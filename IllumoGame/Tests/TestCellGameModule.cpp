@@ -3,6 +3,7 @@
 #include "TestHarness.h"
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Platform/SaveLoad.h>
+#include <Illumo/Rendering/Primitives/DebugDraw3D.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
@@ -87,6 +88,7 @@ struct CellGameFixture
     env.setVar("WorldChunksY", 0);
     env.setVar("vsync", true);
     env.setVar("fullscreen", false);
+    env.setVar("render3dTest", false);
     mock.Initialize();
     module.Start(&context);
     started = CellGameModuleTestAccess::getCellContext(module) != nullptr;
@@ -228,6 +230,49 @@ testInvalidContextStartIsContained()
   incompleteModule.Update(0.016);
   incompleteModule.DispatchDrawables(&fixture.scene);
   incompleteModule.Exit();
+}
+
+static void
+testRender3dTestFlag()
+{
+  testSection("CellGameModule: render3dTest diagnostic scene");
+  CellGameFixture fixture;
+  fixture.env.setVar("render3dTest", true);
+  fixture.module.Update(0.5);
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+
+  DebugDraw3D* staticScene =
+    CellGameModuleTestAccess::getRender3dTestStatic(fixture.module);
+  DebugDraw3D* animatedScene =
+    CellGameModuleTestAccess::getRender3dTestAnimated(fixture.module);
+  testTrue(g,
+           staticScene != nullptr && animatedScene != nullptr,
+           "flag builds both diagnostic drawables");
+  testEqSize(g,
+             fixture.scene.drawablesIn(RenderLayerId::World).size(),
+             2u,
+             "flag replaces CanvasView with the static and animated 3D draws");
+  if (staticScene != nullptr && animatedScene != nullptr) {
+    testTrue(
+      g,
+      fixture.scene.drawablesIn(RenderLayerId::World)[0] == staticScene &&
+        fixture.scene.drawablesIn(RenderLayerId::World)[1] == animatedScene,
+      "diagnostic scene preserves deterministic draw order");
+  }
+
+  fixture.env.setVar("render3dTest", false);
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  testEqSize(g,
+             fixture.scene.drawablesIn(RenderLayerId::World).size(),
+             1u,
+             "disabling the flag restores CanvasView");
+  testTrue(
+    g,
+    fixture.scene.drawablesIn(RenderLayerId::World)[0] ==
+      CellGameModuleTestAccess::getCellContext(fixture.module)->getCanvasView(),
+    "normal World presentation is restored");
 }
 
 static void
@@ -996,6 +1041,8 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CellGame.InvalidContext", []() {
     return runCellGameModuleCase(testInvalidContextStartIsContained);
   });
+  registry.add("IllumoGame.CellGame.Render3dTestFlag",
+               []() { return runCellGameModuleCase(testRender3dTestFlag); });
   registry.add("IllumoGame.CellGame.WireworldSeedAndBrush", []() {
     return runCellGameModuleCase(testWireworldSeedAndBrush);
   });

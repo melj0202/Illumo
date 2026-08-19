@@ -76,6 +76,16 @@ public:
     return module.configurationMenu.get();
   }
 
+  static DebugDraw3D* getRender3dTestStatic(CellGameModule& module)
+  {
+    return module.render3dTestStatic.get();
+  }
+
+  static DebugDraw3D* getRender3dTestAnimated(CellGameModule& module)
+  {
+    return module.render3dTestAnimated.get();
+  }
+
   static SimulatorConfiguration currentConfiguration(
     const CellGameModule& module)
   {

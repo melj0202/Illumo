@@ -2,7 +2,7 @@
 \label{sec:rendering-current}
 
 \begin{statusbox}
-\textbf{The reusable 2D renderer foundation is shipped inside Illumo.} Live
+\textbf{The reusable 2D renderer foundation plus a narrow debug-3D path is shipped inside Illumo.} Live
 frame path is acquire/enroll + tokens + submit via
 \symbolref{Renderer}/\symbolref{IBackend}.
 Drawables emit tokens through \texttt{AppendCommands}; GL draw submission is
@@ -57,6 +57,14 @@ No second real GPU API.
         transparent painter order is never changed by a global texture sort.
         Dynamic buffers reserve 1,024 quads, double as needed, and stop at a
         configurable 65,536 default ceiling.
+  \item \symbolref{DebugDraw3D} is a deliberately narrow token drawable for
+        colored axes, ground grids, wire cubes, and solid cubes. It reuses the
+        existing position-plus-RGBA mesh layout and Shape shader through local
+        depth-tested line and triangle styles. Callers supply a complete
+        perspective view-projection matrix and optional model matrix; it owns
+        no camera, materials,
+        model loading, lighting, or scene system. Compose it in World before
+        2D presentation, which remains painter ordered in one main pass.
 \end{itemize}
 
 \subsection{Managed texture and shader assets (D-R17)}
@@ -178,6 +186,6 @@ line coverage over headless-testable first-party production code.
         (window bootstrap, not frame submission).
   \item Windows is the supported live path. Linux and macOS bootstraps are
         known stale against current App APIs and have no native validation.
-  \item Font atlases/UTF-8 layout, tilemaps/particles, and offscreen compositing
+  \item Font atlases/UTF-8 layout, tilemaps/particles, general 3D meshes, and offscreen compositing
         are follow-on features, not hidden scaffolding in the current renderer.
 \end{enumerate}

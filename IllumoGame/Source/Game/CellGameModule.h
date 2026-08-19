@@ -17,6 +17,8 @@ enum class CellState
   EXIT
 };
 
+class DebugDraw3D;
+
 class CellGameModule : public IModule
 {
   friend class CellGameModuleTestAccess;
@@ -47,6 +49,9 @@ private:
   void updateWireworldBrushFromInput();
   void showModeSplash(const char* label);
   void updateEditorCursor();
+  bool isRender3dTestEnabled() const;
+  void ensureRender3dTestDrawables();
+  void updateRender3dTestMatrices();
   bool consumeCompletedSimulation(bool waitForCompletion);
   void drainSimulation();
   void prepareGridMutation();
@@ -78,5 +83,8 @@ private:
   // Module-owned mode label (EDIT/NORMAL); not a file-scope global.
   std::unique_ptr<SplashText> modeSplash;
   std::unique_ptr<ConfigurationMenu> configurationMenu;
+  std::unique_ptr<DebugDraw3D> render3dTestStatic;
+  std::unique_ptr<DebugDraw3D> render3dTestAnimated;
+  double render3dTestTime;
   Cursor editorCursor;
 };

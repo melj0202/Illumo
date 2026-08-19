@@ -10,6 +10,7 @@
  "fullscreen": "0",
  "logLevel": "3",
  "showFPS": "1",
+ "render3dTest": "0",
  "speedFactor": "1",
  "tps": "12",
  "vsync": "1",

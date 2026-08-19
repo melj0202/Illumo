@@ -732,6 +732,20 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-C5** | At far zoom, `CanvasView` uses a revision-gated density overview capped at roughly four screen pixels per texel; this visual budget does not cap sparse simulation chunks. |
 | **D-C6** | Keep `0 x 0` as the infinite sparse world; positive chunk dimensions select a finite torus. Configure it through the Release F1 overlay, reset on topology change, and preserve it in sparse save version 3. |
 
+`DebugDraw3D` is a deliberately narrow, token-based diagnostic drawable. It
+builds colored axes, ground grids, wire cubes, and solid cubes using the
+existing position-plus-RGBA mesh layout and Shape shader, with local
+depth-tested line and triangle styles. Callers supply a complete perspective
+view-projection matrix and optional model matrix; it does not own a camera,
+model loader, materials, lighting, or a scene system. Compose it in the World
+layer before 2D
+presentation, which remains a single-pass painter-ordered surface.
+
+IllumoGame's persisted `render3dTest=1` flag replaces `CanvasView` with this
+diagnostic scene: fixed axes/grid and orbiting, bobbing, spinning solid and
+wire cubes. It is a rendering smoke path only; simulation keeps running and
+the normal canvas returns immediately when the flag is disabled.
+
 ### 6.3 Performance (D-P\*)
 
 | ID | Decision | Note |
@@ -878,7 +892,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 | IllumoContext growth | Frozen; third module = explicit deps |
 | Life-like JSON family collapse | Optional cleanup of repetitive RuleSet classes |
 | GPU/SYCL acceleration | Optional after bounded CPU parallel benchmark / product need; CPU sparse stepping is the production baseline |
-| File asset formats | Current managed scope is textures + shaders; font atlases, model import, and general 3D meshes are deferred |
+| File asset formats | Current managed scope is textures + shaders; font atlases, model import, and general 3D meshes are deferred. `DebugDraw3D` is procedural diagnostic geometry only. |
 
 ---
 
@@ -1006,7 +1020,7 @@ Resolved highlights (do not re-open without a new decision ID):
 | Compatibility dense storage | `IllumoGame/Source/Game/CellGrid.*`, `Canvas.*` |
 | Rules | `IllumoGame/Source/Rulesets/*` |
 | Tokens / Renderer / resources | `Illumo/Include/Illumo/Rendering/*`, `Illumo/Source/Rendering/*` |
-| 2D primitives / animation | `Illumo/Source/Rendering/Primitives/*` |
+| 2D primitives, animation, and debug 3D | `Illumo/Source/Rendering/Primitives/*` |
 | Debug renderer assets | `Illumo/Assets/RendererDemo/*` |
 | GL execute | `Illumo/Source/Rendering/OpenGL/*` |
 | Mock/test support | `Illumo/TestSupport/Include/Illumo/Testing/*` |

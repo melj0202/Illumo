@@ -1,6 +1,7 @@
 #include "CellGameModule.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include <Illumo/Platform/SaveLoad.h>
+#include <Illumo/Rendering/Primitives/DebugDraw3D.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <array>
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
 #include <new>
 #include <random>
 #include <vector>
@@ -114,6 +116,9 @@ CellGameModule::CellGameModule()
   , wireworldBrush(WireworldRuleSet::CELL_CONDUCTOR)
   , modeSplash(nullptr)
   , configurationMenu(nullptr)
+  , render3dTestStatic(nullptr)
+  , render3dTestAnimated(nullptr)
+  , render3dTestTime(0.0)
 {
   ic = nullptr;
 }
@@ -1017,6 +1022,9 @@ CellGameModule::Update(double dt)
   lastSimulationSteps = 0;
   lastSimulationFrameMilliseconds = 0.0;
   consumeCompletedSimulation(false);
+  if (isRender3dTestEnabled() && dt > 0.0) {
+    render3dTestTime += dt;
+  }
 
   if (configurationMenu != nullptr && ic->commandLine != nullptr &&
       !ic->commandLine->isOpen &&
@@ -1144,6 +1152,8 @@ CellGameModule::Exit()
   unregisterConsoleCommands();
   configurationMenu.reset();
   modeSplash.reset();
+  render3dTestAnimated.reset();
+  render3dTestStatic.reset();
   delete cellContext;
   cellContext = nullptr;
 }
@@ -1597,6 +1607,67 @@ CellGameModule::CameraRotate()
 {
 }
 
+bool
+CellGameModule::isRender3dTestEnabled() const
+{
+  return ic != nullptr && ic->envVars != nullptr &&
+         ic->envVars->getVar("render3dTest").valueAsBool;
+}
+
+void
+CellGameModule::ensureRender3dTestDrawables()
+{
+  if (ic == nullptr || ic->renderer == nullptr ||
+      (render3dTestStatic != nullptr && render3dTestAnimated != nullptr)) {
+    return;
+  }
+
+  render3dTestStatic = std::make_unique<DebugDraw3D>();
+  render3dTestStatic->prepare(ic->renderer);
+  render3dTestStatic->addAxes(glm::vec3(0.0f), 3.0f);
+  render3dTestStatic->addGrid(10, 1.0f, ColorRgba{ 72, 96, 128, 255 });
+
+  render3dTestAnimated = std::make_unique<DebugDraw3D>();
+  render3dTestAnimated->prepare(ic->renderer);
+  render3dTestAnimated->addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.75f), ColorRgba{ 255, 180, 72, 255 });
+  render3dTestAnimated->addWireCube(
+    glm::vec3(0.0f), glm::vec3(1.0f), ColorRgba{ 224, 244, 255, 255 });
+}
+
+void
+CellGameModule::updateRender3dTestMatrices()
+{
+  if (ic == nullptr || ic->window == nullptr || render3dTestStatic == nullptr ||
+      render3dTestAnimated == nullptr) {
+    return;
+  }
+  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+  const float aspectRatio = static_cast<float>(dimensions[0]) /
+                            static_cast<float>(std::max(dimensions[1], 1));
+  const glm::mat4 viewProjection =
+    DebugDraw3D::makePerspectiveViewProjection(glm::vec3(12.0f, 9.0f, 12.0f),
+                                               glm::vec3(0.0f),
+                                               glm::vec3(0.0f, 1.0f, 0.0f),
+                                               55.0f,
+                                               aspectRatio,
+                                               0.1f,
+                                               100.0f);
+  render3dTestStatic->setViewProjection(viewProjection);
+  render3dTestStatic->setModelMatrix(glm::mat4(1.0f));
+
+  const float elapsed = static_cast<float>(render3dTestTime);
+  glm::mat4 model =
+    glm::translate(glm::mat4(1.0f),
+                   glm::vec3(std::sin(elapsed) * 4.0f,
+                             1.5f + std::sin(elapsed * 1.7f) * 0.75f,
+                             std::cos(elapsed) * 4.0f));
+  model = glm::rotate(model, elapsed * 1.4f, glm::vec3(0.0f, 1.0f, 0.0f));
+  model = glm::rotate(model, elapsed * 0.8f, glm::vec3(1.0f, 0.0f, 0.0f));
+  render3dTestAnimated->setViewProjection(viewProjection);
+  render3dTestAnimated->setModelMatrix(model);
+}
+
 void
 CellGameModule::DispatchDrawables(Scene* scene)
 {
@@ -1604,8 +1675,22 @@ CellGameModule::DispatchDrawables(Scene* scene)
     return;
   }
   // Owners implement AppendCommands (domain + GameVisual). Scene lists
-  // Drawable hosts by layer (World → UI → Debug).
-  scene->AddDrawable(this->cellContext->getCanvasView(), RenderLayerId::World);
+  // Drawable hosts by layer (World → UI → Debug). The opt-in diagnostic scene
+  // replaces CanvasView so its depth-tested primitives start from a clear
+  // depth buffer rather than inheriting 2D presentation writes.
+  if (isRender3dTestEnabled()) {
+    ensureRender3dTestDrawables();
+    updateRender3dTestMatrices();
+    if (render3dTestStatic != nullptr) {
+      scene->AddDrawable(render3dTestStatic.get(), RenderLayerId::World);
+    }
+    if (render3dTestAnimated != nullptr) {
+      scene->AddDrawable(render3dTestAnimated.get(), RenderLayerId::World);
+    }
+  } else {
+    scene->AddDrawable(this->cellContext->getCanvasView(),
+                       RenderLayerId::World);
+  }
   if (editorCursor.isVisible()) {
     scene->AddDrawable(&editorCursor, RenderLayerId::UI);
   }

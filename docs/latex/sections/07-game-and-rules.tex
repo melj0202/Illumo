@@ -37,6 +37,11 @@ shutdown to the App main loop. A short eased reveal, staggered row fade, gliding
 selection highlight, and value-change pulse are advanced from frame delta time;
 input remains active throughout.
 
+The persisted 	exttt{render3dTest} flag defaults to 	exttt{0}. Setting it to
+	exttt{1} replaces CanvasView with a rendering diagnostic scene: fixed axes
+and grid plus orbiting, bobbing, spinning solid and wire cubes. Simulation and
+UI continue normally; disabling the flag restores the canvas immediately.
+
 \subsection{Domain console commands and persistence}
 \symbolref{CellGameModule} registers domain commands through
 \symbolref{CommandRegistry}; Services remains free of Game types. Save always
