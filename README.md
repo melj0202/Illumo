@@ -96,9 +96,19 @@ python build.py test --list-tests
 python build.py test --test IllumoGame.CellGame.SaveLoadRoundTrip
 python build.py run -- -ww 1280 -wh 720
 python build.py run --config Debug --no-build
+python build.py stats
+python build.py stats --json
 python build.py coverage
 python build.py docs
 ```
+
+`stats` reports the current Git branch, commit, working-tree counts, tracked
+file count, and categorized first-party lines. LOC counts nonblank lines in
+the current contents of tracked source, tests, shaders, build tooling,
+documentation, and configuration files. It excludes build trees, `archive/`,
+`Illumo/thirdparty/`, `docs/output/`, and binary assets. Use `--json` for
+machine-readable output; the interactive build console exposes the same report
+through **Repository statistics**.
 
 When standard input or output is redirected, running `python build.py` without
 a command performs the normal Release build instead of opening the console.

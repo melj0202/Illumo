@@ -5,20 +5,20 @@
 
 Cursor::Cursor()
 {
-  setSpace(PrimitiveSpace::World);
-  setLayerHint(RenderLayerId::UI);
+  visual.setSpace(PrimitiveSpace::World);
+  visual.setLayerHint(RenderLayerId::UI);
 }
 
 void
 Cursor::init(Renderer* rend, IRenderWindow* win, Camera* cam)
 {
-  setRenderer(rend);
-  setWindow(win);
-  setCamera(cam);
-  setSpace(PrimitiveSpace::World);
-  setLayerHint(RenderLayerId::UI);
+  visual.setRenderer(rend);
+  visual.setWindow(win);
+  visual.setCamera(cam);
+  visual.setSpace(PrimitiveSpace::World);
+  visual.setLayerHint(RenderLayerId::UI);
   if (rend) {
-    prepare(rend);
+    visual.prepare(rend);
   }
   initialized = true;
   rebuild();
@@ -59,16 +59,23 @@ Cursor::setFromCell(std::int64_t cellX, std::int64_t cellY)
 void
 Cursor::rebuild()
 {
-  clearPrimitives();
+  visual.clearPrimitives();
   if (!initialized) {
     return;
   }
 
   // Cell outline + crosshair inside the cell.
-  addOutlineRect(worldX, worldY, cellSize, cellSize, color, 2.0f);
+  visual.addOutlineRect(worldX, worldY, cellSize, cellSize, color, 2.0f);
   const float midX = worldX + cellSize * 0.5f;
   const float midY = worldY + cellSize * 0.5f;
   const float arm = cellSize * 0.35f;
-  addLine(midX - arm, midY, midX + arm, midY, color, 1.5f);
-  addLine(midX, midY - arm, midX, midY + arm, color, 1.5f);
+  visual.addLine(midX - arm, midY, midX + arm, midY, color, 1.5f);
+  visual.addLine(midX, midY - arm, midX, midY + arm, color, 1.5f);
+}
+
+bool
+Cursor::AppendCommands(Renderer* renderer)
+{
+  visual.setVisible(isVisible());
+  return visual.AppendCommands(renderer);
 }

@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <type_traits>
 #include <vector>
 
 static TestCounters g;
@@ -2205,6 +2206,8 @@ static void
 testCursorUsesCellBounds()
 {
   testSection("CanvasView: cursor uses the same cell bounds");
+  static_assert(!std::is_base_of<GameVisual, Cursor>::value,
+                "game cursor must compose rather than inherit GameVisual");
   NullRenderWindow window(64, 64);
   EnvVars env;
   env.setVar("WinX", 64);
@@ -2217,7 +2220,7 @@ testCursorUsesCellBounds()
   cursor.init(&renderer, &window, &camera);
   cursor.setFromCell(0, 0);
 
-  ShapePrimitive* outline = cursor.getShape(0);
+  ShapePrimitive* outline = cursor.getVisual().getShape(0);
   testTrue(g, outline != nullptr, "cursor creates a cell outline");
   if (outline != nullptr) {
     testTrue(g,
@@ -2225,6 +2228,14 @@ testCursorUsesCellBounds()
                outline->rect.w == 16.0f && outline->rect.h == 16.0f,
              "cursor outline is centered on its selected cell");
   }
+  mock.resetCounters();
+  testTrue(g,
+           cursor.AppendCommands(&renderer),
+           "cursor delegates rendering to its composed visual");
+  renderer.EndFrame();
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 1u,
+           "cursor composition emits draw tokens");
 }
 
 static int

@@ -25,9 +25,19 @@ python build.py test --test Illumo.Host.RequiredModuleRollback
 python build.py test --test Illumo.SysCmdLine.WindowDimensionOptions
 python build.py test --test IllumoGame.Config.CanvasCommandLineOptions
 python build.py run -- -ww 1280 -wh 720
+python build.py stats
+python build.py stats --json
 \end{lstlisting}
 Exact runner cases execute in dedicated manual-testing directories so file-backed
 configuration cannot mutate staged runtime data.
+
+The repository-statistics command reports the current Git branch, commit, and
+working-tree counts together with tracked-file and categorized first-party line
+counts. LOC means nonblank lines in the current tracked source, tests, shaders,
+build tooling, documentation, and configuration files. Build trees,
+\pathref{archive/}, \pathref{Illumo/thirdparty/}, \pathref{docs/output/}, and
+binary assets are excluded. The interactive build console exposes the same
+report, and \texttt{--json} provides a stable machine-readable form.
 
 \subsection{Standalone library}
 The supported library-only build remains independently configurable:

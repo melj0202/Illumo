@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import shlex
@@ -53,6 +54,7 @@ DASHBOARD_ITEMS = (
     ("action", "Run headless tests", "test"),
     ("action", "Build and run IllumoGame", "run"),
     ("action", "Run existing build", "launch"),
+    ("action", "Repository statistics", "stats"),
     ("action", "Build documentation", "docs"),
     ("action", "Run LLVM coverage", "coverage"),
     ("action", "Exit", "quit"),
@@ -63,6 +65,7 @@ DASHBOARD_DESCRIPTIONS = {
     "test": "both isolated test runners",
     "run": "build, then launch",
     "launch": "skip configure and build",
+    "stats": "Git state, files, and first-party LOC",
     "docs": "illumo.pdf and architecture-map.pdf",
     "coverage": "Ninja, Clang, and the 85% gate",
     "quit": "return to the shell",
@@ -75,6 +78,46 @@ class BuildError(RuntimeError):
     def __init__(self, message: str, exit_code: int = 1) -> None:
         super().__init__(message)
         self.exit_code = exit_code
+
+
+@dataclass(frozen=True)
+class LineStatistics:
+    label: str
+    files: int = 0
+    physical_lines: int = 0
+    loc: int = 0
+
+
+@dataclass(frozen=True)
+class WorktreeStatistics:
+    staged: int = 0
+    modified: int = 0
+    untracked: int = 0
+    conflicted: int = 0
+
+
+@dataclass(frozen=True)
+class RepositoryStatistics:
+    root: Path
+    branch: str | None
+    commit: str | None
+    subject: str | None
+    worktree: WorktreeStatistics | None
+    repository_files: int
+    repository_files_source: str
+    categories: tuple[LineStatistics, ...]
+
+    @property
+    def first_party_files(self) -> int:
+        return sum(category.files for category in self.categories)
+
+    @property
+    def first_party_physical_lines(self) -> int:
+        return sum(category.physical_lines for category in self.categories)
+
+    @property
+    def first_party_loc(self) -> int:
+        return sum(category.loc for category in self.categories)
 
 
 @dataclass
@@ -390,6 +433,8 @@ def dashboard_action_arguments(
         return ["run", *dashboard_common_arguments(state)]
     if action == "launch":
         return ["run", "--config", state.configuration, "--no-build"]
+    if action == "stats":
+        return ["stats"]
     if action == "docs":
         return ["docs"]
     if action == "coverage":
@@ -514,6 +559,265 @@ def existing_tool(name: str, dry_run: bool) -> str:
     raise BuildError(
         f"Required tool '{name}' was not found on PATH. "
         "Install it or open a developer shell that provides it."
+    )
+
+
+def git_output(root: Path, arguments: Sequence[str]) -> str | None:
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        result = subprocess.run(
+            [git, *arguments],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def is_excluded_repository_path(path: Path) -> bool:
+    parts = path.parts
+    if not parts:
+        return True
+    first = parts[0].lower()
+    normalized = path.as_posix().lower()
+    return (
+        first == ".git"
+        or first == "archive"
+        or (len(parts) > 1 and first.startswith("build"))
+        or normalized.startswith("illumo/thirdparty/")
+        or normalized.startswith("docs/output/")
+    )
+
+
+def repository_files(root: Path) -> tuple[list[Path], str]:
+    tracked = git_output(root, ("ls-files", "-z"))
+    if tracked is not None:
+        paths = [
+            Path(value)
+            for value in tracked.split("\0")
+            if value and (root / value).is_file()
+        ]
+        return paths, "tracked"
+
+    paths = []
+    for directory, child_directories, file_names in os.walk(root):
+        directory_path = Path(directory)
+        relative_directory = directory_path.relative_to(root)
+        child_directories[:] = [
+            name
+            for name in child_directories
+            if not is_excluded_repository_path(
+                relative_directory / name / "directory-entry"
+            )
+        ]
+        for name in file_names:
+            relative = relative_directory / name
+            if not is_excluded_repository_path(relative):
+                paths.append(relative)
+    return paths, "discovered"
+
+
+def repository_text_category(path: Path) -> str | None:
+    if is_excluded_repository_path(path):
+        return None
+
+    suffix = path.suffix.lower()
+    parts = {part.lower() for part in path.parts}
+    c_family = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
+    if suffix in c_family:
+        if "tests" in parts or "testsupport" in parts:
+            return "Tests C/C++"
+        return "Production C/C++"
+    if suffix in {".vert", ".frag", ".glsl"}:
+        return "Shaders"
+    if path.name == "CMakeLists.txt" or suffix in {
+        ".cmake",
+        ".py",
+        ".ps1",
+        ".sh",
+        ".bat",
+        ".cmd",
+    }:
+        return "Build and tooling"
+    if suffix in {".md", ".rst", ".tex"}:
+        return "Documentation"
+    if suffix in {".json", ".toml", ".yaml", ".yml", ".txt", ".in"}:
+        return "Configuration and data"
+    return None
+
+
+def worktree_statistics(root: Path) -> WorktreeStatistics | None:
+    output = git_output(root, ("status", "--porcelain=v1", "--untracked-files=all"))
+    if output is None:
+        return None
+
+    staged = 0
+    modified = 0
+    untracked = 0
+    conflicted = 0
+    conflict_codes = {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}
+    for line in output.splitlines():
+        if len(line) < 2:
+            continue
+        code = line[:2]
+        if code == "??":
+            untracked += 1
+        elif code in conflict_codes:
+            conflicted += 1
+        else:
+            if code[0] != " ":
+                staged += 1
+            if code[1] != " ":
+                modified += 1
+    return WorktreeStatistics(staged, modified, untracked, conflicted)
+
+
+def collect_repository_statistics(root: Path) -> RepositoryStatistics:
+    files, files_source = repository_files(root)
+    category_order = (
+        "Production C/C++",
+        "Tests C/C++",
+        "Shaders",
+        "Build and tooling",
+        "Documentation",
+        "Configuration and data",
+    )
+    counts = {
+        label: {"files": 0, "physical_lines": 0, "loc": 0}
+        for label in category_order
+    }
+    for relative in files:
+        category = repository_text_category(relative)
+        if category is None:
+            continue
+        try:
+            lines = (root / relative).read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
+        except OSError as error:
+            raise BuildError(
+                f"Could not read repository file {relative}: {error}"
+            ) from error
+        counts[category]["files"] += 1
+        counts[category]["physical_lines"] += len(lines)
+        counts[category]["loc"] += sum(1 for line in lines if line.strip())
+
+    categories = tuple(
+        LineStatistics(label, **counts[label]) for label in category_order
+    )
+    branch_output = git_output(root, ("rev-parse", "--abbrev-ref", "HEAD"))
+    commit_output = git_output(root, ("rev-parse", "--short=10", "HEAD"))
+    subject_output = git_output(root, ("log", "-1", "--format=%s"))
+    return RepositoryStatistics(
+        root=root,
+        branch=branch_output.strip() if branch_output else None,
+        commit=commit_output.strip() if commit_output else None,
+        subject=subject_output.strip() if subject_output else None,
+        worktree=worktree_statistics(root),
+        repository_files=len(files),
+        repository_files_source=files_source,
+        categories=categories,
+    )
+
+
+def repository_statistics_json(statistics: RepositoryStatistics) -> str:
+    worktree = None
+    if statistics.worktree is not None:
+        worktree = {
+            "staged": statistics.worktree.staged,
+            "modified": statistics.worktree.modified,
+            "untracked": statistics.worktree.untracked,
+            "conflicted": statistics.worktree.conflicted,
+        }
+    payload = {
+        "root": str(statistics.root),
+        "git": {
+            "branch": statistics.branch,
+            "commit": statistics.commit,
+            "subject": statistics.subject,
+            "worktree": worktree,
+        },
+        "repository_files": {
+            "count": statistics.repository_files,
+            "source": statistics.repository_files_source,
+        },
+        "first_party": {
+            "files": statistics.first_party_files,
+            "loc": statistics.first_party_loc,
+            "physical_lines": statistics.first_party_physical_lines,
+            "categories": [
+                {
+                    "name": category.label,
+                    "files": category.files,
+                    "loc": category.loc,
+                    "physical_lines": category.physical_lines,
+                }
+                for category in statistics.categories
+            ],
+        },
+    }
+    return json.dumps(payload, indent=2)
+
+
+def print_repository_statistics(statistics: RepositoryStatistics) -> None:
+    print("ILLUMO REPOSITORY STATISTICS")
+    print(f"Root: {statistics.root}")
+    if statistics.commit is None:
+        print("Git: unavailable")
+    else:
+        branch = statistics.branch or "unknown"
+        if branch == "HEAD":
+            branch = "detached HEAD"
+        subject = f" - {statistics.subject}" if statistics.subject else ""
+        print(f"Git: {branch} @ {statistics.commit}{subject}")
+
+    if statistics.worktree is None:
+        print("Working tree: unavailable")
+    elif statistics.worktree == WorktreeStatistics():
+        print("Working tree: clean")
+    else:
+        print(
+            "Working tree: "
+            f"{statistics.worktree.staged} staged, "
+            f"{statistics.worktree.modified} modified, "
+            f"{statistics.worktree.untracked} untracked, "
+            f"{statistics.worktree.conflicted} conflicted"
+        )
+
+    print(
+        f"Repository files ({statistics.repository_files_source}): "
+        f"{statistics.repository_files:,}"
+    )
+    print(
+        "First-party text: "
+        f"{statistics.first_party_files:,} files, "
+        f"{statistics.first_party_loc:,} LOC, "
+        f"{statistics.first_party_physical_lines:,} physical lines"
+    )
+    for category in statistics.categories:
+        print(
+            f"  {category.label:<24} "
+            f"{category.files:>4,} files  "
+            f"{category.loc:>8,} LOC  "
+            f"{category.physical_lines:>8,} physical"
+        )
+    source = (
+        "tracked files"
+        if statistics.repository_files_source == "tracked"
+        else "discovered files"
+    )
+    print(
+        f"Scope: current contents of {source}; excludes build directories, archive, "
+        "Illumo/thirdparty, docs/output, binary assets, and blank lines from LOC."
     )
 
 
@@ -718,6 +1022,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="print commands without executing them",
+    )
+    stats_parser = subparsers.add_parser(
+        "stats", help="show Git state and first-party repository statistics"
+    )
+    stats_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable JSON",
     )
     return parser
 
@@ -1006,6 +1318,14 @@ def run_docs(arguments: argparse.Namespace) -> None:
     )
 
 
+def run_repository_statistics(arguments: argparse.Namespace) -> None:
+    statistics = collect_repository_statistics(REPOSITORY_ROOT)
+    if arguments.json:
+        print(repository_statistics_json(statistics))
+    else:
+        print_repository_statistics(statistics)
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
     parser = create_parser()
     command_line = sys.argv[1:] if arguments is None else list(arguments)
@@ -1036,6 +1356,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "run": run_application,
         "coverage": run_coverage,
         "docs": run_docs,
+        "stats": run_repository_statistics,
     }
     try:
         actions[parsed.command](parsed)
