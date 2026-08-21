@@ -440,13 +440,12 @@ testCommandLineHistoryScrollTokens()
 
   // P2: still a single batch even with many history lines
   testEqSize(g,
-             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
-             1u,
-             "history: one UpdateBuffer batch");
-  testEqSize(g,
              mock.countNonEmptyOfType(CommandType::DrawIndexed),
              1u,
              "history: one DrawIndexed batch");
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::UpdateBuffer) <= 1u,
+           "history: at most one UpdateBuffer (idle frames reuse the mesh)");
   // A realistic full help page needs more than the old 2,000-quad capacity.
   // Keep it as one batch rather than silently truncating the final help line.
   bool detailedHelpFits = false;
@@ -639,10 +638,10 @@ testGLStringAndCommandLineTogether()
   testTrue(g,
            mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 2u,
            "console+FPS: at least two DrawIndexed");
-  testTrue(
-    g,
-    mock.countNonEmptyOfType(CommandType::UpdateBuffer) >= 2u,
-    "console+FPS: at least two UpdateBuffer (console + FPS first frame)");
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::UpdateBuffer) >= 1u,
+           "console+FPS: at least one UpdateBuffer (FPS first frame; console "
+           "may be cached)");
   testEqSize(g,
              mock.countNonEmptyOfType(CommandType::ClearScreen),
              1u,
@@ -1121,6 +1120,93 @@ testCommandLineHistoryWrapAndScrollToStart()
 }
 
 static void
+testCommandLineHistoryWrapCacheStability()
+{
+  testSection("CommandLine: wrap cache and idle composition skip re-upload");
+  CommandLineFixture fixture(640, 360);
+  CommandLine& console = fixture.console;
+
+  const std::string longHelp =
+    "ruleset [name] - Show or change the cellular-automaton ruleset; includes "
+    "GAME_OF_LIFE, HIGHLIFE, DAY_AND_NIGHT, LIFE_WITHOUT_DEATH, and WIREWORLD";
+  console.AppendString(255, 255, 255, 255, "OLDEST-MARKER " + longHelp);
+  for (int i = 0; i < 40; ++i) {
+    console.AppendString(
+      255, 255, 255, 255, "mid-" + std::to_string(i) + " " + longHelp);
+  }
+  console.AppendString(255, 255, 255, 255, "NEWEST-MARKER");
+
+  console.Toggle();
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  for (int i = 0; i < 8; ++i) {
+    console.AppendCommands(&fixture.renderer);
+  }
+
+  for (int i = 0; i < 500; ++i) {
+    console.ScrollUp();
+  }
+  const int startOffset = console.getScrollOffset();
+  testTrue(
+    g, startOffset > 0, "wrap cache still produces a positive max scroll");
+
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  testTrue(g,
+           console.AppendCommands(&fixture.renderer),
+           "dirty wrap-cache frame emits tokens");
+  fixture.renderer.EndFrame();
+  testEqSize(g,
+             fixture.mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "dirty history frame uploads once");
+  testEqSize(g,
+             fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             1u,
+             "dirty history frame draws once");
+  testTrue(g,
+           console.getVisual().textCount() <= 16u,
+           "off-screen wrapped history is not tessellated");
+
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  testTrue(g,
+           console.AppendCommands(&fixture.renderer),
+           "idle wrap-cache frame still draws");
+  fixture.renderer.EndFrame();
+  testEqSize(g,
+             fixture.mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             0u,
+             "idle settled frame skips UpdateBuffer");
+  testEqSize(g,
+             fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             1u,
+             "idle settled frame still DrawIndexed");
+
+  console.AppendString(255, 255, 255, 255, "appended-after-cache");
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  testTrue(g,
+           console.AppendCommands(&fixture.renderer),
+           "history append dirties composition");
+  fixture.renderer.EndFrame();
+  testEqSize(g,
+             fixture.mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "new history line uploads again");
+
+  bool oldestStillPresent = false;
+  const std::vector<CommandLine::historyBuffer>& lines = console.getHistory();
+  for (const CommandLine::historyBuffer& line : lines) {
+    if (line.content.find("OLDEST-MARKER") != std::string::npos) {
+      oldestStillPresent = true;
+      break;
+    }
+  }
+  testTrue(
+    g, oldestStillPresent, "oldest marker remains after cached wrap append");
+}
+
+static void
 testCommandLineHeadlessAndLongSelectionTokens()
 {
   testSection(
@@ -1407,6 +1493,9 @@ registerUITokenTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.CommandLine.HistoryWrapAndScrollToStart", []() {
     return runUITokenCase(testCommandLineHistoryWrapAndScrollToStart);
+  });
+  registry.add("Illumo.CommandLine.HistoryWrapCacheStability", []() {
+    return runUITokenCase(testCommandLineHistoryWrapCacheStability);
   });
   registry.add("Illumo.CommandLine.HeadlessAndLongInput", []() {
     return runUITokenCase(testCommandLineHeadlessAndLongSelectionTokens);

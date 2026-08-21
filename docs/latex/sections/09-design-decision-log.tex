@@ -216,10 +216,15 @@ frame even when the CA did not step.\\
 \subsection*{D-P2 --- UI batching and geometry cache}
 \begin{decisionbox}[title={D-P2 \quad 2026-07-28}]
 \textbf{Decision:} CommandLine emits one packed \texttt{UpdateBuffer}/draw when
-open; GLString caches GPU geometry until content/style changes.\\
+open and dirty; GLString caches GPU geometry until content/style changes.
+Settled CommandLine frames keep one \texttt{DrawIndexed} and skip the buffer
+upload.\\
 \textbf{Why:} Per-line uploads and FPS string rebuilds were measurable when the
-console/FPS overlay was active.\\
-\textbf{Consequences:} Token stream stays small; FPS may rebuild $\sim$1\,Hz.
+console/FPS overlay was active. Re-wrapping the full history and baking a
+per-frame accent pulse kept the open console expensive.\\
+\textbf{Consequences:} Token stream stays small; FPS may rebuild $\sim$1\,Hz;
+idle console history reuses the last mesh until scroll, input, layout, caret
+phase, or a quantized pulse changes.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -618,7 +623,9 @@ handlers used a mounted-only height estimate that disagreed with the floating
 panel, so paging to the oldest history could leave text clipped or unreachable.\\
 \textbf{Consequences:} Scrolling fully to the start of history shows the oldest
 characters completely; floating resize and mounted mode share one max-scroll
-definition; a focused wrap/scroll regression covers the clamp and batch path.
+definition; wrap metrics are cached until history or panel width change and
+must stay equivalent to direct wrapping; a focused wrap/scroll regression
+covers the clamp and batch path.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------

@@ -48,6 +48,9 @@ Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
 - Console token payload storage must remain valid through renderer submission.
   Keep the existing token-rendered console; do not introduce an independent
   retained widget hierarchy.
+- Cached console wrap results must stay equivalent to direct wrapping of the
+  same history at the same width. Settled composition cache must not skip a
+  frame that changed history, scroll, input, or settled layout.
 
 ## Documentation and verification
 

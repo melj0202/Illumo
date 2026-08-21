@@ -151,8 +151,11 @@ instead of treating thousands of CPU submissions as displayed frames (D-P32).
 
 \subsection{Primitive-composed UI (D-R20)}
 \begin{itemize}
-  \item \symbolref{CommandLine}: one batched \texttt{UpdateBuffer} +
-        \texttt{DrawIndexed} when open. Its surface, inset history, input row,
+  \item \symbolref{CommandLine}: one batched \texttt{DrawIndexed} when open.
+        \texttt{UpdateBuffer} runs when history, input, scroll, layout, caret
+        phase, or a quantized accent pulse changes. Wrap metrics are cached
+        until contents or panel width change; only visible history lines are
+        tessellated. Its surface, inset history, input row,
         selection, caret, scrollbar, and floating resize affordance compose
         \symbolref{GameVisual} fills, outlines, lines, and text.
   \item \symbolref{GLString}: geometry cache --- skip VBO re-upload if

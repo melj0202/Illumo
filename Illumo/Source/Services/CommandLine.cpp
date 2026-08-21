@@ -147,10 +147,40 @@ findEnvironmentKey(IEnvVars* envVars, const std::string& requested)
 }
 
 static float
+easyFontAdvance(unsigned char ch)
+{
+  if (ch < 32u || ch >= 128u) {
+    return 0.0f;
+  }
+  return static_cast<float>(stb_easy_font_charinfo[ch - 32].advance & 15) +
+         stb_easy_font_spacing_val;
+}
+
+static float
+measureFontTextRange(const char* text, std::size_t length)
+{
+  float len = 0.0f;
+  float maxLen = 0.0f;
+  for (std::size_t i = 0; i < length; ++i) {
+    if (text[i] == '\n') {
+      if (len > maxLen) {
+        maxLen = len;
+      }
+      len = 0.0f;
+      continue;
+    }
+    len += easyFontAdvance(static_cast<unsigned char>(text[i]));
+  }
+  if (len > maxLen) {
+    maxLen = len;
+  }
+  return static_cast<float>(static_cast<int>(std::ceil(maxLen)) * 2);
+}
+
+static float
 measureFontText(const std::string& text)
 {
-  std::string mutableText = text;
-  return static_cast<float>(stb_easy_font_width(mutableText.data()) * 2);
+  return measureFontTextRange(text.data(), text.size());
 }
 
 static std::string
@@ -159,14 +189,21 @@ truncateTextToWidth(const std::string& text, float maxWidth)
   if (maxWidth <= 8.0f || text.empty()) {
     return "";
   }
-  if (measureFontText(text) <= maxWidth) {
+  if (measureFontTextRange(text.data(), text.size()) <= maxWidth) {
     return text;
   }
-  std::string result = text;
-  while (!result.empty() && measureFontText(result) > maxWidth) {
-    result.pop_back();
+  std::size_t end = 0;
+  float raw = 0.0f;
+  while (end < text.size()) {
+    float next = raw + easyFontAdvance(static_cast<unsigned char>(text[end]));
+    float measured = static_cast<float>(static_cast<int>(std::ceil(next)) * 2);
+    if (measured > maxWidth) {
+      break;
+    }
+    raw = next;
+    ++end;
   }
-  return result;
+  return text.substr(0, end);
 }
 
 static void
@@ -187,25 +224,28 @@ wrapTextToWidth(const std::string& text,
   }
   std::size_t start = 0;
   while (start < text.size()) {
-    if (measureFontText(text.substr(start)) <= maxWidth) {
+    if (measureFontTextRange(text.data() + start, text.size() - start) <=
+        maxWidth) {
       lines->push_back(text.substr(start));
       return;
     }
-    std::size_t lo = 1;
-    std::size_t hi = text.size() - start;
-    while (lo < hi) {
-      const std::size_t mid = (lo + hi + 1) / 2;
-      if (measureFontText(text.substr(start, mid)) <= maxWidth) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
+    std::size_t end = start;
+    float raw = 0.0f;
+    while (end < text.size()) {
+      float next = raw + easyFontAdvance(static_cast<unsigned char>(text[end]));
+      float measured =
+        static_cast<float>(static_cast<int>(std::ceil(next)) * 2);
+      if (measured > maxWidth && end > start) {
+        break;
       }
+      raw = next;
+      ++end;
     }
-    if (lo < 1) {
-      lo = 1;
+    if (end == start) {
+      end = start + 1;
     }
-    lines->push_back(text.substr(start, lo));
-    start += lo;
+    lines->push_back(text.substr(start, end - start));
+    start = end;
   }
 }
 }
@@ -220,9 +260,22 @@ CommandLine::CommandLine(IEnvVars* vars,
   , commandRegistry(commandRegistry)
   , renderer(rendererIn)
   , applicationName(applicationNameIn.empty() ? "Illumo" : applicationNameIn)
+  , visual(kUiQuadCap)
   , gpuReady(false)
   , animationProgress(0.0f)
   , lastAnimTime(std::chrono::high_resolution_clock::now())
+  , wrappedHistoryWidth(-1.0f)
+  , wrappedHistoryTotalLines(0)
+  , compositionDirty(true)
+  , composedCaretPhase(-1)
+  , composedPulseStep(-1)
+  , composedScrollOffset(-1)
+  , composedWindowW(-1)
+  , composedWindowH(-1)
+  , composedPanelX(-1.0f)
+  , composedPanelY(-1.0f)
+  , composedPanelW(-1.0f)
+  , composedPanelH(-1.0f)
   , cursorPosition(0)
   , selectionAnchor(0)
   , isDraggingScrollbar(false)
@@ -335,6 +388,7 @@ void
 CommandLine::setFloatingMode(bool floating)
 {
   isFloating = floating;
+  markCompositionDirty();
   if (isFloating) {
     std::array<int, 2> windowDimensions =
       window ? window->getWindowDimensions() : std::array<int, 2>{ 1280, 720 };
@@ -357,6 +411,7 @@ CommandLine::setFloatingSize(float w, float h)
 {
   floatingW = std::max(280.0f, w);
   floatingH = std::max(180.0f, h);
+  markCompositionDirty();
   if (!isFloating) {
     setFloatingMode(true);
   } else {
@@ -392,6 +447,7 @@ void
 CommandLine::Toggle()
 {
   isOpen = !isOpen;
+  markCompositionDirty();
   if (isOpen) {
     animationProgress = 0.0f;
     lastAnimTime = std::chrono::high_resolution_clock::now();
@@ -403,6 +459,47 @@ CommandLine::Toggle()
     isResizingWindow = false;
     isDraggingScrollbar = false;
   }
+}
+
+void
+CommandLine::markCompositionDirty()
+{
+  compositionDirty = true;
+}
+
+void
+CommandLine::invalidateWrapCache()
+{
+  wrappedHistory.clear();
+  wrappedHistoryWidth = -1.0f;
+  wrappedHistoryTotalLines = 0;
+}
+
+void
+CommandLine::rebuildWrapCache(float width) const
+{
+  wrappedHistory.clear();
+  wrappedHistory.resize(history.size());
+  wrappedHistoryTotalLines = 0;
+  wrappedHistoryWidth = width;
+  for (std::size_t i = 0; i < history.size(); ++i) {
+    wrapTextToWidth(history[i].content, width, &wrappedHistory[i]);
+    wrappedHistoryTotalLines += static_cast<int>(wrappedHistory[i].size());
+  }
+}
+
+void
+CommandLine::ensureWrapCache(float width) const
+{
+  if (width <= 0.0f) {
+    return;
+  }
+  if (wrappedHistoryWidth > 0.0f &&
+      std::abs(wrappedHistoryWidth - width) <= 0.5f &&
+      wrappedHistory.size() == history.size()) {
+    return;
+  }
+  rebuildWrapCache(width);
 }
 
 void
@@ -476,6 +573,7 @@ CommandLine::AddCharacter(unsigned int codepoint)
       ++cursorPosition;
       selectionAnchor = cursorPosition;
       clearCompletionHint();
+      markCompositionDirty();
     }
   }
 }
@@ -486,6 +584,7 @@ CommandLine::HandleBackspace(bool byWord)
   if (hasSelection()) {
     eraseSelection();
     clearCompletionHint();
+    markCompositionDirty();
     return;
   }
   if (cursorPosition == 0) {
@@ -498,6 +597,7 @@ CommandLine::HandleBackspace(bool byWord)
   cursorPosition = eraseFrom;
   selectionAnchor = cursorPosition;
   clearCompletionHint();
+  markCompositionDirty();
 }
 
 void
@@ -506,6 +606,7 @@ CommandLine::HandleDelete(bool byWord)
   if (hasSelection()) {
     eraseSelection();
     clearCompletionHint();
+    markCompositionDirty();
     return;
   }
   if (cursorPosition >= currentInput.size()) {
@@ -516,6 +617,7 @@ CommandLine::HandleDelete(bool byWord)
   currentInput.erase(cursorPosition, eraseTo - cursorPosition);
   selectionAnchor = cursorPosition;
   clearCompletionHint();
+  markCompositionDirty();
 }
 
 void
@@ -524,6 +626,7 @@ CommandLine::MoveCursorLeft(bool byWord, bool select)
   if (!select && hasSelection()) {
     cursorPosition = std::min(cursorPosition, selectionAnchor);
     selectionAnchor = cursorPosition;
+    markCompositionDirty();
     return;
   }
   std::size_t newPosition = byWord
@@ -533,6 +636,7 @@ CommandLine::MoveCursorLeft(bool byWord, bool select)
     selectionAnchor = newPosition;
   }
   cursorPosition = newPosition;
+  markCompositionDirty();
 }
 
 void
@@ -544,12 +648,14 @@ CommandLine::MoveCursorRight(bool byWord, bool select)
       currentInput += ghost;
       cursorPosition = currentInput.size();
       selectionAnchor = cursorPosition;
+      markCompositionDirty();
       return;
     }
   }
   if (!select && hasSelection()) {
     cursorPosition = std::max(cursorPosition, selectionAnchor);
     selectionAnchor = cursorPosition;
+    markCompositionDirty();
     return;
   }
   std::size_t newPosition =
@@ -559,6 +665,7 @@ CommandLine::MoveCursorRight(bool byWord, bool select)
     selectionAnchor = newPosition;
   }
   cursorPosition = newPosition;
+  markCompositionDirty();
 }
 
 void
@@ -568,6 +675,7 @@ CommandLine::MoveCursorHome(bool select)
     selectionAnchor = 0;
   }
   cursorPosition = 0;
+  markCompositionDirty();
 }
 
 void
@@ -577,6 +685,7 @@ CommandLine::MoveCursorEnd(bool select)
     selectionAnchor = currentInput.size();
   }
   cursorPosition = currentInput.size();
+  markCompositionDirty();
 }
 
 void
@@ -584,6 +693,7 @@ CommandLine::SelectAll()
 {
   selectionAnchor = 0;
   cursorPosition = currentInput.size();
+  markCompositionDirty();
 }
 
 void
@@ -592,6 +702,7 @@ CommandLine::ClearInput()
   currentInput.clear();
   resetCursorToEnd();
   clearCompletionHint();
+  markCompositionDirty();
 }
 
 void
@@ -1032,6 +1143,7 @@ CommandLine::Complete()
 
   if (matches.empty()) {
     completionHint = "No completion matches '" + prefix + "'";
+    markCompositionDirty();
     return;
   }
 
@@ -1059,6 +1171,7 @@ CommandLine::Complete()
       selectionAnchor = cursorPosition;
     }
     completionHint = "Completed: " + matches[0];
+    markCompositionDirty();
     return;
   }
 
@@ -1074,6 +1187,7 @@ CommandLine::Complete()
   if (matches.size() > visibleMatches) {
     completionHint += "  ...";
   }
+  markCompositionDirty();
 }
 void
 CommandLine::ExecuteCommand()
@@ -1273,6 +1387,7 @@ CommandLine::ExecuteSingleCommand(const std::string& singleCmd,
     }
   } else if (cmd == "clear") {
     history.clear();
+    invalidateWrapCache();
     AppendString(240, 240, 240, 255, applicationName + " Developer Console");
   } else if (cmd == "echo") {
     logNormal(joinArguments(args, 0));
@@ -1372,6 +1487,7 @@ CommandLine::ExecuteSingleCommand(const std::string& singleCmd,
     }
   } else if (cmd == "close") {
     isOpen = false;
+    markCompositionDirty();
   } else if (cmd == "quit") {
     window->requestClose();
   } else if (cmd == "vid_restart") {
@@ -1426,6 +1542,7 @@ CommandLine::HistoryDown()
       currentInput = commandHistory[historyIndex];
     }
     resetCursorToEnd();
+    markCompositionDirty();
   }
 }
 
@@ -1441,6 +1558,7 @@ CommandLine::HistoryUp()
     historyIndex--;
     currentInput = commandHistory[historyIndex];
     resetCursorToEnd();
+    markCompositionDirty();
   }
 }
 
@@ -1504,13 +1622,8 @@ CommandLine::computePanelLayout(bool useSmoothedPanel) const
 int
 CommandLine::countWrappedHistoryLines(float availableWidth) const
 {
-  int total = 0;
-  for (std::size_t i = 0; i < history.size(); ++i) {
-    std::vector<std::string> lines;
-    wrapTextToWidth(history[i].content, availableWidth, &lines);
-    total += static_cast<int>(lines.size());
-  }
-  return total;
+  ensureWrapCache(availableWidth);
+  return wrappedHistoryTotalLines;
 }
 
 void
@@ -1519,11 +1632,30 @@ CommandLine::computeHistoryScrollLimits(int* maxHistoryLines,
                                         float* historyWidth) const
 {
   const PanelLayout layout = computePanelLayout(true);
-  float width = layout.historyBaseWidth;
-  int total = countWrappedHistoryLines(width);
-  if (total > layout.maxHistoryLines) {
-    width = std::max(20.0f, width - 16.0f);
-    total = countWrappedHistoryLines(width);
+  float baseWidth = layout.historyBaseWidth;
+  float insetWidth = std::max(20.0f, baseWidth - 16.0f);
+  float width = baseWidth;
+  if (wrappedHistoryWidth > 0.0f &&
+      std::abs(wrappedHistoryWidth - insetWidth) <= 0.5f) {
+    width = insetWidth;
+  }
+  ensureWrapCache(width);
+  int total = wrappedHistoryTotalLines;
+  if (total > layout.maxHistoryLines && std::abs(width - insetWidth) > 0.5f) {
+    ensureWrapCache(insetWidth);
+    total = wrappedHistoryTotalLines;
+    width = insetWidth;
+  } else if (total <= layout.maxHistoryLines &&
+             std::abs(width - baseWidth) > 0.5f) {
+    ensureWrapCache(baseWidth);
+    total = wrappedHistoryTotalLines;
+    if (total > layout.maxHistoryLines) {
+      ensureWrapCache(insetWidth);
+      total = wrappedHistoryTotalLines;
+      width = insetWidth;
+    } else {
+      width = baseWidth;
+    }
   }
   int maxLines = layout.maxHistoryLines;
   int scroll = total - maxLines;
@@ -1562,6 +1694,7 @@ CommandLine::ScrollUp()
   computeHistoryScrollLimits(nullptr, &maxScroll, nullptr);
   if (scrollOffset < maxScroll) {
     scrollOffset++;
+    markCompositionDirty();
   }
 }
 
@@ -1570,6 +1703,7 @@ CommandLine::ScrollDown()
 {
   if (scrollOffset > 0) {
     scrollOffset--;
+    markCompositionDirty();
   }
 }
 
@@ -1580,8 +1714,12 @@ CommandLine::HandleScroll(double yOffset)
     return;
   }
   int delta = static_cast<int>(yOffset > 0.0 ? 3 : (yOffset < 0.0 ? -3 : 0));
+  int previous = scrollOffset;
   scrollOffset += delta;
   clampScrollOffset();
+  if (scrollOffset != previous) {
+    markCompositionDirty();
+  }
 }
 
 void
@@ -1648,6 +1786,7 @@ CommandLine::HandleMousePress(double mouseX, double mouseY, bool isDrag)
       resizeStartH = panelY1 - panelY0;
       resizeStartMouseX = static_cast<float>(mouseX);
       resizeStartMouseY = static_cast<float>(mouseY);
+      markCompositionDirty();
       return;
     }
   }
@@ -1672,22 +1811,17 @@ CommandLine::HandleMousePress(double mouseX, double mouseY, bool isDrag)
         isDraggingWindow = true;
         dragWindowOffsetX = static_cast<float>(mouseX) - panelX0;
         dragWindowOffsetY = static_cast<float>(mouseY) - panelY0;
+        markCompositionDirty();
         return;
       }
     }
   }
 
-  int totalLines = static_cast<int>(history.size());
-  float lineSpacing = 24.0f;
-  int maxHistoryLines =
-    static_cast<int>((historyBottom - historyTop) / lineSpacing);
-  if (maxHistoryLines < 1) {
-    maxHistoryLines = 1;
-  }
-  int maxScroll =
-    (totalLines > maxHistoryLines) ? (totalLines - maxHistoryLines) : 0;
+  int maxHistoryLines = 0;
+  int maxScroll = 0;
+  computeHistoryScrollLimits(&maxHistoryLines, &maxScroll, nullptr);
 
-  if (totalLines > maxHistoryLines) {
+  if (maxScroll > 0) {
     float scrollbarWidth = 5.0f;
     float scrollbarRightMargin = 9.0f;
     float barX1 = panelX1 - scrollbarWidth - scrollbarRightMargin;
@@ -1715,6 +1849,7 @@ CommandLine::HandleMousePress(double mouseX, double mouseY, bool isDrag)
       if (scrollOffset > maxScroll) {
         scrollOffset = maxScroll;
       }
+      markCompositionDirty();
       return;
     }
   }
@@ -1725,18 +1860,18 @@ CommandLine::HandleMousePress(double mouseX, double mouseY, bool isDrag)
       std::max(48.0f, (panelX1 - panelX0) - 40.0f - 22.0f);
     std::size_t visibleStart = 0;
     while (visibleStart < cursorPosition) {
-      std::string textThroughCursor =
-        currentInput.substr(visibleStart, cursorPosition - visibleStart);
-      if (measureFontText(textThroughCursor) <= inputAvailableWidth) {
+      if (measureFontTextRange(currentInput.data() + visibleStart,
+                               cursorPosition - visibleStart) <=
+          inputAvailableWidth) {
         break;
       }
       ++visibleStart;
     }
     std::size_t visibleEnd = cursorPosition;
     while (visibleEnd < currentInput.size()) {
-      std::string candidateText =
-        currentInput.substr(visibleStart, visibleEnd + 1 - visibleStart);
-      if (measureFontText(candidateText) > inputAvailableWidth) {
+      if (measureFontTextRange(currentInput.data() + visibleStart,
+                               visibleEnd + 1 - visibleStart) >
+          inputAvailableWidth) {
         break;
       }
       ++visibleEnd;
@@ -1748,7 +1883,7 @@ CommandLine::HandleMousePress(double mouseX, double mouseY, bool isDrag)
     std::size_t bestIdx = 0;
     float minDiff = 1e9f;
     for (std::size_t i = 0; i <= visibleInput.size(); ++i) {
-      float charX = inputTextX + measureFontText(visibleInput.substr(0, i));
+      float charX = inputTextX + measureFontTextRange(visibleInput.data(), i);
       float diff = std::abs(charX - relX);
       if (diff < minDiff) {
         minDiff = diff;
@@ -1764,6 +1899,7 @@ CommandLine::HandleMousePress(double mouseX, double mouseY, bool isDrag)
     if (!isDrag) {
       selectionAnchor = cursorPosition;
     }
+    markCompositionDirty();
   }
 }
 
@@ -1784,6 +1920,7 @@ CommandLine::HandleMouseDrag(double mouseX, double mouseY)
 
     floatingW = std::clamp(resizeStartW + deltaX, 280.0f, width - floatingX);
     floatingH = std::clamp(resizeStartH + deltaY, 180.0f, height - floatingY);
+    markCompositionDirty();
     return;
   }
   if (isDraggingWindow && isFloating) {
@@ -1807,6 +1944,7 @@ CommandLine::HandleMouseDrag(double mouseX, double mouseY)
       static_cast<float>(mouseX) - dragWindowOffsetX, 0.0f, width - floatW);
     floatingY = std::clamp(
       static_cast<float>(mouseY) - dragWindowOffsetY, 0.0f, height - floatH);
+    markCompositionDirty();
     return;
   }
   if (isDraggingScrollbar) {
@@ -1831,15 +1969,9 @@ CommandLine::HandleMouseDrag(double mouseX, double mouseY)
     const float inputTop = yOffset + panelHeight - inputRowHeight;
     const float historyBottom = inputTop - 8.0f;
 
-    int totalLines = static_cast<int>(history.size());
-    float lineSpacing = 24.0f;
-    int maxHistoryLines =
-      static_cast<int>((historyBottom - historyTop) / lineSpacing);
-    if (maxHistoryLines < 1) {
-      maxHistoryLines = 1;
-    }
-    int maxScroll =
-      (totalLines > maxHistoryLines) ? (totalLines - maxHistoryLines) : 0;
+    int maxHistoryLines = 0;
+    int maxScroll = 0;
+    computeHistoryScrollLimits(&maxHistoryLines, &maxScroll, nullptr);
 
     float trackHeight = historyBottom - historyTop;
     if (trackHeight > 0.0f && maxScroll > 0) {
@@ -1854,6 +1986,7 @@ CommandLine::HandleMouseDrag(double mouseX, double mouseY)
         newScroll = maxScroll;
       }
       scrollOffset = newScroll;
+      markCompositionDirty();
     }
     return;
   }
@@ -1879,7 +2012,22 @@ CommandLine::AppendString(unsigned char r,
   history.push_back({ r, g, b, a, str });
   if (history.size() > MAX_CMD_HISTORY) {
     history.erase(history.begin());
+    if (!wrappedHistory.empty()) {
+      wrappedHistoryTotalLines -=
+        static_cast<int>(wrappedHistory.front().size());
+      wrappedHistory.erase(wrappedHistory.begin());
+    }
   }
+  if (wrappedHistoryWidth > 0.0f &&
+      wrappedHistory.size() + 1 == history.size()) {
+    std::vector<std::string> lines;
+    wrapTextToWidth(history.back().content, wrappedHistoryWidth, &lines);
+    wrappedHistoryTotalLines += static_cast<int>(lines.size());
+    wrappedHistory.push_back(std::move(lines));
+  } else if (wrappedHistory.size() != history.size()) {
+    wrappedHistoryWidth = -1.0f;
+  }
+  markCompositionDirty();
 }
 void
 CommandLine::AppendStringLn(unsigned char r,
@@ -1888,10 +2036,7 @@ CommandLine::AppendStringLn(unsigned char r,
                             unsigned char a,
                             std::string str)
 {
-  history.push_back({ r, g, b, a, str + "\n" });
-  if (history.size() > MAX_CMD_HISTORY) {
-    history.erase(history.begin());
-  }
+  AppendString(r, g, b, a, str + "\n");
 }
 
 void
@@ -2123,7 +2268,41 @@ CommandLine::AppendCommands(Renderer* r)
     maxHistoryLines = 1;
   }
 
-  // Rebuild chrome + text as GameVisual primitives each frame.
+  long long caretMilliseconds =
+    std::chrono::duration_cast<std::chrono::milliseconds>(
+      now.time_since_epoch())
+      .count();
+  bool caretVisible = (caretMilliseconds % 1000) < 560;
+  int caretPhase = caretVisible ? 1 : 0;
+  int pulseStep = static_cast<int>((caretMilliseconds / 100) % 10);
+  const bool animating =
+    isOpen ? (animationProgress < 1.0f) : (animationProgress > 0.0f);
+  const bool panelBusy = animating || isDraggingWindow || isResizingWindow;
+  if (panelBusy) {
+    compositionDirty = true;
+  }
+  if (winWidth != composedWindowW || winHeight != composedWindowH) {
+    compositionDirty = true;
+  }
+  if (std::abs(currentPanelX - composedPanelX) > 0.5f ||
+      std::abs(currentPanelY - composedPanelY) > 0.5f ||
+      std::abs(currentPanelW - composedPanelW) > 0.5f ||
+      std::abs(currentPanelH - composedPanelH) > 0.5f) {
+    compositionDirty = true;
+  }
+  if (caretPhase != composedCaretPhase || pulseStep != composedPulseStep ||
+      scrollOffset != composedScrollOffset) {
+    compositionDirty = true;
+  }
+  if (!compositionDirty) {
+    visual.setRenderer(r);
+    visual.setWindow(window);
+    visual.setSpace(PrimitiveSpace::Pixels);
+    visual.setVisible(true);
+    return visual.AppendCommands(r);
+  }
+
+  // Rebuild chrome + text as GameVisual primitives when dirty.
   visual.clearPrimitives();
   visual.setRenderer(r);
   visual.setWindow(window);
@@ -2131,12 +2310,8 @@ CommandLine::AppendCommands(Renderer* r)
   const unsigned int kCap = kUiVertCap;
   unsigned int packed = 0;
 
-  long long caretMilliseconds =
-    std::chrono::duration_cast<std::chrono::milliseconds>(
-      now.time_since_epoch())
-      .count();
   float pulse =
-    (std::sin(static_cast<float>(caretMilliseconds) * 0.005f) + 1.0f) * 0.5f;
+    (std::sin(static_cast<float>(pulseStep) * 0.62831853f) + 1.0f) * 0.5f;
 
   // Primitive-composed console chrome. The panel uses a small, coherent
   // theme and real outlines/lines; text, selection, caret, and scrolling stay
@@ -2427,70 +2602,70 @@ CommandLine::AppendCommands(Renderer* r)
   }
 
   // History text is drawn after chrome, but before the input row, so its
-  // clipping and scroll thumb agree with the available space.
+  // clipping and scroll thumb agree with the available space. Off-screen
+  // visual lines stay in the wrap cache for scroll totals and are not
+  // tessellated.
   float currentY = historyTop;
-  struct VisualHistoryLine
-  {
-    unsigned char r, g, b, a;
-    std::string text;
-  };
-  std::vector<VisualHistoryLine> visualLines;
-  for (std::size_t i = 0; i < history.size(); ++i) {
-    const historyBuffer& item = history[i];
-    unsigned char itemColor[4] = { item.r, item.g, item.b, item.a };
-    if (item.content.rfind("SUCCESS:", 0) == 0) {
-      const ColorRgba successText = UiTheme::success();
-      itemColor[0] = successText.r;
-      itemColor[1] = successText.g;
-      itemColor[2] = successText.b;
-      itemColor[3] = 255;
-    } else if (item.content.rfind("ERROR:", 0) == 0) {
-      const ColorRgba errorText = UiTheme::error();
-      itemColor[0] = errorText.r;
-      itemColor[1] = errorText.g;
-      itemColor[2] = errorText.b;
-      itemColor[3] = 255;
-    } else if (item.content.rfind("WARNING:", 0) == 0) {
-      const ColorRgba warningText = UiTheme::warning();
-      itemColor[0] = warningText.r;
-      itemColor[1] = warningText.g;
-      itemColor[2] = warningText.b;
-      itemColor[3] = 255;
-    }
-    std::vector<std::string> wrapped;
-    wrapTextToWidth(item.content, historyAvailableWidth, &wrapped);
-    for (std::size_t lineIndex = 0; lineIndex < wrapped.size(); ++lineIndex) {
-      VisualHistoryLine visual;
-      visual.r = itemColor[0];
-      visual.g = itemColor[1];
-      visual.b = itemColor[2];
-      visual.a = itemColor[3];
-      visual.text = wrapped[lineIndex];
-      visualLines.push_back(visual);
-    }
-  }
-  int endIdx = static_cast<int>(visualLines.size()) - 1 - scrollOffset;
-  if (endIdx >= 0) {
+  int endIdx = wrappedHistoryTotalLines - 1 - scrollOffset;
+  if (endIdx >= 0 && wrappedHistory.size() == history.size()) {
     int startIdx = endIdx - (maxHistoryLines - 1);
     if (startIdx < 0) {
       startIdx = 0;
     }
-    for (int i = startIdx; i <= endIdx; ++i) {
-      const VisualHistoryLine& item = visualLines[static_cast<size_t>(i)];
+    int visualCursor = 0;
+    std::size_t entryIndex = 0;
+    while (entryIndex < history.size()) {
+      const int entryLines =
+        static_cast<int>(wrappedHistory[entryIndex].size());
+      if (visualCursor + entryLines > startIdx) {
+        break;
+      }
+      visualCursor += entryLines;
+      ++entryIndex;
+    }
+    for (; entryIndex < history.size() && visualCursor <= endIdx;
+         ++entryIndex) {
+      const historyBuffer& item = history[entryIndex];
       unsigned char itemColor[4] = { item.r, item.g, item.b, item.a };
-      if (!item.text.empty()) {
-        if (currentY >= historyTop - 12.0f &&
-            currentY <= historyBottom + 2.0f) {
+      if (item.content.rfind("SUCCESS:", 0) == 0) {
+        const ColorRgba successText = UiTheme::success();
+        itemColor[0] = successText.r;
+        itemColor[1] = successText.g;
+        itemColor[2] = successText.b;
+        itemColor[3] = 255;
+      } else if (item.content.rfind("ERROR:", 0) == 0) {
+        const ColorRgba errorText = UiTheme::error();
+        itemColor[0] = errorText.r;
+        itemColor[1] = errorText.g;
+        itemColor[2] = errorText.b;
+        itemColor[3] = 255;
+      } else if (item.content.rfind("WARNING:", 0) == 0) {
+        const ColorRgba warningText = UiTheme::warning();
+        itemColor[0] = warningText.r;
+        itemColor[1] = warningText.g;
+        itemColor[2] = warningText.b;
+        itemColor[3] = 255;
+      }
+      const std::vector<std::string>& wrapped = wrappedHistory[entryIndex];
+      std::size_t lineIndex = 0;
+      if (visualCursor < startIdx) {
+        lineIndex = static_cast<std::size_t>(startIdx - visualCursor);
+        visualCursor = startIdx;
+      }
+      for (; lineIndex < wrapped.size() && visualCursor <= endIdx;
+           ++lineIndex) {
+        if (!wrapped[lineIndex].empty()) {
           packed = packFontLine(&visual,
                                 kCap,
                                 packed,
                                 panelX0 + 14.0f,
                                 currentY,
-                                item.text.c_str(),
+                                wrapped[lineIndex].c_str(),
                                 itemColor);
         }
+        currentY += lineSpacing;
+        ++visualCursor;
       }
-      currentY += lineSpacing;
     }
   }
 
@@ -2502,18 +2677,18 @@ CommandLine::AppendCommands(Renderer* r)
     std::max(48.0f, (panelX1 - panelX0) - 42.0f - 22.0f);
   std::size_t visibleStart = 0;
   while (visibleStart < cursorPosition) {
-    std::string textThroughCursor =
-      currentInput.substr(visibleStart, cursorPosition - visibleStart);
-    if (measureFontText(textThroughCursor) <= inputAvailableWidth) {
+    if (measureFontTextRange(currentInput.data() + visibleStart,
+                             cursorPosition - visibleStart) <=
+        inputAvailableWidth) {
       break;
     }
     ++visibleStart;
   }
   std::size_t visibleEnd = cursorPosition;
   while (visibleEnd < currentInput.size()) {
-    std::string candidateText =
-      currentInput.substr(visibleStart, visibleEnd + 1 - visibleStart);
-    if (measureFontText(candidateText) > inputAvailableWidth) {
+    if (measureFontTextRange(currentInput.data() + visibleStart,
+                             visibleEnd + 1 - visibleStart) >
+        inputAvailableWidth) {
       break;
     }
     ++visibleEnd;
@@ -2579,7 +2754,8 @@ CommandLine::AppendCommands(Renderer* r)
       visibleEnd == currentInput.size()) {
     std::string ghostText = getGhostSuggestion();
     if (!ghostText.empty()) {
-      float ghostX = inputTextX + measureFontText(visibleInput);
+      float ghostX = inputTextX + measureFontTextRange(visibleInput.data(),
+                                                       visibleInput.size());
       if (ghostX < inputTextX + inputAvailableWidth) {
         unsigned char ghostColor[4] = {
           mutedText.r, mutedText.g, mutedText.b, 150
@@ -2590,12 +2766,12 @@ CommandLine::AppendCommands(Renderer* r)
     }
   }
 
-  bool caretVisible = (caretMilliseconds % 1000) < 560;
   if (caretVisible && cursorPosition >= visibleStart &&
       cursorPosition <= visibleEnd) {
     std::string textBeforeCaret =
       visibleInput.substr(0, cursorPosition - visibleStart);
-    float caretX = inputTextX + measureFontText(textBeforeCaret);
+    float caretX = inputTextX + measureFontTextRange(textBeforeCaret.data(),
+                                                     textBeforeCaret.size());
     packed = packLine(&visual,
                       kCap,
                       packed,
@@ -2621,5 +2797,15 @@ CommandLine::AppendCommands(Renderer* r)
   }
 
   visual.setVisible(true);
+  composedCaretPhase = caretPhase;
+  composedPulseStep = pulseStep;
+  composedScrollOffset = scrollOffset;
+  composedWindowW = winWidth;
+  composedWindowH = winHeight;
+  composedPanelX = currentPanelX;
+  composedPanelY = currentPanelY;
+  composedPanelW = currentPanelW;
+  composedPanelH = currentPanelH;
+  compositionDirty = false;
   return visual.AppendCommands(r);
 }

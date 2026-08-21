@@ -624,30 +624,53 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
   if (text.content.empty()) {
     return true;
   }
-  const unsigned int estimate =
-    static_cast<unsigned int>(text.content.size() * 4);
-  ensureCpuCapacity(
-    std::min(maxQuadCount, shapeQuadCount + spriteQuadCount + estimate));
   const unsigned int remaining =
     maxQuadCount - shapeQuadCount - spriteQuadCount;
   if (remaining == 0) {
     return false;
   }
-  const size_t tempBytes =
-    static_cast<size_t>(remaining) * 4 * sizeof(ShapeVertex);
-  std::vector<unsigned char> temp(tempBytes);
+  unsigned int estimatedQuads =
+    static_cast<unsigned int>(text.content.size() * 16u);
+  if (estimatedQuads < 32u) {
+    estimatedQuads = 32u;
+  }
+  if (estimatedQuads > remaining) {
+    estimatedQuads = remaining;
+  }
+  size_t tempBytes =
+    static_cast<size_t>(estimatedQuads) * 4 * sizeof(ShapeVertex);
+  if (textTessellateScratch.size() < tempBytes) {
+    textTessellateScratch.resize(tempBytes);
+  }
   unsigned char color[4] = {
     text.color.r, text.color.g, text.color.b, text.color.a
   };
-  std::string mutableCopy = text.content;
+  char* mutableText = const_cast<char*>(text.content.c_str());
   int quadCount = stb_easy_font_print(0.0f,
                                       0.0f,
-                                      mutableCopy.data(),
+                                      mutableText,
                                       color,
-                                      temp.data(),
-                                      static_cast<int>(temp.size()));
+                                      textTessellateScratch.data(),
+                                      static_cast<int>(tempBytes));
   if (quadCount < 0) {
     quadCount = 0;
+  }
+  if (quadCount >= static_cast<int>(estimatedQuads) &&
+      estimatedQuads < remaining) {
+    estimatedQuads = remaining;
+    tempBytes = static_cast<size_t>(estimatedQuads) * 4 * sizeof(ShapeVertex);
+    if (textTessellateScratch.size() < tempBytes) {
+      textTessellateScratch.resize(tempBytes);
+    }
+    quadCount = stb_easy_font_print(0.0f,
+                                    0.0f,
+                                    mutableText,
+                                    color,
+                                    textTessellateScratch.data(),
+                                    static_cast<int>(tempBytes));
+    if (quadCount < 0) {
+      quadCount = 0;
+    }
   }
   if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount +
                          static_cast<unsigned int>(quadCount))) {
@@ -655,7 +678,8 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
       static_cast<int>(maxQuadCount - shapeQuadCount - spriteQuadCount);
   }
   const float scale = text.sizePt / 12.0f;
-  const ShapeVertex* source = reinterpret_cast<const ShapeVertex*>(temp.data());
+  const ShapeVertex* source =
+    reinterpret_cast<const ShapeVertex*>(textTessellateScratch.data());
   for (int q = 0; q < quadCount; ++q) {
     Point2 points[4];
     for (int vertex = 0; vertex < 4; ++vertex) {

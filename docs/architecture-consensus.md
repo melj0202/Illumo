@@ -657,7 +657,11 @@ The Debug-only console separates general tooling from product behavior:
 - Utility commands include `repeat <N> <command>`, `history [filter|clear]`, and the `sysinfo` telemetry dashboard. The simulation-provided `status` command reports simulation, canvas, ruleset, and camera state.
 - Console chrome uses a single heap-backed batch with capacity for 8,000 UI
   quads. History wraps to panel width and scrolls by visual lines, sharing
-  mounted/floating layout metrics (D-UI2).
+  mounted/floating layout metrics (D-UI2). Wrap metrics are cached until
+  history contents or panel wrap width change; only the visible window is
+  tessellated. Settled composition is replayed until history, input, scroll,
+  layout, caret phase, or a quantized accent pulse changes, so idle frames
+  `DrawIndexed` without a new `UpdateBuffer` (D-P2).
 - `Logger` may mirror output into the console while services are alive. The host
   clears that non-owning logger context before destroying the services.
 
@@ -750,7 +754,7 @@ the normal canvas returns immediately when the flag is disabled.
 | ID | Decision | Note |
 |----|----------|------|
 | **D-P1** | Dirty visual path — idle frames skip full recolor/upload. | Still current |
-| **D-P2** | Primitive UI batch: CommandLine remains one update/draw; GLString caches geometry, including optional panel chrome. | Still current |
+| **D-P2** | Primitive UI batch: CommandLine remains one draw; settled frames skip `UpdateBuffer`. GLString caches geometry, including optional panel chrome. | Still current |
 | **D-P3** | Double-buffer `calcGeneration` + sparse dirty AABB. | Still current; refined by D-P5 |
 | **D-P4** | Originally: R8 + palette + dirty-rect PBO; drop dual float RGB. | **Partially superseded:** dirty-rect PBO + bind tracker kept; **RGB fade display restored** as live presentation (see §5.6) |
 | **D-P5** | Single-pass dirty AABB + `CellGrid` front/back swap (no full memcpy). | 2026-08-06 |

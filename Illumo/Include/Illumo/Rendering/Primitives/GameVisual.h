@@ -166,6 +166,7 @@ private:
 
   std::vector<ShapeVertex> shapeVerts;
   std::vector<SpriteVertex> spriteVerts;
+  std::vector<unsigned char> textTessellateScratch;
   std::vector<DrawBatch> drawBatches;
   unsigned int shapeQuadCount = 0;
   unsigned int spriteQuadCount = 0;

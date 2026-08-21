@@ -254,6 +254,39 @@ testGameVisualTextPrimitive()
 }
 
 static void
+testGameVisualMultipleTextRuns()
+{
+  testSection("GameVisual: several text runs tessellate into one shape batch");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  GameVisual visual;
+  visual.setWindow(&window);
+  visual.prepare(&renderer);
+  ColorRgba white{ 255, 255, 255, 255 };
+  visual.addText("Line one of cached tessellation", 10.0f, 20.0f, 12.0f, white);
+  visual.addText("Line two of cached tessellation", 10.0f, 40.0f, 12.0f, white);
+  visual.addText(
+    "Line three of cached tessellation", 10.0f, 60.0f, 12.0f, white);
+
+  mock.resetCounters();
+  testTrue(g, visual.AppendCommands(&renderer), "multi-text AppendCommands");
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             1u,
+             "multiple text runs stay one shape draw");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "multiple text runs stay one shape upload");
+}
+
+static void
 testGameVisualEmptyAndInvisible()
 {
   testSection("GameVisual: empty/invisible skip draws");
@@ -546,6 +579,9 @@ registerGameVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.GameVisual.Text",
                []() { return runGameVisualCase(testGameVisualTextPrimitive); });
+  registry.add("Illumo.GameVisual.MultipleTextRuns", []() {
+    return runGameVisualCase(testGameVisualMultipleTextRuns);
+  });
   registry.add("Illumo.GameVisual.EmptyAndInvisible", []() {
     return runGameVisualCase(testGameVisualEmptyAndInvisible);
   });

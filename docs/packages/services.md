@@ -4,7 +4,9 @@ The static library owns generic logging, environment variables, input, command
 registry/console editing, and allocators. `CommandLine` receives its branding
 from the application name and owns only generic help, editing, history, alias,
 environment, window/presentation, and quit behavior. It renders through
-`GameVisual` and the value-only `UiTheme`.
+`GameVisual` and the value-only `UiTheme`. History wrap metrics are cached until
+contents or panel width change; settled console composition is replayed until a
+dirty reason fires.
 
 Illumo generic defaults cover window dimensions, fullscreen, VSync, FPS display,
 and log level. An explicit configuration path keeps runtime and file-backed tests

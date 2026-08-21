@@ -174,6 +174,23 @@ private:
   float animationProgress;
   std::chrono::high_resolution_clock::time_point lastAnimTime;
 
+  // Wrapped visual lines stay equivalent to direct wrapTextToWidth (D-UI2).
+  mutable std::vector<std::vector<std::string>> wrappedHistory;
+  mutable float wrappedHistoryWidth;
+  mutable int wrappedHistoryTotalLines;
+
+  // Settled composition is replayed until a dirty reason fires (D-P2).
+  bool compositionDirty;
+  int composedCaretPhase;
+  int composedPulseStep;
+  int composedScrollOffset;
+  int composedWindowW;
+  int composedWindowH;
+  float composedPanelX;
+  float composedPanelY;
+  float composedPanelW;
+  float composedPanelH;
+
   // Approximate capacity tracking for chrome/text emission via GameVisual.
   static const unsigned int kUiQuadCap = 8000;
   static const unsigned int kUiVertCap = kUiQuadCap * 4;
@@ -182,6 +199,10 @@ private:
   void clearCompletionHint();
   void eraseSelection();
   void resetCursorToEnd();
+  void markCompositionDirty();
+  void invalidateWrapCache();
+  void rebuildWrapCache(float width) const;
+  void ensureWrapCache(float width) const;
   std::size_t findPreviousWordBoundary() const;
   std::size_t findNextWordBoundary() const;
   std::vector<std::string> getCompletionCandidates(
