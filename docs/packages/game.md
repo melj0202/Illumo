@@ -85,8 +85,11 @@ infinite or finite toroidal topology plus a bounded presentation view.
   contents, allowing dependent views to skip idle resampling.
 - Rulesets supply pure `nextState` and `evalCell` behavior. Each ruleset's
   complete 256x9 transition table is cached once and shared by all serial and
-  worker hot loops. The old dense
-  `CellGrid`/`Canvas` implementation remains only for compatibility coverage.
+  worker hot loops. Binary B/S modes share `LifeLikeRuleSet` masks. Rule 90 and
+  Rule 184 are elementary 1D space-time rules: the source row is the maximum
+  counted Y, the destination is Y+1, and older rows remain history (D-G2).
+  Dense `calcGeneration` remains Moore/compatibility only.
+  `CellGrid`/`Canvas` remain compatibility coverage.
 
 ## CanvasView (presentation)
 
@@ -116,7 +119,7 @@ infinite or finite toroidal topology plus a bounded presentation view.
 - Overview sampling visits only sparse chunks intersecting the visible source
   region. The visual texel budget does not limit stored chunks or world cells.
 - `CellGameModule` dispatches the view on the World layer and the cursor,
-  splash, and configuration overlay on UI.
+  selection outline, inspector, splash, and configuration overlay on UI.
 
 ## CellGameModule
 
@@ -125,8 +128,13 @@ generation in flight on a persistent runner. The published grid is immutable
 while the worker advances its mirror; completion and its changed-chunk delta
 publish only at a frame boundary. There is no backlog, and overdue whole steps
 are dropped while fractional time is retained. Pause, edit, save/load, ruleset
-changes, manual stepping, and shutdown drain first. Painting, Bresenham strokes, `setcell`,
+changes, manual stepping, and shutdown drain first. Painting, Bresenham strokes, rectangular selection, copy/cut/paste, built-in
+stamps, RLE/plaintext import, `setcell`,
 randomization, and clearing operate directly on signed world coordinates.
+Pattern text is a clipboard/console side path and does not bump the sparse v3
+save format (D-G1). `C`/`X`/`V` are editor clipboard keys; full clear remains
+`clear_canvas`. An optional inspector HUD reports generation, hover address,
+state, chunk, and census (`inspect` or `I`).
 Startup patterns are centered around `(0, 0)`. Infinite mode is non-toroidal;
 positive chunk width and height select a finite torus. `0 x 0` selects the
 infinite canvas, while mixed zero/positive dimensions are rejected. Finite

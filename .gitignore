@@ -37,7 +37,8 @@ CMakeCache.txt
 cmake_install.cmake
 CTestTestfile.cmake
 compile_commands.json
-Testing/
+# CTest in-source output only; do not ignore Illumo/TestSupport/.../Testing/
+/Testing/
 x64/
 glfw_app/x64/
 /packages/

@@ -168,6 +168,46 @@ truncateTextToWidth(const std::string& text, float maxWidth)
   }
   return result;
 }
+
+static void
+wrapTextToWidth(const std::string& text,
+                float maxWidth,
+                std::vector<std::string>* lines)
+{
+  if (lines == nullptr) {
+    return;
+  }
+  if (text.empty()) {
+    lines->push_back("");
+    return;
+  }
+  if (maxWidth <= 8.0f) {
+    lines->push_back(text.substr(0, 1));
+    return;
+  }
+  std::size_t start = 0;
+  while (start < text.size()) {
+    if (measureFontText(text.substr(start)) <= maxWidth) {
+      lines->push_back(text.substr(start));
+      return;
+    }
+    std::size_t lo = 1;
+    std::size_t hi = text.size() - start;
+    while (lo < hi) {
+      const std::size_t mid = (lo + hi + 1) / 2;
+      if (measureFontText(text.substr(start, mid)) <= maxWidth) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (lo < 1) {
+      lo = 1;
+    }
+    lines->push_back(text.substr(start, lo));
+    start += lo;
+  }
+}
 }
 
 CommandLine::CommandLine(IEnvVars* vars,
@@ -1404,23 +1444,122 @@ CommandLine::HistoryUp()
   }
 }
 
+CommandLine::PanelLayout
+CommandLine::computePanelLayout(bool useSmoothedPanel) const
+{
+  std::array<int, 2> windowDimensions =
+    window ? window->getWindowDimensions() : std::array<int, 2>{ 1280, 720 };
+  const float width = static_cast<float>(windowDimensions[0]);
+  const float height = static_cast<float>(windowDimensions[1]);
+  float defaultMarginX = std::clamp(width * 0.08f, 20.0f, 100.0f);
+  float defaultFloatW = std::max(280.0f, width - defaultMarginX * 2.0f);
+  float defaultFloatH = height * 0.52f;
+  if (defaultFloatH < 240.0f) {
+    defaultFloatH = 240.0f;
+  }
+  if (defaultFloatH > height - 20.0f) {
+    defaultFloatH = height - 20.0f;
+  }
+  float floatW = (isFloating && floatingW > 0.0f)
+                   ? std::clamp(floatingW, 280.0f, width)
+                   : defaultFloatW;
+  float floatH = (isFloating && floatingH > 0.0f)
+                   ? std::clamp(floatingH, 180.0f, height)
+                   : defaultFloatH;
+  float targetX0 =
+    isFloating ? std::clamp(floatingX, 0.0f, width - floatW) : 0.0f;
+  float targetY0 =
+    isFloating ? std::clamp(floatingY, 0.0f, height - floatH) : 0.0f;
+  float targetW = isFloating ? floatW : width;
+  float targetH = isFloating ? floatH : defaultFloatH;
+  float panelX =
+    (useSmoothedPanel && currentPanelX >= 0.0f) ? currentPanelX : targetX0;
+  float panelY =
+    (useSmoothedPanel && currentPanelX >= 0.0f) ? currentPanelY : targetY0;
+  float panelW =
+    (useSmoothedPanel && currentPanelX >= 0.0f) ? currentPanelW : targetW;
+  float panelH =
+    (useSmoothedPanel && currentPanelX >= 0.0f) ? currentPanelH : targetH;
+  PanelLayout layout{};
+  layout.panelX0 = panelX;
+  layout.panelY0 = panelY;
+  layout.panelX1 = panelX + panelW;
+  layout.panelY1 = panelY + panelH;
+  layout.headerHeight = 34.0f;
+  layout.inputRowHeight = 40.0f;
+  layout.historyTop = layout.panelY0 + layout.headerHeight + 8.0f;
+  layout.inputTop = layout.panelY1 - layout.inputRowHeight;
+  layout.historyBottom = layout.inputTop - 8.0f;
+  layout.lineSpacing = 24.0f;
+  layout.maxHistoryLines = static_cast<int>(
+    (layout.historyBottom - layout.historyTop) / layout.lineSpacing);
+  if (layout.maxHistoryLines < 1) {
+    layout.maxHistoryLines = 1;
+  }
+  layout.historyBaseWidth =
+    std::max(20.0f, (layout.panelX1 - layout.panelX0) - 32.0f);
+  return layout;
+}
+
+int
+CommandLine::countWrappedHistoryLines(float availableWidth) const
+{
+  int total = 0;
+  for (std::size_t i = 0; i < history.size(); ++i) {
+    std::vector<std::string> lines;
+    wrapTextToWidth(history[i].content, availableWidth, &lines);
+    total += static_cast<int>(lines.size());
+  }
+  return total;
+}
+
+void
+CommandLine::computeHistoryScrollLimits(int* maxHistoryLines,
+                                        int* maxScroll,
+                                        float* historyWidth) const
+{
+  const PanelLayout layout = computePanelLayout(true);
+  float width = layout.historyBaseWidth;
+  int total = countWrappedHistoryLines(width);
+  if (total > layout.maxHistoryLines) {
+    width = std::max(20.0f, width - 16.0f);
+    total = countWrappedHistoryLines(width);
+  }
+  int maxLines = layout.maxHistoryLines;
+  int scroll = total - maxLines;
+  if (scroll < 0) {
+    scroll = 0;
+  }
+  if (maxHistoryLines != nullptr) {
+    *maxHistoryLines = maxLines;
+  }
+  if (maxScroll != nullptr) {
+    *maxScroll = scroll;
+  }
+  if (historyWidth != nullptr) {
+    *historyWidth = width;
+  }
+}
+
+void
+CommandLine::clampScrollOffset()
+{
+  int maxScroll = 0;
+  computeHistoryScrollLimits(nullptr, &maxScroll, nullptr);
+  if (scrollOffset < 0) {
+    scrollOffset = 0;
+  }
+  if (scrollOffset > maxScroll) {
+    scrollOffset = maxScroll;
+  }
+}
+
 void
 CommandLine::ScrollUp()
 {
-  std::array<int, 2> windowDimensions = window->getWindowDimensions();
-  int winHeight = windowDimensions[1];
-  float panelHeight = winHeight * 0.52f;
-  if (panelHeight < 240.0f)
-    panelHeight = 240.0f;
-  float lineSpacing = 24.0f;
-  int maxHistoryLines = (int)((panelHeight - 90.0f) / lineSpacing);
-  if (maxHistoryLines < 1)
-    maxHistoryLines = 1;
-
-  int maxScroll = (int)history.size() - maxHistoryLines;
-  if (maxScroll < 0)
-    maxScroll = 0;
-
+  clampScrollOffset();
+  int maxScroll = 0;
+  computeHistoryScrollLimits(nullptr, &maxScroll, nullptr);
   if (scrollOffset < maxScroll) {
     scrollOffset++;
   }
@@ -1440,40 +1579,9 @@ CommandLine::HandleScroll(double yOffset)
   if (!isOpen || history.empty()) {
     return;
   }
-  std::array<int, 2> windowDimensions =
-    window ? window->getWindowDimensions() : std::array<int, 2>{ 1280, 720 };
-  float height = static_cast<float>(windowDimensions[1]);
-  float panelHeight = height * 0.52f;
-  if (panelHeight < 240.0f) {
-    panelHeight = 240.0f;
-  }
-  if (panelHeight > height - 20.0f) {
-    panelHeight = height - 20.0f;
-  }
-  const float headerHeight = 34.0f;
-  const float inputRowHeight = 40.0f;
-  const float historyTop = 8.0f + headerHeight;
-  const float inputTop = panelHeight - inputRowHeight;
-  const float historyBottom = inputTop - 8.0f;
-  const float lineSpacing = 24.0f;
-  int maxHistoryLines =
-    static_cast<int>((historyBottom - historyTop) / lineSpacing);
-  if (maxHistoryLines < 1) {
-    maxHistoryLines = 1;
-  }
-  int maxScroll = static_cast<int>(history.size()) - maxHistoryLines;
-  if (maxScroll < 0) {
-    maxScroll = 0;
-  }
-
   int delta = static_cast<int>(yOffset > 0.0 ? 3 : (yOffset < 0.0 ? -3 : 0));
   scrollOffset += delta;
-  if (scrollOffset < 0) {
-    scrollOffset = 0;
-  }
-  if (scrollOffset > maxScroll) {
-    scrollOffset = maxScroll;
-  }
+  clampScrollOffset();
 }
 
 void
@@ -2170,7 +2278,10 @@ CommandLine::AppendCommands(Renderer* r)
     }
   }
 
-  int totalLines = static_cast<int>(history.size());
+  int totalLines = 0;
+  float historyAvailableWidth = 0.0f;
+  computeHistoryScrollLimits(&maxHistoryLines, nullptr, &historyAvailableWidth);
+  totalLines = countWrappedHistoryLines(historyAvailableWidth);
   if (totalLines > maxHistoryLines) {
     const float trackTop = historyTop;
     const float trackBottom = historyBottom;
@@ -2317,44 +2428,57 @@ CommandLine::AppendCommands(Renderer* r)
 
   // History text is drawn after chrome, but before the input row, so its
   // clipping and scroll thumb agree with the available space.
-  float historyAvailableWidth = std::max(20.0f, (panelX1 - panelX0) - 32.0f);
-  if (totalLines > maxHistoryLines) {
-    historyAvailableWidth -= 16.0f;
-  }
   float currentY = historyTop;
-  int endIdx = static_cast<int>(history.size()) - 1 - scrollOffset;
+  struct VisualHistoryLine
+  {
+    unsigned char r, g, b, a;
+    std::string text;
+  };
+  std::vector<VisualHistoryLine> visualLines;
+  for (std::size_t i = 0; i < history.size(); ++i) {
+    const historyBuffer& item = history[i];
+    unsigned char itemColor[4] = { item.r, item.g, item.b, item.a };
+    if (item.content.rfind("SUCCESS:", 0) == 0) {
+      const ColorRgba successText = UiTheme::success();
+      itemColor[0] = successText.r;
+      itemColor[1] = successText.g;
+      itemColor[2] = successText.b;
+      itemColor[3] = 255;
+    } else if (item.content.rfind("ERROR:", 0) == 0) {
+      const ColorRgba errorText = UiTheme::error();
+      itemColor[0] = errorText.r;
+      itemColor[1] = errorText.g;
+      itemColor[2] = errorText.b;
+      itemColor[3] = 255;
+    } else if (item.content.rfind("WARNING:", 0) == 0) {
+      const ColorRgba warningText = UiTheme::warning();
+      itemColor[0] = warningText.r;
+      itemColor[1] = warningText.g;
+      itemColor[2] = warningText.b;
+      itemColor[3] = 255;
+    }
+    std::vector<std::string> wrapped;
+    wrapTextToWidth(item.content, historyAvailableWidth, &wrapped);
+    for (std::size_t lineIndex = 0; lineIndex < wrapped.size(); ++lineIndex) {
+      VisualHistoryLine visual;
+      visual.r = itemColor[0];
+      visual.g = itemColor[1];
+      visual.b = itemColor[2];
+      visual.a = itemColor[3];
+      visual.text = wrapped[lineIndex];
+      visualLines.push_back(visual);
+    }
+  }
+  int endIdx = static_cast<int>(visualLines.size()) - 1 - scrollOffset;
   if (endIdx >= 0) {
     int startIdx = endIdx - (maxHistoryLines - 1);
     if (startIdx < 0) {
       startIdx = 0;
     }
     for (int i = startIdx; i <= endIdx; ++i) {
-      const historyBuffer& item = history[static_cast<size_t>(i)];
+      const VisualHistoryLine& item = visualLines[static_cast<size_t>(i)];
       unsigned char itemColor[4] = { item.r, item.g, item.b, item.a };
-      if (item.content.rfind("SUCCESS:", 0) == 0) {
-        const ColorRgba successText = UiTheme::success();
-        itemColor[0] = successText.r;
-        itemColor[1] = successText.g;
-        itemColor[2] = successText.b;
-        itemColor[3] = 255;
-      } else if (item.content.rfind("ERROR:", 0) == 0) {
-        const ColorRgba errorText = UiTheme::error();
-        itemColor[0] = errorText.r;
-        itemColor[1] = errorText.g;
-        itemColor[2] = errorText.b;
-        itemColor[3] = 255;
-      } else if (item.content.rfind("WARNING:", 0) == 0) {
-        const ColorRgba warningText = UiTheme::warning();
-        itemColor[0] = warningText.r;
-        itemColor[1] = warningText.g;
-        itemColor[2] = warningText.b;
-        itemColor[3] = 255;
-      }
-      std::string truncatedLine =
-        truncateTextToWidth(item.content, historyAvailableWidth);
-      if (!truncatedLine.empty()) {
-        // Less strict cutoff: allow text to slightly overlap top/bottom
-        // boundary to prevent abrupt popping.
+      if (!item.text.empty()) {
         if (currentY >= historyTop - 12.0f &&
             currentY <= historyBottom + 2.0f) {
           packed = packFontLine(&visual,
@@ -2362,7 +2486,7 @@ CommandLine::AppendCommands(Renderer* r)
                                 packed,
                                 panelX0 + 14.0f,
                                 currentY,
-                                truncatedLine.c_str(),
+                                item.text.c_str(),
                                 itemColor);
         }
       }

@@ -97,4 +97,9 @@ public:
   {
     return module.applyConfiguration(configuration);
   }
+
+  static GameVisual* getInspectorVisual(CellGameModule& module)
+  {
+    return &module.inspectorVisual;
+  }
 };

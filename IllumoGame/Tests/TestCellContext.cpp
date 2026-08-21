@@ -27,6 +27,8 @@ testIsKnownModeString()
   testTrue(g, CellContext::IsKnownModeString("SEEDS"), "Seeds known");
   testTrue(g, CellContext::IsKnownModeString("BRIANS_BRAIN"), "BB known");
   testTrue(g, CellContext::IsKnownModeString("WIREWORLD"), "Wireworld known");
+  testTrue(g, CellContext::IsKnownModeString("RULE_90"), "Rule 90 known");
+  testTrue(g, CellContext::IsKnownModeString("RULE_184"), "Rule 184 known");
   testTrue(
     g, !CellContext::IsKnownModeString("NOT_A_RULE"), "unknown rejected");
   testTrue(g,

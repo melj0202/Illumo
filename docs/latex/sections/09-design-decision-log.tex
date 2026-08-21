@@ -1582,6 +1582,38 @@ existing file contract.\\
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-G1 --- Pattern I/O is a side path, not save v4}
+\begin{decisionbox}[title={D-G1 \quad 2026-08-21}]
+\textbf{Decision:} Editor selection, in-app \texttt{CellPattern} buffers, Golly-style
+RLE, Life 1.0 plaintext, OS clipboard text, and built-in stamps are a Game-owned
+side path. Sparse world persistence remains version 3. RLE \texttt{rule =}
+headers are ignored and never auto-switch the live ruleset.\\
+\textbf{Why:} Pattern exchange is an editing convenience. Folding it into the
+world save format would force a compatibility bump without changing stored
+chunk topology.\\
+\textbf{Consequences:} Copy writes RLE text; paste parses RLE or plaintext.
+Oversize rectangles (above 256$\times$256 or 8,192 stored cells) fail the
+command without mutating the grid. Finite worlds skip out-of-bounds cells
+instead of wrapping stamps. Full canvas clear remains \texttt{clear\_canvas}.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-G2 --- Elementary 1D space-time neighborhood}
+\begin{decisionbox}[title={D-G2 \quad 2026-08-21}]
+\textbf{Decision:} \symbolref{RuleSet} distinguishes
+\texttt{NeighborhoodKind::MooreCount} from \texttt{Elementary1D}. Moore rules
+keep the 256$\times$9 table. Rule 90 and Rule 184 use
+\texttt{nextElementary(left,center,right)} and a serial space-time
+\symbolref{SparseCellGrid} advance: the source row is the maximum counted Y,
+the destination is that Y plus one, and older rows remain history.\\
+\textbf{Why:} Rule 184 is not a Moore popcount, and overloading the 8-neighbor
+path would silently mis-evolve 1D traffic. Space-time diagrams are the
+authorized presentation, not a single live row.\\
+\textbf{Consequences:} Candidate, halo, frontier, and worker-pool paths stay
+Moore-only. Dense \texttt{calcGeneration} remains a compatibility fixture.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

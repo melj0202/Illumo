@@ -172,10 +172,11 @@ Canvas truth (verify here before trusting older notes):
 Ruleset truth:
 
 - Active: Game of Life, Seeds, Brian's Brain, Highlife, Day & Night, Life
-  Without Death, and Wireworld.
-- Rule 90 and Rule 184 are stubs.
+  Without Death, Wireworld, Rule 90, and Rule 184.
 - Binary rules encode `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, conductor `3`.
+- Rule 90 and Rule 184 are elementary 1D space-time diagrams: source row is the
+  maximum counted Y, destination is Y+1, older rows stay history.
 - `RuleSet` transitions (`nextState`) build a cached 256x9 table and palette
   evaluation (`evalCell`) supplies colors. Production hot loops index the table
   instead of making virtual transition calls and use separate stored/counting masks,
@@ -195,7 +196,8 @@ Ruleset truth:
 | Application runner and main loop | `Illumo/Source/Engine/Application.cpp` |
 | Public library API | `Illumo/Include/Illumo/*` |
 | Host, services, modules | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers |
-| CA modes and editor | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h` |
+| CA modes and editor | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
+| OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
 | Domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
 | Bounded view, fade, dirty upload | `IllumoGame/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
 | Compatibility dense storage | `IllumoGame/Source/Game/CellGrid.*`, `Canvas.*` |

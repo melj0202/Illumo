@@ -19,8 +19,8 @@ Rendering, Services, Engine, platform APIs, and OpenGL.
   states declared by its counting mask contribute to neighbors.
 - `evalCell` supplies a stable palette for every valid state. A palette change
   is user-visible behavior and must be tested with transition behavior.
-- Rule 90 and Rule 184 remain inactive identity stubs until their dimensional
-  semantics, activation path, and tests are explicitly implemented.
+- Rule 90 and Rule 184 are elementary 1D space-time rules (`NeighborhoodKind::Elementary1D`).
+  Keep the 256x9 Moore table for Moore rules; do not express 184 as a popcount.
 - Do not add allocation, I/O, rendering, mutable global state, or concurrency
   to transition evaluation.
 

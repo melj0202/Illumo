@@ -20,6 +20,12 @@ public:
   using TransitionTable =
     std::array<unsigned char, kCellStateCount * kNeighborCountCount>;
 
+  enum class NeighborhoodKind
+  {
+    MooreCount,
+    Elementary1D
+  };
+
   CellGrid* canvas;
 
   RuleSet(CellGrid* targetCanvas)
@@ -60,6 +66,20 @@ public:
   {
     (void)aliveNeighbors;
     return cell;
+  }
+
+  virtual NeighborhoodKind getNeighborhoodKind() const
+  {
+    return NeighborhoodKind::MooreCount;
+  }
+
+  virtual unsigned char nextElementary(unsigned char left,
+                                       unsigned char center,
+                                       unsigned char right) const
+  {
+    (void)left;
+    (void)right;
+    return center;
   }
 
   // Built once per ruleset instance before worker dispatch. Hot simulation

@@ -1,4 +1,13 @@
 #include "Rule90RuleSet.h"
+#include <cstring>
 
-// Intentionally empty: uses RuleSet::nextState identity until Rule 90 is
-// implemented.
+void
+Rule90RuleSet::evalCell(const unsigned char& target,
+                        unsigned char dest[3]) const
+{
+  if (target == 1) {
+    std::memset(dest, 255, 3);
+  } else {
+    std::memset(dest, 0, 3);
+  }
+}

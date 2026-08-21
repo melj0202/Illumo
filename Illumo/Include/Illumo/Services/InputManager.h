@@ -116,6 +116,7 @@ private:
   std::queue<KeyPressEvent> keyQueue;
 
   long numInputContexts;
+  int m_modifierFlags;
 
   KeyCode TranslateKeyCodeToGLFW(int glfwKey);
 
@@ -142,6 +143,10 @@ public:
   bool isKeyReleased(KeyCode key);
 
   bool isMouseButtonPressed(KeyCode mouseButton);
+
+  bool isShiftPressed() const;
+
+  bool isControlPressed() const;
 
   bool isMouseButtonReleased(KeyCode mouseButton);
 

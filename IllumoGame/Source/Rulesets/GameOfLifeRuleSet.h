@@ -1,18 +1,14 @@
 #pragma once
-#include "RuleSet.h"
+#include "LifeLikeRuleSet.h"
 
-class GameOfLifeRuleSet : public RuleSet
+class GameOfLifeRuleSet : public LifeLikeRuleSet
 {
 public:
   GameOfLifeRuleSet(CellGrid* targetCanvas)
-    : RuleSet(targetCanvas)
+    : LifeLikeRuleSet(targetCanvas,
+                      "GAME_OF_LIFE",
+                      1u << 3,
+                      (1u << 2) | (1u << 3))
   {
   }
-  ~GameOfLifeRuleSet() override = default;
-
-  unsigned char nextState(unsigned char cell,
-                          unsigned char aliveNeighbors) const override final;
-  void evalCell(const unsigned char& target,
-                unsigned char dest[3]) const override;
-  std::string getRuleTag() override { return "GAME_OF_LIFE"; }
 };

@@ -1,14 +1,17 @@
 cmake_minimum_required(VERSION 3.20)
 
 add_library(IllumoGameCore STATIC
+  Source/Game/BuiltinPatterns.cpp
   Source/Game/Canvas.cpp
   Source/Game/CanvasView.cpp
   Source/Game/CellGameModule.cpp
   Source/Game/CellGrid.cpp
+  Source/Game/CellPattern.cpp
   Source/Game/ConfigurationMenu.cpp
   Source/Game/Cursor.cpp
   Source/Game/IllumoGameApplication.cpp
   Source/Game/IllumoGameConfig.cpp
+  Source/Game/PatternCodec.cpp
   Source/Game/SimulationRunner.cpp
   Source/Game/SparseCellGrid.cpp
   Source/Rulesets/BriansBrainRuleSet.cpp
@@ -51,6 +54,7 @@ if(BUILD_TESTING)
     Tests/TestWorldTopology.cpp
     Tests/TestConfigurationMenu.cpp
     Tests/TestIllumoGameConfig.cpp
+    Tests/TestEditor.cpp
   )
   target_compile_definitions(IllumoGameTests PRIVATE ILLUMO_TESTING)
   target_include_directories(IllumoGameTests PRIVATE

@@ -7,7 +7,6 @@
 #include "Rulesets/GameOfLifeRuleSet.h"
 #include "Rulesets/HighlifeRuleSet.h"
 #include "Rulesets/LifeWithoutDeathRuleSet.h"
-#include "Rulesets/Rule90RuleSet.h"
 #include "Rulesets/RuleSet.h"
 #include "Rulesets/SeedsRuleSet.h"
 #include "Rulesets/WireworldRuleSet.h"
@@ -26,6 +25,15 @@
 #include <vector>
 
 static TestCounters g;
+
+class IdentityRuleSet : public RuleSet
+{
+public:
+  IdentityRuleSet()
+    : RuleSet(nullptr)
+  {
+  }
+};
 
 static void
 testNegativeChunkMapping()
@@ -893,7 +901,7 @@ static void
 testSparseCachedStatistics()
 {
   testSection("SparseCellGrid: transactional cached statistics");
-  Rule90RuleSet identity(nullptr);
+  IdentityRuleSet identity;
   SparseCellGrid grid;
   grid.setCell(CellAddress{ 0, 0 }, 0);
   grid.setCell(CellAddress{ 1, 0 }, 3);

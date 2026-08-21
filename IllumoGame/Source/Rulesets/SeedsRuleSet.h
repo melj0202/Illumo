@@ -1,18 +1,11 @@
 #pragma once
-#include "RuleSet.h"
+#include "LifeLikeRuleSet.h"
 
-class SeedsRuleSet : public RuleSet
+class SeedsRuleSet : public LifeLikeRuleSet
 {
 public:
   SeedsRuleSet(CellGrid* targetCanvas)
-    : RuleSet(targetCanvas)
+    : LifeLikeRuleSet(targetCanvas, "SEEDS", 1u << 2, 0u)
   {
   }
-  ~SeedsRuleSet() override = default;
-
-  unsigned char nextState(unsigned char cell,
-                          unsigned char aliveNeighbors) const override final;
-  void evalCell(const unsigned char& target,
-                unsigned char dest[3]) const override;
-  std::string getRuleTag() override { return "SEEDS"; }
 };

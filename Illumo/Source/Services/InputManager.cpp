@@ -336,6 +336,8 @@ InputManager::TranslateInputActionGLFW(int glfwAction)
 InputManager::InputManager(GLFWwindow* window)
   : window(window)
   , activeInputContext(&inputContexts[0])
+  , numInputContexts(0)
+  , m_modifierFlags(0)
 {
   s_Instance = this;
   if (window != nullptr) {
@@ -344,8 +346,6 @@ InputManager::InputManager(GLFWwindow* window)
     glfwSetScrollCallback(window, scrollCallback);
   }
   scrollOffset = new double(0.0);
-
-  numInputContexts = 0;
 
   for (KeyCode keyCode : AllKeyCodes) {
     inputStatesCurrent[keyCode] = InputAction::None;
@@ -429,7 +429,12 @@ bool
 InputManager::isKeyPressed(KeyCode key)
 {
   if (window == nullptr) {
-    return false;
+    std::unordered_map<KeyCode, InputAction>::const_iterator it =
+      inputStatesCurrent.find(key);
+    if (it == inputStatesCurrent.end()) {
+      return false;
+    }
+    return it->second == InputAction::Press || it->second == InputAction::Hold;
   }
   int glfwInputAction = glfwGetKey(window, TranslateKeyCodeFromGLFW(key));
 
@@ -451,12 +456,37 @@ bool
 InputManager::isMouseButtonPressed(KeyCode mouseButton)
 {
   if (window == nullptr) {
-    return false;
+    std::unordered_map<KeyCode, InputAction>::const_iterator it =
+      inputStatesCurrent.find(mouseButton);
+    if (it == inputStatesCurrent.end()) {
+      return false;
+    }
+    return it->second == InputAction::Press || it->second == InputAction::Hold;
   }
   int glfwInputAction =
     glfwGetMouseButton(window, TranslateKeyCodeFromGLFW(mouseButton));
 
   return TranslateInputActionGLFW(glfwInputAction) == InputAction::Press;
+}
+
+bool
+InputManager::isShiftPressed() const
+{
+  if (window != nullptr) {
+    return glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+           glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+  }
+  return (m_modifierFlags & GLFW_MOD_SHIFT) != 0;
+}
+
+bool
+InputManager::isControlPressed() const
+{
+  if (window != nullptr) {
+    return glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+           glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+  }
+  return (m_modifierFlags & GLFW_MOD_CONTROL) != 0;
 }
 
 bool
@@ -535,6 +565,7 @@ InputManager::normalKeyCallback(GLFWwindow* /*window*/,
   if (s_Instance) {
     KeyCode localKey = s_Instance->TranslateKeyCodeToGLFW(key);
     InputAction localAction = s_Instance->TranslateInputActionGLFW(action);
+    s_Instance->m_modifierFlags = mods;
     s_Instance->keyQueue.push({ localKey, localAction, mods });
   }
 }

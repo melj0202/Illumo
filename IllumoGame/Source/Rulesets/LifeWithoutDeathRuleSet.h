@@ -1,18 +1,14 @@
 #pragma once
-#include "RuleSet.h"
+#include "LifeLikeRuleSet.h"
 
-class LifeWithoutDeathRuleSet : public RuleSet
+class LifeWithoutDeathRuleSet : public LifeLikeRuleSet
 {
 public:
   LifeWithoutDeathRuleSet(CellGrid* targetCanvas)
-    : RuleSet(targetCanvas)
+    : LifeLikeRuleSet(targetCanvas,
+                      "LIFE_WITHOUT_DEATH",
+                      1u << 3,
+                      (1u << 9) - 1u)
   {
   }
-  ~LifeWithoutDeathRuleSet() override = default;
-
-  unsigned char nextState(unsigned char cell,
-                          unsigned char aliveNeighbors) const override final;
-  void evalCell(const unsigned char& target,
-                unsigned char dest[3]) const override;
-  std::string getRuleTag() override { return "LIFE_WITHOUT_DEATH"; }
 };

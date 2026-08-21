@@ -12,6 +12,9 @@ OS entry points and native persistence dialogs are engine-owned under
 
 Entry code obtains the consumer's `IllumoApplicationDefinition` and calls the
 generic Illumo runner. Dialog implementations accept game-owned labels and
-defaults as data; they do not include Game types or parse save files. Source
+defaults as data; they do not include Game types or parse save files. Clipboard
+text (`Clipboard::GetText` / `SetText`) follows the same platform split:
+Windows is implemented, Linux/macOS return empty/false scaffolds and are not
+supported clipboard ports. Source
 presence does not establish support: each port requires native build, tests,
 live rendering/input, dialogs, and clean shutdown.

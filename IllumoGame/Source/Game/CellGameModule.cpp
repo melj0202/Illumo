@@ -1,7 +1,11 @@
 #include "CellGameModule.h"
+#include "BuiltinPatterns.h"
+#include "PatternCodec.h"
 #include "Rulesets/WireworldRuleSet.h"
+#include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Primitives/DebugDraw3D.h>
+#include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <array>
@@ -13,6 +17,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <new>
 #include <random>
+#include <sstream>
 #include <vector>
 
 static bool
@@ -52,6 +57,19 @@ parseWorldCoordinate(const std::string& text, std::int64_t* value)
   } catch (...) {
     return false;
   }
+}
+
+static std::string
+joinArguments(const std::vector<std::string>& args, std::size_t startIndex)
+{
+  std::string joined;
+  for (std::size_t i = startIndex; i < args.size(); ++i) {
+    if (!joined.empty()) {
+      joined.push_back(' ');
+    }
+    joined += args[i];
+  }
+  return joined;
 }
 
 static bool
@@ -119,6 +137,26 @@ CellGameModule::CellGameModule()
   , render3dTestStatic(nullptr)
   , render3dTestAnimated(nullptr)
   , render3dTestTime(0.0)
+  , hasSelection(false)
+  , selecting(false)
+  , selectAnchorX(0)
+  , selectAnchorY(0)
+  , selectX0(0)
+  , selectY0(0)
+  , selectX1(0)
+  , selectY1(0)
+  , hoverX(0)
+  , hoverY(0)
+  , hoverValid(false)
+  , inspectorEnabled(false)
+  , simulationGeneration(0)
+  , copyHeld(false)
+  , cutHeld(false)
+  , pasteHeld(false)
+  , rotateHeld(false)
+  , flipHeld(false)
+  , inspectHeld(false)
+  , deleteHeld(false)
 {
   ic = nullptr;
 }
@@ -160,10 +198,6 @@ CellGameModule::Start(IllumoContext* context)
   ac.inputAction = InputAction::Press;
   this->inputContext.bindAction("CameraRotate", ac);
 
-  ac.keyCode = KeyCode::C;
-  ac.inputAction = InputAction::Press;
-  this->inputContext.bindAction("ClearCanvas", ac);
-
   ac.keyCode = KeyCode::E;
   ac.inputAction = InputAction::Press;
   this->inputContext.bindAction("ToggleState", ac);
@@ -204,6 +238,25 @@ CellGameModule::Start(IllumoContext* context)
   // Start before the first mouse sample).
   editorCursor.setVisible(false);
 
+  selectionVisual.setRenderer(ic->renderer);
+  selectionVisual.setWindow(ic->window);
+  selectionVisual.setCamera(ic->camera);
+  selectionVisual.setSpace(PrimitiveSpace::World);
+  selectionVisual.setLayerHint(RenderLayerId::UI);
+  selectionVisual.setVisible(false);
+  if (ic->renderer != nullptr) {
+    selectionVisual.prepare(ic->renderer);
+  }
+
+  inspectorVisual.setRenderer(ic->renderer);
+  inspectorVisual.setWindow(ic->window);
+  inspectorVisual.setSpace(PrimitiveSpace::Pixels);
+  inspectorVisual.setLayerHint(RenderLayerId::UI);
+  inspectorVisual.setVisible(false);
+  if (ic->renderer != nullptr) {
+    inspectorVisual.prepare(ic->renderer);
+  }
+
   configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
 
@@ -235,6 +288,12 @@ CellGameModule::seedInitialPattern()
     }
     grid->setCell(CellAddress{ startX, y }, WireworldRuleSet::CELL_HEAD);
     grid->setCell(CellAddress{ startX + 1, y }, WireworldRuleSet::CELL_TAIL);
+    return;
+  }
+
+  if (cellContext->getModeString() == "RULE_90" ||
+      cellContext->getModeString() == "RULE_184") {
+    grid->setCell(CellAddress{ 0, 0 }, 0);
     return;
   }
 
@@ -312,6 +371,7 @@ CellGameModule::consumeCompletedSimulation(bool waitForCompletion)
   lastSimulationStepMilliseconds = elapsedMilliseconds;
   lastSimulationFrameMilliseconds = elapsedMilliseconds;
   lastSimulationSteps += 1;
+  simulationGeneration += 1;
   simulationStepMetric.add(elapsedMilliseconds);
   simulationMirrorMetric.add(timings.mirrorMilliseconds);
   simulationAdvanceMetric.add(timings.advanceMilliseconds);
@@ -675,6 +735,7 @@ CellGameModule::registerConsoleCommands()
       }
       prepareGridMutation();
       cellContext->getGrid()->clear();
+      simulationGeneration = 0;
       updateVisualTargets();
       cellContext->getCanvasView()->snapVisualToTargets();
       ic->commandLine->logSuccess("Canvas cleared");
@@ -793,6 +854,173 @@ CellGameModule::registerConsoleCommands()
     },
     "status",
     "Show simulation, canvas, ruleset, and camera state");
+
+  ic->commandRegistry->RegisterCommand(
+    "select",
+    [this](const std::vector<std::string>& args) {
+      if (args.size() == 1 && args[0] == "clear") {
+        hasSelection = false;
+        selecting = false;
+        ic->commandLine->logSuccess("Selection cleared");
+        return;
+      }
+      std::int64_t x0 = 0;
+      std::int64_t y0 = 0;
+      std::int64_t x1 = 0;
+      std::int64_t y1 = 0;
+      if (args.size() != 4 || !parseWorldCoordinate(args[0], &x0) ||
+          !parseWorldCoordinate(args[1], &y0) ||
+          !parseWorldCoordinate(args[2], &x1) ||
+          !parseWorldCoordinate(args[3], &y1)) {
+        ic->commandLine->logError(
+          "Usage: select <x0> <y0> <x1> <y1> | select clear");
+        return;
+      }
+      normalizeSelection(&x0, &y0, &x1, &y1);
+      selectX0 = x0;
+      selectY0 = y0;
+      selectX1 = x1;
+      selectY1 = y1;
+      hasSelection = true;
+      ic->commandLine->logSuccess("Selection updated");
+    },
+    "select <x0> <y0> <x1> <y1> | select clear",
+    "Set or clear the editor cell rectangle");
+
+  ic->commandRegistry->RegisterCommand(
+    "copy",
+    [this](const std::vector<std::string>& args) {
+      if (!args.empty()) {
+        ic->commandLine->logError("Usage: copy");
+        return;
+      }
+      if (!copySelection()) {
+        ic->commandLine->logError("Copy failed");
+      } else {
+        ic->commandLine->logSuccess("Copied selection");
+      }
+    },
+    "copy",
+    "Copy the selection into the pattern buffer");
+
+  ic->commandRegistry->RegisterCommand(
+    "cut",
+    [this](const std::vector<std::string>& args) {
+      if (!args.empty()) {
+        ic->commandLine->logError("Usage: cut");
+        return;
+      }
+      if (!cutSelection()) {
+        ic->commandLine->logError("Cut failed");
+      } else {
+        ic->commandLine->logSuccess("Cut selection");
+      }
+    },
+    "cut",
+    "Copy the selection and fill it with background");
+
+  ic->commandRegistry->RegisterCommand(
+    "paste",
+    [this](const std::vector<std::string>& args) {
+      std::int64_t originX = hoverX;
+      std::int64_t originY = hoverY;
+      if (args.size() == 2) {
+        if (!parseWorldCoordinate(args[0], &originX) ||
+            !parseWorldCoordinate(args[1], &originY)) {
+          ic->commandLine->logError("Usage: paste [x y]");
+          return;
+        }
+      } else if (!args.empty()) {
+        ic->commandLine->logError("Usage: paste [x y]");
+        return;
+      }
+      std::string error;
+      if (!pastePatternAt(clipboardPattern, originX, originY, &error)) {
+        ic->commandLine->logError(error.empty() ? "Paste failed" : error);
+      } else {
+        ic->commandLine->logSuccess("Pasted pattern");
+      }
+    },
+    "paste [x y]",
+    "Paste the pattern buffer at the cursor or coordinates");
+
+  ic->commandRegistry->RegisterCommand(
+    "stamp",
+    [this](const std::vector<std::string>& args) {
+      if (args.size() != 1) {
+        ic->commandLine->logError("Usage: stamp <name>");
+        return;
+      }
+      if (!stampNamed(args[0])) {
+        ic->commandLine->logError("Unknown stamp '" + args[0] + "'");
+      } else {
+        ic->commandLine->logSuccess("Stamped " + args[0]);
+      }
+    },
+    "stamp <name>",
+    "Paste a built-in pattern at the cursor",
+    BuiltinPatterns::names());
+
+  ic->commandRegistry->RegisterCommand(
+    "rle",
+    [this](const std::vector<std::string>& args) {
+      if (args.empty()) {
+        CellPattern pattern;
+        std::string error;
+        if (!captureSelection(&pattern, &error)) {
+          ic->commandLine->logError(error.empty() ? "RLE export failed"
+                                                  : error);
+          return;
+        }
+        ic->commandLine->logNormal(PatternCodec::encodeRle(pattern));
+        return;
+      }
+      if (!importPatternText(joinArguments(args, 0))) {
+        ic->commandLine->logError("RLE import failed");
+      } else {
+        ic->commandLine->logSuccess("Imported RLE");
+      }
+    },
+    "rle [pattern]",
+    "Export the selection as RLE or import RLE text");
+
+  ic->commandRegistry->RegisterCommand(
+    "plaintext",
+    [this](const std::vector<std::string>& args) {
+      if (args.empty()) {
+        CellPattern pattern;
+        std::string error;
+        if (!captureSelection(&pattern, &error)) {
+          ic->commandLine->logError(error.empty() ? "Plaintext export failed"
+                                                  : error);
+          return;
+        }
+        ic->commandLine->logNormal(PatternCodec::encodePlaintext(pattern));
+        return;
+      }
+      if (!importPatternText(joinArguments(args, 0))) {
+        ic->commandLine->logError("Plaintext import failed");
+      } else {
+        ic->commandLine->logSuccess("Imported plaintext");
+      }
+    },
+    "plaintext [pattern]",
+    "Export the selection as Life 1.0 plaintext or import it");
+
+  ic->commandRegistry->RegisterCommand(
+    "inspect",
+    [this](const std::vector<std::string>& args) {
+      if (!args.empty()) {
+        ic->commandLine->logError("Usage: inspect");
+        return;
+      }
+      inspectorEnabled = !inspectorEnabled;
+      ic->envVars->setVar("showInspector", inspectorEnabled);
+      ic->commandLine->logSuccess(inspectorEnabled ? "Inspector shown"
+                                                   : "Inspector hidden");
+    },
+    "inspect",
+    "Toggle the census inspector HUD");
 }
 
 void
@@ -805,7 +1033,9 @@ CellGameModule::unregisterConsoleCommands()
     "camera",  "camera_reset", "cellfadespeed", "clear_canvas", "fade",
     "load",    "load_dialog",  "mode",          "pause",        "randomize",
     "ruleset", "run",          "save",          "save_dialog",  "setcell",
-    "speed",   "speedfactor",  "status",        "step",         "tps"
+    "speed",   "speedfactor",  "status",        "step",         "tps",
+    "select",  "copy",         "cut",           "paste",        "stamp",
+    "rle",     "plaintext",    "inspect"
   };
   for (const char* commandName : commandNames) {
     ic->commandRegistry->UnregisterCommand(commandName);
@@ -838,6 +1068,7 @@ CellGameModule::stepSimulation(int generations)
   showModeSplash("EDIT");
   for (int i = 0; i < generations; ++i) {
     cellContext->getGrid()->advance(*cellContext->getRuleSet());
+    simulationGeneration += 1;
   }
   updateVisualTargets();
 }
@@ -866,6 +1097,8 @@ CellGameModule::printStatus() const
     std::string("State: ") +
     (currentState == CellState::NORMAL ? "RUNNING" : "PAUSED/EDIT"));
   ic->commandLine->logNormal("Ruleset: " + cellContext->getModeString());
+  ic->commandLine->logNormal("Generation: " +
+                             std::to_string(simulationGeneration));
   ic->commandLine->logNormal(
     "View: " + std::to_string(canvas->getVisibleCellWidth()) + " x " +
     std::to_string(canvas->getVisibleCellHeight()) + " cells -> " +
@@ -1061,6 +1294,8 @@ CellGameModule::Update(double dt)
       }
     }
     updateEditorCursor();
+    updateSelectionVisual();
+    updateInspectorVisual();
     updateVisualTargets();
     cellContext->getCanvasView()->tickVisual(static_cast<float>(dt));
     return;
@@ -1136,7 +1371,12 @@ CellGameModule::Update(double dt)
   }
 
   // Hide in NORMAL (and while console is open); track mouse only in EDIT.
+  if (ic->commandLine == nullptr || !ic->commandLine->isOpen) {
+    handleEditorHotkeys();
+  }
   updateEditorCursor();
+  updateSelectionVisual();
+  updateInspectorVisual();
 
   // Map dirty life cells to palette target colors, then ease display toward
   // them.
@@ -1211,6 +1451,336 @@ CellGameModule::Normal(double dt)
 }
 
 void
+CellGameModule::normalizeSelection(std::int64_t* x0,
+                                   std::int64_t* y0,
+                                   std::int64_t* x1,
+                                   std::int64_t* y1) const
+{
+  if (x0 == nullptr || y0 == nullptr || x1 == nullptr || y1 == nullptr) {
+    return;
+  }
+  if (*x0 > *x1) {
+    const std::int64_t swap = *x0;
+    *x0 = *x1;
+    *x1 = swap;
+  }
+  if (*y0 > *y1) {
+    const std::int64_t swap = *y0;
+    *y0 = *y1;
+    *y1 = swap;
+  }
+}
+
+bool
+CellGameModule::captureSelection(CellPattern* pattern, std::string* error)
+{
+  if (pattern == nullptr) {
+    if (error != nullptr) {
+      *error = "pattern output is null";
+    }
+    return false;
+  }
+  if (!hasSelection) {
+    if (error != nullptr) {
+      *error = "no selection";
+    }
+    return false;
+  }
+  std::int64_t x0 = selectX0;
+  std::int64_t y0 = selectY0;
+  std::int64_t x1 = selectX1;
+  std::int64_t y1 = selectY1;
+  normalizeSelection(&x0, &y0, &x1, &y1);
+  const std::int64_t width = x1 - x0 + 1;
+  const std::int64_t height = y1 - y0 + 1;
+  if (width > CellPattern::kMaxWidth || height > CellPattern::kMaxHeight) {
+    if (error != nullptr) {
+      *error = "selection exceeds 256x256";
+    }
+    return false;
+  }
+  pattern->clear();
+  if (!pattern->setExtent(static_cast<int>(width), static_cast<int>(height))) {
+    if (error != nullptr) {
+      *error = "selection exceeds pattern caps";
+    }
+    return false;
+  }
+  SparseCellGrid* grid = cellContext->getGrid();
+  for (std::int64_t y = y0; y <= y1; ++y) {
+    for (std::int64_t x = x0; x <= x1; ++x) {
+      const CellAddress address{ x, y };
+      if (!grid->isCellInWorldBounds(address)) {
+        continue;
+      }
+      const unsigned char state = grid->getCell(address);
+      if (state == SparseCellGrid::BackgroundState) {
+        continue;
+      }
+      if (!pattern->addCell(static_cast<std::int32_t>(x - x0),
+                            static_cast<std::int32_t>(y - y0),
+                            state)) {
+        if (error != nullptr) {
+          *error = "selection exceeds occupancy cap";
+        }
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool
+CellGameModule::pastePatternAt(const CellPattern& pattern,
+                               std::int64_t originX,
+                               std::int64_t originY,
+                               std::string* error)
+{
+  if (pattern.empty() && pattern.getWidth() <= 0 && pattern.getHeight() <= 0) {
+    if (error != nullptr) {
+      *error = "pattern buffer is empty";
+    }
+    return false;
+  }
+  prepareGridMutation();
+  SparseCellGrid* grid = cellContext->getGrid();
+  CanvasView* canvas = cellContext->getCanvasView();
+  for (const CellPatternCell& cell : pattern.getCells()) {
+    const CellAddress address{ originX + cell.dx, originY + cell.dy };
+    if (!grid->isCellInWorldBounds(address)) {
+      continue;
+    }
+    canvas->setCanvasPixel(address.x, address.y, cell.state);
+  }
+  updateVisualTargets();
+  return true;
+}
+
+bool
+CellGameModule::fillSelection(unsigned char state)
+{
+  if (!hasSelection) {
+    return false;
+  }
+  std::int64_t x0 = selectX0;
+  std::int64_t y0 = selectY0;
+  std::int64_t x1 = selectX1;
+  std::int64_t y1 = selectY1;
+  normalizeSelection(&x0, &y0, &x1, &y1);
+  prepareGridMutation();
+  SparseCellGrid* grid = cellContext->getGrid();
+  CanvasView* canvas = cellContext->getCanvasView();
+  for (std::int64_t y = y0; y <= y1; ++y) {
+    for (std::int64_t x = x0; x <= x1; ++x) {
+      const CellAddress address{ x, y };
+      if (!grid->isCellInWorldBounds(address)) {
+        continue;
+      }
+      canvas->setCanvasPixel(x, y, state);
+    }
+  }
+  updateVisualTargets();
+  return true;
+}
+
+bool
+CellGameModule::copySelection()
+{
+  std::string error;
+  if (!captureSelection(&clipboardPattern, &error)) {
+    Logger::LogError(error.c_str());
+    return false;
+  }
+  const std::string rle = PatternCodec::encodeRle(clipboardPattern);
+  Clipboard::SetText(rle);
+  return true;
+}
+
+bool
+CellGameModule::cutSelection()
+{
+  if (!copySelection()) {
+    return false;
+  }
+  return fillSelection(SparseCellGrid::BackgroundState);
+}
+
+bool
+CellGameModule::pasteAtCursor()
+{
+  std::string error;
+  CellPattern pattern = clipboardPattern;
+  const std::string clipboardText = Clipboard::GetText();
+  if (!clipboardText.empty()) {
+    CellPattern parsed;
+    if (PatternCodec::parse(clipboardText, &parsed, &error) &&
+        !parsed.empty()) {
+      pattern = parsed;
+    }
+  }
+  if (!pastePatternAt(pattern, hoverX, hoverY, &error)) {
+    Logger::LogError(error.c_str());
+    return false;
+  }
+  clipboardPattern = pattern;
+  return true;
+}
+
+bool
+CellGameModule::stampNamed(const std::string& name)
+{
+  CellPattern pattern;
+  if (!BuiltinPatterns::find(name, &pattern)) {
+    return false;
+  }
+  std::string error;
+  const std::int64_t originX = hoverValid ? hoverX : 0;
+  const std::int64_t originY = hoverValid ? hoverY : 0;
+  return pastePatternAt(pattern, originX, originY, &error);
+}
+
+bool
+CellGameModule::importPatternText(const std::string& text)
+{
+  CellPattern pattern;
+  std::string error;
+  if (!PatternCodec::parse(text, &pattern, &error)) {
+    Logger::LogError(error.c_str());
+    return false;
+  }
+  clipboardPattern = pattern;
+  const std::int64_t originX = hoverValid ? hoverX : 0;
+  const std::int64_t originY = hoverValid ? hoverY : 0;
+  return pastePatternAt(pattern, originX, originY, &error);
+}
+
+void
+CellGameModule::handleEditorHotkeys()
+{
+  if (ic == nullptr || ic->inputManager == nullptr || ic->commandLine->isOpen) {
+    return;
+  }
+  const bool control = ic->inputManager->isControlPressed();
+  const bool copyDown = control && ic->inputManager->isKeyPressed(KeyCode::C);
+  const bool cutDown = control && ic->inputManager->isKeyPressed(KeyCode::X);
+  const bool pasteDown = control && ic->inputManager->isKeyPressed(KeyCode::V);
+  const bool rotateDown = ic->inputManager->isKeyPressed(KeyCode::R);
+  const bool flipDown = ic->inputManager->isKeyPressed(KeyCode::F);
+  const bool inspectDown = ic->inputManager->isKeyPressed(KeyCode::I);
+  const bool deleteDown = ic->inputManager->isKeyPressed(KeyCode::Delete);
+
+  if (copyDown && !copyHeld) {
+    copySelection();
+  }
+  if (cutDown && !cutHeld) {
+    cutSelection();
+  }
+  if (pasteDown && !pasteHeld) {
+    pasteAtCursor();
+  }
+  if (rotateDown && !rotateHeld && !control) {
+    clipboardPattern.rotateCw();
+  }
+  if (flipDown && !flipHeld && !control) {
+    clipboardPattern.flipX();
+  }
+  if (inspectDown && !inspectHeld && !control) {
+    inspectorEnabled = !inspectorEnabled;
+    ic->envVars->setVar("showInspector", inspectorEnabled);
+  }
+  if (deleteDown && !deleteHeld) {
+    fillSelection(SparseCellGrid::BackgroundState);
+  }
+
+  copyHeld = copyDown;
+  cutHeld = cutDown;
+  pasteHeld = pasteDown;
+  rotateHeld = rotateDown;
+  flipHeld = flipDown;
+  inspectHeld = inspectDown;
+  deleteHeld = deleteDown;
+}
+
+void
+CellGameModule::updateSelectionVisual()
+{
+  selectionVisual.clearPrimitives();
+  if (!hasSelection || ic == nullptr || ic->camera == nullptr) {
+    selectionVisual.setVisible(false);
+    return;
+  }
+  std::int64_t x0 = selectX0;
+  std::int64_t y0 = selectY0;
+  std::int64_t x1 = selectX1;
+  std::int64_t y1 = selectY1;
+  normalizeSelection(&x0, &y0, &x1, &y1);
+  const float cellSize = 16.0f;
+  const float worldX = static_cast<float>(x0) * cellSize - cellSize * 0.5f;
+  const float worldY = static_cast<float>(y0) * cellSize - cellSize * 0.5f;
+  const float width = static_cast<float>(x1 - x0 + 1) * cellSize;
+  const float height = static_cast<float>(y1 - y0 + 1) * cellSize;
+  selectionVisual.setCamera(ic->camera);
+  selectionVisual.setSpace(PrimitiveSpace::World);
+  selectionVisual.setLayerHint(RenderLayerId::UI);
+  selectionVisual.addOutlineRect(
+    worldX, worldY, width, height, UiTheme::accent(), 2.0f);
+  selectionVisual.setVisible(true);
+}
+
+void
+CellGameModule::updateInspectorVisual()
+{
+  inspectorVisual.clearPrimitives();
+  const bool consoleOpen =
+    ic != nullptr && ic->commandLine != nullptr && ic->commandLine->isOpen;
+  const bool settingsOpen =
+    configurationMenu != nullptr && configurationMenu->isOpen();
+  if (!inspectorEnabled || consoleOpen || settingsOpen || ic == nullptr) {
+    inspectorVisual.setVisible(false);
+    return;
+  }
+
+  std::ostringstream text;
+  text << "gen " << simulationGeneration << "\n";
+  if (hoverValid && cellContext != nullptr) {
+    const CellAddress address{ hoverX, hoverY };
+    const unsigned char state = cellContext->getGrid()->getCell(address);
+    const ChunkAddress chunk = SparseCellGrid::chunkAddressForCell(address);
+    const bool inBounds = cellContext->getGrid()->isCellInWorldBounds(address);
+    text << "cell " << hoverX << "," << hoverY << " state "
+         << static_cast<int>(state) << "\n";
+    text << cellContext->getModeString() << "\n";
+    text << "chunk " << chunk.x << "," << chunk.y
+         << (inBounds ? " in-bounds" : " outside") << "\n";
+  } else {
+    text << "no hover\n";
+  }
+  const SparseAdvanceStats& stats =
+    cellContext->getGrid()->getLastAdvanceStats();
+  text << "cells " << stats.activeCellCount << " tps " << achievedSimulationTps;
+  inspectorVisual.setWindow(ic->window);
+  inspectorVisual.setSpace(PrimitiveSpace::Pixels);
+  inspectorVisual.setLayerHint(RenderLayerId::UI);
+  inspectorVisual.addFilledRect(
+    12.0f, 72.0f, 300.0f, 128.0f, UiTheme::panelSurface());
+  std::string remaining = text.str();
+  float lineY = 80.0f;
+  while (!remaining.empty()) {
+    const std::size_t newline = remaining.find('\n');
+    std::string line = remaining;
+    if (newline != std::string::npos) {
+      line = remaining.substr(0, newline);
+      remaining = remaining.substr(newline + 1);
+    } else {
+      remaining.clear();
+    }
+    inspectorVisual.addText(line, 22.0f, lineY, 16.0f, UiTheme::textPrimary());
+    lineY += 18.0f;
+  }
+  inspectorVisual.setVisible(true);
+}
+
+void
 CellGameModule::Edit(double dt)
 {
   (void)dt;
@@ -1224,71 +1794,86 @@ CellGameModule::Edit(double dt)
 
   const std::int64_t currentX = CanvasView::worldToCell(worldPos.x);
   const std::int64_t currentY = CanvasView::worldToCell(worldPos.y);
+  hoverX = currentX;
+  hoverY = currentY;
+  hoverValid = cellContext->getGrid()->isCellInWorldBounds(
+    CellAddress{ currentX, currentY });
 
   if (!ic->commandLine->isOpen) {
     if (cellContext->getModeString() == "WIREWORLD") {
       updateWireworldBrushFromInput();
     }
+    handleEditorHotkeys();
 
     bool isLeftPressed =
       ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
     bool isRightPressed =
       ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
+    const bool shift = ic->inputManager->isShiftPressed();
 
-    const bool pointerInWorld = cellContext->getGrid()->isCellInWorldBounds(
-      CellAddress{ currentX, currentY });
-    if ((isLeftPressed || isRightPressed) && pointerInWorld) {
-      mirrorDeltaValid = false;
-      // Binary CAs: left = alive (0), right = dead (1).
-      // Wireworld: left = active brush (1/H head, 3/T tail, 4 conductor),
-      // right = empty.
-      unsigned char colorVal = isLeftPressed ? 0 : 1;
-      if (cellContext->getModeString() == "WIREWORLD") {
-        colorVal =
-          isLeftPressed ? wireworldBrush : WireworldRuleSet::CELL_EMPTY;
+    const bool pointerInWorld = hoverValid;
+    if (shift && isLeftPressed && pointerInWorld) {
+      if (!selecting) {
+        selecting = true;
+        selectAnchorX = currentX;
+        selectAnchorY = currentY;
       }
-
-      if (wasPressed) {
-        std::int64_t x0 = lastMouseX;
-        std::int64_t y0 = lastMouseY;
-        const std::int64_t x1 = currentX;
-        const std::int64_t y1 = currentY;
-        const std::int64_t dx = std::llabs(x1 - x0);
-        const std::int64_t dy = std::llabs(y1 - y0);
-        const std::int64_t sx = (x0 < x1) ? 1 : -1;
-        const std::int64_t sy = (y0 < y1) ? 1 : -1;
-        std::int64_t err = dx - dy;
-
-        while (true) {
-          this->cellContext->getCanvasView()->setCanvasPixel(x0, y0, colorVal);
-          if (x0 == x1 && y0 == y1)
-            break;
-          const std::int64_t e2 = 2 * err;
-          if (e2 > -dy) {
-            err -= dy;
-            x0 += sx;
-          }
-          if (e2 < dx) {
-            err += dx;
-            y0 += sy;
-          }
-        }
-      } else {
-        this->cellContext->getCanvasView()->setCanvasPixel(
-          currentX, currentY, colorVal);
-      }
-      wasPressed = true;
-      lastMouseX = currentX;
-      lastMouseY = currentY;
-    } else {
+      selectX0 = selectAnchorX;
+      selectY0 = selectAnchorY;
+      selectX1 = currentX;
+      selectY1 = currentY;
+      hasSelection = true;
       wasPressed = false;
-      if (ic->inputManager->isKeyPressed(KeyCode::C)) {
+    } else {
+      selecting = false;
+      if ((isLeftPressed || isRightPressed) && pointerInWorld) {
         mirrorDeltaValid = false;
-        this->cellContext->getGrid()->clear();
+        unsigned char colorVal = isLeftPressed ? 0 : 1;
+        if (cellContext->getModeString() == "WIREWORLD") {
+          colorVal =
+            isLeftPressed ? wireworldBrush : WireworldRuleSet::CELL_EMPTY;
+        }
+
+        if (wasPressed) {
+          std::int64_t x0 = lastMouseX;
+          std::int64_t y0 = lastMouseY;
+          const std::int64_t x1 = currentX;
+          const std::int64_t y1 = currentY;
+          const std::int64_t dx = std::llabs(x1 - x0);
+          const std::int64_t dy = std::llabs(y1 - y0);
+          const std::int64_t sx = (x0 < x1) ? 1 : -1;
+          const std::int64_t sy = (y0 < y1) ? 1 : -1;
+          std::int64_t err = dx - dy;
+
+          while (true) {
+            this->cellContext->getCanvasView()->setCanvasPixel(
+              x0, y0, colorVal);
+            if (x0 == x1 && y0 == y1)
+              break;
+            const std::int64_t e2 = 2 * err;
+            if (e2 > -dy) {
+              err -= dy;
+              x0 += sx;
+            }
+            if (e2 < dx) {
+              err += dx;
+              y0 += sy;
+            }
+          }
+        } else {
+          this->cellContext->getCanvasView()->setCanvasPixel(
+            currentX, currentY, colorVal);
+        }
+        wasPressed = true;
+        lastMouseX = currentX;
+        lastMouseY = currentY;
+      } else {
+        wasPressed = false;
       }
     }
   } else {
     wasPressed = false;
+    selecting = false;
   }
 }
 
@@ -1307,7 +1892,6 @@ CellGameModule::updateEditorCursor()
     (configurationMenu == nullptr || !configurationMenu->isOpen());
   if (!canShow) {
     editorCursor.setVisible(false);
-    return;
   }
 
   std::array<double, 2> mouseCoords = ic->window->getMouseCoords();
@@ -1315,10 +1899,15 @@ CellGameModule::updateEditorCursor()
     glm::dvec2(mouseCoords[0], mouseCoords[1]));
   const std::int64_t cellX = CanvasView::worldToCell(worldPos.x);
   const std::int64_t cellY = CanvasView::worldToCell(worldPos.y);
-  const bool pointerInWorld =
+  hoverX = cellX;
+  hoverY = cellY;
+  hoverValid =
     cellContext->getGrid()->isCellInWorldBounds(CellAddress{ cellX, cellY });
-  editorCursor.setVisible(pointerInWorld);
-  if (!pointerInWorld) {
+  if (!canShow) {
+    return;
+  }
+  editorCursor.setVisible(hoverValid);
+  if (!hoverValid) {
     return;
   }
   editorCursor.setCellSize(16.0f);
@@ -1566,6 +2155,7 @@ CellGameModule::LoadCellGame(std::string filename)
   }
   cellContext->setRuleSet(ruleString);
   cellContext->getGrid()->swap(*loadedGrid);
+  simulationGeneration = 0;
   cellContext->getCanvasView()->rebuildPalette(cellContext->getRuleSet());
   if (restoreCamera) {
     ic->camera->SetPositionPrecise(savedCameraX, savedCameraY);
@@ -1693,6 +2283,12 @@ CellGameModule::DispatchDrawables(Scene* scene)
   }
   if (editorCursor.isVisible()) {
     scene->AddDrawable(&editorCursor, RenderLayerId::UI);
+  }
+  if (selectionVisual.isVisible()) {
+    scene->AddDrawable(&selectionVisual, RenderLayerId::UI);
+  }
+  if (inspectorVisual.isVisible()) {
+    scene->AddDrawable(&inspectorVisual, RenderLayerId::UI);
   }
   if (modeSplash != nullptr && modeSplash->isVisible()) {
     scene->AddDrawable(modeSplash.get(), RenderLayerId::UI);

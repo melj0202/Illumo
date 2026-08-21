@@ -52,6 +52,8 @@ implementation under IllumoGame.
 - Keep console commands domain-owned and register them through
   `CommandRegistry`; usage, descriptions, validation, and completion data move
   with the command.
+- Editor patterns (RLE/plaintext/stamps/clipboard) are a side path. World saves
+  stay sparse version 3. Finite worlds skip out-of-bounds stamp cells.
 
 ## Persistence and compatibility
 

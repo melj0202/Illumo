@@ -486,6 +486,7 @@ private:
   bool advanceChangedFrontier(const RuleSet& ruleSet, bool useCandidateScratch);
   bool advanceImpl(const RuleSet& ruleSet, bool allowFrontier);
   bool advanceToroidal(const RuleSet& ruleSet);
+  bool advanceElementarySpaceTime(const RuleSet& ruleSet);
   void enrollToroidalCandidate(const CellAddress& address,
                                bool addNeighborContribution);
   static std::size_t saturatingAdd(std::size_t left, std::size_t right);

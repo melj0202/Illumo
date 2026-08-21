@@ -3,7 +3,7 @@
 | Target | Namespace and responsibility |
 |---|---|
 | `IllumoTests` | `Illumo.*`: application/host lifecycle, BuildInfo, SysCmdLine, services, allocators, public/private rendering, assets, generic console/UI |
-| `IllumoGameTests` | `IllumoGame.*`: CA CLI metadata/configuration, rulesets, topology, sparse simulation, presentation, commands, persistence |
+| `IllumoGameTests` | `IllumoGame.*`: CA CLI metadata/configuration, rulesets, topology, sparse simulation, presentation, editor/pattern I/O, commands, persistence |
 | `IllumoPublicHeaderSmoke` | Consumer-only compile/link smoke using no private source include paths |
 
 Both runners support `--list` and exact `--run`. CMake discovers each logical

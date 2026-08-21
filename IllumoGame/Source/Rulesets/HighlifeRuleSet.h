@@ -1,18 +1,14 @@
 #pragma once
-#include "RuleSet.h"
+#include "LifeLikeRuleSet.h"
 
-class HighlifeRuleSet : public RuleSet
+class HighlifeRuleSet : public LifeLikeRuleSet
 {
 public:
   HighlifeRuleSet(CellGrid* targetCanvas)
-    : RuleSet(targetCanvas)
+    : LifeLikeRuleSet(targetCanvas,
+                      "HIGHLIFE",
+                      (1u << 3) | (1u << 6),
+                      (1u << 2) | (1u << 3))
   {
   }
-  ~HighlifeRuleSet() override = default;
-
-  unsigned char nextState(unsigned char cell,
-                          unsigned char aliveNeighbors) const override final;
-  void evalCell(const unsigned char& target,
-                unsigned char dest[3]) const override;
-  std::string getRuleTag() override { return "HIGHLIFE"; }
 };

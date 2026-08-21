@@ -30,6 +30,8 @@ void
 registerConfigurationMenuTests(IllumoTestRegistry& registry);
 void
 registerIllumoGameConfigTests(IllumoTestRegistry& registry);
+void
+registerEditorTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -46,6 +48,7 @@ createRegistry()
   registerWorldTopologyTests(registry);
   registerConfigurationMenuTests(registry);
   registerIllumoGameConfigTests(registry);
+  registerEditorTests(registry);
   return registry;
 }
 

@@ -1,10 +1,14 @@
 // Headless cellular-automaton rules tests (no OpenGL window).
 
+#include "Game/SparseCellGrid.h"
 #include "Rulesets/BrainsBrainRuleSet.h"
 #include "Rulesets/DayAndNightRuleSet.h"
 #include "Rulesets/GameOfLifeRuleSet.h"
 #include "Rulesets/HighlifeRuleSet.h"
+#include "Rulesets/LifeLikeRuleSet.h"
 #include "Rulesets/LifeWithoutDeathRuleSet.h"
+#include "Rulesets/Rule184RuleSet.h"
+#include "Rulesets/Rule90RuleSet.h"
 #include "Rulesets/SeedsRuleSet.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include "TestHarness.h"
@@ -268,7 +272,11 @@ testDayAndNightTruthTable()
 {
   testSection("Day & Night: B3678/S34678 truth table and colors");
   HeadlessCanvasFixture f(2, 2);
-  DayAndNightRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(f.canvas,
+                        "DAY_AND_NIGHT",
+                        (1u << 3) | (1u << 6) | (1u << 7) | (1u << 8),
+                        (1u << 3) | (1u << 4) | (1u << 6) | (1u << 7) |
+                          (1u << 8));
   bool deadTransitionsMatch = true;
   bool aliveTransitionsMatch = true;
   for (unsigned char neighbors = 0; neighbors <= 8; ++neighbors) {
@@ -304,7 +312,8 @@ testHighlifeTruthTable()
 {
   testSection("Highlife: B36/S23 truth table and colors");
   HeadlessCanvasFixture f(2, 2);
-  HighlifeRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(
+    f.canvas, "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
   bool deadTransitionsMatch = true;
   bool aliveTransitionsMatch = true;
   for (unsigned char neighbors = 0; neighbors <= 8; ++neighbors) {
@@ -337,7 +346,8 @@ testLifeWithoutDeathTruthTable()
 {
   testSection("Life Without Death: B3/Sall truth table and colors");
   HeadlessCanvasFixture f(2, 2);
-  LifeWithoutDeathRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(
+    f.canvas, "LIFE_WITHOUT_DEATH", 1u << 3, (1u << 9) - 1u);
   bool deadTransitionsMatch = true;
   bool aliveTransitionsMatch = true;
   for (unsigned char neighbors = 0; neighbors <= 8; ++neighbors) {
@@ -370,15 +380,16 @@ testSeedsTruthTableAndColors()
 {
   testSection("Seeds: B2/Snone truth table and colors");
   HeadlessCanvasFixture f(2, 2);
-  SeedsRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(f.canvas, "SEEDS", 1u << 2, 0u);
   bool transitionsMatch = true;
   for (unsigned char neighbors = 0; neighbors <= 8; ++neighbors) {
-    const unsigned char expected = neighbors == 2 ? HeadlessCanvasFixture::Alive
-                                                  : HeadlessCanvasFixture::Dead;
+    const unsigned char birth = neighbors == 2 ? HeadlessCanvasFixture::Alive
+                                               : HeadlessCanvasFixture::Dead;
     transitionsMatch =
       transitionsMatch &&
-      rules.nextState(HeadlessCanvasFixture::Dead, neighbors) == expected &&
-      rules.nextState(HeadlessCanvasFixture::Alive, neighbors) == expected;
+      rules.nextState(HeadlessCanvasFixture::Dead, neighbors) == birth &&
+      rules.nextState(HeadlessCanvasFixture::Alive, neighbors) ==
+        HeadlessCanvasFixture::Dead;
   }
   testTrue(g, transitionsMatch, "all cells follow B2 with no survival");
   unsigned char rgb[3] = { 127, 127, 127 };
@@ -466,9 +477,11 @@ testTransitionTableCacheAndEquivalence()
   DayAndNightRuleSet dayAndNight(nullptr);
   LifeWithoutDeathRuleSet lifeWithoutDeath(nullptr);
   WireworldRuleSet wireworld(nullptr);
+  Rule90RuleSet rule90(nullptr);
+  Rule184RuleSet rule184(nullptr);
   const RuleSet* rules[] = { &gameOfLife, &seeds,       &briansBrain,
                              &highlife,   &dayAndNight, &lifeWithoutDeath,
-                             &wireworld };
+                             &wireworld,  &rule90,      &rule184 };
   bool equivalent = true;
   for (const RuleSet* rule : rules) {
     const RuleSet::TransitionTable& table = rule->getTransitionTable();
@@ -492,6 +505,35 @@ testTransitionTableCacheAndEquivalence()
            "all shipped rules match direct transitions for all 2304 inputs");
 }
 
+static void
+testElementarySpaceTime()
+{
+  testSection("Rules: Rule 90/184 serial space-time path");
+  Rule90RuleSet rule90(nullptr);
+  testTrue(g,
+           rule90.getNeighborhoodKind() ==
+             RuleSet::NeighborhoodKind::Elementary1D,
+           "Rule 90 is elementary");
+  testEqUChar(g, rule90.nextElementary(0, 1, 0), 1, "Rule 90 0_0 -> dead");
+  testEqUChar(g, rule90.nextElementary(0, 1, 1), 0, "Rule 90 0_1 -> alive");
+  testEqUChar(g, rule90.nextElementary(1, 1, 0), 0, "Rule 90 1_0 -> alive");
+
+  SparseCellGrid grid;
+  grid.setCell(CellAddress{ 0, 0 }, 0);
+  testTrue(g, grid.advance(rule90), "Rule 90 advances");
+  testEqUChar(g, grid.getCell(CellAddress{ 0, 0 }), 0, "source row stays");
+  testEqUChar(g, grid.getCell(CellAddress{ -1, 1 }), 0, "left child");
+  testEqUChar(g, grid.getCell(CellAddress{ 1, 1 }), 0, "right child");
+  testEqUChar(g, grid.getCell(CellAddress{ 0, 1 }), 1, "center child empty");
+
+  Rule184RuleSet rule184(nullptr);
+  SparseCellGrid traffic;
+  traffic.setCell(CellAddress{ 0, 0 }, 0);
+  traffic.setCell(CellAddress{ 1, 0 }, 1);
+  testTrue(g, traffic.advance(rule184), "Rule 184 advances");
+  testEqUChar(g, traffic.getCell(CellAddress{ 1, 1 }), 0, "car moved right");
+}
+
 static int
 runRuleSetCase(void (*testFunction)())
 {
@@ -506,6 +548,8 @@ registerRuleSetTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.Rules.TransitionTable", []() {
     return runRuleSetCase(testTransitionTableCacheAndEquivalence);
   });
+  registry.add("IllumoGame.Rules.ElementarySpaceTime",
+               []() { return runRuleSetCase(testElementarySpaceTime); });
   registry.add("IllumoGame.Rules.GameOfLifeBlock",
                []() { return runRuleSetCase(testGameOfLifeBlockStillLife); });
   registry.add("IllumoGame.Rules.GameOfLifeBlinker",

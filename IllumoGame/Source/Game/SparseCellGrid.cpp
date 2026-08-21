@@ -3939,6 +3939,93 @@ SparseCellGrid::enrollToroidalCandidate(const CellAddress& address,
 }
 
 bool
+SparseCellGrid::advanceElementarySpaceTime(const RuleSet& ruleSet)
+{
+  ZoneScopedN("SparseCellGrid.advanceElementary");
+  const SparseCellGrid& source = generationSource();
+  lastAdvanceStats = SparseAdvanceStats{};
+  lastAdvanceStats.activeChunkCount = source.chunks.size();
+  lastAdvanceStats.activeCellCount = source.m_chunkStatistics.activeCellCount;
+  lastAdvanceStats.countedCellCount = source.m_chunkStatistics.countedCellCount;
+  lastAdvanceStats.workerCount = 1u;
+
+  bool found = false;
+  std::int64_t sourceY = 0;
+  std::int64_t minX = 0;
+  std::int64_t maxX = 0;
+  for (ChunkMap::const_reference entry : source.chunks) {
+    for (std::size_t wordIndex = 0u; wordIndex < entry.second.counted.size();
+         ++wordIndex) {
+      std::uint64_t counted = entry.second.counted[wordIndex];
+      while (counted != 0u) {
+        const unsigned int offset = std::countr_zero(counted);
+        const std::size_t index = wordIndex * 64u + offset;
+        counted &= counted - 1u;
+        const int localX = static_cast<int>(index % kChunkDim);
+        const int localY = static_cast<int>(index / kChunkDim);
+        const std::int64_t cellX = entry.first.x * kChunkDim + localX;
+        const std::int64_t cellY = entry.first.y * kChunkDim + localY;
+        if (!found) {
+          sourceY = cellY;
+          minX = cellX;
+          maxX = cellX;
+          found = true;
+        } else if (cellY > sourceY) {
+          sourceY = cellY;
+          minX = cellX;
+          maxX = cellX;
+        } else if (cellY == sourceY) {
+          if (cellX < minX) {
+            minX = cellX;
+          }
+          if (cellX > maxX) {
+            maxX = cellX;
+          }
+        }
+      }
+    }
+  }
+  if (!found) {
+    return true;
+  }
+
+  CellAddress destination{ 0, sourceY + 1 };
+  destination = canonicalizeCell(destination);
+  const std::int64_t destY = destination.y;
+
+  struct PendingWrite
+  {
+    std::int64_t x = 0;
+    unsigned char state = 1;
+  };
+  std::vector<PendingWrite> writes;
+  for (std::int64_t x = minX - 1; x <= maxX + 1; ++x) {
+    const unsigned char left = source.getCell(CellAddress{ x - 1, sourceY });
+    const unsigned char center = source.getCell(CellAddress{ x, sourceY });
+    const unsigned char right = source.getCell(CellAddress{ x + 1, sourceY });
+    PendingWrite write;
+    write.x = x;
+    write.state = ruleSet.nextElementary(left, center, right);
+    writes.push_back(write);
+  }
+
+  if (&source != this) {
+    copyStateFrom(source);
+  }
+  for (std::size_t i = 0; i < writes.size(); ++i) {
+    CellAddress dest{ writes[i].x, destY };
+    dest = canonicalizeCell(dest);
+    if (!isCellInWorldBounds(dest)) {
+      continue;
+    }
+    setCell(dest, writes[i].state);
+  }
+  lastAdvanceStats.targetChunkCount = 1u;
+  lastAdvanceStats.producedChunkCount = 1u;
+  return true;
+}
+
+bool
 SparseCellGrid::advanceToroidal(const RuleSet& ruleSet)
 {
   ZoneScopedN("SparseCellGrid.advanceToroidal");
@@ -4095,6 +4182,10 @@ bool
 SparseCellGrid::advanceImpl(const RuleSet& ruleSet, bool allowFrontier)
 {
   ZoneScopedN("SparseCellGrid.advance");
+  if (ruleSet.getNeighborhoodKind() ==
+      RuleSet::NeighborhoodKind::Elementary1D) {
+    return advanceElementarySpaceTime(ruleSet);
+  }
   const SparseCellGrid& source = generationSource();
   const ChunkMap& sourceChunks = source.chunks;
   const ChunkStatistics& sourceStatistics = source.m_chunkStatistics;

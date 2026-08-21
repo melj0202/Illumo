@@ -1,12 +1,15 @@
 #pragma once
 #include "CellContext.h"
+#include "CellPattern.h"
 #include "ConfigurationMenu.h"
 #include "Cursor.h"
 #include "Game/SimulationRunner.h"
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Foundation/RollingMetric.h>
+#include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/SplashText.h>
+#include <cstdint>
 #include <memory>
 #include <tracy/Tracy.hpp>
 
@@ -49,6 +52,24 @@ private:
   void updateWireworldBrushFromInput();
   void showModeSplash(const char* label);
   void updateEditorCursor();
+  void updateSelectionVisual();
+  void updateInspectorVisual();
+  void normalizeSelection(std::int64_t* x0,
+                          std::int64_t* y0,
+                          std::int64_t* x1,
+                          std::int64_t* y1) const;
+  bool captureSelection(CellPattern* pattern, std::string* error);
+  bool pastePatternAt(const CellPattern& pattern,
+                      std::int64_t originX,
+                      std::int64_t originY,
+                      std::string* error);
+  bool fillSelection(unsigned char state);
+  bool copySelection();
+  bool cutSelection();
+  bool pasteAtCursor();
+  bool stampNamed(const std::string& name);
+  bool importPatternText(const std::string& text);
+  void handleEditorHotkeys();
   bool isRender3dTestEnabled() const;
   void ensureRender3dTestDrawables();
   void updateRender3dTestMatrices();
@@ -87,4 +108,27 @@ private:
   std::unique_ptr<DebugDraw3D> render3dTestAnimated;
   double render3dTestTime;
   Cursor editorCursor;
+  GameVisual selectionVisual;
+  GameVisual inspectorVisual;
+  bool hasSelection;
+  bool selecting;
+  std::int64_t selectAnchorX;
+  std::int64_t selectAnchorY;
+  std::int64_t selectX0;
+  std::int64_t selectY0;
+  std::int64_t selectX1;
+  std::int64_t selectY1;
+  std::int64_t hoverX;
+  std::int64_t hoverY;
+  bool hoverValid;
+  CellPattern clipboardPattern;
+  bool inspectorEnabled;
+  std::uint64_t simulationGeneration;
+  bool copyHeld;
+  bool cutHeld;
+  bool pasteHeld;
+  bool rotateHeld;
+  bool flipHeld;
+  bool inspectHeld;
+  bool deleteHeld;
 };

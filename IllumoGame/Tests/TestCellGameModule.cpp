@@ -163,8 +163,12 @@ testStartRegistersGameFeatures()
            "module starts in edit mode");
   testEqSize(g,
              fixture.registry.GetCommandNames().size(),
-             22,
+             30,
              "all game commands are registered");
+  testTrue(
+    g, fixture.registry.HasCommand("select"), "select command registered");
+  testTrue(
+    g, fixture.registry.HasCommand("inspect"), "inspect command registered");
   testTrue(
     g, fixture.registry.HasCommand("ruleset"), "ruleset command registered");
   testTrue(g, fixture.registry.HasCommand("save"), "save command registered");
@@ -178,7 +182,7 @@ testStartRegistersGameFeatures()
            "command usage metadata registered");
   testEqSize(g,
              fixture.registry.GetCommandCompletions("ruleset").size(),
-             7,
+             9,
              "ruleset completion candidates registered");
   testTrue(g,
            CellGameModuleTestAccess::getConfigurationMenu(fixture.module) !=

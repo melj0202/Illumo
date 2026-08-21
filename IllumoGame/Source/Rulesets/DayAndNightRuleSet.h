@@ -1,18 +1,14 @@
 #pragma once
-#include "RuleSet.h"
+#include "LifeLikeRuleSet.h"
 
-class DayAndNightRuleSet : public RuleSet
+class DayAndNightRuleSet : public LifeLikeRuleSet
 {
 public:
   DayAndNightRuleSet(CellGrid* targetCanvas)
-    : RuleSet(targetCanvas)
+    : LifeLikeRuleSet(targetCanvas,
+                      "DAY_AND_NIGHT",
+                      (1u << 3) | (1u << 6) | (1u << 7) | (1u << 8),
+                      (1u << 3) | (1u << 4) | (1u << 6) | (1u << 7) | (1u << 8))
   {
   }
-  ~DayAndNightRuleSet() override = default;
-
-  unsigned char nextState(unsigned char cell,
-                          unsigned char aliveNeighbors) const override final;
-  void evalCell(const unsigned char& target,
-                unsigned char dest[3]) const override;
-  std::string getRuleTag() override { return "DAY_AND_NIGHT"; }
 };

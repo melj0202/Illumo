@@ -37,8 +37,16 @@ shutdown to the App main loop. A short eased reveal, staggered row fade, gliding
 selection highlight, and value-change pulse are advanced from frame delta time;
 input remains active throughout.
 
-The persisted 	exttt{render3dTest} flag defaults to 	exttt{0}. Setting it to
-	exttt{1} replaces CanvasView with a rendering diagnostic scene: fixed axes
+EDIT mode supports Shift+drag marquee selection, Ctrl+C/X/V copy/cut/paste,
+Delete fill, R/F buffer rotate/flip, and console commands
+\texttt{select}/\texttt{copy}/\texttt{cut}/\texttt{paste}/\texttt{stamp}/
+\texttt{rle}/\texttt{plaintext}. Patterns are a side path (D-G1). Optional
+\texttt{inspect} HUD reports generation count, hover cell, and census.
+Life-like B/S rules share \texttt{LifeLikeRuleSet} masks behind existing mode
+strings. Rule 90 and Rule 184 are elementary 1D space-time diagrams (D-G2).
+
+The persisted \texttt{render3dTest} flag defaults to \texttt{0}. Setting it to
+\texttt{1} replaces CanvasView with a rendering diagnostic scene: fixed axes
 and grid plus orbiting, bobbing, spinning solid and wire cubes. Simulation and
 UI continue normally; disabling the flag restores the canvas immediately.
 
@@ -174,8 +182,10 @@ resources do not scale with chunk count.
 
 \subsection{Rulesets}
 Active rules (in \pathref{AllSets.h} / factory): Game of Life, Seeds, Brian's
-Brain, Highlife, Day \& Night, Life Without Death, Wireworld. Stub headers
-remain for Rule 90 / 184 (identity \texttt{nextState}).
+Brain, Highlife, Day \& Night, Life Without Death, Wireworld, Rule 90, and
+Rule 184. Binary B/S rules share \texttt{LifeLikeRuleSet} masks. Rule 90 / 184
+use \texttt{NeighborhoodKind::Elementary1D} and a serial space-time advance
+(D-G2).
 
 \begin{lstlisting}
 class RuleSet {

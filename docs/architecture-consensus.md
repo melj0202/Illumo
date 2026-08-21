@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-08-18
+**Last updated:** 2026-08-21
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -523,8 +523,8 @@ invalidate current chunks before the next step.
 
 ### 5.7 Rules and encoding
 
-**Active rules** (factory / AllSets): Game of Life, Seeds, Brian's Brain, Highlife, Day & Night, Life Without Death, **Wireworld**.  
-**Stubs:** Rule 90 / 184 (identity `nextState`).
+**Active rules** (factory / AllSets): Game of Life, Seeds, Brian's Brain, Highlife, Day & Night, Life Without Death, Wireworld, Rule 90, and Rule 184.  
+Life-like B/S modes share `LifeLikeRuleSet` masks. Rule 90 / 184 use `NeighborhoodKind::Elementary1D` and a serial space-time `SparseCellGrid` advance (D-G2).
 
 ```
 class RuleSet {
@@ -656,9 +656,8 @@ The Debug-only console separates general tooling from product behavior:
 - Dynamic parameter syntax hints dynamically render usage instructions in the status bar while typing known commands.
 - Utility commands include `repeat <N> <command>`, `history [filter|clear]`, and the `sysinfo` telemetry dashboard. The simulation-provided `status` command reports simulation, canvas, ruleset, and camera state.
 - Console chrome uses a single heap-backed batch with capacity for 8,000 UI
-  quads. The current draw path truncates each history entry to panel width and
-  scrolls by raw history entries. D-UI2 records the intended word-wrap and
-  visual-line metrics, but that behavior is not present in the live path.
+  quads. History wraps to panel width and scrolls by visual lines, sharing
+  mounted/floating layout metrics (D-UI2).
 - `Logger` may mirror output into the console while services are alive. The host
   clears that non-owning logger context before destroying the services.
 
@@ -797,6 +796,8 @@ the normal canvas returns immediately when the flag is disabled.
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and version 3 topology persistence. |
+| **D-G1** | Editor patterns (RLE/plaintext/stamps/clipboard) are a side path; sparse v3 world saves are unchanged. |
+| **D-G2** | Elementary 1D rules use a serial space-time advance, not the Moore 256×9 table. |
 | **D-F1** | MacroDefs / Windows.h include toxicity deferred until real pain. |
 
 ---
@@ -808,7 +809,7 @@ the normal canvas returns immediately when the flag is disabled.
 | Render text / fonts | **Done** (FreeType + GLString / SplashText) |
 | Command line | **Done** (validated built-ins plus module-registered simulation, canvas, camera, ruleset, and file commands) |
 | Console on GL screen | **Done** (token UI, advanced editing, measured caret, scrolling, full-help capacity test) |
-| More rulesets | **Partly** — Wireworld live; 90/184 stubs |
+| More rulesets | **Done** — Wireworld live; 90/184 space-time |
 | Infinite 16×16 chunk canvas | **Done** — sparse signed-coordinate chunks with separate stored/counting masks, per-target candidates or dense 18×18 halos, bounded view, editing, camera, persistence, and tests |
 | Mouse pan | **Done** (camera controls) |
 | CPU large-grid parallel | **Done where measured** — bounded reusable workers for large candidate and halo work; discovery/merge remain deterministic and serial |

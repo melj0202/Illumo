@@ -88,13 +88,21 @@ public:
     return modeString == "GAME_OF_LIFE" || modeString == "BRIANS_BRAIN" ||
            modeString == "DAY_AND_NIGHT" || modeString == "HIGHLIFE" ||
            modeString == "LIFE_WITHOUT_DEATH" || modeString == "SEEDS" ||
-           modeString == "WIREWORLD";
+           modeString == "WIREWORLD" || modeString == "RULE_90" ||
+           modeString == "RULE_184";
   }
 
   static std::vector<std::string> GetKnownModeStrings()
   {
-    return { "GAME_OF_LIFE",       "BRIANS_BRAIN", "DAY_AND_NIGHT", "HIGHLIFE",
-             "LIFE_WITHOUT_DEATH", "SEEDS",        "WIREWORLD" };
+    return { "GAME_OF_LIFE",
+             "BRIANS_BRAIN",
+             "DAY_AND_NIGHT",
+             "HIGHLIFE",
+             "LIFE_WITHOUT_DEATH",
+             "SEEDS",
+             "WIREWORLD",
+             "RULE_90",
+             "RULE_184" };
   }
 
   // Returns true if the active ruleset instance changed.
@@ -127,6 +135,10 @@ public:
       ruleSet = new SeedsRuleSet(nullptr);
     } else if (modeString == "WIREWORLD") {
       ruleSet = new WireworldRuleSet(nullptr);
+    } else if (modeString == "RULE_90") {
+      ruleSet = new Rule90RuleSet(nullptr);
+    } else if (modeString == "RULE_184") {
+      ruleSet = new Rule184RuleSet(nullptr);
     } else {
       Logger::LogError("Invalid rule set name: " + modeString);
       ruleSet = new GameOfLifeRuleSet(nullptr);

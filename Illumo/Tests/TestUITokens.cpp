@@ -1082,6 +1082,9 @@ testCommandLineHistoryWrapAndScrollToStart()
   testTrue(g,
            startOffset > 0,
            "wrapped history produces a positive max scroll offset");
+  testTrue(g,
+           startOffset >= 40,
+           "scroll distance exceeds raw history count because long lines wrap");
   console.ScrollUp();
   testEqInt(g,
             console.getScrollOffset(),

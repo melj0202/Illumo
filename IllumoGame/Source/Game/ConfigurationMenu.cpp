@@ -165,6 +165,12 @@ ConfigurationMenu::displayRuleSetName(const std::string& mode)
   if (mode == "WIREWORLD") {
     return "Wireworld";
   }
+  if (mode == "RULE_90") {
+    return "Rule 90";
+  }
+  if (mode == "RULE_184") {
+    return "Rule 184";
+  }
   return mode;
 }
 
