@@ -795,6 +795,144 @@ testSparseMicroBenchReport()
               cachedSparseGps,
               sparseChange,
               cachedSparseStats.memoProbeCount);
+
+  {
+    const int denseChunksPerSide = 65;
+    const int denseGenerations = 12;
+    SparseCellGrid grid;
+    seedSparseBenchmark(&grid, denseChunksPerSide, 303u);
+    GameOfLifeRuleSet rules(nullptr);
+    SparseCellGrid::setWorkerOverrideForTesting(4);
+    SparseCellGrid::setCellCandidateOverrideForTesting(0);
+    grid.advance(rules);
+    RollingMetric stepMetric;
+    SparseAdvanceStats lastStats;
+    for (int generation = 0; generation < denseGenerations; ++generation) {
+      const std::chrono::steady_clock::time_point t0 =
+        std::chrono::steady_clock::now();
+      grid.advance(rules);
+      stepMetric.add(std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - t0)
+                       .count());
+      lastStats = grid.getLastAdvanceStats();
+    }
+    SparseCellGrid::setWorkerOverrideForTesting(0);
+    SparseCellGrid::setCellCandidateOverrideForTesting(0);
+    const char* path = lastStats.usedChangedFrontier
+                         ? "frontier"
+                         : (lastStats.usedCellCandidates ? "cells" : "chunks");
+    std::printf("BENCH: Sparse dense soup %dx%d chunks N=%d p50/p95/max="
+                "%.3f/%.3f/%.3f ms path=%s changed=%zu frontier-work=%zu "
+                "complete-work=%zu workers=%u stages=disc/prep/eval/change/"
+                "out/merge=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms\n",
+                denseChunksPerSide,
+                denseChunksPerSide,
+                denseGenerations,
+                stepMetric.median(),
+                stepMetric.p95(),
+                stepMetric.maximum(),
+                path,
+                lastStats.changedChunkCount,
+                lastStats.frontierEstimatedWork,
+                lastStats.completeEstimatedWork,
+                lastStats.workerCount,
+                lastStats.candidateDiscoveryMilliseconds,
+                lastStats.candidatePreparationMilliseconds,
+                lastStats.candidateEvaluationMilliseconds,
+                lastStats.candidateChangeTrackingMilliseconds,
+                lastStats.candidateOutputMilliseconds,
+                lastStats.candidateMergeMilliseconds);
+    testTrue(g,
+             stepMetric.size() == static_cast<std::size_t>(denseGenerations),
+             "dense soup bench retains every measured generation");
+    testTrue(g,
+             lastStats.changedChunkCount > 4096u,
+             "dense soup keeps a journal above the former 4,096-chunk cap");
+    SparseGenerationDelta denseDelta;
+    const std::uint64_t denseRevision = grid.getRevision();
+    testTrue(
+      g,
+      denseRevision > 0u &&
+        grid.captureGenerationDelta(denseRevision - 1u, &denseDelta, false) &&
+        denseDelta.fullReplacement && denseDelta.changedChunks.empty() &&
+        denseDelta.fullChunks.empty(),
+      "dense soup captures a lightweight replacement marker");
+
+    SparseCellGrid asyncPublished;
+    SparseCellGrid asyncWorking;
+    seedSparseBenchmark(&asyncPublished, denseChunksPerSide, 303u);
+    GameOfLifeRuleSet asyncRules(nullptr);
+    SimulationRunner runner;
+    SparseGenerationDelta mirrorDelta;
+    bool mirrorDeltaValid = false;
+    RollingMetric runnerMetric;
+    RollingMetric mirrorMetric;
+    RollingMetric advanceMetric;
+    RollingMetric captureMetric;
+    const int runnerWarmup = 4;
+    const int runnerMeasured = 12;
+    bool runnerSucceeded = true;
+    SparseCellGrid* published = &asyncPublished;
+    SparseCellGrid* working = &asyncWorking;
+    for (int generation = 0;
+         generation < runnerWarmup + runnerMeasured && runnerSucceeded;
+         ++generation) {
+      SparseGenerationDelta transferDelta;
+      if (mirrorDeltaValid) {
+        transferDelta = std::move(mirrorDelta);
+      }
+      runnerSucceeded = runner.start(working,
+                                     published,
+                                     &asyncRules,
+                                     std::move(transferDelta),
+                                     mirrorDeltaValid);
+      SparseCellGrid* completedGrid = nullptr;
+      double elapsedMilliseconds = 0.0;
+      bool advanceSucceeded = false;
+      SimulationRunnerTimings timings;
+      if (runnerSucceeded) {
+        runnerSucceeded = runner.waitAndTakeCompleted(&completedGrid,
+                                                      &mirrorDelta,
+                                                      &elapsedMilliseconds,
+                                                      &advanceSucceeded,
+                                                      &timings) &&
+                          advanceSucceeded && completedGrid == working;
+      }
+      if (!runnerSucceeded) {
+        break;
+      }
+      SparseCellGrid* previousPublished = published;
+      published = working;
+      working = previousPublished;
+      mirrorDeltaValid = true;
+      if (generation >= runnerWarmup) {
+        runnerMetric.add(elapsedMilliseconds);
+        mirrorMetric.add(timings.mirrorMilliseconds);
+        advanceMetric.add(timings.advanceMilliseconds);
+        captureMetric.add(timings.captureMilliseconds);
+      }
+    }
+    runner.shutdown();
+    std::printf("BENCH: Sparse dense soup async %dx%d N=%d p50/p95="
+                "%.3f/%.3f ms mirror=%.3f/%.3f ms advance=%.3f/%.3f ms "
+                "capture=%.3f/%.3f ms\n",
+                denseChunksPerSide,
+                denseChunksPerSide,
+                runnerMeasured,
+                runnerMetric.median(),
+                runnerMetric.p95(),
+                mirrorMetric.median(),
+                mirrorMetric.p95(),
+                advanceMetric.median(),
+                advanceMetric.p95(),
+                captureMetric.median(),
+                captureMetric.p95());
+    testTrue(g, runnerSucceeded, "dense soup async runner published");
+    testEqSize(g,
+               runnerMetric.size(),
+               static_cast<std::size_t>(runnerMeasured),
+               "dense soup async bench retains every measured generation");
+  }
 }
 
 static double

@@ -24,13 +24,26 @@ implementation under IllumoGame.
   wrap both axes; `0 x 0` selects the infinite canvas. Mixed zero/positive
   dimensions are invalid, and topology changes start a fresh world.
 - Preserve deterministic transitions across direct, candidate, halo, frontier,
-  serial, and worker-pool paths. A failed advance must not partially publish a
-  generation.
+  serial, and worker-pool paths. Counting-dense target centers skip
+  neighbor-count scratch preparation and evaluate as halo.
+  Dense-majority and large frontiers skip candidate scratch entirely. A failed
+  advance must not partially publish a generation. Changed-chunk tracking
+  retains at most 16,384 addresses; the frontier versus complete work
+  comparison still selects evaluation, and only tracking overflow or
+  allocation failure invalidates the journal. Journals of at least 2,048
+  presentation chunks capture a lightweight replacement marker instead of
+  per-chunk payloads.
 - Worker pools are grid-owned implementation details. Bound work, join before
   destruction, and do not expose partially written state to the frame thread.
 - `CanvasView` is a bounded world-space view over the sparse domain. It owns a
   reusable RGB texture and quad; visible sampling and overview capping are
-  presentation limits, never simulation-domain limits.
+  presentation limits, never simulation-domain limits. Aligned cache-origin
+  shifts copy retained CPU texels and resample only newly exposed strips. LOD,
+  resize, palette, revision gap, torus wrap, and non-aligned jumps still refill.
+  Exact-cell LOD fades changing texels; density overviews snap. Dense visible
+  revisions that dirty a quarter of the cache resample the complete cache.
+  Changed-bin marking stops once that threshold is reached. Overview resamples
+  walk occupied cells and snap-convert the sampled RGB in one pass.
 - A finite torus presents only its centered canonical rectangle. Cells outside
   that rectangle remain background-colored; wrapping is a simulation-domain
   rule and must not tile the finite world across the camera view.

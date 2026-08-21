@@ -308,6 +308,31 @@ testSparseParallelDeterminism()
 }
 
 static void
+seedDenseSoup(SparseCellGrid* grid, int chunksPerSide, unsigned int seed)
+{
+  if (grid == nullptr) {
+    return;
+  }
+  unsigned int state = seed;
+  const int firstChunk = -chunksPerSide / 2;
+  for (int chunkY = 0; chunkY < chunksPerSide; ++chunkY) {
+    for (int chunkX = 0; chunkX < chunksPerSide; ++chunkX) {
+      SparseChunkRecord record;
+      record.chunkX = firstChunk + chunkX;
+      record.chunkY = firstChunk + chunkY;
+      record.cells.fill(SparseCellGrid::BackgroundState);
+      for (std::size_t index = 0; index < record.cells.size(); ++index) {
+        state = state * 1664525u + 1013904223u;
+        if ((state >> 29) < 2u) {
+          record.cells[index] = SparseCellGrid::CountedNeighborState;
+        }
+      }
+      grid->assignChunk(record);
+    }
+  }
+}
+
+static void
 seedWideBlinkers(SparseCellGrid* grid, int count)
 {
   if (grid == nullptr) {
@@ -759,6 +784,75 @@ testSparseAdaptiveFrontierCost()
   testTrue(g,
            broadStats.frontierEstimatedWork > broadStats.completeEstimatedWork,
            "broad frontier rejection is explained by estimated work");
+}
+
+static void
+testSparseDenseLocalIdentity()
+{
+  testSection("SparseCellGrid: dense local serial/worker/path identity");
+  GameOfLifeRuleSet life(nullptr);
+  SparseCellGrid serial;
+  SparseCellGrid parallel;
+  SparseCellGrid complete;
+  seedDenseSoup(&serial, 16, 404u);
+  seedDenseSoup(&parallel, 16, 404u);
+  seedDenseSoup(&complete, 16, 404u);
+
+  for (int generation = 0; generation < 4; ++generation) {
+    SparseCellGrid::setWorkerOverrideForTesting(1);
+    SparseCellGrid::setCellCandidateOverrideForTesting(0);
+    testTrue(g, serial.advance(life), "dense serial generation advances");
+    SparseCellGrid::setWorkerOverrideForTesting(4);
+    SparseCellGrid::setCellCandidateOverrideForTesting(0);
+    testTrue(g, parallel.advance(life), "dense parallel generation advances");
+    SparseCellGrid::setWorkerOverrideForTesting(1);
+    SparseCellGrid::setCellCandidateOverrideForTesting(-1);
+    testTrue(g, complete.advance(life), "dense complete generation advances");
+  }
+  SparseCellGrid::setWorkerOverrideForTesting(0);
+  SparseCellGrid::setCellCandidateOverrideForTesting(0);
+  testTrue(g,
+           sameSparseRecords(serial.collectChunkRecords(),
+                             parallel.collectChunkRecords()),
+           "dense serial and four-worker paths match");
+  testTrue(g,
+           sameSparseRecords(serial.collectChunkRecords(),
+                             complete.collectChunkRecords()),
+           "dense frontier-allowed and forced-complete paths match");
+}
+
+static void
+testSparseFrontierTrackingSurvivesLargeBurst()
+{
+  testSection("SparseCellGrid: changed-chunk tracking survives 4096 burst");
+  GameOfLifeRuleSet life(nullptr);
+  const int burstCount = 4200;
+  SparseCellGrid burst;
+  seedWideBlinkers(&burst, burstCount);
+
+  SparseCellGrid::setCellCandidateOverrideForTesting(0);
+  testTrue(g, burst.advance(life), "over-limit edit burst advances");
+  testTrue(g,
+           burst.getLastAdvanceStats().changedChunkCount > 4096u,
+           "edit tracking retains more than the former 4,096-chunk cap");
+  testTrue(g, burst.advance(life), "tracked dense generation advances");
+  testTrue(g,
+           burst.getLastAdvanceStats().changedChunkCount > 4096u,
+           "the next generation keeps the changed-chunk journal");
+
+  for (int index = 0; index < burstCount; ++index) {
+    const std::int64_t x = static_cast<std::int64_t>(index) * 32;
+    burst.setCell(CellAddress{ x, -1 }, SparseCellGrid::BackgroundState);
+    burst.setCell(CellAddress{ x, 0 }, SparseCellGrid::BackgroundState);
+    burst.setCell(CellAddress{ x, 1 }, SparseCellGrid::BackgroundState);
+  }
+  testTrue(g, burst.advance(life), "settling generation advances");
+  testTrue(g, burst.advance(life), "post-burst settled generation advances");
+  testTrue(g,
+           burst.getLastAdvanceStats().usedChangedFrontier &&
+             burst.getLastAdvanceStats().frontierTargetCount == 0u,
+           "a settled burst returns to an empty frontier path");
+  SparseCellGrid::setCellCandidateOverrideForTesting(0);
 }
 
 static void
@@ -1503,6 +1597,10 @@ testAdaptiveOverviewAndRevisionGate()
                static_cast<std::size_t>(view.getCachedTexelWidth()) *
                  static_cast<std::size_t>(view.getCachedTexelHeight()),
            "overview revision recomputes only affected density bins");
+  testEqSize(g,
+             view.getFadingTexelCount(),
+             0u,
+             "overview LOD snaps density bins instead of fading");
   view.setFadeSpeed(0.0f);
   mock.ClearCommandQueue();
   view.AppendCommands(&renderer);
@@ -1715,6 +1813,36 @@ testIncrementalPresentationWork()
 }
 
 static void
+testDenseVisibleChangesUseCompleteSample()
+{
+  testSection("CanvasView: dense visible changes use a complete sample");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  SparseCellGrid grid;
+  for (std::int64_t y = 0; y < 80; ++y) {
+    for (std::int64_t x = 0; x < 80; ++x) {
+      grid.setCell(CellAddress{ x, y }, 0);
+    }
+  }
+  CanvasView view(80, 60, &grid, &window, &camera, nullptr);
+  view.setFadeSpeed(0.0f);
+  view.rebuildTargetsFromGrid();
+  GameOfLifeRuleSet rules(nullptr);
+  testTrue(g, grid.advance(rules), "dense block advances one generation");
+  view.rebuildTargetsFromGrid();
+  const std::size_t fullViewTexels =
+    static_cast<std::size_t>(view.getCachedTexelWidth()) *
+    static_cast<std::size_t>(view.getCachedTexelHeight());
+  testEqSize(g,
+             view.getLastSampledTexelCount(),
+             fullViewTexels,
+             "a dense visible generation samples the complete cache");
+}
+
+static void
 testCanvasViewUsesWorldCellQuad()
 {
   testSection("CanvasView: world-space cell-aligned presentation");
@@ -1806,6 +1934,225 @@ testCameraCacheReuseAndLodHysteresis()
   camera.SetZoom(0.16f);
   view.syncVisibleRegion();
   testEqInt(g, view.getCellsPerTexel(), 2, "LOD refines after 80 percent fit");
+}
+
+static void
+readCacheTexelRgb(const CanvasView& view,
+                  const CellAddress& cell,
+                  unsigned char* rgb)
+{
+  const CellAddress first = view.getCacheFirstCell();
+  const int cellsPerTexel = view.getCellsPerTexel();
+  const int x = static_cast<int>((cell.x - first.x) / cellsPerTexel);
+  const int y = static_cast<int>((first.y - cell.y) / cellsPerTexel);
+  const int index = (y * view.getTextureWidth() + x) * 3;
+  const unsigned char* pixels = view.getDisplayTexBuffer();
+  rgb[0] = pixels[index];
+  rgb[1] = pixels[index + 1];
+  rgb[2] = pixels[index + 2];
+}
+
+static void
+testCameraCacheScrollsAlignedPan()
+{
+  testSection("CanvasView: aligned pan scrolls the camera cache");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  SparseCellGrid grid;
+  grid.setCell(CellAddress{ 0, 0 }, 0);
+  grid.setCell(CellAddress{ 24, 8 }, 0);
+  CanvasView view(80, 60, &grid, &window, &camera, nullptr);
+  view.setFadeSpeed(0.0f);
+  view.rebuildTargetsFromGrid();
+  const std::size_t initialRefills = view.getCacheRefillCount();
+  const CellAddress initialFirst = view.getCacheFirstCell();
+
+  const double cellWorld = 16.0;
+  for (int frame = 1; frame <= 24; ++frame) {
+    camera.SetPositionPrecise(static_cast<double>(frame) * 3.0 * cellWorld,
+                              0.0);
+    view.syncVisibleRegion();
+  }
+  testEqSize(g,
+             view.getCacheRefillCount(),
+             initialRefills,
+             "slow continuous pan scrolls instead of refilling the cache");
+  testTrue(g,
+           view.getCacheFirstCell().x != initialFirst.x,
+           "aligned pan moves the sampled cache origin");
+
+  CanvasView reference(80, 60, &grid, &window, &camera, nullptr);
+  reference.setFadeSpeed(0.0f);
+  reference.rebuildTargetsFromGrid();
+  unsigned char scrolledRgb[3] = { 0, 0, 0 };
+  unsigned char referenceRgb[3] = { 0, 0, 0 };
+  readCacheTexelRgb(view, CellAddress{ 0, 0 }, scrolledRgb);
+  readCacheTexelRgb(reference, CellAddress{ 0, 0 }, referenceRgb);
+  testTrue(g,
+           scrolledRgb[0] == referenceRgb[0] &&
+             scrolledRgb[1] == referenceRgb[1] &&
+             scrolledRgb[2] == referenceRgb[2],
+           "retained overlap matches a full refill after a slow pan");
+  readCacheTexelRgb(view, CellAddress{ 24, 8 }, scrolledRgb);
+  readCacheTexelRgb(reference, CellAddress{ 24, 8 }, referenceRgb);
+  testTrue(g,
+           scrolledRgb[0] == referenceRgb[0] &&
+             scrolledRgb[1] == referenceRgb[1] &&
+             scrolledRgb[2] == referenceRgb[2],
+           "a second retained live cell matches after the cache scroll");
+
+  camera.SetPositionPrecise(8000.0 * cellWorld, 0.0);
+  view.syncVisibleRegion();
+  testEqSize(g,
+             view.getCacheRefillCount(),
+             initialRefills + 1u,
+             "a large cache jump still performs a full refill");
+
+  camera.SetZoom(0.1f);
+  view.syncVisibleRegion();
+  testEqSize(g,
+             view.getCacheRefillCount(),
+             initialRefills + 2u,
+             "LOD change still performs a full refill");
+}
+
+static bool
+sameVisibleWorldTexels(const CanvasView& left,
+                       const CanvasView& right,
+                       const char* context)
+{
+  if (left.getCellsPerTexel() != right.getCellsPerTexel() ||
+      left.getVisibleCellWidth() != right.getVisibleCellWidth() ||
+      left.getVisibleCellHeight() != right.getVisibleCellHeight() ||
+      left.getVisibleFirstCell().x != right.getVisibleFirstCell().x ||
+      left.getVisibleFirstCell().y != right.getVisibleFirstCell().y) {
+    std::printf("VISIBLE META mismatch %s lod=%d/%d visible=(%lld,%lld %dx%d)/"
+                "(%lld,%lld %dx%d)\n",
+                context,
+                left.getCellsPerTexel(),
+                right.getCellsPerTexel(),
+                static_cast<long long>(left.getVisibleFirstCell().x),
+                static_cast<long long>(left.getVisibleFirstCell().y),
+                left.getVisibleCellWidth(),
+                left.getVisibleCellHeight(),
+                static_cast<long long>(right.getVisibleFirstCell().x),
+                static_cast<long long>(right.getVisibleFirstCell().y),
+                right.getVisibleCellWidth(),
+                right.getVisibleCellHeight());
+    return false;
+  }
+  const int lod = left.getCellsPerTexel();
+  const CellAddress first = left.getVisibleFirstCell();
+  int mismatches = 0;
+  int firstX = 0;
+  int firstY = 0;
+  unsigned char leftRgb[3] = { 0, 0, 0 };
+  unsigned char rightRgb[3] = { 0, 0, 0 };
+  for (int y = 0; y < left.getVisibleCellHeight(); y += lod) {
+    for (int x = 0; x < left.getVisibleCellWidth(); x += lod) {
+      const CellAddress cell{ first.x + x, first.y - y };
+      readCacheTexelRgb(left, cell, leftRgb);
+      readCacheTexelRgb(right, cell, rightRgb);
+      if (leftRgb[0] != rightRgb[0] || leftRgb[1] != rightRgb[1] ||
+          leftRgb[2] != rightRgb[2]) {
+        if (mismatches == 0) {
+          firstX = x;
+          firstY = y;
+          std::printf("VISIBLE TEXEL mismatch %s cell=(%lld,%lld) "
+                      "scrolled=%u,%u,%u refill=%u,%u,%u\n",
+                      context,
+                      static_cast<long long>(cell.x),
+                      static_cast<long long>(cell.y),
+                      leftRgb[0],
+                      leftRgb[1],
+                      leftRgb[2],
+                      rightRgb[0],
+                      rightRgb[1],
+                      rightRgb[2]);
+        }
+        mismatches += 1;
+      }
+    }
+  }
+  if (mismatches > 0) {
+    std::printf("VISIBLE TEXEL mismatches %s count=%d first-visible=%d,%d\n",
+                context,
+                mismatches,
+                firstX,
+                firstY);
+    return false;
+  }
+  return true;
+}
+
+static void
+seedScrollPattern(SparseCellGrid* grid)
+{
+  if (grid == nullptr) {
+    return;
+  }
+  for (std::int64_t y = -120; y <= 120; ++y) {
+    for (std::int64_t x = -120; x <= 280; ++x) {
+      if ((x % 5 == 0) || (y % 7 == 0)) {
+        grid->setCell(CellAddress{ x, y }, 0);
+      }
+    }
+  }
+}
+
+static void
+testCameraCacheScrollMatchesRefill()
+{
+  testSection("CanvasView: scrolled cache matches a full refill");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  SparseCellGrid grid;
+  seedScrollPattern(&grid);
+
+  const float zooms[] = { 1.0f, 0.1f };
+  const double cellWorld = 16.0;
+  const double panXs[] = { 3.0 * cellWorld, -3.0 * cellWorld, 3.0 * cellWorld };
+  const double panYs[] = { 0.0, 0.0, 3.0 * cellWorld };
+  const char* names[] = { "x+", "x-", "diag" };
+  for (float zoom : zooms) {
+    for (int direction = 0; direction < 3; ++direction) {
+      Camera camera(glm::vec2(0.0f, 0.0f), zoom, &env);
+      CanvasView view(80, 60, &grid, &window, &camera, nullptr);
+      view.setFadeSpeed(0.0f);
+      view.rebuildTargetsFromGrid();
+      const std::size_t initialRefills = view.getCacheRefillCount();
+      for (int frame = 1; frame <= 40; ++frame) {
+        camera.SetPositionPrecise(static_cast<double>(frame) * panXs[direction],
+                                  static_cast<double>(frame) *
+                                    panYs[direction]);
+        view.rebuildTargetsFromGrid();
+      }
+      char context[64];
+      std::snprintf(context,
+                    sizeof(context),
+                    "zoom=%.1f %s origin=(%lld,%lld) lod=%d refills=%zu",
+                    static_cast<double>(zoom),
+                    names[direction],
+                    static_cast<long long>(view.getCacheFirstCell().x),
+                    static_cast<long long>(view.getCacheFirstCell().y),
+                    view.getCellsPerTexel(),
+                    view.getCacheRefillCount() - initialRefills);
+      testTrue(g,
+               zoom != 1.0f || view.getCacheRefillCount() == initialRefills,
+               "near-zoom pan keeps using cache scroll");
+      CanvasView reference(80, 60, &grid, &window, &camera, nullptr);
+      reference.setFadeSpeed(0.0f);
+      reference.rebuildTargetsFromGrid();
+      testTrue(g,
+               sameVisibleWorldTexels(view, reference, context),
+               "scrolled visible texels match a full refill");
+    }
+  }
 }
 
 static void
@@ -1983,8 +2330,10 @@ testAsyncSimulationPublication()
   SparseCellGrid replacementExpected;
   SparseCellGrid replacementPublished;
   SparseCellGrid replacementWorking;
-  seedWideBlinkers(&replacementExpected, 2200);
-  seedWideBlinkers(&replacementPublished, 2200);
+  const int replacementColonies =
+    static_cast<int>(SparseCellGrid::kFrontierTrackingLimit) + 1;
+  seedWideBlinkers(&replacementExpected, replacementColonies);
+  seedWideBlinkers(&replacementPublished, replacementColonies);
   replacementExpected.advance(rules);
   SimulationRunner replacementRunner;
   SparseGenerationDelta replacementDelta;
@@ -2002,7 +2351,7 @@ testAsyncSimulationPublication()
                                                   &advanceSucceeded) &&
              advanceSucceeded && replacementDelta.fullReplacement &&
              replacementDelta.fullChunks.empty(),
-           "broad change publishes a lightweight replacement marker");
+           "tracking overflow publishes a lightweight replacement marker");
   replacementExpected.advance(rules);
   testTrue(g,
            replacementRunner.start(&replacementPublished,
@@ -2097,6 +2446,152 @@ testAsyncSimulationPublication()
 }
 
 static void
+seedDenseSoupBenchmark(SparseCellGrid* grid,
+                       int chunksPerSide,
+                       unsigned int seed)
+{
+  if (grid == nullptr) {
+    return;
+  }
+  unsigned int state = seed;
+  const int firstChunk = -chunksPerSide / 2;
+  for (int chunkY = 0; chunkY < chunksPerSide; ++chunkY) {
+    for (int chunkX = 0; chunkX < chunksPerSide; ++chunkX) {
+      SparseChunkRecord record;
+      record.chunkX = firstChunk + chunkX;
+      record.chunkY = firstChunk + chunkY;
+      record.cells.fill(SparseCellGrid::BackgroundState);
+      for (std::size_t index = 0; index < record.cells.size(); ++index) {
+        state = state * 1664525u + 1013904223u;
+        if ((state >> 29) < 2u) {
+          record.cells[index] = SparseCellGrid::CountedNeighborState;
+        }
+      }
+      grid->assignChunk(record);
+    }
+  }
+}
+
+static void
+reportDenseSoupPresentation(const char* name,
+                            float zoom,
+                            bool pan,
+                            float fadeSpeed)
+{
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera(glm::vec2(0.0f, 0.0f), zoom, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  SparseCellGrid grid;
+  seedDenseSoupBenchmark(&grid, 65, 303u);
+  CanvasView view(80, 60, &grid, &window, &camera, &renderer);
+  view.setFadeSpeed(fadeSpeed);
+  view.rebuildTargetsFromGrid();
+  GameOfLifeRuleSet rules(nullptr);
+
+  const int warmupFrames = 4;
+  const int measuredFrames = 12;
+  const float dt = 1.0f / 145.0f;
+  const double panStepWorld = 3.0 * 16.0;
+  RollingMetric frameMetric;
+  RollingMetric advanceMetric;
+  RollingMetric sampleMetric;
+  RollingMetric fadeMetric;
+  RollingMetric uploadMetric;
+  double panWorldX = 0.0;
+  std::size_t lastFading = 0u;
+  std::size_t lastSampled = 0u;
+  std::size_t lastUploadBytes = 0u;
+  std::size_t lastRefills = 0u;
+  int lastLod = 0;
+  for (int frame = 0; frame < warmupFrames + measuredFrames; ++frame) {
+    if (pan) {
+      panWorldX += panStepWorld;
+      camera.SetPositionPrecise(panWorldX, 0.0);
+    }
+    const std::chrono::steady_clock::time_point frameStart =
+      std::chrono::steady_clock::now();
+    const std::chrono::steady_clock::time_point advanceStart = frameStart;
+    grid.advance(rules);
+    const std::chrono::steady_clock::time_point sampleStart =
+      std::chrono::steady_clock::now();
+    view.rebuildTargetsFromGrid();
+    const std::chrono::steady_clock::time_point fadeStart =
+      std::chrono::steady_clock::now();
+    view.tickVisual(dt);
+    const std::chrono::steady_clock::time_point uploadStart =
+      std::chrono::steady_clock::now();
+    view.AppendCommands(&renderer);
+    mock.SubmitCommandQueue();
+    mock.ClearCommandQueue();
+    const std::chrono::steady_clock::time_point frameEnd =
+      std::chrono::steady_clock::now();
+    if (frame >= warmupFrames) {
+      frameMetric.add(
+        std::chrono::duration<double, std::milli>(frameEnd - frameStart)
+          .count());
+      advanceMetric.add(
+        std::chrono::duration<double, std::milli>(sampleStart - advanceStart)
+          .count());
+      sampleMetric.add(
+        std::chrono::duration<double, std::milli>(fadeStart - sampleStart)
+          .count());
+      fadeMetric.add(
+        std::chrono::duration<double, std::milli>(uploadStart - fadeStart)
+          .count());
+      uploadMetric.add(
+        std::chrono::duration<double, std::milli>(frameEnd - uploadStart)
+          .count());
+      lastFading = view.getFadingTexelCount();
+      lastSampled = view.getLastSampledTexelCount();
+      lastUploadBytes = view.getLastUploadByteCount();
+      lastRefills = view.getCacheRefillCount();
+      lastLod = view.getCellsPerTexel();
+    }
+  }
+  std::printf("BENCH: Dense soup presentation %s N=%d lod=%d fade=%.1f "
+              "frame p50/p95=%.3f/%.3f ms advance=%.3f/%.3f sample=%.3f/%.3f "
+              "fade=%.3f/%.3f upload=%.3f/%.3f fading=%zu sampled=%zu "
+              "upload-bytes=%zu refills=%zu\n",
+              name,
+              measuredFrames,
+              lastLod,
+              static_cast<double>(fadeSpeed),
+              frameMetric.median(),
+              frameMetric.p95(),
+              advanceMetric.median(),
+              advanceMetric.p95(),
+              sampleMetric.median(),
+              sampleMetric.p95(),
+              fadeMetric.median(),
+              fadeMetric.p95(),
+              uploadMetric.median(),
+              uploadMetric.p95(),
+              lastFading,
+              lastSampled,
+              lastUploadBytes,
+              lastRefills);
+  testTrue(g,
+           frameMetric.size() == static_cast<std::size_t>(measuredFrames),
+           "dense presentation bench retains every measured frame");
+}
+
+static void
+testDenseSoupPresentationBench()
+{
+  testSection("CanvasView: dense soup presentation vs simulation stages");
+  reportDenseSoupPresentation("zoom1-static-fade8", 1.0f, false, 8.0f);
+  reportDenseSoupPresentation("zoom1-pan-fade8", 1.0f, true, 8.0f);
+  reportDenseSoupPresentation("zoom0.1-static-fade8", 0.1f, false, 8.0f);
+  reportDenseSoupPresentation("zoom0.1-pan-fade8", 0.1f, true, 8.0f);
+  reportDenseSoupPresentation("zoom1-static-fade0", 1.0f, false, 0.0f);
+}
+
+static void
 testPresentationFrameLatencyBench()
 {
   testSection("CanvasView: warmed camera-cache report (informational)");
@@ -2132,15 +2627,16 @@ testPresentationFrameLatencyBench()
   camera.SetZoom(1.0f);
   view.syncVisibleRegion();
   double panWorldX = 0.0;
+  const double panStepWorld = 3.0 * 16.0;
   for (int frame = 0; frame < warmupFrames; ++frame) {
-    panWorldX += 4.0;
+    panWorldX += panStepWorld;
     camera.SetPositionPrecise(panWorldX, 0.0);
     view.syncVisibleRegion();
   }
   const std::size_t panRefillsBefore = view.getCacheRefillCount();
   RollingMetric panMetric;
   for (int frame = 0; frame < measuredFrames; ++frame) {
-    panWorldX += 4.0;
+    panWorldX += panStepWorld;
     const std::chrono::steady_clock::time_point start =
       std::chrono::steady_clock::now();
     camera.SetPositionPrecise(panWorldX, 0.0);
@@ -2202,9 +2698,8 @@ testPresentationFrameLatencyBench()
              staticMetric.size(),
              RollingMetric::kCapacity,
              "presentation bench retains the latest 256 static samples");
-  testTrue(g,
-           panRefills < static_cast<std::size_t>(measuredFrames),
-           "padded cache avoids a refill on every pan frame");
+  testTrue(
+    g, panRefills == 0u, "aligned pan scrolls the cache instead of refilling");
   testTrue(g,
            zoomRefills < static_cast<std::size_t>(measuredFrames),
            "padded cache avoids a refill on every smooth-zoom frame");
@@ -2294,6 +2789,12 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CanvasInf.SparseAdaptiveFrontierCost", []() {
     return runCanvasInfCase(testSparseAdaptiveFrontierCost);
   });
+  registry.add("IllumoGame.CanvasInf.SparseDenseLocalIdentity",
+               []() { return runCanvasInfCase(testSparseDenseLocalIdentity); });
+  registry.add(
+    "IllumoGame.CanvasInf.SparseFrontierTrackingSurvivesLargeBurst", []() {
+      return runCanvasInfCase(testSparseFrontierTrackingSurvivesLargeBurst);
+    });
   registry.add("IllumoGame.CanvasInf.SparsePreciseActivityMasks", []() {
     return runCanvasInfCase(testSparsePreciseActivityMasks);
   });
@@ -2327,17 +2828,30 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CanvasInf.IncrementalPresentationWork", []() {
     return runCanvasInfCase(testIncrementalPresentationWork);
   });
+  registry.add(
+    "IllumoGame.CanvasInf.DenseVisibleChangesUseCompleteSample", []() {
+      return runCanvasInfCase(testDenseVisibleChangesUseCompleteSample);
+    });
   registry.add("IllumoGame.CanvasInf.WorldCellPresentation", []() {
     return runCanvasInfCase(testCanvasViewUsesWorldCellQuad);
   });
   registry.add("IllumoGame.CanvasInf.CameraCacheReuseAndLod", []() {
     return runCanvasInfCase(testCameraCacheReuseAndLodHysteresis);
   });
+  registry.add("IllumoGame.CanvasInf.CameraCacheScrollsAlignedPan", []() {
+    return runCanvasInfCase(testCameraCacheScrollsAlignedPan);
+  });
+  registry.add("IllumoGame.CanvasInf.CameraCacheScrollMatchesRefill", []() {
+    return runCanvasInfCase(testCameraCacheScrollMatchesRefill);
+  });
   registry.add("IllumoGame.CanvasInf.BoundedDirtyUploadRects", []() {
     return runCanvasInfCase(testBoundedDirtyUploadRectangles);
   });
   registry.add("IllumoGame.CanvasInf.AsyncSimulationPublication", []() {
     return runCanvasInfCase(testAsyncSimulationPublication);
+  });
+  registry.add("IllumoGame.CanvasInf.DenseSoupPresentationBench", []() {
+    return runCanvasInfCase(testDenseSoupPresentationBench);
   });
   registry.add("IllumoGame.CanvasInf.FrameLatencyBench", []() {
     return runCanvasInfCase(testPresentationFrameLatencyBench);

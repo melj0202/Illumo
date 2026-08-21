@@ -103,16 +103,20 @@ mode name. Mode changes update the ruleset and rebuild the canvas palette.
         table. It evaluates
         only non-background cells and neighbors of counted cells.
         Each target selects candidate or direct halo evaluation independently
-        from its counted-neighbor contribution work; all-dense counted worlds
+        from its counted-neighbor contribution work; counting-dense centers skip
+        neighbor-count scratch preparation, and all-dense counted worlds
         bypass scratch construction. This keeps Wireworld conductors separate
         from the heads that actually contribute neighbor counts. Before either
         complete path, a retained changed-chunk frontier records exact state
         and counting-change masks. Every changed chunk enrolls itself, while
         only counting changes on an edge or corner enroll the touching
         neighbor. An empty frontier performs no cell
-        evaluation. Up to 4,096 changed addresses are retained. Sparse local
+        evaluation. Up to 16,384 changed addresses are retained for tracking;
+        evaluation still follows the frontier/complete work comparison. Sparse local
         sources build candidate masks only for frontier targets and select
-        candidates or halos independently. Exact frontier preparation and
+        candidates or halos independently. Dense-majority frontiers and
+        frontiers with at least 2,048 targets skip candidate scratch and
+        evaluate as halo. Exact frontier preparation and
         evaluation work is compared with a complete-path estimate derived from
         cached population totals; cheaper frontiers patch the retained
         prior-generation map directly. At 16,384 or more candidates, retained
@@ -141,19 +145,24 @@ mode name. Mode changes update the ruleset and rebuild the canvas palette.
         mutates the spare grid while the main thread reads the published grid.
         A completion publishes at a frame boundary. Incremental completions
         carry changed chunk snapshots and update the former display grid before
-        it becomes the next worker buffer. Broad completions carry only a
+        it becomes the next worker buffer. Broad completions and journals of at
+        least 2,048 presentation chunks carry only a
         replacement marker; the spare advances directly from the immutable
         published grid and updates its own nodes in place. Incremental catch-up uses the grid's retained
         changed addresses and skips states superseded by the incoming delta;
         Only one request may be outstanding. Status separates rolling mirror,
         advance, and capture latency.
   \item View: \symbolref{CanvasView} samples a globally aligned camera cache
-        padded by two chunks per side. Motion inside it changes only the MVP.
-        One-revision changes map chunks to deduplicated exact or overview bins.
+        padded by two chunks per side. Motion inside it changes only the MVP;
+        aligned origin shifts copy retained texels and resample newly exposed
+        strips. One-revision changes map chunks to deduplicated exact or overview bins
+        and resample the complete cache when those bins cover a quarter of it;
+        marking stops once that threshold is reached. Overview resamples walk
+        occupied cells and snap-convert sampled RGB in one pass.
         Near zoom is one texel per cell; far zoom uses integer density LOD with
-        80\% refinement hysteresis. Revision gaps, cache exit, LOD/resize,
-        palette changes, and replacement perform a bounded refill. A retained
-        active-texel set fades only colors still changing. Finite worlds are
+        80\% refinement hysteresis. Revision gaps, non-aligned jumps, LOD/resize,
+        palette changes, torus wrap, and replacement perform a bounded refill.
+        Exact-cell LOD fades changing colors; density overviews snap. Finite worlds are
         drawn only inside their centered canonical rectangle; camera space
         outside it stays background-colored while opposite-edge simulation
         neighbors still wrap. Their changes conservatively trigger a bounded
@@ -174,8 +183,9 @@ candidates or chunk halos; 32 or more halo targets use up to eight reusable CPU
 workers. A cached 256-state by 9-neighbor transition table serves every hot
 loop, dense halos use rolling three-row neighbor counts, and profitable
 repeated 18$\times$18 states use an exact bounded memo. Presentation uses
-a padded camera cache, changed-chunk bins at every LOD, and an active-texel fade
-set; fallback refills remain bounded and far-zoom output stays near one texel
+a padded camera cache, changed-chunk bins at every LOD, overview snaps, and an
+active-texel fade set at exact-cell zoom; fallback refills remain bounded and
+far-zoom output stays near one texel
 per four screen pixels. GPU
 resources do not scale with chunk count.
 \end{statusbox}
@@ -209,7 +219,8 @@ class RuleSet {
         neighbor-contribution, and evaluation work with a complete-path
         estimate derived from cached totals. Patch the retained map when the
         frontier is no more expensive; otherwise use a complete path. Retain
-        at most 4,096 changed addresses. Edits and ruleset-type changes
+        at most 16,384 changed addresses for tracking; the work comparison still
+        selects evaluation. Edits and ruleset-type changes
         repopulate the frontier.
   \item Use the cached candidate-preferred count to select the complete
         adaptive or all-dense path.
@@ -218,7 +229,10 @@ class RuleSet {
         retained generation-stamped flat index, reset their contiguous
         masks/counts, mark non-background cells plus neighbors of counted cells,
         then choose candidate bits or a direct halo independently for each
-        target from counted-neighbor contribution work. Large sets are divided
+        target from counted-neighbor contribution work. Counting-dense centers
+        skip neighbor-count scratch preparation. Dense-majority frontiers and
+        frontiers with at least 2,048 targets skip candidate scratch. Large
+        sets are divided
         into coarse work-count ranges for the reusable worker pool.
   \item If all source chunks are counting-dense, bypass candidate scratch.
         Build the expanded target set in a retained generation-stamped flat

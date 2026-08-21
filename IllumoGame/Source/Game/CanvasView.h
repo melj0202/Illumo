@@ -114,6 +114,7 @@ private:
   static const int kCachePaddingChunks = 2;
   static const int kDirtyTileDim = 16;
   static const std::size_t kMaximumUploadRects = 8u;
+  static const std::size_t kDenseChangedSampleDivisor = 4u;
 
   struct UploadRect
   {
@@ -149,6 +150,8 @@ private:
   std::vector<int> changedSampleTexels;
   std::vector<unsigned char> changedSampleFlags;
   std::vector<unsigned char> dirtyTiles;
+  std::vector<UploadRect> uploadRectScratch;
+  std::vector<UploadRect> uploadRunScratch;
   std::size_t lastSampledTexelCount;
   std::size_t lastFadeVisitCount;
   std::size_t lastSnapVisitCount;
@@ -181,6 +184,15 @@ private:
   bool paletteDirty;
   bool worldQuadReady;
 
+  struct CacheLayout
+  {
+    CellAddress firstCell{ 0, 0 };
+    int cellWidth = 0;
+    int cellHeight = 0;
+    int activeWidth = 0;
+    int activeHeight = 0;
+  };
+
   static bool sameAddress(const CellAddress& left, const CellAddress& right);
   static int growTextureDimension(int current, int required);
   void initializeGpuResources();
@@ -188,14 +200,31 @@ private:
   void resetUploadBounds();
   void markFullActiveUpload();
   void markDirtyTile(int x, int y);
-  void buildUploadRects(std::vector<UploadRect>* rectangles) const;
+  void buildUploadRects();
   void rebuildWorldQuad();
+  CacheLayout computeCacheLayout(const CellAddress& visibleFirst,
+                                 int visibleCellsX,
+                                 int visibleCellsY,
+                                 int nextCellsPerTexel) const;
+  bool tryScrollCache(const CacheLayout& nextLayout);
+  void copyCacheOverlap(int deltaTexelsX, int deltaTexelsY);
+  void copyCacheRow(int dstY, int srcY, int dstX, int srcX, int count);
+  void remapFadingTexels(int deltaTexelsX, int deltaTexelsY);
+  void sampleCacheRectangle(int minimumX,
+                            int maximumX,
+                            int minimumY,
+                            int maximumY);
+  void sampleExposedCacheStrips(int deltaTexelsX, int deltaTexelsY);
   void sampleGrid(bool snap);
   bool sampleChangedChunks(std::uint64_t previousRevision);
   void sampleCacheTexel(int x, int y, bool snap);
   void markChangedCacheChunk(const ChunkAddress& address);
-  void resampleMarkedCacheTexels();
+  void clearChangedSampleTexels();
+  bool shouldSnapSample() const;
+  bool tooManyChangedSampleTexels() const;
+  void resampleMarkedCacheTexels(bool snap);
   void applySampledTargets(bool snap);
+  void applySnappedSampledTargets();
   void clearFadingTexels();
   int getSlotSampleCount(int x, int y) const;
   int resolveCellsPerTexel(int required,

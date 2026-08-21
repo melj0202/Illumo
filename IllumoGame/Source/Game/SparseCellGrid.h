@@ -140,9 +140,14 @@ public:
   static constexpr int kHaloDim = 18;
   static constexpr std::int64_t kMaximumWorldChunksPerAxis = 1000000;
   static constexpr std::size_t kChunkCellCount = 16u * 16u;
+  // Journal cap. Frontier versus complete evaluation still uses estimated work.
+  static constexpr std::size_t kFrontierTrackingLimit = 16384u;
+  static constexpr std::size_t kLightweightReplacementChunkLimit = 2048u;
   using ChunkCells = std::array<unsigned char, kChunkCellCount>;
   using ChunkVisitor =
     std::function<void(const ChunkAddress&, const ChunkCells&)>;
+  using OccupiedChunkVisitor = std::function<
+    void(const ChunkAddress&, const ChunkCells&, const SparseChunkMask&)>;
   using ChangedChunkVisitor =
     std::function<void(const ChunkAddress&, const ChunkCells*)>;
 
@@ -172,6 +177,9 @@ public:
   void visitChunksInBounds(const ChunkAddress& minimum,
                            const ChunkAddress& maximum,
                            const ChunkVisitor& visitor) const;
+  void visitOccupiedChunksInBounds(const ChunkAddress& minimum,
+                                   const ChunkAddress& maximum,
+                                   const OccupiedChunkVisitor& visitor) const;
   bool visitChangedChunksSince(std::uint64_t previousRevision,
                                const ChangedChunkVisitor& visitor) const;
 
@@ -258,6 +266,7 @@ private:
       , sourcesLinked(false)
       , centerSourceKnown(false)
       , useCellCandidates(true)
+      , skipNeighborPrep(false)
     {
     }
     CandidateScratchChunk(const CandidateScratchChunk&) = delete;
@@ -273,6 +282,7 @@ private:
       , sourcesLinked(other.sourcesLinked)
       , centerSourceKnown(other.centerSourceKnown)
       , useCellCandidates(other.useCellCandidates)
+      , skipNeighborPrep(other.skipNeighborPrep)
     {
       if (candidateCellCount == 0u) {
         return;
@@ -300,6 +310,7 @@ private:
     bool sourcesLinked = false;
     bool centerSourceKnown = false;
     bool useCellCandidates = true;
+    bool skipNeighborPrep = false;
   };
   struct CandidateIndexSlot
   {
@@ -333,7 +344,8 @@ private:
     kCandidateCellsPerChunkThreshold * 8u;
   static constexpr std::size_t kParallelCandidateCellThreshold = 16384u;
   static constexpr std::size_t kCandidateCellsPerWorkRange = 2048u;
-  static constexpr std::size_t kFrontierTrackingLimit = 4096u;
+  static constexpr std::size_t kFrontierScratchPreferredDivisor = 4u;
+  static constexpr std::size_t kFrontierScratchTargetLimit = 2048u;
 
   ChunkMap chunks;
   ChunkMap m_nextChunks;
@@ -460,6 +472,8 @@ private:
   bool markNextChangedChunk(const ChunkAddress& address,
                             const OccupancyMask& stateChanged,
                             const OccupancyMask& countedChanged);
+  void invalidateChangedChunkTracking();
+  void invalidateNextChangedChunkTracking();
   void commitNextChangedChunks();
   void publishChangedChunksRevision(bool valid);
   void publishChangedChunkRevision(const ChunkAddress& address, bool valid);
@@ -482,6 +496,7 @@ private:
   void buildCompleteTargets();
   bool buildFrontierCandidateScratch(std::size_t* estimatedWork,
                                      std::size_t* evaluationWork);
+  bool frontierPrefersCandidateScratch() const;
   std::size_t estimateCompleteAdvanceWork() const;
   bool advanceChangedFrontier(const RuleSet& ruleSet, bool useCandidateScratch);
   bool advanceImpl(const RuleSet& ruleSet, bool allowFrontier);
@@ -506,10 +521,13 @@ private:
                            int sourceOffsetY,
                            const ChunkData* source);
   void populateCandidateSources(CandidateScratchChunk* scratch);
+  void classifyHaloScratchTargets();
+  bool sourceNeedsCandidatePreparation(const ChunkAddress& sourceAddress);
   static bool markCandidate(CandidateScratchChunk* scratch, std::size_t index);
   void prepareCandidateScratchFromSource(const ChunkAddress& sourceAddress,
                                          const ChunkData& source);
   void prepareCandidateScratchChunk(CandidateScratchChunk* scratch) const;
+  void writeChunkFromResult(ChunkData* chunk, const TargetResult& result) const;
   void buildCandidatePreparationRanges(unsigned int workerCount);
   void buildCandidateWorkRanges();
   bool advanceCellCandidates(const RuleSet& ruleSet, bool adaptiveTargets);

@@ -41,7 +41,12 @@ infinite or finite toroidal topology plus a bounded presentation view.
   the reusable pool with up to four automatic workers. Each range writes
   independent result slots; small sets retain the direct serial path. Complete
   mixed worlds choose candidates or a deterministic 18x18 halo independently
-  for each target from its counted-neighbor contribution work. This lets dense
+  for each target. Counting-dense centers skip neighbor-count scratch
+  preparation and go straight to halo evaluation; dense-majority frontiers
+  skip scratch construction. Frontiers with at least 2,048 targets also skip
+  scratch and evaluate as halo, because candidate fan-in exceeds halo
+  evaluation. Only counting-sparse centers pay source-centric
+  candidate fan-in. This lets dense
   Wireworld conductors use candidates because only heads contribute neighbor
   counts. Worlds whose source chunks are all densely counted bypass candidate
   scratch construction. At 32 or more halo targets, a grid-owned reusable pool
@@ -68,7 +73,11 @@ infinite or finite toroidal topology plus a bounded presentation view.
 - The inactive map also remains the prior-generation baseline. Retained flat
   address sets track exact state-change and counting-change masks per chunk.
   Each changed chunk enrolls itself; only counting changes on a shared edge or
-  corner enroll the corresponding neighbor. Up to 4,096 changed addresses are retained. Sparse local sources
+  corner enroll the corresponding neighbor. Up to 16,384 changed addresses are
+  retained for tracking; evaluation still uses the frontier versus complete work
+  comparison. One-revision journals of at least 2,048 presentation chunks
+  capture a lightweight replacement marker instead of per-chunk payloads.
+  Sparse local sources
   build candidate masks only for frontier targets and choose candidate or halo
   evaluation independently. Exact local target/source bookkeeping, candidate,
   neighbor-contribution, and evaluation work is compared with a complete-path
@@ -95,7 +104,8 @@ infinite or finite toroidal topology plus a bounded presentation view.
 
 - Separates the visible viewport from a globally aligned sampled cache padded
   by two 16-cell chunks on every side. Camera motion within the cache changes
-  only the MVP. Near zoom uses one exact texel per cell; far zoom uses a stable
+  only the MVP. Aligned origin shifts copy retained CPU texels and resample
+  only newly exposed strips. Near zoom uses one exact texel per cell; far zoom uses a stable
   integer density LOD bounded to roughly four screen pixels per texel. LOD
   coarsens immediately to fit and refines only when the next level fits within
   80% of the output budget.
@@ -106,18 +116,24 @@ infinite or finite toroidal topology plus a bounded presentation view.
   explicitly releases the texture.
 - Uses nearest filtering so discrete cell colors stay sharp; the editor cursor
   uses the same centered cell bounds.
-- CPU palette targets fade through `displayRgb`; newly revealed cells snap to
-  their current color. A retained active-texel set makes each fade tick and
+- CPU palette targets fade through `displayRgb` at exact-cell LOD; density
+  overviews and newly revealed cells snap to their current color. A retained
+  active-texel set makes each fade tick and
   zero-speed snap visit only colors still changing; repeated unchanged
   `setFadeSpeed(0)` calls are constant-time. Stable grid/camera/palette state
   skips resampling and texture upload. A one-revision grid change publishes
   current or removed chunks and resamples only affected cache texels at both
-  exact and overview LODs. Revision gaps, cache exit, resize, palette changes,
-  and whole-grid replacement fall back to a complete bounded refill. Dirty
+  exact and overview LODs unless those bins cover at least a quarter of the
+  cache, in which case the complete bounded cache is resampled. Changed-bin
+  marking stops once that quarter-cache threshold is reached. Revision gaps,
+  non-aligned jumps, resize, palette changes, torus wrap, and whole-grid
+  replacement fall back to a complete bounded refill. Dirty
   16x16-texel tiles merge into at most eight rectangles when that covers no
   more than half the enclosing AABB; otherwise one AABB is submitted.
 - Overview sampling visits only sparse chunks intersecting the visible source
-  region. The visual texel budget does not limit stored chunks or world cells.
+  region and accumulates occupied cells into density bins. Overview snaps
+  convert the sampled RGB in one pass instead of per-texel fade enrollment.
+  The visual texel budget does not limit stored chunks or world cells.
 - `CellGameModule` dispatches the view on the World layer and the cursor,
   selection outline, inspector, splash, and configuration overlay on UI.
 
@@ -126,7 +142,9 @@ infinite or finite toroidal topology plus a bounded presentation view.
 EDIT / NORMAL; simulation uses `tps` x `speedFactor` and keeps at most one
 generation in flight on a persistent runner. The published grid is immutable
 while the worker advances its mirror; completion and its changed-chunk delta
-publish only at a frame boundary. There is no backlog, and overdue whole steps
+publish only at a frame boundary. Journals of at least 2,048 presentation
+chunks capture a lightweight replacement marker instead of per-chunk
+payloads. There is no backlog, and overdue whole steps
 are dropped while fractional time is retained. Pause, edit, save/load, ruleset
 changes, manual stepping, and shutdown drain first. Painting, Bresenham strokes, rectangular selection, copy/cut/paste, built-in
 stamps, RLE/plaintext import, `setcell`,
