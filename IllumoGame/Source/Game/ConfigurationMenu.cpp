@@ -673,7 +673,8 @@ ConfigurationMenu::rebuildVisual()
     "Use the entire display.",
     "Validate, save, and apply the displayed settings.",
     "Close the menu without changing any settings.",
-    "Exit IllumoGame through the normal shutdown path."
+    "Ask for confirmation, then exit IllumoGame through the normal "
+    "shutdown path."
   };
   const float valueColumnX = panelX + panelWidth * 0.54f;
   const float rowFontSize = std::clamp(rowHeight * 0.56f, 16.0f, 18.0f);

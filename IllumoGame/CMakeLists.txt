@@ -9,6 +9,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/CellPattern.cpp
   Source/Game/ConfigurationMenu.cpp
   Source/Game/Cursor.cpp
+  Source/Game/ExitConfirmDialog.cpp
   Source/Game/IllumoGameApplication.cpp
   Source/Game/IllumoGameConfig.cpp
   Source/Game/PatternCodec.cpp
@@ -53,6 +54,7 @@ if(BUILD_TESTING)
     Tests/TestCanvasInf.cpp
     Tests/TestWorldTopology.cpp
     Tests/TestConfigurationMenu.cpp
+    Tests/TestExitConfirmDialog.cpp
     Tests/TestIllumoGameConfig.cpp
     Tests/TestEditor.cpp
   )

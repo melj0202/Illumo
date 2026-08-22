@@ -330,10 +330,9 @@ DebugModule::Update(double dt)
         }
       }
     } else {
-      // Close window on Escape / Q when console is closed
+      // Close window on Escape when console is closed. Q is owned by the
+      // product module so it can confirm before requesting shutdown.
       if (key == KeyCode::Escape && action == InputAction::Press)
-        ic->window->requestClose();
-      if (key == KeyCode::Q && action == InputAction::Press)
         ic->window->requestClose();
     }
   }

@@ -3,6 +3,7 @@
 #include "CellPattern.h"
 #include "ConfigurationMenu.h"
 #include "Cursor.h"
+#include "ExitConfirmDialog.h"
 #include "Game/SimulationRunner.h"
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Foundation/RollingMetric.h>
@@ -104,6 +105,7 @@ private:
   // Module-owned mode label (EDIT/NORMAL); not a file-scope global.
   std::unique_ptr<SplashText> modeSplash;
   std::unique_ptr<ConfigurationMenu> configurationMenu;
+  std::unique_ptr<ExitConfirmDialog> exitConfirmDialog;
   std::unique_ptr<DebugDraw3D> render3dTestStatic;
   std::unique_ptr<DebugDraw3D> render3dTestAnimated;
   double render3dTestTime;

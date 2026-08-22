@@ -686,9 +686,9 @@ VSync, and fullscreen. Positive dimensions apply finite toroidal topology;
 `0`/`0` or `inf`/`inf` applies infinite topology. Topology changes drain the
 worker and intentionally start a fresh centered world before persisting values.
 Larger high-contrast labels, readable ruleset names, split keyboard help, and a
-selected-setting explanation keep the Release surface legible. Its Exit action
-requests window closure so the Illumo application runner performs normal engine
-shutdown.
+selected-setting explanation keep the Release surface legible. Q and its Exit
+action open a confirmation overlay; confirming requests window closure so the
+Illumo application runner performs normal engine shutdown.
 Animation remains local value state: the overlay eases into place, rows reveal
 in sequence, selection glides, and changed values pulse without adding widgets
 or blocking input.

@@ -165,10 +165,12 @@ VSync, and fullscreen. Applying a topology change drains the worker and starts
 a fresh centered world; other valid settings update the live runtime and the
 persisted environment. The overlay uses larger high-contrast setting text,
 human-readable ruleset names, split control help, and a selected-row
-description. Exit requests window closure through `IRenderWindow`, allowing the
-Illumo application runner to perform normal shutdown. Frame-delta-driven scalar state
-provides an eased reveal, staggered rows, a gliding selection highlight, and a
-short pulse after values change; input remains live during every transition.
+description. Q and the settings Exit action open a primitive-composed
+confirmation overlay; confirming requests window closure through
+`IRenderWindow` so the Illumo application runner can perform normal shutdown.
+Frame-delta-driven scalar state provides an eased reveal, staggered rows, a
+gliding selection highlight, and a short pulse after values change; input
+remains live during every transition.
 
 The inactive mirror does not retain a second copy of the outgoing delta.
 Incremental catch-up uses its existing changed-address journal and skips prior

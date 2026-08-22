@@ -542,9 +542,60 @@ testReleaseConfigurationWorkflow()
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
   fixture.module.Update(0.016);
+  ExitConfirmDialog* confirm =
+    CellGameModuleTestAccess::getExitConfirmDialog(fixture.module);
   testTrue(g,
-           fixture.window.closeRequested && !menu->isOpen(),
-           "Exit menu action requests normal application shutdown");
+           !fixture.window.closeRequested && menu->isOpen() &&
+             confirm != nullptr && confirm->isOpen(),
+           "Exit menu action asks for confirmation first");
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Y, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           fixture.window.closeRequested && !confirm->isOpen(),
+           "confirming exit requests normal application shutdown");
+}
+
+static void
+testExitConfirmationFromQ()
+{
+  testSection("CellGameModule: Q asks before exiting");
+  CellGameFixture fixture;
+  ExitConfirmDialog* confirm =
+    CellGameModuleTestAccess::getExitConfirmDialog(fixture.module);
+  testTrue(
+    g, confirm != nullptr && !confirm->isOpen(), "confirm starts closed");
+
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Q, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.window.closeRequested && confirm->isOpen(),
+           "Q opens the exit confirmation instead of closing immediately");
+
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  testEqSize(g,
+             fixture.scene.drawableCount(),
+             2u,
+             "exit confirmation adds one UI drawable beside the canvas");
+
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.window.closeRequested && !confirm->isOpen(),
+           "Escape cancels the exit confirmation");
+
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Q, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Y, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           fixture.window.closeRequested && !confirm->isOpen(),
+           "Y confirms Q-initiated exit");
 }
 
 static void
@@ -1057,6 +1108,9 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CellGame.ReleaseConfiguration", []() {
     return runCellGameModuleCase(testReleaseConfigurationWorkflow);
+  });
+  registry.add("IllumoGame.CellGame.ExitConfirmation", []() {
+    return runCellGameModuleCase(testExitConfirmationFromQ);
   });
   registry.add("IllumoGame.CellGame.InvalidSaveFiles", []() {
     return runCellGameModuleCase(testLoadRejectsInvalidFiles);

@@ -76,6 +76,11 @@ public:
     return module.configurationMenu.get();
   }
 
+  static ExitConfirmDialog* getExitConfirmDialog(CellGameModule& module)
+  {
+    return module.exitConfirmDialog.get();
+  }
+
   static DebugDraw3D* getRender3dTestStatic(CellGameModule& module)
   {
     return module.render3dTestStatic.get();

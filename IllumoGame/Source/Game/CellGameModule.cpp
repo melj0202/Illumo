@@ -6,6 +6,7 @@
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Primitives/DebugDraw3D.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
+#include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <array>
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <new>
+#include <queue>
 #include <random>
 #include <sstream>
 #include <vector>
@@ -134,6 +136,7 @@ CellGameModule::CellGameModule()
   , wireworldBrush(WireworldRuleSet::CELL_CONDUCTOR)
   , modeSplash(nullptr)
   , configurationMenu(nullptr)
+  , exitConfirmDialog(nullptr)
   , render3dTestStatic(nullptr)
   , render3dTestAnimated(nullptr)
   , render3dTestTime(0.0)
@@ -259,6 +262,8 @@ CellGameModule::Start(IllumoContext* context)
 
   configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
+  exitConfirmDialog =
+    std::make_unique<ExitConfirmDialog>(ic->window, ic->renderer);
 
   return true;
 }
@@ -1243,6 +1248,30 @@ CellGameModule::syncSimRateFromEnv()
   cellContext->getCanvasView()->setFadeSpeed(fadeSpeed);
 }
 
+static bool
+consumeKeyPress(InputManager* inputManager, KeyCode key)
+{
+  if (inputManager == nullptr) {
+    return false;
+  }
+  std::queue<InputManager::KeyPressEvent>& keyQueue =
+    inputManager->getKeyQueue();
+  std::queue<InputManager::KeyPressEvent> remaining;
+  bool consumed = false;
+  while (!keyQueue.empty()) {
+    const InputManager::KeyPressEvent event = keyQueue.front();
+    keyQueue.pop();
+    if (event.key == key && (event.action == InputAction::Press ||
+                             event.action == InputAction::Hold)) {
+      consumed = true;
+      continue;
+    }
+    remaining.push(event);
+  }
+  keyQueue.swap(remaining);
+  return consumed;
+}
+
 void
 CellGameModule::Update(double dt)
 {
@@ -1259,8 +1288,12 @@ CellGameModule::Update(double dt)
     render3dTestTime += dt;
   }
 
-  if (configurationMenu != nullptr && ic->commandLine != nullptr &&
-      !ic->commandLine->isOpen &&
+  const bool consoleOpen =
+    ic->commandLine != nullptr && ic->commandLine->isOpen;
+  const bool exitConfirmOpen =
+    exitConfirmDialog != nullptr && exitConfirmDialog->isOpen();
+
+  if (!consoleOpen && !exitConfirmOpen && configurationMenu != nullptr &&
       ic->inputManager->isActionActive("ToggleSettings")) {
     if (configurationMenu->isOpen()) {
       configurationMenu->close();
@@ -1272,6 +1305,24 @@ CellGameModule::Update(double dt)
     }
   }
 
+  if (exitConfirmOpen) {
+    exitConfirmDialog->tick(static_cast<float>(dt));
+    const ExitConfirmAction action =
+      exitConfirmDialog->update(ic->inputManager);
+    if (action == ExitConfirmAction::Confirm) {
+      exitConfirmDialog->close();
+      ic->window->requestClose();
+    } else if (action == ExitConfirmAction::Cancel) {
+      exitConfirmDialog->close();
+    }
+    updateEditorCursor();
+    updateSelectionVisual();
+    updateInspectorVisual();
+    updateVisualTargets();
+    cellContext->getCanvasView()->tickVisual(static_cast<float>(dt));
+    return;
+  }
+
   if (configurationMenu != nullptr && configurationMenu->isOpen()) {
     configurationMenu->tick(static_cast<float>(dt));
     const ConfigurationMenuAction action =
@@ -1279,8 +1330,14 @@ CellGameModule::Update(double dt)
     if (action == ConfigurationMenuAction::Cancel) {
       configurationMenu->close();
     } else if (action == ConfigurationMenuAction::Exit) {
-      configurationMenu->close();
-      ic->window->requestClose();
+      if (exitConfirmDialog != nullptr) {
+        ic->inputManager->clearCharQueue();
+        exitConfirmDialog->open();
+        exitConfirmDialog->tick(static_cast<float>(dt));
+      } else {
+        configurationMenu->close();
+        ic->window->requestClose();
+      }
     } else if (action == ConfigurationMenuAction::Apply) {
       SimulatorConfiguration configuration;
       std::string error;
@@ -1292,6 +1349,22 @@ CellGameModule::Update(double dt)
       } else {
         configurationMenu->close();
       }
+    }
+    updateEditorCursor();
+    updateSelectionVisual();
+    updateInspectorVisual();
+    updateVisualTargets();
+    cellContext->getCanvasView()->tickVisual(static_cast<float>(dt));
+    return;
+  }
+
+  if (!consoleOpen && consumeKeyPress(ic->inputManager, KeyCode::Q)) {
+    if (exitConfirmDialog != nullptr) {
+      ic->inputManager->clearCharQueue();
+      exitConfirmDialog->open();
+      exitConfirmDialog->tick(static_cast<float>(dt));
+    } else if (ic->window != nullptr) {
+      ic->window->requestClose();
     }
     updateEditorCursor();
     updateSelectionVisual();
@@ -1390,6 +1463,7 @@ CellGameModule::Exit()
   drainSimulation();
   simulationRunner.shutdown();
   unregisterConsoleCommands();
+  exitConfirmDialog.reset();
   configurationMenu.reset();
   modeSplash.reset();
   render3dTestAnimated.reset();
@@ -1735,7 +1809,10 @@ CellGameModule::updateInspectorVisual()
     ic != nullptr && ic->commandLine != nullptr && ic->commandLine->isOpen;
   const bool settingsOpen =
     configurationMenu != nullptr && configurationMenu->isOpen();
-  if (!inspectorEnabled || consoleOpen || settingsOpen || ic == nullptr) {
+  const bool exitConfirmOpen =
+    exitConfirmDialog != nullptr && exitConfirmDialog->isOpen();
+  if (!inspectorEnabled || consoleOpen || settingsOpen || exitConfirmOpen ||
+      ic == nullptr) {
     inspectorVisual.setVisible(false);
     return;
   }
@@ -1889,7 +1966,8 @@ CellGameModule::updateEditorCursor()
   const bool canShow =
     (currentState == CellState::EDIT) &&
     (ic->commandLine == nullptr || !ic->commandLine->isOpen) &&
-    (configurationMenu == nullptr || !configurationMenu->isOpen());
+    (configurationMenu == nullptr || !configurationMenu->isOpen()) &&
+    (exitConfirmDialog == nullptr || !exitConfirmDialog->isOpen());
   if (!canShow) {
     editorCursor.setVisible(false);
   }
@@ -2295,5 +2373,8 @@ CellGameModule::DispatchDrawables(Scene* scene)
   }
   if (configurationMenu != nullptr && configurationMenu->isOpen()) {
     scene->AddDrawable(configurationMenu.get(), RenderLayerId::UI);
+  }
+  if (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen()) {
+    scene->AddDrawable(exitConfirmDialog.get(), RenderLayerId::UI);
   }
 }
