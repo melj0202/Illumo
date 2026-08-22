@@ -55,11 +55,13 @@ From the repo root (requires PowerShell and a TeX distribution with
 \pathref{docs/output/architecture-map.pdf}.
 
 \begin{statusbox}
-As of 2026-08-18 (current-state audit): engine, system, and platform code is
+As of 2026-08-19 (current-state audit): engine, scene, system, and platform code is
 under \pathref{Illumo/Include} and \pathref{Illumo/Source}; IllumoGame contains
 only game and ruleset production code. The reusable 2D token renderer has
 typed generational resources, managed texture/shader assets, painter-correct
-primitives, and mock tests;
+primitives, and mock tests; the persistent \symbolref{SceneGraph} owns
+generational hierarchy nodes and extracts borrowed render attachments through
+that token path;
 SparseCellGrid uses signed-coordinate 16$\times$16 chunks, retained candidate
 and changed-frontier structures, and bounded worker evaluation for large
 candidate/halo workloads; CanvasView uses CPU palette targets, \texttt{displayRgb}

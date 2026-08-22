@@ -40,6 +40,11 @@
   \item[RuleSet]
     Cellular automaton transition rules (\texttt{nextState} + \texttt{evalCell}).
   \item[Scene]
-    Ordered list of drawables + camera + window for one frame; not a node graph
-    and not an immediate GL executor.
+    Non-owning ordered list of drawables + camera + window for one frame. It is
+    the render-extraction list, not the persistent node hierarchy or an
+    immediate GL executor.
+  \item[SceneGraph]
+    Persistent scene-owned hierarchy addressed by graph-local generational
+    handles. It caches world transforms and emits visible, enabled borrowed
+    render attachments as one Scene drawable.
 \end{description}

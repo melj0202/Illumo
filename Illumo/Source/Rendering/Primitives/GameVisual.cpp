@@ -892,25 +892,34 @@ GameVisual::AppendCommands(Renderer* value)
     spriteUploadPending = false;
   }
 
-  float width = 1280.0f;
-  float height = 720.0f;
-  if (window != nullptr) {
-    const std::array<int, 2> dimensions = window->getWindowDimensions();
-    width = static_cast<float>(dimensions[0]);
-    height = static_cast<float>(dimensions[1]);
+  const Renderer::FrameContext& frameContext = value->getFrameContext();
+  std::array<int, 2> dimensions{ 1280, 720 };
+  const bool useFrameDimensions =
+    frameContext.active && window != nullptr && window == value->getWindow();
+  if (useFrameDimensions) {
+    dimensions = frameContext.windowDimensions;
+  } else if (window != nullptr) {
+    dimensions = window->getWindowDimensions();
   }
+  const float width = static_cast<float>(dimensions[0]);
+  const float height = static_cast<float>(dimensions[1]);
   const int usePixels = space == PrimitiveSpace::Pixels ? 1 : 0;
   float mvp[16] = {
     1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
   };
   if (space == PrimitiveSpace::World && camera != nullptr &&
       window != nullptr) {
-    const std::array<int, 2> dimensions = window->getWindowDimensions();
-    const float aspect =
-      static_cast<float>(dimensions[0]) /
-      static_cast<float>(dimensions[1] > 0 ? dimensions[1] : 1);
-    const glm::mat4 matrix = camera->GetMVPMatrix(aspect);
-    std::memcpy(mvp, &matrix[0][0], 16 * sizeof(float));
+    const bool useFrameMvp = useFrameDimensions && frameContext.hasWorldMvp &&
+                             frameContext.worldCamera == camera;
+    if (useFrameMvp) {
+      std::memcpy(mvp, frameContext.worldMvp.data(), sizeof(mvp));
+    } else {
+      const float aspect =
+        static_cast<float>(dimensions[0]) /
+        static_cast<float>(dimensions[1] > 0 ? dimensions[1] : 1);
+      const glm::mat4 matrix = camera->GetMVPMatrix(aspect);
+      std::memcpy(mvp, &matrix[0][0], sizeof(mvp));
+    }
   }
 
   for (size_t i = 0; i < drawBatches.size(); ++i) {

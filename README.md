@@ -1,7 +1,9 @@
 # Illumo workspace
 
-Illumo is a reusable static C++ host/rendering library. `IllumoGame` is the
-cellular-automata simulator that consumes it in the same repository.
+Illumo is a reusable static C++ runtime/rendering foundation for current and
+future projects. `IllumoGame` is the cellular-automata simulator that consumes
+it in the same repository today; moving that product to a downstream CSim
+repository is a separate packaging step.
 
 ## Layout
 
@@ -17,6 +19,7 @@ illumo/
     Include/Illumo/     # Supported consumer headers
     Source/             # Private library implementation
       Engine/           # Generic host, application runner + module lifetime
+      Scene/            # Persistent hierarchy, transforms + render extraction
       Rendering/        # Graphics / backend interfaces
       Services/         # Log, input, env, system CLI, allocators
       Foundation/       # Build metadata, macros and shared helpers
@@ -41,14 +44,18 @@ under `docs/`. Start with:
 
 - `docs/README.md` — documentation map and PDF build commands
 - `docs/architecture-consensus.md` — canonical current architecture
+- `docs/scene-graph-v1-design.md` — retained scene hierarchy contract and scope
 - `docs/latex/illumo.tex` — the canonical prose-book entrypoint
 - `docs/latex/architecture-map.tex` — the current chart-only entrypoint
 - `docs/output/*.pdf` — generated locally; never sources of truth
 
 **Current stack (short):** reusable 2D token renderer (`AppendCommands` →
-`IBackend`) with typed generational handles, painter-correct primitives,
-dynamic quad buffers, primitive-composed themed UI, and asynchronous
-texture/shader assets. `SparseCellGrid` uses published dual-grid simulation,
+`IBackend`) with typed generational handles, a persistent handle-based scene
+hierarchy, painter-correct primitives, dynamic quad buffers,
+primitive-composed themed UI, and asynchronous texture/shader assets. The
+retained `SceneGraph` is extracted as one drawable into the existing per-frame
+render list; it does not replace CSim's sparse domain. `SparseCellGrid` uses
+published dual-grid simulation,
 exact retained candidate topology, direct-source parallel preparation and
 evaluation, recycled transactional chunk nodes, adaptive frontier stepping,
 cached 256x9 transitions, and infinite or finite toroidal topology.

@@ -37,8 +37,13 @@ reviewed.
 - Production rendering uses `RenderCommand` tokens through `IBackend`.
 - Keep `DebugModule` out of Release compilation and register it as optional in
   Debug; `CellGameModule` is the required product module.
-- Do not introduce an ECS, render graph, generalized scene graph, infinite
-  chunks, or a compute backend solely for architectural completeness.
+- The approved `SceneGraph` v1 is the retained world hierarchy. Keep it
+  handle-based, backend-neutral, iterative, and separate from the per-frame
+  `Rendering::Scene` list. Do not expand it into an ECS, retained UI tree,
+  persistence format, culling structure, or update framework without a
+  concrete consumer and an authorized design.
+- Do not introduce a render graph, additional graphics backend, or compute
+  backend solely for architectural completeness.
 
 ## Documentation
 

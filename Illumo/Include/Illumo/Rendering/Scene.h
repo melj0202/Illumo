@@ -11,8 +11,9 @@ class IRenderWindow;
 //
 // Role: ordered, non-owning layered list of drawables rebuilt every frame by
 // modules via IModule::DispatchDrawables (World → UI → Debug). This is NOT a
-// retained scene graph, spatial hierarchy, or world container (D-E4). One main
-// pass; layers are composition order, not GPU render passes (D-R14).
+// retained scene graph, spatial hierarchy, or world container (D-E4). A
+// persistent SceneGraph may appear here as one drawable (D-E8). One main pass;
+// layers are composition order, not GPU render passes (D-R14).
 class Scene
 {
 public:

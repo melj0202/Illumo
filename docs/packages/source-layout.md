@@ -7,6 +7,7 @@ the static `Illumo` library; the library has no Game or Rulesets dependency.
 |---|---|
 | `Illumo/Include/Illumo/` | Supported public headers consumed as `<Illumo/...>` |
 | `Illumo/Source/Engine/` | Application runner, host, module lifetime, context, Debug module implementation |
+| `Illumo/Source/Scene/` | Persistent scene nodes, hierarchy, transform cache, and render extraction |
 | `Illumo/Source/Foundation/` | Build metadata and generic implementation support |
 | `Illumo/Source/Services/` | Logging, environment, input, SysCmdLine, generic console, allocators |
 | `Illumo/Source/Rendering/` | Renderer plus private window/OpenGL implementation |

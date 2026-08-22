@@ -8,6 +8,7 @@ IllumoGame projects. They are documentation, not build inputs.
 | `source-layout.md` | Workspace, library, product, and test trees |
 | `app.md` | Illumo application definition, generic runner, and process loop |
 | `engine.md` | Illumo host, context, modules, and failure semantics |
+| `scene.md` | Persistent nodes, hierarchy, transforms, and render attachments |
 | `game.md` | IllumoGame canvas, simulation, editing, and persistence |
 | `rendering.md` | Public renderer boundary and private OpenGL implementation |
 | `services.md` | Generic Illumo services versus IllumoGame policy |

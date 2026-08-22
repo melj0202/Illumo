@@ -18,6 +18,21 @@
 
 class Renderer
 {
+public:
+  // Stable values captured once for the active RenderScene call. Drawables may
+  // use this only while active is true; direct token tests keep their existing
+  // local camera/window fallback.
+  struct FrameContext
+  {
+    std::array<int, 2> windowDimensions{ 1280, 720 };
+    std::array<float, 16> worldMvp{ 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+                                    0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+                                    0.0f, 0.0f, 0.0f, 1.0f };
+    Camera* worldCamera = nullptr;
+    bool active = false;
+    bool hasWorldMvp = false;
+  };
+
 private:
   // Owned when constructed with unique_ptr or takeOwnership=true; null when the
   // composition root or test fixture retains ownership of the backend.
@@ -48,6 +63,7 @@ private:
   // start of RenderScene and again after submission so token payload pointers
   // that live only for the frame never outlive the submit window by design.
   ArenaAlloc frameArena{ 8 * 1024 };
+  FrameContext frameContext;
 
   static void copyUniformName(char* dest, size_t destSize, const char* name)
   {
@@ -63,6 +79,40 @@ private:
       dest[i] = name[i];
     }
     dest[i] = '\0';
+  }
+
+  void beginFrameContext(Camera* camera)
+  {
+    frameContext.active = false;
+    frameContext.hasWorldMvp = false;
+    frameContext.worldCamera = camera;
+    if (_window == nullptr) {
+      return;
+    }
+
+    frameContext.windowDimensions = _window->getWindowDimensions();
+    frameContext.active = true;
+    if (camera == nullptr) {
+      return;
+    }
+
+    const int height = frameContext.windowDimensions[1] > 0
+                         ? frameContext.windowDimensions[1]
+                         : 1;
+    const float aspect = static_cast<float>(frameContext.windowDimensions[0]) /
+                         static_cast<float>(height);
+    const glm::mat4 matrix = camera->GetMVPMatrix(aspect);
+    std::memcpy(frameContext.worldMvp.data(),
+                &matrix[0][0],
+                frameContext.worldMvp.size() * sizeof(float));
+    frameContext.hasWorldMvp = true;
+  }
+
+  void endFrameContext()
+  {
+    frameContext.active = false;
+    frameContext.hasWorldMvp = false;
+    frameContext.worldCamera = nullptr;
   }
 
 public:
@@ -113,6 +163,7 @@ public:
   bool ownsBackend() const { return _ownedBackend != nullptr; }
   IRenderWindow* getWindow() { return _window; }
   Camera* getCamera() { return _camera; }
+  const FrameContext& getFrameContext() const { return frameContext; }
 
   // =========================================================================
   // Asset enrollment (not mixed into the per-frame token stream — D-007)
@@ -442,9 +493,10 @@ public:
     }
 
     frameArena.Clear();
+    beginFrameContext(_camera);
 
     // Single main pass (default FB): clear once, then World → UI → Debug.
-    std::array<int, 2> dims = _window->getWindowDimensions();
+    const std::array<int, 2>& dims = frameContext.windowDimensions;
     pushViewport(0, 0, dims[0], dims[1]);
 
     PipelineState defaultState;
@@ -497,6 +549,7 @@ public:
     // Immediate draws finished; release frame scratch (not used as token
     // payload storage — command queue owns those pointers until submit).
     frameArena.Clear();
+    endFrameContext();
   }
 
   // =========================================================================

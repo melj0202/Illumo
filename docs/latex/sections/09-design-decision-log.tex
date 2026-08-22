@@ -1056,7 +1056,7 @@ and counted masks.
 \subsection*{D-P18 --- Cost-adaptive candidate frontiers}
 \begin{decisionbox}[title={D-P18 \quad 2026-08-09}]
 \textbf{Decision:} Replace D-P14's 64-target selection cutoff with a work-unit
-comparison. Retain up to 4,096 changed chunk addresses, expand them by one
+comparison. Retain up to 16,384 changed chunk addresses, expand them by one
 chunk, and build exact candidate masks from only the sparse source chunks that
 can affect those targets. Classify frontier targets as candidates or halos by
 counted-neighbor contributions. Compare frontier target/source bookkeeping,
@@ -1066,14 +1066,19 @@ map when frontier work is no greater.\\
 \textbf{Why:} Eight separated localized changes could expand beyond 64 targets
 and fall abruptly into complete-world preparation even when most of a large
 world was static. The target count also treated a sparse candidate target as if
-it required all 256 halo cells.\\
+it required all 256 halo cells. The earlier 4,096-address journal was then
+cleared for the rest of a dense generation, so later shrinking activity could
+not return to frontier tracking without rebuilding from a complete scan.\\
 \textbf{Consequences:} Local work can cross the former cutoff without a path
 cliff, while broad separated changes are cost-rejected. Sparse frontier
 evaluation shares candidate/halo semantics and worker ranges with complete
-mixed stepping. The 4,096-address retention cap bounds persistent bookkeeping;
-crossing it invalidates the frontier for that generation. Focused coverage
-exercises more than 64 frontier targets, candidate selection, forced-complete
-byte identity, local-source bounds, and broad-change fallback.\\
+mixed stepping. Tracking and evaluation are separate: the 16,384-address cap
+bounds persistent bookkeeping, while the work comparison still selects frontier
+versus complete evaluation. Overflowing that cap or failing allocation
+invalidates the journal; a later smaller generation can use frontier again.
+Focused coverage exercises more than 64 frontier targets, candidate selection,
+forced-complete byte identity, local-source bounds, broad-change fallback, a
+burst above 4,096 changed chunks, and return to an empty frontier.\\
 \textbf{Refines:} D-P14 changed-region selection and D-P15 per-target
 adaptation.
 \end{decisionbox}
@@ -1144,12 +1149,15 @@ and any active fade scanned every visible texel each frame. The normal module
 also reapplied the environment fade value every frame, causing a full snap
 scan whenever that value was zero.\\
 \textbf{Consequences:} Common near-zoom edits and generations perform work per
-visible changed chunk, while fade work follows colors still moving. Revision
-gaps, density overviews, camera or palette changes, whole-grid replacement,
-and invalid change journals deliberately use the complete bounded resample.
+visible changed chunk, while fade work follows colors still moving. Density
+overviews snap instead of fading. Bins that cover at least a quarter of the
+cache stop further bin marking and resample the complete bounded cache.
+Revision gaps, camera or palette changes, whole-grid replacement, and
+invalid change journals use the complete bounded resample.
 The status command reports fading, last-sampled, and last-fade-visited texels.
 Focused tests cover edits, removals, generations, replacement invalidation,
-overview and revision-gap fallback, active fade counts, and repeated zero-speed
+overview snap, dense complete-sample fallback, revision-gap fallback, active
+fade counts, and repeated zero-speed
 configuration.\\
 \textbf{Refines:} D-P6 CPU RGB fade and D-P14 retained changed chunks.
 \end{decisionbox}
@@ -1212,14 +1220,22 @@ replacement path.\\
 aligned sampled cache padded by two 16-cell chunks on every side. Keep exact
 one-texel-per-cell output near zoom. Use integer density LOD far away, coarsen
 immediately to fit, and refine only when the next level fits within 80\% of the
-budget. Map one-revision changed chunks to deduplicated exact or overview bins.\\
+budget. Map one-revision changed chunks to deduplicated exact or overview bins.
+When LOD, size, and alignment are unchanged, shift the cache origin by copying
+retained CPU texels and resampling only newly exposed strips.\\
 \textbf{Why:} Continuous pan and smooth zoom previously changed source bounds
-often enough to resample and reapply the complete active view every frame.\\
-\textbf{Consequences:} Sub-cache camera motion changes only the MVP. Cache exit,
-LOD/resize, palette changes, revision gaps, and replacement trigger exact
-bounded refills. Status exposes visible/cache dimensions, LOD, refill count,
-and rolling refill latency; deterministic and warmed camera tests cover reuse,
-boundaries, hysteresis, and overview updates.\\
+often enough to resample and reapply the complete active view every frame.
+Following a compact moving pattern still crossed the two-chunk pad every few
+frames and paid a full refill even though most texels were already sampled.\\
+\textbf{Consequences:} Sub-cache camera motion changes only the MVP. Aligned
+origin shifts keep the overlap and sample strips; LOD/resize, palette changes,
+revision gaps, torus wrap, replacement, and non-aligned jumps still trigger
+exact bounded refills. Density overviews snap color changes instead of
+enrolling fade texels, and dense one-revision bins that cover a quarter of the
+cache resample the complete cache. Status exposes visible/cache dimensions,
+LOD, refill count, and rolling refill latency; deterministic and warmed camera
+tests cover reuse, scroll overlap, boundaries, hysteresis, overview snap, and
+overview updates.\\
 \textbf{Refines:} D-C5 bounded overview and D-P21 changed-tile sampling.
 \end{decisionbox}
 
@@ -1334,7 +1350,7 @@ the next incoming delta immediately replaced.\\
 insertion pass with retained nodes and no temporary hash set. Incremental
 catch-up retains only existing grid journals and writes each superseded address
 once. Deterministic tests cover overlapping and non-overlapping incremental
-changes plus a greater-than-4,096-change full replacement. In two comparable
+changes plus a tracking-overflow full replacement. In two comparable
 Release runs, dispersed mirror p95 fell from 17.7\,ms to 5.0--5.1\,ms and total
 async p95 fell from 49.4\,ms to 28.3--28.6\,ms; the remaining dominant stage is
 the 21.3--21.4\,ms generation advance.\\
@@ -1429,7 +1445,8 @@ Headless coverage verifies the default/fallback policy and both label forms.\\
 \subsection*{D-P33 --- Direct broad generations and exact topology reuse}
 \begin{decisionbox}[title={D-P33 \quad 2026-08-17}]
 \textbf{Decision:} Publish broad generations as a lightweight replacement
-marker without chunk snapshots. Let the spare grid read the immutable published
+marker without chunk snapshots. Capture one-revision journals of at least
+2,048 presentation chunks with the same marker. Let the spare grid read the immutable published
 grid through \texttt{advanceFrom} and update its own authoritative chunk nodes
 in place. Retain each target's 3-by-3 source pointers and an index-aligned
 destination pointer. Give each grid an object-local topology epoch that changes
@@ -1569,6 +1586,35 @@ while supported and scaffold platform implementations live under
 entry/dialogs, and the frame loop to IllumoGame. The sibling split, dependency
 direction, test split, runtime staging, and D-N2 product identity remain in
 force.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-E8 --- Persistent scene hierarchy with generational handles}
+\begin{decisionbox}[title={D-E8 \quad 2026-08-19}]
+\textbf{Decision:} Add a product-agnostic, main-thread-affine
+\symbolref{SceneGraph} to Illumo. The graph owns node storage and exposes
+graph-ID-plus-slot-plus-generation \symbolref{SceneNodeHandle} values. It
+provides deterministic parent/child order, cycle rejection, subtree
+destruction, local and cached world transforms, dirty propagation, and local
+enabled/visible state. Each node may borrow one
+\symbolref{ISceneRenderAttachment}; render traversal supplies the resolved
+world transform and the attachment appends backend-neutral tokens. The graph
+enters the existing per-frame \symbolref{Scene} as one drawable.\
+\textbf{Why:} Illumo is intended to support future projects beyond the
+cellular simulator. Rebuilding persistent object identity and hierarchy every
+frame wastes CPU work and leaves ownership, transform propagation, and stale
+references implicit. A small retained hierarchy supplies those contracts
+without requiring an ECS or changing the renderer submission model.\
+\textbf{Consequences:} The per-frame Rendering Scene remains a non-owning
+layered extraction list. SceneGraph owns nodes but not attachments or backend
+resources; handles from another graph or an older generation are rejected.
+Traversal and subtree operations remain iterative. V1 adds no ECS components,
+serialization, update callbacks, prefabs, retained UI, culling structure,
+physics, scripting, or CSim cell migration. \symbolref{DebugDraw3D} is the
+first render attachment and composes node world state with its existing model
+matrix.\
+\textbf{Refines:} D-E4. The archived raw-pointer SceneObject graph remains
+superseded; only D-E4's per-frame render-list role remains current.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------

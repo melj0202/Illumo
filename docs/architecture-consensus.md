@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-22
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -23,6 +23,7 @@ Optional deeper reading (not required to resume work):
 - `docs/latex/architecture-map.tex` → `docs/output/architecture-map.pdf` — landscape chart-only package/class map
 - `docs/latex/illumo.tex` — canonical prose-book PDF entrypoint (chapters under `sections/`)
 - `docs/latex/sections/09-design-decision-log.tex` — append-only formal decision prose
+- `docs/scene-graph-v1-design.md` — persistent hierarchy contract and bounded rollout
 - `docs/sessions/2026-08-04-illumo-console-and-documentation.md` — this session's implementation record
 
 ---
@@ -51,10 +52,12 @@ Optional deeper reading (not required to resume work):
 **The workspace separates the reusable `Illumo` static library from the
 `IllumoGame` cellular-automata simulator. Illumo owns the generic application
 runner, platform entry/dialogs, BuildInfo, SysCmdLine, host, services,
-rendering, assets, and module lifetime; IllumoGame owns only CA policy,
-configuration metadata, Game, Rulesets, persistence behavior, and its required
-module factory. Production state remains signed-coordinate `SparseCellGrid`; rendering
-remains an enroll-once token stream through `IBackend`; dense
+rendering, persistent scene hierarchy, assets, and module lifetime; IllumoGame
+owns only CA policy, configuration metadata, Game, Rulesets, persistence
+behavior, and its required module factory. Production simulator state remains
+signed-coordinate `SparseCellGrid`; retained `SceneGraph` nodes are a separate
+future-project facility; rendering remains an enroll-once token stream through
+`IBackend`; dense
 `CellGrid`/`Canvas` remain compatibility fixtures only.**
 
 ---
@@ -65,26 +68,32 @@ remains an enroll-once token stream through `IBackend`; dense
 
 From the CA design review and the original spirit of the repo:
 
-- **Practice OOP and systems programming**, not ship a commercial game engine.
+- **Practice OOP and systems programming** through a production-quality,
+  reusable foundation rather than a speculative all-purpose framework.
 - The main learning sandbox is **cellular automata** (GoL family, multi-state rules, editor, camera, console).
+- Illumo should support future downstream projects without importing their
+  domain policy; IllumoGame is the first current consumer, not the limit of the
+  library's intended reuse.
 - Custom allocators, Tracy, backend interfaces, etc. are **useful experiments**, not requirements that must dominate the design.
 - Do **not** rewrite everything for an imagined perfect architecture. Refactor where coupling produces **real friction**.
 
 ### 1.2 What the project grew into
 
-It is no longer “one Game of Life file.” It is a **small CA framework / app**:
+It is no longer “one Game of Life file.” It is a reusable runtime/rendering
+library plus a **small CA framework / app**:
 
 - Multiple rule sets, edit/run modes, save/load hooks  
 - Token-based OpenGL presentation + headless tests  
 - Engine-shaped packaging (App / Engine / Game / Rendering / Services)
 
-That growth is **acceptable**. Architecture should reflect **actual families of behavior** (CA + UI + host), not a fantasy multi-genre engine.
+That growth is **acceptable**. Architecture should add bounded facilities for
+current or credible downstream consumers, not a fantasy feature checklist.
 
 ### 1.3 Explicit non-goals (for now)
 
 - Production AAA renderer or full multiplayer engine  
 - Full ECS / archetypes / cached structural queries  
-- Scene/World graph as the primary cell path  
+- `SceneGraph` as the primary sparse-cell storage or retained product-UI path
 - Second real graphics API (Vulkan/Metal) as a near-term deliverable  
 - Perfect Linux/macOS parity before Windows remains solid  
 - SYCL or a second compute backend before the sparse product path is correct and documented  
@@ -169,11 +178,13 @@ Aspirational **general 2D engine** design (July 2026). Valuable as boundary thin
 | RenderPipeline with Opaque / Transparent / UI / Debug **passes** | **Not built** |
 | MeshDrawCommand-style typed pass queues | **Not built** — we use tagged-union `RenderCommand` stream |
 | Minimal EntityTable (transform, mesh, texture) | **Archived** (D-E3) |
-| Transform hierarchies + fixed-tick mesh interpolation | **Not needed** for CA; cell **fade** is the visual interpolation |
+| Transform hierarchies + fixed-tick mesh interpolation | Persistent hierarchy is now **implemented by D-E8** for future projects; fixed-tick mesh interpolation remains deferred. CA cells still use visual fade rather than graph nodes. |
 | Full ECS (sparse-set sketches) | **Deferred forever-until-pain** |
 | Multi-backend, render graphs, heavy batching | **Explicitly deferred** in that PDF too |
 
-**Do not** re-introduce pass objects or entity mesh tables “because the engine PDF said so.” Token stream + drawable list is the shipped boundary.
+**Do not** re-introduce pass objects or entity mesh tables “because the engine
+PDF said so.” The retained graph is the bounded D-E8 design; token stream plus
+the per-frame drawable list remains the render-submission boundary.
 
 ### 2.4 Later assessments (Grok + ChatGPT on the *current* tree)
 
@@ -182,7 +193,9 @@ Agreement across reviews:
 - The explicit library/product split is **appropriate**
 - The engine-owned application runner consumes a declarative IllumoGame module
   factory; token path + MockBackend are real strengths
-- Scene-as-list is correct; dead graph/EntityTable should stay gone  
+- The per-frame Scene-as-list is correct; the dead pointer-based graph and
+  EntityTable should stay gone. D-E8 adds a separate handle-based retained
+  graph rather than reviving either experiment.
 - Main risks: native platform gaps and explicit resource/failure handling at
   rendering and service boundaries; the renderer now bounds queue/resource growth explicitly
 - Highest value: product correctness + one canonical sparse-domain/bounded-view model in docs — **not** ECS or multi-pass
@@ -191,20 +204,23 @@ Agreement across reviews:
 
 ## 3. Overall assessment
 
-Illumo is a **coherent library consumed by one sibling product**:
+Illumo is a **coherent reusable library currently consumed by one sibling
+product**:
 
 ```
 Illumo Platform/Runner    (entry, system CLI, chrono loop, Debug module)
   → IllumoGame definition (CA defaults/CLI metadata + module factory)
   → IllumoGameCore        (Game, Rulesets, persistence policy)
   → Illumo::Illumo        (generic services + module lifetime)
-  → Illumo Rendering      (Scene, drawables, tokens, OpenGL)
+  → Illumo Scene          (persistent hierarchy + transform extraction)
+  → Illumo Rendering      (frame list, drawables, tokens, OpenGL)
   → IBackend              (GLBackend | test-only MockBackend)
 ```
 
-This is a source and target boundary inside one repository, not an installable
-SDK, DLL ABI, second repository, or authorization for speculative general
-engine work.
+This is currently a source and target boundary inside one repository, not yet
+an installable SDK or stable DLL ABI. A downstream CSim repository remains a
+separate packaging and dependency-boundary validation. The broader reuse goal
+authorizes evidence-backed generic facilities, not speculative framework work.
 
 **Verdict:** Functional and reasonably testable. Residual risk is mostly **product correctness holes** and **documented debt**, not a need for ECS or a full rewrite.
 
@@ -218,7 +234,7 @@ engine work.
 | **Module lifecycle** | `Start` / `Update` / `DispatchDrawables` / `Exit` is clear. |
 | **Render split** | Enroll once; emit tokens per frame; backend executes (D-R1–D-R8, D-R10). |
 | **Rulesets** | Strategy hierarchy; pure `nextState` + `evalCell`; double-buffered generation (D-P3). |
-| **Scene model** | Per-frame drawable list only (D-E3, D-E4). |
+| **Scene model** | Persistent handle-based `SceneGraph` for world organization (D-E8), extracted as one drawable into the unchanged per-frame rendering list (D-E4). |
 | **Tests** | Independent `IllumoTests` and `IllumoGameTests` runners, plus consumer-header smoke, exact process-isolated cases, `IllumoWorkspace` aggregation, and combined Clang/LLVM coverage (D-T1). |
 | **Debt hygiene** | Dead experiments under `archive/` rather than half-live. |
 
@@ -231,6 +247,7 @@ engine work.
 | Package | Role |
 |---------|------|
 | **Illumo/Source/Engine/** | Generic application runner, host, modules, and frozen `IllumoContext`; supported contracts are under `Illumo/Include/Illumo/Engine`. |
+| **Illumo/Source/Scene/** | Persistent nodes, hierarchy, cached transforms, subtree state, and render attachment extraction; supported contracts are under `Illumo/Include/Illumo/Scene`. |
 | **IllumoGame/Source/Game/** | CA definition/config, module factory, domain + presentation (`SparseCellGrid`, `CanvasView`, `CellGameModule`, `CellContext`); dense Canvas types are compatibility-only. |
 | **IllumoGame/Source/Rulesets/** | CA rules (GoL family, Wireworld, …). |
 | **Illumo/Source/Rendering/** | Reusable 2D front end, managed assets, Scene list, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
@@ -245,6 +262,9 @@ House style (D-008 / `docs/contributing.md`): avoid `auto`; avoid namespaces (pr
 ### 5.2 Ownership and lifetime
 
 - **Illumo** owns long-lived services with `unique_ptr` (window, renderer, camera, env, input, scene, command line, …).  
+- **SceneGraph** owns node slots, hierarchy links, and transform caches. It
+  borrows render attachments, which remain consumer-owned and must outlive any
+  traversal that can reach them.
 - **IllumoContext** is a **non-owning** pointer bag frozen as a public source
   contract (D-E5/D-E6); modules validate their required fields at `Start`.
 - **Illumo's runner** registers DebugModule and invokes the consumer-supplied
@@ -313,7 +333,16 @@ flags plus game-provided canvas/help descriptors before host initialization.
 call `std::exit`.
 
 Typical combined draw order (Scene layers, one main pass): World canvas;
-UI splash + console + editor cursor; Debug FPS (Debug builds via DebugModule).
+UI splash + console + editor cursor + selection outline + optional inspector HUD;
+Debug FPS (Debug builds via DebugModule).
+
+At the start of `RenderScene`, `Renderer` captures the active window dimensions
+and primary camera MVP once for that extraction. Matching `GameVisual` instances
+consume those frame values instead of querying the window and recomputing the
+same matrix independently; direct token emitters retain their local fallback.
+`CanvasView` retains upload-rectangle scratch storage, `DebugDraw3D` retains
+dynamic mesh handles and uploads only dirty geometry, and `SceneGraph` retains
+its traversal stack. These caches do not retain or replay command queues.
 
 `RenderWindow` defaults to swap interval one. The persisted `vsync` environment
 value can select synchronized or uncapped presentation and is reapplied only
@@ -321,6 +350,29 @@ when it changes, so Debug's generic `toggle vsync` command works live. The FPS
 overlay labels synchronized swap-completion cadence as `Paced FPS` and reports
 main-loop submissions separately; uncapped mode reports paced FPS as off rather
 than presenting CPU submissions as monitor output (D-P32).
+
+#### 5.4.1 Persistent scene hierarchy (D-E8)
+
+`SceneGraph` is an additive, main-thread-affine persistent world hierarchy.
+It exposes graph-ID-plus-slot-plus-generation `SceneNodeHandle` values and owns
+all node storage. Nodes have deterministic ordered children, local and cached
+world transforms, local enabled/visible state, and at most one borrowed
+`ISceneRenderAttachment`. Reparenting rejects cycles; destruction invalidates
+the complete subtree; dirty propagation and traversal are iterative. Its
+render-traversal stack is retained and grows only with graph size; no cached
+structural render list or culling structure is part of v1.
+
+The graph derives from `DrawableBase` and is normally contributed as one World
+drawable to the per-frame `Rendering::Scene`. During token extraction it walks
+enabled and visible nodes in hierarchy pre-order and supplies each attachment
+with the resolved world transform. It owns no attachment or backend resource.
+`DebugDraw3D` is the first attachment implementation and composes the graph
+world matrix with its existing model matrix.
+
+V1 deliberately has no ECS components, update callbacks, serialization,
+prefabs, bounds/culling structure, physics, scripting, or retained UI. The
+current IllumoGame cellular-automata path does not instantiate a graph. The
+complete contract is `docs/scene-graph-v1-design.md`.
 
 ### 5.5 Rendering architecture (shipped)
 
@@ -385,8 +437,8 @@ The live path is intentionally a full replacement of the finite dense runtime:
 | Layer | Type | Contents |
 |-------|------|----------|
 | **Domain** | `SparseCellGrid` | signed 64-bit cells in a hash map of non-background 16×16 chunks; `0 x 0` selects the infinite non-toroidal domain, while positive chunk dimensions select a finite torus with canonical wrapped cells |
-| **Simulation** | `SimulationRunner` + two `SparseCellGrid`s | one worker generation may be in flight; the main thread reads only the published grid and publishes completions at frame boundaries. Incremental completions apply `SparseGenerationDelta` before the former display grid is reused. Broad completions carry a lightweight replacement marker: the spare advances directly from the immutable published grid and updates its own authoritative nodes in place, avoiding a full snapshot and mirror pass. Overdue whole steps are dropped without a backlog, and edits, persistence, ruleset changes, manual stepping, and shutdown drain first. `SparseCellGrid::advance` retains the transactional totals/frontier/candidate/halo/node-reuse paths described below. |
-| **View** | `CanvasView` | visible dimensions remain diagnostics while sampling uses a globally aligned cache padded by two chunks per side; motion inside it changes only the MVP. Near LOD is one texel/cell; far LOD is an integer density level with immediate coarsening and 80% refinement hysteresis. One-revision changed chunks map to deduplicated exact or overview cache bins; cache exit, revision gaps, resize, palette change, and replacement refill the bounded cache. Active-texel CPU RGB fades snap newly revealed cells. |
+| **Simulation** | `SimulationRunner` + two `SparseCellGrid`s | one worker generation may be in flight; the main thread reads only the published grid and publishes completions at frame boundaries. Incremental completions apply `SparseGenerationDelta` before the former display grid is reused. Broad completions and one-revision journals of at least 2,048 presentation chunks carry a lightweight replacement marker: the spare advances directly from the immutable published grid and updates its own authoritative nodes in place, avoiding a full snapshot and mirror pass. Overdue whole steps are dropped without a backlog, and edits, persistence, ruleset changes, manual stepping, and shutdown drain first. `SparseCellGrid::advance` retains the transactional totals/frontier/candidate/halo/node-reuse paths described below. |
+| **View** | `CanvasView` | visible dimensions remain diagnostics while sampling uses a globally aligned cache padded by two chunks per side; motion inside it copies retained texels and resamples only newly exposed strips when the aligned origin shifts, otherwise it changes only the MVP. Near LOD is one texel/cell; far LOD is an integer density level with immediate coarsening and 80% refinement hysteresis. One-revision changed chunks map to deduplicated exact or overview cache bins, with a complete cache resample when those bins cover at least a quarter of the cache; LOD/resize, non-aligned jumps, revision gaps, palette change, torus wrap, and replacement refill the bounded cache. Complete overview resamples walk occupied cells and snap-convert sampled RGB in one pass. Exact-cell CPU RGB fades; density overviews and newly revealed cells snap. |
 | **GPU** | `CanvasView` + `GameVisual` | one reusable nearest-filtered RGB staging texture and one world-space quad; dirty 16×16-texel tiles merge into at most eight update rectangles or their AABB. Uploads through 64 KiB are direct; larger requests use a non-waiting three-PBO/fence ring with direct fallback. |
 
 Rulesets provide stateless `nextState` and `evalCell` functions. Each ruleset's
@@ -405,15 +457,20 @@ Negative chunk coordinates use centralized floor division/modulo. Chunk output
 is sorted by `(chunkY, chunkX)` for deterministic saves and tests. The view
 visits only chunks intersecting its cache bounds. The cache is globally aligned
 and extends two 16-cell chunks beyond the visible viewport on every side, so
-sub-cache pan/zoom changes only the camera MVP. The grid publishes a
+sub-cache pan/zoom changes only the camera MVP and aligned origin shifts copy
+retained CPU texels while resampling only the newly exposed strips. The grid publishes a
 revision-scoped changed-chunk list for edits and completed generations. When
 exactly one revision is unseen, the view maps changed chunks to deduplicated
-exact-cell or overview bins. Revision gaps, cache exit, palette changes,
-whole-grid replacement, LOD changes, and resize use a complete bounded refill.
+exact-cell or overview bins. Marking those bins stops once they cover a quarter
+of the cache, then the complete bounded cache is resampled. Revision gaps, non-aligned jumps, palette changes,
+whole-grid replacement, LOD changes, torus wrap, and resize use a complete bounded refill.
 Far LOD coarsens immediately to fit and refines only at 80% budget occupancy.
 A retained active-texel set
 makes fade ticks and zero-speed snaps proportional to colors still changing;
-reapplying an unchanged zero fade speed does no scan. At far zoom it limits
+reapplying an unchanged zero fade speed does no scan. Exact-cell LOD keeps that
+fade; density overviews snap color changes. Dense one-revision bins that cover
+at least a quarter of the cache resample the complete bounded cache; bin
+marking stops once that threshold is reached. At far zoom it limits
 the active texture to `max(CanvasX/Y, window / 4)` texels and accumulates
 palette density into each overview texel. This presentation budget neither
 caps chunks nor discards simulation cells. Rendering never creates per-chunk
@@ -457,7 +514,11 @@ the node addresses that make this reuse safe. Candidate-index lookup probes for 
 growth; only a new insertion that would cross the 75% load boundary resizes the
 retained flat table. Each target independently uses those
 candidates when its counted-neighbor contributions are below the calibrated
-threshold, or a direct 18×18 halo otherwise. Thus mixed dense/sparse worlds do
+threshold, or a direct 18×18 halo otherwise. Counting-dense centers skip
+neighbor-count scratch preparation and go straight to halo evaluation.
+Dense-majority frontiers skip candidate scratch construction.
+Frontiers with at least 2,048 targets also skip scratch and evaluate as halo.
+Thus mixed dense/sparse worlds do
 not inherit one global decision, and dense Wireworld conductors remain candidate
 work because only heads contribute neighbor counts. Worlds whose source chunks
 are all densely counted bypass scratch construction. Both capacities are
@@ -517,8 +578,10 @@ candidate construction, neighbor contributions, and evaluation cells with a
 complete-path estimate derived from cached population totals. It patches the
 retained prior map only when the frontier estimate is no greater; broad changes
 use the complete adaptive path. An empty frontier returns without visiting any
-chunk. Tracking retains at most 4,096 changed chunks, bounding bookkeeping
-without reintroducing the former 64-target selection cliff. Ruleset type changes
+chunk. Tracking retains at most 16,384 changed chunks so a large generation
+does not discard the journal; evaluation still chooses frontier versus complete
+from estimated work. Overflowing that tracking cap, or allocation failure, is
+what invalidates frontier bookkeeping. Ruleset type changes
 invalidate current chunks before the next step.
 
 ### 5.7 Rules and encoding
@@ -551,8 +614,9 @@ class RuleSet {
    or halo evaluation independently.
 2. Compare exact frontier preparation/evaluation work units with a complete-path
    estimate derived from cached totals. Evaluate and patch the frontier when it
-   is no more expensive; otherwise use the complete path. Retain at most 4,096
-   changed addresses between generations.
+   is no more expensive; otherwise use the complete path. Retain at most 16,384
+   changed addresses between generations so tracking can resume after a dense
+   burst; the work comparison, not that cap, selects evaluation.
 3. Use the cached candidate-preferred count to select the complete
    adaptive or all-dense path.
 4. If any source chunk is counting-sparse, derive affected target addresses
@@ -561,8 +625,11 @@ class RuleSet {
    bits are enrolled. Build serial scratch source-by-source, or prepare large
    and explicitly parallel workloads target-by-target through the reusable
    pool. Select candidate or direct 18×18 halo evaluation separately
-   for each target from its actual counted-neighbor contribution work. Large
-   mixed work sets use coarse work-count ranges in the worker pool.
+   for each target from its actual counted-neighbor contribution work.
+   Counting-dense centers skip neighbor-count scratch preparation.
+   Dense-majority frontiers and frontiers with at least 2,048 targets skip
+   candidate scratch construction.
+   Large mixed work sets use coarse work-count ranges in the worker pool.
 5. If every source chunk is counting-dense, bypass candidate scratch. Build the
    expanded target set in its retained generation-stamped flat index, retain
    address/result vector capacity, and evaluate serially or through the bounded
@@ -725,7 +792,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R16** | Typed slot+generation resource/style handles; validated replace/destroy/query; stale operations log and no-op. CommandQueue reserves 2,048, grows, and rejects only at a configurable 65,536 default ceiling. |
 | **D-R17** | AssetManager owns canonical-path texture/shader caching, references, one CPU worker, stable fallbacks, render-thread pump/replacement, explicit reload, and Debug 500 ms timestamp polling. |
 | **D-R18** | Painter-correct 2D stream: parent/local transforms, normalized pivots, atlas regions/flips, stable cross-type draw order, adjacent-only batching, bounded dynamic quad buffers, and caller-updated passive sprite animation. |
-| **D-R19** | Superseded by D-E6: the approved sibling IllumoGame consumer establishes the explicit library boundary without claiming a second independent product or a general engine. |
+| **D-R19** | Superseded by D-E6: the sibling IllumoGame consumer establishes the explicit library boundary. Future downstream repositories still require install/package validation. |
 | **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
@@ -770,13 +837,13 @@ the normal canvas returns immediately when the flag is disabled.
 | **D-P15** | Track stored and neighbor-counting masks separately and select candidate versus halo work independently per target chunk. | 2026-08-08 |
 | **D-P16** | Cache all 256x9 rule transitions and reduce dense halos with a rolling three-row neighbor stencil. | 2026-08-09 |
 | **D-P17** | Maintain transactional chunk population aggregates so settled stepping and complete-path selection do not scan all allocated chunks. | 2026-08-09 |
-| **D-P18** | Replace the 64-target frontier cutoff with bounded adaptive work comparison and per-target candidate/halo frontier evaluation. | 2026-08-09 |
+| **D-P18** | Replace the 64-target frontier cutoff with bounded adaptive work comparison and per-target candidate/halo frontier evaluation. | 2026-08-09; tracking cap 16,384 on 2026-08-21 |
 | **D-P19** | Derive candidate boundaries from masks, initialize counters lazily, and use target-owned worker preparation for large workloads. | 2026-08-09 |
 | **D-P20** | Retain complete-halo targets/index/results and build rolling neighbor rows directly from chunk counting masks. | 2026-08-09 |
-| **D-P21** | Publish revision-scoped changed chunks for dirty-tile sampling and retain active fading texels. | Refined for every LOD by D-P24 |
+| **D-P21** | Publish revision-scoped changed chunks for dirty-tile sampling and retain active fading texels. | Refined for every LOD by D-P24; overview snap 2026-08-21 |
 | **D-P22** | Gate the optional second synchronous generation by measured frame cost and report requested versus achieved TPS. | Superseded by D-P26 |
 | **D-P23** | Grow canvas texture capacity geometrically and destroy replaced/released GL textures and PBOs. | Refined by D-P25 |
-| **D-P24** | Separate the visible viewport from a padded aligned camera cache with stable integer LOD and incremental overview bins. | 2026-08-09 |
+| **D-P24** | Separate the visible viewport from a padded aligned camera cache with stable integer LOD and incremental overview bins. | 2026-08-09; aligned cache scroll and overview snap on 2026-08-21 |
 | **D-P25** | Merge dirty texel tiles into bounded rectangles and use direct small uploads plus a non-waiting three-PBO/fence ring. | 2026-08-09 |
 | **D-P26** | Publish one evidence-gated worker generation from dual sparse grids at frame boundaries with no backlog. | 2026-08-09 |
 | **D-P27** | Retain exact state/counting change masks and enroll neighboring frontier targets only at affected edges or corners. | 2026-08-11 |
@@ -793,10 +860,11 @@ the normal canvas returns immediately when the flag is disabled.
 | **D-E1** | Historical App-owned module registration; refined by D-E7 while Engine still knows only `IModule`. |
 | **D-E2** | InputManager has no Game types. |
 | **D-E3** | EntityTable archived; cells are not entities. |
-| **D-E4** | Scene is drawable list only (no graph). |
+| **D-E4** | Rendering `Scene` remains a non-owning per-frame drawable list; D-E8 adds a separate retained graph rather than changing this type. |
 | **D-E5** | Freeze IllumoContext; validate at Start; third module → explicit deps. |
 | **D-E6** | One repository contains the `Illumo` static library and sibling `IllumoGame` product. Public headers live under `Illumo/Include/Illumo`; no install package, DLL ABI, or second repository is implied. Its App/Platform ownership clause is superseded by D-E7. |
 | **D-E7** | Illumo owns platform entry/dialogs, BuildInfo, SysCmdLine, logging lifetime, DebugModule composition, and the frame loop. IllumoGame contains only CA Game/Rulesets/configuration metadata and its required-module factory. |
+| **D-E8** | Illumo owns an additive persistent `SceneGraph` with generational graph-local handles, deterministic hierarchy/transform state, and borrowed token render attachments. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and version 3 topology persistence. |
@@ -934,7 +1002,8 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 
 ### Explicitly deferred (engine PDF + consensus)
 
-- Full Scene/World abstractions, general ECS, cached queries  
+- SceneGraph ECS components, serialization, update callbacks, retained UI,
+  culling/spatial acceleration, and cached structural queries
 - Render graphs, multi-backend, global transparent texture sorting
 - Multithreaded command generation  
 
@@ -942,7 +1011,8 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 
 ## 11. Core design principles (merged)
 
-1. **CA learning sandbox first** — not a general engine product.  
+1. **Reusable foundation, concrete consumers** — generalize Illumo around
+   demonstrated project needs while keeping product policy downstream.
 2. **Ownership explicit** — Illumo owns system/runtime behavior; IllumoGame owns
    only CA policy and supplies its module through a declarative factory; context
    does not own.
@@ -950,7 +1020,8 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 4. **Sim produces complete state; render observes** — double-buffer; no draw mid-generation.  
 5. **Tokens for draw submission** — enroll once, emit commands, backend executes.  
 6. **Parallelize data transformations last** — deterministic serial ownership first; adaptive cell candidates and bounded CPU chunk evaluation are justified only by measured pressure.
-7. **Archive experiments** — don’t leave half-live ECS/graph/passes in the hot path.  
+7. **Archive superseded experiments** — do not revive the old pointer-based
+   graph, EntityTable, or pass objects beside their replacement contracts.
 8. **Simplest architecture that preserves the boundaries you care about** (engine PDF principle, applied to the CA product).  
 9. **Code wins over docs** — update this file when consensus shifts.  
 10. **One technical-documentation tree** — current prose, LaTeX, decisions,
@@ -976,7 +1047,7 @@ Resolved highlights (do not re-open without a new decision ID):
 - Token payload shape → D-R1  
 - Handles → D-R3  
 - Who emits tokens → D-R2  
-- Scene graph leftovers → D-E4  
+- Per-frame render-list role → D-E4; persistent scene hierarchy → D-E8
 - IllumoContext growth → D-E5  
 - Canvas domain vs view → D-C1/D-C2 superseded for production by D-C3
   (`SparseCellGrid` + bounded `CanvasView`); dense types are compatibility-only
@@ -1019,6 +1090,7 @@ Resolved highlights (do not re-open without a new decision ID):
 | Game definition / required module factory | `IllumoGame/Source/Game/IllumoGameApplication.cpp` |
 | Public library API | `Illumo/Include/Illumo/*` |
 | Host / services / modules | `Illumo/Source/Engine/Illumo.cpp` plus public Engine headers |
+| Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
 | CA module / modes | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h` |
 | Sparse domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
 | Bounded world-space view + fade | `IllumoGame/Source/Game/CanvasView.*` |
@@ -1036,7 +1108,8 @@ Resolved highlights (do not re-open without a new decision ID):
 
 ### Appendix B — What not to do next
 
-- Do not reintroduce EntityTable / SceneObject graph “for completeness.”  
+- Do not restore the archived raw-pointer `SceneObject` or EntityTable. Extend
+  the handle-based `SceneGraph` only for a concrete consumer contract.
 - Do not build Opaque/Transparent/UI pass objects unless profiling or a real multi-genre product appears.  
 - Do not make SYCL a hard dependency of Illumo or Game.  
 - Do not document R8-only presentation as current without verifying

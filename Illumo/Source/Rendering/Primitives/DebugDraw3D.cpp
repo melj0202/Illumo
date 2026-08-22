@@ -156,6 +156,19 @@ DebugDraw3D::makePerspectiveViewProjection(const glm::vec3& eye,
 bool
 DebugDraw3D::AppendCommands(Renderer* value)
 {
+  return appendCommandsWithModel(value, modelMatrix);
+}
+
+void
+DebugDraw3D::appendSceneCommands(Renderer* value, const Matrix4& worldTransform)
+{
+  (void)appendCommandsWithModel(value, worldTransform * modelMatrix);
+}
+
+bool
+DebugDraw3D::appendCommandsWithModel(Renderer* value,
+                                     const glm::mat4& activeModelMatrix)
+{
   if (!isVisible()) {
     return true;
   }
@@ -172,10 +185,37 @@ DebugDraw3D::AppendCommands(Renderer* value)
   if (geometryDirty) {
     rebuildMeshes();
   }
+  if (!ensureMeshCapacity(&lineMeshHandle,
+                          &lineMeshIndices,
+                          &lineMeshCapacity,
+                          lineDrawVertices.size()) ||
+      !ensureMeshCapacity(&triangleMeshHandle,
+                          &triangleMeshIndices,
+                          &triangleMeshCapacity,
+                          triangleDrawVertices.size())) {
+    return false;
+  }
 
-  const glm::mat4 modelViewProjection = viewProjection * modelMatrix;
+  if (lineUploadPending) {
+    value->pushUpdateBuffer(
+      lineMeshHandle,
+      0,
+      static_cast<unsigned int>(lineDrawVertices.size() * sizeof(Vertex)),
+      lineDrawVertices.data());
+    lineUploadPending = false;
+  }
+  if (triangleUploadPending) {
+    value->pushUpdateBuffer(
+      triangleMeshHandle,
+      0,
+      static_cast<unsigned int>(triangleDrawVertices.size() * sizeof(Vertex)),
+      triangleDrawVertices.data());
+    triangleUploadPending = false;
+  }
+
+  const glm::mat4 modelViewProjection = viewProjection * activeModelMatrix;
   const float* matrix = glm::value_ptr(modelViewProjection);
-  if (lineMeshHandle.isValid()) {
+  if (!lineDrawVertices.empty() && lineMeshHandle.isValid()) {
     if (!value->bindStyle(lineStyleHandle)) {
       return false;
     }
@@ -184,16 +224,17 @@ DebugDraw3D::AppendCommands(Renderer* value)
     // Reassert world mode for every 3D draw instead of relying on prior state.
     value->pushUniformInt("uUsePixels", 0);
     value->pushUniformMat4("uMVP", matrix);
-    value->pushDrawIndexed(static_cast<unsigned int>(lineIndices.size()));
+    value->pushDrawIndexed(static_cast<unsigned int>(lineDrawVertices.size()));
   }
-  if (triangleMeshHandle.isValid()) {
+  if (!triangleDrawVertices.empty() && triangleMeshHandle.isValid()) {
     if (!value->bindStyle(triangleStyleHandle)) {
       return false;
     }
     value->pushSetMesh(triangleMeshHandle);
     value->pushUniformInt("uUsePixels", 0);
     value->pushUniformMat4("uMVP", matrix);
-    value->pushDrawIndexed(static_cast<unsigned int>(triangleIndices.size()));
+    value->pushDrawIndexed(
+      static_cast<unsigned int>(triangleDrawVertices.size()));
   }
   return true;
 }
@@ -246,29 +287,78 @@ DebugDraw3D::ensureStyles()
 void
 DebugDraw3D::rebuildMeshes()
 {
-  releaseMeshes();
-  if (renderer == nullptr) {
+  expandIndexedVertices(lineVertices, lineIndices, &lineDrawVertices);
+  expandIndexedVertices(
+    triangleVertices, triangleIndices, &triangleDrawVertices);
+  lineUploadPending = !lineDrawVertices.empty();
+  triangleUploadPending = !triangleDrawVertices.empty();
+  geometryDirty = false;
+}
+
+bool
+DebugDraw3D::ensureMeshCapacity(MeshHandle* meshHandle,
+                                std::vector<unsigned int>* meshIndices,
+                                size_t* capacity,
+                                size_t required)
+{
+  if (required == 0) {
+    return true;
+  }
+  if (renderer == nullptr || meshHandle == nullptr || meshIndices == nullptr ||
+      capacity == nullptr) {
+    return false;
+  }
+  if (meshHandle->isValid() && *capacity >= required) {
+    return true;
+  }
+
+  size_t nextCapacity = *capacity == 0 ? 64u : *capacity;
+  while (nextCapacity < required) {
+    nextCapacity *= 2u;
+  }
+  meshIndices->resize(nextCapacity);
+  for (size_t index = 0; index < nextCapacity; ++index) {
+    (*meshIndices)[index] = static_cast<unsigned int>(index);
+  }
+
+  const size_t vertexCapacityBytes = nextCapacity * sizeof(Vertex);
+  const size_t indexBytes = meshIndices->size() * sizeof(unsigned int);
+  if (meshHandle->isValid()) {
+    if (!renderer->replaceDynamicMesh(*meshHandle,
+                                      vertexCapacityBytes,
+                                      meshIndices->data(),
+                                      indexBytes,
+                                      MeshVertexLayout::Pos3Color4U8)) {
+      return false;
+    }
+  } else {
+    *meshHandle = renderer->enrollDynamicMesh(vertexCapacityBytes,
+                                              meshIndices->data(),
+                                              indexBytes,
+                                              MeshVertexLayout::Pos3Color4U8);
+    if (!meshHandle->isValid()) {
+      return false;
+    }
+  }
+  *capacity = nextCapacity;
+  return true;
+}
+
+void
+DebugDraw3D::expandIndexedVertices(const std::vector<Vertex>& vertices,
+                                   const std::vector<unsigned int>& indices,
+                                   std::vector<Vertex>* drawVertices)
+{
+  if (drawVertices == nullptr) {
     return;
   }
-  if (!lineVertices.empty()) {
-    lineMeshHandle =
-      renderer->enrollMesh(lineVertices.data(),
-                           lineVertices.size() * sizeof(Vertex),
-                           lineIndices.data(),
-                           lineIndices.size() * sizeof(unsigned int),
-                           MeshVertexLayout::Pos3Color4U8,
-                           false);
+  drawVertices->clear();
+  drawVertices->reserve(indices.size());
+  for (unsigned int index : indices) {
+    if (index < vertices.size()) {
+      drawVertices->push_back(vertices[index]);
+    }
   }
-  if (!triangleVertices.empty()) {
-    triangleMeshHandle =
-      renderer->enrollMesh(triangleVertices.data(),
-                           triangleVertices.size() * sizeof(Vertex),
-                           triangleIndices.data(),
-                           triangleIndices.size() * sizeof(unsigned int),
-                           MeshVertexLayout::Pos3Color4U8,
-                           false);
-  }
-  geometryDirty = false;
 }
 
 void
@@ -285,6 +375,12 @@ DebugDraw3D::releaseMeshes()
     renderer->destroyMesh(triangleMeshHandle);
     triangleMeshHandle = MeshHandle{};
   }
+  lineMeshCapacity = 0;
+  triangleMeshCapacity = 0;
+  lineMeshIndices.clear();
+  triangleMeshIndices.clear();
+  lineUploadPending = false;
+  triangleUploadPending = false;
 }
 
 void

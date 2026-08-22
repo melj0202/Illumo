@@ -27,6 +27,9 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
   claim a dropped frame was complete.
 - `Scene` is a non-owning ordered drawable list rebuilt each frame. It does not
   own drawables and must not become a retained scene graph or ECS.
+- The separate `SceneGraph` may enter `Scene` as one drawable. Its borrowed
+  `ISceneRenderAttachment` values receive resolved world transforms and emit
+  tokens only; do not make Rendering own graph nodes or graph lifetime.
 - Resource handles are backend-neutral identifiers. The owning backend
   registry controls concrete resource lifetime; enrollment is rare and
   per-frame work emits commands rather than recreating resources.

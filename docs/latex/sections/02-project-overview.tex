@@ -5,7 +5,7 @@
 The repository has two sibling projects with one-way dependency flow.
 \textbf{Illumo} is a static C++ library containing the reusable host,
 application runner, platform layer, foundation, services, rendering, generic
-console/UI, assets, and Debug module.
+console/UI, persistent scene hierarchy, assets, and Debug module.
 \textbf{IllumoGame} is the interactive cellular-automata simulator that consumes
 Illumo through supported \texttt{<Illumo/...>} headers. It owns the canvas,
 rulesets, simulation and persistence policy, product commands, CA defaults, and
@@ -19,10 +19,11 @@ Windows path. Linux and macOS retain unsupported scaffolding and are not
 promoted by the project split.
 
 \begin{inferencebox}
-Illumo remains an engine-shaped library for a concrete product, not a claim of
-being a general-purpose game engine. D-E6 records the explicit boundary and
-keeps broader ECS, render-graph, scene-graph, and multi-backend work out of
-scope until a real need appears.
+Illumo is intended to be a reusable runtime and rendering foundation for
+future projects, with IllumoGame as its first in-tree consumer. D-E6 records
+the explicit library/product boundary and D-E8 adds a bounded persistent scene
+hierarchy. This direction does not imply a full ECS, render graph, stable DLL
+ABI, or speculative multi-backend framework.
 \end{inferencebox}
 
 \subsection{High-level system diagram}
@@ -34,7 +35,7 @@ scope until a real need appears.
   arr/.style={-{Latex}, thick}
 ]
   \node[box, fill=orange!10] (game) {IllumoGame\\Game + Rulesets\\application definition};
-  \node[box, fill=green!10, right=2.0cm of game] (lib) {Illumo static library\\Application + Platform + Engine\\Foundation + Services + Rendering};
+  \node[box, fill=green!10, right=2.0cm of game] (lib) {Illumo static library\\Application + Platform + Engine\\Scene + Foundation + Services + Rendering};
   \node[box, fill=purple!8, below=1.0cm of lib] (gl) {private OpenGL backend\\Illumo assets + licenses};
   \node[box, fill=gray!10, below=1.0cm of game] (tests) {IllumoGameTests\\IllumoTests + TestSupport};
 
@@ -57,6 +58,8 @@ module and engine-owned optional Debug module $\rightarrow$ \texttt{std::chrono}
 \begin{itemize}
   \item No install/export package, shared DLL, or stable binary ABI.
   \item No general-purpose AAA renderer, full ECS, or speculative framework.
+  \item No SceneGraph serialization, retained UI, culling hierarchy, or update
+        framework until a concrete consumer defines those contracts.
   \item No multiplayer or networking.
   \item No claim that Linux or macOS is supported until native validation exists.
 \end{itemize}

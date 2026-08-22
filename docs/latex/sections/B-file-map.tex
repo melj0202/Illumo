@@ -18,6 +18,8 @@
 \path{Illumo/Source/Engine/Illumo.cpp} & Fallible host initialization, rollback, teardown \\
 \path{Illumo/Source/Engine/Application.cpp} & Logger lifetime, CLI flow, module composition, steady-clock loop \\
 \path{Illumo/Source/Engine/DebugModule.cpp} & Optional Debug renderer/tooling module \\
+\path{Illumo/Include/Illumo/Scene/} & Public persistent hierarchy and generational node handles \\
+\path{Illumo/Source/Scene/SceneGraph.cpp} & Node ownership, deterministic traversal, transform cache, render extraction \\
 \path{Illumo/Include/Illumo/Foundation/BuildInfo.h} & Engine build/version metadata \\
 \path{Illumo/Include/Illumo/Rendering/} & Supported backend-neutral render/token API \\
 \path{Illumo/Source/Rendering/OpenGL/} & Private production backend \\
@@ -35,6 +37,7 @@
 \path{IllumoGame/Source/Rulesets/} & Cellular-automata transitions and palettes \\
 \path{IllumoGame/Tests/} & \texttt{IllumoGame.*} product cases \\
 \path{docs/architecture-consensus.md} & Canonical current architecture and decisions \\
+\path{docs/scene-graph-v1-design.md} & Persistent scene hierarchy contract and rollout boundary \\
 \path{docs/illumo-library-and-illumogame-design.md} & Approved extraction design and outcome \\
 \path{docs/latex/illumo.tex} & Prose-book entry point \\
 \path{docs/latex/architecture-map.tex} & Chart-pack entry point \\

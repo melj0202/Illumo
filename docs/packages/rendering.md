@@ -13,13 +13,25 @@ IllumoGame consumes public rendering contracts from `Illumo/Include/Illumo`.
 OpenGL implementation headers remain under `Illumo/Source/Rendering/OpenGL` and
 are private. `MockBackend` is exposed only by `Illumo::TestSupport`.
 
-`Scene` is a non-owning ordered frame list, not a scene graph. Typed
-slot+generation resource handles, the bounded command queue, managed
-`AssetManager`, painter-correct `GameVisual`, transforms, sprites/animation,
-text, and primitive-composed UI retain their existing behavior.
+`Rendering::Scene` is a non-owning ordered frame list. The separate retained
+`SceneGraph` owns hierarchy nodes and appears in that list as one drawable.
+Borrowed `ISceneRenderAttachment` implementations receive a resolved world
+transform and append backend-neutral tokens; `DebugDraw3D` is the first
+adapter. Typed slot+generation resource handles, the bounded command queue,
+managed `AssetManager`, painter-correct `GameVisual`, transforms,
+sprites/animation, text, and primitive-composed UI retain their existing
+behavior.
+
+`Renderer` captures window dimensions and the primary camera MVP once for each
+`RenderScene` extraction. `GameVisual` consumes that transient frame context
+when it shares the renderer's window and camera, while direct callers retain a
+local fallback. `CanvasView` reuses upload-rectangle scratch storage and
+`DebugDraw3D` keeps dynamic mesh handles, updating dirty vertex ranges instead
+of recreating meshes.
 
 The Debug renderer demo proves assets, sprites, transforms, animation, and
 reload through the same library path consumed by IllumoGame. D-E6 supersedes
 the prior deferred-extraction rule: the public static-library boundary now
-exists, but Illumo remains a focused library for a concrete simulator rather
-than a speculative general-purpose engine.
+exists. D-E8 adds a deliberately bounded persistent scene hierarchy for future
+consumers. The current IllumoGame cellular-automata path does not instantiate a
+graph and keeps the simulator's sparse domain and product UI unwired.

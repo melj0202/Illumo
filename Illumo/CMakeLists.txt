@@ -69,6 +69,7 @@ endif()
 
 add_library(Illumo STATIC
   Source/Foundation/MacroDefs.cpp
+  Source/Scene/SceneGraph.cpp
   Source/Services/CommandLine.cpp
   Source/Services/DebugAlloc.cpp
   Source/Services/EnvVars.cpp
@@ -148,6 +149,7 @@ if(BUILD_TESTING)
     Tests/TestIllumoHost.cpp
     Tests/TestTextureUploadPolicy.cpp
     Tests/TestSysCmdLine.cpp
+    Tests/TestSceneGraph.cpp
   )
   target_link_libraries(IllumoTests PRIVATE Illumo::TestSupport glfw)
   target_include_directories(IllumoTests PRIVATE

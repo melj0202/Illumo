@@ -93,6 +93,7 @@ __pycache__/
 .cache/
 
 # Local/private configuration and credentials
+/envvars.json
 .priv/
 .agents/*
 !.agents/skills/

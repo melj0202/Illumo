@@ -1,8 +1,10 @@
 #pragma once
 
 #include <Illumo/Rendering/Drawable.h>
+#include <Illumo/Rendering/ISceneRenderAttachment.h>
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 #include <Illumo/Rendering/ResourceHandle.h>
+#include <cstddef>
 #include <glm/glm.hpp>
 #include <vector>
 
@@ -11,7 +13,9 @@ class Renderer;
 // Small token-based 3D diagnostic drawable. It deliberately owns no camera,
 // material, or asset policy: callers supply the complete view-projection
 // matrix and compose it in the World layer before 2D presentation.
-class DebugDraw3D : public DrawableBase
+class DebugDraw3D
+  : public DrawableBase
+  , public ISceneRenderAttachment
 {
 public:
   DebugDraw3D();
@@ -50,6 +54,8 @@ public:
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
+  void appendSceneCommands(Renderer* renderer,
+                           const Matrix4& worldTransform) override;
 
 private:
   struct Vertex
@@ -70,15 +76,32 @@ private:
   std::vector<unsigned int> lineIndices;
   std::vector<Vertex> triangleVertices;
   std::vector<unsigned int> triangleIndices;
+  std::vector<Vertex> lineDrawVertices;
+  std::vector<Vertex> triangleDrawVertices;
+  std::vector<unsigned int> lineMeshIndices;
+  std::vector<unsigned int> triangleMeshIndices;
   MeshHandle lineMeshHandle{};
   MeshHandle triangleMeshHandle{};
   RenderStyleHandle lineStyleHandle{};
   RenderStyleHandle triangleStyleHandle{};
+  size_t lineMeshCapacity = 0;
+  size_t triangleMeshCapacity = 0;
   bool geometryDirty = true;
+  bool lineUploadPending = false;
+  bool triangleUploadPending = false;
 
   void addLine(const glm::vec3& start, const glm::vec3& end, ColorRgba color);
   void ensureStyles();
+  bool appendCommandsWithModel(Renderer* renderer,
+                               const glm::mat4& activeModelMatrix);
   void rebuildMeshes();
+  bool ensureMeshCapacity(MeshHandle* meshHandle,
+                          std::vector<unsigned int>* meshIndices,
+                          size_t* capacity,
+                          size_t required);
+  static void expandIndexedVertices(const std::vector<Vertex>& vertices,
+                                    const std::vector<unsigned int>& indices,
+                                    std::vector<Vertex>* drawVertices);
   void releaseMeshes();
   void releaseStyles();
 };

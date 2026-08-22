@@ -82,6 +82,7 @@ live tree before treating historical notes as still open.
 - Binary rules encode alive as `0` and dead as `1`.
 - `CellGrid` owns dense domain state; `Canvas` adds RGB targets/fade and GPU
   enrollment (D-C2).
-- Scene is a rebuilt, ordered drawable list—not a scene graph or ECS.
+- Rendering `Scene` is a rebuilt ordered frame list; persistent world nodes
+  belong to the separate handle-based `SceneGraph`, which is not an ECS.
 - Production drawables use render tokens; immediate `Draw()` remains only for
   tests or incomplete stubs.

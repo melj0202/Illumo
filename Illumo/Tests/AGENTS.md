@@ -3,10 +3,14 @@
 This file specializes the repository `AGENTS.md` for `Illumo/Tests/`.
 
 Library tests own the generic host lifecycle, services, rendering contracts,
-primitive UI, allocators, and public-header consumption. Register exact
-`Illumo.<area>.<case>` names and keep the runner's `--list`, exact `--run`, and
-CTest discovery synchronized. Do not add Game, Rulesets, simulator defaults,
-or product command policy to this runner.
+primitive UI, allocators, persistent scene hierarchy, and public-header
+consumption. Register exact `Illumo.<area>.<case>` names and keep the runner's
+`--list`, exact `--run`, and CTest discovery synchronized. Do not add Game,
+Rulesets, simulator defaults, or product command policy to this runner.
+
+SceneGraph cases are `Illumo.SceneGraph.HandlesAndLifetime`,
+`Illumo.SceneGraph.HierarchyAndTransforms`, and
+`Illumo.SceneGraph.RenderExtraction`.
 
 Use `Illumo::TestSupport` for MockBackend and test-only fixtures. Tests must be
 headless, deterministic, and isolated under `build/Testing/Illumo/`.

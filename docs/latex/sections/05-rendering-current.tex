@@ -29,9 +29,30 @@ No second real GPU API.
         World $\rightarrow$ UI $\rightarrow$ Debug; each drawable
         \texttt{AppendCommands}; if a drawable returns false, legacy immediate
         \texttt{Draw()} still runs (hybrid fallback; production drawables return true).
+        It captures window dimensions and the primary camera MVP once for that
+        extraction; matching \symbolref{GameVisual} emitters reuse those values.
   \item \symbolref{IBackend::SubmitCommandQueue} $\rightarrow$
         \symbolref{GLDevice::ExecuteCommandQueue} resolves handles and issues GL.
 \end{enumerate}
+
+\subsection{Persistent scene extraction (D-E8)}
+The per-frame \symbolref{Scene} remains a non-owning layered drawable list.
+The separate \symbolref{SceneGraph} owns persistent hierarchy nodes and may be
+added to that list as one World drawable. Consumers hold graph-local
+generational \symbolref{SceneNodeHandle} values rather than node pointers.
+Dirty local transforms are resolved into cached parent-composed world matrices
+with iterative traversal. Enabled and visible subtree state suppresses render
+extraction without destroying persistent nodes. The render traversal uses
+retained private scratch that grows with node count; v1 does not cache a
+flattened render list.
+
+Each node may borrow one \symbolref{ISceneRenderAttachment}. During
+deterministic hierarchy pre-order, the graph supplies the resolved world
+matrix and the attachment appends ordinary backend-neutral tokens through
+\symbolref{Renderer}. The graph owns neither the attachment nor GPU resources.
+This keeps persistent world organization separate from per-frame extraction
+and backend execution. The current IllumoGame cellular-automata path does not
+instantiate a graph.
 
 \subsection{Layers, styles, and drawables (D-R14, D-R18)}
 \begin{itemize}
@@ -57,14 +78,20 @@ No second real GPU API.
         transparent painter order is never changed by a global texture sort.
         Dynamic buffers reserve 1,024 quads, double as needed, and stop at a
         configurable 65,536 default ceiling.
-  \item \symbolref{DebugDraw3D} is a deliberately narrow token drawable for
+  \item \symbolref{DebugDraw3D} is a deliberately narrow token drawable and
+        \symbolref{ISceneRenderAttachment} for
         colored axes, ground grids, wire cubes, and solid cubes. It reuses the
         existing position-plus-RGBA mesh layout and Shape shader through local
         depth-tested line and triangle styles. Callers supply a complete
-        perspective view-projection matrix and optional model matrix; it owns
+        perspective view-projection matrix and optional model matrix. When it
+        is attached to a scene node, it composes node-world and local model
+        matrices without mutating either; it owns
         no camera, materials,
-        model loading, lighting, or scene system. Compose it in World before
-        2D presentation, which remains painter ordered in one main pass.
+        model loading, or lighting. Compose it in World before
+        2D presentation, which remains painter ordered in one main pass. Its
+        line and triangle meshes are dynamic retained resources: geometry changes
+        upload vertices through \texttt{UpdateBuffer}, while capacity growth alone
+        replaces the backing allocation.
 \end{itemize}
 
 \subsection{Managed texture and shader assets (D-R17)}
@@ -105,7 +132,8 @@ Shutdown cancels obsolete results and joins the worker before backend teardown.
         enclosing AABB; otherwise the AABB is submitted. Small dimension
         increases reserve 50\% texture headroom. Re-enrollment destroys the
         prior GL texture, PBOs, and fences under the same handle, and view
-        destruction explicitly releases the texture.
+        destruction explicitly releases the texture. Upload-run and output-rect
+        scratch vectors are retained across dirty frames.
   \item Shader/style: \symbolref{CanvasView} composes a world-space
         \symbolref{GameVisual} sprite and therefore uses the Renderer-owned
         inline \texttt{Sprite} style with sampler \texttt{uTexture}.
@@ -172,7 +200,8 @@ instead of treating thousands of CPU submissions as displayed frames (D-P32).
 \end{itemize}
 
 \subsection{Tests (headless)}
-\texttt{IllumoTests} owns reusable rendering/services cases, while
+\texttt{IllumoTests} owns persistent scene hierarchy plus reusable
+rendering/services cases, while
 \texttt{IllumoGameTests} owns CanvasView, ruleset, CellGameModule, simulation,
 and persistence cases. Both are shared binaries for compile efficiency, but
 CTest invokes one exact logical case per isolated process (D-T1). No GPU

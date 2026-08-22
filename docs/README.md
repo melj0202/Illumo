@@ -13,6 +13,7 @@ intentional operational-guidance exceptions established by D-DOC2.
 docs/
   README.md                    This index and PDF build instructions
   architecture-consensus.md   Canonical current architecture and work order
+  scene-graph-v1-design.md     Persistent hierarchy contract and rollout plan
   current-issues.md            Reproducible product/correctness punch list
   contributing.md              Project coding and dependency rules
   packages/                    Focused maps of the source packages
@@ -35,10 +36,12 @@ READMEs stay beside the assets they govern.
 
 1. Read `architecture-consensus.md` for current code truth, locked decisions,
    known issues, and work order.
-2. Read `sessions/` when the rationale or exact verification history matters.
-3. Read the LaTeX book for the long-form architecture and complete decision
+2. Read `scene-graph-v1-design.md` when changing persistent scene ownership,
+   hierarchy, transforms, or render attachment extraction.
+3. Read `sessions/` when the rationale or exact verification history matters.
+4. Read the LaTeX book for the long-form architecture and complete decision
    log.
-4. Treat `history/` as provenance, not current implementation guidance.
+5. Treat `history/` as provenance, not current implementation guidance.
 
 If code and documentation disagree, code wins until the documentation is
 updated in the same change.

@@ -1,6 +1,7 @@
 // GameVisual primitive host: shapes + sprites via MockBackend (no OpenGL).
 
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Primitives/DebugDraw3D.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -64,6 +65,135 @@ submittedCommandPosition(const MockBackend& mock,
     }
   }
   return mock.getLastNonEmptySubmittedCount();
+}
+
+class FrameContextProbe : public DrawableBase
+{
+public:
+  void Draw() override {}
+
+  bool AppendCommands(Renderer* renderer) override
+  {
+    const Renderer::FrameContext& context = renderer->getFrameContext();
+    observedActive = context.active;
+    observedDimensions = context.windowDimensions;
+    observedCamera = context.worldCamera;
+    observedHasWorldMvp = context.hasWorldMvp;
+    observedMvpFirstValue = context.worldMvp[0];
+    return true;
+  }
+
+  bool observedActive = false;
+  bool observedHasWorldMvp = false;
+  std::array<int, 2> observedDimensions{ 0, 0 };
+  Camera* observedCamera = nullptr;
+  float observedMvpFirstValue = 0.0f;
+};
+
+static void
+testRendererFrameContext()
+{
+  testSection("Renderer: frame context is captured once for scene extraction");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  FrameContextProbe probe;
+  Scene scene(&window, &camera);
+  scene.AddDrawable(&probe, RenderLayerId::World);
+
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+
+  const glm::mat4 expected = camera.GetMVPMatrix(640.0f / 480.0f);
+  testTrue(g, probe.observedActive, "context is active during extraction");
+  testTrue(
+    g, probe.observedHasWorldMvp, "context contains the primary camera MVP");
+  testEqInt(
+    g, probe.observedDimensions[0], 640, "context keeps one frame width");
+  testEqInt(
+    g, probe.observedDimensions[1], 480, "context keeps one frame height");
+  testTrue(
+    g, probe.observedCamera == &camera, "context identifies the cached camera");
+  testTrue(g,
+           nearFloat(probe.observedMvpFirstValue, expected[0][0]),
+           "context MVP matches the camera result");
+  testTrue(g,
+           !renderer.getFrameContext().active,
+           "context expires after scene extraction");
+}
+
+static void
+testDebugDraw3DDynamicMeshReuse()
+{
+  testSection("DebugDraw3D: dirty geometry reuses dynamic mesh handles");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  DebugDraw3D debugDraw;
+  debugDraw.prepare(&renderer);
+  debugDraw.addAxes();
+
+  renderer.BeginFrame();
+  testTrue(g,
+           debugDraw.AppendCommands(&renderer),
+           "initial debug geometry emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* firstMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g, firstMesh != nullptr, "initial debug draw binds a mesh");
+  MeshHandle initialMeshHandle{};
+  if (firstMesh != nullptr) {
+    initialMeshHandle = firstMesh->bindMesh.handle;
+  }
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "initial debug geometry uploads one dynamic buffer");
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g,
+           debugDraw.AppendCommands(&renderer),
+           "unchanged debug geometry emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* unchangedMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           initialMeshHandle.isValid() && unchangedMesh != nullptr &&
+             initialMeshHandle == unchangedMesh->bindMesh.handle,
+           "unchanged debug geometry keeps its mesh handle");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             0u,
+             "unchanged debug geometry skips buffer uploads");
+
+  debugDraw.addWireCube(
+    glm::vec3(0.0f), glm::vec3(1.0f), ColorRgba{ 255, 255, 255, 255 });
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g,
+           debugDraw.AppendCommands(&renderer),
+           "expanded debug geometry emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* expandedMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           initialMeshHandle.isValid() && expandedMesh != nullptr &&
+             initialMeshHandle == expandedMesh->bindMesh.handle,
+           "growth inside retained capacity keeps the mesh handle");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "expanded debug geometry updates the retained buffer");
 }
 
 static void
@@ -568,6 +698,11 @@ runGameVisualCase(void (*testFunction)())
 void
 registerGameVisualTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Renderer.FrameContext",
+               []() { return runGameVisualCase(testRendererFrameContext); });
+  registry.add("Illumo.DebugDraw3D.DynamicMeshReuse", []() {
+    return runGameVisualCase(testDebugDraw3DDynamicMeshReuse);
+  });
   registry.add("Illumo.GameVisual.Shapes", []() {
     return runGameVisualCase(testGameVisualShapesEmitTokens);
   });

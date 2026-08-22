@@ -10,10 +10,15 @@ file as an architecture catalog.
 This C++23 workspace contains the product-agnostic `Illumo` static library and
 the `IllumoGame` cellular-automata learning sandbox that consumes it. The
 supported product path is Windows, GLFW, OpenGL, and the sparse infinite or
-finite-toroidal canvas. Illumo is not a general-purpose game engine.
+finite-toroidal canvas. Illumo is intended to become a reusable runtime and
+rendering foundation for future projects; the current checkout still contains
+IllumoGame as its first in-tree consumer.
 
-Do not introduce an ECS, render graph, generalized scene graph, additional
-graphics backend, compute backend, or broad framework merely for architectural
+The approved persistent `SceneGraph` v1 is deliberately bounded to handles,
+hierarchy, transforms, subtree state, and token render attachments. Do not
+expand it into an ECS, retained UI tree, serialization system, spatial index,
+or update framework, and do not introduce a render graph, additional graphics
+backend, compute backend, or broad framework merely for architectural
 completeness. Preserve public behavior and formats by default. A change to
 subsystem boundaries, dependency direction, ownership, lifetime, threading,
 persistence, or public contracts requires explicit authorization and a design
@@ -26,6 +31,7 @@ editing. Route detail to these canonical sources:
 
 - repository use and exact common commands: `README.md`;
 - current architecture and decision catalog: `docs/architecture-consensus.md`;
+- persistent scene hierarchy contract: `docs/scene-graph-v1-design.md`;
 - long-form design book and chart-only map: `docs/latex/illumo.tex` and
   `docs/latex/architecture-map.tex`;
 - formal decisions: `docs/latex/sections/09-design-decision-log.tex`;
@@ -71,6 +77,12 @@ Drawable::AppendCommands(Renderer*)
   -> IBackend::SubmitCommandQueue
   -> GLBackend/GLDevice or MockBackend
 ```
+
+`SceneGraph` is a retained, scene-owned node hierarchy with graph-local
+generational handles. It participates in this flow as one drawable in the
+existing per-frame `Rendering::Scene`; borrowed `ISceneRenderAttachment`
+values receive resolved world transforms and append tokens. It is not CSim
+cell storage, an ECS, or a replacement for the frame list.
 
 Production drawables use the token path. Immediate `Draw()` is only the fallback
 for tests or incomplete stubs. Game and rules code must not issue raw OpenGL
@@ -121,7 +133,9 @@ Canvas truth (verify here before trusting older notes):
   maintain transactional aggregate stored-cell, counted-cell, and
   candidate-preferred-chunk totals, so path selection and settled statistics do
   not rescan all allocated chunks. A retained changed-chunk frontier
-  retains up to 4,096 changed addresses and expands them by one chunk. Exact
+  retains up to 16,384 changed addresses and expands them by one chunk; the
+  work comparison still selects frontier versus complete evaluation, and only
+  tracking overflow or allocation failure discards the journal. Exact
   local candidate preparation/evaluation work is compared with a cached-total
   complete-path estimate; cheaper frontiers patch the prior map, while broad
   changes fall back. Sparse frontier targets use candidate masks or halos by
@@ -138,7 +152,9 @@ Canvas truth (verify here before trusting older notes):
   materializing an 18x18 byte halo. A persistent `SimulationRunner` advances a
   spare sparse grid while the main thread reads the published one. Completed
   generations publish only at frame boundaries with `SparseGenerationDelta`;
-  the former display grid consumes the delta before reuse. Only one generation
+  journals of at least 2,048 presentation chunks carry a lightweight
+  replacement marker instead of per-chunk payloads. The former display grid
+  consumes the delta before reuse. Only one generation
   may be outstanding, overdue whole steps are dropped, and state mutations,
   persistence, ruleset changes, manual stepping, and shutdown drain first.
   Status derives achieved TPS from published completions and reports rolling
@@ -148,16 +164,22 @@ Canvas truth (verify here before trusting older notes):
   revision changes only when cell contents actually change.
 - Production presentation: `CanvasView` separates visible diagnostics from a
   globally aligned cache padded by two 16-cell chunks on every side. Camera
-  motion inside it changes only the MVP. Near zoom is one exact nearest-filtered
+  motion inside it changes only the MVP. Aligned origin shifts copy retained
+  CPU texels and resample newly exposed strips. Near zoom is one exact nearest-filtered
   texel per cell; far zoom uses integer density LOD with immediate coarsening
   and 80% refinement hysteresis. One-revision changes map changed chunks to
-  deduplicated exact or overview bins; revision gaps, cache exit, LOD/resize,
-  palette changes, and replacement refill the bounded cache. Dirty 16x16-texel
+  deduplicated exact or overview bins; revision gaps, non-aligned jumps, LOD/resize,
+  palette changes, torus wrap, and replacement refill the bounded cache. Dirty 16x16-texel
   tiles merge into at most eight rectangles or their AABB. Uploads through
   64 KiB are direct; larger requests use a non-waiting three-PBO/fence ring and
   direct fallback. Re-enrollment and destruction delete GL textures, buffers,
-  and fences. A retained active-texel set makes fade/snap work proportional to
-  changing colors. It owns one reusable RGB texture plus one world-space quad.
+  and fences. Exact-cell LOD fades changing colors; density overviews snap.
+  Dense visible revisions that dirty a quarter of the cache resample the
+  complete cache. Changed-bin marking stops once that threshold is reached.
+  Overview resamples walk occupied cells and snap-convert sampled RGB in one
+  pass. A retained active-texel set makes remaining fade/snap work
+  proportional to changing colors. It owns one reusable RGB texture plus one
+  world-space quad.
   Finite worlds draw only their centered canonical rectangle; presentation and
   editor-facing bounds stay blank outside it even though simulation neighbors
   wrap across opposite edges.
@@ -182,7 +204,9 @@ Ruleset truth:
   instead of making virtual transition calls and use separate stored/counting masks,
   retained chunk-local candidate scratch, and a generation-stamped flat address
   index. Mixed targets independently select candidate or halo evaluation, with
-  bounded worker-pool evaluation for large work sets. Both
+  bounded worker-pool evaluation for large work sets. Counting-dense centers
+  skip neighbor-count scratch preparation and evaluate as halo.
+  Dense-majority and large frontiers skip candidate scratch. Both
   result paths share retained transactional chunk-map node storage; a local
   changed-region path patches the retained prior generation. Dense
   `calcGeneration` support remains only for compatibility tests.
@@ -196,6 +220,7 @@ Ruleset truth:
 | Application runner and main loop | `Illumo/Source/Engine/Application.cpp` |
 | Public library API | `Illumo/Include/Illumo/*` |
 | Host, services, modules | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers |
+| Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
 | CA modes and editor | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
 | Domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
@@ -239,7 +264,8 @@ build/IllumoGame/Release/IllumoGameTests.exe --run <IllumoGame.exact-name>
 Clang/LLVM coverage:
 
 Headless tests cover typed/generational MockBackend resources,
-Renderer/token/style/asset flow, painter-correct primitives and animation, rulesets,
+Renderer/token/style/asset flow, retained scene hierarchy, painter-correct
+primitives and animation, rulesets,
 CellContext, CellGameModule commands and file-backed save/load, Canvas
 domain/fade/dirty behavior, input, environment/logging, SysCmdLine, and
 CommandLine/GLString/SplashText tokens. `ILLUMO_ENABLE_COVERAGE=ON` adds the
@@ -286,8 +312,11 @@ exact checks and translation units when static analysis is requested.
 - Production drawables append `RenderCommand` tokens to the backend-neutral
   `Renderer`; `IBackend` executes them. Any pointer carried by a command must
   remain valid until synchronous queue submission returns.
-- `Scene` is a non-owning ordered list rebuilt each frame, not a scene graph or
-  ECS. Rendering resource handles remain backend-neutral and registry-owned.
+- `Rendering::Scene` is a non-owning ordered list rebuilt each frame.
+  `SceneGraph` separately owns persistent nodes and cached transforms, uses
+  graph-ID-plus-slot-plus-generation handles, borrows render attachments, and
+  emits through the token path as one frame-list drawable. It is not an ECS.
+  Rendering resource handles remain backend-neutral and registry-owned.
 - `SparseCellGrid` is the production domain: signed 64-bit coordinates,
   non-background 16x16 sparse chunks, and configurable infinite non-toroidal
   or finite toroidal evolution.
@@ -348,8 +377,8 @@ A change is complete only when its scope is reviewed for accidental edits and:
 Subsystem rules live in:
 
 - `Illumo/Source/Engine/AGENTS.md`, `Illumo/Source/Foundation/AGENTS.md`, and
-  `Illumo/Source/Platform/AGENTS.md` plus its Windows, Linux, and macOS child
-  guidance;
+  `Illumo/Source/Scene/AGENTS.md`, and `Illumo/Source/Platform/AGENTS.md` plus
+  its Windows, Linux, and macOS child guidance;
 - `IllumoGame/Source/Game/AGENTS.md` and
   `IllumoGame/Source/Rulesets/AGENTS.md`;
 - `Illumo/Source/Services/AGENTS.md`, `Illumo/Tests/AGENTS.md`, and

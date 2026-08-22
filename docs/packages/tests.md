@@ -2,7 +2,7 @@
 
 | Target | Namespace and responsibility |
 |---|---|
-| `IllumoTests` | `Illumo.*`: application/host lifecycle, BuildInfo, SysCmdLine, services, allocators, public/private rendering, assets, generic console/UI |
+| `IllumoTests` | `Illumo.*`: application/host lifecycle, BuildInfo, SysCmdLine, services, allocators, persistent scene hierarchy, public/private rendering, assets, generic console/UI |
 | `IllumoGameTests` | `IllumoGame.*`: CA CLI metadata/configuration, rulesets, topology, sparse simulation, presentation, editor/pattern I/O, commands, persistence |
 | `IllumoPublicHeaderSmoke` | Consumer-only compile/link smoke using no private source include paths |
 

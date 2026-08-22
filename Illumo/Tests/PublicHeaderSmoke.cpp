@@ -18,6 +18,7 @@
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/IMesh.h>
 #include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Rendering/ISceneRenderAttachment.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/PipelineState.h>
@@ -37,6 +38,8 @@
 #include <Illumo/Rendering/ResourceHandlePool.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/SplashText.h>
+#include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneNodeHandle.h>
 #include <Illumo/Services/ArenaAlloc.h>
 #include <Illumo/Services/ChainedStackAlloc.h>
 #include <Illumo/Services/CommandLine.h>
@@ -64,5 +67,13 @@ main()
   static_assert(std::has_virtual_destructor_v<IEnvVars>);
   static_assert(std::is_destructible_v<GameVisual>);
   static_assert(std::is_destructible_v<DebugDraw3D>);
+  static_assert(std::is_base_of_v<ISceneRenderAttachment, DebugDraw3D>);
+  static_assert(!std::is_copy_constructible_v<SceneGraph>);
+  static_assert(std::has_virtual_destructor_v<ISceneRenderAttachment>);
+  SceneGraph sceneGraph;
+  const SceneNodeHandle sceneNode = sceneGraph.createNode();
+  if (!sceneGraph.isNodeValid(sceneNode)) {
+    return 1;
+  }
   return 0;
 }

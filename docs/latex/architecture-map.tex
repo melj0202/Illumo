@@ -141,7 +141,7 @@
     {\scriptsize CLI + modules}\\{\scriptsize chrono loop}};
   \node[layer, pkgfill=pkgEngine] (eng) at (9.1,-1.2) {%
     \textbf{\rmfamily Illumo library}\\[3pt]
-    Illumo\\IllumoContext\\IModule\\[2pt]
+    Illumo\\IModule + Context\\SceneGraph\\[2pt]
     {\scriptsize services + DebugModule}};
   \node[layer, pkgfill=pkgGame] (mod) at (12.7,-1.2) {%
     \textbf{\rmfamily Product module}\\[3pt]
@@ -153,7 +153,7 @@
     {\scriptsize owned by CellContext}};
   \node[layer, pkgfill=pkgRender] (rnd) at (19.9,-1.2) {%
     \textbf{\rmfamily Rendering}\\[3pt]
-    Scene\\Drawable\\Renderer\\[2pt]
+    Frame Scene\\Drawable\\Renderer\\[2pt]
     {\scriptsize AppendCommands}};
   \node[layer, pkgfill=pkgRender] (be) at (23.5,-1.2) {%
     \textbf{\rmfamily IBackend}\\[3pt]
@@ -211,7 +211,7 @@
     Illumo static library owns generic services via \texttt{unique\_ptr} $\rightarrow$
     modules receive non-owning \texttt{IllumoContext*} $\rightarrow$\\[2pt]
     IllumoGame domain (SparseCellGrid / CanvasView / RuleSet) $\rightarrow$
-    Scene drawables emit tokens $\rightarrow$ IBackend (private GL* production, Mock in TestSupport).
+    frame Scene drawables emit tokens $\rightarrow$ IBackend (private GL* production, Mock in TestSupport).
   };
 \ChartEnd
 
@@ -588,14 +588,16 @@
   \node[box, pkgfill=pkgRender, minimum width=2.5cm] (gls) at (7.3,-3.6) {GLString};
   \node[box, pkgfill=pkgRender, minimum width=2.5cm] (sp) at (7.3,-4.8) {SplashText};
   \node[box, pkgfill=pkgGame, minimum width=2.5cm] (cur) at (1.7,-4.8) {Cursor : GameVisual};
+  \node[box, pkgfill=pkgEngine, minimum width=2.5cm] (sg) at (4.5,-4.8) {SceneGraph};
   \draw[impl] (c.north) |- (dcrtp.west);
   \draw[impl] (cur.north) |- (db.west);
   \draw[impl] (cl)--(dcrtp);
   \draw[impl] (gls.north) |- (dcrtp.east);
   \draw[impl] (sp)--(gls);
+  \draw[impl] (sg)--(db);
 
   % CENTER
-  \node[box, pkgfill=pkgRender, minimum width=3.6cm] (sc) at (12.0,-1.0) {Scene\\drawables[]*};
+  \node[box, pkgfill=pkgRender, minimum width=3.6cm] (sc) at (12.0,-1.0) {Frame Scene\\drawables[]*};
   \node[box, pkgfill=pkgRender, minimum width=3.6cm] (ren) at (12.0,-2.3) {Renderer};
   \draw[arr] (sc)--(ren);
 
@@ -751,9 +753,10 @@
     RunIllumoApplication · SysCmdLine \textbf{L}\\
     BuildInfo · SaveLoad contract \textbf{L}};
   \node[card, pkgfill=pkgEngine, minimum width=5.9cm, minimum height=2.9cm] at (15.75,-1.5) {%
-    \textbf{\rmfamily Illumo library Engine}\\[3pt]
+    \textbf{\rmfamily Illumo Engine + Scene}\\[3pt]
     Illumo · IllumoContext \textbf{L}\\
-    IModule · DebugModule \textbf{L}};
+    IModule · DebugModule \textbf{L}\\
+    SceneGraph · SceneNodeHandle \textbf{L}};
   \node[card, pkgfill=pkgGame, minimum width=5.9cm, minimum height=2.9cm] at (22.05,-1.5) {%
     \textbf{\rmfamily IllumoGame Game}\\[3pt]
     Application definition · defaults \textbf{L}\\
@@ -772,7 +775,7 @@
     AllSets.h (7 live only)};
   \node[card, pkgfill=pkgRender, minimum width=5.9cm, minimum height=2.9cm] at (9.45,-4.85) {%
     \textbf{\rmfamily Rendering}\\[3pt]
-    Scene Camera Renderer \textbf{L}\\
+    Frame Scene Camera Renderer \textbf{L}\\
     Drawable RenderCommand \textbf{L}\\
     CommandQueue AssetManager \textbf{L}\\
     GLString SplashText \textbf{L}\\
@@ -819,6 +822,7 @@
     \textbf{\rmfamily Observed dependency direction (production)}\\[3pt]
     Illumo Platform $\rightarrow$ game definition $\rightarrow$ Application runner $\rightarrow$ Illumo host $\rightarrow$ IModule (required CellGame / optional Debug) $\cdot$
     CellGame $\rightarrow$ CellContext $\rightarrow$ SparseCellGrid + CanvasView + RuleSet $\rightarrow$ Renderer tokens\\
+    SceneGraph $\rightarrow$ borrowed render attachments $\rightarrow$ Renderer tokens $\cdot$
     Debug $\rightarrow$ CommandLine + GLString $\cdot$
     Renderer $\rightarrow$ IBackend $\rightarrow$ GL* $\cdot$
     split Tests $\rightarrow$ Illumo::TestSupport/MockBackend $\cdot$
