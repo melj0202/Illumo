@@ -12,6 +12,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/ExitConfirmDialog.cpp
   Source/Game/IllumoGameApplication.cpp
   Source/Game/IllumoGameConfig.cpp
+  Source/Game/MainMenuModule.cpp
   Source/Game/PatternCodec.cpp
   Source/Game/SimulationRunner.cpp
   Source/Game/SparseCellGrid.cpp
@@ -50,6 +51,7 @@ if(BUILD_TESTING)
     Tests/TestDomainBoundary.cpp
     Tests/TestSim.cpp
     Tests/TestCellGameModule.cpp
+    Tests/TestMainMenuModule.cpp
     Tests/TestProductBoundary.cpp
     Tests/TestCanvasInf.cpp
     Tests/TestWorldTopology.cpp

@@ -28,9 +28,9 @@ class CellGameModule : public IModule
   friend class CellGameModuleTestAccess;
 
 public:
-  CellGameModule();
-  ~CellGameModule();
-  virtual bool Start(IllumoContext* context) override;
+  explicit CellGameModule(std::string initialSaveFile = {});
+  ~CellGameModule() override;
+  bool Start(IllumoContext* context) override;
   void Update(double dt) override;
   void DispatchDrawables(Scene* scene) override;
   void Exit() override;
@@ -133,4 +133,5 @@ private:
   bool flipHeld;
   bool inspectHeld;
   bool deleteHeld;
+  std::string initialSaveFile;
 };

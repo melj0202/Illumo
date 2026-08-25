@@ -11,6 +11,8 @@
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
 
+class IModuleHost;
+
 // Non-owning service bag passed to IModule::Start.
 struct IllumoContext
 {
@@ -23,6 +25,7 @@ struct IllumoContext
   EnvVars* envVars{ nullptr };
   Camera* camera{ nullptr };
   CommandRegistry* commandRegistry{ nullptr };
+  IModuleHost* moduleHost{ nullptr };
 };
 
 // Required wiring for DebugModule (console, FPS overlay, env flags).

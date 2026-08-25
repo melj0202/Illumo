@@ -9,7 +9,7 @@ class IEnvVars;
 class IModule;
 
 using IllumoDefaultsCallback = void (*)(IEnvVars* environment);
-using IllumoModuleFactory = std::unique_ptr<IModule> (*)();
+using IllumoModuleFactory = std::unique_ptr<IModule> (*)(IEnvVars* environment);
 
 struct IllumoApplicationDefinition
 {

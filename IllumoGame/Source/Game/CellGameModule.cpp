@@ -1,7 +1,9 @@
 #include "CellGameModule.h"
 #include "BuiltinPatterns.h"
+#include "MainMenuModule.h"
 #include "PatternCodec.h"
 #include "Rulesets/WireworldRuleSet.h"
+#include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Primitives/DebugDraw3D.h>
@@ -120,7 +122,7 @@ withIllumoExtension(const std::string& filename)
   return filename + extension;
 }
 
-CellGameModule::CellGameModule()
+CellGameModule::CellGameModule(std::string initialSavePath)
   : cellContext(nullptr)
   , currentState(CellState::EDIT)
   , simAccum(0.0)
@@ -160,6 +162,7 @@ CellGameModule::CellGameModule()
   , flipHeld(false)
   , inspectHeld(false)
   , deleteHeld(false)
+  , initialSaveFile(std::move(initialSavePath))
 {
   ic = nullptr;
 }
@@ -219,8 +222,12 @@ CellGameModule::Start(IllumoContext* context)
   currentState = CellState::EDIT;
   wireworldBrush = WireworldRuleSet::CELL_CONDUCTOR;
 
-  // Ruleset-aware startup seed (GoL glider, Wireworld electron-on-wire, …).
-  seedInitialPattern();
+  if (!initialSaveFile.empty()) {
+    LoadCellGame(initialSaveFile);
+  } else {
+    // Ruleset-aware startup seed (GoL glider, Wireworld electron-on-wire, …).
+    seedInitialPattern();
+  }
 
   // Initial palette from active ruleset; seed cells already mark upload dirty.
   cellContext->getCanvasView()->rebuildPalette(cellContext->getRuleSet());
@@ -1026,6 +1033,20 @@ CellGameModule::registerConsoleCommands()
     },
     "inspect",
     "Toggle the census inspector HUD");
+
+  ic->commandRegistry->RegisterCommand(
+    "menu",
+    [this](const std::vector<std::string>& args) {
+      if (!args.empty()) {
+        ic->commandLine->logError("Usage: menu");
+        return;
+      }
+      if (ic->moduleHost != nullptr) {
+        ic->moduleHost->RequestTransition(std::make_unique<MainMenuModule>());
+      }
+    },
+    "menu",
+    "Return to the Main Menu");
 }
 
 void
@@ -1040,7 +1061,7 @@ CellGameModule::unregisterConsoleCommands()
     "ruleset", "run",          "save",          "save_dialog",  "setcell",
     "speed",   "speedfactor",  "status",        "step",         "tps",
     "select",  "copy",         "cut",           "paste",        "stamp",
-    "rle",     "plaintext",    "inspect"
+    "rle",     "plaintext",    "inspect",       "menu"
   };
   for (const char* commandName : commandNames) {
     ic->commandRegistry->UnregisterCommand(commandName);
@@ -1312,6 +1333,11 @@ CellGameModule::Update(double dt)
     if (action == ExitConfirmAction::Confirm) {
       exitConfirmDialog->close();
       ic->window->requestClose();
+    } else if (action == ExitConfirmAction::MainMenu) {
+      exitConfirmDialog->close();
+      if (ic->moduleHost != nullptr) {
+        ic->moduleHost->RequestTransition(std::make_unique<MainMenuModule>());
+      }
     } else if (action == ExitConfirmAction::Cancel) {
       exitConfirmDialog->close();
     }

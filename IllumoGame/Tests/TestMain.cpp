@@ -34,6 +34,8 @@ void
 registerIllumoGameConfigTests(IllumoTestRegistry& registry);
 void
 registerEditorTests(IllumoTestRegistry& registry);
+void
+registerMainMenuTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -45,6 +47,7 @@ createRegistry()
   registerDomainBoundaryTests(registry);
   registerSimTests(registry);
   registerCellGameModuleTests(registry);
+  registerMainMenuTests(registry);
   registerProductBoundaryTests(registry);
   registerCanvasInfTests(registry);
   registerWorldTopologyTests(registry);

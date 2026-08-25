@@ -83,8 +83,8 @@ testCanvasCommandLineOptions()
   testTrue(g,
            application.createRequiredModule != nullptr,
            "game supplies its required module factory");
-  std::unique_ptr<IModule> module = application.createRequiredModule();
-  testTrue(g, module != nullptr, "game module factory creates CellGameModule");
+  std::unique_ptr<IModule> module = application.createRequiredModule(nullptr);
+  testTrue(g, module != nullptr, "game module factory creates required module");
 
   testEqSize(g,
              application.commandLine.applicationOptions.size(),

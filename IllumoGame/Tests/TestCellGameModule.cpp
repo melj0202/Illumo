@@ -163,7 +163,7 @@ testStartRegistersGameFeatures()
            "module starts in edit mode");
   testEqSize(g,
              fixture.registry.GetCommandNames().size(),
-             30,
+             31,
              "all game commands are registered");
   testTrue(
     g, fixture.registry.HasCommand("select"), "select command registered");
@@ -176,6 +176,7 @@ testStartRegistersGameFeatures()
   testTrue(g, fixture.registry.HasCommand("tps"), "TPS command registered");
   testTrue(g, fixture.registry.HasCommand("speed"), "speed command registered");
   testTrue(g, fixture.registry.HasCommand("fade"), "fade command registered");
+  testTrue(g, fixture.registry.HasCommand("menu"), "menu command registered");
   testTrue(g,
            fixture.registry.GetCommandUsage("setcell") ==
              "setcell <x> <y> <state>",

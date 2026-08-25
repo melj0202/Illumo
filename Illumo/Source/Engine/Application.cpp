@@ -68,7 +68,7 @@ RunIllumoApplication(int argc,
       return 1;
     }
     std::unique_ptr<IModule> requiredModule =
-      application.createRequiredModule();
+      application.createRequiredModule(&illumo.environment());
     if (!requiredModule) {
       Logger::LogError(application.applicationName +
                        " returned an empty required module");

@@ -417,6 +417,148 @@ testFallibleFactoryBoundaries()
   std::filesystem::remove(path, error);
 }
 
+static void
+testModuleTransitionSuccess()
+{
+  testSection("Illumo: runtime module transition replaces primary module");
+  const std::filesystem::path path =
+    temporaryEnvironmentPath("transition-success");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  ModuleProbe initialPrimary;
+  ModuleProbe nextPrimary;
+  ModuleProbe optionalOverlay;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+    testTrue(g,
+             host.context().moduleHost != nullptr,
+             "moduleHost is wired in context");
+
+    host.addModule(std::make_unique<ProbeModule>(&initialPrimary, true),
+                   ModuleRequirement::Required);
+    host.addModule(std::make_unique<ProbeModule>(&optionalOverlay, true),
+                   ModuleRequirement::Optional);
+    testTrue(g, host.startModules(), "modules start");
+
+    host.update(0.016);
+    host.render();
+    testEqInt(g, initialPrimary.updates, 1, "initial module updated once");
+    testEqInt(g, optionalOverlay.updates, 1, "overlay updated once");
+
+    // Request transition
+    host.context().moduleHost->RequestTransition(
+      std::make_unique<ProbeModule>(&nextPrimary, true));
+    testTrue(g, host.HasPendingTransition(), "pending transition reported");
+
+    // Frame update triggers transition
+    host.update(0.016);
+    host.render();
+
+    testTrue(g, !host.HasPendingTransition(), "pending transition cleared");
+    testEqInt(g, initialPrimary.exits, 1, "initial module exited once");
+    testEqInt(g, initialPrimary.destructions, 1, "initial module destroyed");
+    testEqInt(g, nextPrimary.starts, 1, "next module started once");
+    testEqInt(g, nextPrimary.updates, 1, "next module received update");
+    testEqInt(g, nextPrimary.draws, 1, "next module received draw");
+    testEqInt(g,
+              optionalOverlay.updates,
+              2,
+              "overlay continues updating across transitions");
+    testEqInt(
+      g, optionalOverlay.exits, 0, "overlay was not exited during transition");
+
+    host.shutdown();
+  }
+  testEqInt(g, nextPrimary.exits, 1, "next module exited on shutdown");
+  testEqInt(g, optionalOverlay.exits, 1, "overlay exited on shutdown");
+  std::filesystem::remove(path, error);
+}
+
+static void
+testModuleTransitionFailureShutdown()
+{
+  testSection("Illumo: failing module transition safely closes application");
+  const std::filesystem::path path =
+    temporaryEnvironmentPath("transition-fail");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  ModuleProbe initialPrimary;
+  ModuleProbe failingPrimary;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+
+    host.addModule(std::make_unique<ProbeModule>(&initialPrimary, true),
+                   ModuleRequirement::Required);
+    testTrue(g, host.startModules(), "module starts");
+
+    host.context().moduleHost->RequestTransition(std::make_unique<ProbeModule>(
+      &failingPrimary, false, true)); // throws during Start
+
+    host.update(0.016);
+    testTrue(g, host.shouldClose(), "failed transition requests close");
+    testEqInt(
+      g, initialPrimary.exits, 1, "initial module exited before failing start");
+
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
+
+static void
+testInputQueueFlushedOnTransition()
+{
+  testSection("Illumo: input queues are cleared on module transition");
+  const std::filesystem::path path =
+    temporaryEnvironmentPath("transition-input");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  ModuleProbe initialPrimary;
+  ModuleProbe nextPrimary;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+
+    host.addModule(std::make_unique<ProbeModule>(&initialPrimary, true),
+                   ModuleRequirement::Required);
+    testTrue(g, host.startModules(), "module starts");
+
+    // Queue dummy key and char
+    host.context().inputManager->getKeyQueue().push(
+      InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
+    host.context().inputManager->getCharQueue().push('a');
+    testTrue(g,
+             !host.context().inputManager->getKeyQueue().empty(),
+             "key queue has input");
+    testTrue(g,
+             !host.context().inputManager->getCharQueue().empty(),
+             "char queue has input");
+
+    host.context().moduleHost->RequestTransition(
+      std::make_unique<ProbeModule>(&nextPrimary, true));
+
+    // Update triggers transition
+    host.update(0.016);
+
+    testTrue(g,
+             host.context().inputManager->getKeyQueue().empty(),
+             "key queue flushed on transition");
+    testTrue(g,
+             host.context().inputManager->getCharQueue().empty(),
+             "char queue flushed on transition");
+
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
+
 static int
 runHostCase(void (*testFunction)())
 {
@@ -440,4 +582,11 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
                []() { return runHostCase(testInitializationRollback); });
   registry.add("Illumo.Host.FallibleFactoryBoundaries",
                []() { return runHostCase(testFallibleFactoryBoundaries); });
+  registry.add("Illumo.Host.ModuleTransitionSuccess",
+               []() { return runHostCase(testModuleTransitionSuccess); });
+  registry.add("Illumo.Host.ModuleTransitionFailureShutdown", []() {
+    return runHostCase(testModuleTransitionFailureShutdown);
+  });
+  registry.add("Illumo.Host.InputQueueFlushedOnTransition",
+               []() { return runHostCase(testInputQueueFlushedOnTransition); });
 }

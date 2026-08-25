@@ -11,7 +11,8 @@ enum class ExitConfirmAction
 {
   None,
   Confirm,
-  Cancel
+  Cancel,
+  MainMenu
 };
 
 // Primitive-composed exit confirmation overlay. This is not a retained widget
@@ -41,8 +42,9 @@ public:
 
 private:
   static const int kCancelButton = 0;
-  static const int kExitButton = 1;
-  static const int kButtonCount = 2;
+  static const int kMenuButton = 1;
+  static const int kExitButton = 2;
+  static const int kButtonCount = 3;
   static constexpr float kOpenAnimationSeconds = 0.36f;
   static constexpr float kSelectionAnimationSeconds = 0.14f;
 
@@ -63,6 +65,7 @@ private:
   float buttonWidth;
   float buttonHeight;
   float cancelX;
+  float menuX;
   float exitX;
 
   void updateLayout();

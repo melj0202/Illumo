@@ -69,8 +69,22 @@ testExitConfirmActions()
   fixture.press(KeyCode::Right);
   fixture.press(KeyCode::Enter);
   testTrue(g,
+           fixture.dialog.update(&fixture.input) == ExitConfirmAction::MainMenu,
+           "Enter on Main Menu requests menu transition");
+
+  fixture.dialog.open();
+  fixture.press(KeyCode::Right);
+  fixture.press(KeyCode::Right);
+  fixture.press(KeyCode::Enter);
+  testTrue(g,
            fixture.dialog.update(&fixture.input) == ExitConfirmAction::Confirm,
            "Enter on Exit confirms shutdown");
+
+  fixture.dialog.open();
+  fixture.press(KeyCode::M);
+  testTrue(g,
+           fixture.dialog.update(&fixture.input) == ExitConfirmAction::MainMenu,
+           "M selects main menu");
 
   fixture.dialog.open();
   fixture.press(KeyCode::Y);
@@ -126,7 +140,7 @@ testExitConfirmAnimation()
   fixture.dialog.tick(1.0f);
   testTrue(g,
            fixture.dialog.getSelectionPositionForTesting() == 1.0f,
-           "selection highlight settles on Exit");
+           "selection highlight settles on next button");
 }
 
 static void
@@ -153,23 +167,22 @@ testExitConfirmTokens()
 
   GameVisual& visual = fixture.dialog.getVisual();
   bool foundTitle = false;
-  bool foundQuestion = false;
-  bool foundCancel = false;
+  bool foundResume = false;
+  bool foundMenu = false;
   bool foundExit = false;
   for (std::size_t index = 0u; index < visual.textCount(); ++index) {
     TextPrimitive* text = visual.getText(index);
     if (text == nullptr) {
       continue;
     }
-    foundTitle = foundTitle || text->content == "EXIT ILLUMOGAME?";
-    foundQuestion =
-      foundQuestion || text->content == "Are you sure you want to exit?";
-    foundCancel = foundCancel || text->content == "Cancel";
-    foundExit = foundExit || text->content == "Exit";
+    foundTitle = foundTitle || text->content == "SIMULATION PAUSED";
+    foundResume = foundResume || text->content == "Resume";
+    foundMenu = foundMenu || text->content == "Main Menu";
+    foundExit = foundExit || text->content == "Exit App";
   }
   testTrue(g, foundTitle, "confirmation title is present");
-  testTrue(g, foundQuestion, "confirmation asks whether to exit");
-  testTrue(g, foundCancel, "Cancel action is present");
+  testTrue(g, foundResume, "Resume action is present");
+  testTrue(g, foundMenu, "Main Menu action is present");
   testTrue(g, foundExit, "Exit action is present");
 
   fixture.dialog.close();

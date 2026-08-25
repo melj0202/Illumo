@@ -290,7 +290,14 @@ class IModule {
 | DispatchDrawables | Contribute what should draw this frame |
 | Exit | Teardown module-owned state |
 
-The application definition supplies `CellGameModule` as the required module;
+`IllumoContext` exposes `IModuleHost*` allowing active modules to request deferred
+runtime module transitions (`RequestTransition`). Transitions take place at frame
+boundaries, safely tearing down the outgoing module via `Exit()`, draining
+input/char queues to prevent click/key bleed, clearing `Scene` drawables, and invoking
+`Start()` on the incoming module.
+
+The application definition supplies `createRequiredModule` (creating `MainMenuModule`
+by default, or `CellGameModule` if direct launch was requested via environment/CLI);
 the engine runner registers `DebugModule` as optional in Debug. A required
 failure rolls back every accepted module and fails startup; an optional failure
 remains inactive. Startup and rollback exceptions are contained and logged
@@ -309,12 +316,12 @@ Illumo Platform::main
        backend = CreateOpenGLBackend(window)
        backend->Initialize()          // exactly once, owned by Illumo
        renderer = Renderer(..., unique_ptr<IBackend>)
-  → application.createRequiredModule() → CellGameModule
+  → application.createRequiredModule(&environment) → MainMenuModule / CellGameModule
   → addModule(required module, Required)
   → addModule(DebugModule, Optional)  // engine-owned Debug builds
   → startModules()                    // rollback on required failure
   loop:
-    update(dt)   // InputManager → Camera → modules.Update
+    update(dt)   // applyPendingModuleTransition → InputManager → Camera → modules.Update
     render()                            // single production path (D-R13)
       scene.ClearDrawables()          // Scene = per-frame FrameRenderList (D-E4)
       modules.DispatchDrawables(scene)

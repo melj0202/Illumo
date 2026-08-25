@@ -135,17 +135,18 @@ ExitConfirmDialog::updateLayout()
     height = std::max(1, dimensions[1]);
   }
 
-  panelWidth = std::min(420.0f, static_cast<float>(width) - 48.0f);
+  panelWidth = std::min(480.0f, static_cast<float>(width) - 48.0f);
   panelHeight = 196.0f;
   panelX = (static_cast<float>(width) - panelWidth) * 0.5f;
   panelY = (static_cast<float>(height) - panelHeight) * 0.5f;
-  buttonWidth = 132.0f;
+  buttonWidth = 124.0f;
   buttonHeight = 36.0f;
   buttonY = panelY + panelHeight - 56.0f;
-  const float buttonGap = 16.0f;
-  const float buttonsWidth = buttonWidth * 2.0f + buttonGap;
+  const float buttonGap = 12.0f;
+  const float buttonsWidth = buttonWidth * 3.0f + buttonGap * 2.0f;
   cancelX = panelX + (panelWidth - buttonsWidth) * 0.5f;
-  exitX = cancelX + buttonWidth + buttonGap;
+  menuX = cancelX + buttonWidth + buttonGap;
+  exitX = menuX + buttonWidth + buttonGap;
 }
 
 void
@@ -170,6 +171,9 @@ ExitConfirmDialog::activateSelected() const
   if (selectedButton == kExitButton) {
     return ExitConfirmAction::Confirm;
   }
+  if (selectedButton == kMenuButton) {
+    return ExitConfirmAction::MainMenu;
+  }
   return ExitConfirmAction::Cancel;
 }
 
@@ -183,6 +187,10 @@ ExitConfirmDialog::clickAt(float x, float y)
   if (x >= cancelX && x <= cancelX + buttonWidth) {
     selectButton(kCancelButton);
     return ExitConfirmAction::Cancel;
+  }
+  if (x >= menuX && x <= menuX + buttonWidth) {
+    selectButton(kMenuButton);
+    return ExitConfirmAction::MainMenu;
   }
   if (x >= exitX && x <= exitX + buttonWidth) {
     selectButton(kExitButton);
@@ -211,6 +219,8 @@ ExitConfirmDialog::update(InputManager* inputManager)
     }
     if (event.key == KeyCode::Escape || event.key == KeyCode::N) {
       action = ExitConfirmAction::Cancel;
+    } else if (event.key == KeyCode::M) {
+      action = ExitConfirmAction::MainMenu;
     } else if (event.key == KeyCode::Y) {
       action = ExitConfirmAction::Confirm;
     } else if (event.key == KeyCode::Left) {
@@ -301,26 +311,29 @@ ExitConfirmDialog::rebuildVisual()
                        animatedPanelY,
                        5.0f,
                        panelHeight * reveal,
-                       UiTheme::applyOpacity(UiTheme::error(), panelOpacity));
-  visual.addText("EXIT ILLUMOGAME?",
+                       UiTheme::applyOpacity(UiTheme::accent(), panelOpacity));
+  visual.addText("SIMULATION PAUSED",
                  panelX + 28.0f,
                  animatedPanelY + 24.0f,
                  22.0f,
                  UiTheme::applyOpacity(UiTheme::textPrimary(), titleOpacity));
-  visual.addText("Are you sure you want to exit?",
+  visual.addText("Choose an action below to continue:",
                  panelX + 28.0f,
                  animatedPanelY + 64.0f,
                  16.0f,
                  UiTheme::applyOpacity(UiTheme::textMuted(), bodyOpacity));
-  visual.addText("ENTER: selected    Y: exit    N or ESC: stay",
+  visual.addText("ENTER: select    M: menu    Y: exit desktop    ESC: resume",
                  panelX + 28.0f,
                  animatedPanelY + 90.0f,
                  13.0f,
                  UiTheme::applyOpacity(UiTheme::textMuted(), helpOpacity));
 
-  const float buttonXs[kButtonCount] = { cancelX, exitX };
-  const char* buttonLabels[kButtonCount] = { "Cancel", "Exit" };
+  const float buttonXs[kButtonCount] = { cancelX, menuX, exitX };
+  const char* buttonLabels[kButtonCount] = { "Resume",
+                                             "Main Menu",
+                                             "Exit App" };
   const ColorRgba buttonColors[kButtonCount] = { UiTheme::warning(),
+                                                 UiTheme::accent(),
                                                  UiTheme::error() };
   for (int button = 0; button < kButtonCount; ++button) {
     const unsigned char buttonOpacity =
@@ -333,8 +346,14 @@ ExitConfirmDialog::rebuildVisual()
       UiTheme::applyOpacity(UiTheme::panelRaised(), buttonOpacity));
   }
 
-  const float selectionX =
-    cancelX + (exitX - cancelX) * selectionButtonPosition();
+  const float selectionPos = selectionButtonPosition();
+  float selectionX = cancelX;
+  if (selectionPos <= 1.0f) {
+    selectionX = cancelX + (menuX - cancelX) * selectionPos;
+  } else {
+    selectionX = menuX + (exitX - menuX) * (selectionPos - 1.0f);
+  }
+
   const unsigned char selectionOpacity = static_cast<unsigned char>(
     std::round(itemReveal(3 + selectedButton) * 255.0f));
   visual.addFilledRect(
@@ -355,9 +374,9 @@ ExitConfirmDialog::rebuildVisual()
     const unsigned char buttonOpacity =
       static_cast<unsigned char>(std::round(itemReveal(3 + button) * 255.0f));
     visual.addText(buttonLabels[button],
-                   buttonXs[button] + 18.0f,
+                   buttonXs[button] + 12.0f,
                    animatedButtonY + 8.0f,
-                   16.0f,
+                   15.0f,
                    UiTheme::applyOpacity(selected ? buttonColors[button]
                                                   : UiTheme::textPrimary(),
                                          buttonOpacity));

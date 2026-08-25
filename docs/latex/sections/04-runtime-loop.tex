@@ -16,7 +16,7 @@ int RunIllumoApplication(int argc, char** argv,
                                    application.commandLine).shouldExit())
     return /* requested exit code */;
   if (!illumo.initialize()) return 1;
-  illumo.addModule(application.createRequiredModule(), Required);
+  illumo.addModule(application.createRequiredModule(&illumo.environment()), Required);
   illumo.addModule(make_unique<DebugModule>(), Optional); // Debug only
   if (!illumo.startModules()) return 1;
   while (!illumo.shouldClose()) {
@@ -34,8 +34,9 @@ graphics initialization.
 
 The definition in
 \pathref{IllumoGame/Source/Game/IllumoGameApplication.cpp} names the product,
-describes its CA options/help, supplies its defaults callback, and returns a
-required \symbolref{CellGameModule}. It does not perform system work.
+describes its CA options/help, supplies its defaults callback, and creates the
+initial required module (\symbolref{MainMenuModule} by default, or
+\symbolref{CellGameModule} if direct launch was configured). It does not perform system work.
 
 \subsection{Illumo host ownership}
 \symbolref{Illumo} owns the long-lived generic services
@@ -53,8 +54,9 @@ and transfers the resulting \texttt{std::unique\_ptr<IBackend>} to the renderer.
 Library code logs and returns failures rather than calling \texttt{std::exit}.
 
 \symbolref{IllumoContext} is a non-owning pointer bag frozen after successful
-host initialization and passed to modules at \symbolref{Start}. It contains no
-game validation helpers or product assumptions.
+host initialization and passed to modules at \symbolref{Start}. It exposes
+\symbolref{IModuleHost} allowing active modules to request deferred transitions
+at frame boundaries. It contains no game validation helpers or product assumptions.
 
 \subsection{IModule contract and failure policy}
 \begin{lstlisting}
@@ -78,9 +80,11 @@ Each registration is \texttt{Required} or \texttt{Optional}. A rejected optional
 module is destroyed immediately and never receives update/draw/exit. Required
 startup failure rolls back all accepted modules in reverse order and fails
 startup. Exceptions from Start or Exit are contained, logged, and do not stop
-remaining rollback attempts. The engine runner registers the game-supplied
-\symbolref{CellGameModule} as required and engine-owned Debug-build
-\symbolref{DebugModule} as optional.
+remaining rollback attempts. At runtime, the active required module can request
+transition to another module via \symbolref{IModuleHost::RequestTransition}, which
+exits the current module, purges input event queues, clears scene drawables, and
+starts the incoming module. The engine runner registers the game-supplied initial
+module as required and engine-owned Debug-build \symbolref{DebugModule} as optional.
 
 \subsection{Frame flow (conceptual)}
 \begin{center}

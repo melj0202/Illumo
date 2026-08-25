@@ -184,6 +184,7 @@ Illumo::initialize()
     m_context.camera = m_camera.get();
     m_context.commandRegistry = m_commandRegistry.get();
     m_context.scene = m_scene.get();
+    m_context.moduleHost = this;
     m_initialized = true;
     return true;
   } catch (const std::exception& exception) {
@@ -258,10 +259,88 @@ Illumo::startModules()
 }
 
 void
+Illumo::RequestTransition(std::unique_ptr<IModule> nextModule)
+{
+  m_pendingModuleTransition = std::move(nextModule);
+}
+
+bool
+Illumo::HasPendingTransition() const
+{
+  return m_pendingModuleTransition != nullptr;
+}
+
+void
+Illumo::applyPendingModuleTransition()
+{
+  if (!m_pendingModuleTransition) {
+    return;
+  }
+
+  std::unique_ptr<IModule> nextModule = std::move(m_pendingModuleTransition);
+
+  for (std::vector<RegisteredModule>::iterator it = m_modules.begin();
+       it != m_modules.end();) {
+    if (it->requirement == ModuleRequirement::Required) {
+      stopModule(*it, false);
+      it = m_modules.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  if (m_inputManager != nullptr) {
+    m_inputManager->clearKeyQueue();
+    m_inputManager->clearCharQueue();
+  }
+
+  if (m_scene != nullptr) {
+    m_scene->ClearDrawables();
+  }
+
+  bool accepted = false;
+  try {
+    accepted = nextModule && nextModule->Start(&m_context);
+  } catch (const std::exception& exception) {
+    Logger::LogError(
+      std::string("A transitioned module threw during startup: ") +
+      exception.what());
+    accepted = false;
+  } catch (...) {
+    Logger::LogError("A transitioned module threw an unknown startup error");
+    accepted = false;
+  }
+
+  if (!accepted) {
+    Logger::LogError(
+      "A transitioned required module failed to start; closing application");
+    if (nextModule) {
+      try {
+        nextModule->Exit();
+      } catch (...) {
+      }
+    }
+    if (m_window != nullptr) {
+      m_window->requestClose();
+    }
+    return;
+  }
+
+  RegisteredModule registration;
+  registration.module = std::move(nextModule);
+  registration.requirement = ModuleRequirement::Required;
+  registration.started = true;
+  m_modules.insert(m_modules.begin(), std::move(registration));
+}
+
+void
 Illumo::update(double dt)
 {
   if (!m_initialized || !m_modulesStarted) {
     return;
+  }
+  if (m_pendingModuleTransition != nullptr) {
+    applyPendingModuleTransition();
   }
   ZoneScoped;
   m_inputManager->update();
@@ -335,6 +414,7 @@ Illumo::rollbackStartedModules() noexcept
 void
 Illumo::shutdown() noexcept
 {
+  m_pendingModuleTransition.reset();
   rollbackStartedModules();
   m_modules.clear();
   m_modulesStarted = false;

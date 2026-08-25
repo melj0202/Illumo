@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/IllumoContext.h>
 
 #include <functional>
@@ -33,11 +34,11 @@ enum class ModuleRequirement
   Required
 };
 
-class Illumo
+class Illumo : public IModuleHost
 {
 public:
   explicit Illumo(IllumoConfig config = {});
-  ~Illumo();
+  ~Illumo() override;
 
   Illumo(const Illumo&) = delete;
   Illumo& operator=(const Illumo&) = delete;
@@ -55,6 +56,9 @@ public:
   void update(double dt);
   void render();
   void shutdown() noexcept;
+
+  void RequestTransition(std::unique_ptr<IModule> nextModule) override;
+  bool HasPendingTransition() const override;
 
   IllumoContext& context();
   const IllumoContext& context() const;
@@ -79,6 +83,7 @@ private:
   void clearContext();
   void stopModule(RegisteredModule& registration, bool force) noexcept;
   void rollbackStartedModules() noexcept;
+  void applyPendingModuleTransition();
   void releaseServices();
 
   std::string m_applicationName;
@@ -95,6 +100,7 @@ private:
   std::unique_ptr<Scene> m_scene;
   IllumoContext m_context{};
   std::vector<RegisteredModule> m_modules;
+  std::unique_ptr<IModule> m_pendingModuleTransition;
   bool m_initialized{ false };
   bool m_modulesStarted{ false };
 };

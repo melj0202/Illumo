@@ -1,14 +1,20 @@
 #include "CellGameModule.h"
 #include "IllumoGameConfig.h"
+#include "MainMenuModule.h"
 
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Engine/IModule.h>
+#include <Illumo/Services/IEnvVars.h>
 #include <memory>
 
 static std::unique_ptr<IModule>
-createCellGameModule()
+createIllumoGameModule(IEnvVars* environment)
 {
-  return std::make_unique<CellGameModule>();
+  if (environment != nullptr &&
+      environment->getVar("LaunchDirect").valueAsBool) {
+    return std::make_unique<CellGameModule>();
+  }
+  return std::make_unique<MainMenuModule>();
 }
 
 IllumoApplicationDefinition
@@ -35,6 +41,6 @@ CreateIllumoApplication()
     "WIREWORLD\t\t Wireworld\n",
   };
   application.applyDefaults = IllumoGameConfig::ApplyDefaults;
-  application.createRequiredModule = createCellGameModule;
+  application.createRequiredModule = createIllumoGameModule;
   return application;
 }
