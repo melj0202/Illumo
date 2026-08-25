@@ -430,6 +430,13 @@ SceneGraph::setLocalTransform(SceneNodeHandle node, const Matrix4& transform)
 }
 
 bool
+SceneGraph::setLocalTransform(SceneNodeHandle node,
+                              const Transform3D& transform)
+{
+  return setLocalTransform(node, transform.toMatrix());
+}
+
+bool
 SceneGraph::getLocalTransform(SceneNodeHandle node, Matrix4* transform) const
 {
   if (!m_impl->isCurrent(node) || transform == nullptr) {

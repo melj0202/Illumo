@@ -10,6 +10,7 @@
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/SplashText.h>
+#include <Illumo/Scene/SceneGraph.h>
 #include <cstdint>
 #include <memory>
 #include <tracy/Tracy.hpp>
@@ -106,8 +107,13 @@ private:
   std::unique_ptr<SplashText> modeSplash;
   std::unique_ptr<ConfigurationMenu> configurationMenu;
   std::unique_ptr<ExitConfirmDialog> exitConfirmDialog;
+  SceneGraph render3dSceneGraph;
+  SceneNodeHandle render3dRootNode;
+  SceneNodeHandle render3dOrbitNode;
+  SceneNodeHandle render3dChildNode;
   std::unique_ptr<DebugDraw3D> render3dTestStatic;
   std::unique_ptr<DebugDraw3D> render3dTestAnimated;
+  std::unique_ptr<DebugDraw3D> render3dTestChild;
   double render3dTestTime;
   Cursor editorCursor;
   GameVisual selectionVisual;

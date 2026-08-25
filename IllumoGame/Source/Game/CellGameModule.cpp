@@ -1492,6 +1492,11 @@ CellGameModule::Exit()
   exitConfirmDialog.reset();
   configurationMenu.reset();
   modeSplash.reset();
+  render3dSceneGraph.clear();
+  render3dRootNode = SceneNodeHandle{};
+  render3dOrbitNode = SceneNodeHandle{};
+  render3dChildNode = SceneNodeHandle{};
+  render3dTestChild.reset();
   render3dTestAnimated.reset();
   render3dTestStatic.reset();
   delete cellContext;
@@ -2312,7 +2317,8 @@ void
 CellGameModule::ensureRender3dTestDrawables()
 {
   if (ic == nullptr || ic->renderer == nullptr ||
-      (render3dTestStatic != nullptr && render3dTestAnimated != nullptr)) {
+      (render3dTestStatic != nullptr && render3dTestAnimated != nullptr &&
+       render3dTestChild != nullptr)) {
     return;
   }
 
@@ -2327,13 +2333,33 @@ CellGameModule::ensureRender3dTestDrawables()
     glm::vec3(0.0f), glm::vec3(0.75f), ColorRgba{ 255, 180, 72, 255 });
   render3dTestAnimated->addWireCube(
     glm::vec3(0.0f), glm::vec3(1.0f), ColorRgba{ 224, 244, 255, 255 });
+
+  render3dTestChild = std::make_unique<DebugDraw3D>();
+  render3dTestChild->prepare(ic->renderer);
+  render3dTestChild->addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.35f), ColorRgba{ 100, 220, 255, 255 });
+  render3dTestChild->addWireCube(
+    glm::vec3(0.0f), glm::vec3(0.45f), ColorRgba{ 255, 255, 255, 255 });
+
+  render3dSceneGraph.clear();
+  render3dRootNode = render3dSceneGraph.createNode();
+  render3dSceneGraph.setRenderAttachment(render3dRootNode,
+                                         render3dTestStatic.get());
+
+  render3dOrbitNode = render3dSceneGraph.createNode(render3dRootNode);
+  render3dSceneGraph.setRenderAttachment(render3dOrbitNode,
+                                         render3dTestAnimated.get());
+
+  render3dChildNode = render3dSceneGraph.createNode(render3dOrbitNode);
+  render3dSceneGraph.setRenderAttachment(render3dChildNode,
+                                         render3dTestChild.get());
 }
 
 void
 CellGameModule::updateRender3dTestMatrices()
 {
   if (ic == nullptr || ic->window == nullptr || render3dTestStatic == nullptr ||
-      render3dTestAnimated == nullptr) {
+      render3dTestAnimated == nullptr || render3dTestChild == nullptr) {
     return;
   }
   const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
@@ -2348,18 +2374,27 @@ CellGameModule::updateRender3dTestMatrices()
                                                0.1f,
                                                100.0f);
   render3dTestStatic->setViewProjection(viewProjection);
-  render3dTestStatic->setModelMatrix(glm::mat4(1.0f));
+  render3dTestAnimated->setViewProjection(viewProjection);
+  render3dTestChild->setViewProjection(viewProjection);
+
+  render3dSceneGraph.setLocalTransform(render3dRootNode, Matrix4(1.0f));
 
   const float elapsed = static_cast<float>(render3dTestTime);
-  glm::mat4 model =
-    glm::translate(glm::mat4(1.0f),
-                   glm::vec3(std::sin(elapsed) * 4.0f,
-                             1.5f + std::sin(elapsed * 1.7f) * 0.75f,
-                             std::cos(elapsed) * 4.0f));
-  model = glm::rotate(model, elapsed * 1.4f, glm::vec3(0.0f, 1.0f, 0.0f));
-  model = glm::rotate(model, elapsed * 0.8f, glm::vec3(1.0f, 0.0f, 0.0f));
-  render3dTestAnimated->setViewProjection(viewProjection);
-  render3dTestAnimated->setModelMatrix(model);
+  Transform3D orbitTransform;
+  orbitTransform.position = Vector3(std::sin(elapsed) * 4.0f,
+                                    1.5f + std::sin(elapsed * 1.7f) * 0.75f,
+                                    std::cos(elapsed) * 4.0f);
+  orbitTransform.rotation =
+    Quaternion(Vector3(elapsed * 0.8f, elapsed * 1.4f, 0.0f));
+  render3dSceneGraph.setLocalTransform(render3dOrbitNode, orbitTransform);
+
+  Transform3D childTransform;
+  childTransform.position = Vector3(std::sin(elapsed * 2.5f) * 2.2f,
+                                    std::cos(elapsed * 2.5f) * 0.8f,
+                                    std::cos(elapsed * 2.5f) * 2.2f);
+  childTransform.rotation =
+    Quaternion(Vector3(0.0f, elapsed * 3.0f, elapsed * 2.0f));
+  render3dSceneGraph.setLocalTransform(render3dChildNode, childTransform);
 }
 
 void
@@ -2375,12 +2410,7 @@ CellGameModule::DispatchDrawables(Scene* scene)
   if (isRender3dTestEnabled()) {
     ensureRender3dTestDrawables();
     updateRender3dTestMatrices();
-    if (render3dTestStatic != nullptr) {
-      scene->AddDrawable(render3dTestStatic.get(), RenderLayerId::World);
-    }
-    if (render3dTestAnimated != nullptr) {
-      scene->AddDrawable(render3dTestAnimated.get(), RenderLayerId::World);
-    }
+    scene->AddDrawable(&render3dSceneGraph, RenderLayerId::World);
   } else {
     scene->AddDrawable(this->cellContext->getCanvasView(),
                        RenderLayerId::World);

@@ -58,6 +58,17 @@ RenderWindow::initialize()
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+
+  int samples = 4;
+  if (envVars != nullptr) {
+    const EnvVar& msaaVar = envVars->getVar("msaa");
+    if (!msaaVar.value.empty()) {
+      samples = static_cast<int>(msaaVar.valueAsLong);
+    }
+  }
+  if (samples > 0) {
+    glfwWindowHint(GLFW_SAMPLES, samples);
+  }
   /* Create a windowed mode window and its OpenGL context */
 
   if (isFullScreen) {
@@ -96,6 +107,9 @@ RenderWindow::initialize()
 
   /* Make the window's context current */
   glfwMakeContextCurrent(window);
+  if (samples > 0) {
+    glEnable(GL_MULTISAMPLE);
+  }
   glfwSetWindowUserPointer(window, this);
   glfwSetWindowSizeCallback(window, windowSizeCallback);
   // Set initial viewport size based on current framebuffer size

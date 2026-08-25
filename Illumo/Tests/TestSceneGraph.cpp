@@ -196,6 +196,15 @@ testSceneGraphHierarchyAndTransforms()
   testTrue(g,
            !graph.getLocalTransform(root, nullptr),
            "null local-transform output fails safely");
+
+  const Transform3D trs = Transform3D::fromPosition(Vector3(7.0f, 8.0f, 9.0f));
+  testTrue(g,
+           graph.setLocalTransform(root, trs),
+           "Transform3D overload sets local transform successfully");
+  graph.getWorldTransform(root, &world);
+  testTrue(g,
+           translationEquals(world, 7.0f, 8.0f, 9.0f),
+           "Transform3D local transform propagates to world transform");
 }
 
 static void

@@ -35,6 +35,8 @@ testSimulatorDefaults()
     testTrue(g,
              environment.getVar("cellFadeSpeed").value == "8",
              "fade default is product-owned");
+    testTrue(
+      g, environment.getVar("msaa").value == "4", "msaa default is 4 samples");
   }
   std::filesystem::remove(path, error);
 }

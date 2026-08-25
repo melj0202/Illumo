@@ -40,6 +40,7 @@
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneNodeHandle.h>
+#include <Illumo/Scene/Transform3D.h>
 #include <Illumo/Services/ArenaAlloc.h>
 #include <Illumo/Services/ChainedStackAlloc.h>
 #include <Illumo/Services/CommandLine.h>

@@ -23,6 +23,7 @@ IllumoGameConfig::ApplyDefaults(IEnvVars* environment)
     { "speedFactor", "1" },
     { "tps", "30" },
     { "cellFadeSpeed", "8" },
+    { "msaa", "4" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (environment->getVar(defaultValue.name).value.empty()) {

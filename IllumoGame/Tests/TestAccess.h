@@ -91,6 +91,16 @@ public:
     return module.render3dTestAnimated.get();
   }
 
+  static DebugDraw3D* getRender3dTestChild(CellGameModule& module)
+  {
+    return module.render3dTestChild.get();
+  }
+
+  static SceneGraph* getRender3dSceneGraph(CellGameModule& module)
+  {
+    return &module.render3dSceneGraph;
+  }
+
   static SimulatorConfiguration currentConfiguration(
     const CellGameModule& module)
   {

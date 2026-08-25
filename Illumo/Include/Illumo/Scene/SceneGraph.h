@@ -4,6 +4,7 @@
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/ISceneRenderAttachment.h>
 #include <Illumo/Scene/SceneNodeHandle.h>
+#include <Illumo/Scene/Transform3D.h>
 #include <cstddef>
 #include <memory>
 
@@ -38,6 +39,7 @@ public:
   bool setParent(SceneNodeHandle node, SceneNodeHandle parent);
 
   bool setLocalTransform(SceneNodeHandle node, const Matrix4& transform);
+  bool setLocalTransform(SceneNodeHandle node, const Transform3D& transform);
   bool getLocalTransform(SceneNodeHandle node, Matrix4* transform) const;
   bool getWorldTransform(SceneNodeHandle node, Matrix4* transform);
   void updateWorldTransforms();

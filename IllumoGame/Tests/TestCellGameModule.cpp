@@ -251,19 +251,27 @@ testRender3dTestFlag()
     CellGameModuleTestAccess::getRender3dTestStatic(fixture.module);
   DebugDraw3D* animatedScene =
     CellGameModuleTestAccess::getRender3dTestAnimated(fixture.module);
+  DebugDraw3D* childScene =
+    CellGameModuleTestAccess::getRender3dTestChild(fixture.module);
+  SceneGraph* render3dGraph =
+    CellGameModuleTestAccess::getRender3dSceneGraph(fixture.module);
   testTrue(g,
-           staticScene != nullptr && animatedScene != nullptr,
-           "flag builds both diagnostic drawables");
+           staticScene != nullptr && animatedScene != nullptr &&
+             childScene != nullptr && render3dGraph != nullptr,
+           "flag builds all 3D diagnostic attachments and SceneGraph");
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::World).size(),
-             2u,
-             "flag replaces CanvasView with the static and animated 3D draws");
-  if (staticScene != nullptr && animatedScene != nullptr) {
-    testTrue(
-      g,
-      fixture.scene.drawablesIn(RenderLayerId::World)[0] == staticScene &&
-        fixture.scene.drawablesIn(RenderLayerId::World)[1] == animatedScene,
-      "diagnostic scene preserves deterministic draw order");
+             1u,
+             "flag replaces CanvasView with the single SceneGraph drawable");
+  testEqSize(g,
+             render3dGraph->getNodeCount(),
+             3u,
+             "SceneGraph holds root, orbit, and child nodes");
+  if (render3dGraph != nullptr) {
+    testTrue(g,
+             fixture.scene.drawablesIn(RenderLayerId::World)[0] ==
+               render3dGraph,
+             "diagnostic scene registers SceneGraph in World layer");
   }
 
   fixture.env.setVar("render3dTest", false);

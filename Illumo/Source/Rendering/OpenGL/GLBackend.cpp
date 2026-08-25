@@ -34,6 +34,7 @@ GLBackend::Initialize()
     return false;
   }
   Logger::LogTrace("Glew initialized");
+  glEnable(GL_MULTISAMPLE);
   const GLubyte* versionGL = glGetString(GL_VERSION);
   std::string versionStr =
     versionGL ? reinterpret_cast<const char*>(versionGL) : "Unknown";
