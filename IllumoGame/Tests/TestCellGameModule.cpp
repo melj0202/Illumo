@@ -544,7 +544,7 @@ testReleaseConfigurationWorkflow()
             "fullscreen applies immediately once");
 
   menu->open(CellGameModuleTestAccess::currentConfiguration(fixture.module));
-  for (int row = 0; row < 10; ++row) {
+  for (int row = 0; row < 12; ++row) {
     fixture.input.getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
   }

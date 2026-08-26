@@ -61,6 +61,8 @@ defaultConfiguration()
   configuration.fadeSpeed = 8.0;
   configuration.vsync = true;
   configuration.fullscreen = false;
+  configuration.uiScale = 1;
+  configuration.msaa = 4;
   return configuration;
 }
 
@@ -159,7 +161,7 @@ testConfigurationNavigationAndActions()
            fixture.menu.getValuePulseForTesting() == 0.0f,
            "value accent pulse fades to rest");
 
-  for (int row = 0; row < 8; ++row) {
+  for (int row = 0; row < 10; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -169,6 +171,27 @@ testConfigurationNavigationAndActions()
            "Enter activates the Apply row");
 
   fixture.menu.open(defaultConfiguration());
+  for (int row = 0; row < 8; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.uiScale == 2,
+           "right cycles UI scale from 1x to 2x");
+
+  fixture.menu.open(defaultConfiguration());
+  for (int row = 0; row < 9; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) && parsed.msaa == 8,
+           "right cycles MSAA from 4x to 8x");
+
+  fixture.menu.open(defaultConfiguration());
   fixture.press(KeyCode::F1);
   testTrue(g,
            fixture.menu.update(&fixture.input) ==
@@ -176,7 +199,7 @@ testConfigurationNavigationAndActions()
            "F1 cancels an open menu");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 10; ++row) {
+  for (int row = 0; row < 12; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -214,6 +237,7 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   bool foundFriendlyRuleName = false;
   bool foundControlHelp = false;
   bool foundExitAction = false;
+  bool foundRestartNote = false;
   for (std::size_t index = 0u; index < visual.textCount(); ++index) {
     TextPrimitive* text = visual.getText(index);
     if (text == nullptr) {
@@ -231,6 +255,9 @@ testConfigurationMenuTokensAtReleaseWindowSize()
       foundControlHelp ||
       text->content.find("UP/DOWN: select") != std::string::npos;
     foundExitAction = foundExitAction || text->content == "Exit simulator";
+    foundRestartNote =
+      foundRestartNote ||
+      text->content.find("Marked settings") != std::string::npos;
   }
   testTrue(g, foundLargeTitle, "settings title uses larger text");
   testTrue(g,
@@ -241,6 +268,7 @@ testConfigurationMenuTokensAtReleaseWindowSize()
            "ruleset value uses a human-readable display name");
   testTrue(g, foundControlHelp, "keyboard controls are split into clear help");
   testTrue(g, foundExitAction, "settings menu renders an Exit action");
+  testTrue(g, foundRestartNote, "settings menu renders restart note footer");
 
   fixture.menu.close();
   fixture.mock.resetCounters();

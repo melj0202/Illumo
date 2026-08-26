@@ -19,6 +19,8 @@ struct SimulatorConfiguration
   double fadeSpeed = 6.0;
   bool vsync = true;
   bool fullscreen = false;
+  long uiScale = 1;
+  long msaa = 4;
 };
 
 enum class ConfigurationMenuAction
@@ -71,10 +73,12 @@ private:
   static const int kFadeRow = 5;
   static const int kVsyncRow = 6;
   static const int kFullscreenRow = 7;
-  static const int kApplyRow = 8;
-  static const int kCancelRow = 9;
-  static const int kExitRow = 10;
-  static const int kRowCount = 11;
+  static const int kUiScaleRow = 8;
+  static const int kMsaaRow = 9;
+  static const int kApplyRow = 10;
+  static const int kCancelRow = 11;
+  static const int kExitRow = 12;
+  static const int kRowCount = 13;
   static constexpr float kOpenAnimationSeconds = 0.36f;
   static constexpr float kSelectionAnimationSeconds = 0.14f;
   static constexpr float kValuePulseSeconds = 0.20f;
@@ -105,6 +109,8 @@ private:
   std::string fadeText;
   bool vsync;
   bool fullscreen;
+  long uiScale;
+  long msaa;
   std::string errorMessage;
 
   void updateLayout();

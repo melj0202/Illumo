@@ -436,6 +436,13 @@ CellGameModule::currentConfiguration() const
   }
   configuration.vsync = ic->envVars->getVar("vsync").valueAsBool;
   configuration.fullscreen = ic->envVars->getVar("fullscreen").valueAsBool;
+  const EnvVar& uiScaleVar = ic->envVars->getVar("uiScale");
+  configuration.uiScale = uiScaleVar.value.empty() ? 1 : uiScaleVar.valueAsLong;
+  if (configuration.uiScale < 1 || configuration.uiScale > 8) {
+    configuration.uiScale = 1;
+  }
+  const EnvVar& msaaVar = ic->envVars->getVar("msaa");
+  configuration.msaa = msaaVar.value.empty() ? 4 : msaaVar.valueAsLong;
   return configuration;
 }
 
@@ -450,7 +457,8 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
       !std::isfinite(configuration.speedFactor) ||
       configuration.speedFactor <= 0.0 || configuration.speedFactor > 100.0 ||
       !std::isfinite(configuration.fadeSpeed) ||
-      configuration.fadeSpeed < 0.0 || configuration.fadeSpeed > 100.0) {
+      configuration.fadeSpeed < 0.0 || configuration.fadeSpeed > 100.0 ||
+      configuration.uiScale < 1 || configuration.uiScale > 8) {
     return false;
   }
 
@@ -461,6 +469,10 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
     configuration.ruleSet != cellContext->getModeString();
   const bool fullscreenChanged =
     configuration.fullscreen != ic->envVars->getVar("fullscreen").valueAsBool;
+  const bool msaaChanged =
+    configuration.msaa != (ic->envVars->getVar("msaa").value.empty()
+                             ? 4
+                             : ic->envVars->getVar("msaa").valueAsLong);
 
   if (topologyChanged || rulesetChanged) {
     prepareGridMutation();
@@ -485,6 +497,14 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
   ic->envVars->setVar("cellFadeSpeed", configuration.fadeSpeed);
   ic->envVars->setVar("vsync", configuration.vsync);
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
+  ic->envVars->setVar("uiScale", configuration.uiScale);
+  ic->envVars->setVar("msaa", configuration.msaa);
+
+  if (msaaChanged && ic->commandLine != nullptr) {
+    ic->commandLine->logWarning(
+      "Note: Restart IllumoGame for Anti-Aliasing (MSAA) changes to take "
+      "effect.");
+  }
 
   if (topologyChanged) {
     seedInitialPattern();
@@ -1869,10 +1889,24 @@ CellGameModule::updateInspectorVisual()
   inspectorVisual.setWindow(ic->window);
   inspectorVisual.setSpace(PrimitiveSpace::Pixels);
   inspectorVisual.setLayerHint(RenderLayerId::UI);
+  const float scale =
+    ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
+  const std::array<int, 2> winDims = ic->window != nullptr
+                                       ? ic->window->getWindowDimensions()
+                                       : std::array<int, 2>{ 1280, 720 };
+  const float virtWidth =
+    static_cast<float>(winDims[0]) / (scale > 0.0f ? scale : 1.0f);
+  const float virtHeight =
+    static_cast<float>(winDims[1]) / (scale > 0.0f ? scale : 1.0f);
+  const float inspW = std::min(300.0f, std::max(100.0f, virtWidth - 24.0f));
+  const float inspH = std::min(128.0f, std::max(60.0f, virtHeight - 84.0f));
+  const float inspX = 12.0f;
+  const float inspY =
+    std::clamp(72.0f, 0.0f, std::max(0.0f, virtHeight - inspH));
   inspectorVisual.addFilledRect(
-    12.0f, 72.0f, 300.0f, 128.0f, UiTheme::panelSurface());
+    inspX, inspY, inspW, inspH, UiTheme::panelSurface());
   std::string remaining = text.str();
-  float lineY = 80.0f;
+  float lineY = inspY + 8.0f;
   while (!remaining.empty()) {
     const std::size_t newline = remaining.find('\n');
     std::string line = remaining;
@@ -1882,7 +1916,8 @@ CellGameModule::updateInspectorVisual()
     } else {
       remaining.clear();
     }
-    inspectorVisual.addText(line, 22.0f, lineY, 16.0f, UiTheme::textPrimary());
+    inspectorVisual.addText(
+      line, inspX + 10.0f, lineY, 16.0f, UiTheme::textPrimary());
     lineY += 18.0f;
   }
   inspectorVisual.setVisible(true);

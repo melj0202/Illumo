@@ -925,6 +925,17 @@ testCommandLineHelpAndEnvironmentCommands()
                                   "Variable assignment accepts one value"),
            "raw assignment rejects several values");
 
+  executeConsoleText(fixture.console, "set msaa 8");
+  testTrue(
+    g,
+    consoleHistoryContains(fixture.console, "restarting the application"),
+    "set msaa warns that restart is required");
+  executeConsoleText(fixture.console, "msaa 4");
+  testTrue(
+    g,
+    consoleHistoryContains(fixture.console, "restarting the application"),
+    "direct msaa assignment warns that restart is required");
+
   executeConsoleText(fixture.console, "clear");
   testEqSize(g,
              fixture.console.getHistory().size(),

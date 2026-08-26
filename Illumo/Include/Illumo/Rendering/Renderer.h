@@ -29,6 +29,7 @@ public:
                                     0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
                                     0.0f, 0.0f, 0.0f, 1.0f };
     Camera* worldCamera = nullptr;
+    float uiScale = 1.0f;
     bool active = false;
     bool hasWorldMvp = false;
   };
@@ -91,6 +92,13 @@ private:
     }
 
     frameContext.windowDimensions = _window->getWindowDimensions();
+    frameContext.uiScale = 1.0f;
+    if (envVars != nullptr) {
+      const EnvVar& scaleVar = envVars->getVar("uiScale");
+      if (!scaleVar.value.empty() && scaleVar.valueAsDouble > 0.0) {
+        frameContext.uiScale = static_cast<float>(scaleVar.valueAsDouble);
+      }
+    }
     frameContext.active = true;
     if (camera == nullptr) {
       return;
@@ -113,6 +121,7 @@ private:
     frameContext.active = false;
     frameContext.hasWorldMvp = false;
     frameContext.worldCamera = nullptr;
+    frameContext.uiScale = 1.0f;
   }
 
 public:
@@ -164,6 +173,19 @@ public:
   IRenderWindow* getWindow() { return _window; }
   Camera* getCamera() { return _camera; }
   const FrameContext& getFrameContext() const { return frameContext; }
+  float getUiScale() const
+  {
+    if (frameContext.active) {
+      return frameContext.uiScale;
+    }
+    if (envVars != nullptr) {
+      const EnvVar& scaleVar = envVars->getVar("uiScale");
+      if (!scaleVar.value.empty() && scaleVar.valueAsDouble > 0.0) {
+        return static_cast<float>(scaleVar.valueAsDouble);
+      }
+    }
+    return 1.0f;
+  }
 
   // =========================================================================
   // Asset enrollment (not mixed into the per-frame token stream — D-007)

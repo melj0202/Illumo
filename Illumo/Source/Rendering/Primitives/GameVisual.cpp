@@ -904,6 +904,11 @@ GameVisual::AppendCommands(Renderer* value)
   const float width = static_cast<float>(dimensions[0]);
   const float height = static_cast<float>(dimensions[1]);
   const int usePixels = space == PrimitiveSpace::Pixels ? 1 : 0;
+  const float uiScale = value != nullptr ? value->getUiScale() : 1.0f;
+  const float resolutionX =
+    (usePixels != 0 && uiScale > 0.0f) ? width / uiScale : width;
+  const float resolutionY =
+    (usePixels != 0 && uiScale > 0.0f) ? height / uiScale : height;
   float mvp[16] = {
     1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
   };
@@ -930,7 +935,7 @@ GameVisual::AppendCommands(Renderer* value)
     value->pushSetMesh(batch.kind == BatchKind::Shape ? shapeMeshHandle
                                                       : spriteMeshHandle);
     value->pushUniformInt("uUsePixels", usePixels);
-    value->pushUniformVec2("u_resolution", width, height);
+    value->pushUniformVec2("u_resolution", resolutionX, resolutionY);
     value->pushUniformMat4("uMVP", mvp);
     if (batch.kind == BatchKind::Sprite) {
       value->pushUniformInt("uTexture", 0);

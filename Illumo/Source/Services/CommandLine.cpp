@@ -67,6 +67,14 @@ upperCopy(const std::string& text)
   return upper;
 }
 
+static bool
+isRestartRequiredVariable(const std::string& key)
+{
+  const std::string lower = lowerCopy(key);
+  return lower == "msaa" || lower == "winx" || lower == "winy" ||
+         lower == "graphicsapi";
+}
+
 std::string
 joinArguments(const std::vector<std::string>& args, std::size_t first)
 {
@@ -1413,6 +1421,10 @@ CommandLine::ExecuteSingleCommand(const std::string& singleCmd,
       const std::string value = joinArguments(args, 1);
       envVars->setVar(key, value);
       logSuccess(key + " = " + value);
+      if (isRestartRequiredVariable(key)) {
+        logWarning("Note: Changes to '" + key +
+                   "' will take effect after restarting the application.");
+      }
     }
   } else if (cmd == "toggle") {
     if (args.size() != 1) {
@@ -1425,6 +1437,10 @@ CommandLine::ExecuteSingleCommand(const std::string& singleCmd,
         const bool value = !envVars->getVar(key).valueAsBool;
         envVars->setVar(key, value);
         logSuccess(key + " = " + (value ? "true" : "false"));
+        if (isRestartRequiredVariable(key)) {
+          logWarning("Note: Changes to '" + key +
+                     "' will take effect after restarting the application.");
+        }
       }
     }
   } else if (cmd == "vars") {
@@ -1504,6 +1520,10 @@ CommandLine::ExecuteSingleCommand(const std::string& singleCmd,
         } else if (args.size() == 1) {
           envVars->setVar(key, args[0]);
           logSuccess(key + " = " + args[0]);
+          if (isRestartRequiredVariable(key)) {
+            logWarning("Note: Changes to '" + key +
+                       "' will take effect after restarting the application.");
+          }
         } else {
           logError("Variable assignment accepts one value; use set for text "
                    "with spaces");
@@ -1567,27 +1587,34 @@ CommandLine::computePanelLayout(bool useSmoothedPanel) const
 {
   std::array<int, 2> windowDimensions =
     window ? window->getWindowDimensions() : std::array<int, 2>{ 1280, 720 };
-  const float width = static_cast<float>(windowDimensions[0]);
-  const float height = static_cast<float>(windowDimensions[1]);
-  float defaultMarginX = std::clamp(width * 0.08f, 20.0f, 100.0f);
-  float defaultFloatW = std::max(280.0f, width - defaultMarginX * 2.0f);
-  float defaultFloatH = height * 0.52f;
-  if (defaultFloatH < 240.0f) {
-    defaultFloatH = 240.0f;
+  float uiScale = 1.0f;
+  if (envVars != nullptr) {
+    const EnvVar& scaleVar = envVars->getVar("uiScale");
+    if (!scaleVar.value.empty() && scaleVar.valueAsDouble > 0.0) {
+      uiScale = static_cast<float>(scaleVar.valueAsDouble);
+    }
   }
-  if (defaultFloatH > height - 20.0f) {
-    defaultFloatH = height - 20.0f;
-  }
+  const float width =
+    static_cast<float>(windowDimensions[0]) / (uiScale > 0.0f ? uiScale : 1.0f);
+  const float height =
+    static_cast<float>(windowDimensions[1]) / (uiScale > 0.0f ? uiScale : 1.0f);
+  float defaultMarginX = std::clamp(width * 0.08f, 10.0f, 100.0f);
+  float defaultFloatW =
+    std::clamp(width - defaultMarginX * 2.0f, std::min(200.0f, width), width);
+  float defaultFloatH =
+    std::clamp(height * 0.52f, std::min(120.0f, height), height);
   float floatW = (isFloating && floatingW > 0.0f)
-                   ? std::clamp(floatingW, 280.0f, width)
+                   ? std::clamp(floatingW, std::min(200.0f, width), width)
                    : defaultFloatW;
   float floatH = (isFloating && floatingH > 0.0f)
-                   ? std::clamp(floatingH, 180.0f, height)
+                   ? std::clamp(floatingH, std::min(120.0f, height), height)
                    : defaultFloatH;
   float targetX0 =
-    isFloating ? std::clamp(floatingX, 0.0f, width - floatW) : 0.0f;
+    isFloating ? std::clamp(floatingX, 0.0f, std::max(0.0f, width - floatW))
+               : 0.0f;
   float targetY0 =
-    isFloating ? std::clamp(floatingY, 0.0f, height - floatH) : 0.0f;
+    isFloating ? std::clamp(floatingY, 0.0f, std::max(0.0f, height - floatH))
+               : 0.0f;
   float targetW = isFloating ? floatW : width;
   float targetH = isFloating ? floatH : defaultFloatH;
   float panelX =
@@ -1598,13 +1625,17 @@ CommandLine::computePanelLayout(bool useSmoothedPanel) const
     (useSmoothedPanel && currentPanelX >= 0.0f) ? currentPanelW : targetW;
   float panelH =
     (useSmoothedPanel && currentPanelX >= 0.0f) ? currentPanelH : targetH;
+  panelW = std::min(panelW, width);
+  panelH = std::min(panelH, height);
+  panelX = std::clamp(panelX, 0.0f, std::max(0.0f, width - panelW));
+  panelY = std::clamp(panelY, 0.0f, std::max(0.0f, height - panelH));
   PanelLayout layout{};
   layout.panelX0 = panelX;
   layout.panelY0 = panelY;
   layout.panelX1 = panelX + panelW;
   layout.panelY1 = panelY + panelH;
-  layout.headerHeight = 34.0f;
-  layout.inputRowHeight = 40.0f;
+  layout.headerHeight = std::min(34.0f, panelH * 0.25f);
+  layout.inputRowHeight = std::min(40.0f, panelH * 0.30f);
   layout.historyTop = layout.panelY0 + layout.headerHeight + 8.0f;
   layout.inputTop = layout.panelY1 - layout.inputRowHeight;
   layout.historyBottom = layout.inputTop - 8.0f;
@@ -1639,34 +1670,16 @@ CommandLine::computeHistoryScrollLimits(int* maxHistoryLines,
       std::abs(wrappedHistoryWidth - insetWidth) <= 0.5f) {
     width = insetWidth;
   }
-  ensureWrapCache(width);
-  int total = wrappedHistoryTotalLines;
-  if (total > layout.maxHistoryLines && std::abs(width - insetWidth) > 0.5f) {
-    ensureWrapCache(insetWidth);
-    total = wrappedHistoryTotalLines;
+  int lines = countWrappedHistoryLines(width);
+  if (lines > layout.maxHistoryLines && width == baseWidth) {
     width = insetWidth;
-  } else if (total <= layout.maxHistoryLines &&
-             std::abs(width - baseWidth) > 0.5f) {
-    ensureWrapCache(baseWidth);
-    total = wrappedHistoryTotalLines;
-    if (total > layout.maxHistoryLines) {
-      ensureWrapCache(insetWidth);
-      total = wrappedHistoryTotalLines;
-      width = insetWidth;
-    } else {
-      width = baseWidth;
-    }
-  }
-  int maxLines = layout.maxHistoryLines;
-  int scroll = total - maxLines;
-  if (scroll < 0) {
-    scroll = 0;
+    lines = countWrappedHistoryLines(width);
   }
   if (maxHistoryLines != nullptr) {
-    *maxHistoryLines = maxLines;
+    *maxHistoryLines = layout.maxHistoryLines;
   }
   if (maxScroll != nullptr) {
-    *maxScroll = scroll;
+    *maxScroll = std::max(0, lines - layout.maxHistoryLines);
   }
   if (historyWidth != nullptr) {
     *historyWidth = width;
@@ -1731,23 +1744,32 @@ CommandLine::HandleMousePress(double mouseX, double mouseY, bool isDrag)
 
   std::array<int, 2> windowDimensions =
     window ? window->getWindowDimensions() : std::array<int, 2>{ 1280, 720 };
-  float width = static_cast<float>(windowDimensions[0]);
-  float height = static_cast<float>(windowDimensions[1]);
-  float defaultMarginX = std::clamp(width * 0.08f, 20.0f, 100.0f);
-  float defaultFloatW = std::max(280.0f, width - defaultMarginX * 2.0f);
-  float defaultFloatH = height * 0.52f;
-  if (defaultFloatH < 240.0f) {
-    defaultFloatH = 240.0f;
+  float uiScale = 1.0f;
+  if (envVars != nullptr) {
+    const EnvVar& scaleVar = envVars->getVar("uiScale");
+    if (!scaleVar.value.empty() && scaleVar.valueAsDouble > 0.0) {
+      uiScale = static_cast<float>(scaleVar.valueAsDouble);
+    }
   }
-  if (defaultFloatH > height - 20.0f) {
-    defaultFloatH = height - 20.0f;
-  }
+  const float width =
+    static_cast<float>(windowDimensions[0]) / (uiScale > 0.0f ? uiScale : 1.0f);
+  const float height =
+    static_cast<float>(windowDimensions[1]) / (uiScale > 0.0f ? uiScale : 1.0f);
+  const float virtMouseX =
+    static_cast<float>(mouseX) / (uiScale > 0.0f ? uiScale : 1.0f);
+  const float virtMouseY =
+    static_cast<float>(mouseY) / (uiScale > 0.0f ? uiScale : 1.0f);
+  float defaultMarginX = std::clamp(width * 0.08f, 10.0f, 100.0f);
+  float defaultFloatW =
+    std::clamp(width - defaultMarginX * 2.0f, std::min(200.0f, width), width);
+  float defaultFloatH =
+    std::clamp(height * 0.52f, std::min(120.0f, height), height);
 
   float floatW = (isFloating && floatingW > 0.0f)
-                   ? std::clamp(floatingW, 280.0f, width)
+                   ? std::clamp(floatingW, std::min(200.0f, width), width)
                    : defaultFloatW;
   float floatH = (isFloating && floatingH > 0.0f)
-                   ? std::clamp(floatingH, 180.0f, height)
+                   ? std::clamp(floatingH, std::min(120.0f, height), height)
                    : defaultFloatH;
   float panelHeight = isFloating ? floatH : defaultFloatH;
 
@@ -1760,40 +1782,44 @@ CommandLine::HandleMousePress(double mouseX, double mouseY, bool isDrag)
     floatingY = 20.0f;
   }
   float panelX0 =
-    isFloating ? std::clamp(floatingX, 0.0f, width - floatW) : 0.0f;
+    isFloating ? std::clamp(floatingX, 0.0f, std::max(0.0f, width - floatW))
+               : 0.0f;
   float panelX1 = isFloating ? (panelX0 + floatW) : width;
   float panelY0 =
-    isFloating ? std::clamp(floatingY, 0.0f, height - panelHeight) : yOffset;
+    isFloating
+      ? std::clamp(floatingY, 0.0f, std::max(0.0f, height - panelHeight))
+      : yOffset;
   float panelY1 = panelY0 + panelHeight;
 
-  const float headerHeight = 34.0f;
-  const float inputRowHeight = 40.0f;
+  const float headerHeight = std::min(34.0f, panelHeight * 0.25f);
+  const float inputRowHeight = std::min(40.0f, panelHeight * 0.30f);
   const float historyTop = panelY0 + headerHeight + 8.0f;
   const float inputTop = panelY1 - inputRowHeight;
   const float historyBottom = inputTop - 8.0f;
 
-  if (mouseX < panelX0 || mouseX > panelX1 || mouseY < panelY0 ||
-      mouseY > panelY1) {
+  if (virtMouseX < panelX0 || virtMouseX > panelX1 || virtMouseY < panelY0 ||
+      virtMouseY > panelY1) {
     return;
   }
 
   // Corner resize grip (bottom-right 18x18 region)
-  if (isFloating && mouseX >= panelX1 - 18.0f && mouseX <= panelX1 &&
-      mouseY >= panelY1 - 18.0f && mouseY <= panelY1) {
+  if (isFloating && virtMouseX >= panelX1 - 18.0f && virtMouseX <= panelX1 &&
+      virtMouseY >= panelY1 - 18.0f && virtMouseY <= panelY1) {
     if (!isDrag) {
       isResizingWindow = true;
       resizeStartW = panelX1 - panelX0;
       resizeStartH = panelY1 - panelY0;
-      resizeStartMouseX = static_cast<float>(mouseX);
-      resizeStartMouseY = static_cast<float>(mouseY);
+      resizeStartMouseX = virtMouseX;
+      resizeStartMouseY = virtMouseY;
       markCompositionDirty();
       return;
     }
   }
 
-  if (mouseY >= panelY0 && mouseY <= panelY0 + headerHeight) {
+  if (virtMouseY >= panelY0 && virtMouseY <= panelY0 + headerHeight) {
     if (!isDrag) {
-      if (isFloating && mouseX >= panelX1 - 28.0f && mouseX <= panelX1 - 6.0f) {
+      if (isFloating && virtMouseX >= panelX1 - 28.0f &&
+          virtMouseX <= panelX1 - 6.0f) {
         Toggle();
         return;
       }
@@ -1809,8 +1835,8 @@ CommandLine::HandleMousePress(double mouseX, double mouseY, bool isDrag)
       lastHeaderClickTime = now;
       if (isFloating) {
         isDraggingWindow = true;
-        dragWindowOffsetX = static_cast<float>(mouseX) - panelX0;
-        dragWindowOffsetY = static_cast<float>(mouseY) - panelY0;
+        dragWindowOffsetX = virtMouseX - panelX0;
+        dragWindowOffsetY = virtMouseY - panelY0;
         markCompositionDirty();
         return;
       }

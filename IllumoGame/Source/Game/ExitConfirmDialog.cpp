@@ -135,14 +135,27 @@ ExitConfirmDialog::updateLayout()
     height = std::max(1, dimensions[1]);
   }
 
-  panelWidth = std::min(480.0f, static_cast<float>(width) - 48.0f);
-  panelHeight = 196.0f;
-  panelX = (static_cast<float>(width) - panelWidth) * 0.5f;
-  panelY = (static_cast<float>(height) - panelHeight) * 0.5f;
-  buttonWidth = 124.0f;
-  buttonHeight = 36.0f;
-  buttonY = panelY + panelHeight - 56.0f;
-  const float buttonGap = 12.0f;
+  const float scale = renderer != nullptr ? renderer->getUiScale() : 1.0f;
+  const float virtualWidth =
+    static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
+  const float virtualHeight =
+    static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
+
+  panelWidth = std::min(480.0f, std::max(200.0f, virtualWidth - 32.0f));
+  if (panelWidth > virtualWidth) {
+    panelWidth = virtualWidth;
+  }
+  panelHeight = std::min(196.0f, std::max(120.0f, virtualHeight - 24.0f));
+  if (panelHeight > virtualHeight) {
+    panelHeight = virtualHeight;
+  }
+  panelX = std::max(0.0f, (virtualWidth - panelWidth) * 0.5f);
+  panelY = std::max(0.0f, (virtualHeight - panelHeight) * 0.5f);
+  buttonHeight = std::clamp(panelHeight * 0.20f, 24.0f, 36.0f);
+  buttonY = panelY + panelHeight - buttonHeight - 16.0f;
+  const float buttonGap = std::clamp(panelWidth * 0.025f, 6.0f, 12.0f);
+  buttonWidth =
+    std::clamp((panelWidth - 48.0f - buttonGap * 2.0f) / 3.0f, 40.0f, 124.0f);
   const float buttonsWidth = buttonWidth * 3.0f + buttonGap * 2.0f;
   cancelX = panelX + (panelWidth - buttonsWidth) * 0.5f;
   menuX = cancelX + buttonWidth + buttonGap;
@@ -240,8 +253,10 @@ ExitConfirmDialog::update(InputManager* inputManager)
   const bool mouseDown = inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
   if (mouseDown && !mouseWasDown) {
     const std::array<double, 2> mouse = inputManager->getMousePosition();
+    const float scale = renderer != nullptr ? renderer->getUiScale() : 1.0f;
     const ExitConfirmAction clicked =
-      clickAt(static_cast<float>(mouse[0]), static_cast<float>(mouse[1]));
+      clickAt(static_cast<float>(mouse[0]) / (scale > 0.0f ? scale : 1.0f),
+              static_cast<float>(mouse[1]) / (scale > 0.0f ? scale : 1.0f));
     if (clicked != ExitConfirmAction::None) {
       action = clicked;
     }
@@ -268,6 +283,12 @@ ExitConfirmDialog::rebuildVisual()
   }
   updateLayout();
 
+  const float scale = renderer != nullptr ? renderer->getUiScale() : 1.0f;
+  const float virtualWidth =
+    static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
+  const float virtualHeight =
+    static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
+
   const float reveal = panelReveal();
   const float animatedPanelY = panelY + panelOffsetY();
   const float animatedButtonY = buttonY + panelOffsetY();
@@ -285,8 +306,8 @@ ExitConfirmDialog::rebuildVisual()
   visual.addFilledRect(
     0.0f,
     0.0f,
-    static_cast<float>(width),
-    static_cast<float>(height),
+    virtualWidth,
+    virtualHeight,
     UiTheme::applyOpacity(UiTheme::canvasShade(), backdropOpacity));
   visual.addFilledRect(
     panelX + 5.0f,
