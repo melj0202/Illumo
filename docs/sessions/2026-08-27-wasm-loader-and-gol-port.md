@@ -20,6 +20,21 @@ lets a guest loop freeze the tick.
 No WASI. Missing images fail-closed. A missing engine script stays quiet.
 The engine owns the host at initialize; stores wait for load.
 
+## Illumo is the host, CSim is the sim
+
+Illumo is the renderer and game host. IllumoGame (CSim) is the cell simulator.
+Illumo must not be aware of anything related to the cell simulator. This has
+to hold in the host API, not just headers.
+
+`ScriptHost` is load / `invoke` i32 / `register_callback` by name, plus
+SceneGraph traps. No `TransitionTable`, no ruleset-change fence, no
+"product guest" type, no `next_state` in engine headers.
+
+`startModules` may load `IllumoEngineScript.wasm`. It must not know
+`IllumoGameScript.wasm` exists. IllumoGame's `setRuleSet` is what finds that
+image, registers `next_state`, drains, and bakes the table. Bake and the nine
+rules stay in IllumoGame.
+
 ## Two ABIs, two images
 
 Do not merge these tables. Widening one guest to satisfy both is how the
@@ -39,30 +54,39 @@ Engine guest (`IllumoEngineScript.wasm`):
 Product guest (`IllumoGameScript.wasm`):
 
 - GoL / ruleset / later editor traps. Sample product image, not the engine API.
-- Do not load it from `CellGameModule::Start`. That guest was `next_state`
-  with empty imports; the engine table is `sg_*`.
-- `setRuleSet` is the wrong hook for add-objects-and-draw.
-- C++ rulesets still run the sim until the ruleset guest is the live path.
+- IllumoGame loads it from `setRuleSet`. Do not load it from engine
+  `startModules` or from `CellGameModule::Start` as an engine concern.
+- Engine `setRuleSet` is the wrong hook for add-objects-and-draw. Game
+  `setRuleSet` is the bake point for the nine rulesets.
+- Native C++ rulesets still run the sim until the ruleset guest is the live
+  path.
 
 ## IllumoGame-to-script slice
 
 The ask was to move game code into scripting. The live slice is rulesets only.
 `CellGameModule` is not becoming a `.wasm`.
 
-Stay native:
+Stay native in IllumoGame:
 
 - app definition, module shell, menus
 - `SparseCellGrid`, `SimulationRunner`
 - `CanvasView` and the PBO upload path
-- trap implementations on the host
+- drain, bake, and trap registration for `next_state`
+
+Stay native in Illumo:
+
+- wasm load / invoke i32 / register_callback by name
+- SceneGraph trap implementations
 
 Do not retarget existing IllumoGame `.cpp` to `wasm32`. Those TUs include the
 grid and the renderer. A guest that includes them is a DLL again, even through
 wasmtime. New guest TUs see only the trap header.
 
-Guest exports `next_state` / `next_elementary` / `eval_cell`. Host drains,
-bakes the 256x9 `TransitionTable` (about 2.3KB) once at ruleset change, and the
-existing stepper runs. Calling the guest per cell per tick is how you drop TPS.
+Guest exports `next_state` / `next_elementary` / `eval_cell`. IllumoGame
+drains, bakes the 256x9 `TransitionTable` (about 2.3KB) once at `setRuleSet`,
+and the existing native stepper runs. Calling the guest per cell per tick is
+how you drop TPS. Per-cell wasm is off the table. Do not call the guest from
+`SimulationRunner`.
 
 Do not port `RuleSet::canvas` or dense `CellGrid` into the guest. That path
 still compiles and it is the wrong engine.
