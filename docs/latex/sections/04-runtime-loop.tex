@@ -85,6 +85,10 @@ transition to another module via \symbolref{IModuleHost::RequestTransition}, whi
 exits the current module, purges input event queues, clears scene drawables, and
 starts the incoming module. The engine runner registers the game-supplied initial
 module as required and engine-owned Debug-build \symbolref{DebugModule} as optional.
+Optional overlays update before the required product module so console input is
+global, then dispatch after it so console, FPS, and renderer-demo drawables sit
+on top. Unconsumed key and character events are discarded at the end of each
+host update.
 
 \subsection{Frame flow (conceptual)}
 \begin{center}
@@ -96,11 +100,13 @@ module as required and engine-owned Debug-build \symbolref{DebugModule} as optio
 ]
   \node[flowstep] (1) {InputManager::update};
   \node[flowstep, below=of 1] (2) {Camera::Update};
-  \node[flowstep, below=of 2] (3) {started modules: Update(dt)};
-  \node[flowstep, below=of 3] (4) {Scene clear + DispatchDrawables};
-  \node[flowstep, below=of 4] (5) {Renderer::RenderScene (tokens + submit)};
-  \node[flowstep, below=of 5] (6) {IBackend::EndFrame (swap)};
-  \foreach \a/\b in {1/2,2/3,3/4,4/5,5/6} \draw[arr] (\a) -- (\b);
+  \node[flowstep, below=of 2] (3) {optional overlays: Update(dt)};
+  \node[flowstep, below=of 3] (4) {required module: Update(dt)};
+  \node[flowstep, below=of 4] (5) {discard leftover key/char events};
+  \node[flowstep, below=of 5] (6) {Scene clear + required then overlay draw};
+  \node[flowstep, below=of 6] (7) {Renderer::RenderScene (tokens + submit)};
+  \node[flowstep, below=of 7] (8) {IBackend::EndFrame (swap)};
+  \foreach \a/\b in {1/2,2/3,3/4,4/5,5/6,6/7,7/8} \draw[arr] (\a) -- (\b);
 \end{tikzpicture}
 \end{center}
 

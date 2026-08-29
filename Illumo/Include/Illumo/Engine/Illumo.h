@@ -84,6 +84,8 @@ private:
   void stopModule(RegisteredModule& registration, bool force) noexcept;
   void rollbackStartedModules() noexcept;
   void applyPendingModuleTransition();
+  void updateStartedModules(ModuleRequirement requirement, double dt);
+  void dispatchStartedModules(ModuleRequirement requirement);
   void releaseServices();
 
   std::string m_applicationName;

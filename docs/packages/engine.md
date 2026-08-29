@@ -11,7 +11,10 @@ Illumo:
 - `IModule` retains `Start` / `Update` / `DispatchDrawables` / `Exit`.
 - `IModuleHost` allows modules to request runtime transitions (`RequestTransition`)
   deferred to frame boundaries with input queue and scene clearing.
-- `DebugModule` is an optional generic renderer/tooling module in Debug builds.
+- `DebugModule` is an optional generic renderer/tooling overlay in Debug
+  builds. It updates before the required product module so console toggle and
+  editing work on every screen, and it dispatches afterward so console, FPS,
+  and renderer-demo drawables sit on top.
 - `IllumoApplicationDefinition` accepts declarative consumer policy while
   `RunIllumoApplication` owns logging, CLI, module registration, timing, and
   process results.

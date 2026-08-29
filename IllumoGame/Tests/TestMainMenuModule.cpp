@@ -205,6 +205,66 @@ testMainMenuSettingsWorkflow()
 }
 
 static void
+testMainMenuYieldsToConsole()
+{
+  testSection("MainMenuModule: open console blocks menu input");
+  MainMenuFixture fixture;
+  testTrue(g, fixture.started, "menu started");
+
+  fixture.console.Toggle();
+  testTrue(g, fixture.console.isOpen, "console is open");
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testEqInt(g,
+            fixture.module.getSelectedItemForTesting(),
+            0,
+            "open console blocks Down navigation");
+  testTrue(g,
+           !fixture.host.HasPendingTransition(),
+           "open console does not activate Play");
+
+  fixture.console.Toggle();
+  testTrue(g, !fixture.console.isOpen, "console is closed");
+  fixture.input.clearKeyQueue();
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Grave, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testEqInt(g,
+            fixture.module.getSelectedItemForTesting(),
+            1,
+            "closed console still allows Down navigation");
+  testTrue(g,
+           !fixture.input.getKeyQueue().empty() &&
+             fixture.input.getKeyQueue().front().key == KeyCode::Grave,
+           "menu leaves Grave for the global debug overlay");
+}
+
+static void
+testMainMenuSettingsYieldToConsole()
+{
+  testSection("MainMenuModule: open console blocks settings input");
+  MainMenuFixture fixture;
+  testTrue(g, fixture.started, "menu started");
+
+  fixture.module.selectItemForTesting(2);
+  fixture.module.activateSelectedItemForTesting();
+  testTrue(g,
+           fixture.module.isSettingsOpenForTesting(),
+           "settings open for console-yield check");
+
+  fixture.console.Toggle();
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           fixture.module.isSettingsOpenForTesting(),
+           "open console blocks settings Escape");
+}
+
+static void
 testMainMenuConsoleCommands()
 {
   testSection("MainMenuModule: console commands");
@@ -241,4 +301,9 @@ registerMainMenuTests(IllumoTestRegistry& registry)
                []() { return runMainMenuCase(testMainMenuSettingsWorkflow); });
   registry.add("IllumoGame.MainMenu.ConsoleCommands",
                []() { return runMainMenuCase(testMainMenuConsoleCommands); });
+  registry.add("IllumoGame.MainMenu.YieldsToConsole",
+               []() { return runMainMenuCase(testMainMenuYieldsToConsole); });
+  registry.add("IllumoGame.MainMenu.SettingsYieldToConsole", []() {
+    return runMainMenuCase(testMainMenuSettingsYieldToConsole);
+  });
 }

@@ -6,6 +6,7 @@
 #include <Illumo/Engine/DebugModule.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
+#include <queue>
 #include <tracy/Tracy.hpp>
 
 DebugModule::DebugModule()
@@ -275,8 +276,11 @@ DebugModule::Update(double dt)
     }
   }
 
-  // 1. Process Key Queue from InputManager
-  auto& keyQueue = ic->inputManager->getKeyQueue();
+  // Overlay input runs before the required product module. Consume Grave and
+  // open-console editing globally; leave remaining events for the product.
+  std::queue<InputManager::KeyPressEvent>& keyQueue =
+    ic->inputManager->getKeyQueue();
+  std::queue<InputManager::KeyPressEvent> remainingKeys;
   while (!keyQueue.empty()) {
     InputManager::KeyPressEvent event = keyQueue.front();
     keyQueue.pop();
@@ -286,64 +290,58 @@ DebugModule::Update(double dt)
     bool controlPressed = (event.modifiers & GLFW_MOD_CONTROL) != 0;
     bool shiftPressed = (event.modifiers & GLFW_MOD_SHIFT) != 0;
 
-    // Toggle CommandLine with grave accent / tilde key
     if (key == KeyCode::Grave && action == InputAction::Press) {
       ic->commandLine->Toggle();
-      // Clear character queue when toggling to avoid tilde character being
-      // typed
       ic->inputManager->clearCharQueue();
       continue;
     }
 
-    if (ic->commandLine->isOpen) {
-      if (action == InputAction::Press || action == InputAction::Hold) {
-        if (key == KeyCode::Backspace) {
-          ic->commandLine->HandleBackspace(controlPressed);
-        } else if (key == KeyCode::Delete) {
-          ic->commandLine->HandleDelete(controlPressed);
-        } else if (key == KeyCode::Left) {
-          ic->commandLine->MoveCursorLeft(controlPressed, shiftPressed);
-        } else if (key == KeyCode::Right) {
-          ic->commandLine->MoveCursorRight(controlPressed, shiftPressed);
-        } else if (key == KeyCode::Home) {
-          ic->commandLine->MoveCursorHome(shiftPressed);
-        } else if (key == KeyCode::End) {
-          ic->commandLine->MoveCursorEnd(shiftPressed);
-        } else if (key == KeyCode::Tab) {
-          ic->commandLine->Complete();
-        } else if (controlPressed && key == KeyCode::A) {
-          ic->commandLine->SelectAll();
-        } else if (controlPressed && key == KeyCode::L) {
-          ic->commandLine->ClearInput();
-        } else if (key == KeyCode::Enter) {
-          ic->commandLine->ExecuteCommand();
-        } else if (key == KeyCode::Escape) {
-          ic->commandLine->Toggle();
-        } else if (key == KeyCode::Up) {
-          ic->commandLine->HistoryUp();
-        } else if (key == KeyCode::Down) {
-          ic->commandLine->HistoryDown();
-        } else if (key == KeyCode::PageUp) {
-          ic->commandLine->ScrollUp();
-        } else if (key == KeyCode::PageDown) {
-          ic->commandLine->ScrollDown();
-        }
+    if (!ic->commandLine->isOpen) {
+      remainingKeys.push(event);
+      continue;
+    }
+
+    if (action == InputAction::Press || action == InputAction::Hold) {
+      if (key == KeyCode::Backspace) {
+        ic->commandLine->HandleBackspace(controlPressed);
+      } else if (key == KeyCode::Delete) {
+        ic->commandLine->HandleDelete(controlPressed);
+      } else if (key == KeyCode::Left) {
+        ic->commandLine->MoveCursorLeft(controlPressed, shiftPressed);
+      } else if (key == KeyCode::Right) {
+        ic->commandLine->MoveCursorRight(controlPressed, shiftPressed);
+      } else if (key == KeyCode::Home) {
+        ic->commandLine->MoveCursorHome(shiftPressed);
+      } else if (key == KeyCode::End) {
+        ic->commandLine->MoveCursorEnd(shiftPressed);
+      } else if (key == KeyCode::Tab) {
+        ic->commandLine->Complete();
+      } else if (controlPressed && key == KeyCode::A) {
+        ic->commandLine->SelectAll();
+      } else if (controlPressed && key == KeyCode::L) {
+        ic->commandLine->ClearInput();
+      } else if (key == KeyCode::Enter) {
+        ic->commandLine->ExecuteCommand();
+      } else if (key == KeyCode::Escape) {
+        ic->commandLine->Toggle();
+      } else if (key == KeyCode::Up) {
+        ic->commandLine->HistoryUp();
+      } else if (key == KeyCode::Down) {
+        ic->commandLine->HistoryDown();
+      } else if (key == KeyCode::PageUp) {
+        ic->commandLine->ScrollUp();
+      } else if (key == KeyCode::PageDown) {
+        ic->commandLine->ScrollDown();
       }
-    } else {
-      // Close window on Escape when console is closed. Q is owned by the
-      // product module so it can confirm before requesting shutdown.
-      if (key == KeyCode::Escape && action == InputAction::Press)
-        ic->window->requestClose();
     }
   }
+  keyQueue.swap(remainingKeys);
 
-  // 2. Process Character Queue from InputManager
-  auto& charQueue = ic->inputManager->getCharQueue();
-  while (!charQueue.empty()) {
-    unsigned int codepoint = charQueue.front();
-    charQueue.pop();
-
-    if (ic->commandLine->isOpen) {
+  std::queue<unsigned int>& charQueue = ic->inputManager->getCharQueue();
+  if (ic->commandLine->isOpen) {
+    while (!charQueue.empty()) {
+      unsigned int codepoint = charQueue.front();
+      charQueue.pop();
       if (codepoint != '`' && codepoint != '~') {
         ic->commandLine->AddCharacter(codepoint);
       }

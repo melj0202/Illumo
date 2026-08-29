@@ -1,3 +1,6 @@
+#ifndef NDEBUG
+#include <Illumo/Engine/DebugModule.h>
+#endif
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Rendering/IBackend.h>
@@ -20,6 +23,66 @@ struct ModuleProbe
   int draws{ 0 };
   int exits{ 0 };
   int destructions{ 0 };
+};
+
+class OrderProbeModule : public IModule
+{
+public:
+  OrderProbeModule(std::string* sequence, char updateTag, char drawTag)
+    : m_sequence(sequence)
+    , m_updateTag(updateTag)
+    , m_drawTag(drawTag)
+  {
+  }
+
+  bool Start(IllumoContext* context) override
+  {
+    ic = context;
+    return true;
+  }
+
+  void Update(double) override
+  {
+    if (m_sequence != nullptr) {
+      m_sequence->push_back(m_updateTag);
+    }
+  }
+
+  void DispatchDrawables(Scene*) override
+  {
+    if (m_sequence != nullptr) {
+      m_sequence->push_back(m_drawTag);
+    }
+  }
+
+  void Exit() override {}
+
+private:
+  std::string* m_sequence;
+  char m_updateTag;
+  char m_drawTag;
+};
+
+class DrainAllInputModule : public IModule
+{
+public:
+  bool Start(IllumoContext* context) override
+  {
+    ic = context;
+    return context != nullptr && context->inputManager != nullptr;
+  }
+
+  void Update(double) override
+  {
+    if (ic == nullptr || ic->inputManager == nullptr) {
+      return;
+    }
+    ic->inputManager->clearKeyQueue();
+    ic->inputManager->clearCharQueue();
+  }
+
+  void DispatchDrawables(Scene*) override {}
+  void Exit() override {}
 };
 
 class ProbeModule : public IModule
@@ -511,6 +574,78 @@ testModuleTransitionFailureShutdown()
 }
 
 static void
+testOptionalOverlayUpdatesBeforeRequired()
+{
+  testSection("Illumo: optional overlays update first and draw last");
+  const std::filesystem::path path = temporaryEnvironmentPath("overlay-order");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  std::string sequence;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+
+    host.addModule(std::make_unique<OrderProbeModule>(&sequence, 'R', 'r'),
+                   ModuleRequirement::Required);
+    host.addModule(std::make_unique<OrderProbeModule>(&sequence, 'O', 'o'),
+                   ModuleRequirement::Optional);
+    testTrue(g, host.startModules(), "modules start");
+
+    host.update(0.016);
+    testTrue(g,
+             sequence == "OR",
+             "optional overlay updates before the required module");
+    sequence.clear();
+    host.render();
+    testTrue(
+      g, sequence == "ro", "required module draws before optional overlays");
+
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
+
+#ifndef NDEBUG
+static void
+testDebugOverlayConsoleIsGlobal()
+{
+  testSection("Illumo: Debug overlay toggles console before product input");
+  const std::filesystem::path path =
+    temporaryEnvironmentPath("debug-overlay-console");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+
+    host.addModule(std::make_unique<DrainAllInputModule>(),
+                   ModuleRequirement::Required);
+    host.addModule(std::make_unique<DebugModule>(),
+                   ModuleRequirement::Optional);
+    testTrue(g, host.startModules(), "modules start");
+    testTrue(g,
+             host.context().commandLine != nullptr &&
+               !host.context().commandLine->isOpen,
+             "console starts closed");
+
+    host.context().inputManager->getKeyQueue().push(
+      InputManager::KeyPressEvent{ KeyCode::Grave, InputAction::Press, 0 });
+    host.update(0.016);
+    testTrue(g,
+             host.context().commandLine->isOpen,
+             "Grave toggles console even if the required module drains input");
+
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
+#endif
+
+static void
 testInputQueueFlushedOnTransition()
 {
   testSection("Illumo: input queues are cleared on module transition");
@@ -589,4 +724,11 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Host.InputQueueFlushedOnTransition",
                []() { return runHostCase(testInputQueueFlushedOnTransition); });
+  registry.add("Illumo.Host.OptionalOverlayUpdatesFirst", []() {
+    return runHostCase(testOptionalOverlayUpdatesBeforeRequired);
+  });
+#ifndef NDEBUG
+  registry.add("Illumo.Host.DebugOverlayConsoleIsGlobal",
+               []() { return runHostCase(testDebugOverlayConsoleIsGlobal); });
+#endif
 }

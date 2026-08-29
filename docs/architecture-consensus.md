@@ -298,10 +298,13 @@ input/char queues to prevent click/key bleed, clearing `Scene` drawables, and in
 
 The application definition supplies `createRequiredModule` (creating `MainMenuModule`
 by default, or `CellGameModule` if direct launch was requested via environment/CLI);
-the engine runner registers `DebugModule` as optional in Debug. A required
+the engine runner registers `DebugModule` as optional in Debug. Optional overlay
+modules update before the required product module so console/FPS/demo input is
+global across the main menu, settings, and cell canvas; they still dispatch
+after it so overlays draw on top. A required
 failure rolls back every accepted module and fails startup; an optional failure
 remains inactive. Startup and rollback exceptions are contained and logged
-(D-B1/D-E7).
+(D-B1/D-E7/D-E9).
 
 ### 5.4 Frame loop (production)
 
@@ -321,10 +324,13 @@ Illumo Platform::main
   → addModule(DebugModule, Optional)  // engine-owned Debug builds
   → startModules()                    // rollback on required failure
   loop:
-    update(dt)   // applyPendingModuleTransition → InputManager → Camera → modules.Update
+    update(dt)   // applyPendingModuleTransition → InputManager → Camera
+                 // → optional overlays.Update → required.Update
+                 // → discard leftover key/char events
     render()                            // single production path (D-R13)
       scene.ClearDrawables()          // Scene = per-frame FrameRenderList (D-E4)
-      modules.DispatchDrawables(scene)
+      required.DispatchDrawables then optional overlays
+
       renderer.BeginFrame()
       renderer.RenderScene(scene, camera)   // tokens, then optional immediate fallback
       renderer.EndFrame()                   // swap (GL)
@@ -685,7 +691,7 @@ Intended flow:
 GLFW callbacks / poll → InputManager → module / controller logic
 ```
 
-**Today:** InputManager holds key/mouse state and contexts; CellGameModule / DebugModule consume it. Not every behavior is extracted into tiny controller classes—acceptable.
+**Today:** InputManager holds key/mouse state and contexts. `DebugModule` consumes Grave and open-console editing first as a global Debug overlay; product modules then read remaining events and yield while the console is open. Unconsumed key/char events are discarded at the end of the host update. Not every behavior is extracted into tiny controller classes—acceptable.
 
 `CellGameModule` owns a primitive-composed F1 settings overlay in every build.
 It edits ruleset, world chunk width/height, TPS, simulation speed, fade speed,
@@ -705,7 +711,8 @@ Callbacks should record events/state, not own game policy long-term (CA design P
 
 ### 5.10 Developer console
 
-The Debug-only console separates general tooling from product behavior:
+The Debug-only console is a global overlay on the main menu, settings, confirm
+dialogs, and cell canvas. It separates general tooling from product behavior:
 
 - `CommandLine` owns help, environment-variable inspection/editing, validated
   finite timing/display settings, console history, alias macro management, multi-command chaining, and application exit.
@@ -872,6 +879,7 @@ the normal canvas returns immediately when the flag is disabled.
 | **D-E6** | One repository contains the `Illumo` static library and sibling `IllumoGame` product. Public headers live under `Illumo/Include/Illumo`; no install package, DLL ABI, or second repository is implied. Its App/Platform ownership clause is superseded by D-E7. |
 | **D-E7** | Illumo owns platform entry/dialogs, BuildInfo, SysCmdLine, logging lifetime, DebugModule composition, and the frame loop. IllumoGame contains only CA Game/Rulesets/configuration metadata and its required-module factory. |
 | **D-E8** | Illumo owns an additive persistent `SceneGraph` with generational graph-local handles, deterministic hierarchy/transform state, and borrowed token render attachments. |
+| **D-E9** | Debug `DebugModule` is a global overlay: optional modules update before the required product module and dispatch after it. Product input yields while the console is open. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and version 3 topology persistence. |

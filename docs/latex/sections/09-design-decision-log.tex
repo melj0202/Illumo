@@ -1667,6 +1667,26 @@ Moore-only. Dense \texttt{calcGeneration} remains a compatibility fixture.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-E9 --- DebugModule is a global overlay}
+\begin{decisionbox}[title={D-E9 \quad 2026-08-29}]
+\textbf{Decision:} Debug-build \symbolref{DebugModule} is a global overlay, not
+a cell-canvas tool. The host updates optional modules before the required
+product module and dispatches them afterward. \symbolref{DebugModule} consumes
+Grave and open-console editing first and leaves remaining events for the
+product. Product surfaces (main menu, settings, confirm dialogs, camera,
+editor) yield while the console is open. Unconsumed key and character events
+are discarded at the end of \symbolref{Illumo::update}. Escape closes an open
+console; product modules own Escape on their own screens.\\
+\textbf{Why:} The main menu drained the input queues before the overlay could
+toggle the console, so Grave only worked after transitioning to the cell
+canvas.\\
+\textbf{Consequences:} Console, FPS, and renderer-demo remain available across
+module transitions. Release still neither compiles nor registers
+\symbolref{DebugModule}. The former Debug-only leftover Escape-to-close-window
+path is removed; confirmed shutdown stays on the product Q/Exit surfaces.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

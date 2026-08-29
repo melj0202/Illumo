@@ -31,6 +31,10 @@ Engine must remain independent of Game and Rulesets.
   any `Update`, `DispatchDrawables`, or `Exit` call.
 - For accepted modules, call `Start`, repeated `Update` and
   `DispatchDrawables`, and one `Exit` in a deterministic order.
+- Optional overlay modules (`DebugModule`) `Update` before the required
+  product module so global console input is not stolen. `DispatchDrawables`
+  stays required then optional so overlays draw on top. Discard unconsumed
+  key/char events at the end of each host update.
 - Keep window/input/module/render work on the main thread. Worker threads owned
   by another subsystem must join or quiesce before their owner is destroyed.
 - Keep the `Renderer` backend-neutral. Engine composes

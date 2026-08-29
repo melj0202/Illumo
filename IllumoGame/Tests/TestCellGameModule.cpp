@@ -477,6 +477,25 @@ testSparseV2Compatibility()
 }
 
 static void
+testSettingsYieldToConsole()
+{
+  testSection("CellGameModule: open console blocks settings input");
+  CellGameFixture fixture;
+  ConfigurationMenu* menu =
+    CellGameModuleTestAccess::getConfigurationMenu(fixture.module);
+  testTrue(g, menu != nullptr && !menu->isOpen(), "settings start closed");
+  menu->open(CellGameModuleTestAccess::currentConfiguration(fixture.module));
+  testTrue(g, menu->isOpen(), "settings open for console-yield check");
+
+  fixture.console.Toggle();
+  testTrue(g, fixture.console.isOpen, "console is open");
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g, menu->isOpen(), "open console blocks settings Escape");
+}
+
+static void
 testReleaseConfigurationWorkflow()
 {
   testSection("CellGameModule: Release configuration workflow");
@@ -1117,6 +1136,9 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CellGame.ReleaseConfiguration", []() {
     return runCellGameModuleCase(testReleaseConfigurationWorkflow);
+  });
+  registry.add("IllumoGame.CellGame.SettingsYieldToConsole", []() {
+    return runCellGameModuleCase(testSettingsYieldToConsole);
   });
   registry.add("IllumoGame.CellGame.ExitConfirmation", []() {
     return runCellGameModuleCase(testExitConfirmationFromQ);

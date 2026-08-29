@@ -259,7 +259,9 @@ delaying input.
 ## Developer console commands
 
 The in-app console is provided by `DebugModule`, so it is available in Debug
-builds only. Type `help` for the live list or `help <command>` for details.
+builds only. It is a global overlay: grave/tilde toggles it on the main menu,
+settings, and cell canvas. Type `help` for the live list or `help <command>`
+for details.
 
 | Group | Commands |
 |---|---|
