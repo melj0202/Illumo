@@ -1,6 +1,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <algorithm>
+#include <cmath>
 
 Camera::Camera(const glm::vec2& initialPos,
                float initialZoom,
@@ -12,8 +13,16 @@ Camera::Camera(const glm::vec2& initialPos,
   , zoom(initialZoom)
   , targetZoom(initialZoom)
   , envVars(envVars)
-  , projectionType(ProjectonType::ORTOGRAPHIC)
+  , projectionType(ProjectionType::Orthographic)
   , smoothingSpeed(15.0f) // default interpolation speed
+  , eye(0.0f, 0.0f, 12.0f)
+  , target(0.0f, 0.0f, 0.0f)
+  , up(0.0f, 1.0f, 0.0f)
+  , fieldOfViewDegrees(55.0f)
+  , perspectiveNear(0.1f)
+  , perspectiveFar(100.0f)
+  , orthographicNear(-1024.0f)
+  , orthographicFar(1024.0f)
 {
 }
 
@@ -98,9 +107,36 @@ Camera::GetWinDims() const
   return { winX, winY };
 }
 
+void
+Camera::lookAt(const glm::vec3& eyePos,
+               const glm::vec3& targetPos,
+               const glm::vec3& upDir)
+{
+  eye = eyePos;
+  target = targetPos;
+  const float upLength = glm::length(upDir);
+  if (upLength > 0.0001f) {
+    up = upDir / upLength;
+  } else {
+    up = glm::vec3(0.0f, 1.0f, 0.0f);
+  }
+}
+
+void
+Camera::setPerspective(float fovDegrees, float nearPlane, float farPlane)
+{
+  fieldOfViewDegrees = std::clamp(fovDegrees, 1.0f, 179.0f);
+  perspectiveNear = std::max(nearPlane, 0.0001f);
+  perspectiveFar = std::max(farPlane, perspectiveNear + 0.0001f);
+}
+
 glm::mat4
 Camera::GetViewMatrix() const
 {
+  if (projectionType == ProjectionType::Perspective) {
+    return glm::lookAt(eye, target, up);
+  }
+
   std::array<int, 2> winDims = GetWinDims();
   float halfW = winDims[0] / 2.0f;
   float halfH = winDims[1] / 2.0f;
@@ -117,29 +153,35 @@ Camera::GetViewMatrix() const
                         glm::vec3(static_cast<float>(-position.x),
                                   static_cast<float>(-position.y),
                                   0.0f));
-  // 4. Rotate
   return view;
 }
 
 glm::mat4
-Camera::GetProjectionMatrix(float /*aspectRatio*/) const
+Camera::GetProjectionMatrix(float aspectRatio) const
 {
   std::array<int, 2> winDims = GetWinDims();
 
-  switch (projectionType) {
-    case ProjectonType::ORTOGRAPHIC:
-      // Orthographic projection mapping screen pixel space to NDC [-1, 1], with
-      // y going up (0 at bottom, h at top)
-      return glm::ortho(
-        0.0f, (float)winDims[0], 0.0f, (float)winDims[1], -1.0f, 1.0f);
-    case ProjectonType::PERSPECTIVE:
-      // Perspective projection mapping screen pixel space to NDC [-1, 1]
-      return glm::perspective(glm::radians(45.0f),
-                              (float)winDims[0] / (float)winDims[1],
-                              0.1f,
-                              100.0f);
+  if (projectionType == ProjectionType::Perspective) {
+    float aspect = aspectRatio;
+    if (!(aspect > 0.0f)) {
+      aspect = static_cast<float>(winDims[0]) /
+               static_cast<float>(winDims[1] > 0 ? winDims[1] : 1);
+    }
+    return glm::perspective(glm::radians(fieldOfViewDegrees),
+                            aspect,
+                            perspectiveNear,
+                            perspectiveFar);
   }
-  return glm::mat4(1.0f);
+
+  // Orthographic projection mapping screen pixel space to NDC [-1, 1], with
+  // y going up (0 at bottom, h at top). Clip range is wide enough for world
+  // Z meshes; XY mapping matches the historical CA camera.
+  return glm::ortho(0.0f,
+                    static_cast<float>(winDims[0]),
+                    0.0f,
+                    static_cast<float>(winDims[1]),
+                    orthographicNear,
+                    orthographicFar);
 }
 
 glm::mat4

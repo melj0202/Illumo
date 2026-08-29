@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-08-22
+**Last updated:** 2026-08-29
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -347,7 +347,7 @@ At the start of `RenderScene`, `Renderer` captures the active window dimensions
 and primary camera MVP once for that extraction. Matching `GameVisual` instances
 consume those frame values instead of querying the window and recomputing the
 same matrix independently; direct token emitters retain their local fallback.
-`CanvasView` retains upload-rectangle scratch storage, `DebugDraw3D` retains
+`CanvasView` retains upload-rectangle scratch storage, `MeshVisual` retains
 dynamic mesh handles and uploads only dirty geometry, and `SceneGraph` retains
 its traversal stack. These caches do not retain or replay command queues.
 
@@ -373,8 +373,10 @@ The graph derives from `DrawableBase` and is normally contributed as one World
 drawable to the per-frame `Rendering::Scene`. During token extraction it walks
 enabled and visible nodes in hierarchy pre-order and supplies each attachment
 with the resolved world transform. It owns no attachment or backend resource.
-`DebugDraw3D` is the first attachment implementation and composes the graph
-world matrix with its existing model matrix.
+`MeshVisual` is the world mesh/sprite attachment: it composes the graph world
+matrix with local transforms and optional camera-facing billboards, then emits
+the canonical `uMVP` look. Overlay chrome stays on `GameVisual` with a screen
+ortho matrix (D-R21).
 
 V1 deliberately has no ECS components, update callbacks, serialization,
 prefabs, bounds/culling structure, physics, scripting, or retained UI. The
@@ -405,8 +407,10 @@ IBackend::SubmitCommandQueue
 |-------|-----|
 | **Modules** | Choose what should appear this frame; place drawables into Scene layers. |
 | **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug). One main pass. |
-| **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, and Sprite are registered built-ins; custom 2D styles use the same camera/texture/resolution contract. |
-| **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. `CanvasView`, `CommandLine`, `GLString`/`SplashText`, and `Cursor` embed or compose through it; dense `Canvas` is a compatibility fixture. |
+| **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, and Sprite are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world. |
+| **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. |
+| **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
+| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing. One attachment per scene node; compose complex objects with child nodes. Replaces the former `DebugDraw3D` diagnostic host (D-R21). |
 | **Primitive UI** | `CommandLine`, `GLString`, and `SplashText` compose fills, outlines, lines, and text through `GameVisual`. `UiTheme` is a shared value-only palette/panel style; it is not a widget tree or layout engine. FPS and mode labels use optional decorated label chrome. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
 | **Renderer** | Backend-neutral: owns style table; frame setup; walk layers; submit. Depends only on `IBackend*` (D-R11). |
@@ -801,6 +805,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R18** | Painter-correct 2D stream: parent/local transforms, normalized pivots, atlas regions/flips, stable cross-type draw order, adjacent-only batching, bounded dynamic quad buffers, and caller-updated passive sprite animation. |
 | **D-R19** | Superseded by D-E6: the sibling IllumoGame consumer establishes the explicit library boundary. Future downstream repositories still require install/package validation. |
 | **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. |
+| **D-R21** | One world look (`uMVP`). Sprites are textured quads; 2D vs 3D is the camera projection. `MeshVisual` is the world object host; `GameVisual` remains overlay/painter composition. |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
 | **D-C2** | `CellGrid` domain + `Canvas` presentation; rulesets depend only on `CellGrid`. |
@@ -809,19 +814,19 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-C5** | At far zoom, `CanvasView` uses a revision-gated density overview capped at roughly four screen pixels per texel; this visual budget does not cap sparse simulation chunks. |
 | **D-C6** | Keep `0 x 0` as the infinite sparse world; positive chunk dimensions select a finite torus. Configure it through the Release F1 overlay, reset on topology change, and preserve it in sparse save version 3. |
 
-`DebugDraw3D` is a deliberately narrow, token-based diagnostic drawable. It
-builds colored axes, ground grids, wire cubes, and solid cubes using the
-existing position-plus-RGBA mesh layout and Shape shader, with local
-depth-tested line and triangle styles. Callers supply a complete perspective
-view-projection matrix and optional model matrix; it does not own a camera,
-model loader, materials, lighting, or a scene system. Compose it in the World
-layer before 2D
-presentation, which remains a single-pass painter-ordered surface.
+`MeshVisual` is the world mesh host and scene-graph attachment (D-R21). It
+tessellates colored lines/triangles and textured quads, clones Shape/Sprite
+styles with depth-tested pipelines, and emits `uMVP = cameraVP * nodeWorld *
+local` (billboard replaces local rotation with camera axes). It does not own a
+camera, model loader, materials, or lighting. Overlay chrome stays on
+`GameVisual` with a screen ortho `uMVP` so HUD does not pan with the world
+camera.
 
-IllumoGame's persisted `render3dTest=1` flag replaces `CanvasView` with this
-diagnostic scene: fixed axes/grid and orbiting, bobbing, spinning solid and
-wire cubes. It is a rendering smoke path only; simulation keeps running and
-the normal canvas returns immediately when the flag is disabled.
+IllumoGame's persisted `render3dTest=1` flag replaces `CanvasView` with a
+`SceneGraph` of `MeshVisual` attachments and switches the product `Camera` to
+perspective look-at while the flag is on. It is a rendering smoke path only;
+simulation keeps running and the normal ortho canvas returns when the flag is
+disabled.
 
 ### 6.3 Performance (D-P\*)
 
@@ -972,7 +977,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 | IllumoContext growth | Frozen; third module = explicit deps |
 | Life-like JSON family collapse | Optional cleanup of repetitive RuleSet classes |
 | GPU/SYCL acceleration | Optional after bounded CPU parallel benchmark / product need; CPU sparse stepping is the production baseline |
-| File asset formats | Current managed scope is textures + shaders; font atlases, model import, and general 3D meshes are deferred. `DebugDraw3D` is procedural diagnostic geometry only. |
+| File asset formats | Current managed scope is textures + shaders; font atlases, model import, and general 3D meshes are deferred. `MeshVisual` is procedural world geometry (quads, sprites, cubes, lines) only. |
 
 ---
 

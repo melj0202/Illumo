@@ -7,13 +7,15 @@
 
 class IRenderWindow;
 
-enum class ProjectonType
+enum class ProjectionType
 {
-  ORTOGRAPHIC,
-  PERSPECTIVE
+  Orthographic,
+  Perspective
 };
 
 // Standalone camera (no longer inherits unused SceneObject graph — D-E4).
+// Orthographic is the CA default: vec2 pan/zoom with Y-up world XY. Perspective
+// uses look-at plus FOV; 2D pan state is preserved and unused until restored.
 class Camera
 {
 public:
@@ -60,9 +62,21 @@ public:
   void SetSmoothingSpeed(float speed) { smoothingSpeed = speed; }
   float GetSmoothingSpeed() const { return smoothingSpeed; }
 
+  void setProjectionType(ProjectionType type) { projectionType = type; }
+  ProjectionType getProjectionType() const { return projectionType; }
+
+  void lookAt(const glm::vec3& eyePos,
+              const glm::vec3& targetPos,
+              const glm::vec3& upDir);
+  void setPerspective(float fovDegrees, float nearPlane, float farPlane);
+  const glm::vec3& getEye() const { return eye; }
+  const glm::vec3& getTarget() const { return target; }
+  const glm::vec3& getUp() const { return up; }
+  float getFieldOfViewDegrees() const { return fieldOfViewDegrees; }
+
   // Coordinate conversion
   // Converts screen space [0, windowSize] to world space [-1, 1] or grid
-  // coordinates
+  // coordinates. Orthographic only; perspective does not change CA picking.
   glm::vec2 ScreenToWorld(const glm::vec2& screenPos) const;
   glm::dvec2 ScreenToWorldPrecise(const glm::dvec2& screenPos) const;
 
@@ -73,7 +87,7 @@ public:
 
 private:
   std::array<int, 2> GetWinDims() const;
-  ProjectonType projectionType;
+  ProjectionType projectionType;
   glm::dvec2 position;       // Current interpolated position
   glm::dvec2 targetPosition; // Target position we pan towards
   float zoom;                // Current interpolated zoom
@@ -82,4 +96,12 @@ private:
   float rotation;       // Current interpolated rotation
   float targetRotation; // Target rotation we rotate towards
   IEnvVars* envVars;
+  glm::vec3 eye;
+  glm::vec3 target;
+  glm::vec3 up;
+  float fieldOfViewDegrees;
+  float perspectiveNear;
+  float perspectiveFar;
+  float orthographicNear;
+  float orthographicFar;
 };

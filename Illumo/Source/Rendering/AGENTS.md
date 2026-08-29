@@ -33,8 +33,9 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
 - Resource handles are backend-neutral identifiers. The owning backend
   registry controls concrete resource lifetime; enrollment is rare and
   per-frame work emits commands rather than recreating resources.
-- Keep coordinate space and layer explicit. Do not mix screen-space chrome,
-  world-space game visuals, or texture-space sampling implicitly.
+- Keep coordinate space and layer explicit. Overlay chrome uses a screen ortho
+  `uMVP`; world objects use the camera view-projection. Do not mix those
+  matrices or texture-space sampling implicitly.
 - Renderer and backend calls are main-thread affine with the active graphics
   context unless an authorized design introduces synchronization.
 
@@ -50,7 +51,7 @@ failure must be observable and must not leave a partially usable backend.
 - `docs/packages/source-layout.md`
 - `docs/latex/sections/05-rendering-current.tex`
 - renderer decisions in `docs/architecture-consensus.md`
-- MockBackend, renderer end-to-end, UI token, and GameVisual tests
+- MockBackend, renderer end-to-end, UI token, GameVisual, and MeshVisual tests
 
 Use MockBackend for deterministic contract tests. Use a live OpenGL smoke for
 context, shader, state, upload, and visual behavior; headless success is not

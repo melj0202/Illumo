@@ -16,8 +16,10 @@ retained widget toolkit or a second renderer.
   OpenGL types or resource ownership.
 - Make screen-space versus world-space placement and render layer explicit at
   construction and command emission boundaries.
-- Compose complex visuals through existing mesh, shader, texture, uniform,
-  state, and draw tokens. Do not add an immediate-mode side channel.
+- Compose overlay chrome through `GameVisual` value primitives. Compose world
+  objects through `MeshVisual` (mesh + style + optional texture, optional
+  billboard) on a `SceneGraph` node or as one World drawable. Both hosts emit
+  the `WorldLook` `uMVP` contract; do not add an immediate-mode side channel.
 - Batch compatible geometry into bounded reusable storage and emit one upload
   and draw per batch where the existing contract allows it. Preserve order and
   clipping; do not trade correctness for fewer commands.

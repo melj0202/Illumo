@@ -4,8 +4,10 @@
 #include <Illumo/Rendering/ResourceHandle.h>
 
 // Registered draw styles owned by Renderer. A style pairs a shader handle with
-// pipeline defaults. GameVisual custom shaders may consume uMVP, uUsePixels,
-// u_resolution and, for sprites, uTexture on texture unit zero.
+// pipeline defaults. Canonical Shape/Sprite programs consume uMVP (see
+// WorldLook.h). Overlay chrome supplies a Y-down screen ortho; world objects
+// supply camera view-projection times node world. Sprites sample uTexture on
+// texture unit zero. Custom 2D shaders must follow that contract.
 enum class RenderStyleId : unsigned char
 {
   Canvas = 0,

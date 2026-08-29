@@ -22,8 +22,8 @@
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/PipelineState.h>
-#include <Illumo/Rendering/Primitives/DebugDraw3D.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 #include <Illumo/Rendering/Primitives/ShapePrimitive.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
@@ -38,6 +38,7 @@
 #include <Illumo/Rendering/ResourceHandlePool.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/SplashText.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneNodeHandle.h>
 #include <Illumo/Scene/Transform3D.h>
@@ -67,8 +68,9 @@ main()
   static_assert(std::is_destructible_v<IllumoApplicationDefinition>);
   static_assert(std::has_virtual_destructor_v<IEnvVars>);
   static_assert(std::is_destructible_v<GameVisual>);
-  static_assert(std::is_destructible_v<DebugDraw3D>);
-  static_assert(std::is_base_of_v<ISceneRenderAttachment, DebugDraw3D>);
+  static_assert(std::is_destructible_v<MeshVisual>);
+  static_assert(std::is_base_of_v<ISceneRenderAttachment, MeshVisual>);
+  static_assert(std::is_base_of_v<DrawableBase, MeshVisual>);
   static_assert(!std::is_copy_constructible_v<SceneGraph>);
   static_assert(std::has_virtual_destructor_v<ISceneRenderAttachment>);
   SceneGraph sceneGraph;

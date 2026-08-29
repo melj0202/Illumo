@@ -83,7 +83,7 @@ add_library(Illumo STATIC
   Source/Rendering/RendererStyles.cpp
   Source/Rendering/RenderWindow.cpp
   Source/Rendering/SplashText.cpp
-  Source/Rendering/Primitives/DebugDraw3D.cpp
+  Source/Rendering/Primitives/MeshVisual.cpp
   Source/Rendering/Primitives/GameVisual.cpp
   Source/Rendering/Primitives/SpriteAnimation.cpp
   Source/Rendering/OpenGL/CreateOpenGLBackend.cpp
@@ -146,6 +146,7 @@ if(BUILD_TESTING)
     Tests/TestRuntimeUtilities.cpp
     Tests/TestAllocators.cpp
     Tests/TestGameVisual.cpp
+    Tests/TestMeshVisual.cpp
     Tests/TestIllumoHost.cpp
     Tests/TestTextureUploadPolicy.cpp
     Tests/TestSysCmdLine.cpp

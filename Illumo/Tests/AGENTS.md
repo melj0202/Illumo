@@ -10,7 +10,9 @@ Rulesets, simulator defaults, or product command policy to this runner.
 
 SceneGraph cases are `Illumo.SceneGraph.HandlesAndLifetime`,
 `Illumo.SceneGraph.HierarchyAndTransforms`, and
-`Illumo.SceneGraph.RenderExtraction`.
+`Illumo.SceneGraph.RenderExtraction`. MeshVisual cases are
+`Illumo.MeshVisual.DynamicMeshReuse`, `Illumo.MeshVisual.SpriteAndCube`,
+`Illumo.MeshVisual.Billboard`, and `Illumo.MeshVisual.SceneAttachment`.
 
 Use `Illumo::TestSupport` for MockBackend and test-only fixtures. Tests must be
 headless, deterministic, and isolated under `build/Testing/Illumo/`.

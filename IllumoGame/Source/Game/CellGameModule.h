@@ -8,6 +8,7 @@
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Scene/SceneGraph.h>
@@ -21,8 +22,6 @@ enum class CellState
   EDIT,
   EXIT
 };
-
-class DebugDraw3D;
 
 class CellGameModule : public IModule
 {
@@ -74,6 +73,8 @@ private:
   void handleEditorHotkeys();
   bool isRender3dTestEnabled() const;
   void ensureRender3dTestDrawables();
+  void applyRender3dTestCamera();
+  void restoreRender3dTestCamera();
   void updateRender3dTestMatrices();
   bool consumeCompletedSimulation(bool waitForCompletion);
   void drainSimulation();
@@ -111,10 +112,11 @@ private:
   SceneNodeHandle render3dRootNode;
   SceneNodeHandle render3dOrbitNode;
   SceneNodeHandle render3dChildNode;
-  std::unique_ptr<DebugDraw3D> render3dTestStatic;
-  std::unique_ptr<DebugDraw3D> render3dTestAnimated;
-  std::unique_ptr<DebugDraw3D> render3dTestChild;
+  std::unique_ptr<MeshVisual> render3dTestStatic;
+  std::unique_ptr<MeshVisual> render3dTestAnimated;
+  std::unique_ptr<MeshVisual> render3dTestChild;
   double render3dTestTime;
+  bool render3dCameraApplied;
   Cursor editorCursor;
   GameVisual selectionVisual;
   GameVisual inspectorVisual;

@@ -57,23 +57,15 @@ void main() {
 }
 )";
 
-// Shape primitives: pixel space (uUsePixels=1) or world MVP (uUsePixels=0).
+// Shape primitives: world or overlay via uMVP (D-R21).
 static const char* kShapeVertexShader = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec4 aColor;
 out vec4 ourColor;
-uniform int uUsePixels;
-uniform vec2 u_resolution;
 uniform mat4 uMVP;
 void main() {
-    if (uUsePixels != 0) {
-        float x = (aPos.x / u_resolution.x) * 2.0 - 1.0;
-        float y = 1.0 - (aPos.y / u_resolution.y) * 2.0;
-        gl_Position = vec4(x, y, aPos.z, 1.0);
-    } else {
-        gl_Position = uMVP * vec4(aPos, 1.0);
-    }
+    gl_Position = uMVP * vec4(aPos, 1.0);
     ourColor = aColor;
 }
 )";
@@ -87,7 +79,7 @@ void main() {
 }
 )";
 
-// Sprite primitives: same spaces + texture sample with vertex tint.
+// Sprite primitives: same uMVP contract + texture sample with vertex tint.
 static const char* kSpriteVertexShader = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -95,17 +87,9 @@ layout (location = 1) in vec4 aColor;
 layout (location = 2) in vec2 aUv;
 out vec4 ourColor;
 out vec2 ourUv;
-uniform int uUsePixels;
-uniform vec2 u_resolution;
 uniform mat4 uMVP;
 void main() {
-    if (uUsePixels != 0) {
-        float x = (aPos.x / u_resolution.x) * 2.0 - 1.0;
-        float y = 1.0 - (aPos.y / u_resolution.y) * 2.0;
-        gl_Position = vec4(x, y, aPos.z, 1.0);
-    } else {
-        gl_Position = uMVP * vec4(aPos, 1.0);
-    }
+    gl_Position = uMVP * vec4(aPos, 1.0);
     ourColor = aColor;
     ourUv = aUv;
 }

@@ -6,7 +6,8 @@
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
-#include <Illumo/Rendering/Primitives/DebugDraw3D.h>
+#include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
@@ -142,6 +143,7 @@ CellGameModule::CellGameModule(std::string initialSavePath)
   , render3dTestStatic(nullptr)
   , render3dTestAnimated(nullptr)
   , render3dTestTime(0.0)
+  , render3dCameraApplied(false)
   , hasSelection(false)
   , selecting(false)
   , selectAnchorX(0)
@@ -1508,6 +1510,7 @@ CellGameModule::Exit()
 {
   drainSimulation();
   simulationRunner.shutdown();
+  restoreRender3dTestCamera();
   unregisterConsoleCommands();
   exitConfirmDialog.reset();
   configurationMenu.reset();
@@ -2357,19 +2360,19 @@ CellGameModule::ensureRender3dTestDrawables()
     return;
   }
 
-  render3dTestStatic = std::make_unique<DebugDraw3D>();
+  render3dTestStatic = std::make_unique<MeshVisual>();
   render3dTestStatic->prepare(ic->renderer);
   render3dTestStatic->addAxes(glm::vec3(0.0f), 3.0f);
   render3dTestStatic->addGrid(10, 1.0f, ColorRgba{ 72, 96, 128, 255 });
 
-  render3dTestAnimated = std::make_unique<DebugDraw3D>();
+  render3dTestAnimated = std::make_unique<MeshVisual>();
   render3dTestAnimated->prepare(ic->renderer);
   render3dTestAnimated->addSolidCube(
     glm::vec3(0.0f), glm::vec3(0.75f), ColorRgba{ 255, 180, 72, 255 });
   render3dTestAnimated->addWireCube(
     glm::vec3(0.0f), glm::vec3(1.0f), ColorRgba{ 224, 244, 255, 255 });
 
-  render3dTestChild = std::make_unique<DebugDraw3D>();
+  render3dTestChild = std::make_unique<MeshVisual>();
   render3dTestChild->prepare(ic->renderer);
   render3dTestChild->addSolidCube(
     glm::vec3(0.0f), glm::vec3(0.35f), ColorRgba{ 100, 220, 255, 255 });
@@ -2391,26 +2394,36 @@ CellGameModule::ensureRender3dTestDrawables()
 }
 
 void
+CellGameModule::applyRender3dTestCamera()
+{
+  if (ic == nullptr || ic->camera == nullptr) {
+    return;
+  }
+  ic->camera->lookAt(glm::vec3(12.0f, 9.0f, 12.0f),
+                     glm::vec3(0.0f, 0.0f, 0.0f),
+                     glm::vec3(0.0f, 1.0f, 0.0f));
+  ic->camera->setPerspective(55.0f, 0.1f, 100.0f);
+  ic->camera->setProjectionType(ProjectionType::Perspective);
+  render3dCameraApplied = true;
+}
+
+void
+CellGameModule::restoreRender3dTestCamera()
+{
+  if (!render3dCameraApplied || ic == nullptr || ic->camera == nullptr) {
+    return;
+  }
+  ic->camera->setProjectionType(ProjectionType::Orthographic);
+  render3dCameraApplied = false;
+}
+
+void
 CellGameModule::updateRender3dTestMatrices()
 {
-  if (ic == nullptr || ic->window == nullptr || render3dTestStatic == nullptr ||
+  if (ic == nullptr || render3dTestStatic == nullptr ||
       render3dTestAnimated == nullptr || render3dTestChild == nullptr) {
     return;
   }
-  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-  const float aspectRatio = static_cast<float>(dimensions[0]) /
-                            static_cast<float>(std::max(dimensions[1], 1));
-  const glm::mat4 viewProjection =
-    DebugDraw3D::makePerspectiveViewProjection(glm::vec3(12.0f, 9.0f, 12.0f),
-                                               glm::vec3(0.0f),
-                                               glm::vec3(0.0f, 1.0f, 0.0f),
-                                               55.0f,
-                                               aspectRatio,
-                                               0.1f,
-                                               100.0f);
-  render3dTestStatic->setViewProjection(viewProjection);
-  render3dTestAnimated->setViewProjection(viewProjection);
-  render3dTestChild->setViewProjection(viewProjection);
 
   render3dSceneGraph.setLocalTransform(render3dRootNode, Matrix4(1.0f));
 
@@ -2444,9 +2457,11 @@ CellGameModule::DispatchDrawables(Scene* scene)
   // depth buffer rather than inheriting 2D presentation writes.
   if (isRender3dTestEnabled()) {
     ensureRender3dTestDrawables();
+    applyRender3dTestCamera();
     updateRender3dTestMatrices();
     scene->AddDrawable(&render3dSceneGraph, RenderLayerId::World);
   } else {
+    restoreRender3dTestCamera();
     scene->AddDrawable(this->cellContext->getCanvasView(),
                        RenderLayerId::World);
   }

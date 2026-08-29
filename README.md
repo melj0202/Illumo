@@ -239,9 +239,10 @@ live. The Debug FPS overlay reports frame-paced swap cadence separately from
 CPU submissions so an uncapped submission rate is not presented as display FPS.
 
 Set `"render3dTest": "1"` in `envvars.json` to replace the cellular canvas
-with an opt-in 3D diagnostic scene: fixed axes/grid plus orbiting, bobbing,
-spinning solid and wire cubes. It is a rendering smoke path, not a model or
-lighting feature; set it back to `0` to restore the normal canvas.
+with an opt-in 3D diagnostic scene: a `SceneGraph` of `MeshVisual` attachments
+(axes/grid plus orbiting cubes) drawn through the product camera in perspective.
+It is a rendering smoke path, not a model or lighting feature; set it back to
+`0` to restore the normal orthographic canvas.
 
 The F1 menu configures ruleset, world width/height in 16x16 chunks, TPS,
 simulation speed, fade speed, VSync, and fullscreen in both Debug and Release.

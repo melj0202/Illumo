@@ -1667,6 +1667,34 @@ Moore-only. Dense \texttt{calcGeneration} remains a compatibility fixture.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-R21 --- Unified world look and MeshVisual}
+\begin{decisionbox}[title={D-R21 \quad 2026-08-29}]
+\textbf{Decision:} World objects share one look and one host:
+\begin{itemize}
+  \item Shape/Sprite programs (and the asset fallback) position vertices with
+        \texttt{uMVP} only. Overlay chrome supplies a Y-down screen ortho;
+        world draws supply camera view-projection times node world.
+  \item A sprite is a textured quad. \texttt{MeshFacing::Billboard} faces the
+        camera; the default is world-aligned. Orthographic vs perspective is a
+        \symbolref{Camera} projection, not a second primitive system.
+  \item \symbolref{MeshVisual} is the world mesh host and
+        \symbolref{ISceneRenderAttachment}. Product UI remains
+        \symbolref{GameVisual} painter composition (D-R20). CanvasView stays a
+        world-space GameVisual sprite.
+\end{itemize}
+\textbf{Why:} Parallel 2D (\texttt{uUsePixels}) and 3D (private DebugDraw3D
+view-projection) stacks made adding objects and composing them on
+\symbolref{SceneGraph} implicit. One matrix contract is the simple, powerful
+path.\\
+\textbf{Consequences:} \pathref{WorldLook.h}, \pathref{MeshVisual.h},
+\pathref{Camera.h}; \texttt{DebugDraw3D} is removed.
+\texttt{render3dTest} drives \symbolref{MeshVisual} attachments with the product
+camera. No render graph, materials, or model loader.\\
+\textbf{Refines:} D-R14, D-R15. Overlay vs world remains a camera/layer split,
+not a 2D engine vs 3D engine.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

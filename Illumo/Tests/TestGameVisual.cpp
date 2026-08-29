@@ -1,17 +1,19 @@
 // GameVisual primitive host: shapes + sprites via MockBackend (no OpenGL).
 
 #include <Illumo/Rendering/Camera.h>
-#include <Illumo/Rendering/Primitives/DebugDraw3D.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <cmath>
+#include <cstring>
+#include <glm/gtc/type_ptr.hpp>
 
 static TestCounters g;
 
@@ -129,74 +131,6 @@ testRendererFrameContext()
 }
 
 static void
-testDebugDraw3DDynamicMeshReuse()
-{
-  testSection("DebugDraw3D: dirty geometry reuses dynamic mesh handles");
-  NullRenderWindow window(640, 480);
-  EnvVars env;
-  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
-  MockBackend mock;
-  mock.Initialize();
-  Renderer renderer(&window, &env, &camera, &mock, false);
-  DebugDraw3D debugDraw;
-  debugDraw.prepare(&renderer);
-  debugDraw.addAxes();
-
-  renderer.BeginFrame();
-  testTrue(g,
-           debugDraw.AppendCommands(&renderer),
-           "initial debug geometry emits tokens");
-  renderer.EndFrame();
-  const RenderCommand* firstMesh =
-    findSubmittedCommand(mock, CommandType::SetMesh, 0);
-  testTrue(g, firstMesh != nullptr, "initial debug draw binds a mesh");
-  MeshHandle initialMeshHandle{};
-  if (firstMesh != nullptr) {
-    initialMeshHandle = firstMesh->bindMesh.handle;
-  }
-  testEqSize(g,
-             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
-             1u,
-             "initial debug geometry uploads one dynamic buffer");
-
-  mock.resetCounters();
-  renderer.BeginFrame();
-  testTrue(g,
-           debugDraw.AppendCommands(&renderer),
-           "unchanged debug geometry emits tokens");
-  renderer.EndFrame();
-  const RenderCommand* unchangedMesh =
-    findSubmittedCommand(mock, CommandType::SetMesh, 0);
-  testTrue(g,
-           initialMeshHandle.isValid() && unchangedMesh != nullptr &&
-             initialMeshHandle == unchangedMesh->bindMesh.handle,
-           "unchanged debug geometry keeps its mesh handle");
-  testEqSize(g,
-             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
-             0u,
-             "unchanged debug geometry skips buffer uploads");
-
-  debugDraw.addWireCube(
-    glm::vec3(0.0f), glm::vec3(1.0f), ColorRgba{ 255, 255, 255, 255 });
-  mock.resetCounters();
-  renderer.BeginFrame();
-  testTrue(g,
-           debugDraw.AppendCommands(&renderer),
-           "expanded debug geometry emits tokens");
-  renderer.EndFrame();
-  const RenderCommand* expandedMesh =
-    findSubmittedCommand(mock, CommandType::SetMesh, 0);
-  testTrue(g,
-           initialMeshHandle.isValid() && expandedMesh != nullptr &&
-             initialMeshHandle == expandedMesh->bindMesh.handle,
-           "growth inside retained capacity keeps the mesh handle");
-  testEqSize(g,
-             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
-             1u,
-             "expanded debug geometry updates the retained buffer");
-}
-
-static void
 testGameVisualShapesEmitTokens()
 {
   testSection("GameVisual: filled/outline/line shapes emit tokens");
@@ -250,6 +184,34 @@ testGameVisualShapesEmitTokens()
   testTrue(g,
            mock.countNonEmptyOfType(CommandType::SetPipelineState) >= 1u,
            "pipeline state set");
+  bool foundOverlayMvp = false;
+  bool overlayMatchesScreen = false;
+  bool foundPixelMode = false;
+  const Matrix4 expectedOverlay = WorldLook::overlayProjection(640.0f, 480.0f);
+  const float* expectedPtr = glm::value_ptr(expectedOverlay);
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetUniformMat4 &&
+        std::strcmp(command.uniformMat4.name, WorldLook::kMvpUniform) == 0) {
+      foundOverlayMvp = true;
+      overlayMatchesScreen = true;
+      for (int e = 0; e < 16; ++e) {
+        if (std::abs(command.uniformMat4.m[e] - expectedPtr[e]) > 0.0001f) {
+          overlayMatchesScreen = false;
+        }
+      }
+    }
+    if (command.commandType == CommandType::SetUniformInt &&
+        std::strcmp(command.uniformInt.name, "uUsePixels") == 0 &&
+        command.uniformInt.value == 1) {
+      foundPixelMode = true;
+    }
+  }
+  testTrue(g, foundOverlayMvp, "overlay shapes push uMVP");
+  testTrue(g,
+           overlayMatchesScreen,
+           "overlay uMVP is the Y-down screen ortho, not the world camera");
+  testTrue(g, !foundPixelMode, "overlay shapes do not set uUsePixels=1");
 }
 
 static void
@@ -700,9 +662,6 @@ registerGameVisualTests(IllumoTestRegistry& registry)
 {
   registry.add("Illumo.Renderer.FrameContext",
                []() { return runGameVisualCase(testRendererFrameContext); });
-  registry.add("Illumo.DebugDraw3D.DynamicMeshReuse", []() {
-    return runGameVisualCase(testDebugDraw3DDynamicMeshReuse);
-  });
   registry.add("Illumo.GameVisual.Shapes", []() {
     return runGameVisualCase(testGameVisualShapesEmitTokens);
   });

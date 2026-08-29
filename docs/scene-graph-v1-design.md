@@ -118,10 +118,11 @@ backend-neutral commands and may use the supplied world transform directly or
 compose it with camera state. The attachment must outlive any render traversal
 that can reach it.
 
-`DebugDraw3D` implements this attachment contract as the first concrete
-consumer. Direct drawing keeps its existing model matrix; scene attachment
-composes `nodeWorld * modelMatrix` without mutating the drawable. This proves
-the seam while leaving the existing diagnostic dispatch unchanged.
+`MeshVisual` implements this attachment contract as the world mesh/sprite
+consumer (D-R21; formerly `DebugDraw3D`). Direct drawing uses identity node
+world; scene attachment composes `cameraVP * nodeWorld * local` (billboard
+optional) without mutating the drawable. Overlay UI is not migrated into the
+graph.
 
 `SceneGraph` owns nodes and derives from `DrawableBase`. Its
 `AppendCommands(Renderer*)` updates dirty world transforms and visits effective

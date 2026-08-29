@@ -23,6 +23,8 @@ registerAllocatorTests(IllumoTestRegistry& registry);
 void
 registerGameVisualTests(IllumoTestRegistry& registry);
 void
+registerMeshVisualTests(IllumoTestRegistry& registry);
+void
 registerIllumoHostTests(IllumoTestRegistry& registry);
 void
 registerTextureUploadPolicyTests(IllumoTestRegistry& registry);
@@ -42,6 +44,7 @@ createRegistry()
   registerRuntimeUtilityTests(registry);
   registerAllocatorTests(registry);
   registerGameVisualTests(registry);
+  registerMeshVisualTests(registry);
   registerIllumoHostTests(registry);
   registerTextureUploadPolicyTests(registry);
   registerSysCmdLineTests(registry);

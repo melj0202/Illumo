@@ -1,3 +1,4 @@
+#include <Illumo/Rendering/Camera.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -6,8 +7,11 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <iterator>
 #include <string>
 #include <vector>
@@ -160,6 +164,63 @@ testCameraCoordinatesAndMatrices()
   testTrue(g,
            std::isfinite(mvp[0][0]) && std::isfinite(mvp[3][1]),
            "MVP matrix is finite");
+}
+
+static void
+testCameraPerspectiveLookAt()
+{
+  testSection("Camera: perspective look-at and orthographic restore");
+  EnvVars env;
+  env.setVar("WinX", 800);
+  env.setVar("WinY", 600);
+  Camera camera(glm::vec2(200.0f, 150.0f), 2.0f, &env);
+  testTrue(g,
+           camera.getProjectionType() == ProjectionType::Orthographic,
+           "default projection is orthographic");
+
+  const glm::vec2 worldBefore = camera.ScreenToWorld(glm::vec2(500.0f, 250.0f));
+  camera.lookAt(glm::vec3(12.0f, 9.0f, 12.0f),
+                glm::vec3(0.0f, 0.0f, 0.0f),
+                glm::vec3(0.0f, 1.0f, 0.0f));
+  camera.setPerspective(55.0f, 0.1f, 100.0f);
+  camera.setProjectionType(ProjectionType::Perspective);
+
+  const float aspect = 800.0f / 600.0f;
+  const glm::mat4 expectedView = glm::lookAt(glm::vec3(12.0f, 9.0f, 12.0f),
+                                             glm::vec3(0.0f, 0.0f, 0.0f),
+                                             glm::vec3(0.0f, 1.0f, 0.0f));
+  const glm::mat4 view = camera.GetViewMatrix();
+  bool viewMatches = true;
+  for (int i = 0; i < 16; ++i) {
+    if (std::fabs(glm::value_ptr(view)[i] - glm::value_ptr(expectedView)[i]) >
+        0.0001f) {
+      viewMatches = false;
+    }
+  }
+  testTrue(g, viewMatches, "perspective view matches glm::lookAt");
+
+  const glm::mat4 expectedProjection =
+    glm::perspective(glm::radians(55.0f), aspect, 0.1f, 100.0f);
+  const glm::mat4 projection = camera.GetProjectionMatrix(aspect);
+  bool projectionMatches = true;
+  for (int i = 0; i < 16; ++i) {
+    if (std::fabs(glm::value_ptr(projection)[i] -
+                  glm::value_ptr(expectedProjection)[i]) > 0.0001f) {
+      projectionMatches = false;
+    }
+  }
+  testTrue(
+    g, projectionMatches, "perspective projection matches glm::perspective");
+
+  camera.setProjectionType(ProjectionType::Orthographic);
+  const glm::vec2 worldAfter = camera.ScreenToWorld(glm::vec2(500.0f, 250.0f));
+  testTrue(g,
+           nearlyEqual(worldBefore.x, worldAfter.x) &&
+             nearlyEqual(worldBefore.y, worldAfter.y),
+           "restoring orthographic keeps ScreenToWorld");
+  testTrue(g,
+           nearlyEqual(camera.GetPosition().x, 200.0f),
+           "2D pan state survives perspective");
 }
 
 static void
@@ -460,6 +521,8 @@ registerServiceTests(IllumoTestRegistry& registry)
   registry.add("Illumo.Camera.CoordinatesAndMatrices", []() {
     return runServiceCase(testCameraCoordinatesAndMatrices);
   });
+  registry.add("Illumo.Camera.PerspectiveLookAt",
+               []() { return runServiceCase(testCameraPerspectiveLookAt); });
   registry.add("Illumo.EnvVars.TypesAndPersistence",
                []() { return runServiceCase(testEnvVarsTypesAndPersistence); });
   registry.add("Illumo.EnvVars.ApplicationPath",

@@ -3,12 +3,14 @@
 #include <Illumo/Rendering/IMesh.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
 #include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 static void
 includeBounds(bool& any,
@@ -903,12 +905,12 @@ GameVisual::AppendCommands(Renderer* value)
   }
   const float width = static_cast<float>(dimensions[0]);
   const float height = static_cast<float>(dimensions[1]);
-  const int usePixels = space == PrimitiveSpace::Pixels ? 1 : 0;
+  const bool usePixels = space == PrimitiveSpace::Pixels;
   const float uiScale = value != nullptr ? value->getUiScale() : 1.0f;
   const float resolutionX =
-    (usePixels != 0 && uiScale > 0.0f) ? width / uiScale : width;
+    (usePixels && uiScale > 0.0f) ? width / uiScale : width;
   const float resolutionY =
-    (usePixels != 0 && uiScale > 0.0f) ? height / uiScale : height;
+    (usePixels && uiScale > 0.0f) ? height / uiScale : height;
   float mvp[16] = {
     1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
   };
@@ -925,6 +927,10 @@ GameVisual::AppendCommands(Renderer* value)
       const glm::mat4 matrix = camera->GetMVPMatrix(aspect);
       std::memcpy(mvp, &matrix[0][0], sizeof(mvp));
     }
+  } else {
+    const Matrix4 overlay =
+      WorldLook::overlayProjection(resolutionX, resolutionY);
+    std::memcpy(mvp, glm::value_ptr(overlay), sizeof(mvp));
   }
 
   for (size_t i = 0; i < drawBatches.size(); ++i) {
@@ -934,12 +940,13 @@ GameVisual::AppendCommands(Renderer* value)
     }
     value->pushSetMesh(batch.kind == BatchKind::Shape ? shapeMeshHandle
                                                       : spriteMeshHandle);
-    value->pushUniformInt("uUsePixels", usePixels);
-    value->pushUniformVec2("u_resolution", resolutionX, resolutionY);
-    value->pushUniformMat4("uMVP", mvp);
+    value->pushUniformVec2(
+      WorldLook::kResolutionUniform, resolutionX, resolutionY);
+    value->pushUniformMat4(WorldLook::kMvpUniform, mvp);
     if (batch.kind == BatchKind::Sprite) {
-      value->pushUniformInt("uTexture", 0);
-      value->pushSetTexture(batch.textureHandle, 0);
+      value->pushUniformInt(WorldLook::kTextureUniform,
+                            WorldLook::kTextureUnit);
+      value->pushSetTexture(batch.textureHandle, WorldLook::kTextureUnit);
     }
     value->pushDrawIndexed(batch.quadCount * 6, batch.firstQuad * 6);
   }

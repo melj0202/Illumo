@@ -3,7 +3,8 @@
 #include "TestHarness.h"
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Platform/SaveLoad.h>
-#include <Illumo/Rendering/Primitives/DebugDraw3D.h>
+#include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
@@ -247,11 +248,11 @@ testRender3dTestFlag()
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
 
-  DebugDraw3D* staticScene =
+  MeshVisual* staticScene =
     CellGameModuleTestAccess::getRender3dTestStatic(fixture.module);
-  DebugDraw3D* animatedScene =
+  MeshVisual* animatedScene =
     CellGameModuleTestAccess::getRender3dTestAnimated(fixture.module);
-  DebugDraw3D* childScene =
+  MeshVisual* childScene =
     CellGameModuleTestAccess::getRender3dTestChild(fixture.module);
   SceneGraph* render3dGraph =
     CellGameModuleTestAccess::getRender3dSceneGraph(fixture.module);
@@ -272,7 +273,19 @@ testRender3dTestFlag()
              fixture.scene.drawablesIn(RenderLayerId::World)[0] ==
                render3dGraph,
              "diagnostic scene registers SceneGraph in World layer");
+    const SceneNodeHandle root = render3dGraph->getRoot(0);
+    testTrue(g,
+             render3dGraph->getRenderAttachment(root) == staticScene,
+             "root attaches the axes/grid MeshVisual");
+    testTrue(g,
+             render3dGraph->getChildCount(root) == 1u &&
+               render3dGraph->getRenderAttachment(
+                 render3dGraph->getChild(root, 0)) == animatedScene,
+             "orbit child attaches the cube MeshVisual");
   }
+  testTrue(g,
+           fixture.camera.getProjectionType() == ProjectionType::Perspective,
+           "flag drives the product camera in perspective");
 
   fixture.env.setVar("render3dTest", false);
   fixture.scene.ClearDrawables();
@@ -286,6 +299,9 @@ testRender3dTestFlag()
     fixture.scene.drawablesIn(RenderLayerId::World)[0] ==
       CellGameModuleTestAccess::getCellContext(fixture.module)->getCanvasView(),
     "normal World presentation is restored");
+  testTrue(g,
+           fixture.camera.getProjectionType() == ProjectionType::Orthographic,
+           "disabling the flag restores the orthographic CA camera");
 }
 
 static void

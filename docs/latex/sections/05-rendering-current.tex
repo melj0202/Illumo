@@ -60,9 +60,11 @@ instantiate a graph.
         (not a multi-target GPU pass).
   \item \textbf{RenderStyle} --- Renderer-owned generational registry: shader handle +
         \texttt{PipelineState} defaults (\texttt{Canvas}, \texttt{UiText},
-        \texttt{Console}, \texttt{Shape}, \texttt{Sprite}). Custom 2D styles
-        use the same camera, texture, and resolution binding conventions. GPU
-        programs still live in backend registries.
+        \texttt{Console}, \texttt{Shape}, \texttt{Sprite}). Canonical Shape/Sprite
+        programs consume \texttt{uMVP} only (\symbolref{WorldLook}). Overlay
+        chrome supplies a Y-down screen ortho; world objects supply camera
+        view-projection times node world. GPU programs still live in backend
+        registries.
   \item \symbolref{DrawableBase} --- type-erased list entry; virtual
         \texttt{Draw} + virtual \texttt{AppendCommands} (default returns false).
         \textbf{No GL handle ownership} on the base (D-R6). Content handles
@@ -78,20 +80,14 @@ instantiate a graph.
         transparent painter order is never changed by a global texture sort.
         Dynamic buffers reserve 1,024 quads, double as needed, and stop at a
         configurable 65,536 default ceiling.
-  \item \symbolref{DebugDraw3D} is a deliberately narrow token drawable and
-        \symbolref{ISceneRenderAttachment} for
-        colored axes, ground grids, wire cubes, and solid cubes. It reuses the
-        existing position-plus-RGBA mesh layout and Shape shader through local
-        depth-tested line and triangle styles. Callers supply a complete
-        perspective view-projection matrix and optional model matrix. When it
-        is attached to a scene node, it composes node-world and local model
-        matrices without mutating either; it owns
-        no camera, materials,
-        model loading, or lighting. Compose it in World before
-        2D presentation, which remains painter ordered in one main pass. Its
-        line and triangle meshes are dynamic retained resources: geometry changes
-        upload vertices through \texttt{UpdateBuffer}, while capacity growth alone
-        replaces the backing allocation.
+  \item \symbolref{MeshVisual} (D-R21) is the world mesh host and
+        \symbolref{ISceneRenderAttachment}: colored lines/triangles, textured
+        quads (sprites), and optional camera-facing billboards. It clones
+        Shape/Sprite styles with depth-tested pipelines and emits
+        \texttt{uMVP}. Compose complex objects as child scene nodes, each with
+        one attachment. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
+        meshes upload dirty vertices through \texttt{UpdateBuffer}; capacity
+        growth replaces the backing allocation.
 \end{itemize}
 
 \subsection{Managed texture and shader assets (D-R17)}

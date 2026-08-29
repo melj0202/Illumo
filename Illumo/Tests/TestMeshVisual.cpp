@@ -1,0 +1,354 @@
+#include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Primitives/MeshVisual.h>
+#include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/WorldLook.h>
+#include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Services/EnvVars.h>
+#include <Illumo/Testing/MockBackend.h>
+#include <Illumo/Testing/TestHarness.h>
+#include <Illumo/Testing/TestHelpers.h>
+#include <Illumo/Testing/TestRegistry.h>
+#include <cmath>
+#include <cstring>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+static TestCounters g;
+
+static bool
+matricesNear(const float* left, const glm::mat4& right)
+{
+  if (left == nullptr) {
+    return false;
+  }
+  const float* rightPtr = glm::value_ptr(right);
+  for (int i = 0; i < 16; ++i) {
+    if (std::abs(left[i] - rightPtr[i]) > 0.0001f) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static const RenderCommand*
+findSubmittedCommand(const MockBackend& mock, CommandType type, size_t ordinal)
+{
+  size_t found = 0;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == type) {
+      if (found == ordinal) {
+        return &command;
+      }
+      found += 1;
+    }
+  }
+  return nullptr;
+}
+
+static const RenderCommand*
+findSubmittedUniformMat4(const MockBackend& mock,
+                         const char* name,
+                         size_t ordinal)
+{
+  size_t found = 0;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType != CommandType::SetUniformMat4) {
+      continue;
+    }
+    if (std::strcmp(command.uniformMat4.name, name) != 0) {
+      continue;
+    }
+    if (found == ordinal) {
+      return &command;
+    }
+    found += 1;
+  }
+  return nullptr;
+}
+
+static bool
+submittedUsePixelsOne(const MockBackend& mock)
+{
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetUniformInt &&
+        std::strcmp(command.uniformInt.name, "uUsePixels") == 0 &&
+        command.uniformInt.value == 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static int
+runMeshVisualCase(void (*testFunction)())
+{
+  g.failures = 0;
+  testFunction();
+  return g.failures;
+}
+
+static void
+testMeshVisualDynamicMeshReuse()
+{
+  testSection("MeshVisual: dirty geometry reuses dynamic mesh handles");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addAxes();
+
+  renderer.BeginFrame();
+  testTrue(
+    g, visual.AppendCommands(&renderer), "initial geometry emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* firstMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g, firstMesh != nullptr, "initial draw binds a mesh");
+  MeshHandle initialMeshHandle{};
+  if (firstMesh != nullptr) {
+    initialMeshHandle = firstMesh->bindMesh.handle;
+  }
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "initial geometry uploads one dynamic buffer");
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(
+    g, visual.AppendCommands(&renderer), "unchanged geometry emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* unchangedMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           initialMeshHandle.isValid() && unchangedMesh != nullptr &&
+             initialMeshHandle == unchangedMesh->bindMesh.handle,
+           "unchanged geometry keeps its mesh handle");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             0u,
+             "unchanged geometry skips buffer uploads");
+
+  visual.addWireCube(
+    glm::vec3(0.0f), glm::vec3(1.0f), ColorRgba{ 255, 255, 255, 255 });
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(
+    g, visual.AppendCommands(&renderer), "expanded geometry emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* expandedMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           initialMeshHandle.isValid() && expandedMesh != nullptr &&
+             initialMeshHandle == expandedMesh->bindMesh.handle,
+           "growth inside retained capacity keeps the mesh handle");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "expanded geometry updates the retained buffer");
+}
+
+static void
+testMeshVisualSpriteAndCube()
+{
+  testSection("MeshVisual: sprite and cube emit the canonical look");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  unsigned char px[4] = { 255, 255, 255, 255 };
+  TextureHandle texture = renderer.enrollTexture(px, 1, 1, 4);
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+  visual.addSprite(texture,
+                   glm::vec3(0.0f, 0.0f, 0.0f),
+                   glm::vec2(2.0f, 2.0f),
+                   ColorRgba{ 255, 255, 255, 255 },
+                   MeshFacing::World);
+
+  Scene scene(&window, &camera);
+  scene.AddDrawable(&visual, RenderLayerId::World);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::SetShader) >= 2u,
+           "cube and sprite bind styles");
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::SetTexture) >= 1u,
+           "sprite binds a texture");
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 2u,
+           "cube and sprite draw");
+  testTrue(g,
+           findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0) != nullptr,
+           "draws push uMVP");
+  testTrue(
+    g, !submittedUsePixelsOne(mock), "world draws do not set uUsePixels=1");
+}
+
+static void
+testMeshVisualBillboard()
+{
+  testSection("MeshVisual: billboard faces the camera");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  camera.lookAt(glm::vec3(10.0f, 0.0f, 0.0f),
+                glm::vec3(0.0f, 0.0f, 0.0f),
+                glm::vec3(0.0f, 1.0f, 0.0f));
+  camera.setPerspective(55.0f, 0.1f, 100.0f);
+  camera.setProjectionType(ProjectionType::Perspective);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  unsigned char px[4] = { 255, 255, 255, 255 };
+  TextureHandle texture = renderer.enrollTexture(px, 1, 1, 4);
+
+  MeshVisual worldAligned;
+  worldAligned.prepare(&renderer);
+  worldAligned.addSprite(texture,
+                         glm::vec3(0.0f, 0.0f, 0.0f),
+                         glm::vec2(1.0f, 1.0f),
+                         ColorRgba{},
+                         MeshFacing::World);
+
+  MeshVisual billboard;
+  billboard.prepare(&renderer);
+  billboard.addSprite(texture,
+                      glm::vec3(0.0f, 0.0f, 0.0f),
+                      glm::vec2(1.0f, 1.0f),
+                      ColorRgba{},
+                      MeshFacing::Billboard);
+
+  Scene scene(&window, &camera);
+  scene.AddDrawable(&worldAligned, RenderLayerId::World);
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+  const RenderCommand* worldMvpCmd =
+    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
+  testTrue(g, worldMvpCmd != nullptr, "world-aligned sprite submits uMVP");
+  float worldMvp[16] = {};
+  if (worldMvpCmd != nullptr) {
+    std::memcpy(worldMvp, worldMvpCmd->uniformMat4.m, sizeof(worldMvp));
+  }
+
+  mock.resetCounters();
+  Scene billboardScene(&window, &camera);
+  billboardScene.AddDrawable(&billboard, RenderLayerId::World);
+  renderer.BeginFrame();
+  renderer.RenderScene(&billboardScene, &camera);
+  renderer.EndFrame();
+  const RenderCommand* billboardMvpCmd =
+    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
+  testTrue(g, billboardMvpCmd != nullptr, "billboard sprite submits uMVP");
+  float billboardMvp[16] = {};
+  if (billboardMvpCmd != nullptr) {
+    std::memcpy(
+      billboardMvp, billboardMvpCmd->uniformMat4.m, sizeof(billboardMvp));
+  }
+
+  const float aspect = 640.0f / 480.0f;
+  const glm::mat4 viewProjection = camera.GetMVPMatrix(aspect);
+  const glm::mat4 view = camera.GetViewMatrix();
+  Transform3D spriteLocal;
+  spriteLocal.scale = Vector3(1.0f, 1.0f, 1.0f);
+  const glm::mat4 expectedWorld = viewProjection * spriteLocal.toMatrix();
+  const glm::mat4 expectedBillboard =
+    viewProjection * WorldLook::billboardWorld(spriteLocal.toMatrix(), view);
+  testTrue(g,
+           worldMvpCmd != nullptr && matricesNear(worldMvp, expectedWorld),
+           "world-aligned uMVP is camera VP times local");
+  testTrue(g,
+           billboardMvpCmd != nullptr &&
+             matricesNear(billboardMvp, expectedBillboard),
+           "billboard uMVP uses WorldLook::billboardWorld");
+  testTrue(g,
+           worldMvpCmd != nullptr && billboardMvpCmd != nullptr &&
+             !matricesNear(worldMvp, expectedBillboard),
+           "side-on camera makes billboard differ from world-aligned");
+}
+
+static void
+testMeshVisualSceneAttachment()
+{
+  testSection("MeshVisual: scene node world transform composes into uMVP");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.25f), ColorRgba{ 255, 255, 255, 255 });
+
+  SceneGraph graph;
+  const SceneNodeHandle node = graph.createNode();
+  Matrix4 translation =
+    glm::translate(Matrix4(1.0f), Vector3(2.0f, 0.0f, 0.0f));
+  testTrue(g,
+           graph.setLocalTransform(node, translation),
+           "node translation is stored");
+  testTrue(g,
+           graph.setRenderAttachment(node, &visual),
+           "MeshVisual attaches to the node");
+
+  Scene scene(&window, &camera);
+  scene.AddDrawable(&graph, RenderLayerId::World);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+
+  const RenderCommand* mvp =
+    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
+  const float aspect = 640.0f / 480.0f;
+  const glm::mat4 expected = camera.GetMVPMatrix(aspect) * translation;
+  testTrue(g, mvp != nullptr, "attachment submits uMVP");
+  testTrue(g,
+           mvp != nullptr && matricesNear(mvp->uniformMat4.m, expected),
+           "uMVP equals camera MVP times node world");
+  testTrue(
+    g, !submittedUsePixelsOne(mock), "attachment does not use pixel mode");
+}
+
+void
+registerMeshVisualTests(IllumoTestRegistry& registry)
+{
+  registry.add("Illumo.MeshVisual.DynamicMeshReuse", []() {
+    return runMeshVisualCase(testMeshVisualDynamicMeshReuse);
+  });
+  registry.add("Illumo.MeshVisual.SpriteAndCube",
+               []() { return runMeshVisualCase(testMeshVisualSpriteAndCube); });
+  registry.add("Illumo.MeshVisual.Billboard",
+               []() { return runMeshVisualCase(testMeshVisualBillboard); });
+  registry.add("Illumo.MeshVisual.SceneAttachment", []() {
+    return runMeshVisualCase(testMeshVisualSceneAttachment);
+  });
+}

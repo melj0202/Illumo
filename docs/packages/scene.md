@@ -21,6 +21,7 @@ render list.
 V1 is main-thread affine and deliberately excludes ECS components, update
 callbacks, serialization, prefabs, bounds/culling, physics, scripting, and
 retained UI. The current IllumoGame cellular-automata path does not instantiate
-a graph; Engine and `CellGameModule` remain unwired. The complete contract and
-rollout boundary are in `../scene-graph-v1-design.md`; formal decision D-E8
-records the architecture.
+a graph except the opt-in `render3dTest` diagnostic, which attaches `MeshVisual`
+hosts to scene nodes. The complete contract and rollout boundary are in
+`../scene-graph-v1-design.md`; formal decisions D-E8 and D-R21 record the
+architecture.
