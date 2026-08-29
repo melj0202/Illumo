@@ -49,16 +49,17 @@ Optional deeper reading (not required to resume work):
 
 ## 0. One-line summary
 
-**The workspace separates the reusable `Illumo` static library from the
-`IllumoGame` cellular-automata simulator. Illumo owns the generic application
-runner, platform entry/dialogs, BuildInfo, SysCmdLine, host, services,
-rendering, persistent scene hierarchy, assets, and module lifetime; IllumoGame
-owns only CA policy, configuration metadata, Game, Rulesets, persistence
-behavior, and its required module factory. Production simulator state remains
-signed-coordinate `SparseCellGrid`; retained `SceneGraph` nodes are a separate
-future-project facility; rendering remains an enroll-once token stream through
-`IBackend`; dense
-`CellGrid`/`Canvas` remain compatibility fixtures only.**
+**The workspace separates the reusable `Illumo` static library from in-tree
+applications. Illumo owns the generic application runner, platform
+entry/dialogs, BuildInfo, SysCmdLine, host, services, rendering, persistent
+scene hierarchy, assets, and module lifetime. `IllumoGame` owns CA policy and
+`.illumo` persistence. `IllEd` is the SceneGraph world editor that writes
+`.ilsc` documents so later Illumo applications can be bootstrapped from
+authored scenes. Production simulator state remains signed-coordinate
+`SparseCellGrid`; `SceneGraph` is the retained world hierarchy consumed by
+IllEd, not CA cell storage; rendering remains an enroll-once token stream
+through `IBackend`; dense `CellGrid`/`Canvas` remain compatibility fixtures
+only.**
 
 ---
 
@@ -778,6 +779,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-008** | House style: avoid `auto`; no namespaces; no recursion; third-party via PR. |
 | **D-N1** | Historical unified Illumo identity; superseded for product/executable/test identity by D-N2 while retained for the library, repository, host, and `.illumo` format. |
 | **D-N2** | `IllumoGame` is the simulator executable, window, CLI/help/version, console, and product-visible identity. |
+| **D-N3** | `IllEd` is the in-tree world-editor application identity (`IllEd.exe`, `.ilsc`, `IllEd.*` tests). |
 | **D-B1** | `DebugModule` is composed by the engine runner only in Debug; Release must neither compile nor register it. Refined by D-E7. |
 | **D-CLI1** | Services own generic console mechanics; `CellGameModule` registers domain commands and help/completion metadata. |
 | **D-UI1** | Console editing and caret placement use measured text geometry; one enlarged batch must fit a full help page. |
@@ -885,6 +887,7 @@ disabled.
 | **D-E7** | Illumo owns platform entry/dialogs, BuildInfo, SysCmdLine, logging lifetime, DebugModule composition, and the frame loop. IllumoGame contains only CA Game/Rulesets/configuration metadata and its required-module factory. |
 | **D-E8** | Illumo owns an additive persistent `SceneGraph` with generational graph-local handles, deterministic hierarchy/transform state, and borrowed token render attachments. |
 | **D-E9** | Debug `DebugModule` is a global overlay: optional modules update before the required product module and dispatch after it. Product input yields while the console is open. |
+| **D-E10** | `.ilsc` v1 is the editor-owned UTF-8 JSON scene interchange; SceneGraph does not serialize itself. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and version 3 topology persistence. |

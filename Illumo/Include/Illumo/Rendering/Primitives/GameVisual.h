@@ -60,6 +60,14 @@ public:
                  float y1,
                  ColorRgba color,
                  float lineWidth = 1.0f);
+  size_t addFilledEllipse(float x, float y, float w, float h, ColorRgba color);
+  size_t addFilledTriangle(float x0,
+                           float y0,
+                           float x1,
+                           float y1,
+                           float x2,
+                           float y2,
+                           ColorRgba color);
   size_t addSprite(TextureHandle textureHandle,
                    float x,
                    float y,
@@ -199,6 +207,9 @@ private:
                       const Rect2& hostBounds);
   bool pushSpriteQuad(const SpritePrimitive& sprite, const Rect2& hostBounds);
   bool pushTextRun(const TextPrimitive& text, const Rect2& hostBounds);
+  size_t appendShape(const ShapePrimitive& shape);
+  bool pushFilledEllipse(const ShapePrimitive& shape, const Rect2& hostBounds);
+  bool pushFilledTriangle(const ShapePrimitive& shape, const Rect2& hostBounds);
   void appendBatch(BatchKind kind,
                    RenderStyleHandle styleHandle,
                    TextureHandle textureHandle,

@@ -1,0 +1,67 @@
+#pragma once
+
+#include "EditorDocument.h"
+#include "EditorToolbar.h"
+#include <Illumo/Rendering/Drawable.h>
+#include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/ResourceHandle.h>
+#include <string>
+#include <vector>
+
+class InputManager;
+class IRenderWindow;
+class Renderer;
+
+class EditorSidebar : public DrawableBase
+{
+public:
+  static constexpr float kWidth = 200.0f;
+
+  EditorSidebar(IRenderWindow* window, Renderer* renderer);
+  ~EditorSidebar() override = default;
+
+  EditorSidebar(const EditorSidebar&) = delete;
+  EditorSidebar& operator=(const EditorSidebar&) = delete;
+
+  EditorCommand update(InputManager* inputManager);
+  bool consumedPress() const { return m_consumedPress; }
+  void setAtlas(TextureHandle atlas);
+  TextureHandle atlas() const { return m_atlas; }
+  void setDetail(const EditorSceneDetail& detail);
+  void setActiveTool(EditorCommand tool);
+  EditorCommand activeTool() const { return m_activeTool; }
+  bool containsScreenPoint(float x, float y) const;
+  EditorCommand clickAtForTesting(float x, float y);
+  float sidebarX() const { return m_x; }
+  GameVisual& getVisual() { return m_visual; }
+
+  void Draw() override {}
+  bool AppendCommands(Renderer* renderer) override;
+
+private:
+  struct ToolRow
+  {
+    std::string label;
+    EditorCommand command = EditorCommand::None;
+    float y = 0.0f;
+  };
+
+  IRenderWindow* m_window;
+  Renderer* m_renderer;
+  GameVisual m_visual;
+  TextureHandle m_atlas{};
+  EditorSceneDetail m_detail;
+  EditorCommand m_activeTool;
+  bool m_mouseWasDown;
+  bool m_consumedPress;
+  float m_x;
+  float m_y;
+  float m_height;
+  float m_modeY;
+  float m_inspectorY;
+  std::vector<ToolRow> m_tools;
+
+  void updateLayout();
+  void rebuildVisual();
+  EditorCommand clickAt(float x, float y);
+};

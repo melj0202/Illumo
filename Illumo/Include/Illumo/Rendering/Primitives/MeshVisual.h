@@ -60,6 +60,12 @@ public:
   void addSolidCube(const glm::vec3& center,
                     const glm::vec3& halfExtent,
                     ColorRgba color = ColorRgba{ 200, 200, 200, 255 });
+  void addSolidPyramid(const glm::vec3& center,
+                       const glm::vec3& halfExtent,
+                       ColorRgba color = ColorRgba{ 200, 180, 120, 255 });
+  void addWireSphere(const glm::vec3& center,
+                     float radius,
+                     ColorRgba color = ColorRgba{ 180, 220, 255, 255 });
 
   size_t spriteCount() const { return sprites.size(); }
 
@@ -129,6 +135,10 @@ private:
   bool triangleUploadPending = false;
   bool spriteUploadPending = false;
 
+  void addSolidTriangle(const glm::vec3& a,
+                        const glm::vec3& b,
+                        const glm::vec3& c,
+                        ColorRgba color);
   void ensureStyles();
   bool appendCommandsWithWorld(Renderer* renderer, const glm::mat4& nodeWorld);
   void rebuildMeshes();

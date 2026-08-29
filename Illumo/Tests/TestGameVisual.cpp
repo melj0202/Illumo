@@ -215,6 +215,65 @@ testGameVisualShapesEmitTokens()
 }
 
 static void
+testGameVisualNewShapesEmitTokens()
+{
+  testSection("GameVisual: ellipse and triangle emit shape tokens");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  GameVisual visual;
+  visual.setWindow(&window);
+  visual.setCamera(&camera);
+  visual.setSpace(PrimitiveSpace::Pixels);
+  visual.setLayerHint(RenderLayerId::World);
+  visual.prepare(&renderer);
+  visual.addFilledEllipse(
+    10.0f, 20.0f, 40.0f, 24.0f, ColorRgba{ 255, 40, 40, 255 });
+  visual.addFilledTriangle(
+    80.0f, 10.0f, 120.0f, 10.0f, 100.0f, 50.0f, ColorRgba{ 40, 200, 80, 255 });
+  testEqSize(g, visual.shapeCount(), 2u, "ellipse and triangle stored");
+  testTrue(g,
+           visual.getShape(0) != nullptr &&
+             visual.getShape(0)->kind == ShapeKind::FilledEllipse,
+           "first shape is ellipse");
+  testTrue(g,
+           visual.getShape(1) != nullptr &&
+             visual.getShape(1)->kind == ShapeKind::FilledTriangle,
+           "second shape is triangle");
+
+  Scene scene(&window, &camera);
+  scene.AddDrawable(&visual, RenderLayerId::World);
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+
+  testTrue(
+    g, mock.getLastNonEmptySubmittedCount() > 0, "new-shape frame non-empty");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "ellipse+triangle upload one shape buffer");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             1u,
+             "ellipse+triangle emit one indexed draw");
+  const RenderCommand* draw =
+    findSubmittedCommand(mock, CommandType::DrawIndexed, 0);
+  testTrue(g,
+           draw != nullptr && draw->drawIndexed.elementCount >= 6u,
+           "new 2D kinds emit triangle indices");
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::SetShader) >= 1u,
+           "new 2D kinds bind a shader");
+}
+
+static void
 testGameVisualSpritesBatchByTexture()
 {
   testSection("GameVisual: sprites batch by texture handle");
@@ -664,6 +723,9 @@ registerGameVisualTests(IllumoTestRegistry& registry)
                []() { return runGameVisualCase(testRendererFrameContext); });
   registry.add("Illumo.GameVisual.Shapes", []() {
     return runGameVisualCase(testGameVisualShapesEmitTokens);
+  });
+  registry.add("Illumo.GameVisual.NewShapes", []() {
+    return runGameVisualCase(testGameVisualNewShapesEmitTokens);
   });
   registry.add("Illumo.GameVisual.SpriteBatches", []() {
     return runGameVisualCase(testGameVisualSpritesBatchByTexture);

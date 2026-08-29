@@ -14,6 +14,7 @@ Illumo owns process-level system behavior:
   consumer defines `CreateIllumoApplication()` and returns only declarative
   identity, CLI metadata, defaults, and its required module factory.
 
-IllumoGame implements that definition in
-`IllumoGame/Source/Game/IllumoGameApplication.cpp`. It contains game policy but
-no process loop, logger lifetime, platform SDK code, or system parser.
+Each in-tree product implements that definition: IllumoGame in
+`IllumoGame/Source/Game/IllumoGameApplication.cpp`, IllEd in
+`IllEd/Source/IllEdApplication.cpp`. Both contain product policy only — no
+process loop, logger lifetime, platform SDK code, or system parser.

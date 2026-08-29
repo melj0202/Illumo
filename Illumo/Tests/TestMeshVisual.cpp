@@ -338,6 +338,59 @@ testMeshVisualSceneAttachment()
     g, !submittedUsePixelsOne(mock), "attachment does not use pixel mode");
 }
 
+static void
+testMeshVisualNewPrimitivesEmitTokens()
+{
+  testSection("MeshVisual: pyramid and sphere emit 3D tokens");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual pyramid;
+  pyramid.prepare(&renderer);
+  pyramid.addSolidPyramid(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 180, 80, 255 });
+  renderer.BeginFrame();
+  testTrue(g, pyramid.AppendCommands(&renderer), "pyramid appends tokens");
+  renderer.EndFrame();
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 1u,
+           "pyramid emits an indexed draw");
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::UpdateBuffer) >= 1u,
+           "pyramid uploads triangle vertices");
+  const RenderCommand* pyramidDraw =
+    findSubmittedCommand(mock, CommandType::DrawIndexed, 0);
+  testTrue(g,
+           pyramidDraw != nullptr &&
+             pyramidDraw->drawIndexed.elementCount >= 3u,
+           "pyramid draw has triangle indices");
+
+  mock.resetCounters();
+  MeshVisual sphere;
+  sphere.prepare(&renderer);
+  sphere.addWireSphere(glm::vec3(0.0f), 1.0f, ColorRgba{ 80, 180, 255, 255 });
+  renderer.BeginFrame();
+  testTrue(g, sphere.AppendCommands(&renderer), "sphere appends tokens");
+  renderer.EndFrame();
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 1u,
+           "sphere emits an indexed line draw");
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::UpdateBuffer) >= 1u,
+           "sphere uploads line vertices");
+  const RenderCommand* sphereDraw =
+    findSubmittedCommand(mock, CommandType::DrawIndexed, 0);
+  testTrue(g,
+           sphereDraw != nullptr && sphereDraw->drawIndexed.elementCount >= 6u,
+           "sphere draw has line indices");
+}
+
 void
 registerMeshVisualTests(IllumoTestRegistry& registry)
 {
@@ -350,5 +403,8 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
                []() { return runMeshVisualCase(testMeshVisualBillboard); });
   registry.add("Illumo.MeshVisual.SceneAttachment", []() {
     return runMeshVisualCase(testMeshVisualSceneAttachment);
+  });
+  registry.add("Illumo.MeshVisual.NewPrimitives", []() {
+    return runMeshVisualCase(testMeshVisualNewPrimitivesEmitTokens);
   });
 }

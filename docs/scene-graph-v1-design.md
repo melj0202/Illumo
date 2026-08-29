@@ -1,6 +1,8 @@
 # Scene graph v1 design and execution plan
 
-**Status:** Implemented library slice; unused by the current IllumoGame CA path.
+**Status:** Implemented library slice. IllEd is the first product consumer
+via an editor-owned `.ilsc` document (D-E10); the IllumoGame CA path still
+does not store cells in the graph.
 
 **Supersedes:** D-E4 only where it treated every retained scene hierarchy as
 out of scope. The existing per-frame `Scene` drawable list remains intact and

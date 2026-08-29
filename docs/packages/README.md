@@ -10,6 +10,7 @@ IllumoGame projects. They are documentation, not build inputs.
 | `engine.md` | Illumo host, context, modules, and failure semantics |
 | `scene.md` | Persistent nodes, hierarchy, transforms, and render attachments |
 | `game.md` | IllumoGame canvas, simulation, editing, and persistence |
+| `illed.md` | IllEd world editor, SceneGraph documents, and `.ilsc` |
 | `rendering.md` | Public renderer boundary and private OpenGL implementation |
 | `services.md` | Generic Illumo services versus IllumoGame policy |
 | `foundation.md` | Dependency-light public utilities |

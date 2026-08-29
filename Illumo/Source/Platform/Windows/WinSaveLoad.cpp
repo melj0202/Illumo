@@ -13,7 +13,7 @@ buildDialogFilter(const SaveLoadDialogSpec& specification)
   const std::string pattern = specification.extensionPattern.empty()
                                 ? "*.ILLUMO"
                                 : specification.extensionPattern;
-  std::string filter = description + " (.illumo)";
+  std::string filter = description + " (" + pattern + ")";
   filter.push_back('\0');
   filter += pattern;
   filter.push_back('\0');
@@ -76,7 +76,7 @@ SaveLoad::GetSaveLocation(const SaveLoadDialogSpec& specification)
   ofn.lpstrFileTitle = NULL;
   ofn.nMaxFileTitle = 0;
   ofn.lpstrInitialDir = NULL;
-  ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+  ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
 
   if (!GetSaveFileNameA(&ofn)) {
     return "";

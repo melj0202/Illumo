@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/WorldLook.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -184,6 +185,78 @@ MeshVisual::addSolidCube(const glm::vec3& center,
     triangleIndices.push_back(vertexOffset + index);
   }
   geometryDirty = true;
+}
+
+void
+MeshVisual::addSolidTriangle(const glm::vec3& a,
+                             const glm::vec3& b,
+                             const glm::vec3& c,
+                             ColorRgba color)
+{
+  const unsigned int vertexOffset =
+    static_cast<unsigned int>(triangleVertices.size());
+  triangleVertices.push_back(
+    { a.x, a.y, a.z, color.r, color.g, color.b, color.a });
+  triangleVertices.push_back(
+    { b.x, b.y, b.z, color.r, color.g, color.b, color.a });
+  triangleVertices.push_back(
+    { c.x, c.y, c.z, color.r, color.g, color.b, color.a });
+  triangleIndices.push_back(vertexOffset + 0);
+  triangleIndices.push_back(vertexOffset + 1);
+  triangleIndices.push_back(vertexOffset + 2);
+  geometryDirty = true;
+}
+
+void
+MeshVisual::addSolidPyramid(const glm::vec3& center,
+                            const glm::vec3& halfExtent,
+                            ColorRgba color)
+{
+  const glm::vec3 extent = glm::max(halfExtent, glm::vec3(0.0f));
+  const glm::vec3 apex = center + glm::vec3(0.0f, extent.y, 0.0f);
+  const glm::vec3 b0 = center + glm::vec3(-extent.x, -extent.y, -extent.z);
+  const glm::vec3 b1 = center + glm::vec3(extent.x, -extent.y, -extent.z);
+  const glm::vec3 b2 = center + glm::vec3(extent.x, -extent.y, extent.z);
+  const glm::vec3 b3 = center + glm::vec3(-extent.x, -extent.y, extent.z);
+  addSolidTriangle(b0, b1, b2, color);
+  addSolidTriangle(b0, b2, b3, color);
+  addSolidTriangle(apex, b0, b1, color);
+  addSolidTriangle(apex, b1, b2, color);
+  addSolidTriangle(apex, b2, b3, color);
+  addSolidTriangle(apex, b3, b0, color);
+}
+
+void
+MeshVisual::addWireSphere(const glm::vec3& center,
+                          float radius,
+                          ColorRgba color)
+{
+  const float safeRadius = std::max(radius, 0.0f);
+  const int kSegments = 16;
+  const float step = 6.28318530718f / static_cast<float>(kSegments);
+  for (int ring = 0; ring < 3; ++ring) {
+    for (int i = 0; i < kSegments; ++i) {
+      const float a0 = step * static_cast<float>(i);
+      const float a1 = step * static_cast<float>(i + 1);
+      const float c0 = std::cos(a0) * safeRadius;
+      const float s0 = std::sin(a0) * safeRadius;
+      const float c1 = std::cos(a1) * safeRadius;
+      const float s1 = std::sin(a1) * safeRadius;
+      glm::vec3 p0 = center;
+      glm::vec3 p1 = center;
+      if (ring == 0) {
+        p0 += glm::vec3(c0, s0, 0.0f);
+        p1 += glm::vec3(c1, s1, 0.0f);
+      } else if (ring == 1) {
+        p0 += glm::vec3(c0, 0.0f, s0);
+        p1 += glm::vec3(c1, 0.0f, s1);
+      } else {
+        p0 += glm::vec3(0.0f, c0, s0);
+        p1 += glm::vec3(0.0f, c1, s1);
+      }
+      addLine(p0, p1, color);
+    }
+  }
 }
 
 bool

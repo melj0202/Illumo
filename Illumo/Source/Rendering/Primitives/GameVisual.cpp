@@ -171,6 +171,52 @@ GameVisual::addLine(float x0,
   shape.y1 = y1;
   shape.color = color;
   shape.lineWidth = lineWidth;
+  return appendShape(shape);
+}
+
+size_t
+GameVisual::addFilledEllipse(float x,
+                             float y,
+                             float w,
+                             float h,
+                             ColorRgba color)
+{
+  ShapePrimitive shape;
+  shape.kind = ShapeKind::FilledEllipse;
+  shape.rect = { x, y, w, h };
+  shape.color = color;
+  return appendShape(shape);
+}
+
+size_t
+GameVisual::addFilledTriangle(float x0,
+                              float y0,
+                              float x1,
+                              float y1,
+                              float x2,
+                              float y2,
+                              ColorRgba color)
+{
+  ShapePrimitive shape;
+  shape.kind = ShapeKind::FilledTriangle;
+  shape.x0 = x0;
+  shape.y0 = y0;
+  shape.x1 = x1;
+  shape.y1 = y1;
+  shape.x2 = x2;
+  shape.y2 = y2;
+  const float minX = std::min(x0, std::min(x1, x2));
+  const float minY = std::min(y0, std::min(y1, y2));
+  const float maxX = std::max(x0, std::max(x1, x2));
+  const float maxY = std::max(y0, std::max(y1, y2));
+  shape.rect = { minX, minY, maxX - minX, maxY - minY };
+  shape.color = color;
+  return appendShape(shape);
+}
+
+size_t
+GameVisual::appendShape(const ShapePrimitive& shape)
+{
   shapes.push_back(shape);
   VisualItem item;
   item.kind = VisualItemKind::Shape;
@@ -548,6 +594,53 @@ GameVisual::pushShapeQuad(Point2 p0,
 }
 
 bool
+GameVisual::pushFilledEllipse(const ShapePrimitive& shape,
+                              const Rect2& hostBounds)
+{
+  const Rect2 bounds = shape.rect;
+  const float cx = bounds.x + bounds.w * 0.5f;
+  const float cy = bounds.y + bounds.h * 0.5f;
+  const float rx = bounds.w * 0.5f;
+  const float ry = bounds.h * 0.5f;
+  const int kSegments = 16;
+  const float step = 6.28318530718f / static_cast<float>(kSegments);
+  Point2 center = transformPoint({ cx, cy }, bounds, shape.transform);
+  center = applyHostTransform(center, hostBounds);
+  for (int i = 0; i < kSegments; ++i) {
+    const float a0 = step * static_cast<float>(i);
+    const float a1 = step * static_cast<float>(i + 1);
+    Point2 rim0 =
+      transformPoint({ cx + std::cos(a0) * rx, cy + std::sin(a0) * ry },
+                     bounds,
+                     shape.transform);
+    Point2 rim1 =
+      transformPoint({ cx + std::cos(a1) * rx, cy + std::sin(a1) * ry },
+                     bounds,
+                     shape.transform);
+    rim0 = applyHostTransform(rim0, hostBounds);
+    rim1 = applyHostTransform(rim1, hostBounds);
+    if (!pushShapeQuad(center, rim0, rim1, rim1, shape.color)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool
+GameVisual::pushFilledTriangle(const ShapePrimitive& shape,
+                               const Rect2& hostBounds)
+{
+  const Rect2 bounds = shape.rect;
+  Point2 p0 = transformPoint({ shape.x0, shape.y0 }, bounds, shape.transform);
+  Point2 p1 = transformPoint({ shape.x1, shape.y1 }, bounds, shape.transform);
+  Point2 p2 = transformPoint({ shape.x2, shape.y2 }, bounds, shape.transform);
+  p0 = applyHostTransform(p0, hostBounds);
+  p1 = applyHostTransform(p1, hostBounds);
+  p2 = applyHostTransform(p2, hostBounds);
+  return pushShapeQuad(p0, p1, p2, p2, shape.color);
+}
+
+bool
 GameVisual::pushLineAsQuad(Point2 p0,
                            Point2 p1,
                            float width,
@@ -812,6 +905,14 @@ GameVisual::rebuildGeometry()
                            applyHostTransform(p2, hostBounds),
                            applyHostTransform(p3, hostBounds),
                            shape.color)) {
+          break;
+        }
+      } else if (shape.kind == ShapeKind::FilledEllipse) {
+        if (!pushFilledEllipse(shape, hostBounds)) {
+          break;
+        }
+      } else if (shape.kind == ShapeKind::FilledTriangle) {
+        if (!pushFilledTriangle(shape, hostBounds)) {
           break;
         }
       } else {

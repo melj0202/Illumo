@@ -8,11 +8,13 @@ file as an architecture catalog.
 ## Project identity and boundaries
 
 This C++23 workspace contains the product-agnostic `Illumo` static library and
-the `IllumoGame` cellular-automata learning sandbox that consumes it. The
-supported product path is Windows, GLFW, OpenGL, and the sparse infinite or
-finite-toroidal canvas. Illumo is intended to become a reusable runtime and
-rendering foundation for future projects; the current checkout still contains
-IllumoGame as its first in-tree consumer.
+the in-tree applications that consume it. `IllumoGame` is the
+cellular-automata learning sandbox. `IllEd` is the SceneGraph world editor
+used to bootstrap later Illumo applications (editor versus runtime, in the
+same sense as Unreal Editor versus Unreal). The supported product path is
+Windows, GLFW, OpenGL, and — for the simulator — the sparse infinite or
+finite-toroidal canvas. Illumo remains a reusable runtime and rendering
+foundation; application policy stays in the consuming product.
 
 The approved persistent `SceneGraph` v1 is deliberately bounded to handles,
 hierarchy, transforms, subtree state, and token render attachments. Do not
@@ -222,6 +224,7 @@ Ruleset truth:
 | Host, services, modules | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers |
 | Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
 | CA modes and editor | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
+| World editor and `.ilsc` | `IllEd/Source/EditorModule.*`, `EditorDocument.*`, `IlscCodec.*`, `EditorToolbar.*` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
 | Domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
 | Bounded view, fade, dirty upload | `IllumoGame/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
@@ -236,7 +239,7 @@ Ruleset truth:
 | Headless backend | `Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h` |
 | Input, console, env, logging, system CLI | `Illumo/Source/Services/*` |
 | OS entry and native save/load | `Illumo/Source/Platform/*` |
-| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*` |
+| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*` |
 | Canonical architecture | `docs/architecture-consensus.md` |
 | Formal decisions | `docs/latex/sections/09-design-decision-log.tex` |
 
@@ -253,12 +256,14 @@ ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 Focused test work:
 
 ```powershell
-cmake --build build --config Release --target IllumoTests IllumoGameTests
+cmake --build build --config Release --target IllumoTests IllumoGameTests IllEdTests
 ctest --test-dir build -C Release -N -L IllumoWorkspace
 build/Illumo/Release/IllumoTests.exe --list
 build/IllumoGame/Release/IllumoGameTests.exe --list
+build/IllEd/Release/IllEdTests.exe --list
 build/Illumo/Release/IllumoTests.exe --run <Illumo.exact-name>
 build/IllumoGame/Release/IllumoGameTests.exe --run <IllumoGame.exact-name>
+build/IllEd/Release/IllEdTests.exe --run <IllEd.exact-name>
 ```
 
 Clang/LLVM coverage:
@@ -298,12 +303,13 @@ exact checks and translation units when static analysis is requested.
 
 - Illumo owns process entry, platform services, BuildInfo, SysCmdLine, logging
   lifetime, DebugModule composition, and the frame loop. IllumoGame supplies
-  only CA defaults/CLI metadata and its required game-module factory; Illumo
-  must not depend on Game or Rulesets.
+  only CA defaults/CLI metadata and its required game-module factory; IllEd
+  supplies editor defaults/CLI metadata and its required editor-module
+  factory. Illumo must not depend on Game, Rulesets, or IllEd.
 - `IllumoContext` is a non-owning pointer bag frozen after engine startup.
   Failed optional modules remain inactive; a failed required module rolls back
-  every accepted module and fails startup. `CellGameModule` is required and
-  `DebugModule` is optional.
+  every accepted module and fails startup. Each product supplies one required
+  module; `DebugModule` is optional.
 - Production consumers include only `<Illumo/...>` headers. Test-only support
   is exposed separately by `Illumo::TestSupport`.
 - Runtime window, input, module, rendering, and OpenGL work is main-thread
@@ -381,6 +387,7 @@ Subsystem rules live in:
   its Windows, Linux, and macOS child guidance;
 - `IllumoGame/Source/Game/AGENTS.md` and
   `IllumoGame/Source/Rulesets/AGENTS.md`;
+- `IllEd/Source/AGENTS.md` and `IllEd/Tests/AGENTS.md`;
 - `Illumo/Source/Services/AGENTS.md`, `Illumo/Tests/AGENTS.md`, and
   `IllumoGame/Tests/AGENTS.md`;
 - `Illumo/Source/Rendering/AGENTS.md` plus

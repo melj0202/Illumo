@@ -1635,6 +1635,43 @@ existing file contract.\\
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-N3 --- IllEd is the world-editor identity}
+\begin{decisionbox}[title={D-N3 \quad 2026-08-29}]
+\textbf{Decision:} Add \textbf{IllEd} as a second in-tree Illumo application.
+Use \texttt{IllEd} for the executable, window title, CLI help/version output,
+console branding, editor test runner, and \texttt{IllEd.*} test namespace.
+Persist authored scenes as UTF-8 JSON \texttt{.ilsc} files, not
+\texttt{.illumo}.\\
+\textbf{Why:} Illumo is the reusable runtime. IllumoGame is one product (the
+cellular simulator). IllEd is the editor used to bootstrap later Illumo
+applications, analogous to Unreal Editor versus Unreal, not a second CA
+sandbox.\\
+\textbf{Consequences:} Workspace CMake builds three primary executables
+(\texttt{IllumoGame}, \texttt{IllEd}, plus test runners). IllEd links only
+\texttt{Illumo::Illumo}. Simulator saves remain sparse version 3.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-E10 --- .ilsc is editor-owned scene interchange}
+\begin{decisionbox}[title={D-E10 \quad 2026-08-29}]
+\textbf{Decision:} Scene files are a product-owned document, not a
+\texttt{SceneGraph} feature. \texttt{.ilsc} version 1 is pretty-printed UTF-8
+JSON with \texttt{format = ilsc}, stable string node ids, parent references,
+transforms, enabled/visible flags, a camera view hint, and attachment kinds
+\texttt{empty} and \texttt{solid\_cube}. \texttt{SceneNodeHandle} values are
+never persisted. Loads validate completely, then replace live state.\\
+\textbf{Why:} D-E8 forbids serialization, names, and attachment ownership on
+the graph. Handles are graph-local generations. Other tools should compose
+through a readable file rather than through SceneGraph internals.\\
+\textbf{Consequences:} IllEd reconstructs a \texttt{SceneGraph} from the
+document and owns \texttt{MeshVisual} attachments. Extra JSON keys may be
+ignored; unknown kinds and cycles fail closed. Promote the codec into Illumo
+when a second loader exists. This does not change \texttt{.illumo} or CA
+persistence.\\
+\textbf{Refines:} D-E8.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{D-G1 --- Pattern I/O is a side path, not save v4}
 \begin{decisionbox}[title={D-G1 \quad 2026-08-21}]
 \textbf{Decision:} Editor selection, in-app \texttt{CellPattern} buffers, Golly-style

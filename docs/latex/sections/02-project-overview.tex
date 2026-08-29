@@ -2,15 +2,18 @@
 \label{sec:overview}
 
 \subsection{What the workspace contains}
-The repository has two sibling projects with one-way dependency flow.
+The repository has a reusable library and in-tree applications with one-way
+dependency flow.
 \textbf{Illumo} is a static C++ library containing the reusable host,
 application runner, platform layer, foundation, services, rendering, generic
 console/UI, persistent scene hierarchy, assets, and Debug module.
 \textbf{IllumoGame} is the interactive cellular-automata simulator that consumes
 Illumo through supported \texttt{<Illumo/...>} headers. It owns the canvas,
 rulesets, simulation and persistence policy, product commands, CA defaults, and
-a declarative application definition. It contains no process entry, native
-dialog implementation, logging lifetime, system parser, or frame loop.
+a declarative application definition. \textbf{IllEd} is the SceneGraph world
+editor that writes \texttt{.ilsc} documents so later Illumo applications can
+be authored rather than only coded. Neither product contains process entry,
+native dialog implementation, logging lifetime, system parser, or frame loop.
 
 IllumoGame supports multiple rule sets (Game of Life, Brian's Brain,
 Wireworld, \ldots), camera navigation, edit/run modes, save/load, and a compact

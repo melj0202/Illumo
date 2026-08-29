@@ -1,7 +1,8 @@
 # Source layout
 
-The repository root is the canonical CMake workspace. `IllumoGame` depends on
-the static `Illumo` library; the library has no Game or Rulesets dependency.
+The repository root is the canonical CMake workspace. `IllumoGame` and `IllEd`
+depend on the static `Illumo` library; the library has no Game, Rulesets, or
+editor-document dependency.
 
 | Path | Role |
 |---|---|
@@ -17,7 +18,10 @@ the static `Illumo` library; the library has no Game or Rulesets dependency.
 | `IllumoGame/Source/Game/` | CA defaults/CLI metadata/module factory, simulation, presentation, editor, persistence |
 | `IllumoGame/Source/Rulesets/` | CA transitions and palettes |
 | `IllumoGame/Tests/` | `IllumoGame.*` product cases |
+| `IllEd/Source/` | World-editor module factory, document model, `.ilsc` codec, toolbar |
+| `IllEd/Assets/` | Editor UI atlas and other product runtime files |
+| `IllEd/Tests/` | `IllEd.*` product cases |
 
 `Illumo/Shader`, `Illumo/Assets`, notices, dependencies, and licenses remain
-library-owned. `IllumoGame/envvars.json` is product-owned. Historical material
-under `archive/` is not built.
+library-owned. `IllumoGame/envvars.json` and `IllEd/envvars.json` are
+product-owned. Historical material under `archive/` is not built.

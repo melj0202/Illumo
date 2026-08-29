@@ -1,0 +1,11 @@
+{
+ "WinX": "1280",
+ "WinY": "720",
+ "fps": "60",
+ "fullscreen": "0",
+ "logLevel": "3",
+ "showFPS": "1",
+ "vsync": "1",
+ "uiScale": "1",
+ "msaa": "4"
+}

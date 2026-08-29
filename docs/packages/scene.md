@@ -20,8 +20,10 @@ render list.
 
 V1 is main-thread affine and deliberately excludes ECS components, update
 callbacks, serialization, prefabs, bounds/culling, physics, scripting, and
-retained UI. The current IllumoGame cellular-automata path does not instantiate
-a graph except the opt-in `render3dTest` diagnostic, which attaches `MeshVisual`
+retained UI. IllEd is the first product consumer: it rebuilds a graph from an
+editor-owned `.ilsc` document (D-E10) and never asks SceneGraph to serialize
+itself. IllumoGame's CA path still does not use the graph for cell storage,
+except the opt-in `render3dTest` diagnostic, which attaches `MeshVisual`
 hosts to scene nodes. The complete contract and rollout boundary are in
-`../scene-graph-v1-design.md`; formal decisions D-E8 and D-R21 record the
-architecture.
+`../scene-graph-v1-design.md`; formal decisions D-E8, D-E10, and D-R21 record
+the hierarchy, interchange file, and world look.

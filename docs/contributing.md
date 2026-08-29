@@ -31,12 +31,14 @@ reviewed.
   lifetime; it must not depend on Game or Rulesets.
 - IllumoGame owns only CA configuration/CLI metadata, Game, Rulesets, and its
   required game-module factory.
+- IllEd owns the world-editor document, `.ilsc` codec, toolbar, and its
+  required editor-module factory. It must not depend on Game or Rulesets.
 - IllumoGame consumes supported headers through `<Illumo/...>`; OpenGL
   implementation headers and TestSupport are not production API.
 - Game and rules code do not issue raw OpenGL calls.
 - Production rendering uses `RenderCommand` tokens through `IBackend`.
 - Keep `DebugModule` out of Release compilation and register it as optional in
-  Debug; `CellGameModule` is the required product module.
+  Debug; each product supplies its own required module.
 - The approved `SceneGraph` v1 is the retained world hierarchy. Keep it
   handle-based, backend-neutral, iterative, and separate from the per-frame
   `Rendering::Scene` list. Do not expand it into an ECS, retained UI tree,

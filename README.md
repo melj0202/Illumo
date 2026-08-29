@@ -1,9 +1,11 @@
 # Illumo workspace
 
 Illumo is a reusable static C++ runtime/rendering foundation for current and
-future projects. `IllumoGame` is the cellular-automata simulator that consumes
-it in the same repository today; moving that product to a downstream CSim
-repository is a separate packaging step.
+future projects. In-tree applications consume it through
+`CreateIllumoApplication`: `IllumoGame` is the cellular-automata simulator,
+and `IllEd` is the SceneGraph world editor used to author `.ilsc` scenes for
+later Illumo applications. Moving a product to a downstream repository is a
+separate packaging step.
 
 ## Layout
 
@@ -33,6 +35,10 @@ illumo/
     Source/Game/        # CA domain, config, module factory, editor, persistence
     Source/Rulesets/    # Cellular-automata rules
     Tests/              # IllumoGame.* product cases
+    envvars.json        # Product configuration seed
+  IllEd/                # World-editor product project
+    Source/             # Editor module, document, .ilsc codec, toolbar
+    Tests/              # IllEd.* product cases
     envvars.json        # Product configuration seed
   archive/              # Historical / non-build material
 ```
@@ -231,7 +237,13 @@ Command-line dimensions override the persisted values:
 IllumoGame.exe [-ww width] [-wh height] [-cw canvas-width] [-ch canvas-height]
 IllumoGame.exe --help
 IllumoGame.exe --version
+IllEd.exe
+IllEd.exe --help
 ```
+
+`IllEd.exe` is the SceneGraph world editor. It writes `.ilsc` JSON scenes
+(File / Edit / Create / View). Set `LaunchScene` in its `envvars.json` to
+open a file at startup. It does not simulate cellular automata.
 
 Presentation is synchronized to the monitor by default (`"vsync": "1"`). Set
 `vsync` to `0` for uncapped profiling; Debug builds also apply `toggle vsync`

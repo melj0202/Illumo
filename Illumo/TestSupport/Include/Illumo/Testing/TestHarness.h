@@ -16,6 +16,8 @@ public:
   int height;
   int fullscreenToggleCount;
   bool closeRequested;
+  double mouseX;
+  double mouseY;
 
   NullRenderWindow()
     : NullRenderWindow(1280, 720)
@@ -28,6 +30,8 @@ public:
     , height(h)
     , fullscreenToggleCount(0)
     , closeRequested(false)
+    , mouseX(0.0)
+    , mouseY(0.0)
   {
   }
 
@@ -42,7 +46,7 @@ public:
   }
   std::array<double, 2> getMouseCoords() override
   {
-    return std::array<double, 2>{ 0.0, 0.0 };
+    return std::array<double, 2>{ mouseX, mouseY };
   }
   GLFWwindow* getWindowInstance() override { return nullptr; }
   std::array<int, 2> getWindowDimensions() override
