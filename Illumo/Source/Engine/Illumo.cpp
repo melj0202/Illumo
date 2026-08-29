@@ -334,6 +334,28 @@ Illumo::applyPendingModuleTransition()
 }
 
 void
+Illumo::updateStartedModules(ModuleRequirement requirement, double dt)
+{
+  for (RegisteredModule& registration : m_modules) {
+    if (registration.started && registration.module &&
+        registration.requirement == requirement) {
+      registration.module->Update(dt);
+    }
+  }
+}
+
+void
+Illumo::dispatchStartedModules(ModuleRequirement requirement)
+{
+  for (RegisteredModule& registration : m_modules) {
+    if (registration.started && registration.module &&
+        registration.requirement == requirement) {
+      registration.module->DispatchDrawables(m_scene.get());
+    }
+  }
+}
+
+void
 Illumo::update(double dt)
 {
   if (!m_initialized || !m_modulesStarted) {
@@ -345,10 +367,14 @@ Illumo::update(double dt)
   ZoneScoped;
   m_inputManager->update();
   m_camera->Update(static_cast<float>(dt));
-  for (RegisteredModule& registration : m_modules) {
-    if (registration.started && registration.module) {
-      registration.module->Update(dt);
-    }
+  // Optional overlays (DebugModule) consume global console input first.
+  updateStartedModules(ModuleRequirement::Optional, dt);
+  updateStartedModules(ModuleRequirement::Required, dt);
+  // Key/char queues are per-frame events. Unconsumed leftovers must not
+  // retrigger on the next update.
+  if (m_inputManager != nullptr) {
+    m_inputManager->clearKeyQueue();
+    m_inputManager->clearCharQueue();
   }
 }
 
@@ -360,11 +386,9 @@ Illumo::render()
   }
   ZoneScopedN("Illumo.Render");
   m_scene->ClearDrawables();
-  for (RegisteredModule& registration : m_modules) {
-    if (registration.started && registration.module) {
-      registration.module->DispatchDrawables(m_scene.get());
-    }
-  }
+  // Product content first; optional overlays (console, FPS, demo) on top.
+  dispatchStartedModules(ModuleRequirement::Required);
+  dispatchStartedModules(ModuleRequirement::Optional);
 
   m_assetManager->pump();
   m_renderer->BeginFrame();

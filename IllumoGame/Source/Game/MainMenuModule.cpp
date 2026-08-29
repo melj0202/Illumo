@@ -306,34 +306,44 @@ MainMenuModule::Update(double dt)
 
   advanceAmbientSimulation(dt);
 
+  const bool consoleOpen =
+    ic->commandLine != nullptr && ic->commandLine->isOpen;
+
   if (m_configurationMenu != nullptr && m_configurationMenu->isOpen()) {
     m_configurationMenu->tick(static_cast<float>(dt));
-    const ConfigurationMenuAction action =
-      m_configurationMenu->update(ic->inputManager);
-    if (action == ConfigurationMenuAction::Apply) {
-      SimulatorConfiguration config;
-      std::string error;
-      if (m_configurationMenu->readConfiguration(&config, &error)) {
-        applyConfiguration(config);
+    if (!consoleOpen) {
+      const ConfigurationMenuAction action =
+        m_configurationMenu->update(ic->inputManager);
+      if (action == ConfigurationMenuAction::Apply) {
+        SimulatorConfiguration config;
+        std::string error;
+        if (m_configurationMenu->readConfiguration(&config, &error)) {
+          applyConfiguration(config);
+          m_configurationMenu->close();
+        } else {
+          m_configurationMenu->setError(error);
+        }
+      } else if (action == ConfigurationMenuAction::Cancel ||
+                 action == ConfigurationMenuAction::Exit) {
         m_configurationMenu->close();
-      } else {
-        m_configurationMenu->setError(error);
       }
-    } else if (action == ConfigurationMenuAction::Cancel ||
-               action == ConfigurationMenuAction::Exit) {
-      m_configurationMenu->close();
     }
     return;
   }
 
   updateLayout();
 
-  if (ic->inputManager != nullptr) {
+  if (!consoleOpen && ic->inputManager != nullptr) {
     std::queue<InputManager::KeyPressEvent>& keyQueue =
       ic->inputManager->getKeyQueue();
+    std::queue<InputManager::KeyPressEvent> remainingKeys;
     while (!keyQueue.empty()) {
       const InputManager::KeyPressEvent event = keyQueue.front();
       keyQueue.pop();
+      if (event.key == KeyCode::Grave) {
+        remainingKeys.push(event);
+        continue;
+      }
       if (event.action != InputAction::Press &&
           event.action != InputAction::Hold) {
         continue;
@@ -351,6 +361,7 @@ MainMenuModule::Update(double dt)
         }
       }
     }
+    keyQueue.swap(remainingKeys);
 
     std::queue<unsigned int>& charQueue = ic->inputManager->getCharQueue();
     while (!charQueue.empty()) {

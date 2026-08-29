@@ -1351,7 +1351,8 @@ CellGameModule::Update(double dt)
   if (exitConfirmOpen) {
     exitConfirmDialog->tick(static_cast<float>(dt));
     const ExitConfirmAction action =
-      exitConfirmDialog->update(ic->inputManager);
+      consoleOpen ? ExitConfirmAction::None
+                  : exitConfirmDialog->update(ic->inputManager);
     if (action == ExitConfirmAction::Confirm) {
       exitConfirmDialog->close();
       ic->window->requestClose();
@@ -1374,7 +1375,8 @@ CellGameModule::Update(double dt)
   if (configurationMenu != nullptr && configurationMenu->isOpen()) {
     configurationMenu->tick(static_cast<float>(dt));
     const ConfigurationMenuAction action =
-      configurationMenu->update(ic->inputManager);
+      consoleOpen ? ConfigurationMenuAction::None
+                  : configurationMenu->update(ic->inputManager);
     if (action == ConfigurationMenuAction::Cancel) {
       configurationMenu->close();
     } else if (action == ConfigurationMenuAction::Exit) {
