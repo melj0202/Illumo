@@ -21,8 +21,8 @@ manual smoke evidence.
 ```powershell
 cmake --build build --config Release --target IllumoGameTests
 ctest --test-dir build -C Release -L IllumoGame --output-on-failure
-build/IllumoGame/Release/IllumoGameTests.exe --list
-build/IllumoGame/Release/IllumoGameTests.exe --run <exact-test-name>
+build/Release/IllumoGameTests.exe --list
+build/Release/IllumoGameTests.exe --run <exact-test-name>
 ```
 
 The aggregate workspace label is `IllumoWorkspace`; combined coverage retains

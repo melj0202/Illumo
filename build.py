@@ -1178,6 +1178,8 @@ def executable_path(
     else:
         project_directory = "Illumo"
     candidates = (
+        build_directory / configuration / f"{name}{suffix}",
+        build_directory / f"{name}{suffix}",
         build_directory / project_directory / configuration / f"{name}{suffix}",
         build_directory / project_directory / f"{name}{suffix}",
     )

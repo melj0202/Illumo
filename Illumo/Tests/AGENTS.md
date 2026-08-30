@@ -21,6 +21,6 @@ headless, deterministic, and isolated under `build/Testing/Illumo/`.
 ```powershell
 cmake --build build --config Release --target IllumoTests
 ctest --test-dir build -C Release -L Illumo --output-on-failure
-build/Illumo/Release/IllumoTests.exe --list
-build/Illumo/Release/IllumoTests.exe --run <exact-test-name>
+build/Release/IllumoTests.exe --list
+build/Release/IllumoTests.exe --run <exact-test-name>
 ```

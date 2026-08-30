@@ -15,8 +15,8 @@ sources into this runner.
 ```powershell
 cmake --build build --config Release --target IllEdTests
 ctest --test-dir build -C Release -L IllEd --output-on-failure
-build/IllEd/Release/IllEdTests.exe --list
-build/IllEd/Release/IllEdTests.exe --run <exact-test-name>
+build/Release/IllEdTests.exe --list
+build/Release/IllEdTests.exe --run <exact-test-name>
 ```
 
 The aggregate workspace label is `IllumoWorkspace`. Combined coverage does not

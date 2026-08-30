@@ -6,8 +6,8 @@ generated CTest discovery.
 
 ```powershell
 cmake --build build --config Release --target IllEdTests
-build/IllEd/Release/IllEdTests.exe --list
-build/IllEd/Release/IllEdTests.exe --run IllEd.Ilsc.RoundTrip
+build/Release/IllEdTests.exe --list
+build/Release/IllEdTests.exe --run IllEd.Ilsc.RoundTrip
 ctest --test-dir build -C Release -L IllEd --output-on-failure
 ```
 

@@ -7,8 +7,8 @@ process under `build/Testing/IllumoGame/`. The runner supports `--list`, exact
 ```powershell
 cmake -S . -B build -DILLUMO_BUILD_DOCUMENTATION=OFF
 cmake --build build --config Release --target IllumoGameTests
-build/IllumoGame/Release/IllumoGameTests.exe --list
-build/IllumoGame/Release/IllumoGameTests.exe --run IllumoGame.CellGame.SaveLoadRoundTrip
+build/Release/IllumoGameTests.exe --list
+build/Release/IllumoGameTests.exe --run IllumoGame.CellGame.SaveLoadRoundTrip
 ctest --test-dir build -C Release -L IllumoGame --output-on-failure
 ```
 

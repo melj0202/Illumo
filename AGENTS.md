@@ -258,12 +258,12 @@ Focused test work:
 ```powershell
 cmake --build build --config Release --target IllumoTests IllumoGameTests IllEdTests
 ctest --test-dir build -C Release -N -L IllumoWorkspace
-build/Illumo/Release/IllumoTests.exe --list
-build/IllumoGame/Release/IllumoGameTests.exe --list
-build/IllEd/Release/IllEdTests.exe --list
-build/Illumo/Release/IllumoTests.exe --run <Illumo.exact-name>
-build/IllumoGame/Release/IllumoGameTests.exe --run <IllumoGame.exact-name>
-build/IllEd/Release/IllEdTests.exe --run <IllEd.exact-name>
+build/Release/IllumoTests.exe --list
+build/Release/IllumoGameTests.exe --list
+build/Release/IllEdTests.exe --list
+build/Release/IllumoTests.exe --run <Illumo.exact-name>
+build/Release/IllumoGameTests.exe --run <IllumoGame.exact-name>
+build/Release/IllEdTests.exe --run <IllEd.exact-name>
 ```
 
 Clang/LLVM coverage:

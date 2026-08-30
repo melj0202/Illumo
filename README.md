@@ -152,11 +152,11 @@ cmake --build build --config Release
 ```
 
 The canonical workspace build produces `Illumo`, `IllumoGameCore`,
-`IllumoGame`, `IllumoTests`, `IllumoGameTests`, and the consumer-header smoke
-target. With a Visual Studio generator, the orchestrator's default artifacts
-are under `build-workspace/Illumo/Release/` and
-`build-workspace/IllumoGame/Release/`; the direct CMake example above uses
-`build/` instead.
+`IllumoGame`, `IllEdCore`, `IllEd`, `IllumoTests`, `IllumoGameTests`,
+`IllEdTests`, and the consumer-header smoke target in a single output
+folder. With a Visual Studio generator, the orchestrator's default artifacts
+are under `build-workspace/Release/`; the direct CMake example above uses
+`build/Release/` instead.
 
 The library can also configure independently, without IllumoGame:
 
@@ -176,8 +176,9 @@ Headless tests (no GPU):
 ```bash
 ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 ctest --test-dir build -C Release -N -L IllumoWorkspace
-# library: build/Illumo/Release/IllumoTests.exe --run Illumo.Host.ConfigurationOwnership
-# game: build/IllumoGame/Release/IllumoGameTests.exe --run IllumoGame.CellGame.SaveLoadRoundTrip
+# library: build/Release/IllumoTests.exe --run Illumo.Host.ConfigurationOwnership
+# game: build/Release/IllumoGameTests.exe --run IllumoGame.CellGame.SaveLoadRoundTrip
+# editor: build/Release/IllEdTests.exe --run IllEd.Ilsc.RoundTrip
 ```
 
 CTest registers one process-isolated entry per logical case. Both runners

@@ -1,10 +1,12 @@
 include_guard(GLOBAL)
 
 function(_illumo_runtime_output_directory output_variable)
-  if(CMAKE_CONFIGURATION_TYPES)
-    set(runtime_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+  if(DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY AND NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY STREQUAL "")
+    set(runtime_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+  elseif(CMAKE_CONFIGURATION_TYPES)
+    set(runtime_directory "${CMAKE_BINARY_DIR}/$<CONFIG>")
   else()
-    set(runtime_directory "${CMAKE_CURRENT_BINARY_DIR}")
+    set(runtime_directory "${CMAKE_BINARY_DIR}")
   endif()
   set(${output_variable} "${runtime_directory}" PARENT_SCOPE)
 endfunction()
@@ -34,12 +36,6 @@ function(illumo_stage_runtime target_name)
   _illumo_runtime_output_directory(runtime_directory)
   set(stage_target "${target_name}RuntimeStage")
   add_custom_target(${stage_target}
-    COMMAND ${CMAKE_COMMAND} -E remove_directory
-      "${runtime_directory}/Shader"
-    COMMAND ${CMAKE_COMMAND} -E remove_directory
-      "${runtime_directory}/Assets"
-    COMMAND ${CMAKE_COMMAND} -E remove_directory
-      "${runtime_directory}/licenses"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${ILLUMO_LIBRARY_SOURCE_DIR}/Shader"
       "${runtime_directory}/Shader"
@@ -95,8 +91,6 @@ function(illumo_stage_shaders target_name source_directory)
   _illumo_runtime_output_directory(runtime_directory)
   set(stage_target "${target_name}ShaderStage")
   add_custom_target(${stage_target}
-    COMMAND ${CMAKE_COMMAND} -E remove_directory
-      "${runtime_directory}/Shader"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${source_directory}"
       "${runtime_directory}/Shader"

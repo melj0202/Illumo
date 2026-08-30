@@ -14,5 +14,7 @@
  "speedFactor": "1",
  "tps": "12",
  "vsync": "1",
- "cellFadeSpeed": "6"
+ "cellFadeSpeed": "6",
+ "uiScale": "1",
+ "msaa": "4"
 }
