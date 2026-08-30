@@ -1,4 +1,6 @@
+#include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/Transform3D.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <cmath>
@@ -287,6 +289,85 @@ testSceneGraphRenderExtraction()
            "render callbacks cannot mutate graph storage during traversal");
 }
 
+static void
+testTransformConversions()
+{
+  testSection(
+    "SceneGraph: 2D and 3D transform decomposition and reconstruction");
+
+  // 1. Transform2D translation
+  {
+    Transform2D t;
+    t.x = 12.5f;
+    t.y = -34.2f;
+    const Matrix4 mat = t.toMatrix();
+    const Transform2D parsed = Transform2D::fromMatrix(mat);
+    testTrue(
+      g, std::abs(parsed.x - 12.5f) < 0.0001f, "2D translation X round trips");
+    testTrue(
+      g, std::abs(parsed.y - -34.2f) < 0.0001f, "2D translation Y round trips");
+    testTrue(
+      g, std::abs(parsed.scaleX - 1.0f) < 0.0001f, "2D unit scale X preserved");
+    testTrue(
+      g, std::abs(parsed.scaleY - 1.0f) < 0.0001f, "2D unit scale Y preserved");
+    testTrue(g,
+             std::abs(parsed.rotationRadians) < 0.0001f,
+             "2D zero rotation preserved");
+  }
+
+  // 2. Transform2D scale, rotation, and translation combined
+  {
+    Transform2D t;
+    t.x = -5.0f;
+    t.y = 8.0f;
+    t.scaleX = 2.5f;
+    t.scaleY = 0.5f;
+    t.rotationRadians = 0.785398f; // ~45 deg
+    const Matrix4 mat = t.toMatrix();
+    const Transform2D parsed = Transform2D::fromMatrix(mat);
+    testTrue(g, std::abs(parsed.x - t.x) < 0.001f, "2D combined translation X");
+    testTrue(g, std::abs(parsed.y - t.y) < 0.001f, "2D combined translation Y");
+    testTrue(
+      g, std::abs(parsed.scaleX - t.scaleX) < 0.001f, "2D combined scale X");
+    testTrue(
+      g, std::abs(parsed.scaleY - t.scaleY) < 0.001f, "2D combined scale Y");
+    testTrue(g,
+             std::abs(parsed.rotationRadians - t.rotationRadians) < 0.001f,
+             "2D combined rotation");
+  }
+
+  // 3. Transform3D translation and scale
+  {
+    Transform3D t;
+    t.position = Vector3(10.0f, -20.0f, 30.0f);
+    t.scale = Vector3(2.0f, 0.5f, 4.0f);
+    const Matrix4 mat = t.toMatrix();
+    const Transform3D parsed = Transform3D::fromMatrix(mat);
+    testTrue(g, std::abs(parsed.position.x - 10.0f) < 0.0001f, "3D position X");
+    testTrue(
+      g, std::abs(parsed.position.y - -20.0f) < 0.0001f, "3D position Y");
+    testTrue(g, std::abs(parsed.position.z - 30.0f) < 0.0001f, "3D position Z");
+    testTrue(g, std::abs(parsed.scale.x - 2.0f) < 0.0001f, "3D scale X");
+    testTrue(g, std::abs(parsed.scale.y - 0.5f) < 0.0001f, "3D scale Y");
+    testTrue(g, std::abs(parsed.scale.z - 4.0f) < 0.0001f, "3D scale Z");
+  }
+
+  // 4. Transform3D Euler rotation round-trip
+  {
+    const Transform3D t = Transform3D::fromEuler(0.2f, 0.4f, 0.6f);
+    const Matrix4 mat = t.toMatrix();
+    const Transform3D parsed = Transform3D::fromMatrix(mat);
+    const Matrix4 reconstructedMat = parsed.toMatrix();
+    for (int col = 0; col < 4; ++col) {
+      for (int row = 0; row < 4; ++row) {
+        testTrue(g,
+                 std::abs(mat[col][row] - reconstructedMat[col][row]) < 0.001f,
+                 "3D rotation matrix round-trip invariant");
+      }
+    }
+  }
+}
+
 static int
 runSceneGraphCase(void (*testFunction)())
 {
@@ -307,4 +388,6 @@ registerSceneGraphTests(IllumoTestRegistry& registry)
   registry.add("Illumo.SceneGraph.RenderExtraction", []() {
     return runSceneGraphCase(testSceneGraphRenderExtraction);
   });
+  registry.add("Illumo.SceneGraph.TransformConversions",
+               []() { return runSceneGraphCase(testTransformConversions); });
 }

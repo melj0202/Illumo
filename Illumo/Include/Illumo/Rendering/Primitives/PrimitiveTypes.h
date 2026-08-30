@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Illumo/Foundation/MathTypes.h>
+#include <cmath>
 #include <cstdint>
 
 // Shared value types for render primitives (D-R15).
@@ -32,6 +34,35 @@ struct Transform2D
   // Normalized within the transformed primitive or GameVisual content bounds.
   float pivotX = 0.0f;
   float pivotY = 0.0f;
+
+  Matrix4 toMatrix() const
+  {
+    const Matrix4 translationMatrix =
+      glm::translate(Matrix4(1.0f), Vector3(x, y, 0.0f));
+    const Matrix4 rotationMatrix =
+      glm::rotate(Matrix4(1.0f), rotationRadians, Vector3(0.0f, 0.0f, 1.0f));
+    const Matrix4 scaleMatrix =
+      glm::scale(Matrix4(1.0f), Vector3(scaleX, scaleY, 1.0f));
+    return translationMatrix * rotationMatrix * scaleMatrix;
+  }
+
+  static Transform2D fromMatrix(const Matrix4& matrix)
+  {
+    Transform2D transform;
+    transform.x = matrix[3][0];
+    transform.y = matrix[3][1];
+    transform.scaleX = glm::length(Vector3(matrix[0]));
+    transform.scaleY = glm::length(Vector3(matrix[1]));
+    const float det2D =
+      matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
+    if (det2D < 0.0f) {
+      transform.scaleY = -transform.scaleY;
+    }
+    if (transform.scaleX > 0.00001f) {
+      transform.rotationRadians = std::atan2(matrix[0][1], matrix[0][0]);
+    }
+    return transform;
+  }
 };
 
 struct TextureRegion

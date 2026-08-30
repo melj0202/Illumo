@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Illumo/Foundation/MathTypes.h>
+#include <Illumo/Scene/Transform3D.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 // Canonical world/overlay look (D-R21). Shape and Sprite programs position
@@ -28,10 +29,9 @@ struct WorldLook
 
   static Matrix4 billboardWorld(const Matrix4& nodeWorld, const Matrix4& view)
   {
-    const Vector3 position(nodeWorld[3][0], nodeWorld[3][1], nodeWorld[3][2]);
-    const Vector3 scale(glm::length(Vector3(nodeWorld[0])),
-                        glm::length(Vector3(nodeWorld[1])),
-                        glm::length(Vector3(nodeWorld[2])));
+    const Transform3D decomp = Transform3D::fromMatrix(nodeWorld);
+    const Vector3& position = decomp.position;
+    const Vector3& scale = decomp.scale;
     const Matrix4 invView = glm::inverse(view);
     Vector3 right(invView[0][0], invView[0][1], invView[0][2]);
     Vector3 up(invView[1][0], invView[1][1], invView[1][2]);

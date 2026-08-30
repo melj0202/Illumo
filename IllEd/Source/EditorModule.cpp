@@ -692,10 +692,9 @@ EditorModule::rebuildSelectionOverlay()
                         255 };
 
   const Matrix4 worldMat = m_document.worldMatrix(m_selectedId);
-  const Vector3 worldPos(worldMat[3][0], worldMat[3][1], worldMat[3][2]);
-  const Vector3 worldScale(glm::length(Vector3(worldMat[0])),
-                           glm::length(Vector3(worldMat[1])),
-                           glm::length(Vector3(worldMat[2])));
+  const Transform3D worldTransform = Transform3D::fromMatrix(worldMat);
+  const Vector3 worldPos = worldTransform.position;
+  const Vector3 worldScale = worldTransform.scale;
   half *= worldScale;
 
   m_selectionOverlay->addWireCube(worldPos, half, gold);

@@ -420,11 +420,13 @@ EditorDocument::pick(float worldX, float worldY, std::string* id) const
   for (size_t i = m_document.nodes.size(); i > 0; --i) {
     const IlscNode& node = m_document.nodes[i - 1];
     const Matrix4 mat = worldMatrix(node.id);
-    const float centerX = mat[3][0];
-    const float centerY = planeXZ ? mat[3][2] : mat[3][1];
-    const float scaleX = glm::length(Vector3(mat[0]));
+    const Transform3D worldTransform = Transform3D::fromMatrix(mat);
+    const float centerX = worldTransform.position.x;
+    const float centerY =
+      planeXZ ? worldTransform.position.z : worldTransform.position.y;
+    const float scaleX = worldTransform.scale.x;
     const float scaleY =
-      planeXZ ? glm::length(Vector3(mat[2])) : glm::length(Vector3(mat[1]));
+      planeXZ ? worldTransform.scale.z : worldTransform.scale.y;
     float halfX = 0.2f * std::fabs(scaleX);
     float halfY = 0.2f * std::fabs(scaleY);
     if (IlscCodec::kindHasGeometry(node.kind)) {
