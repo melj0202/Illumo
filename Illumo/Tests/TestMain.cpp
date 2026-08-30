@@ -34,6 +34,8 @@ void
 registerSceneGraphTests(IllumoTestRegistry& registry);
 void
 registerGuiKitTests(IllumoTestRegistry& registry);
+void
+registerMeshLoaderTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -47,6 +49,7 @@ createRegistry()
   registerAllocatorTests(registry);
   registerGameVisualTests(registry);
   registerMeshVisualTests(registry);
+  registerMeshLoaderTests(registry);
   registerIllumoHostTests(registry);
   registerTextureUploadPolicyTests(registry);
   registerSysCmdLineTests(registry);

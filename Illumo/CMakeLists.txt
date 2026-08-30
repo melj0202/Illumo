@@ -80,6 +80,7 @@ add_library(Illumo STATIC
   Source/Rendering/AssetManager.cpp
   Source/Rendering/Camera.cpp
   Source/Rendering/GLString.cpp
+  Source/Rendering/MeshLoader.cpp
   Source/Rendering/RendererStyles.cpp
   Source/Rendering/RenderWindow.cpp
   Source/Rendering/SplashText.cpp
@@ -150,6 +151,7 @@ if(BUILD_TESTING)
     Tests/TestAllocators.cpp
     Tests/TestGameVisual.cpp
     Tests/TestMeshVisual.cpp
+    Tests/TestMeshLoader.cpp
     Tests/TestIllumoHost.cpp
     Tests/TestTextureUploadPolicy.cpp
     Tests/TestSysCmdLine.cpp

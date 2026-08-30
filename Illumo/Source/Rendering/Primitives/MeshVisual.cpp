@@ -291,6 +291,38 @@ MeshVisual::addSolidEllipse(const glm::vec3& center,
   geometryDirty = true;
 }
 
+void
+MeshVisual::addMesh(const MeshData& mesh, ColorRgba tint)
+{
+  if (mesh.vertices.empty() || mesh.indices.empty()) {
+    return;
+  }
+
+  const unsigned int vertexOffset =
+    static_cast<unsigned int>(triangleVertices.size());
+  for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+    const MeshVertex& vertex = mesh.vertices[i];
+    unsigned char r = static_cast<unsigned char>(
+      std::clamp(vertex.color.r * static_cast<float>(tint.r), 0.0f, 255.0f));
+    unsigned char g = static_cast<unsigned char>(
+      std::clamp(vertex.color.g * static_cast<float>(tint.g), 0.0f, 255.0f));
+    unsigned char b = static_cast<unsigned char>(
+      std::clamp(vertex.color.b * static_cast<float>(tint.b), 0.0f, 255.0f));
+    unsigned char a = static_cast<unsigned char>(std::clamp(
+      vertex.color.a * (static_cast<float>(tint.a) / 255.0f) * 255.0f,
+      0.0f,
+      255.0f));
+
+    triangleVertices.push_back(
+      { vertex.position.x, vertex.position.y, vertex.position.z, r, g, b, a });
+  }
+
+  for (size_t i = 0; i < mesh.indices.size(); ++i) {
+    triangleIndices.push_back(vertexOffset + mesh.indices[i]);
+  }
+  geometryDirty = true;
+}
+
 bool
 MeshVisual::AppendCommands(Renderer* value)
 {

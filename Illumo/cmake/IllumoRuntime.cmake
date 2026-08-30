@@ -28,6 +28,7 @@ function(illumo_stage_runtime target_name)
     "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/glm/copying.txt"
     "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/json/LICENSE.MIT"
     "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/stb/LICENSE"
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tinyobjloader/LICENSE"
     "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/LICENSE")
   target_sources(${target_name} PRIVATE ${illumo_runtime_inputs})
   set_source_files_properties(${illumo_runtime_inputs}
@@ -68,6 +69,9 @@ function(illumo_stage_runtime target_name)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/stb/LICENSE"
       "${runtime_directory}/licenses/stb-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tinyobjloader/LICENSE"
+      "${runtime_directory}/licenses/tinyobjloader-LICENSE.txt"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/LICENSE"
       "${runtime_directory}/licenses/Tracy-LICENSE.txt"

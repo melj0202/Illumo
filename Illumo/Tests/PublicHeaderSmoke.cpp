@@ -25,6 +25,8 @@
 #include <Illumo/Rendering/ISceneRenderAttachment.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ITexture.h>
+#include <Illumo/Rendering/MeshData.h>
+#include <Illumo/Rendering/MeshLoader.h>
 #include <Illumo/Rendering/PipelineState.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -73,6 +75,10 @@ main()
   static_assert(std::has_virtual_destructor_v<IEnvVars>);
   static_assert(std::is_destructible_v<GameVisual>);
   static_assert(std::is_destructible_v<MeshVisual>);
+  static_assert(std::is_destructible_v<MeshData>);
+  static_assert(std::is_destructible_v<MeshLoadOptions>);
+  static_assert(std::is_destructible_v<MeshLoadResult>);
+  static_assert(std::has_virtual_destructor_v<IMeshLoaderBackend>);
   static_assert(std::is_base_of_v<ISceneRenderAttachment, MeshVisual>);
   static_assert(std::is_base_of_v<DrawableBase, MeshVisual>);
   static_assert(!std::is_copy_constructible_v<SceneGraph>);
