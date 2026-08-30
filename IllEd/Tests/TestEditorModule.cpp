@@ -348,6 +348,69 @@ testToolbarCreateClickDoesNotInsertOnUpdate()
            "Create Cube is armed after Update");
 }
 
+static void
+testOpenConsoleBlocksEditorInput()
+{
+  testSection(
+    "EditorModule: open console blocks editor input and grave is unconsumed");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "module starts");
+
+  // 1. When console is closed, Grave key is not consumed or toggled by
+  // EditorModule
+  fixture.input.clearKeyQueue();
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Grave, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.console.isOpen,
+           "EditorModule does not toggle console on Grave");
+  testTrue(g,
+           !fixture.input.getKeyQueue().empty() &&
+             fixture.input.getKeyQueue().front().key == KeyCode::Grave,
+           "Grave key remains in queue for DebugModule overlay");
+
+  // 2. When console is open, toolbar and sidebar input yield
+  fixture.console.Toggle();
+  testTrue(g, fixture.console.isOpen, "console is open");
+  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(fixture.module);
+  testTrue(g, toolbar != nullptr, "toolbar exists");
+  fixture.window.mouseX = 20.0;
+  fixture.window.mouseY = 8.0;
+  pressLeft(fixture, true);
+  fixture.module.Update(0.016);
+  testTrue(g, !toolbar->isMenuOpen(), "open console blocks toolbar clicks");
+}
+
+static void
+testEditorModuleDoesNotDispatchConsole()
+{
+  testSection("EditorModule: does not dispatch console drawable (DebugModule "
+              "responsibility)");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "module starts");
+
+  fixture.console.Toggle();
+  testTrue(g, fixture.console.isOpen, "console is open");
+  testTrue(g, fixture.console.wantsDraw(), "console wants draw");
+
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+
+  const std::vector<DrawableBase*>& uiDrawables =
+    fixture.scene.drawablesIn(RenderLayerId::UI);
+  bool consoleFoundInScene = false;
+  for (DrawableBase* drawable : uiDrawables) {
+    if (drawable == &fixture.console) {
+      consoleFoundInScene = true;
+      break;
+    }
+  }
+  testTrue(g,
+           !consoleFoundInScene,
+           "EditorModule does not add CommandLine to Scene drawables");
+}
+
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
@@ -384,6 +447,16 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.ToolbarCreateClickNoInsert", []() {
     g = {};
     testToolbarCreateClickDoesNotInsertOnUpdate();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.OpenConsoleBlocksInput", []() {
+    g = {};
+    testOpenConsoleBlocksEditorInput();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.ConsoleNotDispatchedByModule", []() {
+    g = {};
+    testEditorModuleDoesNotDispatchConsole();
     return g.failures;
   });
 }

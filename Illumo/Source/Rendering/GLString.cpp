@@ -78,6 +78,12 @@ GLString::syncVisual()
     float textY = static_cast<float>(y);
     if (panelStyle.enabled) {
       std::string measuredContent = content;
+      for (char& ch : measuredContent) {
+        const unsigned char uch = static_cast<unsigned char>(ch);
+        if (uch != '\n' && (uch < 32 || uch > 126)) {
+          ch = '?';
+        }
+      }
       const float scale = size_pt / 12.0f;
       const float textWidth =
         static_cast<float>(stb_easy_font_width(measuredContent.data())) * scale;

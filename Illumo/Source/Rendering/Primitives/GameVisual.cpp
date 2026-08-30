@@ -740,7 +740,14 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
   unsigned char color[4] = {
     text.color.r, text.color.g, text.color.b, text.color.a
   };
-  char* mutableText = const_cast<char*>(text.content.c_str());
+  std::string sanitizedText = text.content;
+  for (char& ch : sanitizedText) {
+    const unsigned char uch = static_cast<unsigned char>(ch);
+    if (uch != '\n' && (uch < 32 || uch > 126)) {
+      ch = '?';
+    }
+  }
+  char* mutableText = sanitizedText.data();
   int quadCount = stb_easy_font_print(0.0f,
                                       0.0f,
                                       mutableText,

@@ -27,6 +27,10 @@ if(NOT DEFINED CMAKE_ARCHIVE_OUTPUT_DIRECTORY)
   endif()
 endif()
 
+if(MSVC)
+  add_compile_options(/FS)
+endif()
+
 function(illumo_configure_cpp_target target_name)
   target_compile_features(${target_name} PUBLIC cxx_std_23)
 

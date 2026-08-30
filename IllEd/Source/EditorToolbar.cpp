@@ -372,11 +372,11 @@ EditorToolbar::rebuildVisual()
     if (m_is3D) {
       const unsigned char dotAlpha =
         static_cast<unsigned char>(255.0f * dotPulse);
-      m_visual.addText("●",
-                       hudX + 8.0f,
-                       hudY + 4.0f,
-                       11.0f,
-                       ColorRgba{ 70, 160, 255, dotAlpha });
+      m_visual.addFilledEllipse(hudX + 11.0f,
+                                hudY + 9.0f,
+                                6.0f,
+                                6.0f,
+                                ColorRgba{ 70, 160, 255, dotAlpha });
       m_visual.addText("3D PERSPECTIVE",
                        hudX + 22.0f,
                        hudY + 4.0f,
@@ -385,11 +385,11 @@ EditorToolbar::rebuildVisual()
     } else {
       const unsigned char dotAlpha =
         static_cast<unsigned char>(255.0f * dotPulse);
-      m_visual.addText("●",
-                       hudX + 8.0f,
-                       hudY + 4.0f,
-                       11.0f,
-                       ColorRgba{ 60, 220, 120, dotAlpha });
+      m_visual.addFilledEllipse(hudX + 11.0f,
+                                hudY + 9.0f,
+                                6.0f,
+                                6.0f,
+                                ColorRgba{ 60, 220, 120, dotAlpha });
       m_visual.addText("2D ORTHOGRAPHIC",
                        hudX + 22.0f,
                        hudY + 4.0f,

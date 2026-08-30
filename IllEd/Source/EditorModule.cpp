@@ -33,7 +33,6 @@ EditorModule::EditorModule(std::string initialScenePath)
   , m_dragging(false)
   , m_panning(false)
   , m_mouseWasDown(false)
-  , m_graveWasDown(false)
   , m_lastMouseX(0.0)
   , m_lastMouseY(0.0)
   , m_animTime(0.0f)
@@ -323,7 +322,11 @@ EditorModule::updateStatus()
     const int zoom = static_cast<int>(std::round(ic->camera->GetZoom()));
     status += "  |  Zoom: " + std::to_string(zoom) + "x";
   }
+#ifndef NDEBUG
   status += "  |  [WASD/MMB: Pan  Wheel: Zoom  ~: Console]";
+#else
+  status += "  |  [WASD/MMB: Pan  Wheel: Zoom]";
+#endif
   m_toolbar->setStatus(status);
 }
 
@@ -767,14 +770,6 @@ EditorModule::Update(double dt)
   const float dtF = static_cast<float>(dt);
   m_animTime += dtF;
 
-  if (ic->commandLine != nullptr && ic->inputManager != nullptr) {
-    const bool graveDown = ic->inputManager->isKeyPressed(KeyCode::Grave);
-    if (graveDown && !m_graveWasDown) {
-      ic->commandLine->Toggle();
-    }
-    m_graveWasDown = graveDown;
-  }
-
   if (m_toolbar) {
     m_toolbar->setWorldMode(m_document.worldMode() == IlscWorldMode::World3D);
   }
@@ -881,10 +876,6 @@ EditorModule::DispatchDrawables(Scene* scene)
   }
   if (m_confirm && m_confirm->isOpen()) {
     scene->AddDrawable(m_confirm.get(), RenderLayerId::UI);
-  }
-  if (ic != nullptr && ic->commandLine != nullptr &&
-      ic->commandLine->wantsDraw()) {
-    scene->AddDrawable(ic->commandLine, RenderLayerId::UI);
   }
 }
 

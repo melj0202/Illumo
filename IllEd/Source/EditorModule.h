@@ -58,7 +58,6 @@ private:
   bool m_dragging;
   bool m_panning;
   bool m_mouseWasDown;
-  bool m_graveWasDown;
   double m_lastMouseX;
   double m_lastMouseY;
   float m_animTime;
