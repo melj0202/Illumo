@@ -68,6 +68,8 @@ testPropertiesPickAndSceneDetail()
   testTrue(g, document.setName(pyramid, "Peak"), "sets pyramid name");
   document.setTransform(ellipse,
                         Transform3D::fromPosition(Vector3(4.0f, 0.0f, 5.0f)));
+  document.setTransform(pyramid,
+                        Transform3D::fromPosition(Vector3(4.0f, 0.0f, 0.0f)));
   std::string hit;
   testTrue(g, document.pick(4.2f, 5.1f, &hit), "picks ellipse on XZ ground");
   testEqStr(g, hit, ellipse, "pick id is ellipse");

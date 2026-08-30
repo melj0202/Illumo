@@ -259,6 +259,38 @@ MeshVisual::addWireSphere(const glm::vec3& center,
   }
 }
 
+void
+MeshVisual::addSolidEllipse(const glm::vec3& center,
+                            const glm::vec2& radius,
+                            ColorRgba color,
+                            int segments)
+{
+  const int count = std::max(segments, 3);
+  const float step = 6.28318530718f / static_cast<float>(count);
+  const unsigned int centerIndex =
+    static_cast<unsigned int>(triangleVertices.size());
+  triangleVertices.push_back(
+    { center.x, center.y, center.z, color.r, color.g, color.b, color.a });
+
+  for (int i = 0; i < count; ++i) {
+    const float angle = step * static_cast<float>(i);
+    const float x = center.x + std::cos(angle) * std::max(radius.x, 0.0f);
+    const float y = center.y + std::sin(angle) * std::max(radius.y, 0.0f);
+    triangleVertices.push_back(
+      { x, y, center.z, color.r, color.g, color.b, color.a });
+  }
+
+  for (int i = 0; i < count; ++i) {
+    const unsigned int current = centerIndex + 1 + static_cast<unsigned int>(i);
+    const unsigned int next =
+      centerIndex + 1 + static_cast<unsigned int>((i + 1) % count);
+    triangleIndices.push_back(centerIndex);
+    triangleIndices.push_back(current);
+    triangleIndices.push_back(next);
+  }
+  geometryDirty = true;
+}
+
 bool
 MeshVisual::AppendCommands(Renderer* value)
 {

@@ -2,7 +2,6 @@
 
 #include "IlscCodec.h"
 #include <Illumo/Rendering/ISceneRenderAttachment.h>
-#include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <memory>
 
@@ -27,6 +26,5 @@ public:
 
 private:
   SceneNodeKind m_kind;
-  std::unique_ptr<MeshVisual> m_draw3d;
-  std::unique_ptr<GameVisual> m_visual2d;
+  std::unique_ptr<MeshVisual> m_visual;
 };

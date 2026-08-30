@@ -389,6 +389,29 @@ testMeshVisualNewPrimitivesEmitTokens()
   testTrue(g,
            sphereDraw != nullptr && sphereDraw->drawIndexed.elementCount >= 6u,
            "sphere draw has line indices");
+
+  mock.resetCounters();
+  MeshVisual ellipse;
+  ellipse.prepare(&renderer);
+  ellipse.addSolidEllipse(glm::vec3(0.0f),
+                          glm::vec2(1.0f, 0.5f),
+                          ColorRgba{ 180, 220, 255, 255 },
+                          16);
+  renderer.BeginFrame();
+  testTrue(g, ellipse.AppendCommands(&renderer), "ellipse appends tokens");
+  renderer.EndFrame();
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 1u,
+           "ellipse emits an indexed triangle draw");
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::UpdateBuffer) >= 1u,
+           "ellipse uploads triangle vertices");
+  const RenderCommand* ellipseDraw =
+    findSubmittedCommand(mock, CommandType::DrawIndexed, 0);
+  testTrue(g,
+           ellipseDraw != nullptr &&
+             ellipseDraw->drawIndexed.elementCount == 16u * 3u,
+           "ellipse draw has 16 triangle fan indices");
 }
 
 void

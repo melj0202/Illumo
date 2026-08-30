@@ -690,15 +690,22 @@ EditorModule::rebuildSelectionOverlay()
                         static_cast<unsigned char>(205.0f * pulse),
                         static_cast<unsigned char>(60.0f * pulse),
                         255 };
-  m_selectionOverlay->addWireCube(node->transform.position, half, gold);
+
+  const Matrix4 worldMat = m_document.worldMatrix(m_selectedId);
+  const Vector3 worldPos(worldMat[3][0], worldMat[3][1], worldMat[3][2]);
+  const Vector3 worldScale(glm::length(Vector3(worldMat[0])),
+                           glm::length(Vector3(worldMat[1])),
+                           glm::length(Vector3(worldMat[2])));
+  half *= worldScale;
+
+  m_selectionOverlay->addWireCube(worldPos, half, gold);
 
   // Outer corner bracket / halo flare
   const float outerPulse = 0.5f + 0.5f * std::sin(m_animTime * 6.0f);
   const unsigned char cyanAlpha =
     static_cast<unsigned char>(180.0f * outerPulse);
   const ColorRgba haloCyan{ 66, 214, 210, cyanAlpha };
-  m_selectionOverlay->addWireCube(
-    node->transform.position, half * 1.05f, haloCyan);
+  m_selectionOverlay->addWireCube(worldPos, half * 1.05f, haloCyan);
 }
 
 void
@@ -948,8 +955,18 @@ EditorModule::applyActiveToolAt(float worldX, float worldY)
   if (id.empty()) {
     return;
   }
-  m_document.setTransform(id,
-                          m_document.makeEditPlaneTransform(worldX, worldY));
+  if (!parentId.empty()) {
+    const Matrix4 parentWorld = m_document.worldMatrix(parentId);
+    const Matrix4 invParent = glm::inverse(parentWorld);
+    const Transform3D worldTarget =
+      m_document.makeEditPlaneTransform(worldX, worldY);
+    const Matrix4 localMat = invParent * worldTarget.toMatrix();
+    const Vector3 localPos(localMat[3][0], localMat[3][1], localMat[3][2]);
+    m_document.setTransform(id, Transform3D::fromPosition(localPos));
+  } else {
+    m_document.setTransform(id,
+                            m_document.makeEditPlaneTransform(worldX, worldY));
+  }
   m_selectedId = id;
   if (m_toolbar) {
     const IlscNode* created = m_document.findNode(id);

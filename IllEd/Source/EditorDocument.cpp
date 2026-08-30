@@ -354,11 +354,22 @@ EditorDocument::translate(const std::string& id, float dx, float dy)
   if (node == nullptr) {
     return false;
   }
-  node->transform.position.x += dx;
-  if (m_document.worldMode == IlscWorldMode::World3D) {
-    node->transform.position.z += dy;
+  if (!node->parentId.empty()) {
+    const Matrix4 parentWorld = worldMatrix(node->parentId);
+    const Matrix4 invParent = glm::inverse(parentWorld);
+    const Vector3 worldDelta(
+      dx,
+      m_document.worldMode == IlscWorldMode::World3D ? 0.0f : dy,
+      m_document.worldMode == IlscWorldMode::World3D ? dy : 0.0f);
+    const Vector3 localDelta = glm::mat3(invParent) * worldDelta;
+    node->transform.position += localDelta;
   } else {
-    node->transform.position.y += dy;
+    node->transform.position.x += dx;
+    if (m_document.worldMode == IlscWorldMode::World3D) {
+      node->transform.position.z += dy;
+    } else {
+      node->transform.position.y += dy;
+    }
   }
   m_dirty = true;
   return true;
@@ -373,6 +384,31 @@ EditorDocument::makeEditPlaneTransform(float planeX, float planeY) const
   return Transform3D::fromPosition(Vector3(planeX, planeY, 0.0f));
 }
 
+Matrix4
+EditorDocument::worldMatrix(const std::string& id) const
+{
+  const IlscNode* node = findNode(id);
+  if (node == nullptr) {
+    return Matrix4(1.0f);
+  }
+  std::vector<const IlscNode*> chain;
+  const IlscNode* current = node;
+  std::unordered_set<std::string> visited;
+  while (current != nullptr && visited.find(current->id) == visited.end()) {
+    chain.push_back(current);
+    visited.insert(current->id);
+    if (current->parentId.empty()) {
+      break;
+    }
+    current = findNode(current->parentId);
+  }
+  Matrix4 worldMat = Matrix4(1.0f);
+  for (size_t i = chain.size(); i > 0; --i) {
+    worldMat = worldMat * chain[i - 1]->transform.toMatrix();
+  }
+  return worldMat;
+}
+
 bool
 EditorDocument::pick(float worldX, float worldY, std::string* id) const
 {
@@ -383,17 +419,18 @@ EditorDocument::pick(float worldX, float worldY, std::string* id) const
   const bool planeXZ = m_document.worldMode == IlscWorldMode::World3D;
   for (size_t i = m_document.nodes.size(); i > 0; --i) {
     const IlscNode& node = m_document.nodes[i - 1];
-    const float centerX = node.transform.position.x;
-    const float centerY =
-      planeXZ ? node.transform.position.z : node.transform.position.y;
-    float halfX = 0.2f * std::fabs(node.transform.scale.x);
-    float halfY = 0.2f * std::fabs(planeXZ ? node.transform.scale.z
-                                           : node.transform.scale.y);
+    const Matrix4 mat = worldMatrix(node.id);
+    const float centerX = mat[3][0];
+    const float centerY = planeXZ ? mat[3][2] : mat[3][1];
+    const float scaleX = glm::length(Vector3(mat[0]));
+    const float scaleY =
+      planeXZ ? glm::length(Vector3(mat[2])) : glm::length(Vector3(mat[1]));
+    float halfX = 0.2f * std::fabs(scaleX);
+    float halfY = 0.2f * std::fabs(scaleY);
     if (IlscCodec::kindHasGeometry(node.kind)) {
-      halfX = node.primitive.extent.x * std::fabs(node.transform.scale.x);
-      halfY =
-        (planeXZ ? node.primitive.extent.z : node.primitive.extent.y) *
-        std::fabs(planeXZ ? node.transform.scale.z : node.transform.scale.y);
+      halfX = node.primitive.extent.x * std::fabs(scaleX);
+      halfY = (planeXZ ? node.primitive.extent.z : node.primitive.extent.y) *
+              std::fabs(scaleY);
     }
     if (worldX >= centerX - halfX && worldX <= centerX + halfX &&
         worldY >= centerY - halfY && worldY <= centerY + halfY) {

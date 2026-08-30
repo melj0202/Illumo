@@ -66,6 +66,14 @@ public:
   void addWireSphere(const glm::vec3& center,
                      float radius,
                      ColorRgba color = ColorRgba{ 180, 220, 255, 255 });
+  void addSolidTriangle(const glm::vec3& a,
+                        const glm::vec3& b,
+                        const glm::vec3& c,
+                        ColorRgba color);
+  void addSolidEllipse(const glm::vec3& center,
+                       const glm::vec2& radius,
+                       ColorRgba color = ColorRgba{ 180, 220, 255, 255 },
+                       int segments = 24);
 
   size_t spriteCount() const { return sprites.size(); }
 
@@ -135,10 +143,6 @@ private:
   bool triangleUploadPending = false;
   bool spriteUploadPending = false;
 
-  void addSolidTriangle(const glm::vec3& a,
-                        const glm::vec3& b,
-                        const glm::vec3& c,
-                        ColorRgba color);
   void ensureStyles();
   bool appendCommandsWithWorld(Renderer* renderer, const glm::mat4& nodeWorld);
   void rebuildMeshes();

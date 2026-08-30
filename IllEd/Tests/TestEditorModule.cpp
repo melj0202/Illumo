@@ -456,9 +456,51 @@ testUiDrawOrder()
            "toolbar is dispatched after (on top of) sidebar");
 }
 
+static void
+test2dModeNodeRenderingEmitsTokens()
+{
+  testSection("EditorModule: 2D nodes (Rect, Ellipse, Triangle) emit render "
+              "tokens in 2D mode");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "module starts");
+  testTrue(g,
+           EditorModuleTestAccess::document(fixture.module).worldMode() ==
+             IlscWorldMode::World2D,
+           "starts in 2D mode");
+
+  EditorModuleTestAccess::createNode(fixture.module, SceneNodeKind::FilledRect);
+  EditorModuleTestAccess::createNode(fixture.module,
+                                     SceneNodeKind::FilledEllipse);
+  EditorModuleTestAccess::createNode(fixture.module,
+                                     SceneNodeKind::FilledTriangle);
+
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  for (DrawableBase* drawable :
+       fixture.scene.drawablesIn(RenderLayerId::World)) {
+    drawable->AppendCommands(&fixture.renderer);
+  }
+  fixture.renderer.EndFrame();
+
+  testTrue(g,
+           fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 3u,
+           "2D nodes emit indexed draw tokens");
+  testTrue(g,
+           fixture.mock.countNonEmptyOfType(CommandType::SetUniformMat4) >= 3u,
+           "2D nodes set MVP uniform");
+}
+
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Module.2DNodeRendering", []() {
+    g = {};
+    test2dModeNodeRenderingEmitsTokens();
+    return g.failures;
+  });
   registry.add("IllEd.Module.UiAtlasSprites", []() {
     g = {};
     testUiAtlasSpritesFromStart();
