@@ -1,6 +1,8 @@
 #pragma once
 #include <GL/glew.h> // Or your preferred OpenGL loader header
 #include <Illumo/Rendering/IShaderProgram.h>
+#include <Illumo/Rendering/ShaderPreprocessor.h>
+#include <Illumo/Services/Logger.h>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -42,35 +44,74 @@ public:
 
 private:
   bool _valid = false;
-  std::string ReadFile(const std::string& filePath)
-  {
-    std::ifstream file(filePath);
-    if (!file.is_open()) {
-      std::cerr << "ERROR::SHADER::FILE_NOT_SUCCESFULLY_READ: " << filePath
-                << std::endl;
-      return "";
-    }
-    std::stringstream stream;
-    stream << file.rdbuf();
-    return stream.str();
-  }
 
   void CompileAndLink(const ShaderSources& sources) override
   {
-    CompileAndLink(sources.vertexSource, sources.fragmentSource);
+    PreprocessOptions vsOptions;
+    vsOptions.defines = sources.defines;
+    PreprocessResult vsResult =
+      ShaderPreprocessor::Process(sources.vertexSource, vsOptions);
+    if (!vsResult.success) {
+      Logger::LogError("GLShaderProgram: Vertex preprocessor failed: " +
+                       vsResult.errorMessage);
+      _valid = false;
+      return;
+    }
+
+    PreprocessOptions fsOptions;
+    fsOptions.defines = sources.defines;
+    PreprocessResult fsResult =
+      ShaderPreprocessor::Process(sources.fragmentSource, fsOptions);
+    if (!fsResult.success) {
+      Logger::LogError("GLShaderProgram: Fragment preprocessor failed: " +
+                       fsResult.errorMessage);
+      _valid = false;
+      return;
+    }
+
+    CompileAndLinkRaw(vsResult.source, fsResult.source);
   }
 
   void CompileAndLink(const ShaderPaths& paths) override
   {
-    std::string vertexCode = ReadFile(paths.vertexPath);
-    std::string fragmentCode = ReadFile(paths.fragmentPath);
-    if (!vertexCode.empty() && !fragmentCode.empty()) {
-      CompileAndLink(vertexCode, fragmentCode);
+    PreprocessOptions vsOptions;
+    vsOptions.defines = paths.defines;
+    vsOptions.sourcePath = paths.vertexPath;
+    PreprocessResult vsResult =
+      ShaderPreprocessor::ProcessFile(paths.vertexPath, vsOptions);
+    if (!vsResult.success) {
+      Logger::LogError("GLShaderProgram: Vertex preprocessor failed for " +
+                       paths.vertexPath + ": " + vsResult.errorMessage);
+      _valid = false;
+      return;
     }
+
+    PreprocessOptions fsOptions;
+    fsOptions.defines = paths.defines;
+    fsOptions.sourcePath = paths.fragmentPath;
+    PreprocessResult fsResult =
+      ShaderPreprocessor::ProcessFile(paths.fragmentPath, fsOptions);
+    if (!fsResult.success) {
+      Logger::LogError("GLShaderProgram: Fragment preprocessor failed for " +
+                       paths.fragmentPath + ": " + fsResult.errorMessage);
+      _valid = false;
+      return;
+    }
+
+    CompileAndLinkRaw(vsResult.source, fsResult.source);
   }
 
   void CompileAndLink(const std::string& vertexSource,
                       const std::string& fragmentSource) override
+  {
+    ShaderSources sources;
+    sources.vertexSource = vertexSource;
+    sources.fragmentSource = fragmentSource;
+    CompileAndLink(sources);
+  }
+
+  void CompileAndLinkRaw(const std::string& vertexSource,
+                         const std::string& fragmentSource)
   {
     unsigned int vs = CompileShader(GL_VERTEX_SHADER, vertexSource);
     unsigned int fs = CompileShader(GL_FRAGMENT_SHADER, fragmentSource);

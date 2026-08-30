@@ -2,6 +2,7 @@
 #include "thirdparty/stb/stb_image.h"
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cctype>
@@ -228,6 +229,7 @@ AssetManager::acquireShader(const ShaderPaths& paths, AssetLoadMode mode)
     job.requestSerial = stored.requestSerial;
     job.pathA = stored.paths.vertexPath;
     job.pathB = stored.paths.fragmentPath;
+    job.defines = stored.paths.defines;
     LoadResult result = executeJob(job);
     processResult(result);
   } else {
@@ -454,6 +456,7 @@ AssetManager::queueShader(ShaderEntry& entry)
   job.requestSerial = entry.requestSerial;
   job.pathA = entry.paths.vertexPath;
   job.pathB = entry.paths.fragmentPath;
+  job.defines = entry.paths.defines;
   enqueue(job);
 }
 
@@ -521,19 +524,41 @@ AssetManager::executeJob(const LoadJob& job)
     return result;
   }
 
-  std::ifstream vertexFile(job.pathA, std::ios::binary);
-  std::ifstream fragmentFile(job.pathB, std::ios::binary);
-  if (!vertexFile.is_open() || !fragmentFile.is_open()) {
-    result.error =
-      "Unable to read shader files: " + job.pathA + " | " + job.pathB;
+  PreprocessOptions vsOptions;
+  vsOptions.defines = job.defines;
+  vsOptions.sourcePath = job.pathA;
+  PreprocessResult vsResult =
+    ShaderPreprocessor::ProcessFile(job.pathA, vsOptions);
+  if (!vsResult.success) {
+    result.error = "Vertex shader preprocessor failed for " + job.pathA + ": " +
+                   vsResult.errorMessage;
     return result;
   }
-  std::ostringstream vertexStream;
-  std::ostringstream fragmentStream;
-  vertexStream << vertexFile.rdbuf();
-  fragmentStream << fragmentFile.rdbuf();
-  result.shaderSources.vertexSource = vertexStream.str();
-  result.shaderSources.fragmentSource = fragmentStream.str();
+
+  PreprocessOptions fsOptions;
+  fsOptions.defines = job.defines;
+  fsOptions.sourcePath = job.pathB;
+  PreprocessResult fsResult =
+    ShaderPreprocessor::ProcessFile(job.pathB, fsOptions);
+  if (!fsResult.success) {
+    result.error = "Fragment shader preprocessor failed for " + job.pathB +
+                   ": " + fsResult.errorMessage;
+    return result;
+  }
+
+  result.shaderSources.vertexSource = vsResult.source;
+  result.shaderSources.fragmentSource = fsResult.source;
+  result.shaderSources.defines = job.defines;
+  result.dependencies = vsResult.fileDependencies;
+  for (size_t i = 0; i < fsResult.fileDependencies.size(); ++i) {
+    const std::string& dep = fsResult.fileDependencies[i];
+    if (std::find(result.dependencies.begin(),
+                  result.dependencies.end(),
+                  dep) == result.dependencies.end()) {
+      result.dependencies.push_back(dep);
+    }
+  }
+
   if (result.shaderSources.vertexSource.empty() ||
       result.shaderSources.fragmentSource.empty()) {
     result.error = "Shader source is empty";
@@ -588,6 +613,13 @@ AssetManager::processResult(LoadResult& result)
   entry.reloadPending = false;
   entry.vertexWriteTime = writeTime(entry.paths.vertexPath);
   entry.fragmentWriteTime = writeTime(entry.paths.fragmentPath);
+  entry.dependencies = result.dependencies;
+  entry.dependencyWriteTimes.clear();
+  for (size_t i = 0; i < entry.dependencies.size(); ++i) {
+    const std::string& dep = entry.dependencies[i];
+    entry.dependencyWriteTimes[dep] = writeTime(dep);
+  }
+
   if (!result.success ||
       !renderer->replaceShader(entry.handle, result.shaderSources)) {
     entry.lastError =
@@ -634,11 +666,29 @@ AssetManager::pollHotReload()
       writeTime(entry.paths.vertexPath);
     const std::filesystem::file_time_type fragment =
       writeTime(entry.paths.fragmentPath);
-    if (!entry.reloadPending &&
-        ((vertex != std::filesystem::file_time_type{} &&
-          vertex != entry.vertexWriteTime) ||
-         (fragment != std::filesystem::file_time_type{} &&
-          fragment != entry.fragmentWriteTime))) {
+    bool needsReload = false;
+    if (vertex != std::filesystem::file_time_type{} &&
+        vertex != entry.vertexWriteTime) {
+      needsReload = true;
+    } else if (fragment != std::filesystem::file_time_type{} &&
+               fragment != entry.fragmentWriteTime) {
+      needsReload = true;
+    } else {
+      for (size_t i = 0; i < entry.dependencies.size(); ++i) {
+        const std::string& dep = entry.dependencies[i];
+        const std::filesystem::file_time_type depTime = writeTime(dep);
+        std::unordered_map<std::string,
+                           std::filesystem::file_time_type>::const_iterator
+          itDep = entry.dependencyWriteTimes.find(dep);
+        if (depTime != std::filesystem::file_time_type{} &&
+            (itDep == entry.dependencyWriteTimes.end() ||
+             itDep->second != depTime)) {
+          needsReload = true;
+          break;
+        }
+      }
+    }
+    if (!entry.reloadPending && needsReload) {
       queueShader(entry);
     }
   }

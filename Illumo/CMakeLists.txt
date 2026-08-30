@@ -83,6 +83,7 @@ add_library(Illumo STATIC
   Source/Rendering/MeshLoader.cpp
   Source/Rendering/RendererStyles.cpp
   Source/Rendering/RenderWindow.cpp
+  Source/Rendering/ShaderPreprocessor.cpp
   Source/Rendering/SplashText.cpp
   Source/Rendering/Primitives/MeshVisual.cpp
   Source/Rendering/Primitives/GameVisual.cpp
@@ -156,6 +157,7 @@ if(BUILD_TESTING)
     Tests/TestTextureUploadPolicy.cpp
     Tests/TestSysCmdLine.cpp
     Tests/TestSceneGraph.cpp
+    Tests/TestShaderPreprocessor.cpp
     Tests/TestGuiKit.cpp
   )
   target_link_libraries(IllumoTests PRIVATE Illumo::TestSupport glfw)

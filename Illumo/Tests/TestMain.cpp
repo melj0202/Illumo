@@ -36,6 +36,7 @@ void
 registerGuiKitTests(IllumoTestRegistry& registry);
 void
 registerMeshLoaderTests(IllumoTestRegistry& registry);
+registerShaderPreprocessorTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -55,6 +56,7 @@ createRegistry()
   registerSysCmdLineTests(registry);
   registerSceneGraphTests(registry);
   registerGuiKitTests(registry);
+  registerShaderPreprocessorTests(registry);
   return registry;
 }
 
