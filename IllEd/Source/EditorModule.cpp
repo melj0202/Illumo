@@ -641,7 +641,7 @@ EditorModule::updateCamera(double dt)
   if (middle || (right && m_document.worldMode() != IlscWorldMode::World3D)) {
     if (m_panning) {
       ic->camera->Pan(
-        glm::dvec2(m_lastMouseX - mouse[0], mouse[1] - m_lastMouseY));
+        glm::dvec2(m_lastMouseX - mouse[0], m_lastMouseY - mouse[1]));
     }
     m_panning = true;
   } else if (!(m_document.worldMode() == IlscWorldMode::World3D && right)) {

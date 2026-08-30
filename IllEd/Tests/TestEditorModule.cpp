@@ -608,9 +608,47 @@ testFontSizeImmediateRuntimeChange()
   module.Exit();
 }
 
+static void
+testMousePanningMovesCameraNaturalDirection()
+{
+  testSection(
+    "EditorModule: mouse panning moves camera in natural drag direction");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "module starts");
+
+  // Initial camera position at (0, 0)
+  fixture.camera.SetPositionPrecise(0.0, 0.0);
+  fixture.camera.SetZoom(1.0f);
+  fixture.window.mouseX = 500.0;
+  fixture.window.mouseY = 300.0;
+  fixture.module.Update(0.016);
+
+  // Press middle mouse button and drag right (500 -> 550) and down (300 -> 350)
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseMiddle, InputAction::Press);
+  fixture.module.Update(0.016);
+
+  fixture.window.mouseX = 550.0;
+  fixture.window.mouseY = 350.0;
+  fixture.module.Update(0.016);
+
+  // Dragging right (dx > 0) should shift camera left (targetPosition.x < 0)
+  // Dragging down (dy > 0 in screen space) should shift camera down
+  // (targetPosition.y < 0 in world space)
+  fixture.camera.Update(1.0f);
+  const glm::dvec2 pos = fixture.camera.GetPositionPrecise();
+  testTrue(g, pos.x < 0.0, "dragging right moves camera X left");
+  testTrue(g, pos.y < 0.0, "dragging down moves camera Y down");
+}
+
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Module.MousePanningDirection", []() {
+    g = {};
+    testMousePanningMovesCameraNaturalDirection();
+    return g.failures;
+  });
   registry.add("IllEd.Module.2DNodeRendering", []() {
     g = {};
     test2dModeNodeRenderingEmitsTokens();
