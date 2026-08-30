@@ -23,6 +23,8 @@ EditorSidebar::EditorSidebar(IRenderWindow* window, Renderer* renderer)
   , m_height(670.0f)
   , m_modeY(0.0f)
   , m_inspectorY(0.0f)
+  , m_animTime(0.0f)
+  , m_modeAnim(0.0f)
 {
   m_visual.setSpace(PrimitiveSpace::Pixels);
   m_visual.setLayerHint(RenderLayerId::UI);
@@ -133,8 +135,14 @@ EditorSidebar::clickAtForTesting(float x, float y)
 }
 
 EditorCommand
-EditorSidebar::update(InputManager* inputManager)
+EditorSidebar::update(InputManager* inputManager, float dt)
 {
+  m_animTime += std::max(0.0f, dt);
+  const float targetMode =
+    (m_detail.worldMode == IlscWorldMode::World3D) ? 1.0f : 0.0f;
+  m_modeAnim +=
+    (targetMode - m_modeAnim) * std::min(1.0f, std::max(0.0f, dt) * 16.0f);
+
   updateLayout();
   EditorCommand command = EditorCommand::None;
   m_consumedPress = false;
@@ -167,108 +175,263 @@ EditorSidebar::rebuildVisual()
 {
   m_visual.clearPrimitives();
   updateLayout();
-  m_visual.addFilledRect(m_x, m_y, kWidth, m_height, UiTheme::panelSurface());
-  m_visual.addLine(m_x, m_y, m_x, m_y + m_height, UiTheme::panelBorder(), 1.0f);
-  m_visual.addText(
-    "Tools", m_x + 10.0f, m_y + 6.0f, 12.0f, UiTheme::textMuted());
 
-  const ColorRgba modeOn = UiTheme::selection();
-  const ColorRgba modeOff = UiTheme::panelRaised();
+  const ColorRgba sideBg{ 13, 19, 29, 255 };
+  const ColorRgba sideBorder{ 40, 56, 78, 255 };
+  const ColorRgba text = UiTheme::textPrimary();
+  const ColorRgba muted = UiTheme::textMuted();
+  const ColorRgba cyanAccent{ 66, 214, 210, 255 };
+
+  // Sidebar background and left border
+  m_visual.addFilledRect(m_x, m_y, kWidth, m_height, sideBg);
+  m_visual.addLine(m_x, m_y, m_x, m_y + m_height, sideBorder, 1.0f);
+
+  // Section: MODE
+  m_visual.addFilledRect(m_x + 6.0f, m_y + 8.0f, 2.0f, 8.0f, cyanAccent);
+  m_visual.addText("MODE", m_x + 12.0f, m_y + 6.0f, 11.0f, muted);
+
   const bool mode3d = m_detail.worldMode == IlscWorldMode::World3D;
+
+  // Segmented control container
+  m_visual.addFilledRect(m_x + 6.0f,
+                         m_modeY - 2.0f,
+                         kWidth - 12.0f,
+                         26.0f,
+                         ColorRgba{ 8, 12, 18, 220 });
+  m_visual.addOutlineRect(m_x + 6.0f,
+                          m_modeY - 2.0f,
+                          kWidth - 12.0f,
+                          26.0f,
+                          ColorRgba{ 35, 48, 66, 255 },
+                          1.0f);
+
+  // 2D Button
+  const ColorRgba activeTabBg{ 25, 75, 105, 255 };
+  const ColorRgba inactiveTabBg{ 16, 24, 36, 180 };
   m_visual.addFilledRect(
-    m_x + 8.0f, m_modeY, 88.0f, 22.0f, mode3d ? modeOff : modeOn);
+    m_x + 8.0f, m_modeY, 88.0f, 22.0f, mode3d ? inactiveTabBg : activeTabBg);
+  if (!mode3d) {
+    m_visual.addOutlineRect(
+      m_x + 8.0f, m_modeY, 88.0f, 22.0f, ColorRgba{ 66, 214, 210, 200 }, 1.0f);
+  }
   if (m_atlas.isValid()) {
     m_visual.addCenteredSprite(
       m_atlas,
-      m_x + 26.0f,
+      m_x + 28.0f,
       m_modeY + 11.0f,
       EditorUiAtlas::kIconSize,
       EditorUiAtlas::kIconSize,
       EditorUiAtlas::regionFor(EditorCommand::SetMode2D));
   }
-  m_visual.addText(
-    "2D", m_x + 40.0f, m_modeY + 4.0f, 13.0f, UiTheme::textPrimary());
+  m_visual.addText("2D",
+                   m_x + 44.0f,
+                   m_modeY + 5.0f,
+                   13.0f,
+                   mode3d ? muted : ColorRgba{ 255, 255, 255, 255 });
+
+  // 3D Button
   m_visual.addFilledRect(
-    m_x + 104.0f, m_modeY, 88.0f, 22.0f, mode3d ? modeOn : modeOff);
+    m_x + 104.0f, m_modeY, 88.0f, 22.0f, mode3d ? activeTabBg : inactiveTabBg);
+  if (mode3d) {
+    m_visual.addOutlineRect(m_x + 104.0f,
+                            m_modeY,
+                            88.0f,
+                            22.0f,
+                            ColorRgba{ 66, 214, 210, 200 },
+                            1.0f);
+  }
   if (m_atlas.isValid()) {
     m_visual.addCenteredSprite(
       m_atlas,
-      m_x + 122.0f,
+      m_x + 124.0f,
       m_modeY + 11.0f,
       EditorUiAtlas::kIconSize,
       EditorUiAtlas::kIconSize,
       EditorUiAtlas::regionFor(EditorCommand::SetMode3D));
   }
-  m_visual.addText(
-    "3D", m_x + 136.0f, m_modeY + 4.0f, 13.0f, UiTheme::textPrimary());
+  m_visual.addText("3D",
+                   m_x + 140.0f,
+                   m_modeY + 5.0f,
+                   13.0f,
+                   mode3d ? ColorRgba{ 255, 255, 255, 255 } : muted);
+
+  // Divider between Mode and Tools
+  m_visual.addLine(m_x + 8.0f,
+                   m_modeY + 25.0f,
+                   m_x + kWidth - 8.0f,
+                   m_modeY + 25.0f,
+                   ColorRgba{ 35, 48, 66, 255 },
+                   1.0f);
+
+  const float toolPulse = 0.75f + 0.25f * std::sin(m_animTime * 4.0f);
+  const ColorRgba pulsedCyan{
+    66, 214, 210, static_cast<unsigned char>(255.0f * toolPulse)
+  };
 
   for (const ToolRow& row : m_tools) {
     const bool active = row.command == m_activeTool;
-    m_visual.addFilledRect(m_x + 8.0f,
-                           row.y,
-                           kWidth - 16.0f,
-                           22.0f,
-                           active ? UiTheme::selection()
-                                  : UiTheme::panelRaised());
+    if (active) {
+      m_visual.addFilledRect(m_x + 8.0f,
+                             row.y,
+                             kWidth - 16.0f,
+                             22.0f,
+                             ColorRgba{ 28, 80, 115, 250 });
+      m_visual.addOutlineRect(m_x + 8.0f,
+                              row.y,
+                              kWidth - 16.0f,
+                              22.0f,
+                              ColorRgba{ 66, 214, 210, 160 },
+                              1.0f);
+      m_visual.addFilledRect(m_x + 8.0f, row.y, 3.0f, 22.0f, pulsedCyan);
+    } else {
+      m_visual.addFilledRect(
+        m_x + 8.0f, row.y, kWidth - 16.0f, 22.0f, ColorRgba{ 17, 25, 38, 220 });
+      m_visual.addOutlineRect(m_x + 8.0f,
+                              row.y,
+                              kWidth - 16.0f,
+                              22.0f,
+                              ColorRgba{ 32, 45, 62, 200 },
+                              1.0f);
+    }
     float labelX = m_x + 16.0f;
     if (m_atlas.isValid()) {
       m_visual.addCenteredSprite(m_atlas,
-                                 m_x + 20.0f,
+                                 m_x + 22.0f,
                                  row.y + 11.0f,
                                  EditorUiAtlas::kIconSize,
                                  EditorUiAtlas::kIconSize,
                                  EditorUiAtlas::regionFor(row.command));
-      labelX = m_x + 32.0f;
+      labelX = m_x + 36.0f;
     }
-    m_visual.addText(
-      row.label, labelX, row.y + 4.0f, 13.0f, UiTheme::textPrimary());
+    m_visual.addText(row.label,
+                     labelX,
+                     row.y + 4.0f,
+                     13.0f,
+                     active ? ColorRgba{ 255, 255, 255, 255 }
+                            : ColorRgba{ 190, 208, 228, 255 });
   }
 
-  m_visual.addText(
-    "Scene", m_x + 10.0f, m_inspectorY, 12.0f, UiTheme::textMuted());
+  // Section: INSPECTOR
+  m_visual.addLine(m_x + 8.0f,
+                   m_inspectorY - 6.0f,
+                   m_x + kWidth - 8.0f,
+                   m_inspectorY - 6.0f,
+                   ColorRgba{ 35, 48, 66, 255 },
+                   1.0f);
+  m_visual.addFilledRect(
+    m_x + 6.0f, m_inspectorY + 2.0f, 2.0f, 8.0f, cyanAccent);
+  m_visual.addText("INSPECTOR", m_x + 12.0f, m_inspectorY, 11.0f, muted);
+
+  // Summary badges
+  m_visual.addFilledRect(m_x + 8.0f,
+                         m_inspectorY + 16.0f,
+                         88.0f,
+                         18.0f,
+                         ColorRgba{ 18, 27, 40, 255 });
+  m_visual.addOutlineRect(m_x + 8.0f,
+                          m_inspectorY + 16.0f,
+                          88.0f,
+                          18.0f,
+                          ColorRgba{ 38, 54, 75, 255 },
+                          1.0f);
   std::ostringstream summary;
   summary << "Nodes: " << m_detail.nodeCount;
   m_visual.addText(summary.str(),
-                   m_x + 10.0f,
-                   m_inspectorY + 18.0f,
-                   12.0f,
-                   UiTheme::textPrimary());
+                   m_x + 14.0f,
+                   m_inspectorY + 19.0f,
+                   11.0f,
+                   ColorRgba{ 210, 225, 240, 255 });
+
   const char* modeLabel = IlscCodec::worldModeName(m_detail.worldMode);
   std::string modeText = "Mode: ";
   modeText += modeLabel;
-  m_visual.addText(
-    modeText, m_x + 10.0f, m_inspectorY + 36.0f, 12.0f, UiTheme::textPrimary());
+  m_visual.addFilledRect(m_x + 104.0f,
+                         m_inspectorY + 16.0f,
+                         88.0f,
+                         18.0f,
+                         ColorRgba{ 18, 27, 40, 255 });
+  m_visual.addOutlineRect(m_x + 104.0f,
+                          m_inspectorY + 16.0f,
+                          88.0f,
+                          18.0f,
+                          ColorRgba{ 38, 54, 75, 255 },
+                          1.0f);
+  m_visual.addText(modeText,
+                   m_x + 110.0f,
+                   m_inspectorY + 19.0f,
+                   11.0f,
+                   ColorRgba{ 210, 225, 240, 255 });
 
   if (!m_detail.hasSelection) {
-    m_visual.addText("No selection",
-                     m_x + 10.0f,
-                     m_inspectorY + 58.0f,
+    m_visual.addFilledRect(m_x + 8.0f,
+                           m_inspectorY + 40.0f,
+                           kWidth - 16.0f,
+                           70.0f,
+                           ColorRgba{ 10, 15, 24, 200 });
+    m_visual.addOutlineRect(m_x + 8.0f,
+                            m_inspectorY + 40.0f,
+                            kWidth - 16.0f,
+                            70.0f,
+                            ColorRgba{ 32, 45, 62, 255 },
+                            1.0f);
+    m_visual.addText("No Selection",
+                     m_x + 14.0f,
+                     m_inspectorY + 48.0f,
                      12.0f,
-                     UiTheme::textMuted());
+                     ColorRgba{ 140, 165, 190, 255 });
+    m_visual.addText("Click node in canvas",
+                     m_x + 14.0f,
+                     m_inspectorY + 68.0f,
+                     11.0f,
+                     ColorRgba{ 90, 112, 135, 255 });
+    m_visual.addText("or choose tool to create",
+                     m_x + 14.0f,
+                     m_inspectorY + 84.0f,
+                     11.0f,
+                     ColorRgba{ 90, 112, 135, 255 });
   } else {
+    const float selPulse = 0.80f + 0.20f * std::sin(m_animTime * 3.5f);
+    const unsigned char selBorderA =
+      static_cast<unsigned char>(255.0f * selPulse);
+
+    // Header card for selection
+    m_visual.addFilledRect(m_x + 8.0f,
+                           m_inspectorY + 38.0f,
+                           kWidth - 16.0f,
+                           20.0f,
+                           ColorRgba{ 22, 34, 52, 255 });
+    m_visual.addOutlineRect(m_x + 8.0f,
+                            m_inspectorY + 38.0f,
+                            kWidth - 16.0f,
+                            20.0f,
+                            ColorRgba{ 66, 120, 180, selBorderA },
+                            1.0f);
     std::string idLine =
-      m_detail.selectedName + " (" + m_detail.selectedId + ")";
-    m_visual.addText(
-      idLine, m_x + 10.0f, m_inspectorY + 58.0f, 12.0f, UiTheme::textPrimary());
-    std::string kindLine = "Kind: ";
-    kindLine += IlscCodec::kindName(m_detail.selectedKind);
+      m_detail.selectedName + " (#" + m_detail.selectedId + ")";
+    m_visual.addText(idLine,
+                     m_x + 12.0f,
+                     m_inspectorY + 42.0f,
+                     12.0f,
+                     ColorRgba{ 255, 255, 255, 255 });
+
+    std::string kindLine =
+      "Kind: " + std::string(IlscCodec::kindName(m_detail.selectedKind));
     m_visual.addText(kindLine,
                      m_x + 10.0f,
-                     m_inspectorY + 74.0f,
+                     m_inspectorY + 66.0f,
                      12.0f,
-                     UiTheme::textPrimary());
+                     ColorRgba{ 66, 214, 210, 255 });
+
     char transformText[96];
     std::snprintf(transformText,
                   sizeof(transformText),
-                  "Pos %.2f %.2f %.2f",
+                  "Pos %.2f, %.2f, %.2f",
                   m_detail.transform.position.x,
                   m_detail.transform.position.y,
                   m_detail.transform.position.z);
-    m_visual.addText(transformText,
-                     m_x + 10.0f,
-                     m_inspectorY + 90.0f,
-                     12.0f,
-                     UiTheme::textPrimary());
+    m_visual.addText(
+      transformText, m_x + 10.0f, m_inspectorY + 86.0f, 12.0f, text);
+
     char extentText[96];
     std::snprintf(extentText,
                   sizeof(extentText),
@@ -280,16 +443,22 @@ EditorSidebar::rebuildVisual()
                            m_inspectorY + 108.0f,
                            kWidth - 16.0f,
                            20.0f,
-                           UiTheme::panelInset());
-    m_visual.addText(extentText,
-                     m_x + 10.0f,
-                     m_inspectorY + 110.0f,
-                     12.0f,
-                     UiTheme::textPrimary());
+                           ColorRgba{ 16, 24, 37, 255 });
+    m_visual.addOutlineRect(m_x + 8.0f,
+                            m_inspectorY + 108.0f,
+                            kWidth - 16.0f,
+                            20.0f,
+                            ColorRgba{ 44, 62, 86, 255 },
+                            1.0f);
+    m_visual.addText(
+      extentText, m_x + 12.0f, m_inspectorY + 111.0f, 12.0f, text);
+    m_visual.addText(
+      "[+]", m_x + kWidth - 32.0f, m_inspectorY + 111.0f, 11.0f, cyanAccent);
+
     char colorText[64];
     std::snprintf(colorText,
                   sizeof(colorText),
-                  "Color %u %u %u",
+                  "RGB %u %u %u",
                   static_cast<unsigned>(m_detail.color.r),
                   static_cast<unsigned>(m_detail.color.g),
                   static_cast<unsigned>(m_detail.color.b));
@@ -297,12 +466,31 @@ EditorSidebar::rebuildVisual()
                            m_inspectorY + 128.0f,
                            kWidth - 16.0f,
                            20.0f,
-                           UiTheme::panelInset());
-    m_visual.addText(colorText,
-                     m_x + 10.0f,
-                     m_inspectorY + 130.0f,
-                     12.0f,
-                     UiTheme::textPrimary());
+                           ColorRgba{ 16, 24, 37, 255 });
+    m_visual.addOutlineRect(m_x + 8.0f,
+                            m_inspectorY + 128.0f,
+                            kWidth - 16.0f,
+                            20.0f,
+                            ColorRgba{ 44, 62, 86, 255 },
+                            1.0f);
+
+    // Live color swatch preview tile with subtle breathing outline
+    m_visual.addFilledRect(
+      m_x + 12.0f, m_inspectorY + 132.0f, 12.0f, 12.0f, m_detail.color);
+    m_visual.addOutlineRect(m_x + 12.0f,
+                            m_inspectorY + 132.0f,
+                            12.0f,
+                            12.0f,
+                            ColorRgba{ 255, 255, 255, selBorderA },
+                            1.0f);
+
+    m_visual.addText(
+      colorText, m_x + 28.0f, m_inspectorY + 131.0f, 12.0f, text);
+    m_visual.addText("[Cycle]",
+                     m_x + kWidth - 54.0f,
+                     m_inspectorY + 131.0f,
+                     11.0f,
+                     cyanAccent);
   }
 }
 

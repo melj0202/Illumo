@@ -15,6 +15,7 @@ EditorConfirmDialog::EditorConfirmDialog(IRenderWindow* window,
   , m_visual(256u)
   , m_open(false)
   , m_mouseWasDown(false)
+  , m_animElapsed(0.0f)
   , m_panelX(0.0f)
   , m_panelY(0.0f)
   , m_panelWidth(420.0f)
@@ -40,6 +41,7 @@ EditorConfirmDialog::open(const std::string& message)
   m_message = message;
   m_open = true;
   m_mouseWasDown = false;
+  m_animElapsed = 0.0f;
   setVisible(true);
   updateLayout();
   rebuildVisual();
@@ -49,6 +51,7 @@ void
 EditorConfirmDialog::close()
 {
   m_open = false;
+  m_animElapsed = 0.0f;
   setVisible(false);
 }
 
@@ -100,11 +103,12 @@ EditorConfirmDialog::clickAt(float x, float y)
 }
 
 EditorConfirmAction
-EditorConfirmDialog::update(InputManager* inputManager)
+EditorConfirmDialog::update(InputManager* inputManager, float dt)
 {
   if (!m_open) {
     return EditorConfirmAction::None;
   }
+  m_animElapsed += std::max(0.0f, dt);
   updateLayout();
   EditorConfirmAction action = EditorConfirmAction::None;
   if (inputManager != nullptr) {
@@ -161,51 +165,107 @@ EditorConfirmDialog::rebuildVisual()
   const float virtualHeight =
     static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
 
+  const float t = std::clamp(m_animElapsed / 0.18f, 0.0f, 1.0f);
+  const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
+  const float slideY = (1.0f - ease) * 16.0f;
+  const unsigned char bgAlpha = static_cast<unsigned char>(180.0f * ease);
+
+  // Full-screen animated backdrop
   m_visual.addFilledRect(
-    0.0f, 0.0f, virtualWidth, virtualHeight, ColorRgba{ 0, 0, 0, 140 });
+    0.0f, 0.0f, virtualWidth, virtualHeight, ColorRgba{ 0, 0, 0, bgAlpha });
+
+  const float curPanelY = m_panelY - slideY;
+  const float curButtonY = m_buttonY - slideY;
+
+  // Dialog drop shadow
   m_visual.addFilledRect(
-    m_panelX, m_panelY, m_panelWidth, m_panelHeight, UiTheme::panelSurface());
+    m_panelX + 6.0f,
+    curPanelY + 6.0f,
+    m_panelWidth,
+    m_panelHeight,
+    ColorRgba{ 0, 0, 0, static_cast<unsigned char>(140 * ease) });
+
+  // Dialog window surface & border
+  m_visual.addFilledRect(m_panelX,
+                         curPanelY,
+                         m_panelWidth,
+                         m_panelHeight,
+                         ColorRgba{ 14, 21, 32, 255 });
   m_visual.addOutlineRect(m_panelX,
-                          m_panelY,
+                          curPanelY,
                           m_panelWidth,
                           m_panelHeight,
-                          UiTheme::panelBorder(),
+                          ColorRgba{ 55, 80, 115, 255 },
                           1.0f);
-  m_visual.addText("Unsaved changes",
-                   m_panelX + 16.0f,
-                   m_panelY + 16.0f,
+
+  // Top accent stripe
+  m_visual.addFilledRect(
+    m_panelX, curPanelY, m_panelWidth, 3.0f, ColorRgba{ 66, 214, 210, 255 });
+
+  m_visual.addText("Unsaved Changes",
+                   m_panelX + 18.0f,
+                   curPanelY + 18.0f,
                    16.0f,
-                   UiTheme::textPrimary());
+                   ColorRgba{ 255, 255, 255, 255 });
   m_visual.addText(m_message.empty() ? "Save the current scene?" : m_message,
-                   m_panelX + 16.0f,
-                   m_panelY + 48.0f,
+                   m_panelX + 18.0f,
+                   curPanelY + 52.0f,
                    13.0f,
                    UiTheme::textMuted());
 
-  m_visual.addFilledRect(
-    m_saveX, m_buttonY, m_buttonWidth, m_buttonHeight, UiTheme::selection());
-  m_visual.addText(
-    "Save", m_saveX + 36.0f, m_buttonY + 8.0f, 13.0f, UiTheme::textPrimary());
+  // Save button (primary)
+  m_visual.addFilledRect(m_saveX,
+                         curButtonY,
+                         m_buttonWidth,
+                         m_buttonHeight,
+                         ColorRgba{ 25, 85, 120, 255 });
+  m_visual.addOutlineRect(m_saveX,
+                          curButtonY,
+                          m_buttonWidth,
+                          m_buttonHeight,
+                          ColorRgba{ 66, 214, 210, 200 },
+                          1.0f);
+  m_visual.addText("Save",
+                   m_saveX + 38.0f,
+                   curButtonY + 8.0f,
+                   13.0f,
+                   ColorRgba{ 255, 255, 255, 255 });
+
+  // Don't Save button (destructive)
   m_visual.addFilledRect(m_discardX,
-                         m_buttonY,
+                         curButtonY,
                          m_buttonWidth,
                          m_buttonHeight,
-                         UiTheme::panelRaised());
+                         ColorRgba{ 65, 28, 35, 255 });
+  m_visual.addOutlineRect(m_discardX,
+                          curButtonY,
+                          m_buttonWidth,
+                          m_buttonHeight,
+                          ColorRgba{ 180, 60, 75, 200 },
+                          1.0f);
   m_visual.addText("Don't Save",
-                   m_discardX + 14.0f,
-                   m_buttonY + 8.0f,
+                   m_discardX + 16.0f,
+                   curButtonY + 8.0f,
                    13.0f,
-                   UiTheme::textPrimary());
+                   ColorRgba{ 255, 220, 220, 255 });
+
+  // Cancel button
   m_visual.addFilledRect(m_cancelX,
-                         m_buttonY,
+                         curButtonY,
                          m_buttonWidth,
                          m_buttonHeight,
-                         UiTheme::panelRaised());
+                         ColorRgba{ 22, 32, 48, 255 });
+  m_visual.addOutlineRect(m_cancelX,
+                          curButtonY,
+                          m_buttonWidth,
+                          m_buttonHeight,
+                          ColorRgba{ 45, 65, 90, 255 },
+                          1.0f);
   m_visual.addText("Cancel",
-                   m_cancelX + 30.0f,
-                   m_buttonY + 8.0f,
+                   m_cancelX + 32.0f,
+                   curButtonY + 8.0f,
                    13.0f,
-                   UiTheme::textPrimary());
+                   ColorRgba{ 200, 220, 240, 255 });
 }
 
 bool

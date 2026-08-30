@@ -36,6 +36,7 @@ EditorModule::EditorModule(std::string initialScenePath)
   , m_graveWasDown(false)
   , m_lastMouseX(0.0)
   , m_lastMouseY(0.0)
+  , m_animTime(0.0f)
   , m_pendingAction(EditorPendingAction::None)
 {
 }
@@ -67,8 +68,7 @@ EditorModule::Start(IllumoContext* context)
   }
   m_grid = std::make_unique<MeshVisual>();
   m_grid->prepare(ic->renderer);
-  m_grid->addGrid(12, 1.0f, ColorRgba{ 70, 90, 110, 255 });
-  m_grid->addAxes(glm::vec3(0.0f), 1.5f);
+  rebuildGrid();
   m_selectionOverlay = std::make_unique<MeshVisual>();
   m_selectionOverlay->prepare(ic->renderer);
 
@@ -206,8 +206,75 @@ EditorModule::rebuildGraph()
     }
   }
   applyWorldCamera();
+  rebuildGrid();
   rebuildSelectionOverlay();
   return true;
+}
+
+void
+EditorModule::rebuildGrid()
+{
+  if (!m_grid || ic == nullptr || ic->renderer == nullptr) {
+    return;
+  }
+  m_grid->clearPrimitives();
+  if (m_document.worldMode() == IlscWorldMode::World3D) {
+    const int halfCount = 20;
+    const float spacing = 1.0f;
+    const float extent = static_cast<float>(halfCount) * spacing;
+    const ColorRgba minorColor{ 38, 50, 66, 255 };
+    const ColorRgba majorColor{ 58, 76, 100, 255 };
+    for (int i = -halfCount; i <= halfCount; ++i) {
+      if (i == 0) {
+        continue;
+      }
+      const float pos = static_cast<float>(i) * spacing;
+      const ColorRgba color = (i % 5 == 0) ? majorColor : minorColor;
+      m_grid->addLine(
+        glm::vec3(-extent, 0.0f, pos), glm::vec3(extent, 0.0f, pos), color);
+      m_grid->addLine(
+        glm::vec3(pos, 0.0f, -extent), glm::vec3(pos, 0.0f, extent), color);
+    }
+    m_grid->addLine(glm::vec3(-extent, 0.0f, 0.0f),
+                    glm::vec3(extent, 0.0f, 0.0f),
+                    ColorRgba{ 220, 65, 65, 255 });
+    m_grid->addLine(glm::vec3(0.0f, 0.0f, -extent),
+                    glm::vec3(0.0f, 0.0f, extent),
+                    ColorRgba{ 65, 120, 230, 255 });
+    m_grid->addLine(glm::vec3(0.0f, 0.0f, 0.0f),
+                    glm::vec3(0.0f, 2.5f, 0.0f),
+                    ColorRgba{ 65, 210, 95, 255 });
+  } else {
+    const int halfCount = 30;
+    const float spacing = 1.0f;
+    const float extent = static_cast<float>(halfCount) * spacing;
+    const ColorRgba minorColor{ 32, 44, 58, 255 };
+    const ColorRgba majorColor{ 48, 66, 88, 255 };
+    for (int i = -halfCount; i <= halfCount; ++i) {
+      if (i == 0) {
+        continue;
+      }
+      const float pos = static_cast<float>(i) * spacing;
+      const ColorRgba color = (i % 5 == 0) ? majorColor : minorColor;
+      m_grid->addLine(
+        glm::vec3(-extent, pos, 0.0f), glm::vec3(extent, pos, 0.0f), color);
+      m_grid->addLine(
+        glm::vec3(pos, -extent, 0.0f), glm::vec3(pos, extent, 0.0f), color);
+    }
+    m_grid->addLine(glm::vec3(-extent, 0.0f, 0.0f),
+                    glm::vec3(extent, 0.0f, 0.0f),
+                    ColorRgba{ 190, 60, 60, 255 });
+    m_grid->addLine(glm::vec3(0.0f, -extent, 0.0f),
+                    glm::vec3(0.0f, extent, 0.0f),
+                    ColorRgba{ 60, 180, 85, 255 });
+    const float cross = 0.35f;
+    m_grid->addLine(glm::vec3(-cross, 0.0f, 0.01f),
+                    glm::vec3(cross, 0.0f, 0.01f),
+                    ColorRgba{ 255, 220, 100, 255 });
+    m_grid->addLine(glm::vec3(0.0f, -cross, 0.01f),
+                    glm::vec3(0.0f, cross, 0.01f),
+                    ColorRgba{ 255, 220, 100, 255 });
+  }
 }
 
 SaveLoadDialogSpec
@@ -236,7 +303,7 @@ EditorModule::updateStatus()
     status += "  |  ";
     if (node != nullptr) {
       status += node->name;
-      status += " (";
+      status += " (#";
       status += node->id;
       status += ")";
     } else {
@@ -249,11 +316,14 @@ EditorModule::updateStatus()
     const std::array<double, 2> mouse = ic->window->getMouseCoords();
     const glm::dvec2 world =
       ic->camera->ScreenToWorldPrecise(glm::dvec2(mouse[0], mouse[1]));
-    status += "  |  ";
+    status += "  |  X: ";
     status += std::to_string(static_cast<int>(std::round(world.x)));
-    status += ", ";
+    status += ", Y: ";
     status += std::to_string(static_cast<int>(std::round(world.y)));
+    const int zoom = static_cast<int>(std::round(ic->camera->GetZoom()));
+    status += "  |  Zoom: " + std::to_string(zoom) + "x";
   }
+  status += "  |  [WASD/MMB: Pan  Wheel: Zoom  ~: Console]";
   m_toolbar->setStatus(status);
 }
 
@@ -297,7 +367,15 @@ EditorModule::saveDocument(bool saveAs)
     if (ic != nullptr && ic->commandLine != nullptr) {
       ic->commandLine->logError(error);
     }
+    if (m_toolbar) {
+      m_toolbar->showToast("Failed to save: " + error,
+                           ColorRgba{ 245, 100, 110, 255 });
+    }
     return false;
+  }
+  if (m_toolbar) {
+    m_toolbar->showToast("Saved scene: " + (path.empty() ? "Scene.ilsc" : path),
+                         ColorRgba{ 60, 220, 120, 255 });
   }
   updateStatus();
   return true;
@@ -315,6 +393,10 @@ EditorModule::openDocument()
     if (ic != nullptr && ic->commandLine != nullptr) {
       ic->commandLine->logError(error);
     }
+    if (m_toolbar) {
+      m_toolbar->showToast("Failed to load: " + error,
+                           ColorRgba{ 245, 100, 110, 255 });
+    }
     return false;
   }
   m_selectedId.clear();
@@ -322,6 +404,10 @@ EditorModule::openDocument()
     ic->camera->SetPositionPrecise(m_document.camera().x,
                                    m_document.camera().y);
     ic->camera->SetZoom(m_document.camera().zoom);
+  }
+  if (m_toolbar) {
+    m_toolbar->showToast("Opened scene: " + path,
+                         ColorRgba{ 66, 214, 210, 255 });
   }
   rebuildGraph();
   updateStatus();
@@ -336,6 +422,9 @@ EditorModule::newDocument()
   if (ic != nullptr && ic->camera != nullptr) {
     ic->camera->Reset();
     ic->camera->SetZoom(32.0f);
+  }
+  if (m_toolbar) {
+    m_toolbar->showToast("Created new scene", ColorRgba{ 66, 214, 210, 255 });
   }
   rebuildGraph();
   updateStatus();
@@ -362,6 +451,11 @@ EditorModule::createNode(SceneNodeKind kind)
     }
   }
   m_selectedId = id;
+  if (m_toolbar) {
+    const IlscNode* node = m_document.findNode(id);
+    m_toolbar->showToast("Created " + (node ? node->name : "node"),
+                         ColorRgba{ 60, 220, 120, 255 });
+  }
   rebuildGraph();
   updateStatus();
 }
@@ -374,6 +468,10 @@ EditorModule::deleteSelection()
   }
   m_document.destroySubtree(m_selectedId);
   m_selectedId.clear();
+  if (m_toolbar) {
+    m_toolbar->showToast("Deleted selected node",
+                         ColorRgba{ 245, 100, 110, 255 });
+  }
   rebuildGraph();
   updateStatus();
 }
@@ -385,6 +483,10 @@ EditorModule::unparentSelection()
     return;
   }
   if (m_document.setParent(m_selectedId, {})) {
+    if (m_toolbar) {
+      m_toolbar->showToast("Unparented node to root",
+                           ColorRgba{ 66, 214, 210, 255 });
+    }
     rebuildGraph();
     updateStatus();
   }
@@ -458,9 +560,17 @@ EditorModule::handleCommand(EditorCommand command)
     }
   } else if (command == EditorCommand::SetMode2D) {
     m_document.setWorldMode(IlscWorldMode::World2D);
+    if (m_toolbar) {
+      m_toolbar->showToast("Mode: 2D Orthographic (XY)",
+                           ColorRgba{ 60, 220, 120, 255 });
+    }
     rebuildGraph();
   } else if (command == EditorCommand::SetMode3D) {
     m_document.setWorldMode(IlscWorldMode::World3D);
+    if (m_toolbar) {
+      m_toolbar->showToast("Mode: 3D Perspective (XZ)",
+                           ColorRgba{ 70, 160, 255, 255 });
+    }
     rebuildGraph();
   } else if (command == EditorCommand::NudgeExtent) {
     nudgeSelectedExtent();
@@ -470,6 +580,10 @@ EditorModule::handleCommand(EditorCommand command)
              ic->camera != nullptr) {
     ic->camera->Reset();
     ic->camera->SetZoom(32.0f);
+    if (m_toolbar) {
+      m_toolbar->showToast("Camera reset to origin",
+                           ColorRgba{ 66, 214, 210, 255 });
+    }
   }
 }
 
@@ -531,7 +645,13 @@ EditorModule::updateCamera(double dt)
   double* scroll = ic->inputManager->getMouseScrollOffset();
   if (scroll != nullptr && *scroll != 0.0) {
     const float factor = *scroll > 0.0 ? 1.1f : 0.9f;
-    ic->camera->ZoomAt(factor, glm::dvec2(mouse[0], mouse[1]));
+    if (m_document.worldMode() != IlscWorldMode::World3D) {
+      const glm::dvec2 worldMouse =
+        ic->camera->ScreenToWorldPrecise(glm::dvec2(mouse[0], mouse[1]));
+      ic->camera->ZoomAt(factor, worldMouse);
+    } else {
+      ic->camera->ZoomAt(factor, ic->camera->GetPositionPrecise());
+    }
     *scroll = 0.0;
   }
 }
@@ -550,12 +670,16 @@ EditorModule::rebuildSelectionOverlay()
   if (node == nullptr) {
     return;
   }
-  glm::vec3 half(0.2f, 0.2f, 0.2f);
+  glm::vec3 half(0.25f, 0.25f, 0.25f);
   if (IlscCodec::kindHasGeometry(node->kind)) {
     half = node->primitive.extent * 1.08f;
   }
-  m_selectionOverlay->addWireCube(
-    node->transform.position, half, ColorRgba{ 255, 210, 80, 255 });
+  const float pulse = 0.82f + 0.18f * std::sin(m_animTime * 4.0f);
+  const ColorRgba gold{ 255,
+                        static_cast<unsigned char>(205.0f * pulse),
+                        static_cast<unsigned char>(60.0f * pulse),
+                        255 };
+  m_selectionOverlay->addWireCube(node->transform.position, half, gold);
 }
 
 void
@@ -640,6 +764,9 @@ EditorModule::Update(double dt)
   if (ic == nullptr) {
     return;
   }
+  const float dtF = static_cast<float>(dt);
+  m_animTime += dtF;
+
   if (ic->commandLine != nullptr && ic->inputManager != nullptr) {
     const bool graveDown = ic->inputManager->isKeyPressed(KeyCode::Grave);
     if (graveDown && !m_graveWasDown) {
@@ -648,8 +775,12 @@ EditorModule::Update(double dt)
     m_graveWasDown = graveDown;
   }
 
+  if (m_toolbar) {
+    m_toolbar->setWorldMode(m_document.worldMode() == IlscWorldMode::World3D);
+  }
+
   if (m_confirm && m_confirm->isOpen()) {
-    const EditorConfirmAction action = m_confirm->update(ic->inputManager);
+    const EditorConfirmAction action = m_confirm->update(ic->inputManager, dtF);
     if (action == EditorConfirmAction::Cancel) {
       m_confirm->close();
       m_pendingAction = EditorPendingAction::None;
@@ -668,9 +799,9 @@ EditorModule::Update(double dt)
     const bool consoleOpen =
       ic->commandLine != nullptr && ic->commandLine->isOpen;
     if (!consoleOpen) {
-      handleCommand(m_toolbar->update(ic->inputManager));
+      handleCommand(m_toolbar->update(ic->inputManager, dtF));
       if (m_sidebar) {
-        handleCommand(m_sidebar->update(ic->inputManager));
+        handleCommand(m_sidebar->update(ic->inputManager, dtF));
       }
     } else {
       m_toolbar->closeMenus();
@@ -691,6 +822,10 @@ EditorModule::Update(double dt)
     } else {
       updateSelection(dt);
     }
+  }
+
+  if (!m_selectedId.empty()) {
+    rebuildSelectionOverlay();
   }
 
   if (ic->camera != nullptr) {
@@ -795,6 +930,11 @@ EditorModule::applyActiveToolAt(float worldX, float worldY)
   m_document.setTransform(id,
                           m_document.makeEditPlaneTransform(worldX, worldY));
   m_selectedId = id;
+  if (m_toolbar) {
+    const IlscNode* created = m_document.findNode(id);
+    m_toolbar->showToast("Created " + (created ? created->name : "node"),
+                         ColorRgba{ 60, 220, 120, 255 });
+  }
   rebuildGraph();
   m_activeTool = EditorCommand::SelectTool;
   if (m_sidebar) {
@@ -814,6 +954,9 @@ EditorModule::nudgeSelectedExtent()
   }
   Vector3 extent = node->primitive.extent * 1.15f;
   if (m_document.setExtent(m_selectedId, extent)) {
+    if (m_toolbar) {
+      m_toolbar->showToast("Nudged node size", ColorRgba{ 66, 214, 210, 255 });
+    }
     rebuildGraph();
   }
 }
@@ -837,6 +980,9 @@ EditorModule::cycleSelectedColor()
     next = ColorRgba{ 210, 90, 70, 255 };
   }
   if (m_document.setColor(m_selectedId, next)) {
+    if (m_toolbar) {
+      m_toolbar->showToast("Updated node color", next);
+    }
     rebuildGraph();
   }
 }

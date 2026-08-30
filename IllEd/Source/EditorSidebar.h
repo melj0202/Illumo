@@ -23,7 +23,7 @@ public:
   EditorSidebar(const EditorSidebar&) = delete;
   EditorSidebar& operator=(const EditorSidebar&) = delete;
 
-  EditorCommand update(InputManager* inputManager);
+  EditorCommand update(InputManager* inputManager, float dt = 0.016f);
   bool consumedPress() const { return m_consumedPress; }
   void setAtlas(TextureHandle atlas);
   TextureHandle atlas() const { return m_atlas; }
@@ -59,6 +59,8 @@ private:
   float m_height;
   float m_modeY;
   float m_inspectorY;
+  float m_animTime;
+  float m_modeAnim;
   std::vector<ToolRow> m_tools;
 
   void updateLayout();

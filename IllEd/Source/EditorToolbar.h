@@ -47,10 +47,14 @@ public:
   EditorToolbar(const EditorToolbar&) = delete;
   EditorToolbar& operator=(const EditorToolbar&) = delete;
 
-  EditorCommand update(InputManager* inputManager);
+  EditorCommand update(InputManager* inputManager, float dt = 0.016f);
   void setAtlas(TextureHandle atlas);
   TextureHandle atlas() const { return m_atlas; }
   void setStatus(const std::string& text);
+  void setWorldMode(bool is3D) { m_is3D = is3D; }
+  void showToast(const std::string& message,
+                 ColorRgba color = ColorRgba{ 66, 214, 210, 255 },
+                 float duration = 2.5f);
   void closeMenus();
   bool isMenuOpen() const { return m_openMenu >= 0; }
   bool consumedPress() const { return m_consumedPress; }
@@ -67,6 +71,7 @@ private:
   struct MenuItem
   {
     std::string label;
+    std::string shortcut;
     EditorCommand command = EditorCommand::None;
   };
 
@@ -92,6 +97,13 @@ private:
   float m_dropdownY;
   float m_dropdownWidth;
   float m_dropdownHeight;
+  float m_dropdownAnim;
+  float m_toastElapsed;
+  float m_toastDuration;
+  std::string m_toastMessage;
+  ColorRgba m_toastColor{ 66, 214, 210, 255 };
+  bool m_is3D;
+  float m_animTime;
 
   void rebuildMenus();
   void updateLayout();

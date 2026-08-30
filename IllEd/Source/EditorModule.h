@@ -61,6 +61,7 @@ private:
   bool m_graveWasDown;
   double m_lastMouseX;
   double m_lastMouseY;
+  float m_animTime;
   EditorPendingAction m_pendingAction;
 
   bool rebuildGraph();
@@ -77,6 +78,7 @@ private:
   void updateCamera(double dt);
   void updateSelection(double dt);
   void rebuildSelectionOverlay();
+  void rebuildGrid();
   void updateStatus();
   glm::mat4 currentViewProjection() const;
   bool uiBlocksWorld(float screenX, float screenY) const;
