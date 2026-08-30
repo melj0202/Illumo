@@ -15,10 +15,8 @@ IllEdConfig::ApplyDefaults(IEnvVars* environment)
     const char* value;
   };
   const DefaultValue defaults[] = {
-    { "uiScale", "1" },
-    { "msaa", "4" },
-    { "vsync", "1" },
-    { "fullscreen", "0" },
+    { "uiScale", "1" }, { "fontSize", "13" },  { "msaa", "4" },
+    { "vsync", "1" },   { "fullscreen", "0" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (environment->getVar(defaultValue.name).value.empty()) {

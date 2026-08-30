@@ -57,6 +57,9 @@ EditorModule::Start(IllumoContext* context)
     std::make_unique<EditorSceneGraphView>(ic->window, ic->renderer);
   m_sidebar = std::make_unique<EditorSidebar>(ic->window, ic->renderer);
   m_confirm = std::make_unique<EditorConfirmDialog>(ic->window, ic->renderer);
+
+  syncFontSize();
+
   if (ic->assetManager != nullptr) {
     TextureOptions options;
     options.filter = TextureFilter::Nearest;
@@ -356,7 +359,9 @@ EditorModule::uiBlocksWorld(float screenX, float screenY) const
       ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
     const float virtualHeight =
       static_cast<float>(dimensions[1]) / (scale > 0.0f ? scale : 1.0f);
-    if (screenY >= virtualHeight - EditorToolbar::kStatusHeight) {
+    const float statusHeight = m_toolbar ? m_toolbar->statusHeight()
+                                         : EditorToolbar::kDefaultStatusHeight;
+    if (screenY >= virtualHeight - statusHeight) {
       return true;
     }
   }
@@ -789,6 +794,7 @@ EditorModule::Update(double dt)
   if (ic == nullptr) {
     return;
   }
+  syncFontSize();
   const float dtF = static_cast<float>(dt);
   m_animTime += dtF;
 
@@ -1065,4 +1071,55 @@ EditorModule::screenToWorld(float screenX,
   *worldX = nearPoint.x + direction.x * t;
   *worldY = nearPoint.z + direction.z * t;
   return true;
+}
+
+void
+EditorModule::syncFontSize()
+{
+  if (ic == nullptr) {
+    return;
+  }
+  std::string fontVar =
+    (ic->envVars != nullptr) ? ic->envVars->getVar("fontSize").value : "";
+  if (fontVar.empty()) {
+    fontVar = "13";
+  }
+  if (fontVar == m_appliedFontSizeVar) {
+    return;
+  }
+  m_appliedFontSizeVar = fontVar;
+  try {
+    float size = std::stof(fontVar);
+    if (size > 0.0f && size <= 4.0f) {
+      size *= EditorToolbar::kDefaultFontSize;
+    }
+    size = std::clamp(size, 8.0f, 48.0f);
+    applyFontSize(size);
+  } catch (...) {
+  }
+}
+
+void
+EditorModule::applyFontSize(float size)
+{
+  if (m_toolbar) {
+    m_toolbar->setFontSize(size);
+  }
+  if (m_sceneGraphView) {
+    m_sceneGraphView->setFontSize(size);
+  }
+  if (m_sidebar) {
+    m_sidebar->setFontSize(size);
+  }
+  if (m_confirm) {
+    m_confirm->setFontSize(size);
+  }
+  if (m_toolbar && m_sidebar) {
+    m_sidebar->setToolbarDimensions(m_toolbar->barHeight(),
+                                    m_toolbar->statusHeight());
+  }
+  if (m_toolbar && m_sceneGraphView) {
+    m_sceneGraphView->setToolbarDimensions(m_toolbar->barHeight(),
+                                           m_toolbar->statusHeight());
+  }
 }

@@ -15,13 +15,19 @@ class Renderer;
 class EditorSidebar : public DrawableBase
 {
 public:
-  static constexpr float kWidth = 200.0f;
+  static constexpr float kDefaultWidth = 200.0f;
+  static constexpr float kWidth = kDefaultWidth;
 
   EditorSidebar(IRenderWindow* window, Renderer* renderer);
   ~EditorSidebar() override = default;
 
   EditorSidebar(const EditorSidebar&) = delete;
   EditorSidebar& operator=(const EditorSidebar&) = delete;
+
+  void setFontSize(float sizePt);
+  float fontSize() const { return m_fontSize; }
+  void setToolbarDimensions(float barHeight, float statusHeight);
+  float panelWidth() const { return m_width; }
 
   EditorCommand update(InputManager* inputManager, float dt = 0.016f);
   bool consumedPress() const { return m_consumedPress; }
@@ -54,6 +60,12 @@ private:
   EditorCommand m_activeTool;
   bool m_mouseWasDown;
   bool m_consumedPress;
+  float m_fontSize;
+  float m_width;
+  float m_barHeight;
+  float m_statusHeight;
+  float m_toolRowHeight;
+  float m_modeButtonHeight;
   float m_x;
   float m_y;
   float m_height;

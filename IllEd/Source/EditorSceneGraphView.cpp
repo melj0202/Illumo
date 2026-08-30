@@ -26,11 +26,16 @@ EditorSceneGraphView::EditorSceneGraphView(IRenderWindow* window,
   , m_dropValid(false)
   , m_dragStartX(0.0f)
   , m_dragStartY(0.0f)
+  , m_fontSize(EditorToolbar::kDefaultFontSize)
+  , m_width(kDefaultWidth)
+  , m_rowHeight(kDefaultRowHeight)
+  , m_barHeight(EditorToolbar::kDefaultBarHeight)
+  , m_statusHeight(EditorToolbar::kDefaultStatusHeight)
   , m_x(0.0f)
-  , m_y(EditorToolbar::kBarHeight)
+  , m_y(EditorToolbar::kDefaultBarHeight)
   , m_height(670.0f)
-  , m_headerY(EditorToolbar::kBarHeight)
-  , m_treeStartY(EditorToolbar::kBarHeight + 32.0f)
+  , m_headerY(EditorToolbar::kDefaultBarHeight)
+  , m_treeStartY(EditorToolbar::kDefaultBarHeight + 30.0f)
   , m_animTime(0.0f)
   , m_hoverRow(-1)
   , m_hoverRootZone(false)
@@ -42,6 +47,24 @@ EditorSceneGraphView::EditorSceneGraphView(IRenderWindow* window,
   m_visual.setWindow(window);
   m_visual.setRenderer(renderer);
   m_visual.prepare(renderer);
+  updateLayout();
+}
+
+void
+EditorSceneGraphView::setFontSize(float sizePt)
+{
+  const float clamped = std::clamp(sizePt, 8.0f, 48.0f);
+  if (std::abs(m_fontSize - clamped) > 0.001f) {
+    m_fontSize = clamped;
+    updateLayout();
+  }
+}
+
+void
+EditorSceneGraphView::setToolbarDimensions(float barHeight, float statusHeight)
+{
+  m_barHeight = barHeight;
+  m_statusHeight = statusHeight;
   updateLayout();
 }
 
@@ -65,19 +88,21 @@ EditorSceneGraphView::updateLayout()
   const float virtualHeight =
     static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
 
+  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
+  m_width = std::max(220.0f, std::round(220.0f * fontScale));
+  m_rowHeight = std::max(22.0f, std::round(22.0f * fontScale));
+
   m_x = 0.0f;
-  m_y = EditorToolbar::kBarHeight;
-  m_height = std::max(80.0f,
-                      virtualHeight - EditorToolbar::kBarHeight -
-                        EditorToolbar::kStatusHeight);
+  m_y = m_barHeight;
+  m_height = std::max(80.0f, virtualHeight - m_barHeight - m_statusHeight);
   m_headerY = m_y;
-  m_treeStartY = m_y + 30.0f;
+  m_treeStartY = m_y + std::max(30.0f, std::round(30.0f * fontScale));
 }
 
 bool
 EditorSceneGraphView::containsScreenPoint(float x, float y) const
 {
-  return x >= m_x && x <= m_x + kWidth && y >= m_y && y <= m_y + m_height;
+  return x >= m_x && x <= m_x + m_width && y >= m_y && y <= m_y + m_height;
 }
 
 void
@@ -142,7 +167,7 @@ EditorSceneGraphView::rebuildTreeRows(const EditorDocument* document)
     row.y = currentY;
     row.isLastChild = entry.isLastChild;
     m_rows.push_back(row);
-    currentY += kRowHeight;
+    currentY += m_rowHeight;
 
     const auto it = childrenMap.find(node->id);
     if (it != childrenMap.end()) {
@@ -158,11 +183,11 @@ EditorSceneGraphView::rebuildTreeRows(const EditorDocument* document)
 int
 EditorSceneGraphView::hitTestRow(float x, float y) const
 {
-  if (x < m_x || x > m_x + kWidth) {
+  if (x < m_x || x > m_x + m_width) {
     return -1;
   }
   for (size_t i = 0; i < m_rows.size(); ++i) {
-    if (y >= m_rows[i].y && y < m_rows[i].y + kRowHeight) {
+    if (y >= m_rows[i].y && y < m_rows[i].y + m_rowHeight) {
       return static_cast<int>(i);
     }
   }
@@ -172,11 +197,11 @@ EditorSceneGraphView::hitTestRow(float x, float y) const
 bool
 EditorSceneGraphView::hitTestRootZone(float x, float y) const
 {
-  if (x < m_x || x > m_x + kWidth) {
+  if (x < m_x || x > m_x + m_width) {
     return false;
   }
   const float treeEndY =
-    m_treeStartY + static_cast<float>(m_rows.size()) * kRowHeight;
+    m_treeStartY + static_cast<float>(m_rows.size()) * m_rowHeight;
   return y >= treeEndY && y <= m_y + m_height;
 }
 
@@ -328,6 +353,13 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
   m_visual.clearPrimitives();
   updateLayout();
 
+  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
+  const float headerFontSize = std::max(9.0f, std::round(11.0f * fontScale));
+  const float pillFontSize = std::max(8.0f, std::round(10.0f * fontScale));
+  const float rowFontSize = std::max(10.0f, std::round(12.0f * fontScale));
+  const float iconSize = std::max(14.0f, std::round(14.0f * fontScale));
+  const float indent = std::max(14.0f, std::round(14.0f * fontScale));
+
   const ColorRgba panelBg{ 13, 19, 29, 255 };
   const ColorRgba panelBorder{ 40, 56, 78, 255 };
   const ColorRgba text = UiTheme::textPrimary();
@@ -336,53 +368,71 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
   const ColorRgba treeLineColor{ 45, 65, 90, 220 };
 
   // Background and right border
-  m_visual.addFilledRect(m_x, m_y, kWidth, m_height, panelBg);
+  m_visual.addFilledRect(m_x, m_y, m_width, m_height, panelBg);
   m_visual.addLine(
-    m_x + kWidth, m_y, m_x + kWidth, m_y + m_height, panelBorder, 1.0f);
+    m_x + m_width, m_y, m_x + m_width, m_y + m_height, panelBorder, 1.0f);
 
   // Section Header: SCENE GRAPH
   const float headerGlow = 0.70f + 0.30f * std::sin(m_animTime * 3.0f);
   m_visual.addFilledRect(
-    m_x + 6.0f,
-    m_headerY + 8.0f,
+    m_x + 6.0f * fontScale,
+    m_headerY + 8.0f * fontScale,
     2.0f,
-    8.0f,
+    8.0f * fontScale,
     ColorRgba{ 66, 214, 210, static_cast<unsigned char>(255.0f * headerGlow) });
-  m_visual.addText("SCENE GRAPH", m_x + 12.0f, m_headerY + 6.0f, 11.0f, muted);
+  m_visual.addText("SCENE GRAPH",
+                   m_x + 12.0f * fontScale,
+                   m_headerY + 6.0f * fontScale,
+                   headerFontSize,
+                   muted);
 
   // Node count pill badge
   const size_t totalNodes = document ? document->nodeCount() : 0;
   const std::string countStr = std::to_string(totalNodes);
-  m_visual.addFilledRect(m_x + kWidth - 36.0f,
-                         m_headerY + 6.0f,
-                         28.0f,
-                         14.0f,
+  const float badgeW =
+    std::max(28.0f * fontScale,
+             static_cast<float>(countStr.size()) * pillFontSize * 0.55f +
+               12.0f * fontScale);
+  const float badgeH = std::max(14.0f, std::round(14.0f * fontScale));
+  const float badgeX = m_x + m_width - badgeW - 8.0f * fontScale;
+
+  m_visual.addFilledRect(badgeX,
+                         m_headerY + 6.0f * fontScale,
+                         badgeW,
+                         badgeH,
                          ColorRgba{ 20, 32, 48, 220 });
-  m_visual.addOutlineRect(m_x + kWidth - 36.0f,
-                          m_headerY + 6.0f,
-                          28.0f,
-                          14.0f,
+  m_visual.addOutlineRect(badgeX,
+                          m_headerY + 6.0f * fontScale,
+                          badgeW,
+                          badgeH,
                           ColorRgba{ 44, 62, 86, 255 },
                           1.0f);
-  m_visual.addText(
-    countStr, m_x + kWidth - 28.0f, m_headerY + 7.0f, 10.0f, cyanAccent);
+  m_visual.addText(countStr,
+                   badgeX + 6.0f * fontScale,
+                   m_headerY + 6.0f * fontScale +
+                     std::max(0.0f, std::round((badgeH - pillFontSize) * 0.5f)),
+                   pillFontSize,
+                   cyanAccent);
 
   // Divider under header
-  m_visual.addLine(m_x + 6.0f,
-                   m_headerY + 24.0f,
-                   m_x + kWidth - 6.0f,
-                   m_headerY + 24.0f,
+  m_visual.addLine(m_x + 6.0f * fontScale,
+                   m_headerY + 24.0f * fontScale,
+                   m_x + m_width - 6.0f * fontScale,
+                   m_headerY + 24.0f * fontScale,
                    ColorRgba{ 35, 48, 66, 255 },
                    1.0f);
 
   // Empty state note if no nodes exist
   if (m_rows.empty()) {
-    m_visual.addText(
-      "No nodes in scene", m_x + 16.0f, m_treeStartY + 16.0f, 11.0f, muted);
+    m_visual.addText("No nodes in scene",
+                     m_x + 16.0f * fontScale,
+                     m_treeStartY + 16.0f * fontScale,
+                     headerFontSize,
+                     muted);
     m_visual.addText("Use Tools or Create menu",
-                     m_x + 16.0f,
-                     m_treeStartY + 34.0f,
-                     11.0f,
+                     m_x + 16.0f * fontScale,
+                     m_treeStartY + 34.0f * fontScale,
+                     headerFontSize,
                      ColorRgba{ 90, 112, 135, 255 });
     return;
   }
@@ -395,35 +445,28 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
     const bool isDragged = (m_isDragging && row.id == m_draggedNodeId);
     const bool isDropTarget = (m_isDragging && row.id == m_dropTargetNodeId);
 
-    const float rowX = m_x + 4.0f;
-    const float rowW = kWidth - 8.0f;
+    const float rowX = m_x + 4.0f * fontScale;
+    const float rowW = m_width - 8.0f * fontScale;
     const float rowY = row.y;
+    const float rowH = m_rowHeight - 2.0f;
 
     // Row background and borders
     if (isDropTarget) {
       if (m_dropValid) {
         // Valid drop target: glowing cyan border and pill
         m_visual.addFilledRect(
-          rowX, rowY, rowW, kRowHeight - 2.0f, ColorRgba{ 25, 80, 100, 240 });
-        m_visual.addOutlineRect(rowX,
-                                rowY,
-                                rowW,
-                                kRowHeight - 2.0f,
-                                ColorRgba{ 66, 214, 210, 255 },
-                                1.5f);
-        m_visual.addFilledRect(rowX, rowY, 3.0f, kRowHeight - 2.0f, cyanAccent);
+          rowX, rowY, rowW, rowH, ColorRgba{ 25, 80, 100, 240 });
+        m_visual.addOutlineRect(
+          rowX, rowY, rowW, rowH, ColorRgba{ 66, 214, 210, 255 }, 1.5f);
+        m_visual.addFilledRect(rowX, rowY, 3.0f, rowH, cyanAccent);
       } else {
         // Invalid drop target (cycle / self): red warning pill
         m_visual.addFilledRect(
-          rowX, rowY, rowW, kRowHeight - 2.0f, ColorRgba{ 90, 25, 30, 240 });
-        m_visual.addOutlineRect(rowX,
-                                rowY,
-                                rowW,
-                                kRowHeight - 2.0f,
-                                ColorRgba{ 240, 70, 80, 255 },
-                                1.5f);
+          rowX, rowY, rowW, rowH, ColorRgba{ 90, 25, 30, 240 });
+        m_visual.addOutlineRect(
+          rowX, rowY, rowW, rowH, ColorRgba{ 240, 70, 80, 255 }, 1.5f);
         m_visual.addFilledRect(
-          rowX, rowY, 3.0f, kRowHeight - 2.0f, ColorRgba{ 240, 70, 80, 255 });
+          rowX, rowY, 3.0f, rowH, ColorRgba{ 240, 70, 80, 255 });
       }
     } else if (isSelected) {
       // Selected row: vibrant blue/cyan highlight with glowing left edge
@@ -432,45 +475,36 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
       const ColorRgba activeBorder{
         66, 180, 230, static_cast<unsigned char>(255.0f * pulse)
       };
-      m_visual.addFilledRect(rowX, rowY, rowW, kRowHeight - 2.0f, activeBg);
-      m_visual.addOutlineRect(
-        rowX, rowY, rowW, kRowHeight - 2.0f, activeBorder, 1.0f);
-      m_visual.addFilledRect(rowX, rowY, 3.0f, kRowHeight - 2.0f, cyanAccent);
+      m_visual.addFilledRect(rowX, rowY, rowW, rowH, activeBg);
+      m_visual.addOutlineRect(rowX, rowY, rowW, rowH, activeBorder, 1.0f);
+      m_visual.addFilledRect(rowX, rowY, 3.0f, rowH, cyanAccent);
     } else if (isHovered && !m_isDragging) {
       m_visual.addFilledRect(
-        rowX, rowY, rowW, kRowHeight - 2.0f, ColorRgba{ 24, 38, 56, 220 });
-      m_visual.addOutlineRect(rowX,
-                              rowY,
-                              rowW,
-                              kRowHeight - 2.0f,
-                              ColorRgba{ 52, 75, 105, 200 },
-                              1.0f);
+        rowX, rowY, rowW, rowH, ColorRgba{ 24, 38, 56, 220 });
+      m_visual.addOutlineRect(
+        rowX, rowY, rowW, rowH, ColorRgba{ 52, 75, 105, 200 }, 1.0f);
     } else if (isDragged) {
       // Ghost dimming for the node being dragged
       m_visual.addFilledRect(
-        rowX, rowY, rowW, kRowHeight - 2.0f, ColorRgba{ 15, 22, 33, 160 });
-      m_visual.addOutlineRect(rowX,
-                              rowY,
-                              rowW,
-                              kRowHeight - 2.0f,
-                              ColorRgba{ 40, 55, 75, 160 },
-                              1.0f);
+        rowX, rowY, rowW, rowH, ColorRgba{ 15, 22, 33, 160 });
+      m_visual.addOutlineRect(
+        rowX, rowY, rowW, rowH, ColorRgba{ 40, 55, 75, 160 }, 1.0f);
     }
 
     // Depth indentation & tree guide branch lines
-    const float indent = 14.0f;
-    const float contentX = rowX + 8.0f + static_cast<float>(row.depth) * indent;
+    const float contentX =
+      rowX + 8.0f * fontScale + static_cast<float>(row.depth) * indent;
 
     if (row.depth > 0) {
       // Draw horizontal hook into the node
-      const float hookX0 = contentX - 10.0f;
-      const float hookX1 = contentX - 2.0f;
-      const float hookY = rowY + (kRowHeight - 2.0f) * 0.5f;
+      const float hookX0 = contentX - 10.0f * fontScale;
+      const float hookX1 = contentX - 2.0f * fontScale;
+      const float hookY = rowY + rowH * 0.5f;
       m_visual.addLine(hookX0, hookY, hookX1, hookY, treeLineColor, 1.0f);
 
       // Draw vertical stem
       const float stemY0 = rowY;
-      const float stemY1 = row.isLastChild ? hookY : (rowY + kRowHeight - 2.0f);
+      const float stemY1 = row.isLastChild ? hookY : (rowY + m_rowHeight);
       m_visual.addLine(hookX0, stemY0, hookX0, stemY1, treeLineColor, 1.0f);
     }
 
@@ -502,20 +536,21 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
           break;
       }
       m_visual.addCenteredSprite(m_atlas,
-                                 contentX + 7.0f,
-                                 rowY + (kRowHeight - 2.0f) * 0.5f,
-                                 14.0f,
-                                 14.0f,
+                                 contentX + iconSize * 0.5f,
+                                 rowY + rowH * 0.5f,
+                                 iconSize,
+                                 iconSize,
                                  EditorUiAtlas::regionFor(iconCmd));
-      labelX = contentX + 18.0f;
+      labelX = contentX + iconSize + 4.0f * fontScale;
     } else {
       // Small bullet dot
-      m_visual.addFilledRect(contentX + 2.0f,
-                             rowY + 8.0f,
-                             4.0f,
-                             4.0f,
+      m_visual.addFilledRect(contentX + 2.0f * fontScale,
+                             rowY +
+                               std::round((rowH - 4.0f * fontScale) * 0.5f),
+                             4.0f * fontScale,
+                             4.0f * fontScale,
                              isSelected ? cyanAccent : muted);
-      labelX = contentX + 10.0f;
+      labelX = contentX + 10.0f * fontScale;
     }
 
     // Node label and id tag
@@ -526,15 +561,20 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
                               : (isHovered ? ColorRgba{ 220, 235, 250, 255 }
                                            : ColorRgba{ 180, 198, 218, 255 }));
 
-    m_visual.addText(labelText, labelX, rowY + 4.0f, 12.0f, labelColor);
+    const float textY =
+      rowY + std::max(0.0f, std::round((rowH - rowFontSize) * 0.5f));
+    m_visual.addText(labelText, labelX, textY, rowFontSize, labelColor);
   }
 
   // Root drop zone indicator if dragging
   if (m_isDragging) {
-    const float treeEndY =
-      m_treeStartY + static_cast<float>(m_rows.size()) * kRowHeight + 6.0f;
+    const float treeEndY = m_treeStartY +
+                           static_cast<float>(m_rows.size()) * m_rowHeight +
+                           6.0f * fontScale;
     const float zoneH =
-      std::min(40.0f, std::max(24.0f, m_y + m_height - treeEndY - 8.0f));
+      std::min(40.0f * fontScale,
+               std::max(24.0f * fontScale,
+                        m_y + m_height - treeEndY - 8.0f * fontScale));
 
     if (zoneH > 20.0f) {
       const bool isTargetRoot = (m_dropTargetNodeId.empty() && m_hoverRootZone);
@@ -544,22 +584,30 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
                                          ? ColorRgba{ 66, 214, 210, 255 }
                                          : ColorRgba{ 35, 50, 70, 180 };
 
-      m_visual.addFilledRect(
-        m_x + 8.0f, treeEndY, kWidth - 16.0f, zoneH, rootZoneBg);
-      m_visual.addOutlineRect(
-        m_x + 8.0f, treeEndY, kWidth - 16.0f, zoneH, rootZoneBorder, 1.0f);
-      m_visual.addText("Drop here -> Root",
-                       m_x + 16.0f,
-                       treeEndY + zoneH * 0.5f - 5.0f,
-                       11.0f,
-                       isTargetRoot ? ColorRgba{ 255, 255, 255, 255 } : muted);
+      m_visual.addFilledRect(m_x + 8.0f * fontScale,
+                             treeEndY,
+                             m_width - 16.0f * fontScale,
+                             zoneH,
+                             rootZoneBg);
+      m_visual.addOutlineRect(m_x + 8.0f * fontScale,
+                              treeEndY,
+                              m_width - 16.0f * fontScale,
+                              zoneH,
+                              rootZoneBorder,
+                              1.0f);
+      m_visual.addText(
+        "Drop here -> Root",
+        m_x + 16.0f * fontScale,
+        treeEndY + std::max(0.0f, std::round((zoneH - headerFontSize) * 0.5f)),
+        headerFontSize,
+        isTargetRoot ? ColorRgba{ 255, 255, 255, 255 } : muted);
     }
 
     // Dragged floating ghost pill following cursor
-    const float ghostW = 130.0f;
-    const float ghostH = 22.0f;
-    const float ghostX = m_mouseX + 12.0f;
-    const float ghostY = m_mouseY - 11.0f;
+    const float ghostW = std::max(130.0f, std::round(130.0f * fontScale));
+    const float ghostH = m_rowHeight;
+    const float ghostX = m_mouseX + 12.0f * fontScale;
+    const float ghostY = m_mouseY - ghostH * 0.5f;
 
     const ColorRgba ghostBg =
       m_dropValid ? ColorRgba{ 18, 55, 80, 240 } : ColorRgba{ 70, 25, 30, 240 };
@@ -574,11 +622,12 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
     const std::string draggedTitle =
       draggedNode ? (draggedNode->name + " (#" + m_draggedNodeId + ")")
                   : ("#" + m_draggedNodeId);
-    m_visual.addText(draggedTitle,
-                     ghostX + 8.0f,
-                     ghostY + 4.0f,
-                     11.0f,
-                     ColorRgba{ 255, 255, 255, 255 });
+    m_visual.addText(
+      draggedTitle,
+      ghostX + 8.0f * fontScale,
+      ghostY + std::max(0.0f, std::round((ghostH - headerFontSize) * 0.5f)),
+      headerFontSize,
+      ColorRgba{ 255, 255, 255, 255 });
   }
 }
 

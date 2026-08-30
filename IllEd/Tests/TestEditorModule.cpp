@@ -67,6 +67,7 @@ struct EditorFixture
   {
     env.setVar("WinX", 1280);
     env.setVar("WinY", 720);
+    env.setVar("fontSize", "13");
     mock.Initialize();
     seedShippedAtlas();
     started = module.Start(&context);
@@ -493,6 +494,120 @@ test2dModeNodeRenderingEmitsTokens()
            "2D nodes set MVP uniform");
 }
 
+static void
+testFontSizeConfiguredFromEnvVars()
+{
+  testSection("EditorModule: fontSize configured from IEnvVars");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("fontSize", "20");
+  Camera camera(glm::vec2(0.0f, 0.0f), 32.0f, &env);
+  MockBackend mock;
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  AssetManager assets(&renderer, false);
+  CommandRegistry registry;
+  CommandLine console(&env, &registry, &window, &renderer, "IllEd");
+  InputManager input(nullptr);
+  Scene scene(&window, &camera);
+  IllumoContext context{ &scene,  &window, &console, &input,   &renderer,
+                         &assets, &env,    &camera,  &registry };
+  EditorModule module;
+  mock.Initialize();
+  seedShippedAtlas();
+  const bool started = module.Start(&context);
+  testTrue(g, started, "module started with fontSize 20");
+
+  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(module);
+  EditorSidebar* sidebar = EditorModuleTestAccess::sidebar(module);
+  EditorSceneGraphView* sceneGraphView =
+    EditorModuleTestAccess::sceneGraphView(module);
+
+  testTrue(g, toolbar != nullptr, "toolbar exists");
+  testTrue(g, sidebar != nullptr, "sidebar exists");
+  testTrue(g, sceneGraphView != nullptr, "sceneGraphView exists");
+
+  testTrue(
+    g, std::abs(toolbar->fontSize() - 20.0f) < 0.001f, "toolbar fontSize 20");
+  testTrue(
+    g, std::abs(sidebar->fontSize() - 20.0f) < 0.001f, "sidebar fontSize 20");
+  testTrue(g,
+           std::abs(sceneGraphView->fontSize() - 20.0f) < 0.001f,
+           "sceneGraphView fontSize 20");
+
+  module.Exit();
+}
+
+static void
+testFontSizeImmediateRuntimeChange()
+{
+  testSection(
+    "EditorModule: runtime fontSize change takes effect immediately on Update");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("fontSize", "13");
+  Camera camera(glm::vec2(0.0f, 0.0f), 32.0f, &env);
+  MockBackend mock;
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  AssetManager assets(&renderer, false);
+  CommandRegistry registry;
+  CommandLine console(&env, &registry, &window, &renderer, "IllEd");
+  InputManager input(nullptr);
+  Scene scene(&window, &camera);
+  IllumoContext context{ &scene,  &window, &console, &input,   &renderer,
+                         &assets, &env,    &camera,  &registry };
+  EditorModule module;
+  mock.Initialize();
+  seedShippedAtlas();
+  const bool started = module.Start(&context);
+  testTrue(g, started, "module started");
+
+  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(module);
+  EditorSidebar* sidebar = EditorModuleTestAccess::sidebar(module);
+  EditorSceneGraphView* sceneGraphView =
+    EditorModuleTestAccess::sceneGraphView(module);
+
+  testTrue(g,
+           toolbar != nullptr && sidebar != nullptr &&
+             sceneGraphView != nullptr,
+           "views exist");
+  testTrue(g,
+           std::abs(toolbar->fontSize() - 13.0f) < 0.001f,
+           "initial toolbar fontSize 13");
+  testTrue(
+    g, std::abs(toolbar->barHeight() - 28.0f) < 0.001f, "initial barHeight 28");
+
+  // Change variable at runtime
+  env.setVar("fontSize", "24");
+  module.Update(0.016);
+
+  testTrue(g,
+           std::abs(toolbar->fontSize() - 24.0f) < 0.001f,
+           "toolbar resized to 24 immediately");
+  testTrue(g,
+           std::abs(sidebar->fontSize() - 24.0f) < 0.001f,
+           "sidebar resized to 24 immediately");
+  testTrue(g,
+           std::abs(sceneGraphView->fontSize() - 24.0f) < 0.001f,
+           "sceneGraphView resized to 24 immediately");
+  testTrue(
+    g, toolbar->barHeight() >= 48.0f, "toolbar height updated immediately");
+  testTrue(
+    g, sidebar->panelWidth() >= 360.0f, "sidebar width updated immediately");
+
+  // Change variable again at runtime (e.g. via multiplier or smaller size)
+  env.setVar("fontSize", "16");
+  module.Update(0.016);
+
+  testTrue(g,
+           std::abs(toolbar->fontSize() - 16.0f) < 0.001f,
+           "toolbar resized to 16 immediately");
+  testTrue(g,
+           std::abs(sidebar->fontSize() - 16.0f) < 0.001f,
+           "sidebar resized to 16 immediately");
+
+  module.Exit();
+}
+
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
@@ -549,6 +664,16 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.UiDrawOrder", []() {
     g = {};
     testUiDrawOrder();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.FontSizeConfigured", []() {
+    g = {};
+    testFontSizeConfiguredFromEnvVars();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.FontSizeImmediateRuntimeChange", []() {
+    g = {};
+    testFontSizeImmediateRuntimeChange();
     return g.failures;
   });
 }

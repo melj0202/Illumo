@@ -28,6 +28,8 @@ public:
   void open(const std::string& message);
   void close();
   bool isOpen() const { return m_open; }
+  void setFontSize(float sizePt);
+  float fontSize() const { return m_fontSize; }
   EditorConfirmAction update(InputManager* inputManager, float dt = 0.016f);
   GameVisual& getVisual() { return m_visual; }
   const std::string& messageForTesting() const { return m_message; }
@@ -43,6 +45,7 @@ private:
   bool m_mouseWasDown;
   float m_animElapsed;
   std::string m_message;
+  float m_fontSize;
   float m_panelX;
   float m_panelY;
   float m_panelWidth;

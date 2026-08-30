@@ -125,6 +125,29 @@ testVisualTokenEmission()
            "emits DrawIndexed commands");
 }
 
+static void
+testFontSizeScaling()
+{
+  testSection("EditorSceneGraphView: font size scaling");
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorSceneGraphView view(&fixture.window, &fixture.renderer);
+
+  testTrue(
+    g, std::abs(view.fontSize() - 13.0f) < 0.001f, "default fontSize 13");
+  testTrue(
+    g, std::abs(view.panelWidth() - 220.0f) < 0.001f, "default width 220");
+  testTrue(
+    g, std::abs(view.rowHeight() - 22.0f) < 0.001f, "default rowHeight 22");
+
+  view.setFontSize(26.0f);
+  view.setToolbarDimensions(56.0f, 44.0f);
+  testTrue(
+    g, std::abs(view.fontSize() - 26.0f) < 0.001f, "fontSize updated to 26");
+  testTrue(g, view.panelWidth() >= 440.0f, "width scaled to >= 440");
+  testTrue(g, view.rowHeight() >= 44.0f, "rowHeight scaled to >= 44");
+  testTrue(g, view.containsScreenPoint(300.0f, 70.0f), "contains scaled point");
+}
+
 void
 registerEditorSceneGraphViewTests(IllumoTestRegistry& registry)
 {
@@ -146,6 +169,11 @@ registerEditorSceneGraphViewTests(IllumoTestRegistry& registry)
   registry.add("IllEd.SceneGraphView.VisualEmission", []() {
     g = {};
     testVisualTokenEmission();
+    return g.failures;
+  });
+  registry.add("IllEd.SceneGraphView.FontSizeScaling", []() {
+    g = {};
+    testFontSizeScaling();
     return g.failures;
   });
 }

@@ -14,14 +14,22 @@ class Renderer;
 class EditorSceneGraphView : public DrawableBase
 {
 public:
-  static constexpr float kWidth = 220.0f;
-  static constexpr float kRowHeight = 22.0f;
+  static constexpr float kDefaultWidth = 220.0f;
+  static constexpr float kDefaultRowHeight = 22.0f;
+  static constexpr float kWidth = kDefaultWidth;
+  static constexpr float kRowHeight = kDefaultRowHeight;
 
   EditorSceneGraphView(IRenderWindow* window, Renderer* renderer);
   ~EditorSceneGraphView() override = default;
 
   EditorSceneGraphView(const EditorSceneGraphView&) = delete;
   EditorSceneGraphView& operator=(const EditorSceneGraphView&) = delete;
+
+  void setFontSize(float sizePt);
+  float fontSize() const { return m_fontSize; }
+  void setToolbarDimensions(float barHeight, float statusHeight);
+  float panelWidth() const { return m_width; }
+  float rowHeight() const { return m_rowHeight; }
 
   bool update(InputManager* inputManager,
               EditorDocument* document,
@@ -33,7 +41,6 @@ public:
   TextureHandle atlas() const { return m_atlas; }
   bool containsScreenPoint(float x, float y) const;
   float panelX() const { return m_x; }
-  float panelWidth() const { return kWidth; }
   GameVisual& getVisual() { return m_visual; }
 
   // Testing hooks
@@ -80,6 +87,11 @@ private:
   float m_dragStartX;
   float m_dragStartY;
 
+  float m_fontSize;
+  float m_width;
+  float m_rowHeight;
+  float m_barHeight;
+  float m_statusHeight;
   float m_x;
   float m_y;
   float m_height;

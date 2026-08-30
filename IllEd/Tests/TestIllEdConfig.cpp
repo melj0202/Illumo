@@ -34,6 +34,8 @@ testDefaultsAndIdentity()
     IllEdConfig::ApplyDefaults(&environment);
     testEqStr(g, environment.getVar("uiScale").value, "1", "uiScale default");
     testEqStr(g, environment.getVar("msaa").value, "4", "msaa default");
+    testEqStr(
+      g, environment.getVar("fontSize").value, "13", "fontSize default");
   }
   std::filesystem::remove(path, error);
 }

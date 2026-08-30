@@ -38,14 +38,22 @@ enum class EditorCommand
 class EditorToolbar : public DrawableBase
 {
 public:
-  static constexpr float kBarHeight = 28.0f;
-  static constexpr float kStatusHeight = 22.0f;
+  static constexpr float kDefaultFontSize = 13.0f;
+  static constexpr float kDefaultBarHeight = 28.0f;
+  static constexpr float kDefaultStatusHeight = 22.0f;
+  static constexpr float kBarHeight = kDefaultBarHeight;
+  static constexpr float kStatusHeight = kDefaultStatusHeight;
 
   EditorToolbar(IRenderWindow* window, Renderer* renderer);
   ~EditorToolbar() override = default;
 
   EditorToolbar(const EditorToolbar&) = delete;
   EditorToolbar& operator=(const EditorToolbar&) = delete;
+
+  void setFontSize(float sizePt);
+  float fontSize() const { return m_fontSize; }
+  float barHeight() const { return m_barHeight; }
+  float statusHeight() const { return m_statusHeight; }
 
   EditorCommand update(InputManager* inputManager, float dt = 0.016f);
   void setAtlas(TextureHandle atlas);
@@ -93,6 +101,9 @@ private:
   bool m_consumedPress;
   std::string m_status;
   float m_barWidth;
+  float m_fontSize;
+  float m_barHeight;
+  float m_statusHeight;
   float m_dropdownX;
   float m_dropdownY;
   float m_dropdownWidth;

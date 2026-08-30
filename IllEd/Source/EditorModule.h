@@ -64,7 +64,10 @@ private:
   double m_lastMouseY;
   float m_animTime;
   EditorPendingAction m_pendingAction;
+  std::string m_appliedFontSizeVar;
 
+  void syncFontSize();
+  void applyFontSize(float size);
   bool rebuildGraph();
   void applyWorldCamera();
   void handleCommand(EditorCommand command);

@@ -35,12 +35,39 @@ testSidebarHits()
   testTrue(g, pyramid == EditorCommand::CreatePyramid, "Pyramid tool row");
 }
 
+static void
+testFontSizeScaling()
+{
+  testSection("EditorSidebar: font size scaling");
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorSidebar sidebar(&fixture.window, &fixture.renderer);
+
+  testTrue(
+    g, std::abs(sidebar.fontSize() - 13.0f) < 0.001f, "default fontSize 13");
+  testTrue(
+    g, std::abs(sidebar.panelWidth() - 200.0f) < 0.001f, "default width 200");
+
+  sidebar.setFontSize(26.0f);
+  sidebar.setToolbarDimensions(56.0f, 44.0f);
+  testTrue(
+    g, std::abs(sidebar.fontSize() - 26.0f) < 0.001f, "fontSize updated to 26");
+  testTrue(g, sidebar.panelWidth() >= 400.0f, "width scaled to >= 400");
+  testTrue(g,
+           sidebar.containsScreenPoint(sidebar.sidebarX() + 20.0f, 70.0f),
+           "contains scaled point");
+}
+
 void
 registerEditorSidebarTests(IllumoTestRegistry& registry)
 {
   registry.add("IllEd.Sidebar.ToolHits", []() {
     g = {};
     testSidebarHits();
+    return g.failures;
+  });
+  registry.add("IllEd.Sidebar.FontSizeScaling", []() {
+    g = {};
+    testFontSizeScaling();
     return g.failures;
   });
 }

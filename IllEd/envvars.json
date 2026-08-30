@@ -7,5 +7,6 @@
  "showFPS": "1",
  "vsync": "1",
  "uiScale": "1",
+ "fontSize": "13",
  "msaa": "4"
 }
