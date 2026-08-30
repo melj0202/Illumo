@@ -2,6 +2,7 @@
 #include "EditorToolbar.h"
 #include "EditorUiAtlas.h"
 
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>

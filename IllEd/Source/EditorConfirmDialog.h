@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Gui/GuiDialog.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <string>
@@ -27,40 +28,16 @@ public:
 
   void open(const std::string& message);
   void close();
-  bool isOpen() const { return m_open; }
+  bool isOpen() const { return m_dialog.isOpen(); }
   void setFontSize(float sizePt);
-  float fontSize() const { return m_fontSize; }
+  float fontSize() const { return m_dialog.fontSize(); }
   EditorConfirmAction update(InputManager* inputManager, float dt = 0.016f);
-  GameVisual& getVisual() { return m_visual; }
-  const std::string& messageForTesting() const { return m_message; }
+  GameVisual& getVisual() { return m_dialog.getVisual(); }
+  const std::string& messageForTesting() const { return m_dialog.getMessage(); }
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
 
 private:
-  IRenderWindow* m_window;
-  Renderer* m_renderer;
-  GameVisual m_visual;
-  bool m_open;
-  bool m_mouseWasDown;
-  float m_animElapsed;
-  std::string m_message;
-  float m_fontSize;
-  float m_panelX;
-  float m_panelY;
-  float m_panelWidth;
-  float m_panelHeight;
-  float m_buttonY;
-  float m_buttonWidth;
-  float m_buttonHeight;
-  float m_saveX;
-  float m_discardX;
-  float m_cancelX;
-  EditorConfirmAction m_hoveredButton;
-  float m_mouseX;
-  float m_mouseY;
-
-  void updateLayout();
-  void rebuildVisual();
-  EditorConfirmAction clickAt(float x, float y);
+  GuiDialog m_dialog;
 };

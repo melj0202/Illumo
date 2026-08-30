@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Gui/GuiDialog.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 
@@ -15,8 +16,8 @@ enum class ExitConfirmAction
   MainMenu
 };
 
-// Primitive-composed exit confirmation overlay. This is not a retained widget
-// tree: one GameVisual rebuilds chrome and the two actions each frame.
+// Primitive-composed exit confirmation overlay backed by
+// Illumo::Gui::GuiDialog.
 class ExitConfirmDialog : public DrawableBase
 {
 public:
@@ -28,54 +29,24 @@ public:
 
   void open();
   void close();
-  bool isOpen() const { return openState; }
+  bool isOpen() const { return m_dialog.isOpen(); }
   void tick(float deltaSeconds);
   ExitConfirmAction update(InputManager* inputManager);
-  GameVisual& getVisual() { return visual; }
+  GameVisual& getVisual() { return m_dialog.getVisual(); }
 
-  int getSelectedButtonForTesting() const { return selectedButton; }
-  float getAnimationProgressForTesting() const;
-  float getSelectionPositionForTesting() const;
+  int getSelectedButtonForTesting() const { return m_dialog.selectedButton(); }
+  float getAnimationProgressForTesting() const
+  {
+    return m_dialog.animationProgress();
+  }
+  float getSelectionPositionForTesting() const
+  {
+    return m_dialog.selectionPosition();
+  }
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
 
 private:
-  static const int kCancelButton = 0;
-  static const int kMenuButton = 1;
-  static const int kExitButton = 2;
-  static const int kButtonCount = 3;
-  static constexpr float kOpenAnimationSeconds = 0.36f;
-  static constexpr float kSelectionAnimationSeconds = 0.14f;
-
-  IRenderWindow* window;
-  Renderer* renderer;
-  GameVisual visual;
-  bool openState;
-  bool mouseWasDown;
-  int selectedButton;
-  float animationElapsed;
-  float selectionFromButton;
-  float selectionAnimationElapsed;
-  float panelX;
-  float panelY;
-  float panelWidth;
-  float panelHeight;
-  float buttonY;
-  float buttonWidth;
-  float buttonHeight;
-  float cancelX;
-  float menuX;
-  float exitX;
-
-  void updateLayout();
-  void rebuildVisual();
-  void selectButton(int button);
-  float animationProgress() const;
-  float panelReveal() const;
-  float panelOffsetY() const;
-  float itemReveal(int item) const;
-  float selectionButtonPosition() const;
-  ExitConfirmAction activateSelected() const;
-  ExitConfirmAction clickAt(float x, float y);
+  GuiDialog m_dialog;
 };

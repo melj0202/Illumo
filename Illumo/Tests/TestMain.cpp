@@ -32,6 +32,8 @@ void
 registerSysCmdLineTests(IllumoTestRegistry& registry);
 void
 registerSceneGraphTests(IllumoTestRegistry& registry);
+void
+registerGuiKitTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -49,6 +51,7 @@ createRegistry()
   registerTextureUploadPolicyTests(registry);
   registerSysCmdLineTests(registry);
   registerSceneGraphTests(registry);
+  registerGuiKitTests(registry);
   return registry;
 }
 

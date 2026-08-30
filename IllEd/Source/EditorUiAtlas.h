@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorToolbar.h"
+#include <Illumo/Gui/GridAtlas.h>
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 
 // Implicit 6x6 cells over Assets/IllEd/editor-ui-atlas.jpg (row 0 is top).

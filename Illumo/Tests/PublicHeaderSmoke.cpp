@@ -8,6 +8,10 @@
 #include <Illumo/Foundation/MacroDefs.h>
 #include <Illumo/Foundation/MathTypes.h>
 #include <Illumo/Foundation/RollingMetric.h>
+#include <Illumo/Gui/GridAtlas.h>
+#include <Illumo/Gui/GuiDialog.h>
+#include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiTypes.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/AssetManager.h>

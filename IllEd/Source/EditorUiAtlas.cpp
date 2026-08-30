@@ -96,5 +96,5 @@ EditorUiAtlas::regionFor(EditorCommand command)
   if (!cellFor(command, &column, &row)) {
     return TextureRegion{};
   }
-  return TextureRegion::gridCell(kColumns, kRows, column, row);
+  return GridAtlas::computeCellRegion(column, row, kColumns, kRows);
 }

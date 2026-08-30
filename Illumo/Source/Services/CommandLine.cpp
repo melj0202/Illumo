@@ -1,4 +1,5 @@
 #include "thirdparty/stb/stb_easy_font.h"
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/IMesh.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>

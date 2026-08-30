@@ -91,6 +91,9 @@ add_library(Illumo STATIC
   Source/Rendering/OpenGL/GLDevice.cpp
   Source/Engine/Illumo.cpp
   Source/Engine/Application.cpp
+  Source/Gui/GridAtlas.cpp
+  Source/Gui/GuiDialog.cpp
+  Source/Gui/GuiKit.cpp
   ${ILLUMO_PLATFORM_SOURCES}
   thirdparty/tracy-0.13.1/public/TracyClient.cpp
 )
@@ -151,6 +154,7 @@ if(BUILD_TESTING)
     Tests/TestTextureUploadPolicy.cpp
     Tests/TestSysCmdLine.cpp
     Tests/TestSceneGraph.cpp
+    Tests/TestGuiKit.cpp
   )
   target_link_libraries(IllumoTests PRIVATE Illumo::TestSupport glfw)
   target_include_directories(IllumoTests PRIVATE

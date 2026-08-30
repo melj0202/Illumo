@@ -1,6 +1,7 @@
 #include "EditorToolbar.h"
 #include "EditorUiAtlas.h"
 
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -533,27 +534,23 @@ EditorToolbar::rebuildVisual()
     const float itemHeight = std::max(24.0f, std::round(24.0f * fontScale));
     const float shortcutFont = std::max(9.0f, std::round(11.0f * fontScale));
 
-    // Drop shadow with depth blur effect
-    m_visual.addFilledRect(
-      m_dropdownX + 5.0f,
-      m_dropdownY + 5.0f,
-      m_dropdownWidth,
-      animHeight,
-      ColorRgba{ 0, 0, 0, static_cast<unsigned char>(130 * ease) });
-    // Dropdown surface
-    m_visual.addFilledRect(
-      m_dropdownX,
-      m_dropdownY,
-      m_dropdownWidth,
-      animHeight,
-      ColorRgba{ 12, 18, 28, static_cast<unsigned char>(252 * ease) });
-    m_visual.addOutlineRect(
-      m_dropdownX,
-      m_dropdownY,
-      m_dropdownWidth,
-      animHeight,
-      ColorRgba{ 56, 82, 116, static_cast<unsigned char>(255 * ease) },
-      1.0f);
+    // Dropdown surface with shadow and border via GuiKit
+    GuiPanelChrome dropChrome;
+    dropChrome.background =
+      ColorRgba{ 12, 18, 28, static_cast<unsigned char>(252 * ease) };
+    dropChrome.border =
+      ColorRgba{ 56, 82, 116, static_cast<unsigned char>(255 * ease) };
+    dropChrome.shadow =
+      ColorRgba{ 0, 0, 0, static_cast<unsigned char>(130 * ease) };
+    dropChrome.shadowOffset = 5.0f;
+    dropChrome.drawShadow = true;
+    dropChrome.drawAccent = false;
+    GuiKit::drawPanel(m_visual,
+                      m_dropdownX,
+                      m_dropdownY,
+                      m_dropdownWidth,
+                      animHeight,
+                      dropChrome);
 
     float itemY = m_dropdownY + 4.0f * fontScale;
     for (size_t itemIdx = 0; itemIdx < menu.items.size(); ++itemIdx) {
@@ -622,23 +619,18 @@ EditorToolbar::rebuildVisual()
     const unsigned char borderA =
       static_cast<unsigned char>(255.0f * alphaFactor);
 
-    // Toast shadow
-    m_visual.addFilledRect(
-      toastX + 4.0f,
-      toastY + 4.0f,
-      toastW,
-      toastH,
-      ColorRgba{ 0, 0, 0, static_cast<unsigned char>(120 * alphaFactor) });
-    // Toast body
-    m_visual.addFilledRect(
-      toastX, toastY, toastW, toastH, ColorRgba{ 14, 22, 34, bgA });
-    m_visual.addOutlineRect(
-      toastX, toastY, toastW, toastH, ColorRgba{ 58, 86, 122, borderA }, 1.0f);
-
-    // Toast left accent stripe
-    ColorRgba accentCol = m_toastColor;
-    accentCol.a = borderA;
-    m_visual.addFilledRect(toastX, toastY, 4.0f, toastH, accentCol);
+    GuiPanelChrome toastChrome;
+    toastChrome.background = ColorRgba{ 14, 22, 34, bgA };
+    toastChrome.border = ColorRgba{ 58, 86, 122, borderA };
+    toastChrome.shadow =
+      ColorRgba{ 0, 0, 0, static_cast<unsigned char>(120 * alphaFactor) };
+    toastChrome.shadowOffset = 4.0f;
+    toastChrome.drawShadow = true;
+    toastChrome.drawAccent = true;
+    toastChrome.accent = m_toastColor;
+    toastChrome.accent.a = borderA;
+    toastChrome.accentWidth = 4.0f;
+    GuiKit::drawPanel(m_visual, toastX, toastY, toastW, toastH, toastChrome);
 
     // Animated lifetime progress bar along the bottom of the toast
     const float remainingRatio =

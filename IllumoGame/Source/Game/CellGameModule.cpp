@@ -4,6 +4,7 @@
 #include "PatternCodec.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Camera.h>
@@ -1908,8 +1909,7 @@ CellGameModule::updateInspectorVisual()
   const float inspX = 12.0f;
   const float inspY =
     std::clamp(72.0f, 0.0f, std::max(0.0f, virtHeight - inspH));
-  inspectorVisual.addFilledRect(
-    inspX, inspY, inspW, inspH, UiTheme::panelSurface());
+  GuiKit::drawCard(inspectorVisual, inspX, inspY, inspW, inspH);
   std::string remaining = text.str();
   float lineY = inspY + 8.0f;
   while (!remaining.empty()) {

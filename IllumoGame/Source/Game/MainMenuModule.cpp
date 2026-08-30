@@ -5,6 +5,7 @@
 #include "CellGameModule.h"
 #include "PatternCodec.h"
 #include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Services/CommandLine.h>
@@ -418,27 +419,17 @@ MainMenuModule::rebuildVisual()
                              ColorRgba{ 10, 14, 23, 180 });
 
   // Main Card Panel
-  m_menuVisual.addFilledRect(
-    m_panelX + 6.0f,
-    m_panelY + 6.0f,
-    m_panelWidth,
-    m_panelHeight,
-    UiTheme::applyOpacity(UiTheme::panelShadow(), 240));
-  m_menuVisual.addFilledRect(
-    m_panelX,
-    m_panelY,
-    m_panelWidth,
-    m_panelHeight,
-    UiTheme::applyOpacity(UiTheme::panelSurface(), 245));
-  m_menuVisual.addOutlineRect(
-    m_panelX,
-    m_panelY,
-    m_panelWidth,
-    m_panelHeight,
-    UiTheme::applyOpacity(UiTheme::panelBorder(), 255),
-    1.0f);
-  m_menuVisual.addFilledRect(
-    m_panelX, m_panelY, 5.0f, m_panelHeight, UiTheme::accent());
+  GuiPanelChrome chrome;
+  chrome.background = UiTheme::applyOpacity(UiTheme::panelSurface(), 245);
+  chrome.border = UiTheme::applyOpacity(UiTheme::panelBorder(), 255);
+  chrome.shadow = UiTheme::applyOpacity(UiTheme::panelShadow(), 240);
+  chrome.shadowOffset = 6.0f;
+  chrome.drawShadow = true;
+  chrome.drawAccent = true;
+  chrome.accent = UiTheme::accent();
+  chrome.accentWidth = 5.0f;
+  GuiKit::drawPanel(
+    m_menuVisual, m_panelX, m_panelY, m_panelWidth, m_panelHeight, chrome);
 
   // Title & Subtitle
   m_menuVisual.addText("ILLUMO",

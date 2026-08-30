@@ -1,4 +1,5 @@
 #include "thirdparty/stb/stb_easy_font.h"
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -97,28 +98,19 @@ GLString::syncVisual()
       const float panelH = panelStyle.paddingY * 2.0f + textHeight;
       const unsigned char opacity = static_cast<unsigned char>(a);
 
-      visual.addFilledRect(panelX + panelStyle.shadowOffset,
-                           panelY + panelStyle.shadowOffset,
-                           panelW,
-                           panelH,
-                           UiTheme::applyOpacity(panelStyle.shadow, opacity));
-      visual.addFilledRect(
-        panelX,
-        panelY,
-        panelW,
-        panelH,
-        UiTheme::applyOpacity(panelStyle.background, opacity));
-      visual.addOutlineRect(panelX,
-                            panelY,
-                            panelW,
-                            panelH,
-                            UiTheme::applyOpacity(panelStyle.border, opacity),
-                            panelStyle.borderWidth);
-      visual.addFilledRect(panelX,
-                           panelY,
-                           panelStyle.accentWidth,
-                           panelH,
-                           UiTheme::applyOpacity(panelStyle.accent, opacity));
+      GuiPanelChrome chrome;
+      chrome.background = UiTheme::applyOpacity(panelStyle.background, opacity);
+      chrome.border = UiTheme::applyOpacity(panelStyle.border, opacity);
+      chrome.shadow = UiTheme::applyOpacity(panelStyle.shadow, opacity);
+      chrome.accent = UiTheme::applyOpacity(panelStyle.accent, opacity);
+      chrome.borderWidth = panelStyle.borderWidth;
+      chrome.shadowOffset = panelStyle.shadowOffset;
+      chrome.accentWidth = panelStyle.accentWidth;
+      chrome.drawShadow = (panelStyle.shadowOffset > 0.0f);
+      chrome.drawAccent = (panelStyle.accentWidth > 0.0f);
+
+      GuiKit::drawPanel(visual, panelX, panelY, panelW, panelH, chrome);
+
       textX += panelStyle.paddingX + accentGap;
       textY += panelStyle.paddingY;
     }

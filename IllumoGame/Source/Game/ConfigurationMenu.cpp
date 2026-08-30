@@ -1,6 +1,7 @@
 #include "ConfigurationMenu.h"
 #include "Game/CellContext.h"
 #include "Game/SparseCellGrid.h"
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -667,30 +668,19 @@ ConfigurationMenu::rebuildVisual()
     virtualWidth,
     virtualHeight,
     UiTheme::applyOpacity(UiTheme::canvasShade(), backdropOpacity));
-  visual.addFilledRect(
-    panelX + 5.0f,
-    animatedPanelY + 5.0f,
-    panelWidth,
-    panelHeight,
-    UiTheme::applyOpacity(UiTheme::panelShadow(), panelOpacity));
-  visual.addFilledRect(
-    panelX,
-    animatedPanelY,
-    panelWidth,
-    panelHeight,
-    UiTheme::applyOpacity(UiTheme::panelSurface(), panelOpacity));
-  visual.addOutlineRect(
-    panelX,
-    animatedPanelY,
-    panelWidth,
-    panelHeight,
-    UiTheme::applyOpacity(UiTheme::panelBorder(), panelOpacity),
-    1.0f);
-  visual.addFilledRect(panelX,
-                       animatedPanelY,
-                       5.0f,
-                       panelHeight * reveal,
-                       UiTheme::applyOpacity(UiTheme::accent(), panelOpacity));
+  GuiPanelChrome chrome;
+  chrome.background =
+    UiTheme::applyOpacity(UiTheme::panelSurface(), panelOpacity);
+  chrome.border = UiTheme::applyOpacity(UiTheme::panelBorder(), panelOpacity);
+  chrome.shadow =
+    ColorRgba{ 0, 0, 0, static_cast<unsigned char>(180.0f * reveal) };
+  chrome.shadowOffset = 6.0f;
+  chrome.drawShadow = true;
+  chrome.drawAccent = true;
+  chrome.accent = UiTheme::applyOpacity(UiTheme::accent(), panelOpacity);
+  chrome.accentWidth = 5.0f;
+  GuiKit::drawPanel(
+    visual, panelX, animatedPanelY, panelWidth, panelHeight, chrome);
 
   const float headerHeight = panelHeight >= 400.0f
                                ? 104.0f

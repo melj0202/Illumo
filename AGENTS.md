@@ -233,6 +233,7 @@ Ruleset truth:
 | Renderer and tokens | `Illumo/Include/Illumo/Rendering/*`, `Illumo/Source/Rendering/*` |
 | Resource handles and file assets | `Illumo/Include/Illumo/Rendering/ResourceHandle*`, `Illumo/Source/Rendering/AssetManager.cpp` |
 | World meshes, overlay primitives, animation | `Illumo/Source/Rendering/Primitives/*` (`MeshVisual`, `GameVisual`) |
+| GUI subsystem, dialogs, and atlas helpers | `Illumo/Include/Illumo/Gui/*`, `Illumo/Source/Gui/*` (`GuiKit`, `GuiDialog`, `GridAtlas`) |
 | Debug renderer atlas and shader | `Illumo/Assets/RendererDemo/*` |
 | Production backend factory | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*` (composed in `Engine/Illumo.cpp`) |
 | Real graphics execution | `Illumo/Source/Rendering/OpenGL/*` |
@@ -383,7 +384,8 @@ A change is complete only when its scope is reviewed for accidental edits and:
 Subsystem rules live in:
 
 - `Illumo/Source/Engine/AGENTS.md`, `Illumo/Source/Foundation/AGENTS.md`, and
-  `Illumo/Source/Scene/AGENTS.md`, and `Illumo/Source/Platform/AGENTS.md` plus
+  `Illumo/Source/Scene/AGENTS.md`, `Illumo/Source/Gui/AGENTS.md`, and
+  `Illumo/Source/Platform/AGENTS.md` plus
   its Windows, Linux, and macOS child guidance;
 - `IllumoGame/Source/Game/AGENTS.md` and
   `IllumoGame/Source/Rulesets/AGENTS.md`;
