@@ -61,6 +61,13 @@ private:
   float m_inspectorY;
   float m_animTime;
   float m_modeAnim;
+  int m_hoverTool;
+  bool m_hoverMode2D;
+  bool m_hoverMode3D;
+  bool m_hoverNudge;
+  bool m_hoverColor;
+  float m_mouseX;
+  float m_mouseY;
   std::vector<ToolRow> m_tools;
 
   void updateLayout();

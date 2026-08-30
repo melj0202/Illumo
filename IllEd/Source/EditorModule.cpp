@@ -683,6 +683,14 @@ EditorModule::rebuildSelectionOverlay()
                         static_cast<unsigned char>(60.0f * pulse),
                         255 };
   m_selectionOverlay->addWireCube(node->transform.position, half, gold);
+
+  // Outer corner bracket / halo flare
+  const float outerPulse = 0.5f + 0.5f * std::sin(m_animTime * 6.0f);
+  const unsigned char cyanAlpha =
+    static_cast<unsigned char>(180.0f * outerPulse);
+  const ColorRgba haloCyan{ 66, 214, 210, cyanAlpha };
+  m_selectionOverlay->addWireCube(
+    node->transform.position, half * 1.05f, haloCyan);
 }
 
 void

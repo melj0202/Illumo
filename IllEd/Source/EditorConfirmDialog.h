@@ -53,6 +53,9 @@ private:
   float m_saveX;
   float m_discardX;
   float m_cancelX;
+  EditorConfirmAction m_hoveredButton;
+  float m_mouseX;
+  float m_mouseY;
 
   void updateLayout();
   void rebuildVisual();

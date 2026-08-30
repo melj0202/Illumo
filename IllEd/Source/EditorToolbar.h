@@ -104,6 +104,10 @@ private:
   ColorRgba m_toastColor{ 66, 214, 210, 255 };
   bool m_is3D;
   float m_animTime;
+  int m_hoverMenu;
+  int m_hoverItem;
+  float m_mouseX;
+  float m_mouseY;
 
   void rebuildMenus();
   void updateLayout();

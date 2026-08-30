@@ -29,6 +29,10 @@ EditorToolbar::EditorToolbar(IRenderWindow* window, Renderer* renderer)
   , m_toastColor(ColorRgba{ 66, 214, 210, 255 })
   , m_is3D(false)
   , m_animTime(0.0f)
+  , m_hoverMenu(-1)
+  , m_hoverItem(-1)
+  , m_mouseX(0.0f)
+  , m_mouseY(0.0f)
 {
   m_visual.setSpace(PrimitiveSpace::Pixels);
   m_visual.setLayerHint(RenderLayerId::UI);
@@ -228,6 +232,43 @@ EditorToolbar::update(InputManager* inputManager, float dt)
   m_toastElapsed += std::max(0.0f, dt);
 
   updateLayout();
+
+  // Mouse hover tracking
+  m_hoverMenu = -1;
+  m_hoverItem = -1;
+  if (m_window != nullptr) {
+    const std::array<double, 2> mouseCoords = m_window->getMouseCoords();
+    const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
+    m_mouseX =
+      static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
+    m_mouseY =
+      static_cast<float>(mouseCoords[1]) / (scale > 0.0f ? scale : 1.0f);
+
+    if (m_mouseY >= 0.0f && m_mouseY <= kBarHeight) {
+      for (size_t i = 0; i < m_menus.size(); ++i) {
+        if (m_mouseX >= m_menus[i].x &&
+            m_mouseX <= m_menus[i].x + m_menus[i].width) {
+          m_hoverMenu = static_cast<int>(i);
+          break;
+        }
+      }
+    } else if (m_openMenu >= 0 &&
+               static_cast<size_t>(m_openMenu) < m_menus.size()) {
+      if (m_mouseX >= m_dropdownX &&
+          m_mouseX <= m_dropdownX + m_dropdownWidth &&
+          m_mouseY >= m_dropdownY &&
+          m_mouseY <= m_dropdownY + m_dropdownHeight) {
+        const float localY = m_mouseY - m_dropdownY - 4.0f;
+        const int item = static_cast<int>(localY / 24.0f);
+        if (item >= 0 &&
+            static_cast<size_t>(item) <
+              m_menus[static_cast<size_t>(m_openMenu)].items.size()) {
+          m_hoverItem = item;
+        }
+      }
+    }
+  }
+
   if (inputManager == nullptr) {
     rebuildVisual();
     return EditorCommand::None;
@@ -306,14 +347,24 @@ EditorToolbar::rebuildVisual()
   const ColorRgba barBg{ 14, 20, 30, 255 };
   const ColorRgba barBorder{ 38, 54, 76, 255 };
   const ColorRgba text = UiTheme::textPrimary();
+  const ColorRgba cyanAccent{ 66, 214, 210, 255 };
 
   // Top menu bar
   m_visual.addFilledRect(0.0f, 0.0f, m_barWidth, kBarHeight, barBg);
   m_visual.addLine(0.0f, kBarHeight, m_barWidth, kBarHeight, barBorder, 1.0f);
 
+  // Subtle animated glowing accent stripe at very top edge
+  const float glowPulse = 0.5f + 0.5f * std::sin(m_animTime * 2.5f);
+  const unsigned char topGlowAlpha =
+    static_cast<unsigned char>(140.0f * glowPulse);
+  m_visual.addFilledRect(
+    0.0f, 0.0f, m_barWidth, 1.0f, ColorRgba{ 66, 214, 210, topGlowAlpha });
+
   for (size_t i = 0; i < m_menus.size(); ++i) {
     const Menu& menu = m_menus[i];
     const bool isOpen = (m_openMenu == static_cast<int>(i));
+    const bool isHovered = (m_hoverMenu == static_cast<int>(i));
+
     if (isOpen) {
       m_visual.addFilledRect(menu.x,
                              2.0f,
@@ -324,9 +375,22 @@ EditorToolbar::rebuildVisual()
                               2.0f,
                               menu.width,
                               kBarHeight - 4.0f,
-                              ColorRgba{ 66, 214, 210, 180 },
+                              ColorRgba{ 66, 214, 210, 220 },
+                              1.0f);
+    } else if (isHovered) {
+      m_visual.addFilledRect(menu.x,
+                             2.0f,
+                             menu.width,
+                             kBarHeight - 4.0f,
+                             ColorRgba{ 24, 38, 56, 230 });
+      m_visual.addOutlineRect(menu.x,
+                              2.0f,
+                              menu.width,
+                              kBarHeight - 4.0f,
+                              ColorRgba{ 55, 85, 120, 200 },
                               1.0f);
     }
+
     float titleX = menu.x + 8.0f;
     if (m_atlas.isValid()) {
       EditorCommand iconCommand = EditorCommand::None;
@@ -353,65 +417,71 @@ EditorToolbar::rebuildVisual()
                      titleX,
                      7.0f,
                      13.0f,
-                     isOpen ? ColorRgba{ 255, 255, 255, 255 } : text);
+                     (isOpen || isHovered) ? ColorRgba{ 255, 255, 255, 255 }
+                                           : text);
   }
 
   // Viewport HUD Watermark pill in top-left
   {
     const float hudX = 12.0f;
     const float hudY = kBarHeight + 10.0f;
-    const float hudW = 140.0f;
-    const float hudH = 22.0f;
+    const float hudW = 144.0f;
+    const float hudH = 24.0f;
 
     m_visual.addFilledRect(
-      hudX, hudY, hudW, hudH, ColorRgba{ 12, 18, 28, 190 });
+      hudX, hudY, hudW, hudH, ColorRgba{ 12, 18, 28, 210 });
     m_visual.addOutlineRect(
-      hudX, hudY, hudW, hudH, ColorRgba{ 40, 60, 85, 220 }, 1.0f);
+      hudX, hudY, hudW, hudH, ColorRgba{ 45, 68, 96, 230 }, 1.0f);
 
+    // Glowing left accent indicator bar on the HUD pill
     const float dotPulse = 0.65f + 0.35f * std::sin(m_animTime * 4.0f);
     if (m_is3D) {
       const unsigned char dotAlpha =
         static_cast<unsigned char>(255.0f * dotPulse);
-      m_visual.addFilledEllipse(hudX + 11.0f,
-                                hudY + 9.0f,
+      m_visual.addFilledRect(
+        hudX, hudY, 3.0f, hudH, ColorRgba{ 70, 160, 255, 240 });
+      m_visual.addFilledEllipse(hudX + 13.0f,
+                                hudY + 10.0f,
                                 6.0f,
                                 6.0f,
                                 ColorRgba{ 70, 160, 255, dotAlpha });
       m_visual.addText("3D PERSPECTIVE",
-                       hudX + 22.0f,
-                       hudY + 4.0f,
+                       hudX + 24.0f,
+                       hudY + 5.0f,
                        10.0f,
-                       ColorRgba{ 190, 220, 255, 240 });
+                       ColorRgba{ 200, 230, 255, 255 });
     } else {
       const unsigned char dotAlpha =
         static_cast<unsigned char>(255.0f * dotPulse);
-      m_visual.addFilledEllipse(hudX + 11.0f,
-                                hudY + 9.0f,
+      m_visual.addFilledRect(
+        hudX, hudY, 3.0f, hudH, ColorRgba{ 60, 220, 120, 240 });
+      m_visual.addFilledEllipse(hudX + 13.0f,
+                                hudY + 10.0f,
                                 6.0f,
                                 6.0f,
                                 ColorRgba{ 60, 220, 120, dotAlpha });
       m_visual.addText("2D ORTHOGRAPHIC",
-                       hudX + 22.0f,
-                       hudY + 4.0f,
+                       hudX + 24.0f,
+                       hudY + 5.0f,
                        10.0f,
-                       ColorRgba{ 190, 245, 215, 240 });
+                       ColorRgba{ 200, 250, 225, 255 });
     }
   }
 
-  // Dropdown menu with opening ease animation
+  // Dropdown menu with opening ease animation & hover states
   if (m_openMenu >= 0 && static_cast<size_t>(m_openMenu) < m_menus.size()) {
     const Menu& menu = m_menus[static_cast<size_t>(m_openMenu)];
     const float t = std::clamp(m_dropdownAnim, 0.0f, 1.0f);
     const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
     const float animHeight = m_dropdownHeight * (0.6f + 0.4f * ease);
 
-    // Drop shadow
+    // Drop shadow with depth blur effect
     m_visual.addFilledRect(
-      m_dropdownX + 4.0f,
-      m_dropdownY + 4.0f,
+      m_dropdownX + 5.0f,
+      m_dropdownY + 5.0f,
       m_dropdownWidth,
       animHeight,
-      ColorRgba{ 0, 0, 0, static_cast<unsigned char>(120 * ease) });
+      ColorRgba{ 0, 0, 0, static_cast<unsigned char>(130 * ease) });
     // Dropdown surface
     m_visual.addFilledRect(
       m_dropdownX,
@@ -424,16 +494,36 @@ EditorToolbar::rebuildVisual()
       m_dropdownY,
       m_dropdownWidth,
       animHeight,
-      ColorRgba{ 52, 75, 105, static_cast<unsigned char>(255 * ease) },
+      ColorRgba{ 56, 82, 116, static_cast<unsigned char>(255 * ease) },
       1.0f);
 
     float itemY = m_dropdownY + 4.0f;
-    for (const MenuItem& item : menu.items) {
+    for (size_t itemIdx = 0; itemIdx < menu.items.size(); ++itemIdx) {
       if (itemY + 20.0f > m_dropdownY + animHeight) {
         break;
       }
-      m_visual.addText(
-        item.label, m_dropdownX + 12.0f, itemY + 4.0f, 13.0f, text);
+      const MenuItem& item = menu.items[itemIdx];
+      const bool isItemHovered = (m_hoverItem == static_cast<int>(itemIdx));
+
+      if (isItemHovered) {
+        // Item hover highlight pill & left accent glow
+        m_visual.addFilledRect(m_dropdownX + 3.0f,
+                               itemY,
+                               m_dropdownWidth - 6.0f,
+                               22.0f,
+                               ColorRgba{ 26, 44, 66, 240 });
+        m_visual.addFilledRect(m_dropdownX + 3.0f,
+                               itemY,
+                               3.0f,
+                               22.0f,
+                               ColorRgba{ 66, 214, 210, 240 });
+      }
+
+      m_visual.addText(item.label,
+                       m_dropdownX + 14.0f,
+                       itemY + 4.0f,
+                       13.0f,
+                       isItemHovered ? ColorRgba{ 255, 255, 255, 255 } : text);
       if (!item.shortcut.empty()) {
         const float scWidth =
           static_cast<float>(item.shortcut.size()) * 11.0f * 0.55f;
@@ -441,63 +531,85 @@ EditorToolbar::rebuildVisual()
                          m_dropdownX + m_dropdownWidth - scWidth - 14.0f,
                          itemY + 5.0f,
                          11.0f,
-                         ColorRgba{ 110, 135, 160, 255 });
+                         isItemHovered ? cyanAccent
+                                       : ColorRgba{ 110, 135, 160, 255 });
       }
       itemY += 24.0f;
     }
   }
 
-  // Toast notification banner
+  // Toast notification banner with life progress bar
   if (m_toastElapsed < m_toastDuration && !m_toastMessage.empty()) {
     const float inT = std::clamp(m_toastElapsed / 0.20f, 0.0f, 1.0f);
     const float inEase = 1.0f - std::pow(1.0f - inT, 3.0f);
     const float outT =
       std::clamp((m_toastDuration - m_toastElapsed) / 0.35f, 0.0f, 1.0f);
     const float alphaFactor = std::min(inEase, outT);
-    const float slideUp = (1.0f - inEase) * 12.0f;
+    const float slideUp = (1.0f - inEase) * 14.0f;
 
-    const float toastW = estimateTextWidth(m_toastMessage, 12.0f) + 32.0f;
-    const float toastH = 28.0f;
+    const float toastW = estimateTextWidth(m_toastMessage, 12.0f) + 36.0f;
+    const float toastH = 30.0f;
     const float toastX = std::max(20.0f, m_barWidth - toastW - 240.0f);
     const float statusY = virtualHeight - kStatusHeight;
-    const float toastY = statusY - toastH - 10.0f - slideUp;
+    const float toastY = statusY - toastH - 12.0f - slideUp;
 
-    const unsigned char bgA = static_cast<unsigned char>(240.0f * alphaFactor);
+    const unsigned char bgA = static_cast<unsigned char>(245.0f * alphaFactor);
     const unsigned char borderA =
       static_cast<unsigned char>(255.0f * alphaFactor);
 
     // Toast shadow
     m_visual.addFilledRect(
-      toastX + 3.0f,
-      toastY + 3.0f,
+      toastX + 4.0f,
+      toastY + 4.0f,
       toastW,
       toastH,
-      ColorRgba{ 0, 0, 0, static_cast<unsigned char>(100 * alphaFactor) });
+      ColorRgba{ 0, 0, 0, static_cast<unsigned char>(120 * alphaFactor) });
     // Toast body
     m_visual.addFilledRect(
       toastX, toastY, toastW, toastH, ColorRgba{ 14, 22, 34, bgA });
     m_visual.addOutlineRect(
-      toastX, toastY, toastW, toastH, ColorRgba{ 55, 82, 118, borderA }, 1.0f);
+      toastX, toastY, toastW, toastH, ColorRgba{ 58, 86, 122, borderA }, 1.0f);
 
     // Toast left accent stripe
     ColorRgba accentCol = m_toastColor;
     accentCol.a = borderA;
-    m_visual.addFilledRect(toastX, toastY, 3.0f, toastH, accentCol);
+    m_visual.addFilledRect(toastX, toastY, 4.0f, toastH, accentCol);
+
+    // Animated lifetime progress bar along the bottom of the toast
+    const float remainingRatio =
+      std::clamp(1.0f - (m_toastElapsed / m_toastDuration), 0.0f, 1.0f);
+    const float progressW = (toastW - 4.0f) * remainingRatio;
+    m_visual.addFilledRect(
+      toastX + 4.0f,
+      toastY + toastH - 2.0f,
+      progressW,
+      2.0f,
+      ColorRgba{ accentCol.r,
+                 accentCol.g,
+                 accentCol.b,
+                 static_cast<unsigned char>(180 * alphaFactor) });
 
     // Toast message text
     ColorRgba msgText{ 240, 250, 255, borderA };
     m_visual.addText(
-      m_toastMessage, toastX + 14.0f, toastY + 6.0f, 12.0f, msgText);
+      m_toastMessage, toastX + 16.0f, toastY + 7.0f, 12.0f, msgText);
   }
 
-  // Bottom status bar
+  // Bottom status bar with status indicator pip
   const float statusY = virtualHeight - kStatusHeight;
   m_visual.addFilledRect(
     0.0f, statusY, m_barWidth, kStatusHeight, ColorRgba{ 10, 15, 24, 255 });
   m_visual.addLine(
     0.0f, statusY, m_barWidth, statusY, ColorRgba{ 35, 48, 66, 255 }, 1.0f);
+
+  // Status green active pip
+  const float pipPulse = 0.70f + 0.30f * std::sin(m_animTime * 3.0f);
+  const unsigned char pipAlpha = static_cast<unsigned char>(255.0f * pipPulse);
+  m_visual.addFilledEllipse(
+    10.0f, statusY + 11.0f, 5.0f, 5.0f, ColorRgba{ 60, 220, 120, pipAlpha });
+
   m_visual.addText(
-    m_status, 10.0f, statusY + 4.0f, 12.0f, ColorRgba{ 150, 172, 195, 255 });
+    m_status, 20.0f, statusY + 4.0f, 12.0f, ColorRgba{ 170, 192, 215, 255 });
 }
 
 bool

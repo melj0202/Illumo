@@ -26,6 +26,9 @@ EditorConfirmDialog::EditorConfirmDialog(IRenderWindow* window,
   , m_saveX(0.0f)
   , m_discardX(0.0f)
   , m_cancelX(0.0f)
+  , m_hoveredButton(EditorConfirmAction::None)
+  , m_mouseX(0.0f)
+  , m_mouseY(0.0f)
 {
   m_visual.setSpace(PrimitiveSpace::Pixels);
   m_visual.setLayerHint(RenderLayerId::UI);
@@ -42,6 +45,7 @@ EditorConfirmDialog::open(const std::string& message)
   m_open = true;
   m_mouseWasDown = false;
   m_animElapsed = 0.0f;
+  m_hoveredButton = EditorConfirmAction::None;
   setVisible(true);
   updateLayout();
   rebuildVisual();
@@ -52,6 +56,7 @@ EditorConfirmDialog::close()
 {
   m_open = false;
   m_animElapsed = 0.0f;
+  m_hoveredButton = EditorConfirmAction::None;
   setVisible(false);
 }
 
@@ -110,6 +115,19 @@ EditorConfirmDialog::update(InputManager* inputManager, float dt)
   }
   m_animElapsed += std::max(0.0f, dt);
   updateLayout();
+
+  // Mouse hover tracking
+  m_hoveredButton = EditorConfirmAction::None;
+  if (m_window != nullptr) {
+    const std::array<double, 2> mouseCoords = m_window->getMouseCoords();
+    const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
+    m_mouseX =
+      static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
+    m_mouseY =
+      static_cast<float>(mouseCoords[1]) / (scale > 0.0f ? scale : 1.0f);
+    m_hoveredButton = clickAt(m_mouseX, m_mouseY);
+  }
+
   EditorConfirmAction action = EditorConfirmAction::None;
   if (inputManager != nullptr) {
     std::queue<InputManager::KeyPressEvent>& keyQueue =
@@ -168,7 +186,7 @@ EditorConfirmDialog::rebuildVisual()
   const float t = std::clamp(m_animElapsed / 0.18f, 0.0f, 1.0f);
   const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
   const float slideY = (1.0f - ease) * 16.0f;
-  const unsigned char bgAlpha = static_cast<unsigned char>(180.0f * ease);
+  const unsigned char bgAlpha = static_cast<unsigned char>(190.0f * ease);
 
   // Full-screen animated backdrop
   m_visual.addFilledRect(
@@ -179,11 +197,11 @@ EditorConfirmDialog::rebuildVisual()
 
   // Dialog drop shadow
   m_visual.addFilledRect(
-    m_panelX + 6.0f,
-    curPanelY + 6.0f,
+    m_panelX + 8.0f,
+    curPanelY + 8.0f,
     m_panelWidth,
     m_panelHeight,
-    ColorRgba{ 0, 0, 0, static_cast<unsigned char>(140 * ease) });
+    ColorRgba{ 0, 0, 0, static_cast<unsigned char>(150 * ease) });
 
   // Dialog window surface & border
   m_visual.addFilledRect(m_panelX,
@@ -198,9 +216,15 @@ EditorConfirmDialog::rebuildVisual()
                           ColorRgba{ 55, 80, 115, 255 },
                           1.0f);
 
-  // Top accent stripe
-  m_visual.addFilledRect(
-    m_panelX, curPanelY, m_panelWidth, 3.0f, ColorRgba{ 66, 214, 210, 255 });
+  // Top glowing accent stripe
+  const float stripePulse = 0.80f + 0.20f * std::sin(m_animElapsed * 6.0f);
+  const unsigned char stripeAlpha =
+    static_cast<unsigned char>(255.0f * stripePulse);
+  m_visual.addFilledRect(m_panelX,
+                         curPanelY,
+                         m_panelWidth,
+                         3.0f,
+                         ColorRgba{ 66, 214, 210, stripeAlpha });
 
   m_visual.addText("Unsaved Changes",
                    m_panelX + 18.0f,
@@ -213,17 +237,20 @@ EditorConfirmDialog::rebuildVisual()
                    13.0f,
                    UiTheme::textMuted());
 
-  // Save button (primary)
+  // Save button (primary with hover flare)
+  const bool saveHovered = (m_hoveredButton == EditorConfirmAction::Save);
   m_visual.addFilledRect(m_saveX,
                          curButtonY,
                          m_buttonWidth,
                          m_buttonHeight,
-                         ColorRgba{ 25, 85, 120, 255 });
+                         saveHovered ? ColorRgba{ 35, 110, 155, 255 }
+                                     : ColorRgba{ 25, 85, 120, 255 });
   m_visual.addOutlineRect(m_saveX,
                           curButtonY,
                           m_buttonWidth,
                           m_buttonHeight,
-                          ColorRgba{ 66, 214, 210, 200 },
+                          saveHovered ? ColorRgba{ 100, 240, 235, 255 }
+                                      : ColorRgba{ 66, 214, 210, 200 },
                           1.0f);
   m_visual.addText("Save",
                    m_saveX + 38.0f,
@@ -231,17 +258,20 @@ EditorConfirmDialog::rebuildVisual()
                    13.0f,
                    ColorRgba{ 255, 255, 255, 255 });
 
-  // Don't Save button (destructive)
+  // Don't Save button (destructive with hover flare)
+  const bool discardHovered = (m_hoveredButton == EditorConfirmAction::Discard);
   m_visual.addFilledRect(m_discardX,
                          curButtonY,
                          m_buttonWidth,
                          m_buttonHeight,
-                         ColorRgba{ 65, 28, 35, 255 });
+                         discardHovered ? ColorRgba{ 90, 36, 45, 255 }
+                                        : ColorRgba{ 65, 28, 35, 255 });
   m_visual.addOutlineRect(m_discardX,
                           curButtonY,
                           m_buttonWidth,
                           m_buttonHeight,
-                          ColorRgba{ 180, 60, 75, 200 },
+                          discardHovered ? ColorRgba{ 230, 80, 100, 255 }
+                                         : ColorRgba{ 180, 60, 75, 200 },
                           1.0f);
   m_visual.addText("Don't Save",
                    m_discardX + 16.0f,
@@ -249,17 +279,20 @@ EditorConfirmDialog::rebuildVisual()
                    13.0f,
                    ColorRgba{ 255, 220, 220, 255 });
 
-  // Cancel button
+  // Cancel button (neutral with hover flare)
+  const bool cancelHovered = (m_hoveredButton == EditorConfirmAction::Cancel);
   m_visual.addFilledRect(m_cancelX,
                          curButtonY,
                          m_buttonWidth,
                          m_buttonHeight,
-                         ColorRgba{ 22, 32, 48, 255 });
+                         cancelHovered ? ColorRgba{ 32, 46, 68, 255 }
+                                       : ColorRgba{ 22, 32, 48, 255 });
   m_visual.addOutlineRect(m_cancelX,
                           curButtonY,
                           m_buttonWidth,
                           m_buttonHeight,
-                          ColorRgba{ 45, 65, 90, 255 },
+                          cancelHovered ? ColorRgba{ 70, 100, 135, 255 }
+                                        : ColorRgba{ 45, 65, 90, 255 },
                           1.0f);
   m_visual.addText("Cancel",
                    m_cancelX + 32.0f,

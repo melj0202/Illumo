@@ -25,6 +25,13 @@ EditorSidebar::EditorSidebar(IRenderWindow* window, Renderer* renderer)
   , m_inspectorY(0.0f)
   , m_animTime(0.0f)
   , m_modeAnim(0.0f)
+  , m_hoverTool(-1)
+  , m_hoverMode2D(false)
+  , m_hoverMode3D(false)
+  , m_hoverNudge(false)
+  , m_hoverColor(false)
+  , m_mouseX(0.0f)
+  , m_mouseY(0.0f)
 {
   m_visual.setSpace(PrimitiveSpace::Pixels);
   m_visual.setLayerHint(RenderLayerId::UI);
@@ -144,6 +151,48 @@ EditorSidebar::update(InputManager* inputManager, float dt)
     (targetMode - m_modeAnim) * std::min(1.0f, std::max(0.0f, dt) * 16.0f);
 
   updateLayout();
+
+  // Mouse hover tracking
+  m_hoverTool = -1;
+  m_hoverMode2D = false;
+  m_hoverMode3D = false;
+  m_hoverNudge = false;
+  m_hoverColor = false;
+
+  if (m_window != nullptr) {
+    const std::array<double, 2> mouseCoords = m_window->getMouseCoords();
+    const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
+    m_mouseX =
+      static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
+    m_mouseY =
+      static_cast<float>(mouseCoords[1]) / (scale > 0.0f ? scale : 1.0f);
+
+    if (containsScreenPoint(m_mouseX, m_mouseY)) {
+      if (m_mouseY >= m_modeY && m_mouseY <= m_modeY + 22.0f) {
+        if (m_mouseX >= m_x + 8.0f && m_mouseX < m_x + 96.0f) {
+          m_hoverMode2D = true;
+        } else if (m_mouseX >= m_x + 104.0f && m_mouseX <= m_x + 192.0f) {
+          m_hoverMode3D = true;
+        }
+      }
+      for (size_t i = 0; i < m_tools.size(); ++i) {
+        if (m_mouseY >= m_tools[i].y && m_mouseY < m_tools[i].y + 22.0f) {
+          m_hoverTool = static_cast<int>(i);
+          break;
+        }
+      }
+      if (m_detail.hasSelection) {
+        if (m_mouseY >= m_inspectorY + 108.0f &&
+            m_mouseY < m_inspectorY + 128.0f) {
+          m_hoverNudge = true;
+        } else if (m_mouseY >= m_inspectorY + 128.0f &&
+                   m_mouseY < m_inspectorY + 148.0f) {
+          m_hoverColor = true;
+        }
+      }
+    }
+  }
+
   EditorCommand command = EditorCommand::None;
   m_consumedPress = false;
   if (inputManager != nullptr) {
@@ -186,13 +235,19 @@ EditorSidebar::rebuildVisual()
   m_visual.addFilledRect(m_x, m_y, kWidth, m_height, sideBg);
   m_visual.addLine(m_x, m_y, m_x, m_y + m_height, sideBorder, 1.0f);
 
-  // Section: MODE
-  m_visual.addFilledRect(m_x + 6.0f, m_y + 8.0f, 2.0f, 8.0f, cyanAccent);
+  // Section: MODE Header
+  const float headerGlow = 0.70f + 0.30f * std::sin(m_animTime * 3.0f);
+  m_visual.addFilledRect(
+    m_x + 6.0f,
+    m_y + 8.0f,
+    2.0f,
+    8.0f,
+    ColorRgba{ 66, 214, 210, static_cast<unsigned char>(255.0f * headerGlow) });
   m_visual.addText("MODE", m_x + 12.0f, m_y + 6.0f, 11.0f, muted);
 
   const bool mode3d = m_detail.worldMode == IlscWorldMode::World3D;
 
-  // Segmented control container
+  // Segmented control track container
   m_visual.addFilledRect(m_x + 6.0f,
                          m_modeY - 2.0f,
                          kWidth - 12.0f,
@@ -205,14 +260,17 @@ EditorSidebar::rebuildVisual()
                           ColorRgba{ 35, 48, 66, 255 },
                           1.0f);
 
-  // 2D Button
+  // Animated sliding selection indicator pill
+  const float slideX = m_x + 8.0f + m_modeAnim * 96.0f;
   const ColorRgba activeTabBg{ 25, 75, 105, 255 };
-  const ColorRgba inactiveTabBg{ 16, 24, 36, 180 };
-  m_visual.addFilledRect(
-    m_x + 8.0f, m_modeY, 88.0f, 22.0f, mode3d ? inactiveTabBg : activeTabBg);
-  if (!mode3d) {
-    m_visual.addOutlineRect(
-      m_x + 8.0f, m_modeY, 88.0f, 22.0f, ColorRgba{ 66, 214, 210, 200 }, 1.0f);
+  const ColorRgba activeTabBorder{ 66, 214, 210, 220 };
+  m_visual.addFilledRect(slideX, m_modeY, 88.0f, 22.0f, activeTabBg);
+  m_visual.addOutlineRect(slideX, m_modeY, 88.0f, 22.0f, activeTabBorder, 1.0f);
+
+  // 2D Button content
+  if (m_hoverMode2D && mode3d) {
+    m_visual.addFilledRect(
+      m_x + 8.0f, m_modeY, 88.0f, 22.0f, ColorRgba{ 20, 32, 48, 180 });
   }
   if (m_atlas.isValid()) {
     m_visual.addCenteredSprite(
@@ -227,18 +285,13 @@ EditorSidebar::rebuildVisual()
                    m_x + 44.0f,
                    m_modeY + 5.0f,
                    13.0f,
-                   mode3d ? muted : ColorRgba{ 255, 255, 255, 255 });
+                   (!mode3d || m_hoverMode2D) ? ColorRgba{ 255, 255, 255, 255 }
+                                              : muted);
 
-  // 3D Button
-  m_visual.addFilledRect(
-    m_x + 104.0f, m_modeY, 88.0f, 22.0f, mode3d ? activeTabBg : inactiveTabBg);
-  if (mode3d) {
-    m_visual.addOutlineRect(m_x + 104.0f,
-                            m_modeY,
-                            88.0f,
-                            22.0f,
-                            ColorRgba{ 66, 214, 210, 200 },
-                            1.0f);
+  // 3D Button content
+  if (m_hoverMode3D && !mode3d) {
+    m_visual.addFilledRect(
+      m_x + 104.0f, m_modeY, 88.0f, 22.0f, ColorRgba{ 20, 32, 48, 180 });
   }
   if (m_atlas.isValid()) {
     m_visual.addCenteredSprite(
@@ -253,7 +306,8 @@ EditorSidebar::rebuildVisual()
                    m_x + 140.0f,
                    m_modeY + 5.0f,
                    13.0f,
-                   mode3d ? ColorRgba{ 255, 255, 255, 255 } : muted);
+                   (mode3d || m_hoverMode3D) ? ColorRgba{ 255, 255, 255, 255 }
+                                             : muted);
 
   // Divider between Mode and Tools
   m_visual.addLine(m_x + 8.0f,
@@ -268,8 +322,11 @@ EditorSidebar::rebuildVisual()
     66, 214, 210, static_cast<unsigned char>(255.0f * toolPulse)
   };
 
-  for (const ToolRow& row : m_tools) {
-    const bool active = row.command == m_activeTool;
+  for (size_t i = 0; i < m_tools.size(); ++i) {
+    const ToolRow& row = m_tools[i];
+    const bool active = (row.command == m_activeTool);
+    const bool hovered = (m_hoverTool == static_cast<int>(i));
+
     if (active) {
       m_visual.addFilledRect(m_x + 8.0f,
                              row.y,
@@ -280,9 +337,20 @@ EditorSidebar::rebuildVisual()
                               row.y,
                               kWidth - 16.0f,
                               22.0f,
-                              ColorRgba{ 66, 214, 210, 160 },
+                              ColorRgba{ 66, 214, 210, 180 },
                               1.0f);
       m_visual.addFilledRect(m_x + 8.0f, row.y, 3.0f, 22.0f, pulsedCyan);
+    } else if (hovered) {
+      m_visual.addFilledRect(
+        m_x + 8.0f, row.y, kWidth - 16.0f, 22.0f, ColorRgba{ 24, 38, 56, 240 });
+      m_visual.addOutlineRect(m_x + 8.0f,
+                              row.y,
+                              kWidth - 16.0f,
+                              22.0f,
+                              ColorRgba{ 52, 75, 105, 220 },
+                              1.0f);
+      m_visual.addFilledRect(
+        m_x + 8.0f, row.y, 2.0f, 22.0f, ColorRgba{ 66, 160, 200, 200 });
     } else {
       m_visual.addFilledRect(
         m_x + 8.0f, row.y, kWidth - 16.0f, 22.0f, ColorRgba{ 17, 25, 38, 220 });
@@ -293,6 +361,7 @@ EditorSidebar::rebuildVisual()
                               ColorRgba{ 32, 45, 62, 200 },
                               1.0f);
     }
+
     float labelX = m_x + 16.0f;
     if (m_atlas.isValid()) {
       m_visual.addCenteredSprite(m_atlas,
@@ -307,8 +376,8 @@ EditorSidebar::rebuildVisual()
                      labelX,
                      row.y + 4.0f,
                      13.0f,
-                     active ? ColorRgba{ 255, 255, 255, 255 }
-                            : ColorRgba{ 190, 208, 228, 255 });
+                     (active || hovered) ? ColorRgba{ 255, 255, 255, 255 }
+                                         : ColorRgba{ 190, 208, 228, 255 });
   }
 
   // Section: INSPECTOR
@@ -319,10 +388,14 @@ EditorSidebar::rebuildVisual()
                    ColorRgba{ 35, 48, 66, 255 },
                    1.0f);
   m_visual.addFilledRect(
-    m_x + 6.0f, m_inspectorY + 2.0f, 2.0f, 8.0f, cyanAccent);
+    m_x + 6.0f,
+    m_inspectorY + 2.0f,
+    2.0f,
+    8.0f,
+    ColorRgba{ 66, 214, 210, static_cast<unsigned char>(255.0f * headerGlow) });
   m_visual.addText("INSPECTOR", m_x + 12.0f, m_inspectorY, 11.0f, muted);
 
-  // Summary badges
+  // Summary badges with glossy borders
   m_visual.addFilledRect(m_x + 8.0f,
                          m_inspectorY + 16.0f,
                          88.0f,
@@ -332,7 +405,7 @@ EditorSidebar::rebuildVisual()
                           m_inspectorY + 16.0f,
                           88.0f,
                           18.0f,
-                          ColorRgba{ 38, 54, 75, 255 },
+                          ColorRgba{ 44, 62, 86, 255 },
                           1.0f);
   std::ostringstream summary;
   summary << "Nodes: " << m_detail.nodeCount;
@@ -354,7 +427,7 @@ EditorSidebar::rebuildVisual()
                           m_inspectorY + 16.0f,
                           88.0f,
                           18.0f,
-                          ColorRgba{ 38, 54, 75, 255 },
+                          ColorRgba{ 44, 62, 86, 255 },
                           1.0f);
   m_visual.addText(modeText,
                    m_x + 110.0f,
@@ -394,7 +467,7 @@ EditorSidebar::rebuildVisual()
     const unsigned char selBorderA =
       static_cast<unsigned char>(255.0f * selPulse);
 
-    // Header card for selection
+    // Header card for selection with left glowing accent
     m_visual.addFilledRect(m_x + 8.0f,
                            m_inspectorY + 38.0f,
                            kWidth - 16.0f,
@@ -406,10 +479,13 @@ EditorSidebar::rebuildVisual()
                             20.0f,
                             ColorRgba{ 66, 120, 180, selBorderA },
                             1.0f);
+    m_visual.addFilledRect(
+      m_x + 8.0f, m_inspectorY + 38.0f, 3.0f, 20.0f, cyanAccent);
+
     std::string idLine =
       m_detail.selectedName + " (#" + m_detail.selectedId + ")";
     m_visual.addText(idLine,
-                     m_x + 12.0f,
+                     m_x + 15.0f,
                      m_inspectorY + 42.0f,
                      12.0f,
                      ColorRgba{ 255, 255, 255, 255 });
@@ -443,17 +519,23 @@ EditorSidebar::rebuildVisual()
                            m_inspectorY + 108.0f,
                            kWidth - 16.0f,
                            20.0f,
-                           ColorRgba{ 16, 24, 37, 255 });
+                           m_hoverNudge ? ColorRgba{ 24, 38, 56, 255 }
+                                        : ColorRgba{ 16, 24, 37, 255 });
     m_visual.addOutlineRect(m_x + 8.0f,
                             m_inspectorY + 108.0f,
                             kWidth - 16.0f,
                             20.0f,
-                            ColorRgba{ 44, 62, 86, 255 },
+                            m_hoverNudge ? ColorRgba{ 66, 120, 180, 255 }
+                                         : ColorRgba{ 44, 62, 86, 255 },
                             1.0f);
     m_visual.addText(
       extentText, m_x + 12.0f, m_inspectorY + 111.0f, 12.0f, text);
-    m_visual.addText(
-      "[+]", m_x + kWidth - 32.0f, m_inspectorY + 111.0f, 11.0f, cyanAccent);
+    m_visual.addText("[+]",
+                     m_x + kWidth - 32.0f,
+                     m_inspectorY + 111.0f,
+                     11.0f,
+                     m_hoverNudge ? ColorRgba{ 255, 255, 255, 255 }
+                                  : cyanAccent);
 
     char colorText[64];
     std::snprintf(colorText,
@@ -466,12 +548,14 @@ EditorSidebar::rebuildVisual()
                            m_inspectorY + 128.0f,
                            kWidth - 16.0f,
                            20.0f,
-                           ColorRgba{ 16, 24, 37, 255 });
+                           m_hoverColor ? ColorRgba{ 24, 38, 56, 255 }
+                                        : ColorRgba{ 16, 24, 37, 255 });
     m_visual.addOutlineRect(m_x + 8.0f,
                             m_inspectorY + 128.0f,
                             kWidth - 16.0f,
                             20.0f,
-                            ColorRgba{ 44, 62, 86, 255 },
+                            m_hoverColor ? ColorRgba{ 66, 120, 180, 255 }
+                                         : ColorRgba{ 44, 62, 86, 255 },
                             1.0f);
 
     // Live color swatch preview tile with subtle breathing outline
@@ -490,7 +574,8 @@ EditorSidebar::rebuildVisual()
                      m_x + kWidth - 54.0f,
                      m_inspectorY + 131.0f,
                      11.0f,
-                     cyanAccent);
+                     m_hoverColor ? ColorRgba{ 255, 255, 255, 255 }
+                                  : cyanAccent);
   }
 }
 
