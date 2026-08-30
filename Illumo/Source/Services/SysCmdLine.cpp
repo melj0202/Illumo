@@ -39,6 +39,26 @@ parsePositiveIntegerOption(int argc,
   return {};
 }
 
+static SysCmdLineResult
+parseStringOption(int argc,
+                  char** argv,
+                  int* index,
+                  IEnvVars* environment,
+                  const SysCmdLineOption& option)
+{
+  const int valueIndex = *index + 1;
+  const bool valid = valueIndex < argc && argv[valueIndex] != nullptr &&
+                     argv[valueIndex][0] != '\0';
+  if (!valid) {
+    std::cout << "ERROR: option '" << option.option
+              << "' requires a string argument.\n";
+    return { SysCmdLineAction::ExitFailure };
+  }
+  environment->setVar(option.environmentVariable, argv[valueIndex]);
+  *index = valueIndex;
+  return {};
+}
+
 static const SysCmdLineOption*
 findOption(const char* argument, const SysCmdLineConfig& config)
 {
@@ -136,10 +156,25 @@ SysCmdLine::ParseCommandLine(int argc,
                   << "' has no environment target.\n";
         return { SysCmdLineAction::ExitFailure };
       }
-      const SysCmdLineResult result =
-        parsePositiveIntegerOption(argc, argv, &i, environment, *option);
-      if (result.shouldExit()) {
-        return result;
+      if (option->valueName == "path" || option->valueName == "string" ||
+          option->valueName == "file") {
+        const SysCmdLineResult result =
+          parseStringOption(argc, argv, &i, environment, *option);
+        if (result.shouldExit()) {
+          return result;
+        }
+      } else {
+        const SysCmdLineResult result =
+          parsePositiveIntegerOption(argc, argv, &i, environment, *option);
+        if (result.shouldExit()) {
+          return result;
+        }
+      }
+    } else if (argv[i][0] != '-' &&
+               !config.positionalEnvironmentVariable.empty()) {
+      if (environment->getVar(config.positionalEnvironmentVariable)
+            .value.empty()) {
+        environment->setVar(config.positionalEnvironmentVariable, argv[i]);
       }
     }
   }

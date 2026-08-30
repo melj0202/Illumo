@@ -36,6 +36,7 @@ struct SysCmdLineConfig
   std::string applicationName{ "Illumo" };
   std::string description;
   std::string usage;
+  std::string positionalEnvironmentVariable;
   std::vector<SysCmdLineOption> applicationOptions;
   std::vector<std::string> helpSections;
 };

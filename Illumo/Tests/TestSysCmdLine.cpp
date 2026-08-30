@@ -198,6 +198,54 @@ testHelpAndVersion()
 }
 
 static void
+testStringOptionsAndPositionalArguments()
+{
+  testSection("SysCmdLine: string options and positional arguments");
+  const std::filesystem::path path = environmentPath("string-positional");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  {
+    EnvVars environment(path);
+    SysCmdLineConfig config;
+    config.applicationName = "TestViewer";
+    config.positionalEnvironmentVariable = "LaunchMesh";
+    config.applicationOptions = {
+      { "-m", "path", "LaunchMesh", "Mesh file path" },
+      { "--name", "string", "SceneName", "Name of scene" },
+    };
+
+    char executable[] = "TestViewer";
+    char meshFile[] = "assets/teapot.obj";
+    char* positionalArgs[] = { executable, meshFile };
+    const SysCmdLineResult positionalResult =
+      SysCmdLine::ParseCommandLine(2, positionalArgs, &environment, config);
+    testTrue(
+      g, !positionalResult.shouldExit(), "positional arg continues startup");
+    testTrue(g,
+             environment.getVar("LaunchMesh").value == "assets/teapot.obj",
+             "positional mesh path parsed");
+
+    char mOption[] = "-m";
+    char newMesh[] = "assets/bunny.obj";
+    char nameOption[] = "--name";
+    char sceneName[] = "StanfordBunny";
+    char* optionArgs[] = {
+      executable, mOption, newMesh, nameOption, sceneName
+    };
+    const SysCmdLineResult optionResult =
+      SysCmdLine::ParseCommandLine(5, optionArgs, &environment, config);
+    testTrue(g, !optionResult.shouldExit(), "string options continue startup");
+    testTrue(g,
+             environment.getVar("LaunchMesh").value == "assets/bunny.obj",
+             "string option -m parsed");
+    testTrue(g,
+             environment.getVar("SceneName").value == "StanfordBunny",
+             "string option --name parsed");
+  }
+  std::filesystem::remove(path, error);
+}
+
+static void
 testBuildInfoMetadata()
 {
   testSection("BuildInfo: engine-owned version metadata");
@@ -231,6 +279,9 @@ registerSysCmdLineTests(IllumoTestRegistry& registry)
                []() { return runSysCmdLineCase(testInvalidWindowDimensions); });
   registry.add("Illumo.SysCmdLine.HelpAndVersion",
                []() { return runSysCmdLineCase(testHelpAndVersion); });
+  registry.add("Illumo.SysCmdLine.StringOptionsAndPositionalArguments", []() {
+    return runSysCmdLineCase(testStringOptionsAndPositionalArguments);
+  });
   registry.add("Illumo.BuildInfo.VersionMetadata",
                []() { return runSysCmdLineCase(testBuildInfoMetadata); });
 }
