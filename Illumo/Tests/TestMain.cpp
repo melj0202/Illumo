@@ -34,6 +34,8 @@ void
 registerSceneGraphTests(IllumoTestRegistry& registry);
 void
 registerGuiKitTests(IllumoTestRegistry& registry);
+void
+registerShaderPreprocessorTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -52,6 +54,7 @@ createRegistry()
   registerSysCmdLineTests(registry);
   registerSceneGraphTests(registry);
   registerGuiKitTests(registry);
+  registerShaderPreprocessorTests(registry);
   return registry;
 }
 

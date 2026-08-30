@@ -1,5 +1,6 @@
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Services/Logger.h>
 
 // Built-in style shader sources and enrollment (D-R14). Owned by Renderer;
@@ -7,6 +8,7 @@
 
 static const char* kUiTextVertexShader = R"(
 #version 330 core
+#include <illumo/screen_transform.glsl>
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec4 aColor;
 out vec4 ourColor;
@@ -14,10 +16,7 @@ uniform vec2 u_resolution;
 uniform vec2 u_scale;
 uniform vec2 u_position;
 void main() {
-    vec2 pos = aPos.xy * u_scale + u_position;
-    float x = (pos.x / u_resolution.x) * 2.0 - 1.0;
-    float y = 1.0 - (pos.y / u_resolution.y) * 2.0;
-    gl_Position = vec4(x, y, aPos.z, 1.0);
+    gl_Position = illumoScaledScreenToClip(aPos.xy, u_scale, u_position, u_resolution, aPos.z);
     ourColor = aColor;
 }
 )";
@@ -34,16 +33,14 @@ void main() {
 // Console batch uses absolute pixel positions (no u_position offset).
 static const char* kConsoleVertexShader = R"(
 #version 330 core
+#include <illumo/screen_transform.glsl>
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec4 aColor;
 out vec4 ourColor;
 uniform vec2 u_resolution;
 uniform vec2 u_scale;
 void main() {
-    vec2 scaledPos = aPos.xy * u_scale;
-    float x = (scaledPos.x / u_resolution.x) * 2.0 - 1.0;
-    float y = 1.0 - (scaledPos.y / u_resolution.y) * 2.0;
-    gl_Position = vec4(x, y, aPos.z, 1.0);
+    gl_Position = illumoScaledScreenToClip(aPos.xy, u_scale, vec2(0.0), u_resolution, aPos.z);
     ourColor = aColor;
 }
 )";
@@ -60,6 +57,7 @@ void main() {
 // Shape primitives: world or overlay via uMVP (D-R21).
 static const char* kShapeVertexShader = R"(
 #version 330 core
+#include <illumo/common.glsl>
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec4 aColor;
 out vec4 ourColor;
@@ -82,9 +80,7 @@ void main() {
 // Sprite primitives: same uMVP contract + texture sample with vertex tint.
 static const char* kSpriteVertexShader = R"(
 #version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec4 aColor;
-layout (location = 2) in vec2 aUv;
+#include <illumo/vertex_2d.glsl>
 out vec4 ourColor;
 out vec2 ourUv;
 uniform mat4 uMVP;
@@ -97,12 +93,13 @@ void main() {
 
 static const char* kSpriteFragmentShader = R"(
 #version 330 core
+#include <illumo/sprite.glsl>
 in vec4 ourColor;
 in vec2 ourUv;
 out vec4 FragColor;
 uniform sampler2D uTexture;
 void main() {
-    FragColor = texture(uTexture, ourUv) * ourColor;
+    FragColor = sampleSprite(uTexture, ourUv, ourColor);
 }
 )";
 
