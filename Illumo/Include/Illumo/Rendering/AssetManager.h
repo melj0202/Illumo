@@ -112,6 +112,9 @@ private:
     std::string lastError;
     std::filesystem::file_time_type vertexWriteTime{};
     std::filesystem::file_time_type fragmentWriteTime{};
+    std::vector<std::string> dependencies;
+    std::unordered_map<std::string, std::filesystem::file_time_type>
+      dependencyWriteTimes;
   };
 
   struct LoadJob
@@ -122,6 +125,7 @@ private:
     uint64_t requestSerial = 0;
     std::string pathA;
     std::string pathB;
+    std::vector<std::string> defines;
     TextureOptions textureOptions;
   };
 
@@ -138,6 +142,7 @@ private:
     TextureOptions textureOptions;
     std::vector<unsigned char> pixels;
     ShaderSources shaderSources;
+    std::vector<std::string> dependencies;
     std::string error;
   };
 

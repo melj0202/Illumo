@@ -1,10 +1,12 @@
 #pragma once
 #include <string>
+#include <vector>
 
 struct ShaderPaths
 {
   std::string vertexPath;
   std::string fragmentPath;
+  std::vector<std::string> defines;
   // Expandable later for geometry/compute paths
 };
 
@@ -12,6 +14,7 @@ struct ShaderSources
 {
   std::string vertexSource;
   std::string fragmentSource;
+  std::vector<std::string> defines;
   // Expandable later for geometry/compute paths
 };
 

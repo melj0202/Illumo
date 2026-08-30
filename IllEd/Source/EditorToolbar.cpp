@@ -641,9 +641,9 @@ EditorToolbar::rebuildVisual()
       toastY + toastH - 2.0f,
       progressW,
       2.0f,
-      ColorRgba{ accentCol.r,
-                 accentCol.g,
-                 accentCol.b,
+      ColorRgba{ m_toastColor.r,
+                 m_toastColor.g,
+                 m_toastColor.b,
                  static_cast<unsigned char>(180 * alphaFactor) });
 
     // Toast message text
