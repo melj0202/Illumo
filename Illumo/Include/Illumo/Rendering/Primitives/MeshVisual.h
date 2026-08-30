@@ -3,6 +3,7 @@
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/IMesh.h>
 #include <Illumo/Rendering/ISceneRenderAttachment.h>
+#include <Illumo/Rendering/MeshData.h>
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Scene/Transform3D.h>
@@ -74,6 +75,8 @@ public:
                        const glm::vec2& radius,
                        ColorRgba color = ColorRgba{ 180, 220, 255, 255 },
                        int segments = 24);
+  void addMesh(const MeshData& mesh,
+               ColorRgba tint = ColorRgba{ 255, 255, 255, 255 });
 
   size_t spriteCount() const { return sprites.size(); }
 

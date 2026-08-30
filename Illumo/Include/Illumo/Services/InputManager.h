@@ -148,6 +148,8 @@ public:
 
   bool isControlPressed() const;
 
+  bool isAltPressed() const;
+
   bool isMouseButtonReleased(KeyCode mouseButton);
 
   void setActiveInputContext(long inputContext);

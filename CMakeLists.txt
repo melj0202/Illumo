@@ -9,13 +9,14 @@ set(ILLUMO_WORKSPACE_BUILD ON)
 add_subdirectory(Illumo)
 add_subdirectory(IllumoGame)
 add_subdirectory(IllEd)
+add_subdirectory(IllMeshViewer)
 
 if(BUILD_TESTING)
   add_custom_target(IllumoRunTests ALL
     COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>
       -L IllumoWorkspace --output-on-failure
     DEPENDS IllumoTestsDiscover IllumoGameTestsDiscover
-      IllEdTestsDiscover IllumoPublicHeaderSmoke
+      IllEdTestsDiscover IllMeshViewerTestsDiscover IllumoPublicHeaderSmoke
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     COMMENT "Running the Illumo workspace test suite"

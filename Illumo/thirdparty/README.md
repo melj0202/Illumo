@@ -13,6 +13,7 @@ Do not remove the license files stored beside these source trees.
 | `glm/` | GLM 1.0.0 | `copying.txt` |
 | `json/` | JSON for Modern C++ 3.12.0 | `LICENSE.MIT` |
 | `stb/` | stb headers (`stb_easy_font` and `stb_image` are active) | `LICENSE` and the notice at the end of each header |
+| `tinyobjloader/` | tinyobjloader header | `LICENSE` |
 | `tracy-0.13.1/` | Tracy Profiler 0.13.1 | `LICENSE` |
 
 ## Present but not linked by the current targets

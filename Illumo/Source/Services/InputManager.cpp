@@ -490,6 +490,16 @@ InputManager::isControlPressed() const
 }
 
 bool
+InputManager::isAltPressed() const
+{
+  if (window != nullptr) {
+    return glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
+           glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+  }
+  return (m_modifierFlags & GLFW_MOD_ALT) != 0;
+}
+
+bool
 InputManager::isMouseButtonReleased(KeyCode mouseButton)
 {
   if (window == nullptr) {
