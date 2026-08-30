@@ -5,6 +5,7 @@ add_library(IllEdCore STATIC
   Source/EditorConfirmDialog.cpp
   Source/EditorDocument.cpp
   Source/EditorModule.cpp
+  Source/EditorSceneGraphView.cpp
   Source/EditorSidebar.cpp
   Source/EditorToolbar.cpp
   Source/EditorUiAtlas.cpp
@@ -44,6 +45,7 @@ if(BUILD_TESTING)
     Tests/TestMain.cpp
     Tests/TestEditorDocument.cpp
     Tests/TestEditorModule.cpp
+    Tests/TestEditorSceneGraphView.cpp
     Tests/TestEditorSidebar.cpp
     Tests/TestEditorToolbar.cpp
     Tests/TestEditorUiAtlas.cpp

@@ -37,6 +37,7 @@ public:
 
   std::string createNode(SceneNodeKind kind, const std::string& parentId);
   bool destroySubtree(const std::string& id);
+  bool canSetParent(const std::string& id, const std::string& parentId) const;
   bool setParent(const std::string& id, const std::string& parentId);
   bool setTransform(const std::string& id, const Transform3D& transform);
   bool setName(const std::string& id, const std::string& name);

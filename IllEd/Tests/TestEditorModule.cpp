@@ -411,6 +411,51 @@ testEditorModuleDoesNotDispatchConsole()
            "EditorModule does not add CommandLine to Scene drawables");
 }
 
+static void
+testUiDrawOrder()
+{
+  testSection("EditorModule: UI draw order ensures toolbar and dropdowns draw "
+              "above side panels");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "module starts");
+
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+
+  const std::vector<DrawableBase*>& uiDrawables =
+    fixture.scene.drawablesIn(RenderLayerId::UI);
+  testTrue(g, uiDrawables.size() >= 3u, "at least 3 UI drawables in scene");
+
+  EditorSceneGraphView* sceneGraphView =
+    EditorModuleTestAccess::sceneGraphView(fixture.module);
+  EditorSidebar* sidebar = EditorModuleTestAccess::sidebar(fixture.module);
+  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(fixture.module);
+
+  int sgvIndex = -1;
+  int sidebarIndex = -1;
+  int toolbarIndex = -1;
+
+  for (size_t i = 0; i < uiDrawables.size(); ++i) {
+    if (uiDrawables[i] == sceneGraphView) {
+      sgvIndex = static_cast<int>(i);
+    } else if (uiDrawables[i] == sidebar) {
+      sidebarIndex = static_cast<int>(i);
+    } else if (uiDrawables[i] == toolbar) {
+      toolbarIndex = static_cast<int>(i);
+    }
+  }
+
+  testTrue(g,
+           sgvIndex >= 0 && sidebarIndex >= 0 && toolbarIndex >= 0,
+           "all UI drawables found in layer");
+  testTrue(g,
+           toolbarIndex > sgvIndex,
+           "toolbar is dispatched after (on top of) SceneGraphView");
+  testTrue(g,
+           toolbarIndex > sidebarIndex,
+           "toolbar is dispatched after (on top of) sidebar");
+}
+
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
@@ -457,6 +502,11 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.ConsoleNotDispatchedByModule", []() {
     g = {};
     testEditorModuleDoesNotDispatchConsole();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.UiDrawOrder", []() {
+    g = {};
+    testUiDrawOrder();
     return g.failures;
   });
 }

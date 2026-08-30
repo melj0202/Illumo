@@ -3,6 +3,7 @@
 #include "EditorAttachment.h"
 #include "EditorConfirmDialog.h"
 #include "EditorDocument.h"
+#include "EditorSceneGraphView.h"
 #include "EditorSidebar.h"
 #include "EditorToolbar.h"
 #include <Illumo/Engine/IModule.h>
@@ -45,6 +46,7 @@ private:
   EditorDocument m_document;
   SceneGraph m_graph;
   std::unique_ptr<EditorToolbar> m_toolbar;
+  std::unique_ptr<EditorSceneGraphView> m_sceneGraphView;
   std::unique_ptr<EditorSidebar> m_sidebar;
   std::unique_ptr<EditorConfirmDialog> m_confirm;
   TextureHandle m_atlas{};

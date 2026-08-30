@@ -53,6 +53,8 @@ EditorModule::Start(IllumoContext* context)
   ic = context;
 
   m_toolbar = std::make_unique<EditorToolbar>(ic->window, ic->renderer);
+  m_sceneGraphView =
+    std::make_unique<EditorSceneGraphView>(ic->window, ic->renderer);
   m_sidebar = std::make_unique<EditorSidebar>(ic->window, ic->renderer);
   m_confirm = std::make_unique<EditorConfirmDialog>(ic->window, ic->renderer);
   if (ic->assetManager != nullptr) {
@@ -62,6 +64,7 @@ EditorModule::Start(IllumoContext* context)
       EditorUiAtlas::relativePath(), options, AssetLoadMode::Synchronous);
     if (ic->assetManager->getState(m_atlas).state == AssetState::Ready) {
       m_toolbar->setAtlas(m_atlas);
+      m_sceneGraphView->setAtlas(m_atlas);
       m_sidebar->setAtlas(m_atlas);
     }
   }
@@ -104,6 +107,7 @@ EditorModule::Exit()
   m_grid.reset();
   m_confirm.reset();
   m_sidebar.reset();
+  m_sceneGraphView.reset();
   m_toolbar.reset();
   m_graph.clear();
 }
@@ -337,6 +341,10 @@ EditorModule::uiBlocksWorld(float screenX, float screenY) const
     return true;
   }
   if (m_toolbar && m_toolbar->containsScreenPoint(screenX, screenY)) {
+    return true;
+  }
+  if (m_sceneGraphView &&
+      m_sceneGraphView->containsScreenPoint(screenX, screenY)) {
     return true;
   }
   if (m_sidebar && m_sidebar->containsScreenPoint(screenX, screenY)) {
@@ -803,6 +811,12 @@ EditorModule::Update(double dt)
       ic->commandLine != nullptr && ic->commandLine->isOpen;
     if (!consoleOpen) {
       handleCommand(m_toolbar->update(ic->inputManager, dtF));
+      if (m_sceneGraphView) {
+        if (m_sceneGraphView->update(
+              ic->inputManager, &m_document, &m_selectedId, dtF)) {
+          rebuildGraph();
+        }
+      }
       if (m_sidebar) {
         handleCommand(m_sidebar->update(ic->inputManager, dtF));
       }
@@ -811,8 +825,10 @@ EditorModule::Update(double dt)
     }
   }
 
-  const bool uiConsumedClick = (m_toolbar && m_toolbar->consumedPress()) ||
-                               (m_sidebar && m_sidebar->consumedPress());
+  const bool uiConsumedClick =
+    (m_toolbar && m_toolbar->consumedPress()) ||
+    (m_sceneGraphView && m_sceneGraphView->consumedPress()) ||
+    (m_sidebar && m_sidebar->consumedPress());
   if (!(m_confirm && m_confirm->isOpen()) &&
       !(ic->commandLine != nullptr && ic->commandLine->isOpen)) {
     updateCamera(dt);
@@ -858,6 +874,9 @@ EditorModule::Update(double dt)
   if (m_toolbar) {
     m_toolbar->getVisual().prepare(ic->renderer);
   }
+  if (m_sceneGraphView) {
+    m_sceneGraphView->getVisual().prepare(ic->renderer);
+  }
   if (m_sidebar) {
     m_sidebar->getVisual().prepare(ic->renderer);
   }
@@ -876,11 +895,14 @@ EditorModule::DispatchDrawables(Scene* scene)
   if (m_selectionOverlay) {
     scene->AddDrawable(m_selectionOverlay.get(), RenderLayerId::World);
   }
-  if (m_toolbar) {
-    scene->AddDrawable(m_toolbar.get(), RenderLayerId::UI);
+  if (m_sceneGraphView) {
+    scene->AddDrawable(m_sceneGraphView.get(), RenderLayerId::UI);
   }
   if (m_sidebar) {
     scene->AddDrawable(m_sidebar.get(), RenderLayerId::UI);
+  }
+  if (m_toolbar) {
+    scene->AddDrawable(m_toolbar.get(), RenderLayerId::UI);
   }
   if (m_confirm && m_confirm->isOpen()) {
     scene->AddDrawable(m_confirm.get(), RenderLayerId::UI);

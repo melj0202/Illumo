@@ -19,6 +19,8 @@ registerEditorToolbarTests(IllumoTestRegistry& registry);
 void
 registerEditorSidebarTests(IllumoTestRegistry& registry);
 void
+registerEditorSceneGraphViewTests(IllumoTestRegistry& registry);
+void
 registerEditorUiAtlasTests(IllumoTestRegistry& registry);
 void
 registerEditorModuleTests(IllumoTestRegistry& registry);
@@ -32,6 +34,7 @@ createRegistry()
   registerIllEdConfigTests(registry);
   registerEditorToolbarTests(registry);
   registerEditorSidebarTests(registry);
+  registerEditorSceneGraphViewTests(registry);
   registerEditorUiAtlasTests(registry);
   registerEditorModuleTests(registry);
   return registry;

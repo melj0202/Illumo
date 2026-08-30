@@ -52,6 +52,11 @@ public:
     return module.m_sidebar.get();
   }
 
+  static EditorSceneGraphView* sceneGraphView(EditorModule& module)
+  {
+    return module.m_sceneGraphView.get();
+  }
+
   static EditorCommand activeTool(const EditorModule& module)
   {
     return module.m_activeTool;

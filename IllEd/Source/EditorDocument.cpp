@@ -264,9 +264,10 @@ EditorDocument::destroySubtree(const std::string& id)
 }
 
 bool
-EditorDocument::setParent(const std::string& id, const std::string& parentId)
+EditorDocument::canSetParent(const std::string& id,
+                             const std::string& parentId) const
 {
-  IlscNode* node = findNode(id);
+  const IlscNode* node = findNode(id);
   if (node == nullptr) {
     return false;
   }
@@ -274,6 +275,19 @@ EditorDocument::setParent(const std::string& id, const std::string& parentId)
     return false;
   }
   if (wouldCreateCycle(id, parentId)) {
+    return false;
+  }
+  return true;
+}
+
+bool
+EditorDocument::setParent(const std::string& id, const std::string& parentId)
+{
+  if (!canSetParent(id, parentId)) {
+    return false;
+  }
+  IlscNode* node = findNode(id);
+  if (node == nullptr) {
     return false;
   }
   node->parentId = parentId;
