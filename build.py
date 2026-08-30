@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Front end for the Illumo library and IllumoGame workspace."""
+"""Front end for the Illumo library, IllumoGame, and IllEd workspace."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ ANSI_HIDE_CURSOR = "\x1b[?25l"
 ANSI_SHOW_CURSOR = "\x1b[?25h"
 
 DASHBOARD_CONFIGURATIONS = ("Release", "Debug", "RelWithDebInfo")
+DASHBOARD_APPLICATIONS = ("IllumoGame", "IllEd")
 DASHBOARD_PARALLEL_OPTIONS = (
     ("Auto", 0),
     ("Off", None),
@@ -46,13 +47,14 @@ DASHBOARD_PARALLEL_OPTIONS = (
 )
 DASHBOARD_ITEMS = (
     ("setting", "Configuration", "configuration"),
+    ("setting", "Application", "application"),
     ("setting", "Documentation", "documentation"),
     ("setting", "Tracy profiling", "tracy"),
     ("setting", "Parallel build", "parallel"),
     ("action", "Build everything", "build"),
-    ("action", "Build application", "application"),
+    ("action", "Build application", "build_app"),
     ("action", "Run headless tests", "test"),
-    ("action", "Build and run IllumoGame", "run"),
+    ("action", "Build and run application", "run"),
     ("action", "Run existing build", "launch"),
     ("action", "Repository statistics", "stats"),
     ("action", "Build documentation", "docs"),
@@ -60,10 +62,10 @@ DASHBOARD_ITEMS = (
     ("action", "Exit", "quit"),
 )
 DASHBOARD_DESCRIPTIONS = {
-    "build": "application, tests, and optional PDFs",
-    "application": "focused IllumoGame target",
-    "test": "both isolated test runners",
-    "run": "build, then launch",
+    "build": "applications, tests, and optional PDFs",
+    "build_app": "focused target for selected application",
+    "test": "all three isolated test runners",
+    "run": "build, then launch selected application",
     "launch": "skip configure and build",
     "stats": "Git state, files, and first-party LOC",
     "docs": "illumo.pdf and architecture-map.pdf",
@@ -124,6 +126,7 @@ class RepositoryStatistics:
 class DashboardState:
     selected: int = 0
     configuration_index: int = 0
+    application_index: int = 0
     documentation_enabled: bool = True
     tracy_enabled: bool = False
     parallel_index: int = 0
@@ -133,6 +136,10 @@ class DashboardState:
     @property
     def configuration(self) -> str:
         return DASHBOARD_CONFIGURATIONS[self.configuration_index]
+
+    @property
+    def application(self) -> str:
+        return DASHBOARD_APPLICATIONS[self.application_index]
 
     @property
     def parallel_value(self) -> int | None:
@@ -195,6 +202,8 @@ def dashboard_style(text: str, style: str, ansi: bool) -> str:
 def dashboard_value(state: DashboardState, key: str) -> str:
     if key == "configuration":
         return state.configuration
+    if key == "application":
+        return state.application
     if key == "documentation":
         return "On" if state.documentation_enabled else "Off"
     if key == "tracy":
@@ -273,16 +282,18 @@ def render_dashboard(
         glyphs["horizontal"],
         glyphs["middle_right"],
     )
-    content("Settings", ANSI_BOLD + ANSI_BLUE)
-
+    last_kind = None
     for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
-        if index == 4:
-            border(
-                glyphs["middle_left"],
-                glyphs["horizontal"],
-                glyphs["middle_right"],
-            )
-            content("Actions", ANSI_BOLD + ANSI_BLUE)
+        if kind != last_kind:
+            if last_kind is not None:
+                border(
+                    glyphs["middle_left"],
+                    glyphs["horizontal"],
+                    glyphs["middle_right"],
+                )
+            section_title = "Settings" if kind == "setting" else "Actions"
+            content(section_title, ANSI_BOLD + ANSI_BLUE)
+            last_kind = kind
 
         marker = glyphs["marker"] if index == state.selected else " "
         if kind == "setting":
@@ -295,7 +306,14 @@ def render_dashboard(
                 f"{glyphs['left']} {value} {glyphs['right']} "
             )
         else:
-            description = DASHBOARD_DESCRIPTIONS[key]
+            if key == "build_app":
+                description = f"focused {state.application} target"
+            elif key == "run":
+                description = f"build, then launch {state.application}"
+            elif key == "launch":
+                description = f"launch existing {state.application}"
+            else:
+                description = DASHBOARD_DESCRIPTIONS[key]
             if inner_width >= 76:
                 available = max(1, inner_width - len(label) - len(description) - 7)
                 raw = f" {marker} {label}{' ' * available}{description} "
@@ -386,6 +404,10 @@ def adjust_dashboard_setting(state: DashboardState, direction: int) -> None:
         state.configuration_index = (
             state.configuration_index + direction
         ) % len(DASHBOARD_CONFIGURATIONS)
+    elif key == "application":
+        state.application_index = (
+            state.application_index + direction
+        ) % len(DASHBOARD_APPLICATIONS)
     elif key == "documentation":
         state.documentation_enabled = not state.documentation_enabled
     elif key == "tracy":
@@ -420,19 +442,31 @@ def dashboard_action_arguments(
 ) -> list[str]:
     if action == "build":
         return ["build", *dashboard_common_arguments(state)]
-    if action == "application":
+    if action == "build_app":
         return [
             "build",
             *dashboard_common_arguments(state),
             "--target",
-            "IllumoGame",
+            state.application,
         ]
     if action == "test":
         return ["test", *dashboard_common_arguments(state)]
     if action == "run":
-        return ["run", *dashboard_common_arguments(state)]
+        return [
+            "run",
+            "--app",
+            state.application,
+            *dashboard_common_arguments(state),
+        ]
     if action == "launch":
-        return ["run", "--config", state.configuration, "--no-build"]
+        return [
+            "run",
+            "--app",
+            state.application,
+            "--config",
+            state.configuration,
+            "--no-build",
+        ]
     if action == "stats":
         return ["stats"]
     if action == "docs":
@@ -959,16 +993,28 @@ def create_parser() -> argparse.ArgumentParser:
     )
     test_mode = test_parser.add_mutually_exclusive_group()
     test_mode.add_argument(
-        "--test", metavar="NAME", help="run one exact test from either runner"
+        "--test", metavar="NAME", help="run one exact test from any runner"
     )
     test_mode.add_argument(
         "--list-tests",
         action="store_true",
-        help="list exact Illumo.* and IllumoGame.* case names",
+        help="list exact Illumo.*, IllumoGame.*, and IllEd.* case names",
     )
 
     run_parser = subparsers.add_parser(
-        "run", parents=[common], help="build and launch IllumoGame"
+        "run", parents=[common], help="build and launch an Illumo application"
+    )
+    run_parser.add_argument(
+        "--app",
+        choices=("IllumoGame", "IllEd"),
+        default="IllumoGame",
+        help="application to launch (default: IllumoGame)",
+    )
+    run_parser.add_argument(
+        "--target",
+        dest="app",
+        choices=("IllumoGame", "IllEd"),
+        help="alias for --app",
     )
     run_parser.add_argument(
         "--no-build",
@@ -978,7 +1024,7 @@ def create_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "app_arguments",
         nargs=argparse.REMAINDER,
-        help="arguments after -- are passed to IllumoGame",
+        help="arguments after -- are passed to the application",
     )
 
     coverage_parser = subparsers.add_parser(
@@ -1125,7 +1171,12 @@ def executable_path(
     dry_run: bool,
 ) -> Path:
     suffix = ".exe" if os.name == "nt" else ""
-    project_directory = "IllumoGame" if name.startswith("IllumoGame") else "Illumo"
+    if name.startswith("IllumoGame"):
+        project_directory = "IllumoGame"
+    elif name.startswith("IllEd"):
+        project_directory = "IllEd"
+    else:
+        project_directory = "Illumo"
     candidates = (
         build_directory / project_directory / configuration / f"{name}{suffix}",
         build_directory / project_directory / f"{name}{suffix}",
@@ -1144,10 +1195,12 @@ def exact_test_target(test_name: str) -> str:
         return "IllumoPublicHeaderSmoke"
     if test_name.startswith("IllumoGame."):
         return "IllumoGameTests"
+    if test_name.startswith("IllEd."):
+        return "IllEdTests"
     if test_name.startswith("Illumo."):
         return "IllumoTests"
     raise BuildError(
-        "Exact tests must start with 'Illumo.' or 'IllumoGame.'."
+        "Exact tests must start with 'Illumo.', 'IllumoGame.', or 'IllEd.'."
     )
 
 
@@ -1199,7 +1252,7 @@ def run_tests(arguments: argparse.Namespace) -> None:
         return
 
     if arguments.list_tests:
-        for target in ("IllumoTests", "IllumoGameTests"):
+        for target in ("IllumoTests", "IllumoGameTests", "IllEdTests"):
             runner.run(build_command(arguments, cmake, target))
             test_binary = executable_path(
                 build_directory,
@@ -1217,6 +1270,7 @@ def run_tests(arguments: argparse.Namespace) -> None:
     for target in (
         "IllumoTestsDiscover",
         "IllumoGameTestsDiscover",
+        "IllEdTestsDiscover",
         "IllumoPublicHeaderSmoke",
     ):
         runner.run(build_command(arguments, cmake, target))
@@ -1238,9 +1292,10 @@ def run_tests(arguments: argparse.Namespace) -> None:
 
 def run_application(arguments: argparse.Namespace) -> None:
     runner = CommandRunner(arguments.dry_run)
+    app_name = getattr(arguments, "app", "IllumoGame") or "IllumoGame"
     if not arguments.no_build:
         cmake = configure(arguments, runner)
-        runner.run(build_command(arguments, cmake, "IllumoGame"))
+        runner.run(build_command(arguments, cmake, app_name))
 
     build_directory = resolve_build_directory(arguments.build_dir)
     if arguments.no_build:
@@ -1248,7 +1303,7 @@ def run_application(arguments: argparse.Namespace) -> None:
     application = executable_path(
         build_directory,
         arguments.config,
-        "IllumoGame",
+        app_name,
         runner.dry_run,
     )
     app_arguments = list(arguments.app_arguments)
