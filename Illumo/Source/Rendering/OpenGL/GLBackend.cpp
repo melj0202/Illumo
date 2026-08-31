@@ -75,6 +75,7 @@ GLBackend::SubmitCommandQueue()
   tables.meshes = &_vaoRegistryLookup;
   tables.programs = &_programRegistryLookup;
   tables.textures = &_textureRegistryLookup;
+  tables.framebuffers = &_framebufferRegistryLookup;
   device->ExecuteCommandQueue(*commandQueue, tables);
 }
 
@@ -125,6 +126,17 @@ GLBackend::Shutdown()
   }
   _textureRegistryLookup.clear();
   textureHandles.clear();
+
+  for (std::unordered_map<uint32_t, GLFramebufferResourceEntry>::iterator it =
+         _framebufferRegistryLookup.begin();
+       it != _framebufferRegistryLookup.end();
+       ++it) {
+    if (it->second.fboId != 0) {
+      glDeleteFramebuffers(1, &it->second.fboId);
+    }
+  }
+  _framebufferRegistryLookup.clear();
+  framebufferHandles.clear();
 
   delete device;
   device = nullptr;
@@ -394,4 +406,91 @@ GLBackend::GetTextureInfo(TextureHandle handle) const
   info.height = size[1];
   info.channels = it->second.resource->getChannels();
   return info;
+}
+
+FramebufferHandle
+GLBackend::CreateDepthFramebuffer(int width,
+                                  int height,
+                                  TextureHandle* outDepthTexture)
+{
+  if (width <= 0 || height <= 0) {
+    Logger::LogError("CreateDepthFramebuffer: invalid dimensions");
+    return FramebufferHandle{};
+  }
+
+  std::unique_ptr<GLTexture> depthTex =
+    GLTexture::CreateDepthTexture(width, height);
+  if (!depthTex || depthTex->getID() == 0) {
+    Logger::LogError("CreateDepthFramebuffer: failed to create depth texture");
+    return FramebufferHandle{};
+  }
+
+  GLuint fbo = 0;
+  glGenFramebuffers(1, &fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+  glFramebufferTexture2D(
+    GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTex->getID(), 0);
+  glDrawBuffer(GL_NONE);
+  glReadBuffer(GL_NONE);
+
+  GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  if (status != GL_FRAMEBUFFER_COMPLETE) {
+    Logger::LogError("CreateDepthFramebuffer: framebuffer is incomplete (" +
+                     std::to_string(status) + ")");
+    glDeleteFramebuffers(1, &fbo);
+    return FramebufferHandle{};
+  }
+
+  TextureHandle texHandle = textureHandles.allocate();
+  GLTextureResourceEntry texEntry;
+  texEntry.generation = texHandle.generation;
+  texEntry.resource = std::move(depthTex);
+  _textureRegistryLookup[texHandle.slot] = std::move(texEntry);
+
+  if (outDepthTexture) {
+    *outDepthTexture = texHandle;
+  }
+
+  FramebufferHandle fbHandle = framebufferHandles.allocate();
+  GLFramebufferResourceEntry fbEntry;
+  fbEntry.generation = fbHandle.generation;
+  fbEntry.fboId = fbo;
+  fbEntry.depthTexture = texHandle;
+  fbEntry.width = width;
+  fbEntry.height = height;
+  _framebufferRegistryLookup[fbHandle.slot] = fbEntry;
+
+  return fbHandle;
+}
+
+bool
+GLBackend::DestroyFramebuffer(FramebufferHandle handle)
+{
+  std::unordered_map<uint32_t, GLFramebufferResourceEntry>::iterator it =
+    _framebufferRegistryLookup.find(handle.slot);
+  if (it == _framebufferRegistryLookup.end() ||
+      it->second.generation != handle.generation) {
+    Logger::LogWarning("DestroyFramebuffer: stale framebuffer handle ignored");
+    return false;
+  }
+  if (it->second.fboId != 0) {
+    glDeleteFramebuffers(1, &it->second.fboId);
+  }
+  if (it->second.depthTexture.isValid()) {
+    DestroyTexture(it->second.depthTexture);
+  }
+  _framebufferRegistryLookup.erase(it);
+  return framebufferHandles.release(handle);
+}
+
+bool
+GLBackend::IsFramebufferValid(FramebufferHandle handle) const
+{
+  std::unordered_map<uint32_t, GLFramebufferResourceEntry>::const_iterator it =
+    _framebufferRegistryLookup.find(handle.slot);
+  return framebufferHandles.isCurrent(handle) &&
+         it != _framebufferRegistryLookup.end() &&
+         it->second.generation == handle.generation;
 }

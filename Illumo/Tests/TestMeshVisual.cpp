@@ -326,8 +326,18 @@ testMeshVisualSceneAttachment()
   renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();
 
+  size_t uMvpCount = 0;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetUniformMat4 &&
+        std::strcmp(command.uniformMat4.name, WorldLook::kMvpUniform) == 0) {
+      ++uMvpCount;
+    }
+  }
   const RenderCommand* mvp =
-    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
+    uMvpCount > 0
+      ? findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, uMvpCount - 1)
+      : nullptr;
   const float aspect = 640.0f / 480.0f;
   const glm::mat4 expected = camera.GetMVPMatrix(aspect) * translation;
   testTrue(g, mvp != nullptr, "attachment submits uMVP");

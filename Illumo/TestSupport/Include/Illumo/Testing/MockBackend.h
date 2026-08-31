@@ -62,14 +62,19 @@ private:
   ResourceHandlePool<MeshHandle> meshHandles;
   ResourceHandlePool<ShaderHandle> shaderHandles;
   ResourceHandlePool<TextureHandle> textureHandles;
+  ResourceHandlePool<FramebufferHandle> framebufferHandles;
   std::unordered_map<uint32_t, uint32_t> liveMeshes;
   std::unordered_map<uint32_t, uint32_t> liveShaders;
   std::unordered_map<uint32_t, uint32_t> liveTextures;
+  std::unordered_map<uint32_t, uint32_t> liveFramebuffers;
   std::unordered_map<uint32_t, TextureInfo> textureInfos;
 
   bool isCommandResourceValid(const RenderCommand& command) const
   {
     switch (command.commandType) {
+      case CommandType::SetFramebuffer:
+        return !command.bindFramebuffer.handle.isValid() ||
+               IsFramebufferValid(command.bindFramebuffer.handle);
       case CommandType::SetMesh:
         return IsMeshValid(command.bindMesh.handle);
       case CommandType::SetShader:
@@ -387,6 +392,41 @@ public:
       return TextureInfo{};
     }
     return it->second;
+  }
+
+  FramebufferHandle CreateDepthFramebuffer(
+    int width,
+    int height,
+    TextureHandle* outDepthTexture) override
+  {
+    TextureOptions options;
+    options.filter = TextureFilter::Nearest;
+    TextureHandle tex = CreateTexture(nullptr, width, height, 1, options);
+    if (outDepthTexture) {
+      *outDepthTexture = tex;
+    }
+    FramebufferHandle fb = framebufferHandles.allocate();
+    liveFramebuffers[fb.slot] = fb.generation;
+    return fb;
+  }
+
+  bool DestroyFramebuffer(FramebufferHandle handle) override
+  {
+    std::unordered_map<uint32_t, uint32_t>::iterator it =
+      liveFramebuffers.find(handle.slot);
+    if (it == liveFramebuffers.end() || it->second != handle.generation) {
+      return false;
+    }
+    liveFramebuffers.erase(it);
+    return framebufferHandles.release(handle);
+  }
+
+  bool IsFramebufferValid(FramebufferHandle handle) const override
+  {
+    std::unordered_map<uint32_t, uint32_t>::const_iterator it =
+      liveFramebuffers.find(handle.slot);
+    return framebufferHandles.isCurrent(handle) &&
+           it != liveFramebuffers.end() && it->second == handle.generation;
   }
 
   bool wasInitialized() const { return initialized; }

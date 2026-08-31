@@ -13,6 +13,10 @@ public:
   static const unsigned int kUiStrideBytes = 16; // pos3 float + color4 ubyte
   static const unsigned int kSpriteStrideBytes =
     24; // pos3 float + color4 ubyte + uv2 float
+  static const unsigned int kLitPrimitiveStrideBytes =
+    36; // pos3 float (12) + norm3 float (12) + color4 ubyte (4) + uv2 float (8)
+  static const unsigned int kLitMeshStrideBytes =
+    32; // pos3 float (12) + norm3 float (12) + uv2 float (8)
 
   // Static mesh (Canvas / proof). Default layout Pos3Color3Uv2.
   GLMesh(const void* vertices,
@@ -196,6 +200,59 @@ private:
                             GL_FALSE,
                             kSpriteStrideBytes,
                             reinterpret_cast<void*>(16));
+    } else if (_layout == MeshVertexLayout::Pos3Norm3Color4U8Uv2) {
+      // Lit primitives: location 0 pos3, 1 color4 ubyte, 2 uv2, 3 normal3
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(0,
+                            3,
+                            GL_FLOAT,
+                            GL_FALSE,
+                            kLitPrimitiveStrideBytes,
+                            reinterpret_cast<void*>(0));
+      glEnableVertexAttribArray(3);
+      glVertexAttribPointer(3,
+                            3,
+                            GL_FLOAT,
+                            GL_FALSE,
+                            kLitPrimitiveStrideBytes,
+                            reinterpret_cast<void*>(12));
+      glEnableVertexAttribArray(1);
+      glVertexAttribPointer(1,
+                            4,
+                            GL_UNSIGNED_BYTE,
+                            GL_TRUE,
+                            kLitPrimitiveStrideBytes,
+                            reinterpret_cast<void*>(24));
+      glEnableVertexAttribArray(2);
+      glVertexAttribPointer(2,
+                            2,
+                            GL_FLOAT,
+                            GL_FALSE,
+                            kLitPrimitiveStrideBytes,
+                            reinterpret_cast<void*>(28));
+    } else if (_layout == MeshVertexLayout::Pos3Norm3Uv2) {
+      // Lit meshes: location 0 pos3, 3 normal3, 2 uv2
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(0,
+                            3,
+                            GL_FLOAT,
+                            GL_FALSE,
+                            kLitMeshStrideBytes,
+                            reinterpret_cast<void*>(0));
+      glEnableVertexAttribArray(3);
+      glVertexAttribPointer(3,
+                            3,
+                            GL_FLOAT,
+                            GL_FALSE,
+                            kLitMeshStrideBytes,
+                            reinterpret_cast<void*>(12));
+      glEnableVertexAttribArray(2);
+      glVertexAttribPointer(2,
+                            2,
+                            GL_FLOAT,
+                            GL_FALSE,
+                            kLitMeshStrideBytes,
+                            reinterpret_cast<void*>(24));
     } else {
       // Canvas: location 0 pos3, location 2 uv2
       glEnableVertexAttribArray(0);

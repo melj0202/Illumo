@@ -57,6 +57,32 @@ public:
     UploadToGPU(data, width, height, m_channels, options);
   }
 
+  static std::unique_ptr<GLTexture> CreateDepthTexture(int width, int height)
+  {
+    auto tex = std::make_unique<GLTexture>();
+    tex->m_size = { width, height };
+    tex->m_channels = 1;
+    glGenTextures(1, &tex->m_id);
+    glBindTexture(GL_TEXTURE_2D, tex->m_id);
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,
+                 GL_DEPTH_COMPONENT24,
+                 width,
+                 height,
+                 0,
+                 GL_DEPTH_COMPONENT,
+                 GL_FLOAT,
+                 nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex;
+  }
+
   ~GLTexture() override { Destroy(); }
 
   void Bind(unsigned int slot) const override

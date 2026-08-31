@@ -63,10 +63,15 @@ MeshVisual::addQuad(const glm::vec3& center,
     triangleVertices.push_back({ corners[i].x,
                                  corners[i].y,
                                  corners[i].z,
+                                 0.0f,
+                                 0.0f,
+                                 1.0f,
                                  color.r,
                                  color.g,
                                  color.b,
-                                 color.a });
+                                 color.a,
+                                 0.0f,
+                                 0.0f });
   }
   triangleIndices.push_back(vertexOffset + 0);
   triangleIndices.push_back(vertexOffset + 1);
@@ -161,28 +166,74 @@ MeshVisual::addSolidCube(const glm::vec3& center,
                          ColorRgba color)
 {
   const glm::vec3 extent = glm::max(halfExtent, glm::vec3(0.0f));
-  const glm::vec3 corners[8] = {
-    center + glm::vec3(-extent.x, -extent.y, -extent.z),
-    center + glm::vec3(extent.x, -extent.y, -extent.z),
-    center + glm::vec3(extent.x, extent.y, -extent.z),
-    center + glm::vec3(-extent.x, extent.y, -extent.z),
-    center + glm::vec3(-extent.x, -extent.y, extent.z),
-    center + glm::vec3(extent.x, -extent.y, extent.z),
-    center + glm::vec3(extent.x, extent.y, extent.z),
-    center + glm::vec3(-extent.x, extent.y, extent.z),
+  struct FaceDef
+  {
+    glm::vec3 normal;
+    glm::vec3 corners[4];
   };
-  const unsigned int vertexOffset =
-    static_cast<unsigned int>(triangleVertices.size());
-  for (const glm::vec3& corner : corners) {
-    triangleVertices.push_back(
-      { corner.x, corner.y, corner.z, color.r, color.g, color.b, color.a });
-  }
-  static const unsigned int kCubeIndices[36] = {
-    0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 4, 7, 0, 7, 3,
-    1, 2, 6, 1, 6, 5, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2,
+
+  const FaceDef faces[6] = {
+    // Front (+Z)
+    { glm::vec3(0, 0, 1),
+      { center + glm::vec3(-extent.x, -extent.y, extent.z),
+        center + glm::vec3(extent.x, -extent.y, extent.z),
+        center + glm::vec3(extent.x, extent.y, extent.z),
+        center + glm::vec3(-extent.x, extent.y, extent.z) } },
+    // Back (-Z)
+    { glm::vec3(0, 0, -1),
+      { center + glm::vec3(extent.x, -extent.y, -extent.z),
+        center + glm::vec3(-extent.x, -extent.y, -extent.z),
+        center + glm::vec3(-extent.x, extent.y, -extent.z),
+        center + glm::vec3(extent.x, extent.y, -extent.z) } },
+    // Top (+Y)
+    { glm::vec3(0, 1, 0),
+      { center + glm::vec3(-extent.x, extent.y, extent.z),
+        center + glm::vec3(extent.x, extent.y, extent.z),
+        center + glm::vec3(extent.x, extent.y, -extent.z),
+        center + glm::vec3(-extent.x, extent.y, -extent.z) } },
+    // Bottom (-Y)
+    { glm::vec3(0, -1, 0),
+      { center + glm::vec3(-extent.x, -extent.y, -extent.z),
+        center + glm::vec3(extent.x, -extent.y, -extent.z),
+        center + glm::vec3(extent.x, -extent.y, extent.z),
+        center + glm::vec3(-extent.x, -extent.y, extent.z) } },
+    // Right (+X)
+    { glm::vec3(1, 0, 0),
+      { center + glm::vec3(extent.x, -extent.y, extent.z),
+        center + glm::vec3(extent.x, -extent.y, -extent.z),
+        center + glm::vec3(extent.x, extent.y, -extent.z),
+        center + glm::vec3(extent.x, extent.y, extent.z) } },
+    // Left (-X)
+    { glm::vec3(-1, 0, 0),
+      { center + glm::vec3(-extent.x, -extent.y, -extent.z),
+        center + glm::vec3(-extent.x, -extent.y, extent.z),
+        center + glm::vec3(-extent.x, extent.y, extent.z),
+        center + glm::vec3(-extent.x, extent.y, -extent.z) } },
   };
-  for (unsigned int index : kCubeIndices) {
-    triangleIndices.push_back(vertexOffset + index);
+
+  for (const FaceDef& f : faces) {
+    const unsigned int offset =
+      static_cast<unsigned int>(triangleVertices.size());
+    for (int i = 0; i < 4; ++i) {
+      triangleVertices.push_back({ f.corners[i].x,
+                                   f.corners[i].y,
+                                   f.corners[i].z,
+                                   f.normal.x,
+                                   f.normal.y,
+                                   f.normal.z,
+                                   color.r,
+                                   color.g,
+                                   color.b,
+                                   color.a,
+                                   0.0f,
+                                   0.0f });
+    }
+    triangleIndices.push_back(offset + 0);
+    triangleIndices.push_back(offset + 1);
+    triangleIndices.push_back(offset + 2);
+    triangleIndices.push_back(offset + 0);
+    triangleIndices.push_back(offset + 2);
+    triangleIndices.push_back(offset + 3);
   }
   geometryDirty = true;
 }
@@ -193,14 +244,48 @@ MeshVisual::addSolidTriangle(const glm::vec3& a,
                              const glm::vec3& c,
                              ColorRgba color)
 {
+  glm::vec3 normal = glm::normalize(glm::cross(b - a, c - a));
+  if (std::isnan(normal.x) || std::isnan(normal.y) || std::isnan(normal.z)) {
+    normal = glm::vec3(0.0f, 1.0f, 0.0f);
+  }
   const unsigned int vertexOffset =
     static_cast<unsigned int>(triangleVertices.size());
-  triangleVertices.push_back(
-    { a.x, a.y, a.z, color.r, color.g, color.b, color.a });
-  triangleVertices.push_back(
-    { b.x, b.y, b.z, color.r, color.g, color.b, color.a });
-  triangleVertices.push_back(
-    { c.x, c.y, c.z, color.r, color.g, color.b, color.a });
+  triangleVertices.push_back({ a.x,
+                               a.y,
+                               a.z,
+                               normal.x,
+                               normal.y,
+                               normal.z,
+                               color.r,
+                               color.g,
+                               color.b,
+                               color.a,
+                               0.0f,
+                               0.0f });
+  triangleVertices.push_back({ b.x,
+                               b.y,
+                               b.z,
+                               normal.x,
+                               normal.y,
+                               normal.z,
+                               color.r,
+                               color.g,
+                               color.b,
+                               color.a,
+                               0.0f,
+                               0.0f });
+  triangleVertices.push_back({ c.x,
+                               c.y,
+                               c.z,
+                               normal.x,
+                               normal.y,
+                               normal.z,
+                               color.r,
+                               color.g,
+                               color.b,
+                               color.a,
+                               0.0f,
+                               0.0f });
   triangleIndices.push_back(vertexOffset + 0);
   triangleIndices.push_back(vertexOffset + 1);
   triangleIndices.push_back(vertexOffset + 2);
@@ -269,15 +354,35 @@ MeshVisual::addSolidEllipse(const glm::vec3& center,
   const float step = 6.28318530718f / static_cast<float>(count);
   const unsigned int centerIndex =
     static_cast<unsigned int>(triangleVertices.size());
-  triangleVertices.push_back(
-    { center.x, center.y, center.z, color.r, color.g, color.b, color.a });
+  triangleVertices.push_back({ center.x,
+                               center.y,
+                               center.z,
+                               0.0f,
+                               0.0f,
+                               1.0f,
+                               color.r,
+                               color.g,
+                               color.b,
+                               color.a,
+                               0.0f,
+                               0.0f });
 
   for (int i = 0; i < count; ++i) {
     const float angle = step * static_cast<float>(i);
     const float x = center.x + std::cos(angle) * std::max(radius.x, 0.0f);
     const float y = center.y + std::sin(angle) * std::max(radius.y, 0.0f);
-    triangleVertices.push_back(
-      { x, y, center.z, color.r, color.g, color.b, color.a });
+    triangleVertices.push_back({ x,
+                                 y,
+                                 center.z,
+                                 0.0f,
+                                 0.0f,
+                                 1.0f,
+                                 color.r,
+                                 color.g,
+                                 color.b,
+                                 color.a,
+                                 0.0f,
+                                 0.0f });
   }
 
   for (int i = 0; i < count; ++i) {
@@ -313,8 +418,18 @@ MeshVisual::addMesh(const MeshData& mesh, ColorRgba tint)
       0.0f,
       255.0f));
 
-    triangleVertices.push_back(
-      { vertex.position.x, vertex.position.y, vertex.position.z, r, g, b, a });
+    triangleVertices.push_back({ vertex.position.x,
+                                 vertex.position.y,
+                                 vertex.position.z,
+                                 vertex.normal.x,
+                                 vertex.normal.y,
+                                 vertex.normal.z,
+                                 r,
+                                 g,
+                                 b,
+                                 a,
+                                 vertex.texCoords.x,
+                                 vertex.texCoords.y });
   }
 
   for (size_t i = 0; i < mesh.indices.size(); ++i) {
@@ -359,6 +474,10 @@ MeshVisual::ensureStyles()
   }
   const RenderStyle* shapeStyle = renderer->getStyle(RenderStyleId::Shape);
   const RenderStyle* spriteStyle = renderer->getStyle(RenderStyleId::Sprite);
+  const RenderStyle* litStyle = renderer->getStyle(RenderStyleId::LitMesh);
+  const RenderStyle* shadowStyle =
+    renderer->getStyle(RenderStyleId::ShadowDepth);
+
   if (shapeStyle != nullptr && !lineStyleHandle.isValid()) {
     RenderStyle lineStyle = *shapeStyle;
     lineStyle.pipeline.depthTestEnabled = true;
@@ -384,6 +503,37 @@ MeshVisual::ensureStyles()
     worldSprite.pipeline.faceCullingEnabled = false;
     worldSprite.pipeline.primitives = Primitives::Triangles;
     spriteStyleHandle = renderer->createStyle(worldSprite);
+  }
+  if (litStyle != nullptr && !litMeshStyleHandle.isValid()) {
+    litMeshStyleHandle =
+      renderer->getBuiltinStyleHandle(RenderStyleId::LitMesh);
+  }
+  if (shadowStyle != nullptr && !shadowDepthStyleHandle.isValid()) {
+    shadowDepthStyleHandle =
+      renderer->getBuiltinStyleHandle(RenderStyleId::ShadowDepth);
+  }
+}
+
+void
+MeshVisual::ensureShadowResources(Renderer* value)
+{
+  if (value == nullptr || shadowFboHandle.isValid()) {
+    return;
+  }
+  shadowFboHandle =
+    value->enrollDepthFramebuffer(1024, 1024, &shadowDepthTextureHandle);
+}
+
+void
+MeshVisual::releaseShadowResources()
+{
+  if (renderer == nullptr) {
+    return;
+  }
+  if (shadowFboHandle.isValid()) {
+    renderer->destroyFramebuffer(shadowFboHandle);
+    shadowFboHandle = FramebufferHandle{};
+    shadowDepthTextureHandle = TextureHandle{};
   }
 }
 
@@ -452,7 +602,8 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   if (hasLines && !lineStyleHandle.isValid()) {
     return false;
   }
-  if (hasTriangles && !triangleStyleHandle.isValid()) {
+  if (hasTriangles && !triangleStyleHandle.isValid() &&
+      !litMeshStyleHandle.isValid()) {
     return false;
   }
   if (hasSprites && !spriteStyleHandle.isValid()) {
@@ -466,11 +617,12 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
                                       MeshVertexLayout::Pos3Color4U8)) {
     return false;
   }
-  if (hasTriangles && !ensureMeshCapacity(&triangleMeshHandle,
-                                          &triangleMeshIndices,
-                                          &triangleMeshCapacity,
-                                          triangleDrawVertices.size(),
-                                          MeshVertexLayout::Pos3Color4U8)) {
+  if (hasTriangles &&
+      !ensureMeshCapacity(&triangleMeshHandle,
+                          &triangleMeshIndices,
+                          &triangleMeshCapacity,
+                          triangleDrawVertices.size(),
+                          MeshVertexLayout::Pos3Norm3Color4U8Uv2)) {
     return false;
   }
   if (hasSprites && !ensureMeshCapacity(&spriteMeshHandle,
@@ -490,12 +642,11 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
     lineUploadPending = false;
   }
   if (triangleUploadPending && triangleMeshHandle.isValid()) {
-    value->pushUpdateBuffer(
-      triangleMeshHandle,
-      0,
-      static_cast<unsigned int>(triangleDrawVertices.size() *
-                                sizeof(ColorVertex)),
-      triangleDrawVertices.data());
+    value->pushUpdateBuffer(triangleMeshHandle,
+                            0,
+                            static_cast<unsigned int>(
+                              triangleDrawVertices.size() * sizeof(LitVertex)),
+                            triangleDrawVertices.data());
     triangleUploadPending = false;
   }
   if (spriteUploadPending && spriteMeshHandle.isValid()) {
@@ -516,6 +667,41 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   const glm::mat4 coloredMvp = viewProjection * coloredWorld;
   const float* coloredMvpPtr = glm::value_ptr(coloredMvp);
 
+  // Directional lighting & shadow setup
+  const glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
+  const glm::vec3 lightPos = lightDir * 20.0f;
+  const glm::mat4 lightView =
+    glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+  const glm::mat4 lightProj =
+    glm::ortho(-15.0f, 15.0f, -15.0f, 15.0f, 1.0f, 40.0f);
+  const glm::mat4 lightSpaceMatrix = lightProj * lightView;
+
+  // Pass 1: Directional Shadow Depth Pass (when lighting and shadow depth are
+  // valid)
+  if (lightingEnabled && hasTriangles && triangleMeshHandle.isValid() &&
+      shadowDepthStyleHandle.isValid()) {
+    ensureShadowResources(value);
+    if (shadowFboHandle.isValid()) {
+      value->pushFramebuffer(shadowFboHandle);
+      value->pushViewport(0, 0, 1024, 1024);
+      value->pushClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+
+      const glm::mat4 lightMvp = lightSpaceMatrix * coloredWorld;
+      value->bindStyle(shadowDepthStyleHandle);
+      value->pushSetMesh(triangleMeshHandle);
+      value->pushUniformMat4(WorldLook::kMvpUniform, glm::value_ptr(lightMvp));
+      value->pushDrawIndexed(
+        static_cast<unsigned int>(triangleDrawVertices.size()));
+
+      // Restore main framebuffer & viewport
+      value->pushFramebuffer(FramebufferHandle{});
+      const std::array<int, 2>& dims =
+        value->getFrameContext().windowDimensions;
+      value->pushViewport(0, 0, dims[0], dims[1]);
+    }
+  }
+
+  // Pass 2: Main Render Pass
   if (hasLines && lineMeshHandle.isValid()) {
     if (!value->bindStyle(lineStyleHandle)) {
       return false;
@@ -525,13 +711,39 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
     value->pushDrawIndexed(static_cast<unsigned int>(lineDrawVertices.size()));
   }
   if (hasTriangles && triangleMeshHandle.isValid()) {
-    if (!value->bindStyle(triangleStyleHandle)) {
-      return false;
+    if (lightingEnabled && litMeshStyleHandle.isValid()) {
+      if (!value->bindStyle(litMeshStyleHandle)) {
+        return false;
+      }
+      value->pushSetMesh(triangleMeshHandle);
+      value->pushUniformMat4(WorldLook::kMvpUniform, coloredMvpPtr);
+      value->pushUniformMat4(WorldLook::kModelUniform,
+                             glm::value_ptr(coloredWorld));
+      value->pushUniformMat4(WorldLook::kLightSpaceMatrixUniform,
+                             glm::value_ptr(lightSpaceMatrix));
+      value->pushUniformVec3(
+        WorldLook::kLightDirUniform, lightDir.x, lightDir.y, lightDir.z);
+      value->pushUniformVec3(WorldLook::kLightColorUniform, 1.0f, 0.95f, 0.9f);
+      value->pushUniformVec3(
+        WorldLook::kAmbientColorUniform, 0.2f, 0.22f, 0.25f);
+
+      if (shadowDepthTextureHandle.isValid()) {
+        value->pushSetTexture(shadowDepthTextureHandle,
+                              WorldLook::kShadowTextureUnit);
+        value->pushUniformInt(WorldLook::kShadowMapUniform,
+                              WorldLook::kShadowTextureUnit);
+      }
+      value->pushDrawIndexed(
+        static_cast<unsigned int>(triangleDrawVertices.size()));
+    } else {
+      if (!value->bindStyle(triangleStyleHandle)) {
+        return false;
+      }
+      value->pushSetMesh(triangleMeshHandle);
+      value->pushUniformMat4(WorldLook::kMvpUniform, coloredMvpPtr);
+      value->pushDrawIndexed(
+        static_cast<unsigned int>(triangleDrawVertices.size()));
     }
-    value->pushSetMesh(triangleMeshHandle);
-    value->pushUniformMat4(WorldLook::kMvpUniform, coloredMvpPtr);
-    value->pushDrawIndexed(
-      static_cast<unsigned int>(triangleDrawVertices.size()));
   }
   if (hasSprites && spriteMeshHandle.isValid()) {
     if (!value->bindStyle(spriteStyleHandle)) {
@@ -561,7 +773,7 @@ void
 MeshVisual::rebuildMeshes()
 {
   expandIndexedVertices(lineVertices, lineIndices, &lineDrawVertices);
-  expandIndexedVertices(
+  expandIndexedLitVertices(
     triangleVertices, triangleIndices, &triangleDrawVertices);
   spriteVertices.clear();
   spriteVertices.reserve(sprites.size() * 6);
@@ -647,9 +859,13 @@ MeshVisual::ensureMeshCapacity(MeshHandle* meshHandle,
     (*meshIndices)[index] = static_cast<unsigned int>(index);
   }
 
-  const size_t vertexStride = layout == MeshVertexLayout::Pos3Color4U8Uv2
-                                ? sizeof(SpriteVertex)
-                                : sizeof(ColorVertex);
+  size_t vertexStride = sizeof(ColorVertex);
+  if (layout == MeshVertexLayout::Pos3Color4U8Uv2) {
+    vertexStride = sizeof(SpriteVertex);
+  } else if (layout == MeshVertexLayout::Pos3Norm3Color4U8Uv2) {
+    vertexStride = sizeof(LitVertex);
+  }
+
   const size_t vertexCapacityBytes = nextCapacity * vertexStride;
   const size_t indexBytes = meshIndices->size() * sizeof(unsigned int);
   if (meshHandle->isValid()) {
@@ -675,6 +891,23 @@ void
 MeshVisual::expandIndexedVertices(const std::vector<ColorVertex>& vertices,
                                   const std::vector<unsigned int>& indices,
                                   std::vector<ColorVertex>* drawVertices)
+{
+  if (drawVertices == nullptr) {
+    return;
+  }
+  drawVertices->clear();
+  drawVertices->reserve(indices.size());
+  for (unsigned int index : indices) {
+    if (index < vertices.size()) {
+      drawVertices->push_back(vertices[index]);
+    }
+  }
+}
+
+void
+MeshVisual::expandIndexedLitVertices(const std::vector<LitVertex>& vertices,
+                                     const std::vector<unsigned int>& indices,
+                                     std::vector<LitVertex>* drawVertices)
 {
   if (drawVertices == nullptr) {
     return;
@@ -735,4 +968,7 @@ MeshVisual::releaseStyles()
     renderer->destroyStyle(spriteStyleHandle);
     spriteStyleHandle = RenderStyleHandle{};
   }
+  litMeshStyleHandle = RenderStyleHandle{};
+  shadowDepthStyleHandle = RenderStyleHandle{};
+  releaseShadowResources();
 }

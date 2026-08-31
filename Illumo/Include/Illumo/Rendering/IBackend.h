@@ -69,4 +69,12 @@ public:
   virtual bool DestroyTexture(TextureHandle handle) = 0;
   virtual bool IsTextureValid(TextureHandle handle) const = 0;
   virtual TextureInfo GetTextureInfo(TextureHandle handle) const = 0;
+
+  // Framebuffer / depth target for shadow mapping & offscreen passes
+  virtual FramebufferHandle CreateDepthFramebuffer(
+    int width,
+    int height,
+    TextureHandle* outDepthTexture) = 0;
+  virtual bool DestroyFramebuffer(FramebufferHandle handle) = 0;
+  virtual bool IsFramebufferValid(FramebufferHandle handle) const = 0;
 };

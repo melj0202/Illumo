@@ -14,6 +14,7 @@ enum class CommandType
   SetScissorState,
 
   // Resource bindings
+  SetFramebuffer,
   SetShader,
   SetMesh,
   SetTexture,
@@ -22,6 +23,8 @@ enum class CommandType
   SetUniformInt,
   SetUniformFloat,
   SetUniformVec2,
+  SetUniformVec3,
+  SetUniformVec4,
   SetUniformMat4,
 
   // Resource updates (same-frame pointer validity)
@@ -71,6 +74,11 @@ struct CmdBindMesh
   MeshHandle handle;
 };
 
+struct CmdBindFramebuffer
+{
+  FramebufferHandle handle; // Invalid / default slot 0 binds screen (FBO 0)
+};
+
 struct CmdBindShader
 {
   ShaderHandle handle;
@@ -102,6 +110,23 @@ struct CmdUniformVec2
   char name[32];
   float x;
   float y;
+};
+
+struct CmdUniformVec3
+{
+  char name[32];
+  float x;
+  float y;
+  float z;
+};
+
+struct CmdUniformVec4
+{
+  char name[32];
+  float x;
+  float y;
+  float z;
+  float w;
 };
 
 struct CmdUniformMat4
@@ -166,12 +191,15 @@ struct RenderCommand
     CmdClearColor clear;
     CmdViewport viewport;
     CmdScissor scissor;
+    CmdBindFramebuffer bindFramebuffer;
     CmdBindMesh bindMesh;
     CmdBindShader bindShader;
     CmdBindTexture bindTexture;
     CmdUniformInt uniformInt;
     CmdUniformFloat uniformFloat;
     CmdUniformVec2 uniformVec2;
+    CmdUniformVec3 uniformVec3;
+    CmdUniformVec4 uniformVec4;
     CmdUniformMat4 uniformMat4;
     CmdDraw draw;
     CmdDrawIndexed drawIndexed;

@@ -22,9 +22,12 @@ private:
   std::unordered_map<uint32_t, GLMeshResourceEntry> _vaoRegistryLookup;
   std::unordered_map<uint32_t, GLShaderResourceEntry> _programRegistryLookup;
   std::unordered_map<uint32_t, GLTextureResourceEntry> _textureRegistryLookup;
+  std::unordered_map<uint32_t, GLFramebufferResourceEntry>
+    _framebufferRegistryLookup;
   ResourceHandlePool<MeshHandle> meshHandles;
   ResourceHandlePool<ShaderHandle> shaderHandles;
   ResourceHandlePool<TextureHandle> textureHandles;
+  ResourceHandlePool<FramebufferHandle> framebufferHandles;
 
 public:
   GLBackend(IRenderWindow* window);
@@ -83,4 +86,11 @@ public:
   bool DestroyTexture(TextureHandle handle) override;
   bool IsTextureValid(TextureHandle handle) const override;
   TextureInfo GetTextureInfo(TextureHandle handle) const override;
+
+  FramebufferHandle CreateDepthFramebuffer(
+    int width,
+    int height,
+    TextureHandle* outDepthTexture) override;
+  bool DestroyFramebuffer(FramebufferHandle handle) override;
+  bool IsFramebufferValid(FramebufferHandle handle) const override;
 };

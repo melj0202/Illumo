@@ -195,6 +195,38 @@ Renderer::ensureBuiltinStyles()
       createStyle(style);
   }
 
+  // 3D Lit Mesh / Solid Primitives (MeshVisual).
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = true;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderPaths paths;
+    paths.vertexPath = "Shader/mesh_lit_vertex.glsl";
+    paths.fragmentPath = "Shader/mesh_lit_frag.glsl";
+    style.shaderHandle = enrollShader(paths);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::LitMesh)] =
+      createStyle(style);
+  }
+
+  // Shadow Depth pass (depth-only offscreen).
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = true;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderPaths paths;
+    paths.vertexPath = "Shader/shadow_depth_vertex.glsl";
+    paths.fragmentPath = "Shader/shadow_depth_frag.glsl";
+    style.shaderHandle = enrollShader(paths);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::ShadowDepth)] =
+      createStyle(style);
+  }
+
   _builtinStylesReady = true;
 }
 

@@ -288,6 +288,18 @@ public:
     return _backend->DestroyTexture(handle);
   }
 
+  FramebufferHandle enrollDepthFramebuffer(int width,
+                                           int height,
+                                           TextureHandle* outDepthTexture)
+  {
+    return _backend->CreateDepthFramebuffer(width, height, outDepthTexture);
+  }
+
+  bool destroyFramebuffer(FramebufferHandle handle)
+  {
+    return _backend->DestroyFramebuffer(handle);
+  }
+
   bool destroyShader(ShaderHandle handle)
   {
     return _backend->DestroyShaderProgram(handle);
@@ -404,6 +416,14 @@ public:
     _backend->PushToCommandQueue(cmd);
   }
 
+  void pushFramebuffer(FramebufferHandle handle)
+  {
+    RenderCommand cmd;
+    cmd.commandType = CommandType::SetFramebuffer;
+    cmd.bindFramebuffer.handle = handle;
+    _backend->PushToCommandQueue(cmd);
+  }
+
   void pushUniformInt(const char* name, int value)
   {
     RenderCommand cmd;
@@ -429,6 +449,29 @@ public:
     copyUniformName(cmd.uniformVec2.name, sizeof(cmd.uniformVec2.name), name);
     cmd.uniformVec2.x = x;
     cmd.uniformVec2.y = y;
+    _backend->PushToCommandQueue(cmd);
+  }
+
+  void pushUniformVec3(const char* name, float x, float y, float z)
+  {
+    RenderCommand cmd;
+    cmd.commandType = CommandType::SetUniformVec3;
+    copyUniformName(cmd.uniformVec3.name, sizeof(cmd.uniformVec3.name), name);
+    cmd.uniformVec3.x = x;
+    cmd.uniformVec3.y = y;
+    cmd.uniformVec3.z = z;
+    _backend->PushToCommandQueue(cmd);
+  }
+
+  void pushUniformVec4(const char* name, float x, float y, float z, float w)
+  {
+    RenderCommand cmd;
+    cmd.commandType = CommandType::SetUniformVec4;
+    copyUniformName(cmd.uniformVec4.name, sizeof(cmd.uniformVec4.name), name);
+    cmd.uniformVec4.x = x;
+    cmd.uniformVec4.y = y;
+    cmd.uniformVec4.z = z;
+    cmd.uniformVec4.w = w;
     _backend->PushToCommandQueue(cmd);
   }
 

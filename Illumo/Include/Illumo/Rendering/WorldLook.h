@@ -10,12 +10,20 @@
 struct WorldLook
 {
   static constexpr const char* kMvpUniform = "uMVP";
+  static constexpr const char* kModelUniform = "uModel";
+  static constexpr const char* kLightSpaceMatrixUniform = "uLightSpaceMatrix";
+  static constexpr const char* kLightDirUniform = "uLightDir";
+  static constexpr const char* kLightColorUniform = "uLightColor";
+  static constexpr const char* kAmbientColorUniform = "uAmbientColor";
+  static constexpr const char* kShadowMapUniform = "uShadowMap";
   static constexpr const char* kTextureUniform = "uTexture";
   static constexpr const char* kResolutionUniform = "u_resolution";
   static constexpr int kTextureUnit = 0;
+  static constexpr int kShadowTextureUnit = 1;
   static constexpr int kPositionLocation = 0;
   static constexpr int kColorLocation = 1;
   static constexpr int kUvLocation = 2;
+  static constexpr int kNormalLocation = 3;
   static constexpr float kOverlayNear = -1.0f;
   static constexpr float kOverlayFar = 1.0f;
 

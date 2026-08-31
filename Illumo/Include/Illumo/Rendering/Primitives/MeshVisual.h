@@ -39,6 +39,8 @@ public:
   void prepare(Renderer* renderer);
   void setModelMatrix(const glm::mat4& value);
   const glm::mat4& getModelMatrix() const { return modelMatrix; }
+  void setLightingEnabled(bool enabled) { lightingEnabled = enabled; }
+  bool isLightingEnabled() const { return lightingEnabled; }
 
   void clearPrimitives();
   size_t addQuad(const glm::vec3& center,
@@ -97,6 +99,22 @@ private:
     unsigned char a;
   };
 
+  struct LitVertex
+  {
+    float x;
+    float y;
+    float z;
+    float nx = 0.0f;
+    float ny = 1.0f;
+    float nz = 0.0f;
+    unsigned char r = 255;
+    unsigned char g = 255;
+    unsigned char b = 255;
+    unsigned char a = 255;
+    float u = 0.0f;
+    float v = 0.0f;
+  };
+
   struct SpriteVertex
   {
     float x;
@@ -123,10 +141,10 @@ private:
   glm::mat4 modelMatrix = glm::mat4(1.0f);
   std::vector<ColorVertex> lineVertices;
   std::vector<unsigned int> lineIndices;
-  std::vector<ColorVertex> triangleVertices;
+  std::vector<LitVertex> triangleVertices;
   std::vector<unsigned int> triangleIndices;
   std::vector<ColorVertex> lineDrawVertices;
-  std::vector<ColorVertex> triangleDrawVertices;
+  std::vector<LitVertex> triangleDrawVertices;
   std::vector<unsigned int> lineMeshIndices;
   std::vector<unsigned int> triangleMeshIndices;
   std::vector<SpriteItem> sprites;
@@ -138,6 +156,10 @@ private:
   RenderStyleHandle lineStyleHandle{};
   RenderStyleHandle triangleStyleHandle{};
   RenderStyleHandle spriteStyleHandle{};
+  RenderStyleHandle litMeshStyleHandle{};
+  RenderStyleHandle shadowDepthStyleHandle{};
+  FramebufferHandle shadowFboHandle{};
+  TextureHandle shadowDepthTextureHandle{};
   size_t lineMeshCapacity = 0;
   size_t triangleMeshCapacity = 0;
   size_t spriteMeshCapacity = 0;
@@ -145,8 +167,10 @@ private:
   bool lineUploadPending = false;
   bool triangleUploadPending = false;
   bool spriteUploadPending = false;
+  bool lightingEnabled = true;
 
   void ensureStyles();
+  void ensureShadowResources(Renderer* renderer);
   bool appendCommandsWithWorld(Renderer* renderer, const glm::mat4& nodeWorld);
   void rebuildMeshes();
   bool ensureMeshCapacity(MeshHandle* meshHandle,
@@ -157,8 +181,12 @@ private:
   static void expandIndexedVertices(const std::vector<ColorVertex>& vertices,
                                     const std::vector<unsigned int>& indices,
                                     std::vector<ColorVertex>* drawVertices);
+  static void expandIndexedLitVertices(const std::vector<LitVertex>& vertices,
+                                       const std::vector<unsigned int>& indices,
+                                       std::vector<LitVertex>* drawVertices);
   void releaseMeshes();
   void releaseStyles();
+  void releaseShadowResources();
   bool resolveViewProjection(Renderer* renderer,
                              glm::mat4* viewProjection,
                              glm::mat4* view) const;

@@ -15,6 +15,9 @@ enum class RenderStyleId : unsigned char
   Console = 2,
   Shape = 3,  // solid/outline shapes (GameVisual primitives)
   Sprite = 4, // textured quads (GameVisual primitives)
+  LitMesh =
+    5, // 3D lit meshes / solid primitives with Blinn-Phong and PCF shadows
+  ShadowDepth = 6, // Depth-only shadow mapping pass
   Count
 };
 

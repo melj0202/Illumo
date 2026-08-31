@@ -117,6 +117,29 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
         }
         break;
 
+      case CommandType::SetFramebuffer: {
+        if (!cmd.bindFramebuffer.handle.isValid()) {
+          if (_boundFbo != 0) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            _boundFbo = 0;
+          }
+          break;
+        }
+        const GLFramebufferResourceEntry* fb =
+          resolveFramebuffer(tables, cmd.bindFramebuffer.handle);
+        if (!fb) {
+          Logger::LogWarning("SetFramebuffer: unknown framebuffer handle");
+          glBindFramebuffer(GL_FRAMEBUFFER, 0);
+          _boundFbo = 0;
+          break;
+        }
+        if (fb->fboId != _boundFbo) {
+          glBindFramebuffer(GL_FRAMEBUFFER, fb->fboId);
+          _boundFbo = fb->fboId;
+        }
+        break;
+      }
+
       case CommandType::SetShader: {
         GLShaderProgram* program =
           resolveProgram(tables, cmd.bindShader.handle);
@@ -190,6 +213,27 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
         GLint loc = getUniformLocation(cmd.uniformVec2.name);
         if (loc >= 0) {
           glUniform2f(loc, cmd.uniformVec2.x, cmd.uniformVec2.y);
+        }
+        break;
+      }
+
+      case CommandType::SetUniformVec3: {
+        GLint loc = getUniformLocation(cmd.uniformVec3.name);
+        if (loc >= 0) {
+          glUniform3f(
+            loc, cmd.uniformVec3.x, cmd.uniformVec3.y, cmd.uniformVec3.z);
+        }
+        break;
+      }
+
+      case CommandType::SetUniformVec4: {
+        GLint loc = getUniformLocation(cmd.uniformVec4.name);
+        if (loc >= 0) {
+          glUniform4f(loc,
+                      cmd.uniformVec4.x,
+                      cmd.uniformVec4.y,
+                      cmd.uniformVec4.z,
+                      cmd.uniformVec4.w);
         }
         break;
       }

@@ -458,6 +458,43 @@ testScissorEnableDisable()
              "second scissor token disables clipping");
 }
 
+static void
+testDepthFramebufferLifecycle()
+{
+  std::printf("\n--- depth framebuffer lifecycle and tokens ---\n");
+  MockBackend mock;
+  mock.Initialize();
+
+  TextureHandle depthTex{};
+  FramebufferHandle fbo = mock.CreateDepthFramebuffer(1024, 1024, &depthTex);
+  expectTrue(fbo.isValid(), "depth framebuffer is valid");
+  expectTrue(depthTex.isValid(), "depth texture is valid");
+  expectTrue(mock.IsFramebufferValid(fbo), "framebuffer is live in backend");
+  expectTrue(mock.IsTextureValid(depthTex), "depth texture is live in backend");
+
+  RenderCommand bindFb{};
+  bindFb.commandType = CommandType::SetFramebuffer;
+  bindFb.bindFramebuffer.handle = fbo;
+  mock.PushToCommandQueue(bindFb);
+
+  RenderCommand unbindFb{};
+  unbindFb.commandType = CommandType::SetFramebuffer;
+  unbindFb.bindFramebuffer.handle = FramebufferHandle{};
+  mock.PushToCommandQueue(unbindFb);
+
+  mock.SubmitCommandQueue();
+  expectEqSize(
+    mock.getLastSubmittedCount(), 2u, "framebuffer bind/unbind submitted");
+  expectTrue(mock.getLastSubmitted(0).bindFramebuffer.handle.isValid(),
+             "first token binds target FBO");
+  expectTrue(!mock.getLastSubmitted(1).bindFramebuffer.handle.isValid(),
+             "second token unbinds to default FBO");
+
+  expectTrue(mock.DestroyFramebuffer(fbo),
+             "framebuffer destroyed successfully");
+  expectTrue(!mock.IsFramebufferValid(fbo), "framebuffer is no longer valid");
+}
+
 static int
 runMockBackendCase(void (*testFunction)())
 {
@@ -487,4 +524,7 @@ registerMockBackendTests(IllumoTestRegistry& registry)
                []() { return runMockBackendCase(testGenerationalHandles); });
   registry.add("Illumo.MockBackend.ScissorEnableDisable",
                []() { return runMockBackendCase(testScissorEnableDisable); });
+  registry.add("Illumo.MockBackend.DepthFramebufferLifecycle", []() {
+    return runMockBackendCase(testDepthFramebufferLifecycle);
+  });
 }

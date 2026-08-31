@@ -36,6 +36,14 @@ struct RenderStyleHandle
   bool isValid() const { return slot != 0 && generation != 0; }
 };
 
+struct FramebufferHandle
+{
+  uint32_t slot;
+  uint32_t generation;
+
+  bool isValid() const { return slot != 0 && generation != 0; }
+};
+
 inline bool
 operator==(MeshHandle left, MeshHandle right)
 {
@@ -80,6 +88,18 @@ operator==(RenderStyleHandle left, RenderStyleHandle right)
 
 inline bool
 operator!=(RenderStyleHandle left, RenderStyleHandle right)
+{
+  return !(left == right);
+}
+
+inline bool
+operator==(FramebufferHandle left, FramebufferHandle right)
+{
+  return left.slot == right.slot && left.generation == right.generation;
+}
+
+inline bool
+operator!=(FramebufferHandle left, FramebufferHandle right)
 {
   return !(left == right);
 }

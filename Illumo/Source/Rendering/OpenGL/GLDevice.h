@@ -32,12 +32,23 @@ struct GLTextureResourceEntry
   std::unique_ptr<GLTexture> resource;
 };
 
+struct GLFramebufferResourceEntry
+{
+  uint32_t generation = 0;
+  GLuint fboId = 0;
+  TextureHandle depthTexture{};
+  int width = 0;
+  int height = 0;
+};
+
 // Registries owned by GLBackend; typed handles resolve by slot and generation.
 struct GLResourceTables
 {
   const std::unordered_map<uint32_t, GLMeshResourceEntry>* meshes = nullptr;
   const std::unordered_map<uint32_t, GLShaderResourceEntry>* programs = nullptr;
   const std::unordered_map<uint32_t, GLTextureResourceEntry>* textures =
+    nullptr;
+  const std::unordered_map<uint32_t, GLFramebufferResourceEntry>* framebuffers =
     nullptr;
 };
 
@@ -51,6 +62,7 @@ private:
   GLuint _boundProgram = 0;
   GLuint _boundVao = 0;
   GLuint _boundTexture[8] = {};
+  GLuint _boundFbo = 0;
   int _viewportX = -1;
   int _viewportY = -1;
   int _viewportW = -1;
@@ -179,6 +191,22 @@ private:
       return nullptr;
     }
     return it->second.resource.get();
+  }
+
+  const GLFramebufferResourceEntry* resolveFramebuffer(
+    const GLResourceTables& tables,
+    FramebufferHandle handle) const
+  {
+    if (!tables.framebuffers) {
+      return nullptr;
+    }
+    std::unordered_map<uint32_t, GLFramebufferResourceEntry>::const_iterator
+      it = tables.framebuffers->find(handle.slot);
+    if (it == tables.framebuffers->end() ||
+        it->second.generation != handle.generation) {
+      return nullptr;
+    }
+    return &it->second;
   }
 
 public:

@@ -12,6 +12,11 @@ enum class MeshVertexLayout : int
   Pos3Color4U8 = 1,
   // Sprites / Text: float pos3 | ubyte color4 | float uv2 (stride 24)
   Pos3Color4U8Uv2 = 2,
+  // 3D Lit primitives/meshes: float pos3 | float norm3 | ubyte color4 | float
+  // uv2 (stride 36)
+  Pos3Norm3Color4U8Uv2 = 3,
+  // 3D Textured lit meshes: float pos3 | float norm3 | float uv2 (stride 32)
+  Pos3Norm3Uv2 = 4,
 };
 
 class IMesh
