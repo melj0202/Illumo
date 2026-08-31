@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Front end for the Illumo library, IllumoGame, and IllEd workspace."""
+"""Front end for the Illumo library and workspace applications."""
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -36,7 +37,6 @@ ANSI_HIDE_CURSOR = "\x1b[?25l"
 ANSI_SHOW_CURSOR = "\x1b[?25h"
 
 DASHBOARD_CONFIGURATIONS = ("Release", "Debug", "RelWithDebInfo")
-DASHBOARD_APPLICATIONS = ("IllumoGame", "IllEd")
 DASHBOARD_PARALLEL_OPTIONS = (
     ("Auto", 0),
     ("Off", None),
@@ -48,6 +48,7 @@ DASHBOARD_PARALLEL_OPTIONS = (
 DASHBOARD_ITEMS = (
     ("setting", "Configuration", "configuration"),
     ("setting", "Application", "application"),
+    ("setting", "Testing", "testing"),
     ("setting", "Documentation", "documentation"),
     ("setting", "Tracy profiling", "tracy"),
     ("setting", "Parallel build", "parallel"),
@@ -64,7 +65,7 @@ DASHBOARD_ITEMS = (
 DASHBOARD_DESCRIPTIONS = {
     "build": "applications, tests, and optional PDFs",
     "build_app": "focused target for selected application",
-    "test": "all three isolated test runners",
+    "test": "all discovered test runners",
     "run": "build, then launch selected application",
     "launch": "skip configure and build",
     "stats": "Git state, files, and first-party LOC",
@@ -80,6 +81,170 @@ class BuildError(RuntimeError):
     def __init__(self, message: str, exit_code: int = 1) -> None:
         super().__init__(message)
         self.exit_code = exit_code
+
+
+@dataclass(frozen=True)
+class ProjectInfo:
+    name: str
+    directory: Path
+    applications: tuple[str, ...] = ()
+    test_runners: tuple[str, ...] = ()
+    discovery_targets: tuple[str, ...] = ()
+    smoke_targets: tuple[str, ...] = ()
+    test_prefixes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class WorkspaceProjects:
+    root: Path
+    projects: tuple[ProjectInfo, ...]
+
+    @property
+    def applications(self) -> tuple[str, ...]:
+        apps: list[str] = []
+        for project in self.projects:
+            apps.extend(project.applications)
+        return tuple(apps)
+
+    @property
+    def test_runners(self) -> tuple[str, ...]:
+        runners: list[str] = []
+        for project in self.projects:
+            runners.extend(project.test_runners)
+        return tuple(runners)
+
+    @property
+    def discovery_targets(self) -> tuple[str, ...]:
+        targets: list[str] = []
+        for project in self.projects:
+            targets.extend(project.discovery_targets)
+        return tuple(targets)
+
+    @property
+    def smoke_targets(self) -> tuple[str, ...]:
+        smoke: list[str] = []
+        for project in self.projects:
+            smoke.extend(project.smoke_targets)
+        return tuple(smoke)
+
+    @property
+    def primary_application(self) -> str:
+        apps = self.applications
+        if "IllumoGame" in apps:
+            return "IllumoGame"
+        return apps[0] if apps else "IllumoGame"
+
+    def resolve_test_target(self, test_name: str) -> str:
+        if test_name == PUBLIC_HEADER_SMOKE_TEST:
+            return "IllumoPublicHeaderSmoke"
+        for project in self.projects:
+            for prefix in project.test_prefixes:
+                if test_name.startswith(prefix):
+                    if project.test_runners:
+                        return project.test_runners[0]
+            if test_name.startswith(f"{project.name}."):
+                if project.test_runners:
+                    return project.test_runners[0]
+        for runner in self.test_runners:
+            prefix = runner.removesuffix("Tests") + "."
+            if test_name.startswith(prefix):
+                return runner
+        valid_prefixes = sorted(
+            {f"{p.name}." for p in self.projects if p.test_runners}
+            | {f"{runner.removesuffix('Tests')}." for runner in self.test_runners}
+            | {PUBLIC_HEADER_SMOKE_TEST}
+        )
+        rendered = ", ".join(f"'{p}'" for p in valid_prefixes)
+        raise BuildError(
+            f"Test '{test_name}' could not be matched to any test runner. "
+            f"Exact tests must start with one of: {rendered}"
+        )
+
+
+def discover_workspace_projects(root: Path = REPOSITORY_ROOT) -> WorkspaceProjects:
+    root_cmake = root / "CMakeLists.txt"
+    ordered_names: list[str] = []
+    if root_cmake.is_file():
+        try:
+            content = root_cmake.read_text(encoding="utf-8", errors="replace")
+            for match in re.finditer(
+                r"add_subdirectory\s*\(\s*([A-Za-z0-9_\-]+)\s*\)", content
+            ):
+                sub = match.group(1)
+                if (root / sub / "CMakeLists.txt").is_file() and sub not in ordered_names:
+                    ordered_names.append(sub)
+        except OSError:
+            pass
+
+    for item in sorted(root.iterdir(), key=lambda p: p.name):
+        if item.is_dir() and (item / "CMakeLists.txt").is_file():
+            if item.name not in ordered_names and not is_excluded_repository_path(
+                item.relative_to(root)
+            ):
+                name_lower = item.name.lower()
+                if not (
+                    name_lower in ("cmake", "thirdparty", "docs", "archive")
+                    or name_lower.startswith("build")
+                ):
+                    ordered_names.append(item.name)
+
+    project_list: list[ProjectInfo] = []
+    for name in ordered_names:
+        project_dir = root / name
+        cmake_file = project_dir / "CMakeLists.txt"
+        if not cmake_file.is_file():
+            continue
+        try:
+            cmake_text = cmake_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        executables = re.findall(r"add_executable\s*\(\s*([A-Za-z0-9_]+)", cmake_text)
+        discover_matches = re.findall(
+            r"illumo_discover_test_runner\s*\(\s*([A-Za-z0-9_]+)(?:\s+([A-Za-z0-9_]+))?\)",
+            cmake_text,
+        )
+        test_runners: list[str] = []
+        discovery_targets: list[str] = []
+        test_prefixes: list[str] = []
+        for runner_target, label in discover_matches:
+            if runner_target not in test_runners:
+                test_runners.append(runner_target)
+                discovery_targets.append(f"{runner_target}Discover")
+                if label:
+                    test_prefixes.append(f"{label}.")
+                else:
+                    test_prefixes.append(f"{name}.")
+
+        for exe in executables:
+            if exe.endswith("Tests") and exe not in test_runners:
+                test_runners.append(exe)
+                discovery_targets.append(f"{exe}Discover")
+                test_prefixes.append(f"{exe.removesuffix('Tests')}.")
+
+        smoke_targets: list[str] = []
+        for exe in executables:
+            if "Smoke" in exe and exe not in test_runners:
+                smoke_targets.append(exe)
+
+        applications: list[str] = []
+        for exe in executables:
+            if exe not in test_runners and exe not in smoke_targets:
+                applications.append(exe)
+
+        project_list.append(
+            ProjectInfo(
+                name=name,
+                directory=project_dir,
+                applications=tuple(applications),
+                test_runners=tuple(test_runners),
+                discovery_targets=tuple(discovery_targets),
+                smoke_targets=tuple(smoke_targets),
+                test_prefixes=tuple(test_prefixes),
+            )
+        )
+
+    return WorkspaceProjects(root=root, projects=tuple(project_list))
 
 
 @dataclass(frozen=True)
@@ -108,6 +273,7 @@ class RepositoryStatistics:
     repository_files: int
     repository_files_source: str
     categories: tuple[LineStatistics, ...]
+    projects: tuple[ProjectInfo, ...] = ()
 
     @property
     def first_party_files(self) -> int:
@@ -127,11 +293,20 @@ class DashboardState:
     selected: int = 0
     configuration_index: int = 0
     application_index: int = 0
+    testing_enabled: bool = True
     documentation_enabled: bool = True
     tracy_enabled: bool = False
     parallel_index: int = 0
     status: str = "Ready"
     status_kind: str = "normal"
+    applications: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if not self.applications:
+            discovered = discover_workspace_projects(REPOSITORY_ROOT).applications
+            self.applications = (
+                discovered if discovered else ("IllumoGame", "IllEd")
+            )
 
     @property
     def configuration(self) -> str:
@@ -139,7 +314,8 @@ class DashboardState:
 
     @property
     def application(self) -> str:
-        return DASHBOARD_APPLICATIONS[self.application_index]
+        apps = self.applications if self.applications else ("IllumoGame",)
+        return apps[self.application_index % len(apps)]
 
     @property
     def parallel_value(self) -> int | None:
@@ -204,6 +380,8 @@ def dashboard_value(state: DashboardState, key: str) -> str:
         return state.configuration
     if key == "application":
         return state.application
+    if key == "testing":
+        return "On" if state.testing_enabled else "Off"
     if key == "documentation":
         return "On" if state.documentation_enabled else "Off"
     if key == "tracy":
@@ -298,9 +476,7 @@ def render_dashboard(
         marker = glyphs["marker"] if index == state.selected else " "
         if kind == "setting":
             value = dashboard_value(state, key)
-            available = max(
-                1, inner_width - len(label) - len(value) - 8
-            )
+            available = max(1, inner_width - len(label) - len(value) - 8)
             raw = (
                 f" {marker} {label}{' ' * available}"
                 f"{glyphs['left']} {value} {glyphs['right']} "
@@ -315,7 +491,9 @@ def render_dashboard(
             else:
                 description = DASHBOARD_DESCRIPTIONS[key]
             if inner_width >= 76:
-                available = max(1, inner_width - len(label) - len(description) - 7)
+                available = max(
+                    1, inner_width - len(label) - len(description) - 7
+                )
                 raw = f" {marker} {label}{' ' * available}{description} "
             else:
                 raw = f" {marker} {label} "
@@ -405,9 +583,10 @@ def adjust_dashboard_setting(state: DashboardState, direction: int) -> None:
             state.configuration_index + direction
         ) % len(DASHBOARD_CONFIGURATIONS)
     elif key == "application":
-        state.application_index = (
-            state.application_index + direction
-        ) % len(DASHBOARD_APPLICATIONS)
+        apps = state.applications if state.applications else ("IllumoGame",)
+        state.application_index = (state.application_index + direction) % len(apps)
+    elif key == "testing":
+        state.testing_enabled = not state.testing_enabled
     elif key == "documentation":
         state.documentation_enabled = not state.documentation_enabled
     elif key == "tracy":
@@ -429,6 +608,8 @@ def dashboard_parallel_arguments(state: DashboardState) -> list[str]:
 
 def dashboard_common_arguments(state: DashboardState) -> list[str]:
     arguments = ["--config", state.configuration]
+    if not state.testing_enabled:
+        arguments.append("--no-tests")
     if not state.documentation_enabled:
         arguments.append("--no-docs")
     if state.tracy_enabled:
@@ -516,7 +697,8 @@ def run_dashboard() -> int:
         )
         return 2
 
-    state = DashboardState()
+    workspace = discover_workspace_projects(REPOSITORY_ROOT)
+    state = DashboardState(applications=workspace.applications)
     terminal = DashboardTerminal()
     terminal.enter()
     try:
@@ -690,7 +872,9 @@ def repository_text_category(path: Path) -> str | None:
 
 
 def worktree_statistics(root: Path) -> WorktreeStatistics | None:
-    output = git_output(root, ("status", "--porcelain=v1", "--untracked-files=all"))
+    output = git_output(
+        root, ("status", "--porcelain=v1", "--untracked-files=all")
+    )
     if output is None:
         return None
 
@@ -751,6 +935,7 @@ def collect_repository_statistics(root: Path) -> RepositoryStatistics:
     branch_output = git_output(root, ("rev-parse", "--abbrev-ref", "HEAD"))
     commit_output = git_output(root, ("rev-parse", "--short=10", "HEAD"))
     subject_output = git_output(root, ("log", "-1", "--format=%s"))
+    workspace = discover_workspace_projects(root)
     return RepositoryStatistics(
         root=root,
         branch=branch_output.strip() if branch_output else None,
@@ -760,6 +945,7 @@ def collect_repository_statistics(root: Path) -> RepositoryStatistics:
         repository_files=len(files),
         repository_files_source=files_source,
         categories=categories,
+        projects=workspace.projects,
     )
 
 
@@ -798,6 +984,17 @@ def repository_statistics_json(statistics: RepositoryStatistics) -> str:
                 for category in statistics.categories
             ],
         },
+        "projects": [
+            {
+                "name": project.name,
+                "directory": str(project.directory),
+                "applications": list(project.applications),
+                "test_runners": list(project.test_runners),
+                "discovery_targets": list(project.discovery_targets),
+                "smoke_targets": list(project.smoke_targets),
+            }
+            for project in statistics.projects
+        ],
     }
     return json.dumps(payload, indent=2)
 
@@ -826,6 +1023,19 @@ def print_repository_statistics(statistics: RepositoryStatistics) -> None:
             f"{statistics.worktree.untracked} untracked, "
             f"{statistics.worktree.conflicted} conflicted"
         )
+
+    if statistics.projects:
+        print(f"Discovered projects ({len(statistics.projects)}):")
+        for project in statistics.projects:
+            details: list[str] = []
+            if project.applications:
+                details.append(f"apps: {', '.join(project.applications)}")
+            if project.test_runners:
+                details.append(f"tests: {', '.join(project.test_runners)}")
+            if project.smoke_targets:
+                details.append(f"smoke: {', '.join(project.smoke_targets)}")
+            detail_str = f" ({'; '.join(details)})" if details else ""
+            print(f"  {project.name:<24}{detail_str}")
 
     print(
         f"Repository files ({statistics.repository_files_source}): "
@@ -934,9 +1144,28 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
         help="enable Tracy instrumentation with ILLUMO_ENABLE_TRACY",
     )
     parser.add_argument(
+        "--no-tests",
+        "--no-testing",
+        dest="no_tests",
+        action="store_true",
+        help="disable building and running tests with BUILD_TESTING=OFF",
+    )
+    parser.add_argument(
         "--no-docs",
         action="store_true",
         help="disable the optional IllumoDocs target for this build tree",
+    )
+    parser.add_argument(
+        "--clean",
+        "--clean-first",
+        dest="clean",
+        action="store_true",
+        help="clean build targets first before building (--clean-first)",
+    )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="configure a fresh build tree without removing the directory (--fresh)",
     )
     parser.add_argument(
         "--cmake-arg",
@@ -955,7 +1184,12 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def create_parser() -> argparse.ArgumentParser:
+def create_parser(
+    workspace: WorkspaceProjects | None = None,
+) -> argparse.ArgumentParser:
+    if workspace is None:
+        workspace = discover_workspace_projects(REPOSITORY_ROOT)
+
     parser = argparse.ArgumentParser(
         description=(
             "Configure, build, test, run, and measure the Illumo workspace. "
@@ -989,31 +1223,42 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     test_parser = subparsers.add_parser(
-        "test", parents=[common], help="build and run the headless tests"
+        "test",
+        parents=[common],
+        help="build and run headless tests across all discovered projects",
     )
     test_mode = test_parser.add_mutually_exclusive_group()
     test_mode.add_argument(
-        "--test", metavar="NAME", help="run one exact test from any runner"
+        "--test",
+        metavar="NAME",
+        help="run one exact test from any discovered test runner",
     )
     test_mode.add_argument(
         "--list-tests",
         action="store_true",
-        help="list exact Illumo.*, IllumoGame.*, and IllEd.* case names",
+        help="list exact case names across all discovered test runners",
     )
+
+    app_choices = (
+        workspace.applications
+        if workspace.applications
+        else ("IllumoGame", "IllEd")
+    )
+    default_app = workspace.primary_application
 
     run_parser = subparsers.add_parser(
         "run", parents=[common], help="build and launch an Illumo application"
     )
     run_parser.add_argument(
         "--app",
-        choices=("IllumoGame", "IllEd"),
-        default="IllumoGame",
-        help="application to launch (default: IllumoGame)",
+        choices=app_choices,
+        default=default_app,
+        help=f"application to launch (default: {default_app})",
     )
     run_parser.add_argument(
         "--target",
         dest="app",
-        choices=("IllumoGame", "IllEd"),
+        choices=app_choices,
         help="alias for --app",
     )
     run_parser.add_argument(
@@ -1109,16 +1354,20 @@ def configure_command(arguments: argparse.Namespace, cmake: str) -> list[str]:
         "-B",
         str(build_directory),
     ]
+    if getattr(arguments, "fresh", False):
+        command.append("--fresh")
     if arguments.generator:
         command.extend(("-G", arguments.generator))
     if arguments.architecture:
         command.extend(("-A", arguments.architecture))
 
+    testing_enabled = "OFF" if getattr(arguments, "no_tests", False) else "ON"
     docs_enabled = "OFF" if arguments.no_docs else "ON"
     tracy_enabled = "ON" if arguments.tracy else "OFF"
     command.extend(
         (
             f"-DCMAKE_BUILD_TYPE={arguments.config}",
+            f"-DBUILD_TESTING={testing_enabled}",
             f"-DILLUMO_BUILD_DOCUMENTATION={docs_enabled}",
             f"-DILLUMO_ENABLE_TRACY={tracy_enabled}",
             "-DILLUMO_ENABLE_COVERAGE=OFF",
@@ -1141,6 +1390,8 @@ def build_command(
         "--config",
         arguments.config,
     ]
+    if getattr(arguments, "clean", False):
+        command.append("--clean-first")
     selected_target = (
         target if target is not None else getattr(arguments, "target", None)
     )
@@ -1169,41 +1420,38 @@ def executable_path(
     configuration: str,
     name: str,
     dry_run: bool,
+    workspace: WorkspaceProjects | None = None,
 ) -> Path:
     suffix = ".exe" if os.name == "nt" else ""
-    if name.startswith("IllumoGame"):
-        project_directory = "IllumoGame"
-    elif name.startswith("IllEd"):
-        project_directory = "IllEd"
-    else:
-        project_directory = "Illumo"
-    candidates = (
+    candidates: list[Path] = [
         build_directory / configuration / f"{name}{suffix}",
         build_directory / f"{name}{suffix}",
-        build_directory / project_directory / configuration / f"{name}{suffix}",
-        build_directory / project_directory / f"{name}{suffix}",
-    )
+    ]
+    if workspace is None:
+        workspace = discover_workspace_projects(REPOSITORY_ROOT)
+    for project in workspace.projects:
+        candidates.append(
+            build_directory / project.name / configuration / f"{name}{suffix}"
+        )
+        candidates.append(
+            build_directory / project.name / f"{name}{suffix}"
+        )
     if dry_run:
         return candidates[0]
     for candidate in candidates:
         if candidate.is_file():
             return candidate
+
+    target_filename = f"{name}{suffix}".lower()
+    for root_dir, _subdirs, files in os.walk(build_directory):
+        for file in files:
+            if file.lower() == target_filename:
+                found = Path(root_dir) / file
+                if configuration.lower() in found.parts or len(candidates) <= 2:
+                    return found
+
     rendered = " or ".join(str(candidate) for candidate in candidates)
     raise BuildError(f"Expected executable was not produced at {rendered}")
-
-
-def exact_test_target(test_name: str) -> str:
-    if test_name == PUBLIC_HEADER_SMOKE_TEST:
-        return "IllumoPublicHeaderSmoke"
-    if test_name.startswith("IllumoGame."):
-        return "IllumoGameTests"
-    if test_name.startswith("IllEd."):
-        return "IllEdTests"
-    if test_name.startswith("Illumo."):
-        return "IllumoTests"
-    raise BuildError(
-        "Exact tests must start with 'Illumo.', 'IllumoGame.', or 'IllEd.'."
-    )
 
 
 def run_configure(arguments: argparse.Namespace) -> None:
@@ -1218,23 +1466,24 @@ def run_build(arguments: argparse.Namespace) -> None:
 
 
 def run_tests(arguments: argparse.Namespace) -> None:
+    if getattr(arguments, "no_tests", False):
+        raise BuildError(
+            "Cannot run tests when testing is disabled via --no-tests."
+        )
+    workspace = discover_workspace_projects(REPOSITORY_ROOT)
     runner = CommandRunner(arguments.dry_run)
-    exact_target = (
-        exact_test_target(arguments.test) if arguments.test else None
-    )
     cmake = configure(arguments, runner)
     build_directory = resolve_build_directory(arguments.build_dir)
 
     if arguments.test:
-        target = exact_target
-        if target is None:
-            raise BuildError("Exact test target was not resolved.")
+        target = workspace.resolve_test_target(arguments.test)
         runner.run(build_command(arguments, cmake, target))
         test_binary = executable_path(
             build_directory,
             arguments.config,
             target,
             runner.dry_run,
+            workspace,
         )
         safe_case_name = "".join(
             character
@@ -1248,33 +1497,32 @@ def run_tests(arguments: argparse.Namespace) -> None:
         if not runner.dry_run:
             case_directory.mkdir(parents=True, exist_ok=True)
         test_command = (str(test_binary),)
-        if target != "IllumoPublicHeaderSmoke":
+        if target not in workspace.smoke_targets:
             test_command = (str(test_binary), "--run", arguments.test)
         runner.run(test_command, case_directory)
         return
 
     if arguments.list_tests:
-        for target in ("IllumoTests", "IllumoGameTests", "IllEdTests"):
+        for target in workspace.test_runners:
             runner.run(build_command(arguments, cmake, target))
             test_binary = executable_path(
                 build_directory,
                 arguments.config,
                 target,
                 runner.dry_run,
+                workspace,
             )
             runner.run((str(test_binary), "--list"), test_binary.parent)
-        runner.run(
-            build_command(arguments, cmake, "IllumoPublicHeaderSmoke")
-        )
-        print(PUBLIC_HEADER_SMOKE_TEST, flush=True)
+        for smoke_target in workspace.smoke_targets:
+            runner.run(build_command(arguments, cmake, smoke_target))
+            if smoke_target == "IllumoPublicHeaderSmoke":
+                print(PUBLIC_HEADER_SMOKE_TEST, flush=True)
+            else:
+                print(smoke_target, flush=True)
         return
 
-    for target in (
-        "IllumoTestsDiscover",
-        "IllumoGameTestsDiscover",
-        "IllEdTestsDiscover",
-        "IllumoPublicHeaderSmoke",
-    ):
+    build_targets = [*workspace.discovery_targets, *workspace.smoke_targets]
+    for target in build_targets:
         runner.run(build_command(arguments, cmake, target))
 
     ctest = existing_tool("ctest", runner.dry_run)
@@ -1293,8 +1541,9 @@ def run_tests(arguments: argparse.Namespace) -> None:
 
 
 def run_application(arguments: argparse.Namespace) -> None:
+    workspace = discover_workspace_projects(REPOSITORY_ROOT)
     runner = CommandRunner(arguments.dry_run)
-    app_name = getattr(arguments, "app", "IllumoGame") or "IllumoGame"
+    app_name = getattr(arguments, "app", None) or workspace.primary_application
     if not arguments.no_build:
         cmake = configure(arguments, runner)
         runner.run(build_command(arguments, cmake, app_name))
@@ -1307,6 +1556,7 @@ def run_application(arguments: argparse.Namespace) -> None:
         arguments.config,
         app_name,
         runner.dry_run,
+        workspace,
     )
     app_arguments = list(arguments.app_arguments)
     if app_arguments and app_arguments[0] == "--":
@@ -1384,7 +1634,8 @@ def run_repository_statistics(arguments: argparse.Namespace) -> None:
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
-    parser = create_parser()
+    workspace = discover_workspace_projects(REPOSITORY_ROOT)
+    parser = create_parser(workspace)
     command_line = sys.argv[1:] if arguments is None else list(arguments)
     if not command_line:
         if sys.stdin.isatty() and sys.stdout.isatty():
@@ -1398,7 +1649,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
     if parsed.command == "menu":
         if parsed.snapshot:
-            print(render_dashboard(DashboardState(), 96, ansi=False))
+            print(
+                render_dashboard(
+                    DashboardState(applications=workspace.applications),
+                    96,
+                    ansi=False,
+                )
+            )
             return 0
         try:
             return run_dashboard()

@@ -1,5 +1,7 @@
 # Project runtime data
 *.illumo
+*.ilsc
+
 
 # Compiler outputs
 *.d
