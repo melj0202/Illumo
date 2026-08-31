@@ -43,3 +43,29 @@ if(ILLUMO_ENABLE_COVERAGE)
     COMMENT "Running combined Illumo workspace coverage"
   )
 endif()
+
+if(ILLUMO_ENABLE_CLANG_TIDY)
+  find_package(Python3 COMPONENTS Interpreter)
+  get_filename_component(_illumo_clang_tidy_dir
+    "${ILLUMO_CLANG_TIDY_EXECUTABLE}" DIRECTORY)
+  find_program(ILLUMO_RUN_CLANG_TIDY_EXECUTABLE
+    NAMES run-clang-tidy run-clang-tidy.py
+    HINTS "${_illumo_clang_tidy_dir}")
+  unset(_illumo_clang_tidy_dir)
+  if(Python3_Interpreter_FOUND AND ILLUMO_RUN_CLANG_TIDY_EXECUTABLE)
+    add_custom_target(IllumoTidy
+      COMMAND ${CMAKE_COMMAND}
+        "-DBINARY_DIR=${CMAKE_BINARY_DIR}"
+        "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DCLANG_TIDY=${ILLUMO_CLANG_TIDY_EXECUTABLE}"
+        "-DRUN_CLANG_TIDY=${ILLUMO_RUN_CLANG_TIDY_EXECUTABLE}"
+        "-DPYTHON=${Python3_EXECUTABLE}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunWorkspaceTidy.cmake"
+      USES_TERMINAL
+      COMMENT "Running clang-tidy on first-party workspace sources"
+    )
+  else()
+    message(STATUS
+      "IllumoTidy skipped: Python3 and run-clang-tidy are required")
+  endif()
+endif()

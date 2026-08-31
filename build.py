@@ -20,6 +20,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parent
 SOURCE_DIRECTORY = REPOSITORY_ROOT
 DEFAULT_BUILD_DIRECTORY = Path("build-workspace")
 DEFAULT_COVERAGE_DIRECTORY = Path("build-workspace-coverage")
+DEFAULT_TIDY_DIRECTORY = Path("build-workspace-tidy")
 PUBLIC_HEADER_SMOKE_TEST = "Illumo.PublicHeaders.ConsumerSmoke"
 
 ANSI_RESET = "\x1b[0m"
@@ -60,6 +61,7 @@ DASHBOARD_ITEMS = (
     ("action", "Repository statistics", "stats"),
     ("action", "Build documentation", "docs"),
     ("action", "Run LLVM coverage", "coverage"),
+    ("action", "Run clang-tidy", "tidy"),
     ("action", "Exit", "quit"),
 )
 DASHBOARD_DESCRIPTIONS = {
@@ -71,6 +73,7 @@ DASHBOARD_DESCRIPTIONS = {
     "stats": "Git state, files, and first-party LOC",
     "docs": "illumo.pdf and architecture-map.pdf",
     "coverage": "Ninja, Clang, and the 85% gate",
+    "tidy": "Ninja, Clang, and first-party clang-tidy",
     "quit": "return to the shell",
 }
 
@@ -654,6 +657,8 @@ def dashboard_action_arguments(
         return ["docs"]
     if action == "coverage":
         return ["coverage", *dashboard_parallel_arguments(state)]
+    if action == "tidy":
+        return ["tidy", *dashboard_parallel_arguments(state)]
     raise BuildError(f"Unknown dashboard action: {action}")
 
 
@@ -1156,6 +1161,11 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
         help="disable the optional IllumoDocs target for this build tree",
     )
     parser.add_argument(
+        "--no-tidy",
+        action="store_true",
+        help="disable clang-tidy during compile with ILLUMO_ENABLE_CLANG_TIDY=OFF",
+    )
+    parser.add_argument(
         "--clean",
         "--clean-first",
         dest="clean",
@@ -1192,7 +1202,7 @@ def create_parser(
 
     parser = argparse.ArgumentParser(
         description=(
-            "Configure, build, test, run, and measure the Illumo workspace. "
+            "Configure, build, test, run, lint, and measure the Illumo workspace. "
             "Running without a command opens the "
             "interactive build console in a terminal."
         )
@@ -1306,6 +1316,40 @@ def create_parser(
         help="print commands without executing them",
     )
 
+    tidy_parser = subparsers.add_parser(
+        "tidy", help="configure and run the workspace clang-tidy target"
+    )
+    tidy_parser.add_argument(
+        "--build-dir",
+        type=Path,
+        default=DEFAULT_TIDY_DIRECTORY,
+        metavar="PATH",
+        help="clang-tidy build tree (default: build-workspace-tidy)",
+    )
+    tidy_parser.add_argument(
+        "--parallel",
+        nargs="?",
+        const=0,
+        type=positive_job_count,
+        metavar="JOBS",
+        help="configure/build in parallel, optionally with a job limit",
+    )
+    tidy_parser.add_argument(
+        "--cmake-arg",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help="extra configure argument; repeat and use --cmake-arg=-DNAME=VALUE",
+    )
+    tidy_parser.add_argument(
+        "--verbose", action="store_true", help="request verbose build output"
+    )
+    tidy_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print commands without executing them",
+    )
+
     docs_parser = subparsers.add_parser(
         "docs", help="build the two documentation PDFs through docs/build.ps1"
     )
@@ -1364,6 +1408,7 @@ def configure_command(arguments: argparse.Namespace, cmake: str) -> list[str]:
     testing_enabled = "OFF" if getattr(arguments, "no_tests", False) else "ON"
     docs_enabled = "OFF" if arguments.no_docs else "ON"
     tracy_enabled = "ON" if arguments.tracy else "OFF"
+    tidy_enabled = "OFF" if getattr(arguments, "no_tidy", False) else "ON"
     command.extend(
         (
             f"-DCMAKE_BUILD_TYPE={arguments.config}",
@@ -1371,6 +1416,7 @@ def configure_command(arguments: argparse.Namespace, cmake: str) -> list[str]:
             f"-DILLUMO_BUILD_DOCUMENTATION={docs_enabled}",
             f"-DILLUMO_ENABLE_TRACY={tracy_enabled}",
             "-DILLUMO_ENABLE_COVERAGE=OFF",
+            f"-DILLUMO_ENABLE_CLANG_TIDY={tidy_enabled}",
         )
     )
     command.extend(arguments.cmake_arg)
@@ -1583,6 +1629,7 @@ def run_coverage(arguments: argparse.Namespace) -> None:
         "-DILLUMO_BUILD_DOCUMENTATION=OFF",
         "-DILLUMO_ENABLE_TRACY=OFF",
         "-DILLUMO_ENABLE_COVERAGE=ON",
+        "-DILLUMO_ENABLE_CLANG_TIDY=OFF",
     ]
     configure_coverage.extend(arguments.cmake_arg)
     runner.run(configure_coverage)
@@ -1601,6 +1648,48 @@ def run_coverage(arguments: argparse.Namespace) -> None:
     if arguments.verbose:
         build_coverage.append("--verbose")
     runner.run(build_coverage)
+
+
+def run_tidy(arguments: argparse.Namespace) -> None:
+    runner = CommandRunner(arguments.dry_run)
+    cmake = existing_tool("cmake", runner.dry_run)
+    existing_tool("clang-tidy", runner.dry_run)
+    existing_tool("ninja", runner.dry_run)
+    build_directory = resolve_build_directory(arguments.build_dir)
+    validate_workspace_build_directory(build_directory)
+    configure_tidy = [
+        cmake,
+        "-S",
+        str(SOURCE_DIRECTORY),
+        "-B",
+        str(build_directory),
+        "-G",
+        "Ninja",
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DCMAKE_C_COMPILER=clang",
+        "-DCMAKE_CXX_COMPILER=clang++",
+        "-DILLUMO_BUILD_DOCUMENTATION=OFF",
+        "-DILLUMO_ENABLE_TRACY=OFF",
+        "-DILLUMO_ENABLE_COVERAGE=OFF",
+        "-DILLUMO_ENABLE_CLANG_TIDY=ON",
+    ]
+    configure_tidy.extend(arguments.cmake_arg)
+    runner.run(configure_tidy)
+
+    build_tidy = [
+        cmake,
+        "--build",
+        str(build_directory),
+        "--target",
+        "IllumoTidy",
+    ]
+    if arguments.parallel is not None:
+        build_tidy.append("--parallel")
+        if arguments.parallel > 0:
+            build_tidy.append(str(arguments.parallel))
+    if arguments.verbose:
+        build_tidy.append("--verbose")
+    runner.run(build_tidy)
 
 
 def run_docs(arguments: argparse.Namespace) -> None:
@@ -1669,6 +1758,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "test": run_tests,
         "run": run_application,
         "coverage": run_coverage,
+        "tidy": run_tidy,
         "docs": run_docs,
         "stats": run_repository_statistics,
     }

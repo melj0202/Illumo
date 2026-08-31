@@ -100,6 +100,11 @@ add_library(Illumo STATIC
   ${ILLUMO_PLATFORM_SOURCES}
   thirdparty/tracy-0.13.1/public/TracyClient.cpp
 )
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.27")
+  set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/tracy-0.13.1/public/TracyClient.cpp"
+    PROPERTIES SKIP_LINTING ON)
+endif()
 target_sources(Illumo PRIVATE
   $<$<CONFIG:Debug>:${CMAKE_CURRENT_SOURCE_DIR}/Source/Engine/DebugModule.cpp>)
 add_library(Illumo::Illumo ALIAS Illumo)

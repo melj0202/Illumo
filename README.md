@@ -112,6 +112,7 @@ python build.py run --config Debug --no-build
 python build.py stats
 python build.py stats --json
 python build.py coverage
+python build.py tidy
 python build.py docs
 ```
 
@@ -202,6 +203,23 @@ window, and the OpenGL backend are excluded;
 native dialogs, window behavior, and live OpenGL still require smoke testing.
 See `Illumo/Tests/README.md` and `IllumoGame/Tests/README.md` for the exact
 scope and commands.
+
+clang-tidy (first-party sources, warnings as errors):
+
+```bash
+cmake -S . -B build-tidy -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DILLUMO_BUILD_DOCUMENTATION=OFF -DILLUMO_ENABLE_CLANG_TIDY=ON
+cmake --build build-tidy --target IllumoTidy
+```
+
+`ILLUMO_ENABLE_CLANG_TIDY` defaults to ON, so a normal first-party compile
+runs `clang-tidy` with `.clang-tidy` and treats diagnostics as errors.
+Vendored translation units are excluded. Disable it with
+`-DILLUMO_ENABLE_CLANG_TIDY=OFF` or `python build.py build --no-tidy`.
+`python build.py tidy` still configures a Ninja/Clang tree under
+`build-workspace-tidy` and builds the batch `IllumoTidy` target.
 
 ### Optimized Tracy profiling
 

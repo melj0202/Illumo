@@ -42,14 +42,14 @@ SaveLoad::GetLoadLocation(const SaveLoadDialogSpec& specification)
 
   ZeroMemory(&ofn, sizeof(ofn));
   ofn.lStructSize = sizeof(ofn);
-  ofn.hwndOwner = NULL;
+  ofn.hwndOwner = nullptr;
   ofn.lpstrFile = file;
   ofn.nMaxFile = static_cast<DWORD>(sizeof(file));
   ofn.lpstrFilter = filter.c_str();
   ofn.nFilterIndex = 1;
-  ofn.lpstrFileTitle = NULL;
+  ofn.lpstrFileTitle = nullptr;
   ofn.nMaxFileTitle = 0;
-  ofn.lpstrInitialDir = NULL;
+  ofn.lpstrInitialDir = nullptr;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
   if (!GetOpenFileNameA(&ofn)) {
@@ -68,14 +68,14 @@ SaveLoad::GetSaveLocation(const SaveLoadDialogSpec& specification)
 
   ZeroMemory(&ofn, sizeof(ofn));
   ofn.lStructSize = sizeof(ofn);
-  ofn.hwndOwner = NULL;
+  ofn.hwndOwner = nullptr;
   ofn.lpstrFile = file;
   ofn.nMaxFile = static_cast<DWORD>(sizeof(file));
   ofn.lpstrFilter = filter.c_str();
   ofn.nFilterIndex = 1;
-  ofn.lpstrFileTitle = NULL;
+  ofn.lpstrFileTitle = nullptr;
   ofn.nMaxFileTitle = 0;
-  ofn.lpstrInitialDir = NULL;
+  ofn.lpstrInitialDir = nullptr;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
 
   if (!GetSaveFileNameA(&ofn)) {

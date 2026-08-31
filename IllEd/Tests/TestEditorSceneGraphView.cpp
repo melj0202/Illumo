@@ -15,11 +15,9 @@ testHierarchyOrderingAndIndentation()
   EditorDocument doc;
   const std::string rootA = doc.createNode(SceneNodeKind::Empty, {});
   const std::string childA1 = doc.createNode(SceneNodeKind::SolidCube, rootA);
-  const std::string childA2 =
-    doc.createNode(SceneNodeKind::FilledEllipse, rootA);
-  const std::string grandChildA1 =
-    doc.createNode(SceneNodeKind::WireSphere, childA1);
-  const std::string rootB = doc.createNode(SceneNodeKind::FilledRect, {});
+  doc.createNode(SceneNodeKind::FilledEllipse, rootA);
+  doc.createNode(SceneNodeKind::WireSphere, childA1);
+  doc.createNode(SceneNodeKind::FilledRect, {});
 
   std::string selected;
   view.update(nullptr, &doc, &selected, 0.016f);

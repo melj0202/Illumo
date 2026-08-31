@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-08-29
+**Last updated:** 2026-08-30
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -236,7 +236,7 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **Render split** | Enroll once; emit tokens per frame; backend executes (D-R1–D-R8, D-R10). |
 | **Rulesets** | Strategy hierarchy; pure `nextState` + `evalCell`; double-buffered generation (D-P3). |
 | **Scene model** | Persistent handle-based `SceneGraph` for world organization (D-E8), extracted as one drawable into the unchanged per-frame rendering list (D-E4). |
-| **Tests** | Independent `IllumoTests` and `IllumoGameTests` runners, plus consumer-header smoke, exact process-isolated cases, `IllumoWorkspace` aggregation, and combined Clang/LLVM coverage (D-T1). |
+| **Tests** | Independent `IllumoTests` and `IllumoGameTests` runners, plus consumer-header smoke, exact process-isolated cases, `IllumoWorkspace` aggregation, combined Clang/LLVM coverage (D-T1), and compile-time `clang-tidy` (D-T3). |
 | **Debt hygiene** | Dead experiments under `archive/` rather than half-live. |
 
 ---
@@ -789,6 +789,8 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-DOC1** | Established one first-party documentation tree; refined by D-DOC2. |
 | **D-DOC2** | Canonical technical documentation remains under `docs/`; `illumo.tex` is the prose book and `architecture-map.tex` the chart pack. Root/nested `AGENTS.md` and `.agent/` are operational-guidance exceptions. |
 | **D-T1** | Independent compile-efficient `IllumoTests` and `IllumoGameTests` runners expose exact cases; `IllumoWorkspace` aggregates them and combined Clang/LLVM coverage enforces at least 85% production line coverage. |
+| **D-T2** | Introduced workspace `IllumoTidy`; superseded for default-build invocation by D-T3. |
+| **D-T3** | First-party C++ runs `clang-tidy` during the default build (`ILLUMO_ENABLE_CLANG_TIDY` ON). Disable with `-DILLUMO_ENABLE_CLANG_TIDY=OFF` or `python build.py build --no-tidy`. `python build.py tidy` remains the batch Ninja/Clang compile-database run. |
 
 ### 6.2 Rendering (D-R\*)
 
@@ -949,7 +951,9 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
   until submit
 - CMake configuration is centralized through shared target helpers; the
   repository root is the canonical `IllumoWorkspace` entry point and adds the
-  sibling `Illumo` and `IllumoGame` projects.
+  sibling `Illumo` and `IllumoGame` projects. Workspace `clang-tidy` runs on
+  first-party compiles by default (D-T3); `IllumoTidy` is the optional batch
+  compile-database run.
 - Runtime configuration is one `envvars.json` beside IllumoGame; CMake seeds
   it from tracked `IllumoGame/envvars.json` only when absent, so launch working
   directories cannot select or overwrite a different configuration. The F1

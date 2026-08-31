@@ -1,0 +1,42 @@
+# First-party clang-tidy config for the Illumo workspace.
+# IllumoTidy runs this against Ninja/Clang compile_commands.json.
+#
+# Disabled checks are existing-tree noise or they conflict with house style:
+# - modernize-use-auto: D-008 forbids auto
+# - bugprone-reserved-identifier: historical MacroDefs identifiers
+# - modernize-use-override / equals-default: large existing-style churn
+# - readability-redundant-member-init: widespread test/fixture initializers
+# Remaining bugprone checks are the workspace gate (D-T2).
+---
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-branch-clone,
+  -bugprone-crtp-constructor-accessibility,
+  -bugprone-derived-method-shadowing-base-method,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-empty-catch,
+  -bugprone-exception-escape,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-incorrect-roundings,
+  -bugprone-misplaced-widening-cast,
+  -bugprone-narrowing-conversions,
+  -bugprone-not-null-terminated-result,
+  -bugprone-reserved-identifier,
+  -bugprone-suspicious-missing-comma,
+  -bugprone-throwing-static-initialization,
+  -bugprone-use-after-move,
+  misc-redundant-expression,
+  misc-unused-using-decls,
+  modernize-deprecated-headers,
+  modernize-use-equals-delete,
+  modernize-use-nullptr,
+  performance-move-const-arg,
+  readability-duplicate-include,
+  readability-misleading-indentation,
+  readability-redundant-control-flow
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(Illumo|IllumoGame|IllEd|IllMeshViewer)[/\\](Include|Source|Tests|TestSupport)[/\\]'
+FormatStyle: file
+UseColor: true
+SystemHeaders: false

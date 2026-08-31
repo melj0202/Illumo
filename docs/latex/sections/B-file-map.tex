@@ -8,8 +8,10 @@
 \toprule
 \textbf{Path} & \textbf{Why it matters} \\
 \midrule
-\path{CMakeLists.txt} & Canonical workspace and aggregate tests/coverage \\
+\path{CMakeLists.txt} & Canonical workspace and aggregate tests/coverage/tidy \\
 \path{cmake/IllumoBuild.cmake} & Shared warnings, instrumentation, staging, test discovery \\
+\path{cmake/RunWorkspaceTidy.cmake} & First-party \texttt{clang-tidy} runner for \texttt{IllumoTidy} \\
+\path{.clang-tidy} & Workspace \texttt{clang-tidy} check set and header filter \\
 \path{Illumo/CMakeLists.txt} & Static library, TestSupport, library tests, standalone mode \\
 \path{Illumo/Include/Illumo/Engine/Illumo.h} & Public host/config/module-requirement API \\
 \path{Illumo/Include/Illumo/Engine/Application.h} & Declarative application seam and generic runner API \\

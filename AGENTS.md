@@ -284,21 +284,33 @@ cmake -S . -B build-coverage -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILE
 cmake --build build-coverage --target IllumoCoverage
 ```
 
-Documentation and formatting:
+Documentation, formatting, and clang-tidy:
 
 ```powershell
 ./docs/build.ps1
 clang-format -i <modified-cpp-or-header-files>
 ```
 
+`ILLUMO_ENABLE_CLANG_TIDY` defaults to ON and attaches LLVM `clang-tidy` to
+first-party C++ compilation. `.clang-tidy` treats diagnostics as errors.
+Vendored, generated, and third-party sources are excluded. Disable with
+`-DILLUMO_ENABLE_CLANG_TIDY=OFF` or `python build.py build --no-tidy`.
+Workspace `IllumoTidy` is the batch Ninja/Clang compile-database run.
+
+```powershell
+cmake -S . -B build-tidy -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DILLUMO_BUILD_DOCUMENTATION=OFF -DILLUMO_ENABLE_CLANG_TIDY=ON
+cmake --build build-tidy --target IllumoTidy
+```
+
+`python build.py tidy` configures the same tree under `build-workspace-tidy`.
+
 The default workspace build compiles both runners, runs every granular
 `Illumo.*` and `IllumoGame.*` case through `IllumoRunTests`, and builds
 `IllumoDocs` when PowerShell and
 `latexmk` are available. Headless tests do not prove the live OpenGL window,
 native dialogs, or non-Windows ports. Use Debug or Release GUI smoke tests and
-sanitizers when the affected risk requires them. No repository-wide
-`clang-tidy` target is configured; use the compile database and report the
-exact checks and translation units when static analysis is requested.
+sanitizers when the affected risk requires them. When static analysis is
+requested beyond `IllumoTidy`, report the extra checks and translation units.
 
 ## Project-wide invariants
 
@@ -372,8 +384,9 @@ A change is complete only when its scope is reviewed for accidental edits and:
 
 - affected targets build and relevant exact tests pass;
 - behavior changes pass the full Release build and labeled CTest suite above;
-- configured formatting, analysis, sanitizer, coverage, benchmark, or manual
-  checks relevant to the risk pass, with environment and limitations reported;
+- configured formatting, analysis (`IllumoTidy` when the change warrants
+  clang-tidy), sanitizer, coverage, benchmark, or manual checks relevant to
+  the risk pass, with environment and limitations reported;
 - new serious diagnostics are resolved and unrelated pre-existing failures are
   recorded without opportunistic fixes;
 - matching canonical documentation is synchronized in the same change;

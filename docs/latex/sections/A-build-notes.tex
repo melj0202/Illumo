@@ -27,6 +27,7 @@ python build.py test --test IllumoGame.Config.CanvasCommandLineOptions
 python build.py run -- -ww 1280 -wh 720
 python build.py stats
 python build.py stats --json
+python build.py tidy
 \end{lstlisting}
 Exact runner cases execute in dedicated manual-testing directories so file-backed
 configuration cannot mutate staged runtime data.
@@ -71,6 +72,25 @@ profiles from both instrumented products, writes
 vendored/system code, the concrete live window, and the OpenGL implementation
 are excluded; proportional manual Windows smoke tests cover the live
 graphics/dialog boundary.
+
+\subsection{clang-tidy}
+\begin{lstlisting}[language={}]
+cmake -S . -B build-tidy -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DILLUMO_BUILD_DOCUMENTATION=OFF -DILLUMO_ENABLE_CLANG_TIDY=ON
+cmake --build build-tidy --target IllumoTidy
+\end{lstlisting}
+\texttt{ILLUMO\_ENABLE\_CLANG\_TIDY} defaults to ON, so first-party C++
+compilation runs LLVM \texttt{clang-tidy} with \pathref{.clang-tidy} and treats
+diagnostics as errors (D-T3). Disable with
+\texttt{-DILLUMO\_ENABLE\_CLANG\_TIDY=OFF} or
+\texttt{python build.py build --no-tidy}.
+\texttt{python build.py tidy} configures a Ninja/Clang tree under
+\texttt{build-workspace-tidy} and builds the batch \texttt{IllumoTidy} target
+from \pathref{compile\_commands.json}. Vendored third-party sources are
+excluded. \texttt{modernize-use-auto} stays disabled because house style
+forbids \texttt{auto} (D-008).
 
 \subsection{Runtime staging}
 The Illumo-owned helper copies shaders, assets, notices, and licenses beside

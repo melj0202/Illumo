@@ -6,6 +6,8 @@ and formal decision log; they do not override either.
 
 Current records:
 
+- `2026-08-30-clang-tidy.md` — workspace `IllumoTidy` clang-tidy gate, Ninja/Clang
+  compile database, `python build.py tidy`, and first-party check set.
 - `2026-08-04-illumo-console-and-documentation.md` — product rename, console
   commands/editor/UI, save/load, fullscreen, build boundary, tests, and this
   documentation consolidation.

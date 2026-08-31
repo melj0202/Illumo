@@ -1752,6 +1752,46 @@ not a 2D engine vs 3D engine.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-T2 --- Workspace clang-tidy gate}
+\begin{decisionbox}[title={D-T2 \quad 2026-08-30}]
+\textbf{Decision:} First-party C++ is linted by workspace \texttt{clang-tidy}.
+\texttt{ILLUMO\_ENABLE\_CLANG\_TIDY=ON} adds \texttt{IllumoTidy}, which reads a
+Ninja/Clang \pathref{compile\_commands.json} and runs LLVM \texttt{clang-tidy}
+with \pathref{.clang-tidy}. Diagnostics are errors.
+\texttt{python build.py tidy} is the supported front end. The default MSVC
+workspace compile does not invoke clang-tidy. Combined coverage remains a
+separate Clang/LLVM tree (D-T1).\\
+\textbf{Why:} Manual one-off clang-tidy invocations were not a repeatable gate,
+and wrapping every MSVC compile would double build time and mix Clang's parser
+with MSVC flags.\\
+\textbf{Consequences:} Vendored third-party translation units are excluded.
+\texttt{modernize-use-auto} stays disabled because house style forbids
+\texttt{auto} (D-008). Standalone \texttt{cmake -S Illumo} rejects the tidy
+option the same way it rejects combined coverage.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-T3 --- clang-tidy runs during first-party compiles}
+\begin{decisionbox}[title={D-T3 \quad 2026-08-30}]
+\textbf{Decision:} \texttt{ILLUMO\_ENABLE\_CLANG\_TIDY} defaults to ON.
+First-party targets receive \texttt{CXX\_CLANG\_TIDY} and are linted during
+the ordinary compile with \pathref{.clang-tidy}. Diagnostics remain errors.
+Disable with \texttt{-DILLUMO\_ENABLE\_CLANG\_TIDY=OFF} or
+\texttt{python build.py build --no-tidy}. The batch \texttt{IllumoTidy} target
+and \texttt{python build.py tidy} remain available. Combined coverage still
+disables tidy so the instrumented tree stays a coverage-only configure
+(D-T1).\\
+\textbf{Why:} An opt-in-only Ninja target was not part of the default build
+the workspace actually runs.\\
+\textbf{Consequences:} LLVM \texttt{clang-tidy} must be on \texttt{PATH} unless
+the option is turned off. Vendored sources (including TracyClient) are not
+linted. Standalone \texttt{cmake -S Illumo} lints first-party library sources
+the same way; it still rejects combined coverage.\\
+\textbf{Supersedes:} D-T2's default-MSVC-does-not-run and standalone-reject
+details.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

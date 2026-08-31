@@ -21,5 +21,8 @@ ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 ```
 
 Combined LLVM coverage runs both runners and preserves the 85% production-line
-gate. Headless success does not replace live Windows OpenGL or native-dialog
-smoke tests.
+gate. Workspace `clang-tidy` runs on first-party C++ during the default build
+(`ILLUMO_ENABLE_CLANG_TIDY` defaults to ON) and also as the batch
+`IllumoTidy` target (`python build.py tidy`). Disable compile-time linting with
+`-DILLUMO_ENABLE_CLANG_TIDY=OFF` or `python build.py build --no-tidy`. Headless
+success does not replace live Windows OpenGL or native-dialog smoke tests.

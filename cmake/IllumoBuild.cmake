@@ -4,6 +4,24 @@ option(ILLUMO_ENABLE_TRACY
   "Enable Tracy instrumentation in optimized builds" OFF)
 option(ILLUMO_ENABLE_COVERAGE
   "Instrument both Illumo test runners for LLVM coverage" OFF)
+option(ILLUMO_ENABLE_CLANG_TIDY
+  "Run clang-tidy on first-party C++ during build" ON)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+get_filename_component(ILLUMO_WORKSPACE_SOURCE_ROOT
+  "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+if(ILLUMO_ENABLE_CLANG_TIDY)
+  find_program(ILLUMO_CLANG_TIDY_EXECUTABLE NAMES clang-tidy)
+  if(NOT ILLUMO_CLANG_TIDY_EXECUTABLE)
+    message(FATAL_ERROR
+      "ILLUMO_ENABLE_CLANG_TIDY=ON requires clang-tidy on PATH. "
+      "Install LLVM or configure with -DILLUMO_ENABLE_CLANG_TIDY=OFF.")
+  endif()
+  set(ILLUMO_CLANG_TIDY_COMMAND
+    "${ILLUMO_CLANG_TIDY_EXECUTABLE};--config-file=${ILLUMO_WORKSPACE_SOURCE_ROOT}/.clang-tidy;--quiet"
+    CACHE INTERNAL "clang-tidy command attached to first-party C++ targets")
+endif()
 
 if(NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   if(CMAKE_CONFIGURATION_TYPES)
@@ -45,6 +63,11 @@ function(illumo_configure_cpp_target target_name)
   )
   if(ILLUMO_ENABLE_TRACY)
     target_compile_definitions(${target_name} PRIVATE TRACY_ENABLE)
+  endif()
+
+  if(ILLUMO_ENABLE_CLANG_TIDY)
+    set_target_properties(${target_name} PROPERTIES
+      CXX_CLANG_TIDY "${ILLUMO_CLANG_TIDY_COMMAND}")
   endif()
 
   if(ILLUMO_ENABLE_COVERAGE)

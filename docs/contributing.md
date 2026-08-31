@@ -7,7 +7,15 @@
 3. Do not add recursive code.
 4. Match the surrounding C++23 style and keep ownership explicit.
 5. **Code Formatting:** The project uses `clang-format` based on Mozilla style (80-column limit, 2-space indent). You must run `clang-format` on your changes before finalizing them.
-6. **Naming Conventions:** Enforce the following conventions on new/modified code:
+6. **Static analysis:** First-party C++ is linted by `clang-tidy` during the
+   normal build (`ILLUMO_ENABLE_CLANG_TIDY` defaults to ON). The check set is
+   `.clang-tidy`; diagnostics are errors. Disable with
+   `-DILLUMO_ENABLE_CLANG_TIDY=OFF` or `python build.py build --no-tidy`.
+   `python build.py tidy` runs the batch `IllumoTidy` target. Do not lint
+   vendored or generated files. Checks that conflict with house style
+   (including `modernize-use-auto`) or that would require unrelated mass
+   cleanup stay disabled in `.clang-tidy`.
+7. **Naming Conventions:** Enforce the following conventions on new/modified code:
    - **Classes and structs:** `PascalCase` (e.g., `RenderQueue`)
    - **Enums and Enum values:** `PascalCase` (e.g., `BlendMode`, `BlendMode::AlphaBlend`)
    - **Functions:** `camelCase` (e.g., `submitCommand()`)
