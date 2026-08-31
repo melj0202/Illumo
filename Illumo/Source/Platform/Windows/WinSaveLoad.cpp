@@ -36,7 +36,7 @@ std::string
 SaveLoad::GetLoadLocation(const SaveLoadDialogSpec& specification)
 {
   OPENFILENAMEA ofn;
-  char file[256] = {};
+  char file[4096] = {};
   seedDialogFilename(file, sizeof(file), specification);
   const std::string filter = buildDialogFilter(specification);
 
@@ -44,13 +44,13 @@ SaveLoad::GetLoadLocation(const SaveLoadDialogSpec& specification)
   ofn.lStructSize = sizeof(ofn);
   ofn.hwndOwner = NULL;
   ofn.lpstrFile = file;
-  ofn.nMaxFile = sizeof(file);
+  ofn.nMaxFile = static_cast<DWORD>(sizeof(file));
   ofn.lpstrFilter = filter.c_str();
   ofn.nFilterIndex = 1;
   ofn.lpstrFileTitle = NULL;
   ofn.nMaxFileTitle = 0;
   ofn.lpstrInitialDir = NULL;
-  ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+  ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
   if (!GetOpenFileNameA(&ofn)) {
     return "";
@@ -62,7 +62,7 @@ std::string
 SaveLoad::GetSaveLocation(const SaveLoadDialogSpec& specification)
 {
   OPENFILENAMEA ofn;
-  char file[256] = {};
+  char file[4096] = {};
   seedDialogFilename(file, sizeof(file), specification);
   const std::string filter = buildDialogFilter(specification);
 
@@ -70,13 +70,13 @@ SaveLoad::GetSaveLocation(const SaveLoadDialogSpec& specification)
   ofn.lStructSize = sizeof(ofn);
   ofn.hwndOwner = NULL;
   ofn.lpstrFile = file;
-  ofn.nMaxFile = sizeof(file);
+  ofn.nMaxFile = static_cast<DWORD>(sizeof(file));
   ofn.lpstrFilter = filter.c_str();
   ofn.nFilterIndex = 1;
   ofn.lpstrFileTitle = NULL;
   ofn.nMaxFileTitle = 0;
   ofn.lpstrInitialDir = NULL;
-  ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+  ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
 
   if (!GetSaveFileNameA(&ofn)) {
     return "";
