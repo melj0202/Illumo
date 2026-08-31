@@ -12,7 +12,7 @@
 MeshViewerUi::MeshViewerUi(IRenderWindow* window, Renderer* renderer)
   : m_window(window)
   , m_renderer(renderer)
-  , m_visual(512u)
+  , m_visual(2048u)
   , m_fontSize(kDefaultFontSize)
   , m_mouseWasDown(false)
   , m_consumedPress(false)
@@ -79,6 +79,8 @@ MeshViewerUi::containsScreenPoint(float x, float y) const
   const float virtualHeight =
     static_cast<float>(dimensions[1]) / (scale > 0.0f ? scale : 1.0f);
 
+  const float fontScale = m_fontSize / kDefaultFontSize;
+
   // Top header bar
   if (y <= kHeaderHeight) {
     return true;
@@ -88,13 +90,30 @@ MeshViewerUi::containsScreenPoint(float x, float y) const
     return true;
   }
   // Info card area (top-left below header)
-  if (m_metadata.hasMesh && x <= 260.0f && y <= kHeaderHeight + 160.0f) {
+  if (m_metadata.hasMesh && x <= 260.0f * fontScale &&
+      y <= kHeaderHeight + 170.0f * fontScale) {
     return true;
   }
   // Empty state card area
-  if (!m_metadata.hasMesh && x >= virtualWidth * 0.5f - 240.0f &&
-      x <= virtualWidth * 0.5f + 240.0f && y >= virtualHeight * 0.4f - 40.0f &&
-      y <= virtualHeight * 0.4f + 60.0f) {
+  const bool isCompact = virtualWidth < 800.0f;
+  const bool isVeryCompact = virtualWidth < 580.0f;
+  const std::string emptyHint =
+    isVeryCompact
+      ? "Press [O] or 'Open' to load .obj"
+      : (isCompact
+           ? "Press [O] or click 'Open' to view .obj"
+           : "Press [O] or click 'Open Mesh' to view a Wavefront (.obj) file");
+
+  const float emptyW =
+    std::min(virtualWidth - 24.0f,
+             std::max(300.0f * fontScale,
+                      GuiKit::estimateTextWidth(emptyHint, m_fontSize) +
+                        40.0f * fontScale));
+  const float emptyH = 76.0f * fontScale;
+  const float emptyX = (virtualWidth - emptyW) * 0.5f;
+  const float emptyY = (virtualHeight - emptyH) * 0.45f;
+  if (!m_metadata.hasMesh && x >= emptyX && x <= emptyX + emptyW &&
+      y >= emptyY && y <= emptyY + emptyH) {
     return true;
   }
 
@@ -196,13 +215,16 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
                           GuiAlignment::Left);
 
   // Header Buttons
-  float btnX = 180.0f;
+  const float fontScale = m_fontSize / kDefaultFontSize;
+  const float titleWidth =
+    GuiKit::estimateTextWidth(title, m_fontSize + 2.0f) + 24.0f * fontScale;
+  float btnX = std::max(180.0f, titleWidth);
   const float btnY = 5.0f;
   const float btnH = 26.0f;
 
   auto addButton = [&](const std::string& label,
                        MeshViewerAction action,
-                       float width,
+                       float minWidth,
                        bool active = false) {
     const size_t index = m_buttonDefs.size();
     const bool hovered = (static_cast<int>(index) == m_hoveredButton);
@@ -212,6 +234,9 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
     } else if (hovered) {
       state = GuiButtonState::Hover;
     }
+    const float textW = GuiKit::estimateTextWidth(label, m_fontSize);
+    const float width =
+      std::max(minWidth * fontScale, textW + 20.0f * fontScale);
     GuiKit::drawButton(m_visual,
                        btnX,
                        btnY,
@@ -225,27 +250,50 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
     btnX += width + 8.0f;
   };
 
-  addButton("Open Mesh... [O]", MeshViewerAction::OpenMesh, 135.0f);
-  addButton("Reset Camera [R/F]", MeshViewerAction::ResetView, 145.0f);
-  addButton(std::string("Grid: ") + (m_showGrid ? "ON" : "OFF"),
+  // Header Buttons: calculate compact vs full labels based on virtualWidth
+  const bool isCompact = virtualWidth < 800.0f;
+  const bool isVeryCompact = virtualWidth < 580.0f;
+
+  const std::string openLabel =
+    isVeryCompact ? "Open" : (isCompact ? "Open [O]" : "Open Mesh... [O]");
+  const std::string resetLabel =
+    isVeryCompact ? "Reset" : (isCompact ? "Reset [R]" : "Reset Camera [R/F]");
+  const std::string gridLabel =
+    isVeryCompact ? (m_showGrid ? "G:ON" : "G:OFF")
+                  : (std::string("Grid: ") + (m_showGrid ? "ON" : "OFF"));
+  const std::string wireLabel =
+    isVeryCompact ? (m_showWireframe ? "W:ON" : "W:OFF")
+                  : (std::string("Wire: ") + (m_showWireframe ? "ON" : "OFF"));
+  const std::string axesLabel =
+    isVeryCompact ? (m_showAxes ? "A:ON" : "A:OFF")
+                  : (std::string("Axes: ") + (m_showAxes ? "ON" : "OFF"));
+
+  addButton(openLabel,
+            MeshViewerAction::OpenMesh,
+            isVeryCompact ? 50.0f : (isCompact ? 80.0f : 135.0f));
+  addButton(resetLabel,
+            MeshViewerAction::ResetView,
+            isVeryCompact ? 55.0f : (isCompact ? 85.0f : 145.0f));
+  addButton(gridLabel,
             MeshViewerAction::ToggleGrid,
-            85.0f,
+            isVeryCompact ? 50.0f : 80.0f,
             m_showGrid);
-  addButton(std::string("Wire: ") + (m_showWireframe ? "ON" : "OFF"),
+  addButton(wireLabel,
             MeshViewerAction::ToggleWireframe,
-            85.0f,
+            isVeryCompact ? 50.0f : 80.0f,
             m_showWireframe);
-  addButton(std::string("Axes: ") + (m_showAxes ? "ON" : "OFF"),
+  addButton(axesLabel,
             MeshViewerAction::ToggleAxes,
-            85.0f,
+            isVeryCompact ? 50.0f : 80.0f,
             m_showAxes);
 
   // 2. Info Card / HUD (Top-Left under header)
   if (m_metadata.hasMesh) {
-    const float cardX = 12.0f;
+    const float cardX = 12.0f * fontScale;
     const float cardY = kHeaderHeight + 12.0f;
-    const float cardW = 240.0f;
-    const float cardH = 150.0f;
+    const float cardW = 250.0f * fontScale;
+    const float cardH = 154.0f * fontScale;
+    const float headerH = 26.0f * fontScale;
 
     GuiKit::drawShadow(m_visual, cardX, cardY, cardW, cardH);
     GuiKit::drawCard(m_visual, cardX, cardY, cardW, cardH);
@@ -253,50 +301,49 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
                           cardX,
                           cardY,
                           cardW,
-                          26.0f,
+                          headerH,
                           "Mesh Info",
                           m_fontSize,
                           UiTheme::panelRaised(),
                           UiTheme::textPrimary(),
                           UiTheme::accent());
 
-    float lineY = cardY + 34.0f;
-    const float lineSpacing = 18.0f;
-    const float labelW = 90.0f;
+    float lineY = cardY + headerH + 8.0f * fontScale;
+    const float lineSpacing = 20.0f * fontScale;
 
     GuiKit::drawLabelValue(m_visual,
                            "File:",
                            m_metadata.filename,
-                           cardX + 10.0f,
+                           cardX + 10.0f * fontScale,
                            lineY,
-                           labelW,
+                           cardW - 20.0f * fontScale,
                            m_fontSize);
     lineY += lineSpacing;
 
     GuiKit::drawLabelValue(m_visual,
                            "Vertices:",
                            std::to_string(m_metadata.vertexCount),
-                           cardX + 10.0f,
+                           cardX + 10.0f * fontScale,
                            lineY,
-                           labelW,
+                           cardW - 20.0f * fontScale,
                            m_fontSize);
     lineY += lineSpacing;
 
     GuiKit::drawLabelValue(m_visual,
                            "Triangles:",
                            std::to_string(m_metadata.triangleCount),
-                           cardX + 10.0f,
+                           cardX + 10.0f * fontScale,
                            lineY,
-                           labelW,
+                           cardW - 20.0f * fontScale,
                            m_fontSize);
     lineY += lineSpacing;
 
     GuiKit::drawLabelValue(m_visual,
                            "Submeshes:",
                            std::to_string(m_metadata.submeshCount),
-                           cardX + 10.0f,
+                           cardX + 10.0f * fontScale,
                            lineY,
-                           labelW,
+                           cardW - 20.0f * fontScale,
                            m_fontSize);
     lineY += lineSpacing;
 
@@ -307,14 +354,24 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
     GuiKit::drawLabelValue(m_visual,
                            "Size:",
                            dimStream.str(),
-                           cardX + 10.0f,
+                           cardX + 10.0f * fontScale,
                            lineY,
-                           labelW,
+                           cardW - 20.0f * fontScale,
                            m_fontSize);
   } else {
     // Empty state card
-    const float emptyW = 440.0f;
-    const float emptyH = 70.0f;
+    const std::string emptyHint =
+      isVeryCompact ? "Press [O] or 'Open' to load .obj"
+                    : (isCompact ? "Press [O] or click 'Open' to view .obj"
+                                 : "Press [O] or click 'Open Mesh' to view a "
+                                   "Wavefront (.obj) file");
+
+    const float emptyW =
+      std::min(virtualWidth - 24.0f,
+               std::max(300.0f * fontScale,
+                        GuiKit::estimateTextWidth(emptyHint, m_fontSize) +
+                          40.0f * fontScale));
+    const float emptyH = 76.0f * fontScale;
     const float emptyX = (virtualWidth - emptyW) * 0.5f;
     const float emptyY = (virtualHeight - emptyH) * 0.45f;
 
@@ -323,16 +380,15 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
     GuiKit::drawTextCentered(m_visual,
                              "No 3D Mesh Loaded",
                              emptyX + emptyW * 0.5f,
-                             emptyY + 14.0f,
+                             emptyY + 16.0f * fontScale,
                              m_fontSize + 2.0f,
                              UiTheme::textPrimary());
-    GuiKit::drawTextCentered(
-      m_visual,
-      "Press [O] or click 'Open Mesh' to view a Wavefront (.obj) file",
-      emptyX + emptyW * 0.5f,
-      emptyY + 38.0f,
-      m_fontSize,
-      UiTheme::textMuted());
+    GuiKit::drawTextCentered(m_visual,
+                             emptyHint,
+                             emptyX + emptyW * 0.5f,
+                             emptyY + 42.0f * fontScale,
+                             m_fontSize,
+                             UiTheme::textMuted());
   }
 
   // 3. Toast notification (if active)
@@ -372,27 +428,36 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
   GuiKit::drawDivider(m_visual, 0.0f, statusY, virtualWidth, false);
 
   const std::string hintText =
-    "[LMB/RMB: Orbit  MMB/WASD: Pan  Scroll: Zoom  Q/E: Roll  O: Open  F/R: "
-    "Reset  ~: Console]";
+    isVeryCompact
+      ? "[LMB: Orbit  MMB: Pan  Scroll: Zoom]"
+      : (isCompact
+           ? "[LMB: Orbit  MMB/WASD: Pan  Scroll: Zoom  O: Open  R: Reset]"
+           : "[LMB/RMB: Orbit  MMB/WASD: Pan  Scroll: Zoom  Q/E: Roll  O: "
+             "Open  F/R: Reset  ~: Console]");
+
+  const float camInfoWidth = isVeryCompact ? 160.0f : 240.0f;
   GuiKit::drawTextAligned(m_visual,
                           hintText,
                           12.0f,
                           statusY + 5.0f,
-                          virtualWidth * 0.6f,
+                          std::max(50.0f, virtualWidth - camInfoWidth - 24.0f),
                           m_fontSize - 1.0f,
                           UiTheme::textMuted(),
                           GuiAlignment::Left);
 
   std::ostringstream camStream;
-  camStream << "Yaw: " << static_cast<int>(std::round(m_yawDeg))
-            << " deg | Pitch: " << static_cast<int>(std::round(m_pitchDeg))
-            << " deg | Dist: " << std::fixed << std::setprecision(2)
-            << m_distance;
+  if (isVeryCompact) {
+    camStream << "D: " << std::fixed << std::setprecision(1) << m_distance;
+  } else {
+    camStream << "Yaw: " << static_cast<int>(std::round(m_yawDeg))
+              << " deg | Dist: " << std::fixed << std::setprecision(1)
+              << m_distance;
+  }
   GuiKit::drawTextAligned(m_visual,
                           camStream.str(),
-                          virtualWidth - 280.0f,
+                          virtualWidth - camInfoWidth - 12.0f,
                           statusY + 5.0f,
-                          268.0f,
+                          camInfoWidth,
                           m_fontSize - 1.0f,
                           UiTheme::textPrimary(),
                           GuiAlignment::Right);

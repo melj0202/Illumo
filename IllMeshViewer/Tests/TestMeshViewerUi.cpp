@@ -74,6 +74,45 @@ testUiMetadataAndToast()
            "metadata filename preserved");
 }
 
+static void
+testUiFontSizeScaling()
+{
+  testSection("MeshViewerUi: font size scaling and dynamic button widths");
+  UiFixture fixture;
+
+  fixture.ui.setFontSize(18.0f);
+  fixture.ui.update(&fixture.input, 0.016f);
+  testTrue(
+    g, fixture.ui.buttonCountForTesting() >= 5u, "buttons with large font");
+
+  // Empty state card bounds should scale properly
+  testTrue(g,
+           fixture.ui.containsScreenPoint(640.0f, 320.0f),
+           "center empty card hit-test with scaled font");
+}
+
+static void
+testUiSmallWindowLayout()
+{
+  testSection("MeshViewerUi: responsive small window layout and hit testing");
+  NullRenderWindow smallWindow(640, 360);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&smallWindow, &env, &camera, &mock, false);
+  InputManager input(nullptr);
+  MeshViewerUi ui(&smallWindow, &renderer);
+
+  ui.update(&input, 0.016f);
+  testTrue(g, ui.buttonCountForTesting() >= 5u, "buttons on small window");
+  testTrue(g,
+           ui.containsScreenPoint(320.0f, 160.0f),
+           "center empty card hit-test on 640x360 window");
+  testTrue(g, ui.containsScreenPoint(50.0f, 10.0f), "header hit-test");
+  testTrue(g, ui.containsScreenPoint(50.0f, 350.0f), "status bar hit-test");
+}
+
 static int
 runUiCase(void (*testFunction)())
 {
@@ -89,4 +128,8 @@ registerMeshViewerUiTests(IllumoTestRegistry& registry)
                []() { return runUiCase(testUiLayoutAndHits); });
   registry.add("IllMeshViewer.Ui.MetadataAndToast",
                []() { return runUiCase(testUiMetadataAndToast); });
+  registry.add("IllMeshViewer.Ui.FontSizeScaling",
+               []() { return runUiCase(testUiFontSizeScaling); });
+  registry.add("IllMeshViewer.Ui.SmallWindowLayout",
+               []() { return runUiCase(testUiSmallWindowLayout); });
 }

@@ -112,6 +112,7 @@ RenderWindow::initialize()
   }
   glfwSetWindowUserPointer(window, this);
   glfwSetWindowSizeCallback(window, windowSizeCallback);
+  glfwSetWindowSizeLimits(window, 640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
   // Set initial viewport size based on current framebuffer size
   int fbWidth = 0;
   int fbHeight = 0;
