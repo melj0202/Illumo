@@ -1,5 +1,5 @@
-#include "thirdparty/stb/stb_easy_font.h"
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IMesh.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -470,9 +470,10 @@ GameVisual::itemStyle(const VisualItem& item) const
   if (renderer == nullptr) {
     return RenderStyleHandle{};
   }
-  return renderer->getBuiltinStyleHandle(item.kind == VisualItemKind::Sprite
-                                           ? RenderStyleId::Sprite
-                                           : RenderStyleId::Shape);
+  return renderer->getBuiltinStyleHandle(
+    (item.kind == VisualItemKind::Sprite || item.kind == VisualItemKind::Text)
+      ? RenderStyleId::Sprite
+      : RenderStyleId::Shape);
 }
 
 GameVisual::Point2
@@ -719,81 +720,59 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
   if (text.content.empty()) {
     return true;
   }
-  const unsigned int remaining =
-    maxQuadCount - shapeQuadCount - spriteQuadCount;
-  if (remaining == 0) {
-    return false;
+  std::shared_ptr<Font> font = text.font ? text.font : Font::getDefaultFont();
+  if (font == nullptr) {
+    return true;
   }
-  unsigned int estimatedQuads =
-    static_cast<unsigned int>(text.content.size() * 16u);
-  if (estimatedQuads < 32u) {
-    estimatedQuads = 32u;
-  }
-  if (estimatedQuads > remaining) {
-    estimatedQuads = remaining;
-  }
-  size_t tempBytes =
-    static_cast<size_t>(estimatedQuads) * 4 * sizeof(ShapeVertex);
-  if (textTessellateScratch.size() < tempBytes) {
-    textTessellateScratch.resize(tempBytes);
-  }
-  unsigned char color[4] = {
-    text.color.r, text.color.g, text.color.b, text.color.a
-  };
-  std::string sanitizedText = text.content;
-  for (char& ch : sanitizedText) {
-    const unsigned char uch = static_cast<unsigned char>(ch);
-    if (uch != '\n' && (uch < 32 || uch > 126)) {
-      ch = '?';
+
+  const float scale = font->getMetrics().pixelSize > 0.0f
+                        ? (text.sizePt / font->getMetrics().pixelSize)
+                        : 1.0f;
+  const float lineHeight = font->getLineHeight(text.sizePt);
+  const float ascender = font->getAscender(text.sizePt);
+
+  float penX = 0.0f;
+  float penY = 0.0f;
+
+  for (size_t i = 0; i < text.content.size(); ++i) {
+    const char ch = text.content[i];
+    if (ch == '\n') {
+      penX = 0.0f;
+      penY += lineHeight;
+      continue;
     }
-  }
-  char* mutableText = sanitizedText.data();
-  int quadCount = stb_easy_font_print(0.0f,
-                                      0.0f,
-                                      mutableText,
-                                      color,
-                                      textTessellateScratch.data(),
-                                      static_cast<int>(tempBytes));
-  if (quadCount < 0) {
-    quadCount = 0;
-  }
-  if (quadCount >= static_cast<int>(estimatedQuads) &&
-      estimatedQuads < remaining) {
-    estimatedQuads = remaining;
-    tempBytes = static_cast<size_t>(estimatedQuads) * 4 * sizeof(ShapeVertex);
-    if (textTessellateScratch.size() < tempBytes) {
-      textTessellateScratch.resize(tempBytes);
+    const GlyphInfo* glyph =
+      font->getGlyph(static_cast<char32_t>(static_cast<unsigned char>(ch)));
+    if (glyph == nullptr) {
+      continue;
     }
-    quadCount = stb_easy_font_print(0.0f,
-                                    0.0f,
-                                    mutableText,
-                                    color,
-                                    textTessellateScratch.data(),
-                                    static_cast<int>(tempBytes));
-    if (quadCount < 0) {
-      quadCount = 0;
+    if (glyph->visible && glyph->width > 0.0f && glyph->height > 0.0f) {
+      if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
+        return false;
+      }
+      const float x0 = text.x + penX + glyph->bearingX * scale;
+      const float y0 = text.y + penY + (ascender - glyph->bearingY * scale);
+      const float x1 = x0 + glyph->width * scale;
+      const float y1 = y0 + glyph->height * scale;
+
+      Point2 p0 = applyHostTransform({ x0, y0 }, hostBounds);
+      Point2 p1 = applyHostTransform({ x1, y0 }, hostBounds);
+      Point2 p2 = applyHostTransform({ x1, y1 }, hostBounds);
+      Point2 p3 = applyHostTransform({ x0, y1 }, hostBounds);
+
+      const unsigned int base = spriteQuadCount * 4;
+      const ColorRgba color = text.color;
+      spriteVerts[base + 0] = { p0.x,    p0.y,    0.0f,      color.r,  color.g,
+                                color.b, color.a, glyph->u0, glyph->v0 };
+      spriteVerts[base + 1] = { p1.x,    p1.y,    0.0f,      color.r,  color.g,
+                                color.b, color.a, glyph->u1, glyph->v0 };
+      spriteVerts[base + 2] = { p2.x,    p2.y,    0.0f,      color.r,  color.g,
+                                color.b, color.a, glyph->u1, glyph->v1 };
+      spriteVerts[base + 3] = { p3.x,    p3.y,    0.0f,      color.r,  color.g,
+                                color.b, color.a, glyph->u0, glyph->v1 };
+      spriteQuadCount += 1;
     }
-  }
-  if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount +
-                         static_cast<unsigned int>(quadCount))) {
-    quadCount =
-      static_cast<int>(maxQuadCount - shapeQuadCount - spriteQuadCount);
-  }
-  const float scale = text.sizePt / 12.0f;
-  const ShapeVertex* source =
-    reinterpret_cast<const ShapeVertex*>(textTessellateScratch.data());
-  for (int q = 0; q < quadCount; ++q) {
-    Point2 points[4];
-    for (int vertex = 0; vertex < 4; ++vertex) {
-      const ShapeVertex& value = source[q * 4 + vertex];
-      points[vertex].x = value.x * scale + text.x;
-      points[vertex].y = value.y * scale + text.y;
-      points[vertex] = applyHostTransform(points[vertex], hostBounds);
-    }
-    if (!pushShapeQuad(
-          points[0], points[1], points[2], points[3], text.color)) {
-      return false;
-    }
+    penX += glyph->advanceX * scale;
   }
   return true;
 }
@@ -866,85 +845,93 @@ GameVisual::rebuildGeometry()
       continue;
     }
 
-    const unsigned int first = shapeQuadCount;
     if (item.kind == VisualItemKind::Text) {
       if (item.index >= texts.size() || !texts[item.index].visible) {
         continue;
       }
-      if (!pushTextRun(texts[item.index], hostBounds)) {
+      const TextPrimitive& text = texts[item.index];
+      std::shared_ptr<Font> font =
+        text.font ? text.font : Font::getDefaultFont();
+      TextureHandle fontTex =
+        font ? font->getTextureHandle(renderer) : TextureHandle{};
+      const unsigned int first = spriteQuadCount;
+      if (!pushTextRun(text, hostBounds)) {
+        break;
+      }
+      appendBatch(BatchKind::Sprite,
+                  styleHandle,
+                  fontTex,
+                  first,
+                  spriteQuadCount - first);
+      continue;
+    }
+
+    const unsigned int first = shapeQuadCount;
+    if (item.index >= shapes.size() || !shapes[item.index].visible) {
+      continue;
+    }
+    const ShapePrimitive& shape = shapes[item.index];
+    if (shape.kind == ShapeKind::Line) {
+      Rect2 bounds;
+      bounds.x = std::min(shape.x0, shape.x1);
+      bounds.y = std::min(shape.y0, shape.y1);
+      bounds.w = std::abs(shape.x1 - shape.x0);
+      bounds.h = std::abs(shape.y1 - shape.y0);
+      Point2 p0 =
+        transformPoint({ shape.x0, shape.y0 }, bounds, shape.transform);
+      Point2 p1 =
+        transformPoint({ shape.x1, shape.y1 }, bounds, shape.transform);
+      if (!pushLineAsQuad(
+            p0, p1, std::max(shape.lineWidth, 1.0f), shape.color, hostBounds)) {
+        break;
+      }
+    } else if (shape.kind == ShapeKind::FilledRect) {
+      const Rect2 bounds = shape.rect;
+      Point2 p0 =
+        transformPoint({ bounds.x, bounds.y }, bounds, shape.transform);
+      Point2 p1 = transformPoint(
+        { bounds.x + bounds.w, bounds.y }, bounds, shape.transform);
+      Point2 p2 = transformPoint(
+        { bounds.x + bounds.w, bounds.y + bounds.h }, bounds, shape.transform);
+      Point2 p3 = transformPoint(
+        { bounds.x, bounds.y + bounds.h }, bounds, shape.transform);
+      if (!pushShapeQuad(applyHostTransform(p0, hostBounds),
+                         applyHostTransform(p1, hostBounds),
+                         applyHostTransform(p2, hostBounds),
+                         applyHostTransform(p3, hostBounds),
+                         shape.color)) {
+        break;
+      }
+    } else if (shape.kind == ShapeKind::FilledEllipse) {
+      if (!pushFilledEllipse(shape, hostBounds)) {
+        break;
+      }
+    } else if (shape.kind == ShapeKind::FilledTriangle) {
+      if (!pushFilledTriangle(shape, hostBounds)) {
         break;
       }
     } else {
-      if (item.index >= shapes.size() || !shapes[item.index].visible) {
-        continue;
+      const Rect2 bounds = shape.rect;
+      const float thickness = std::max(shape.lineWidth, 1.0f);
+      Point2 corners[4] = {
+        { bounds.x, bounds.y },
+        { bounds.x + bounds.w, bounds.y },
+        { bounds.x + bounds.w, bounds.y + bounds.h },
+        { bounds.x, bounds.y + bounds.h },
+      };
+      for (int i = 0; i < 4; ++i) {
+        corners[i] = transformPoint(corners[i], bounds, shape.transform);
       }
-      const ShapePrimitive& shape = shapes[item.index];
-      if (shape.kind == ShapeKind::Line) {
-        Rect2 bounds;
-        bounds.x = std::min(shape.x0, shape.x1);
-        bounds.y = std::min(shape.y0, shape.y1);
-        bounds.w = std::abs(shape.x1 - shape.x0);
-        bounds.h = std::abs(shape.y1 - shape.y0);
-        Point2 p0 =
-          transformPoint({ shape.x0, shape.y0 }, bounds, shape.transform);
-        Point2 p1 =
-          transformPoint({ shape.x1, shape.y1 }, bounds, shape.transform);
-        if (!pushLineAsQuad(p0,
-                            p1,
-                            std::max(shape.lineWidth, 1.0f),
-                            shape.color,
-                            hostBounds)) {
-          break;
-        }
-      } else if (shape.kind == ShapeKind::FilledRect) {
-        const Rect2 bounds = shape.rect;
-        Point2 p0 =
-          transformPoint({ bounds.x, bounds.y }, bounds, shape.transform);
-        Point2 p1 = transformPoint(
-          { bounds.x + bounds.w, bounds.y }, bounds, shape.transform);
-        Point2 p2 = transformPoint({ bounds.x + bounds.w, bounds.y + bounds.h },
-                                   bounds,
-                                   shape.transform);
-        Point2 p3 = transformPoint(
-          { bounds.x, bounds.y + bounds.h }, bounds, shape.transform);
-        if (!pushShapeQuad(applyHostTransform(p0, hostBounds),
-                           applyHostTransform(p1, hostBounds),
-                           applyHostTransform(p2, hostBounds),
-                           applyHostTransform(p3, hostBounds),
-                           shape.color)) {
-          break;
-        }
-      } else if (shape.kind == ShapeKind::FilledEllipse) {
-        if (!pushFilledEllipse(shape, hostBounds)) {
-          break;
-        }
-      } else if (shape.kind == ShapeKind::FilledTriangle) {
-        if (!pushFilledTriangle(shape, hostBounds)) {
-          break;
-        }
-      } else {
-        const Rect2 bounds = shape.rect;
-        const float thickness = std::max(shape.lineWidth, 1.0f);
-        Point2 corners[4] = {
-          { bounds.x, bounds.y },
-          { bounds.x + bounds.w, bounds.y },
-          { bounds.x + bounds.w, bounds.y + bounds.h },
-          { bounds.x, bounds.y + bounds.h },
-        };
-        for (int i = 0; i < 4; ++i) {
-          corners[i] = transformPoint(corners[i], bounds, shape.transform);
-        }
-        bool ok = true;
-        for (int i = 0; i < 4; ++i) {
-          ok = ok && pushLineAsQuad(corners[i],
-                                    corners[(i + 1) % 4],
-                                    thickness,
-                                    shape.color,
-                                    hostBounds);
-        }
-        if (!ok) {
-          break;
-        }
+      bool ok = true;
+      for (int i = 0; i < 4; ++i) {
+        ok = ok && pushLineAsQuad(corners[i],
+                                  corners[(i + 1) % 4],
+                                  thickness,
+                                  shape.color,
+                                  hostBounds);
+      }
+      if (!ok) {
+        break;
       }
     }
     appendBatch(BatchKind::Shape,

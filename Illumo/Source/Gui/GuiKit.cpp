@@ -1,4 +1,5 @@
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Rendering/Font.h>
 #include <algorithm>
 #include <cmath>
 
@@ -22,7 +23,9 @@ GuiKit::drawTextCentered(GameVisual& visual,
                          float sizePt,
                          ColorRgba color)
 {
-  const float textW = estimateTextWidth(text, sizePt);
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  const float textW = font ? font->measureText(text, sizePt).width
+                           : estimateTextWidth(text, sizePt);
   const float textX = centerX - textW * 0.5f;
   const float textY = centerY - sizePt * 0.5f;
   visual.addText(text, textX, textY, sizePt, color);
@@ -38,7 +41,9 @@ GuiKit::drawTextAligned(GameVisual& visual,
                         ColorRgba color,
                         GuiAlignment alignment)
 {
-  const float textW = estimateTextWidth(text, sizePt);
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  const float textW = font ? font->measureText(text, sizePt).width
+                           : estimateTextWidth(text, sizePt);
   float drawX = x;
   if (alignment == GuiAlignment::Center) {
     drawX = x + std::max(0.0f, (width - textW) * 0.5f);
@@ -60,7 +65,9 @@ GuiKit::drawLabelValue(GameVisual& visual,
                        ColorRgba valueColor)
 {
   visual.addText(label, x, y, sizePt, labelColor);
-  const float valW = estimateTextWidth(value, sizePt);
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  const float valW = font ? font->measureText(value, sizePt).width
+                          : estimateTextWidth(value, sizePt);
   const float valX = x + std::max(0.0f, width - valW);
   visual.addText(value, valX, y, sizePt, valueColor);
 }

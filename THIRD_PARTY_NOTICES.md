@@ -19,10 +19,11 @@ IllumoGame executable.
 | [GLFW 3.4](https://www.glfw.org/) | Windowing and input | zlib/libpng license | Copyright (c) 2002-2006 Marcus Geelnard and Copyright (c) 2006-2019 Camilla Löwy. | [`LICENSE.md`](Illumo/thirdparty/glfw-3.4/LICENSE.md) |
 | [GLM 1.0.0](https://github.com/g-truc/glm) | Vector and matrix math | MIT License | Copyright (c) 2005 - G-Truc Creation. | [`copying.txt`](Illumo/thirdparty/glm/copying.txt) |
 | [JSON for Modern C++ 3.12.0](https://github.com/nlohmann/json) | Environment-variable persistence | MIT License | Copyright (c) 2013-2025 Niels Lohmann. | [`LICENSE.MIT`](Illumo/thirdparty/json/LICENSE.MIT) |
-| [stb](https://github.com/nothings/stb) (`stb_easy_font` 1.1 and `stb_image` 2.30) | Debug text geometry and image loading | MIT License | Copyright (c) 2017 Sean Barrett. | [`LICENSE`](Illumo/thirdparty/stb/LICENSE); the same notice is retained at the end of each header |
+| [stb](https://github.com/nothings/stb) (`stb_image` 2.30) | Image loading | MIT License | Copyright (c) 2017 Sean Barrett. | [`LICENSE`](Illumo/thirdparty/stb/LICENSE); the same notice is retained at the end of each header |
 | [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) | Wavefront OBJ mesh loading | MIT License | Copyright (c) 2012-Present Syoyo Fujita and many contributors. | [`LICENSE`](Illumo/thirdparty/tinyobjloader/LICENSE) |
 | [Tracy Profiler 0.13.1](https://github.com/wolfpld/tracy) | Debug profiling instrumentation | BSD 3-Clause License | Copyright (c) 2017-2025 Bartosz Taudul. | [`LICENSE`](Illumo/thirdparty/tracy-0.13.1/LICENSE) |
 | [Handjet](https://github.com/rosettatype/Handjet/) | Application TrueType font | SIL Open Font License 1.1 | Copyright 2018 The Handjet Project Authors. | [`OFL.txt`](Illumo/Assets/Fonts/Handjet/OFL.txt) |
+| [Space Mono](https://github.com/googlefonts/spacemono) | Application TrueType font | SIL Open Font License 1.1 | Copyright 2016 The Space Mono Project Authors. | [`OFL.txt`](Illumo/Assets/Fonts/Space_Mono/OFL.txt) |
 
 The repository also contains `stb_image_resize2` 2.10 and `stb_truetype` 1.26.
 They are not referenced by the current Illumo targets, but are covered by the

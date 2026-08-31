@@ -1,5 +1,5 @@
-#include "thirdparty/stb/stb_easy_font.h"
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IMesh.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -155,35 +155,17 @@ findEnvironmentKey(IEnvVars* envVars, const std::string& requested)
   return "";
 }
 
-static float
-easyFontAdvance(unsigned char ch)
-{
-  if (ch < 32u || ch >= 128u) {
-    return 0.0f;
-  }
-  return static_cast<float>(stb_easy_font_charinfo[ch - 32].advance & 15) +
-         stb_easy_font_spacing_val;
-}
+static constexpr float kConsoleFontSize = 14.0f;
+static constexpr float kConsoleLineSpacing = 20.0f;
 
 static float
 measureFontTextRange(const char* text, std::size_t length)
 {
-  float len = 0.0f;
-  float maxLen = 0.0f;
-  for (std::size_t i = 0; i < length; ++i) {
-    if (text[i] == '\n') {
-      if (len > maxLen) {
-        maxLen = len;
-      }
-      len = 0.0f;
-      continue;
-    }
-    len += easyFontAdvance(static_cast<unsigned char>(text[i]));
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font == nullptr || text == nullptr || length == 0) {
+    return 0.0f;
   }
-  if (len > maxLen) {
-    maxLen = len;
-  }
-  return static_cast<float>(static_cast<int>(std::ceil(maxLen)) * 2);
+  return font->measureTextRange(text, length, kConsoleFontSize).width;
 }
 
 static float
@@ -201,15 +183,20 @@ truncateTextToWidth(const std::string& text, float maxWidth)
   if (measureFontTextRange(text.data(), text.size()) <= maxWidth) {
     return text;
   }
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font == nullptr) {
+    return "";
+  }
   std::size_t end = 0;
-  float raw = 0.0f;
+  float currentWidth = 0.0f;
   while (end < text.size()) {
-    float next = raw + easyFontAdvance(static_cast<unsigned char>(text[end]));
-    float measured = static_cast<float>(static_cast<int>(std::ceil(next)) * 2);
-    if (measured > maxWidth) {
+    float adv = font->getAdvance(
+      static_cast<char32_t>(static_cast<unsigned char>(text[end])),
+      kConsoleFontSize);
+    if (currentWidth + adv > maxWidth) {
       break;
     }
-    raw = next;
+    currentWidth += adv;
     ++end;
   }
   return text.substr(0, end);
@@ -231,6 +218,7 @@ wrapTextToWidth(const std::string& text,
     lines->push_back(text.substr(0, 1));
     return;
   }
+  std::shared_ptr<Font> font = Font::getDefaultFont();
   std::size_t start = 0;
   while (start < text.size()) {
     if (measureFontTextRange(text.data() + start, text.size() - start) <=
@@ -239,15 +227,17 @@ wrapTextToWidth(const std::string& text,
       return;
     }
     std::size_t end = start;
-    float raw = 0.0f;
+    float currentWidth = 0.0f;
     while (end < text.size()) {
-      float next = raw + easyFontAdvance(static_cast<unsigned char>(text[end]));
-      float measured =
-        static_cast<float>(static_cast<int>(std::ceil(next)) * 2);
-      if (measured > maxWidth && end > start) {
+      float adv =
+        font ? font->getAdvance(
+                 static_cast<char32_t>(static_cast<unsigned char>(text[end])),
+                 kConsoleFontSize)
+             : (kConsoleFontSize * 0.6f);
+      if (currentWidth + adv > maxWidth && end > start) {
         break;
       }
-      raw = next;
+      currentWidth += adv;
       ++end;
     }
     if (end == start) {
@@ -1640,7 +1630,7 @@ CommandLine::computePanelLayout(bool useSmoothedPanel) const
   layout.historyTop = layout.panelY0 + layout.headerHeight + 8.0f;
   layout.inputTop = layout.panelY1 - layout.inputRowHeight;
   layout.historyBottom = layout.inputTop - 8.0f;
-  layout.lineSpacing = 24.0f;
+  layout.lineSpacing = kConsoleLineSpacing;
   layout.maxHistoryLines = static_cast<int>(
     (layout.historyBottom - layout.historyTop) / layout.lineSpacing);
   if (layout.maxHistoryLines < 1) {
@@ -2170,7 +2160,7 @@ packFontLine(GameVisual* visual,
     return writeAt;
   }
   ColorRgba c{ color[0], color[1], color[2], color[3] };
-  visual->addText(text, x, y, 24.0f, c);
+  visual->addText(text, x, y, kConsoleFontSize, c);
   // Rough budget: ~1 quad per character (under-estimate is fine for soft cap).
   const unsigned int estimate =
     static_cast<unsigned int>(std::strlen(text) * 4u);
@@ -2288,7 +2278,7 @@ CommandLine::AppendCommands(Renderer* r)
   const float historyTop = panelY0 + headerHeight + 8.0f;
   const float inputTop = panelY1 - inputRowHeight;
   const float historyBottom = inputTop - 8.0f;
-  float lineSpacing = 24.0f;
+  float lineSpacing = kConsoleLineSpacing;
   int maxHistoryLines =
     static_cast<int>((historyBottom - historyTop) / lineSpacing);
   if (maxHistoryLines < 1) {

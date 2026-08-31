@@ -1,5 +1,5 @@
-#include "thirdparty/stb/stb_easy_font.h"
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -78,19 +78,11 @@ GLString::syncVisual()
     float textX = static_cast<float>(x);
     float textY = static_cast<float>(y);
     if (panelStyle.enabled) {
-      std::string measuredContent = content;
-      for (char& ch : measuredContent) {
-        const unsigned char uch = static_cast<unsigned char>(ch);
-        if (uch != '\n' && (uch < 32 || uch > 126)) {
-          ch = '?';
-        }
-      }
-      const float scale = size_pt / 12.0f;
-      const float textWidth =
-        static_cast<float>(stb_easy_font_width(measuredContent.data())) * scale;
-      const float textHeight =
-        static_cast<float>(stb_easy_font_height(measuredContent.data())) *
-        scale;
+      std::shared_ptr<Font> font = Font::getDefaultFont();
+      TextBounds bounds =
+        font ? font->measureText(content, size_pt) : TextBounds{};
+      const float textWidth = bounds.width;
+      const float textHeight = bounds.height > 0.0f ? bounds.height : size_pt;
       const float accentGap = panelStyle.accentWidth + 7.0f;
       const float panelX = textX;
       const float panelY = textY;

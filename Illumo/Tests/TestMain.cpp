@@ -38,6 +38,8 @@ void
 registerMeshLoaderTests(IllumoTestRegistry& registry);
 void
 registerShaderPreprocessorTests(IllumoTestRegistry& registry);
+void
+registerFontTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -58,6 +60,7 @@ createRegistry()
   registerSceneGraphTests(registry);
   registerGuiKitTests(registry);
   registerShaderPreprocessorTests(registry);
+  registerFontTests(registry);
   return registry;
 }
 

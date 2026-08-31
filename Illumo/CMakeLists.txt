@@ -79,6 +79,7 @@ add_library(Illumo STATIC
   Source/Services/SysCmdLine.cpp
   Source/Rendering/AssetManager.cpp
   Source/Rendering/Camera.cpp
+  Source/Rendering/Font.cpp
   Source/Rendering/GLString.cpp
   Source/Rendering/MeshLoader.cpp
   Source/Rendering/RendererStyles.cpp
@@ -159,6 +160,7 @@ if(BUILD_TESTING)
     Tests/TestSceneGraph.cpp
     Tests/TestShaderPreprocessor.cpp
     Tests/TestGuiKit.cpp
+    Tests/TestFont.cpp
   )
   target_link_libraries(IllumoTests PRIVATE Illumo::TestSupport glfw)
   target_include_directories(IllumoTests PRIVATE

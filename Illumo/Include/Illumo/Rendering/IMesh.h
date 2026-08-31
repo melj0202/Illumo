@@ -8,9 +8,9 @@ enum class MeshVertexLayout : int
   // Canvas / triangle shaders: float pos3 | float color3 | float uv2 (stride
   // 32)
   Pos3Color3Uv2 = 0,
-  // UI / stb_easy_font: float pos3 | ubyte color4 (stride 16)
+  // UI / Shapes: float pos3 | ubyte color4 (stride 16)
   Pos3Color4U8 = 1,
-  // Sprites: float pos3 | ubyte color4 | float uv2 (stride 24)
+  // Sprites / Text: float pos3 | ubyte color4 | float uv2 (stride 24)
   Pos3Color4U8Uv2 = 2,
 };
 

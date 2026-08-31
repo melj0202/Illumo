@@ -106,10 +106,10 @@ MeshViewerUi::containsScreenPoint(float x, float y) const
 
   const float emptyW =
     std::min(virtualWidth - 24.0f,
-             std::max(300.0f * fontScale,
+             std::max(320.0f * fontScale,
                       GuiKit::estimateTextWidth(emptyHint, m_fontSize) +
-                        40.0f * fontScale));
-  const float emptyH = 76.0f * fontScale;
+                        60.0f * fontScale));
+  const float emptyH = 84.0f * fontScale;
   const float emptyX = (virtualWidth - emptyW) * 0.5f;
   const float emptyY = (virtualHeight - emptyH) * 0.45f;
   if (!m_metadata.hasMesh && x >= emptyX && x <= emptyX + emptyW &&
@@ -236,7 +236,7 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
     }
     const float textW = GuiKit::estimateTextWidth(label, m_fontSize);
     const float width =
-      std::max(minWidth * fontScale, textW + 20.0f * fontScale);
+      std::max(minWidth * fontScale, textW + 24.0f * fontScale);
     GuiKit::drawButton(m_visual,
                        btnX,
                        btnY,
@@ -270,21 +270,21 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
 
   addButton(openLabel,
             MeshViewerAction::OpenMesh,
-            isVeryCompact ? 50.0f : (isCompact ? 80.0f : 135.0f));
+            isVeryCompact ? 50.0f : (isCompact ? 85.0f : 155.0f));
   addButton(resetLabel,
             MeshViewerAction::ResetView,
-            isVeryCompact ? 55.0f : (isCompact ? 85.0f : 145.0f));
+            isVeryCompact ? 55.0f : (isCompact ? 90.0f : 165.0f));
   addButton(gridLabel,
             MeshViewerAction::ToggleGrid,
-            isVeryCompact ? 50.0f : 80.0f,
+            isVeryCompact ? 50.0f : 90.0f,
             m_showGrid);
   addButton(wireLabel,
             MeshViewerAction::ToggleWireframe,
-            isVeryCompact ? 50.0f : 80.0f,
+            isVeryCompact ? 50.0f : 90.0f,
             m_showWireframe);
   addButton(axesLabel,
             MeshViewerAction::ToggleAxes,
-            isVeryCompact ? 50.0f : 80.0f,
+            isVeryCompact ? 50.0f : 90.0f,
             m_showAxes);
 
   // 2. Info Card / HUD (Top-Left under header)
@@ -368,10 +368,10 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
 
     const float emptyW =
       std::min(virtualWidth - 24.0f,
-               std::max(300.0f * fontScale,
+               std::max(320.0f * fontScale,
                         GuiKit::estimateTextWidth(emptyHint, m_fontSize) +
-                          40.0f * fontScale));
-    const float emptyH = 76.0f * fontScale;
+                          60.0f * fontScale));
+    const float emptyH = 84.0f * fontScale;
     const float emptyX = (virtualWidth - emptyW) * 0.5f;
     const float emptyY = (virtualHeight - emptyH) * 0.45f;
 
@@ -380,13 +380,13 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
     GuiKit::drawTextCentered(m_visual,
                              "No 3D Mesh Loaded",
                              emptyX + emptyW * 0.5f,
-                             emptyY + 16.0f * fontScale,
+                             emptyY + 22.0f * fontScale,
                              m_fontSize + 2.0f,
                              UiTheme::textPrimary());
     GuiKit::drawTextCentered(m_visual,
                              emptyHint,
                              emptyX + emptyW * 0.5f,
-                             emptyY + 42.0f * fontScale,
+                             emptyY + 50.0f * fontScale,
                              m_fontSize,
                              UiTheme::textMuted());
   }
