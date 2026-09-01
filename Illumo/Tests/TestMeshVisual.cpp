@@ -424,6 +424,76 @@ testMeshVisualNewPrimitivesEmitTokens()
            "ellipse draw has 16 triangle fan indices");
 }
 
+static void
+testMeshVisualLitShadowPassClearsDepth()
+{
+  testSection("MeshVisual: lit shadow pass clears depth before drawing");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "cube appends lit tokens");
+  renderer.EndFrame();
+
+  bool sawShadowFramebuffer = false;
+  bool clearedDepthBeforeShadowDraw = false;
+  bool sawColorClearOnShadowTarget = false;
+  bool shadowDrawIssued = false;
+  bool lightingUniformsPresent = false;
+
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetFramebuffer &&
+        command.bindFramebuffer.handle.isValid()) {
+      sawShadowFramebuffer = true;
+      clearedDepthBeforeShadowDraw = false;
+      shadowDrawIssued = false;
+      continue;
+    }
+    if (!sawShadowFramebuffer || shadowDrawIssued) {
+      if (command.commandType == CommandType::SetUniformVec3 &&
+          std::strcmp(command.uniformVec3.name, WorldLook::kLightDirUniform) ==
+            0) {
+        lightingUniformsPresent = true;
+      }
+      continue;
+    }
+    if (command.commandType == CommandType::ClearColorBuffer) {
+      sawColorClearOnShadowTarget = true;
+    }
+    if (command.commandType == CommandType::ClearDepthBuffer) {
+      clearedDepthBeforeShadowDraw = true;
+    }
+    if (command.commandType == CommandType::DrawIndexed) {
+      shadowDrawIssued = true;
+    }
+  }
+
+  testTrue(g, sawShadowFramebuffer, "lit cube binds a shadow framebuffer");
+  testTrue(g, shadowDrawIssued, "shadow pass issues an indexed depth draw");
+  testTrue(g,
+           clearedDepthBeforeShadowDraw,
+           "shadow pass clears depth before drawing into the depth FBO");
+  testTrue(g,
+           !sawColorClearOnShadowTarget,
+           "shadow pass does not color-clear a depth-only target");
+  testTrue(g,
+           lightingUniformsPresent,
+           "main pass still pushes directional lighting uniforms");
+}
+
 void
 registerMeshVisualTests(IllumoTestRegistry& registry)
 {
@@ -439,5 +509,8 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.MeshVisual.NewPrimitives", []() {
     return runMeshVisualCase(testMeshVisualNewPrimitivesEmitTokens);
+  });
+  registry.add("Illumo.MeshVisual.LitShadowPassClearsDepth", []() {
+    return runMeshVisualCase(testMeshVisualLitShadowPassClearsDepth);
   });
 }

@@ -667,13 +667,21 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   const glm::mat4 coloredMvp = viewProjection * coloredWorld;
   const float* coloredMvpPtr = glm::value_ptr(coloredMvp);
 
-  // Directional lighting & shadow setup
+  // Directional lighting & shadow setup. Viewer meshes are normalized to
+  // radius 1; a tight ortho keeps shadow texels on the object instead of
+  // a 30-unit empty volume.
   const glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
-  const glm::vec3 lightPos = lightDir * 20.0f;
+  const float shadowRadius = 2.5f;
+  const float lightDistance = 8.0f;
+  const glm::vec3 lightPos = lightDir * lightDistance;
   const glm::mat4 lightView =
     glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-  const glm::mat4 lightProj =
-    glm::ortho(-15.0f, 15.0f, -15.0f, 15.0f, 1.0f, 40.0f);
+  const glm::mat4 lightProj = glm::ortho(-shadowRadius,
+                                         shadowRadius,
+                                         -shadowRadius,
+                                         shadowRadius,
+                                         0.5f,
+                                         lightDistance + shadowRadius);
   const glm::mat4 lightSpaceMatrix = lightProj * lightView;
 
   // Pass 1: Directional Shadow Depth Pass (when lighting and shadow depth are
@@ -684,7 +692,10 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
     if (shadowFboHandle.isValid()) {
       value->pushFramebuffer(shadowFboHandle);
       value->pushViewport(0, 0, 1024, 1024);
-      value->pushClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+      // Depth-only FBO has no color attachment. A color clear is a no-op and
+      // leaves uninitialized depth at 0, so the main pass shadows every
+      // fragment and lighting collapses to ambient.
+      value->pushClearDepth();
 
       const glm::mat4 lightMvp = lightSpaceMatrix * coloredWorld;
       value->bindStyle(shadowDepthStyleHandle);

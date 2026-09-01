@@ -372,6 +372,13 @@ public:
     _backend->PushToCommandQueue(cmd);
   }
 
+  void pushClearDepth()
+  {
+    RenderCommand cmd;
+    cmd.commandType = CommandType::ClearDepthBuffer;
+    _backend->PushToCommandQueue(cmd);
+  }
+
   void pushViewport(int x, int y, int width, int height)
   {
     RenderCommand cmd;
