@@ -14,6 +14,7 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <cmath>
+#include <cstring>
 
 static TestCounters g;
 
@@ -131,6 +132,147 @@ testModuleMeshLoading()
            "camera distance valid");
 }
 
+static void
+testModuleLightingFromEnvVars()
+{
+  testSection("MeshViewerModule: lighting EnvVars update MeshVisual");
+  ModuleFixture fixture;
+  testTrue(g, fixture.started, "module started");
+  testTrue(g,
+           fixture.module.loadMeshFromMemory(g_testCubeObj, "cube.obj"),
+           "cube loaded");
+
+  fixture.env.setVar("lightingEnabled", "1");
+  fixture.env.setVar("lightDirX", 0);
+  fixture.env.setVar("lightDirY", 1);
+  fixture.env.setVar("lightDirZ", 0);
+  fixture.env.setVar("lightColorR", 0.25);
+  fixture.env.setVar("lightColorG", 0.5);
+  fixture.env.setVar("lightColorB", 0.75);
+  fixture.env.setVar("ambientColorR", 0.1);
+  fixture.env.setVar("ambientColorG", 0.2);
+  fixture.env.setVar("ambientColorB", 0.3);
+  fixture.module.Update(0.016);
+
+  MeshVisual* visual = fixture.module.meshVisual();
+  testTrue(g, visual != nullptr, "mesh visual exists");
+  testTrue(g, visual->isLightingEnabled(), "lighting remains enabled");
+  testTrue(g,
+           std::abs(visual->getLightDirection().x) < 0.0001f &&
+             std::abs(visual->getLightDirection().y - 1.0f) < 0.0001f &&
+             std::abs(visual->getLightDirection().z) < 0.0001f,
+           "light direction from EnvVars");
+  testTrue(g,
+           std::abs(visual->getLightColor().x - 0.25f) < 0.0001f &&
+             std::abs(visual->getLightColor().y - 0.5f) < 0.0001f &&
+             std::abs(visual->getLightColor().z - 0.75f) < 0.0001f,
+           "light color from EnvVars");
+  testTrue(g,
+           std::abs(visual->getAmbientColor().x - 0.1f) < 0.0001f &&
+             std::abs(visual->getAmbientColor().y - 0.2f) < 0.0001f &&
+             std::abs(visual->getAmbientColor().z - 0.3f) < 0.0001f,
+           "ambient color from EnvVars");
+
+  fixture.renderer.BeginFrame();
+  testTrue(g, visual->AppendCommands(&fixture.renderer), "mesh appends tokens");
+  fixture.renderer.EndFrame();
+
+  bool sawConfiguredLightDir = false;
+  for (size_t i = 0; i < fixture.mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = fixture.mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetUniformVec3 &&
+        std::strcmp(command.uniformVec3.name, "uLightDir") == 0 &&
+        std::abs(command.uniformVec3.x) < 0.0001f &&
+        std::abs(command.uniformVec3.y - 1.0f) < 0.0001f &&
+        std::abs(command.uniformVec3.z) < 0.0001f) {
+      sawConfiguredLightDir = true;
+    }
+  }
+  testTrue(
+    g, sawConfiguredLightDir, "configured light direction reaches uLightDir");
+
+  fixture.env.setVar("lightingEnabled", "0");
+  fixture.module.Update(0.016);
+  testTrue(
+    g, !visual->isLightingEnabled(), "lightingEnabled 0 disables lighting");
+}
+
+static void
+testModuleShadowFromEnvVars()
+{
+  testSection("MeshViewerModule: shadow EnvVars update MeshVisual");
+  ModuleFixture fixture;
+  testTrue(g, fixture.started, "module started");
+  testTrue(g,
+           fixture.module.loadMeshFromMemory(g_testCubeObj, "cube.obj"),
+           "cube loaded");
+
+  fixture.env.setVar("lightingEnabled", "1");
+  fixture.env.setVar("shadowsEnabled", "1");
+  fixture.env.setVar("shadowMapSize", 512);
+  fixture.env.setVar("shadowRadius", 3.0);
+  fixture.env.setVar("lightDistance", 12.0);
+  fixture.env.setVar("shadowBias", 0.002);
+  fixture.env.setVar("shadowSlopeScale", 0.01);
+  fixture.env.setVar("shadowNormalOffset", 0.02);
+  fixture.env.setVar("shadowPcf", "0");
+  fixture.module.Update(0.016);
+
+  MeshVisual* visual = fixture.module.meshVisual();
+  testTrue(g, visual != nullptr, "mesh visual exists");
+  testTrue(g, visual->isShadowsEnabled(), "shadows remain enabled");
+  testTrue(g, visual->getShadowMapSize() == 512, "shadowMapSize from EnvVars");
+  testTrue(g,
+           std::abs(visual->getShadowRadius() - 3.0f) < 0.0001f,
+           "shadowRadius from EnvVars");
+  testTrue(g,
+           std::abs(visual->getLightDistance() - 12.0f) < 0.0001f,
+           "lightDistance from EnvVars");
+  testTrue(g,
+           std::abs(visual->getShadowBias() - 0.002f) < 0.0001f,
+           "shadowBias from EnvVars");
+  testTrue(g,
+           std::abs(visual->getShadowSlopeScale() - 0.01f) < 0.0001f,
+           "shadowSlopeScale from EnvVars");
+  testTrue(g,
+           std::abs(visual->getShadowNormalOffset() - 0.02f) < 0.0001f,
+           "shadowNormalOffset from EnvVars");
+  testTrue(g, !visual->isShadowPcfEnabled(), "shadowPcf 0 disables PCF");
+
+  fixture.renderer.BeginFrame();
+  testTrue(g, visual->AppendCommands(&fixture.renderer), "mesh appends tokens");
+  fixture.renderer.EndFrame();
+
+  bool sawConfiguredBias = false;
+  bool sawShadowViewport = false;
+  bool insideShadowTarget = false;
+  for (size_t i = 0; i < fixture.mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = fixture.mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetFramebuffer &&
+        command.bindFramebuffer.handle.isValid()) {
+      insideShadowTarget = true;
+    } else if (command.commandType == CommandType::SetFramebuffer &&
+               !command.bindFramebuffer.handle.isValid()) {
+      insideShadowTarget = false;
+    }
+    if (insideShadowTarget && command.commandType == CommandType::SetViewport &&
+        command.viewport.width == 512 && command.viewport.height == 512) {
+      sawShadowViewport = true;
+    }
+    if (command.commandType == CommandType::SetUniformFloat &&
+        std::strcmp(command.uniformFloat.name, "uShadowBias") == 0 &&
+        std::abs(command.uniformFloat.value - 0.002f) < 0.000001f) {
+      sawConfiguredBias = true;
+    }
+  }
+  testTrue(g, sawShadowViewport, "configured shadow map size reaches viewport");
+  testTrue(g, sawConfiguredBias, "configured shadow bias reaches uShadowBias");
+
+  fixture.env.setVar("shadowsEnabled", "0");
+  fixture.module.Update(0.016);
+  testTrue(g, !visual->isShadowsEnabled(), "shadowsEnabled 0 disables shadows");
+}
+
 static int
 runModuleCase(void (*testFunction)())
 {
@@ -146,4 +288,8 @@ registerMeshViewerModuleTests(IllumoTestRegistry& registry)
                []() { return runModuleCase(testModuleStartupAndLifecycle); });
   registry.add("IllMeshViewer.Module.MeshLoading",
                []() { return runModuleCase(testModuleMeshLoading); });
+  registry.add("IllMeshViewer.Module.LightingFromEnvVars",
+               []() { return runModuleCase(testModuleLightingFromEnvVars); });
+  registry.add("IllMeshViewer.Module.ShadowFromEnvVars",
+               []() { return runModuleCase(testModuleShadowFromEnvVars); });
 }

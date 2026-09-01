@@ -494,6 +494,207 @@ testMeshVisualLitShadowPassClearsDepth()
            "main pass still pushes directional lighting uniforms");
 }
 
+static bool
+uniformVec3Near(const RenderCommand& command,
+                const char* name,
+                float x,
+                float y,
+                float z)
+{
+  return command.commandType == CommandType::SetUniformVec3 &&
+         std::strcmp(command.uniformVec3.name, name) == 0 &&
+         std::abs(command.uniformVec3.x - x) < 0.0001f &&
+         std::abs(command.uniformVec3.y - y) < 0.0001f &&
+         std::abs(command.uniformVec3.z - z) < 0.0001f;
+}
+
+static void
+testMeshVisualLightingUniformsFromSetters()
+{
+  testSection("MeshVisual: lighting setters control uniform tokens");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+  visual.setLightDirection(glm::vec3(0.0f, 1.0f, 0.0f));
+  visual.setLightColor(glm::vec3(0.25f, 0.5f, 0.75f));
+  visual.setAmbientColor(glm::vec3(0.1f, 0.2f, 0.3f));
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "lit cube appends tokens");
+  renderer.EndFrame();
+
+  bool sawLightDir = false;
+  bool sawLightColor = false;
+  bool sawAmbient = false;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (uniformVec3Near(
+          command, WorldLook::kLightDirUniform, 0.0f, 1.0f, 0.0f)) {
+      sawLightDir = true;
+    }
+    if (uniformVec3Near(
+          command, WorldLook::kLightColorUniform, 0.25f, 0.5f, 0.75f)) {
+      sawLightColor = true;
+    }
+    if (uniformVec3Near(
+          command, WorldLook::kAmbientColorUniform, 0.1f, 0.2f, 0.3f)) {
+      sawAmbient = true;
+    }
+  }
+  testTrue(g, sawLightDir, "light direction uniform matches setter");
+  testTrue(g, sawLightColor, "light color uniform matches setter");
+  testTrue(g, sawAmbient, "ambient color uniform matches setter");
+
+  visual.setLightingEnabled(false);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "unlit cube appends tokens");
+  renderer.EndFrame();
+
+  bool sawLightingUniformWhileDisabled = false;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetUniformVec3 &&
+        (std::strcmp(command.uniformVec3.name, WorldLook::kLightDirUniform) ==
+           0 ||
+         std::strcmp(command.uniformVec3.name, WorldLook::kLightColorUniform) ==
+           0 ||
+         std::strcmp(command.uniformVec3.name,
+                     WorldLook::kAmbientColorUniform) == 0)) {
+      sawLightingUniformWhileDisabled = true;
+    }
+  }
+  testTrue(g,
+           !sawLightingUniformWhileDisabled,
+           "disabled lighting does not emit light uniforms");
+}
+
+static bool
+uniformFloatNear(const RenderCommand& command, const char* name, float value)
+{
+  return command.commandType == CommandType::SetUniformFloat &&
+         std::strcmp(command.uniformFloat.name, name) == 0 &&
+         std::abs(command.uniformFloat.value - value) < 0.000001f;
+}
+
+static bool
+uniformIntIs(const RenderCommand& command, const char* name, int value)
+{
+  return command.commandType == CommandType::SetUniformInt &&
+         std::strcmp(command.uniformInt.name, name) == 0 &&
+         command.uniformInt.value == value;
+}
+
+static void
+testMeshVisualShadowUniformsFromSetters()
+{
+  testSection("MeshVisual: shadow setters control pass and uniforms");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+  visual.setShadowMapSize(512);
+  visual.setShadowBias(0.002f);
+  visual.setShadowSlopeScale(0.01f);
+  visual.setShadowNormalOffset(0.02f);
+  visual.setShadowPcfEnabled(false);
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(
+    g, visual.AppendCommands(&renderer), "lit cube appends shadow tokens");
+  renderer.EndFrame();
+
+  bool sawShadowViewport = false;
+  bool sawBias = false;
+  bool sawSlope = false;
+  bool sawOffset = false;
+  bool sawPcfOff = false;
+  bool sawShadowsOn = false;
+  bool insideShadowTarget = false;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetFramebuffer &&
+        command.bindFramebuffer.handle.isValid()) {
+      insideShadowTarget = true;
+    } else if (command.commandType == CommandType::SetFramebuffer &&
+               !command.bindFramebuffer.handle.isValid()) {
+      insideShadowTarget = false;
+    }
+    if (insideShadowTarget && command.commandType == CommandType::SetViewport &&
+        command.viewport.width == 512 && command.viewport.height == 512) {
+      sawShadowViewport = true;
+    }
+    if (uniformFloatNear(command, WorldLook::kShadowBiasUniform, 0.002f)) {
+      sawBias = true;
+    }
+    if (uniformFloatNear(command, WorldLook::kShadowSlopeScaleUniform, 0.01f)) {
+      sawSlope = true;
+    }
+    if (uniformFloatNear(
+          command, WorldLook::kShadowNormalOffsetUniform, 0.02f)) {
+      sawOffset = true;
+    }
+    if (uniformIntIs(command, WorldLook::kShadowPcfUniform, 0)) {
+      sawPcfOff = true;
+    }
+    if (uniformIntIs(command, WorldLook::kShadowsEnabledUniform, 1)) {
+      sawShadowsOn = true;
+    }
+  }
+  testTrue(g, visual.getShadowMapSize() == 512, "shadow map size snaps to 512");
+  testTrue(g, sawShadowViewport, "shadow pass viewport matches map size");
+  testTrue(g, sawBias, "shadow bias uniform matches setter");
+  testTrue(g, sawSlope, "shadow slope scale uniform matches setter");
+  testTrue(g, sawOffset, "shadow normal offset uniform matches setter");
+  testTrue(g, sawPcfOff, "PCF disable reaches uShadowPcf");
+  testTrue(g, sawShadowsOn, "shadows remain enabled");
+
+  visual.setShadowsEnabled(false);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(
+    g, visual.AppendCommands(&renderer), "unshadowed cube appends tokens");
+  renderer.EndFrame();
+
+  bool sawShadowFramebuffer = false;
+  bool sawShadowsOff = false;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetFramebuffer &&
+        command.bindFramebuffer.handle.isValid()) {
+      sawShadowFramebuffer = true;
+    }
+    if (uniformIntIs(command, WorldLook::kShadowsEnabledUniform, 0)) {
+      sawShadowsOff = true;
+    }
+  }
+  testTrue(g,
+           !sawShadowFramebuffer,
+           "disabled shadows skip the depth framebuffer pass");
+  testTrue(g, sawShadowsOff, "uShadowsEnabled is 0 when shadows are off");
+}
+
 void
 registerMeshVisualTests(IllumoTestRegistry& registry)
 {
@@ -512,5 +713,11 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.MeshVisual.LitShadowPassClearsDepth", []() {
     return runMeshVisualCase(testMeshVisualLitShadowPassClearsDepth);
+  });
+  registry.add("Illumo.MeshVisual.LightingUniformsFromSetters", []() {
+    return runMeshVisualCase(testMeshVisualLightingUniformsFromSetters);
+  });
+  registry.add("Illumo.MeshVisual.ShadowUniformsFromSetters", []() {
+    return runMeshVisualCase(testMeshVisualShadowUniformsFromSetters);
   });
 }

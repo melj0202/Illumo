@@ -41,6 +41,28 @@ public:
   const glm::mat4& getModelMatrix() const { return modelMatrix; }
   void setLightingEnabled(bool enabled) { lightingEnabled = enabled; }
   bool isLightingEnabled() const { return lightingEnabled; }
+  void setLightDirection(const glm::vec3& direction);
+  const glm::vec3& getLightDirection() const { return lightDirection; }
+  void setLightColor(const glm::vec3& color);
+  const glm::vec3& getLightColor() const { return lightColor; }
+  void setAmbientColor(const glm::vec3& color);
+  const glm::vec3& getAmbientColor() const { return ambientColor; }
+  void setShadowsEnabled(bool enabled) { shadowsEnabled = enabled; }
+  bool isShadowsEnabled() const { return shadowsEnabled; }
+  void setShadowMapSize(int size);
+  int getShadowMapSize() const { return shadowMapSize; }
+  void setShadowRadius(float radius);
+  float getShadowRadius() const { return shadowRadius; }
+  void setLightDistance(float distance);
+  float getLightDistance() const { return lightDistance; }
+  void setShadowBias(float bias);
+  float getShadowBias() const { return shadowBias; }
+  void setShadowSlopeScale(float scale);
+  float getShadowSlopeScale() const { return shadowSlopeScale; }
+  void setShadowNormalOffset(float offset);
+  float getShadowNormalOffset() const { return shadowNormalOffset; }
+  void setShadowPcfEnabled(bool enabled) { shadowPcfEnabled = enabled; }
+  bool isShadowPcfEnabled() const { return shadowPcfEnabled; }
 
   void clearPrimitives();
   size_t addQuad(const glm::vec3& center,
@@ -168,6 +190,18 @@ private:
   bool triangleUploadPending = false;
   bool spriteUploadPending = false;
   bool lightingEnabled = true;
+  bool shadowsEnabled = true;
+  bool shadowPcfEnabled = true;
+  glm::vec3 lightDirection = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
+  glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
+  glm::vec3 ambientColor = glm::vec3(0.2f, 0.22f, 0.25f);
+  int shadowMapSize = 1024;
+  int enrolledShadowMapSize = 0;
+  float shadowRadius = 2.5f;
+  float lightDistance = 8.0f;
+  float shadowBias = 0.001f;
+  float shadowSlopeScale = 0.004f;
+  float shadowNormalOffset = 0.015f;
 
   void ensureStyles();
   void ensureShadowResources(Renderer* renderer);

@@ -15,6 +15,12 @@ orbit, pan, zoom, and rotate camera controls.
   or IllEdCore.
 - Load meshes through `MeshLoader::loadFromFile` or `MeshLoader::loadFromMemory`.
 - Keep UI primitive-composed through `GameVisual` and `GuiKit`. No retained widget tree.
+- Persist lighting and shadows in EnvVars (`lightingEnabled`, `lightDir*`,
+  `lightColor*`, `ambientColor*`, `shadowsEnabled`, `shadowMapSize`,
+  `shadowRadius`, `lightDistance`, `shadowBias`, `shadowSlopeScale`,
+  `shadowNormalOffset`, `shadowPcf`) and apply them through `MeshVisual`
+  setters. Do not have `MeshVisual` read EnvVars, and do not bind EnvVars
+  directly as shader uniforms.
 - Main-thread affine.
 - Follow `docs/contributing.md`: avoid `auto`, avoid namespaces, keep ownership
   explicit, and format with Mozilla-style `clang-format`.

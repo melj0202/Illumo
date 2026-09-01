@@ -12,9 +12,18 @@ uniform vec3 uLightColor;
 uniform vec3 uAmbientColor;
 uniform sampler2D uShadowMap;
 uniform mat4 uLightSpaceMatrix;
+uniform int uShadowsEnabled;
+uniform float uShadowBias;
+uniform float uShadowSlopeScale;
+uniform float uShadowNormalOffset;
+uniform int uShadowPcf;
 
 float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
 {
+    if (uShadowsEnabled == 0) {
+        return 0.0;
+    }
+
     float nDotL = dot(normal, lightDir);
     if (nDotL <= 0.0) {
         return 1.0;
@@ -24,7 +33,7 @@ float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
     // Perspective-correct interpolation of that quantity follows the view
     // camera and self-shadows whole triangles. Offset along the normal so
     // the receiver is tested slightly toward the light.
-    vec3 offsetPos = fragPos + normal * 0.015;
+    vec3 offsetPos = fragPos + normal * uShadowNormalOffset;
     vec4 lightClip = uLightSpaceMatrix * vec4(offsetPos, 1.0);
     vec3 projCoords = lightClip.xyz / lightClip.w;
     projCoords = projCoords * 0.5 + 0.5;
@@ -35,18 +44,24 @@ float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
     }
 
     float currentDepth = projCoords.z;
-    float bias = 0.001 + 0.004 * (1.0 - nDotL);
+    float bias = uShadowBias + uShadowSlopeScale * (1.0 - nDotL);
 
+    int radius = uShadowPcf > 0 ? 1 : 0;
     float shadow = 0.0;
+    float samples = 0.0;
     vec2 texelSize = 1.0 / vec2(textureSize(uShadowMap, 0));
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {
+            if (abs(x) > radius || abs(y) > radius) {
+                continue;
+            }
             float pcfDepth =
                 texture(uShadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
             shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+            samples += 1.0;
         }
     }
-    return shadow / 9.0;
+    return shadow / max(samples, 1.0);
 }
 
 void main()

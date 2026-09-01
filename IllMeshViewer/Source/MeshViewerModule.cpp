@@ -76,6 +76,8 @@ MeshViewerModule::Start(IllumoContext* context)
   m_wireframeVisual->prepare(ic->renderer);
 
   m_ui = std::make_unique<MeshViewerUi>(ic->window, ic->renderer);
+  applyLightingFromEnv();
+  applyShadowsFromEnv();
 
   if (ic->envVars != nullptr) {
     const std::string fontSizeVar = ic->envVars->getVar("fontSize").value;
@@ -343,6 +345,118 @@ MeshViewerModule::rebuildWireframe()
 }
 
 void
+MeshViewerModule::applyLightingFromEnv()
+{
+  if (m_meshVisual == nullptr || ic == nullptr || ic->envVars == nullptr) {
+    return;
+  }
+
+  const EnvVar& lightingVar = ic->envVars->getVar("lightingEnabled");
+  if (!lightingVar.value.empty()) {
+    m_meshVisual->setLightingEnabled(lightingVar.valueAsBool);
+  }
+
+  glm::vec3 lightDirection = m_meshVisual->getLightDirection();
+  const EnvVar& lightDirX = ic->envVars->getVar("lightDirX");
+  const EnvVar& lightDirY = ic->envVars->getVar("lightDirY");
+  const EnvVar& lightDirZ = ic->envVars->getVar("lightDirZ");
+  if (!lightDirX.value.empty()) {
+    lightDirection.x = static_cast<float>(lightDirX.valueAsDouble);
+  }
+  if (!lightDirY.value.empty()) {
+    lightDirection.y = static_cast<float>(lightDirY.valueAsDouble);
+  }
+  if (!lightDirZ.value.empty()) {
+    lightDirection.z = static_cast<float>(lightDirZ.valueAsDouble);
+  }
+  m_meshVisual->setLightDirection(lightDirection);
+
+  glm::vec3 lightColor = m_meshVisual->getLightColor();
+  const EnvVar& lightColorR = ic->envVars->getVar("lightColorR");
+  const EnvVar& lightColorG = ic->envVars->getVar("lightColorG");
+  const EnvVar& lightColorB = ic->envVars->getVar("lightColorB");
+  if (!lightColorR.value.empty()) {
+    lightColor.x = static_cast<float>(lightColorR.valueAsDouble);
+  }
+  if (!lightColorG.value.empty()) {
+    lightColor.y = static_cast<float>(lightColorG.valueAsDouble);
+  }
+  if (!lightColorB.value.empty()) {
+    lightColor.z = static_cast<float>(lightColorB.valueAsDouble);
+  }
+  m_meshVisual->setLightColor(lightColor);
+
+  glm::vec3 ambientColor = m_meshVisual->getAmbientColor();
+  const EnvVar& ambientColorR = ic->envVars->getVar("ambientColorR");
+  const EnvVar& ambientColorG = ic->envVars->getVar("ambientColorG");
+  const EnvVar& ambientColorB = ic->envVars->getVar("ambientColorB");
+  if (!ambientColorR.value.empty()) {
+    ambientColor.x = static_cast<float>(ambientColorR.valueAsDouble);
+  }
+  if (!ambientColorG.value.empty()) {
+    ambientColor.y = static_cast<float>(ambientColorG.valueAsDouble);
+  }
+  if (!ambientColorB.value.empty()) {
+    ambientColor.z = static_cast<float>(ambientColorB.valueAsDouble);
+  }
+  m_meshVisual->setAmbientColor(ambientColor);
+}
+
+void
+MeshViewerModule::applyShadowsFromEnv()
+{
+  if (m_meshVisual == nullptr || ic == nullptr || ic->envVars == nullptr) {
+    return;
+  }
+
+  const EnvVar& shadowsVar = ic->envVars->getVar("shadowsEnabled");
+  if (!shadowsVar.value.empty()) {
+    m_meshVisual->setShadowsEnabled(shadowsVar.valueAsBool);
+  }
+
+  const EnvVar& shadowMapSizeVar = ic->envVars->getVar("shadowMapSize");
+  if (!shadowMapSizeVar.value.empty()) {
+    m_meshVisual->setShadowMapSize(
+      static_cast<int>(shadowMapSizeVar.valueAsLong));
+  }
+
+  const EnvVar& shadowRadiusVar = ic->envVars->getVar("shadowRadius");
+  if (!shadowRadiusVar.value.empty()) {
+    m_meshVisual->setShadowRadius(
+      static_cast<float>(shadowRadiusVar.valueAsDouble));
+  }
+
+  const EnvVar& lightDistanceVar = ic->envVars->getVar("lightDistance");
+  if (!lightDistanceVar.value.empty()) {
+    m_meshVisual->setLightDistance(
+      static_cast<float>(lightDistanceVar.valueAsDouble));
+  }
+
+  const EnvVar& shadowBiasVar = ic->envVars->getVar("shadowBias");
+  if (!shadowBiasVar.value.empty()) {
+    m_meshVisual->setShadowBias(
+      static_cast<float>(shadowBiasVar.valueAsDouble));
+  }
+
+  const EnvVar& shadowSlopeVar = ic->envVars->getVar("shadowSlopeScale");
+  if (!shadowSlopeVar.value.empty()) {
+    m_meshVisual->setShadowSlopeScale(
+      static_cast<float>(shadowSlopeVar.valueAsDouble));
+  }
+
+  const EnvVar& shadowOffsetVar = ic->envVars->getVar("shadowNormalOffset");
+  if (!shadowOffsetVar.value.empty()) {
+    m_meshVisual->setShadowNormalOffset(
+      static_cast<float>(shadowOffsetVar.valueAsDouble));
+  }
+
+  const EnvVar& shadowPcfVar = ic->envVars->getVar("shadowPcf");
+  if (!shadowPcfVar.value.empty()) {
+    m_meshVisual->setShadowPcfEnabled(shadowPcfVar.valueAsBool);
+  }
+}
+
+void
 MeshViewerModule::rebuildMeshVisual()
 {
   if (!m_meshVisual || ic == nullptr || ic->renderer == nullptr) {
@@ -511,6 +625,9 @@ MeshViewerModule::Update(double dt)
     ic->commandLine != nullptr && ic->commandLine->isOpen;
 
   MeshViewerAction action = MeshViewerAction::None;
+  applyLightingFromEnv();
+  applyShadowsFromEnv();
+
   if (m_ui) {
     action = m_ui->update(ic->inputManager, static_cast<float>(dt));
   }

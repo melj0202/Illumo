@@ -16,6 +16,12 @@ struct WorldLook
   static constexpr const char* kLightColorUniform = "uLightColor";
   static constexpr const char* kAmbientColorUniform = "uAmbientColor";
   static constexpr const char* kShadowMapUniform = "uShadowMap";
+  static constexpr const char* kShadowsEnabledUniform = "uShadowsEnabled";
+  static constexpr const char* kShadowBiasUniform = "uShadowBias";
+  static constexpr const char* kShadowSlopeScaleUniform = "uShadowSlopeScale";
+  static constexpr const char* kShadowNormalOffsetUniform =
+    "uShadowNormalOffset";
+  static constexpr const char* kShadowPcfUniform = "uShadowPcf";
   static constexpr const char* kTextureUniform = "uTexture";
   static constexpr const char* kResolutionUniform = "u_resolution";
   static constexpr int kTextureUnit = 0;

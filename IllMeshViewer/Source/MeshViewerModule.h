@@ -57,6 +57,8 @@ private:
   void rebuildGrid();
   void rebuildWireframe();
   void rebuildMeshVisual();
+  void applyLightingFromEnv();
+  void applyShadowsFromEnv();
   void updateCameraInput(double dt);
   void handleAction(MeshViewerAction action);
   void syncUiMetadata();

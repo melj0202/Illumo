@@ -34,6 +34,83 @@ MeshVisual::setModelMatrix(const glm::mat4& value)
 }
 
 void
+MeshVisual::setLightDirection(const glm::vec3& direction)
+{
+  const float length = glm::length(direction);
+  if (length <= 0.0001f) {
+    return;
+  }
+  lightDirection = direction / length;
+}
+
+void
+MeshVisual::setLightColor(const glm::vec3& color)
+{
+  lightColor = glm::max(color, glm::vec3(0.0f));
+}
+
+void
+MeshVisual::setAmbientColor(const glm::vec3& color)
+{
+  ambientColor = glm::max(color, glm::vec3(0.0f));
+}
+
+static int
+snapShadowMapSize(int size)
+{
+  const int options[4] = { 256, 512, 1024, 2048 };
+  int best = 1024;
+  int bestDelta = 100000;
+  for (int i = 0; i < 4; ++i) {
+    int delta = size - options[i];
+    if (delta < 0) {
+      delta = -delta;
+    }
+    if (delta < bestDelta) {
+      best = options[i];
+      bestDelta = delta;
+    }
+  }
+  return best;
+}
+
+void
+MeshVisual::setShadowMapSize(int size)
+{
+  shadowMapSize = snapShadowMapSize(size);
+}
+
+void
+MeshVisual::setShadowRadius(float radius)
+{
+  shadowRadius = std::max(radius, 0.1f);
+}
+
+void
+MeshVisual::setLightDistance(float distance)
+{
+  lightDistance = std::max(distance, 0.5f);
+}
+
+void
+MeshVisual::setShadowBias(float bias)
+{
+  shadowBias = std::max(bias, 0.0f);
+}
+
+void
+MeshVisual::setShadowSlopeScale(float scale)
+{
+  shadowSlopeScale = std::max(scale, 0.0f);
+}
+
+void
+MeshVisual::setShadowNormalOffset(float offset)
+{
+  shadowNormalOffset = std::max(offset, 0.0f);
+}
+
+void
 MeshVisual::clearPrimitives()
 {
   lineVertices.clear();
@@ -517,11 +594,18 @@ MeshVisual::ensureStyles()
 void
 MeshVisual::ensureShadowResources(Renderer* value)
 {
-  if (value == nullptr || shadowFboHandle.isValid()) {
+  if (value == nullptr) {
     return;
   }
-  shadowFboHandle =
-    value->enrollDepthFramebuffer(1024, 1024, &shadowDepthTextureHandle);
+  if (shadowFboHandle.isValid() && enrolledShadowMapSize == shadowMapSize) {
+    return;
+  }
+  releaseShadowResources();
+  shadowFboHandle = value->enrollDepthFramebuffer(
+    shadowMapSize, shadowMapSize, &shadowDepthTextureHandle);
+  if (shadowFboHandle.isValid()) {
+    enrolledShadowMapSize = shadowMapSize;
+  }
 }
 
 void
@@ -534,6 +618,7 @@ MeshVisual::releaseShadowResources()
     renderer->destroyFramebuffer(shadowFboHandle);
     shadowFboHandle = FramebufferHandle{};
     shadowDepthTextureHandle = TextureHandle{};
+    enrolledShadowMapSize = 0;
   }
 }
 
@@ -669,11 +754,9 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
 
   // Directional lighting & shadow setup. Viewer meshes are normalized to
   // radius 1; a tight ortho keeps shadow texels on the object instead of
-  // a 30-unit empty volume.
-  const glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
-  const float shadowRadius = 2.5f;
-  const float lightDistance = 8.0f;
-  const glm::vec3 lightPos = lightDir * lightDistance;
+  // a 30-unit empty volume. Light and shadow parameters come from drawable
+  // state (products persist those values in EnvVars).
+  const glm::vec3 lightPos = lightDirection * lightDistance;
   const glm::mat4 lightView =
     glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
   const glm::mat4 lightProj = glm::ortho(-shadowRadius,
@@ -686,12 +769,13 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
 
   // Pass 1: Directional Shadow Depth Pass (when lighting and shadow depth are
   // valid)
-  if (lightingEnabled && hasTriangles && triangleMeshHandle.isValid() &&
-      shadowDepthStyleHandle.isValid()) {
+  bool shadowMapBound = false;
+  if (lightingEnabled && shadowsEnabled && hasTriangles &&
+      triangleMeshHandle.isValid() && shadowDepthStyleHandle.isValid()) {
     ensureShadowResources(value);
     if (shadowFboHandle.isValid()) {
       value->pushFramebuffer(shadowFboHandle);
-      value->pushViewport(0, 0, 1024, 1024);
+      value->pushViewport(0, 0, shadowMapSize, shadowMapSize);
       // Depth-only FBO has no color attachment. A color clear is a no-op and
       // leaves uninitialized depth at 0, so the main pass shadows every
       // fragment and lighting collapses to ambient.
@@ -709,6 +793,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
       const std::array<int, 2>& dims =
         value->getFrameContext().windowDimensions;
       value->pushViewport(0, 0, dims[0], dims[1]);
+      shadowMapBound = shadowDepthTextureHandle.isValid();
     }
   }
 
@@ -732,13 +817,29 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
                              glm::value_ptr(coloredWorld));
       value->pushUniformMat4(WorldLook::kLightSpaceMatrixUniform,
                              glm::value_ptr(lightSpaceMatrix));
-      value->pushUniformVec3(
-        WorldLook::kLightDirUniform, lightDir.x, lightDir.y, lightDir.z);
-      value->pushUniformVec3(WorldLook::kLightColorUniform, 1.0f, 0.95f, 0.9f);
-      value->pushUniformVec3(
-        WorldLook::kAmbientColorUniform, 0.2f, 0.22f, 0.25f);
+      value->pushUniformVec3(WorldLook::kLightDirUniform,
+                             lightDirection.x,
+                             lightDirection.y,
+                             lightDirection.z);
+      value->pushUniformVec3(WorldLook::kLightColorUniform,
+                             lightColor.x,
+                             lightColor.y,
+                             lightColor.z);
+      value->pushUniformVec3(WorldLook::kAmbientColorUniform,
+                             ambientColor.x,
+                             ambientColor.y,
+                             ambientColor.z);
+      value->pushUniformInt(WorldLook::kShadowsEnabledUniform,
+                            shadowMapBound ? 1 : 0);
+      value->pushUniformFloat(WorldLook::kShadowBiasUniform, shadowBias);
+      value->pushUniformFloat(WorldLook::kShadowSlopeScaleUniform,
+                              shadowSlopeScale);
+      value->pushUniformFloat(WorldLook::kShadowNormalOffsetUniform,
+                              shadowNormalOffset);
+      value->pushUniformInt(WorldLook::kShadowPcfUniform,
+                            shadowPcfEnabled ? 1 : 0);
 
-      if (shadowDepthTextureHandle.isValid()) {
+      if (shadowMapBound) {
         value->pushSetTexture(shadowDepthTextureHandle,
                               WorldLook::kShadowTextureUnit);
         value->pushUniformInt(WorldLook::kShadowMapUniform,
