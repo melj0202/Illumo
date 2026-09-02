@@ -87,6 +87,9 @@ public:
   bool IsTextureValid(TextureHandle handle) const override;
   TextureInfo GetTextureInfo(TextureHandle handle) const override;
 
+  FramebufferHandle CreateFramebuffer(
+    const FramebufferDesc& desc,
+    FramebufferAttachments* outAttachments = nullptr) override;
   FramebufferHandle CreateDepthFramebuffer(
     int width,
     int height,

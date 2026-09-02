@@ -9,6 +9,8 @@ out vec3 vFragPos;
 out vec3 vNormal;
 out vec4 vColor;
 out vec2 vTexCoord;
+out vec4 vCurrentClip;
+out vec4 vPrevClip;
 
 uniform mat4 uMVP;
 uniform mat4 uPrevMVP;
@@ -29,6 +31,8 @@ void main()
     vTexCoord = aTexCoord;
 
     vec4 currentClip = uMVP * vec4(aPos, 1.0);
+    vCurrentClip = currentClip;
+    vPrevClip = uPrevMVP * vec4(aPos, 1.0);
     if (uMotionBlurEnabled == 0 || uMotionBlurAmount <= 0.0) {
         gl_Position = currentClip;
         return;

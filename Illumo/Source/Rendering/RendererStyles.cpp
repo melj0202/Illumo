@@ -103,6 +103,55 @@ void main() {
 }
 )";
 
+static const char* kMotionBlurVertexShader = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aColor;
+layout (location = 2) in vec2 aTexCoord;
+
+out vec2 vTexCoord;
+
+void main() {
+    gl_Position = vec4(aPos.x, aPos.y, 0.0, 1.0);
+    vTexCoord = aTexCoord;
+}
+)";
+
+static const char* kMotionBlurFragmentShader = R"(
+#version 330 core
+in vec2 vTexCoord;
+out vec4 FragColor;
+
+uniform sampler2D uColorTexture;
+uniform sampler2D uVelocityTexture;
+uniform float uMotionBlurAmount;
+uniform float uMotionBlurMax;
+uniform int uMotionBlurSamples;
+
+void main() {
+    vec2 velocity = texture(uVelocityTexture, vTexCoord).rg * uMotionBlurAmount;
+    float speed = length(velocity);
+    float maxSpeed = max(uMotionBlurMax, 0.0);
+    if (speed > maxSpeed && speed > 0.0) {
+        velocity = (velocity / speed) * maxSpeed;
+    }
+
+    int samples = max(1, min(uMotionBlurSamples, 16));
+    if (speed < 0.0001 || samples <= 1) {
+        FragColor = texture(uColorTexture, vTexCoord);
+        return;
+    }
+
+    vec4 color = vec4(0.0);
+    for (int i = 0; i < samples; ++i) {
+        float t = float(i) / float(samples - 1) - 0.5;
+        vec2 offset = velocity * t;
+        color += texture(uColorTexture, vTexCoord + offset);
+    }
+    FragColor = color / float(samples);
+}
+)";
+
 static void
 fillCanvasPipeline(PipelineState& ps)
 {
@@ -224,6 +273,22 @@ Renderer::ensureBuiltinStyles()
     style.shaderHandle = enrollShader(paths);
     style.ready = style.shaderHandle.isValid();
     builtinStyleHandles[renderStyleIndex(RenderStyleId::ShadowDepth)] =
+      createStyle(style);
+  }
+
+  // Motion Blur Post-Process pass.
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = false;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kMotionBlurFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::MotionBlur)] =
       createStyle(style);
   }
 

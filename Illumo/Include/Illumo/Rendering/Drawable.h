@@ -34,8 +34,12 @@ public:
   bool isVisible() const { return visible; }
   void setVisible(bool v) { visible = v; }
 
+  uint32_t getPassMask() const { return passMask; }
+  void setPassMask(uint32_t mask) { passMask = mask; }
+
 protected:
   bool visible = true;
+  uint32_t passMask = 0xFFFFFFFF;
 };
 
 // CRTP helper: virtual Draw -> Derived::DrawImpl (immediate path only).

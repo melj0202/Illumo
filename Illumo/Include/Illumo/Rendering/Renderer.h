@@ -5,7 +5,9 @@
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/RenderLayerId.h>
+#include <Illumo/Rendering/RenderPass.h>
 #include <Illumo/Rendering/RenderStyle.h>
+#include <Illumo/Rendering/RenderTargetPool.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/ArenaAlloc.h>
@@ -59,6 +61,11 @@ private:
   MeshHandle _proofMeshHandle{};
   ShaderHandle _proofShaderHandle{};
   TextureHandle _proofTextureHandle{};
+
+  // Pass pipeline resources
+  RenderTargetPool _renderTargetPool;
+  bool _fullscreenQuadReady = false;
+  MeshHandle _fullscreenQuadMeshHandle{};
 
   // Per-frame scratch (immediate-draw pointer list, etc.). Cleared at the
   // start of RenderScene and again after submission so token payload pointers
@@ -138,6 +145,7 @@ public:
     , currentScene(nullptr)
   {
     (void)envVars;
+    _renderTargetPool.setBackend(_backend);
   }
 
   // Backend-neutral inject: production uses CreateOpenGLBackend +
@@ -156,10 +164,12 @@ public:
     , envVars(envVars)
     , currentScene(nullptr)
   {
+    _renderTargetPool.setBackend(_backend);
   }
 
   ~Renderer()
   {
+    _renderTargetPool.releaseAll();
     if (_ownedBackend) {
       _ownedBackend->Shutdown();
       _ownedBackend.reset();
@@ -551,6 +561,92 @@ public:
   }
 
   // =========================================================================
+  // Render targets & pass execution helpers
+  // =========================================================================
+
+  RenderTargetPool& getRenderTargetPool() { return _renderTargetPool; }
+  const RenderTargetPool& getRenderTargetPool() const
+  {
+    return _renderTargetPool;
+  }
+
+  PooledRenderTarget acquireRenderTarget(const PooledRenderTargetDesc& desc)
+  {
+    const std::array<int, 2>& dims = frameContext.windowDimensions;
+    return _renderTargetPool.acquire(desc, dims[0], dims[1]);
+  }
+
+  PooledRenderTarget getRenderTarget(const std::string& name) const
+  {
+    return _renderTargetPool.get(name);
+  }
+
+  void ensureFullscreenQuadMesh()
+  {
+    if (_fullscreenQuadReady && _fullscreenQuadMeshHandle.isValid()) {
+      return;
+    }
+    const float verts[32] = {
+      1.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f,  1.0f,  1.0f, 1.0f, -1.0f, 0.0f,
+      1.0f, 1.0f, 1.0f,  1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, 1.0f,  1.0f,
+      0.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f,  1.0f,  1.0f, 0.0f, 1.0f,
+    };
+    const unsigned int indices[6] = { 0, 1, 2, 0, 2, 3 };
+    _fullscreenQuadMeshHandle = enrollMesh(verts,
+                                           sizeof(verts),
+                                           indices,
+                                           sizeof(indices),
+                                           MeshVertexLayout::Pos3Color3Uv2,
+                                           false);
+    _fullscreenQuadReady = _fullscreenQuadMeshHandle.isValid();
+  }
+
+  void executePostProcessPass(const RenderPassDesc& pass,
+                              const std::array<int, 2>& targetDims)
+  {
+    (void)targetDims;
+    PipelineState ps;
+    ps.depthTestEnabled = false;
+    ps.blendEnabled = false;
+    ps.faceCullingEnabled = false;
+    ps.primitives = Primitives::Triangles;
+    if (pass.overridePipelineState) {
+      ps = pass.pipelineState;
+    }
+    pushPipelineState(ps);
+
+    if (pass.styleHandle.isValid()) {
+      bindStyle(pass.styleHandle);
+    } else if (pass.shaderHandle.isValid()) {
+      pushSetShader(pass.shaderHandle);
+    }
+
+    for (size_t i = 0; i < pass.inputTextures.size(); ++i) {
+      const PassTextureBinding& binding = pass.inputTextures[i];
+      if (binding.texture.isValid()) {
+        pushSetTexture(binding.texture, binding.slot);
+      }
+    }
+
+    for (size_t i = 0; i < pass.uniformFloats.size(); ++i) {
+      pushUniformFloat(pass.uniformFloats[i].name.c_str(),
+                       pass.uniformFloats[i].value);
+    }
+    for (size_t i = 0; i < pass.uniformInts.size(); ++i) {
+      pushUniformInt(pass.uniformInts[i].name.c_str(),
+                     pass.uniformInts[i].value);
+    }
+    for (size_t i = 0; i < pass.uniformMat4s.size(); ++i) {
+      pushUniformMat4(pass.uniformMat4s[i].name.c_str(),
+                      pass.uniformMat4s[i].matrix.data());
+    }
+
+    ensureFullscreenQuadMesh();
+    pushSetMesh(_fullscreenQuadMeshHandle);
+    pushDrawIndexed(6);
+  }
+
+  // =========================================================================
   // Scene render (token-first; hybrid immediate only if AppendCommands fails)
   // Production: Canvas / CommandLine / GLString / SplashText are pure-token
   // (D-R10). Immediate Draw() remains for test stubs and any future unmigrated
@@ -593,17 +689,96 @@ public:
            ++layerIndex) {
         const RenderLayerId layer = static_cast<RenderLayerId>(layerIndex);
         const std::vector<DrawableBase*>& list = scene->drawablesIn(layer);
-        for (size_t i = 0; i < list.size(); ++i) {
-          DrawableBase* drawable = list[i];
-          if (!drawable) {
-            continue;
+
+        if (!scene->hasCustomPasses(layer)) {
+          for (size_t i = 0; i < list.size(); ++i) {
+            DrawableBase* drawable = list[i];
+            if (!drawable) {
+              continue;
+            }
+            // Pure-token: returns true. Immediate fallback if false (tests /
+            // stubs).
+            if (!drawable->AppendCommands(this)) {
+              if (immediateList != nullptr && immediateCount < immediateCap) {
+                immediateList[immediateCount] = drawable;
+                immediateCount += 1;
+              }
+            }
           }
-          // Pure-token: returns true. Immediate fallback if false (tests /
-          // stubs).
-          if (!drawable->AppendCommands(this)) {
-            if (immediateList != nullptr && immediateCount < immediateCap) {
-              immediateList[immediateCount] = drawable;
-              immediateCount += 1;
+        } else {
+          const std::vector<RenderPassDesc>& passes = scene->passesIn(layer);
+          for (size_t p = 0; p < passes.size(); ++p) {
+            const RenderPassDesc& pass = passes[p];
+
+            FramebufferHandle targetFbo{};
+            int targetW = frameContext.windowDimensions[0];
+            int targetH = frameContext.windowDimensions[1];
+
+            if (!pass.useScreenTarget) {
+              if (!pass.pooledTargetName.empty()) {
+                PooledRenderTarget pooled =
+                  _renderTargetPool.acquire(pass.targetDesc,
+                                            frameContext.windowDimensions[0],
+                                            frameContext.windowDimensions[1]);
+                targetFbo = pooled.fboHandle;
+                targetW = pooled.width;
+                targetH = pooled.height;
+              }
+            }
+
+            pushFramebuffer(targetFbo);
+
+            if (pass.customViewport) {
+              pushViewport(pass.viewportX,
+                           pass.viewportY,
+                           pass.viewportWidth,
+                           pass.viewportHeight);
+            } else {
+              pushViewport(0, 0, targetW, targetH);
+            }
+
+            if (pass.clear.clearColor && pass.clear.clearDepth) {
+              pushClearScreen(pass.clear.clearColorValue[0],
+                              pass.clear.clearColorValue[1],
+                              pass.clear.clearColorValue[2],
+                              pass.clear.clearColorValue[3]);
+            } else {
+              if (pass.clear.clearColor) {
+                pushClearScreen(pass.clear.clearColorValue[0],
+                                pass.clear.clearColorValue[1],
+                                pass.clear.clearColorValue[2],
+                                pass.clear.clearColorValue[3]);
+              }
+              if (pass.clear.clearDepth) {
+                pushClearDepth();
+              }
+            }
+
+            if (pass.overridePipelineState) {
+              pushPipelineState(pass.pipelineState);
+            }
+
+            if (pass.type == PassType::Draw) {
+              for (size_t i = 0; i < list.size(); ++i) {
+                DrawableBase* drawable = list[i];
+                if (!drawable) {
+                  continue;
+                }
+                if ((drawable->getPassMask() & pass.passMask) == 0) {
+                  continue;
+                }
+                if (!drawable->AppendCommands(this)) {
+                  if (immediateList != nullptr &&
+                      immediateCount < immediateCap) {
+                    immediateList[immediateCount] = drawable;
+                    immediateCount += 1;
+                  }
+                }
+              }
+            } else if (pass.type == PassType::PostProcess) {
+              executePostProcessPass(pass, { targetW, targetH });
+            } else if (pass.type == PassType::Custom && pass.customExecution) {
+              pass.customExecution(this);
             }
           }
         }

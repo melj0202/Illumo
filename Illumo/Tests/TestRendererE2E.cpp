@@ -423,6 +423,141 @@ testRendererHeaderIsBackendNeutral()
           "Renderer.h still depends on IBackend");
 }
 
+static void
+testRenderSceneLayerPassPipeline()
+{
+  std::printf(
+    "\n--- e2e: Layer-defined render passes with post-processing ---\n");
+  E2ENullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  Scene scene(&window, &camera);
+
+  // Configure World layer to have 2 passes:
+  // 1. Geometry pass to offscreen MRT target (color + velocity)
+  // 2. Motion blur post-process pass to screen
+  RenderPassDesc geomPass;
+  geomPass.name = "GeometryAndVelocity";
+  geomPass.type = PassType::Draw;
+  geomPass.useScreenTarget = false;
+  geomPass.pooledTargetName = "WorldColorVelocity";
+  geomPass.targetDesc.name = "WorldColorVelocity";
+  geomPass.targetDesc.windowRelative = true;
+
+  FramebufferAttachmentDesc color0;
+  color0.format = TextureFormat::RGBA8;
+  geomPass.targetDesc.colorAttachments.push_back(color0);
+
+  FramebufferAttachmentDesc color1;
+  color1.format = TextureFormat::RG16F;
+  geomPass.targetDesc.colorAttachments.push_back(color1);
+
+  geomPass.targetDesc.depthStencilFormat = TextureFormat::Depth24;
+  geomPass.clear.clearColor = true;
+  geomPass.clear.clearColorValue = { 0.2f, 0.3f, 0.4f, 1.0f };
+  geomPass.clear.clearDepth = true;
+
+  RenderPassDesc postPass;
+  postPass.name = "MotionBlurResolve";
+  postPass.type = PassType::PostProcess;
+  postPass.useScreenTarget = true;
+  postPass.styleHandle =
+    renderer.getBuiltinStyleHandle(RenderStyleId::MotionBlur);
+
+  PassUniformFloat blurAmount;
+  blurAmount.name = "uMotionBlurAmount";
+  blurAmount.value = 0.5f;
+  postPass.uniformFloats.push_back(blurAmount);
+
+  std::vector<RenderPassDesc> worldPasses;
+  worldPasses.push_back(geomPass);
+  worldPasses.push_back(postPass);
+  scene.SetLayerPasses(RenderLayerId::World, worldPasses);
+
+  e2eTrue(scene.hasCustomPasses(RenderLayerId::World),
+          "World layer has custom passes");
+  e2eTrue(!scene.hasCustomPasses(RenderLayerId::UI),
+          "UI layer has no custom passes");
+
+  TokenQuadDrawable worldQuad;
+  worldQuad.enroll(&renderer);
+  TokenQuadDrawable uiQuad;
+  uiQuad.enroll(&renderer);
+
+  scene.AddDrawable(&worldQuad, RenderLayerId::World);
+  scene.AddDrawable(&uiQuad, RenderLayerId::UI);
+
+  renderer.RenderScene(&scene, &camera);
+
+  // Verification
+  e2eTrue(worldQuad.appendCallCount == 1,
+          "world quad received appendCommands in geom pass");
+  e2eTrue(uiQuad.appendCallCount == 1,
+          "UI quad received appendCommands in default UI pass");
+
+  // Verify offscreen target was created in target pool
+  PooledRenderTarget pooledTarget =
+    renderer.getRenderTarget("WorldColorVelocity");
+  e2eTrue(pooledTarget.isValid(), "pooled render target is valid");
+  e2eEqInt(pooledTarget.width, 1280, "target width matches window width");
+  e2eEqInt(pooledTarget.height, 720, "target height matches window height");
+  e2eEqSize(pooledTarget.attachments.colorTextures.size(),
+            2u,
+            "target has 2 color attachments");
+
+  // Inspect submitted commands
+  e2eTrue(mock.getLastSubmittedCount() > 0, "commands submitted");
+  e2eTrue(mock.countSubmittedOfType(CommandType::SetFramebuffer) >= 2,
+          "at least two SetFramebuffer tokens submitted");
+}
+
+static void
+testRenderTargetPoolResizing()
+{
+  std::printf("\n--- e2e: RenderTargetPool automatic resizing ---\n");
+  MockBackend mock;
+  mock.Initialize();
+  RenderTargetPool pool(&mock);
+
+  PooledRenderTargetDesc desc;
+  desc.name = "TestResizeTarget";
+  desc.windowRelative = true;
+  desc.scale = 1.0f;
+  FramebufferAttachmentDesc color0;
+  color0.format = TextureFormat::RGBA8;
+  desc.colorAttachments.push_back(color0);
+
+  // Initial acquire at 1280x720
+  PooledRenderTarget target1 = pool.acquire(desc, 1280, 720);
+  e2eTrue(target1.isValid(), "target1 is valid");
+  e2eEqInt(target1.width, 1280, "target1 width 1280");
+  e2eEqInt(target1.height, 720, "target1 height 720");
+
+  // Re-acquire at same size: reuses existing
+  PooledRenderTarget targetReused = pool.acquire(desc, 1280, 720);
+  e2eTrue(targetReused.fboHandle == target1.fboHandle,
+          "target reused when size unchanged");
+
+  // Resize to 1920x1080
+  PooledRenderTarget target2 = pool.acquire(desc, 1920, 1080);
+  e2eTrue(target2.isValid(), "target2 is valid after resize");
+  e2eEqInt(target2.width, 1920, "target2 width resized to 1920");
+  e2eEqInt(target2.height, 1080, "target2 height resized to 1080");
+  e2eTrue(target2.fboHandle != target1.fboHandle,
+          "old target handle was replaced");
+  e2eTrue(!mock.IsFramebufferValid(target1.fboHandle), "old FBO was destroyed");
+  e2eTrue(mock.IsFramebufferValid(target2.fboHandle), "new FBO is valid");
+
+  pool.releaseAll();
+  e2eTrue(!mock.IsFramebufferValid(target2.fboHandle),
+          "releaseAll destroys active FBO");
+}
+
 static int
 runRendererE2ECase(void (*testFunction)())
 {
@@ -450,4 +585,10 @@ registerRendererE2ETests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Renderer.ProofQuad",
                []() { return runRendererE2ECase(testRenderProofQuadOnMock); });
+  registry.add("Illumo.Renderer.LayerPassPipeline", []() {
+    return runRendererE2ECase(testRenderSceneLayerPassPipeline);
+  });
+  registry.add("Illumo.Renderer.RenderTargetPoolResizing", []() {
+    return runRendererE2ECase(testRenderTargetPoolResizing);
+  });
 }

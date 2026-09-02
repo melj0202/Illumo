@@ -57,30 +57,116 @@ public:
     UploadToGPU(data, width, height, m_channels, options);
   }
 
-  static std::unique_ptr<GLTexture> CreateDepthTexture(int width, int height)
+  static std::unique_ptr<GLTexture> CreateRenderTargetTexture(
+    int width,
+    int height,
+    TextureFormat format,
+    TextureFilter filter = TextureFilter::Nearest,
+    TextureWrap wrap = TextureWrap::ClampToEdge)
   {
     auto tex = std::make_unique<GLTexture>();
     tex->m_size = { width, height };
-    tex->m_channels = 1;
+
+    GLint internalFormat = GL_RGBA8;
+    GLenum glFormat = GL_RGBA;
+    GLenum glType = GL_UNSIGNED_BYTE;
+    int channels = 4;
+
+    switch (format) {
+      case TextureFormat::RGBA8:
+        internalFormat = GL_RGBA8;
+        glFormat = GL_RGBA;
+        glType = GL_UNSIGNED_BYTE;
+        channels = 4;
+        break;
+      case TextureFormat::RGB8:
+        internalFormat = GL_RGB8;
+        glFormat = GL_RGB;
+        glType = GL_UNSIGNED_BYTE;
+        channels = 3;
+        break;
+      case TextureFormat::R8:
+        internalFormat = GL_R8;
+        glFormat = GL_RED;
+        glType = GL_UNSIGNED_BYTE;
+        channels = 1;
+        break;
+      case TextureFormat::RGBA16F:
+        internalFormat = GL_RGBA16F;
+        glFormat = GL_RGBA;
+        glType = GL_FLOAT;
+        channels = 4;
+        break;
+      case TextureFormat::RG16F:
+        internalFormat = GL_RG16F;
+        glFormat = GL_RG;
+        glType = GL_FLOAT;
+        channels = 2;
+        break;
+      case TextureFormat::R16F:
+        internalFormat = GL_R16F;
+        glFormat = GL_RED;
+        glType = GL_FLOAT;
+        channels = 1;
+        break;
+      case TextureFormat::Depth24:
+        internalFormat = GL_DEPTH_COMPONENT24;
+        glFormat = GL_DEPTH_COMPONENT;
+        glType = GL_FLOAT;
+        channels = 1;
+        break;
+      case TextureFormat::Depth24Stencil8:
+        internalFormat = GL_DEPTH24_STENCIL8;
+        glFormat = GL_DEPTH_STENCIL;
+        glType = GL_UNSIGNED_INT_24_8;
+        channels = 2;
+        break;
+      default:
+        break;
+    }
+
+    tex->m_channels = channels;
     glGenTextures(1, &tex->m_id);
     glBindTexture(GL_TEXTURE_2D, tex->m_id);
     glTexImage2D(GL_TEXTURE_2D,
                  0,
-                 GL_DEPTH_COMPONENT24,
+                 internalFormat,
                  width,
                  height,
                  0,
-                 GL_DEPTH_COMPONENT,
-                 GL_FLOAT,
+                 glFormat,
+                 glType,
                  nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
-    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+
+    const GLint glFilter =
+      (filter == TextureFilter::Linear) ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, glFilter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, glFilter);
+
+    const GLint glWrap =
+      (wrap == TextureWrap::Repeat) ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, glWrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, glWrap);
+
+    if (format == TextureFormat::Depth24 ||
+        format == TextureFormat::Depth24Stencil8) {
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+      float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+      glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+    }
+
     glBindTexture(GL_TEXTURE_2D, 0);
     return tex;
+  }
+
+  static std::unique_ptr<GLTexture> CreateDepthTexture(int width, int height)
+  {
+    return CreateRenderTargetTexture(width,
+                                     height,
+                                     TextureFormat::Depth24,
+                                     TextureFilter::Nearest,
+                                     TextureWrap::ClampToEdge);
   }
 
   ~GLTexture() override { Destroy(); }
