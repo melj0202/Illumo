@@ -1,5 +1,6 @@
 #include "EditorModule.h"
 #include "EditorUiAtlas.h"
+#include "IlscCodec.h"
 #include "TestAccess.h"
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -641,6 +642,54 @@ testMousePanningMovesCameraNaturalDirection()
   testTrue(g, pos.y < 0.0, "dragging down moves camera Y down");
 }
 
+static void
+testLaunchScenePathLoadsDocument()
+{
+  testSection("EditorModule: constructor path / LaunchScene loads .ilsc");
+  IlscDocument document;
+  IlscNode node;
+  node.id = "n1";
+  node.name = "LaunchCube";
+  node.kind = SceneNodeKind::SolidCube;
+  document.nodes.push_back(node);
+  const std::filesystem::path path = "launch-from-arg.ilsc";
+  std::string error;
+  testTrue(g,
+           IlscCodec::writeFile(path.string(), document, &error),
+           "seeds scene file");
+
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  env.setVar("fontSize", "13");
+  Camera camera(glm::vec2(0.0f, 0.0f), 32.0f, &env);
+  MockBackend mock;
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  AssetManager assets(&renderer, false);
+  CommandRegistry registry;
+  CommandLine console(&env, &registry, &window, &renderer, "IllEd");
+  InputManager input(nullptr);
+  Scene scene(&window, &camera);
+  IllumoContext context{ &scene,  &window, &console, &input,   &renderer,
+                         &assets, &env,    &camera,  &registry };
+  EditorModule module(path.string());
+  mock.Initialize();
+  seedShippedAtlas();
+  const bool started = module.Start(&context);
+  testTrue(g, started, "module starts with positional scene path");
+  testEqSize(g,
+             EditorModuleTestAccess::document(module).nodeCount(),
+             1u,
+             "LaunchScene path loaded one node");
+  const IlscNode* loaded =
+    EditorModuleTestAccess::document(module).nodeAt(0);
+  testTrue(g,
+           loaded != nullptr && loaded->name == "LaunchCube",
+           "loaded the seeded cube");
+  module.Exit();
+}
+
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
@@ -712,6 +761,11 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.FontSizeImmediateRuntimeChange", []() {
     g = {};
     testFontSizeImmediateRuntimeChange();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.LaunchScenePath", []() {
+    g = {};
+    testLaunchScenePathLoadsDocument();
     return g.failures;
   });
 }
