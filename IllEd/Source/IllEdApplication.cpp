@@ -24,9 +24,10 @@ CreateIllumoApplication()
   application.commandLine.applicationName = application.applicationName;
   application.commandLine.description = "Illumo world editor";
   application.commandLine.usage = "IllEd.exe [FILE]";
+  application.commandLine.positionalEnvironmentVariable = "LaunchScene";
   application.commandLine.helpSections = {
     "IllEd authors SceneGraph documents and writes .ilsc files.\n"
-    "Open a scene through File > Open or set LaunchScene in envvars.json.\n",
+    "Open a scene through File > Open, pass FILE, or set LaunchScene.\n",
   };
   application.applyDefaults = IllEdConfig::ApplyDefaults;
   application.createRequiredModule = createIllEdModule;
