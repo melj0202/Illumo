@@ -81,7 +81,11 @@ void main()
     vec4 baseColor = vColor;
     FragColor = vec4(lighting * baseColor.rgb, baseColor.a);
 
-    vec2 currentNdc = vCurrentClip.xy / max(abs(vCurrentClip.w), 1e-5);
-    vec2 prevNdc = vPrevClip.xy / max(abs(vPrevClip.w), 1e-5);
-    FragVelocity = (currentNdc - prevNdc) * 0.5;
+    if (uMotionBlurEnabled != 0) {
+        vec2 currentNdc = vCurrentClip.xy / max(abs(vCurrentClip.w), 1e-5);
+        vec2 prevNdc = vPrevClip.xy / max(abs(vPrevClip.w), 1e-5);
+        FragVelocity = (currentNdc - prevNdc) * 0.5;
+    } else {
+        FragVelocity = vec2(0.0);
+    }
 }
