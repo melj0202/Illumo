@@ -20,6 +20,7 @@ uniform float uShadowBias;
 uniform float uShadowSlopeScale;
 uniform float uShadowNormalOffset;
 uniform int uShadowPcf;
+uniform int uMotionBlurEnabled;
 
 float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
 {
