@@ -632,13 +632,48 @@ testMousePanningMovesCameraNaturalDirection()
   fixture.window.mouseY = 350.0;
   fixture.module.Update(0.016);
 
-  // Dragging right (dx > 0) should shift camera left (targetPosition.x < 0)
-  // Dragging down (dy > 0 in screen space) should shift camera down
-  // (targetPosition.y < 0 in world space)
+  // Dragging right (dx > 0) should shift camera target left (targetPosition.x <
+  // 0) Dragging down (dy > 0 in screen space) should shift camera target up
+  // (targetPosition.y > 0 in world space, moving the visible scene downward
+  // with the cursor)
   fixture.camera.Update(1.0f);
   const glm::dvec2 pos = fixture.camera.GetPositionPrecise();
   testTrue(g, pos.x < 0.0, "dragging right moves camera X left");
-  testTrue(g, pos.y < 0.0, "dragging down moves camera Y down");
+  testTrue(g, pos.y > 0.0, "dragging down moves camera Y up (world down)");
+}
+
+static void
+test3DMousePanningRespectsCameraOrientation()
+{
+  testSection(
+    "EditorModule: 3D mouse panning moves target along camera orientation");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "module starts");
+
+  EditorModuleTestAccess::handleCommand(fixture.module,
+                                        EditorCommand::SetMode3D);
+  fixture.camera.SetPositionPrecise(0.0, 0.0);
+  fixture.camera.SetZoom(1.0f);
+  fixture.window.mouseX = 500.0;
+  fixture.window.mouseY = 300.0;
+  fixture.module.Update(0.016);
+
+  // Default camera yaw is 0.0. Looking down -Z, right vector is (+1, 0, 0).
+  // Dragging right (mouse 500 -> 550) should shift target left (-X).
+  // Dragging down (mouse 300 -> 350) should shift target forward (-Z,
+  // position.y < 0).
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseMiddle, InputAction::Press);
+  fixture.module.Update(0.016);
+
+  fixture.window.mouseX = 550.0;
+  fixture.window.mouseY = 350.0;
+  fixture.module.Update(0.016);
+
+  fixture.camera.Update(1.0f);
+  const glm::dvec2 pos = fixture.camera.GetPositionPrecise();
+  testTrue(g, pos.x < 0.0, "3D dragging right moves target -X");
+  testTrue(g, pos.y < 0.0, "3D dragging down moves target -Z (forward)");
 }
 
 void
@@ -647,6 +682,11 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.MousePanningDirection", []() {
     g = {};
     testMousePanningMovesCameraNaturalDirection();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.3DMousePanningDirection", []() {
+    g = {};
+    test3DMousePanningRespectsCameraOrientation();
     return g.failures;
   });
   registry.add("IllEd.Module.2DNodeRendering", []() {

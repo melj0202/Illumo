@@ -606,56 +606,108 @@ EditorModule::handleCommand(EditorCommand command)
 void
 EditorModule::updateCamera(double dt)
 {
-  if (ic == nullptr || ic->camera == nullptr || ic->inputManager == nullptr) {
+  if (ic == nullptr || ic->camera == nullptr || ic->inputManager == nullptr ||
+      ic->window == nullptr) {
     return;
   }
-  if (!ic->inputManager->isControlPressed()) {
-    const float speed = 420.0f * static_cast<float>(dt);
-    glm::vec2 pan(0.0f, 0.0f);
-    if (ic->inputManager->isKeyPressed(KeyCode::A) ||
-        ic->inputManager->isKeyPressed(KeyCode::Left)) {
-      pan.x -= speed;
-    }
-    if (ic->inputManager->isKeyPressed(KeyCode::D) ||
-        ic->inputManager->isKeyPressed(KeyCode::Right)) {
-      pan.x += speed;
-    }
-    if (ic->inputManager->isKeyPressed(KeyCode::W) ||
-        ic->inputManager->isKeyPressed(KeyCode::Up)) {
-      pan.y += speed;
-    }
-    if (ic->inputManager->isKeyPressed(KeyCode::S) ||
-        ic->inputManager->isKeyPressed(KeyCode::Down)) {
-      pan.y -= speed;
-    }
-    if (pan.x != 0.0f || pan.y != 0.0f) {
-      ic->camera->Pan(pan);
-    }
-  }
-
   const std::array<double, 2> mouse = ic->window->getMouseCoords();
   const bool middle =
     ic->inputManager->isMouseButtonPressed(KeyCode::MouseMiddle);
   const bool right =
     ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
-  if (middle || (right && m_document.worldMode() != IlscWorldMode::World3D)) {
-    if (m_panning) {
-      ic->camera->Pan(
-        glm::dvec2(m_lastMouseX - mouse[0], m_lastMouseY - mouse[1]));
-    }
-    m_panning = true;
-  } else if (!(m_document.worldMode() == IlscWorldMode::World3D && right)) {
-    m_panning = false;
-  }
 
-  if (m_document.worldMode() == IlscWorldMode::World3D && right) {
-    IlscCameraState camera = m_document.camera();
-    camera.yaw += static_cast<float>(mouse[0] - m_lastMouseX) * 0.01f;
-    camera.pitch = std::clamp(
-      camera.pitch + static_cast<float>(m_lastMouseY - mouse[1]) * 0.01f,
-      0.05f,
-      1.5f);
-    m_document.setCamera(camera);
+  if (m_document.worldMode() == IlscWorldMode::World3D) {
+    const IlscCameraState& camState = m_document.camera();
+    const float sinYaw = std::sin(camState.yaw);
+    const float cosYaw = std::cos(camState.yaw);
+    // Camera right vector on XZ plane: (cosYaw, 0, -sinYaw)
+    // Camera forward vector on XZ plane: (-sinYaw, 0, -cosYaw)
+    const glm::dvec2 rightDir(cosYaw, -sinYaw);
+    const glm::dvec2 forwardDir(-sinYaw, -cosYaw);
+
+    if (!ic->inputManager->isControlPressed()) {
+      const double speed = 420.0 * dt;
+      glm::dvec2 pan(0.0, 0.0);
+      if (ic->inputManager->isKeyPressed(KeyCode::A) ||
+          ic->inputManager->isKeyPressed(KeyCode::Left)) {
+        pan -= rightDir * speed;
+      }
+      if (ic->inputManager->isKeyPressed(KeyCode::D) ||
+          ic->inputManager->isKeyPressed(KeyCode::Right)) {
+        pan += rightDir * speed;
+      }
+      if (ic->inputManager->isKeyPressed(KeyCode::W) ||
+          ic->inputManager->isKeyPressed(KeyCode::Up)) {
+        pan += forwardDir * speed;
+      }
+      if (ic->inputManager->isKeyPressed(KeyCode::S) ||
+          ic->inputManager->isKeyPressed(KeyCode::Down)) {
+        pan -= forwardDir * speed;
+      }
+      if (pan.x != 0.0 || pan.y != 0.0) {
+        ic->camera->Pan(pan);
+      }
+    }
+
+    if (middle) {
+      if (m_panning) {
+        const double deltaScreenX = mouse[0] - m_lastMouseX;
+        const double deltaScreenY = mouse[1] - m_lastMouseY;
+        // Dragging mouse right moves world right (camera moves left)
+        // Dragging mouse down moves world towards camera / down screen (camera
+        // moves forward)
+        const glm::dvec2 panOffset =
+          -rightDir * deltaScreenX + forwardDir * deltaScreenY;
+        ic->camera->Pan(panOffset);
+      }
+      m_panning = true;
+    } else {
+      m_panning = false;
+    }
+
+    if (right) {
+      IlscCameraState camera = m_document.camera();
+      camera.yaw += static_cast<float>(mouse[0] - m_lastMouseX) * 0.01f;
+      camera.pitch = std::clamp(
+        camera.pitch + static_cast<float>(m_lastMouseY - mouse[1]) * 0.01f,
+        0.05f,
+        1.5f);
+      m_document.setCamera(camera);
+    }
+  } else {
+    if (!ic->inputManager->isControlPressed()) {
+      const float speed = 420.0f * static_cast<float>(dt);
+      glm::vec2 pan(0.0f, 0.0f);
+      if (ic->inputManager->isKeyPressed(KeyCode::A) ||
+          ic->inputManager->isKeyPressed(KeyCode::Left)) {
+        pan.x -= speed;
+      }
+      if (ic->inputManager->isKeyPressed(KeyCode::D) ||
+          ic->inputManager->isKeyPressed(KeyCode::Right)) {
+        pan.x += speed;
+      }
+      if (ic->inputManager->isKeyPressed(KeyCode::W) ||
+          ic->inputManager->isKeyPressed(KeyCode::Up)) {
+        pan.y += speed;
+      }
+      if (ic->inputManager->isKeyPressed(KeyCode::S) ||
+          ic->inputManager->isKeyPressed(KeyCode::Down)) {
+        pan.y -= speed;
+      }
+      if (pan.x != 0.0f || pan.y != 0.0f) {
+        ic->camera->Pan(pan);
+      }
+    }
+
+    if (middle || right) {
+      if (m_panning) {
+        ic->camera->Pan(
+          glm::dvec2(m_lastMouseX - mouse[0], mouse[1] - m_lastMouseY));
+      }
+      m_panning = true;
+    } else {
+      m_panning = false;
+    }
   }
 
   double* scroll = ic->inputManager->getMouseScrollOffset();
