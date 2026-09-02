@@ -25,6 +25,18 @@ enum class EditorPendingAction
   ExitEditor
 };
 
+enum class GizmoPart
+{
+  None,
+  Center,
+  AxisX,
+  AxisY,
+  AxisZ,
+  PlaneXY,
+  PlaneXZ,
+  PlaneYZ
+};
+
 class EditorModule : public IModule
 {
   friend class EditorModuleTestAccess;
@@ -65,6 +77,11 @@ private:
   float m_animTime;
   EditorPendingAction m_pendingAction;
   std::string m_appliedFontSizeVar;
+  GizmoPart m_hoveredGizmoPart = GizmoPart::None;
+  GizmoPart m_activeGizmoPart = GizmoPart::None;
+  glm::vec3 m_dragGizmoOrigin{ 0.0f };
+  glm::vec3 m_dragGizmoHitOffset{ 0.0f };
+  float m_cameraTargetY = 0.0f;
 
   void syncFontSize();
   void applyFontSize(float size);
@@ -91,6 +108,20 @@ private:
                      float screenY,
                      float* worldX,
                      float* worldY) const;
+  bool screenToWorldRay(float screenX,
+                        float screenY,
+                        glm::vec3* rayOrigin,
+                        glm::vec3* rayDir) const;
+  float gizmoScale(const glm::vec3& worldPos) const;
+  GizmoPart hitTestGizmo(float screenX,
+                         float screenY,
+                         const glm::vec3& gizmoOrigin,
+                         float gizmoScale) const;
+  bool intersectGizmoConstraint(GizmoPart part,
+                                const glm::vec3& gizmoOrigin,
+                                const glm::vec3& rayOrigin,
+                                const glm::vec3& rayDir,
+                                glm::vec3* outIntersection) const;
   void applyActiveToolAt(float worldX, float worldY);
   void nudgeSelectedExtent();
   void cycleSelectedColor();

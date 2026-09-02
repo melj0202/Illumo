@@ -77,4 +77,42 @@ public:
   {
     return module.screenToWorld(screenX, screenY, worldX, worldY);
   }
+
+  static bool screenToWorldRay(const EditorModule& module,
+                               float screenX,
+                               float screenY,
+                               glm::vec3* rayOrigin,
+                               glm::vec3* rayDir)
+  {
+    return module.screenToWorldRay(screenX, screenY, rayOrigin, rayDir);
+  }
+
+  static float gizmoScale(const EditorModule& module, const glm::vec3& worldPos)
+  {
+    return module.gizmoScale(worldPos);
+  }
+
+  static GizmoPart hitTestGizmo(const EditorModule& module,
+                                float screenX,
+                                float screenY,
+                                const glm::vec3& gizmoOrigin,
+                                float gizmoScale)
+  {
+    return module.hitTestGizmo(screenX, screenY, gizmoOrigin, gizmoScale);
+  }
+
+  static GizmoPart activeGizmoPart(const EditorModule& module)
+  {
+    return module.m_activeGizmoPart;
+  }
+
+  static GizmoPart hoveredGizmoPart(const EditorModule& module)
+  {
+    return module.m_hoveredGizmoPart;
+  }
+
+  static bool isDragging(const EditorModule& module)
+  {
+    return module.m_dragging;
+  }
 };

@@ -350,6 +350,16 @@ EditorDocument::setColor(const std::string& id, ColorRgba color)
 bool
 EditorDocument::translate(const std::string& id, float dx, float dy)
 {
+  const Vector3 worldDelta(
+    dx,
+    m_document.worldMode == IlscWorldMode::World3D ? 0.0f : dy,
+    m_document.worldMode == IlscWorldMode::World3D ? dy : 0.0f);
+  return translate(id, worldDelta);
+}
+
+bool
+EditorDocument::translate(const std::string& id, const Vector3& deltaWorld)
+{
   IlscNode* node = findNode(id);
   if (node == nullptr) {
     return false;
@@ -357,19 +367,10 @@ EditorDocument::translate(const std::string& id, float dx, float dy)
   if (!node->parentId.empty()) {
     const Matrix4 parentWorld = worldMatrix(node->parentId);
     const Matrix4 invParent = glm::inverse(parentWorld);
-    const Vector3 worldDelta(
-      dx,
-      m_document.worldMode == IlscWorldMode::World3D ? 0.0f : dy,
-      m_document.worldMode == IlscWorldMode::World3D ? dy : 0.0f);
-    const Vector3 localDelta = glm::mat3(invParent) * worldDelta;
+    const Vector3 localDelta = glm::mat3(invParent) * deltaWorld;
     node->transform.position += localDelta;
   } else {
-    node->transform.position.x += dx;
-    if (m_document.worldMode == IlscWorldMode::World3D) {
-      node->transform.position.z += dy;
-    } else {
-      node->transform.position.y += dy;
-    }
+    node->transform.position += deltaWorld;
   }
   m_dirty = true;
   return true;

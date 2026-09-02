@@ -676,6 +676,155 @@ test3DMousePanningRespectsCameraOrientation()
   testTrue(g, pos.y < 0.0, "3D dragging down moves target -Z (forward)");
 }
 
+static void
+test3DCameraElevationKeys()
+{
+  testSection("EditorModule: 3D camera elevation via E (Up) and Q (Down)");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "module starts");
+
+  EditorModuleTestAccess::handleCommand(fixture.module,
+                                        EditorCommand::SetMode3D);
+  fixture.module.Update(0.016);
+
+  const glm::vec3 initialEye = fixture.camera.getEye();
+  const glm::vec3 initialTarget = fixture.camera.getTarget();
+
+  // Press E to elevate camera Up
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Press);
+  fixture.module.Update(0.1);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Release);
+
+  const glm::vec3 elevatedEye = fixture.camera.getEye();
+  const glm::vec3 elevatedTarget = fixture.camera.getTarget();
+  testTrue(g,
+           elevatedTarget.y > initialTarget.y,
+           "pressing E elevates camera target Y");
+  testTrue(g, elevatedEye.y > initialEye.y, "pressing E elevates camera eye Y");
+
+  // Press Q to lower camera Down
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::Q, InputAction::Press);
+  fixture.module.Update(0.2);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::Q, InputAction::Release);
+
+  const glm::vec3 loweredEye = fixture.camera.getEye();
+  const glm::vec3 loweredTarget = fixture.camera.getTarget();
+  testTrue(
+    g, loweredTarget.y < elevatedTarget.y, "pressing Q lowers camera target Y");
+  testTrue(g, loweredEye.y < elevatedEye.y, "pressing Q lowers camera eye Y");
+}
+
+static void
+testTransformGizmoHitAndConstraints()
+{
+  testSection(
+    "EditorModule: Transform gizmo hit testing and constraint dragging");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "module starts");
+
+  EditorModuleTestAccess::handleCommand(fixture.module,
+                                        EditorCommand::SetMode3D);
+  EditorModuleTestAccess::createNode(fixture.module, SceneNodeKind::SolidCube);
+  const std::string id = EditorModuleTestAccess::selectedId(fixture.module);
+  testTrue(g, !id.empty(), "cube created and selected");
+
+  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  document.setTransform(id,
+                        Transform3D::fromPosition(Vector3(0.0f, 0.0f, 0.0f)));
+  fixture.camera.SetPositionPrecise(0.0, 0.0);
+  fixture.camera.SetZoom(32.0f);
+  fixture.module.Update(0.016);
+
+  // Gizmo is centered at world (0, 0, 0)
+  const glm::vec3 gizmoOrigin(0.0f, 0.0f, 0.0f);
+  const float initialScale =
+    EditorModuleTestAccess::gizmoScale(fixture.module, gizmoOrigin);
+  testTrue(g,
+           initialScale > 0.3f && initialScale < 2.0f,
+           "initial gizmo scale is well-proportioned");
+
+  // When camera zooms out (distance increases), world gizmoScale increases
+  // proportionally so that screen-space visual size remains stable rather than
+  // wildly blowing up or shrinking
+  fixture.camera.SetZoom(8.0f);
+  fixture.module.Update(0.016);
+  const float zoomedOutScale =
+    EditorModuleTestAccess::gizmoScale(fixture.module, gizmoOrigin);
+  testTrue(g,
+           zoomedOutScale > initialScale,
+           "zoomed out camera increases world scale for screen stability");
+
+  // Screen center corresponds to world (0, 0, 0)
+  const float centerX = 640.0f;
+  const float centerY = 360.0f;
+
+  const GizmoPart centerHit = EditorModuleTestAccess::hitTestGizmo(
+    fixture.module, centerX, centerY, gizmoOrigin, zoomedOutScale);
+  testTrue(
+    g, centerHit == GizmoPart::Center, "center of gizmo hits Center part");
+
+  // Translating via document with Vector3 directly
+  testTrue(g,
+           document.translate(id, Vector3(5.0f, 2.0f, -3.0f)),
+           "translate 3D vector");
+  const IlscNode* node = document.findNode(id);
+  testTrue(g,
+           node != nullptr && node->transform.position.x == 5.0f,
+           "node position X is 5");
+  testTrue(g,
+           node != nullptr && node->transform.position.y == 2.0f,
+           "node position Y is 2");
+  testTrue(g,
+           node != nullptr && node->transform.position.z == -3.0f,
+           "node position Z is -3");
+
+  // Drag continuity: start dragging center, move outside window / over UI, and
+  // ensure drag is preserved Reset node to 0,0,0
+  document.setTransform(id,
+                        Transform3D::fromPosition(Vector3(0.0f, 0.0f, 0.0f)));
+  fixture.window.mouseX = 640.0;
+  fixture.window.mouseY = 360.0;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           EditorModuleTestAccess::isDragging(fixture.module),
+           "drag started on center click");
+
+  // Move mouse over sidebar / off normal world (e.g. x=20, y=100 which is
+  // inside sidebar UI)
+  fixture.window.mouseX = 20.0;
+  fixture.window.mouseY = 100.0;
+  fixture.module.Update(0.016);
+  testTrue(g,
+           EditorModuleTestAccess::isDragging(fixture.module),
+           "drag persists when cursor moves over UI");
+
+  // Re-enter world area
+  fixture.window.mouseX = 700.0;
+  fixture.window.mouseY = 360.0;
+  fixture.module.Update(0.016);
+  testTrue(g,
+           EditorModuleTestAccess::isDragging(fixture.module),
+           "drag still active when cursor re-enters");
+  const IlscNode* movedNode = document.findNode(id);
+  testTrue(g,
+           movedNode != nullptr && movedNode->transform.position.x != 0.0f,
+           "node position updated during continued drag");
+
+  // Releasing mouse terminates the drag
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !EditorModuleTestAccess::isDragging(fixture.module),
+           "drag terminates on mouse release");
+}
+
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
@@ -687,6 +836,16 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.3DMousePanningDirection", []() {
     g = {};
     test3DMousePanningRespectsCameraOrientation();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.3DCameraElevationKeys", []() {
+    g = {};
+    test3DCameraElevationKeys();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.TransformGizmoHitAndConstraints", []() {
+    g = {};
+    testTransformGizmoHitAndConstraints();
     return g.failures;
   });
   registry.add("IllEd.Module.2DNodeRendering", []() {

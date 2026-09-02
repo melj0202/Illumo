@@ -44,6 +44,7 @@ public:
   bool setExtent(const std::string& id, const Vector3& extent);
   bool setColor(const std::string& id, ColorRgba color);
   bool translate(const std::string& id, float dx, float dy);
+  bool translate(const std::string& id, const Vector3& deltaWorld);
   bool pick(float worldX, float worldY, std::string* id) const;
   Matrix4 worldMatrix(const std::string& id) const;
   Transform3D makeEditPlaneTransform(float planeX, float planeY) const;

@@ -109,6 +109,49 @@ testTransactionalLoad()
   testTrue(g, !document.isDirty(), "successful load is clean");
 }
 
+static void
+test3DTranslateWithParent()
+{
+  testSection("EditorDocument: 3D translate with parent transform");
+  EditorDocument document;
+  document.setWorldMode(IlscWorldMode::World3D);
+
+  const std::string parentId = document.createNode(SceneNodeKind::Empty, {});
+  Transform3D parentTransform;
+  parentTransform.position = Vector3(10.0f, 5.0f, -2.0f);
+  parentTransform.scale = Vector3(2.0f, 2.0f, 2.0f);
+  document.setTransform(parentId, parentTransform);
+
+  const std::string childId =
+    document.createNode(SceneNodeKind::SolidCube, parentId);
+  Transform3D childTransform;
+  childTransform.position = Vector3(0.0f, 0.0f, 0.0f);
+  document.setTransform(childId, childTransform);
+
+  // Translating child by (4, 2, 6) in world space should translate by (2, 1, 3)
+  // in local space due to parent scale 2
+  testTrue(g,
+           document.translate(childId, Vector3(4.0f, 2.0f, 6.0f)),
+           "translate child");
+  const IlscNode* childNode = document.findNode(childId);
+  testTrue(g, childNode != nullptr, "child found");
+  testTrue(g,
+           std::abs(childNode->transform.position.x - 2.0f) < 0.001f,
+           "local X is 2");
+  testTrue(g,
+           std::abs(childNode->transform.position.y - 1.0f) < 0.001f,
+           "local Y is 1");
+  testTrue(g,
+           std::abs(childNode->transform.position.z - 3.0f) < 0.001f,
+           "local Z is 3");
+
+  // World matrix of child should now be (10 + 4 = 14, 5 + 2 = 7, -2 + 6 = 4)
+  const Matrix4 worldMat = document.worldMatrix(childId);
+  testTrue(g, std::abs(worldMat[3][0] - 14.0f) < 0.001f, "world X is 14");
+  testTrue(g, std::abs(worldMat[3][1] - 7.0f) < 0.001f, "world Y is 7");
+  testTrue(g, std::abs(worldMat[3][2] - 4.0f) < 0.001f, "world Z is 4");
+}
+
 void
 registerEditorDocumentTests(IllumoTestRegistry& registry)
 {
@@ -120,6 +163,11 @@ registerEditorDocumentTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Document.PickTranslate", []() {
     g = {};
     testPickAndTranslate();
+    return g.failures;
+  });
+  registry.add("IllEd.Document.Translate3DWithParent", []() {
+    g = {};
+    test3DTranslateWithParent();
     return g.failures;
   });
   registry.add("IllEd.Document.TransactionalLoad", []() {

@@ -147,8 +147,9 @@ EditorModule::applyWorldCamera()
   const glm::dvec2 position = ic->camera->GetPositionPrecise();
   const float zoom = ic->camera->GetZoom();
   const float distance = std::max(2.0f, 12.0f / std::max(0.15f, zoom / 32.0f));
-  const glm::vec3 target(
-    static_cast<float>(position.x), 0.0f, static_cast<float>(position.y));
+  const glm::vec3 target(static_cast<float>(position.x),
+                         m_cameraTargetY,
+                         static_cast<float>(position.y));
   const glm::vec3 eye =
     target + glm::vec3(std::cos(state.pitch) * std::sin(state.yaw) * distance,
                        std::sin(state.pitch) * distance,
@@ -330,9 +331,18 @@ EditorModule::updateStatus()
     status += "  |  Zoom: " + std::to_string(zoom) + "x";
   }
 #ifndef NDEBUG
-  status += "  |  [WASD/MMB: Pan  Wheel: Zoom  ~: Console]";
+  if (m_document.worldMode() == IlscWorldMode::World3D) {
+    status +=
+      "  |  [WASD/MMB: Pan  QE: Up/Down  RMB: Orbit  Wheel: Zoom  ~: Console]";
+  } else {
+    status += "  |  [WASD/MMB: Pan  Wheel: Zoom  ~: Console]";
+  }
 #else
-  status += "  |  [WASD/MMB: Pan  Wheel: Zoom]";
+  if (m_document.worldMode() == IlscWorldMode::World3D) {
+    status += "  |  [WASD/MMB: Pan  QE: Up/Down  RMB: Orbit  Wheel: Zoom]";
+  } else {
+    status += "  |  [WASD/MMB: Pan  Wheel: Zoom]";
+  }
 #endif
   m_toolbar->setStatus(status);
 }
@@ -421,6 +431,7 @@ EditorModule::openDocument()
                                    m_document.camera().y);
     ic->camera->SetZoom(m_document.camera().zoom);
   }
+  m_cameraTargetY = 0.0f;
   if (m_toolbar) {
     m_toolbar->showToast("Opened scene: " + path,
                          ColorRgba{ 66, 214, 210, 255 });
@@ -439,6 +450,7 @@ EditorModule::newDocument()
     ic->camera->Reset();
     ic->camera->SetZoom(32.0f);
   }
+  m_cameraTargetY = 0.0f;
   if (m_toolbar) {
     m_toolbar->showToast("Created new scene", ColorRgba{ 66, 214, 210, 255 });
   }
@@ -596,6 +608,7 @@ EditorModule::handleCommand(EditorCommand command)
              ic->camera != nullptr) {
     ic->camera->Reset();
     ic->camera->SetZoom(32.0f);
+    m_cameraTargetY = 0.0f;
     if (m_toolbar) {
       m_toolbar->showToast("Camera reset to origin",
                            ColorRgba{ 66, 214, 210, 255 });
@@ -662,6 +675,14 @@ EditorModule::updateCamera(double dt)
       if (ic->inputManager->isKeyPressed(KeyCode::S) ||
           ic->inputManager->isKeyPressed(KeyCode::Down)) {
         pan -= forwardDir * speed;
+      }
+      if (ic->inputManager->isKeyPressed(KeyCode::E) ||
+          ic->inputManager->isKeyPressed(KeyCode::Space)) {
+        m_cameraTargetY += static_cast<float>(speed);
+      }
+      if (ic->inputManager->isKeyPressed(KeyCode::Q) ||
+          ic->inputManager->isKeyPressed(KeyCode::C)) {
+        m_cameraTargetY -= static_cast<float>(speed);
       }
       if (pan.x != 0.0 || pan.y != 0.0) {
         ic->camera->Pan(pan);
@@ -781,6 +802,128 @@ EditorModule::rebuildSelectionOverlay()
     static_cast<unsigned char>(180.0f * outerPulse);
   const ColorRgba haloCyan{ 66, 214, 210, cyanAlpha };
   m_selectionOverlay->addWireCube(worldPos, half * 1.05f, haloCyan);
+
+  // --- Full Interactive Transform Gizmo (Axes + Planes) ---
+  const bool is3D = (m_document.worldMode() == IlscWorldMode::World3D);
+  const float gScale = gizmoScale(worldPos);
+
+  const GizmoPart activeOrHover = (m_activeGizmoPart != GizmoPart::None)
+                                    ? m_activeGizmoPart
+                                    : m_hoveredGizmoPart;
+
+  // Colors: matching standard DCC tool palettes (X = Red, Y = Green, Z = Blue)
+  const ColorRgba redAxis{ 235, 55, 65, 255 };
+  const ColorRgba greenAxis{ 55, 215, 75, 255 };
+  const ColorRgba blueAxis{ 55, 125, 245, 255 };
+  const ColorRgba activeHighlight{ 255, 245, 75, 255 };
+
+  // Sleek, professional proportions
+  const float planeSize = gScale * 0.28f;
+  const float axisLen = gScale * 0.85f;
+  const float capHalf = gScale * 0.035f;
+
+  // 1. Center Box Handle (sleek small cube)
+  const ColorRgba centerColor = (activeOrHover == GizmoPart::Center)
+                                  ? activeHighlight
+                                  : ColorRgba{ 245, 245, 245, 230 };
+  m_selectionOverlay->addSolidCube(
+    worldPos, glm::vec3(gScale * 0.035f), centerColor);
+  m_selectionOverlay->addWireCube(
+    worldPos, glm::vec3(gScale * 0.038f), ColorRgba{ 30, 30, 30, 255 });
+
+  // 2. Plane Handles:
+  // Colors match the normal axis or bounding axes:
+  // - Plane XY (normal is Z: Blue)
+  // - Plane XZ (normal is Y: Green)
+  // - Plane YZ (normal is X: Red)
+  // Semi-transparent quad with tinted outline
+  const ColorRgba xyColor =
+    (activeOrHover == GizmoPart::PlaneXY) ? activeHighlight : blueAxis;
+  m_selectionOverlay->addLine(worldPos + glm::vec3(planeSize, 0, 0),
+                              worldPos + glm::vec3(planeSize, planeSize, 0),
+                              xyColor);
+  m_selectionOverlay->addLine(worldPos + glm::vec3(0, planeSize, 0),
+                              worldPos + glm::vec3(planeSize, planeSize, 0),
+                              xyColor);
+  m_selectionOverlay->addSolidTriangle(
+    worldPos,
+    worldPos + glm::vec3(planeSize, 0, 0),
+    worldPos + glm::vec3(planeSize, planeSize, 0),
+    ColorRgba{ xyColor.r, xyColor.g, xyColor.b, 65 });
+  m_selectionOverlay->addSolidTriangle(
+    worldPos,
+    worldPos + glm::vec3(planeSize, planeSize, 0),
+    worldPos + glm::vec3(0, planeSize, 0),
+    ColorRgba{ xyColor.r, xyColor.g, xyColor.b, 65 });
+
+  if (is3D) {
+    // Plane XZ (Ground, normal is Y: Green)
+    const ColorRgba xzColor =
+      (activeOrHover == GizmoPart::PlaneXZ) ? activeHighlight : greenAxis;
+    m_selectionOverlay->addLine(worldPos + glm::vec3(planeSize, 0, 0),
+                                worldPos + glm::vec3(planeSize, 0, planeSize),
+                                xzColor);
+    m_selectionOverlay->addLine(worldPos + glm::vec3(0, 0, planeSize),
+                                worldPos + glm::vec3(planeSize, 0, planeSize),
+                                xzColor);
+    m_selectionOverlay->addSolidTriangle(
+      worldPos,
+      worldPos + glm::vec3(planeSize, 0, 0),
+      worldPos + glm::vec3(planeSize, 0, planeSize),
+      ColorRgba{ xzColor.r, xzColor.g, xzColor.b, 65 });
+    m_selectionOverlay->addSolidTriangle(
+      worldPos,
+      worldPos + glm::vec3(planeSize, 0, planeSize),
+      worldPos + glm::vec3(0, 0, planeSize),
+      ColorRgba{ xzColor.r, xzColor.g, xzColor.b, 65 });
+
+    // Plane YZ (normal is X: Red)
+    const ColorRgba yzColor =
+      (activeOrHover == GizmoPart::PlaneYZ) ? activeHighlight : redAxis;
+    m_selectionOverlay->addLine(worldPos + glm::vec3(0, planeSize, 0),
+                                worldPos + glm::vec3(0, planeSize, planeSize),
+                                yzColor);
+    m_selectionOverlay->addLine(worldPos + glm::vec3(0, 0, planeSize),
+                                worldPos + glm::vec3(0, planeSize, planeSize),
+                                yzColor);
+    m_selectionOverlay->addSolidTriangle(
+      worldPos,
+      worldPos + glm::vec3(0, planeSize, 0),
+      worldPos + glm::vec3(0, planeSize, planeSize),
+      ColorRgba{ yzColor.r, yzColor.g, yzColor.b, 65 });
+    m_selectionOverlay->addSolidTriangle(
+      worldPos,
+      worldPos + glm::vec3(0, planeSize, planeSize),
+      worldPos + glm::vec3(0, 0, planeSize),
+      ColorRgba{ yzColor.r, yzColor.g, yzColor.b, 65 });
+  }
+
+  // 3. Axis Shafts and End Caps
+  // X Axis (Red)
+  const ColorRgba cX =
+    (activeOrHover == GizmoPart::AxisX) ? activeHighlight : redAxis;
+  m_selectionOverlay->addLine(
+    worldPos, worldPos + glm::vec3(axisLen, 0, 0), cX);
+  m_selectionOverlay->addSolidCube(
+    worldPos + glm::vec3(axisLen, 0, 0), glm::vec3(capHalf), cX);
+
+  // Y Axis (Green)
+  const ColorRgba cY =
+    (activeOrHover == GizmoPart::AxisY) ? activeHighlight : greenAxis;
+  m_selectionOverlay->addLine(
+    worldPos, worldPos + glm::vec3(0, axisLen, 0), cY);
+  m_selectionOverlay->addSolidCube(
+    worldPos + glm::vec3(0, axisLen, 0), glm::vec3(capHalf), cY);
+
+  // Z Axis (in 3D, Blue)
+  if (is3D) {
+    const ColorRgba cZ =
+      (activeOrHover == GizmoPart::AxisZ) ? activeHighlight : blueAxis;
+    m_selectionOverlay->addLine(
+      worldPos, worldPos + glm::vec3(0, 0, axisLen), cZ);
+    m_selectionOverlay->addSolidCube(
+      worldPos + glm::vec3(0, 0, axisLen), glm::vec3(capHalf), cZ);
+  }
 }
 
 void
@@ -805,56 +948,138 @@ EditorModule::updateSelection(double dt)
     static_cast<float>(mouse[0]) / (scale > 0.0f ? scale : 1.0f);
   const float uiY =
     static_cast<float>(mouse[1]) / (scale > 0.0f ? scale : 1.0f);
+  const float mouseScreenX = static_cast<float>(mouse[0]);
+  const float mouseScreenY = static_cast<float>(mouse[1]);
   const bool left = ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
-  if (uiBlocksWorld(uiX, uiY)) {
-    m_dragging = false;
+
+  // If we are actively dragging an object or gizmo handle and left mouse is
+  // held, continue tracking the drag anywhere on screen (even over panels or if
+  // cursor briefly left and re-entered).
+  if (left && m_dragging && !m_selectedId.empty()) {
+    glm::vec3 rayOrigin{ 0.0f };
+    glm::vec3 rayDir{ 0.0f, 0.0f, -1.0f };
+    if (screenToWorldRay(mouseScreenX, mouseScreenY, &rayOrigin, &rayDir)) {
+      glm::vec3 currentHit{ 0.0f };
+      if (intersectGizmoConstraint(m_activeGizmoPart,
+                                   m_dragGizmoOrigin,
+                                   rayOrigin,
+                                   rayDir,
+                                   &currentHit)) {
+        const Matrix4 currentMat = m_document.worldMatrix(m_selectedId);
+        const glm::vec3 currentPos(
+          currentMat[3][0], currentMat[3][1], currentMat[3][2]);
+        const glm::vec3 desiredPos = currentHit - m_dragGizmoHitOffset;
+        const glm::vec3 delta = desiredPos - currentPos;
+
+        if (glm::length(delta) > 0.00001f) {
+          m_document.translate(m_selectedId, delta);
+          const IlscNode* node = m_document.findNode(m_selectedId);
+          if (node != nullptr) {
+            const std::unordered_map<std::string,
+                                     SceneNodeHandle>::const_iterator found =
+              m_handles.find(m_selectedId);
+            if (found != m_handles.end()) {
+              m_graph.setLocalTransform(found->second, node->transform);
+            }
+          }
+        }
+      }
+    }
+    rebuildSelectionOverlay();
     m_mouseWasDown = left;
     return;
   }
 
-  float worldX = 0.0f;
-  float worldY = 0.0f;
-  if (!screenToWorld(static_cast<float>(mouse[0]),
-                     static_cast<float>(mouse[1]),
-                     &worldX,
-                     &worldY)) {
+  // If left button is released, terminate any active drag
+  if (!left) {
+    m_dragging = false;
+    m_activeGizmoPart = GizmoPart::None;
+  }
+
+  if (uiBlocksWorld(uiX, uiY)) {
     m_mouseWasDown = left;
     return;
   }
+
+  // Compute gizmo scale & origin for selection
+  glm::vec3 selectedWorldPos{ 0.0f };
+  float gizmoScale = 1.0f;
+  const bool hasSelection =
+    !m_selectedId.empty() && (m_document.findNode(m_selectedId) != nullptr);
+  if (hasSelection) {
+    const Matrix4 mat = m_document.worldMatrix(m_selectedId);
+    selectedWorldPos = glm::vec3(mat[3][0], mat[3][1], mat[3][2]);
+    gizmoScale = this->gizmoScale(selectedWorldPos);
+  }
+
+  // Update hover state when not actively dragging
+  if (!m_dragging && hasSelection) {
+    const GizmoPart hovered =
+      hitTestGizmo(mouseScreenX, mouseScreenY, selectedWorldPos, gizmoScale);
+    if (hovered != m_hoveredGizmoPart) {
+      m_hoveredGizmoPart = hovered;
+      rebuildSelectionOverlay();
+    }
+  } else if (!hasSelection) {
+    m_hoveredGizmoPart = GizmoPart::None;
+  }
+
+  float worldX = 0.0f;
+  float worldY = 0.0f;
+  if (!screenToWorld(mouseScreenX, mouseScreenY, &worldX, &worldY)) {
+    m_mouseWasDown = left;
+    return;
+  }
+
   if (left && !m_mouseWasDown) {
     if (m_activeTool != EditorCommand::SelectTool &&
         m_activeTool != EditorCommand::None) {
       applyActiveToolAt(worldX, worldY);
     } else {
+      // Check if gizmo handle was clicked first
+      if (hasSelection) {
+        const GizmoPart hitPart = hitTestGizmo(
+          mouseScreenX, mouseScreenY, selectedWorldPos, gizmoScale);
+        if (hitPart != GizmoPart::None) {
+          m_activeGizmoPart = hitPart;
+          m_dragging = true;
+          m_dragGizmoOrigin = selectedWorldPos;
+
+          glm::vec3 rayOrigin{ 0.0f };
+          glm::vec3 rayDir{ 0.0f, 0.0f, -1.0f };
+          screenToWorldRay(mouseScreenX, mouseScreenY, &rayOrigin, &rayDir);
+          glm::vec3 initialHit{ 0.0f };
+          if (intersectGizmoConstraint(m_activeGizmoPart,
+                                       m_dragGizmoOrigin,
+                                       rayOrigin,
+                                       rayDir,
+                                       &initialHit)) {
+            m_dragGizmoHitOffset = initialHit - m_dragGizmoOrigin;
+          } else {
+            m_dragGizmoHitOffset = glm::vec3(0.0f);
+          }
+          rebuildSelectionOverlay();
+          m_mouseWasDown = left;
+          return;
+        }
+      }
+
+      // If no gizmo handle hit, perform object picking
       std::string hit;
       if (m_document.pick(worldX, worldY, &hit)) {
         m_selectedId = hit;
         m_dragging = true;
+        m_activeGizmoPart = GizmoPart::Center;
+        const Matrix4 mat = m_document.worldMatrix(m_selectedId);
+        m_dragGizmoOrigin = glm::vec3(mat[3][0], mat[3][1], mat[3][2]);
+        m_dragGizmoHitOffset = glm::vec3(0.0f);
       } else {
         m_selectedId.clear();
         m_dragging = false;
+        m_activeGizmoPart = GizmoPart::None;
       }
     }
     rebuildSelectionOverlay();
-  } else if (left && m_dragging && !m_selectedId.empty()) {
-    float previousX = worldX;
-    float previousY = worldY;
-    screenToWorld(static_cast<float>(m_lastMouseX),
-                  static_cast<float>(m_lastMouseY),
-                  &previousX,
-                  &previousY);
-    m_document.translate(m_selectedId, worldX - previousX, worldY - previousY);
-    const IlscNode* node = m_document.findNode(m_selectedId);
-    if (node != nullptr) {
-      const std::unordered_map<std::string, SceneNodeHandle>::const_iterator
-        found = m_handles.find(m_selectedId);
-      if (found != m_handles.end()) {
-        m_graph.setLocalTransform(found->second, node->transform);
-      }
-    }
-    rebuildSelectionOverlay();
-  } else if (!left) {
-    m_dragging = false;
   }
   m_mouseWasDown = left;
 }
@@ -1144,6 +1369,338 @@ EditorModule::screenToWorld(float screenX,
   const float t = -nearPoint.y / direction.y;
   *worldX = nearPoint.x + direction.x * t;
   *worldY = nearPoint.z + direction.z * t;
+  return true;
+}
+
+bool
+EditorModule::screenToWorldRay(float screenX,
+                               float screenY,
+                               glm::vec3* rayOrigin,
+                               glm::vec3* rayDir) const
+{
+  if (rayOrigin == nullptr || rayDir == nullptr || ic == nullptr ||
+      ic->camera == nullptr || ic->window == nullptr) {
+    return false;
+  }
+  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+  if (dimensions[0] <= 0 || dimensions[1] <= 0) {
+    return false;
+  }
+  if (m_document.worldMode() != IlscWorldMode::World3D) {
+    const glm::dvec2 world = ic->camera->ScreenToWorldPrecise(
+      glm::dvec2(static_cast<double>(screenX), static_cast<double>(screenY)));
+    *rayOrigin = glm::vec3(
+      static_cast<float>(world.x), static_cast<float>(world.y), 10.0f);
+    *rayDir = glm::vec3(0.0f, 0.0f, -1.0f);
+    return true;
+  }
+  const float ndcX =
+    (2.0f * screenX / static_cast<float>(dimensions[0])) - 1.0f;
+  const float ndcY =
+    1.0f - (2.0f * screenY / static_cast<float>(dimensions[1]));
+  const glm::mat4 inverse = glm::inverse(currentViewProjection());
+  glm::vec4 nearPoint = inverse * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+  glm::vec4 farPoint = inverse * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+  if (std::fabs(nearPoint.w) < 0.000001f || std::fabs(farPoint.w) < 0.000001f) {
+    return false;
+  }
+  nearPoint /= nearPoint.w;
+  farPoint /= farPoint.w;
+  *rayOrigin = glm::vec3(nearPoint);
+  const glm::vec3 dir = glm::vec3(farPoint) - glm::vec3(nearPoint);
+  const float len = glm::length(dir);
+  if (len < 0.000001f) {
+    return false;
+  }
+  *rayDir = dir / len;
+  return true;
+}
+
+float
+EditorModule::gizmoScale(const glm::vec3& worldPos) const
+{
+  if (ic == nullptr || ic->camera == nullptr) {
+    return 1.0f;
+  }
+  if (m_document.worldMode() != IlscWorldMode::World3D) {
+    const float zoom = ic->camera->GetZoom();
+    return std::clamp(28.0f / std::max(1.0f, zoom), 0.35f, 3.0f);
+  }
+  const glm::vec3 eye = ic->camera->getEye();
+  const float dist = glm::length(eye - worldPos);
+  // Keep constant screen size: at dist 12, scale is ~1.0
+  return std::clamp(dist * 0.085f, 0.4f, 8.0f);
+}
+
+static float
+distRayToSegment(const glm::vec3& rayOrigin,
+                 const glm::vec3& rayDir,
+                 const glm::vec3& segA,
+                 const glm::vec3& segB,
+                 float* segT)
+{
+  const glm::vec3 u = rayDir;
+  const glm::vec3 v = segB - segA;
+  const glm::vec3 w = rayOrigin - segA;
+  const float a = glm::dot(u, u);
+  const float b = glm::dot(u, v);
+  const float c = glm::dot(v, v);
+  const float d = glm::dot(u, w);
+  const float e = glm::dot(v, w);
+  const float denom = a * c - b * b;
+  float sN = 0.0f;
+  float tN = 0.0f;
+  float tD = denom;
+  if (denom < 0.000001f) {
+    sN = 0.0f;
+    tN = e;
+    tD = c;
+  } else {
+    sN = (b * e - c * d);
+    tN = (a * e - b * d);
+    if (sN < 0.0f) {
+      sN = 0.0f;
+      tN = e;
+      tD = c;
+    }
+  }
+  float sc = (std::abs(sN) < 0.000001f ? 0.0f : sN / denom);
+  float tc = (std::abs(tN) < 0.000001f ? 0.0f : tN / tD);
+  tc = std::clamp(tc, 0.0f, 1.0f);
+  if (segT != nullptr) {
+    *segT = tc;
+  }
+  const glm::vec3 dP = w + (sc * u) - (tc * v);
+  return glm::length(dP);
+}
+
+static bool
+intersectRayQuad(const glm::vec3& rayOrigin,
+                 const glm::vec3& rayDir,
+                 const glm::vec3& origin,
+                 const glm::vec3& uAxis,
+                 const glm::vec3& vAxis,
+                 float size,
+                 float* hitDistance)
+{
+  const glm::vec3 normal = glm::normalize(glm::cross(uAxis, vAxis));
+  const float denom = glm::dot(rayDir, normal);
+  if (std::abs(denom) < 0.000001f) {
+    return false;
+  }
+  const float t = glm::dot(origin - rayOrigin, normal) / denom;
+  if (t < 0.0f) {
+    return false;
+  }
+  const glm::vec3 p = rayOrigin + rayDir * t;
+  const glm::vec3 d = p - origin;
+  const float u = glm::dot(d, uAxis);
+  const float v = glm::dot(d, vAxis);
+  if (u >= 0.0f && u <= size && v >= 0.0f && v <= size) {
+    if (hitDistance != nullptr) {
+      *hitDistance = t;
+    }
+    return true;
+  }
+  return false;
+}
+
+GizmoPart
+EditorModule::hitTestGizmo(float screenX,
+                           float screenY,
+                           const glm::vec3& gizmoOrigin,
+                           float gizmoScale) const
+{
+  glm::vec3 rayOrigin{ 0.0f };
+  glm::vec3 rayDir{ 0.0f, 0.0f, -1.0f };
+  if (!screenToWorldRay(screenX, screenY, &rayOrigin, &rayDir)) {
+    return GizmoPart::None;
+  }
+
+  const bool is3D = (m_document.worldMode() == IlscWorldMode::World3D);
+  const float scale = std::max(0.1f, gizmoScale);
+  const float axisLength = scale * 0.85f;
+  const float planeSize = scale * 0.28f;
+
+  // 1. Center handle check (sphere / cube hit)
+  const float centerRadius = scale * 0.08f;
+  const glm::vec3 toCenter = gizmoOrigin - rayOrigin;
+  const float projCenter = glm::dot(toCenter, rayDir);
+  if (projCenter >= 0.0f) {
+    const glm::vec3 closestPoint = rayOrigin + rayDir * projCenter;
+    if (glm::length(closestPoint - gizmoOrigin) <= centerRadius) {
+      return GizmoPart::Center;
+    }
+  }
+
+  // 2. Plane handles check (closer to center, checked before axes)
+  float bestPlaneDist = 1e9f;
+  GizmoPart hitPlane = GizmoPart::None;
+  float dist = 0.0f;
+
+  // Plane XY
+  if (intersectRayQuad(rayOrigin,
+                       rayDir,
+                       gizmoOrigin,
+                       glm::vec3(1, 0, 0),
+                       glm::vec3(0, 1, 0),
+                       planeSize,
+                       &dist)) {
+    if (dist < bestPlaneDist) {
+      bestPlaneDist = dist;
+      hitPlane = GizmoPart::PlaneXY;
+    }
+  }
+
+  if (is3D) {
+    // Plane XZ (ground plane)
+    if (intersectRayQuad(rayOrigin,
+                         rayDir,
+                         gizmoOrigin,
+                         glm::vec3(1, 0, 0),
+                         glm::vec3(0, 0, 1),
+                         planeSize,
+                         &dist)) {
+      if (dist < bestPlaneDist) {
+        bestPlaneDist = dist;
+        hitPlane = GizmoPart::PlaneXZ;
+      }
+    }
+    // Plane YZ
+    if (intersectRayQuad(rayOrigin,
+                         rayDir,
+                         gizmoOrigin,
+                         glm::vec3(0, 1, 0),
+                         glm::vec3(0, 0, 1),
+                         planeSize,
+                         &dist)) {
+      if (dist < bestPlaneDist) {
+        bestPlaneDist = dist;
+        hitPlane = GizmoPart::PlaneYZ;
+      }
+    }
+  }
+
+  if (hitPlane != GizmoPart::None) {
+    return hitPlane;
+  }
+
+  // 3. Axis handles check
+  const float axisThreshold = scale * 0.10f;
+  float bestAxisDist = axisThreshold;
+  GizmoPart hitAxis = GizmoPart::None;
+
+  // X Axis
+  float segT = 0.0f;
+  const float distX =
+    distRayToSegment(rayOrigin,
+                     rayDir,
+                     gizmoOrigin,
+                     gizmoOrigin + glm::vec3(axisLength, 0, 0),
+                     &segT);
+  if (distX < bestAxisDist) {
+    bestAxisDist = distX;
+    hitAxis = GizmoPart::AxisX;
+  }
+
+  // Y Axis
+  const float distY =
+    distRayToSegment(rayOrigin,
+                     rayDir,
+                     gizmoOrigin,
+                     gizmoOrigin + glm::vec3(0, axisLength, 0),
+                     &segT);
+  if (distY < bestAxisDist) {
+    bestAxisDist = distY;
+    hitAxis = GizmoPart::AxisY;
+  }
+
+  // Z Axis (in 3D)
+  if (is3D) {
+    const float distZ =
+      distRayToSegment(rayOrigin,
+                       rayDir,
+                       gizmoOrigin,
+                       gizmoOrigin + glm::vec3(0, 0, axisLength),
+                       &segT);
+    if (distZ < bestAxisDist) {
+      bestAxisDist = distZ;
+      hitAxis = GizmoPart::AxisZ;
+    }
+  }
+
+  return hitAxis;
+}
+
+bool
+EditorModule::intersectGizmoConstraint(GizmoPart part,
+                                       const glm::vec3& gizmoOrigin,
+                                       const glm::vec3& rayOrigin,
+                                       const glm::vec3& rayDir,
+                                       glm::vec3* outIntersection) const
+{
+  if (outIntersection == nullptr) {
+    return false;
+  }
+
+  // Plane intersections
+  if (part == GizmoPart::PlaneXY ||
+      (part == GizmoPart::Center &&
+       m_document.worldMode() != IlscWorldMode::World3D)) {
+    // Normal is (0, 0, 1)
+    if (std::abs(rayDir.z) < 0.000001f) {
+      return false;
+    }
+    const float t = (gizmoOrigin.z - rayOrigin.z) / rayDir.z;
+    *outIntersection = rayOrigin + rayDir * t;
+    return true;
+  }
+
+  if (part == GizmoPart::PlaneXZ ||
+      (part == GizmoPart::Center &&
+       m_document.worldMode() == IlscWorldMode::World3D)) {
+    // Normal is (0, 1, 0)
+    if (std::abs(rayDir.y) < 0.000001f) {
+      return false;
+    }
+    const float t = (gizmoOrigin.y - rayOrigin.y) / rayDir.y;
+    *outIntersection = rayOrigin + rayDir * t;
+    return true;
+  }
+
+  if (part == GizmoPart::PlaneYZ) {
+    // Normal is (1, 0, 0)
+    if (std::abs(rayDir.x) < 0.000001f) {
+      return false;
+    }
+    const float t = (gizmoOrigin.x - rayOrigin.x) / rayDir.x;
+    *outIntersection = rayOrigin + rayDir * t;
+    return true;
+  }
+
+  // Axis intersections: project the closest point on the axis line
+  glm::vec3 axisDir(1.0f, 0.0f, 0.0f);
+  if (part == GizmoPart::AxisY) {
+    axisDir = glm::vec3(0.0f, 1.0f, 0.0f);
+  } else if (part == GizmoPart::AxisZ) {
+    axisDir = glm::vec3(0.0f, 0.0f, 1.0f);
+  }
+
+  // Find closest approach between ray and axis line
+  const glm::vec3 u = rayDir;
+  const glm::vec3 v = axisDir;
+  const glm::vec3 w = rayOrigin - gizmoOrigin;
+  const float a = glm::dot(u, u);
+  const float b = glm::dot(u, v);
+  const float c = glm::dot(v, v);
+  const float d = glm::dot(u, w);
+  const float e = glm::dot(v, w);
+  const float denom = a * c - b * b;
+  if (std::abs(denom) < 0.000001f) {
+    return false;
+  }
+  const float tN = (a * e - b * d) / denom;
+  *outIntersection = gizmoOrigin + axisDir * tN;
   return true;
 }
 
