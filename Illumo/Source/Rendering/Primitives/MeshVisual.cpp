@@ -684,7 +684,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
     if (shadowFboHandle.isValid()) {
       value->pushFramebuffer(shadowFboHandle);
       value->pushViewport(0, 0, 1024, 1024);
-      value->pushClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+      value->pushClearDepth();
 
       const glm::mat4 lightMvp = lightSpaceMatrix * coloredWorld;
       value->bindStyle(shadowDepthStyleHandle);
