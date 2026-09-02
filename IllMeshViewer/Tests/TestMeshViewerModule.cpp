@@ -273,6 +273,56 @@ testModuleShadowFromEnvVars()
   testTrue(g, !visual->isShadowsEnabled(), "shadowsEnabled 0 disables shadows");
 }
 
+static void
+testModuleMotionBlurFromEnvVars()
+{
+  testSection("MeshViewerModule: motion blur EnvVars update MeshVisual");
+  ModuleFixture fixture;
+  testTrue(g, fixture.started, "module started");
+  testTrue(g,
+           fixture.module.loadMeshFromMemory(g_testCubeObj, "cube.obj"),
+           "cube loaded");
+
+  fixture.env.setVar("lightingEnabled", "1");
+  fixture.env.setVar("motionBlurEnabled", "1");
+  fixture.env.setVar("motionBlurAmount", 0.75);
+  fixture.env.setVar("motionBlurMax", 0.15);
+  fixture.module.Update(0.016);
+
+  MeshVisual* visual = fixture.module.meshVisual();
+  testTrue(g, visual != nullptr, "mesh visual exists");
+  testTrue(g, visual->isMotionBlurEnabled(), "motion blur remains enabled");
+  testTrue(g,
+           std::abs(visual->getMotionBlurAmount() - 0.75f) < 0.0001f,
+           "motionBlurAmount from EnvVars");
+  testTrue(g,
+           std::abs(visual->getMotionBlurMax() - 0.15f) < 0.0001f,
+           "motionBlurMax from EnvVars");
+
+  fixture.renderer.BeginFrame();
+  testTrue(g, visual->AppendCommands(&fixture.renderer), "mesh appends tokens");
+  fixture.renderer.EndFrame();
+
+  bool sawConfiguredAmount = false;
+  for (size_t i = 0; i < fixture.mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = fixture.mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetUniformFloat &&
+        std::strcmp(command.uniformFloat.name, "uMotionBlurAmount") == 0 &&
+        std::abs(command.uniformFloat.value - 0.75f) < 0.000001f) {
+      sawConfiguredAmount = true;
+    }
+  }
+  testTrue(g,
+           sawConfiguredAmount,
+           "configured motion blur amount reaches uMotionBlurAmount");
+
+  fixture.env.setVar("motionBlurEnabled", "0");
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !visual->isMotionBlurEnabled(),
+           "motionBlurEnabled 0 disables motion blur");
+}
+
 static int
 runModuleCase(void (*testFunction)())
 {
@@ -292,4 +342,6 @@ registerMeshViewerModuleTests(IllumoTestRegistry& registry)
                []() { return runModuleCase(testModuleLightingFromEnvVars); });
   registry.add("IllMeshViewer.Module.ShadowFromEnvVars",
                []() { return runModuleCase(testModuleShadowFromEnvVars); });
+  registry.add("IllMeshViewer.Module.MotionBlurFromEnvVars",
+               []() { return runModuleCase(testModuleMotionBlurFromEnvVars); });
 }

@@ -82,13 +82,14 @@ instantiate a graph.
         configurable 65,536 default ceiling.
   \item \symbolref{MeshVisual} (D-R21) is the world mesh host and
         \symbolref{ISceneRenderAttachment}: colored lines/triangles, textured
-        quads (sprites), optional camera-facing billboards, and optional
-        directional lighting with a depth-only shadow pass. It clones
+        quads (sprites), optional camera-facing billboards, optional
+        directional lighting with a depth-only shadow pass, and optional
+        object motion blur from the previous clip pose. It clones
         Shape/Sprite styles with depth-tested pipelines and emits
-        \texttt{uMVP}. Lit meshes also emit \texttt{WorldLook} light and
-        shadow uniforms from CPU-side drawable state; products persist those
-        values through EnvVars rather than having \symbolref{MeshVisual} read
-        configuration.
+        \texttt{uMVP}. Lit meshes also emit \texttt{WorldLook} light, shadow,
+        and motion-blur uniforms from CPU-side drawable state; products
+        persist those values through EnvVars rather than having
+        \symbolref{MeshVisual} read configuration.
         Compose complex objects as child scene nodes, each with
         one attachment. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
         meshes upload dirty vertices through \texttt{UpdateBuffer}; capacity

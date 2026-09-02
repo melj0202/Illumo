@@ -17,10 +17,11 @@ are private. `MockBackend` is exposed only by `Illumo::TestSupport`.
 `SceneGraph` owns hierarchy nodes and appears in that list as one drawable.
 Borrowed `ISceneRenderAttachment` implementations receive a resolved world
 transform and append backend-neutral tokens; `MeshVisual` is the world
-mesh/sprite adapter. Typed slot+generation resource handles, the bounded command
-queue, managed `AssetManager`, painter-correct `GameVisual` overlay composition,
-`WorldLook` `uMVP` contract, transforms, sprites/animation, text, and
-primitive-composed UI retain their existing behavior.
+mesh/sprite adapter, including optional lighting, shadow mapping, and
+previous-MVP motion blur. Typed slot+generation resource handles, the bounded
+command queue, managed `AssetManager`, painter-correct `GameVisual` overlay
+composition, `WorldLook` `uMVP` contract, transforms, sprites/animation, text,
+and primitive-composed UI retain their existing behavior.
 
 `Renderer` captures window dimensions and the primary camera MVP once for each
 `RenderScene` extraction. `GameVisual` consumes that transient frame context

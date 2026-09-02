@@ -78,6 +78,7 @@ MeshViewerModule::Start(IllumoContext* context)
   m_ui = std::make_unique<MeshViewerUi>(ic->window, ic->renderer);
   applyLightingFromEnv();
   applyShadowsFromEnv();
+  applyMotionBlurFromEnv();
 
   if (ic->envVars != nullptr) {
     const std::string fontSizeVar = ic->envVars->getVar("fontSize").value;
@@ -457,6 +458,30 @@ MeshViewerModule::applyShadowsFromEnv()
 }
 
 void
+MeshViewerModule::applyMotionBlurFromEnv()
+{
+  if (m_meshVisual == nullptr || ic == nullptr || ic->envVars == nullptr) {
+    return;
+  }
+
+  const EnvVar& enabledVar = ic->envVars->getVar("motionBlurEnabled");
+  if (!enabledVar.value.empty()) {
+    m_meshVisual->setMotionBlurEnabled(enabledVar.valueAsBool);
+  }
+
+  const EnvVar& amountVar = ic->envVars->getVar("motionBlurAmount");
+  if (!amountVar.value.empty()) {
+    m_meshVisual->setMotionBlurAmount(
+      static_cast<float>(amountVar.valueAsDouble));
+  }
+
+  const EnvVar& maxVar = ic->envVars->getVar("motionBlurMax");
+  if (!maxVar.value.empty()) {
+    m_meshVisual->setMotionBlurMax(static_cast<float>(maxVar.valueAsDouble));
+  }
+}
+
+void
 MeshViewerModule::rebuildMeshVisual()
 {
   if (!m_meshVisual || ic == nullptr || ic->renderer == nullptr) {
@@ -627,6 +652,7 @@ MeshViewerModule::Update(double dt)
   MeshViewerAction action = MeshViewerAction::None;
   applyLightingFromEnv();
   applyShadowsFromEnv();
+  applyMotionBlurFromEnv();
 
   if (m_ui) {
     action = m_ui->update(ic->inputManager, static_cast<float>(dt));

@@ -63,6 +63,12 @@ public:
   float getShadowNormalOffset() const { return shadowNormalOffset; }
   void setShadowPcfEnabled(bool enabled) { shadowPcfEnabled = enabled; }
   bool isShadowPcfEnabled() const { return shadowPcfEnabled; }
+  void setMotionBlurEnabled(bool enabled) { motionBlurEnabled = enabled; }
+  bool isMotionBlurEnabled() const { return motionBlurEnabled; }
+  void setMotionBlurAmount(float amount);
+  float getMotionBlurAmount() const { return motionBlurAmount; }
+  void setMotionBlurMax(float ndcUnits);
+  float getMotionBlurMax() const { return motionBlurMax; }
 
   void clearPrimitives();
   size_t addQuad(const glm::vec3& center,
@@ -192,6 +198,11 @@ private:
   bool lightingEnabled = true;
   bool shadowsEnabled = true;
   bool shadowPcfEnabled = true;
+  bool motionBlurEnabled = true;
+  bool hasPreviousMvp = false;
+  glm::mat4 previousColoredMvp = glm::mat4(1.0f);
+  float motionBlurAmount = 0.5f;
+  float motionBlurMax = 0.2f;
   glm::vec3 lightDirection = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
   glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
   glm::vec3 ambientColor = glm::vec3(0.2f, 0.22f, 0.25f);

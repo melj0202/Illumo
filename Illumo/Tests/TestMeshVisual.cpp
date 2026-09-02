@@ -695,6 +695,116 @@ testMeshVisualShadowUniformsFromSetters()
   testTrue(g, sawShadowsOff, "uShadowsEnabled is 0 when shadows are off");
 }
 
+static void
+testMeshVisualMotionBlurUniformsFromSetters()
+{
+  testSection("MeshVisual: motion blur setters control previous-MVP tokens");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+  visual.setMotionBlurEnabled(true);
+  visual.setMotionBlurAmount(0.75f);
+  visual.setMotionBlurMax(0.15f);
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(
+    g, visual.AppendCommands(&renderer), "first lit cube appends tokens");
+  renderer.EndFrame();
+
+  const RenderCommand* firstMvp =
+    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 1);
+  const RenderCommand* firstPrev =
+    findSubmittedUniformMat4(mock, WorldLook::kPrevMvpUniform, 0);
+  testTrue(g, firstMvp != nullptr, "main pass emits uMVP");
+  testTrue(g, firstPrev != nullptr, "main pass emits uPrevMVP");
+  glm::mat4 firstMvpMatrix(1.0f);
+  bool haveFirstMvp = false;
+  if (firstMvp != nullptr && firstPrev != nullptr) {
+    std::memcpy(glm::value_ptr(firstMvpMatrix),
+                firstMvp->uniformMat4.m,
+                16 * sizeof(float));
+    haveFirstMvp = true;
+    testTrue(g,
+             matricesNear(firstPrev->uniformMat4.m, firstMvpMatrix),
+             "first frame previous MVP matches current MVP");
+  }
+
+  bool sawAmount = false;
+  bool sawMax = false;
+  bool sawEnabled = false;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (uniformFloatNear(command, WorldLook::kMotionBlurAmountUniform, 0.75f)) {
+      sawAmount = true;
+    }
+    if (uniformFloatNear(command, WorldLook::kMotionBlurMaxUniform, 0.15f)) {
+      sawMax = true;
+    }
+    if (uniformIntIs(command, WorldLook::kMotionBlurEnabledUniform, 1)) {
+      sawEnabled = true;
+    }
+  }
+  testTrue(g, sawAmount, "motion blur amount uniform matches setter");
+  testTrue(g, sawMax, "motion blur max uniform matches setter");
+  testTrue(g, sawEnabled, "motion blur remains enabled");
+
+  visual.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(
+    g, visual.AppendCommands(&renderer), "moved lit cube appends tokens");
+  renderer.EndFrame();
+
+  const RenderCommand* secondMvp =
+    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 1);
+  const RenderCommand* secondPrev =
+    findSubmittedUniformMat4(mock, WorldLook::kPrevMvpUniform, 0);
+  testTrue(g,
+           secondMvp != nullptr && secondPrev != nullptr,
+           "moved frame emits current and previous MVP");
+  if (haveFirstMvp && secondPrev != nullptr) {
+    testTrue(g,
+             matricesNear(secondPrev->uniformMat4.m, firstMvpMatrix),
+             "second frame previous MVP matches the prior current MVP");
+  }
+  if (secondMvp != nullptr && secondPrev != nullptr) {
+    glm::mat4 current(1.0f);
+    std::memcpy(
+      glm::value_ptr(current), secondMvp->uniformMat4.m, 16 * sizeof(float));
+    testTrue(g,
+             !matricesNear(secondPrev->uniformMat4.m, current),
+             "moved frame current MVP differs from previous MVP");
+  }
+
+  visual.setMotionBlurEnabled(false);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(
+    g, visual.AppendCommands(&renderer), "disabled motion blur appends tokens");
+  renderer.EndFrame();
+
+  bool sawDisabled = false;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (uniformIntIs(command, WorldLook::kMotionBlurEnabledUniform, 0)) {
+      sawDisabled = true;
+    }
+  }
+  testTrue(g, sawDisabled, "uMotionBlurEnabled is 0 when motion blur is off");
+}
+
 void
 registerMeshVisualTests(IllumoTestRegistry& registry)
 {
@@ -719,5 +829,8 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.MeshVisual.ShadowUniformsFromSetters", []() {
     return runMeshVisualCase(testMeshVisualShadowUniformsFromSetters);
+  });
+  registry.add("Illumo.MeshVisual.MotionBlurUniformsFromSetters", []() {
+    return runMeshVisualCase(testMeshVisualMotionBlurUniformsFromSetters);
   });
 }

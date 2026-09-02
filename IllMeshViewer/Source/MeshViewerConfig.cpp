@@ -49,6 +49,9 @@ MeshViewerConfig::ApplyDefaults(IEnvVars* environment)
     { "shadowSlopeScale", "0.004" },
     { "shadowNormalOffset", "0.015" },
     { "shadowPcf", "1" },
+    { "motionBlurEnabled", "1" },
+    { "motionBlurAmount", "0.5" },
+    { "motionBlurMax", "0.2" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (environment->getVar(defaultValue.name).value.empty()) {

@@ -111,6 +111,18 @@ MeshVisual::setShadowNormalOffset(float offset)
 }
 
 void
+MeshVisual::setMotionBlurAmount(float amount)
+{
+  motionBlurAmount = std::clamp(amount, 0.0f, 1.0f);
+}
+
+void
+MeshVisual::setMotionBlurMax(float ndcUnits)
+{
+  motionBlurMax = std::clamp(ndcUnits, 0.0f, 2.0f);
+}
+
+void
 MeshVisual::clearPrimitives()
 {
   lineVertices.clear();
@@ -751,6 +763,8 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   const glm::mat4 coloredWorld = nodeWorld * modelMatrix;
   const glm::mat4 coloredMvp = viewProjection * coloredWorld;
   const float* coloredMvpPtr = glm::value_ptr(coloredMvp);
+  const glm::mat4 previousMvp =
+    hasPreviousMvp ? previousColoredMvp : coloredMvp;
 
   // Directional lighting & shadow setup. Viewer meshes are normalized to
   // radius 1; a tight ortho keeps shadow texels on the object instead of
@@ -838,6 +852,13 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
                               shadowNormalOffset);
       value->pushUniformInt(WorldLook::kShadowPcfUniform,
                             shadowPcfEnabled ? 1 : 0);
+      value->pushUniformMat4(WorldLook::kPrevMvpUniform,
+                             glm::value_ptr(previousMvp));
+      value->pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
+                            motionBlurEnabled ? 1 : 0);
+      value->pushUniformFloat(WorldLook::kMotionBlurAmountUniform,
+                              motionBlurAmount);
+      value->pushUniformFloat(WorldLook::kMotionBlurMaxUniform, motionBlurMax);
 
       if (shadowMapBound) {
         value->pushSetTexture(shadowDepthTextureHandle,
@@ -878,6 +899,8 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
       value->pushDrawIndexed(6, static_cast<unsigned int>(i * 6));
     }
   }
+  previousColoredMvp = coloredMvp;
+  hasPreviousMvp = true;
   return true;
 }
 

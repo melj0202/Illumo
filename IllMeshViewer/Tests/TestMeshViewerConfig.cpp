@@ -65,6 +65,14 @@ testConfigDefaults()
              env.getVar("shadowNormalOffset").value == "0.015",
              "shadowNormalOffset is 0.015");
     testTrue(g, env.getVar("shadowPcf").value == "1", "shadowPcf is 1");
+    testTrue(g,
+             env.getVar("motionBlurEnabled").value == "1",
+             "motionBlurEnabled is 1");
+    testTrue(g,
+             env.getVar("motionBlurAmount").value == "0.5",
+             "motionBlurAmount is 0.5");
+    testTrue(
+      g, env.getVar("motionBlurMax").value == "0.2", "motionBlurMax is 0.2");
   }
   std::filesystem::remove(path, error);
 }

@@ -417,7 +417,7 @@ IBackend::SubmitCommandQueue
 | **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, and Sprite are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world. |
 | **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. |
 | **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
-| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, and optional directional lighting plus a depth-only shadow pass. Lighting is CPU-side drawable state emitted as `WorldLook` uniforms; products persist it through EnvVars. One attachment per scene node; compose complex objects with child nodes. Replaces the former `DebugDraw3D` diagnostic host (D-R21). |
+| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, and motion blur are CPU-side drawable state emitted as `WorldLook` uniforms; products persist them through EnvVars. One attachment per scene node; compose complex objects with child nodes. Replaces the former `DebugDraw3D` diagnostic host (D-R21). |
 | **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `CommandLine`, `GLString`, `ExitConfirmDialog`, and `EditorConfirmDialog` compose these primitives without introducing a retained widget hierarchy. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
 | **Renderer** | Backend-neutral: owns style table; frame setup; walk layers; submit. Depends only on `IBackend*` (D-R11). |
@@ -832,12 +832,15 @@ styles with depth-tested pipelines, and emits `uMVP = cameraVP * nodeWorld *
 local` (billboard replaces local rotation with camera axes). Lit triangle
 meshes also emit `uLightDir`, `uLightColor`, `uAmbientColor`,
 `uLightSpaceMatrix`, `uShadowMap`, and shadow filter uniforms from drawable
-lighting state. Shadow map size, ortho radius, light distance, bias, slope
-scale, normal offset, and PCF are the same CPU-side state. MeshVisual
-does not read EnvVars; IllMeshViewer persists those values and calls the
-setters. It does not own a camera, model loader, or material system. Overlay
-chrome stays on `GameVisual` with a screen ortho `uMVP` so HUD does not pan
-with the world camera.
+lighting state. Lit meshes retain the previous `uMVP` and emit `uPrevMVP`,
+`uMotionBlurEnabled`, `uMotionBlurAmount`, and `uMotionBlurMax`; the lit
+vertex shader stretches trailing vertices toward that previous clip pose so
+object and camera motion smear the silhouette. Shadow map size, ortho radius,
+light distance, bias, slope scale, normal offset, PCF, and motion-blur amount
+are the same CPU-side state. MeshVisual does not read EnvVars; IllMeshViewer
+persists those values and calls the setters. It does not own a camera, model
+loader, or material system. Overlay chrome stays on `GameVisual` with a
+screen ortho `uMVP` so HUD does not pan with the world camera.
 
 IllumoGame's persisted `render3dTest=1` flag replaces `CanvasView` with a
 `SceneGraph` of `MeshVisual` attachments and switches the product `Camera` to

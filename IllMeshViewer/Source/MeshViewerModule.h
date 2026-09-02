@@ -59,6 +59,7 @@ private:
   void rebuildMeshVisual();
   void applyLightingFromEnv();
   void applyShadowsFromEnv();
+  void applyMotionBlurFromEnv();
   void updateCameraInput(double dt);
   void handleAction(MeshViewerAction action);
   void syncUiMetadata();

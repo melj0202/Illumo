@@ -6,6 +6,7 @@ This directory contains the headless automated test suite for IllMeshViewer.
 
 - Tests must run headlessly with `MockBackend` and `NullRenderWindow`.
 - Follow the CTest single-case discovery pattern via `TestRegistry`.
-- Verify camera math, config defaults, lighting and shadow EnvVars, UI layout/interaction, and module lifecycle.
+- Verify camera math, config defaults, lighting, shadow, and motion-blur
+  EnvVars, UI layout/interaction, and module lifecycle.
 - Follow `docs/contributing.md`: avoid `auto`, avoid namespaces, keep ownership
   explicit, and format with Mozilla-style `clang-format`.
