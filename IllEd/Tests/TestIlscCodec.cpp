@@ -2,7 +2,10 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
+#include <vector>
 
 static TestCounters g;
 
@@ -135,6 +138,73 @@ testFileRoundTrip()
   testEqStr(g, loaded.nodes[0].name, "Solo", "name round trips");
 }
 
+static std::vector<char>
+readFileBytes(const std::filesystem::path& path)
+{
+  std::ifstream input(path, std::ios::binary);
+  return std::vector<char>(std::istreambuf_iterator<char>(input),
+                           std::istreambuf_iterator<char>());
+}
+
+static void
+testFailedWriteLeavesPreviousFile()
+{
+  testSection("IlscCodec: failed write leaves previous file intact");
+  IlscDocument document;
+  IlscNode node;
+  node.id = "n1";
+  node.name = "KeepMe";
+  node.kind = SceneNodeKind::SolidCube;
+  document.nodes.push_back(node);
+  const std::filesystem::path path = "codec-atomic.ilsc";
+  std::string error;
+  testTrue(g, IlscCodec::writeFile(path.string(), document, &error), "seed");
+  const std::vector<char> original = readFileBytes(path);
+  testTrue(g, !original.empty(), "seeded file has contents");
+
+  const std::filesystem::path tempPath = path.string() + ".tmp";
+  std::error_code fsError;
+  std::filesystem::create_directory(tempPath, fsError);
+  testTrue(g,
+           std::filesystem::is_directory(tempPath),
+           "temp path occupied by a directory");
+  document.nodes[0].name = "Changed";
+  testTrue(g,
+           !IlscCodec::writeFile(path.string(), document, &error),
+           "write fails when sibling temp cannot be written");
+  testTrue(g, readFileBytes(path) == original, "original bytes survive");
+  IlscDocument loaded;
+  testTrue(g, IlscCodec::readFile(path.string(), &loaded, &error), "reload");
+  testEqStr(g, loaded.nodes[0].name, "KeepMe", "previous document remains");
+  std::filesystem::remove_all(tempPath, fsError);
+}
+
+static void
+testRejectsOversizeInput()
+{
+  testSection("IlscCodec: parse rejects oversized input and node counts");
+  IlscDocument document;
+  std::string error;
+  const std::string huge(IlscCodec::kMaxParseBytes + 1, 'x');
+  testTrue(g, !IlscCodec::parse(huge, &document, &error), "oversize text");
+  testTrue(g, error.find("too large") != std::string::npos, "too-large error");
+
+  std::string manyNodes = R"({"format":"ilsc","version":1,"nodes":[)";
+  for (std::size_t i = 0; i <= IlscCodec::kMaxNodeCount; ++i) {
+    if (i > 0) {
+      manyNodes += ',';
+    }
+    manyNodes += R"({"id":"n)";
+    manyNodes += std::to_string(i);
+    manyNodes += R"(","kind":"empty"})";
+  }
+  manyNodes += "]}";
+  testTrue(
+    g, !IlscCodec::parse(manyNodes, &document, &error), "too many nodes");
+  testTrue(
+    g, error.find("too many nodes") != std::string::npos, "node-count error");
+}
+
 void
 registerIlscCodecTests(IllumoTestRegistry& registry)
 {
@@ -151,6 +221,16 @@ registerIlscCodecTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Ilsc.FileRoundTrip", []() {
     g = {};
     testFileRoundTrip();
+    return g.failures;
+  });
+  registry.add("IllEd.Ilsc.FailedWriteLeavesPreviousFile", []() {
+    g = {};
+    testFailedWriteLeavesPreviousFile();
+    return g.failures;
+  });
+  registry.add("IllEd.Ilsc.RejectsOversizeInput", []() {
+    g = {};
+    testRejectsOversizeInput();
     return g.failures;
   });
   registry.add("IllEd.Ilsc.Mixed2d3dRoundTrip", []() {
