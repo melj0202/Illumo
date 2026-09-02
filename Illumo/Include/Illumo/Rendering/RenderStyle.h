@@ -17,6 +17,7 @@ enum class RenderStyleId : unsigned char
   Sprite = 4,      // textured quads (GameVisual primitives)
   LitMesh = 5,     // 3D lit meshes with Blinn-Phong, PCF shadows, motion blur
   ShadowDepth = 6, // Depth-only shadow mapping pass
+  MotionBlur = 7,  // Deferred screen-space motion blur post-process
   Count
 };
 

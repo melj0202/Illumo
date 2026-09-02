@@ -14,6 +14,19 @@ enum class TextureWrap
   Repeat
 };
 
+enum class TextureFormat : uint8_t
+{
+  RGBA8,
+  RGB8,
+  R8,
+  RGBA16F,
+  RG16F,
+  R16F,
+  Depth24,
+  Depth24Stencil8,
+  None
+};
+
 struct TextureOptions
 {
   TextureFilter filter = TextureFilter::Nearest;

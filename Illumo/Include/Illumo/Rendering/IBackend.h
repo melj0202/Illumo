@@ -6,6 +6,29 @@
 #include <Illumo/Rendering/PipelineState.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <string>
+#include <vector>
+
+struct FramebufferAttachmentDesc
+{
+  TextureFormat format = TextureFormat::RGBA8;
+  TextureFilter filter = TextureFilter::Linear;
+  TextureWrap wrap = TextureWrap::ClampToEdge;
+};
+
+struct FramebufferDesc
+{
+  int width = 0;
+  int height = 0;
+  std::vector<FramebufferAttachmentDesc> colorAttachments;
+  TextureFormat depthStencilFormat = TextureFormat::None;
+  TextureFilter depthFilter = TextureFilter::Nearest;
+};
+
+struct FramebufferAttachments
+{
+  std::vector<TextureHandle> colorTextures;
+  TextureHandle depthStencilTexture{};
+};
 
 class IBackend
 {
@@ -70,7 +93,10 @@ public:
   virtual bool IsTextureValid(TextureHandle handle) const = 0;
   virtual TextureInfo GetTextureInfo(TextureHandle handle) const = 0;
 
-  // Framebuffer / depth target for shadow mapping & offscreen passes
+  // Framebuffers / render targets for offscreen passes, MRT, and shadows
+  virtual FramebufferHandle CreateFramebuffer(
+    const FramebufferDesc& desc,
+    FramebufferAttachments* outAttachments = nullptr) = 0;
   virtual FramebufferHandle CreateDepthFramebuffer(
     int width,
     int height,

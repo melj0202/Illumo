@@ -394,19 +394,67 @@ public:
     return it->second;
   }
 
+  FramebufferHandle CreateFramebuffer(
+    const FramebufferDesc& desc,
+    FramebufferAttachments* outAttachments = nullptr) override
+  {
+    std::vector<TextureHandle> colHandles;
+    colHandles.reserve(desc.colorAttachments.size());
+    for (size_t i = 0; i < desc.colorAttachments.size(); ++i) {
+      const FramebufferAttachmentDesc& att = desc.colorAttachments[i];
+      TextureOptions opt;
+      opt.filter = att.filter;
+      opt.wrapX = att.wrap;
+      opt.wrapY = att.wrap;
+      int ch = 4;
+      if (att.format == TextureFormat::RGB8) {
+        ch = 3;
+      } else if (att.format == TextureFormat::R8 ||
+                 att.format == TextureFormat::R16F) {
+        ch = 1;
+      } else if (att.format == TextureFormat::RG16F) {
+        ch = 2;
+      }
+
+      TextureHandle tex =
+        CreateTexture(nullptr, desc.width, desc.height, ch, opt);
+      colHandles.push_back(tex);
+    }
+
+    TextureHandle depthHandle{};
+    if (desc.depthStencilFormat != TextureFormat::None) {
+      TextureOptions opt;
+      opt.filter = desc.depthFilter;
+      opt.wrapX = TextureWrap::ClampToEdge;
+      opt.wrapY = TextureWrap::ClampToEdge;
+      depthHandle = CreateTexture(nullptr, desc.width, desc.height, 1, opt);
+    }
+
+    if (outAttachments) {
+      outAttachments->colorTextures = colHandles;
+      outAttachments->depthStencilTexture = depthHandle;
+    }
+
+    FramebufferHandle fb = framebufferHandles.allocate();
+    liveFramebuffers[fb.slot] = fb.generation;
+    return fb;
+  }
+
   FramebufferHandle CreateDepthFramebuffer(
     int width,
     int height,
     TextureHandle* outDepthTexture) override
   {
-    TextureOptions options;
-    options.filter = TextureFilter::Nearest;
-    TextureHandle tex = CreateTexture(nullptr, width, height, 1, options);
+    FramebufferDesc desc;
+    desc.width = width;
+    desc.height = height;
+    desc.depthStencilFormat = TextureFormat::Depth24;
+    desc.depthFilter = TextureFilter::Nearest;
+    FramebufferAttachments atts;
+    FramebufferHandle fb = CreateFramebuffer(desc, &atts);
     if (outDepthTexture) {
-      *outDepthTexture = tex;
+      *outDepthTexture = atts.depthStencilTexture;
     }
-    FramebufferHandle fb = framebufferHandles.allocate();
-    liveFramebuffers[fb.slot] = fb.generation;
     return fb;
   }
 

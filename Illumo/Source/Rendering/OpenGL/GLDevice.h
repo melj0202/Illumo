@@ -13,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 struct GLMeshResourceEntry
 {
@@ -36,6 +37,7 @@ struct GLFramebufferResourceEntry
 {
   uint32_t generation = 0;
   GLuint fboId = 0;
+  std::vector<TextureHandle> colorTextures;
   TextureHandle depthTexture{};
   int width = 0;
   int height = 0;

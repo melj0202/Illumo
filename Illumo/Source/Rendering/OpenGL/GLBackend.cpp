@@ -409,60 +409,149 @@ GLBackend::GetTextureInfo(TextureHandle handle) const
 }
 
 FramebufferHandle
-GLBackend::CreateDepthFramebuffer(int width,
-                                  int height,
-                                  TextureHandle* outDepthTexture)
+GLBackend::CreateFramebuffer(const FramebufferDesc& desc,
+                             FramebufferAttachments* outAttachments)
 {
-  if (width <= 0 || height <= 0) {
-    Logger::LogError("CreateDepthFramebuffer: invalid dimensions");
-    return FramebufferHandle{};
-  }
-
-  std::unique_ptr<GLTexture> depthTex =
-    GLTexture::CreateDepthTexture(width, height);
-  if (!depthTex || depthTex->getID() == 0) {
-    Logger::LogError("CreateDepthFramebuffer: failed to create depth texture");
+  if (desc.width <= 0 || desc.height <= 0) {
+    Logger::LogError("CreateFramebuffer: invalid dimensions");
     return FramebufferHandle{};
   }
 
   GLuint fbo = 0;
   glGenFramebuffers(1, &fbo);
   glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-  glFramebufferTexture2D(
-    GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTex->getID(), 0);
-  glDrawBuffer(GL_NONE);
-  glReadBuffer(GL_NONE);
+
+  std::vector<TextureHandle> allocatedColorHandles;
+  std::vector<GLenum> drawBuffers;
+  allocatedColorHandles.reserve(desc.colorAttachments.size());
+  drawBuffers.reserve(desc.colorAttachments.size());
+
+  bool creationFailed = false;
+
+  for (size_t i = 0; i < desc.colorAttachments.size(); ++i) {
+    const FramebufferAttachmentDesc& att = desc.colorAttachments[i];
+    std::unique_ptr<GLTexture> colTex = GLTexture::CreateRenderTargetTexture(
+      desc.width, desc.height, att.format, att.filter, att.wrap);
+    if (!colTex || colTex->getID() == 0) {
+      Logger::LogError(
+        "CreateFramebuffer: failed to create color texture attachment " +
+        std::to_string(i));
+      creationFailed = true;
+      break;
+    }
+
+    const GLenum attachPoint = static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + i);
+    glFramebufferTexture2D(
+      GL_FRAMEBUFFER, attachPoint, GL_TEXTURE_2D, colTex->getID(), 0);
+    drawBuffers.push_back(attachPoint);
+
+    TextureHandle texHandle = textureHandles.allocate();
+    GLTextureResourceEntry texEntry;
+    texEntry.generation = texHandle.generation;
+    texEntry.resource = std::move(colTex);
+    _textureRegistryLookup[texHandle.slot] = std::move(texEntry);
+
+    allocatedColorHandles.push_back(texHandle);
+  }
+
+  TextureHandle allocatedDepthHandle{};
+  if (!creationFailed && desc.depthStencilFormat != TextureFormat::None) {
+    std::unique_ptr<GLTexture> depthTex =
+      GLTexture::CreateRenderTargetTexture(desc.width,
+                                           desc.height,
+                                           desc.depthStencilFormat,
+                                           desc.depthFilter,
+                                           TextureWrap::ClampToEdge);
+    if (!depthTex || depthTex->getID() == 0) {
+      Logger::LogError(
+        "CreateFramebuffer: failed to create depth texture attachment");
+      creationFailed = true;
+    } else {
+      const GLenum attachPoint =
+        (desc.depthStencilFormat == TextureFormat::Depth24Stencil8)
+          ? GL_DEPTH_STENCIL_ATTACHMENT
+          : GL_DEPTH_ATTACHMENT;
+      glFramebufferTexture2D(
+        GL_FRAMEBUFFER, attachPoint, GL_TEXTURE_2D, depthTex->getID(), 0);
+
+      allocatedDepthHandle = textureHandles.allocate();
+      GLTextureResourceEntry texEntry;
+      texEntry.generation = allocatedDepthHandle.generation;
+      texEntry.resource = std::move(depthTex);
+      _textureRegistryLookup[allocatedDepthHandle.slot] = std::move(texEntry);
+    }
+  }
+
+  if (creationFailed) {
+    for (size_t i = 0; i < allocatedColorHandles.size(); ++i) {
+      DestroyTexture(allocatedColorHandles[i]);
+    }
+    if (allocatedDepthHandle.isValid()) {
+      DestroyTexture(allocatedDepthHandle);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fbo);
+    return FramebufferHandle{};
+  }
+
+  if (drawBuffers.empty()) {
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+  } else {
+    glDrawBuffers(static_cast<GLsizei>(drawBuffers.size()), drawBuffers.data());
+  }
 
   GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
   if (status != GL_FRAMEBUFFER_COMPLETE) {
-    Logger::LogError("CreateDepthFramebuffer: framebuffer is incomplete (" +
+    Logger::LogError("CreateFramebuffer: framebuffer is incomplete (" +
                      std::to_string(status) + ")");
+    for (size_t i = 0; i < allocatedColorHandles.size(); ++i) {
+      DestroyTexture(allocatedColorHandles[i]);
+    }
+    if (allocatedDepthHandle.isValid()) {
+      DestroyTexture(allocatedDepthHandle);
+    }
     glDeleteFramebuffers(1, &fbo);
     return FramebufferHandle{};
   }
 
-  TextureHandle texHandle = textureHandles.allocate();
-  GLTextureResourceEntry texEntry;
-  texEntry.generation = texHandle.generation;
-  texEntry.resource = std::move(depthTex);
-  _textureRegistryLookup[texHandle.slot] = std::move(texEntry);
-
-  if (outDepthTexture) {
-    *outDepthTexture = texHandle;
+  if (outAttachments) {
+    outAttachments->colorTextures = allocatedColorHandles;
+    outAttachments->depthStencilTexture = allocatedDepthHandle;
   }
 
   FramebufferHandle fbHandle = framebufferHandles.allocate();
   GLFramebufferResourceEntry fbEntry;
   fbEntry.generation = fbHandle.generation;
   fbEntry.fboId = fbo;
-  fbEntry.depthTexture = texHandle;
-  fbEntry.width = width;
-  fbEntry.height = height;
+  fbEntry.colorTextures = allocatedColorHandles;
+  fbEntry.depthTexture = allocatedDepthHandle;
+  fbEntry.width = desc.width;
+  fbEntry.height = desc.height;
   _framebufferRegistryLookup[fbHandle.slot] = fbEntry;
 
   return fbHandle;
+}
+
+FramebufferHandle
+GLBackend::CreateDepthFramebuffer(int width,
+                                  int height,
+                                  TextureHandle* outDepthTexture)
+{
+  FramebufferDesc desc;
+  desc.width = width;
+  desc.height = height;
+  desc.depthStencilFormat = TextureFormat::Depth24;
+  desc.depthFilter = TextureFilter::Nearest;
+
+  FramebufferAttachments atts;
+  FramebufferHandle handle = CreateFramebuffer(desc, &atts);
+  if (outDepthTexture) {
+    *outDepthTexture = atts.depthStencilTexture;
+  }
+  return handle;
 }
 
 bool
@@ -477,6 +566,11 @@ GLBackend::DestroyFramebuffer(FramebufferHandle handle)
   }
   if (it->second.fboId != 0) {
     glDeleteFramebuffers(1, &it->second.fboId);
+  }
+  for (size_t i = 0; i < it->second.colorTextures.size(); ++i) {
+    if (it->second.colorTextures[i].isValid()) {
+      DestroyTexture(it->second.colorTextures[i]);
+    }
   }
   if (it->second.depthTexture.isValid()) {
     DestroyTexture(it->second.depthTexture);

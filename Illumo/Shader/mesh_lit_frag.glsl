@@ -4,8 +4,11 @@ in vec3 vFragPos;
 in vec3 vNormal;
 in vec4 vColor;
 in vec2 vTexCoord;
+in vec4 vCurrentClip;
+in vec4 vPrevClip;
 
-out vec4 FragColor;
+layout (location = 0) out vec4 FragColor;
+layout (location = 1) out vec2 FragVelocity;
 
 uniform vec3 uLightDir;
 uniform vec3 uLightColor;
@@ -17,6 +20,7 @@ uniform float uShadowBias;
 uniform float uShadowSlopeScale;
 uniform float uShadowNormalOffset;
 uniform int uShadowPcf;
+uniform int uMotionBlurEnabled;
 
 float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
 {
@@ -77,4 +81,12 @@ void main()
     vec3 lighting = ambient + (1.0 - shadow) * diffuse;
     vec4 baseColor = vColor;
     FragColor = vec4(lighting * baseColor.rgb, baseColor.a);
+
+    if (uMotionBlurEnabled != 0) {
+        vec2 currentNdc = vCurrentClip.xy / max(abs(vCurrentClip.w), 1e-5);
+        vec2 prevNdc = vPrevClip.xy / max(abs(vPrevClip.w), 1e-5);
+        FragVelocity = (currentNdc - prevNdc) * 0.5;
+    } else {
+        FragVelocity = vec2(0.0);
+    }
 }

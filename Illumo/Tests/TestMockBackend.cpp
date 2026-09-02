@@ -495,6 +495,44 @@ testDepthFramebufferLifecycle()
   expectTrue(!mock.IsFramebufferValid(fbo), "framebuffer is no longer valid");
 }
 
+static void
+testFramebufferMRTAndFormats()
+{
+  MockBackend mock;
+  mock.Initialize();
+
+  FramebufferDesc desc;
+  desc.width = 1920;
+  desc.height = 1080;
+
+  FramebufferAttachmentDesc color0;
+  color0.format = TextureFormat::RGBA8;
+  color0.filter = TextureFilter::Linear;
+  desc.colorAttachments.push_back(color0);
+
+  FramebufferAttachmentDesc color1;
+  color1.format = TextureFormat::RG16F;
+  color1.filter = TextureFilter::Nearest;
+  desc.colorAttachments.push_back(color1);
+
+  desc.depthStencilFormat = TextureFormat::Depth24;
+  desc.depthFilter = TextureFilter::Nearest;
+
+  FramebufferAttachments atts;
+  FramebufferHandle fbo = mock.CreateFramebuffer(desc, &atts);
+
+  expectTrue(fbo.isValid(), "MRT framebuffer is valid");
+  expectEqSize(
+    atts.colorTextures.size(), 2u, "two color attachments allocated");
+  expectTrue(atts.colorTextures[0].isValid(), "color 0 texture is valid");
+  expectTrue(atts.colorTextures[1].isValid(), "color 1 texture is valid");
+  expectTrue(atts.depthStencilTexture.isValid(), "depth texture is valid");
+  expectTrue(mock.IsFramebufferValid(fbo), "MRT FBO is valid in backend");
+
+  expectTrue(mock.DestroyFramebuffer(fbo), "MRT FBO destroyed successfully");
+  expectTrue(!mock.IsFramebufferValid(fbo), "MRT FBO is no longer valid");
+}
+
 static int
 runMockBackendCase(void (*testFunction)())
 {
@@ -526,5 +564,8 @@ registerMockBackendTests(IllumoTestRegistry& registry)
                []() { return runMockBackendCase(testScissorEnableDisable); });
   registry.add("Illumo.MockBackend.DepthFramebufferLifecycle", []() {
     return runMockBackendCase(testDepthFramebufferLifecycle);
+  });
+  registry.add("Illumo.MockBackend.FramebufferMRT", []() {
+    return runMockBackendCase(testFramebufferMRTAndFormats);
   });
 }
