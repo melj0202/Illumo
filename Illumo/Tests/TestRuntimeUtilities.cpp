@@ -230,6 +230,39 @@ testPresentationTimingPolicy()
            buildFrameRateLabel(false, 999, 4812) ==
              "Paced FPS: off | Submit FPS: 4812",
            "uncapped label does not misreport submissions as presented FPS");
+
+  testTrue(
+    g, getTargetFps(nullptr) == 60, "missing environment defaults to 60 FPS");
+  EnvVars fpsEnv;
+  testTrue(
+    g, getTargetFps(&fpsEnv) == 60, "missing fps var defaults to 60 FPS");
+  fpsEnv.setVar("fps", 144);
+  testTrue(
+    g, getTargetFps(&fpsEnv) == 144, "positive fps var returns target FPS");
+  fpsEnv.setVar("fps", 0);
+  testTrue(g, getTargetFps(&fpsEnv) == 0, "zero fps var selects uncapped");
+  fpsEnv.setVar("fps", -10);
+  testTrue(g, getTargetFps(&fpsEnv) == 0, "negative fps var selects uncapped");
+
+  testTrue(g,
+           calculateTargetFrameDuration(0) == std::chrono::nanoseconds::zero(),
+           "zero target FPS has zero target duration");
+  testTrue(g,
+           calculateTargetFrameDuration(60) ==
+             std::chrono::nanoseconds(1'000'000'000LL / 60),
+           "60 FPS calculates correct duration");
+
+  // Verify paceFrame delays approximately the target duration
+  const auto start = std::chrono::steady_clock::now();
+  // 100 FPS = 10ms frame time
+  paceFrame(start, 100);
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  testTrue(g,
+           elapsed >= std::chrono::milliseconds(9),
+           "paceFrame waits for at least the requested duration");
+  testTrue(g,
+           elapsed < std::chrono::milliseconds(50),
+           "paceFrame does not overshoot excessively");
 }
 
 static void
