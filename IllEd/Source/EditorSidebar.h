@@ -28,6 +28,9 @@ public:
   float fontSize() const { return m_fontSize; }
   void setToolbarDimensions(float barHeight, float statusHeight);
   float panelWidth() const { return m_width; }
+  bool isCollapsed() const { return m_collapsed; }
+  void setCollapsed(bool collapsed);
+  void toggleCollapsed() { setCollapsed(!m_collapsed); }
 
   EditorCommand update(InputManager* inputManager, float dt = 0.016f);
   bool consumedPress() const { return m_consumedPress; }
@@ -78,6 +81,10 @@ private:
   bool m_hoverMode3D;
   bool m_hoverNudge;
   bool m_hoverColor;
+  bool m_collapsed;
+  bool m_hoverCollapse;
+  float m_collapseAnim;
+  float m_collapsedWidth;
   float m_mouseX;
   float m_mouseY;
   std::vector<ToolRow> m_tools;

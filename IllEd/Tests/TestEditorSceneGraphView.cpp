@@ -1,4 +1,5 @@
 #include "EditorSceneGraphView.h"
+#include "EditorToolbar.h"
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -146,6 +147,59 @@ testFontSizeScaling()
   testTrue(g, view.containsScreenPoint(300.0f, 70.0f), "contains scaled point");
 }
 
+static void
+testCollapseExpand()
+{
+  testSection("EditorSceneGraphView: collapse and expand behavior");
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorSceneGraphView view(&fixture.window, &fixture.renderer);
+
+  EditorDocument doc;
+  const std::string root = doc.createNode(SceneNodeKind::Empty, {});
+  doc.createNode(SceneNodeKind::SolidCube, root);
+
+  testTrue(g, !view.isCollapsed(), "starts expanded by default");
+  testTrue(g, view.panelWidth() >= 220.0f, "expanded width is normal");
+  testTrue(g,
+           view.containsScreenPoint(100.0f, 100.0f),
+           "contains 100,100 when expanded");
+
+  std::string selected;
+
+  // Collapse via setter
+  view.setCollapsed(true);
+  testTrue(g, view.isCollapsed(), "isCollapsed is true");
+
+  // Advance animation to completion
+  for (int f = 0; f < 30; ++f) {
+    view.update(nullptr, &doc, &selected, 0.033f);
+  }
+  testTrue(g, view.panelWidth() <= 32.0f, "collapsed width is narrow tab");
+  testTrue(g,
+           view.containsScreenPoint(10.0f, 100.0f),
+           "contains 10,100 when collapsed");
+  testTrue(g,
+           !view.containsScreenPoint(100.0f, 100.0f),
+           "does not contain 100,100 when collapsed");
+
+  // Clicking collapsed tab expands it
+  view.clickAtForTesting(10.0f, 100.0f, &doc, &selected);
+  testTrue(g, !view.isCollapsed(), "clicking collapsed tab expands view");
+  for (int f = 0; f < 30; ++f) {
+    view.update(nullptr, &doc, &selected, 0.033f);
+  }
+  testTrue(g, view.panelWidth() >= 220.0f, "width restored to expanded size");
+
+  // Clicking collapse button [<] in header collapses it
+  const float fontScale = view.fontSize() / EditorToolbar::kDefaultFontSize;
+  const float btnSize = std::max(18.0f, std::round(18.0f * fontScale));
+  const float collapseBtnX =
+    view.panelX() + view.panelWidth() - btnSize - 6.0f * fontScale;
+  view.clickAtForTesting(collapseBtnX + 2.0f, 28.0f + 6.0f, &doc, &selected);
+  testTrue(
+    g, view.isCollapsed(), "clicking header collapse button collapses view");
+}
+
 void
 registerEditorSceneGraphViewTests(IllumoTestRegistry& registry)
 {
@@ -172,6 +226,11 @@ registerEditorSceneGraphViewTests(IllumoTestRegistry& registry)
   registry.add("IllEd.SceneGraphView.FontSizeScaling", []() {
     g = {};
     testFontSizeScaling();
+    return g.failures;
+  });
+  registry.add("IllEd.SceneGraphView.CollapseExpand", []() {
+    g = {};
+    testCollapseExpand();
     return g.failures;
   });
 }

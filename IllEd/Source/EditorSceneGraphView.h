@@ -30,6 +30,9 @@ public:
   void setToolbarDimensions(float barHeight, float statusHeight);
   float panelWidth() const { return m_width; }
   float rowHeight() const { return m_rowHeight; }
+  bool isCollapsed() const { return m_collapsed; }
+  void setCollapsed(bool collapsed);
+  void toggleCollapsed() { setCollapsed(!m_collapsed); }
 
   bool update(InputManager* inputManager,
               EditorDocument* document,
@@ -100,6 +103,10 @@ private:
   float m_animTime;
   int m_hoverRow;
   bool m_hoverRootZone;
+  bool m_collapsed;
+  bool m_hoverCollapse;
+  float m_collapseAnim;
+  float m_collapsedWidth;
   float m_mouseX;
   float m_mouseY;
 

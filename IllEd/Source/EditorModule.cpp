@@ -600,6 +600,25 @@ EditorModule::handleCommand(EditorCommand command)
       m_toolbar->showToast("Camera reset to origin",
                            ColorRgba{ 66, 214, 210, 255 });
     }
+  } else if (command == EditorCommand::ToggleSceneGraph) {
+    if (m_sceneGraphView) {
+      m_sceneGraphView->toggleCollapsed();
+      if (m_toolbar) {
+        m_toolbar->showToast(m_sceneGraphView->isCollapsed()
+                               ? "Scene Graph collapsed"
+                               : "Scene Graph expanded",
+                             ColorRgba{ 66, 214, 210, 255 });
+      }
+    }
+  } else if (command == EditorCommand::ToggleSidebar) {
+    if (m_sidebar) {
+      m_sidebar->toggleCollapsed();
+      if (m_toolbar) {
+        m_toolbar->showToast(m_sidebar->isCollapsed() ? "Inspector collapsed"
+                                                      : "Inspector expanded",
+                             ColorRgba{ 66, 214, 210, 255 });
+      }
+    }
   }
 }
 
@@ -927,6 +946,9 @@ EditorModule::Update(double dt)
   if (m_sidebar) {
     m_sidebar->setDetail(sceneDetail());
     m_sidebar->setActiveTool(m_activeTool);
+  }
+  if (m_toolbar && m_sidebar) {
+    m_toolbar->setSidebarCollapsed(m_sidebar->isCollapsed());
   }
   applyWorldCamera();
   updateStatus();

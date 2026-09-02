@@ -1,4 +1,5 @@
 #include "EditorSidebar.h"
+#include "EditorToolbar.h"
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -57,6 +58,55 @@ testFontSizeScaling()
            "contains scaled point");
 }
 
+static void
+testCollapseExpand()
+{
+  testSection("EditorSidebar: collapse and expand behavior");
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorSidebar sidebar(&fixture.window, &fixture.renderer);
+
+  testTrue(g, !sidebar.isCollapsed(), "starts expanded by default");
+  testTrue(g, sidebar.panelWidth() >= 200.0f, "expanded width is normal");
+  const float origX = sidebar.sidebarX();
+  testTrue(g,
+           sidebar.containsScreenPoint(origX + 10.0f, 100.0f),
+           "contains screen point when expanded");
+
+  // Collapse via setter
+  sidebar.setCollapsed(true);
+  testTrue(g, sidebar.isCollapsed(), "isCollapsed is true");
+
+  // Advance animation to completion
+  for (int f = 0; f < 30; ++f) {
+    sidebar.update(nullptr, 0.033f);
+  }
+  testTrue(g, sidebar.panelWidth() <= 32.0f, "collapsed width is narrow tab");
+  testTrue(g, sidebar.sidebarX() > origX, "docked against right edge");
+  testTrue(g,
+           sidebar.containsScreenPoint(1280.0f - 10.0f, 100.0f),
+           "contains right strip point");
+  testTrue(g,
+           !sidebar.containsScreenPoint(origX + 10.0f, 100.0f),
+           "does not contain old expanded interior");
+
+  // Clicking collapsed tab expands it
+  sidebar.clickAtForTesting(1280.0f - 10.0f, 100.0f);
+  testTrue(g, !sidebar.isCollapsed(), "clicking collapsed tab expands sidebar");
+  for (int f = 0; f < 30; ++f) {
+    sidebar.update(nullptr, 0.033f);
+  }
+  testTrue(
+    g, sidebar.panelWidth() >= 200.0f, "width restored to expanded size");
+
+  // Clicking collapse button [>] in header collapses it
+  const float fontScale = sidebar.fontSize() / EditorToolbar::kDefaultFontSize;
+  const float collapseBtnX = sidebar.sidebarX() + 6.0f * fontScale;
+  sidebar.clickAtForTesting(collapseBtnX + 2.0f, 28.0f + 6.0f);
+  testTrue(g,
+           sidebar.isCollapsed(),
+           "clicking header collapse button collapses sidebar");
+}
+
 void
 registerEditorSidebarTests(IllumoTestRegistry& registry)
 {
@@ -68,6 +118,11 @@ registerEditorSidebarTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Sidebar.FontSizeScaling", []() {
     g = {};
     testFontSizeScaling();
+    return g.failures;
+  });
+  registry.add("IllEd.Sidebar.CollapseExpand", []() {
+    g = {};
+    testCollapseExpand();
     return g.failures;
   });
 }

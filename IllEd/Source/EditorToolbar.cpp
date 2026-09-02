@@ -32,6 +32,8 @@ EditorToolbar::EditorToolbar(IRenderWindow* window, Renderer* renderer)
   , m_toastMessage("")
   , m_toastColor(ColorRgba{ 66, 214, 210, 255 })
   , m_is3D(false)
+  , m_sidebarCollapsed(false)
+  , m_sidebarMarginAnim(240.0f)
   , m_animTime(0.0f)
   , m_hoverMenu(-1)
   , m_hoverItem(-1)
@@ -134,6 +136,10 @@ EditorToolbar::rebuildMenus()
   viewMenu.items.push_back({ "2D World", "2", EditorCommand::SetMode2D });
   viewMenu.items.push_back({ "3D World", "3", EditorCommand::SetMode3D });
   viewMenu.items.push_back({ "Reset Camera", "R", EditorCommand::ResetCamera });
+  viewMenu.items.push_back(
+    { "Toggle Scene Graph", "", EditorCommand::ToggleSceneGraph });
+  viewMenu.items.push_back(
+    { "Toggle Inspector", "", EditorCommand::ToggleSidebar });
   m_menus.push_back(viewMenu);
 }
 
@@ -272,6 +278,12 @@ EditorToolbar::update(InputManager* inputManager, float dt)
 
   updateLayout();
   const float fontScale = m_fontSize / kDefaultFontSize;
+  const float targetMargin = (m_sidebarCollapsed ? 32.0f : 240.0f) * fontScale;
+  m_sidebarMarginAnim += (targetMargin - m_sidebarMarginAnim) *
+                         std::min(1.0f, std::max(0.0f, dt) * 18.0f);
+  if (std::abs(m_sidebarMarginAnim - targetMargin) < 0.1f) {
+    m_sidebarMarginAnim = targetMargin;
+  }
   const float itemHeight = std::max(24.0f, std::round(24.0f * fontScale));
 
   // Mouse hover tracking
@@ -610,8 +622,8 @@ EditorToolbar::rebuildVisual()
     const float toastW =
       estimateTextWidth(m_toastMessage, toastFontSize) + 36.0f * fontScale;
     const float toastH = std::max(30.0f, std::round(30.0f * fontScale));
-    const float toastX =
-      std::max(20.0f, m_barWidth - toastW - 240.0f * fontScale);
+    const float sidebarMargin = m_sidebarMarginAnim;
+    const float toastX = std::max(20.0f, m_barWidth - toastW - sidebarMargin);
     const float statusY = virtualHeight - m_statusHeight;
     const float toastY = statusY - toastH - 12.0f * fontScale - slideUp;
 

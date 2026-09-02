@@ -40,6 +40,10 @@ EditorSceneGraphView::EditorSceneGraphView(IRenderWindow* window,
   , m_animTime(0.0f)
   , m_hoverRow(-1)
   , m_hoverRootZone(false)
+  , m_collapsed(false)
+  , m_hoverCollapse(false)
+  , m_collapseAnim(0.0f)
+  , m_collapsedWidth(24.0f)
   , m_mouseX(0.0f)
   , m_mouseY(0.0f)
 {
@@ -49,6 +53,19 @@ EditorSceneGraphView::EditorSceneGraphView(IRenderWindow* window,
   m_visual.setRenderer(renderer);
   m_visual.prepare(renderer);
   updateLayout();
+}
+
+void
+EditorSceneGraphView::setCollapsed(bool collapsed)
+{
+  if (m_collapsed != collapsed) {
+    m_collapsed = collapsed;
+    m_isDragging = false;
+    m_draggedNodeId.clear();
+    m_dropTargetNodeId.clear();
+    m_dropValid = false;
+    updateLayout();
+  }
 }
 
 void
@@ -90,7 +107,10 @@ EditorSceneGraphView::updateLayout()
     static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
 
   const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
-  m_width = std::max(220.0f, std::round(220.0f * fontScale));
+  m_collapsedWidth = std::max(24.0f, std::round(24.0f * fontScale));
+  const float expandedW = std::max(220.0f, std::round(220.0f * fontScale));
+  m_width =
+    std::round(expandedW + (m_collapsedWidth - expandedW) * m_collapseAnim);
   m_rowHeight = std::max(22.0f, std::round(22.0f * fontScale));
 
   m_x = 0.0f;
@@ -184,7 +204,7 @@ EditorSceneGraphView::rebuildTreeRows(const EditorDocument* document)
 int
 EditorSceneGraphView::hitTestRow(float x, float y) const
 {
-  if (x < m_x || x > m_x + m_width) {
+  if (m_collapsed || x < m_x || x > m_x + m_width) {
     return -1;
   }
   for (size_t i = 0; i < m_rows.size(); ++i) {
@@ -198,7 +218,7 @@ EditorSceneGraphView::hitTestRow(float x, float y) const
 bool
 EditorSceneGraphView::hitTestRootZone(float x, float y) const
 {
-  if (x < m_x || x > m_x + m_width) {
+  if (m_collapsed || x < m_x || x > m_x + m_width) {
     return false;
   }
   const float treeEndY =
@@ -213,6 +233,23 @@ EditorSceneGraphView::clickAtForTesting(float x,
                                         std::string* selectedId)
 {
   updateLayout();
+  if (m_collapsed) {
+    if (containsScreenPoint(x, y)) {
+      setCollapsed(false);
+    }
+    return;
+  }
+
+  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
+  const float btnSize = std::max(18.0f, std::round(18.0f * fontScale));
+  const float collapseBtnX = m_x + m_width - btnSize - 6.0f * fontScale;
+  const float collapseBtnY = m_headerY + 4.0f * fontScale;
+  if (x >= collapseBtnX && x <= collapseBtnX + btnSize && y >= collapseBtnY &&
+      y <= collapseBtnY + btnSize) {
+    setCollapsed(true);
+    return;
+  }
+
   rebuildTreeRows(document);
   const int rowIdx = hitTestRow(x, y);
   if (rowIdx >= 0 && static_cast<size_t>(rowIdx) < m_rows.size() &&
@@ -238,8 +275,18 @@ EditorSceneGraphView::update(InputManager* inputManager,
                              float dt)
 {
   m_animTime += std::max(0.0f, dt);
+  const float targetCollapse = m_collapsed ? 1.0f : 0.0f;
+  m_collapseAnim += (targetCollapse - m_collapseAnim) *
+                    std::min(1.0f, std::max(0.0f, dt) * 18.0f);
+  if (std::abs(m_collapseAnim - targetCollapse) < 0.001f) {
+    m_collapseAnim = targetCollapse;
+  }
   updateLayout();
-  rebuildTreeRows(document);
+  if (m_collapseAnim < 0.99f) {
+    rebuildTreeRows(document);
+  } else {
+    m_rows.clear();
+  }
 
   m_consumedPress = false;
   bool hierarchyChanged = false;
@@ -255,8 +302,23 @@ EditorSceneGraphView::update(InputManager* inputManager,
   }
 
   const bool inPanel = containsScreenPoint(m_mouseX, m_mouseY);
-  m_hoverRow = inPanel ? hitTestRow(m_mouseX, m_mouseY) : -1;
-  m_hoverRootZone = inPanel ? hitTestRootZone(m_mouseX, m_mouseY) : false;
+  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
+  const float btnSize = std::max(18.0f, std::round(18.0f * fontScale));
+  const float collapseBtnX = m_x + m_width - btnSize - 6.0f * fontScale;
+  const float collapseBtnY = m_headerY + 4.0f * fontScale;
+
+  m_hoverCollapse = false;
+  if (m_collapsed) {
+    m_hoverCollapse = inPanel;
+    m_hoverRow = -1;
+    m_hoverRootZone = false;
+  } else {
+    m_hoverCollapse =
+      (m_mouseX >= collapseBtnX && m_mouseX <= collapseBtnX + btnSize &&
+       m_mouseY >= collapseBtnY && m_mouseY <= collapseBtnY + btnSize);
+    m_hoverRow = inPanel ? hitTestRow(m_mouseX, m_mouseY) : -1;
+    m_hoverRootZone = inPanel ? hitTestRootZone(m_mouseX, m_mouseY) : false;
+  }
 
   if (inputManager != nullptr) {
     const bool mouseDown =
@@ -264,10 +326,17 @@ EditorSceneGraphView::update(InputManager* inputManager,
 
     // Mouse Press event
     if (mouseDown && !m_mouseWasDown) {
-      if (inPanel) {
+      if (m_collapsed) {
+        if (inPanel) {
+          m_consumedPress = true;
+          setCollapsed(false);
+        }
+      } else if (inPanel) {
         m_consumedPress = true;
-        if (m_hoverRow >= 0 &&
-            static_cast<size_t>(m_hoverRow) < m_rows.size()) {
+        if (m_hoverCollapse) {
+          setCollapsed(true);
+        } else if (m_hoverRow >= 0 &&
+                   static_cast<size_t>(m_hoverRow) < m_rows.size()) {
           const std::string clickedId = m_rows[m_hoverRow].id;
           if (selectedId != nullptr) {
             *selectedId = clickedId;
@@ -369,9 +438,74 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
   const ColorRgba treeLineColor{ 45, 65, 90, 220 };
 
   // Background and right border
-  m_visual.addFilledRect(m_x, m_y, m_width, m_height, panelBg);
+  m_visual.addFilledRect(m_x,
+                         m_y,
+                         m_width,
+                         m_height,
+                         (m_collapseAnim > 0.8f && m_hoverCollapse)
+                           ? ColorRgba{ 18, 28, 42, 255 }
+                           : panelBg);
   m_visual.addLine(
     m_x + m_width, m_y, m_x + m_width, m_y + m_height, panelBorder, 1.0f);
+
+  // If mostly or fully collapsed, draw the compact vertical docking tab strip
+  if (m_collapseAnim > 0.05f) {
+    const float tabAlpha = m_collapseAnim;
+    // Glowing accent pip when hovered or idle
+    const float stripPulse = 0.70f + 0.30f * std::sin(m_animTime * 3.0f);
+    const unsigned char stripAlpha = static_cast<unsigned char>(
+      (m_hoverCollapse ? 255.0f : (180.0f * stripPulse)) * tabAlpha);
+    m_visual.addFilledRect(m_x,
+                           m_y + 8.0f * fontScale,
+                           2.0f,
+                           24.0f * fontScale,
+                           ColorRgba{ 66, 214, 210, stripAlpha });
+
+    // Expand arrow ">"
+    const float arrowFontSize = std::max(11.0f, std::round(13.0f * fontScale));
+    const unsigned char arrowAlpha =
+      static_cast<unsigned char>(255.0f * tabAlpha);
+    m_visual.addText(
+      ">",
+      m_x +
+        std::max(0.0f, std::round((m_width - arrowFontSize * 0.55f) * 0.5f)),
+      m_y + 12.0f * fontScale,
+      arrowFontSize,
+      m_hoverCollapse ? ColorRgba{ 255, 255, 255, arrowAlpha }
+                      : ColorRgba{ 66, 214, 210, arrowAlpha });
+
+    // Vertical text label "SCENE"
+    const char* letters[] = { "S", "C", "E", "N", "E" };
+    const float letterFont = std::max(8.0f, std::round(9.0f * fontScale));
+    float letterY = m_y + 44.0f * fontScale;
+    for (const char* l : letters) {
+      m_visual.addText(
+        l,
+        m_x + std::max(0.0f, std::round((m_width - letterFont * 0.55f) * 0.5f)),
+        letterY,
+        letterFont,
+        m_hoverCollapse
+          ? ColorRgba{ 200, 230, 255, arrowAlpha }
+          : ColorRgba{ muted.r,
+                       muted.g,
+                       muted.b,
+                       static_cast<unsigned char>(muted.a * tabAlpha) });
+      letterY += 13.0f * fontScale;
+    }
+
+    if (m_collapseAnim >= 0.98f) {
+      return;
+    }
+  }
+
+  const float expandAlpha = 1.0f - m_collapseAnim;
+  const auto fadeColor = [expandAlpha](ColorRgba c) -> ColorRgba {
+    return ColorRgba{ c.r,
+                      c.g,
+                      c.b,
+                      static_cast<unsigned char>(static_cast<float>(c.a) *
+                                                 expandAlpha) };
+  };
 
   // Section Header: SCENE GRAPH
   const float headerGlow = 0.70f + 0.30f * std::sin(m_animTime * 3.0f);
@@ -380,14 +514,53 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
     m_headerY + 8.0f * fontScale,
     2.0f,
     8.0f * fontScale,
-    ColorRgba{ 66, 214, 210, static_cast<unsigned char>(255.0f * headerGlow) });
+    fadeColor(ColorRgba{
+      66, 214, 210, static_cast<unsigned char>(255.0f * headerGlow) }));
   m_visual.addText("SCENE GRAPH",
                    m_x + 12.0f * fontScale,
                    m_headerY + 6.0f * fontScale,
                    headerFontSize,
-                   muted);
+                   fadeColor(muted));
 
-  // Node count pill badge
+  // Collapse button [<] at right of header
+  const float btnSize = std::max(18.0f, std::round(18.0f * fontScale));
+  const float collapseBtnX = m_x + m_width - btnSize - 6.0f * fontScale;
+  const float collapseBtnY = m_headerY + 4.0f * fontScale;
+  if (m_hoverCollapse) {
+    m_visual.addFilledRect(collapseBtnX,
+                           collapseBtnY,
+                           btnSize,
+                           btnSize,
+                           fadeColor(ColorRgba{ 26, 44, 66, 240 }));
+    m_visual.addOutlineRect(collapseBtnX,
+                            collapseBtnY,
+                            btnSize,
+                            btnSize,
+                            fadeColor(cyanAccent),
+                            1.0f);
+  } else {
+    m_visual.addFilledRect(collapseBtnX,
+                           collapseBtnY,
+                           btnSize,
+                           btnSize,
+                           fadeColor(ColorRgba{ 18, 28, 42, 180 }));
+    m_visual.addOutlineRect(collapseBtnX,
+                            collapseBtnY,
+                            btnSize,
+                            btnSize,
+                            fadeColor(ColorRgba{ 40, 56, 78, 200 }),
+                            1.0f);
+  }
+  const float btnArrowFont = std::max(9.0f, std::round(10.0f * fontScale));
+  m_visual.addText(
+    "<",
+    collapseBtnX +
+      std::max(0.0f, std::round((btnSize - btnArrowFont * 0.55f) * 0.5f)),
+    collapseBtnY + std::max(0.0f, std::round((btnSize - btnArrowFont) * 0.5f)),
+    btnArrowFont,
+    fadeColor(m_hoverCollapse ? ColorRgba{ 255, 255, 255, 255 } : cyanAccent));
+
+  // Node count pill badge (placed to the left of the collapse button)
   const size_t totalNodes = document ? document->nodeCount() : 0;
   const std::string countStr = std::to_string(totalNodes);
   const float badgeW =
@@ -395,32 +568,32 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
              static_cast<float>(countStr.size()) * pillFontSize * 0.55f +
                12.0f * fontScale);
   const float badgeH = std::max(14.0f, std::round(14.0f * fontScale));
-  const float badgeX = m_x + m_width - badgeW - 8.0f * fontScale;
+  const float badgeX = collapseBtnX - badgeW - 6.0f * fontScale;
 
   m_visual.addFilledRect(badgeX,
                          m_headerY + 6.0f * fontScale,
                          badgeW,
                          badgeH,
-                         ColorRgba{ 20, 32, 48, 220 });
+                         fadeColor(ColorRgba{ 20, 32, 48, 220 }));
   m_visual.addOutlineRect(badgeX,
                           m_headerY + 6.0f * fontScale,
                           badgeW,
                           badgeH,
-                          ColorRgba{ 44, 62, 86, 255 },
+                          fadeColor(ColorRgba{ 44, 62, 86, 255 }),
                           1.0f);
   m_visual.addText(countStr,
                    badgeX + 6.0f * fontScale,
                    m_headerY + 6.0f * fontScale +
                      std::max(0.0f, std::round((badgeH - pillFontSize) * 0.5f)),
                    pillFontSize,
-                   cyanAccent);
+                   fadeColor(cyanAccent));
 
   // Divider under header
   m_visual.addLine(m_x + 6.0f * fontScale,
                    m_headerY + 24.0f * fontScale,
                    m_x + m_width - 6.0f * fontScale,
                    m_headerY + 24.0f * fontScale,
-                   ColorRgba{ 35, 48, 66, 255 },
+                   fadeColor(ColorRgba{ 35, 48, 66, 255 }),
                    1.0f);
 
   // Empty state note if no nodes exist
@@ -429,12 +602,12 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
                      m_x + 16.0f * fontScale,
                      m_treeStartY + 16.0f * fontScale,
                      headerFontSize,
-                     muted);
+                     fadeColor(muted));
     m_visual.addText("Use Tools or Create menu",
                      m_x + 16.0f * fontScale,
                      m_treeStartY + 34.0f * fontScale,
                      headerFontSize,
-                     ColorRgba{ 90, 112, 135, 255 });
+                     fadeColor(ColorRgba{ 90, 112, 135, 255 }));
     return;
   }
 
@@ -501,12 +674,14 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
       const float hookX0 = contentX - 10.0f * fontScale;
       const float hookX1 = contentX - 2.0f * fontScale;
       const float hookY = rowY + rowH * 0.5f;
-      m_visual.addLine(hookX0, hookY, hookX1, hookY, treeLineColor, 1.0f);
+      m_visual.addLine(
+        hookX0, hookY, hookX1, hookY, fadeColor(treeLineColor), 1.0f);
 
       // Draw vertical stem
       const float stemY0 = rowY;
       const float stemY1 = row.isLastChild ? hookY : (rowY + m_rowHeight);
-      m_visual.addLine(hookX0, stemY0, hookX0, stemY1, treeLineColor, 1.0f);
+      m_visual.addLine(
+        hookX0, stemY0, hookX0, stemY1, fadeColor(treeLineColor), 1.0f);
     }
 
     // Node icon (from atlas if available or styled bullet)
@@ -541,7 +716,8 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
                                  rowY + rowH * 0.5f,
                                  iconSize,
                                  iconSize,
-                                 EditorUiAtlas::regionFor(iconCmd));
+                                 EditorUiAtlas::regionFor(iconCmd),
+                                 fadeColor(ColorRgba{ 255, 255, 255, 255 }));
       labelX = contentX + iconSize + 4.0f * fontScale;
     } else {
       // Small bullet dot
@@ -550,7 +726,7 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
                                std::round((rowH - 4.0f * fontScale) * 0.5f),
                              4.0f * fontScale,
                              4.0f * fontScale,
-                             isSelected ? cyanAccent : muted);
+                             fadeColor(isSelected ? cyanAccent : muted));
       labelX = contentX + 10.0f * fontScale;
     }
 
@@ -564,7 +740,8 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
 
     const float textY =
       rowY + std::max(0.0f, std::round((rowH - rowFontSize) * 0.5f));
-    m_visual.addText(labelText, labelX, textY, rowFontSize, labelColor);
+    m_visual.addText(
+      labelText, labelX, textY, rowFontSize, fadeColor(labelColor));
   }
 
   // Root drop zone indicator if dragging

@@ -32,7 +32,9 @@ enum class EditorCommand
   SetMode3D,
   CycleColor,
   NudgeExtent,
-  ResetCamera
+  ResetCamera,
+  ToggleSceneGraph,
+  ToggleSidebar
 };
 
 class EditorToolbar : public DrawableBase
@@ -60,6 +62,7 @@ public:
   TextureHandle atlas() const { return m_atlas; }
   void setStatus(const std::string& text);
   void setWorldMode(bool is3D) { m_is3D = is3D; }
+  void setSidebarCollapsed(bool collapsed) { m_sidebarCollapsed = collapsed; }
   void showToast(const std::string& message,
                  ColorRgba color = ColorRgba{ 66, 214, 210, 255 },
                  float duration = 2.5f);
@@ -114,6 +117,8 @@ private:
   std::string m_toastMessage;
   ColorRgba m_toastColor{ 66, 214, 210, 255 };
   bool m_is3D;
+  bool m_sidebarCollapsed;
+  float m_sidebarMarginAnim;
   float m_animTime;
   int m_hoverMenu;
   int m_hoverItem;
