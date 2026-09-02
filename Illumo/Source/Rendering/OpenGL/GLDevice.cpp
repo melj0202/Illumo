@@ -76,6 +76,8 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
   for (int s = 0; s < 8; ++s) {
     _boundTexture[s] = 0;
   }
+  // Not 0: first SetFramebuffer({}) must still call glBindFramebuffer(0).
+  _boundFbo = static_cast<GLuint>(-1);
   _viewportX = -1;
   _viewportY = -1;
   _viewportW = -1;
