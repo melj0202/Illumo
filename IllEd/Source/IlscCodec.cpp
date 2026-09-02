@@ -2,12 +2,16 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 static bool
 isFiniteNumber(double value)
@@ -278,6 +282,10 @@ IlscCodec::parse(const std::string& text,
     setError(error, "Document pointer is null");
     return false;
   }
+  if (text.size() > kMaxParseBytes) {
+    setError(error, "Scene file is too large");
+    return false;
+  }
 
   nlohmann::json root;
   try {
@@ -354,6 +362,10 @@ IlscCodec::parse(const std::string& text,
     return false;
   }
   const nlohmann::json& nodesJson = root["nodes"];
+  if (nodesJson.size() > kMaxNodeCount) {
+    setError(error, "Scene file has too many nodes");
+    return false;
+  }
   std::unordered_set<std::string> ids;
   parsed.nodes.reserve(nodesJson.size());
   for (size_t i = 0; i < nodesJson.size(); ++i) {
@@ -555,6 +567,17 @@ IlscCodec::readFile(const std::string& path,
     setError(error, "Failed to open scene file");
     return false;
   }
+  file.seekg(0, std::ios::end);
+  const std::streamoff size = file.tellg();
+  if (size < 0) {
+    setError(error, "Failed while reading scene file");
+    return false;
+  }
+  if (static_cast<std::size_t>(size) > kMaxParseBytes) {
+    setError(error, "Scene file is too large");
+    return false;
+  }
+  file.seekg(0);
   std::ostringstream buffer;
   buffer << file.rdbuf();
   if (!file.good() && !file.eof()) {
@@ -562,6 +585,27 @@ IlscCodec::readFile(const std::string& path,
     return false;
   }
   return parse(buffer.str(), document, error);
+}
+
+static bool
+replaceDestinationWithTemp(const std::string& destination,
+                           const std::string& tempPath)
+{
+#ifdef _WIN32
+  if (MoveFileExA(tempPath.c_str(),
+                  destination.c_str(),
+                  MOVEFILE_REPLACE_EXISTING) == 0) {
+    std::remove(tempPath.c_str());
+    return false;
+  }
+  return true;
+#else
+  if (std::rename(tempPath.c_str(), destination.c_str()) != 0) {
+    std::remove(tempPath.c_str());
+    return false;
+  }
+  return true;
+#endif
 }
 
 bool
@@ -573,14 +617,23 @@ IlscCodec::writeFile(const std::string& path,
     setError(error, "Scene path is empty");
     return false;
   }
-  std::ofstream file(path, std::ios::trunc);
+  const std::string tempPath = path + ".tmp";
+  std::ofstream file(tempPath, std::ios::trunc);
   if (!file.is_open()) {
     setError(error, "Failed to open scene file for writing");
     return false;
   }
   const std::string text = encode(document);
   file << text;
-  if (!file.good()) {
+  file.flush();
+  const bool succeeded = file.good();
+  file.close();
+  if (!succeeded) {
+    std::remove(tempPath.c_str());
+    setError(error, "Failed while writing scene file");
+    return false;
+  }
+  if (!replaceDestinationWithTemp(path, tempPath)) {
     setError(error, "Failed while writing scene file");
     return false;
   }
