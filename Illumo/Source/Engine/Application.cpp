@@ -5,6 +5,7 @@
 #ifndef NDEBUG
 #include <Illumo/Engine/DebugModule.h>
 #endif
+#include "Rendering/PresentationTiming.h"
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <chrono>
@@ -104,6 +105,12 @@ RunIllumoApplication(int argc,
       {
         ZoneScopedN("Frame.Render");
         illumo.render();
+      }
+
+      {
+        ZoneScopedN("Frame.Pacing");
+        const long targetFps = getTargetFps(&illumo.environment());
+        paceFrame(currentTime, targetFps);
       }
     }
 
