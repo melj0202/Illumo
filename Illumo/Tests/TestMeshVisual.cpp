@@ -424,6 +424,68 @@ testMeshVisualNewPrimitivesEmitTokens()
            "ellipse draw has 16 triangle fan indices");
 }
 
+static void
+testMeshVisualShadowDepthClear()
+{
+  testSection("MeshVisual: shadow pass clears depth, not color");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.setLightingEnabled(true);
+  visual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "lit cube emits tokens");
+  renderer.EndFrame();
+
+  const size_t count = mock.getLastNonEmptySubmittedCount();
+  size_t bindIndex = count;
+  size_t clearIndex = count;
+  size_t drawIndex = count;
+  size_t unbindIndex = count;
+  bool colorClearInShadow = false;
+  for (size_t i = 0; i < count; ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (bindIndex == count) {
+      if (command.commandType == CommandType::SetFramebuffer &&
+          command.bindFramebuffer.handle.isValid()) {
+        bindIndex = i;
+      }
+      continue;
+    }
+    if (command.commandType == CommandType::ClearColorBuffer) {
+      colorClearInShadow = true;
+    }
+    if (clearIndex == count &&
+        command.commandType == CommandType::ClearDepthBuffer) {
+      clearIndex = i;
+    }
+    if (drawIndex == count && command.commandType == CommandType::DrawIndexed) {
+      drawIndex = i;
+    }
+    if (command.commandType == CommandType::SetFramebuffer &&
+        !command.bindFramebuffer.handle.isValid()) {
+      unbindIndex = i;
+      break;
+    }
+  }
+  testTrue(g,
+           bindIndex < clearIndex && clearIndex < drawIndex &&
+             drawIndex < unbindIndex,
+           "shadow subsequence is FBO, ClearDepthBuffer, DrawIndexed, unbind");
+  testTrue(
+    g, !colorClearInShadow, "shadow pass does not emit ClearColorBuffer");
+}
+
 void
 registerMeshVisualTests(IllumoTestRegistry& registry)
 {
@@ -439,5 +501,8 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.MeshVisual.NewPrimitives", []() {
     return runMeshVisualCase(testMeshVisualNewPrimitivesEmitTokens);
+  });
+  registry.add("Illumo.MeshVisual.ShadowDepthClear", []() {
+    return runMeshVisualCase(testMeshVisualShadowDepthClear);
   });
 }
