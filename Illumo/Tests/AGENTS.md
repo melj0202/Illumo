@@ -12,8 +12,8 @@ SceneGraph cases are `Illumo.SceneGraph.HandlesAndLifetime`,
 `Illumo.SceneGraph.HierarchyAndTransforms`, and
 `Illumo.SceneGraph.RenderExtraction`. MeshVisual cases are
 `Illumo.MeshVisual.DynamicMeshReuse`, `Illumo.MeshVisual.SpriteAndCube`,
-`Illumo.MeshVisual.Billboard`, `Illumo.MeshVisual.SceneAttachment`, and
-`Illumo.MeshVisual.NewPrimitives`.
+`Illumo.MeshVisual.Billboard`, `Illumo.MeshVisual.SceneAttachment`,
+`Illumo.MeshVisual.NewPrimitives`, and `Illumo.MeshVisual.ShadowDepthClear`.
 
 Use `Illumo::TestSupport` for MockBackend and test-only fixtures. Tests must be
 headless, deterministic, and isolated under `build/Testing/Illumo/`.
