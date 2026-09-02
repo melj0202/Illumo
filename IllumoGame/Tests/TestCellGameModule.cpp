@@ -219,7 +219,6 @@ testInvalidContextStartIsContained()
   testTrue(g,
            CellGameModuleTestAccess::getCellContext(module) == nullptr,
            "null context does not create game state");
-  // Failed Start must not crash on later frame hooks.
   module.Update(0.016);
   module.DispatchDrawables(nullptr);
   module.Exit();
@@ -310,7 +309,6 @@ testWireworldSeedAndBrush()
   testSection("CellGameModule: Wireworld seed and brush state");
   CellGameFixture fixture(16, 12);
   fixture.env.setVar("ModeString", "WIREWORLD");
-  // Restart under Wireworld so seedInitialPattern runs for that ruleset.
   fixture.module.Exit();
   fixture.started = false;
   fixture.env.setVar("ModeString", "WIREWORLD");
