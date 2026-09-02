@@ -76,6 +76,8 @@ class IlscCodec
 {
 public:
   static const int kVersion = 1;
+  static const std::size_t kMaxParseBytes = 1024 * 1024;
+  static const std::size_t kMaxNodeCount = 4096;
 
   static bool parse(const std::string& text,
                     IlscDocument* document,
