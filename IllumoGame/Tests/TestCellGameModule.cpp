@@ -433,6 +433,39 @@ testSaveLoadRoundTrip()
 }
 
 static void
+testFailedSaveLeavesPreviousFile()
+{
+  testSection("CellGameModule: failed save leaves previous file intact");
+  CellGameFixture fixture(5, 4);
+  CellContext* cellContext =
+    CellGameModuleTestAccess::getCellContext(fixture.module);
+  CanvasView* canvas = cellContext->getCanvasView();
+  canvas->clearCanvas();
+  canvas->setCanvasPixel(0, 0, 0);
+  const std::filesystem::path savePath = "atomic-save.illumo";
+  testTrue(g,
+           CellGameModuleTestAccess::save(fixture.module, savePath.string()),
+           "initial save succeeds");
+  const std::vector<char> original = readFileBytes(savePath);
+  testTrue(g, !original.empty(), "saved file has contents");
+
+  const std::filesystem::path tempPath = savePath.string() + ".tmp";
+  std::error_code error;
+  std::filesystem::create_directory(tempPath, error);
+  testTrue(g,
+           std::filesystem::is_directory(tempPath),
+           "temp path occupied by a directory");
+  canvas->setCanvasPixel(1, 1, 0);
+  testTrue(g,
+           !CellGameModuleTestAccess::save(fixture.module, savePath.string()),
+           "save fails when sibling temp cannot be written");
+  testTrue(g,
+           readFileBytes(savePath) == original,
+           "previous valid file is unchanged");
+  std::filesystem::remove_all(tempPath, error);
+}
+
+static void
 testSparseV2Compatibility()
 {
   testSection("CellGameModule: sparse v2 compatibility");
@@ -1147,6 +1180,9 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CellGame.SaveLoadRoundTrip",
                []() { return runCellGameModuleCase(testSaveLoadRoundTrip); });
+  registry.add("IllumoGame.CellGame.FailedSaveLeavesPreviousFile", []() {
+    return runCellGameModuleCase(testFailedSaveLeavesPreviousFile);
+  });
   registry.add("IllumoGame.CellGame.SparseV2Compatibility", []() {
     return runCellGameModuleCase(testSparseV2Compatibility);
   });
