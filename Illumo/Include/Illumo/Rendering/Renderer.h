@@ -26,7 +26,7 @@ public:
   {
     std::array<int, 2> windowDimensions{ 1280, 720 };
     std::array<float, 16> worldMvp{ 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
-                                    0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+                                    0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
                                     0.0f, 0.0f, 0.0f, 1.0f };
     Camera* worldCamera = nullptr;
     float uiScale = 1.0f;
