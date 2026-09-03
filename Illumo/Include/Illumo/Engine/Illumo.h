@@ -86,6 +86,7 @@ private:
   void applyPendingModuleTransition();
   void updateStartedModules(ModuleRequirement requirement, double dt);
   void dispatchStartedModules(ModuleRequirement requirement);
+  void processGlobalHotkeys();
   void releaseServices();
 
   std::string m_applicationName;

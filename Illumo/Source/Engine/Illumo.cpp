@@ -356,6 +356,72 @@ Illumo::dispatchStartedModules(ModuleRequirement requirement)
 }
 
 void
+Illumo::processGlobalHotkeys()
+{
+  if (m_inputManager == nullptr) {
+    return;
+  }
+
+  // When console is open, do not intercept hotkeys so text editing is
+  // unimpeded.
+  if (m_commandLine != nullptr && m_commandLine->isOpen) {
+    return;
+  }
+
+  std::queue<InputManager::KeyPressEvent>& keyQueue =
+    m_inputManager->getKeyQueue();
+  std::queue<InputManager::KeyPressEvent> remainingKeys;
+
+  while (!keyQueue.empty()) {
+    InputManager::KeyPressEvent event = keyQueue.front();
+    keyQueue.pop();
+
+    if (event.action == InputAction::Press) {
+      if (event.key == KeyCode::F11) {
+        if (m_window != nullptr) {
+          m_window->toggleFullscreen();
+          if (m_environment != nullptr) {
+            const bool current =
+              m_environment->getVar("fullscreen").valueAsBool;
+            m_environment->setVar("fullscreen", !current);
+            if (m_commandLine != nullptr) {
+              m_commandLine->logSuccess(std::string("Fullscreen: ") +
+                                        (!current ? "on" : "off"));
+            }
+          }
+        }
+        continue;
+      }
+      if (event.key == KeyCode::F3) {
+        if (m_environment != nullptr) {
+          const bool current = m_environment->getVar("showFPS").valueAsBool;
+          m_environment->setVar("showFPS", !current);
+          if (m_commandLine != nullptr) {
+            m_commandLine->logSuccess(std::string("FPS overlay: ") +
+                                      (!current ? "on" : "off"));
+          }
+        }
+        continue;
+      }
+      if (event.key == KeyCode::F5) {
+        if (m_assetManager != nullptr) {
+          const size_t queued = m_assetManager->reloadAll();
+          if (m_commandLine != nullptr) {
+            m_commandLine->logNormal("Asset reloads queued: " +
+                                     std::to_string(queued));
+          }
+        }
+        continue;
+      }
+    }
+
+    remainingKeys.push(event);
+  }
+
+  keyQueue.swap(remainingKeys);
+}
+
+void
 Illumo::update(double dt)
 {
   if (!m_initialized || !m_modulesStarted) {
@@ -366,6 +432,7 @@ Illumo::update(double dt)
   }
   ZoneScoped;
   m_inputManager->update();
+  processGlobalHotkeys();
   m_camera->Update(static_cast<float>(dt));
   // Optional overlays (DebugModule) consume global console input first.
   updateStartedModules(ModuleRequirement::Optional, dt);
