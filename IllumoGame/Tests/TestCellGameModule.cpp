@@ -601,6 +601,80 @@ testReleaseConfigurationWorkflow()
 }
 
 static void
+testHamburgerMenuButton()
+{
+  testSection("CellGameModule: hamburger icon toggles settings menu");
+  CellGameFixture fixture;
+  ConfigurationMenu* menu =
+    CellGameModuleTestAccess::getConfigurationMenu(fixture.module);
+  testTrue(g, menu != nullptr && !menu->isOpen(), "settings start closed");
+
+  // Initial update establishes hamburger button placement and dimensions
+  fixture.module.Update(0.016);
+  GameVisual* hamburger =
+    CellGameModuleTestAccess::getHamburgerVisual(fixture.module);
+  testTrue(g,
+           hamburger != nullptr && hamburger->isVisible(),
+           "hamburger button is visible in default state");
+
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  const std::vector<DrawableBase*> uiDrawables =
+    fixture.scene.drawablesIn(RenderLayerId::UI);
+  testTrue(g,
+           std::find(uiDrawables.begin(), uiDrawables.end(), hamburger) !=
+             uiDrawables.end(),
+           "hamburger button is on the UI layer");
+
+  const float hx = CellGameModuleTestAccess::getHamburgerX(fixture.module);
+  const float hy = CellGameModuleTestAccess::getHamburgerY(fixture.module);
+  const float hsize =
+    CellGameModuleTestAccess::getHamburgerSize(fixture.module);
+  testTrue(g,
+           hx > 0.0f && hy > 0.0f && hsize > 0.0f,
+           "hamburger button has valid bounds");
+
+  // Move mouse outside hamburger -> not hovered
+  fixture.window.mouseX = 0.0;
+  fixture.window.mouseY = 0.0;
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !CellGameModuleTestAccess::isHamburgerHovered(fixture.module),
+           "hamburger is not hovered when mouse is away");
+
+  // Move mouse inside hamburger -> hovered
+  fixture.window.mouseX = static_cast<double>(hx + hsize * 0.5f);
+  fixture.window.mouseY = static_cast<double>(hy + hsize * 0.5f);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CellGameModuleTestAccess::isHamburgerHovered(fixture.module),
+           "hamburger is hovered when mouse is over it");
+
+  // Click hamburger -> toggles settings open
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testTrue(g, menu->isOpen(), "clicking hamburger opens settings menu");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+
+  // When settings are open, hamburger is hidden
+  testTrue(g,
+           !hamburger->isVisible(),
+           "hamburger is hidden while settings menu is open");
+
+  // Press Escape to close settings
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g, !menu->isOpen(), "settings menu closed with Escape");
+  testTrue(g,
+           hamburger->isVisible(),
+           "hamburger reappears after settings menu closes");
+}
+
+static void
 testExitConfirmationFromQ()
 {
   testSection("CellGameModule: Q asks before exiting");
@@ -1153,6 +1227,8 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CellGame.ReleaseConfiguration", []() {
     return runCellGameModuleCase(testReleaseConfigurationWorkflow);
   });
+  registry.add("IllumoGame.CellGame.HamburgerMenu",
+               []() { return runCellGameModuleCase(testHamburgerMenuButton); });
   registry.add("IllumoGame.CellGame.SettingsYieldToConsole", []() {
     return runCellGameModuleCase(testSettingsYieldToConsole);
   });

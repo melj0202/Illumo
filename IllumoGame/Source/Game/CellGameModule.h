@@ -53,6 +53,9 @@ private:
   void updateWireworldBrushFromInput();
   void showModeSplash(const char* label);
   void updateEditorCursor();
+  void updateHamburgerVisual(double dt);
+  bool isHamburgerHovered() const;
+  void toggleSettingsMenu();
   void updateSelectionVisual();
   void updateInspectorVisual();
   void normalizeSelection(std::int64_t* x0,
@@ -118,6 +121,12 @@ private:
   double render3dTestTime;
   bool render3dCameraApplied;
   Cursor editorCursor;
+  GameVisual hamburgerVisual;
+  float hamburgerX;
+  float hamburgerY;
+  float hamburgerSize;
+  bool hamburgerHovered;
+  bool hamburgerMouseWasDown;
   GameVisual selectionVisual;
   GameVisual inspectorVisual;
   bool hasSelection;
