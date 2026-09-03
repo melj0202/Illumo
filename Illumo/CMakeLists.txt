@@ -23,14 +23,16 @@ if(WIN32)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/Windows/WinMain.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/Windows/WinSaveLoad.cpp
-    Source/Platform/Windows/WinClipboard.cpp)
-  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32)
+    Source/Platform/Windows/WinClipboard.cpp
+    Source/Platform/Windows/WinTimer.cpp)
+  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm)
 elseif(APPLE)
   enable_language(OBJCXX)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/macOS/Main.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/macOS/MacSaveLoad.mm
-    Source/Platform/macOS/MacClipboard.cpp)
+    Source/Platform/macOS/MacClipboard.cpp
+    Source/Platform/macOS/MacTimer.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES
     "-framework Cocoa" "-framework OpenGL" "-framework IOKit"
     "-framework CoreVideo")
@@ -40,7 +42,8 @@ elseif(UNIX)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/Linux/_main.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/Linux/LinuxSaveLoad.cpp
-    Source/Platform/Linux/LinuxClipboard.cpp)
+    Source/Platform/Linux/LinuxClipboard.cpp
+    Source/Platform/Linux/LinuxTimer.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES ${GTK_LIBRARIES})
 else()
   message(FATAL_ERROR "Illumo has no platform entry implementation")

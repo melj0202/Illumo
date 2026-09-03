@@ -4,6 +4,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/EnvVars.h>
@@ -91,6 +92,7 @@ public:
   }
   bool shouldWindowClose() override { return false; }
   bool isFramePaced() const override { return false; }
+  int getRefreshRate() const override { return 60; }
   void swapBuffers() override {}
   void requestClose() override {}
 };
@@ -474,6 +476,20 @@ testRenderSceneLayerPassPipeline()
   blurAmount.value = 0.5f;
   postPass.uniformFloats.push_back(blurAmount);
 
+  PassInputTargetBinding colorBinding;
+  colorBinding.targetName = "WorldColorVelocity";
+  colorBinding.attachmentIndex = 0;
+  colorBinding.slot = 0;
+  colorBinding.samplerUniformName = "uColorTexture";
+  postPass.inputTargetTextures.push_back(colorBinding);
+
+  PassInputTargetBinding velBinding;
+  velBinding.targetName = "WorldColorVelocity";
+  velBinding.attachmentIndex = 1;
+  velBinding.slot = 1;
+  velBinding.samplerUniformName = "uVelocityTexture";
+  postPass.inputTargetTextures.push_back(velBinding);
+
   std::vector<RenderPassDesc> worldPasses;
   worldPasses.push_back(geomPass);
   worldPasses.push_back(postPass);
@@ -514,6 +530,130 @@ testRenderSceneLayerPassPipeline()
   e2eTrue(mock.getLastSubmittedCount() > 0, "commands submitted");
   e2eTrue(mock.countSubmittedOfType(CommandType::SetFramebuffer) >= 2,
           "at least two SetFramebuffer tokens submitted");
+  e2eTrue(mock.countSubmittedOfType(CommandType::SetTexture) >= 2,
+          "color and velocity textures bound for post-process pass");
+}
+
+static void
+testRenderSceneMeshVisualRestoresPassTarget()
+{
+  std::printf("\n--- e2e: MeshVisual restores active pass target after shadow "
+              "pass ---\n");
+  E2ENullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+
+  MockBackend mock;
+  mock.Initialize();
+
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+
+  Scene scene(&window, &camera);
+
+  RenderPassDesc geomPass;
+  geomPass.name = "WorldGeomPass";
+  geomPass.type = PassType::Draw;
+  geomPass.useScreenTarget = false;
+  geomPass.pooledTargetName = "WorldColorVelocity";
+  geomPass.targetDesc.name = "WorldColorVelocity";
+  geomPass.targetDesc.windowRelative = true;
+
+  FramebufferAttachmentDesc color0;
+  color0.format = TextureFormat::RGBA8;
+  geomPass.targetDesc.colorAttachments.push_back(color0);
+  FramebufferAttachmentDesc color1;
+  color1.format = TextureFormat::RG16F;
+  geomPass.targetDesc.colorAttachments.push_back(color1);
+  geomPass.targetDesc.depthStencilFormat = TextureFormat::Depth24;
+  geomPass.clear.clearColor = true;
+  geomPass.clear.clearDepth = true;
+
+  RenderPassDesc postPass;
+  postPass.name = "MotionBlurResolve";
+  postPass.type = PassType::PostProcess;
+  postPass.useScreenTarget = true;
+  postPass.styleHandle =
+    renderer.getBuiltinStyleHandle(RenderStyleId::MotionBlur);
+
+  PassInputTargetBinding colorBinding;
+  colorBinding.targetName = "WorldColorVelocity";
+  colorBinding.attachmentIndex = 0;
+  colorBinding.slot = 0;
+  colorBinding.samplerUniformName = "uColorTexture";
+  postPass.inputTargetTextures.push_back(colorBinding);
+
+  PassInputTargetBinding velBinding;
+  velBinding.targetName = "WorldColorVelocity";
+  velBinding.attachmentIndex = 1;
+  velBinding.slot = 1;
+  velBinding.samplerUniformName = "uVelocityTexture";
+  postPass.inputTargetTextures.push_back(velBinding);
+
+  std::vector<RenderPassDesc> worldPasses;
+  worldPasses.push_back(geomPass);
+  worldPasses.push_back(postPass);
+  scene.SetLayerPasses(RenderLayerId::World, worldPasses);
+
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+  visual.addLine(
+    glm::vec3(0.0f), glm::vec3(1.0f), ColorRgba{ 100, 100, 100, 255 });
+  visual.setLightingEnabled(true);
+  visual.setShadowsEnabled(true);
+  visual.setMotionBlurEnabled(true);
+
+  scene.AddDrawable(&visual, RenderLayerId::World);
+
+  renderer.RenderScene(&scene, &camera);
+
+  PooledRenderTarget pooledTarget =
+    renderer.getRenderTarget("WorldColorVelocity");
+  e2eTrue(pooledTarget.isValid(), "pooled render target is valid");
+
+  // Verify that after shadow pass, SetFramebuffer was called with
+  // pooledTarget.fboHandle, NOT 0!
+  // Sequence of SetFramebuffer calls:
+  // 1. Initial pass target: WorldColorVelocity FBO
+  // 2. Shadow pass: shadowFboHandle
+  // 3. Restored pass target: WorldColorVelocity FBO (not screen / 0!)
+  // 4. Post-process pass target: screen / 0
+  std::vector<FramebufferHandle> boundFbos;
+  bool sawLinePrevMvp = false;
+  bool sawLineMotionBlur = false;
+  for (size_t i = 0; i < mock.getLastSubmittedCount(); ++i) {
+    const RenderCommand& cmd = mock.getLastSubmitted(i);
+    if (cmd.commandType == CommandType::SetFramebuffer) {
+      boundFbos.push_back(cmd.bindFramebuffer.handle);
+    }
+    if (cmd.commandType == CommandType::SetUniformMat4 &&
+        std::strcmp(cmd.uniformMat4.name, "uPrevMVP") == 0) {
+      sawLinePrevMvp = true;
+    }
+    if (cmd.commandType == CommandType::SetUniformInt &&
+        std::strcmp(cmd.uniformInt.name, "uMotionBlurEnabled") == 0 &&
+        cmd.uniformInt.value == 1) {
+      sawLineMotionBlur = true;
+    }
+  }
+
+  e2eTrue(sawLinePrevMvp, "lines emit uPrevMVP uniform");
+  e2eTrue(sawLineMotionBlur, "lines emit uMotionBlurEnabled uniform");
+
+  e2eTrue(boundFbos.size() >= 4, "at least 4 framebuffer binds submitted");
+  if (boundFbos.size() >= 4) {
+    e2eTrue(boundFbos[0] == pooledTarget.fboHandle,
+            "pass initially binds target FBO");
+    e2eTrue(boundFbos[1].isValid() && boundFbos[1] != pooledTarget.fboHandle,
+            "shadow pass binds shadow FBO");
+    e2eTrue(boundFbos[2] == pooledTarget.fboHandle,
+            "MeshVisual restored target FBO, not screen 0");
+    e2eTrue(!boundFbos[3].isValid(), "post-process pass binds screen 0");
+  }
 }
 
 static void
@@ -587,6 +727,9 @@ registerRendererE2ETests(IllumoTestRegistry& registry)
                []() { return runRendererE2ECase(testRenderProofQuadOnMock); });
   registry.add("Illumo.Renderer.LayerPassPipeline", []() {
     return runRendererE2ECase(testRenderSceneLayerPassPipeline);
+  });
+  registry.add("Illumo.Renderer.MeshVisualRestoresPassTarget", []() {
+    return runRendererE2ECase(testRenderSceneMeshVisualRestoresPassTarget);
   });
   registry.add("Illumo.Renderer.RenderTargetPoolResizing", []() {
     return runRendererE2ECase(testRenderTargetPoolResizing);

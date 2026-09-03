@@ -261,6 +261,19 @@ RenderWindow::requestClose()
   glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
+int
+RenderWindow::getRefreshRate() const
+{
+  GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+  if (monitor != nullptr) {
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    if (mode != nullptr && mode->refreshRate > 0) {
+      return mode->refreshRate;
+    }
+  }
+  return 60;
+}
+
 void
 RenderWindow::swapBuffers()
 {

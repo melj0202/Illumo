@@ -338,9 +338,19 @@ MeshViewerModule::rebuildWireframe()
       const glm::vec3& p0 = m_meshData.vertices[i0].position;
       const glm::vec3& p1 = m_meshData.vertices[i1].position;
       const glm::vec3& p2 = m_meshData.vertices[i2].position;
-      m_wireframeVisual->addLine(p0, p1, wireColor);
-      m_wireframeVisual->addLine(p1, p2, wireColor);
-      m_wireframeVisual->addLine(p2, p0, wireColor);
+      const glm::vec3& n0 = m_meshData.vertices[i0].normal;
+      const glm::vec3& n1 = m_meshData.vertices[i1].normal;
+      const glm::vec3& n2 = m_meshData.vertices[i2].normal;
+      const float offset = 0.001f;
+      const glm::vec3 o0 =
+        glm::dot(n0, n0) > 0.01f ? (p0 + glm::normalize(n0) * offset) : p0;
+      const glm::vec3 o1 =
+        glm::dot(n1, n1) > 0.01f ? (p1 + glm::normalize(n1) * offset) : p1;
+      const glm::vec3 o2 =
+        glm::dot(n2, n2) > 0.01f ? (p2 + glm::normalize(n2) * offset) : p2;
+      m_wireframeVisual->addLine(o0, o1, wireColor);
+      m_wireframeVisual->addLine(o1, o2, wireColor);
+      m_wireframeVisual->addLine(o2, o0, wireColor);
     }
   }
 }
@@ -460,24 +470,42 @@ MeshViewerModule::applyShadowsFromEnv()
 void
 MeshViewerModule::applyMotionBlurFromEnv()
 {
-  if (m_meshVisual == nullptr || ic == nullptr || ic->envVars == nullptr) {
+  if (ic == nullptr || ic->envVars == nullptr) {
     return;
   }
 
   const EnvVar& enabledVar = ic->envVars->getVar("motionBlurEnabled");
-  if (!enabledVar.value.empty()) {
-    m_meshVisual->setMotionBlurEnabled(enabledVar.valueAsBool);
+  const bool enabled = !enabledVar.value.empty() && enabledVar.valueAsBool;
+  if (m_meshVisual) {
+    m_meshVisual->setMotionBlurEnabled(enabled);
+  }
+  if (m_wireframeVisual) {
+    m_wireframeVisual->setMotionBlurEnabled(enabled);
+  }
+  if (m_gridVisual) {
+    m_gridVisual->setMotionBlurEnabled(false);
   }
 
   const EnvVar& amountVar = ic->envVars->getVar("motionBlurAmount");
   if (!amountVar.value.empty()) {
-    m_meshVisual->setMotionBlurAmount(
-      static_cast<float>(amountVar.valueAsDouble));
+    const float amount = static_cast<float>(amountVar.valueAsDouble);
+    if (m_meshVisual) {
+      m_meshVisual->setMotionBlurAmount(amount);
+    }
+    if (m_wireframeVisual) {
+      m_wireframeVisual->setMotionBlurAmount(amount);
+    }
   }
 
   const EnvVar& maxVar = ic->envVars->getVar("motionBlurMax");
   if (!maxVar.value.empty()) {
-    m_meshVisual->setMotionBlurMax(static_cast<float>(maxVar.valueAsDouble));
+    const float maxVel = static_cast<float>(maxVar.valueAsDouble);
+    if (m_meshVisual) {
+      m_meshVisual->setMotionBlurMax(maxVel);
+    }
+    if (m_wireframeVisual) {
+      m_wireframeVisual->setMotionBlurMax(maxVel);
+    }
   }
 }
 

@@ -32,6 +32,7 @@ public:
   void handleResize(int width, int height) override;
   bool shouldWindowClose() override;
   bool isFramePaced() const override { return vsyncEnabled; }
+  int getRefreshRate() const override;
   void swapBuffers() override;
   void requestClose() override;
 

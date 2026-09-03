@@ -117,4 +117,29 @@ public:
   {
     return &module.inspectorVisual;
   }
+
+  static GameVisual* getHamburgerVisual(CellGameModule& module)
+  {
+    return &module.hamburgerVisual;
+  }
+
+  static float getHamburgerX(const CellGameModule& module)
+  {
+    return module.hamburgerX;
+  }
+
+  static float getHamburgerY(const CellGameModule& module)
+  {
+    return module.hamburgerY;
+  }
+
+  static float getHamburgerSize(const CellGameModule& module)
+  {
+    return module.hamburgerSize;
+  }
+
+  static bool isHamburgerHovered(const CellGameModule& module)
+  {
+    return module.isHamburgerHovered();
+  }
 };

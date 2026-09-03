@@ -7,6 +7,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
+#include <Illumo/Rendering/RenderPass.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/CommandLine.h>
@@ -356,6 +357,72 @@ Illumo::dispatchStartedModules(ModuleRequirement requirement)
 }
 
 void
+Illumo::processGlobalHotkeys()
+{
+  if (m_inputManager == nullptr) {
+    return;
+  }
+
+  // When console is open, do not intercept hotkeys so text editing is
+  // unimpeded.
+  if (m_commandLine != nullptr && m_commandLine->isOpen) {
+    return;
+  }
+
+  std::queue<InputManager::KeyPressEvent>& keyQueue =
+    m_inputManager->getKeyQueue();
+  std::queue<InputManager::KeyPressEvent> remainingKeys;
+
+  while (!keyQueue.empty()) {
+    InputManager::KeyPressEvent event = keyQueue.front();
+    keyQueue.pop();
+
+    if (event.action == InputAction::Press) {
+      if (event.key == KeyCode::F11) {
+        if (m_window != nullptr) {
+          m_window->toggleFullscreen();
+          if (m_environment != nullptr) {
+            const bool current =
+              m_environment->getVar("fullscreen").valueAsBool;
+            m_environment->setVar("fullscreen", !current);
+            if (m_commandLine != nullptr) {
+              m_commandLine->logSuccess(std::string("Fullscreen: ") +
+                                        (!current ? "on" : "off"));
+            }
+          }
+        }
+        continue;
+      }
+      if (event.key == KeyCode::F3) {
+        if (m_environment != nullptr) {
+          const bool current = m_environment->getVar("showFPS").valueAsBool;
+          m_environment->setVar("showFPS", !current);
+          if (m_commandLine != nullptr) {
+            m_commandLine->logSuccess(std::string("FPS overlay: ") +
+                                      (!current ? "on" : "off"));
+          }
+        }
+        continue;
+      }
+      if (event.key == KeyCode::F5) {
+        if (m_assetManager != nullptr) {
+          const size_t queued = m_assetManager->reloadAll();
+          if (m_commandLine != nullptr) {
+            m_commandLine->logNormal("Asset reloads queued: " +
+                                     std::to_string(queued));
+          }
+        }
+        continue;
+      }
+    }
+
+    remainingKeys.push(event);
+  }
+
+  keyQueue.swap(remainingKeys);
+}
+
+void
 Illumo::update(double dt)
 {
   if (!m_initialized || !m_modulesStarted) {
@@ -366,6 +433,7 @@ Illumo::update(double dt)
   }
   ZoneScoped;
   m_inputManager->update();
+  processGlobalHotkeys();
   m_camera->Update(static_cast<float>(dt));
   // Optional overlays (DebugModule) consume global console input first.
   updateStartedModules(ModuleRequirement::Optional, dt);
@@ -379,12 +447,121 @@ Illumo::update(double dt)
 }
 
 void
+Illumo::configureScenePipeline()
+{
+  if (!m_scene || !m_renderer || !m_environment) {
+    return;
+  }
+
+  const EnvVar& mbVar = m_environment->getVar("motionBlurEnabled");
+  const bool motionBlur = !mbVar.value.empty() && mbVar.valueAsBool;
+
+  if (motionBlur) {
+    float amount = 0.5f;
+    float maxVel = 0.2f;
+    int samples = 8;
+
+    const EnvVar& amountVar = m_environment->getVar("motionBlurAmount");
+    if (!amountVar.value.empty()) {
+      amount = static_cast<float>(amountVar.valueAsDouble);
+    }
+    const EnvVar& maxVar = m_environment->getVar("motionBlurMax");
+    if (!maxVar.value.empty()) {
+      maxVel = static_cast<float>(maxVar.valueAsDouble);
+    }
+    const EnvVar& samplesVar = m_environment->getVar("motionBlurSamples");
+    if (!samplesVar.value.empty()) {
+      samples = static_cast<int>(samplesVar.valueAsLong);
+    }
+
+    if (m_motionBlurPipelineConfigured && m_configuredBlurAmount == amount &&
+        m_configuredBlurMax == maxVel && m_configuredBlurSamples == samples &&
+        m_scene->hasCustomPasses(RenderLayerId::World)) {
+      return;
+    }
+
+    m_motionBlurPipelineConfigured = true;
+    m_configuredBlurAmount = amount;
+    m_configuredBlurMax = maxVel;
+    m_configuredBlurSamples = samples;
+
+    RenderPassDesc geomPass;
+    geomPass.name = "WorldGeomPass";
+    geomPass.type = PassType::Draw;
+    geomPass.useScreenTarget = false;
+    geomPass.pooledTargetName = "WorldColorVelocity";
+    geomPass.targetDesc.name = "WorldColorVelocity";
+    geomPass.targetDesc.windowRelative = true;
+
+    FramebufferAttachmentDesc color0;
+    color0.format = TextureFormat::RGBA8;
+    geomPass.targetDesc.colorAttachments.push_back(color0);
+
+    FramebufferAttachmentDesc color1;
+    color1.format = TextureFormat::RG16F;
+    geomPass.targetDesc.colorAttachments.push_back(color1);
+
+    geomPass.targetDesc.depthStencilFormat = TextureFormat::Depth24;
+    geomPass.clear.clearColor = true;
+    geomPass.clear.clearColorValue = { 0.1f, 0.1f, 0.1f, 1.0f };
+    geomPass.clear.clearDepth = true;
+
+    RenderPassDesc postPass;
+    postPass.name = "MotionBlurResolve";
+    postPass.type = PassType::PostProcess;
+    postPass.useScreenTarget = true;
+    postPass.styleHandle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::MotionBlur);
+
+    PassInputTargetBinding colorBinding;
+    colorBinding.targetName = "WorldColorVelocity";
+    colorBinding.attachmentIndex = 0;
+    colorBinding.slot = 0;
+    colorBinding.samplerUniformName = "uColorTexture";
+    postPass.inputTargetTextures.push_back(colorBinding);
+
+    PassInputTargetBinding velBinding;
+    velBinding.targetName = "WorldColorVelocity";
+    velBinding.attachmentIndex = 1;
+    velBinding.slot = 1;
+    velBinding.samplerUniformName = "uVelocityTexture";
+    postPass.inputTargetTextures.push_back(velBinding);
+
+    PassUniformFloat blurAmount;
+    blurAmount.name = "uMotionBlurAmount";
+    blurAmount.value = amount;
+    postPass.uniformFloats.push_back(blurAmount);
+
+    PassUniformFloat blurMax;
+    blurMax.name = "uMotionBlurMax";
+    blurMax.value = maxVel;
+    postPass.uniformFloats.push_back(blurMax);
+
+    PassUniformInt blurSamples;
+    blurSamples.name = "uMotionBlurSamples";
+    blurSamples.value = samples;
+    postPass.uniformInts.push_back(blurSamples);
+
+    std::vector<RenderPassDesc> worldPasses;
+    worldPasses.push_back(std::move(geomPass));
+    worldPasses.push_back(std::move(postPass));
+    m_scene->SetLayerPasses(RenderLayerId::World, std::move(worldPasses));
+  } else {
+    m_motionBlurPipelineConfigured = false;
+    if (m_scene->hasCustomPasses(RenderLayerId::World)) {
+      m_scene->ClearLayerPasses(RenderLayerId::World);
+    }
+  }
+}
+
+void
 Illumo::render()
 {
   if (!m_initialized || !m_modulesStarted) {
     return;
   }
   ZoneScopedN("Illumo.Render");
+  configureScenePipeline();
   m_scene->ClearDrawables();
   // Product content first; optional overlays (console, FPS, demo) on top.
   dispatchStartedModules(ModuleRequirement::Required);

@@ -802,11 +802,10 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
       value->pushDrawIndexed(
         static_cast<unsigned int>(triangleDrawVertices.size()));
 
-      // Restore main framebuffer & viewport
-      value->pushFramebuffer(FramebufferHandle{});
-      const std::array<int, 2>& dims =
-        value->getFrameContext().windowDimensions;
-      value->pushViewport(0, 0, dims[0], dims[1]);
+      // Restore pass framebuffer & viewport
+      value->pushFramebuffer(value->getCurrentPassFramebuffer());
+      const std::array<int, 4> vp = value->getCurrentPassViewport();
+      value->pushViewport(vp[0], vp[1], vp[2], vp[3]);
       shadowMapBound = shadowDepthTextureHandle.isValid();
     }
   }
@@ -818,6 +817,10 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
     }
     value->pushSetMesh(lineMeshHandle);
     value->pushUniformMat4(WorldLook::kMvpUniform, coloredMvpPtr);
+    value->pushUniformMat4(WorldLook::kPrevMvpUniform,
+                           glm::value_ptr(previousMvp));
+    value->pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
+                          motionBlurEnabled ? 1 : 0);
     value->pushDrawIndexed(static_cast<unsigned int>(lineDrawVertices.size()));
   }
   if (hasTriangles && triangleMeshHandle.isValid()) {
@@ -874,6 +877,10 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
       }
       value->pushSetMesh(triangleMeshHandle);
       value->pushUniformMat4(WorldLook::kMvpUniform, coloredMvpPtr);
+      value->pushUniformMat4(WorldLook::kPrevMvpUniform,
+                             glm::value_ptr(previousMvp));
+      value->pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
+                            motionBlurEnabled ? 1 : 0);
       value->pushDrawIndexed(
         static_cast<unsigned int>(triangleDrawVertices.size()));
     }

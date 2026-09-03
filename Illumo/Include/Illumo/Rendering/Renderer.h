@@ -66,6 +66,8 @@ private:
   RenderTargetPool _renderTargetPool;
   bool _fullscreenQuadReady = false;
   MeshHandle _fullscreenQuadMeshHandle{};
+  FramebufferHandle _currentPassFbo{};
+  std::array<int, 4> _currentPassViewport{ 0, 0, 0, 0 };
 
   // Per-frame scratch (immediate-draw pointer list, etc.). Cleared at the
   // start of RenderScene and again after submission so token payload pointers
@@ -343,6 +345,10 @@ public:
   {
     _backend->BeginFrame();
     _backend->ClearCommandQueue();
+    _currentPassFbo = FramebufferHandle{};
+    const std::array<int, 2> dims =
+      _window ? _window->getWindowDimensions() : std::array<int, 2>{ 0, 0 };
+    _currentPassViewport = { 0, 0, dims[0], dims[1] };
   }
 
   void EndFrame()
@@ -581,6 +587,16 @@ public:
     return _renderTargetPool.get(name);
   }
 
+  FramebufferHandle getCurrentPassFramebuffer() const
+  {
+    return _currentPassFbo;
+  }
+
+  std::array<int, 4> getCurrentPassViewport() const
+  {
+    return _currentPassViewport;
+  }
+
   void ensureFullscreenQuadMesh()
   {
     if (_fullscreenQuadReady && _fullscreenQuadMeshHandle.isValid()) {
@@ -625,6 +641,25 @@ public:
       const PassTextureBinding& binding = pass.inputTextures[i];
       if (binding.texture.isValid()) {
         pushSetTexture(binding.texture, binding.slot);
+      }
+    }
+
+    for (size_t i = 0; i < pass.inputTargetTextures.size(); ++i) {
+      const PassInputTargetBinding& binding = pass.inputTargetTextures[i];
+      if (!binding.targetName.empty()) {
+        PooledRenderTarget target = _renderTargetPool.get(binding.targetName);
+        if (target.isValid() &&
+            binding.attachmentIndex < target.attachments.colorTextures.size()) {
+          TextureHandle tex =
+            target.attachments.colorTextures[binding.attachmentIndex];
+          if (tex.isValid()) {
+            pushSetTexture(tex, binding.slot);
+            if (!binding.samplerUniformName.empty()) {
+              pushUniformInt(binding.samplerUniformName.c_str(),
+                             static_cast<int>(binding.slot));
+            }
+          }
+        }
       }
     }
 
@@ -691,6 +726,11 @@ public:
         const std::vector<DrawableBase*>& list = scene->drawablesIn(layer);
 
         if (!scene->hasCustomPasses(layer)) {
+          _currentPassFbo = FramebufferHandle{};
+          _currentPassViewport = { 0,
+                                   0,
+                                   frameContext.windowDimensions[0],
+                                   frameContext.windowDimensions[1] };
           for (size_t i = 0; i < list.size(); ++i) {
             DrawableBase* drawable = list[i];
             if (!drawable) {
@@ -726,16 +766,21 @@ public:
               }
             }
 
-            pushFramebuffer(targetFbo);
-
+            _currentPassFbo = targetFbo;
             if (pass.customViewport) {
-              pushViewport(pass.viewportX,
-                           pass.viewportY,
-                           pass.viewportWidth,
-                           pass.viewportHeight);
+              _currentPassViewport = { pass.viewportX,
+                                       pass.viewportY,
+                                       pass.viewportWidth,
+                                       pass.viewportHeight };
             } else {
-              pushViewport(0, 0, targetW, targetH);
+              _currentPassViewport = { 0, 0, targetW, targetH };
             }
+
+            pushFramebuffer(_currentPassFbo);
+            pushViewport(_currentPassViewport[0],
+                         _currentPassViewport[1],
+                         _currentPassViewport[2],
+                         _currentPassViewport[3]);
 
             if (pass.clear.clearColor && pass.clear.clearDepth) {
               pushClearScreen(pass.clear.clearColorValue[0],

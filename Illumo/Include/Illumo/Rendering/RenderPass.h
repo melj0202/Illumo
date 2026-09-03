@@ -33,6 +33,14 @@ struct PassTextureBinding
   unsigned int slot = 0;
 };
 
+struct PassInputTargetBinding
+{
+  std::string targetName;
+  size_t attachmentIndex = 0;
+  unsigned int slot = 0;
+  std::string samplerUniformName;
+};
+
 struct PassUniformFloat
 {
   std::string name;
@@ -82,6 +90,7 @@ struct RenderPassDesc
   RenderStyleHandle styleHandle{};
   ShaderHandle shaderHandle{};
   std::vector<PassTextureBinding> inputTextures;
+  std::vector<PassInputTargetBinding> inputTargetTextures;
   std::vector<PassUniformFloat> uniformFloats;
   std::vector<PassUniformInt> uniformInts;
   std::vector<PassUniformMat4> uniformMat4s;

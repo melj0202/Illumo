@@ -156,6 +156,11 @@ CellGameModule::CellGameModule(std::string initialSavePath)
   , hoverX(0)
   , hoverY(0)
   , hoverValid(false)
+  , hamburgerX(0.0f)
+  , hamburgerY(0.0f)
+  , hamburgerSize(32.0f)
+  , hamburgerHovered(false)
+  , hamburgerMouseWasDown(false)
   , inspectorEnabled(false)
   , simulationGeneration(0)
   , copyHeld(false)
@@ -268,6 +273,15 @@ CellGameModule::Start(IllumoContext* context)
   inspectorVisual.setVisible(false);
   if (ic->renderer != nullptr) {
     inspectorVisual.prepare(ic->renderer);
+  }
+
+  hamburgerVisual.setRenderer(ic->renderer);
+  hamburgerVisual.setWindow(ic->window);
+  hamburgerVisual.setSpace(PrimitiveSpace::Pixels);
+  hamburgerVisual.setLayerHint(RenderLayerId::UI);
+  hamburgerVisual.setVisible(false);
+  if (ic->renderer != nullptr) {
+    hamburgerVisual.prepare(ic->renderer);
   }
 
   configurationMenu =
@@ -1337,16 +1351,18 @@ CellGameModule::Update(double dt)
   const bool exitConfirmOpen =
     exitConfirmDialog != nullptr && exitConfirmDialog->isOpen();
 
+  const bool mouseLeftDown =
+    ic->inputManager != nullptr &&
+    ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+  const bool hamburgerClicked = !consoleOpen && !exitConfirmOpen &&
+                                hamburgerHovered && mouseLeftDown &&
+                                !hamburgerMouseWasDown;
+  hamburgerMouseWasDown = mouseLeftDown;
+
   if (!consoleOpen && !exitConfirmOpen && configurationMenu != nullptr &&
-      ic->inputManager->isActionActive("ToggleSettings")) {
-    if (configurationMenu->isOpen()) {
-      configurationMenu->close();
-    } else {
-      drainSimulation();
-      ic->inputManager->clearKeyQueue();
-      ic->inputManager->clearCharQueue();
-      configurationMenu->open(currentConfiguration());
-    }
+      (ic->inputManager->isActionActive("ToggleSettings") ||
+       hamburgerClicked)) {
+    toggleSettingsMenu();
   }
 
   if (exitConfirmOpen) {
@@ -1366,6 +1382,7 @@ CellGameModule::Update(double dt)
       exitConfirmDialog->close();
     }
     updateEditorCursor();
+    updateHamburgerVisual(dt);
     updateSelectionVisual();
     updateInspectorVisual();
     updateVisualTargets();
@@ -1402,6 +1419,7 @@ CellGameModule::Update(double dt)
       }
     }
     updateEditorCursor();
+    updateHamburgerVisual(dt);
     updateSelectionVisual();
     updateInspectorVisual();
     updateVisualTargets();
@@ -1418,6 +1436,7 @@ CellGameModule::Update(double dt)
       ic->window->requestClose();
     }
     updateEditorCursor();
+    updateHamburgerVisual(dt);
     updateSelectionVisual();
     updateInspectorVisual();
     updateVisualTargets();
@@ -1499,6 +1518,7 @@ CellGameModule::Update(double dt)
     handleEditorHotkeys();
   }
   updateEditorCursor();
+  updateHamburgerVisual(dt);
   updateSelectionVisual();
   updateInspectorVisual();
 
@@ -1525,6 +1545,8 @@ CellGameModule::Exit()
   render3dTestChild.reset();
   render3dTestAnimated.reset();
   render3dTestStatic.reset();
+  hamburgerVisual.clearPrimitives();
+  hamburgerVisual.setVisible(false);
   delete cellContext;
   cellContext = nullptr;
 }
@@ -1959,7 +1981,7 @@ CellGameModule::Edit(double dt)
       ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
     const bool shift = ic->inputManager->isShiftPressed();
 
-    const bool pointerInWorld = hoverValid;
+    const bool pointerInWorld = hoverValid && !isHamburgerHovered();
     if (shift && isLeftPressed && pointerInWorld) {
       if (!selecting) {
         selecting = true;
@@ -2023,6 +2045,131 @@ CellGameModule::Edit(double dt)
     wasPressed = false;
     selecting = false;
   }
+}
+
+void
+CellGameModule::toggleSettingsMenu()
+{
+  if (configurationMenu == nullptr) {
+    return;
+  }
+  if (configurationMenu->isOpen()) {
+    configurationMenu->close();
+  } else {
+    drainSimulation();
+    if (ic != nullptr && ic->inputManager != nullptr) {
+      ic->inputManager->clearKeyQueue();
+      ic->inputManager->clearCharQueue();
+    }
+    configurationMenu->open(currentConfiguration());
+  }
+}
+
+bool
+CellGameModule::isHamburgerHovered() const
+{
+  if (ic == nullptr || ic->window == nullptr) {
+    return false;
+  }
+  const bool consoleOpen =
+    ic->commandLine != nullptr && ic->commandLine->isOpen;
+  const bool exitConfirmOpen =
+    exitConfirmDialog != nullptr && exitConfirmDialog->isOpen();
+  if (consoleOpen || exitConfirmOpen) {
+    return false;
+  }
+  const std::array<double, 2> mouseCoords = ic->window->getMouseCoords();
+  const float scale =
+    ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
+  const float mx =
+    static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
+  const float my =
+    static_cast<float>(mouseCoords[1]) / (scale > 0.0f ? scale : 1.0f);
+
+  return mx >= hamburgerX && mx <= (hamburgerX + hamburgerSize) &&
+         my >= hamburgerY && my <= (hamburgerY + hamburgerSize);
+}
+
+void
+CellGameModule::updateHamburgerVisual(double dt)
+{
+  (void)dt;
+  hamburgerVisual.clearPrimitives();
+  if (ic == nullptr || ic->window == nullptr) {
+    hamburgerVisual.setVisible(false);
+    return;
+  }
+
+  const bool consoleOpen =
+    ic->commandLine != nullptr && ic->commandLine->isOpen;
+  const bool exitConfirmOpen =
+    exitConfirmDialog != nullptr && exitConfirmDialog->isOpen();
+  const bool settingsOpen =
+    configurationMenu != nullptr && configurationMenu->isOpen();
+
+  if (consoleOpen || exitConfirmOpen || settingsOpen) {
+    hamburgerVisual.setVisible(false);
+    hamburgerHovered = false;
+    return;
+  }
+
+  const std::array<int, 2> winDims = ic->window->getWindowDimensions();
+  const float scale =
+    ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
+  const float virtWidth =
+    static_cast<float>(winDims[0]) / (scale > 0.0f ? scale : 1.0f);
+
+  hamburgerSize = 32.0f;
+  hamburgerX = std::max(0.0f, virtWidth - hamburgerSize - 12.0f);
+  hamburgerY = 12.0f;
+
+  hamburgerHovered = isHamburgerHovered();
+  const bool isMouseDown =
+    ic->inputManager != nullptr &&
+    ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+  const bool isPressed = hamburgerHovered && isMouseDown;
+
+  // Background and border opacity
+  // Resting: subtle and translucent (~35%)
+  // Hovered: noticeable (~85%)
+  // Pressed: accented highlight
+  const unsigned char bgAlpha = isPressed ? 180 : (hamburgerHovered ? 150 : 60);
+  const unsigned char borderAlpha =
+    isPressed ? 230 : (hamburgerHovered ? 200 : 90);
+  const unsigned char barAlpha =
+    isPressed ? 255 : (hamburgerHovered ? 240 : 130);
+
+  ColorRgba bgColor = UiTheme::panelSurface();
+  bgColor.a = bgAlpha;
+  ColorRgba borderColor =
+    isPressed ? UiTheme::accent() : UiTheme::panelBorder();
+  borderColor.a = borderAlpha;
+  ColorRgba barColor = isPressed ? UiTheme::accent() : UiTheme::textPrimary();
+  barColor.a = barAlpha;
+
+  // Panel card background
+  GuiKit::drawCard(hamburgerVisual,
+                   hamburgerX,
+                   hamburgerY,
+                   hamburgerSize,
+                   hamburgerSize,
+                   bgColor,
+                   borderColor,
+                   1.0f);
+
+  // 3 horizontal bars (hamburger lines)
+  const float barWidth = 16.0f;
+  const float barHeight = 2.0f;
+  const float barX = hamburgerX + (hamburgerSize - barWidth) * 0.5f;
+  const float startY = hamburgerY + 9.0f;
+  const float spacing = 5.0f;
+
+  for (int i = 0; i < 3; ++i) {
+    const float y = startY + static_cast<float>(i) * spacing;
+    hamburgerVisual.addFilledRect(barX, y, barWidth, barHeight, barColor);
+  }
+
+  hamburgerVisual.setVisible(true);
 }
 
 void
@@ -2478,6 +2625,9 @@ CellGameModule::DispatchDrawables(Scene* scene)
   }
   if (modeSplash != nullptr && modeSplash->isVisible()) {
     scene->AddDrawable(modeSplash.get(), RenderLayerId::UI);
+  }
+  if (hamburgerVisual.isVisible()) {
+    scene->AddDrawable(&hamburgerVisual, RenderLayerId::UI);
   }
   if (configurationMenu != nullptr && configurationMenu->isOpen()) {
     scene->AddDrawable(configurationMenu.get(), RenderLayerId::UI);

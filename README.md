@@ -288,6 +288,16 @@ normal runtime shutdown path; Discard, Escape, and F1 only close the menu. A sho
 reveal, gliding row highlight, and value-change pulse provide motion without
 delaying input.
 
+## Global hotkeys
+
+The engine host handles common shortcuts across applications:
+
+- **F11**: Toggle fullscreen mode.
+- **F3**: Toggle the FPS overlay (`showFPS`).
+- **F5**: Reload all managed asset resources (textures and shaders).
+
+Global shortcuts yield while typing in the developer console (`~` / Grave).
+
 ## Developer console commands
 
 The in-app console is provided by `DebugModule`, so it is available in Debug
