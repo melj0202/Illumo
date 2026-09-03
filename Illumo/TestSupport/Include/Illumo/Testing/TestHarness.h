@@ -55,6 +55,7 @@ public:
   }
   bool shouldWindowClose() override { return closeRequested; }
   bool isFramePaced() const override { return false; }
+  int getRefreshRate() const override { return 60; }
   void swapBuffers() override {}
   void requestClose() override { closeRequested = true; }
 };

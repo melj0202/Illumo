@@ -6,6 +6,7 @@
 #include <Illumo/Engine/DebugModule.h>
 #endif
 #include "Rendering/PresentationTiming.h"
+#include <Illumo/Platform/PlatformTimer.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <chrono>
@@ -34,6 +35,7 @@ RunIllumoApplication(int argc,
                      IllumoApplicationDefinition application)
 {
   ApplicationLoggerLifetime loggerLifetime;
+  PlatformTimerScope timerScope;
   try {
     if (application.applicationName.empty()) {
       application.applicationName = "Illumo";
@@ -88,6 +90,7 @@ RunIllumoApplication(int argc,
       return 1;
     }
 
+    FramePacer framePacer;
     std::chrono::steady_clock::time_point lastTime =
       std::chrono::steady_clock::now();
     while (!illumo.shouldClose()) {
@@ -110,7 +113,11 @@ RunIllumoApplication(int argc,
       {
         ZoneScopedN("Frame.Pacing");
         const long targetFps = getTargetFps(&illumo.environment());
-        paceFrame(currentTime, targetFps);
+        const bool vsyncEnabled = isVsyncRequested(&illumo.environment());
+        const int refreshRate = illumo.context().window != nullptr
+                                  ? illumo.context().window->getRefreshRate()
+                                  : 60;
+        framePacer.pace(targetFps, vsyncEnabled, refreshRate);
       }
     }
 

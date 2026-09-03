@@ -34,6 +34,7 @@ public:
   virtual std::array<int, 2> getWindowDimensions() = 0;
   virtual bool shouldWindowClose() = 0;
   virtual bool isFramePaced() const = 0;
+  virtual int getRefreshRate() const = 0;
   virtual void swapBuffers() = 0;
   virtual void requestClose() = 0;
 };

@@ -252,17 +252,83 @@ testPresentationTimingPolicy()
              std::chrono::nanoseconds(1'000'000'000LL / 60),
            "60 FPS calculates correct duration");
 
+  // Platform timer resolution RAII scope
+  {
+    PlatformTimerScope timerScope;
+    PlatformCpuPause();
+  }
+
+  // shouldPace policy checks
+  testTrue(g, !shouldPace(false, 60, 0), "uncapped target FPS does not pace");
+  testTrue(g, !shouldPace(false, 60, -10), "negative target FPS does not pace");
+  testTrue(g,
+           shouldPace(false, 60, 60),
+           "positive target FPS paces when VSync is disabled");
+  testTrue(g,
+           shouldPace(false, 60, 144),
+           "high target FPS paces when VSync is disabled");
+  testTrue(
+    g,
+    !shouldPace(true, 60, 60),
+    "matching target FPS bypasses software pacing when VSync is enabled");
+  testTrue(g,
+           !shouldPace(true, 60, 120),
+           "higher target FPS bypasses software pacing when VSync is enabled");
+  testTrue(g,
+           shouldPace(true, 60, 30),
+           "lower target FPS engages software pacing when VSync is enabled");
+  testTrue(
+    g,
+    shouldPace(true, 144, 60),
+    "60 FPS target on 144 Hz display engages software pacing under VSync");
+
+  // FramePacer cadence and state
+  {
+    PlatformTimerScope timerScope;
+    FramePacer pacer;
+    testTrue(g, !pacer.hasTarget(), "new pacer has no initial target");
+
+    // First call sets the target deadline without waiting
+    testTrue(g, pacer.pace(100, false, 60), "pacer pace succeeds");
+    testTrue(g, pacer.hasTarget(), "pacer establishes target after first pace");
+    const auto firstDeadline = pacer.nextDeadline();
+
+    // Second call waits to meet deadline and advances by 10ms (100 FPS)
+    testTrue(g, pacer.pace(100, false, 60), "second pace call succeeds");
+    const auto secondDeadline = pacer.nextDeadline();
+    testTrue(g,
+             secondDeadline > firstDeadline,
+             "pacer advances deadline by frame duration");
+
+    // Reset clears state
+    pacer.reset();
+    testTrue(g, !pacer.hasTarget(), "reset clears pacer target");
+
+    // Hitch reset: simulating a long stall
+    pacer.pace(100, false, 60);
+    std::this_thread::sleep_for(std::chrono::milliseconds(25)); // > 1.5 * 10ms
+    const auto beforeHitch = std::chrono::steady_clock::now();
+    pacer.pace(100, false, 60);
+    const auto afterHitchDeadline = pacer.nextDeadline();
+    testTrue(g,
+             afterHitchDeadline >= beforeHitch,
+             "pacer hard resets deadline after hitch without catch-up burst");
+  }
+
   // Verify paceFrame delays approximately the target duration
-  const auto start = std::chrono::steady_clock::now();
-  // 100 FPS = 10ms frame time
-  paceFrame(start, 100);
-  const auto elapsed = std::chrono::steady_clock::now() - start;
-  testTrue(g,
-           elapsed >= std::chrono::milliseconds(9),
-           "paceFrame waits for at least the requested duration");
-  testTrue(g,
-           elapsed < std::chrono::milliseconds(50),
-           "paceFrame does not overshoot excessively");
+  {
+    PlatformTimerScope timerScope;
+    const auto start = std::chrono::steady_clock::now();
+    // 100 FPS = 10ms frame time
+    paceFrame(start, 100);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    testTrue(g,
+             elapsed >= std::chrono::milliseconds(9),
+             "paceFrame waits for at least the requested duration");
+    testTrue(g,
+             elapsed < std::chrono::milliseconds(50),
+             "paceFrame does not overshoot excessively");
+  }
 }
 
 static void
