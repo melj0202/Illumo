@@ -65,6 +65,7 @@ private:
   GLuint _boundVao = 0;
   GLuint _boundTexture[8] = {};
   GLuint _boundFbo = 0;
+  FramebufferHandle _boundFboHandle{};
   int _viewportX = -1;
   int _viewportY = -1;
   int _viewportW = -1;

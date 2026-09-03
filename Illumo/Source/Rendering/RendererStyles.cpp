@@ -61,19 +61,37 @@ static const char* kShapeVertexShader = R"(
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec4 aColor;
 out vec4 ourColor;
+out vec4 vCurrentClip;
+out vec4 vPrevClip;
 uniform mat4 uMVP;
+uniform mat4 uPrevMVP;
+uniform int uMotionBlurEnabled;
 void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
+    vec4 currentClip = uMVP * vec4(aPos, 1.0);
+    gl_Position = currentClip;
     ourColor = aColor;
+    vCurrentClip = currentClip;
+    vPrevClip = (uMotionBlurEnabled != 0) ? (uPrevMVP * vec4(aPos, 1.0)) : currentClip;
 }
 )";
 
 static const char* kShapeFragmentShader = R"(
 #version 330 core
 in vec4 ourColor;
-out vec4 FragColor;
+in vec4 vCurrentClip;
+in vec4 vPrevClip;
+layout (location = 0) out vec4 FragColor;
+layout (location = 1) out vec2 FragVelocity;
+uniform int uMotionBlurEnabled;
 void main() {
     FragColor = ourColor;
+    if (uMotionBlurEnabled != 0) {
+        vec2 currentNdc = vCurrentClip.xy / max(abs(vCurrentClip.w), 1e-5);
+        vec2 prevNdc = vPrevClip.xy / max(abs(vPrevClip.w), 1e-5);
+        FragVelocity = (currentNdc - prevNdc) * 0.5;
+    } else {
+        FragVelocity = vec2(0.0);
+    }
 }
 )";
 
@@ -96,10 +114,12 @@ static const char* kSpriteFragmentShader = R"(
 #include <illumo/sprite.glsl>
 in vec4 ourColor;
 in vec2 ourUv;
-out vec4 FragColor;
+layout (location = 0) out vec4 FragColor;
+layout (location = 1) out vec2 FragVelocity;
 uniform sampler2D uTexture;
 void main() {
     FragColor = sampleSprite(uTexture, ourUv, ourColor);
+    FragVelocity = vec2(0.0);
 }
 )";
 
@@ -136,7 +156,7 @@ void main() {
         velocity = (velocity / speed) * maxSpeed;
     }
 
-    int samples = max(1, min(uMotionBlurSamples, 16));
+    int samples = (uMotionBlurSamples <= 0) ? 8 : min(uMotionBlurSamples, 16);
     if (speed < 0.0001 || samples <= 1) {
         FragColor = texture(uColorTexture, vTexCoord);
         return;

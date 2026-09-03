@@ -87,6 +87,7 @@ private:
   void updateStartedModules(ModuleRequirement requirement, double dt);
   void dispatchStartedModules(ModuleRequirement requirement);
   void processGlobalHotkeys();
+  void configureScenePipeline();
   void releaseServices();
 
   std::string m_applicationName;
@@ -106,4 +107,8 @@ private:
   std::unique_ptr<IModule> m_pendingModuleTransition;
   bool m_initialized{ false };
   bool m_modulesStarted{ false };
+  bool m_motionBlurPipelineConfigured{ false };
+  float m_configuredBlurAmount{ 0.0f };
+  float m_configuredBlurMax{ 0.0f };
+  int m_configuredBlurSamples{ 0 };
 };

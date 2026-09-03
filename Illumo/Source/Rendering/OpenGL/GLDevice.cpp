@@ -7,6 +7,7 @@ GLDevice::ApplyPipelineState(const PipelineState& pipelineState)
   if (pipelineState.depthTestEnabled != _currentGLState.depthTestEnabled) {
     if (pipelineState.depthTestEnabled) {
       glEnable(GL_DEPTH_TEST);
+      glDepthFunc(GL_LEQUAL);
     } else {
       glDisable(GL_DEPTH_TEST);
     }
@@ -73,6 +74,8 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
   // touch GL). Still skip duplicates *within* this queue.
   _boundProgram = 0;
   _boundVao = 0;
+  _boundFbo = 0;
+  _boundFboHandle = FramebufferHandle{};
   for (int s = 0; s < 8; ++s) {
     _boundTexture[s] = 0;
   }
@@ -123,6 +126,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             _boundFbo = 0;
           }
+          _boundFboHandle = FramebufferHandle{};
           break;
         }
         const GLFramebufferResourceEntry* fb =
@@ -131,12 +135,14 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
           Logger::LogWarning("SetFramebuffer: unknown framebuffer handle");
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           _boundFbo = 0;
+          _boundFboHandle = FramebufferHandle{};
           break;
         }
         if (fb->fboId != _boundFbo) {
           glBindFramebuffer(GL_FRAMEBUFFER, fb->fboId);
           _boundFbo = fb->fboId;
         }
+        _boundFboHandle = cmd.bindFramebuffer.handle;
         break;
       }
 
@@ -268,35 +274,85 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
         break;
       }
 
-      case CommandType::ClearScreen:
-        if (cmd.clear.a > 0.0f || cmd.clear.r > 0.0f || cmd.clear.g > 0.0f ||
-            cmd.clear.b > 0.0f ||
-            (cmd.clear.r == 0.0f && cmd.clear.g == 0.0f &&
-             cmd.clear.b == 0.0f)) {
-          // Always apply clear color when ClearScreen is issued.
-          glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
+      case CommandType::ClearScreen: {
+        const GLFramebufferResourceEntry* fb =
+          _boundFboHandle.isValid()
+            ? resolveFramebuffer(tables, _boundFboHandle)
+            : nullptr;
+        if (fb && fb->colorTextures.size() > 1) {
+          const float clearColor[4] = {
+            cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a
+          };
+          glClearBufferfv(GL_COLOR, 0, clearColor);
+          const float zeroColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+          for (size_t c = 1; c < fb->colorTextures.size(); ++c) {
+            glClearBufferfv(GL_COLOR, static_cast<GLint>(c), zeroColor);
+          }
+          glClear(GL_DEPTH_BUFFER_BIT);
+        } else {
+          if (cmd.clear.a > 0.0f || cmd.clear.r > 0.0f || cmd.clear.g > 0.0f ||
+              cmd.clear.b > 0.0f ||
+              (cmd.clear.r == 0.0f && cmd.clear.g == 0.0f &&
+               cmd.clear.b == 0.0f)) {
+            // Always apply clear color when ClearScreen is issued.
+            glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
+          }
+          glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         }
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         break;
+      }
 
       case CommandType::ClearDepthBuffer:
         glClear(GL_DEPTH_BUFFER_BIT);
         break;
 
-      case CommandType::ClearColorBuffer:
-        glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
-        glClear(GL_COLOR_BUFFER_BIT);
+      case CommandType::ClearColorBuffer: {
+        const GLFramebufferResourceEntry* fb =
+          _boundFboHandle.isValid()
+            ? resolveFramebuffer(tables, _boundFboHandle)
+            : nullptr;
+        if (fb && fb->colorTextures.size() > 1) {
+          const float clearColor[4] = {
+            cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a
+          };
+          glClearBufferfv(GL_COLOR, 0, clearColor);
+          const float zeroColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+          for (size_t c = 1; c < fb->colorTextures.size(); ++c) {
+            glClearBufferfv(GL_COLOR, static_cast<GLint>(c), zeroColor);
+          }
+        } else {
+          glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
+          glClear(GL_COLOR_BUFFER_BIT);
+        }
         break;
+      }
 
       case CommandType::ClearStencilBuffer:
         glClear(GL_STENCIL_BUFFER_BIT);
         break;
 
-      case CommandType::ClearAll:
-        glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
-                GL_STENCIL_BUFFER_BIT);
+      case CommandType::ClearAll: {
+        const GLFramebufferResourceEntry* fb =
+          _boundFboHandle.isValid()
+            ? resolveFramebuffer(tables, _boundFboHandle)
+            : nullptr;
+        if (fb && fb->colorTextures.size() > 1) {
+          const float clearColor[4] = {
+            cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a
+          };
+          glClearBufferfv(GL_COLOR, 0, clearColor);
+          const float zeroColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+          for (size_t c = 1; c < fb->colorTextures.size(); ++c) {
+            glClearBufferfv(GL_COLOR, static_cast<GLint>(c), zeroColor);
+          }
+          glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        } else {
+          glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
+          glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+                  GL_STENCIL_BUFFER_BIT);
+        }
         break;
+      }
 
       case CommandType::Draw: {
         if (_activeProgram == 0 || _boundVao == 0) {

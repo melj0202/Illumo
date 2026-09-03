@@ -764,6 +764,72 @@ testGlobalHotkeys()
   std::filesystem::remove(path, error);
 }
 
+static void
+testScenePipelineConfigurationFromEnv()
+{
+  std::error_code error;
+  const std::filesystem::path path =
+    std::filesystem::current_path() / "test-pipeline-env.json";
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  int backendInitializations = 0;
+  ModuleProbe probe;
+
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions, &backendInitializations);
+    testTrue(g, host.initialize(), "host initialized");
+
+    host.addModule(std::make_unique<ProbeModule>(&probe, true),
+                   ModuleRequirement::Required);
+    testTrue(g, host.startModules(), "modules started");
+
+    Scene* scene = IllumoTestAccess::getScene(host);
+    EnvVars* env = IllumoTestAccess::getEnvironment(host);
+    testTrue(g, scene != nullptr, "scene exists");
+    testTrue(g, env != nullptr, "env exists");
+
+    // By default without motionBlurEnabled, World has no custom passes
+    IllumoTestAccess::configureScenePipeline(host);
+    testTrue(g,
+             !scene->hasCustomPasses(RenderLayerId::World),
+             "World layer has no custom passes when motionBlurEnabled is off");
+
+    // Enable motionBlurEnabled in env
+    env->setVar("motionBlurEnabled", "1");
+    env->setVar("motionBlurAmount", 0.75);
+    env->setVar("motionBlurMax", 0.15);
+    env->setVar("motionBlurSamples", static_cast<long>(12));
+    IllumoTestAccess::configureScenePipeline(host);
+
+    testTrue(g,
+             scene->hasCustomPasses(RenderLayerId::World),
+             "World layer has custom passes when motionBlurEnabled is on");
+    const std::vector<RenderPassDesc>& passes =
+      scene->passesIn(RenderLayerId::World);
+    testEqSize(g, passes.size(), 2u, "World layer has 2 passes");
+    testTrue(g, passes[0].name == "WorldGeomPass", "pass 0 is WorldGeomPass");
+    testTrue(g, !passes[0].useScreenTarget, "pass 0 targets pooled target");
+    testTrue(
+      g, passes[1].name == "MotionBlurResolve", "pass 1 is MotionBlurResolve");
+    testTrue(g, passes[1].useScreenTarget, "pass 1 targets screen");
+    testEqSize(g,
+               passes[1].inputTargetTextures.size(),
+               2u,
+               "post pass binds 2 target textures");
+
+    // Disable motionBlurEnabled
+    env->setVar("motionBlurEnabled", "0");
+    IllumoTestAccess::configureScenePipeline(host);
+    testTrue(g,
+             !scene->hasCustomPasses(RenderLayerId::World),
+             "World layer custom passes cleared when motionBlurEnabled is off");
+
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
+
 static int
 runHostCase(void (*testFunction)())
 {
@@ -799,6 +865,9 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Host.GlobalHotkeys",
                []() { return runHostCase(testGlobalHotkeys); });
+  registry.add("Illumo.Host.ScenePipelineConfigurationFromEnv", []() {
+    return runHostCase(testScenePipelineConfigurationFromEnv);
+  });
 #ifndef NDEBUG
   registry.add("Illumo.Host.DebugOverlayConsoleIsGlobal",
                []() { return runHostCase(testDebugOverlayConsoleIsGlobal); });
