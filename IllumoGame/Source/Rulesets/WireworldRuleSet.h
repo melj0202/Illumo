@@ -28,5 +28,5 @@ public:
                           unsigned char headNeighbors) const override final;
   void evalCell(const unsigned char& target,
                 unsigned char dest[3]) const override;
-  std::string getRuleTag() override { return "WIREWORLD"; }
+  std::string getRuleTag() const override { return "WIREWORLD"; }
 };

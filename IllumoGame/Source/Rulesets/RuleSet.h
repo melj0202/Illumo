@@ -49,7 +49,7 @@ public:
     (void)dest;
   }
 
-  virtual std::string getRuleTag() { return "BASE_CLASS"; }
+  virtual std::string getRuleTag() const { return "BASE_CLASS"; }
 
   // Worker count for calcGeneration: 0 = auto (size threshold + HW), 1 =
   // force serial, N = force up to N workers. Used by tests and optional

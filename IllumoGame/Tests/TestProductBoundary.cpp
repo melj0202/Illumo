@@ -1,6 +1,6 @@
 #include "Game/Canvas.h"
 #include "Game/SparseCellGrid.h"
-#include "Rulesets/GameOfLifeRuleSet.h"
+#include "Rulesets/LifeLikeRuleSet.h"
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
@@ -87,7 +87,8 @@ testSparseCellGridPool()
   testTrue(g, grid.getAllocatedChunkCount() >= 1, "chunk allocated");
   testTrue(g, grid.getPoolChunks() >= 1, "pool has chunks");
 
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules(
+    nullptr, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   testTrue(g, grid.advance(rules), "advance succeeds");
   testEqUChar(g, grid.getCell(CellAddress{ -1, 1 }), 0, "blinker left");
   testEqUChar(g, grid.getCell(CellAddress{ 0, 1 }), 0, "blinker middle");

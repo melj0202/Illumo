@@ -1,0 +1,54 @@
+[
+  {
+    "id": "GAME_OF_LIFE",
+    "name": "Conway's Game of Life",
+    "family": "life_like",
+    "rule": "B3/S23"
+  },
+  {
+    "id": "BRIANS_BRAIN",
+    "name": "Brian's Brain",
+    "family": "generations"
+  },
+  {
+    "id": "DAY_AND_NIGHT",
+    "name": "Day & Night",
+    "family": "life_like",
+    "rule": "B3678/S34678"
+  },
+  {
+    "id": "HIGHLIFE",
+    "name": "HighLife",
+    "family": "life_like",
+    "rule": "B36/S23"
+  },
+  {
+    "id": "LIFE_WITHOUT_DEATH",
+    "name": "Life Without Death",
+    "family": "life_like",
+    "rule": "B3/S012345678"
+  },
+  {
+    "id": "SEEDS",
+    "name": "Seeds",
+    "family": "life_like",
+    "rule": "B2/S"
+  },
+  {
+    "id": "WIREWORLD",
+    "name": "Wireworld",
+    "family": "wireworld"
+  },
+  {
+    "id": "RULE_90",
+    "name": "Wolfram Rule 90",
+    "family": "elementary_1d",
+    "rule_number": 90
+  },
+  {
+    "id": "RULE_184",
+    "name": "Wolfram Rule 184",
+    "family": "elementary_1d",
+    "rule_number": 184
+  }
+]

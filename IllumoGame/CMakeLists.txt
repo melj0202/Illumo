@@ -21,19 +21,16 @@ add_library(IllumoGameCore STATIC
   Source/Game/SparseCellGrid.cpp
   Source/Game/SparseWorkerPool.cpp
   Source/Rulesets/BriansBrainRuleSet.cpp
-  Source/Rulesets/DayAndNightRuleSet.cpp
-  Source/Rulesets/GameOfLifeRuleSet.cpp
-  Source/Rulesets/HighlifeRuleSet.cpp
-  Source/Rulesets/LifeWithoutDeathRuleSet.cpp
-  Source/Rulesets/Rule184RuleSet.cpp
-  Source/Rulesets/Rule90RuleSet.cpp
+  Source/Rulesets/Elementary1DRuleSet.cpp
+  Source/Rulesets/LifeLikeRuleSet.cpp
   Source/Rulesets/RuleSet.cpp
-  Source/Rulesets/SeedsRuleSet.cpp
+  Source/Rulesets/RuleSetRegistry.cpp
   Source/Rulesets/WireworldRuleSet.cpp
 )
 target_include_directories(IllumoGameCore PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_include_directories(IllumoGameCore SYSTEM PRIVATE
+  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/json/single_include"
   "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
 target_link_libraries(IllumoGameCore PUBLIC Illumo::Illumo)
 illumo_configure_runtime_target(IllumoGameCore)
@@ -44,6 +41,8 @@ illumo_configure_runtime_target(IllumoGame)
 illumo_stage_runtime(IllumoGame)
 illumo_stage_default_file(IllumoGame
   "${CMAKE_CURRENT_SOURCE_DIR}/envvars.json" envvars.json)
+illumo_stage_default_file(IllumoGame
+  "${CMAKE_CURRENT_SOURCE_DIR}/rulesets.json" rulesets.json)
 illumo_stage_msvc_asan(IllumoGame)
 
 if(BUILD_TESTING)

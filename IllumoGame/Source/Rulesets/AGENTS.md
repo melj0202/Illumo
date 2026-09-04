@@ -26,11 +26,13 @@ Rendering, Services, Engine, platform APIs, and OpenGL.
 
 ## Adding or changing a ruleset
 
-Update the implementation, application/test CMake source lists, factory and
-known-mode logic, startup and save validation, console help and completion,
-palette behavior, transition-table tests, and focused domain tests together.
-Preserve existing mode names used in persisted files unless a compatibility
-migration is authorized.
+New rules for supported families (`LifeLikeRuleSet` for binary B/S,
+`Elementary1DRuleSet` for Wolfram 1D) are cataloged in `rulesets.json` and
+automatically discovered by `RuleSetRegistry`. When introducing a new family or
+specialized transition logic, implement the family `.h`/`.cpp` pair, update
+`RuleSetRegistry`, source lists, palette behavior, and focused domain tests
+together. Preserve existing mode names used in persisted files unless a
+compatibility migration is authorized.
 
 ## Documentation and verification
 

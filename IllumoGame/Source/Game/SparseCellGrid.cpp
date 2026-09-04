@@ -1,6 +1,6 @@
 #include "SparseCellGrid.h"
-#include "SparseWorkerPool.h"
 #include "Rulesets/RuleSet.h"
+#include "SparseWorkerPool.h"
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -2487,6 +2487,7 @@ SparseCellGrid::copyStateFrom(const SparseCellGrid& source)
   m_candidateScratchSourceGrid = nullptr;
   m_candidateScratchSourceTopologyRevision = 0u;
   lastRuleType = source.lastRuleType;
+  lastRuleTag = source.lastRuleTag;
   m_backgroundTransitionsStayBinary = source.m_backgroundTransitionsStayBinary;
   m_countedChangeCoversStateChange = source.m_countedChangeCoversStateChange;
   lastAdvanceStats = source.lastAdvanceStats;
@@ -2804,6 +2805,7 @@ SparseCellGrid::swap(SparseCellGrid& other) noexcept
   m_nextChangedChunkIndex.swap(other.m_nextChangedChunkIndex);
   std::swap(m_nextChangedChunkGeneration, other.m_nextChangedChunkGeneration);
   std::swap(lastRuleType, other.lastRuleType);
+  std::swap(lastRuleTag, other.lastRuleTag);
   std::swap(m_backgroundTransitionsStayBinary,
             other.m_backgroundTransitionsStayBinary);
   std::swap(m_countedChangeCoversStateChange,
@@ -4076,8 +4078,10 @@ SparseCellGrid::advanceImpl(const RuleSet& ruleSet, bool allowFrontier)
   lastAdvanceStats.chunkMemoActive = false;
   m_nextCandidateTopologyChanged = false;
 
-  if (lastRuleType != &typeid(ruleSet)) {
+  const std::string ruleTag = ruleSet.getRuleTag();
+  if (lastRuleType != &typeid(ruleSet) || lastRuleTag != ruleTag) {
     lastRuleType = &typeid(ruleSet);
+    lastRuleTag = ruleTag;
     m_backgroundTransitionsStayBinary = true;
     const RuleSet::TransitionTable& transitions = ruleSet.getTransitionTable();
     for (unsigned char neighbors = 0u; neighbors < RuleSet::kNeighborCountCount;

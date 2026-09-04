@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <typeinfo>
 #include <unordered_map>
 #include <vector>
@@ -401,6 +402,7 @@ private:
   std::uint64_t m_changedChunksRevision = 0u;
   bool m_changedChunksRevisionValid = false;
   const std::type_info* lastRuleType = nullptr;
+  std::string lastRuleTag;
   bool m_frontierInvalid = false;
   std::unique_ptr<SparseWorkerPool> workerPool;
   SparseAdvanceStats lastAdvanceStats;
