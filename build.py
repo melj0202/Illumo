@@ -1655,6 +1655,52 @@ def create_parser(
         action="store_true",
         help="emit machine-readable JSON",
     )
+
+    new_project_parser = subparsers.add_parser(
+        "new-project",
+        aliases=["create-project"],
+        help="generate a new Illumo application project (Unreal style with engine framework, debug tools, and spinning-cube starter template)",
+    )
+    new_project_parser.add_argument(
+        "destination",
+        type=Path,
+        help="path where the new project workspace will be created",
+    )
+    new_project_parser.add_argument(
+        "-n",
+        "--name",
+        default="IllumoGame",
+        help="name of the game application (default: %(default)s)",
+    )
+    new_project_parser.add_argument(
+        "-t",
+        "--template",
+        default="spinning-cube",
+        choices=["spinning-cube"],
+        help="starter template to instantiate (default: %(default)s)",
+    )
+    new_project_parser.add_argument(
+        "--no-debug-tools",
+        action="store_true",
+        help="do not include the IllEd debug editor in the generated workspace",
+    )
+    new_project_parser.add_argument(
+        "--in-workspace",
+        action="store_true",
+        help="create as an application folder inside the current workspace",
+    )
+    new_project_parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="overwrite or create within an existing non-empty directory",
+    )
+    new_project_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="enable detailed logging of files copied",
+    )
     return parser
 
 
@@ -2093,6 +2139,32 @@ def run_repository_statistics(arguments: argparse.Namespace) -> None:
             run_source_file_statistics(arguments)
 
 
+def run_new_project(arguments: argparse.Namespace) -> None:
+    tool_script = REPOSITORY_ROOT / "tools" / "create_project.py"
+    if not tool_script.is_file():
+        raise BuildError(f"Project creation tool not found at {tool_script}")
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("create_project", tool_script)
+    if spec is None or spec.loader is None:
+        raise BuildError("Failed to load create_project module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    try:
+        module.create_project(
+            destination=arguments.destination,
+            project_name=arguments.name,
+            template_name=arguments.template,
+            include_debug_tools=not arguments.no_debug_tools,
+            in_workspace=arguments.in_workspace,
+            force=arguments.force,
+            verbose=arguments.verbose,
+        )
+    except module.ProjectCreationError as err:
+        raise BuildError(str(err)) from err
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
     workspace = discover_workspace_projects(REPOSITORY_ROOT)
     parser = create_parser(workspace)
@@ -2134,6 +2206,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "stats": run_repository_statistics,
         "file-stats": run_source_file_statistics,
         "source-stats": run_source_file_statistics,
+        "new-project": run_new_project,
+        "create-project": run_new_project,
     }
     try:
         actions[parsed.command](parsed)

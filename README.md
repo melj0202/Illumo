@@ -116,7 +116,45 @@ python build.py file-stats -n 25
 python build.py coverage
 python build.py tidy
 python build.py docs
+python build.py new-project ../MyNewGame --name MyNewGame
 ```
+
+## Project creation (Unreal Engine style)
+
+To scaffold a new Illumo application project, use the project creation tool:
+
+```bash
+python build.py new-project <destination_path> [--name <ApplicationName>]
+```
+
+Or invoke the standalone script directly:
+
+```bash
+python tools/create_project.py <destination_path> --name MyGame
+```
+
+This generates a turnkey standalone workspace following an Unreal Engine style layout:
+- `Illumo/`: Full source code of the engine framework (`Include/`, `Source/`, `Shader/`, `Assets/`, `thirdparty/`, `TestSupport/`, `Tests/`, `cmake/`)
+- `IllEd/`: Debug tools and the SceneGraph world editor
+- `<ApplicationName>/` (default: `IllumoGame/`): Game application containing the starter template (a 3D lit spinning cube with perspective camera, controls, configuration, and automated tests)
+- `cmake/`, `build.py`, `CMakeLists.txt`, `README.md`: Workspace build orchestration and configuration
+
+To build and run the newly generated application:
+
+```bash
+cd <destination_path>
+python build.py build
+python build.py run --app <ApplicationName>
+python build.py test
+```
+
+Controls for the spinning cube starter application:
+- **Space**: Pause / resume rotation
+- **R**: Reset rotation angle to 0
+- **G**: Toggle 3D reference grid
+- **Up / Down**: Increase / decrease rotation speed
+- **Escape**: Exit application
+
 
 `stats` reports the current Git branch, commit, working-tree counts, tracked
 file count, and categorized first-party lines. LOC counts nonblank lines in
