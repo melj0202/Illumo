@@ -1,4 +1,4 @@
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
 #include <Illumo/Engine/DebugModule.h>
 #endif
 #include <Illumo/Engine/IModule.h>
@@ -607,7 +607,7 @@ testOptionalOverlayUpdatesBeforeRequired()
   std::filesystem::remove(path, error);
 }
 
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
 static void
 testDebugOverlayConsoleIsGlobal()
 {
@@ -638,6 +638,52 @@ testDebugOverlayConsoleIsGlobal()
     testTrue(g,
              host.context().commandLine->isOpen,
              "Grave toggles console even if the required module drains input");
+
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
+
+static void
+testDebugOverlayWatermarkDispatched()
+{
+  testSection("Illumo: Debug overlay dispatches development build watermark");
+  const std::filesystem::path path =
+    temporaryEnvironmentPath("debug-overlay-watermark");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+
+    host.addModule(std::make_unique<DrainAllInputModule>(),
+                   ModuleRequirement::Required);
+    host.addModule(std::make_unique<DebugModule>(),
+                   ModuleRequirement::Optional);
+    testTrue(g, host.startModules(), "modules start");
+
+    host.update(0.016);
+    host.render();
+
+    Scene* scene = IllumoTestAccess::getScene(host);
+    testTrue(g, scene != nullptr, "scene exists");
+    const std::vector<DrawableBase*>& debugDrawables =
+      scene->drawablesIn(RenderLayerId::Debug);
+    bool watermarkFound = false;
+    for (DrawableBase* drawable : debugDrawables) {
+      GLString* str = dynamic_cast<GLString*>(drawable);
+      if (str != nullptr && str->getContent() == "development build") {
+        watermarkFound = true;
+        testTrue(g, str->getR() == 245, "watermark is red");
+        testTrue(g, str->getA() == 140, "watermark is translucent");
+        testTrue(g, str->getSize() == 18, "watermark is expected font size");
+        break;
+      }
+    }
+    testTrue(
+      g, watermarkFound, "development build watermark is in debug drawables");
 
     host.shutdown();
   }
@@ -868,8 +914,11 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
   registry.add("Illumo.Host.ScenePipelineConfigurationFromEnv", []() {
     return runHostCase(testScenePipelineConfigurationFromEnv);
   });
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   registry.add("Illumo.Host.DebugOverlayConsoleIsGlobal",
                []() { return runHostCase(testDebugOverlayConsoleIsGlobal); });
+  registry.add("Illumo.Host.DebugOverlayWatermarkDispatched", []() {
+    return runHostCase(testDebugOverlayWatermarkDispatched);
+  });
 #endif
 }

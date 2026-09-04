@@ -330,7 +330,7 @@ EditorModule::updateStatus()
     const int zoom = static_cast<int>(std::round(ic->camera->GetZoom()));
     status += "  |  Zoom: " + std::to_string(zoom) + "x";
   }
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   if (m_document.worldMode() == IlscWorldMode::World3D) {
     status +=
       "  |  [WASD/MMB: Pan  QE: Up/Down  RMB: Orbit  Wheel: Zoom  ~: Console]";

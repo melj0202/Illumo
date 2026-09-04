@@ -1,9 +1,10 @@
 #ifndef GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_NONE
 #endif
-#include <Illumo/Engine/PresentationTiming.h>
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/DebugModule.h>
+#include <Illumo/Engine/PresentationTiming.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <queue>
@@ -11,6 +12,7 @@
 
 DebugModule::DebugModule()
   : fpsLabel(nullptr)
+  , watermarkLabel(nullptr)
   , rendererDemo(nullptr)
   , animatedSpriteIndex(0)
   , rotatingSpriteIndex(0)
@@ -48,6 +50,13 @@ DebugModule::Start(IllumoContext* context)
     new GLString("FPS: 0", 80, 255, 120, 255, 18, 12, 12, ic->renderer);
   fpsLabel->setPanelStyle(UiTheme::statusPanel());
   fpsLabel->setVisible(isShowFpsEnabled());
+
+  // Translucent watermark in bottom-right corner for debug compilation builds
+  watermarkLabel =
+    new GLString("development build", 245, 80, 80, 140, 18, 0, 0, ic->renderer);
+  updateWatermarkPosition();
+  watermarkLabel->setVisible(true);
+
   createRendererDemo();
   registerRendererCommands();
 
@@ -251,6 +260,33 @@ DebugModule::updateFpsCounter(double dt)
 }
 
 void
+DebugModule::updateWatermarkPosition()
+{
+  if (!watermarkLabel || !ic || !ic->window) {
+    return;
+  }
+  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+  const float windowWidth = static_cast<float>(dimensions[0]);
+  const float windowHeight = static_cast<float>(dimensions[1]);
+  const float uiScale =
+    ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
+  const float resX = (uiScale > 0.0f) ? (windowWidth / uiScale) : windowWidth;
+  const float resY = (uiScale > 0.0f) ? (windowHeight / uiScale) : windowHeight;
+
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  const float sizePt = static_cast<float>(watermarkLabel->getSize());
+  const float textWidth =
+    font ? font->measureText(watermarkLabel->getContent(), sizePt).width
+         : (static_cast<float>(watermarkLabel->getContent().size()) * sizePt *
+            0.6f);
+
+  const int posX = static_cast<int>(std::max(0.0f, resX - textWidth - 14.0f));
+  const int posY = static_cast<int>(std::max(0.0f, resY - sizePt - 12.0f));
+  watermarkLabel->setX(posX);
+  watermarkLabel->setY(posY);
+}
+
+void
 DebugModule::Update(double dt)
 {
   ZoneNamed(DebugModuleUpdateZone, "DebugModule Update");
@@ -262,6 +298,7 @@ DebugModule::Update(double dt)
   }
 
   updateFpsCounter(dt);
+  updateWatermarkPosition();
   if (rendererDemoEnabled && rendererDemo != nullptr) {
     rendererDemoAnimator.update(dt);
     rendererDemoRotation += dt * 0.8;
@@ -410,6 +447,10 @@ DebugModule::Exit()
     delete fpsLabel;
     fpsLabel = nullptr;
   }
+  if (watermarkLabel) {
+    delete watermarkLabel;
+    watermarkLabel = nullptr;
+  }
 }
 
 void
@@ -425,6 +466,9 @@ DebugModule::DispatchDrawables(Scene* scene)
   }
   if (fpsLabel && isShowFpsEnabled()) {
     scene->AddDrawable(fpsLabel, RenderLayerId::Debug);
+  }
+  if (watermarkLabel && watermarkLabel->isVisible()) {
+    scene->AddDrawable(watermarkLabel, RenderLayerId::Debug);
   }
   if (rendererDemo != nullptr && rendererDemoEnabled) {
     scene->AddDrawable(rendererDemo, RenderLayerId::Debug);
