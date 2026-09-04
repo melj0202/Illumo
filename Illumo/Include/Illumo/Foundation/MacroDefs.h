@@ -135,4 +135,13 @@ _generic_pow2(T& x)
 #define __MAX_RECURSION_DEPTH__                                                \
   100 // Maybe avoiding recursin all together is a better idea?
 
+// Debug tooling enablement (DebugModule, developer overlay, console hotkeys,
+// etc.) Enabled in Debug and RelWithDebInfo configurations, or when
+// !defined(NDEBUG).
+#if !defined(NDEBUG) || defined(ILLUMO_ENABLE_DEBUG_TOOLS)
+#ifndef ILLUMO_ENABLE_DEBUG_TOOLS
+#define ILLUMO_ENABLE_DEBUG_TOOLS 1
+#endif
+#endif
+
 #endif

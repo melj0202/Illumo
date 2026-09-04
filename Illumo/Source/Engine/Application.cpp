@@ -2,7 +2,7 @@
 
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Engine/Illumo.h>
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
 #include <Illumo/Engine/DebugModule.h>
 #endif
 #include <Illumo/Engine/PresentationTiming.h>
@@ -79,7 +79,7 @@ RunIllumoApplication(int argc,
       return 1;
     }
     illumo.addModule(std::move(requiredModule), ModuleRequirement::Required);
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
     illumo.addModule(std::make_unique<DebugModule>(),
                      ModuleRequirement::Optional);
 #endif

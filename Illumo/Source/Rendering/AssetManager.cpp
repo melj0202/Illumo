@@ -48,7 +48,7 @@ AssetManager::AssetManager(Renderer* rendererValue, bool startWorker)
   , workerEnabled(startWorker)
   , nextHotReloadPoll(std::chrono::steady_clock::now())
 {
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   hotReloadEnabled = true;
 #endif
   if (workerEnabled) {

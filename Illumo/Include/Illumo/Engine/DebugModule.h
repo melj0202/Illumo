@@ -17,11 +17,13 @@ public:
 private:
   bool isShowFpsEnabled() const;
   void updateFpsCounter(double dt);
+  void updateWatermarkPosition();
   void registerRendererCommands();
   void unregisterRendererCommands();
   void createRendererDemo();
 
   GLString* fpsLabel;
+  GLString* watermarkLabel;
   GameVisual* rendererDemo;
   TextureHandle rendererDemoTexture{};
   ShaderHandle rendererDemoShader{};

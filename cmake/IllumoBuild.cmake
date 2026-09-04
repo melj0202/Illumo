@@ -60,6 +60,7 @@ function(illumo_configure_cpp_target target_name)
 
   target_compile_definitions(${target_name} PRIVATE
     $<$<CONFIG:Debug>:TRACY_ENABLE>
+    $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:ILLUMO_ENABLE_DEBUG_TOOLS=1>
   )
   if(ILLUMO_ENABLE_TRACY)
     target_compile_definitions(${target_name} PRIVATE TRACY_ENABLE)

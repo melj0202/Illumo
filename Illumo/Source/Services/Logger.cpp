@@ -64,7 +64,7 @@ Logger::LogInfo(const char* message)
 {
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 3)
     return;
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   printf("\x1B[34mINFO\033[0m: %s\n", message);
 #endif
   if (instance) {
@@ -80,7 +80,7 @@ Logger::LogWarning(const char* message)
 {
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 2)
     return;
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   printf("\x1B[33mWARNING\033[0m: %s\n", message);
 #endif
   if (instance) {
@@ -96,7 +96,7 @@ Logger::LogError(const char* message)
 {
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 1)
     return;
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   printf("\x1B[31mERROR\033[0m: %s\n", message);
 #endif
   if (instance) {
@@ -112,7 +112,7 @@ Logger::Log(const char* message)
 {
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 1)
     return;
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   std::cout << message << std::endl;
 #endif
   if (instance) {
@@ -128,7 +128,7 @@ Logger::LogTrace(const char* message)
 {
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 4)
     return;
-#ifndef NDEBUG
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   printf("\x1B[35mTRACE\x1B[0m: %s\n", message);
 #endif
   if (instance) {
