@@ -59,6 +59,7 @@ DASHBOARD_ITEMS = (
     ("action", "Build and run application", "run"),
     ("action", "Run existing build", "launch"),
     ("action", "Repository statistics", "stats"),
+    ("action", "Source file statistics", "file_stats"),
     ("action", "Build documentation", "docs"),
     ("action", "Run LLVM coverage", "coverage"),
     ("action", "Run clang-tidy", "tidy"),
@@ -71,6 +72,7 @@ DASHBOARD_DESCRIPTIONS = {
     "run": "build, then launch selected application",
     "launch": "skip configure and build",
     "stats": "Git state, files, and first-party LOC",
+    "file_stats": "first-party source files sorted by LOC",
     "docs": "illumo.pdf and architecture-map.pdf",
     "coverage": "Ninja, Clang, and the 85% gate",
     "tidy": "Ninja, Clang, and first-party clang-tidy",
@@ -259,6 +261,18 @@ class LineStatistics:
 
 
 @dataclass(frozen=True)
+class SourceFileStatistics:
+    path: Path
+    category: str
+    physical_lines: int = 0
+    loc: int = 0
+
+    @property
+    def blank_lines(self) -> int:
+        return max(0, self.physical_lines - self.loc)
+
+
+@dataclass(frozen=True)
 class WorktreeStatistics:
     staged: int = 0
     modified: int = 0
@@ -277,6 +291,7 @@ class RepositoryStatistics:
     repository_files_source: str
     categories: tuple[LineStatistics, ...]
     projects: tuple[ProjectInfo, ...] = ()
+    files: tuple[SourceFileStatistics, ...] = ()
 
     @property
     def first_party_files(self) -> int:
@@ -653,6 +668,8 @@ def dashboard_action_arguments(
         ]
     if action == "stats":
         return ["stats"]
+    if action == "file_stats":
+        return ["file-stats"]
     if action == "docs":
         return ["docs"]
     if action == "coverage":
@@ -918,6 +935,7 @@ def collect_repository_statistics(root: Path) -> RepositoryStatistics:
         label: {"files": 0, "physical_lines": 0, "loc": 0}
         for label in category_order
     }
+    source_files: list[SourceFileStatistics] = []
     for relative in files:
         category = repository_text_category(relative)
         if category is None:
@@ -930,9 +948,19 @@ def collect_repository_statistics(root: Path) -> RepositoryStatistics:
             raise BuildError(
                 f"Could not read repository file {relative}: {error}"
             ) from error
+        physical_lines = len(lines)
+        loc = sum(1 for line in lines if line.strip())
         counts[category]["files"] += 1
-        counts[category]["physical_lines"] += len(lines)
-        counts[category]["loc"] += sum(1 for line in lines if line.strip())
+        counts[category]["physical_lines"] += physical_lines
+        counts[category]["loc"] += loc
+        source_files.append(
+            SourceFileStatistics(
+                path=relative,
+                category=category,
+                physical_lines=physical_lines,
+                loc=loc,
+            )
+        )
 
     categories = tuple(
         LineStatistics(label, **counts[label]) for label in category_order
@@ -951,10 +979,13 @@ def collect_repository_statistics(root: Path) -> RepositoryStatistics:
         repository_files_source=files_source,
         categories=categories,
         projects=workspace.projects,
+        files=tuple(source_files),
     )
 
 
-def repository_statistics_json(statistics: RepositoryStatistics) -> str:
+def repository_statistics_json(
+    statistics: RepositoryStatistics, include_files: bool = False
+) -> str:
     worktree = None
     if statistics.worktree is not None:
         worktree = {
@@ -963,6 +994,31 @@ def repository_statistics_json(statistics: RepositoryStatistics) -> str:
             "untracked": statistics.worktree.untracked,
             "conflicted": statistics.worktree.conflicted,
         }
+    first_party: dict[str, object] = {
+        "files": statistics.first_party_files,
+        "loc": statistics.first_party_loc,
+        "physical_lines": statistics.first_party_physical_lines,
+        "categories": [
+            {
+                "name": category.label,
+                "files": category.files,
+                "loc": category.loc,
+                "physical_lines": category.physical_lines,
+            }
+            for category in statistics.categories
+        ],
+    }
+    if include_files and statistics.files:
+        first_party["source_files"] = [
+            {
+                "path": item.path.as_posix(),
+                "category": item.category,
+                "loc": item.loc,
+                "physical_lines": item.physical_lines,
+                "blank_lines": item.blank_lines,
+            }
+            for item in statistics.files
+        ]
     payload = {
         "root": str(statistics.root),
         "git": {
@@ -975,20 +1031,7 @@ def repository_statistics_json(statistics: RepositoryStatistics) -> str:
             "count": statistics.repository_files,
             "source": statistics.repository_files_source,
         },
-        "first_party": {
-            "files": statistics.first_party_files,
-            "loc": statistics.first_party_loc,
-            "physical_lines": statistics.first_party_physical_lines,
-            "categories": [
-                {
-                    "name": category.label,
-                    "files": category.files,
-                    "loc": category.loc,
-                    "physical_lines": category.physical_lines,
-                }
-                for category in statistics.categories
-            ],
-        },
+        "first_party": first_party,
         "projects": [
             {
                 "name": project.name,
@@ -1067,6 +1110,175 @@ def print_repository_statistics(statistics: RepositoryStatistics) -> None:
     print(
         f"Scope: current contents of {source}; excludes build directories, archive, "
         "Illumo/thirdparty, docs/output, binary assets, and blank lines from LOC."
+    )
+
+
+def resolve_category_filter(
+    category: str, include_tests: bool = False
+) -> set[str]:
+    cat_lower = category.lower().strip()
+    if include_tests:
+        return {"Production C/C++", "Tests C/C++"}
+    if cat_lower in ("production", "prod", "production c/c++"):
+        return {"Production C/C++"}
+    if cat_lower in ("tests", "test", "tests c/c++"):
+        return {"Tests C/C++"}
+    if cat_lower in ("cpp", "c++", "source", "sources"):
+        return {"Production C/C++", "Tests C/C++"}
+    if cat_lower in ("shaders", "shader"):
+        return {"Shaders"}
+    if cat_lower in ("build", "tooling", "build and tooling"):
+        return {"Build and tooling"}
+    if cat_lower in ("docs", "doc", "documentation"):
+        return {"Documentation"}
+    if cat_lower in ("config", "data", "configuration and data"):
+        return {"Configuration and data"}
+    if cat_lower in ("all", "*"):
+        return {
+            "Production C/C++",
+            "Tests C/C++",
+            "Shaders",
+            "Build and tooling",
+            "Documentation",
+            "Configuration and data",
+        }
+    return {category}
+
+
+def filter_and_sort_source_files(
+    files: Sequence[SourceFileStatistics],
+    category: str = "production",
+    include_tests: bool = False,
+    sort_by: str = "loc",
+    descending: bool = True,
+    min_loc: int = 0,
+    limit: int | None = None,
+    project: str | None = None,
+) -> list[SourceFileStatistics]:
+    allowed_categories = resolve_category_filter(category, include_tests)
+    filtered = [
+        item
+        for item in files
+        if item.category in allowed_categories and item.loc >= min_loc
+    ]
+    if project:
+        proj_lower = project.lower()
+        filtered = [
+            item
+            for item in filtered
+            if item.path.parts and item.path.parts[0].lower() == proj_lower
+        ]
+
+    if sort_by in ("lines", "physical"):
+        filtered.sort(
+            key=lambda item: (
+                item.physical_lines,
+                item.loc,
+                item.path.as_posix(),
+            ),
+            reverse=descending,
+        )
+    elif sort_by in ("name", "path"):
+        filtered.sort(
+            key=lambda item: item.path.as_posix().lower(),
+            reverse=not descending,
+        )
+    else:  # default: "loc"
+        filtered.sort(
+            key=lambda item: (
+                item.loc,
+                item.physical_lines,
+                item.path.as_posix(),
+            ),
+            reverse=descending,
+        )
+
+    if limit is not None and limit > 0:
+        filtered = filtered[:limit]
+    return filtered
+
+
+def source_file_statistics_json(
+    files: Sequence[SourceFileStatistics],
+    total_matching: int,
+    total_matching_loc: int,
+    total_matching_physical: int,
+    scope_label: str,
+    sort_label: str,
+) -> str:
+    payload = {
+        "scope": scope_label,
+        "sorted_by": sort_label,
+        "total_files": total_matching,
+        "total_loc": total_matching_loc,
+        "total_physical_lines": total_matching_physical,
+        "files_count": len(files),
+        "files": [
+            {
+                "rank": index,
+                "path": item.path.as_posix(),
+                "category": item.category,
+                "loc": item.loc,
+                "physical_lines": item.physical_lines,
+                "blank_lines": item.blank_lines,
+            }
+            for index, item in enumerate(files, start=1)
+        ],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def print_source_file_statistics(
+    files: Sequence[SourceFileStatistics],
+    total_matching: int,
+    total_matching_loc: int,
+    total_matching_physical: int,
+    scope_label: str,
+    sort_label: str,
+    limit: int | None = None,
+) -> None:
+    print("ILLUMO FIRST-PARTY SOURCE FILE STATISTICS")
+    print(f"Scope: {scope_label}")
+    print(f"Sorted by: {sort_label}")
+    print()
+    if not files:
+        print("  No source files matched the requested filters.")
+        return
+
+    print(
+        f"  {'Rank':>4}  {'LOC':>7}  {'Physical':>8}  {'Category':<16}  Path"
+    )
+    print(
+        f"  {'-' * 4}  {'-' * 7}  {'-' * 8}  {'-' * 16}  {'-' * 44}"
+    )
+    for index, item in enumerate(files, start=1):
+        rel_str = item.path.as_posix()
+        print(
+            f"  {index:>4}  {item.loc:>7,}  {item.physical_lines:>8,}  "
+            f"{item.category:<16}  {rel_str}"
+        )
+    print(
+        f"  {'-' * 4}  {'-' * 7}  {'-' * 8}  {'-' * 16}  {'-' * 44}"
+    )
+    if limit is not None and limit > 0 and len(files) < total_matching:
+        shown_loc = sum(item.loc for item in files)
+        shown_phys = sum(item.physical_lines for item in files)
+        print(
+            f"  Shown: {len(files):,} of {total_matching:,} files "
+            f"({shown_loc:,} LOC, {shown_phys:,} physical lines)"
+        )
+        print(
+            f"  Total: {total_matching:,} files, {total_matching_loc:,} LOC, "
+            f"{total_matching_physical:,} physical lines"
+        )
+    else:
+        print(
+            f"  Total: {total_matching:,} files, {total_matching_loc:,} LOC, "
+            f"{total_matching_physical:,} physical lines"
+        )
+    print(
+        "Scope: current contents of tracked files; excludes build directories, "
+        "archive, Illumo/thirdparty, docs/output, binary assets, and blank lines from LOC."
     )
 
 
@@ -1362,6 +1574,83 @@ def create_parser(
         "stats", help="show Git state and first-party repository statistics"
     )
     stats_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable JSON",
+    )
+    stats_parser.add_argument(
+        "--files",
+        "--by-file",
+        dest="by_file",
+        action="store_true",
+        help="include per-file breakdown for first-party source files sorted largest to smallest",
+    )
+    stats_parser.add_argument(
+        "-n",
+        "--top",
+        "--limit",
+        dest="limit",
+        type=positive_job_count,
+        metavar="COUNT",
+        help="limit per-file output to the top COUNT files",
+    )
+    stats_parser.add_argument(
+        "--include-tests",
+        action="store_true",
+        help="include test files alongside production source files",
+    )
+
+    file_stats_parser = subparsers.add_parser(
+        "file-stats",
+        aliases=["source-stats"],
+        help="show per-file statistics for first-party source files sorted largest to smallest",
+    )
+    file_stats_parser.add_argument(
+        "-n",
+        "--top",
+        "--limit",
+        dest="limit",
+        type=positive_job_count,
+        metavar="COUNT",
+        help="limit output to the top COUNT largest files",
+    )
+    file_stats_parser.add_argument(
+        "--min-loc",
+        type=int,
+        default=0,
+        metavar="LOC",
+        help="only include files with at least LOC nonblank lines",
+    )
+    file_stats_parser.add_argument(
+        "--category",
+        choices=["production", "tests", "cpp", "shaders", "all"],
+        default="production",
+        help="file category to analyze (default: %(default)s)",
+    )
+    file_stats_parser.add_argument(
+        "--include-tests",
+        action="store_true",
+        help="include test files alongside production source files (shorthand for --category cpp)",
+    )
+    file_stats_parser.add_argument(
+        "--sort",
+        choices=["loc", "lines", "name"],
+        default="loc",
+        help="sort key: loc (nonblank lines), lines (physical lines), or name (default: %(default)s)",
+    )
+    file_stats_parser.add_argument(
+        "--reverse",
+        "--asc",
+        dest="reverse",
+        action="store_true",
+        help="sort in ascending order (smallest to largest) instead of descending",
+    )
+    file_stats_parser.add_argument(
+        "--project",
+        metavar="NAME",
+        help="filter files to a specific project (e.g., IllumoGame, IllEd, Illumo)",
+    )
+    file_stats_parser.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable JSON",
@@ -1714,12 +2003,94 @@ def run_docs(arguments: argparse.Namespace) -> None:
     )
 
 
+def run_source_file_statistics(arguments: argparse.Namespace) -> None:
+    statistics = collect_repository_statistics(REPOSITORY_ROOT)
+    category = getattr(arguments, "category", "production")
+    include_tests = getattr(arguments, "include_tests", False)
+    sort_by = getattr(arguments, "sort", "loc")
+    descending = not getattr(arguments, "reverse", False)
+    min_loc = getattr(arguments, "min_loc", 0) or 0
+    limit = getattr(arguments, "limit", None)
+    project = getattr(arguments, "project", None)
+
+    scope_parts: list[str] = []
+    if include_tests:
+        scope_parts.append("Production C/C++ and Tests C/C++")
+    elif category.lower() in ("production", "prod", "production c/c++"):
+        scope_parts.append("Production C/C++")
+    elif category.lower() in ("tests", "test", "tests c/c++"):
+        scope_parts.append("Tests C/C++")
+    elif category.lower() in ("cpp", "c++", "source", "sources"):
+        scope_parts.append("All C/C++ (Production and Tests)")
+    elif category.lower() in ("all", "*"):
+        scope_parts.append("All first-party files")
+    else:
+        scope_parts.append(category)
+
+    if project:
+        scope_parts.append(f"project: {project}")
+    if min_loc > 0:
+        scope_parts.append(f"min LOC: {min_loc}")
+    scope_label = ", ".join(scope_parts)
+
+    sort_direction = (
+        "smallest to largest" if not descending else "largest to smallest"
+    )
+    sort_label = f"{sort_by.upper()} ({sort_direction})"
+
+    all_matching = filter_and_sort_source_files(
+        statistics.files,
+        category=category,
+        include_tests=include_tests,
+        sort_by=sort_by,
+        descending=descending,
+        min_loc=min_loc,
+        limit=None,
+        project=project,
+    )
+    total_matching = len(all_matching)
+    total_matching_loc = sum(item.loc for item in all_matching)
+    total_matching_physical = sum(item.physical_lines for item in all_matching)
+
+    displayed_files = (
+        all_matching[:limit]
+        if limit is not None and limit > 0
+        else all_matching
+    )
+
+    if getattr(arguments, "json", False):
+        print(
+            source_file_statistics_json(
+                displayed_files,
+                total_matching=total_matching,
+                total_matching_loc=total_matching_loc,
+                total_matching_physical=total_matching_physical,
+                scope_label=scope_label,
+                sort_label=sort_label,
+            )
+        )
+    else:
+        print_source_file_statistics(
+            displayed_files,
+            total_matching=total_matching,
+            total_matching_loc=total_matching_loc,
+            total_matching_physical=total_matching_physical,
+            scope_label=scope_label,
+            sort_label=sort_label,
+            limit=limit,
+        )
+
+
 def run_repository_statistics(arguments: argparse.Namespace) -> None:
     statistics = collect_repository_statistics(REPOSITORY_ROOT)
+    by_file = getattr(arguments, "by_file", False)
     if arguments.json:
-        print(repository_statistics_json(statistics))
+        print(repository_statistics_json(statistics, include_files=by_file))
     else:
         print_repository_statistics(statistics)
+        if by_file:
+            print()
+            run_source_file_statistics(arguments)
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
@@ -1761,6 +2132,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "tidy": run_tidy,
         "docs": run_docs,
         "stats": run_repository_statistics,
+        "file-stats": run_source_file_statistics,
+        "source-stats": run_source_file_statistics,
     }
     try:
         actions[parsed.command](parsed)

@@ -111,6 +111,8 @@ python build.py run -- -ww 1280 -wh 720
 python build.py run --config Debug --no-build
 python build.py stats
 python build.py stats --json
+python build.py file-stats
+python build.py file-stats -n 25
 python build.py coverage
 python build.py tidy
 python build.py docs
@@ -123,6 +125,15 @@ documentation, and configuration files. It excludes build trees, `archive/`,
 `Illumo/thirdparty/`, `docs/output/`, and binary assets. Use `--json` for
 machine-readable output; the interactive build console exposes the same report
 through **Repository statistics**.
+
+`file-stats` (aliases: `source-stats`, `stats --by-file`) provides a per-file
+breakdown of first-party source files sorted from largest to smallest by LOC
+to highlight large components and potential god objects. Options include
+`-n COUNT` / `--top COUNT` to limit output, `--min-loc LOC` for size
+thresholds, `--include-tests` to include test suites alongside production code,
+`--category` to filter categories, `--sort` for sorting keys, and `--json` for
+machine-readable output. The interactive build console exposes this through
+**Source file statistics**.
 
 When standard input or output is redirected, running `python build.py` without
 a command performs the normal Release build instead of opening the console.

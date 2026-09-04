@@ -27,6 +27,8 @@ python build.py test --test IllumoGame.Config.CanvasCommandLineOptions
 python build.py run -- -ww 1280 -wh 720
 python build.py stats
 python build.py stats --json
+python build.py file-stats
+python build.py file-stats -n 25
 python build.py tidy
 \end{lstlisting}
 Exact runner cases execute in dedicated manual-testing directories so file-backed
@@ -39,6 +41,10 @@ build tooling, documentation, and configuration files. Build trees,
 \pathref{archive/}, \pathref{Illumo/thirdparty/}, \pathref{docs/output/}, and
 binary assets are excluded. The interactive build console exposes the same
 report, and \texttt{--json} provides a stable machine-readable form.
+The \texttt{file-stats} command (or \texttt{stats --by-file}) provides a per-file
+source breakdown sorted by LOC from largest to smallest to highlight large
+components and god-object candidates, with optional \texttt{-n} count limits,
+\texttt{--min-loc} thresholds, \texttt{--include-tests}, category filters, and JSON output.
 
 \subsection{Standalone library}
 The supported library-only build remains independently configurable:
