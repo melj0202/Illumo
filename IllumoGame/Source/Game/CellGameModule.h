@@ -1,4 +1,5 @@
 #pragma once
+#include "CellClipboard.h"
 #include "CellContext.h"
 #include "CellPattern.h"
 #include "ConfigurationMenu.h"
@@ -84,6 +85,8 @@ private:
   void prepareGridMutation();
   SimulatorConfiguration currentConfiguration() const;
   bool applyConfiguration(const SimulatorConfiguration& configuration);
+  CellClipboard& getClipboard() { return clipboard; }
+  const CellClipboard& getClipboard() const { return clipboard; }
   CellContext* cellContext;
   CellState currentState;
   InputContext inputContext;
@@ -129,18 +132,10 @@ private:
   bool hamburgerMouseWasDown;
   GameVisual selectionVisual;
   GameVisual inspectorVisual;
-  bool hasSelection;
-  bool selecting;
-  std::int64_t selectAnchorX;
-  std::int64_t selectAnchorY;
-  std::int64_t selectX0;
-  std::int64_t selectY0;
-  std::int64_t selectX1;
-  std::int64_t selectY1;
+  CellClipboard clipboard;
   std::int64_t hoverX;
   std::int64_t hoverY;
   bool hoverValid;
-  CellPattern clipboardPattern;
   bool inspectorEnabled;
   std::uint64_t simulationGeneration;
   bool copyHeld;

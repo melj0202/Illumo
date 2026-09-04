@@ -12,25 +12,58 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
 static TestCounters g;
 
+namespace {
+bool g_seededAtlasCreated = false;
+std::filesystem::path g_seededAtlasPath;
+
+void
+cleanupSeededAtlas()
+{
+  if (g_seededAtlasCreated && !g_seededAtlasPath.empty()) {
+    std::error_code error;
+    std::filesystem::remove(g_seededAtlasPath, error);
+    std::filesystem::path parent = g_seededAtlasPath.parent_path();
+    if (std::filesystem::is_empty(parent, error)) {
+      std::filesystem::remove(parent, error);
+      parent = parent.parent_path();
+      if (std::filesystem::is_empty(parent, error)) {
+        std::filesystem::remove(parent, error);
+      }
+    }
+    g_seededAtlasCreated = false;
+  }
+}
+} // namespace
+
 static void
 seedShippedAtlas()
 {
-  const std::filesystem::path source =
-    std::filesystem::path(__FILE__).parent_path().parent_path() / "Assets" /
-    "editor-ui-atlas.jpg";
   const std::filesystem::path destination =
     std::filesystem::current_path() / EditorUiAtlas::relativePath();
   std::error_code error;
+  if (std::filesystem::exists(destination, error)) {
+    return;
+  }
+  const std::filesystem::path source =
+    std::filesystem::path(__FILE__).parent_path().parent_path() / "Assets" /
+    "editor-ui-atlas.jpg";
   std::filesystem::create_directories(destination.parent_path(), error);
-  std::filesystem::copy_file(source,
-                             destination,
-                             std::filesystem::copy_options::overwrite_existing,
-                             error);
+  if (std::filesystem::copy_file(source,
+                                 destination,
+                                 std::filesystem::copy_options::overwrite_existing,
+                                 error)) {
+    if (!g_seededAtlasCreated) {
+      g_seededAtlasCreated = true;
+      g_seededAtlasPath = destination;
+      std::atexit(cleanupSeededAtlas);
+    }
+  }
 }
 
 struct EditorFixture
@@ -142,7 +175,19 @@ testSaveLoadThroughDocument()
   testTrue(g, fixture.started, "module starts");
   EditorModuleTestAccess::createNode(fixture.module, SceneNodeKind::SolidCube);
   EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
-  const std::filesystem::path path = "module-roundtrip.ilsc";
+  const std::filesystem::path path =
+    std::filesystem::temp_directory_path() / "module-roundtrip.ilsc";
+  struct TempFileGuard
+  {
+    std::filesystem::path file;
+    ~TempFileGuard()
+    {
+      std::error_code ec;
+      std::filesystem::remove(file, ec);
+    }
+  } guard{ path };
+  std::error_code fsError;
+  std::filesystem::remove(path, fsError);
   std::string error;
   testTrue(g, document.saveToFile(path.string(), &error), "saves .ilsc");
   EditorDocument loaded;

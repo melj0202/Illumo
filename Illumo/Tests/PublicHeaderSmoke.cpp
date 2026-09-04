@@ -1,8 +1,10 @@
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Engine/DebugModule.h>
 #include <Illumo/Engine/IModule.h>
+#include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Foundation/ArrayQueue.h>
 #include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Foundation/MacroDefs.h>
@@ -13,6 +15,7 @@
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiTypes.h>
 #include <Illumo/Platform/Clipboard.h>
+#include <Illumo/Platform/PlatformTimer.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
@@ -38,11 +41,14 @@
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/RenderLayerId.h>
+#include <Illumo/Rendering/RenderPass.h>
 #include <Illumo/Rendering/RenderStyle.h>
+#include <Illumo/Rendering/RenderTargetPool.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
 #include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Scene/SceneGraph.h>
@@ -51,6 +57,7 @@
 #include <Illumo/Services/ArenaAlloc.h>
 #include <Illumo/Services/ChainedStackAlloc.h>
 #include <Illumo/Services/CommandLine.h>
+#include <Illumo/Services/CommandLineCore.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/DebugAlloc.h>
 #include <Illumo/Services/EnvVars.h>
@@ -72,6 +79,9 @@ main()
   static_assert(!std::is_copy_constructible_v<Illumo>);
   static_assert(std::is_destructible_v<IllumoConfig>);
   static_assert(std::is_destructible_v<IllumoApplicationDefinition>);
+  static_assert(std::has_virtual_destructor_v<IModuleHost>);
+  static_assert(std::is_destructible_v<FramePacer>);
+  static_assert(std::is_destructible_v<PlatformTimerScope>);
   static_assert(std::has_virtual_destructor_v<IEnvVars>);
   static_assert(std::is_destructible_v<GameVisual>);
   static_assert(std::is_destructible_v<MeshVisual>);
@@ -83,6 +93,9 @@ main()
   static_assert(std::is_base_of_v<DrawableBase, MeshVisual>);
   static_assert(!std::is_copy_constructible_v<SceneGraph>);
   static_assert(std::has_virtual_destructor_v<ISceneRenderAttachment>);
+  static_assert(std::is_destructible_v<RenderPassDesc>);
+  static_assert(std::is_destructible_v<RenderTargetPool>);
+  static_assert(std::is_destructible_v<PreprocessOptions>);
   SceneGraph sceneGraph;
   const SceneNodeHandle sceneNode = sceneGraph.createNode();
   if (!sceneGraph.isNodeValid(sceneNode)) {

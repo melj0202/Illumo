@@ -1,4 +1,6 @@
 #include "Game/CellGameModule.h"
+#include "Rulesets/RuleSet.h"
+#include "Rulesets/WireworldRuleSet.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
 #include <Illumo/Engine/IllumoContext.h>

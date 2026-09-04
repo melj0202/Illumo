@@ -74,6 +74,7 @@ add_library(Illumo STATIC
   Source/Foundation/MacroDefs.cpp
   Source/Scene/SceneGraph.cpp
   Source/Services/CommandLine.cpp
+  Source/Services/CommandLineCore.cpp
   Source/Services/DebugAlloc.cpp
   Source/Services/EnvVars.cpp
   Source/Services/InputManager.cpp
@@ -85,6 +86,7 @@ add_library(Illumo STATIC
   Source/Rendering/Font.cpp
   Source/Rendering/GLString.cpp
   Source/Rendering/MeshLoader.cpp
+  Source/Rendering/Renderer.cpp
   Source/Rendering/RendererStyles.cpp
   Source/Rendering/RenderWindow.cpp
   Source/Rendering/ShaderPreprocessor.cpp

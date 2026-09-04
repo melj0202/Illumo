@@ -1,6 +1,7 @@
 // CellContext mode string / ruleset factory tests (headless).
 
 #include "Game/CellContext.h"
+#include "Rulesets/RuleSet.h"
 #include "TestHarness.h"
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>

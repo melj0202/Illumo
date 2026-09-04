@@ -2,7 +2,7 @@
 #include "Game/Cursor.h"
 #include "Game/SimulationRunner.h"
 #include "Game/SparseCellGrid.h"
-#include "Rulesets/BrainsBrainRuleSet.h"
+#include "Rulesets/BriansBrainRuleSet.h"
 #include "Rulesets/DayAndNightRuleSet.h"
 #include "Rulesets/GameOfLifeRuleSet.h"
 #include "Rulesets/HighlifeRuleSet.h"
@@ -1410,7 +1410,7 @@ testSparseCellCandidateRuleEquivalence()
   testSection("SparseCellGrid: candidate rule equivalence");
   GameOfLifeRuleSet life(nullptr);
   SeedsRuleSet seeds(nullptr);
-  BrainsBrainRuleSet brains(nullptr);
+  BriansBrainRuleSet brains(nullptr);
   HighlifeRuleSet highlife(nullptr);
   DayAndNightRuleSet dayAndNight(nullptr);
   LifeWithoutDeathRuleSet lifeWithoutDeath(nullptr);
@@ -1475,7 +1475,7 @@ testMultiStateTransitions()
               WireworldRuleSet::CELL_CONDUCTOR,
               "conductor preserves state");
 
-  BrainsBrainRuleSet brainRules(nullptr);
+  BriansBrainRuleSet brainRules(nullptr);
   SparseCellGrid brain;
   brain.setCell(CellAddress{ 0, 0 }, 0);
   brain.setCell(CellAddress{ 1, 0 }, 2);

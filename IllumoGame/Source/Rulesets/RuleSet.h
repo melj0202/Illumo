@@ -1,9 +1,11 @@
 #pragma once
-#include "Game/CellGrid.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+
+class CellGrid;
 
 constexpr auto MAX_RULETAG_SIZE = 128;
 
@@ -28,10 +30,7 @@ public:
 
   CellGrid* canvas;
 
-  RuleSet(CellGrid* targetCanvas)
-    : canvas(targetCanvas)
-  {
-  }
+  RuleSet(CellGrid* targetCanvas);
 
   virtual ~RuleSet() = default;
 

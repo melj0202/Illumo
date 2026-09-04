@@ -1,14 +1,14 @@
 #pragma once
 #include "RuleSet.h"
 
-class BrainsBrainRuleSet : public RuleSet
+class BriansBrainRuleSet : public RuleSet
 {
 public:
-  BrainsBrainRuleSet(CellGrid* targetCanvas)
+  BriansBrainRuleSet(CellGrid* targetCanvas)
     : RuleSet(targetCanvas)
   {
   }
-  ~BrainsBrainRuleSet() override = default;
+  ~BriansBrainRuleSet() override = default;
 
   unsigned char nextState(unsigned char cell,
                           unsigned char aliveNeighbors) const override final;
@@ -16,3 +16,5 @@ public:
                 unsigned char dest[3]) const override;
   std::string getRuleTag() override { return "BRIANS_BRAIN"; }
 };
+
+using BrainsBrainRuleSet = BriansBrainRuleSet;

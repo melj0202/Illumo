@@ -1,5 +1,6 @@
 #include "CellGameModule.h"
 #include "BuiltinPatterns.h"
+#include "IllumoCodec.h"
 #include "MainMenuModule.h"
 #include "PatternCodec.h"
 #include "Rulesets/WireworldRuleSet.h"
@@ -145,14 +146,7 @@ CellGameModule::CellGameModule(std::string initialSavePath)
   , render3dTestAnimated(nullptr)
   , render3dTestTime(0.0)
   , render3dCameraApplied(false)
-  , hasSelection(false)
-  , selecting(false)
-  , selectAnchorX(0)
-  , selectAnchorY(0)
-  , selectX0(0)
-  , selectY0(0)
-  , selectX1(0)
-  , selectY1(0)
+  , clipboard()
   , hoverX(0)
   , hoverY(0)
   , hoverValid(false)
@@ -908,8 +902,7 @@ CellGameModule::registerConsoleCommands()
     "select",
     [this](const std::vector<std::string>& args) {
       if (args.size() == 1 && args[0] == "clear") {
-        hasSelection = false;
-        selecting = false;
+        clipboard.clearSelection();
         ic->commandLine->logSuccess("Selection cleared");
         return;
       }
@@ -925,12 +918,7 @@ CellGameModule::registerConsoleCommands()
           "Usage: select <x0> <y0> <x1> <y1> | select clear");
         return;
       }
-      normalizeSelection(&x0, &y0, &x1, &y1);
-      selectX0 = x0;
-      selectY0 = y0;
-      selectX1 = x1;
-      selectY1 = y1;
-      hasSelection = true;
+      clipboard.setSelection(x0, y0, x1, y1);
       ic->commandLine->logSuccess("Selection updated");
     },
     "select <x0> <y0> <x1> <y1> | select clear",
@@ -984,7 +972,7 @@ CellGameModule::registerConsoleCommands()
         return;
       }
       std::string error;
-      if (!pastePatternAt(clipboardPattern, originX, originY, &error)) {
+      if (!pastePatternAt(clipboard.getClipboardPattern(), originX, originY, &error)) {
         ic->commandLine->logError(error.empty() ? "Paste failed" : error);
       } else {
         ic->commandLine->logSuccess("Pasted pattern");
@@ -1134,19 +1122,6 @@ CellGameModule::stepSimulation(int generations)
     simulationGeneration += 1;
   }
   updateVisualTargets();
-}
-
-static std::string
-boundedRuleTag(const char* tag, std::size_t capacity)
-{
-  if (tag == nullptr) {
-    return std::string();
-  }
-  std::size_t length = 0;
-  while (length < capacity && tag[length] != '\0') {
-    length += 1;
-  }
-  return std::string(tag, length);
 }
 
 void
@@ -1609,78 +1584,19 @@ CellGameModule::normalizeSelection(std::int64_t* x0,
                                    std::int64_t* x1,
                                    std::int64_t* y1) const
 {
-  if (x0 == nullptr || y0 == nullptr || x1 == nullptr || y1 == nullptr) {
-    return;
-  }
-  if (*x0 > *x1) {
-    const std::int64_t swap = *x0;
-    *x0 = *x1;
-    *x1 = swap;
-  }
-  if (*y0 > *y1) {
-    const std::int64_t swap = *y0;
-    *y0 = *y1;
-    *y1 = swap;
-  }
+  CellClipboard::normalizeSelection(x0, y0, x1, y1);
 }
 
 bool
 CellGameModule::captureSelection(CellPattern* pattern, std::string* error)
 {
-  if (pattern == nullptr) {
+  if (cellContext == nullptr || cellContext->getGrid() == nullptr) {
     if (error != nullptr) {
-      *error = "pattern output is null";
+      *error = "Grid unavailable";
     }
     return false;
   }
-  if (!hasSelection) {
-    if (error != nullptr) {
-      *error = "no selection";
-    }
-    return false;
-  }
-  std::int64_t x0 = selectX0;
-  std::int64_t y0 = selectY0;
-  std::int64_t x1 = selectX1;
-  std::int64_t y1 = selectY1;
-  normalizeSelection(&x0, &y0, &x1, &y1);
-  const std::int64_t width = x1 - x0 + 1;
-  const std::int64_t height = y1 - y0 + 1;
-  if (width > CellPattern::kMaxWidth || height > CellPattern::kMaxHeight) {
-    if (error != nullptr) {
-      *error = "selection exceeds 256x256";
-    }
-    return false;
-  }
-  pattern->clear();
-  if (!pattern->setExtent(static_cast<int>(width), static_cast<int>(height))) {
-    if (error != nullptr) {
-      *error = "selection exceeds pattern caps";
-    }
-    return false;
-  }
-  SparseCellGrid* grid = cellContext->getGrid();
-  for (std::int64_t y = y0; y <= y1; ++y) {
-    for (std::int64_t x = x0; x <= x1; ++x) {
-      const CellAddress address{ x, y };
-      if (!grid->isCellInWorldBounds(address)) {
-        continue;
-      }
-      const unsigned char state = grid->getCell(address);
-      if (state == SparseCellGrid::BackgroundState) {
-        continue;
-      }
-      if (!pattern->addCell(static_cast<std::int32_t>(x - x0),
-                            static_cast<std::int32_t>(y - y0),
-                            state)) {
-        if (error != nullptr) {
-          *error = "selection exceeds occupancy cap";
-        }
-        return false;
-      }
-    }
-  }
-  return true;
+  return clipboard.captureSelection(cellContext->getGrid(), pattern, error);
 }
 
 bool
@@ -1689,122 +1605,132 @@ CellGameModule::pastePatternAt(const CellPattern& pattern,
                                std::int64_t originY,
                                std::string* error)
 {
-  if (pattern.empty() && pattern.getWidth() <= 0 && pattern.getHeight() <= 0) {
+  if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
+      cellContext->getCanvasView() == nullptr) {
     if (error != nullptr) {
-      *error = "pattern buffer is empty";
+      *error = "Grid or canvas unavailable";
     }
     return false;
   }
   prepareGridMutation();
-  SparseCellGrid* grid = cellContext->getGrid();
-  CanvasView* canvas = cellContext->getCanvasView();
-  for (const CellPatternCell& cell : pattern.getCells()) {
-    const CellAddress address{ originX + cell.dx, originY + cell.dy };
-    if (!grid->isCellInWorldBounds(address)) {
-      continue;
-    }
-    canvas->setCanvasPixel(address.x, address.y, cell.state);
+  const bool result = clipboard.pastePatternAt(cellContext->getGrid(),
+                                               cellContext->getCanvasView(),
+                                               pattern,
+                                               originX,
+                                               originY,
+                                               error);
+  if (result) {
+    updateVisualTargets();
   }
-  updateVisualTargets();
-  return true;
+  return result;
 }
 
 bool
 CellGameModule::fillSelection(unsigned char state)
 {
-  if (!hasSelection) {
+  if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
+      cellContext->getCanvasView() == nullptr) {
     return false;
   }
-  std::int64_t x0 = selectX0;
-  std::int64_t y0 = selectY0;
-  std::int64_t x1 = selectX1;
-  std::int64_t y1 = selectY1;
-  normalizeSelection(&x0, &y0, &x1, &y1);
   prepareGridMutation();
-  SparseCellGrid* grid = cellContext->getGrid();
-  CanvasView* canvas = cellContext->getCanvasView();
-  for (std::int64_t y = y0; y <= y1; ++y) {
-    for (std::int64_t x = x0; x <= x1; ++x) {
-      const CellAddress address{ x, y };
-      if (!grid->isCellInWorldBounds(address)) {
-        continue;
-      }
-      canvas->setCanvasPixel(x, y, state);
-    }
+  const bool result = clipboard.fillSelection(
+    cellContext->getGrid(), cellContext->getCanvasView(), state);
+  if (result) {
+    updateVisualTargets();
   }
-  updateVisualTargets();
-  return true;
+  return result;
 }
 
 bool
 CellGameModule::copySelection()
 {
+  if (cellContext == nullptr || cellContext->getGrid() == nullptr) {
+    return false;
+  }
   std::string error;
-  if (!captureSelection(&clipboardPattern, &error)) {
+  if (!clipboard.copySelection(cellContext->getGrid(), &error)) {
     Logger::LogError(error.c_str());
     return false;
   }
-  const std::string rle = PatternCodec::encodeRle(clipboardPattern);
-  Clipboard::SetText(rle);
   return true;
 }
 
 bool
 CellGameModule::cutSelection()
 {
-  if (!copySelection()) {
+  if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
+      cellContext->getCanvasView() == nullptr) {
     return false;
   }
-  return fillSelection(SparseCellGrid::BackgroundState);
+  prepareGridMutation();
+  std::string error;
+  const bool result = clipboard.cutSelection(
+    cellContext->getGrid(), cellContext->getCanvasView(), &error);
+  if (!result) {
+    Logger::LogError(error.c_str());
+    return false;
+  }
+  updateVisualTargets();
+  return true;
 }
 
 bool
 CellGameModule::pasteAtCursor()
 {
-  std::string error;
-  CellPattern pattern = clipboardPattern;
-  const std::string clipboardText = Clipboard::GetText();
-  if (!clipboardText.empty()) {
-    CellPattern parsed;
-    if (PatternCodec::parse(clipboardText, &parsed, &error) &&
-        !parsed.empty()) {
-      pattern = parsed;
-    }
+  if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
+      cellContext->getCanvasView() == nullptr) {
+    return false;
   }
-  if (!pastePatternAt(pattern, hoverX, hoverY, &error)) {
+  prepareGridMutation();
+  std::string error;
+  const bool result = clipboard.pasteAtCursor(
+    cellContext->getGrid(), cellContext->getCanvasView(), hoverX, hoverY, &error);
+  if (!result) {
     Logger::LogError(error.c_str());
     return false;
   }
-  clipboardPattern = pattern;
+  updateVisualTargets();
   return true;
 }
 
 bool
 CellGameModule::stampNamed(const std::string& name)
 {
-  CellPattern pattern;
-  if (!BuiltinPatterns::find(name, &pattern)) {
+  if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
+      cellContext->getCanvasView() == nullptr) {
     return false;
   }
-  std::string error;
+  prepareGridMutation();
   const std::int64_t originX = hoverValid ? hoverX : 0;
   const std::int64_t originY = hoverValid ? hoverY : 0;
-  return pastePatternAt(pattern, originX, originY, &error);
+  std::string error;
+  const bool result = clipboard.stampNamed(
+    cellContext->getGrid(), cellContext->getCanvasView(), name, originX, originY, &error);
+  if (result) {
+    updateVisualTargets();
+  }
+  return result;
 }
 
 bool
 CellGameModule::importPatternText(const std::string& text)
 {
-  CellPattern pattern;
+  if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
+      cellContext->getCanvasView() == nullptr) {
+    return false;
+  }
+  prepareGridMutation();
+  const std::int64_t originX = hoverValid ? hoverX : 0;
+  const std::int64_t originY = hoverValid ? hoverY : 0;
   std::string error;
-  if (!PatternCodec::parse(text, &pattern, &error)) {
+  const bool result = clipboard.importPatternText(
+    cellContext->getGrid(), cellContext->getCanvasView(), text, originX, originY, &error);
+  if (!result) {
     Logger::LogError(error.c_str());
     return false;
   }
-  clipboardPattern = pattern;
-  const std::int64_t originX = hoverValid ? hoverX : 0;
-  const std::int64_t originY = hoverValid ? hoverY : 0;
-  return pastePatternAt(pattern, originX, originY, &error);
+  updateVisualTargets();
+  return true;
 }
 
 void
@@ -1832,10 +1758,10 @@ CellGameModule::handleEditorHotkeys()
     pasteAtCursor();
   }
   if (rotateDown && !rotateHeld && !control) {
-    clipboardPattern.rotateCw();
+    clipboard.rotateCw();
   }
   if (flipDown && !flipHeld && !control) {
-    clipboardPattern.flipX();
+    clipboard.flipHorizontal();
   }
   if (inspectDown && !inspectHeld && !control) {
     inspectorEnabled = !inspectorEnabled;
@@ -1858,15 +1784,15 @@ void
 CellGameModule::updateSelectionVisual()
 {
   selectionVisual.clearPrimitives();
-  if (!hasSelection || ic == nullptr || ic->camera == nullptr) {
+  if (!clipboard.hasSelection() || ic == nullptr || ic->camera == nullptr) {
     selectionVisual.setVisible(false);
     return;
   }
-  std::int64_t x0 = selectX0;
-  std::int64_t y0 = selectY0;
-  std::int64_t x1 = selectX1;
-  std::int64_t y1 = selectY1;
-  normalizeSelection(&x0, &y0, &x1, &y1);
+  std::int64_t x0 = 0;
+  std::int64_t y0 = 0;
+  std::int64_t x1 = 0;
+  std::int64_t y1 = 0;
+  clipboard.getNormalizedSelection(&x0, &y0, &x1, &y1);
   const float cellSize = 16.0f;
   const float worldX = static_cast<float>(x0) * cellSize - cellSize * 0.5f;
   const float worldY = static_cast<float>(y0) * cellSize - cellSize * 0.5f;
@@ -1983,19 +1909,14 @@ CellGameModule::Edit(double dt)
 
     const bool pointerInWorld = hoverValid && !isHamburgerHovered();
     if (shift && isLeftPressed && pointerInWorld) {
-      if (!selecting) {
-        selecting = true;
-        selectAnchorX = currentX;
-        selectAnchorY = currentY;
+      if (!clipboard.isSelecting()) {
+        clipboard.startSelection(currentX, currentY);
+      } else {
+        clipboard.updateSelectionDrag(currentX, currentY);
       }
-      selectX0 = selectAnchorX;
-      selectY0 = selectAnchorY;
-      selectX1 = currentX;
-      selectY1 = currentY;
-      hasSelection = true;
       wasPressed = false;
     } else {
-      selecting = false;
+      clipboard.stopSelectionDrag();
       if ((isLeftPressed || isRightPressed) && pointerInWorld) {
         mirrorDeltaValid = false;
         unsigned char colorVal = isLeftPressed ? 0 : 1;
@@ -2043,7 +1964,7 @@ CellGameModule::Edit(double dt)
     }
   } else {
     wasPressed = false;
-    selecting = false;
+    clipboard.stopSelectionDrag();
   }
 }
 
@@ -2214,250 +2135,78 @@ bool
 CellGameModule::SaveCellGame(std::string filename)
 {
   if (filename.empty()) {
-    ic->commandLine->logError("Save path is empty");
+    if (ic != nullptr && ic->commandLine != nullptr) {
+      ic->commandLine->logError("Save path is empty");
+    }
     return false;
   }
   drainSimulation();
 
-  std::ofstream file(filename, std::ios::binary | std::ios::trunc);
-  if (!file.is_open()) {
-    ic->commandLine->logError("Failed to open for saving: " + filename);
+  IllumoDocument doc;
+  doc.version = IllumoCodec::kVersion;
+  doc.ruleString = cellContext->getRuleSet()->getRuleTag();
+  if (ic != nullptr && ic->camera != nullptr) {
+    const glm::dvec2 cameraPosition = ic->camera->GetPositionPrecise();
+    doc.cameraX = cameraPosition.x;
+    doc.cameraY = cameraPosition.y;
+    doc.cameraZoom = static_cast<double>(ic->camera->GetZoom());
+  }
+  doc.worldChunkWidth = cellContext->getWorldChunkWidth();
+  doc.worldChunkHeight = cellContext->getWorldChunkHeight();
+  doc.sourceGrid = cellContext->getGrid();
+
+  std::string error;
+  if (!IllumoCodec::writeFile(filename, doc, &error)) {
+    if (ic != nullptr && ic->commandLine != nullptr) {
+      ic->commandLine->logError(error);
+    }
     return false;
   }
-
-  const char magic[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '3', '\0' };
-  const std::uint32_t version = 3;
-  char ruleTag[MAX_RULETAG_SIZE] = {};
-  const std::string activeTag = cellContext->getRuleSet()->getRuleTag();
-  const std::size_t tagBytes =
-    std::min(activeTag.size(), static_cast<std::size_t>(MAX_RULETAG_SIZE - 1));
-  std::memcpy(ruleTag, activeTag.data(), tagBytes);
-
-  const glm::dvec2 cameraPosition = ic->camera->GetPositionPrecise();
-  const double cameraX = cameraPosition.x;
-  const double cameraY = cameraPosition.y;
-  const double cameraZoom = static_cast<double>(ic->camera->GetZoom());
-  const std::int64_t worldChunkWidth = cellContext->getWorldChunkWidth();
-  const std::int64_t worldChunkHeight = cellContext->getWorldChunkHeight();
-  const std::vector<SparseChunkRecord> records =
-    cellContext->getGrid()->collectChunkRecords();
-  const std::uint64_t chunkCount = static_cast<std::uint64_t>(records.size());
-
-  file.write(magic, sizeof(magic));
-  file.write(reinterpret_cast<const char*>(&version), sizeof(version));
-  file.write(ruleTag, sizeof(ruleTag));
-  file.write(reinterpret_cast<const char*>(&cameraX), sizeof(cameraX));
-  file.write(reinterpret_cast<const char*>(&cameraY), sizeof(cameraY));
-  file.write(reinterpret_cast<const char*>(&cameraZoom), sizeof(cameraZoom));
-  file.write(reinterpret_cast<const char*>(&worldChunkWidth),
-             sizeof(worldChunkWidth));
-  file.write(reinterpret_cast<const char*>(&worldChunkHeight),
-             sizeof(worldChunkHeight));
-  file.write(reinterpret_cast<const char*>(&chunkCount), sizeof(chunkCount));
-  for (const SparseChunkRecord& record : records) {
-    file.write(reinterpret_cast<const char*>(&record.chunkX),
-               sizeof(record.chunkX));
-    file.write(reinterpret_cast<const char*>(&record.chunkY),
-               sizeof(record.chunkY));
-    file.write(reinterpret_cast<const char*>(record.cells.data()),
-               static_cast<std::streamsize>(record.cells.size()));
-  }
-  const bool succeeded = file.good();
-  file.close();
-  if (!succeeded) {
-    ic->commandLine->logError("Failed while writing: " + filename);
-  }
-  return succeeded;
+  return true;
 }
 
 bool
 CellGameModule::LoadCellGame(std::string filename)
 {
   if (filename.empty()) {
-    ic->commandLine->logError("Load path is empty");
+    if (ic != nullptr && ic->commandLine != nullptr) {
+      ic->commandLine->logError("Load path is empty");
+    }
     return false;
   }
 
-  std::ifstream file(filename, std::ios::binary);
-  if (!file.is_open()) {
-    ic->commandLine->logError("Failed to open for loading: " + filename);
+  IllumoDocument doc;
+  std::string error;
+  if (!IllumoCodec::readFile(filename, &doc, &error)) {
+    if (ic != nullptr && ic->commandLine != nullptr) {
+      ic->commandLine->logError(error);
+    }
     return false;
   }
 
-  const char expectedMagicV3[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '3', '\0' };
-  const char expectedMagicV2[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '2', '\0' };
-  char magic[sizeof(expectedMagicV3)] = {};
-  if (!file.read(magic, sizeof(magic))) {
-    ic->commandLine->logError("Invalid or truncated Illumo save header");
-    return false;
-  }
-
-  std::string ruleString;
-  std::unique_ptr<SparseCellGrid> loadedGrid =
-    std::make_unique<SparseCellGrid>();
-  std::int64_t loadedWorldChunkWidth = 0;
-  std::int64_t loadedWorldChunkHeight = 0;
-  bool restoreCamera = false;
-  double savedCameraX = 0.0;
-  double savedCameraY = 0.0;
-  double savedCameraZoom = 1.0;
-
-  const bool sparseV3 = std::memcmp(magic, expectedMagicV3, sizeof(magic)) == 0;
-  const bool sparseV2 = std::memcmp(magic, expectedMagicV2, sizeof(magic)) == 0;
-  if (sparseV3 || sparseV2) {
-    std::uint32_t version = 0;
-    char ruleTag[MAX_RULETAG_SIZE] = {};
-    std::uint64_t chunkCount = 0;
-    if (!file.read(reinterpret_cast<char*>(&version), sizeof(version)) ||
-        !file.read(ruleTag, sizeof(ruleTag)) ||
-        !file.read(reinterpret_cast<char*>(&savedCameraX),
-                   sizeof(savedCameraX)) ||
-        !file.read(reinterpret_cast<char*>(&savedCameraY),
-                   sizeof(savedCameraY)) ||
-        !file.read(reinterpret_cast<char*>(&savedCameraZoom),
-                   sizeof(savedCameraZoom))) {
-      ic->commandLine->logError("Invalid or truncated sparse save header");
-      return false;
-    }
-    if (sparseV3 &&
-        (!file.read(reinterpret_cast<char*>(&loadedWorldChunkWidth),
-                    sizeof(loadedWorldChunkWidth)) ||
-         !file.read(reinterpret_cast<char*>(&loadedWorldChunkHeight),
-                    sizeof(loadedWorldChunkHeight)))) {
-      ic->commandLine->logError("Invalid or truncated topology metadata");
-      return false;
-    }
-    if (!file.read(reinterpret_cast<char*>(&chunkCount), sizeof(chunkCount))) {
-      ic->commandLine->logError("Invalid or truncated sparse save header");
-      return false;
-    }
-    const std::uint32_t expectedVersion = sparseV3 ? 3u : 2u;
-    if (version != expectedVersion || chunkCount > 10000000ULL ||
-        !std::isfinite(savedCameraX) || !std::isfinite(savedCameraY) ||
-        !std::isfinite(savedCameraZoom) || savedCameraZoom < 0.1 ||
-        savedCameraZoom > 100.0 ||
-        !SparseCellGrid::isValidTopology(loadedWorldChunkWidth,
-                                         loadedWorldChunkHeight)) {
-      ic->commandLine->logError("Sparse save contains invalid metadata");
-      return false;
-    }
-    loadedGrid = std::make_unique<SparseCellGrid>(loadedWorldChunkWidth,
-                                                  loadedWorldChunkHeight);
-    ruleString = boundedRuleTag(ruleTag, sizeof(ruleTag));
-    bool havePreviousChunk = false;
-    std::int64_t previousChunkX = 0;
-    std::int64_t previousChunkY = 0;
-    for (std::uint64_t i = 0; i < chunkCount; ++i) {
-      SparseChunkRecord record{};
-      if (!file.read(reinterpret_cast<char*>(&record.chunkX),
-                     sizeof(record.chunkX)) ||
-          !file.read(reinterpret_cast<char*>(&record.chunkY),
-                     sizeof(record.chunkY)) ||
-          !file.read(reinterpret_cast<char*>(record.cells.data()),
-                     static_cast<std::streamsize>(record.cells.size()))) {
-        ic->commandLine->logError("Sparse save is truncated");
-        return false;
-      }
-      bool hasCell = false;
-      for (unsigned char state : record.cells) {
-        if (state != SparseCellGrid::BackgroundState) {
-          hasCell = true;
-          break;
-        }
-      }
-      if (!hasCell) {
-        ic->commandLine->logError("Sparse save contains an empty chunk");
-        return false;
-      }
-      if (havePreviousChunk && (record.chunkY < previousChunkY ||
-                                (record.chunkY == previousChunkY &&
-                                 record.chunkX <= previousChunkX))) {
-        ic->commandLine->logError(
-          "Sparse save chunk records are not strictly sorted");
-        return false;
-      }
-      havePreviousChunk = true;
-      previousChunkX = record.chunkX;
-      previousChunkY = record.chunkY;
-      if (!loadedGrid->assignChunk(record)) {
-        ic->commandLine->logError("Sparse save contains an invalid chunk");
-        return false;
-      }
-    }
-    restoreCamera = true;
-  } else {
-    file.clear();
-    file.seekg(0, std::ios::beg);
-    char legacyRuleTag[MAX_RULETAG_SIZE] = {};
-    int fileWidth = 0;
-    int fileHeight = 0;
-    if (!file.read(legacyRuleTag, sizeof(legacyRuleTag)) ||
-        !file.read(reinterpret_cast<char*>(&fileWidth), sizeof(fileWidth)) ||
-        !file.read(reinterpret_cast<char*>(&fileHeight), sizeof(fileHeight))) {
-      ic->commandLine->logError("Invalid or truncated legacy save header");
-      return false;
-    }
-    ruleString = boundedRuleTag(legacyRuleTag, sizeof(legacyRuleTag));
-    const long long fileCellCount =
-      static_cast<long long>(fileWidth) * static_cast<long long>(fileHeight);
-    if (fileWidth < 1 || fileHeight < 1 || fileCellCount < 1 ||
-        fileCellCount > 100000000LL) {
-      ic->commandLine->logError("Legacy save contains invalid dimensions");
-      return false;
-    }
-    const std::size_t cellBytes = static_cast<std::size_t>(fileCellCount);
-    std::vector<unsigned char> loadedCells;
-    try {
-      loadedCells.resize(cellBytes);
-    } catch (const std::bad_alloc&) {
-      ic->commandLine->logError("Legacy save is too large to load");
-      return false;
-    }
-    if (!file.read(reinterpret_cast<char*>(loadedCells.data()),
-                   static_cast<std::streamsize>(cellBytes))) {
-      ic->commandLine->logError("Legacy save is truncated");
-      return false;
-    }
-    const std::int64_t originX = static_cast<std::int64_t>(fileWidth / 2);
-    const std::int64_t originY = static_cast<std::int64_t>(fileHeight / 2);
-    for (int y = 0; y < fileHeight; ++y) {
-      for (int x = 0; x < fileWidth; ++x) {
-        const unsigned char state =
-          loadedCells[static_cast<std::size_t>(y) *
-                        static_cast<std::size_t>(fileWidth) +
-                      static_cast<std::size_t>(x)];
-        if (state != SparseCellGrid::BackgroundState) {
-          loadedGrid->setCell(
-            CellAddress{ static_cast<std::int64_t>(x) - originX,
-                         static_cast<std::int64_t>(y) - originY },
-            state);
-        }
-      }
-    }
-  }
-
-  if (!CellContext::IsKnownModeString(ruleString)) {
-    ic->commandLine->logError("Save uses unsupported ruleset: " + ruleString);
-    return false;
-  }
-
-  // All parsing and allocation above completed against temporary state.
+  // All parsing and allocation completed against temporary state.
   prepareGridMutation();
-  if ((cellContext->getWorldChunkWidth() != loadedWorldChunkWidth ||
-       cellContext->getWorldChunkHeight() != loadedWorldChunkHeight) &&
-      !cellContext->resetWorld(loadedWorldChunkWidth, loadedWorldChunkHeight)) {
-    ic->commandLine->logError("Unable to allocate the saved world topology");
+  if ((cellContext->getWorldChunkWidth() != doc.worldChunkWidth ||
+       cellContext->getWorldChunkHeight() != doc.worldChunkHeight) &&
+      !cellContext->resetWorld(doc.worldChunkWidth, doc.worldChunkHeight)) {
+    if (ic != nullptr && ic->commandLine != nullptr) {
+      ic->commandLine->logError("Unable to allocate the saved world topology");
+    }
     return false;
   }
-  cellContext->setRuleSet(ruleString);
-  cellContext->getGrid()->swap(*loadedGrid);
+  cellContext->setRuleSet(doc.ruleString);
+  if (doc.grid != nullptr) {
+    cellContext->getGrid()->swap(*doc.grid);
+  }
   simulationGeneration = 0;
   cellContext->getCanvasView()->rebuildPalette(cellContext->getRuleSet());
-  if (restoreCamera) {
-    ic->camera->SetPositionPrecise(savedCameraX, savedCameraY);
-    ic->camera->SetZoom(static_cast<float>(savedCameraZoom));
-  } else {
-    ic->camera->Reset();
+  if (ic != nullptr && ic->camera != nullptr) {
+    if (doc.restoreCamera) {
+      ic->camera->SetPositionPrecise(doc.cameraX, doc.cameraY);
+      ic->camera->SetZoom(static_cast<float>(doc.cameraZoom));
+    } else {
+      ic->camera->Reset();
+    }
   }
   updateVisualTargets();
   cellContext->getCanvasView()->snapVisualToTargets();

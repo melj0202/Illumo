@@ -1,10 +1,14 @@
 #include "Game/BuiltinPatterns.h"
+#include "Game/CellClipboard.h"
 #include "Game/CellGameModule.h"
 #include "Game/CellPattern.h"
+#include "Game/IllumoCodec.h"
 #include "Game/PatternCodec.h"
 #include "Game/SparseCellGrid.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
+#include <filesystem>
+#include <limits>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Rendering/CommandQueue.h>
@@ -299,6 +303,113 @@ testInspectorTokens()
            "inspector frame draws");
 }
 
+static void
+testCellClipboardOperations()
+{
+  testSection("Editor: CellClipboard standalone operations");
+  CellClipboard cb;
+  testTrue(g, !cb.hasSelection(), "initially no selection");
+  testTrue(g, !cb.isSelecting(), "initially not selecting");
+
+  cb.setSelection(10, 20, 5, 8);
+  testTrue(g, cb.hasSelection(), "selection set");
+  std::int64_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+  cb.getNormalizedSelection(&x0, &y0, &x1, &y1);
+  testEqInt(g, static_cast<int>(x0), 5, "normalized x0");
+  testEqInt(g, static_cast<int>(y0), 8, "normalized y0");
+  testEqInt(g, static_cast<int>(x1), 10, "normalized x1");
+  testEqInt(g, static_cast<int>(y1), 20, "normalized y1");
+
+  cb.startSelection(2, 3);
+  testTrue(g, cb.isSelecting(), "isSelecting true during drag");
+  cb.updateSelectionDrag(7, 9);
+  cb.stopSelectionDrag();
+  testTrue(g, !cb.isSelecting(), "isSelecting false after stop");
+  cb.getNormalizedSelection(&x0, &y0, &x1, &y1);
+  testEqInt(g, static_cast<int>(x0), 2, "drag normalized x0");
+  testEqInt(g, static_cast<int>(y0), 3, "drag normalized y0");
+  testEqInt(g, static_cast<int>(x1), 7, "drag normalized x1");
+  testEqInt(g, static_cast<int>(y1), 9, "drag normalized y1");
+
+  cb.clearSelection();
+  testTrue(g, !cb.hasSelection(), "cleared selection");
+
+  CellPattern pattern;
+  pattern.setExtent(2, 2);
+  pattern.addCell(0, 0, 0);
+  cb.setClipboardPattern(pattern);
+  testTrue(g, cb.rotateCw(), "rotateCw succeeds");
+  testTrue(g, cb.flipHorizontal(), "flipHorizontal succeeds");
+  testTrue(g, cb.flipVertical(), "flipVertical succeeds");
+
+  // Extreme coordinate boundary protection
+  cb.setSelection(-5000000000000000000LL,
+                  -5000000000000000000LL,
+                  5000000000000000000LL,
+                  5000000000000000000LL);
+  SparseCellGrid grid;
+  CellPattern captured;
+  std::string error;
+  testTrue(g,
+           !cb.captureSelection(&grid, &captured, &error),
+           "extreme 64-bit span safely rejected without overflow");
+  testTrue(g,
+           error.find("exceeds") != std::string::npos,
+           "reports exceeds error for extreme span");
+
+  cb.setSelection(0,
+                  0,
+                  std::numeric_limits<std::int64_t>::max(),
+                  std::numeric_limits<std::int64_t>::max());
+  testTrue(g,
+           !cb.captureSelection(&grid, &captured, &error),
+           "INT64_MAX selection rejected");
+  testTrue(
+    g, !cb.fillSelection(&grid, nullptr, 0), "fillSelection on null rejected");
+}
+
+static void
+testIllumoCodecDirect()
+{
+  testSection("Persistence: IllumoCodec direct file serialization");
+  testTrue(g,
+           IllumoCodec::withIllumoExtension("world") == "world.illumo",
+           "adds .illumo extension");
+  testTrue(g,
+           IllumoCodec::withIllumoExtension("world.illumo") == "world.illumo",
+           "preserves existing .illumo extension");
+
+  IllumoDocument doc;
+  doc.version = IllumoCodec::kVersion;
+  doc.ruleString = "GAME_OF_LIFE";
+  doc.cameraX = 15.25;
+  doc.cameraY = -27.5;
+  doc.cameraZoom = 3.5;
+  doc.worldChunkWidth = 0;
+  doc.worldChunkHeight = 0;
+  SparseCellGrid grid;
+  grid.setCell(CellAddress{ 3, 4 }, 0);
+  doc.sourceGrid = &grid;
+
+  const std::string testFile = "direct-codec-test.illumo";
+  std::string error;
+  testTrue(
+    g, IllumoCodec::writeFile(testFile, doc, &error), "direct writeFile succeeds");
+
+  IllumoDocument loaded;
+  testTrue(
+    g, IllumoCodec::readFile(testFile, &loaded, &error), "direct readFile succeeds");
+  testEqInt(g, loaded.version, 3, "loaded version is 3");
+  testEqStr(g, loaded.ruleString, "GAME_OF_LIFE", "rule tag preserved");
+  testTrue(g, loaded.cameraX == 15.25, "cameraX preserved");
+  testTrue(g, loaded.cameraY == -27.5, "cameraY preserved");
+  testTrue(g, loaded.cameraZoom == 3.5, "cameraZoom preserved");
+  testTrue(g, loaded.grid != nullptr, "grid allocated");
+  testEqUChar(
+    g, loaded.grid->getCell(CellAddress{ 3, 4 }), 0, "saved cell preserved");
+  std::filesystem::remove(testFile);
+}
+
 static int
 runEditorCase(void (*testFunction)())
 {
@@ -327,4 +438,8 @@ registerEditorTests(IllumoTestRegistry& registry)
                []() { return runEditorCase(testCDoesNotClearWorld); });
   registry.add("IllumoGame.Editor.InspectorTokens",
                []() { return runEditorCase(testInspectorTokens); });
+  registry.add("IllumoGame.Editor.CellClipboardOperations",
+               []() { return runEditorCase(testCellClipboardOperations); });
+  registry.add("IllumoGame.Editor.IllumoCodecDirect",
+               []() { return runEditorCase(testIllumoCodecDirect); });
 }

@@ -1,4 +1,4 @@
-#include "BrainsBrainRuleSet.h"
+#include "BriansBrainRuleSet.h"
 #include <cstring>
 
 namespace {
@@ -8,7 +8,7 @@ const unsigned char CELL_ALIVE = 0;
 }
 
 unsigned char
-BrainsBrainRuleSet::nextState(unsigned char cell,
+BriansBrainRuleSet::nextState(unsigned char cell,
                               unsigned char aliveNeighbors) const
 {
   // Dead + 2 live → alive; alive → dying; dying → dead
@@ -25,7 +25,7 @@ BrainsBrainRuleSet::nextState(unsigned char cell,
 }
 
 void
-BrainsBrainRuleSet::evalCell(const unsigned char& target,
+BriansBrainRuleSet::evalCell(const unsigned char& target,
                              unsigned char dest[3]) const
 {
   if (target == CELL_DEAD) {

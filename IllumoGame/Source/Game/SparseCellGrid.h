@@ -333,7 +333,17 @@ private:
   using ChunkMap =
     std::unordered_map<ChunkAddress, ChunkData, ChunkAddressHash>;
   using ChunkNode = ChunkMap::node_type;
-  struct TargetResult;
+  struct TargetResult
+  {
+    ChunkAddress address;
+    CellArray cells{};
+    OccupancyMask occupied{};
+    OccupancyMask counted{};
+    OccupancyMask stateChanged{};
+    OccupancyMask countedChanged{};
+    bool hasNonBackground = false;
+    bool completeCells = false;
+  };
   struct ChunkMemoState;
 
   static constexpr std::size_t kParallelTargetThreshold = 32u;
