@@ -4,18 +4,22 @@ add_library(IllumoGameCore STATIC
   Source/Game/BuiltinPatterns.cpp
   Source/Game/Canvas.cpp
   Source/Game/CanvasView.cpp
+  Source/Game/CellClipboard.cpp
+  Source/Game/CellContext.cpp
   Source/Game/CellGameModule.cpp
   Source/Game/CellGrid.cpp
   Source/Game/CellPattern.cpp
   Source/Game/ConfigurationMenu.cpp
   Source/Game/Cursor.cpp
   Source/Game/ExitConfirmDialog.cpp
+  Source/Game/IllumoCodec.cpp
   Source/Game/IllumoGameApplication.cpp
   Source/Game/IllumoGameConfig.cpp
   Source/Game/MainMenuModule.cpp
   Source/Game/PatternCodec.cpp
   Source/Game/SimulationRunner.cpp
   Source/Game/SparseCellGrid.cpp
+  Source/Game/SparseWorkerPool.cpp
   Source/Rulesets/BriansBrainRuleSet.cpp
   Source/Rulesets/DayAndNightRuleSet.cpp
   Source/Rulesets/GameOfLifeRuleSet.cpp

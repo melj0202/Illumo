@@ -1,7 +1,7 @@
 // Headless cellular-automaton rules tests (no OpenGL window).
 
 #include "Game/SparseCellGrid.h"
-#include "Rulesets/BrainsBrainRuleSet.h"
+#include "Rulesets/BriansBrainRuleSet.h"
 #include "Rulesets/DayAndNightRuleSet.h"
 #include "Rulesets/GameOfLifeRuleSet.h"
 #include "Rulesets/HighlifeRuleSet.h"
@@ -151,7 +151,7 @@ testBriansBrainAliveBecomesDying()
   f.clearDead();
   f.setAlive(2, 2);
 
-  BrainsBrainRuleSet rules(f.canvas);
+  BriansBrainRuleSet rules(f.canvas);
   rules.calcGeneration(0, 0, 6, 6);
   // Isolated alive becomes dying (2)
   testEqUChar(g, f.at(2, 2), 2, "alive becomes dying");
@@ -406,7 +406,7 @@ testBriansBrainStateMachineAndColors()
 {
   testSection("Brian's Brain: state machine and colors");
   HeadlessCanvasFixture f(2, 2);
-  BrainsBrainRuleSet rules(f.canvas);
+  BriansBrainRuleSet rules(f.canvas);
   testEqUChar(
     g, rules.nextState(1, 2), 0, "dead with two neighbors becomes alive");
   testEqUChar(
@@ -472,7 +472,7 @@ testTransitionTableCacheAndEquivalence()
 
   GameOfLifeRuleSet gameOfLife(nullptr);
   SeedsRuleSet seeds(nullptr);
-  BrainsBrainRuleSet briansBrain(nullptr);
+  BriansBrainRuleSet briansBrain(nullptr);
   HighlifeRuleSet highlife(nullptr);
   DayAndNightRuleSet dayAndNight(nullptr);
   LifeWithoutDeathRuleSet lifeWithoutDeath(nullptr);

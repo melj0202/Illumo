@@ -1,4 +1,4 @@
-#include "BrainsBrainRuleSet.h"
+#include "BriansBrainRuleSet.h"
 #include "DayAndNightRuleSet.h"
 #include "GameOfLifeRuleSet.h"
 #include "HighlifeRuleSet.h"

@@ -1,5 +1,6 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Services/CommandLine.h>
+#include <Illumo/Services/CommandLineCore.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
@@ -503,6 +504,77 @@ testLoggerLevelsAndSinks()
            "file sink works without console");
 }
 
+static void
+testCommandLineCoreHeadless()
+{
+  testSection("CommandLineCore: headless parsing, editing, aliases, and execution");
+  EnvVars env;
+  CommandRegistry registry;
+  CommandLineCore core(&env, &registry, "HeadlessTest");
+
+  testTrue(g, core.getCurrentInput().empty(), "initially empty input");
+  testEqInt(g, static_cast<int>(core.getCursorPosition()), 0, "cursor at 0");
+  testTrue(g, !core.hasSelection(), "no selection initially");
+
+  // Character editing
+  core.AddCharacter('e');
+  core.AddCharacter('c');
+  core.AddCharacter('h');
+  core.AddCharacter('o');
+  core.AddCharacter(' ');
+  core.AddCharacter('h');
+  core.AddCharacter('e');
+  core.AddCharacter('l');
+  core.AddCharacter('l');
+  core.AddCharacter('o');
+  testTrue(g, core.getCurrentInput() == "echo hello", "input populated");
+  testEqInt(g, static_cast<int>(core.getCursorPosition()), 10, "cursor at 10");
+
+  core.HandleBackspace();
+  testTrue(g, core.getCurrentInput() == "echo hell", "backspace works");
+  core.AddCharacter('o');
+
+  // Command execution
+  core.ExecuteCommand();
+  testTrue(g, core.getCurrentInput().empty(), "input cleared after execution");
+  testEqInt(g, static_cast<int>(core.getHistory().size()) >= 3, 1, "history has new items");
+
+  // Aliases
+  core.SetAlias("greet", "set greeting welcome");
+  testTrue(g, core.HasAlias("greet"), "alias registered");
+  testTrue(g, core.GetAlias("greet") == "set greeting welcome", "alias expansion retrieved");
+
+  for (char c : std::string("greet")) {
+    core.AddCharacter(static_cast<unsigned int>(c));
+  }
+  core.ExecuteCommand();
+  testTrue(g, env.getVar("greeting").value == "welcome", "alias executed and set env var");
+
+  core.RemoveAlias("greet");
+  testTrue(g, !core.HasAlias("greet"), "alias removed");
+
+  // Parsing helpers
+  std::vector<std::string> args = core.ParseCommandArgs("foo \"bar baz\" qux", " ");
+  testEqInt(g, static_cast<int>(args.size()), 3, "parsed 3 quoted args");
+  testTrue(g, args[1] == "bar baz", "quoted arg preserved");
+
+  std::vector<std::string> chains = core.SplitCommandChain("cmd1; cmd2; cmd3");
+  testEqInt(g, static_cast<int>(chains.size()), 3, "split 3 chained commands");
+
+  // Deep/recursive alias depth limit
+  core.SetAlias("loopA", "loopB");
+  core.SetAlias("loopB", "loopA");
+  core.ExecuteSingleCommand("loopA");
+  bool foundRecursionLimit = false;
+  for (const CommandLineCore::historyBuffer& line : core.getHistory()) {
+    if (line.content.find("depth limit exceeded") != std::string::npos) {
+      foundRecursionLimit = true;
+      break;
+    }
+  }
+  testTrue(g, foundRecursionLimit, "recursive alias depth limit safely caught");
+}
+
 static int
 runServiceCase(void (*testFunction)())
 {
@@ -534,4 +606,6 @@ registerServiceTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Logger.LevelsAndSinks",
                []() { return runServiceCase(testLoggerLevelsAndSinks); });
+  registry.add("Illumo.CommandLineCore.Headless",
+               []() { return runServiceCase(testCommandLineCoreHeadless); });
 }

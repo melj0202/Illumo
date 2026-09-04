@@ -5,7 +5,7 @@
 #ifndef NDEBUG
 #include <Illumo/Engine/DebugModule.h>
 #endif
-#include "Rendering/PresentationTiming.h"
+#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Platform/PlatformTimer.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>

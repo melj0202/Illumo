@@ -123,7 +123,19 @@ testFileRoundTrip()
   node.name = "Solo";
   node.kind = SceneNodeKind::SolidCube;
   document.nodes.push_back(node);
-  const std::filesystem::path path = "codec-roundtrip.ilsc";
+  const std::filesystem::path path =
+    std::filesystem::temp_directory_path() / "codec-roundtrip.ilsc";
+  struct TempFileGuard
+  {
+    std::filesystem::path file;
+    ~TempFileGuard()
+    {
+      std::error_code ec;
+      std::filesystem::remove(file, ec);
+    }
+  } guard{ path };
+  std::error_code fsError;
+  std::filesystem::remove(path, fsError);
   std::string error;
   testTrue(g,
            IlscCodec::writeFile(path.string(), document, &error),

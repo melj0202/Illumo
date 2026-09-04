@@ -1,7 +1,13 @@
 #include "RuleSet.h"
+#include "Game/CellGrid.h"
 #include <thread>
 #include <tracy/Tracy.hpp>
 #include <vector>
+
+RuleSet::RuleSet(CellGrid* targetCanvas)
+  : canvas(targetCanvas)
+{
+}
 
 int RuleSet::workerOverride = 0;
 

@@ -16,35 +16,6 @@
 #include <vector>
 
 namespace {
-struct BuiltInCommandHelp
-{
-  const char* name;
-  const char* usage;
-  const char* description;
-};
-
-const BuiltInCommandHelp kBuiltInCommands[] = {
-  { "alias", "alias [<name> <command>]", "Create or list command aliases" },
-  { "clear", "clear", "Clear console output" },
-  { "close", "close", "Close the console" },
-  { "echo", "echo <text>", "Print text to the console" },
-  { "fps", "fps [on|off|toggle]", "Show or change the FPS overlay" },
-  { "fullscreen",
-    "fullscreen [on|off|toggle]",
-    "Show or change fullscreen mode" },
-  { "get", "get <variable>", "Read an environment variable" },
-  { "help", "help [command]", "Show commands or detailed help" },
-  { "history", "history [filter|clear]", "Search or clear command history" },
-  { "quit", "quit", "Exit the application" },
-  { "repeat", "repeat <count> <command>", "Execute command multiple times" },
-  { "set",
-    "set <variable> <value>",
-    "Create or update an environment variable" },
-  { "sysinfo", "sysinfo", "Display system telemetry and statistics" },
-  { "toggle", "toggle <variable>", "Toggle a boolean environment variable" },
-  { "unalias", "unalias <name>", "Remove a command alias" },
-  { "vars", "vars [filter]", "List environment variables, optionally filtered" }
-};
 
 std::string
 lowerCopy(const std::string& text)
@@ -68,27 +39,6 @@ upperCopy(const std::string& text)
   return upper;
 }
 
-static bool
-isRestartRequiredVariable(const std::string& key)
-{
-  const std::string lower = lowerCopy(key);
-  return lower == "msaa" || lower == "winx" || lower == "winy" ||
-         lower == "graphicsapi";
-}
-
-std::string
-joinArguments(const std::vector<std::string>& args, std::size_t first)
-{
-  std::string result;
-  for (std::size_t i = first; i < args.size(); ++i) {
-    if (!result.empty()) {
-      result += " ";
-    }
-    result += args[i];
-  }
-  return result;
-}
-
 bool
 parseLongStrict(const std::string& text, long* value)
 {
@@ -106,53 +56,6 @@ parseLongStrict(const std::string& text, long* value)
   } catch (...) {
     return false;
   }
-}
-
-bool
-parseBoolValue(const std::string& text, bool* value)
-{
-  if (value == nullptr) {
-    return false;
-  }
-  const std::string lowered = lowerCopy(text);
-  if (lowered == "on" || lowered == "true" || lowered == "yes" ||
-      lowered == "1") {
-    *value = true;
-    return true;
-  }
-  if (lowered == "off" || lowered == "false" || lowered == "no" ||
-      lowered == "0") {
-    *value = false;
-    return true;
-  }
-  return false;
-}
-
-const BuiltInCommandHelp*
-findBuiltInCommand(const std::string& name)
-{
-  for (const BuiltInCommandHelp& command : kBuiltInCommands) {
-    if (name == command.name) {
-      return &command;
-    }
-  }
-  return nullptr;
-}
-
-std::string
-findEnvironmentKey(IEnvVars* envVars, const std::string& requested)
-{
-  if (envVars == nullptr) {
-    return "";
-  }
-  const std::string loweredRequested = lowerCopy(requested);
-  const std::unordered_map<std::string, EnvVar>& variables = envVars->getVars();
-  for (const std::pair<const std::string, EnvVar>& variable : variables) {
-    if (lowerCopy(variable.first) == loweredRequested) {
-      return variable.first;
-    }
-  }
-  return "";
 }
 
 static constexpr float kConsoleFontSize = 14.0f;
@@ -254,29 +157,9 @@ CommandLine::CommandLine(IEnvVars* vars,
                          IRenderWindow* win,
                          Renderer* rendererIn,
                          const std::string& applicationNameIn)
-  : envVars(vars)
-  , window(win)
-  , commandRegistry(commandRegistry)
-  , renderer(rendererIn)
-  , applicationName(applicationNameIn.empty() ? "Illumo" : applicationNameIn)
-  , visual(kUiQuadCap)
-  , gpuReady(false)
-  , animationProgress(0.0f)
-  , lastAnimTime(std::chrono::high_resolution_clock::now())
-  , wrappedHistoryWidth(-1.0f)
-  , wrappedHistoryTotalLines(0)
-  , compositionDirty(true)
-  , composedCaretPhase(-1)
-  , composedPulseStep(-1)
-  , composedScrollOffset(-1)
-  , composedWindowW(-1)
-  , composedWindowH(-1)
-  , composedPanelX(-1.0f)
-  , composedPanelY(-1.0f)
-  , composedPanelW(-1.0f)
-  , composedPanelH(-1.0f)
-  , cursorPosition(0)
-  , selectionAnchor(0)
+  : CommandLineCore(vars, commandRegistry, applicationNameIn)
+  , scrollOffset(0)
+  , consoleInitialized(false)
   , isDraggingScrollbar(false)
   , dragStartY(0.0f)
   , dragStartScrollOffset(0)
@@ -298,19 +181,26 @@ CommandLine::CommandLine(IEnvVars* vars,
   , currentPanelY(-1.0f)
   , currentPanelW(-1.0f)
   , currentPanelH(-1.0f)
-  , parseArena(16 * 1024)
-  , aliasExpandStack(4 * 1024)
+  , window(win)
+  , renderer(rendererIn)
+  , visual(kUiQuadCap)
+  , gpuReady(false)
+  , animationProgress(0.0f)
+  , lastAnimTime(std::chrono::high_resolution_clock::now())
+  , wrappedHistoryWidth(-1.0f)
+  , wrappedHistoryTotalLines(0)
+  , compositionDirty(true)
+  , composedCaretPhase(-1)
+  , composedPulseStep(-1)
+  , composedScrollOffset(-1)
+  , composedWindowW(-1)
+  , composedWindowH(-1)
+  , composedPanelX(-1.0f)
+  , composedPanelY(-1.0f)
+  , composedPanelW(-1.0f)
+  , composedPanelH(-1.0f)
 {
   isOpen = false;
-  currentInput = "";
-  tempInput = "";
-  completionHint = "";
-  history = {
-    { 240, 240, 240, 255, applicationName + " Developer Console" },
-    { 240, 240, 240, 255, "Press ` to toggle, type 'help' for commands" }
-  };
-
-  historyIndex = 0;
   scrollOffset = 0;
   consoleInitialized = false;
 
@@ -502,1074 +392,79 @@ CommandLine::ensureWrapCache(float width) const
 }
 
 void
-CommandLine::clearCompletionHint()
+CommandLine::onInputChanged()
 {
-  completionHint.clear();
-}
-
-void
-CommandLine::resetCursorToEnd()
-{
-  cursorPosition = currentInput.size();
-  selectionAnchor = cursorPosition;
-}
-
-void
-CommandLine::eraseSelection()
-{
-  if (!hasSelection()) {
-    return;
-  }
-
-  std::size_t start = std::min(cursorPosition, selectionAnchor);
-  std::size_t end = std::max(cursorPosition, selectionAnchor);
-  currentInput.erase(start, end - start);
-  cursorPosition = start;
-  selectionAnchor = start;
-}
-
-std::size_t
-CommandLine::findPreviousWordBoundary() const
-{
-  std::size_t position = cursorPosition;
-  while (position > 0 &&
-         std::isspace(static_cast<unsigned char>(currentInput[position - 1]))) {
-    --position;
-  }
-  while (position > 0 && !std::isspace(static_cast<unsigned char>(
-                           currentInput[position - 1]))) {
-    --position;
-  }
-  return position;
-}
-
-std::size_t
-CommandLine::findNextWordBoundary() const
-{
-  std::size_t position = cursorPosition;
-  while (position < currentInput.size() &&
-         !std::isspace(static_cast<unsigned char>(currentInput[position]))) {
-    ++position;
-  }
-  while (position < currentInput.size() &&
-         std::isspace(static_cast<unsigned char>(currentInput[position]))) {
-    ++position;
-  }
-  return position;
-}
-
-void
-CommandLine::AddCharacter(unsigned int codepoint)
-{
-  std::size_t selectedCharacters =
-    hasSelection() ? std::max(cursorPosition, selectionAnchor) -
-                       std::min(cursorPosition, selectionAnchor)
-                   : 0;
-  if (currentInput.size() - selectedCharacters < MAX_CHARS_PER_LINE - 1) {
-    if (codepoint >= 32 && codepoint <= 126) {
-      eraseSelection();
-      currentInput.insert(cursorPosition, 1, static_cast<char>(codepoint));
-      ++cursorPosition;
-      selectionAnchor = cursorPosition;
-      clearCompletionHint();
-      markCompositionDirty();
-    }
-  }
-}
-
-void
-CommandLine::HandleBackspace(bool byWord)
-{
-  if (hasSelection()) {
-    eraseSelection();
-    clearCompletionHint();
-    markCompositionDirty();
-    return;
-  }
-  if (cursorPosition == 0) {
-    return;
-  }
-
-  std::size_t eraseFrom =
-    byWord ? findPreviousWordBoundary() : cursorPosition - 1;
-  currentInput.erase(eraseFrom, cursorPosition - eraseFrom);
-  cursorPosition = eraseFrom;
-  selectionAnchor = cursorPosition;
-  clearCompletionHint();
   markCompositionDirty();
 }
 
 void
-CommandLine::HandleDelete(bool byWord)
+CommandLine::onHistoryAppended(const historyBuffer& item, bool erasedFront)
 {
-  if (hasSelection()) {
-    eraseSelection();
-    clearCompletionHint();
-    markCompositionDirty();
-    return;
+  (void)item;
+  if (erasedFront && !wrappedHistory.empty()) {
+    wrappedHistoryTotalLines -= static_cast<int>(wrappedHistory.front().size());
+    wrappedHistory.erase(wrappedHistory.begin());
   }
-  if (cursorPosition >= currentInput.size()) {
-    return;
+  if (wrappedHistoryWidth > 0.0f &&
+      wrappedHistory.size() + 1 == history.size()) {
+    std::vector<std::string> lines;
+    wrapTextToWidth(history.back().content, wrappedHistoryWidth, &lines);
+    wrappedHistoryTotalLines += static_cast<int>(lines.size());
+    wrappedHistory.push_back(std::move(lines));
+  } else if (wrappedHistory.size() != history.size()) {
+    wrappedHistoryWidth = -1.0f;
   }
-
-  std::size_t eraseTo = byWord ? findNextWordBoundary() : cursorPosition + 1;
-  currentInput.erase(cursorPosition, eraseTo - cursorPosition);
-  selectionAnchor = cursorPosition;
-  clearCompletionHint();
   markCompositionDirty();
 }
 
 void
-CommandLine::MoveCursorLeft(bool byWord, bool select)
+CommandLine::onHistoryCleared()
 {
-  if (!select && hasSelection()) {
-    cursorPosition = std::min(cursorPosition, selectionAnchor);
-    selectionAnchor = cursorPosition;
-    markCompositionDirty();
-    return;
-  }
-  std::size_t newPosition = byWord
-                              ? findPreviousWordBoundary()
-                              : (cursorPosition > 0 ? cursorPosition - 1 : 0);
-  if (!select) {
-    selectionAnchor = newPosition;
-  }
-  cursorPosition = newPosition;
+  invalidateWrapCache();
   markCompositionDirty();
 }
 
 void
-CommandLine::MoveCursorRight(bool byWord, bool select)
+CommandLine::onCloseRequested()
 {
-  if (!select && cursorPosition == currentInput.size()) {
-    std::string ghost = getGhostSuggestion();
-    if (!ghost.empty()) {
-      currentInput += ghost;
-      cursorPosition = currentInput.size();
-      selectionAnchor = cursorPosition;
-      markCompositionDirty();
-      return;
-    }
-  }
-  if (!select && hasSelection()) {
-    cursorPosition = std::max(cursorPosition, selectionAnchor);
-    selectionAnchor = cursorPosition;
-    markCompositionDirty();
-    return;
-  }
-  std::size_t newPosition =
-    byWord ? findNextWordBoundary()
-           : std::min(cursorPosition + 1, currentInput.size());
-  if (!select) {
-    selectionAnchor = newPosition;
-  }
-  cursorPosition = newPosition;
+  isOpen = false;
   markCompositionDirty();
 }
 
 void
-CommandLine::MoveCursorHome(bool select)
+CommandLine::onQuitRequested()
 {
-  if (!select) {
-    selectionAnchor = 0;
-  }
-  cursorPosition = 0;
-  markCompositionDirty();
-}
-
-void
-CommandLine::MoveCursorEnd(bool select)
-{
-  if (!select) {
-    selectionAnchor = currentInput.size();
-  }
-  cursorPosition = currentInput.size();
-  markCompositionDirty();
-}
-
-void
-CommandLine::SelectAll()
-{
-  selectionAnchor = 0;
-  cursorPosition = currentInput.size();
-  markCompositionDirty();
-}
-
-void
-CommandLine::ClearInput()
-{
-  currentInput.clear();
-  resetCursorToEnd();
-  clearCompletionHint();
-  markCompositionDirty();
-}
-
-void
-CommandLine::logNormal(const std::string& str)
-{
-  AppendString(255, 255, 255, 255, str);
-}
-void
-CommandLine::logError(const std::string& str)
-{
-  AppendString(255, 100, 100, 255, "ERROR: " + str);
-  // AppendStringLn(255, 255, 255, 255, str);
-}
-void
-CommandLine::logWarning(const std::string& str)
-{
-  AppendString(255, 220, 100, 255, "WARNING: " + str);
-  // AppendStringLn(255, 255, 255, 255, str);
-}
-void
-CommandLine::logSuccess(const std::string& str)
-{
-  AppendString(100, 255, 100, 255, "SUCCESS: " + str);
-  // AppendStringLn(255, 255, 255, 255, str);
-}
-
-void
-CommandLine::logTrace(const std::string& str)
-{
-  AppendString(206, 0, 252, 255, "TRACE: " + str);
-  // AppendStringLn(255, 255, 255, 255, str);
-}
-
-bool
-CommandLine::parseArgsInto(const std::string& text,
-                           std::vector<std::string>& outArgs) const
-{
-  outArgs.clear();
-  std::string currentArg;
-  char quote = '\0';
-  bool escaping = false;
-  bool tokenStarted = false;
-  bool arenaOk = true;
-
-  auto flushToken = [&]() {
-    if (!tokenStarted && currentArg.empty()) {
-      return;
-    }
-    char* staged = parseArena.AllocateCString(currentArg);
-    if (staged != nullptr) {
-      outArgs.push_back(std::string(staged));
-    } else {
-      arenaOk = false;
-      outArgs.push_back(currentArg);
-    }
-    currentArg.clear();
-    tokenStarted = false;
-  };
-
-  for (char character : text) {
-    if (escaping) {
-      currentArg += character;
-      escaping = false;
-      tokenStarted = true;
-      continue;
-    }
-    if (character == '\\') {
-      escaping = true;
-      tokenStarted = true;
-      continue;
-    }
-    if (quote != '\0') {
-      if (character == quote) {
-        quote = '\0';
-      } else {
-        currentArg += character;
-      }
-      tokenStarted = true;
-      continue;
-    }
-    if (character == '\'' || character == '"') {
-      quote = character;
-      tokenStarted = true;
-      continue;
-    }
-    if (character == ' ' || character == '\t') {
-      flushToken();
-      continue;
-    }
-    currentArg += character;
-    tokenStarted = true;
-  }
-  flushToken();
-  return arenaOk;
-}
-
-bool
-CommandLine::splitChainInto(const std::string& text,
-                            std::vector<std::string>& outCommands) const
-{
-  outCommands.clear();
-  std::string currentCmd;
-  char quote = '\0';
-  bool escaping = false;
-  bool arenaOk = true;
-
-  auto flushCommand = [&]() {
-    std::size_t firstNonSpace = currentCmd.find_first_not_of(" \t\r\n");
-    if (firstNonSpace == std::string::npos) {
-      currentCmd.clear();
-      return;
-    }
-    char* staged = parseArena.AllocateCString(currentCmd);
-    if (staged != nullptr) {
-      outCommands.push_back(std::string(staged));
-    } else {
-      arenaOk = false;
-      outCommands.push_back(currentCmd);
-    }
-    currentCmd.clear();
-  };
-
-  for (std::size_t i = 0; i < text.size(); ++i) {
-    char character = text[i];
-    if (escaping) {
-      currentCmd += character;
-      escaping = false;
-      continue;
-    }
-    if (character == '\\') {
-      escaping = true;
-      currentCmd += character;
-      continue;
-    }
-    if (quote != '\0') {
-      if (character == quote) {
-        quote = '\0';
-      }
-      currentCmd += character;
-      continue;
-    }
-    if (character == '\'' || character == '"') {
-      quote = character;
-      currentCmd += character;
-      continue;
-    }
-    if (character == ';') {
-      flushCommand();
-      continue;
-    }
-    currentCmd += character;
-  }
-  flushCommand();
-  return arenaOk;
-}
-
-std::vector<std::string>
-CommandLine::ParseCommandArgs(const std::string& text,
-                              const std::string& delim) const
-{
-  (void)delim;
-  std::vector<std::string> args;
-  std::string currentArg;
-  char quote = '\0';
-  bool escaping = false;
-  bool tokenStarted = false;
-
-  for (char character : text) {
-    if (escaping) {
-      currentArg += character;
-      escaping = false;
-      tokenStarted = true;
-      continue;
-    }
-    if (character == '\\') {
-      escaping = true;
-      tokenStarted = true;
-      continue;
-    }
-    if (quote != '\0') {
-      if (character == quote) {
-        quote = '\0';
-      } else {
-        currentArg += character;
-      }
-      tokenStarted = true;
-      continue;
-    }
-    if (character == '\'' || character == '"') {
-      quote = character;
-      tokenStarted = true;
-      continue;
-    }
-    if (delim.find(character) != std::string::npos) {
-      if (tokenStarted) {
-        args.push_back(currentArg);
-        currentArg.clear();
-        tokenStarted = false;
-      }
-      continue;
-    }
-    currentArg += character;
-    tokenStarted = true;
-  }
-
-  if (escaping) {
-    currentArg += '\\';
-  }
-  if (tokenStarted) {
-    args.push_back(currentArg);
-  }
-  return args;
-}
-
-std::vector<std::string>
-CommandLine::SplitCommandChain(const std::string& text) const
-{
-  std::vector<std::string> commands;
-  std::string currentCmd;
-  char quote = '\0';
-  bool escaping = false;
-
-  for (std::size_t i = 0; i < text.size(); ++i) {
-    char character = text[i];
-    if (escaping) {
-      currentCmd += character;
-      escaping = false;
-      continue;
-    }
-    if (character == '\\') {
-      escaping = true;
-      currentCmd += character;
-      continue;
-    }
-    if (quote != '\0') {
-      if (character == quote) {
-        quote = '\0';
-      }
-      currentCmd += character;
-      continue;
-    }
-    if (character == '\'' || character == '"') {
-      quote = character;
-      currentCmd += character;
-      continue;
-    }
-    if (character == ';') {
-      std::size_t firstNonSpace = currentCmd.find_first_not_of(" \t\r\n");
-      if (firstNonSpace != std::string::npos) {
-        commands.push_back(currentCmd);
-      }
-      currentCmd.clear();
-      continue;
-    }
-    currentCmd += character;
-  }
-
-  std::size_t firstNonSpace = currentCmd.find_first_not_of(" \t\r\n");
-  if (firstNonSpace != std::string::npos) {
-    commands.push_back(currentCmd);
-  }
-  return commands;
-}
-
-void
-CommandLine::SetAlias(const std::string& name, const std::string& expansion)
-{
-  if (!name.empty()) {
-    aliases[lowerCopy(name)] = expansion;
-  }
-}
-
-void
-CommandLine::RemoveAlias(const std::string& name)
-{
-  aliases.erase(lowerCopy(name));
-}
-
-bool
-CommandLine::HasAlias(const std::string& name) const
-{
-  return aliases.find(lowerCopy(name)) != aliases.end();
-}
-
-std::string
-CommandLine::GetAlias(const std::string& name) const
-{
-  std::unordered_map<std::string, std::string>::const_iterator it =
-    aliases.find(lowerCopy(name));
-  if (it != aliases.end()) {
-    return it->second;
-  }
-  return "";
-}
-
-std::string
-CommandLine::getGhostSuggestion() const
-{
-  if (currentInput.empty() || cursorPosition != currentInput.size() ||
-      hasSelection()) {
-    return "";
-  }
-
-  std::size_t tokenStart = cursorPosition;
-  while (tokenStart > 0 && !std::isspace(static_cast<unsigned char>(
-                             currentInput[tokenStart - 1]))) {
-    --tokenStart;
-  }
-  const std::string prefix =
-    currentInput.substr(tokenStart, cursorPosition - tokenStart);
-  if (prefix.empty()) {
-    return "";
-  }
-
-  const std::string leadingText = currentInput.substr(0, tokenStart);
-  std::vector<std::string> candidates = getCompletionCandidates(leadingText);
-  for (const std::string& candidate : candidates) {
-    if (candidate.size() > prefix.size()) {
-      bool matchesPrefix = true;
-      for (std::size_t i = 0; i < prefix.size(); ++i) {
-        if (std::tolower(static_cast<unsigned char>(candidate[i])) !=
-            std::tolower(static_cast<unsigned char>(prefix[i]))) {
-          matchesPrefix = false;
-          break;
-        }
-      }
-      if (matchesPrefix) {
-        return candidate.substr(prefix.size());
-      }
-    }
-  }
-  return "";
-}
-
-std::string
-CommandLine::getParameterHint(const std::string& inputLine) const
-{
-  if (inputLine.empty()) {
-    return "";
-  }
-  parseArena.Clear();
-  std::vector<std::string> args;
-  parseArgsInto(inputLine, args);
-  if (args.empty()) {
-    return "";
-  }
-  const std::string cmd = lowerCopy(args[0]);
-  const BuiltInCommandHelp* builtIn = findBuiltInCommand(cmd);
-  if (builtIn != nullptr) {
-    return std::string("Usage: ") + builtIn->usage;
-  }
-  if (commandRegistry != nullptr && commandRegistry->HasCommand(cmd)) {
-    std::string usage = commandRegistry->GetCommandUsage(cmd);
-    if (!usage.empty()) {
-      return std::string("Usage: ") + usage;
-    }
-  }
-  return "";
-}
-
-std::vector<std::string>
-CommandLine::getCompletionCandidates(const std::string& leadingText) const
-{
-  std::vector<std::string> candidates;
-  std::vector<std::string> leadingArgs;
-  parseArgsInto(leadingText, leadingArgs);
-  if (leadingArgs.empty()) {
-    for (const BuiltInCommandHelp& command : kBuiltInCommands) {
-      candidates.push_back(command.name);
-    }
-
-    if (commandRegistry != nullptr) {
-      std::vector<std::string> registeredCommands =
-        commandRegistry->GetCommandNames();
-      candidates.insert(
-        candidates.end(), registeredCommands.begin(), registeredCommands.end());
-    }
-    const std::unordered_map<std::string, EnvVar>& vars = envVars->getVars();
-    for (const std::pair<const std::string, EnvVar>& variable : vars) {
-      candidates.push_back(variable.first);
-    }
-    for (const std::pair<const std::string, std::string>& aliasItem : aliases) {
-      candidates.push_back(aliasItem.first);
-    }
-  } else {
-    const std::string command = lowerCopy(leadingArgs[0]);
-    if (commandRegistry != nullptr && commandRegistry->HasCommand(command)) {
-      candidates = commandRegistry->GetCommandCompletions(command);
-    } else if (command == "get" || command == "set" || command == "toggle" ||
-               command == "vars") {
-      const std::unordered_map<std::string, EnvVar>& vars = envVars->getVars();
-      for (const std::pair<const std::string, EnvVar>& variable : vars) {
-        candidates.push_back(variable.first);
-      }
-    } else if (command == "fps" || command == "fullscreen") {
-      candidates = { "off", "on", "toggle" };
-    }
-  }
-
-  std::sort(candidates.begin(), candidates.end());
-  candidates.erase(std::unique(candidates.begin(), candidates.end()),
-                   candidates.end());
-  return candidates;
-}
-
-void
-CommandLine::Complete()
-{
-  parseArena.Clear();
-
-  std::size_t tokenStart = cursorPosition;
-  while (tokenStart > 0 && !std::isspace(static_cast<unsigned char>(
-                             currentInput[tokenStart - 1]))) {
-    --tokenStart;
-  }
-  const std::string prefix =
-    currentInput.substr(tokenStart, cursorPosition - tokenStart);
-  const std::string leadingText = currentInput.substr(0, tokenStart);
-  std::vector<std::string> candidates = getCompletionCandidates(leadingText);
-  std::vector<std::string> matches;
-  for (const std::string& candidate : candidates) {
-    if (candidate.size() < prefix.size()) {
-      continue;
-    }
-
-    bool matchesPrefix = true;
-    for (std::size_t i = 0; i < prefix.size(); ++i) {
-      if (std::tolower(static_cast<unsigned char>(candidate[i])) !=
-          std::tolower(static_cast<unsigned char>(prefix[i]))) {
-        matchesPrefix = false;
-        break;
-      }
-    }
-    if (matchesPrefix) {
-      matches.push_back(candidate);
-    }
-  }
-
-  if (matches.empty()) {
-    completionHint = "No completion matches '" + prefix + "'";
-    markCompositionDirty();
-    return;
-  }
-
-  std::string replacement = matches[0];
-  for (std::size_t i = 1; i < matches.size(); ++i) {
-    std::size_t commonLength = 0;
-    while (commonLength < replacement.size() &&
-           commonLength < matches[i].size() &&
-           replacement[commonLength] == matches[i][commonLength]) {
-      ++commonLength;
-    }
-    replacement.resize(commonLength);
-  }
-
-  if (replacement.size() > prefix.size() || matches.size() == 1) {
-    currentInput.replace(tokenStart, cursorPosition - tokenStart, replacement);
-    cursorPosition = tokenStart + replacement.size();
-    selectionAnchor = cursorPosition;
-  }
-
-  if (matches.size() == 1) {
-    if (tokenStart == 0 && cursorPosition == currentInput.size()) {
-      currentInput += " ";
-      ++cursorPosition;
-      selectionAnchor = cursorPosition;
-    }
-    completionHint = "Completed: " + matches[0];
-    markCompositionDirty();
-    return;
-  }
-
-  completionHint = "Matches: ";
-  const std::size_t visibleMatches =
-    std::min(matches.size(), static_cast<std::size_t>(4));
-  for (std::size_t i = 0; i < visibleMatches; ++i) {
-    if (i > 0) {
-      completionHint += "  ";
-    }
-    completionHint += matches[i];
-  }
-  if (matches.size() > visibleMatches) {
-    completionHint += "  ...";
-  }
-  markCompositionDirty();
-}
-void
-CommandLine::ExecuteCommand()
-{
-  if (currentInput.empty()) {
-    return;
-  }
-
-  AddToHistory(currentInput);
-
-  parseArena.Clear();
-  aliasExpandStack.Clear();
-
-  std::vector<std::string> subCommands;
-  splitChainInto(currentInput, subCommands);
-  ClearInput();
-  scrollOffset = 0;
-
-  for (const std::string& singleCmd : subCommands) {
-    ExecuteSingleCommand(singleCmd, 0);
-  }
-
-  parseArena.Clear();
-  aliasExpandStack.Clear();
-}
-
-void
-CommandLine::ExecuteSingleCommand(const std::string& singleCmd,
-                                  int expansionDepth)
-{
-  if (expansionDepth > 8) {
-    logError("Alias expansion depth limit exceeded");
-    return;
-  }
-
-  std::vector<std::string> commandParts;
-  parseArgsInto(singleCmd, commandParts);
-  if (commandParts.empty()) {
-    return;
-  }
-
-  if (expansionDepth == 0) {
-    AppendString(100, 200, 255, 255, "> " + singleCmd);
-  }
-
-  const std::string rawCommand = commandParts[0];
-  const std::string cmd = lowerCopy(rawCommand);
-  std::vector<std::string> args(commandParts.begin() + 1, commandParts.end());
-
-  if (HasAlias(cmd)) {
-    std::string expanded = GetAlias(cmd);
-    if (!args.empty()) {
-      expanded += " " + joinArguments(args, 0);
-    }
-    // Nested eval: stage expanded text on the LIFO stack so each expansion
-    // depth frees in reverse order after its children return.
-    char* stacked = aliasExpandStack.AllocateCString(expanded);
-    const char* expandedView = stacked != nullptr ? stacked : expanded.c_str();
-    std::vector<std::string> chained;
-    splitChainInto(std::string(expandedView), chained);
-    for (const std::string& subCmd : chained) {
-      ExecuteSingleCommand(subCmd, expansionDepth + 1);
-    }
-    if (stacked != nullptr) {
-      aliasExpandStack.FreeTop(stacked);
-    }
-    return;
-  }
-
-  if (cmd == "alias") {
-    if (args.empty()) {
-      if (aliases.empty()) {
-        logNormal("No aliases defined.");
-      } else {
-        logNormal("Defined aliases:");
-        std::vector<std::pair<std::string, std::string>> sortedAliases(
-          aliases.begin(), aliases.end());
-        std::sort(sortedAliases.begin(), sortedAliases.end());
-        for (const std::pair<std::string, std::string>& aliasItem :
-             sortedAliases) {
-          logNormal("  " + aliasItem.first + " = \"" + aliasItem.second + "\"");
-        }
-      }
-    } else if (args.size() == 1) {
-      if (HasAlias(args[0])) {
-        logNormal(args[0] + " = \"" + GetAlias(args[0]) + "\"");
-      } else {
-        logError("Unknown alias: " + args[0]);
-      }
-    } else {
-      const std::string name = args[0];
-      const std::string expansion = joinArguments(args, 1);
-      SetAlias(name, expansion);
-      logSuccess("Alias '" + name + "' set to: " + expansion);
-    }
-  } else if (cmd == "unalias") {
-    if (args.size() != 1) {
-      logNormal("Usage: unalias <name>");
-    } else if (HasAlias(args[0])) {
-      RemoveAlias(args[0]);
-      logSuccess("Alias '" + args[0] + "' removed");
-    } else {
-      logError("Unknown alias: " + args[0]);
-    }
-  } else if (cmd == "repeat") {
-    if (args.size() < 2) {
-      logNormal("Usage: repeat <count> <command>");
-    } else {
-      long count = 0;
-      if (!parseLongStrict(args[0], &count) || count < 1 || count > 1000) {
-        logError("repeat count must be an integer from 1 to 1000");
-      } else {
-        const std::string repeatCmd = joinArguments(args, 1);
-        for (long i = 0; i < count; ++i) {
-          ExecuteSingleCommand(repeatCmd, expansionDepth + 1);
-        }
-      }
-    }
-  } else if (cmd == "history") {
-    if (args.size() == 1 && lowerCopy(args[0]) == "clear") {
-      commandHistory.clear();
-      historyIndex = 0;
-      logSuccess("Command history cleared");
-    } else {
-      const std::string filter = args.empty() ? "" : lowerCopy(args[0]);
-      logNormal("Command history:");
-      int count = 0;
-      for (std::size_t i = 0; i < commandHistory.size(); ++i) {
-        if (filter.empty() ||
-            lowerCopy(commandHistory[i]).find(filter) != std::string::npos) {
-          logNormal("  " + std::to_string(i + 1) + ": " + commandHistory[i]);
-          ++count;
-        }
-      }
-      if (count == 0) {
-        logWarning("No history entries match '" + filter + "'");
-      }
-    }
-  } else if (cmd == "sysinfo") {
-    logNormal("=== " + applicationName + " System Telemetry ===");
-    logNormal("Registered commands: " +
-              std::to_string(commandRegistry
-                               ? commandRegistry->GetCommandNames().size()
-                               : 0));
-    logNormal("Env variables:       " +
-              std::to_string(envVars ? envVars->getVars().size() : 0));
-    logNormal("Defined aliases:     " + std::to_string(aliases.size()));
-    std::array<int, 2> dims =
-      window ? window->getWindowDimensions() : std::array<int, 2>{ 0, 0 };
-    logNormal("Window resolution:   " + std::to_string(dims[0]) + "x" +
-              std::to_string(dims[1]));
-    logNormal("FPS overlay:         " +
-              std::string(envVars && envVars->getVar("showFPS").valueAsBool
-                            ? "on"
-                            : "off"));
-  } else if (cmd == "help") {
-    if (args.empty()) {
-      logNormal("Built-in commands:");
-      for (const BuiltInCommandHelp& command : kBuiltInCommands) {
-        logNormal("  " + std::string(command.usage) + " - " +
-                  command.description);
-      }
-
-      if (commandRegistry != nullptr) {
-        std::vector<std::string> registeredCommands =
-          commandRegistry->GetCommandNames();
-        if (!registeredCommands.empty()) {
-          logNormal("Registered commands:");
-        }
-        for (const std::string& commandName : registeredCommands) {
-          std::string usage = commandRegistry->GetCommandUsage(commandName);
-          std::string description =
-            commandRegistry->GetCommandDescription(commandName);
-          if (usage.empty()) {
-            usage = commandName;
-          }
-          logNormal("  " + usage +
-                    (description.empty() ? "" : " - " + description));
-        }
-      }
-      logNormal("Use 'help <command>' for one command.");
-    } else {
-      const std::string requested = lowerCopy(args[0]);
-      const BuiltInCommandHelp* builtIn = findBuiltInCommand(requested);
-      if (builtIn != nullptr) {
-        logNormal(std::string(builtIn->usage) + " - " + builtIn->description);
-      } else if (commandRegistry != nullptr &&
-                 commandRegistry->HasCommand(requested)) {
-        std::string usage = commandRegistry->GetCommandUsage(requested);
-        std::string description =
-          commandRegistry->GetCommandDescription(requested);
-        logNormal((usage.empty() ? requested : usage) +
-                  (description.empty() ? "" : " - " + description));
-      } else {
-        logError("No help available for '" + args[0] + "'");
-      }
-    }
-  } else if (cmd == "clear") {
-    history.clear();
-    invalidateWrapCache();
-    AppendString(240, 240, 240, 255, applicationName + " Developer Console");
-  } else if (cmd == "echo") {
-    logNormal(joinArguments(args, 0));
-  } else if (cmd == "get") {
-    if (args.size() != 1) {
-      logNormal("Usage: get <variable>");
-    } else {
-      const std::string key = findEnvironmentKey(envVars, args[0]);
-      if (key.empty()) {
-        logError("Unknown variable: " + args[0]);
-      } else {
-        logNormal(key + " = " + envVars->getVar(key).value);
-      }
-    }
-  } else if (cmd == "set") {
-    if (args.size() < 2) {
-      logNormal("Usage: set <variable> <value>");
-    } else {
-      std::string key = findEnvironmentKey(envVars, args[0]);
-      if (key.empty()) {
-        key = args[0];
-      }
-      const std::string value = joinArguments(args, 1);
-      envVars->setVar(key, value);
-      logSuccess(key + " = " + value);
-      if (isRestartRequiredVariable(key)) {
-        logWarning("Note: Changes to '" + key +
-                   "' will take effect after restarting the application.");
-      }
-    }
-  } else if (cmd == "toggle") {
-    if (args.size() != 1) {
-      logNormal("Usage: toggle <variable>");
-    } else {
-      const std::string key = findEnvironmentKey(envVars, args[0]);
-      if (key.empty()) {
-        logError("Unknown variable: " + args[0]);
-      } else {
-        const bool value = !envVars->getVar(key).valueAsBool;
-        envVars->setVar(key, value);
-        logSuccess(key + " = " + (value ? "true" : "false"));
-        if (isRestartRequiredVariable(key)) {
-          logWarning("Note: Changes to '" + key +
-                     "' will take effect after restarting the application.");
-        }
-      }
-    }
-  } else if (cmd == "vars") {
-    const std::string filter = args.empty() ? "" : lowerCopy(args[0]);
-    std::vector<std::string> variableLines;
-    const std::unordered_map<std::string, EnvVar>& variables =
-      envVars->getVars();
-    for (const std::pair<const std::string, EnvVar>& variable : variables) {
-      if (filter.empty() ||
-          lowerCopy(variable.first).find(filter) != std::string::npos) {
-        variableLines.push_back(variable.first + " = " + variable.second.value);
-      }
-    }
-    std::sort(variableLines.begin(), variableLines.end());
-    if (variableLines.empty()) {
-      logWarning("No variables match '" +
-                 (args.empty() ? std::string("") : args[0]) + "'");
-    }
-    for (const std::string& line : variableLines) {
-      logNormal(line);
-    }
-  } else if (cmd == "fps") {
-    const bool currentValue = envVars->getVar("showFPS").valueAsBool;
-    if (args.empty()) {
-      logNormal(std::string("FPS overlay: ") + (currentValue ? "on" : "off"));
-    } else {
-      bool requestedValue = false;
-      bool valid = false;
-      if (args.size() == 1 && lowerCopy(args[0]) == "toggle") {
-        requestedValue = !currentValue;
-        valid = true;
-      } else if (args.size() == 1) {
-        valid = parseBoolValue(args[0], &requestedValue);
-      }
-      if (!valid) {
-        logError("Usage: fps [on|off|toggle]");
-      } else {
-        envVars->setVar("showFPS", requestedValue);
-        logSuccess(std::string("FPS overlay: ") +
-                   (requestedValue ? "on" : "off"));
-      }
-    }
-  } else if (cmd == "fullscreen") {
-    const bool currentValue = envVars->getVar("fullscreen").valueAsBool;
-    bool requestedValue = !currentValue;
-    bool valid = args.empty();
-    if (args.size() == 1 && lowerCopy(args[0]) == "toggle") {
-      valid = true;
-    } else if (args.size() == 1) {
-      valid = parseBoolValue(args[0], &requestedValue);
-    }
-    if (!valid) {
-      logError("Usage: fullscreen [on|off|toggle]");
-    } else {
-      if (requestedValue != currentValue) {
-        window->toggleFullscreen();
-      }
-      envVars->setVar("fullscreen", requestedValue);
-      logSuccess(std::string("Fullscreen: ") + (requestedValue ? "on" : "off"));
-    }
-  } else if (cmd == "close") {
-    isOpen = false;
-    markCompositionDirty();
-  } else if (cmd == "quit") {
+  if (window != nullptr) {
     window->requestClose();
-  } else if (cmd == "vid_restart") {
-    logWarning("vid_restart is unavailable: safely rebuilding the OpenGL "
-               "context requires resource re-enrollment");
+  }
+}
+
+void
+CommandLine::onToggleFullscreen()
+{
+  if (window != nullptr) {
+    window->toggleFullscreen();
+  }
+}
+
+void
+CommandLine::queryWindowDimensions(int* width, int* height) const
+{
+  if (window != nullptr) {
+    const std::array<int, 2> dims = window->getWindowDimensions();
+    if (width != nullptr) {
+      *width = dims[0];
+    }
+    if (height != nullptr) {
+      *height = dims[1];
+    }
   } else {
-    if (commandRegistry != nullptr && commandRegistry->HasCommand(cmd)) {
-      commandRegistry->QueueCommand(cmd, args);
-    } else {
-      const std::string key = findEnvironmentKey(envVars, rawCommand);
-      if (!key.empty()) {
-        if (args.empty()) {
-          logNormal(key + " = " + envVars->getVar(key).value);
-        } else if (args.size() == 1) {
-          envVars->setVar(key, args[0]);
-          logSuccess(key + " = " + args[0]);
-          if (isRestartRequiredVariable(key)) {
-            logWarning("Note: Changes to '" + key +
-                       "' will take effect after restarting the application.");
-          }
-        } else {
-          logError("Variable assignment accepts one value; use set for text "
-                   "with spaces");
-        }
-      } else {
-        logError("Unknown command or variable: " + rawCommand);
-      }
+    if (width != nullptr) {
+      *width = 0;
     }
-  }
-}
-
-void
-CommandLine::AddToHistory(std::string command)
-{
-  commandHistory.push_back(command);
-  // imitate stack behavior by setting historyIndex to top of stack and popping
-  // the first entry when full.
-  if (commandHistory.size() > MAX_CMD_HISTORY) {
-    commandHistory.erase(commandHistory.begin());
-  }
-  historyIndex = (int)commandHistory.size();
-  tempInput = "";
-  resetCursorToEnd();
-}
-
-void
-CommandLine::HistoryDown()
-{
-  if (commandHistory.empty())
-    return;
-  if (historyIndex < (int)commandHistory.size()) {
-    historyIndex++;
-    if (historyIndex == (int)commandHistory.size()) {
-      currentInput = tempInput;
-    } else {
-      currentInput = commandHistory[historyIndex];
+    if (height != nullptr) {
+      *height = 0;
     }
-    resetCursorToEnd();
-    markCompositionDirty();
-  }
-}
-
-void
-CommandLine::HistoryUp()
-{
-  if (commandHistory.empty())
-    return;
-  if (historyIndex > 0) {
-    if (historyIndex == (int)commandHistory.size()) {
-      tempInput = currentInput;
-    }
-    historyIndex--;
-    currentInput = commandHistory[historyIndex];
-    resetCursorToEnd();
-    markCompositionDirty();
   }
 }
 
@@ -2019,42 +914,7 @@ CommandLine::HandleMouseRelease()
   isResizingWindow = false;
 }
 
-void
-CommandLine::AppendString(unsigned char r,
-                          unsigned char g,
-                          unsigned char b,
-                          unsigned char a,
-                          std::string str)
-{
-  history.push_back({ r, g, b, a, str });
-  if (history.size() > MAX_CMD_HISTORY) {
-    history.erase(history.begin());
-    if (!wrappedHistory.empty()) {
-      wrappedHistoryTotalLines -=
-        static_cast<int>(wrappedHistory.front().size());
-      wrappedHistory.erase(wrappedHistory.begin());
-    }
-  }
-  if (wrappedHistoryWidth > 0.0f &&
-      wrappedHistory.size() + 1 == history.size()) {
-    std::vector<std::string> lines;
-    wrapTextToWidth(history.back().content, wrappedHistoryWidth, &lines);
-    wrappedHistoryTotalLines += static_cast<int>(lines.size());
-    wrappedHistory.push_back(std::move(lines));
-  } else if (wrappedHistory.size() != history.size()) {
-    wrappedHistoryWidth = -1.0f;
-  }
-  markCompositionDirty();
-}
-void
-CommandLine::AppendStringLn(unsigned char r,
-                            unsigned char g,
-                            unsigned char b,
-                            unsigned char a,
-                            std::string str)
-{
-  AppendString(r, g, b, a, str + "\n");
-}
+
 
 void
 CommandLine::DrawImpl()
