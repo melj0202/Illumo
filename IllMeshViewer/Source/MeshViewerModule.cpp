@@ -81,9 +81,9 @@ MeshViewerModule::Start(IllumoContext* context)
   m_wireframeVisual->prepare(ic->renderer);
 
   if (ic->assetManager != nullptr) {
-    std::string skyboxPath = "Assets/Skybox/skybox.jpg";
+    std::string skyboxPath = "Assets/Skybox/skybox-daylight.png";
     if (!std::filesystem::exists(skyboxPath)) {
-      skyboxPath = "Illumo/Assets/Skybox/skybox.jpg";
+      skyboxPath = "Illumo/Assets/Skybox/skybox-daylight.png";
     }
     TextureHandle skyboxCubemap =
       ic->assetManager->acquireCubemapFromCross(skyboxPath);

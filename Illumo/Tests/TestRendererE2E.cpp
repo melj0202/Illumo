@@ -768,20 +768,21 @@ testAssetManagerCubemapFromCross()
   Renderer renderer(&window, nullptr, &camera, &backend, false);
   AssetManager assets(&renderer, false);
 
-  std::string skyboxPath = "Assets/Skybox/skybox.jpg";
+  std::string skyboxPath = "Assets/Skybox/skybox-daylight.png";
   if (!std::filesystem::exists(skyboxPath)) {
     skyboxPath = (std::filesystem::path(__FILE__).parent_path().parent_path() /
-                  "Assets" / "Skybox" / "skybox.jpg")
+                  "Assets" / "Skybox" / "skybox-daylight.png")
                    .string();
   }
 
   TextureHandle cubemap =
     assets.acquireCubemapFromCross(skyboxPath, AssetLoadMode::Synchronous);
-  e2eTrue(cubemap.isValid(), "Should load cubemap cross from skybox.jpg");
+  e2eTrue(cubemap.isValid(),
+          "Should load cubemap cross from skybox-daylight.png");
 
   TextureInfo info = assets.getTextureInfo(cubemap);
-  e2eEqInt(info.width, 400, "Face width should be 400");
-  e2eEqInt(info.height, 400, "Face height should be 400");
+  e2eEqInt(info.width, 512, "Face width should be 512");
+  e2eEqInt(info.height, 512, "Face height should be 512");
 
   TextureHandle cached =
     assets.acquireCubemapFromCross(skyboxPath, AssetLoadMode::Synchronous);
