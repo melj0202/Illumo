@@ -31,6 +31,7 @@ MeshViewerModule::MeshViewerModule(std::string initialMeshPath)
   , m_showGrid(true)
   , m_showWireframe(false)
   , m_showAxes(true)
+  , m_showSkybox(true)
   , m_isOrbiting(false)
   , m_isPanning(false)
   , m_mouseWasDown(false)
@@ -64,6 +65,10 @@ MeshViewerModule::Start(IllumoContext* context)
     if (!wireVar.empty()) {
       m_showWireframe = (wireVar == "1" || wireVar == "true");
     }
+    const std::string skyVar = ic->envVars->getVar("showSkybox").value;
+    if (!skyVar.empty()) {
+      m_showSkybox = (skyVar == "1" || skyVar == "true");
+    }
   }
 
   m_gridVisual = std::make_unique<MeshVisual>();
@@ -74,6 +79,19 @@ MeshViewerModule::Start(IllumoContext* context)
 
   m_wireframeVisual = std::make_unique<MeshVisual>();
   m_wireframeVisual->prepare(ic->renderer);
+
+  if (ic->assetManager != nullptr) {
+    std::string skyboxPath = "Assets/Skybox/skybox.jpg";
+    if (!std::filesystem::exists(skyboxPath)) {
+      skyboxPath = "Illumo/Assets/Skybox/skybox.jpg";
+    }
+    TextureHandle skyboxCubemap =
+      ic->assetManager->acquireCubemapFromCross(skyboxPath);
+    if (skyboxCubemap.isValid()) {
+      m_skyboxVisual = std::make_unique<SkyboxVisual>(skyboxCubemap);
+      m_skyboxVisual->prepare(ic->renderer);
+    }
+  }
 
   m_ui = std::make_unique<MeshViewerUi>(ic->window, ic->renderer);
   applyLightingFromEnv();
@@ -113,6 +131,7 @@ MeshViewerModule::Exit()
   m_wireframeVisual.reset();
   m_meshVisual.reset();
   m_gridVisual.reset();
+  m_skyboxVisual.reset();
   m_meshData.clear();
   m_meshPath.clear();
 }
@@ -202,7 +221,8 @@ MeshViewerModule::setShowGrid(bool show)
   m_showGrid = show;
   rebuildGrid();
   if (m_ui) {
-    m_ui->setDisplayOptions(m_showGrid, m_showWireframe, m_showAxes);
+    m_ui->setDisplayOptions(
+      m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
   }
 }
 
@@ -212,7 +232,8 @@ MeshViewerModule::setShowWireframe(bool show)
   m_showWireframe = show;
   rebuildWireframe();
   if (m_ui) {
-    m_ui->setDisplayOptions(m_showGrid, m_showWireframe, m_showAxes);
+    m_ui->setDisplayOptions(
+      m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
   }
 }
 
@@ -222,7 +243,18 @@ MeshViewerModule::setShowAxes(bool show)
   m_showAxes = show;
   rebuildGrid();
   if (m_ui) {
-    m_ui->setDisplayOptions(m_showGrid, m_showWireframe, m_showAxes);
+    m_ui->setDisplayOptions(
+      m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
+  }
+}
+
+void
+MeshViewerModule::setShowSkybox(bool show)
+{
+  m_showSkybox = show;
+  if (m_ui) {
+    m_ui->setDisplayOptions(
+      m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
   }
 }
 
@@ -546,7 +578,8 @@ MeshViewerModule::syncUiMetadata()
     meta.hasMesh = false;
   }
   m_ui->setMeshMetadata(meta);
-  m_ui->setDisplayOptions(m_showGrid, m_showWireframe, m_showAxes);
+  m_ui->setDisplayOptions(
+    m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
 }
 
 void
@@ -567,6 +600,9 @@ MeshViewerModule::handleAction(MeshViewerAction action)
       break;
     case MeshViewerAction::ToggleAxes:
       setShowAxes(!m_showAxes);
+      break;
+    case MeshViewerAction::ToggleSkybox:
+      setShowSkybox(!m_showSkybox);
       break;
     case MeshViewerAction::None:
     default:
@@ -735,6 +771,17 @@ MeshViewerModule::Update(double dt)
       xWasPressed = false;
     }
 
+    if (ic->inputManager->isKeyPressed(KeyCode::B)) {
+      static bool bWasPressed = false;
+      if (!bWasPressed) {
+        setShowSkybox(!m_showSkybox);
+      }
+      bWasPressed = true;
+    } else {
+      static bool bWasPressed = false;
+      bWasPressed = false;
+    }
+
     const bool uiConsumed = m_ui && m_ui->consumedPress();
     if (!uiConsumed) {
       updateCameraInput(dt);
@@ -758,6 +805,9 @@ MeshViewerModule::Update(double dt)
     m_lastMouseY = mouse[1];
   }
 
+  if (m_skyboxVisual) {
+    m_skyboxVisual->prepare(ic->renderer);
+  }
   if (m_gridVisual) {
     m_gridVisual->prepare(ic->renderer);
   }
@@ -777,6 +827,9 @@ MeshViewerModule::DispatchDrawables(Scene* scene)
 {
   if (scene == nullptr) {
     return;
+  }
+  if (m_showSkybox && m_skyboxVisual) {
+    scene->AddDrawable(m_skyboxVisual.get(), RenderLayerId::World);
   }
   if (m_showGrid && m_gridVisual) {
     scene->AddDrawable(m_gridVisual.get(), RenderLayerId::World);

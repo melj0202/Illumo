@@ -136,9 +136,7 @@ public:
 
   bool destroyMesh(MeshHandle handle);
 
-  TextureHandle enrollTexture(const unsigned char* data,
-                              int width,
-                              int height);
+  TextureHandle enrollTexture(const unsigned char* data, int width, int height);
 
   TextureHandle enrollTexture(const unsigned char* data,
                               int width,
@@ -150,6 +148,12 @@ public:
                               int height,
                               int channels,
                               const TextureOptions& options);
+
+  TextureHandle enrollCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3);
 
   bool replaceTexture(TextureHandle handle,
                       const unsigned char* data,

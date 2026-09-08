@@ -21,6 +21,7 @@ public:
       ShaderPaths,
       ShaderSources,
       TextureData,
+      CubemapData,
       ReplaceMesh,
       ReplaceShader,
       ReplaceTexture,
@@ -322,6 +323,32 @@ public:
     rec.height = height;
     rec.channels = channels;
     rec.filter = options.filter;
+    creates.push_back(rec);
+    liveTextures[handle.slot] = handle.generation;
+    TextureInfo info;
+    info.width = width;
+    info.height = height;
+    info.channels = channels;
+    textureInfos[handle.slot] = info;
+    return handle;
+  }
+
+  TextureHandle CreateCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3) override
+  {
+    (void)facesData;
+    TextureHandle handle = textureHandles.allocate();
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::CubemapData;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    rec.width = width;
+    rec.height = height;
+    rec.channels = channels;
+    rec.filter = TextureFilter::Linear;
     creates.push_back(rec);
     liveTextures[handle.slot] = handle.generation;
     TextureInfo info;

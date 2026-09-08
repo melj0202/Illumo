@@ -17,6 +17,7 @@ public:
     36; // pos3 float (12) + norm3 float (12) + color4 ubyte (4) + uv2 float (8)
   static const unsigned int kLitMeshStrideBytes =
     32; // pos3 float (12) + norm3 float (12) + uv2 float (8)
+  static const unsigned int kPos3StrideBytes = 12; // pos3 float (12)
 
   // Static mesh (Canvas / proof). Default layout Pos3Color3Uv2.
   GLMesh(const void* vertices,
@@ -253,6 +254,11 @@ private:
                             GL_FALSE,
                             kLitMeshStrideBytes,
                             reinterpret_cast<void*>(24));
+    } else if (_layout == MeshVertexLayout::Pos3) {
+      // Pos3: location 0 pos3 (12 bytes)
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(
+        0, 3, GL_FLOAT, GL_FALSE, kPos3StrideBytes, reinterpret_cast<void*>(0));
     } else {
       // Canvas: location 0 pos3, location 2 uv2
       glEnableVertexAttribArray(0);

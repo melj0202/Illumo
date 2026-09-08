@@ -1791,6 +1791,36 @@ the same way; it still rejects combined coverage.\\
 details.
 \end{decisionbox}
 
+\subsection*{D-R22 --- Cubemap and SkyboxVisual rendering}
+\begin{decisionbox}[title={D-R22 \quad 2026-09-04}]
+\textbf{Decision:} The rendering subsystem supports 3D environment skyboxes via
+cubemaps:
+\begin{itemize}
+  \item \symbolref{IBackend} gains \texttt{CreateCubemap} allocating a
+        generational \symbolref{TextureHandle} bound to
+        \texttt{GL\_TEXTURE\_CUBE\_MAP} with 6 face uploads, seamless filtering,
+        and \texttt{GL\_CLAMP\_TO\_EDGE} wrap.
+  \item \symbolref{AssetManager} loads individual face files via
+        \texttt{acquireCubemap} and automatically extracts 6 faces from horizontal
+        crosses (4:3), vertical crosses (3:4), and strips (6:1) via
+        \texttt{acquireCubemapFromCross}.
+  \item Built-in style \texttt{RenderStyleId::Skybox} renders a unit cube
+        at the far depth plane using \texttt{pos.xyww} projection,
+        \texttt{GL\_LEQUAL} depth testing, and no backface culling.
+  \item \symbolref{SkyboxVisual} is the world cubemap host and
+        \symbolref{ISceneRenderAttachment}, emitting tokens with a
+        translation-stripped camera view-projection matrix. Consuming
+        viewers (e.g. \texttt{IllMeshViewer}) expose live toggles and runtime
+        configuration.
+\end{itemize}
+\textbf{Why:} 3D scene visualization and model viewing require environment
+context without polluting the backend-neutral token queue or breaking the
+single-pipeline render model.\\
+\textbf{Consequences:} \pathref{SkyboxVisual.h}, \pathref{GLTexture.h},
+\pathref{IBackend.h}, \pathref{AssetManager.h}; tested via headless mock tokens
+and E2E suite; integrated into \texttt{IllMeshViewer}.
+\end{decisionbox}
+
 %----------------------------------------------------------------------------
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]

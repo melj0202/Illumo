@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/PipelineState.h>
 #include <Illumo/Rendering/ResourceHandle.h>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -83,6 +84,11 @@ public:
                                       const int height,
                                       int channels,
                                       const TextureOptions& options) = 0;
+  virtual TextureHandle CreateCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3) = 0;
   virtual bool ReplaceTexture(TextureHandle handle,
                               const unsigned char* data,
                               int width,

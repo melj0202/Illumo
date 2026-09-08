@@ -49,12 +49,31 @@ public:
     , m_id(0)
     , m_size({ width, height })
     , m_channels(normalizeChannels(channels))
+    , m_target(GL_TEXTURE_2D)
     , m_pbo{ 0, 0, 0 }
     , m_pboFence{ nullptr, nullptr, nullptr }
     , m_pboIndex(0)
     , m_pboBytes(0)
   {
     UploadToGPU(data, width, height, m_channels, options);
+  }
+
+  GLTexture(const std::array<const unsigned char*, 6>& facesData,
+            int width,
+            int height,
+            int channels = 3,
+            TextureFilter filter = TextureFilter::Linear)
+    : m_path("")
+    , m_id(0)
+    , m_size({ width, height })
+    , m_channels(normalizeChannels(channels))
+    , m_target(GL_TEXTURE_CUBE_MAP)
+    , m_pbo{ 0, 0, 0 }
+    , m_pboFence{ nullptr, nullptr, nullptr }
+    , m_pboIndex(0)
+    , m_pboBytes(0)
+  {
+    UploadCubemapToGPU(facesData, width, height, m_channels, filter);
   }
 
   static std::unique_ptr<GLTexture> CreateRenderTargetTexture(
@@ -174,12 +193,13 @@ public:
   void Bind(unsigned int slot) const override
   {
     glActiveTexture(GL_TEXTURE0 + slot);
-    glBindTexture(GL_TEXTURE_2D, m_id);
+    glBindTexture(m_target, m_id);
   }
 
   unsigned int getID() const override { return m_id; }
   std::array<int, 2> getSize() const override { return m_size; }
   int getChannels() const override { return m_channels; }
+  bool isCubemap() const override { return m_target == GL_TEXTURE_CUBE_MAP; }
 
   // CPU → GPU subimage upload with optional row stride and PBO ping-pong (P4).
   // data is host pointer (not PBO). srcRowStride is in pixels (0 = tightly
@@ -508,10 +528,51 @@ private:
     }
   }
 
+  void UploadCubemapToGPU(const std::array<const unsigned char*, 6>& facesData,
+                          int width,
+                          int height,
+                          int channels,
+                          TextureFilter filter)
+  {
+    glGenTextures(1, &m_id);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, m_id);
+
+    const GLenum format = formatForChannels(channels);
+    const GLenum internalFmt = internalFormatForChannels(channels);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    for (unsigned int i = 0; i < 6; ++i) {
+      glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i,
+                   0,
+                   static_cast<GLint>(internalFmt),
+                   width,
+                   height,
+                   0,
+                   format,
+                   GL_UNSIGNED_BYTE,
+                   facesData[i]);
+    }
+
+    const GLint glFilter =
+      (filter == TextureFilter::Linear) ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, glFilter);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, glFilter);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+#ifdef GL_TEXTURE_CUBE_MAP_SEAMLESS
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+#endif
+
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+  }
+
   std::string m_path;
   unsigned int m_id;
   std::array<int, 2> m_size;
   int m_channels;
+  GLenum m_target = GL_TEXTURE_2D;
 
   // Async upload: non-blocking triple-buffered pixel unpack buffers.
   GLuint m_pbo[kPboCount];

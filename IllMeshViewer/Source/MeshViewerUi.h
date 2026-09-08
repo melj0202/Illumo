@@ -18,6 +18,7 @@ enum class MeshViewerAction
   ToggleGrid,
   ToggleWireframe,
   ToggleAxes,
+  ToggleSkybox,
 };
 
 struct MeshMetadata
@@ -50,7 +51,10 @@ public:
   void setMeshMetadata(const MeshMetadata& metadata);
   const MeshMetadata& meshMetadata() const { return m_metadata; }
 
-  void setDisplayOptions(bool showGrid, bool showWireframe, bool showAxes);
+  void setDisplayOptions(bool showGrid,
+                         bool showWireframe,
+                         bool showAxes,
+                         bool showSkybox = true);
   void setCameraInfo(float yawDegrees, float pitchDegrees, float distance);
 
   void showToast(const std::string& message,
@@ -84,6 +88,7 @@ private:
   bool m_showGrid;
   bool m_showWireframe;
   bool m_showAxes;
+  bool m_showSkybox;
 
   float m_yawDeg;
   float m_pitchDeg;

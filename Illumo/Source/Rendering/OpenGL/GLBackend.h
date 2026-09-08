@@ -77,6 +77,11 @@ public:
                               const int height,
                               int channels,
                               const TextureOptions& options) override;
+  TextureHandle CreateCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3) override;
   bool ReplaceTexture(TextureHandle handle,
                       const unsigned char* data,
                       int width,

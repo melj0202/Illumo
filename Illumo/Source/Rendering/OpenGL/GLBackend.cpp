@@ -336,6 +336,29 @@ GLBackend::CreateTexture(const unsigned char* data,
   return handle;
 }
 
+TextureHandle
+GLBackend::CreateCubemap(const std::array<const unsigned char*, 6>& facesData,
+                         int width,
+                         int height,
+                         int channels)
+{
+  for (size_t i = 0; i < 6; ++i) {
+    if (facesData[i] == nullptr) {
+      return TextureHandle{};
+    }
+  }
+  if (width <= 0 || height <= 0) {
+    return TextureHandle{};
+  }
+  TextureHandle handle = textureHandles.allocate();
+  GLTextureResourceEntry entry;
+  entry.generation = handle.generation;
+  entry.resource =
+    std::make_unique<GLTexture>(facesData, width, height, channels);
+  _textureRegistryLookup[handle.slot] = std::move(entry);
+  return handle;
+}
+
 bool
 GLBackend::ReplaceTexture(TextureHandle handle,
                           const unsigned char* data,

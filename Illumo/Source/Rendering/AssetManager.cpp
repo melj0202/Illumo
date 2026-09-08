@@ -184,6 +184,257 @@ AssetManager::acquireTexture(const std::string& path,
   return handle;
 }
 
+TextureHandle
+AssetManager::acquireCubemap(const std::array<std::string, 6>& facePaths,
+                             AssetLoadMode mode)
+{
+  (void)mode;
+  if (renderer == nullptr) {
+    return TextureHandle{};
+  }
+  std::string combinedKey = "cubemap_6faces";
+  for (size_t i = 0; i < 6; ++i) {
+    combinedKey += "|" + canonicalPath(facePaths[i]);
+  }
+  std::unordered_map<std::string, uint32_t>::iterator cached =
+    textureCache.find(combinedKey);
+  if (cached != textureCache.end()) {
+    TextureEntry& entry = textures[cached->second];
+    entry.referenceCount += 1;
+    return entry.handle;
+  }
+
+  std::array<unsigned char*, 6> loadedData{};
+  int faceWidth = 0;
+  int faceHeight = 0;
+  int faceChannels = 0;
+  bool loadFailed = false;
+
+  for (size_t i = 0; i < 6; ++i) {
+    int w = 0;
+    int h = 0;
+    int ch = 0;
+    std::string path = facePaths[i];
+    unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 0);
+    if (!data) {
+      path = canonicalPath(facePaths[i]);
+      data = stbi_load(path.c_str(), &w, &h, &ch, 0);
+    }
+    if (!data) {
+      Logger::LogError(
+        ("acquireCubemap: failed to load face: " + facePaths[i]).c_str());
+      loadFailed = true;
+      break;
+    }
+    if (i == 0) {
+      faceWidth = w;
+      faceHeight = h;
+      faceChannels = ch;
+    } else if (w != faceWidth || h != faceHeight) {
+      Logger::LogError("acquireCubemap: face dimension mismatch");
+      stbi_image_free(data);
+      loadFailed = true;
+      break;
+    }
+    loadedData[i] = data;
+  }
+
+  if (loadFailed) {
+    for (size_t i = 0; i < 6; ++i) {
+      if (loadedData[i] != nullptr) {
+        stbi_image_free(loadedData[i]);
+      }
+    }
+    return TextureHandle{};
+  }
+
+  std::array<const unsigned char*, 6> facePtrs = {
+    loadedData[0], loadedData[1], loadedData[2],
+    loadedData[3], loadedData[4], loadedData[5]
+  };
+  TextureHandle handle =
+    renderer->enrollCubemap(facePtrs, faceWidth, faceHeight, faceChannels);
+
+  for (size_t i = 0; i < 6; ++i) {
+    stbi_image_free(loadedData[i]);
+  }
+
+  if (!handle.isValid()) {
+    return TextureHandle{};
+  }
+
+  TextureEntry entry;
+  entry.handle = handle;
+  entry.path = facePaths[0];
+  entry.cacheKey = combinedKey;
+  entry.info = { faceWidth, faceHeight, faceChannels };
+  entry.state = AssetState::Ready;
+  entry.lastWriteTime = writeTime(canonicalPath(facePaths[0]));
+  textures[handle.slot] = entry;
+  textureCache[combinedKey] = handle.slot;
+  return handle;
+}
+
+TextureHandle
+AssetManager::acquireCubemapFromCross(const std::string& crossPath,
+                                      AssetLoadMode mode)
+{
+  (void)mode;
+  if (renderer == nullptr) {
+    return TextureHandle{};
+  }
+  const std::string canonical = canonicalPath(crossPath);
+  const std::string key = "cubemap_cross|" + canonical;
+  std::unordered_map<std::string, uint32_t>::iterator cached =
+    textureCache.find(key);
+  if (cached != textureCache.end()) {
+    TextureEntry& entry = textures[cached->second];
+    entry.referenceCount += 1;
+    return entry.handle;
+  }
+
+  int width = 0;
+  int height = 0;
+  int channels = 0;
+  unsigned char* data =
+    stbi_load(crossPath.c_str(), &width, &height, &channels, 0);
+  if (!data) {
+    data = stbi_load(canonical.c_str(), &width, &height, &channels, 0);
+  }
+  if (!data) {
+    Logger::LogError(
+      ("acquireCubemapFromCross: failed to load " + crossPath).c_str());
+    return TextureHandle{};
+  }
+
+  int faceSize = 0;
+  int faceCols[6];
+  int faceRows[6];
+  bool flipH[6] = { false, false, false, false, false, false };
+  bool flipV[6] = { false, false, false, false, false, false };
+
+  if (width * 3 == height * 4) {
+    // 4:3 Horizontal Cross (4 columns, 3 rows)
+    // OpenGL cubemap face sampling convention views the cube from the inside
+    // out: side faces (+X, -X, +Z, -Z) require horizontal flip so left/right
+    // panning and seam continuity match, while top (+Y) and bottom (-Y)
+    // require vertical flip to align with the front face top/bottom edges.
+    faceSize = width / 4;
+    faceCols[0] = 2;
+    faceRows[0] = 1; // +X (Right)
+    flipH[0] = true;
+    faceCols[1] = 0;
+    faceRows[1] = 1; // -X (Left)
+    flipH[1] = true;
+    faceCols[2] = 1;
+    faceRows[2] = 0; // +Y (Top)
+    flipV[2] = true;
+    faceCols[3] = 1;
+    faceRows[3] = 2; // -Y (Bottom)
+    flipV[3] = true;
+    faceCols[4] = 3;
+    faceRows[4] = 1; // +Z (Back)
+    flipH[4] = true;
+    faceCols[5] = 1;
+    faceRows[5] = 1; // -Z (Front)
+    flipH[5] = true;
+  } else if (width * 4 == height * 3) {
+    // 3:4 Vertical Cross (3 columns, 4 rows)
+    faceSize = width / 3;
+    faceCols[0] = 2;
+    faceRows[0] = 1; // +X (Right)
+    flipH[0] = true;
+    faceCols[1] = 0;
+    faceRows[1] = 1; // -X (Left)
+    flipH[1] = true;
+    faceCols[2] = 1;
+    faceRows[2] = 0; // +Y (Top)
+    flipV[2] = true;
+    faceCols[3] = 1;
+    faceRows[3] = 2; // -Y (Bottom)
+    flipV[3] = true;
+    faceCols[4] = 1;
+    faceRows[4] = 3; // +Z (Back)
+    flipH[4] = true;
+    faceCols[5] = 1;
+    faceRows[5] = 1; // -Z (Front)
+    flipH[5] = true;
+  } else if (width == 6 * height) {
+    // 6:1 Horizontal Strip: +X, -X, +Y, -Y, +Z, -Z
+    faceSize = height;
+    for (int i = 0; i < 6; ++i) {
+      faceCols[i] = i;
+      faceRows[i] = 0;
+    }
+  } else {
+    faceSize = std::min(width, height);
+    for (int i = 0; i < 6; ++i) {
+      faceCols[i] = 0;
+      faceRows[i] = 0;
+    }
+  }
+
+  std::vector<std::vector<unsigned char>> faceBuffers(6);
+  for (size_t f = 0; f < 6; ++f) {
+    faceBuffers[f].resize(static_cast<size_t>(faceSize) * faceSize * channels);
+    const int col = faceCols[f];
+    const int row = faceRows[f];
+    const bool fH = flipH[f];
+    const bool fV = flipV[f];
+    const size_t ch = static_cast<size_t>(channels);
+
+    for (int r = 0; r < faceSize; ++r) {
+      const int srcRowIdx = fV ? (faceSize - 1 - r) : r;
+      const int srcY = row * faceSize + srcRowIdx;
+      unsigned char* dstRow =
+        faceBuffers[f].data() + static_cast<size_t>(r) * faceSize * ch;
+
+      if (!fH) {
+        const int srcX = col * faceSize;
+        const unsigned char* srcRow =
+          data + (static_cast<size_t>(srcY) * width + srcX) * ch;
+        std::memcpy(dstRow, srcRow, static_cast<size_t>(faceSize) * ch);
+      } else {
+        const int baseSrcX = col * faceSize;
+        for (int c = 0; c < faceSize; ++c) {
+          const int srcColIdx = faceSize - 1 - c;
+          const int srcX = baseSrcX + srcColIdx;
+          const unsigned char* srcPixel =
+            data + (static_cast<size_t>(srcY) * width + srcX) * ch;
+          unsigned char* dstPixel = dstRow + static_cast<size_t>(c) * ch;
+          for (size_t k = 0; k < ch; ++k) {
+            dstPixel[k] = srcPixel[k];
+          }
+        }
+      }
+    }
+  }
+
+  std::array<const unsigned char*, 6> facePtrs = {
+    faceBuffers[0].data(), faceBuffers[1].data(), faceBuffers[2].data(),
+    faceBuffers[3].data(), faceBuffers[4].data(), faceBuffers[5].data()
+  };
+
+  TextureHandle handle =
+    renderer->enrollCubemap(facePtrs, faceSize, faceSize, channels);
+  stbi_image_free(data);
+
+  if (!handle.isValid()) {
+    return TextureHandle{};
+  }
+
+  TextureEntry entry;
+  entry.handle = handle;
+  entry.path = canonical;
+  entry.cacheKey = key;
+  entry.info = { faceSize, faceSize, channels };
+  entry.state = AssetState::Ready;
+  entry.lastWriteTime = writeTime(canonical);
+  textures[handle.slot] = entry;
+  textureCache[key] = handle.slot;
+  return handle;
+}
+
 ShaderHandle
 AssetManager::acquireShader(const ShaderPaths& paths, AssetLoadMode mode)
 {

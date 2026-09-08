@@ -92,6 +92,7 @@ add_library(Illumo STATIC
   Source/Rendering/ShaderPreprocessor.cpp
   Source/Rendering/SplashText.cpp
   Source/Rendering/Primitives/MeshVisual.cpp
+  Source/Rendering/Primitives/SkyboxVisual.cpp
   Source/Rendering/Primitives/GameVisual.cpp
   Source/Rendering/Primitives/SpriteAnimation.cpp
   Source/Rendering/OpenGL/CreateOpenGLBackend.cpp
