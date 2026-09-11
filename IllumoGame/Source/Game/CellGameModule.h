@@ -90,6 +90,7 @@ private:
   CellContext* cellContext;
   CellState currentState;
   InputContext inputContext;
+  long inputContextId = -1;
   double simAccum;
   double simStepSeconds;
   double requestedSimulationTps;

@@ -91,8 +91,31 @@ terminal, open its build console with:
 python build.py
 ```
 
-Use the arrow keys to choose `Release`, `Debug`, or `RelWithDebInfo`, toggle
+Use the arrow keys to choose `Release`, `Debug`, `RelWithDebInfo`, or `MinSizeRel`, toggle
 documentation and Tracy, select build parallelism, and run a focused action.
+On Windows consoles, moving the mouse over a row highlights it without activating
+it. Left-click a setting to cycle forward or an action to run
+it. Click the setting's left arrow or right-click it to cycle backward; scroll
+over menu rows to move the selection. Button releases, dragging, and the second
+press of a double-click do not activate actions. Input mode is restored while
+commands run and when the dashboard exits. Other terminals retain keyboard
+controls. Mouse hit testing requires the whole dashboard to fit (at least
+56 columns and 29 rows); enlarge the terminal if clicks are ignored.
+
+Build, test, coverage, tidy, and documentation actions open a live progress view:
+current phase and command, total/phase elapsed time, a bounded recent-output
+panel, and warning/error line counts. CTest counts and Ninja/CMake progress are
+shown when the tools report them. These describe the current tool, not an
+estimated percentage of the whole action; MSBuild and quiet tools may show an
+activity indicator instead. The final view includes success/failure, exit code,
+and the log location. Press Enter to return to the menu.
+
+Complete combined output is saved under Git-ignored `build-orchestrator-logs/`;
+logs are retained until you remove them. Ctrl+C cancels the active progress
+action and stops its owned processes. Windows uses a Job Object so compiler or
+test descendants cannot outlive the action. Application launches and statistics
+reports retain direct output. Explicit CLI commands retain their normal output.
+
 The same operations remain available as explicit commands for scripts, CI, or
 anyone who prefers a shell. For example, a Debug build is:
 
@@ -119,7 +142,148 @@ python build.py docs
 python build.py new-project ../MyNewGame --name MyNewGame
 ```
 
+### Build profiles and diagnostics
+
+The dashboard's **Development Tools** submenu completes the build/test/debug
+loop without leaving the console:
+
+- **Test explorer** reads names, labels, commands, working directories, and
+  timeouts from CTest's JSON inventory. `/` edits a name search; Enter applies
+  it and Escape cancels editing. Ordinary characters (including `q`, `h`, `j`,
+  `k`, and `l`) remain text while editing; Backspace edits. The project-label
+  action cycles filters. Hovering or selecting a test only displays its details.
+  Choose **Run Selected**, **Run Matching**, or **Rerun Failed** explicitly.
+- Test actions configure and build CMake's declared discovery targets and
+  smoke targets first. The execution-mode action offers **Run Existing** to skip
+  preparation. **Refresh Inventory** explicitly prepares the selected tree;
+  merely opening or searching the explorer never builds. Missing configuration
+  discovery files and mismatched single-configuration caches are rejected, even
+  when CMake's discovery helper could fall back to another configuration.
+- Selected tests run through CTest with escaped, anchored name filters split
+  into bounded batches. CTest retains its working directories and timeouts.
+  An empty selection never runs anything. Local `-T Test --no-compress-output`
+  reports are captured per batch; nothing is submitted to a dashboard server.
+  Results retain status and duration. Reruns use only the latest test run for
+  the same checkout, build directory, and configuration. Cancelled/incomplete
+  runs and missing tests require explicit selection rather than a guessed rerun.
+- **Diagnostic browser** browses recorded runs with error, warning, and all
+  filters. It recognizes MSVC, Clang/clang-tidy, and CMake locations. Select a
+  diagnostic for a preview, then use **Inspect selected diagnostic** for raw
+  log context and a read-only **CURRENT SOURCE** view. Relative paths use the
+  recorded command directory. Missing files and invalid locations are reported;
+  the browser never searches for replacement files. **Browse raw log** retains
+  messages without recognized locations. Current files may differ from the run.
+- **Profile picker** previews built-in and saved settings, including directory,
+  configuration, generator, architecture, feature flags, extra CMake arguments,
+  and parallelism. **Apply selected profile** carries them into ordinary build,
+  test, and launch actions. Manual dashboard changes are session overrides;
+  applying another profile clears them. Saving is explicit: type a name with
+  `/`, apply the text, then choose **Save current settings**. Coverage and tidy
+  retain their dedicated Debug/Ninja trees and honor selected parallelism.
+- **Artifact shortcuts** offers existing build directories, the latest log for
+  the selected build identity, the coverage HTML report, and generated PDFs.
+  Opening uses Windows' default handler and never starts a build.
+
+Subviews scroll with arrows, the wheel, Page Up/Down, and Home/End. Hit regions
+follow the visible viewport; hover changes selection and only action rows
+execute work. `q` or Escape returns to the previous view outside text entry.
+Source-file statistics is also available in Development Tools.
+
+Each recorded dashboard log has a version-1 `.json` sidecar containing build
+identity, effective settings, wrapper and child command directories, completion
+status, and available test results. `.tests.json`, per-batch XML, and command
+context files support interrupted runs. Raw `.log` files remain authoritative;
+older logs remain browsable without metadata but cannot supply trusted reruns.
+All records stay under the ignored log directory until explicitly removed.
+The toolbox uses only the standard library inside `build.py`, so generated
+projects retain it when copying the orchestrator.
+
+Use `python build.py profiles` to list named configurations (`--json` is also
+available). Built-in `debug` and `release` profiles select their configuration
+and separate `build-workspace-debug` / `build-workspace-release` directories.
+Commands without a profile retain their existing defaults.
+
+```bash
+python build.py doctor --profile release
+python build.py build --profile debug --parallel 4
+python build.py profile-save dev --profile debug --no-docs --parallel 4
+python build.py test --profile dev
+python build.py build --profile dev --docs --config RelWithDebInfo --dry-run
+```
+
+Profiles apply to `configure`, `build`, `test`, `run`, `doctor`, and
+`profile-save`. Explicit CLI settings override profile values; repeated
+`--cmake-arg` values append after the profile's arguments. Use `--docs`,
+`--tests`, `--tidy`, or `--no-tracy` to reverse saved boolean choices.
+Application arguments after `run --` remain application arguments.
+Coverage and tidy retain their dedicated toolchains and build directories.
+
+`profile-save NAME` creates or replaces that name in the Git-ignored
+`build-profiles.local.json`. It preserves other names and replaces the file
+atomically. `--dry-run` previews without writing. Only reusable configuration,
+build-directory, generator, architecture, parallelism, feature flags, and extra
+CMake arguments are saved; target, application, clean, fresh, and dry-run choices
+are not saved. Treat extra CMake arguments as trusted local build configuration.
+
+For a shared file, pass `--profiles-file PATH` explicitly. Relative profile-file
+and build-directory paths resolve from the repository root, including when the
+shell is elsewhere. The file's parent directory must already exist. Its format is:
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "dev": {
+      "config": "Debug",
+      "build_dir": "build-workspace-dev",
+      "no_docs": true,
+      "parallel": 4
+    }
+  }
+}
+```
+
+Allowed keys are `config`, `build_dir`, `generator`, `architecture`, `tracy`,
+`no_tests`, `no_docs`, `no_tidy`, `parallel`, and `cmake_arg` (a string array).
+Parallelism is `null` for no explicit limit option, `0` for automatic, or a
+positive job count. On the CLI, `--parallel` or `--parallel=auto` selects automatic
+parallelism. Saved profiles replace matching built-in definitions;
+there is no inheritance. Unknown keys and malformed values are rejected.
+
+`doctor` checks the selected cache and required tools, reports versions and
+optional documentation tools, and supports `--json`. Errors return a nonzero
+exit code. It runs bounded tool-version probes but never configures, builds,
+downloads, or repairs anything. A successful report does not prove that a compiler
+and Windows SDK can compile the project; CMake configuration remains that check.
+Builds reject foreign caches and conflicting explicit generator/architecture
+choices. Use a separate build directory, or explicitly `--fresh` for a same-source
+generator change. Failed commands report their exit code, elapsed time, working
+directory, and command while preserving native tool diagnostics.
+
+Run the orchestrator regression suite with:
+
+```bash
+python -m unittest discover -s tools -p test_build.py -v
+```
+
 ## Project creation (Unreal Engine style)
+
+Standalone generated workspaces include `engine-provenance.json`: source commit,
+dirty/unknown status, template and creation options. A dirty source copy is not
+an exact Git pin; retain its changes with the generated project. Git-unavailable
+sources record unknown identity explicitly. Source must remain unchanged during
+copying; the generator does not lock the checkout or create a Git snapshot.
+
+## Standalone rendering tool
+
+`cmake --build build --config Release --target IllumoCapture` builds the bounded
+capture client. Run `build/Release/IllumoCapture.exe --output build/frame.png
+--mode scene` to produce a PNG and JSON diagnostics without a game loop. See
+[capture inputs and ownership](docs/frame-capture.md) and
+[charter direction](docs/charter-direction.md). The existing destination must not
+exist. Capture requires a real graphics context; Linux remains unverified.
+
+## Creating an application
 
 To scaffold a new Illumo application project, use the project creation tool:
 

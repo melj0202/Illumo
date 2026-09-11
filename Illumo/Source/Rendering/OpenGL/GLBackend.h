@@ -18,6 +18,7 @@ private:
   CommandQueue* commandQueue;
   IRenderWindow* window;
   int fps = 0;
+  size_t m_rejectionsAtFrameStart = 0;
 
   std::unordered_map<uint32_t, GLMeshResourceEntry> _vaoRegistryLookup;
   std::unordered_map<uint32_t, GLShaderResourceEntry> _programRegistryLookup;
@@ -41,6 +42,7 @@ public:
   void PushToCommandQueue(RenderCommand command) override;
   void ClearCommandQueue() override;
   int getFPS() const override { return fps; }
+  FrameReadback readBackbuffer(int width, int height) override;
 
   MeshHandle CreateMesh(const void* vertices,
                         size_t vertexSize,

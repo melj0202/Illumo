@@ -1,7 +1,7 @@
 #include "Rendering/BackendConfig.h"
-#include <Illumo/Engine/PresentationTiming.h>
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Services/InputContext.h>
@@ -12,6 +12,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -174,6 +175,35 @@ testInputManagerContextsAndCapacity()
             static_cast<int>(input.registerInputContext(InputContext())),
             -1,
             "context capacity is enforced");
+  InputContext* selected = input.getActiveInputContext();
+  testTrue(g, !input.setActiveInputContext(-1), "negative ID rejected");
+  testTrue(g, !input.setActiveInputContext(999), "unknown ID rejected");
+  testTrue(g,
+           input.getActiveInputContext() == selected,
+           "invalid activation preserves selection");
+  testTrue(g, !input.isActionActive("missing"), "missing action is inert");
+  testTrue(g, input.unregisterInputContext(firstId), "active context retired");
+  testTrue(g, !input.isActionActive("toggle"), "retired actions are inert");
+  testTrue(
+    g, !input.unregisterInputContext(firstId), "double retirement rejected");
+  for (int i = 0; i < NUM_INPUT_CONTEXTS * 4; ++i) {
+    const long replacement = input.registerInputContext(first);
+    testTrue(g, replacement > firstId, "free storage receives fresh ID");
+    testTrue(
+      g, input.setActiveInputContext(replacement), "replacement activates");
+    testTrue(
+      g, !input.setActiveInputContext(firstId), "stale ID never aliases");
+    testTrue(g,
+             !input.unregisterInputContext(firstId),
+             "stale retirement never aliases");
+    testTrue(
+      g, input.unregisterInputContext(replacement), "replacement retires");
+  }
+  InputManagerTestAccess::setNextContextId(input,
+                                           std::numeric_limits<long>::max());
+  testTrue(g,
+           input.registerInputContext(first) == -1,
+           "ID exhaustion fails without overflow");
 }
 
 static void

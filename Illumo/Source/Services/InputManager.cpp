@@ -1,5 +1,7 @@
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
+#include <limits>
+#include <utility>
 
 #ifdef TRACY_ENABLE
 #include "tracy/Tracy.hpp"
@@ -335,10 +337,10 @@ InputManager::TranslateInputActionGLFW(int glfwAction)
 
 InputManager::InputManager(GLFWwindow* window)
   : window(window)
-  , activeInputContext(&inputContexts[0])
-  , numInputContexts(0)
+  , activeInputContext(&neutralContext)
   , m_modifierFlags(0)
 {
+  contextIds.fill(-1);
   s_Instance = this;
   if (window != nullptr) {
     glfwSetKeyCallback(window, normalKeyCallback);
@@ -511,15 +513,46 @@ InputManager::isMouseButtonReleased(KeyCode mouseButton)
   return TranslateInputActionGLFW(glfwInputAction) == InputAction::Release;
 }
 
-void
+bool
 InputManager::setActiveInputContext(long inputContext)
 {
-  activeInputContext = &inputContexts[inputContext];
+  if (inputContext < 0) {
+    return false;
+  }
+  for (size_t i = 0; i < contextIds.size(); ++i) {
+    if (contextIds[i] == inputContext) {
+      activeInputContext = &inputContexts[i];
+      return true;
+    }
+  }
+  return false;
+}
+
+bool
+InputManager::unregisterInputContext(long inputContext)
+{
+  if (inputContext < 0) {
+    return false;
+  }
+  for (size_t i = 0; i < contextIds.size(); ++i) {
+    if (contextIds[i] == inputContext) {
+      if (activeInputContext == &inputContexts[i]) {
+        activeInputContext = &neutralContext;
+      }
+      inputContexts[i] = InputContext{};
+      contextIds[i] = -1;
+      return true;
+    }
+  }
+  return false;
 }
 
 [[nodiscard]] bool
 InputManager::isActionActive(std::string actionTag)
 {
+  if (!activeInputContext->getActions().contains(actionTag)) {
+    return false;
+  }
   InputEvent ie = activeInputContext->getActionTag(actionTag);
   return inputStatesCurrent[ie.keyCode] == ie.inputAction;
 }
@@ -527,13 +560,17 @@ InputManager::isActionActive(std::string actionTag)
 [[nodiscard]] long
 InputManager::registerInputContext(InputContext inputContext)
 {
-  if (numInputContexts >= NUM_INPUT_CONTEXTS) {
-    Logger::LogError("Too many input contexts registered");
-    return -1;
+  if (nextContextId < std::numeric_limits<long>::max()) {
+    for (size_t i = 0; i < contextIds.size(); ++i) {
+      if (contextIds[i] == -1) {
+        inputContexts[i] = std::move(inputContext);
+        contextIds[i] = nextContextId++;
+        return contextIds[i];
+      }
+    }
   }
-  inputContexts[numInputContexts] = inputContext;
-  numInputContexts++;
-  return numInputContexts - 1;
+  Logger::LogError("Input context capacity or identifier space exhausted");
+  return -1;
 }
 
 std::array<double, 2>

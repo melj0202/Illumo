@@ -21,3 +21,11 @@ IllumoGame owns CA defaults and `envvars.json`, TPS, speed, fade, ruleset,
 canvas, simulation, camera, persistence commands, canvas CLI descriptors, and
 dialog labels/default filenames. `CellGameModule` registers domain commands
 through `CommandRegistry` and calls SaveLoad without containing native code.
+
+## Input registration lifetime
+
+InputManager supports 32 live contexts with reusable storage and non-reused
+manager-local long IDs. Registration returns -1 when full or ID space is
+exhausted. Invalid activation preserves selection; unregistering the active ID
+selects neutral input. Unknown actions are inactive. Modules must unregister
+on Exit; rejected startup must not retain a registration.

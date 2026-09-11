@@ -34,6 +34,11 @@ READMEs stay beside the assets they govern.
 
 ## Reading order
 
+The [charter direction](charter-direction.md) separates future requirements from
+current capabilities. [Frame capture](frame-capture.md) documents the independent
+rendering service and CLI. The [milestone plan](charter-baseline-and-capture-plan.md)
+records this implementation and its validation.
+
 1. Read `architecture-consensus.md` for current code truth, locked decisions,
    known issues, and work order.
 2. Read `scene-graph-v1-design.md` when changing persistent scene ownership,

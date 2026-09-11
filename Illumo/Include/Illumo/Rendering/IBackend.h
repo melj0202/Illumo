@@ -1,5 +1,6 @@
 #pragma once
 #include <Illumo/Rendering/CommandQueue.h>
+#include <Illumo/Rendering/FrameReadback.h>
 #include <Illumo/Rendering/IMesh.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ITexture.h>
@@ -45,6 +46,15 @@ public:
   virtual void PushToCommandQueue(RenderCommand command) = 0;
   virtual void ClearCommandQueue() = 0;
   virtual int getFPS() const = 0;
+  // Synchronous default-backbuffer capture, after submission and before swap.
+  // Failure must include frame rejection/resource errors even after queue
+  // clear.
+  virtual FrameReadback readBackbuffer(int width, int height)
+  {
+    (void)width;
+    (void)height;
+    return { 0, 0, {}, "Backend does not support frame readback" };
+  }
 
   virtual MeshHandle CreateMesh(const void* vertices,
                                 size_t vertexSize,

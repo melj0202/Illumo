@@ -29,6 +29,11 @@ The repository also contains `stb_image_resize2` 2.10 and `stb_truetype` 1.26.
 They are not referenced by the current Illumo targets, but are covered by the
 same stb MIT notice and retain the complete dual-license text in each header.
 
+PNG capture compiles the existing `stb_image_write` header bundled in
+`Illumo/thirdparty/glfw-3.4/deps/stb_image_write.h` under its MIT alternative
+(Copyright (c) 2017 Sean Barrett). Its complete notice remains in the header;
+the same stb MIT text is staged as `licenses/stb-LICENSE.txt` with IllumoCapture.
+
 ## Vendored source not linked by the current targets
 
 These source trees are present in `Illumo/thirdparty/`, but the current

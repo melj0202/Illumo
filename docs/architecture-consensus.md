@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-08-30
+**Last updated:** 2026-09-11
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -46,6 +46,24 @@ Optional deeper reading (not required to resume work):
 13. [How to use this document](#13-how-to-use-this-document)  
 
 ---
+
+## Charter milestones (2026-09-11)
+
+[Charter direction](charter-direction.md) separates later physics, object
+lifetime, tooling and Linux requirements from current contracts. The owner
+approved baseline and independent rendering; older CA-only deferrals do not
+exclude those concrete consumers.
+
+InputManager now validates non-reused manager-local IDs, reuses retired storage
+among 32 live slots and selects neutral input after active retirement.
+CellGameModule releases its registration on Exit and rejects exhausted startup
+before domain allocation. Generated standalone projects record source provenance
+in engine-provenance.json, distinguishing clean, dirty and unknown identity.
+
+[FrameCapture and IllumoCapture](frame-capture.md) provide bounded hidden-context
+OpenGL rendering and PNG/JSON output without starting the runtime host. Scene and
+direct producers use the same renderer. Strict capture errors, backend readback
+and first-frame depth state are explicit; normal application defaults remain.
 
 ## 0. One-line summary
 
@@ -1002,7 +1020,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 | IllumoContext growth | Frozen; third module = explicit deps |
 | Life-like JSON family collapse | Optional cleanup of repetitive RuleSet classes |
 | GPU/SYCL acceleration | Optional after bounded CPU parallel benchmark / product need; CPU sparse stepping is the production baseline |
-| File asset formats | Current managed scope is textures + shaders; font atlases, model import, and general 3D meshes are deferred. `MeshVisual` is procedural world geometry (quads, sprites, cubes, lines) only. |
+| File asset formats | AssetManager manages textures/shaders. MeshLoader imports OBJ on the CPU behind a replaceable loader; MeshVisual consumes mesh data and procedural geometry. Game-object persistence remains separate future work. |
 
 ---
 
@@ -1075,7 +1093,7 @@ Most design questions from the LaTeX open list are **resolved** (see §6). Still
 | Topic | Working answer |
 |-------|----------------|
 | Resource ownership long-term | Typed generational handles validate explicit replace/destroy operations; `AssetManager` adds reference-counted file assets, and the resizeable canvas explicitly replaces/releases its texture and PBO ring. |
-| Linux/macOS parity | Both selected bootstraps are known stale and do not match the shared App APIs; keep them unsupported until native configure/build/test/smoke validation succeeds. |
+| Linux/macOS parity | The selected bootstraps use the shared application entry contract, but native configure/build/test/smoke evidence is absent; keep them unsupported until that validation succeeds. |
 | Tracy CI policy | Debug-oriented; no strict CI policy yet. |
 | When to introduce SYCL / GPU simulation | Only after a current benchmark and explicit product or learning goal justify a second compute path. Sparse chunks and bounded CPU workers are already live. |
 

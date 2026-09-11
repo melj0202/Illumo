@@ -17,6 +17,20 @@ before running the workspace label. There is no compatibility executable named
 \texttt{Illumo}.
 
 The Python front end configures the root workspace and exposes the same flow:
+Its interactive Windows console accepts left-clicks to activate rows, the left
+setting arrow or right-clicks to cycle backward, and wheel input to navigate.
+Mouse movement highlights the row under the pointer without activating it.
+Keyboard controls remain available. Mouse hit testing requires the complete
+dashboard to fit (at least 56 columns by 29 rows). Native console input mode is
+restored around child commands and on exit; other terminals use keyboard input.
+Build, test, coverage, tidy, and documentation menu actions display a live phase,
+elapsed times, tool-reported progress, diagnostic line counts, and recent output.
+Unknown totals use an activity indicator rather than an estimated percentage.
+The complete combined log remains under \pathref{build-orchestrator-logs/}.
+Ctrl+C stops the action's owned processes; Windows Job Objects retain descendant
+ownership even if the launcher exits first. The completion screen shows exit
+status and remains until Enter. Application launches and statistics retain
+direct output, and explicit CLI output is unchanged.
 \begin{lstlisting}[language={}]
 python build.py build --config Debug --target IllumoGame --parallel
 python build.py test
@@ -33,6 +47,72 @@ python build.py tidy
 \end{lstlisting}
 Exact runner cases execute in dedicated manual-testing directories so file-backed
 configuration cannot mutate staged runtime data.
+
+Named profiles are available for configure, build, test, run, and diagnostics:
+\begin{lstlisting}[language={}]
+python build.py profiles
+python build.py doctor --profile release --json
+python build.py profile-save dev --profile debug --no-docs --parallel 4
+python build.py build --profile dev
+\end{lstlisting}
+Built-in debug and release profiles use separate build directories. Saved
+settings live in Git-ignored \pathref{build-profiles.local.json}; an explicit
+\texttt{--profiles-file} selects a shared version-1 JSON file. CLI values override
+saved defaults, while extra CMake arguments append. Saving replaces only the
+named entry, atomically, and excludes one-shot clean/fresh actions. The README
+documents the schema and boolean overrides. Existing commands without a profile
+keep their defaults; CMake remains authoritative.
+
+The doctor command checks cache compatibility and tool availability with bounded
+version probes, without configuring or repairing the tree. It does not prove
+compiler/SDK readiness. Explicit generator and architecture conflicts fail before
+configuration; foreign-source caches remain rejected even with fresh requested.
+Command failures report elapsed time, working directory, and native exit status.
+Orchestrator regression tests run through Python unittest discovery with
+\texttt{-s tools -p test\_build.py}.
+
+\subsubsection{Everyday development toolbox}
+The compact dashboard opens a scrollable Development Tools submenu with a
+test explorer, diagnostic browser, profile picker, existing-artifact shortcuts,
+and source-file statistics. Arrows, wheel, Page Up/Down, and Home/End navigate;
+mouse hit regions follow the visible viewport. Hover and ordinary item selection
+only update details. Explicit action rows execute work. Slash focuses search;
+ordinary characters (including navigation letters) become text, Backspace edits,
+Enter applies, and Escape cancels. Outside text entry, Escape or q returns.
+
+The explorer reads CTest's JSON inventory, including labels, commands, working
+directories, and timeouts. Name search and project-label filters narrow the list.
+Run Selected, Run Matching, Rerun Failed, and Refresh Inventory are explicit.
+Preparation configures and builds declared discovery and smoke targets by
+default; Run Existing skips preparation. Browsing never builds. Exact selected
+configuration discovery files are mandatory: another-configuration fallback is
+rejected, as is a mismatched single-configuration cache. Empty selections run
+nothing. Escaped, anchored name filters are batched below Windows command-length
+limits while CTest retains test working directories and timeouts.
+
+Test runs use local \texttt{-T Test --no-compress-output} reporting without
+submission. Fresh XML is saved per batch before a later batch can replace it.
+Version-1 JSON sidecars beside raw logs record checkout, build directory,
+configuration, effective settings, command directories, completion status,
+durations, and available test results. Raw logs remain authoritative. Failed-test
+reruns use only the latest test run with the same build identity. Incomplete or
+cancelled results, missing tests, and legacy logs cannot silently supply reruns.
+
+The diagnostic browser recognizes MSVC, Clang/clang-tidy, and CMake locations,
+filters errors/warnings, and retains unrecognized output through raw log context.
+Relative source paths resolve against recorded command directories. Previews are
+read-only and explicitly labelled CURRENT SOURCE because files may have changed.
+Missing files and invalid locations receive messages rather than guessed paths.
+
+The profile picker shows built-in and saved effective settings. Applying a profile
+carries its configuration, directory, generator, architecture, feature flags,
+extra CMake arguments, and parallelism into ordinary dashboard commands. Manual
+changes remain session overrides; switching profiles clears them. Saving requires
+an explicit name and action. Coverage and tidy retain their dedicated Debug/Ninja
+trees. Artifact shortcuts open only existing build directories, applicable logs,
+coverage HTML, and generated PDFs through Windows default handlers; opening never
+builds. All toolbox implementation remains standard-library-only in
+\pathref{build.py} so independently generated projects retain the functionality.
 
 The repository-statistics command reports the current Git branch, commit, and
 working-tree counts together with tracked-file and categorized first-party line
