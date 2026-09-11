@@ -33,6 +33,8 @@ editing. Route detail to these canonical sources:
 
 - repository use and exact common commands: `README.md`;
 - current architecture and decision catalog: `docs/architecture-consensus.md`;
+- intended charter direction and current boundary: `docs/charter-direction.md`;
+- independent capture API and CLI: `docs/frame-capture.md`;
 - persistent scene hierarchy contract: `docs/scene-graph-v1-design.md`;
 - long-form design book and chart-only map: `docs/latex/illumo.tex` and
   `docs/latex/architecture-map.tex`;

@@ -88,6 +88,12 @@ testModuleStartupAndLifecycle()
   testTrue(g, fixture.started, "module started successfully");
   testTrue(g, fixture.module.showGrid(), "grid enabled by default");
   testTrue(g, !fixture.module.showWireframe(), "wireframe disabled by default");
+  testTrue(g, fixture.module.showSkybox(), "skybox enabled by default");
+
+  fixture.module.setShowSkybox(false);
+  testTrue(g, !fixture.module.showSkybox(), "skybox disabled via setter");
+  fixture.module.setShowSkybox(true);
+  testTrue(g, fixture.module.showSkybox(), "skybox re-enabled via setter");
 
   fixture.module.Update(0.016);
   fixture.module.DispatchDrawables(&fixture.scene);

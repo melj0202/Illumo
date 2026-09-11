@@ -111,11 +111,13 @@ private:
   std::unordered_map<KeyCode, InputAction> inputStatesCurrent;
   std::unordered_map<KeyCode, InputAction> inputStatesPrevious;
   InputContext inputContexts[NUM_INPUT_CONTEXTS];
+  std::array<long, NUM_INPUT_CONTEXTS> contextIds;
+  InputContext neutralContext;
   InputContext* activeInputContext;
   std::queue<unsigned int> charQueue;
   std::queue<KeyPressEvent> keyQueue;
 
-  long numInputContexts;
+  long nextContextId = 0;
   int m_modifierFlags;
 
   KeyCode TranslateKeyCodeToGLFW(int glfwKey);
@@ -152,7 +154,11 @@ public:
 
   bool isMouseButtonReleased(KeyCode mouseButton);
 
-  void setActiveInputContext(long inputContext);
+  // IDs are manager-local and never reused. Invalid selection leaves the
+  // current context unchanged; retiring the active context selects neutral
+  // input.
+  bool setActiveInputContext(long inputContext);
+  bool unregisterInputContext(long inputContext);
 
   InputContext* getActiveInputContext() { return activeInputContext; }
 

@@ -87,6 +87,8 @@ add_library(Illumo STATIC
   Source/Rendering/AssetManager.cpp
   Source/Rendering/Camera.cpp
   Source/Rendering/Font.cpp
+  Source/Rendering/FrameCapture.cpp
+  Source/Rendering/FrameCaptureImage.cpp
   Source/Rendering/GLString.cpp
   Source/Rendering/MeshLoader.cpp
   Source/Rendering/Renderer.cpp
@@ -95,6 +97,7 @@ add_library(Illumo STATIC
   Source/Rendering/ShaderPreprocessor.cpp
   Source/Rendering/SplashText.cpp
   Source/Rendering/Primitives/MeshVisual.cpp
+  Source/Rendering/Primitives/SkyboxVisual.cpp
   Source/Rendering/Primitives/GameVisual.cpp
   Source/Rendering/Primitives/SpriteAnimation.cpp
   Source/Rendering/OpenGL/CreateOpenGLBackend.cpp
@@ -128,6 +131,7 @@ target_include_directories(Illumo
 target_include_directories(Illumo SYSTEM PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/thirdparty>")
 target_include_directories(Illumo SYSTEM PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glfw-3.4/deps"
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glfw-3.4/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glew-2.1.0/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/json/single_include"
@@ -174,6 +178,7 @@ if(BUILD_TESTING)
     Tests/TestShaderPreprocessor.cpp
     Tests/TestGuiKit.cpp
     Tests/TestFont.cpp
+    Tests/TestFrameCapture.cpp
   )
   target_link_libraries(IllumoTests PRIVATE Illumo::TestSupport glfw)
   target_include_directories(IllumoTests PRIVATE
@@ -201,6 +206,46 @@ if(BUILD_TESTING)
       WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
       USES_TERMINAL
       COMMENT "Running the standalone Illumo test suite")
+  endif()
+endif()
+
+option(ILLUMO_BUILD_CAPTURE "Build the standalone frame capture tool" ON)
+if(ILLUMO_BUILD_CAPTURE)
+  add_executable(IllumoCapture tools/CaptureMain.cpp)
+  target_link_libraries(IllumoCapture PRIVATE Illumo::Illumo)
+  target_include_directories(IllumoCapture SYSTEM PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/json/single_include")
+  illumo_configure_runtime_target(IllumoCapture)
+  illumo_stage_runtime(IllumoCapture)
+  illumo_stage_msvc_asan(IllumoCapture)
+  set(_capture_revision "unknown")
+  find_package(Git QUIET)
+  if(Git_FOUND)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _git_result
+      OUTPUT_VARIABLE _git_revision OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(_git_result EQUAL 0)
+      set(_capture_revision "${_git_revision}")
+      execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE _git_status ERROR_QUIET)
+      if(NOT _git_status STREQUAL "")
+        string(APPEND _capture_revision "-dirty")
+      endif()
+    endif()
+  endif()
+  target_compile_definitions(IllumoCapture PRIVATE "ILLUMO_CAPTURE_REVISION=\"${_capture_revision}\"")
+  if(BUILD_TESTING)
+    # Explicit real-GPU check, never part of the headless default CTest suite.
+    add_executable(IllumoCaptureGpuTests EXCLUDE_FROM_ALL tools/CaptureGpuTests.cpp)
+    target_link_libraries(IllumoCaptureGpuTests PRIVATE Illumo::Illumo)
+    illumo_configure_runtime_target(IllumoCaptureGpuTests)
+    illumo_stage_msvc_asan(IllumoCaptureGpuTests)
+    add_test(NAME Illumo.Capture.Help COMMAND IllumoCapture --help)
+    add_test(NAME Illumo.Capture.InvalidDimensions COMMAND IllumoCapture --width 0 --output unused.png)
+    set_tests_properties(Illumo.Capture.InvalidDimensions PROPERTIES WILL_FAIL TRUE)
+    set_tests_properties(Illumo.Capture.Help Illumo.Capture.InvalidDimensions
+      PROPERTIES LABELS "Illumo;IllumoWorkspace")
+    add_dependencies(IllumoTestsDiscover IllumoCapture)
   endif()
 endif()
 

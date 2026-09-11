@@ -1,10 +1,12 @@
 // End-to-end drawable → Renderer → MockBackend token tests (no OpenGL).
 // Linked into the current IllumoTests target with TestMockBackend.cpp.
 
+#include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
+#include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/EnvVars.h>
@@ -698,6 +700,95 @@ testRenderTargetPoolResizing()
           "releaseAll destroys active FBO");
 }
 
+static void
+testRendererSkyboxVisual()
+{
+  std::printf("\n--- e2e: SkyboxVisual token emission ---\n");
+  E2ENullRenderWindow window(1280, 720);
+  MockBackend backend;
+  backend.Initialize();
+  Camera camera;
+  camera.setPerspective(60.0f, 0.1f, 1000.0f);
+  camera.setProjectionType(ProjectionType::Perspective);
+  camera.lookAt(glm::vec3(0.0f, 0.0f, 5.0f),
+                glm::vec3(0.0f, 0.0f, 0.0f),
+                glm::vec3(0.0f, 1.0f, 0.0f));
+
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  renderer.ensureBuiltinStyles();
+
+  std::array<unsigned char, 4> px = { 100, 150, 200, 255 };
+  std::array<const unsigned char*, 6> faces = {
+    px.data(), px.data(), px.data(), px.data(), px.data(), px.data()
+  };
+  TextureHandle cubemap = renderer.enrollCubemap(faces, 1, 1, 4);
+  e2eTrue(cubemap.isValid(), "Cubemap texture handle should be valid");
+
+  SkyboxVisual skybox(cubemap);
+  skybox.prepare(&renderer);
+
+  Scene scene(&window, &camera);
+  scene.AddDrawable(&skybox, RenderLayerId::World);
+
+  renderer.RenderScene(&scene, &camera);
+
+  bool foundTextureBind = false;
+  bool foundUniformViewProj = false;
+  bool foundDraw = false;
+
+  for (size_t i = 0; i < backend.getLastSubmittedCount(); ++i) {
+    const RenderCommand& cmd = backend.getLastSubmitted(i);
+    if (cmd.commandType == CommandType::SetTexture &&
+        cmd.bindTexture.handle == cubemap) {
+      foundTextureBind = true;
+    }
+    if (cmd.commandType == CommandType::SetUniformMat4 &&
+        std::strcmp(cmd.uniformMat4.name, "uViewProjection") == 0) {
+      foundUniformViewProj = true;
+    }
+    if (cmd.commandType == CommandType::DrawIndexed &&
+        cmd.drawIndexed.elementCount == 36) {
+      foundDraw = true;
+    }
+  }
+
+  e2eTrue(foundTextureBind, "Skybox should bind cubemap texture");
+  e2eTrue(foundUniformViewProj, "Skybox should push uViewProjection matrix");
+  e2eTrue(foundDraw, "Skybox should issue DrawIndexed with 36 indices");
+}
+
+static void
+testAssetManagerCubemapFromCross()
+{
+  std::printf("\n--- e2e: AssetManager cubemap from cross ---\n");
+  E2ENullRenderWindow window(1280, 720);
+  MockBackend backend;
+  backend.Initialize();
+  Camera camera;
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  AssetManager assets(&renderer, false);
+
+  std::string skyboxPath = "Assets/Skybox/skybox-daylight.png";
+  if (!std::filesystem::exists(skyboxPath)) {
+    skyboxPath = (std::filesystem::path(__FILE__).parent_path().parent_path() /
+                  "Assets" / "Skybox" / "skybox-daylight.png")
+                   .string();
+  }
+
+  TextureHandle cubemap =
+    assets.acquireCubemapFromCross(skyboxPath, AssetLoadMode::Synchronous);
+  e2eTrue(cubemap.isValid(),
+          "Should load cubemap cross from skybox-daylight.png");
+
+  TextureInfo info = assets.getTextureInfo(cubemap);
+  e2eEqInt(info.width, 512, "Face width should be 512");
+  e2eEqInt(info.height, 512, "Face height should be 512");
+
+  TextureHandle cached =
+    assets.acquireCubemapFromCross(skyboxPath, AssetLoadMode::Synchronous);
+  e2eTrue(cached == cubemap, "Repeated acquire should return cached handle");
+}
+
 static int
 runRendererE2ECase(void (*testFunction)())
 {
@@ -733,5 +824,10 @@ registerRendererE2ETests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Renderer.RenderTargetPoolResizing", []() {
     return runRendererE2ECase(testRenderTargetPoolResizing);
+  });
+  registry.add("Illumo.Renderer.SkyboxVisual",
+               []() { return runRendererE2ECase(testRendererSkyboxVisual); });
+  registry.add("Illumo.AssetManager.CubemapLoading", []() {
+    return runRendererE2ECase(testAssetManagerCubemapFromCross);
   });
 }

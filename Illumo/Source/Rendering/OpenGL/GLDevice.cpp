@@ -132,7 +132,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
         const GLFramebufferResourceEntry* fb =
           resolveFramebuffer(tables, cmd.bindFramebuffer.handle);
         if (!fb) {
-          Logger::LogWarning("SetFramebuffer: unknown framebuffer handle");
+          reportFrameError("SetFramebuffer: unknown framebuffer handle");
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           _boundFbo = 0;
           _boundFboHandle = FramebufferHandle{};
@@ -150,7 +150,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
         GLShaderProgram* program =
           resolveProgram(tables, cmd.bindShader.handle);
         if (!program) {
-          Logger::LogWarning("SetShader: unknown shader handle");
+          reportFrameError("SetShader: unknown shader handle");
           glUseProgram(0);
           _boundProgram = 0;
           _activeProgram = 0;
@@ -168,7 +168,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       case CommandType::SetMesh: {
         GLMesh* mesh = resolveMesh(tables, cmd.bindMesh.handle);
         if (!mesh) {
-          Logger::LogWarning("SetMesh: unknown mesh handle");
+          reportFrameError("SetMesh: unknown mesh handle");
           glBindVertexArray(0);
           _boundVao = 0;
           break;
@@ -184,7 +184,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       case CommandType::SetTexture: {
         GLTexture* texture = resolveTexture(tables, cmd.bindTexture.handle);
         if (!texture) {
-          Logger::LogWarning("SetTexture: unknown texture handle");
+          reportFrameError("SetTexture: unknown texture handle");
           break;
         }
         const unsigned int slot = cmd.bindTexture.slot;
@@ -255,7 +255,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       case CommandType::UpdateTexture: {
         GLTexture* texture = resolveTexture(tables, cmd.updateTexture.handle);
         if (!texture || !cmd.updateTexture.data) {
-          Logger::LogWarning("UpdateTexture: invalid handle or null data");
+          reportFrameError("UpdateTexture: invalid handle or null data");
           break;
         }
         // PBO ping-pong + dirty-rect copy lives on GLTexture (P4).
@@ -356,7 +356,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::Draw: {
         if (_activeProgram == 0 || _boundVao == 0) {
-          Logger::LogWarning("Draw: missing valid shader or mesh; ignored");
+          reportFrameError("Draw: missing valid shader or mesh; ignored");
           break;
         }
         GLenum mode = mapPrimitives(_currentGLState.primitives);
@@ -368,7 +368,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::DrawIndexed: {
         if (_activeProgram == 0 || _boundVao == 0) {
-          Logger::LogWarning(
+          reportFrameError(
             "DrawIndexed: missing valid shader or mesh; ignored");
           break;
         }
@@ -385,7 +385,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::DrawInstanced: {
         if (_activeProgram == 0 || _boundVao == 0) {
-          Logger::LogWarning(
+          reportFrameError(
             "DrawInstanced: missing valid shader or mesh; ignored");
           break;
         }
@@ -401,7 +401,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       case CommandType::UpdateBuffer: {
         GLMesh* mesh = resolveMesh(tables, cmd.updateBuffer.handle);
         if (!mesh || !cmd.updateBuffer.data) {
-          Logger::LogWarning("UpdateBuffer: invalid handle or null data");
+          reportFrameError("UpdateBuffer: invalid handle or null data");
           break;
         }
         mesh->UpdateVertexData(cmd.updateBuffer.data,
@@ -487,4 +487,13 @@ GLDevice::GetHWInfo()
 
   glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &info.maxUniformBlocks);
   return info;
+}
+
+void
+GLDevice::reportFrameError(const char* message)
+{
+  if (m_frameError.empty()) {
+    m_frameError = message;
+  }
+  Logger::LogWarning(message);
 }

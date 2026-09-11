@@ -65,6 +65,8 @@ public:
   static bool initLogger(IEnvVars* ev = nullptr, CommandLine* cl = nullptr);
   static void setContext(IEnvVars* ev, CommandLine* cl);
   static void shutdownLogger();
+  // Console tools can reserve stdout for machine-readable results.
+  static void setConsoleToStderr(bool enabled) { consoleToStderr = enabled; }
   static CommandLine* getCommandLine()
   {
     return instance ? instance->commandLine : nullptr;
@@ -73,6 +75,7 @@ public:
   std::ofstream logFileStream;
 
 private:
+  static inline bool consoleToStderr = false;
   static long getSafeLogLevel();
   static Logger* instance;
   IEnvVars* envVars;

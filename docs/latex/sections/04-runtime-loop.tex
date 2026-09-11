@@ -132,3 +132,9 @@ byte counts and availability. Windows obtains them through the process-memory
 API; unsupported scaffolds and failures display ``Memory: unavailable'' and
 retry at the normal interval. Native headers stay in the Windows platform
 implementation. No worker or new rendering path is introduced.
+\subsection{Input registration retirement (2026-09-11)}
+InputManager bounds live contexts to 32, reuses released slots and issues distinct
+manager-local IDs. Invalid activation preserves selection; active retirement
+selects neutral input. CellGameModule releases its registration on Exit and
+rejects exhausted startup before allocating domain state. Repeated module entry
+must not consume permanent input slots.

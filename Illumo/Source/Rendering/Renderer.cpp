@@ -217,6 +217,15 @@ Renderer::enrollTexture(const unsigned char* data,
   return _backend->CreateTexture(data, width, height, channels, options);
 }
 
+TextureHandle
+Renderer::enrollCubemap(const std::array<const unsigned char*, 6>& facesData,
+                        const int width,
+                        const int height,
+                        int channels)
+{
+  return _backend->CreateCubemap(facesData, width, height, channels);
+}
+
 bool
 Renderer::replaceTexture(TextureHandle handle,
                          const unsigned char* data,
@@ -270,6 +279,7 @@ Renderer::getTextureInfo(TextureHandle handle) const
 void
 Renderer::BeginFrame()
 {
+  m_frameError.clear();
   _backend->BeginFrame();
   _backend->ClearCommandQueue();
   _currentPassFbo = FramebufferHandle{};
@@ -530,13 +540,17 @@ Renderer::ensureFullscreenQuadMesh()
     return;
   }
   const float verts[32] = {
-    1.0f,  1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,  -1.0f, 0.0f,
-    1.0f,  1.0f, 1.0f, 1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, 1.0f,  1.0f,
-    0.0f,  0.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f,
+    1.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f,  1.0f,  1.0f, 1.0f, -1.0f, 0.0f,
+    1.0f, 1.0f, 1.0f,  1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, 1.0f,  1.0f,
+    0.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f,  1.0f,  1.0f, 0.0f, 1.0f,
   };
   const unsigned int indices[6] = { 0, 1, 2, 0, 2, 3 };
-  _fullscreenQuadMeshHandle = enrollMesh(
-    verts, sizeof(verts), indices, sizeof(indices), MeshVertexLayout::Pos3Color3Uv2, false);
+  _fullscreenQuadMeshHandle = enrollMesh(verts,
+                                         sizeof(verts),
+                                         indices,
+                                         sizeof(indices),
+                                         MeshVertexLayout::Pos3Color3Uv2,
+                                         false);
   _fullscreenQuadReady = _fullscreenQuadMeshHandle.isValid();
 }
 
@@ -592,8 +606,7 @@ Renderer::executePostProcessPass(const RenderPassDesc& pass,
                      pass.uniformFloats[i].value);
   }
   for (size_t i = 0; i < pass.uniformInts.size(); ++i) {
-    pushUniformInt(pass.uniformInts[i].name.c_str(),
-                   pass.uniformInts[i].value);
+    pushUniformInt(pass.uniformInts[i].name.c_str(), pass.uniformInts[i].value);
   }
   for (size_t i = 0; i < pass.uniformMat4s.size(); ++i) {
     pushUniformMat4(pass.uniformMat4s[i].name.c_str(),
@@ -645,15 +658,21 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
 
       if (!scene->hasCustomPasses(layer)) {
         _currentPassFbo = FramebufferHandle{};
-        _currentPassViewport = {
-          0, 0, frameContext.windowDimensions[0], frameContext.windowDimensions[1]
-        };
+        _currentPassViewport = { 0,
+                                 0,
+                                 frameContext.windowDimensions[0],
+                                 frameContext.windowDimensions[1] };
         for (size_t i = 0; i < list.size(); ++i) {
           DrawableBase* drawable = list[i];
           if (!drawable) {
             continue;
           }
           if (!drawable->AppendCommands(this)) {
+            if (m_strictSubmission) {
+              reportFrameError(
+                "Drawable did not emit a complete token submission");
+              continue;
+            }
             if (immediateList != nullptr && immediateCount < immediateCap) {
               immediateList[immediateCount] = drawable;
               immediateCount += 1;
@@ -728,8 +747,12 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                 continue;
               }
               if (!drawable->AppendCommands(this)) {
-                if (immediateList != nullptr &&
-                    immediateCount < immediateCap) {
+                if (m_strictSubmission) {
+                  reportFrameError(
+                    "Drawable did not emit a complete token submission");
+                  continue;
+                }
+                if (immediateList != nullptr && immediateCount < immediateCap) {
                   immediateList[immediateCount] = drawable;
                   immediateCount += 1;
                 }
@@ -765,14 +788,13 @@ Renderer::ensureProofResources()
   }
 
   const float verts[32] = {
-    1.0f,  1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,  -1.0f, 0.0f,
-    0.0f,  1.0f, 0.0f, 1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,  1.0f,
-    0.0f,  0.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+    1.0f, 1.0f, 0.0f,  1.0f, 0.0f, 0.0f,  1.0f,  1.0f, 1.0f, -1.0f, 0.0f,
+    0.0f, 1.0f, 0.0f,  1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,  1.0f,
+    0.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f,  1.0f,  0.0f, 0.0f, 1.0f,
   };
   const unsigned int indices[6] = { 0, 1, 2, 0, 2, 3 };
 
-  _proofMeshHandle =
-    enrollMesh(verts, sizeof(verts), indices, sizeof(indices));
+  _proofMeshHandle = enrollMesh(verts, sizeof(verts), indices, sizeof(indices));
 
   ShaderPaths paths;
   paths.vertexPath = "Shader/triangle_vertex.glsl";

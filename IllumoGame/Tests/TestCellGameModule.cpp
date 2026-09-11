@@ -1207,9 +1207,48 @@ runCellGameModuleCase(void (*testFunction)())
   return g.failures;
 }
 
+static void
+testInputRegistrationLifetime()
+{
+  CellGameFixture fixture;
+  fixture.module.Exit();
+  fixture.started = false;
+  for (int i = 0; i < NUM_INPUT_CONTEXTS * 2; ++i) {
+    CellGameModule module;
+    testTrue(
+      g, module.Start(&fixture.context), "re-entry retains input capacity");
+    testTrue(g,
+             fixture.input.getActiveInputContext()->getActions().contains(
+               "PaintCanvas"),
+             "new module owns active bindings");
+    module.Exit();
+    module.Exit();
+    testTrue(
+      g, !fixture.input.isActionActive("PaintCanvas"), "exit retires bindings");
+  }
+  for (int i = 0; i < NUM_INPUT_CONTEXTS; ++i) {
+    testTrue(g,
+             fixture.input.registerInputContext(InputContext{}) >= 0,
+             "all slots available after repeated exit");
+  }
+  InputContext* selected = fixture.input.getActiveInputContext();
+  CellGameModule rejected;
+  testTrue(
+    g, !rejected.Start(&fixture.context), "full registry rejects startup");
+  testTrue(g,
+           CellGameModuleTestAccess::getCellContext(rejected) == nullptr,
+           "failed startup allocates no domain state");
+  testTrue(g,
+           fixture.input.getActiveInputContext() == selected,
+           "failed startup preserves selection");
+}
+
 void
 registerCellGameModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.CellGame.InputRegistrationLifetime", []() {
+    return runCellGameModuleCase(testInputRegistrationLifetime);
+  });
   registry.add("IllumoGame.CellGame.StartAndRegistration", []() {
     return runCellGameModuleCase(testStartRegistersGameFeatures);
   });

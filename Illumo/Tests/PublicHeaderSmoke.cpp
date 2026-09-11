@@ -22,6 +22,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/Drawable.h>
+#include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/IMesh.h>

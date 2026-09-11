@@ -19,6 +19,7 @@ MeshViewerUi::MeshViewerUi(IRenderWindow* window, Renderer* renderer)
   , m_showGrid(true)
   , m_showWireframe(false)
   , m_showAxes(true)
+  , m_showSkybox(true)
   , m_yawDeg(45.0f)
   , m_pitchDeg(25.0f)
   , m_distance(3.5f)
@@ -41,11 +42,13 @@ MeshViewerUi::setMeshMetadata(const MeshMetadata& metadata)
 void
 MeshViewerUi::setDisplayOptions(bool showGrid,
                                 bool showWireframe,
-                                bool showAxes)
+                                bool showAxes,
+                                bool showSkybox)
 {
   m_showGrid = showGrid;
   m_showWireframe = showWireframe;
   m_showAxes = showAxes;
+  m_showSkybox = showSkybox;
 }
 
 void
@@ -267,6 +270,9 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
   const std::string axesLabel =
     isVeryCompact ? (m_showAxes ? "A:ON" : "A:OFF")
                   : (std::string("Axes: ") + (m_showAxes ? "ON" : "OFF"));
+  const std::string skyboxLabel =
+    isVeryCompact ? (m_showSkybox ? "S:ON" : "S:OFF")
+                  : (std::string("Sky: ") + (m_showSkybox ? "ON" : "OFF"));
 
   addButton(openLabel,
             MeshViewerAction::OpenMesh,
@@ -286,6 +292,10 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
             MeshViewerAction::ToggleAxes,
             isVeryCompact ? 50.0f : 90.0f,
             m_showAxes);
+  addButton(skyboxLabel,
+            MeshViewerAction::ToggleSkybox,
+            isVeryCompact ? 50.0f : 90.0f,
+            m_showSkybox);
 
   // 2. Info Card / HUD (Top-Left under header)
   if (m_metadata.hasMesh) {

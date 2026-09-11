@@ -191,11 +191,15 @@ resources do not scale with chunk count.
 \end{statusbox}
 
 \subsection{Rulesets}
-Active rules (in \pathref{AllSets.h} / factory): Game of Life, Seeds, Brian's
-Brain, Highlife, Day \& Night, Life Without Death, Wireworld, Rule 90, and
-Rule 184. Binary B/S rules share \texttt{LifeLikeRuleSet} masks. Rule 90 / 184
-use \texttt{NeighborhoodKind::Elementary1D} and a serial space-time advance
-(D-G2).
+Active rules are cataloged in \pathref{rulesets.json} and registered via
+\texttt{RuleSetRegistry}: Game of Life, Brian's Brain, Day \& Night, Highlife,
+Life Without Death, Seeds, Wireworld, Rule 90, and Rule 184. Implementations are
+organized by mathematical family: \texttt{LifeLikeRuleSet} for binary Moore B/S
+rules, \texttt{Elementary1DRuleSet} for Wolfram 1D space-time rules
+(\texttt{NeighborhoodKind::Elementary1D}, D-G2), \texttt{BriansBrainRuleSet} for
+3-state decay, and \texttt{WireworldRuleSet} for digital circuit simulation.
+Additional rules added to \pathref{rulesets.json} are discovered dynamically at
+runtime without C++ recompilation.
 
 \begin{lstlisting}
 class RuleSet {

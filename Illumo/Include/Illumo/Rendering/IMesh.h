@@ -17,6 +17,8 @@ enum class MeshVertexLayout : int
   Pos3Norm3Color4U8Uv2 = 3,
   // 3D Textured lit meshes: float pos3 | float norm3 | float uv2 (stride 32)
   Pos3Norm3Uv2 = 4,
+  // Position only (e.g. skybox unit cube): float pos3 (stride 12)
+  Pos3 = 5,
 };
 
 class IMesh

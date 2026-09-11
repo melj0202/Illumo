@@ -110,7 +110,8 @@ function(illumo_stage_default_file target_name source_file destination_name)
     PROPERTIES HEADER_FILE_ONLY TRUE)
 
   _illumo_runtime_output_directory(runtime_directory)
-  set(stage_target "${target_name}DefaultFileStage")
+  string(MAKE_C_IDENTIFIER "${destination_name}" dest_identifier)
+  set(stage_target "${target_name}_${dest_identifier}_Stage")
   add_custom_target(${stage_target}
     COMMAND ${CMAKE_COMMAND}
       "-DSOURCE=${source_file}"

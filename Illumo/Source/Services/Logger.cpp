@@ -65,7 +65,8 @@ Logger::LogInfo(const char* message)
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 3)
     return;
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-  printf("\x1B[34mINFO\033[0m: %s\n", message);
+  fprintf(
+    consoleToStderr ? stderr : stdout, "\x1B[34mINFO\033[0m: %s\n", message);
 #endif
   if (instance) {
     instance->logFileStream << "INFO: " << message << std::endl;
@@ -81,7 +82,8 @@ Logger::LogWarning(const char* message)
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 2)
     return;
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-  printf("\x1B[33mWARNING\033[0m: %s\n", message);
+  fprintf(
+    consoleToStderr ? stderr : stdout, "\x1B[33mWARNING\033[0m: %s\n", message);
 #endif
   if (instance) {
     instance->logFileStream << "WARNING: " << message << std::endl;
@@ -97,7 +99,8 @@ Logger::LogError(const char* message)
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 1)
     return;
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-  printf("\x1B[31mERROR\033[0m: %s\n", message);
+  fprintf(
+    consoleToStderr ? stderr : stdout, "\x1B[31mERROR\033[0m: %s\n", message);
 #endif
   if (instance) {
     instance->logFileStream << "ERROR: " << message << std::endl;
@@ -113,7 +116,7 @@ Logger::Log(const char* message)
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 1)
     return;
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-  std::cout << message << std::endl;
+  (consoleToStderr ? std::cerr : std::cout) << message << std::endl;
 #endif
   if (instance) {
     instance->logFileStream << message << std::endl;
@@ -129,7 +132,8 @@ Logger::LogTrace(const char* message)
   if (!message || __STRLEN(message) == 0 || getSafeLogLevel() < 4)
     return;
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-  printf("\x1B[35mTRACE\x1B[0m: %s\n", message);
+  fprintf(
+    consoleToStderr ? stderr : stdout, "\x1B[35mTRACE\x1B[0m: %s\n", message);
 #endif
   if (instance) {
     instance->logFileStream << "TRACE: " << message << std::endl;

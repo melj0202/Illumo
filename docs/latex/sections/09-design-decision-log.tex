@@ -1791,7 +1791,52 @@ the same way; it still rejects combined coverage.\\
 details.
 \end{decisionbox}
 
+\subsection*{D-R22 --- Cubemap and SkyboxVisual rendering}
+\begin{decisionbox}[title={D-R22 \quad 2026-09-04}]
+\textbf{Decision:} The rendering subsystem supports 3D environment skyboxes via
+cubemaps:
+\begin{itemize}
+  \item \symbolref{IBackend} gains \texttt{CreateCubemap} allocating a
+        generational \symbolref{TextureHandle} bound to
+        \texttt{GL\_TEXTURE\_CUBE\_MAP} with 6 face uploads, seamless filtering,
+        and \texttt{GL\_CLAMP\_TO\_EDGE} wrap.
+  \item \symbolref{AssetManager} loads individual face files via
+        \texttt{acquireCubemap} and automatically extracts 6 faces from horizontal
+        crosses (4:3), vertical crosses (3:4), and strips (6:1) via
+        \texttt{acquireCubemapFromCross}.
+  \item Built-in style \texttt{RenderStyleId::Skybox} renders a unit cube
+        at the far depth plane using \texttt{pos.xyww} projection,
+        \texttt{GL\_LEQUAL} depth testing, and no backface culling.
+  \item \symbolref{SkyboxVisual} is the world cubemap host and
+        \symbolref{ISceneRenderAttachment}, emitting tokens with a
+        translation-stripped camera view-projection matrix. Consuming
+        viewers (e.g. \texttt{IllMeshViewer}) expose live toggles and runtime
+        configuration.
+\end{itemize}
+\textbf{Why:} 3D scene visualization and model viewing require environment
+context without polluting the backend-neutral token queue or breaking the
+single-pipeline render model.\\
+\textbf{Consequences:} \pathref{SkyboxVisual.h}, \pathref{GLTexture.h},
+\pathref{IBackend.h}, \pathref{AssetManager.h}; tested via headless mock tokens
+and E2E suite; integrated into \texttt{IllMeshViewer}.
+\end{decisionbox}
+
 %----------------------------------------------------------------------------
+\subsection*{D-CAP1 --- Bounded standalone rendering and charter baseline}
+\begin{decisionbox}[title={D-CAP1 \quad 2026-09-11}]
+\textbf{Decision:} Reuse the token renderer for direct and SceneGraph frame capture
+in a hidden OpenGL context. Capture owns a bounded service lifetime, not an
+application loop. Readback and strict diagnostics are public contracts; PNG
+publication does not replace existing artifacts.
+\textbf{Why:} The owner authorized the first two charter milestones: reliable
+baseline behavior and independently usable rendering tools.
+\textbf{Consequences:} Input IDs are validated, retired and never reused within
+a manager; generated copies record commit/dirty/unknown provenance. Broader 3D
+framework direction is separate from current code. Physics, object destruction,
+shared ticks, additional backends and Linux support remain later work. Existing
+application and persistence contracts remain. See the milestone execution plan.
+\end{decisionbox}
+
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

@@ -1,9 +1,7 @@
+#pragma once
+
 #include "BriansBrainRuleSet.h"
-#include "DayAndNightRuleSet.h"
-#include "GameOfLifeRuleSet.h"
-#include "HighlifeRuleSet.h"
-#include "LifeWithoutDeathRuleSet.h"
-#include "Rule184RuleSet.h"
-#include "Rule90RuleSet.h"
-#include "SeedsRuleSet.h"
+#include "Elementary1DRuleSet.h"
+#include "LifeLikeRuleSet.h"
+#include "RuleSetRegistry.h"
 #include "WireworldRuleSet.h"

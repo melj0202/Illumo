@@ -48,12 +48,8 @@ CellContext::CellContext(std::string modeString,
   }
   grid = new SparseCellGrid(worldChunkWidth, worldChunkHeight);
   spareGrid = new SparseCellGrid(worldChunkWidth, worldChunkHeight);
-  canvasView = new CanvasView(static_cast<int>(cx),
-                              static_cast<int>(cy),
-                              grid,
-                              window,
-                              camera,
-                              renderer);
+  canvasView = new CanvasView(
+    static_cast<int>(cx), static_cast<int>(cy), grid, window, camera, renderer);
   ruleSet = nullptr;
   ModeString = "";
   setRuleSet(modeString);
@@ -70,35 +66,19 @@ CellContext::~CellContext()
 std::string
 CellContext::NormalizeModeString(std::string modeString)
 {
-  for (size_t i = 0; i < modeString.size(); ++i) {
-    modeString[i] = static_cast<char>(
-      std::toupper(static_cast<unsigned char>(modeString[i])));
-  }
-  return modeString;
+  return RuleSetRegistry::normalizeId(std::move(modeString));
 }
 
 bool
 CellContext::IsKnownModeString(const std::string& modeString)
 {
-  return modeString == "GAME_OF_LIFE" || modeString == "BRIANS_BRAIN" ||
-         modeString == "DAY_AND_NIGHT" || modeString == "HIGHLIFE" ||
-         modeString == "LIFE_WITHOUT_DEATH" || modeString == "SEEDS" ||
-         modeString == "WIREWORLD" || modeString == "RULE_90" ||
-         modeString == "RULE_184";
+  return RuleSetRegistry::instance().isKnownRule(modeString);
 }
 
 std::vector<std::string>
 CellContext::GetKnownModeStrings()
 {
-  return { "GAME_OF_LIFE",
-           "BRIANS_BRAIN",
-           "DAY_AND_NIGHT",
-           "HIGHLIFE",
-           "LIFE_WITHOUT_DEATH",
-           "SEEDS",
-           "WIREWORLD",
-           "RULE_90",
-           "RULE_184" };
+  return RuleSetRegistry::instance().getKnownRules();
 }
 
 bool
@@ -114,32 +94,17 @@ CellContext::setRuleSet(std::string modeString)
     return false;
   }
 
-  delete ruleSet;
-  ruleSet = nullptr;
-
-  if (modeString == "GAME_OF_LIFE") {
-    ruleSet = new GameOfLifeRuleSet(nullptr);
-  } else if (modeString == "BRIANS_BRAIN") {
-    ruleSet = new BriansBrainRuleSet(nullptr);
-  } else if (modeString == "DAY_AND_NIGHT") {
-    ruleSet = new DayAndNightRuleSet(nullptr);
-  } else if (modeString == "HIGHLIFE") {
-    ruleSet = new HighlifeRuleSet(nullptr);
-  } else if (modeString == "LIFE_WITHOUT_DEATH") {
-    ruleSet = new LifeWithoutDeathRuleSet(nullptr);
-  } else if (modeString == "SEEDS") {
-    ruleSet = new SeedsRuleSet(nullptr);
-  } else if (modeString == "WIREWORLD") {
-    ruleSet = new WireworldRuleSet(nullptr);
-  } else if (modeString == "RULE_90") {
-    ruleSet = new Rule90RuleSet(nullptr);
-  } else if (modeString == "RULE_184") {
-    ruleSet = new Rule184RuleSet(nullptr);
-  } else {
+  std::unique_ptr<RuleSet> newRuleSet =
+    RuleSetRegistry::instance().createRuleSet(modeString, nullptr);
+  if (!newRuleSet) {
     Logger::LogError("Invalid rule set name: " + modeString);
-    ruleSet = new GameOfLifeRuleSet(nullptr);
+    newRuleSet =
+      RuleSetRegistry::instance().createRuleSet("GAME_OF_LIFE", nullptr);
     modeString = "GAME_OF_LIFE";
   }
+
+  delete ruleSet;
+  ruleSet = newRuleSet.release();
 
   ModeString = modeString;
   if (envVars) {

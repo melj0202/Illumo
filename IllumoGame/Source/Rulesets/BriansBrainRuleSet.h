@@ -14,7 +14,7 @@ public:
                           unsigned char aliveNeighbors) const override final;
   void evalCell(const unsigned char& target,
                 unsigned char dest[3]) const override;
-  std::string getRuleTag() override { return "BRIANS_BRAIN"; }
+  std::string getRuleTag() const override { return "BRIANS_BRAIN"; }
 };
 
 using BrainsBrainRuleSet = BriansBrainRuleSet;

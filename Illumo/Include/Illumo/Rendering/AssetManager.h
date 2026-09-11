@@ -50,6 +50,11 @@ public:
   TextureHandle acquireTexture(const std::string& path,
                                const TextureOptions& options = TextureOptions{},
                                AssetLoadMode mode = AssetLoadMode::Async);
+  TextureHandle acquireCubemap(const std::array<std::string, 6>& facePaths,
+                               AssetLoadMode mode = AssetLoadMode::Synchronous);
+  TextureHandle acquireCubemapFromCross(
+    const std::string& crossPath,
+    AssetLoadMode mode = AssetLoadMode::Synchronous);
   ShaderHandle acquireShader(const ShaderPaths& paths,
                              AssetLoadMode mode = AssetLoadMode::Async);
 

@@ -172,6 +172,37 @@ void main() {
 }
 )";
 
+static const char* kSkyboxVertexShader = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+
+out vec3 vTexCoords;
+
+uniform mat4 uViewProjection;
+
+void main() {
+    vTexCoords = aPos;
+    vec4 pos = uViewProjection * vec4(aPos, 1.0);
+    gl_Position = pos.xyww;
+}
+)";
+
+static const char* kSkyboxFragmentShader = R"(
+#version 330 core
+in vec3 vTexCoords;
+
+layout (location = 0) out vec4 FragColor;
+layout (location = 1) out vec2 FragVelocity;
+
+uniform samplerCube uSkybox;
+uniform vec4 uTint;
+
+void main() {
+    FragColor = texture(uSkybox, vTexCoords) * uTint;
+    FragVelocity = vec2(0.0);
+}
+)";
+
 static void
 fillCanvasPipeline(PipelineState& ps)
 {
@@ -309,6 +340,22 @@ Renderer::ensureBuiltinStyles()
     style.shaderHandle = enrollShader(sources);
     style.ready = style.shaderHandle.isValid();
     builtinStyleHandles[renderStyleIndex(RenderStyleId::MotionBlur)] =
+      createStyle(style);
+  }
+
+  // 3D Cubemap Skybox.
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = true;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderSources sources;
+    sources.vertexSource = kSkyboxVertexShader;
+    sources.fragmentSource = kSkyboxFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::Skybox)] =
       createStyle(style);
   }
 

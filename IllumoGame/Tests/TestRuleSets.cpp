@@ -2,14 +2,9 @@
 
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/BriansBrainRuleSet.h"
-#include "Rulesets/DayAndNightRuleSet.h"
-#include "Rulesets/GameOfLifeRuleSet.h"
-#include "Rulesets/HighlifeRuleSet.h"
+#include "Rulesets/Elementary1DRuleSet.h"
 #include "Rulesets/LifeLikeRuleSet.h"
-#include "Rulesets/LifeWithoutDeathRuleSet.h"
-#include "Rulesets/Rule184RuleSet.h"
-#include "Rulesets/Rule90RuleSet.h"
-#include "Rulesets/SeedsRuleSet.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include "TestHarness.h"
 #include <Illumo/Testing/TestHelpers.h>
@@ -48,7 +43,7 @@ testGameOfLifeBlockStillLife()
   f.setAlive(3, 4);
   f.setAlive(4, 4);
 
-  GameOfLifeRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(f.canvas);
   rules.calcGeneration(0, 0, 8, 8);
 
   testTrue(g,
@@ -70,7 +65,7 @@ testGameOfLifeBlinker()
   f.setAlive(4, 4);
   f.setAlive(5, 4);
 
-  GameOfLifeRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(f.canvas);
   rules.calcGeneration(0, 0, 8, 8);
 
   // Expect vertical
@@ -94,7 +89,7 @@ testGameOfLifeEmptyStaysEmpty()
   testSection("GoL: empty grid stays empty");
   HeadlessCanvasFixture f(6, 6);
   f.clearDead();
-  GameOfLifeRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(f.canvas);
   rules.calcGeneration(0, 0, 6, 6);
   int alive = 0;
   for (int y = 0; y < 6; ++y) {
@@ -112,7 +107,7 @@ testGameOfLifeEvalCellColors()
 {
   testSection("GoL: evalCell colors");
   HeadlessCanvasFixture f(4, 4);
-  GameOfLifeRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(f.canvas);
   unsigned char rgb[3] = { 1, 2, 3 };
   rules.evalCell(HeadlessCanvasFixture::Dead, rgb);
   testTrue(g, rgb[0] == 255 && rgb[1] == 255 && rgb[2] == 255, "dead is white");
@@ -130,7 +125,7 @@ testSeedsBirthOnly()
   f.setAlive(3, 3);
   f.setAlive(4, 3);
 
-  SeedsRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(f.canvas, "SEEDS", 1u << 2, 0u);
   rules.calcGeneration(0, 0, 8, 8);
 
   // Original cells should die (Seeds has no survival)
@@ -165,7 +160,8 @@ testHighlifeRuleTag()
 {
   testSection("Highlife: rule tag");
   HeadlessCanvasFixture f(4, 4);
-  HighlifeRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules(
+    f.canvas, "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
   testTrue(g, rules.getRuleTag() == "HIGHLIFE", "Highlife rule tag");
 }
 
@@ -470,15 +466,21 @@ testTransitionTableCacheAndEquivalence()
             static_cast<int>(expectedCalls),
             "subsequent access performs no transition calls");
 
-  GameOfLifeRuleSet gameOfLife(nullptr);
-  SeedsRuleSet seeds(nullptr);
+  LifeLikeRuleSet gameOfLife(nullptr);
+  LifeLikeRuleSet seeds(nullptr, "SEEDS", 1u << 2, 0u);
   BriansBrainRuleSet briansBrain(nullptr);
-  HighlifeRuleSet highlife(nullptr);
-  DayAndNightRuleSet dayAndNight(nullptr);
-  LifeWithoutDeathRuleSet lifeWithoutDeath(nullptr);
+  LifeLikeRuleSet highlife(
+    nullptr, "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
+  LifeLikeRuleSet dayAndNight(nullptr,
+                              "DAY_AND_NIGHT",
+                              (1u << 3) | (1u << 6) | (1u << 7) | (1u << 8),
+                              (1u << 3) | (1u << 4) | (1u << 6) | (1u << 7) |
+                                (1u << 8));
+  LifeLikeRuleSet lifeWithoutDeath(
+    nullptr, "LIFE_WITHOUT_DEATH", 1u << 3, (1u << 9) - 1u);
   WireworldRuleSet wireworld(nullptr);
-  Rule90RuleSet rule90(nullptr);
-  Rule184RuleSet rule184(nullptr);
+  Elementary1DRuleSet rule90(nullptr, "RULE_90", 90u);
+  Elementary1DRuleSet rule184(nullptr, "RULE_184", 184u);
   const RuleSet* rules[] = { &gameOfLife, &seeds,       &briansBrain,
                              &highlife,   &dayAndNight, &lifeWithoutDeath,
                              &wireworld,  &rule90,      &rule184 };
@@ -509,7 +511,7 @@ static void
 testElementarySpaceTime()
 {
   testSection("Rules: Rule 90/184 serial space-time path");
-  Rule90RuleSet rule90(nullptr);
+  Elementary1DRuleSet rule90(nullptr, "RULE_90", 90u);
   testTrue(g,
            rule90.getNeighborhoodKind() ==
              RuleSet::NeighborhoodKind::Elementary1D,
@@ -526,12 +528,119 @@ testElementarySpaceTime()
   testEqUChar(g, grid.getCell(CellAddress{ 1, 1 }), 0, "right child");
   testEqUChar(g, grid.getCell(CellAddress{ 0, 1 }), 1, "center child empty");
 
-  Rule184RuleSet rule184(nullptr);
+  Elementary1DRuleSet rule184(nullptr, "RULE_184", 184u);
   SparseCellGrid traffic;
   traffic.setCell(CellAddress{ 0, 0 }, 0);
   traffic.setCell(CellAddress{ 1, 0 }, 1);
   testTrue(g, traffic.advance(rule184), "Rule 184 advances");
   testEqUChar(g, traffic.getCell(CellAddress{ 1, 1 }), 0, "car moved right");
+}
+
+static void
+testRuleSetRegistryParsing()
+{
+  testSection("RuleSetRegistry: B.../S... string parsing");
+  unsigned int birth = 0u;
+  unsigned int survive = 0u;
+  testTrue(g,
+           RuleSetRegistry::parseLifeLikeRuleString("B3/S23", birth, survive),
+           "parse B3/S23 succeeds");
+  testEqInt(g, static_cast<int>(birth), 1 << 3, "B3 birth mask");
+  testEqInt(
+    g, static_cast<int>(survive), (1 << 2) | (1 << 3), "S23 survive mask");
+
+  testTrue(g,
+           RuleSetRegistry::parseLifeLikeRuleString("b36/s23", birth, survive),
+           "parse lowercase b36/s23 succeeds");
+  testEqInt(g, static_cast<int>(birth), (1 << 3) | (1 << 6), "B36 birth mask");
+  testEqInt(
+    g, static_cast<int>(survive), (1 << 2) | (1 << 3), "S23 survive mask");
+
+  testTrue(g,
+           RuleSetRegistry::parseLifeLikeRuleString("B2/S", birth, survive),
+           "parse B2/S succeeds");
+  testEqInt(g, static_cast<int>(birth), 1 << 2, "B2 birth mask");
+  testEqInt(g, static_cast<int>(survive), 0, "S empty survive mask");
+
+  testTrue(g,
+           RuleSetRegistry::parseLifeLikeRuleString("23/3", birth, survive),
+           "parse S/B slash notation 23/3 succeeds");
+  testEqInt(
+    g, static_cast<int>(survive), (1 << 2) | (1 << 3), "23 survive mask");
+  testEqInt(g, static_cast<int>(birth), 1 << 3, "3 birth mask");
+
+  testTrue(g,
+           !RuleSetRegistry::parseLifeLikeRuleString("", birth, survive),
+           "empty string rejected");
+}
+
+static void
+testRuleSetRegistryFactory()
+{
+  testSection("RuleSetRegistry: default rule registration and creation");
+  RuleSetRegistry registry;
+  registry.loadBuiltinDefaults();
+
+  const std::vector<std::string> known = registry.getKnownRules();
+  testTrue(g, known.size() >= 9u, "at least 9 default rules registered");
+  testTrue(g, registry.isKnownRule("GAME_OF_LIFE"), "GoL known");
+  testTrue(g,
+           registry.isKnownRule(RuleSetRegistry::normalizeId("game_of_life")),
+           "normalized known");
+  testTrue(
+    g, !registry.isKnownRule("game_of_life"), "exact match requires uppercase");
+  testTrue(g, registry.isKnownRule("RULE_90"), "Rule 90 known");
+  testTrue(g, registry.isKnownRule("BRIANS_BRAIN"), "Brian's Brain known");
+  testTrue(g, registry.isKnownRule("WIREWORLD"), "Wireworld known");
+  testTrue(g, !registry.isKnownRule("NONEXISTENT_RULE"), "unknown rejected");
+
+  std::unique_ptr<RuleSet> gol = registry.createRuleSet("GAME_OF_LIFE");
+  testTrue(g, gol != nullptr, "GoL instance created");
+  testTrue(g, gol->getRuleTag() == "GAME_OF_LIFE", "GoL tag matches");
+  testTrue(g,
+           gol->getNeighborhoodKind() == RuleSet::NeighborhoodKind::MooreCount,
+           "GoL is Moore count");
+
+  std::unique_ptr<RuleSet> r90 = registry.createRuleSet("RULE_90");
+  testTrue(g, r90 != nullptr, "Rule 90 instance created");
+  testTrue(g,
+           r90->getNeighborhoodKind() ==
+             RuleSet::NeighborhoodKind::Elementary1D,
+           "Rule 90 is Elementary1D");
+
+  std::unique_ptr<RuleSet> bb = registry.createRuleSet("BRIANS_BRAIN");
+  testTrue(g, bb != nullptr, "Brian's Brain instance created");
+  testTrue(g, bb->getRuleTag() == "BRIANS_BRAIN", "Brian's Brain tag matches");
+
+  std::unique_ptr<RuleSet> ww = registry.createRuleSet("WIREWORLD");
+  testTrue(g, ww != nullptr, "Wireworld instance created");
+  testTrue(g, ww->getRuleTag() == "WIREWORLD", "Wireworld tag matches");
+}
+
+static void
+testRuleSetRegistryDynamicRegistration()
+{
+  testSection("RuleSetRegistry: dynamic rule registration");
+  RuleSetRegistry registry;
+  registry.loadBuiltinDefaults();
+
+  RuleDefinition custom;
+  custom.id = "REPLICATOR";
+  custom.name = "Replicator";
+  custom.family = "life_like";
+  custom.rule = "B1357/S1357";
+  RuleSetRegistry::parseLifeLikeRuleString(
+    custom.rule, custom.birthMask, custom.surviveMask);
+  registry.registerRule(custom);
+
+  testTrue(g, registry.isKnownRule("REPLICATOR"), "custom rule registered");
+  std::unique_ptr<RuleSet> replicator = registry.createRuleSet("REPLICATOR");
+  testTrue(g, replicator != nullptr, "custom rule created");
+  testTrue(g, replicator->getRuleTag() == "REPLICATOR", "custom tag matches");
+  // 1 neighbor on dead -> born
+  testEqUChar(g, replicator->nextState(1, 1), 0, "replicator birth on 1");
+  // 2 neighbors on dead -> dead
+  testEqUChar(g, replicator->nextState(1, 2), 1, "replicator no birth on 2");
 }
 
 static int
@@ -550,6 +659,13 @@ registerRuleSetTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.Rules.ElementarySpaceTime",
                []() { return runRuleSetCase(testElementarySpaceTime); });
+  registry.add("IllumoGame.Rules.RegistryParsing",
+               []() { return runRuleSetCase(testRuleSetRegistryParsing); });
+  registry.add("IllumoGame.Rules.RegistryFactory",
+               []() { return runRuleSetCase(testRuleSetRegistryFactory); });
+  registry.add("IllumoGame.Rules.RegistryDynamic", []() {
+    return runRuleSetCase(testRuleSetRegistryDynamicRegistration);
+  });
   registry.add("IllumoGame.Rules.GameOfLifeBlock",
                []() { return runRuleSetCase(testGameOfLifeBlockStillLife); });
   registry.add("IllumoGame.Rules.GameOfLifeBlinker",

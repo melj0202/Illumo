@@ -59,6 +59,8 @@ class GLDevice
 private:
   PipelineState _currentGLState;
   GLuint _activeProgram = 0;
+  std::string m_frameError;
+  void reportFrameError(const char* message);
 
   // Bind-state tracker (P4): skip redundant GL binds within a submit.
   GLuint _boundProgram = 0;
@@ -213,6 +215,14 @@ private:
   }
 
 public:
+  GLDevice()
+  {
+    // A fresh OpenGL context has depth testing disabled, unlike PipelineState.
+    // The first requested depth-enabled draw must actually enable it.
+    _currentGLState.depthTestEnabled = false;
+  }
+  void resetFrameError() { m_frameError.clear(); }
+  const std::string& frameError() const { return m_frameError; }
   void ApplyPipelineState(const PipelineState& pipelineState);
   void ExecuteCommandQueue(CommandQueue& commandQueue,
                            const GLResourceTables& tables);

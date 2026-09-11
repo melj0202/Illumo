@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-08-30
+**Last updated:** 2026-09-11
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -46,6 +46,24 @@ Optional deeper reading (not required to resume work):
 13. [How to use this document](#13-how-to-use-this-document)  
 
 ---
+
+## Charter milestones (2026-09-11)
+
+[Charter direction](charter-direction.md) separates later physics, object
+lifetime, tooling and Linux requirements from current contracts. The owner
+approved baseline and independent rendering; older CA-only deferrals do not
+exclude those concrete consumers.
+
+InputManager now validates non-reused manager-local IDs, reuses retired storage
+among 32 live slots and selects neutral input after active retirement.
+CellGameModule releases its registration on Exit and rejects exhausted startup
+before domain allocation. Generated standalone projects record source provenance
+in engine-provenance.json, distinguishing clean, dirty and unknown identity.
+
+[FrameCapture and IllumoCapture](frame-capture.md) provide bounded hidden-context
+OpenGL rendering and PNG/JSON output without starting the runtime host. Scene and
+direct producers use the same renderer. Strict capture errors, backend readback
+and first-frame depth state are explicit; normal application defaults remain.
 
 ## 0. One-line summary
 
@@ -414,15 +432,16 @@ IBackend::SubmitCommandQueue
 |-------|-----|
 | **Modules** | Choose what should appear this frame; place drawables into Scene layers. |
 | **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug). One main pass. |
-| **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, and Sprite are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world. |
+| **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, Sprite, and Skybox are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world; Skybox positions at the far plane with translation-stripped view-projection. |
 | **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. |
 | **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
 | **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, and motion blur are CPU-side drawable state emitted as `WorldLook` uniforms; products persist them through EnvVars. One attachment per scene node; compose complex objects with child nodes. Replaces the former `DebugDraw3D` diagnostic host (D-R21). |
+| **SkyboxVisual** | World cubemap host and `ISceneRenderAttachment`: unit cube geometry rendered with `RenderStyleId::Skybox` at the far depth plane (`xyww`), translation-stripped view matrix `projection * mat4(mat3(view))`, seamless cubemap sampling (`IBackend::CreateCubemap`, `AssetManager::acquireCubemapFromCross`), and optional tint color. Consumed by 3D viewers (e.g. `IllMeshViewer`). |
 | **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `CommandLine`, `GLString`, `ExitConfirmDialog`, and `EditorConfirmDialog` compose these primitives without introducing a retained widget hierarchy. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
 | **Renderer** | Backend-neutral: owns style table; frame setup; walk layers; submit. Depends only on `IBackend*` (D-R11). |
-| **IBackend** | Allocates typed slot+generation handles; validates create/replace/destroy/query operations; queues and submits. GPU objects live in backend registries. |
-| **AssetManager** | Canonical-path texture/shader cache with reference counts, stable per-request fallback resources (the shader fallback follows the custom 2D binding contract), synchronous or one-worker CPU loading, include-dependency tracking for automatic hot reload, render-thread `pump`, explicit reload, and Debug timestamp polling. The Debug demo manages both its atlas and sprite shader through this path. |
+| **IBackend** | Allocates typed slot+generation handles; validates create/replace/destroy/query operations; queues and submits. GPU objects live in backend registries. Supports 2D textures and 6-face cubemaps (`CreateCubemap`) with seamless filtering and clamp-to-edge wrap. |
+| **AssetManager** | Canonical-path texture/cubemap/shader cache with reference counts, stable per-request fallback resources (the shader fallback follows the custom 2D binding contract), synchronous or one-worker CPU loading, cubemap cross/strip extraction (`acquireCubemapFromCross`), include-dependency tracking for automatic hot reload, render-thread `pump`, explicit reload, and Debug timestamp polling. The Debug demo manages both its atlas and sprite shader through this path. |
 | **ShaderPreprocessor** | Backend-neutral GLSL preprocessor: resolves `#include` directives against virtual in-memory module registry (`<illumo/...>`) and disk paths, injects compile-time `#define` macros, enforces `#pragma once` & recursion guards, preserves `#version` at line 1, emits `#line` markers, and discovers transitive include dependencies. |
 | **Composition (`Illumo::initialize`)** | Calls fallible window/backend factories, initializes the backend exactly once, transfers `unique_ptr<IBackend>` to Renderer, and calls `ensureBuiltinStyles()`. |
 | **GLBackend / GLDevice** | Real OpenGL under `Rendering/OpenGL/`: handle registries, execute tokens, PBO texture updates, bind-state tracking, blend-func-on-enable (D-R5). |
@@ -1024,7 +1043,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 | IllumoContext growth | Frozen; third module = explicit deps |
 | Life-like JSON family collapse | Optional cleanup of repetitive RuleSet classes |
 | GPU/SYCL acceleration | Optional after bounded CPU parallel benchmark / product need; CPU sparse stepping is the production baseline |
-| File asset formats | Current managed scope is textures + shaders; font atlases, model import, and general 3D meshes are deferred. `MeshVisual` is procedural world geometry (quads, sprites, cubes, lines) only. |
+| File asset formats | AssetManager manages textures/shaders. MeshLoader imports OBJ on the CPU behind a replaceable loader; MeshVisual consumes mesh data and procedural geometry. Game-object persistence remains separate future work. |
 
 ---
 
@@ -1097,7 +1116,7 @@ Most design questions from the LaTeX open list are **resolved** (see §6). Still
 | Topic | Working answer |
 |-------|----------------|
 | Resource ownership long-term | Typed generational handles validate explicit replace/destroy operations; `AssetManager` adds reference-counted file assets, and the resizeable canvas explicitly replaces/releases its texture and PBO ring. |
-| Linux/macOS parity | Both selected bootstraps are known stale and do not match the shared App APIs; keep them unsupported until native configure/build/test/smoke validation succeeds. |
+| Linux/macOS parity | The selected bootstraps use the shared application entry contract, but native configure/build/test/smoke evidence is absent; keep them unsupported until that validation succeeds. |
 | Tracy CI policy | Debug-oriented; no strict CI policy yet. |
 | When to introduce SYCL / GPU simulation | Only after a current benchmark and explicit product or learning goal justify a second compute path. Sparse chunks and bounded CPU workers are already live. |
 
