@@ -24,7 +24,8 @@ if(WIN32)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/Windows/WinSaveLoad.cpp
     Source/Platform/Windows/WinClipboard.cpp
-    Source/Platform/Windows/WinTimer.cpp)
+    Source/Platform/Windows/WinTimer.cpp
+    Source/Platform/Windows/WinProcessMemoryStats.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm)
 elseif(APPLE)
   enable_language(OBJCXX)
@@ -32,7 +33,8 @@ elseif(APPLE)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/macOS/MacSaveLoad.mm
     Source/Platform/macOS/MacClipboard.cpp
-    Source/Platform/macOS/MacTimer.cpp)
+    Source/Platform/macOS/MacTimer.cpp
+    Source/Platform/UnsupportedProcessMemoryStats.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES
     "-framework Cocoa" "-framework OpenGL" "-framework IOKit"
     "-framework CoreVideo")
@@ -43,7 +45,8 @@ elseif(UNIX)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/Linux/LinuxSaveLoad.cpp
     Source/Platform/Linux/LinuxClipboard.cpp
-    Source/Platform/Linux/LinuxTimer.cpp)
+    Source/Platform/Linux/LinuxTimer.cpp
+    Source/Platform/UnsupportedProcessMemoryStats.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES ${GTK_LIBRARIES})
 else()
   message(FATAL_ERROR "Illumo has no platform entry implementation")

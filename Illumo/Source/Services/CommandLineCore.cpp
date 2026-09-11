@@ -30,6 +30,7 @@ const BuiltInCommandHelp kBuiltInCommands[] = {
   { "get", "get <variable>", "Read an environment variable" },
   { "help", "help [command]", "Show commands or detailed help" },
   { "history", "history [filter|clear]", "Search or clear command history" },
+  { "memory", "memory [on|off|toggle]", "Show or change the memory overlay" },
   { "quit", "quit", "Exit the application" },
   { "repeat", "repeat <count> <command>", "Execute command multiple times" },
   { "set",
@@ -198,9 +199,8 @@ CommandLineCore::findPreviousWordBoundary() const
          std::isspace(static_cast<unsigned char>(currentInput[position - 1]))) {
     --position;
   }
-  while (position > 0 &&
-         !std::isspace(
-           static_cast<unsigned char>(currentInput[position - 1]))) {
+  while (position > 0 && !std::isspace(static_cast<unsigned char>(
+                           currentInput[position - 1]))) {
     --position;
   }
   return position;
@@ -703,9 +703,8 @@ CommandLineCore::getGhostSuggestion() const
   }
 
   std::size_t tokenStart = cursorPosition;
-  while (tokenStart > 0 &&
-         !std::isspace(
-           static_cast<unsigned char>(currentInput[tokenStart - 1]))) {
+  while (tokenStart > 0 && !std::isspace(static_cast<unsigned char>(
+                             currentInput[tokenStart - 1]))) {
     --tokenStart;
   }
   const std::string prefix =
@@ -799,7 +798,8 @@ CommandLineCore::getCompletionCandidates(const std::string& leadingText) const
           candidates.push_back(variable.first);
         }
       }
-    } else if (command == "fps" || command == "fullscreen") {
+    } else if (command == "fps" || command == "memory" ||
+               command == "fullscreen") {
       candidates = { "off", "on", "toggle" };
     }
   }
@@ -816,9 +816,8 @@ CommandLineCore::Complete()
   parseArena.Clear();
 
   std::size_t tokenStart = cursorPosition;
-  while (tokenStart > 0 &&
-         !std::isspace(
-           static_cast<unsigned char>(currentInput[tokenStart - 1]))) {
+  while (tokenStart > 0 && !std::isspace(static_cast<unsigned char>(
+                             currentInput[tokenStart - 1]))) {
     --tokenStart;
   }
   const std::string prefix =
@@ -1044,6 +1043,10 @@ CommandLineCore::ExecuteSingleCommand(const std::string& singleCmd,
               std::string(envVars && envVars->getVar("showFPS").valueAsBool
                             ? "on"
                             : "off"));
+    logNormal("Memory overlay:      " +
+              std::string(envVars && envVars->getVar("showMemory").valueAsBool
+                            ? "on"
+                            : "off"));
   } else if (cmd == "help") {
     if (args.empty()) {
       logNormal("Built-in commands:");
@@ -1156,11 +1159,13 @@ CommandLineCore::ExecuteSingleCommand(const std::string& singleCmd,
     for (const std::string& line : variableLines) {
       logNormal(line);
     }
-  } else if (cmd == "fps") {
+  } else if (cmd == "fps" || cmd == "memory") {
+    const char* variable = cmd == "fps" ? "showFPS" : "showMemory";
+    const char* label = cmd == "fps" ? "FPS overlay: " : "Memory overlay: ";
     const bool currentValue =
-      envVars ? envVars->getVar("showFPS").valueAsBool : false;
+      envVars ? envVars->getVar(variable).valueAsBool : false;
     if (args.empty()) {
-      logNormal(std::string("FPS overlay: ") + (currentValue ? "on" : "off"));
+      logNormal(std::string(label) + (currentValue ? "on" : "off"));
     } else {
       bool requestedValue = false;
       bool valid = false;
@@ -1171,13 +1176,12 @@ CommandLineCore::ExecuteSingleCommand(const std::string& singleCmd,
         valid = parseBoolValue(args[0], &requestedValue);
       }
       if (!valid) {
-        logError("Usage: fps [on|off|toggle]");
+        logError("Usage: " + cmd + " [on|off|toggle]");
       } else {
         if (envVars != nullptr) {
-          envVars->setVar("showFPS", requestedValue);
+          envVars->setVar(variable, requestedValue);
         }
-        logSuccess(std::string("FPS overlay: ") +
-                   (requestedValue ? "on" : "off"));
+        logSuccess(std::string(label) + (requestedValue ? "on" : "off"));
       }
     }
   } else if (cmd == "fullscreen") {

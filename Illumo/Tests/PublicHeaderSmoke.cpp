@@ -16,6 +16,7 @@
 #include <Illumo/Gui/GuiTypes.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/PlatformTimer.h>
+#include <Illumo/Platform/ProcessMemoryStats.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>

@@ -752,6 +752,29 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
 - `Logger` may mirror output into the console while services are alive. The host
   clears that non-owning logger context before destroying the services.
 
+#### Process memory diagnostics
+
+The optional Debug/RelWithDebInfo `DebugModule` owns one top-left `GLString`
+diagnostics panel. `showFPS` / F3 / `fps` retain FPS-only control;
+`showMemory` (default off) / `memory [on|off|toggle]` independently control
+memory rows. Both settings persist through the existing environment service.
+The console help, completion and `sysinfo` expose memory visibility.
+
+An internal `DebugOverlayState` owns independent FPS and memory refresh clocks
+and cached text; only changed content rebuilds the label. Memory sampling occurs
+on enable and once per second while visible, on the main thread. Hidden memory
+performs no queries. Failure replaces old values with `Memory: unavailable` and
+retries normally. No background worker or allocator instrumentation is added.
+
+The public platform value `ProcessMemoryStats` contains resident, lifetime-peak
+resident and private-commit byte counts. `QueryProcessMemoryStats` returns false
+and clears its output when unavailable. Windows implements it with
+`K32GetProcessMemoryInfo`; existing non-Windows scaffolds return unavailable.
+Win32 headers remain in Platform/Windows. Values cover the whole process and
+are formatted in MiB with one decimal place; private commit is not resident
+memory, and resident memory includes shared pages. GPU and system memory are
+outside this diagnostic's scope.
+
 ### 5.11 Window / platform boundaries
 
 - Semantic window ops (`shouldClose`, poll, swap, title, dimensions) justify thin wrappers even if one-liners — they hide GLFW types from the main loop.  

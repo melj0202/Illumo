@@ -113,3 +113,22 @@ host update.
 \symbolref{RenderWindow} defaults to swap interval one. Persisted
 \texttt{vsync=0} selects uncapped profiling, while Debug metrics distinguish
 paced swap completions from CPU submissions.
+
+
+\subsection{Process memory diagnostics}
+The optional Debug/RelWithDebInfo module composes FPS and memory in one
+\texttt{GLString} status panel. F3 and \texttt{fps} control only FPS;
+\texttt{memory [on|off|toggle]} controls the persisted \texttt{showMemory}
+flag, initially off. Each section may be visible independently. The memory
+rows show current working set, process-lifetime peak working set and private
+committed memory in MiB with one decimal place. Working set includes shared
+pages; private commit need not be resident. These are whole-process values,
+not GPU memory or allocation/leak tracking.
+
+The internal presentation state maintains independent refresh clocks. Memory
+is queried immediately on enable, then once per second while visible; unchanged
+text does not rebuild the drawable. The platform-neutral memory query returns
+byte counts and availability. Windows obtains them through the process-memory
+API; unsupported scaffolds and failures display ``Memory: unavailable'' and
+retry at the normal interval. Native headers stay in the Windows platform
+implementation. No worker or new rendering path is introduced.
