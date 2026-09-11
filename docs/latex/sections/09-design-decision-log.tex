@@ -1822,6 +1822,21 @@ and E2E suite; integrated into \texttt{IllMeshViewer}.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-CAP1 --- Bounded standalone rendering and charter baseline}
+\begin{decisionbox}[title={D-CAP1 \quad 2026-09-11}]
+\textbf{Decision:} Reuse the token renderer for direct and SceneGraph frame capture
+in a hidden OpenGL context. Capture owns a bounded service lifetime, not an
+application loop. Readback and strict diagnostics are public contracts; PNG
+publication does not replace existing artifacts.
+\textbf{Why:} The owner authorized the first two charter milestones: reliable
+baseline behavior and independently usable rendering tools.
+\textbf{Consequences:} Input IDs are validated, retired and never reused within
+a manager; generated copies record commit/dirty/unknown provenance. Broader 3D
+framework direction is separate from current code. Physics, object destruction,
+shared ticks, additional backends and Linux support remain later work. Existing
+application and persistence contracts remain. See the milestone execution plan.
+\end{decisionbox}
+
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

@@ -25,6 +25,9 @@ Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
   grow memory indefinitely.
 - Validate context identifiers before indexing. Registration failure must be
   observable and must not become an out-of-bounds active context.
+  Input IDs are manager-local and never reused; modules retire registrations on
+  exit. Invalid activation preserves selection; retiring the active context
+  selects neutral input. Exhausted startup must not allocate domain state.
 - Command queuing and execution are main-thread operations. If callbacks may
   queue more commands, execution must not invalidate the container currently
   being iterated.

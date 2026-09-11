@@ -13,15 +13,38 @@ Generates a new Illumo application project with an Unreal Engine style structure
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
 import shutil
 import sys
+import subprocess
 from typing import Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = REPOSITORY_ROOT / "Templates"
+
+
+def source_provenance() -> dict[str, object]:
+    """Describe source identity; a dirty copy is not an exact Git snapshot."""
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT,
+            capture_output=True, text=True, check=True, timeout=10,
+        ).stdout.strip()
+        if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
+            raise ValueError("Invalid commit identity")
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=REPOSITORY_ROOT, capture_output=True, text=True,
+            check=True, timeout=10,
+        ).stdout
+        return {"source_commit": commit, "source_dirty": bool(status.strip()),
+                "source_status": "available"}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {"source_commit": None, "source_dirty": None,
+                "source_status": "unavailable"}
 
 EXCLUDED_DIR_NAMES = {
     ".git",
@@ -357,6 +380,14 @@ def create_project(
         return target_dir
 
     # Standalone mode: generate complete Unreal-style engine + tools + game project
+    provenance = {
+        "schema_version": 1,
+        **source_provenance(),
+        "template": template_name,
+        "project_name": project_name,
+        "include_debug_tools": include_debug_tools,
+        "creation_mode": "standalone-source-copy",
+    }
     if destination.exists() and any(destination.iterdir()) and not force:
         raise ProjectCreationError(
             f"Destination directory '{destination}' already exists and is not empty. "
@@ -425,6 +456,9 @@ def create_project(
 
     readme_content = generate_readme(project_name, app_folder_name)
     (destination / "README.md").write_text(readme_content, encoding="utf-8")
+    (destination / "engine-provenance.json").write_text(
+        json.dumps(provenance, indent=2) + "\n", encoding="utf-8"
+    )
 
     print("\nProject creation completed successfully!")
     print(f"\nTo build and run your new application:")

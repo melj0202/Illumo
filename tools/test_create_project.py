@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import os
+import json
+import subprocess
 from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from create_project import (
     ProjectCreationError,
@@ -16,12 +19,30 @@ from create_project import (
     generate_root_cmake,
     instantiate_template,
     validate_project_name,
+    source_provenance,
 )
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
 class TestProjectCreation(unittest.TestCase):
+    def test_source_provenance(self) -> None:
+        commit = "a" * 40
+        for status, dirty in [("", False), (" M file.cpp\n", True)]:
+            with patch("create_project.subprocess.run", side_effect=[
+                subprocess.CompletedProcess([], 0, commit + "\n"),
+                subprocess.CompletedProcess([], 0, status),
+            ]):
+                self.assertEqual(source_provenance(), {
+                    "source_commit": commit, "source_dirty": dirty,
+                    "source_status": "available",
+                })
+        with patch("create_project.subprocess.run", side_effect=FileNotFoundError):
+            self.assertEqual(source_provenance(), {
+                "source_commit": None, "source_dirty": None,
+                "source_status": "unavailable",
+            })
+
     def setUp(self) -> None:
         self.temp_dir = Path(tempfile.mkdtemp(prefix="illumo_test_project_"))
 
@@ -76,6 +97,11 @@ class TestProjectCreation(unittest.TestCase):
         )
 
         self.assertEqual(created, dest)
+        provenance = json.loads((dest / "engine-provenance.json").read_text())
+        self.assertEqual(provenance["schema_version"], 1)
+        self.assertEqual(provenance["project_name"], "SpinningApp")
+        self.assertEqual(provenance["creation_mode"], "standalone-source-copy")
+        self.assertTrue(provenance["include_debug_tools"])
         self.assertTrue((dest / "CMakeLists.txt").is_file())
         self.assertTrue((dest / "README.md").is_file())
         self.assertTrue((dest / "build.py").is_file())

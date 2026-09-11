@@ -279,6 +279,7 @@ Renderer::getTextureInfo(TextureHandle handle) const
 void
 Renderer::BeginFrame()
 {
+  m_frameError.clear();
   _backend->BeginFrame();
   _backend->ClearCommandQueue();
   _currentPassFbo = FramebufferHandle{};
@@ -667,6 +668,11 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
             continue;
           }
           if (!drawable->AppendCommands(this)) {
+            if (m_strictSubmission) {
+              reportFrameError(
+                "Drawable did not emit a complete token submission");
+              continue;
+            }
             if (immediateList != nullptr && immediateCount < immediateCap) {
               immediateList[immediateCount] = drawable;
               immediateCount += 1;
@@ -741,6 +747,11 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                 continue;
               }
               if (!drawable->AppendCommands(this)) {
+                if (m_strictSubmission) {
+                  reportFrameError(
+                    "Drawable did not emit a complete token submission");
+                  continue;
+                }
                 if (immediateList != nullptr && immediateCount < immediateCap) {
                   immediateList[immediateCount] = drawable;
                   immediateCount += 1;

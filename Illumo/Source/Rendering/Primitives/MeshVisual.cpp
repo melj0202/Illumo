@@ -536,7 +536,10 @@ MeshVisual::AppendCommands(Renderer* value)
 void
 MeshVisual::appendSceneCommands(Renderer* value, const Matrix4& worldTransform)
 {
-  (void)appendCommandsWithWorld(value, worldTransform);
+  if (!appendCommandsWithWorld(value, worldTransform) && value != nullptr) {
+    value->reportFrameError(
+      "MeshVisual scene attachment could not emit its resources");
+  }
 }
 
 void

@@ -22,7 +22,8 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
 - Pointer payloads for mesh, texture, uniform, or text updates are borrowed.
   Their storage must remain valid and unchanged until synchronous
   `SubmitCommandQueue` returns.
-- `CommandQueue` has a fixed 2,048-command capacity. Preserve deterministic
+- `CommandQueue` reserves 2,048 commands and grows to a configurable 65,536
+  default ceiling. Preserve deterministic
   order and explicit overflow behavior; never write past capacity or silently
   claim a dropped frame was complete.
 - `Scene` is a non-owning ordered drawable list rebuilt each frame. It does not
@@ -40,6 +41,14 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
   context unless an authorized design introduces synchronization.
 
 ## Compatibility and errors
+
+Standalone capture is an authorized composition entry through `FrameCapture`.
+Keep it main-thread-affine and separate from the application host. Its producer
+owns content through synchronous submission and destroys renderer-bound content
+before returning. Strict capture rejects immediate fallback; render attachments
+must report required-resource emission failures with `Renderer::reportFrameError`.
+Readback occurs before swap and preserves pixel-pack state; diagnostics survive
+queue reset. Do not imply that a successful submission proves useful pixels.
 
 Treat command layout, handle semantics, ordering, capacity, blend/state
 behavior, and shader-visible data as cross-backend contracts. Validate sizes,

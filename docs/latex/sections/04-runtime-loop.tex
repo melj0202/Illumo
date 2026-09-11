@@ -113,3 +113,11 @@ host update.
 \symbolref{RenderWindow} defaults to swap interval one. Persisted
 \texttt{vsync=0} selects uncapped profiling, while Debug metrics distinguish
 paced swap completions from CPU submissions.
+
+
+\subsection{Input registration retirement (2026-09-11)}
+InputManager bounds live contexts to 32, reuses released slots and issues distinct
+manager-local IDs. Invalid activation preserves selection; active retirement
+selects neutral input. CellGameModule releases its registration on Exit and
+rejects exhausted startup before allocating domain state. Repeated module entry
+must not consume permanent input slots.

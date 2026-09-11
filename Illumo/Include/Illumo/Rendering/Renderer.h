@@ -73,6 +73,8 @@ private:
   // that live only for the frame never outlive the submit window by design.
   ArenaAlloc frameArena{ 8 * 1024 };
   FrameContext frameContext;
+  bool m_strictSubmission = false;
+  std::string m_frameError;
 
   void beginFrameContext(Camera* camera);
   void endFrameContext();
@@ -196,6 +198,14 @@ public:
   // =========================================================================
 
   void BeginFrame();
+  void setStrictSubmission(bool enabled) { m_strictSubmission = enabled; }
+  const std::string& frameError() const { return m_frameError; }
+  void reportFrameError(const std::string& message)
+  {
+    if (m_frameError.empty()) {
+      m_frameError = message;
+    }
+  }
   void EndFrame();
   void SubmitOnly();
 

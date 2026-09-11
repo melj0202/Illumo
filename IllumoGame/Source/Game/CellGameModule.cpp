@@ -189,13 +189,6 @@ CellGameModule::Start(IllumoContext* context)
   if (startMode.empty()) {
     startMode = "GAME_OF_LIFE";
   }
-  this->cellContext = new CellContext(
-    startMode, ic->envVars, ic->window, ic->camera, ic->renderer);
-
-  // Simulation step rate comes from env (tps * speedFactor). Re-read live in
-  // Normal().
-  simAccum = 0.0;
-  syncSimRateFromEnv();
 
   InputEvent ac;
   ac.keyCode = KeyCode::MouseMiddle;
@@ -218,8 +211,16 @@ CellGameModule::Start(IllumoContext* context)
   ac.inputAction = InputAction::Press;
   this->inputContext.bindAction("PaintCanvas", ac);
 
-  long contextId = ic->inputManager->registerInputContext(this->inputContext);
-  ic->inputManager->setActiveInputContext(contextId);
+  inputContextId = ic->inputManager->registerInputContext(this->inputContext);
+  if (inputContextId < 0) {
+    return false;
+  }
+  ic->inputManager->setActiveInputContext(inputContextId);
+  this->cellContext = new CellContext(
+    startMode, ic->envVars, ic->window, ic->camera, ic->renderer);
+  // Canvas-dependent settings are applied only after domain construction.
+  simAccum = 0.0;
+  syncSimRateFromEnv();
 
   currentState = CellState::EDIT;
   wireworldBrush = WireworldRuleSet::CELL_CONDUCTOR;
@@ -972,7 +973,8 @@ CellGameModule::registerConsoleCommands()
         return;
       }
       std::string error;
-      if (!pastePatternAt(clipboard.getClipboardPattern(), originX, originY, &error)) {
+      if (!pastePatternAt(
+            clipboard.getClipboardPattern(), originX, originY, &error)) {
         ic->commandLine->logError(error.empty() ? "Paste failed" : error);
       } else {
         ic->commandLine->logSuccess("Pasted pattern");
@@ -1506,6 +1508,10 @@ CellGameModule::Update(double dt)
 void
 CellGameModule::Exit()
 {
+  if (inputContextId >= 0 && ic != nullptr && ic->inputManager != nullptr) {
+    ic->inputManager->unregisterInputContext(inputContextId);
+    inputContextId = -1;
+  }
   drainSimulation();
   simulationRunner.shutdown();
   restoreRender3dTestCamera();
@@ -1683,8 +1689,11 @@ CellGameModule::pasteAtCursor()
   }
   prepareGridMutation();
   std::string error;
-  const bool result = clipboard.pasteAtCursor(
-    cellContext->getGrid(), cellContext->getCanvasView(), hoverX, hoverY, &error);
+  const bool result = clipboard.pasteAtCursor(cellContext->getGrid(),
+                                              cellContext->getCanvasView(),
+                                              hoverX,
+                                              hoverY,
+                                              &error);
   if (!result) {
     Logger::LogError(error.c_str());
     return false;
@@ -1704,8 +1713,12 @@ CellGameModule::stampNamed(const std::string& name)
   const std::int64_t originX = hoverValid ? hoverX : 0;
   const std::int64_t originY = hoverValid ? hoverY : 0;
   std::string error;
-  const bool result = clipboard.stampNamed(
-    cellContext->getGrid(), cellContext->getCanvasView(), name, originX, originY, &error);
+  const bool result = clipboard.stampNamed(cellContext->getGrid(),
+                                           cellContext->getCanvasView(),
+                                           name,
+                                           originX,
+                                           originY,
+                                           &error);
   if (result) {
     updateVisualTargets();
   }
@@ -1723,8 +1736,12 @@ CellGameModule::importPatternText(const std::string& text)
   const std::int64_t originX = hoverValid ? hoverX : 0;
   const std::int64_t originY = hoverValid ? hoverY : 0;
   std::string error;
-  const bool result = clipboard.importPatternText(
-    cellContext->getGrid(), cellContext->getCanvasView(), text, originX, originY, &error);
+  const bool result = clipboard.importPatternText(cellContext->getGrid(),
+                                                  cellContext->getCanvasView(),
+                                                  text,
+                                                  originX,
+                                                  originY,
+                                                  &error);
   if (!result) {
     Logger::LogError(error.c_str());
     return false;

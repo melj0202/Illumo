@@ -15,7 +15,8 @@ public:
   RenderWindow(const int width,
                const int height,
                const std::string& title,
-               IEnvVars* envVars);
+               IEnvVars* envVars,
+               bool captureOnly = false);
   ~RenderWindow();
   void reinitializeWindow(const int width,
                           const int height,
@@ -37,6 +38,9 @@ public:
   void requestClose() override;
 
 private:
+  friend std::unique_ptr<IRenderWindow> CreateCaptureWindow(int width,
+                                                            int height);
+  bool m_captureOnly = false;
   friend std::unique_ptr<IRenderWindow> CreateRenderWindow(
     int width,
     int height,
@@ -67,3 +71,6 @@ CreateRenderWindow(int width,
                    int height,
                    const std::string& title,
                    IEnvVars* envVars);
+
+std::unique_ptr<IRenderWindow>
+CreateCaptureWindow(int width, int height);

@@ -121,6 +121,23 @@ python build.py new-project ../MyNewGame --name MyNewGame
 
 ## Project creation (Unreal Engine style)
 
+Standalone generated workspaces include `engine-provenance.json`: source commit,
+dirty/unknown status, template and creation options. A dirty source copy is not
+an exact Git pin; retain its changes with the generated project. Git-unavailable
+sources record unknown identity explicitly. Source must remain unchanged during
+copying; the generator does not lock the checkout or create a Git snapshot.
+
+## Standalone rendering tool
+
+`cmake --build build --config Release --target IllumoCapture` builds the bounded
+capture client. Run `build/Release/IllumoCapture.exe --output build/frame.png
+--mode scene` to produce a PNG and JSON diagnostics without a game loop. See
+[capture inputs and ownership](docs/frame-capture.md) and
+[charter direction](docs/charter-direction.md). The existing destination must not
+exist. Capture requires a real graphics context; Linux remains unverified.
+
+## Creating an application
+
 To scaffold a new Illumo application project, use the project creation tool:
 
 ```bash

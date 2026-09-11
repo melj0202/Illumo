@@ -8,6 +8,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Services/Logger.h>
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <tracy/Tracy.hpp>
@@ -46,6 +47,79 @@ GLBackend::Initialize()
 void
 GLBackend::BeginFrame()
 {
+  m_rejectionsAtFrameStart = commandQueue->GetTotalRejected();
+  device->resetFrameError();
+}
+
+FrameReadback
+GLBackend::readBackbuffer(int width, int height)
+{
+  FrameReadback result;
+  if (width < 1 || height < 1 || width > 4096 || height > 4096) {
+    result.error = "Readback dimensions must be within 1..4096";
+    return result;
+  }
+  if (commandQueue->GetTotalRejected() != m_rejectionsAtFrameStart) {
+    result.error = "Frame rejected commands at the queue safety ceiling";
+    return result;
+  }
+  if (!device->frameError().empty()) {
+    result.error = device->frameError();
+    return result;
+  }
+  if (glGetError() != GL_NO_ERROR) {
+    result.error = "OpenGL error during frame preparation or submission";
+    return result;
+  }
+  GLint framebuffer = 0;
+  GLint packBuffer = 0;
+  GLint alignment = 0;
+  GLint rowLength = 0;
+  GLint skipRows = 0;
+  GLint skipPixels = 0;
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &framebuffer);
+  glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &packBuffer);
+  glGetIntegerv(GL_PACK_ALIGNMENT, &alignment);
+  glGetIntegerv(GL_PACK_ROW_LENGTH, &rowLength);
+  glGetIntegerv(GL_PACK_SKIP_ROWS, &skipRows);
+  glGetIntegerv(GL_PACK_SKIP_PIXELS, &skipPixels);
+  const size_t rowBytes = static_cast<size_t>(width) * 4;
+  result.pixels.resize(rowBytes * static_cast<size_t>(height));
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+  GLint readBuffer = 0;
+  glGetIntegerv(GL_READ_BUFFER, &readBuffer);
+  glReadBuffer(GL_BACK);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+  glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+  glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+  glReadPixels(
+    0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, result.pixels.data());
+  const GLenum error = glGetError();
+  glReadBuffer(static_cast<GLenum>(readBuffer));
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(framebuffer));
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(packBuffer));
+  glPixelStorei(GL_PACK_ALIGNMENT, alignment);
+  glPixelStorei(GL_PACK_ROW_LENGTH, rowLength);
+  glPixelStorei(GL_PACK_SKIP_ROWS, skipRows);
+  glPixelStorei(GL_PACK_SKIP_PIXELS, skipPixels);
+  if (error != GL_NO_ERROR) {
+    result.pixels.clear();
+    result.error =
+      "OpenGL backbuffer readback failed: " + std::to_string(error);
+    return result;
+  }
+  for (int row = 0; row < height / 2; ++row) {
+    unsigned char* top =
+      result.pixels.data() + static_cast<size_t>(row) * rowBytes;
+    unsigned char* bottom =
+      result.pixels.data() + static_cast<size_t>(height - row - 1) * rowBytes;
+    std::swap_ranges(top, top + rowBytes, bottom);
+  }
+  result.width = width;
+  result.height = height;
+  return result;
 }
 
 void
