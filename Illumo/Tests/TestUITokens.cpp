@@ -809,6 +809,19 @@ testCommandLineCompletionBranches()
            fixture.console.getCurrentInput() == "fps toggle",
            "boolean command argument completes uniquely");
 
+  fixture.console.ClearInput();
+  enterConsoleText(fixture.console, "mem");
+  fixture.console.Complete();
+  testTrue(g,
+           fixture.console.getCurrentInput() == "memory ",
+           "memory command name completes");
+  fixture.console.ClearInput();
+  enterConsoleText(fixture.console, "memory t");
+  fixture.console.Complete();
+  testTrue(g,
+           fixture.console.getCurrentInput() == "memory toggle",
+           "memory boolean argument completes");
+
   const std::vector<std::string> trailingEscape =
     fixture.console.ParseCommandArgs("echo tail\\", " \t");
   testEqSize(g,
@@ -956,6 +969,46 @@ testCommandLineNumericAndDisplayCommands()
   testTrue(g,
            consoleHistoryContains(fixture.console, "Usage: fps"),
            "fps rejects invalid boolean");
+
+  executeConsoleText(fixture.console, "memory");
+  testTrue(g,
+           consoleHistoryContains(fixture.console, "Memory overlay: off"),
+           "memory query reports default state");
+  executeConsoleText(fixture.console, "memory on");
+  testTrue(g,
+           fixture.env.getVar("showMemory").valueAsBool,
+           "memory on enables statistics");
+  testTrue(g,
+           !fixture.env.getVar("showFPS").valueAsBool,
+           "memory does not enable FPS");
+  executeConsoleText(fixture.console, "memory toggle");
+  testTrue(g,
+           !fixture.env.getVar("showMemory").valueAsBool,
+           "memory toggle disables statistics");
+  executeConsoleText(fixture.console, "memory toggle");
+  executeConsoleText(fixture.console, "memory maybe");
+  executeConsoleText(fixture.console, "memory on extra");
+  testTrue(g,
+           fixture.env.getVar("showMemory").valueAsBool,
+           "invalid memory commands preserve visibility");
+  testTrue(
+    g,
+    consoleHistoryContains(fixture.console, "Usage: memory [on|off|toggle]"),
+    "invalid memory arguments explain usage");
+  executeConsoleText(fixture.console, "fps on");
+  executeConsoleText(fixture.console, "memory off");
+  testTrue(g,
+           !fixture.env.getVar("showMemory").valueAsBool &&
+             fixture.env.getVar("showFPS").valueAsBool,
+           "memory off leaves FPS enabled");
+  executeConsoleText(fixture.console, "sysinfo");
+  testTrue(g,
+           consoleHistoryContains(fixture.console, "Memory overlay:      off"),
+           "system status includes memory visibility");
+  executeConsoleText(fixture.console, "help memory");
+  testTrue(g,
+           consoleHistoryContains(fixture.console, "memory [on|off|toggle]"),
+           "memory command help is available");
 
   executeConsoleText(fixture.console, "fullscreen");
   testEqInt(g,

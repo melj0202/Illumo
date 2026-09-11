@@ -255,6 +255,7 @@ testEnvVarsTypesAndPersistence()
     env.setVar("integer", 7);
     env.setVar("long", 8L);
     env.setVar("boolean", true);
+    env.setVar("showMemory", true);
     env.setVar("unsignedInt", static_cast<unsigned int>(9));
     env.setVar("unsignedLong", static_cast<unsigned long>(10));
     env.setVar("unsignedLongLong", static_cast<unsigned long long>(11));
@@ -292,6 +293,9 @@ testEnvVarsTypesAndPersistence()
 
   {
     EnvVars reloaded(configPath);
+    testTrue(g,
+             reloaded.getVar("showMemory").valueAsBool,
+             "memory visibility persists across reload");
     testEqInt(g,
               static_cast<int>(reloaded.getVar("unsignedLong").valueAsLong),
               10,
@@ -507,7 +511,8 @@ testLoggerLevelsAndSinks()
 static void
 testCommandLineCoreHeadless()
 {
-  testSection("CommandLineCore: headless parsing, editing, aliases, and execution");
+  testSection(
+    "CommandLineCore: headless parsing, editing, aliases, and execution");
   EnvVars env;
   CommandRegistry registry;
   CommandLineCore core(&env, &registry, "HeadlessTest");
@@ -537,24 +542,32 @@ testCommandLineCoreHeadless()
   // Command execution
   core.ExecuteCommand();
   testTrue(g, core.getCurrentInput().empty(), "input cleared after execution");
-  testEqInt(g, static_cast<int>(core.getHistory().size()) >= 3, 1, "history has new items");
+  testEqInt(g,
+            static_cast<int>(core.getHistory().size()) >= 3,
+            1,
+            "history has new items");
 
   // Aliases
   core.SetAlias("greet", "set greeting welcome");
   testTrue(g, core.HasAlias("greet"), "alias registered");
-  testTrue(g, core.GetAlias("greet") == "set greeting welcome", "alias expansion retrieved");
+  testTrue(g,
+           core.GetAlias("greet") == "set greeting welcome",
+           "alias expansion retrieved");
 
   for (char c : std::string("greet")) {
     core.AddCharacter(static_cast<unsigned int>(c));
   }
   core.ExecuteCommand();
-  testTrue(g, env.getVar("greeting").value == "welcome", "alias executed and set env var");
+  testTrue(g,
+           env.getVar("greeting").value == "welcome",
+           "alias executed and set env var");
 
   core.RemoveAlias("greet");
   testTrue(g, !core.HasAlias("greet"), "alias removed");
 
   // Parsing helpers
-  std::vector<std::string> args = core.ParseCommandArgs("foo \"bar baz\" qux", " ");
+  std::vector<std::string> args =
+    core.ParseCommandArgs("foo \"bar baz\" qux", " ");
   testEqInt(g, static_cast<int>(args.size()), 3, "parsed 3 quoted args");
   testTrue(g, args[1] == "bar baz", "quoted arg preserved");
 

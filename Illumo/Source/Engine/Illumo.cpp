@@ -95,9 +95,9 @@ Illumo::applyHostDefaults()
     const char* value;
   };
   const DefaultValue defaults[] = {
-    { "fps", "60" },           { "vsync", "true" }, { "WinX", "1280" },
-    { "WinY", "720" },         { "showFPS", "0" },  { "logLevel", "2" },
-    { "fullscreen", "false" },
+    { "fps", "60" },     { "vsync", "true" },       { "WinX", "1280" },
+    { "WinY", "720" },   { "showFPS", "0" },        { "showMemory", "0" },
+    { "logLevel", "2" }, { "fullscreen", "false" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (m_environment->getVar(defaultValue.name).value.empty()) {

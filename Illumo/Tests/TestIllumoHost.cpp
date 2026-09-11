@@ -234,6 +234,10 @@ testGenericConfigurationOwnership()
     config.environmentPath = path.string();
     Illumo host(config);
     testTrue(g,
+             host.environment().getVars().count("showMemory") == 1 &&
+               !host.environment().getVar("showMemory").valueAsBool,
+             "engine supplies memory visibility default off");
+    testTrue(g,
              host.applicationName() == "EmbeddingHost",
              "host retains application identity");
     testTrue(g,

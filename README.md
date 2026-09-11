@@ -514,8 +514,8 @@ Global shortcuts yield while typing in the developer console (`~` / Grave).
 ## Developer console commands
 
 The in-app console is provided by `DebugModule`, so it is available in Debug
-builds only. It is a global overlay: grave/tilde toggles it on the main menu,
-settings, and cell canvas. Type `help` for the live list or `help <command>`
+and RelWithDebInfo builds. It is a global overlay: grave/tilde toggles it on
+the main menu, settings, and cell canvas. Type `help` for the live list or `help <command>`
 for details.
 
 | Group | Commands |
@@ -523,11 +523,26 @@ for details.
 | Simulation | `pause`, `run`, `step [count]`, `status` |
 | Canvas | `clear_canvas`, `randomize [percent]`, `setcell <x> <y> <state>` |
 | Rules and files | `ruleset [name]`, `save <file>`, `load <file>`, `save_dialog`, `load_dialog` |
-| Camera and display | `camera [x y [zoom]]`, `camera_reset`, `fullscreen`, `fps` |
+| Camera and display | `camera [x y [zoom]]`, `camera_reset`, `fullscreen`, `fps`, `memory` |
 | Renderer diagnostics | `renderer_demo [on|off]`, `assets`, `asset_reload <all|path>` |
 | Timing | `tps`, `speed`, `fade` |
 | Environment | `get`, `set`, `toggle`, `vars [filter]` |
 | Console/app | `help`, `echo`, `clear`, `close`, `quit` |
+
+`memory [on|off|toggle]` independently controls process memory statistics;
+without an argument it reports visibility. The persisted `showMemory` setting
+defaults to `0`. FPS remains controlled by F3 or `fps` (`showFPS`). Both sections
+share the existing top-left diagnostics panel, and either may be shown alone.
+
+Memory is sampled immediately on enable and then once per second while visible.
+`RAM` is the process working set (resident physical memory, including shared
+pages); `Peak RAM` is its process-lifetime peak; `Private commit` is private
+committed memory, which may be backed by RAM or the page file. Values use MiB
+(1,048,576 bytes) with one decimal place and cover the entire application.
+They are not GPU memory or a leak detector. Windows supplies the counters;
+failed or unsupported queries display `Memory: unavailable` and retry on the
+next interval. Compare with matching working-set/private-commit counters, not
+Task Manager's default private-working-set column.
 
 Normal mode keeps at most one generation in flight on a persistent worker and
 publishes completed sparse grids only at frame boundaries. It never builds a

@@ -1,9 +1,9 @@
 #ifndef GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_NONE
 #endif
+#include "DebugOverlayState.h"
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/DebugModule.h>
-#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
@@ -11,16 +11,14 @@
 #include <tracy/Tracy.hpp>
 
 DebugModule::DebugModule()
-  : fpsLabel(nullptr)
+  : diagnosticsLabel(nullptr)
+  , diagnostics(std::make_unique<DebugOverlayState>())
   , watermarkLabel(nullptr)
   , rendererDemo(nullptr)
   , animatedSpriteIndex(0)
   , rotatingSpriteIndex(0)
   , rendererDemoEnabled(false)
   , rendererDemoRotation(0.0)
-  , fpsAccum(0.0)
-  , fpsFrames(0)
-  , fpsDisplay(0)
 {
 }
 
@@ -46,10 +44,11 @@ DebugModule::Start(IllumoContext* context)
   // Required for GLString / SplashText screen-space drawing
   GLString::setRenderWindow(ic->window);
 
-  fpsLabel =
-    new GLString("FPS: 0", 80, 255, 120, 255, 18, 12, 12, ic->renderer);
-  fpsLabel->setPanelStyle(UiTheme::statusPanel());
-  fpsLabel->setVisible(isShowFpsEnabled());
+  diagnosticsLabel =
+    new GLString("", 80, 255, 120, 255, 18, 12, 12, ic->renderer);
+  diagnosticsLabel->setPanelStyle(UiTheme::statusPanel());
+  *diagnostics = DebugOverlayState{};
+  updateDiagnostics(0.0);
 
   // Translucent watermark in bottom-right corner for debug compilation builds
   watermarkLabel =
@@ -222,41 +221,21 @@ DebugModule::unregisterRendererCommands()
   ic->commandRegistry->UnregisterCommand("asset_reload");
 }
 
-bool
-DebugModule::isShowFpsEnabled() const
-{
-  if (!ic || !ic->envVars) {
-    return false;
-  }
-  return ic->envVars->getVar("showFPS").valueAsBool;
-}
-
 void
-DebugModule::updateFpsCounter(double dt)
+DebugModule::updateDiagnostics(double dt)
 {
-  if (!isShowFpsEnabled() || !fpsLabel) {
-    if (fpsLabel) {
-      fpsLabel->setVisible(false);
-    }
+  if (diagnosticsLabel == nullptr || ic == nullptr || ic->envVars == nullptr) {
     return;
   }
-
-  fpsLabel->setVisible(true);
-  fpsFrames += 1;
-  fpsAccum += dt;
-
-  // Refresh displayed FPS about once per second (stable, readable)
-  if (fpsAccum >= 1.0) {
-    fpsDisplay =
-      static_cast<int>(static_cast<double>(fpsFrames) / fpsAccum + 0.5);
-    fpsFrames = 0;
-    fpsAccum = 0.0;
-
-    const IBackend* backend = ic->renderer->getBackend();
-    const int pacedFps = backend != nullptr ? backend->getFPS() : 0;
-    fpsLabel->setContent(
-      buildFrameRateLabel(ic->window->isFramePaced(), pacedFps, fpsDisplay));
+  const IBackend* backend = ic->renderer->getBackend();
+  if (diagnostics->update(dt,
+                          ic->envVars->getVar("showFPS").valueAsBool,
+                          ic->envVars->getVar("showMemory").valueAsBool,
+                          ic->window->isFramePaced(),
+                          backend != nullptr ? backend->getFPS() : 0)) {
+    diagnosticsLabel->setContent(diagnostics->content());
   }
+  diagnosticsLabel->setVisible(diagnostics->visible());
 }
 
 void
@@ -297,7 +276,7 @@ DebugModule::Update(double dt)
     return;
   }
 
-  updateFpsCounter(dt);
+  updateDiagnostics(dt);
   updateWatermarkPosition();
   if (rendererDemoEnabled && rendererDemo != nullptr) {
     rendererDemoAnimator.update(dt);
@@ -443,9 +422,9 @@ DebugModule::Exit()
     ic->assetManager->releaseShader(rendererDemoShader);
     rendererDemoShader = ShaderHandle{};
   }
-  if (fpsLabel) {
-    delete fpsLabel;
-    fpsLabel = nullptr;
+  if (diagnosticsLabel) {
+    delete diagnosticsLabel;
+    diagnosticsLabel = nullptr;
   }
   if (watermarkLabel) {
     delete watermarkLabel;
@@ -464,8 +443,8 @@ DebugModule::DispatchDrawables(Scene* scene)
   if (ic->commandLine && ic->commandLine->wantsDraw()) {
     scene->AddDrawable(ic->commandLine, RenderLayerId::UI);
   }
-  if (fpsLabel && isShowFpsEnabled()) {
-    scene->AddDrawable(fpsLabel, RenderLayerId::Debug);
+  if (diagnosticsLabel && diagnosticsLabel->isVisible()) {
+    scene->AddDrawable(diagnosticsLabel, RenderLayerId::Debug);
   }
   if (watermarkLabel && watermarkLabel->isVisible()) {
     scene->AddDrawable(watermarkLabel, RenderLayerId::Debug);

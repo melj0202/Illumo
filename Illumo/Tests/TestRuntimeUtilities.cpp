@@ -18,7 +18,106 @@
 #include <thread>
 #include <vector>
 
+#include "Engine/DebugOverlayState.h"
+
 static TestCounters g;
+static int g_memoryQueries = 0;
+static bool g_memoryAvailable = true;
+static ProcessMemoryStats g_memorySample;
+
+static bool
+queryTestMemory(ProcessMemoryStats& stats) noexcept
+{
+  ++g_memoryQueries;
+  stats = g_memorySample;
+  return g_memoryAvailable;
+}
+
+static void
+testDebugOverlayMemory()
+{
+  DebugOverlayState overlay;
+  g_memoryQueries = 0;
+  g_memoryAvailable = true;
+  g_memorySample = { 130547712, 144913203, 163577856 };
+  testTrue(g,
+           !overlay.update(10.0, false, false, true, 60, queryTestMemory),
+           "hidden overlay has no content changes");
+  testEqInt(g, g_memoryQueries, 0, "hidden memory does not sample");
+  testTrue(g, !overlay.visible(), "both sections disabled hides panel");
+  testTrue(g,
+           overlay.update(0.0, false, true, true, 60, queryTestMemory),
+           "enabling memory updates immediately");
+  testTrue(g, overlay.visible(), "memory alone shows panel");
+  testTrue(g,
+           overlay.content() == "RAM: 124.5 MiB\nPeak RAM: 138.2 MiB\n"
+                                "Private commit: 156.0 MiB",
+           "memory uses MiB with one decimal and no leading FPS row");
+  testEqInt(g, g_memoryQueries, 1, "enabling memory samples once");
+  testTrue(g,
+           !overlay.update(0.5, false, true, true, 60, queryTestMemory),
+           "cached content remains unchanged between samples");
+  testEqInt(g, g_memoryQueries, 1, "half-second does not sample");
+  testTrue(g,
+           !overlay.update(0.5, false, true, true, 60, queryTestMemory),
+           "identical values avoid a label rebuild");
+  testEqInt(g, g_memoryQueries, 2, "one-second interval samples");
+  overlay.update(0.0, true, true, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content().find("Paced FPS: 60 | Submit FPS: 0\nRAM:") == 0,
+           "FPS precedes memory when both enabled");
+  testEqInt(g, g_memoryQueries, 2, "FPS visibility does not resample memory");
+  overlay.update(0.5, true, false, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content() == "Paced FPS: 60 | Submit FPS: 0",
+           "FPS-only panel removes memory rows");
+  overlay.update(0.5, true, true, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content().find("Submit FPS: 2\nRAM:") != std::string::npos,
+           "memory toggles do not reset the FPS interval");
+  testEqInt(g, g_memoryQueries, 3, "re-enabling samples immediately");
+  g_memoryAvailable = false;
+  overlay.update(1.0, false, true, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content() == "Memory: unavailable",
+           "failure replaces stale memory values");
+  overlay.update(0.5, false, true, true, 60, queryTestMemory);
+  testEqInt(g, g_memoryQueries, 4, "failed queries still use normal cadence");
+  g_memoryAvailable = true;
+  g_memorySample = { 0, 4294967296ULL, 1048576 };
+  overlay.update(0.5, false, true, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content() == "RAM: 0.0 MiB\nPeak RAM: 4096.0 MiB\n"
+                                "Private commit: 1.0 MiB",
+           "query recovers and formats zero and large byte counts");
+  overlay.update(5.0, false, true, true, 60, queryTestMemory);
+  testEqInt(g, g_memoryQueries, 6, "long frame samples only once");
+  overlay.update(0.0, false, false, true, 60, queryTestMemory);
+  testTrue(g,
+           !overlay.visible() && overlay.content().empty(),
+           "disabling both clears panel");
+}
+
+static void
+testProcessMemoryQuery()
+{
+  ProcessMemoryStats stats{ 1, 2, 3 };
+  const bool available = QueryProcessMemoryStats(stats);
+#ifdef _WIN32
+  testTrue(g, available, "Windows process query succeeds");
+  testTrue(g, stats.residentBytes > 0, "resident memory is nonzero");
+  testTrue(g,
+           stats.peakResidentBytes >= stats.residentBytes,
+           "lifetime peak is at least the current working set");
+  testTrue(g, stats.privateCommitBytes > 0, "private commit is nonzero");
+#else
+  testTrue(g, !available, "unsupported platform reports unavailable");
+  testTrue(g,
+           stats.residentBytes == 0 && stats.peakResidentBytes == 0 &&
+             stats.privateCommitBytes == 0,
+           "unavailable query clears output");
+#endif
+}
 
 static void
 testInputContextBindings()
@@ -661,6 +760,10 @@ runRuntimeUtilityCase(void (*testFunction)())
 void
 registerRuntimeUtilityTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.DebugOverlay.Memory",
+               []() { return runRuntimeUtilityCase(testDebugOverlayMemory); });
+  registry.add("Illumo.Platform.ProcessMemory",
+               []() { return runRuntimeUtilityCase(testProcessMemoryQuery); });
   registry.add("Illumo.InputContext.Bindings", []() {
     return runRuntimeUtilityCase(testInputContextBindings);
   });
