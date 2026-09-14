@@ -803,15 +803,37 @@ action open a confirmation overlay; confirming requests window closure so the
 Illumo application runner performs normal engine shutdown.
 Animation remains local value state: the overlay eases into place, rows reveal
 in sequence, selection glides, and changed values pulse without adding widgets
-or blocking input. Rows retain readable height and scroll with selection, wheel,
-Page Up/Down, and Home/End; drawing and pointer conversion share a fitted UI
+or blocking input. The mouse wheel scrolls the viewport without changing the
+selected row; an offscreen selection has no visible highlight. Keyboard navigation
+keeps the selected row visible, including Page Up/Down and Home/End. Rows retain
+readable height; drawing and pointer conversion share a fitted UI
 scale. A held opening click is consumed until release. The main-menu card adds
 a larger responsive title area, rounded raised action cards with icons, a
-glowing animated cell motif, bounded decorative cell outlines, layered color
-accents, staggered text, and selection glow. Rounded surfaces are composed from
-non-overlapping triangles and rectangles in the existing GameVisual stream. `reducedUiMotion` snaps menu animations and disables decorative
-motion; it does not change domain simulation or cell fading. `showInspector`
+glowing animated cell motif, flowing cyan/violet light ribbons, softly lit grid,
+and drifting glider clusters that crossfade between phases. The background uses
+fixed primitive counts and a continuous 12-second decorative cycle. Settings
+share the rounded panel, raised rows, inset values, and toggle pills; the pause
+and exit dialog uses the same chrome, raised actions, and gliding selection.
+`GuiKit::drawRoundedRect` composes non-overlapping triangles and rectangles in
+the existing GameVisual stream; `drawRoundedPanel` shares theme colors and
+layered chrome. `GuiDialog` provides opt-in rounded presentation with a fitted
+visual/pointer scale; its default presentation remains available to other apps.
+The game advances pause-dialog time once per frame, and submission refreshes
+the visual even while input yields to the console. `reducedUiMotion` snaps menu
+animations and disables decorative motion, including pause/exit transitions;
+it does not change domain simulation or cell fading. `showInspector`
 loads at product startup and applies to the existing inspector drawable.
+
+Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
+A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
+retires after completion. It covers the canvas and HUD but remains beneath
+settings and confirmation dialogs. The transition never changes camera or
+simulation state and does not block input. Reduced menu motion and the 3D
+diagnostic view skip it from the first frame. Returning to the main menu reverses
+this veil over 0.48 seconds, then submits one module transition. Repeated return
+requests do not restart it; product input is consumed during the accepted exit,
+while the global console retains its input. Reduced motion returns immediately.
+Both the pause-menu action and the console menu command use this path.
 
 **D-E2:** InputManager must not depend on Game types.  
 Callbacks should record events/state, not own game policy long-term (CA design PDF — still the direction of travel).

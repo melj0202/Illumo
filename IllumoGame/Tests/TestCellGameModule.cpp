@@ -4,6 +4,7 @@
 #include "Rulesets/WireworldRuleSet.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
+#include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Camera.h>
@@ -203,8 +204,8 @@ testStartRegistersGameFeatures()
   fixture.module.DispatchDrawables(&fixture.scene);
   testEqSize(g,
              fixture.scene.drawableCount(),
-             1,
-             "canvas is dispatched while splash is hidden");
+             2,
+             "canvas and entrance veil are dispatched while splash is hidden");
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::World).size(),
              1,
@@ -538,8 +539,8 @@ testReleaseConfigurationWorkflow()
   fixture.module.DispatchDrawables(&fixture.scene);
   testEqSize(g,
              fixture.scene.drawableCount(),
-             2u,
-             "open settings add one UI drawable beside the canvas");
+             3u,
+             "settings render above the canvas and entrance veil");
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
@@ -719,8 +720,8 @@ testExitConfirmationFromQ()
   fixture.module.DispatchDrawables(&fixture.scene);
   testEqSize(g,
              fixture.scene.drawableCount(),
-             2u,
-             "exit confirmation adds one UI drawable beside the canvas");
+             3u,
+             "exit confirmation renders above the canvas and entrance veil");
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
@@ -1429,9 +1430,141 @@ testInputRegistrationLifetime()
            "failed startup preserves selection");
 }
 
+class CanvasReturnHost : public IModuleHost
+{
+public:
+  int requests = 0;
+  std::unique_ptr<IModule> next;
+  void RequestTransition(std::unique_ptr<IModule> module) override
+  {
+    ++requests;
+    next = std::move(module);
+  }
+  bool HasPendingTransition() const override { return next != nullptr; }
+};
+
+static void
+testCanvasReturn()
+{
+  CanvasReturnHost host;
+  CellGameFixture fixture;
+  fixture.context.moduleHost = &host;
+  CellGameModuleTestAccess::advanceCanvasEntrance(fixture.module, 1.0);
+  fixture.input.getKeyQueue().push({ KeyCode::Q, InputAction::Press, 0 });
+  fixture.module.Update(0.0);
+  fixture.input.getKeyQueue().push({ KeyCode::M, InputAction::Press, 0 });
+  fixture.module.Update(0.0);
+  testEqInt(
+    g, host.requests, 0, "Main Menu waits for the canvas exit animation");
+  GameVisual& veil =
+    CellGameModuleTestAccess::getCanvasEntranceVisual(fixture.module);
+  fixture.module.Update(0.24);
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  testTrue(g,
+           veil.isVisible() && veil.shapeCount() > 0 &&
+             veil.getShape(0)->color.a > 0 && veil.getShape(0)->color.a < 255,
+           "canvas veil closes gradually before returning");
+  fixture.execute("menu");
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.25);
+  testEqInt(g,
+            host.requests,
+            1,
+            "repeated returns do not restart or duplicate the transition");
+  testTrue(g,
+           fixture.input.getKeyQueue().empty(),
+           "exit input does not leak into the main menu");
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  testEqInt(g,
+            veil.getShape(0)->color.a,
+            255,
+            "canvas is covered when the module transition is requested");
+  fixture.module.Update(1.0);
+  testEqInt(g, host.requests, 1, "completed exit submits only once");
+}
+
+static void
+testReducedCanvasReturn()
+{
+  CanvasReturnHost host;
+  CellGameFixture fixture;
+  fixture.context.moduleHost = &host;
+  fixture.env.setVar("reducedUiMotion", true);
+  fixture.execute("menu");
+  testEqInt(g,
+            host.requests,
+            1,
+            "reduced motion returns immediately through the console path");
+  fixture.execute("menu");
+  testEqInt(g, host.requests, 1, "immediate return remains idempotent");
+}
+
+static void
+testCanvasEntrance()
+{
+  CellGameFixture fixture;
+  GameVisual& veil =
+    CellGameModuleTestAccess::getCanvasEntranceVisual(fixture.module);
+  fixture.module.DispatchDrawables(&fixture.scene);
+  testTrue(g,
+           veil.isVisible() && veil.shapeCount() > 0,
+           "entering a canvas starts a visible reveal");
+  testEqInt(
+    g, veil.getShape(0)->color.a, 255, "entrance initially covers the canvas");
+  CellGameModuleTestAccess::advanceCanvasEntrance(fixture.module, 0.24);
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  testTrue(g,
+           veil.getShape(0)->color.a > 0 && veil.getShape(0)->color.a < 255,
+           "entrance veil dissolves over time");
+  testTrue(g,
+           veil.getShape(142)->color.a < veil.getShape(0)->color.a,
+           "the center reveals before the outer edge");
+  const unsigned char opacity = veil.getShape(0)->color.a;
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  testEqInt(g,
+            veil.getShape(0)->color.a,
+            opacity,
+            "drawing does not advance entrance time");
+  fixture.env.setVar("uiScale", 4);
+  fixture.window.handleResize(800, 600);
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  testTrue(g,
+           veil.getShape(0)->rect.w * 16.0f * 4.0f == 800.0f &&
+             veil.getShape(0)->rect.h * 10.0f * 4.0f == 600.0f,
+           "entrance coverage follows viewport size and UI scale");
+  CellGameModuleTestAccess::advanceCanvasEntrance(fixture.module, 1.0);
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  const std::vector<DrawableBase*>& ui =
+    fixture.scene.drawablesIn(RenderLayerId::UI);
+  testTrue(g,
+           !veil.isVisible() &&
+             std::find(ui.begin(), ui.end(), &veil) == ui.end(),
+           "completed entrance is no longer submitted");
+  fixture.module.Exit();
+  fixture.env.setVar("reducedUiMotion", true);
+  fixture.started = fixture.module.Start(&fixture.context);
+  testTrue(g,
+           fixture.started && !veil.isVisible(),
+           "reduced motion skips entrance from the first frame");
+}
+
 void
 registerCellGameModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.CellGameModule.CanvasReturn",
+               []() { return runCellGameModuleCase(testCanvasReturn); });
+  registry.add("IllumoGame.CellGameModule.ReducedCanvasReturn",
+               []() { return runCellGameModuleCase(testReducedCanvasReturn); });
+
+  registry.add("IllumoGame.CellGameModule.CanvasEntrance",
+               []() { return runCellGameModuleCase(testCanvasEntrance); });
+
   registry.add("IllumoGame.CellGame.InputRegistrationLifetime", []() {
     return runCellGameModuleCase(testInputRegistrationLifetime);
   });

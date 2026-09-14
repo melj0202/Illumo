@@ -6,8 +6,10 @@
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/MockBackend.h>
+#include <Illumo/Testing/TestAccess.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <limits>
 #include <string>
 
 static TestCounters g;
@@ -31,6 +33,7 @@ struct ExitConfirmFixture
     , input(nullptr)
     , dialog(&window, &renderer)
   {
+    env.setVar("uiScale", 1);
     env.setVar("WinX", 640);
     env.setVar("WinY", 480);
     mock.Initialize();
@@ -122,6 +125,15 @@ testExitConfirmAnimation()
   testTrue(g,
            midProgress > 0.0f && midProgress < 1.0f,
            "reveal animation advances incrementally");
+  fixture.dialog.update(&fixture.input);
+  testTrue(g,
+           fixture.dialog.getAnimationProgressForTesting() == midProgress,
+           "input processing does not advance frame-owned animation twice");
+  fixture.dialog.tick(std::numeric_limits<float>::quiet_NaN());
+  fixture.dialog.tick(-1.0f);
+  testTrue(g,
+           fixture.dialog.getAnimationProgressForTesting() == midProgress,
+           "invalid frame deltas preserve animation state");
   fixture.dialog.tick(1.0f);
   testTrue(g,
            fixture.dialog.getAnimationProgressForTesting() == 1.0f,
@@ -141,6 +153,16 @@ testExitConfirmAnimation()
   testTrue(g,
            fixture.dialog.getSelectionPositionForTesting() == 1.0f,
            "selection highlight settles on next button");
+  fixture.dialog.setReducedMotion(true);
+  fixture.dialog.open();
+  testTrue(g,
+           fixture.dialog.getAnimationProgressForTesting() == 1.0f,
+           "reduced motion opens the dialog immediately");
+  fixture.press(KeyCode::Right);
+  fixture.dialog.update(&fixture.input);
+  testTrue(g,
+           fixture.dialog.getSelectionPositionForTesting() == 1.0f,
+           "reduced motion snaps selection immediately");
 }
 
 static void
@@ -175,6 +197,11 @@ testExitConfirmTokens()
     if (text == nullptr) {
       continue;
     }
+    if (text->content == "SIMULATION PAUSED") {
+      testTrue(g,
+               text->color.a == 255,
+               "tick-only frames refresh the reveal before rendering");
+    }
     foundTitle = foundTitle || text->content == "SIMULATION PAUSED";
     foundResume = foundResume || text->content == "Resume";
     foundMenu = foundMenu || text->content == "Main Menu";
@@ -195,6 +222,68 @@ testExitConfirmTokens()
            "closed confirmation emits no commands");
 }
 
+static void
+testExitConfirmScaledMouse()
+{
+  const std::string labels[3] = { "Resume", "Main Menu", "Exit App" };
+  const ExitConfirmAction actions[3] = { ExitConfirmAction::Cancel,
+                                         ExitConfirmAction::MainMenu,
+                                         ExitConfirmAction::Confirm };
+  for (int scale : { 1, 4 }) {
+    ExitConfirmFixture fixture;
+    fixture.env.setVar("uiScale", scale);
+    fixture.window.handleResize(320, 240);
+    fixture.dialog.setReducedMotion(true);
+    fixture.dialog.open();
+    GameVisual& openingVisual = fixture.dialog.getVisual();
+    const float openingFit =
+      openingVisual.getTransform().scaleX * fixture.renderer.getUiScale();
+    for (size_t index = 0; index < openingVisual.textCount(); ++index) {
+      const TextPrimitive* text = openingVisual.getText(index);
+      if (text != nullptr && text->content == "Resume") {
+        fixture.window.mouseX = (text->x + 2.0f) * openingFit;
+        fixture.window.mouseY = (text->y + 2.0f) * openingFit;
+        break;
+      }
+    }
+    InputManagerTestAccess::setAction(
+      fixture.input, KeyCode::MouseLeft, InputAction::Press);
+    testTrue(g,
+             fixture.dialog.update(&fixture.input) == ExitConfirmAction::None,
+             "held opening click cannot activate a dialog action");
+    for (int button = 0; button < 3; ++button) {
+      InputManagerTestAccess::setAction(
+        fixture.input, KeyCode::MouseLeft, InputAction::Release);
+      fixture.dialog.update(&fixture.input);
+      GameVisual& visual = fixture.dialog.getVisual();
+      const float fit =
+        visual.getTransform().scaleX * fixture.renderer.getUiScale();
+      bool found = false;
+      for (size_t index = 0; index < visual.textCount(); ++index) {
+        const TextPrimitive* text = visual.getText(index);
+        if (text != nullptr && text->content == labels[button]) {
+          fixture.window.mouseX = (text->x + 2.0f) * fit;
+          fixture.window.mouseY = (text->y + 2.0f) * fit;
+          found = true;
+          testTrue(
+            g,
+            fixture.window.mouseX > 0.0 && fixture.window.mouseX < 320.0 &&
+              fixture.window.mouseY > 0.0 && fixture.window.mouseY < 240.0,
+            "rendered action stays inside the small viewport");
+          break;
+        }
+      }
+      testTrue(g, found, "scaled dialog renders each action");
+      InputManagerTestAccess::setAction(
+        fixture.input, KeyCode::MouseLeft, InputAction::Press);
+      testTrue(g,
+               fixture.dialog.update(&fixture.input) == actions[button],
+               "physical mouse coordinates hit the displayed action at every "
+               "UI scale");
+    }
+  }
+}
+
 static int
 runExitConfirmCase(void (*testFunction)())
 {
@@ -206,6 +295,8 @@ runExitConfirmCase(void (*testFunction)())
 void
 registerExitConfirmDialogTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.ExitConfirm.ScaledMouse",
+               []() { return runExitConfirmCase(testExitConfirmScaledMouse); });
   registry.add("IllumoGame.ExitConfirm.Actions",
                []() { return runExitConfirmCase(testExitConfirmActions); });
   registry.add("IllumoGame.ExitConfirm.Tokens",

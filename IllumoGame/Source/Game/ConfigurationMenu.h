@@ -55,6 +55,7 @@ public:
   void setError(const std::string& message);
   GameVisual& getVisual() { return visual; }
 
+  int getFirstVisibleRowForTesting() const { return firstVisibleRow; }
   int getSelectedRowForTesting() const { return selectedRow; }
   float getAnimationProgressForTesting() const;
   float getSelectionPositionForTesting() const;

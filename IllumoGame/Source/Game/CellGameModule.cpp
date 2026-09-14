@@ -282,6 +282,16 @@ CellGameModule::Start(IllumoContext* context)
     hamburgerVisual.prepare(ic->renderer);
   }
 
+  canvasEntranceVisual.setRenderer(ic->renderer);
+  canvasEntranceVisual.setWindow(ic->window);
+  canvasEntranceVisual.setSpace(PrimitiveSpace::Pixels);
+  canvasEntranceVisual.setLayerHint(RenderLayerId::UI);
+  canvasEntranceVisual.prepare(ic->renderer);
+  canvasEntranceElapsed = 0.0;
+  mainMenuReturnPending = false;
+  mainMenuReturnSubmitted = false;
+  advanceCanvasEntrance(0.0);
+
   configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
   exitConfirmDialog =
@@ -1097,9 +1107,7 @@ CellGameModule::registerConsoleCommands()
         ic->commandLine->logError("Usage: menu");
         return;
       }
-      if (ic->moduleHost != nullptr) {
-        ic->moduleHost->RequestTransition(std::make_unique<MainMenuModule>());
-      }
+      requestMainMenuReturn();
     },
     "menu",
     "Return to the Main Menu");
@@ -1357,6 +1365,27 @@ CellGameModule::Update(double dt)
   if (cellContext == nullptr || ic == nullptr) {
     return;
   }
+  advanceCanvasEntrance(dt);
+  if (mainMenuReturnPending) {
+    // The accepted exit owns product input until the host replaces this module.
+    // Leave the global console toggle and an open console's input alone.
+    if (ic->commandLine == nullptr || !ic->commandLine->isOpen) {
+      std::queue<InputManager::KeyPressEvent>& keys =
+        ic->inputManager->getKeyQueue();
+      std::queue<InputManager::KeyPressEvent> preserved;
+      while (!keys.empty()) {
+        const InputManager::KeyPressEvent event = keys.front();
+        keys.pop();
+        if (event.key == KeyCode::Grave) {
+          preserved.push(event);
+        }
+      }
+      keys.swap(preserved);
+      ic->inputManager->clearCharQueue();
+    }
+    completeMainMenuReturn();
+    return;
+  }
   lastSimulationSteps = 0;
   lastSimulationFrameMilliseconds = 0.0;
   consumeCompletedSimulation(false);
@@ -1368,6 +1397,12 @@ CellGameModule::Update(double dt)
     ic->commandLine != nullptr && ic->commandLine->isOpen;
   const bool exitConfirmOpen =
     exitConfirmDialog != nullptr && exitConfirmDialog->isOpen();
+
+  if (exitConfirmDialog != nullptr) {
+    exitConfirmDialog->setReducedMotion(
+      ic->envVars != nullptr &&
+      ic->envVars->getVar("reducedUiMotion").valueAsBool);
+  }
 
   const bool mouseLeftDown =
     ic->inputManager != nullptr &&
@@ -1393,9 +1428,7 @@ CellGameModule::Update(double dt)
       ic->window->requestClose();
     } else if (action == ExitConfirmAction::MainMenu) {
       exitConfirmDialog->close();
-      if (ic->moduleHost != nullptr) {
-        ic->moduleHost->RequestTransition(std::make_unique<MainMenuModule>());
-      }
+      requestMainMenuReturn();
     } else if (action == ExitConfirmAction::Cancel) {
       exitConfirmDialog->close();
     }
@@ -1578,6 +1611,9 @@ CellGameModule::Exit()
   render3dTestStatic.reset();
   hamburgerVisual.clearPrimitives();
   hamburgerVisual.setVisible(false);
+  canvasEntranceVisual.clearPrimitives();
+  canvasEntranceVisual.setVisible(false);
+  canvasEntranceElapsed = kCanvasEntranceSeconds;
   delete cellContext;
   cellContext = nullptr;
 }
@@ -2456,6 +2492,108 @@ CellGameModule::updateRender3dTestMatrices()
 }
 
 void
+CellGameModule::requestMainMenuReturn()
+{
+  if (ic->moduleHost == nullptr || mainMenuReturnPending) {
+    return;
+  }
+  mainMenuReturnPending = true;
+  configurationMenu->close();
+  exitConfirmDialog->close();
+  // Reverse the existing reveal from its current position, even during entry.
+  advanceCanvasEntrance(0.0);
+  completeMainMenuReturn();
+}
+
+void
+CellGameModule::completeMainMenuReturn()
+{
+  if (!mainMenuReturnSubmitted && canvasEntranceElapsed <= 0.0) {
+    mainMenuReturnSubmitted = true;
+    ic->moduleHost->RequestTransition(std::make_unique<MainMenuModule>());
+  }
+}
+
+void
+CellGameModule::advanceCanvasEntrance(double dt)
+{
+  const bool reducedMotion = ic->envVars != nullptr &&
+                             ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  if (mainMenuReturnPending) {
+    if (reducedMotion || isRender3dTestEnabled()) {
+      canvasEntranceElapsed = 0.0;
+    } else if (std::isfinite(dt) && dt > 0.0) {
+      canvasEntranceElapsed =
+        std::max(0.0,
+                 canvasEntranceElapsed -
+                   dt * kCanvasEntranceSeconds / kCanvasExitSeconds);
+    }
+    canvasEntranceVisual.setVisible(true);
+    return;
+  }
+  if (reducedMotion || isRender3dTestEnabled()) {
+    canvasEntranceElapsed = kCanvasEntranceSeconds;
+  } else if (std::isfinite(dt) && dt > 0.0) {
+    canvasEntranceElapsed =
+      std::min(kCanvasEntranceSeconds, canvasEntranceElapsed + dt);
+  }
+  canvasEntranceVisual.setVisible(canvasEntranceElapsed <
+                                  kCanvasEntranceSeconds);
+}
+
+void
+CellGameModule::rebuildCanvasEntrance()
+{
+  canvasEntranceVisual.clearPrimitives();
+  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+  const float scale = ic->renderer->getUiScale();
+  const float width = static_cast<float>(std::max(1, dimensions[0])) / scale;
+  const float height = static_cast<float>(std::max(1, dimensions[1])) / scale;
+  const float progress =
+    static_cast<float>(canvasEntranceElapsed / kCanvasEntranceSeconds);
+  constexpr int columns = 16;
+  constexpr int rows = 10;
+  const float cellWidth = width / static_cast<float>(columns);
+  const float cellHeight = height / static_cast<float>(rows);
+  // A bounded, screen-space veil reveals the world without changing its camera,
+  // simulation, or input. Neighboring cells dissolve outward from the center.
+  for (int row = 0; row < rows; ++row) {
+    for (int column = 0; column < columns; ++column) {
+      const float x = static_cast<float>(column) * cellWidth;
+      const float y = static_cast<float>(row) * cellHeight;
+      const float nx =
+        (static_cast<float>(column) + 0.5f) / columns * 2.0f - 1.0f;
+      const float ny = (static_cast<float>(row) + 0.5f) / rows * 2.0f - 1.0f;
+      const float distance = std::sqrt(nx * nx + ny * ny) * 0.70710678f;
+      const float local =
+        std::clamp((progress - distance * 0.28f) / 0.72f, 0.0f, 1.0f);
+      const float remaining = (1.0f - local) * (1.0f - local) * (1.0f - local);
+      const unsigned char opacity =
+        static_cast<unsigned char>(255.0f * remaining);
+      if (opacity == 0) {
+        continue;
+      }
+      canvasEntranceVisual.addFilledRect(
+        x,
+        y,
+        cellWidth,
+        cellHeight,
+        UiTheme::applyOpacity(UiTheme::menuSurface(), opacity));
+      canvasEntranceVisual.addOutlineRect(
+        x + 0.5f,
+        y + 0.5f,
+        std::max(0.0f, cellWidth - 1.0f),
+        std::max(0.0f, cellHeight - 1.0f),
+        UiTheme::applyOpacity(
+          column < columns / 2 ? UiTheme::accentCool()
+                               : UiTheme::accentViolet(),
+          static_cast<unsigned char>(42.0f * local * remaining)),
+        1.0f);
+    }
+  }
+}
+
+void
 CellGameModule::DispatchDrawables(Scene* scene)
 {
   if (cellContext == nullptr || scene == nullptr) {
@@ -2489,6 +2627,11 @@ CellGameModule::DispatchDrawables(Scene* scene)
   }
   if (hamburgerVisual.isVisible()) {
     scene->AddDrawable(&hamburgerVisual, RenderLayerId::UI);
+  }
+  advanceCanvasEntrance(0.0);
+  if (canvasEntranceVisual.isVisible()) {
+    rebuildCanvasEntrance();
+    scene->AddDrawable(&canvasEntranceVisual, RenderLayerId::UI);
   }
   if (configurationMenu != nullptr && configurationMenu->isOpen()) {
     scene->AddDrawable(configurationMenu.get(), RenderLayerId::UI);

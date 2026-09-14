@@ -51,14 +51,35 @@ names, split keyboard instructions, and a short explanation for the selected
 setting. Pressing Q or activating Exit opens a confirmation overlay; confirming
 requests window closure and leaves normal engine shutdown to the App main loop. A short eased reveal, staggered row fade, gliding
 selection highlight, and value-change pulse are advanced from frame delta time;
-input remains active throughout. Rows scroll with selection, wheel, Page Up/Down,
-and Home/End rather than shrinking text to fit the list. Rendering and mouse
+input remains active throughout. The mouse wheel scrolls the view without
+changing selection; an offscreen selection has no visible highlight. Keyboard
+navigation, including Page Up/Down and Home/End, brings selection into view.
+Rows retain readable height rather than shrinking text to fit the list. Rendering and mouse
 conversion share a fitted UI scale. Main-menu F1 opens the same overlay; the
 main-menu card adds a larger responsive title area, rounded raised action
 cards with icons, a glowing animated cell motif, cyan/violet accents, drifting
-cell outlines, staggered labels, and selection glow. Reduced menu motion snaps transitions and stops
-decorative motion without changing simulation or cell fading. The in-game
+glider clusters that crossfade between phases, a softly lit grid, and flowing
+light ribbons. Fixed primitive counts and a continuous 12-second decorative
+cycle keep the background bounded. Settings share rounded panel chrome, raised
+rows, inset values, and toggle pills; the pause/exit dialog shares rounded
+actions and a gliding highlight. Stateless GuiKit rounded-surface helpers use
+non-overlapping triangles and rectangles. GuiDialog's rounded style is opt-in
+and fits drawing and pointer coordinates together. The product advances dialog
+time once per frame; submission refreshes visuals even while the console owns
+input. Reduced menu motion snaps all menu transitions, including pause/exit,
+and stops decorative motion without changing simulation or cell fading. The in-game
 settings button eases its hover highlight and displays the F1 shortcut.
+
+Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
+A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
+retires after completion. It covers the canvas and HUD but remains beneath
+settings and confirmation dialogs. The transition never changes camera or
+simulation state and does not block input. Reduced menu motion and the 3D
+diagnostic view skip it from the first frame. Returning to the main menu reverses
+this veil over 0.48 seconds, then submits one module transition. Repeated return
+requests do not restart it; product input is consumed during the accepted exit,
+while the global console retains its input. Reduced motion returns immediately.
+Both the pause-menu action and the console menu command use this path.
 
 EDIT mode supports Shift+drag marquee selection, Ctrl+C/X/V copy/cut/paste,
 Delete fill, R/F buffer rotate/flip, and console commands

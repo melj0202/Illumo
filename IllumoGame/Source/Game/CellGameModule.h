@@ -55,6 +55,10 @@ private:
   void showModeSplash(const char* label);
   void updateEditorCursor();
   void updateHamburgerVisual(double dt);
+  void advanceCanvasEntrance(double dt);
+  void requestMainMenuReturn();
+  void completeMainMenuReturn();
+  void rebuildCanvasEntrance();
   bool isHamburgerHovered() const;
   void toggleSettingsMenu();
   void updateSelectionVisual();
@@ -128,6 +132,12 @@ private:
   bool render3dCameraApplied;
   Cursor editorCursor;
   GameVisual hamburgerVisual;
+  GameVisual canvasEntranceVisual{ 1024u };
+  static constexpr double kCanvasEntranceSeconds = 0.72;
+  double canvasEntranceElapsed = kCanvasEntranceSeconds;
+  static constexpr double kCanvasExitSeconds = 0.48;
+  bool mainMenuReturnPending = false;
+  bool mainMenuReturnSubmitted = false;
   float hamburgerX;
   float hamburgerY;
   float hamburgerSize;

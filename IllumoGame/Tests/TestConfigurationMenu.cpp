@@ -362,10 +362,44 @@ testDisplaySettingsAndScrolling()
   fixture.menu.update(&fixture.input);
   *fixture.input.getMouseScrollOffset() = -1.0;
   fixture.menu.update(&fixture.input);
+  testTrue(
+    g,
+    fixture.menu.getSelectedRowForTesting() == 0 &&
+      fixture.menu.getFirstVisibleRowForTesting() == 1 &&
+      *fixture.input.getMouseScrollOffset() == 0.0,
+    "wheel moves the view without selecting another button and is consumed");
+  fixture.menu.tick(0.1f);
+  fixture.menu.update(&fixture.input);
+  testEqInt(g,
+            fixture.menu.getFirstVisibleRowForTesting(),
+            1,
+            "later layout updates do not snap back to the selected row");
+  *fixture.input.getMouseScrollOffset() = -100.0;
+  fixture.menu.update(&fixture.input);
+  const int bottomRow = fixture.menu.getFirstVisibleRowForTesting();
+  testTrue(g,
+           bottomRow > 1 && fixture.menu.getSelectedRowForTesting() == 0,
+           "wheel clamps at the bottom while selection stays offscreen");
+  *fixture.input.getMouseScrollOffset() = -1.0;
+  fixture.menu.update(&fixture.input);
+  testEqInt(g,
+            fixture.menu.getFirstVisibleRowForTesting(),
+            bottomRow,
+            "scrolling past the bottom does not wrap");
+  *fixture.input.getMouseScrollOffset() = 100.0;
+  fixture.menu.update(&fixture.input);
+  testEqInt(g,
+            fixture.menu.getFirstVisibleRowForTesting(),
+            0,
+            "wheel clamps at the top");
+  *fixture.input.getMouseScrollOffset() = -3.0;
+  fixture.menu.update(&fixture.input);
+  fixture.press(KeyCode::Down);
+  fixture.menu.update(&fixture.input);
   testTrue(g,
            fixture.menu.getSelectedRowForTesting() == 1 &&
-             *fixture.input.getMouseScrollOffset() == 0.0,
-           "wheel navigates once and is consumed");
+             fixture.menu.getFirstVisibleRowForTesting() == 1,
+           "keyboard navigation brings the selected row back into view");
   fixture.press(KeyCode::End);
   fixture.menu.update(&fixture.input);
   Scene scene(&fixture.window, &fixture.camera);

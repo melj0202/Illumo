@@ -39,6 +39,20 @@ public:
                              ColorRgba valueColor = UiTheme::textPrimary());
 
   // --- Panels, Surfaces & Chrome ---
+  static void drawRoundedRect(GameVisual& visual,
+                              float x,
+                              float y,
+                              float width,
+                              float height,
+                              float radius,
+                              ColorRgba color);
+  static void drawRoundedPanel(GameVisual& visual,
+                               float x,
+                               float y,
+                               float width,
+                               float height,
+                               unsigned char opacity = 255);
+
   static bool isPointInRect(float px,
                             float py,
                             float rx,

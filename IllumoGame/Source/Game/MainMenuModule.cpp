@@ -86,7 +86,8 @@ MainMenuModule::Start(IllumoContext* context)
   m_animationElapsed = 0.0f;
   m_revealElapsed = 0.0f;
   m_bgSimAccum = 0.0;
-  m_mouseWasDown = false;
+  m_mouseWasDown = ic->inputManager != nullptr &&
+                   ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
 
   registerConsoleCommands();
   updateLayout();
@@ -477,44 +478,6 @@ MainMenuModule::Update(double dt)
   rebuildVisual();
 }
 
-// Non-overlapping quarter fans keep translucent rounded surfaces evenly tinted.
-static void
-drawMenuSurface(GameVisual& visual,
-                float x,
-                float y,
-                float width,
-                float height,
-                float radius,
-                ColorRgba color)
-{
-  radius = std::min(radius, std::min(width, height) * 0.5f);
-  visual.addFilledRect(x + radius, y, width - 2.0f * radius, height, color);
-  visual.addFilledRect(x, y + radius, radius, height - 2.0f * radius, color);
-  visual.addFilledRect(
-    x + width - radius, y + radius, radius, height - 2.0f * radius, color);
-  const float centersX[4] = {
-    x + radius, x + width - radius, x + width - radius, x + radius
-  };
-  const float centersY[4] = {
-    y + radius, y + radius, y + height - radius, y + height - radius
-  };
-  const float starts[4] = { 3.14159265f, 4.71238898f, 0.0f, 1.57079633f };
-  for (int corner = 0; corner < 4; ++corner) {
-    for (int segment = 0; segment < 6; ++segment) {
-      const float a =
-        starts[corner] + static_cast<float>(segment) * 0.26179939f;
-      const float b = a + 0.26179939f;
-      visual.addFilledTriangle(centersX[corner],
-                               centersY[corner],
-                               centersX[corner] + std::cos(a) * radius,
-                               centersY[corner] + std::sin(a) * radius,
-                               centersX[corner] + std::cos(b) * radius,
-                               centersY[corner] + std::sin(b) * radius,
-                               color);
-    }
-  }
-}
-
 static void
 drawMenuIcon(GameVisual& visual, int item, float x, float y, ColorRgba color)
 {
@@ -557,92 +520,106 @@ MainMenuModule::rebuildVisual()
   const float breathe =
     reducedMotion() ? 0.5f
                     : 0.5f + 0.5f * std::sin(m_animationElapsed * 1.04719755f);
-  const ColorRgba cyan{ 87, 221, 242, 255 };
-  const ColorRgba violet{ 151, 128, 245, 255 };
+  const ColorRgba cyan = UiTheme::accentCool();
+  const ColorRgba violet = UiTheme::accentViolet();
   m_menuVisual.addFilledRect(
-    0.0f, 0.0f, width, height, ColorRgba{ 7, 12, 24, 225 });
+    0.0f, 0.0f, width, height, ColorRgba{ 8, 14, 28, 250 });
+  const float phase = reducedMotion() ? 0.0f : m_animationElapsed * 0.52359877f;
 
-  // Bounded layers of translucent color create ambient light without textures.
-  for (int band = 0; band < 12; ++band) {
-    const float inset = static_cast<float>(band) * 18.0f;
-    const unsigned char alpha =
-      static_cast<unsigned char>(2.0f + breathe * 2.0f);
-    m_menuVisual.addFilledRect(inset,
-                               0.0f,
-                               std::max(0.0f, width * 0.45f - inset),
-                               height,
-                               ColorRgba{ 30, 110, 155, alpha });
-    m_menuVisual.addFilledRect(width * 0.65f + inset,
-                               0.0f,
-                               std::max(0.0f, width * 0.35f - inset),
-                               height,
-                               ColorRgba{ 91, 55, 155, alpha });
+  // Fixed primitive counts keep the animated light field independent of
+  // resolution.
+  for (int light = 0; light < 2; ++light) {
+    const float side = static_cast<float>(light);
+    const float cx =
+      width * (0.12f + side * 0.78f) + std::sin(phase + side * 3.0f) * 45.0f;
+    const float cy =
+      height * (0.30f + side * 0.35f) + std::cos(phase + side) * 60.0f;
+    const ColorRgba tint = light == 0 ? cyan : violet;
+    for (int ring = 12; ring > 0; --ring) {
+      const float radius = static_cast<float>(ring) * width * 0.033f;
+      m_menuVisual.addFilledEllipse(cx - radius,
+                                    cy - radius * 1.2f,
+                                    radius * 2.0f,
+                                    radius * 2.4f,
+                                    UiTheme::applyOpacity(tint, 3));
+    }
   }
-  // A slow cell constellation echoes the simulator without random per-frame
-  // work.
-  for (int cell = 0; cell < 28; ++cell) {
-    const float phase = static_cast<float>(cell) * 0.73f;
-    const float drift =
-      reducedMotion()
-        ? 0.0f
-        : std::sin(m_animationElapsed * 0.52359877f + phase) * 9.0f;
-    const float x = std::fmod(static_cast<float>(cell * 137 + 31), width);
-    const float y = std::fmod(static_cast<float>(cell * 79 + 17), height);
-    m_menuVisual.addOutlineRect(
-      x,
-      std::clamp(y + drift, 0.0f, height - 8.0f),
-      8.0f,
-      8.0f,
-      ColorRgba{
-        85, 180, 225, static_cast<unsigned char>(25.0f + 25.0f * breathe) },
-      1.0f);
+  for (int column = 0; column <= 32; ++column) {
+    const float x = width * static_cast<float>(column) / 32.0f;
+    m_menuVisual.addLine(
+      x, 0.0f, x, height, ColorRgba{ 109, 155, 199, 9 }, 1.0f);
+  }
+  for (int row = 0; row <= 18; ++row) {
+    const float y = height * static_cast<float>(row) / 18.0f;
+    m_menuVisual.addLine(
+      0.0f, y, width, y, ColorRgba{ 109, 155, 199, 9 }, 1.0f);
+  }
+  for (int ribbon = 0; ribbon < 3; ++ribbon) {
+    const float offset = static_cast<float>(ribbon) * 1.8f;
+    const ColorRgba tint = ribbon == 1 ? violet : cyan;
+    for (int segment = 0; segment < 64; ++segment) {
+      const float u = static_cast<float>(segment) / 64.0f;
+      const float v = static_cast<float>(segment + 1) / 64.0f;
+      const float y0 =
+        height * (0.5f + 0.28f * std::sin(u * 5.0f + phase + offset) +
+                  0.07f * std::cos(u * 11.0f - phase * 2.0f));
+      const float y1 =
+        height * (0.5f + 0.28f * std::sin(v * 5.0f + phase + offset) +
+                  0.07f * std::cos(v * 11.0f - phase * 2.0f));
+      m_menuVisual.addLine(
+        u * width, y0, v * width, y1, UiTheme::applyOpacity(tint, 5), 16.0f);
+      m_menuVisual.addLine(
+        u * width, y0, v * width, y1, UiTheme::applyOpacity(tint, 35), 1.0f);
+    }
+  }
+
+  // Crossfade glider phases while each small cluster follows a continuous
+  // orbit.
+  const unsigned int gliders[4] = {
+    0b111100010u, 0b010110101u, 0b110101100u, 0b011110001u
+  };
+  for (int cluster = 0; cluster < 10; ++cluster) {
+    const int clusterRow = cluster / 2;
+    const float seed = static_cast<float>(cluster);
+    const float orbit = phase + seed * 1.7f;
+    const float x = width * (cluster % 2 == 0 ? 0.07f : 0.84f) +
+                    std::sin(orbit) * (25.0f + seed * 2.0f);
+    const float y = height * (0.12f + static_cast<float>(clusterRow) * 0.18f) +
+                    std::cos(orbit) * 22.0f;
+    const float cellSize = 5.0f + static_cast<float>(cluster % 3) * 2.0f;
+    const float generation =
+      (reducedMotion() ? 0.0f : m_animationElapsed / 3.0f) + seed;
+    const int frame = static_cast<int>(generation) % 4;
+    const float blend = easeOutCubic(generation - std::floor(generation));
+    const ColorRgba tint = cluster % 3 == 0 ? violet : cyan;
+    for (int cell = 0; cell < 9; ++cell) {
+      const int cellRow = cell / 3;
+      const float current = (gliders[frame] & (1u << cell)) != 0u ? 1.0f : 0.0f;
+      const float next =
+        (gliders[(frame + 1) % 4] & (1u << cell)) != 0u ? 1.0f : 0.0f;
+      const float intensity = current + (next - current) * blend;
+      const float px = x + static_cast<float>(cell % 3) * (cellSize + 3.0f);
+      const float py = y + static_cast<float>(cellRow) * (cellSize + 3.0f);
+      m_menuVisual.addFilledRect(
+        px - 3.0f,
+        py - 3.0f,
+        cellSize + 6.0f,
+        cellSize + 6.0f,
+        UiTheme::applyOpacity(tint,
+                              static_cast<unsigned char>(intensity * 12.0f)));
+      m_menuVisual.addFilledRect(
+        px,
+        py,
+        cellSize,
+        cellSize,
+        UiTheme::applyOpacity(
+          tint, static_cast<unsigned char>(15.0f + intensity * 100.0f)));
+    }
   }
 
   const float room = std::clamp((m_panelHeight - 456.0f) / 144.0f, 0.0f, 1.0f);
-  // Wide, low-opacity halos give the card depth without a postprocessing pass.
-  for (int layer = 6; layer > 0; --layer) {
-    const float spread = static_cast<float>(layer) * 5.0f;
-    drawMenuSurface(
-      m_menuVisual,
-      m_panelX - spread,
-      m_panelY - spread * 0.4f,
-      m_panelWidth + spread * 2.0f,
-      m_panelHeight + spread * 0.8f,
-      22.0f + spread,
-      ColorRgba{ 39, 116, 150, static_cast<unsigned char>(3.0f * reveal) });
-  }
-  drawMenuSurface(m_menuVisual,
-                  m_panelX + 2.0f,
-                  m_panelY + 10.0f,
-                  m_panelWidth,
-                  m_panelHeight,
-                  22.0f,
-                  UiTheme::applyOpacity(ColorRgba{ 2, 7, 17, 150 }, opacity));
-  drawMenuSurface(
-    m_menuVisual,
-    m_panelX,
-    m_panelY,
-    m_panelWidth,
-    m_panelHeight,
-    22.0f,
-    UiTheme::applyOpacity(ColorRgba{ 69, 110, 142, 255 }, opacity));
-  drawMenuSurface(m_menuVisual,
-                  m_panelX + 1.0f,
-                  m_panelY + 1.0f,
-                  m_panelWidth - 2.0f,
-                  m_panelHeight - 2.0f,
-                  21.0f,
-                  UiTheme::applyOpacity(ColorRgba{ 14, 23, 40, 255 }, opacity));
-  for (int strip = 0; strip < 14; ++strip) {
-    const float sx = m_panelX + 24.0f +
-                     static_cast<float>(strip) * (m_panelWidth - 48.0f) / 14.0f;
-    const ColorRgba tint = strip < 8 ? cyan : violet;
-    m_menuVisual.addFilledRect(sx,
-                               m_panelY,
-                               (m_panelWidth - 48.0f) / 14.0f + 0.1f,
-                               2.0f,
-                               UiTheme::applyOpacity(tint, opacity));
-  }
+  GuiKit::drawRoundedPanel(
+    m_menuVisual, m_panelX, m_panelY, m_panelWidth, m_panelHeight, opacity);
   m_menuVisual.addText("C E L L U L A R   P L A Y G R O U N D",
                        m_panelX + 30.0f,
                        m_panelY + 23.0f,
@@ -684,7 +661,7 @@ MainMenuModule::rebuildVisual()
       const float x = motifX + static_cast<float>(col) * cellStep;
       const float y = motifY + static_cast<float>(row) * cellStep;
       if (lit) {
-        drawMenuSurface(
+        GuiKit::drawRoundedRect(
           m_menuVisual,
           x - 3.0f,
           y - 3.0f,
@@ -698,7 +675,7 @@ MainMenuModule::rebuildVisual()
                        static_cast<unsigned char>(25.0f + 25.0f * shimmer) },
             opacity));
       }
-      drawMenuSurface(
+      GuiKit::drawRoundedRect(
         m_menuVisual,
         x,
         y,
@@ -728,7 +705,7 @@ MainMenuModule::rebuildVisual()
   const float stride = m_itemHeight + 8.0f;
   for (int item = 0; item < kItemCount; ++item) {
     const float y = m_firstItemY + static_cast<float>(item) * stride;
-    drawMenuSurface(
+    GuiKit::drawRoundedRect(
       m_menuVisual,
       itemX,
       y + 3.0f,
@@ -736,7 +713,7 @@ MainMenuModule::rebuildVisual()
       m_itemHeight,
       13.0f,
       UiTheme::applyOpacity(ColorRgba{ 4, 10, 21, 220 }, opacity));
-    drawMenuSurface(
+    GuiKit::drawRoundedRect(
       m_menuVisual,
       itemX,
       y,
@@ -744,7 +721,7 @@ MainMenuModule::rebuildVisual()
       m_itemHeight,
       13.0f,
       UiTheme::applyOpacity(ColorRgba{ 43, 61, 85, 255 }, opacity));
-    drawMenuSurface(
+    GuiKit::drawRoundedRect(
       m_menuVisual,
       itemX + 1.0f,
       y + 1.0f,
@@ -754,7 +731,7 @@ MainMenuModule::rebuildVisual()
       UiTheme::applyOpacity(ColorRgba{ 23, 36, 56, 255 }, opacity));
   }
   const float selectionY = m_firstItemY + itemPosition() * stride;
-  drawMenuSurface(
+  GuiKit::drawRoundedRect(
     m_menuVisual,
     itemX - 3.0f,
     selectionY - 3.0f,
@@ -765,14 +742,14 @@ MainMenuModule::rebuildVisual()
       ColorRgba{
         68, 204, 229, static_cast<unsigned char>(22.0f + 12.0f * breathe) },
       opacity));
-  drawMenuSurface(m_menuVisual,
-                  itemX,
-                  selectionY,
-                  m_itemWidth,
-                  m_itemHeight,
-                  13.0f,
-                  UiTheme::applyOpacity(cyan, opacity));
-  drawMenuSurface(
+  GuiKit::drawRoundedRect(m_menuVisual,
+                          itemX,
+                          selectionY,
+                          m_itemWidth,
+                          m_itemHeight,
+                          13.0f,
+                          UiTheme::applyOpacity(cyan, opacity));
+  GuiKit::drawRoundedRect(
     m_menuVisual,
     itemX + 1.0f,
     selectionY + 1.0f,
@@ -804,16 +781,17 @@ MainMenuModule::rebuildVisual()
       10.0f + room * 2.0f,
       UiTheme::applyOpacity(UiTheme::textMuted(), rowOpacity));
     const float iconY = y + (m_itemHeight - 42.0f) * 0.5f;
-    drawMenuSurface(m_menuVisual,
-                    itemX + 16.0f,
-                    iconY,
-                    44.0f,
-                    42.0f,
-                    10.0f,
-                    UiTheme::applyOpacity(item == m_selectedItem
-                                            ? ColorRgba{ 61, 139, 162, 170 }
-                                            : ColorRgba{ 46, 65, 92, 200 },
-                                          rowOpacity));
+    GuiKit::drawRoundedRect(
+      m_menuVisual,
+      itemX + 16.0f,
+      iconY,
+      44.0f,
+      42.0f,
+      10.0f,
+      UiTheme::applyOpacity(item == m_selectedItem
+                              ? ColorRgba{ 61, 139, 162, 170 }
+                              : ColorRgba{ 46, 65, 92, 200 },
+                            rowOpacity));
     drawMenuIcon(m_menuVisual,
                  item,
                  itemX + 26.0f,

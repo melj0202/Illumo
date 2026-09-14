@@ -388,12 +388,6 @@ ConfigurationMenu::updateLayout()
     std::clamp(static_cast<int>(availableRowsH / 34.0f), 1, kRowCount);
   rowHeight = availableRowsH / static_cast<float>(visibleRows);
   firstVisibleRow = std::clamp(firstVisibleRow, 0, kRowCount - visibleRows);
-  if (selectedRow < firstVisibleRow) {
-    firstVisibleRow = selectedRow;
-  }
-  if (selectedRow >= firstVisibleRow + visibleRows) {
-    firstVisibleRow = selectedRow - visibleRows + 1;
-  }
 }
 
 void
@@ -404,6 +398,12 @@ ConfigurationMenu::selectRow(int row)
     selectionFromRow = selectionRowPosition();
     selectedRow = nextRow;
     selectionAnimationElapsed = 0.0f;
+  }
+  if (selectedRow < firstVisibleRow) {
+    firstVisibleRow = selectedRow;
+  }
+  if (selectedRow >= firstVisibleRow + visibleRows) {
+    firstVisibleRow = selectedRow - visibleRows + 1;
   }
   replaceFieldOnType = true;
   errorMessage.clear();
@@ -645,8 +645,15 @@ ConfigurationMenu::update(InputManager* inputManager)
   }
 
   double* scroll = inputManager->getMouseScrollOffset();
-  if (scroll != nullptr && std::isfinite(*scroll) && *scroll != 0.0) {
-    selectRow(selectedRow + (*scroll > 0.0 ? -1 : 1));
+  const bool wheelScrolled =
+    scroll != nullptr && std::isfinite(*scroll) && *scroll != 0.0;
+  if (wheelScrolled) {
+    const int rows = static_cast<int>(
+      std::ceil(std::min(std::abs(*scroll), static_cast<double>(kRowCount))));
+    firstVisibleRow =
+      std::clamp(firstVisibleRow + (*scroll > 0.0 ? -rows : rows),
+                 0,
+                 kRowCount - visibleRows);
     *scroll = 0.0;
   }
   updateLayout();
@@ -660,8 +667,9 @@ ConfigurationMenu::update(InputManager* inputManager)
   previousMouseX = mouseX;
   previousMouseY = mouseY;
   const float animatedFirstRowY = firstRowY + panelOffsetY();
-  if ((moved || (mouseDown && !mouseWasDown)) && mouseX >= panelX + 20.0f &&
-      mouseX <= panelX + panelWidth - 20.0f && mouseY >= animatedFirstRowY &&
+  if (((moved && !wheelScrolled) || (mouseDown && !mouseWasDown)) &&
+      mouseX >= panelX + 20.0f && mouseX <= panelX + panelWidth - 20.0f &&
+      mouseY >= animatedFirstRowY &&
       mouseY <
         animatedFirstRowY + rowHeight * static_cast<float>(visibleRows)) {
     const int row = firstVisibleRow +
@@ -774,36 +782,18 @@ ConfigurationMenu::rebuildVisual()
     virtualWidth,
     virtualHeight,
     UiTheme::applyOpacity(UiTheme::canvasShade(), backdropOpacity));
-  GuiPanelChrome chrome;
-  chrome.background =
-    UiTheme::applyOpacity(UiTheme::panelSurface(), panelOpacity);
-  chrome.border = UiTheme::applyOpacity(UiTheme::panelBorder(), panelOpacity);
-  chrome.shadow =
-    ColorRgba{ 0, 0, 0, static_cast<unsigned char>(180.0f * reveal) };
-  chrome.shadowOffset = 6.0f;
-  chrome.drawShadow = true;
-  chrome.drawAccent = true;
-  chrome.accent = UiTheme::applyOpacity(UiTheme::accent(), panelOpacity);
-  chrome.accentWidth = 5.0f;
-  GuiKit::drawPanel(
-    visual, panelX, animatedPanelY, panelWidth, panelHeight, chrome);
-
+  GuiKit::drawRoundedPanel(
+    visual, panelX, animatedPanelY, panelWidth, panelHeight, panelOpacity);
   const float breathe =
     reducedUiMotion ? 0.5f : 0.5f + 0.5f * std::sin(ambientPhase * 1.04719755f);
-  for (int band = 0; band < 8; ++band) {
-    visual.addFilledRect(
-      panelX + 6.0f,
-      animatedPanelY + static_cast<float>(band) * 10.0f,
-      panelWidth - 7.0f,
-      10.0f,
-      ColorRgba{
-        55, 160, 210, static_cast<unsigned char>((14 - band) * reveal) });
-  }
-  visual.addFilledRect(panelX + 20.0f,
-                       animatedFirstRowY - 5.0f,
-                       (panelWidth - 40.0f) * reveal,
-                       2.0f,
-                       UiTheme::applyOpacity(UiTheme::accent(), panelOpacity));
+  GuiKit::drawRoundedRect(
+    visual,
+    panelX + 20.0f,
+    animatedFirstRowY - 5.0f,
+    (panelWidth - 40.0f) * reveal,
+    2.0f,
+    1.0f,
+    UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
   if (visibleRows < kRowCount) {
     const float trackHeight = rowHeight * static_cast<float>(visibleRows);
     visual.addFilledRect(panelX + panelWidth - 13.0f,
@@ -830,7 +820,7 @@ ConfigurationMenu::rebuildVisual()
     panelHeight >= 360.0f ? 24.0f
                           : std::clamp(headerHeight * 0.35f, 12.0f, 24.0f);
   const float subFontSize = panelHeight >= 400.0f
-                              ? 13.0f
+                              ? 11.0f
                               : std::clamp(headerHeight * 0.18f, 9.0f, 13.0f);
   const float noteFontSize = panelHeight >= 400.0f
                                ? 11.0f
@@ -839,10 +829,17 @@ ConfigurationMenu::rebuildVisual()
                                ? 13.0f
                                : std::clamp(footerHeight * 0.30f, 9.0f, 13.0f);
 
+  if (headerHeight >= 90.0f) {
+    visual.addText("M A K E   I T   Y O U R S",
+                   panelX + 28.0f,
+                   animatedPanelY + 16.0f,
+                   10.0f,
+                   UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
+  }
   visual.addText("SIMULATOR SETTINGS",
                  panelX + 28.0f,
                  animatedPanelY + (panelHeight >= 400.0f
-                                     ? 22.0f
+                                     ? 34.0f
                                      : std::max(4.0f, headerHeight * 0.10f)),
                  titleFontSize,
                  UiTheme::applyOpacity(UiTheme::textPrimary(), panelOpacity));
@@ -851,13 +848,13 @@ ConfigurationMenu::rebuildVisual()
     visual.addText("UP/DOWN: select   LEFT/RIGHT: change   TYPE: edit",
                    panelX + 28.0f,
                    animatedPanelY +
-                     (panelHeight >= 400.0f ? 58.0f : headerHeight * 0.48f),
+                     (panelHeight >= 400.0f ? 65.0f : headerHeight * 0.48f),
                    subFontSize,
                    UiTheme::applyOpacity(secondaryText, panelOpacity));
     visual.addText("SCROLL / PGDN: more   ENTER: activate   ESC: discard",
                    panelX + 28.0f,
                    animatedPanelY +
-                     (panelHeight >= 400.0f ? 77.0f : headerHeight * 0.72f),
+                     (panelHeight >= 400.0f ? 82.0f : headerHeight * 0.72f),
                    subFontSize,
                    UiTheme::applyOpacity(secondaryText, panelOpacity));
   }
@@ -923,20 +920,30 @@ ConfigurationMenu::rebuildVisual()
       animatedFirstRowY + rowHeight * static_cast<float>(row - firstVisibleRow);
     const unsigned char rowOpacity =
       static_cast<unsigned char>(std::round(rowReveal(row) * 255.0f));
-    visual.addFilledRect(
+    GuiKit::drawRoundedRect(
+      visual,
+      panelX + 20.0f,
+      y + 2.0f,
+      panelWidth - 40.0f,
+      rowHeight - 4.0f,
+      8.0f,
+      UiTheme::applyOpacity(UiTheme::panelShadow(), rowOpacity));
+    GuiKit::drawRoundedRect(
+      visual,
       panelX + 20.0f,
       y,
       panelWidth - 40.0f,
       rowHeight - 4.0f,
-      UiTheme::applyOpacity(UiTheme::panelRaised(), rowOpacity));
-    if (row < kApplyRow) {
-      visual.addFilledRect(
-        valueColumnX - 12.0f,
-        y + 2.0f,
-        panelX + panelWidth - 20.0f - valueColumnX + 12.0f,
-        rowHeight - 8.0f,
-        UiTheme::applyOpacity(UiTheme::panelInset(), rowOpacity));
-    }
+      8.0f,
+      UiTheme::applyOpacity(UiTheme::panelBorder(), rowOpacity));
+    GuiKit::drawRoundedRect(
+      visual,
+      panelX + 21.0f,
+      y + 1.0f,
+      panelWidth - 42.0f,
+      rowHeight - 6.0f,
+      7.0f,
+      UiTheme::applyOpacity(UiTheme::menuCard(), rowOpacity));
   }
 
   const float selectionY =
@@ -946,31 +953,30 @@ ConfigurationMenu::rebuildVisual()
                   static_cast<float>(firstVisibleRow),
                   static_cast<float>(firstVisibleRow + visibleRows - 1)) -
        static_cast<float>(firstVisibleRow));
+  const bool selectionVisible = selectedRow >= firstVisibleRow &&
+                                selectedRow < firstVisibleRow + visibleRows;
   const unsigned char selectionOpacity =
-    static_cast<unsigned char>(std::round(rowReveal(selectedRow) * 255.0f));
-  visual.addFilledRect(
+    selectionVisible
+      ? static_cast<unsigned char>(std::round(rowReveal(selectedRow) * 255.0f))
+      : 0;
+  GuiKit::drawRoundedRect(
+    visual,
+    panelX + 19.0f,
+    selectionY - 1.0f,
+    panelWidth - 38.0f,
+    rowHeight - 2.0f,
+    9.0f,
+    UiTheme::applyOpacity(
+      UiTheme::accentCool(),
+      static_cast<unsigned char>(selectionOpacity * (0.55f + 0.2f * breathe))));
+  GuiKit::drawRoundedRect(
+    visual,
     panelX + 20.0f,
     selectionY,
     panelWidth - 40.0f,
     rowHeight - 4.0f,
+    8.0f,
     UiTheme::applyOpacity(UiTheme::selection(), selectionOpacity));
-  visual.addFilledRect(
-    panelX + 20.0f,
-    selectionY,
-    4.0f,
-    (rowHeight - 4.0f) * rowReveal(selectedRow),
-    UiTheme::applyOpacity(UiTheme::accent(), selectionOpacity));
-  visual.addOutlineRect(
-    panelX + 20.0f,
-    selectionY,
-    panelWidth - 40.0f,
-    rowHeight - 4.0f,
-    ColorRgba{ 85,
-               214,
-               242,
-               static_cast<unsigned char>((65.0f + 45.0f * breathe) *
-                                          rowReveal(selectedRow)) },
-    1.0f);
   for (int row = firstVisibleRow; row < firstVisibleRow + visibleRows; ++row) {
     const float y =
       animatedFirstRowY + rowHeight * static_cast<float>(row - firstVisibleRow);
@@ -978,22 +984,61 @@ ConfigurationMenu::rebuildVisual()
     const float textY = y + std::max(2.0f, (rowHeight - rowFontSize) * 0.5f);
     const unsigned char rowOpacity =
       static_cast<unsigned char>(std::round(rowReveal(row) * 255.0f));
-    if (row == selectedRow && row < kApplyRow && valuePulse() > 0.0f) {
-      const unsigned char pulseOpacity = static_cast<unsigned char>(
-        std::round(valuePulse() * static_cast<float>(rowOpacity)));
-      visual.addOutlineRect(
+    if (row < kApplyRow) {
+      const float fieldWidth =
+        panelX + panelWidth - 25.0f - valueColumnX + 12.0f;
+      GuiKit::drawRoundedRect(
+        visual,
         valueColumnX - 12.0f,
-        y + 2.0f,
-        panelX + panelWidth - 20.0f - valueColumnX + 12.0f,
-        rowHeight - 8.0f,
-        UiTheme::applyOpacity(UiTheme::accent(), pulseOpacity),
-        2.0f);
+        y + 3.0f,
+        fieldWidth,
+        rowHeight - 10.0f,
+        6.0f,
+        UiTheme::applyOpacity(UiTheme::panelInset(), rowOpacity));
+      if (selected && valuePulse() > 0.0f) {
+        GuiKit::drawRoundedRect(
+          visual,
+          valueColumnX - 12.0f,
+          y + 3.0f,
+          fieldWidth,
+          rowHeight - 10.0f,
+          6.0f,
+          UiTheme::applyOpacity(
+            UiTheme::accentCool(),
+            static_cast<unsigned char>(valuePulse() * rowOpacity * 0.3f)));
+      }
+      if (row == 6 || row == 7 || row == 11 || row == 12) {
+        const bool enabled = row == 6    ? vsync
+                             : row == 7  ? fullscreen
+                             : row == 11 ? showInspector
+                                         : reducedUiMotion;
+        const float toggleX = panelX + panelWidth - 75.0f;
+        const float toggleY = y + (rowHeight - 20.0f) * 0.5f;
+        GuiKit::drawRoundedRect(visual,
+                                toggleX,
+                                toggleY,
+                                36.0f,
+                                16.0f,
+                                8.0f,
+                                UiTheme::applyOpacity(enabled
+                                                        ? UiTheme::accentCool()
+                                                        : UiTheme::menuBorder(),
+                                                      rowOpacity));
+        GuiKit::drawRoundedRect(
+          visual,
+          toggleX + (enabled ? 21.0f : 3.0f),
+          toggleY + 3.0f,
+          10.0f,
+          10.0f,
+          5.0f,
+          UiTheme::applyOpacity(UiTheme::textPrimary(), rowOpacity));
+      }
     }
     visual.addText(labels[row],
                    panelX + 36.0f,
                    textY,
                    rowFontSize,
-                   UiTheme::applyOpacity(selected ? UiTheme::accent()
+                   UiTheme::applyOpacity(selected ? UiTheme::accentCool()
                                                   : UiTheme::textPrimary(),
                                          rowOpacity));
     visual.addText(values[row],
@@ -1004,7 +1049,7 @@ ConfigurationMenu::rebuildVisual()
                                          : row == kExitRow ? UiTheme::error()
                                          : row == kCancelRow
                                            ? UiTheme::warning()
-                                         : selected ? UiTheme::accent()
+                                         : selected ? UiTheme::accentCool()
                                                     : UiTheme::textPrimary(),
                                          rowOpacity));
   }

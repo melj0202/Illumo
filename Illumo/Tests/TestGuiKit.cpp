@@ -196,6 +196,7 @@ testGuiDialogModalFlow()
   testSection("GuiDialog: modal flow, shortcuts, and animation");
   NullRenderWindow window(1280, 720);
   EnvVars env;
+  env.setVar("uiScale", 1);
   env.setVar("WinX", 1280);
   env.setVar("WinY", 720);
   Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
@@ -252,12 +253,30 @@ testGuiDialogModalFlow()
 
   // Click hit testing
   dialog.updateLayout();
-  const float clickBtn0X = dialog.panelWidth() * 0.4f;
-  const float clickBtnY = 720.0f * 0.5f + 40.0f;
-  const int clickedAction = dialog.clickAt(clickBtn0X, clickBtnY);
+  testEqInt(g,
+            dialog.clickAt(574.0f, 408.0f),
+            1,
+            "clicking the rendered left button activates Cancel");
+  testEqInt(g,
+            dialog.clickAt(706.0f, 408.0f),
+            2,
+            "clicking the rendered right button activates Confirm");
+  testEqInt(g,
+            dialog.clickAt(100.0f, 100.0f),
+            0,
+            "clicking outside the panel leaves it open");
+
+  env.setVar("uiScale", 0.5);
+  dialog.rebuildVisual();
+  const ShapePrimitive* backdrop = dialog.getVisual().getShape(0);
   testTrue(g,
-           clickedAction >= 0 && clickedAction <= 2,
-           "clickAt returns valid action");
+           backdrop != nullptr && backdrop->rect.w == 2560.0f &&
+             backdrop->rect.h == 1440.0f,
+           "fractional UI scale keeps the default backdrop full-screen");
+  testEqInt(g,
+            dialog.clickAt(1214.0f, 768.0f),
+            1,
+            "fractional UI scale preserves default action geometry");
 
   dialog.close();
   testTrue(g, !dialog.isOpen(), "Dialog closed");
