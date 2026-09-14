@@ -806,8 +806,10 @@ in sequence, selection glides, and changed values pulse without adding widgets
 or blocking input. Rows retain readable height and scroll with selection, wheel,
 Page Up/Down, and Home/End; drawing and pointer conversion share a fitted UI
 scale. A held opening click is consumed until release. The main-menu card adds
-bounded decorative cell outlines, layered color accents, staggered text, and
-selection glow. `reducedUiMotion` snaps menu animations and disables decorative
+a larger responsive title area, rounded raised action cards with icons, a
+glowing animated cell motif, bounded decorative cell outlines, layered color
+accents, staggered text, and selection glow. Rounded surfaces are composed from
+non-overlapping triangles and rectangles in the existing GameVisual stream. `reducedUiMotion` snaps menu animations and disables decorative
 motion; it does not change domain simulation or cell fading. `showInspector`
 loads at product startup and applies to the existing inspector drawable.
 

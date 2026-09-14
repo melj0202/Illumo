@@ -547,8 +547,9 @@ labels use larger, high-contrast text, readable ruleset names, and contextual
 help for the selected setting. The final menu action exits through Illumo's
 normal runtime shutdown path; Discard, Escape, and F1 only close the menu. A short eased
 reveal, gliding row highlight, and value-change pulse provide motion without
-delaying input. The main menu adds a layered cyan/violet surface, drifting cell
-outlines, staggered entry, and animated selection. Reduced menu motion snaps
+delaying input. The main menu uses a larger responsive title area, rounded raised
+action cards with icons, a glowing animated cell motif, layered cyan/violet
+lighting, drifting cell outlines, staggered entry, and animated selection. Reduced menu motion snaps
 transitions and suppresses decorative motion in both menus without changing
 simulation speed or cell fading. The in-game settings button eases on hover
 and displays its F1 shortcut. F1 also opens settings from the main menu.

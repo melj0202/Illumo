@@ -26,7 +26,7 @@ easeOutCubic(float progress)
 }
 
 MainMenuModule::MainMenuModule()
-  : m_menuVisual(2048u)
+  : m_menuVisual(4096u)
   , m_selectedItem(kPlayItem)
   , m_animationElapsed(0.0f)
   , m_selectionFromItem(0.0f)
@@ -167,15 +167,17 @@ MainMenuModule::updateLayout()
   m_menuVisual.setTransform(fit);
   const float virtualWidth = static_cast<float>(width) / m_layoutScale;
   const float virtualHeight = static_cast<float>(height) / m_layoutScale;
-  m_panelWidth = std::min(540.0f, virtualWidth - 48.0f);
-  m_panelHeight = std::min(488.0f, virtualHeight - 24.0f);
+  m_panelWidth = std::min(680.0f, virtualWidth - 100.0f);
+  m_panelHeight = std::min(600.0f, virtualHeight - 24.0f);
   m_panelX = (virtualWidth - m_panelWidth) * 0.5f;
   const float reveal =
     reducedMotion() ? 1.0f : easeOutCubic(m_revealElapsed / 0.45f);
   m_panelY = (virtualHeight - m_panelHeight) * 0.5f + 12.0f * (1.0f - reveal);
   m_itemWidth = m_panelWidth - 56.0f;
-  m_itemHeight = (m_panelHeight - 196.0f) / 4.0f;
-  m_firstItemY = m_panelY + 140.0f;
+  const float headerHeight =
+    140.0f + 48.0f * std::clamp((m_panelHeight - 456.0f) / 144.0f, 0.0f, 1.0f);
+  m_itemHeight = (m_panelHeight - headerHeight - 56.0f) / 4.0f;
+  m_firstItemY = m_panelY + headerHeight;
 }
 
 bool
@@ -475,6 +477,72 @@ MainMenuModule::Update(double dt)
   rebuildVisual();
 }
 
+// Non-overlapping quarter fans keep translucent rounded surfaces evenly tinted.
+static void
+drawMenuSurface(GameVisual& visual,
+                float x,
+                float y,
+                float width,
+                float height,
+                float radius,
+                ColorRgba color)
+{
+  radius = std::min(radius, std::min(width, height) * 0.5f);
+  visual.addFilledRect(x + radius, y, width - 2.0f * radius, height, color);
+  visual.addFilledRect(x, y + radius, radius, height - 2.0f * radius, color);
+  visual.addFilledRect(
+    x + width - radius, y + radius, radius, height - 2.0f * radius, color);
+  const float centersX[4] = {
+    x + radius, x + width - radius, x + width - radius, x + radius
+  };
+  const float centersY[4] = {
+    y + radius, y + radius, y + height - radius, y + height - radius
+  };
+  const float starts[4] = { 3.14159265f, 4.71238898f, 0.0f, 1.57079633f };
+  for (int corner = 0; corner < 4; ++corner) {
+    for (int segment = 0; segment < 6; ++segment) {
+      const float a =
+        starts[corner] + static_cast<float>(segment) * 0.26179939f;
+      const float b = a + 0.26179939f;
+      visual.addFilledTriangle(centersX[corner],
+                               centersY[corner],
+                               centersX[corner] + std::cos(a) * radius,
+                               centersY[corner] + std::sin(a) * radius,
+                               centersX[corner] + std::cos(b) * radius,
+                               centersY[corner] + std::sin(b) * radius,
+                               color);
+    }
+  }
+}
+
+static void
+drawMenuIcon(GameVisual& visual, int item, float x, float y, ColorRgba color)
+{
+  if (item == 0) {
+    visual.addFilledTriangle(
+      x + 3.0f, y, x + 3.0f, y + 22.0f, x + 21.0f, y + 11.0f, color);
+  } else if (item == 1) {
+    visual.addOutlineRect(x, y + 6.0f, 24.0f, 17.0f, color, 2.0f);
+    visual.addLine(x, y + 5.0f, x, y + 1.0f, color, 2.0f);
+    visual.addLine(x, y + 1.0f, x + 10.0f, y + 1.0f, color, 2.0f);
+    visual.addLine(x + 10.0f, y + 1.0f, x + 15.0f, y + 6.0f, color, 2.0f);
+  } else if (item == 2) {
+    for (int line = 0; line < 3; ++line) {
+      const float ly = y + 3.0f + static_cast<float>(line) * 8.0f;
+      const float knob = line == 1 ? 16.0f : 6.0f;
+      visual.addLine(x, ly, x + 24.0f, ly, color, 2.0f);
+      visual.addFilledRect(x + knob, ly - 3.0f, 4.0f, 6.0f, color);
+    }
+  } else {
+    visual.addLine(x + 2.0f, y, x + 2.0f, y + 24.0f, color, 2.0f);
+    visual.addLine(x + 2.0f, y, x + 10.0f, y, color, 2.0f);
+    visual.addLine(x + 2.0f, y + 24.0f, x + 10.0f, y + 24.0f, color, 2.0f);
+    visual.addLine(x + 8.0f, y + 12.0f, x + 25.0f, y + 12.0f, color, 2.0f);
+    visual.addLine(x + 19.0f, y + 6.0f, x + 25.0f, y + 12.0f, color, 2.0f);
+    visual.addLine(x + 19.0f, y + 18.0f, x + 25.0f, y + 12.0f, color, 2.0f);
+  }
+}
+
 void
 MainMenuModule::rebuildVisual()
 {
@@ -530,53 +598,119 @@ MainMenuModule::rebuildVisual()
       1.0f);
   }
 
-  GuiPanelChrome chrome;
-  chrome.background =
-    UiTheme::applyOpacity(ColorRgba{ 14, 23, 39, 247 }, opacity);
-  chrome.border =
-    UiTheme::applyOpacity(ColorRgba{ 65, 101, 133, 255 }, opacity);
-  chrome.shadow = UiTheme::applyOpacity(UiTheme::panelShadow(), opacity);
-  chrome.shadowOffset = 8.0f;
-  chrome.drawShadow = true;
-  chrome.drawAccent = false;
-  GuiKit::drawPanel(
-    m_menuVisual, m_panelX, m_panelY, m_panelWidth, m_panelHeight, chrome);
-  m_menuVisual.addFilledRect(m_panelX,
-                             m_panelY,
-                             m_panelWidth * 0.65f * reveal,
-                             3.0f,
-                             UiTheme::applyOpacity(cyan, opacity));
-  m_menuVisual.addFilledRect(m_panelX + m_panelWidth * 0.65f,
-                             m_panelY,
-                             m_panelWidth * 0.35f * reveal,
-                             3.0f,
-                             UiTheme::applyOpacity(violet, opacity));
-  m_menuVisual.addText("I L L U M O",
-                       m_panelX + 28.0f,
-                       m_panelY + 28.0f,
-                       34.0f,
-                       UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
-  m_menuVisual.addText("Small rules. Endless possibilities.",
-                       m_panelX + 28.0f,
-                       m_panelY + 78.0f,
-                       15.0f,
+  const float room = std::clamp((m_panelHeight - 456.0f) / 144.0f, 0.0f, 1.0f);
+  // Wide, low-opacity halos give the card depth without a postprocessing pass.
+  for (int layer = 6; layer > 0; --layer) {
+    const float spread = static_cast<float>(layer) * 5.0f;
+    drawMenuSurface(
+      m_menuVisual,
+      m_panelX - spread,
+      m_panelY - spread * 0.4f,
+      m_panelWidth + spread * 2.0f,
+      m_panelHeight + spread * 0.8f,
+      22.0f + spread,
+      ColorRgba{ 39, 116, 150, static_cast<unsigned char>(3.0f * reveal) });
+  }
+  drawMenuSurface(m_menuVisual,
+                  m_panelX + 2.0f,
+                  m_panelY + 10.0f,
+                  m_panelWidth,
+                  m_panelHeight,
+                  22.0f,
+                  UiTheme::applyOpacity(ColorRgba{ 2, 7, 17, 150 }, opacity));
+  drawMenuSurface(
+    m_menuVisual,
+    m_panelX,
+    m_panelY,
+    m_panelWidth,
+    m_panelHeight,
+    22.0f,
+    UiTheme::applyOpacity(ColorRgba{ 69, 110, 142, 255 }, opacity));
+  drawMenuSurface(m_menuVisual,
+                  m_panelX + 1.0f,
+                  m_panelY + 1.0f,
+                  m_panelWidth - 2.0f,
+                  m_panelHeight - 2.0f,
+                  21.0f,
+                  UiTheme::applyOpacity(ColorRgba{ 14, 23, 40, 255 }, opacity));
+  for (int strip = 0; strip < 14; ++strip) {
+    const float sx = m_panelX + 24.0f +
+                     static_cast<float>(strip) * (m_panelWidth - 48.0f) / 14.0f;
+    const ColorRgba tint = strip < 8 ? cyan : violet;
+    m_menuVisual.addFilledRect(sx,
+                               m_panelY,
+                               (m_panelWidth - 48.0f) / 14.0f + 0.1f,
+                               2.0f,
+                               UiTheme::applyOpacity(tint, opacity));
+  }
+  m_menuVisual.addText("C E L L U L A R   P L A Y G R O U N D",
+                       m_panelX + 30.0f,
+                       m_panelY + 23.0f,
+                       9.0f + room * 2.0f,
                        UiTheme::applyOpacity(cyan, opacity));
-  m_menuVisual.addText("CELLULAR AUTOMATA SANDBOX",
+  m_menuVisual.addText("ILLUMO",
                        m_panelX + 28.0f,
-                       m_panelY + 108.0f,
-                       11.0f,
-                       UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+                       m_panelY + 43.0f,
+                       40.0f + room * 18.0f,
+                       UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
+  m_menuVisual.addText(
+    "Small rules. Endless possibilities.",
+    m_panelX + 30.0f,
+    m_panelY + 98.0f + room * 20.0f,
+    13.0f + room * 3.0f,
+    UiTheme::applyOpacity(ColorRgba{ 182, 207, 226, 255 }, opacity));
+  if (room > 0.5f) {
+    m_menuVisual.addText("Build a world. See what emerges.",
+                         m_panelX + 30.0f,
+                         m_panelY + 145.0f,
+                         12.0f,
+                         UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+  }
 
-  const unsigned int logoRows[5] = { 4u, 2u, 14u, 0u, 0u };
-  for (int row = 0; row < 3; ++row) {
-    for (int col = 0; col < 4; ++col) {
-      const bool lit = (logoRows[row] & (1u << col)) != 0u;
-      m_menuVisual.addFilledRect(
-        m_panelX + m_panelWidth - 91.0f + static_cast<float>(col) * 14.0f,
-        m_panelY + 34.0f + static_cast<float>(row) * 14.0f,
-        10.0f,
-        10.0f,
-        UiTheme::applyOpacity(lit ? cyan : ColorRgba{ 34, 51, 73, 255 },
+  const float cellSize = 7.0f + room * 5.0f;
+  const float cellStep = cellSize + 3.0f;
+  const float motifWidth = cellStep * 7.0f;
+  const float motifX = m_panelX + m_panelWidth - motifWidth - 30.0f;
+  const float motifY = m_panelY + 35.0f;
+  const unsigned int motifRows[7] = { 0u, 8u, 4u, 28u, 0u, 0u, 0u };
+  for (int row = 0; row < 7; ++row) {
+    for (int col = 0; col < 7; ++col) {
+      const bool lit = (motifRows[row] & (1u << col)) != 0u;
+      const float shimmer =
+        reducedMotion()
+          ? 0.5f
+          : 0.5f + 0.5f * std::sin(m_animationElapsed * 1.57079633f -
+                                   static_cast<float>(row + col) * 0.65f);
+      const float x = motifX + static_cast<float>(col) * cellStep;
+      const float y = motifY + static_cast<float>(row) * cellStep;
+      if (lit) {
+        drawMenuSurface(
+          m_menuVisual,
+          x - 3.0f,
+          y - 3.0f,
+          cellSize + 6.0f,
+          cellSize + 6.0f,
+          4.0f,
+          UiTheme::applyOpacity(
+            ColorRgba{ 75,
+                       220,
+                       238,
+                       static_cast<unsigned char>(25.0f + 25.0f * shimmer) },
+            opacity));
+      }
+      drawMenuSurface(
+        m_menuVisual,
+        x,
+        y,
+        cellSize,
+        cellSize,
+        2.0f,
+        UiTheme::applyOpacity(lit ? ColorRgba{ 104, 231, 241, 255 }
+                                  : ColorRgba{ 60,
+                                               90,
+                                               128,
+                                               static_cast<unsigned char>(
+                                                 65.0f + 65.0f * shimmer) },
                               opacity));
     }
   }
@@ -594,35 +728,58 @@ MainMenuModule::rebuildVisual()
   const float stride = m_itemHeight + 8.0f;
   for (int item = 0; item < kItemCount; ++item) {
     const float y = m_firstItemY + static_cast<float>(item) * stride;
-    m_menuVisual.addFilledRect(
+    drawMenuSurface(
+      m_menuVisual,
+      itemX,
+      y + 3.0f,
+      m_itemWidth,
+      m_itemHeight,
+      13.0f,
+      UiTheme::applyOpacity(ColorRgba{ 4, 10, 21, 220 }, opacity));
+    drawMenuSurface(
+      m_menuVisual,
       itemX,
       y,
       m_itemWidth,
       m_itemHeight,
-      UiTheme::applyOpacity(UiTheme::panelRaised(), opacity));
+      13.0f,
+      UiTheme::applyOpacity(ColorRgba{ 43, 61, 85, 255 }, opacity));
+    drawMenuSurface(
+      m_menuVisual,
+      itemX + 1.0f,
+      y + 1.0f,
+      m_itemWidth - 2.0f,
+      m_itemHeight - 2.0f,
+      12.0f,
+      UiTheme::applyOpacity(ColorRgba{ 23, 36, 56, 255 }, opacity));
   }
   const float selectionY = m_firstItemY + itemPosition() * stride;
-  m_menuVisual.addFilledRect(
-    itemX,
-    selectionY,
-    m_itemWidth,
-    m_itemHeight,
-    UiTheme::applyOpacity(ColorRgba{ 32, 74, 99, 230 }, opacity));
-  m_menuVisual.addOutlineRect(
-    itemX,
-    selectionY,
-    m_itemWidth,
-    m_itemHeight,
+  drawMenuSurface(
+    m_menuVisual,
+    itemX - 3.0f,
+    selectionY - 3.0f,
+    m_itemWidth + 6.0f,
+    m_itemHeight + 6.0f,
+    16.0f,
     UiTheme::applyOpacity(
       ColorRgba{
-        87, 221, 242, static_cast<unsigned char>(100.0f + 70.0f * breathe) },
-      opacity),
-    1.0f);
-  m_menuVisual.addFilledRect(itemX,
-                             selectionY,
-                             3.0f,
-                             m_itemHeight,
-                             UiTheme::applyOpacity(cyan, opacity));
+        68, 204, 229, static_cast<unsigned char>(22.0f + 12.0f * breathe) },
+      opacity));
+  drawMenuSurface(m_menuVisual,
+                  itemX,
+                  selectionY,
+                  m_itemWidth,
+                  m_itemHeight,
+                  13.0f,
+                  UiTheme::applyOpacity(cyan, opacity));
+  drawMenuSurface(
+    m_menuVisual,
+    itemX + 1.0f,
+    selectionY + 1.0f,
+    m_itemWidth - 2.0f,
+    m_itemHeight - 2.0f,
+    12.0f,
+    UiTheme::applyOpacity(ColorRgba{ 28, 78, 102, 255 }, opacity));
   for (int item = 0; item < kItemCount; ++item) {
     const float rowReveal =
       reducedMotion()
@@ -635,20 +792,39 @@ MainMenuModule::rebuildVisual()
     const float slide = (1.0f - rowReveal) * 10.0f;
     m_menuVisual.addText(
       labels[item],
-      itemX + 18.0f + slide,
-      y + 9.0f,
-      18.0f,
+      itemX + 80.0f + slide,
+      y + 12.0f + room * 7.0f,
+      19.0f + room * 2.0f,
       UiTheme::applyOpacity(
         item == m_selectedItem ? cyan : UiTheme::textPrimary(), rowOpacity));
     m_menuVisual.addText(
       descriptions[item],
-      itemX + 18.0f + slide,
-      y + 34.0f,
-      11.0f,
+      itemX + 80.0f + slide,
+      y + 37.0f + room * 8.0f,
+      10.0f + room * 2.0f,
       UiTheme::applyOpacity(UiTheme::textMuted(), rowOpacity));
-    m_menuVisual.addText(item == m_selectedItem ? ">" : ".",
+    const float iconY = y + (m_itemHeight - 42.0f) * 0.5f;
+    drawMenuSurface(m_menuVisual,
+                    itemX + 16.0f,
+                    iconY,
+                    44.0f,
+                    42.0f,
+                    10.0f,
+                    UiTheme::applyOpacity(item == m_selectedItem
+                                            ? ColorRgba{ 61, 139, 162, 170 }
+                                            : ColorRgba{ 46, 65, 92, 200 },
+                                          rowOpacity));
+    drawMenuIcon(m_menuVisual,
+                 item,
+                 itemX + 26.0f,
+                 iconY + 9.0f,
+                 UiTheme::applyOpacity(item == m_selectedItem
+                                         ? cyan
+                                         : ColorRgba{ 166, 186, 213, 255 },
+                                       rowOpacity));
+    m_menuVisual.addText(">",
                          itemX + m_itemWidth - 24.0f,
-                         y + 16.0f,
+                         y + m_itemHeight * 0.5f - 9.0f,
                          18.0f,
                          UiTheme::applyOpacity(cyan, rowOpacity));
   }
