@@ -7,8 +7,6 @@
 #include "Game/SparseCellGrid.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
-#include <filesystem>
-#include <limits>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Rendering/CommandQueue.h>
@@ -21,6 +19,8 @@
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -213,6 +213,160 @@ testRleGliderRoundTrip()
 }
 
 static void
+testRleByteStates()
+{
+  testSection("Editor: RLE byte-state round trips");
+  std::string error;
+  for (int state = 0; state <= 255; ++state) {
+    CellPattern original;
+    original.setExtent(3, 2);
+    if (state != 1) {
+      for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 3; ++x) {
+          original.addCell(x, y, static_cast<unsigned char>(state));
+        }
+      }
+    }
+    CellPattern parsed;
+    bool exact = PatternCodec::parseRle(
+                   PatternCodec::encodeRle(original), &parsed, &error) &&
+                 parsed.getWidth() == 3 && parsed.getHeight() == 2 &&
+                 parsed.getCells().size() == original.getCells().size();
+    for (std::size_t i = 0; exact && i < parsed.getCells().size(); ++i) {
+      const CellPatternCell& actual = parsed.getCells()[i];
+      const CellPatternCell& expected = original.getCells()[i];
+      exact = actual.dx == expected.dx && actual.dy == expected.dy &&
+              actual.state == expected.state;
+    }
+    testTrue(
+      g, exact, ("RLE exact byte state " + std::to_string(state)).c_str());
+  }
+  CellPattern mixed;
+  mixed.addCell(0, 0, 2);
+  mixed.addCell(1, 0, 0);
+  mixed.addCell(2, 0, 0);
+  mixed.addCell(3, 0, 0);
+  mixed.addCell(4, 0, 10);
+  mixed.addCell(5, 0, 255);
+  mixed.addCell(6, 0, 255);
+  const std::string encoded = PatternCodec::encodeRle(mixed);
+  testTrue(g,
+           encoded.find("p{2}3op{10}2p{255}!") != std::string::npos,
+           "state delimiters separate subsequent run counts");
+  CellPattern parsed;
+  testTrue(g,
+           PatternCodec::parse(encoded, &parsed, &error) &&
+             parsed.getCells().size() == 7 &&
+             parsed.getCells()[4].state == 10 &&
+             parsed.getCells()[6].state == 255,
+           "mixed adjacent state/run tokens autodetect and round trip");
+  testTrue(g,
+           PatternCodec::parseRle("p23o!", &parsed, &error) &&
+             parsed.getCells().size() == 4 && parsed.getCells()[0].state == 2 &&
+             parsed.getCells()[3].state == 0,
+           "legacy one-digit state followed by run retains its meaning");
+  for (const std::string& invalid :
+       { "p{}!", "p{256}!", "p{-1}!", "p{10!", "p{999999999999999999}!" }) {
+    testTrue(g,
+             !PatternCodec::parseRle(invalid, &parsed, &error),
+             "malformed or out-of-range state rejected");
+  }
+}
+
+static void
+testPatternFormatRouting()
+{
+  testSection("Editor: comment-aware detection and explicit formats");
+  const std::string plaintext =
+    "! Glider comment contains $ p0!\n.O.\n..O\nOOO\n";
+  CellPattern parsed;
+  std::string error;
+  testTrue(g,
+           PatternCodec::parse(plaintext, &parsed, &error),
+           "commented plaintext autodetects");
+  testTrue(g,
+           parsed.getWidth() == 3 && parsed.getHeight() == 3 &&
+             parsed.getCells().size() == 5,
+           "comment text does not turn plaintext into empty RLE");
+  testTrue(g,
+           PatternCodec::parse(
+             "# RLE comment ! $\nx=3,y=3\nbo$2bo$3o!", &parsed, &error),
+           "RLE comments and compact header autodetect");
+  testTrue(g, parsed.getCells().size() == 5, "RLE glider retains five cells");
+  testTrue(g,
+           PatternCodec::parse("oo\no", &parsed, &error),
+           "ambiguous multiline cells use plaintext rows");
+  testTrue(g,
+           parsed.getWidth() == 2 && parsed.getHeight() == 2,
+           "plaintext line breaks retain rows");
+
+  EditorFixture fixture;
+  SparseCellGrid* grid =
+    CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+  grid->clear();
+  testTrue(g,
+           fixture.registry.QueueCommand("plaintext", { plaintext }),
+           "explicit plaintext command queues");
+  fixture.registry.ExecuteQueue();
+  testTrue(g,
+           grid->getCell(CellAddress{ 1, 0 }) == 0 &&
+             grid->getCell(CellAddress{ 2, 1 }) == 0 &&
+             grid->getCell(CellAddress{ 0, 2 }) == 0,
+           "explicit plaintext imports commented glider at origin");
+  grid->clear();
+  fixture.registry.QueueCommand("plaintext", { "p0!" });
+  fixture.registry.ExecuteQueue();
+  testEqUChar(g,
+              grid->getCell(CellAddress{ 0, 0 }),
+              1,
+              "explicit plaintext does not accept RLE p-token");
+  fixture.registry.QueueCommand("rle", { "o\no" });
+  fixture.registry.ExecuteQueue();
+  testTrue(g,
+           grid->getCell(CellAddress{ 1, 0 }) == 0 &&
+             grid->getCell(CellAddress{ 0, 1 }) == 1,
+           "explicit RLE ignores physical line break");
+}
+
+static void
+testClipboardRejectsStaleFallback()
+{
+  testSection("Editor: invalid clipboard cannot paste previous pattern");
+  CellClipboard clipboard;
+  CellPattern previous;
+  BuiltinPatterns::find("glider", &previous);
+  clipboard.setClipboardPattern(previous);
+  SparseCellGrid grid;
+  CanvasView view(4, 4, &grid, nullptr, nullptr, nullptr);
+  std::string error;
+  for (const std::string& invalid : { std::string(),
+                                      std::string("! comment only"),
+                                      std::string("3b!"),
+                                      std::string("o?!") }) {
+    gClipboardText = invalid;
+    const std::uint64_t revision = grid.getRevision();
+    testTrue(g,
+             !clipboard.pasteAtCursor(&grid, &view, 0, 0, &error),
+             "empty or invalid clipboard paste fails");
+    testTrue(g,
+             grid.getRevision() == revision && !error.empty(),
+             "failed paste reports error and leaves world unchanged");
+    testEqSize(g,
+               clipboard.getClipboardPattern().getCells().size(),
+               5,
+               "failed paste preserves internal pattern without reusing it");
+  }
+  gClipboardText = "! glider\n.O.\n..O\nOOO\n";
+  testTrue(g,
+           clipboard.pasteAtCursor(&grid, &view, 0, 0, &error),
+           "valid commented plaintext clipboard pastes after failures");
+  testEqUChar(g,
+              grid.getCell(CellAddress{ 2, 1 }),
+              0,
+              "clipboard paste uses new plaintext cells");
+}
+
+static void
 testStampGlider()
 {
   testSection("Editor: stamp glider occupancy");
@@ -366,6 +520,31 @@ testCellClipboardOperations()
            "INT64_MAX selection rejected");
   testTrue(
     g, !cb.fillSelection(&grid, nullptr, 0), "fillSelection on null rejected");
+  CanvasView view(4, 4, &grid, nullptr, nullptr, nullptr);
+  for (const std::int64_t endpoint :
+       { std::numeric_limits<std::int64_t>::min(),
+         std::numeric_limits<std::int64_t>::max() }) {
+    cb.setSelection(endpoint, endpoint, endpoint, endpoint);
+    grid.setCell(CellAddress{ endpoint, endpoint }, 0);
+    testTrue(g,
+             cb.captureSelection(&grid, &captured, &error),
+             "one-cell endpoint selection captured");
+    testTrue(g,
+             captured.getWidth() == 1 && captured.getHeight() == 1 &&
+               captured.getCells().size() == 1,
+             "endpoint capture has exact local extent and occupancy");
+    testTrue(g, cb.fillSelection(&grid, &view, 3), "endpoint selection fills");
+    testEqUChar(g,
+                grid.getCell(CellAddress{ endpoint, endpoint }),
+                3,
+                "endpoint fill changes selected cell");
+    testTrue(
+      g, cb.cutSelection(&grid, &view, &error), "endpoint selection cuts");
+    testEqUChar(g,
+                grid.getCell(CellAddress{ endpoint, endpoint }),
+                1,
+                "endpoint cut clears selected cell");
+  }
 }
 
 static void
@@ -393,12 +572,14 @@ testIllumoCodecDirect()
 
   const std::string testFile = "direct-codec-test.illumo";
   std::string error;
-  testTrue(
-    g, IllumoCodec::writeFile(testFile, doc, &error), "direct writeFile succeeds");
+  testTrue(g,
+           IllumoCodec::writeFile(testFile, doc, &error),
+           "direct writeFile succeeds");
 
   IllumoDocument loaded;
-  testTrue(
-    g, IllumoCodec::readFile(testFile, &loaded, &error), "direct readFile succeeds");
+  testTrue(g,
+           IllumoCodec::readFile(testFile, &loaded, &error),
+           "direct readFile succeeds");
   testEqInt(g, loaded.version, 3, "loaded version is 3");
   testEqStr(g, loaded.ruleString, "GAME_OF_LIFE", "rule tag preserved");
   testTrue(g, loaded.cameraX == 15.25, "cameraX preserved");
@@ -407,6 +588,14 @@ testIllumoCodecDirect()
   testTrue(g, loaded.grid != nullptr, "grid allocated");
   testEqUChar(
     g, loaded.grid->getCell(CellAddress{ 3, 4 }), 0, "saved cell preserved");
+  grid.setCell(CellAddress{ 8, 9 }, 0);
+  testTrue(g,
+           IllumoCodec::writeFile(testFile, doc, &error),
+           "replaces existing sparse save after finalization");
+  testTrue(g,
+           IllumoCodec::readFile(testFile, &loaded, &error) &&
+             loaded.grid->getCell(CellAddress{ 8, 9 }) == 0,
+           "replacement remains sparse version 3 compatible");
   std::filesystem::remove(testFile);
 }
 
@@ -430,6 +619,13 @@ registerEditorTests(IllumoTestRegistry& registry)
                []() { return runEditorCase(testOversizeReject); });
   registry.add("IllumoGame.Editor.RleGliderRoundTrip",
                []() { return runEditorCase(testRleGliderRoundTrip); });
+  registry.add("IllumoGame.Editor.RleByteStates",
+               []() { return runEditorCase(testRleByteStates); });
+  registry.add("IllumoGame.Editor.PatternFormatRouting",
+               []() { return runEditorCase(testPatternFormatRouting); });
+  registry.add("IllumoGame.Editor.ClipboardRejectsStaleFallback", []() {
+    return runEditorCase(testClipboardRejectsStaleFallback);
+  });
   registry.add("IllumoGame.Editor.StampGlider",
                []() { return runEditorCase(testStampGlider); });
   registry.add("IllumoGame.Editor.PasteDrainsSimulation",

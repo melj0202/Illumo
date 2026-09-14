@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <memory>
 #include <new>
 #include <string>
 #include <utility>
@@ -22,7 +24,20 @@ public:
 private:
   struct Chunk
   {
-    char* data = nullptr;
+    size_t alignment;
+    char* data;
+    explicit Chunk(size_t size,
+                   size_t requestedAlignment = alignof(std::max_align_t))
+      : alignment(requestedAlignment)
+      , data(
+          static_cast<char*>(::operator new(size, std::align_val_t(alignment))))
+    {
+    }
+    ~Chunk() { ::operator delete(data, std::align_val_t(alignment)); }
+    Chunk(const Chunk&) = delete;
+    Chunk& operator=(const Chunk&) = delete;
+    Chunk(Chunk&&) = delete;
+    Chunk& operator=(Chunk&&) = delete;
     size_t wastedBytes = 0;
     Chunk* next = nullptr;
   };
@@ -44,22 +59,31 @@ private:
   size_t numChunks = 0;
   std::vector<Mark> marks;
 
-  static size_t alignUp(size_t value, size_t alignment)
+  void* alignedAddress(size_t size, size_t alignment)
   {
-    if (alignment <= 1) {
-      return value;
+    void* address = chunk->data + offset;
+    size_t available = chunkSize - offset;
+    if (std::align(alignment, size, address, available) != nullptr) {
+      return address;
     }
-    const size_t mask = alignment - 1;
-    return (value + mask) & ~mask;
+    if (offset == 0 && alignment > chunk->alignment) {
+      // No live allocation moves when an empty chunk gains stronger alignment.
+      char* replacement = static_cast<char*>(
+        ::operator new(chunkSize, std::align_val_t(alignment)));
+      ::operator delete(chunk->data, std::align_val_t(chunk->alignment));
+      chunk->data = replacement;
+      chunk->alignment = alignment;
+      return replacement;
+    }
+    return nullptr;
   }
 
-  bool growChunk()
+  bool growChunk(size_t alignment)
   {
     if (numChunks >= kMaxChunks) {
       return false;
     }
-    Chunk* nextChunk = new Chunk();
-    nextChunk->data = new char[chunkSize];
+    Chunk* nextChunk = new Chunk(chunkSize, alignment);
     nextChunk->next = nullptr;
     nextChunk->wastedBytes = 0;
     chunk->wastedBytes = chunkSize - offset;
@@ -80,7 +104,6 @@ private:
     keep->wastedBytes = 0;
     while (current != nullptr) {
       Chunk* next = current->next;
-      delete[] current->data;
       delete current;
       current = next;
     }
@@ -94,27 +117,34 @@ private:
     if (alignment == 0) {
       alignment = 1;
     }
+    if ((alignment & (alignment - 1)) != 0) {
+      return nullptr;
+    }
 
     Mark mark;
     mark.chunk = chunk;
     mark.offset = offset;
     mark.numChunks = numChunks;
 
-    size_t alignedOffset = alignUp(offset, alignment);
-    if (alignedOffset + size > chunkSize) {
-      if (!growChunk()) {
+    void* address = alignedAddress(size, alignment);
+    if (address == nullptr) {
+      if (!growChunk(alignment)) {
         return nullptr;
       }
-      alignedOffset = alignUp(offset, alignment);
-      if (alignedOffset + size > chunkSize) {
-        return nullptr;
-      }
+      address = chunk->data;
     }
-
-    void* address = chunk->data + alignedOffset;
-    offset = alignedOffset + size;
     mark.pointer = address;
-    marks.push_back(mark);
+    try {
+      marks.push_back(mark);
+    } catch (...) {
+      releaseChunksAfter(mark.chunk);
+      chunk = mark.chunk;
+      offset = mark.offset;
+      numChunks = mark.numChunks;
+      throw;
+    }
+    offset =
+      static_cast<size_t>(static_cast<char*>(address) - chunk->data) + size;
     return address;
   }
 
@@ -143,8 +173,7 @@ public:
     if (chunkSize == 0) {
       chunkSize = 1;
     }
-    chunk = new Chunk();
-    chunk->data = new char[chunkSize];
+    chunk = new Chunk(chunkSize);
     chunk->next = nullptr;
     chunk->wastedBytes = 0;
     chunkHead = chunk;
@@ -157,7 +186,6 @@ public:
     Chunk* currentChunk = chunkHead;
     while (currentChunk != nullptr) {
       Chunk* next = currentChunk->next;
-      delete[] currentChunk->data;
       delete currentChunk;
       currentChunk = next;
     }
@@ -165,6 +193,8 @@ public:
 
   ChainedStackAlloc(const ChainedStackAlloc&) = delete;
   ChainedStackAlloc& operator=(const ChainedStackAlloc&) = delete;
+  ChainedStackAlloc(ChainedStackAlloc&&) = delete;
+  ChainedStackAlloc& operator=(ChainedStackAlloc&&) = delete;
 
   template<typename T, typename... Args>
   T* Allocate(Args&&... args)
@@ -185,6 +215,9 @@ public:
 
   char* AllocateCString(const char* src, size_t length)
   {
+    if (length == std::numeric_limits<size_t>::max()) {
+      return nullptr;
+    }
     char* dest = static_cast<char*>(allocateRaw(length + 1, alignof(char)));
     if (dest == nullptr) {
       return nullptr;
@@ -233,7 +266,6 @@ public:
     Chunk* currentChunk = chunkHead->next;
     while (currentChunk != nullptr) {
       Chunk* nextChunk = currentChunk->next;
-      delete[] currentChunk->data;
       delete currentChunk;
       currentChunk = nextChunk;
     }

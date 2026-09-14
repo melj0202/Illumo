@@ -90,6 +90,11 @@ public:
                       int height,
                       int channels,
                       const TextureOptions& options) override;
+  bool ReplaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels) override;
   bool DestroyTexture(TextureHandle handle) override;
   bool IsTextureValid(TextureHandle handle) const override;
   TextureInfo GetTextureInfo(TextureHandle handle) const override;

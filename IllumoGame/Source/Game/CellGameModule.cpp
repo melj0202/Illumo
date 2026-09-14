@@ -1,5 +1,6 @@
 #include "CellGameModule.h"
 #include "BuiltinPatterns.h"
+#include "CanvasCoordinatePolicy.h"
 #include "IllumoCodec.h"
 #include "MainMenuModule.h"
 #include "PatternCodec.h"
@@ -386,6 +387,14 @@ CellGameModule::consumeCompletedSimulation(bool waitForCompletion)
   }
   if (!advanceSucceeded || completedGrid != cellContext->getSpareGrid()) {
     mirrorDeltaValid = false;
+    simulationRetryPending = true;
+    currentState = CellState::EDIT;
+    achievedSimulationTps = 0.0;
+    const char* message = "Simulation generation failed; paused without "
+                          "publication. Use run or step to retry.";
+    Logger::LogError(message);
+    ic->commandLine->logError(message);
+    showModeSplash("EDIT");
     return true;
   }
   cellContext->publishSpareGrid(completedDelta);
@@ -762,7 +771,13 @@ CellGameModule::registerConsoleCommands()
           "step count must be an integer from 1 to 1000");
         return;
       }
-      stepSimulation(generations);
+      const int completed = stepSimulation(generations);
+      if (completed != generations) {
+        ic->commandLine->logError(
+          "Generation failed after " + std::to_string(completed) + " of " +
+          std::to_string(generations) + "; paused. Use step or run to retry.");
+        return;
+      }
       ic->commandLine->logSuccess(
         "Advanced " + std::to_string(generations) +
         (generations == 1 ? " generation" : " generations"));
@@ -876,7 +891,8 @@ CellGameModule::registerConsoleCommands()
           !parseFloatingArgument(args[0], &x) ||
           !parseFloatingArgument(args[1], &y) ||
           (args.size() == 3 && !parseFloatingArgument(args[2], &zoom)) ||
-          zoom < 0.1 || zoom > 100.0) {
+          zoom < 0.1 || zoom > 100.0 ||
+          !CanvasCoordinatePolicy::validPosition(x, y)) {
         ic->commandLine->logError("Usage: camera <x> <y> [zoom 0.1..100]");
         return;
       }
@@ -1014,7 +1030,7 @@ CellGameModule::registerConsoleCommands()
         ic->commandLine->logNormal(PatternCodec::encodeRle(pattern));
         return;
       }
-      if (!importPatternText(joinArguments(args, 0))) {
+      if (!importPatternText(joinArguments(args, 0), PatternFormat::Rle)) {
         ic->commandLine->logError("RLE import failed");
       } else {
         ic->commandLine->logSuccess("Imported RLE");
@@ -1037,7 +1053,8 @@ CellGameModule::registerConsoleCommands()
         ic->commandLine->logNormal(PatternCodec::encodePlaintext(pattern));
         return;
       }
-      if (!importPatternText(joinArguments(args, 0))) {
+      if (!importPatternText(joinArguments(args, 0),
+                             PatternFormat::Plaintext)) {
         ic->commandLine->logError("Plaintext import failed");
       } else {
         ic->commandLine->logSuccess("Imported plaintext");
@@ -1112,18 +1129,30 @@ CellGameModule::setRunning(bool running)
                                       : "Simulation paused in edit mode");
 }
 
-void
+int
 CellGameModule::stepSimulation(int generations)
 {
   prepareGridMutation();
   currentState = CellState::EDIT;
   simAccum = 0.0;
   showModeSplash("EDIT");
-  for (int i = 0; i < generations; ++i) {
-    cellContext->getGrid()->advance(*cellContext->getRuleSet());
+  int completed = 0;
+  for (; completed < generations; ++completed) {
+    bool succeeded = false;
+    try {
+      succeeded = cellContext->getGrid()->advance(*cellContext->getRuleSet());
+    } catch (...) {
+      succeeded = false;
+    }
+    if (!succeeded) {
+      simulationRetryPending = true;
+      break;
+    }
+    simulationRetryPending = false;
     simulationGeneration += 1;
   }
   updateVisualTargets();
+  return completed;
 }
 
 void
@@ -1450,7 +1479,16 @@ CellGameModule::Update(double dt)
     double* scroll = ic->inputManager->getMouseScrollOffset();
     if (*scroll != 0.0f) {
       double zoomFactor = (*scroll > 0.0f) ? 1.15 : 0.85;
-      ic->camera->ZoomAt(static_cast<float>(zoomFactor), worldMouse);
+      const glm::dvec2 target = ic->camera->GetTargetPositionPrecise();
+      const float oldZoom = ic->camera->GetTargetZoom();
+      const float newZoom =
+        std::clamp(oldZoom * static_cast<float>(zoomFactor), 0.1f, 100.0f);
+      const glm::dvec2 next =
+        worldMouse -
+        (worldMouse - target) * static_cast<double>(oldZoom / newZoom);
+      if (CanvasCoordinatePolicy::validPosition(next.x, next.y)) {
+        ic->camera->ZoomAt(static_cast<float>(zoomFactor), worldMouse);
+      }
     }
   }
 
@@ -1545,19 +1583,23 @@ CellGameModule::Normal(double dt)
 
   simAccum += dt;
   simulationBudgetLimited = false;
-  if (simAccum >= simStepSeconds && !simulationRunner.isBusy()) {
+  if ((simulationRetryPending || simAccum >= simStepSeconds) &&
+      !simulationRunner.isBusy()) {
     SparseGenerationDelta transferDelta;
     const bool useMirrorDelta = mirrorDeltaValid;
     if (useMirrorDelta) {
       transferDelta = std::move(mirrorDelta);
     }
+    mirrorDeltaValid = false;
     if (simulationRunner.start(cellContext->getSpareGrid(),
                                cellContext->getGrid(),
                                cellContext->getRuleSet(),
                                std::move(transferDelta),
                                useMirrorDelta)) {
-      mirrorDeltaValid = false;
-      simAccum -= simStepSeconds;
+      if (!simulationRetryPending) {
+        simAccum -= simStepSeconds;
+      }
+      simulationRetryPending = false;
     }
   } else if (simAccum >= simStepSeconds) {
     FrameMarkNamed("Sim.inFlightDeferred");
@@ -1726,7 +1768,7 @@ CellGameModule::stampNamed(const std::string& name)
 }
 
 bool
-CellGameModule::importPatternText(const std::string& text)
+CellGameModule::importPatternText(const std::string& text, PatternFormat format)
 {
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
@@ -1741,7 +1783,8 @@ CellGameModule::importPatternText(const std::string& text)
                                                   text,
                                                   originX,
                                                   originY,
-                                                  &error);
+                                                  &error,
+                                                  format);
   if (!result) {
     Logger::LogError(error.c_str());
     return false;
@@ -1905,8 +1948,15 @@ CellGameModule::Edit(double dt)
   glm::dvec2 worldPos = ic->camera->ScreenToWorldPrecise(
     glm::dvec2(mouseCoords[0], mouseCoords[1]));
 
-  const std::int64_t currentX = CanvasView::worldToCell(worldPos.x);
-  const std::int64_t currentY = CanvasView::worldToCell(worldPos.y);
+  std::int64_t currentX = 0, currentY = 0;
+  if (!CanvasCoordinatePolicy::tryWorldToCell(worldPos.x, &currentX) ||
+      !CanvasCoordinatePolicy::tryWorldToCell(worldPos.y, &currentY)) {
+    hoverValid = false;
+    wasPressed = false;
+    clipboard.stopSelectionDrag();
+    editorCursor.setVisible(false);
+    return;
+  }
   hoverX = currentX;
   hoverY = currentY;
   hoverValid = cellContext->getGrid()->isCellInWorldBounds(
@@ -2131,8 +2181,13 @@ CellGameModule::updateEditorCursor()
   std::array<double, 2> mouseCoords = ic->window->getMouseCoords();
   glm::dvec2 worldPos = ic->camera->ScreenToWorldPrecise(
     glm::dvec2(mouseCoords[0], mouseCoords[1]));
-  const std::int64_t cellX = CanvasView::worldToCell(worldPos.x);
-  const std::int64_t cellY = CanvasView::worldToCell(worldPos.y);
+  std::int64_t cellX = 0, cellY = 0;
+  if (!CanvasCoordinatePolicy::tryWorldToCell(worldPos.x, &cellX) ||
+      !CanvasCoordinatePolicy::tryWorldToCell(worldPos.y, &cellY)) {
+    hoverValid = false;
+    editorCursor.setVisible(false);
+    return;
+  }
   hoverX = cellX;
   hoverY = cellY;
   hoverValid =
@@ -2245,7 +2300,14 @@ CellGameModule::CameraPan()
       wasPressed = true;
     }
     glm::dvec2 delta = lastMousePos - worldMouse;
-    ic->camera->Pan(delta * static_cast<double>(ic->camera->GetZoom()));
+    const glm::dvec2 offset =
+      delta * static_cast<double>(ic->camera->GetZoom());
+    const glm::dvec2 next =
+      ic->camera->GetTargetPositionPrecise() +
+      offset / static_cast<double>(ic->camera->GetTargetZoom());
+    if (CanvasCoordinatePolicy::validPosition(next.x, next.y)) {
+      ic->camera->Pan(offset);
+    }
     worldMouse =
       ic->camera->ScreenToWorldPrecise(glm::dvec2(mousePos[0], mousePos[1]));
   } else {

@@ -3,6 +3,7 @@
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -104,7 +105,11 @@ private:
   int atlasHeight = 0;
   bool valid = false;
 
-  Renderer* enrolledRenderer = nullptr;
+  std::map<std::weak_ptr<const void>,
+           TextureHandle,
+           std::owner_less<std::weak_ptr<const void>>>
+    rendererTextures;
+  std::weak_ptr<const void> lastRendererLifetime;
   TextureHandle textureHandle{};
 
   void buildFallbackAtlas(float pixelSize);

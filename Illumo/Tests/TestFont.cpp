@@ -153,9 +153,75 @@ testFontGameVisualRendering()
            "text updates sprite buffer");
 }
 
+static void
+testRendererLifetimeEnrollment()
+{
+  NullRenderWindow window(128, 128);
+  Camera camera;
+  MockBackend firstBackend;
+  MockBackend secondBackend;
+  firstBackend.Initialize();
+  secondBackend.Initialize();
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  alignas(Renderer) std::byte storage[sizeof(Renderer)];
+  Renderer* first = std::construct_at(reinterpret_cast<Renderer*>(storage),
+                                      &window,
+                                      nullptr,
+                                      &camera,
+                                      &firstBackend,
+                                      false);
+  const TextureHandle old = font->getTextureHandle(first);
+  testTrue(g, firstBackend.IsTextureValid(old), "first lifetime enrolls atlas");
+  std::destroy_at(first);
+  testTrue(g,
+           !font->getTextureHandle(nullptr).isValid(),
+           "expired lifetime does not expose a stale last handle");
+  Renderer* second = std::construct_at(reinterpret_cast<Renderer*>(storage),
+                                       &window,
+                                       nullptr,
+                                       &camera,
+                                       &secondBackend,
+                                       false);
+  const unsigned char pixel[4] = { 1, 2, 3, 255 };
+  const TextureHandle unrelated = second->enrollTexture(pixel, 1, 1);
+  testTrue(g,
+           unrelated == old,
+           "fixture aliases old structural handle in new backend");
+  const TextureHandle current = font->getTextureHandle(second);
+  testTrue(g,
+           current != unrelated && secondBackend.IsTextureValid(current),
+           "same renderer address enrolls a new atlas instead of aliasing "
+           "unrelated texture");
+  Renderer alternate(&window, nullptr, &camera, &firstBackend, false);
+  const TextureHandle alternateAtlas = font->getTextureHandle(&alternate);
+  const size_t firstCount = firstBackend.getCreateCount();
+  const size_t secondCount = secondBackend.getCreateCount();
+  for (int i = 0; i < 8; ++i) {
+    testTrue(g,
+             font->getTextureHandle(second) == current &&
+               font->getTextureHandle(&alternate) == alternateAtlas,
+             "alternating live renderers reuses each atlas");
+  }
+  testTrue(g,
+           firstBackend.getCreateCount() == firstCount &&
+             secondBackend.getCreateCount() == secondCount,
+           "alternating renderers performs no repeated enrollment");
+  second->destroyTexture(current);
+  const TextureHandle renewed = font->getTextureHandle(second);
+  testTrue(g,
+           renewed != current && secondBackend.IsTextureValid(renewed),
+           "explicitly retired atlas is enrolled again");
+  std::destroy_at(second);
+}
+
 void
 registerFontTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Font.RendererLifetimeEnrollment", []() {
+    g = {};
+    testRendererLifetimeEnrollment();
+    return g.failures;
+  });
   registry.add("Illumo.Font.DefaultFontLoading", []() {
     g = {};
     testDefaultFontLoading();

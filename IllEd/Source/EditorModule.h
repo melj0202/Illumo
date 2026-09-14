@@ -52,6 +52,7 @@ public:
   void Update(double dt) override;
   void DispatchDrawables(Scene* scene) override;
   void Exit() override;
+  bool OnCloseRequested() override;
   EditorSceneDetail sceneDetail() const;
 
 private:
@@ -76,6 +77,7 @@ private:
   double m_lastMouseY;
   float m_animTime;
   EditorPendingAction m_pendingAction;
+  bool m_exitApproved = false;
   std::string m_appliedFontSizeVar;
   GizmoPart m_hoveredGizmoPart = GizmoPart::None;
   GizmoPart m_activeGizmoPart = GizmoPart::None;

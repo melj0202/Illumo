@@ -2,6 +2,7 @@
 
 #include "CanvasView.h"
 #include "CellPattern.h"
+#include "PatternCodec.h"
 #include "SparseCellGrid.h"
 
 #include <cstdint>
@@ -50,8 +51,7 @@ public:
                         CellPattern* pattern,
                         std::string* error = nullptr) const;
 
-  bool copySelection(const SparseCellGrid* grid,
-                     std::string* error = nullptr);
+  bool copySelection(const SparseCellGrid* grid, std::string* error = nullptr);
 
   bool cutSelection(SparseCellGrid* grid,
                     CanvasView* canvas,
@@ -86,7 +86,8 @@ public:
                          const std::string& text,
                          std::int64_t originX,
                          std::int64_t originY,
-                         std::string* error = nullptr);
+                         std::string* error = nullptr,
+                         PatternFormat format = PatternFormat::Auto);
 
   bool rotateCw();
   bool flipHorizontal();

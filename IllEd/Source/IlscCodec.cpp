@@ -1,8 +1,10 @@
 #include "IlscCodec.h"
+#include <Illumo/Platform/AtomicFile.h>
 
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <unordered_map>
@@ -29,7 +31,9 @@ static bool
 readFloat(const nlohmann::json& value, float* number)
 {
   double parsed = 0.0;
-  if (!readDouble(value, &parsed)) {
+  if (number == nullptr || !readDouble(value, &parsed) ||
+      parsed < -static_cast<double>(std::numeric_limits<float>::max()) ||
+      parsed > static_cast<double>(std::numeric_limits<float>::max())) {
     return false;
   }
   *number = static_cast<float>(parsed);
@@ -42,7 +46,23 @@ readInt(const nlohmann::json& value, int* number)
   if (number == nullptr || !value.is_number_integer()) {
     return false;
   }
-  *number = value.get<int>();
+  if (value.is_number_unsigned()) {
+    const nlohmann::json::number_unsigned_t parsed =
+      value.get<nlohmann::json::number_unsigned_t>();
+    if (parsed > static_cast<nlohmann::json::number_unsigned_t>(
+                   std::numeric_limits<int>::max())) {
+      return false;
+    }
+    *number = static_cast<int>(parsed);
+  } else {
+    const nlohmann::json::number_integer_t parsed =
+      value.get<nlohmann::json::number_integer_t>();
+    if (parsed < std::numeric_limits<int>::min() ||
+        parsed > std::numeric_limits<int>::max()) {
+      return false;
+    }
+    *number = static_cast<int>(parsed);
+  }
   return true;
 }
 
@@ -573,16 +593,11 @@ IlscCodec::writeFile(const std::string& path,
     setError(error, "Scene path is empty");
     return false;
   }
-  std::ofstream file(path, std::ios::trunc);
-  if (!file.is_open()) {
-    setError(error, "Failed to open scene file for writing");
-    return false;
-  }
-  const std::string text = encode(document);
-  file << text;
-  if (!file.good()) {
-    setError(error, "Failed while writing scene file");
-    return false;
-  }
-  return true;
+  return AtomicFile::write(
+    path,
+    [&document](std::ostream& file, std::string*) {
+      file << encode(document);
+      return file.good();
+    },
+    error);
 }

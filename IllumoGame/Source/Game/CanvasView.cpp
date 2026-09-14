@@ -1,4 +1,5 @@
 #include "CanvasView.h"
+#include "CanvasCoordinatePolicy.h"
 #include "Rulesets/RuleSet.h"
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
@@ -109,8 +110,9 @@ CanvasView::~CanvasView()
 std::int64_t
 CanvasView::worldToCell(double worldCoordinate)
 {
-  return static_cast<std::int64_t>(
-    std::floor(worldCoordinate / static_cast<double>(kCellSize) + 0.5));
+  std::int64_t cell = 0;
+  CanvasCoordinatePolicy::tryWorldToCell(worldCoordinate, &cell);
+  return cell;
 }
 
 bool
@@ -1054,6 +1056,13 @@ CanvasView::tryScrollCache(const CacheLayout& nextLayout)
       nextLayout.activeHeight != activeViewHeight) {
     return false;
   }
+  // Check overlap before subtraction: opposite signed endpoints cannot scroll.
+  if (nextLayout.firstCell.x > cacheFirstCell.x + cacheCellWidth ||
+      nextLayout.firstCell.x < cacheFirstCell.x - cacheCellWidth ||
+      nextLayout.firstCell.y > cacheFirstCell.y + cacheCellHeight ||
+      nextLayout.firstCell.y < cacheFirstCell.y - cacheCellHeight) {
+    return false;
+  }
   const std::int64_t deltaCellsX = nextLayout.firstCell.x - cacheFirstCell.x;
   const std::int64_t deltaCellsY = cacheFirstCell.y - nextLayout.firstCell.y;
   if (cellsPerTexel <= 0 || deltaCellsX % cellsPerTexel != 0 ||
@@ -1106,6 +1115,10 @@ CanvasView::syncVisibleRegion()
     position = camera->GetPositionPrecise();
   }
 
+  if (!CanvasCoordinatePolicy::validPosition(position.x, position.y) ||
+      !std::isfinite(zoom)) {
+    return;
+  }
   const double worldWidth = static_cast<double>(width) / zoom;
   const double worldHeight = static_cast<double>(height) / zoom;
   const int nextCellWidth =
@@ -1115,24 +1128,21 @@ CanvasView::syncVisibleRegion()
     static_cast<int>(std::ceil(worldHeight / static_cast<double>(kCellSize))) +
     2;
   const int outputBudgetWidth =
-    std::max(baseViewWidth,
-             (width + kOverviewPixelsPerTexel - 1) / kOverviewPixelsPerTexel);
+    std::max(baseViewWidth, 1 + (width - 1) / kOverviewPixelsPerTexel);
   const int outputBudgetHeight =
-    std::max(baseViewHeight,
-             (height + kOverviewPixelsPerTexel - 1) / kOverviewPixelsPerTexel);
-  const int requiredCellsPerTexel = std::max(
-    1,
-    std::max((nextCellWidth + outputBudgetWidth - 1) / outputBudgetWidth,
-             (nextCellHeight + outputBudgetHeight - 1) / outputBudgetHeight));
+    std::max(baseViewHeight, 1 + (height - 1) / kOverviewPixelsPerTexel);
+  const int requiredCellsPerTexel =
+    std::max(1,
+             std::max(1 + (nextCellWidth - 1) / outputBudgetWidth,
+                      1 + (nextCellHeight - 1) / outputBudgetHeight));
   const int nextCellsPerTexel = resolveCellsPerTexel(requiredCellsPerTexel,
                                                      outputBudgetWidth,
                                                      outputBudgetHeight,
                                                      nextCellWidth,
                                                      nextCellHeight);
-  const int nextVisibleViewWidth =
-    (nextCellWidth + nextCellsPerTexel - 1) / nextCellsPerTexel;
+  const int nextVisibleViewWidth = 1 + (nextCellWidth - 1) / nextCellsPerTexel;
   const int nextVisibleViewHeight =
-    (nextCellHeight + nextCellsPerTexel - 1) / nextCellsPerTexel;
+    1 + (nextCellHeight - 1) / nextCellsPerTexel;
   const std::int64_t centerX = worldToCell(position.x);
   const std::int64_t centerY = worldToCell(position.y);
   const CellAddress nextFirstCell{ centerX - nextCellWidth / 2,

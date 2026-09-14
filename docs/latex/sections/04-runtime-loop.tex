@@ -66,6 +66,7 @@ public:
   virtual void Update(double dt) = 0;
   virtual void DispatchDrawables(Scene* scene) = 0;
   virtual void Exit() = 0;
+  virtual bool OnCloseRequested() { return true; }
 };
 \end{lstlisting}
 
@@ -74,7 +75,16 @@ public:
   \item \textbf{Update} advances simulation and input behavior.
   \item \textbf{DispatchDrawables} contributes this frame's non-owning draw list.
   \item \textbf{Exit} releases module-owned state.
+  \item \textbf{OnCloseRequested} may defer native close for product confirmation.
 \end{itemize}
+
+The runner invokes \texttt{processCloseRequest} explicitly before termination.
+Only started modules participate; acceptance is the default. Deferral clears the
+native close flag and continues updating/rendering. IllEd shares its existing
+Save/Discard/Cancel flow with native close and records approved discard so a
+dirty document does not prompt repeatedly. Required transition failure remains
+terminal. Custom windows used with deferring modules implement close-flag
+cancellation. The const \texttt{shouldClose} query has no callbacks.
 
 Each registration is \texttt{Required} or \texttt{Optional}. A rejected optional
 module is destroyed immediately and never receives update/draw/exit. Required
@@ -113,6 +123,30 @@ host update.
 \symbolref{RenderWindow} defaults to swap interval one. Persisted
 \texttt{vsync=0} selects uncapped profiling, while Debug metrics distinguish
 paced swap completions from CPU submissions.
+
+The global F11 shortcut asks the window to toggle fullscreen. The window
+publishes the resulting state to EnvVars, and the host reports that value
+without changing it again. A rejected toggle preserves the prior setting.
+
+IllMeshViewer consumes queued Press events for O (open), F/R (reset camera),
+G (grid), X (wireframe), and B (skybox). Hold/repeat and release events do not
+execute these actions. Shortcuts are suppressed while the console is open;
+unrelated keys remain available to the host. No shortcut latch is shared
+between viewer instances.
+
+IllEd body selection records the initial hit offset on the same constraint plane
+used during dragging. Holding or releasing an off-center click without moving
+does not translate the object or dirty the document. If the initial drag-plane
+intersection fails, selection still succeeds but dragging does not begin.
+
+In 3D, IllEd selects the nearest forward screen-ray intersection with an
+object's transformed local bounds. Parent transforms, nonuniform scale and
+rotation are included; inherited hidden/disabled state excludes candidates.
+Singular or nonfinite bounds are skipped. Bounds follow attachment recipes,
+with a small proxy for empty nodes; equal-distance ties prefer later document
+entries. This is bounds-based picking, not triangle-exact picking. 2D picking
+and ground-plane placement retain their existing paths. A 3D selection ray
+need not intersect the ground plane.
 
 
 \subsection{Process memory diagnostics}

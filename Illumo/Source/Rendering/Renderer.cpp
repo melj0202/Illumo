@@ -106,6 +106,7 @@ Renderer::Renderer(IRenderWindow* window,
 
 Renderer::~Renderer()
 {
+  _lifetimeIdentity.reset();
   _renderTargetPool.releaseAll();
   if (_ownedBackend) {
     _ownedBackend->Shutdown();
@@ -227,6 +228,16 @@ Renderer::enrollCubemap(const std::array<const unsigned char*, 6>& facesData,
 }
 
 bool
+Renderer::replaceCubemap(TextureHandle handle,
+                         const std::array<const unsigned char*, 6>& faces,
+                         int width,
+                         int height,
+                         int channels)
+{
+  return _backend->ReplaceCubemap(handle, faces, width, height, channels);
+}
+
+bool
 Renderer::replaceTexture(TextureHandle handle,
                          const unsigned char* data,
                          int width,
@@ -328,8 +339,15 @@ Renderer::pushClearScreen(float r, float g, float b, float a)
 void
 Renderer::pushClearDepth()
 {
+  pushClearDepth(1.0f);
+}
+
+void
+Renderer::pushClearDepth(float value)
+{
   RenderCommand cmd;
   cmd.commandType = CommandType::ClearDepthBuffer;
+  cmd.clearDepthValue = value;
   _backend->PushToCommandQueue(cmd);
 }
 
@@ -631,6 +649,7 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
 
   // Single main pass (default FB): clear once, then World → UI → Debug.
   const std::array<int, 2>& dims = frameContext.windowDimensions;
+  pushFramebuffer(FramebufferHandle{});
   pushViewport(0, 0, dims[0], dims[1]);
 
   PipelineState defaultState;
@@ -662,6 +681,11 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                                  0,
                                  frameContext.windowDimensions[0],
                                  frameContext.windowDimensions[1] };
+        pushFramebuffer(_currentPassFbo);
+        pushViewport(_currentPassViewport[0],
+                     _currentPassViewport[1],
+                     _currentPassViewport[2],
+                     _currentPassViewport[3]);
         for (size_t i = 0; i < list.size(); ++i) {
           DrawableBase* drawable = list[i];
           if (!drawable) {
@@ -716,21 +740,14 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                        _currentPassViewport[2],
                        _currentPassViewport[3]);
 
-          if (pass.clear.clearColor && pass.clear.clearDepth) {
-            pushClearScreen(pass.clear.clearColorValue[0],
-                            pass.clear.clearColorValue[1],
-                            pass.clear.clearColorValue[2],
-                            pass.clear.clearColorValue[3]);
-          } else {
-            if (pass.clear.clearColor) {
-              pushClearScreen(pass.clear.clearColorValue[0],
-                              pass.clear.clearColorValue[1],
-                              pass.clear.clearColorValue[2],
-                              pass.clear.clearColorValue[3]);
-            }
-            if (pass.clear.clearDepth) {
-              pushClearDepth();
-            }
+          if (pass.clear.clearColor) {
+            pushClearColor(pass.clear.clearColorValue[0],
+                           pass.clear.clearColorValue[1],
+                           pass.clear.clearColorValue[2],
+                           pass.clear.clearColorValue[3]);
+          }
+          if (pass.clear.clearDepth) {
+            pushClearDepth(pass.clear.clearDepthValue);
           }
 
           if (pass.overridePipelineState) {

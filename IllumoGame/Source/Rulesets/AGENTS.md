@@ -28,7 +28,9 @@ Rendering, Services, Engine, platform APIs, and OpenGL.
 
 New rules for supported families (`LifeLikeRuleSet` for binary B/S,
 `Elementary1DRuleSet` for Wolfram 1D) are cataloged in `rulesets.json` and
-automatically discovered by `RuleSetRegistry`. When introducing a new family or
+loaded by Game's `RuleCatalogLoader` during product startup. `RuleSetRegistry`
+constructs only built-ins and accepts catalog text transactionally; it must not
+discover files or call native APIs. When introducing a new family or
 specialized transition logic, implement the family `.h`/`.cpp` pair, update
 `RuleSetRegistry`, source lists, palette behavior, and focused domain tests
 together. Preserve existing mode names used in persisted files unless a

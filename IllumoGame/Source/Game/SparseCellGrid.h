@@ -204,6 +204,10 @@ public:
   // Test-only override: 0 selects the adaptive production worker count.
   static void setWorkerOverrideForTesting(int workers);
   static int getWorkerOverrideForTesting();
+  void setElementaryWriteFailureForTesting(int successfulWrites)
+  {
+    m_elementaryWriteFailureCountdown = successfulWrites;
+  }
   // Test-only override: -1 forces full chunks, 0 selects adaptively, and 1
   // forces cell candidates.
   static void setCellCandidateOverrideForTesting(int mode);
@@ -416,6 +420,7 @@ private:
   bool m_countedChangeCoversStateChange = false;
   mutable std::unique_ptr<ChunkMemoState> m_chunkMemo;
   const SparseCellGrid* m_generationSourceGrid = nullptr;
+  int m_elementaryWriteFailureCountdown = -1;
   std::int64_t m_worldChunkWidth = 0;
   std::int64_t m_worldChunkHeight = 0;
 

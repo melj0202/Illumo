@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <sstream>
+#include <limits>
 #include <unordered_set>
 #include <utility>
 
@@ -80,41 +80,19 @@ EditorDocument::indexOf(const std::string& id) const
   return m_document.nodes.size();
 }
 
-void
-EditorDocument::refreshNextId()
-{
-  unsigned int highest = 0;
-  for (const IlscNode& node : m_document.nodes) {
-    if (node.id.size() < 2 || node.id[0] != 'n') {
-      continue;
-    }
-    bool digits = true;
-    unsigned int value = 0;
-    for (size_t i = 1; i < node.id.size(); ++i) {
-      const unsigned char character = static_cast<unsigned char>(node.id[i]);
-      if (character < '0' || character > '9') {
-        digits = false;
-        break;
-      }
-      value = value * 10u + static_cast<unsigned int>(character - '0');
-    }
-    if (digits && value > highest) {
-      highest = value;
-    }
-  }
-  m_nextId = highest + 1u;
-  if (m_nextId == 0) {
-    m_nextId = 1;
-  }
-}
-
 std::string
 EditorDocument::allocateId()
 {
-  std::ostringstream stream;
-  stream << 'n' << m_nextId;
-  ++m_nextId;
-  return stream.str();
+  const unsigned int first = m_nextId;
+  do {
+    const std::string candidate = "n" + std::to_string(m_nextId);
+    m_nextId =
+      m_nextId == std::numeric_limits<unsigned int>::max() ? 1u : m_nextId + 1u;
+    if (findNode(candidate) == nullptr) {
+      return candidate;
+    }
+  } while (m_nextId != first);
+  return {};
 }
 
 bool
@@ -125,7 +103,7 @@ EditorDocument::loadFromText(const std::string& text, std::string* error)
     return false;
   }
   m_document = std::move(loaded);
-  refreshNextId();
+  m_nextId = 1;
   m_dirty = false;
   return true;
 }
@@ -139,7 +117,7 @@ EditorDocument::loadFromFile(const std::string& path, std::string* error)
   }
   m_document = std::move(loaded);
   m_path = path;
-  refreshNextId();
+  m_nextId = 1;
   m_dirty = false;
   return true;
 }
@@ -206,6 +184,9 @@ EditorDocument::createNode(SceneNodeKind kind, const std::string& parentId)
   }
   IlscNode node;
   node.id = allocateId();
+  if (node.id.empty()) {
+    return {};
+  }
   node.parentId = parentId;
   node.kind = kind;
   node.name = IlscCodec::kindName(kind);
@@ -442,6 +423,104 @@ EditorDocument::pick(float worldX, float worldY, std::string* id) const
     }
   }
   return false;
+}
+
+bool
+EditorDocument::pickRay(const Vector3& origin,
+                        const Vector3& direction,
+                        std::string* id) const
+{
+  if (id == nullptr) {
+    return false;
+  }
+  id->clear();
+  for (int axis = 0; axis < 3; ++axis) {
+    if (!std::isfinite(origin[axis]) || !std::isfinite(direction[axis])) {
+      return false;
+    }
+  }
+  if (direction == Vector3(0.0f)) {
+    return false;
+  }
+  double nearest = std::numeric_limits<double>::infinity();
+  for (size_t index = m_document.nodes.size(); index > 0; --index) {
+    const IlscNode& node = m_document.nodes[index - 1];
+    const IlscNode* ancestor = &node;
+    bool eligible = true;
+    size_t remaining = m_document.nodes.size();
+    while (ancestor != nullptr) {
+      if (remaining == 0 || !ancestor->enabled || !ancestor->visible) {
+        eligible = false;
+        break;
+      }
+      --remaining;
+      if (ancestor->parentId.empty()) {
+        break;
+      }
+      ancestor = findNode(ancestor->parentId);
+      if (ancestor == nullptr) {
+        eligible = false;
+      }
+    }
+    if (!eligible) {
+      continue;
+    }
+    const glm::dmat4 world(worldMatrix(node.id));
+    const double determinant = glm::determinant(world);
+    if (!std::isfinite(determinant) || determinant == 0.0) {
+      continue;
+    }
+    const glm::dmat4 inverse = glm::inverse(world);
+    const glm::dvec3 localOrigin(inverse * glm::dvec4(origin, 1.0));
+    // Do not normalize: t must remain comparable across differently scaled
+    // nodes.
+    const glm::dvec3 localDirection(inverse * glm::dvec4(direction, 0.0));
+    glm::dvec3 half(0.2);
+    if (IlscCodec::kindHasGeometry(node.kind)) {
+      half = glm::dvec3(node.primitive.extent);
+      if (node.kind == SceneNodeKind::WireSphere) {
+        half = glm::dvec3(std::max(half.x, std::max(half.y, half.z)));
+      } else if (node.kind == SceneNodeKind::FilledEllipse) {
+        half = glm::dvec3(half.x);
+      } else if (node.kind == SceneNodeKind::FilledRect) {
+        half.z = 0.02;
+      }
+    }
+    double enter = 0.0;
+    double leave = nearest;
+    bool hit = true;
+    for (int axis = 0; axis < 3; ++axis) {
+      if (!std::isfinite(localOrigin[axis]) ||
+          !std::isfinite(localDirection[axis]) || !std::isfinite(half[axis]) ||
+          half[axis] < 0.0) {
+        hit = false;
+        break;
+      }
+      if (localDirection[axis] == 0.0) {
+        if (localOrigin[axis] < -half[axis] || localOrigin[axis] > half[axis]) {
+          hit = false;
+          break;
+        }
+        continue;
+      }
+      double first = (-half[axis] - localOrigin[axis]) / localDirection[axis];
+      double last = (half[axis] - localOrigin[axis]) / localDirection[axis];
+      if (first > last) {
+        std::swap(first, last);
+      }
+      enter = std::max(enter, first);
+      leave = std::min(leave, last);
+      if (enter > leave) {
+        hit = false;
+        break;
+      }
+    }
+    if (hit && enter < nearest) {
+      nearest = enter;
+      *id = node.id;
+    }
+  }
+  return !id->empty();
 }
 
 EditorSceneDetail

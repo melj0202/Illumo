@@ -3,7 +3,8 @@
 \label{sec:layout}
 
 The canonical workspace is configured from the repository root. Responsibility
-is divided between the reusable Illumo project and the IllumoGame product.
+is divided between the reusable Illumo project and three products:
+IllumoGame, IllEd, and IllMeshViewer.
 
 \begin{center}
 \begin{tabularx}{\linewidth}{@{}l X@{}}
@@ -22,6 +23,8 @@ is divided between the reusable Illumo project and the IllumoGame product.
 \pathref{IllumoGame/Source/Game/} & Application definition, CA defaults, canvas, sparse simulation, editor, and game module. \\
 \pathref{IllumoGame/Source/Rulesets/} & Cellular-automata rules and palettes. \\
 \pathref{IllumoGame/Tests/} & Product-owned \texttt{IllumoGame.*} cases. \\
+\pathref{IllEd/Source/}, \pathref{IllEd/Tests/} & World editor, document codec, and \texttt{IllEd.*} cases. \\
+\pathref{IllMeshViewer/Source/}, \pathref{IllMeshViewer/Tests/} & Mesh viewer and \texttt{IllMeshViewer.*} cases. \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -29,7 +32,7 @@ is divided between the reusable Illumo project and the IllumoGame product.
 \subsection{Related trees}
 \begin{itemize}
   \item \pathref{Illumo/Shader/} and \pathref{Illumo/Assets/} are library-owned
-        runtime data staged beside IllumoGame by the supplied CMake helper.
+        runtime data staged beside consuming applications by the supplied CMake helper.
   \item \pathref{Illumo/thirdparty/} holds vendored dependencies and licenses.
   \item \pathref{IllumoGame/envvars.json} is product-owned default configuration
         and is seeded separately from library assets.

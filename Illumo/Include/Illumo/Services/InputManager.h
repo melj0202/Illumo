@@ -129,6 +129,10 @@ private:
 public:
   InputManager(GLFWwindow* window);
   ~InputManager();
+  InputManager(const InputManager&) = delete;
+  InputManager& operator=(const InputManager&) = delete;
+  InputManager(InputManager&&) = delete;
+  InputManager& operator=(InputManager&&) = delete;
 
   std::queue<unsigned int>& getCharQueue() { return charQueue; }
   std::queue<KeyPressEvent>& getKeyQueue() { return keyQueue; }

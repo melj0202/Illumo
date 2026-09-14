@@ -59,5 +59,6 @@ A screen-space File / Edit / Create / View menu bar, a right-hand tool
 sidebar (mode, primitive tools, scene inspector), and a status line, composed
 with `GameVisual`. Tool chrome samples `Assets/IllEd/editor-ui-atlas.jpg`
 as a 6x6 sprite atlas through the token path. The document stores a 2D or 3D world mode used for
-presentation and picking. 2D kinds emit through `GameVisual`; 3D kinds use
-`MeshVisual`. Editor grid and selection wireframes are not saved.
+presentation and picking. `EditorAttachment` uses `MeshVisual` for document
+geometry in both world modes; `GameVisual` composes screen UI. Editor grid and
+selection wireframes are not saved.

@@ -5,6 +5,14 @@
 class EditorModuleTestAccess
 {
 public:
+  static void setCameraTargetHeight(EditorModule& module, float height)
+  {
+    module.m_cameraTargetY = height;
+  }
+  static bool confirmationOpen(const EditorModule& module)
+  {
+    return module.m_confirm && module.m_confirm->isOpen();
+  }
   static EditorDocument& document(EditorModule& module)
   {
     return module.m_document;

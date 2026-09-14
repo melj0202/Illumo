@@ -1,3 +1,4 @@
+#include "Game/CanvasCoordinatePolicy.h"
 #include "Game/CellGameModule.h"
 #include "Rulesets/RuleSet.h"
 #include "Rulesets/WireworldRuleSet.h"
@@ -774,6 +775,48 @@ testLoadRejectsInvalidFiles()
   const std::int64_t invalidWorldWidth = 0;
   const std::int64_t invalidWorldHeight = 2;
   const std::uint64_t noSparseChunks = 0;
+  fixture.camera.SetPositionPrecise(10.5, 20.5);
+  fixture.camera.SetZoom(2.5f);
+  for (const std::uint32_t version : { 2u, 3u }) {
+    for (const double invalidCoordinate :
+         { 1e300, -1e300, std::ldexp(1.0, 67), -std::ldexp(1.0, 67) }) {
+      for (const bool invalidX : { false, true }) {
+        const double savedX = invalidX ? invalidCoordinate : 0.0;
+        const double savedY = invalidX ? 0.0 : invalidCoordinate;
+        {
+          std::ofstream output("invalid-camera.illumo",
+                               std::ios::binary | std::ios::trunc);
+          output.write(version == 2 ? sparseMagic : sparseMagicV3, 8);
+          output.write(reinterpret_cast<const char*>(&version),
+                       sizeof(version));
+          output.write(sparseTag, sizeof(sparseTag));
+          output.write(reinterpret_cast<const char*>(&savedX), sizeof(savedX));
+          output.write(reinterpret_cast<const char*>(&savedY), sizeof(savedY));
+          output.write(reinterpret_cast<const char*>(&sparseZoom),
+                       sizeof(sparseZoom));
+          if (version == 3) {
+            const std::int64_t finiteSize = 2;
+            output.write(reinterpret_cast<const char*>(&finiteSize),
+                         sizeof(finiteSize));
+            output.write(reinterpret_cast<const char*>(&finiteSize),
+                         sizeof(finiteSize));
+          }
+          output.write(reinterpret_cast<const char*>(&noSparseChunks),
+                       sizeof(noSparseChunks));
+        }
+        testTrue(g,
+                 !CellGameModuleTestAccess::load(fixture.module,
+                                                 "invalid-camera.illumo"),
+                 "otherwise valid sparse metadata rejects unsafe camera");
+        testTrue(g,
+                 liveContext->getGrid()->getCell(CellAddress{ 77, 88 }) == 0 &&
+                   fixture.camera.GetPositionPrecise() ==
+                     glm::dvec2(10.5, 20.5) &&
+                   fixture.camera.GetZoom() == 2.5f,
+                 "unsafe metadata preserves live cells and camera");
+      }
+    }
+  }
   {
     std::ofstream output("invalid-v3-topology.illumo",
                          std::ios::binary | std::ios::trunc);
@@ -986,6 +1029,17 @@ testConsoleCameraAndFiles()
   testTrue(g,
            fixture.camera.GetPosition() == glm::vec2(10.5f, 20.5f),
            "camera rejects non-finite position");
+  for (const char* invalid : { "1e300",
+                               "-1e300",
+                               "1.47573952589676412928e20",
+                               "-1.47573952589676412928e20" }) {
+    fixture.execute("camera", { invalid, "20", "3" });
+    fixture.execute("camera", { "10", invalid, "4" });
+    testTrue(g,
+             fixture.camera.GetPositionPrecise() == glm::dvec2(10.5, 20.5) &&
+               fixture.camera.GetZoom() == 2.5f,
+             "unsafe camera coordinates preserve position and zoom");
+  }
   fixture.execute("camera_reset");
   testTrue(g,
            historyContains(fixture.console, "Camera reset"),
@@ -1103,6 +1157,117 @@ testUpdateStateAndTiming()
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::None);
   fixture.module.Update(0.016);
+}
+
+static void
+testCameraInputBounds()
+{
+  testSection("CellGameModule: camera input bounds");
+  CellGameFixture fixture;
+  const glm::dvec2 boundary(CanvasCoordinatePolicy::kMaximumWorld, 0.0);
+  fixture.camera.SetPositionPrecise(boundary.x, boundary.y);
+  fixture.camera.SetZoom(1.0f);
+  fixture.window.mouseX = -1e9;
+  fixture.window.mouseY = 240.0;
+  InputManager::scrollCallback(nullptr, 0.0, -1.0);
+  fixture.module.Update(0.0);
+  testTrue(g,
+           fixture.camera.GetTargetPositionPrecise() == boundary &&
+             fixture.camera.GetTargetZoom() == 1.0f,
+           "zoom out rejects a pending target beyond coordinate boundary");
+  fixture.camera.Update(1.0f);
+  testTrue(g,
+           fixture.camera.GetPositionPrecise() == boundary &&
+             fixture.camera.GetZoom() == 1.0f,
+           "later interpolation cannot apply rejected zoom");
+  fixture.camera.SetPositionPrecise(0.0, 0.0);
+  testTrue(g,
+           CellGameModuleTestAccess::save(fixture.module, "camera-save.illumo"),
+           "valid camera saves");
+  const std::vector<char> saved = readFileBytes("camera-save.illumo");
+  fixture.camera.SetPositionPrecise(1e300, 0.0);
+  testTrue(
+    g,
+    !CellGameModuleTestAccess::save(fixture.module, "camera-save.illumo"),
+    "unsafe direct camera cannot produce unloadable save");
+  testTrue(g,
+           readFileBytes("camera-save.illumo") == saved,
+           "invalid camera save preserves destination");
+}
+
+static void
+testSimulationFailureReporting()
+{
+  testSection(
+    "CellGameModule: failed generations do not count and remain retryable");
+  {
+    CellGameFixture fixture;
+    fixture.execute("ruleset", { "RULE_90" });
+    SparseCellGrid* grid =
+      CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+    grid->clear();
+    grid->setCell(
+      CellAddress{ 0, std::numeric_limits<std::int64_t>::max() - 1 }, 0);
+    fixture.execute("step", { "3" });
+    testTrue(
+      g,
+      CellGameModuleTestAccess::getSimulationGeneration(fixture.module) == 1 &&
+        CellGameModuleTestAccess::isSimulationRetryPending(fixture.module),
+      "manual batch counts only its successful first generation");
+    testTrue(g,
+             historyContains(fixture.console, "failed after 1 of 3"),
+             "manual failure reports requested and completed count");
+    grid->clear();
+    grid->setCell(CellAddress{ 0, 0 }, 0);
+    fixture.execute("run");
+    fixture.module.Update(0.0);
+    testTrue(g,
+             CellGameModuleTestAccess::isSimulationBusy(fixture.module),
+             "run retries failed work without waiting another time step");
+    CellGameModuleTestAccess::drainSimulation(fixture.module);
+    testTrue(
+      g,
+      CellGameModuleTestAccess::getSimulationGeneration(fixture.module) == 2,
+      "successful retry counts once");
+  }
+  {
+    CellGameFixture fixture;
+    fixture.execute("ruleset", { "RULE_90" });
+    SparseCellGrid* grid =
+      CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+    grid->clear();
+    grid->setCell(CellAddress{ 0, 0 }, 0);
+    CellGameModuleTestAccess::getCellContext(fixture.module)
+      ->getSpareGrid()
+      ->setElementaryWriteFailureForTesting(1);
+    const std::uint64_t revision = grid->getRevision();
+    fixture.execute("run");
+    fixture.module.Update(0.04);
+    CellGameModuleTestAccess::drainSimulation(fixture.module);
+    testTrue(
+      g,
+      CellGameModuleTestAccess::getSimulationGeneration(fixture.module) == 0 &&
+        grid->getRevision() == revision &&
+        CellGameModuleTestAccess::getState(fixture.module) == CellState::EDIT &&
+        CellGameModuleTestAccess::isSimulationRetryPending(fixture.module),
+      "async failure preserves published world and pauses with pending retry");
+    testTrue(g,
+             historyContains(fixture.console, "paused without publication"),
+             "async failure has actionable console diagnostic");
+    fixture.module.Update(0.25);
+    testTrue(g,
+             !CellGameModuleTestAccess::isSimulationBusy(fixture.module),
+             "failure does not create an automatic retry loop");
+    grid->clear();
+    grid->setCell(CellAddress{ 0, 0 }, 0);
+    fixture.execute("run");
+    fixture.module.Update(0.0);
+    CellGameModuleTestAccess::drainSimulation(fixture.module);
+    testTrue(
+      g,
+      CellGameModuleTestAccess::getSimulationGeneration(fixture.module) == 1,
+      "explicit async retry succeeds and counts once");
+  }
 }
 
 static void
@@ -1293,6 +1458,11 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CellGame.FrameSimulationBudget", []() {
     return runCellGameModuleCase(testFrameSimulationBudget);
   });
+  registry.add("IllumoGame.CellGame.SimulationFailureReporting", []() {
+    return runCellGameModuleCase(testSimulationFailureReporting);
+  });
+  registry.add("IllumoGame.CellGame.CameraInputBounds",
+               []() { return runCellGameModuleCase(testCameraInputBounds); });
   registry.add("IllumoGame.CellGame.AsyncTransitionDraining", []() {
     return runCellGameModuleCase(testAsyncTransitionDraining);
   });

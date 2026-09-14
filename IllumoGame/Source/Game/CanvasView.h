@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Game/CanvasCoordinatePolicy.h"
 #include "Game/SparseCellGrid.h"
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Drawable.h>
@@ -109,7 +110,8 @@ public:
 
 private:
   static const int kPaletteSize = 256;
-  static constexpr float kCellSize = 16.0f;
+  static constexpr float kCellSize =
+    static_cast<float>(CanvasCoordinatePolicy::kCellSize);
   static const int kOverviewPixelsPerTexel = 4;
   static const int kCachePaddingChunks = 2;
   static const int kDirtyTileDim = 16;

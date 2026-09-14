@@ -5,14 +5,8 @@
 #include "WireworldRuleSet.h"
 #include <algorithm>
 #include <cctype>
-#include <filesystem>
-#include <fstream>
+#include <cstdint>
 #include <nlohmann/json.hpp>
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
 
 RuleSetRegistry&
 RuleSetRegistry::instance()
@@ -41,56 +35,50 @@ RuleSetRegistry::parseLifeLikeRuleString(const std::string& ruleStr,
     return false;
   }
 
-  bool hasLetter = false;
-  for (char c : ruleStr) {
-    if (c == 'b' || c == 'B' || c == 's' || c == 'S') {
-      hasLetter = true;
-      break;
+  std::string normalized;
+  for (const char character : ruleStr) {
+    if (std::isspace(static_cast<unsigned char>(character)) == 0) {
+      normalized.push_back(
+        static_cast<char>(std::toupper(static_cast<unsigned char>(character))));
     }
   }
-
-  if (hasLetter) {
-    char currentSection = '\0';
-    for (char c : ruleStr) {
-      if (c == 'b' || c == 'B') {
-        currentSection = 'B';
-      } else if (c == 's' || c == 'S') {
-        currentSection = 'S';
-      } else if (c >= '0' && c <= '8') {
-        const unsigned int digit = static_cast<unsigned int>(c - '0');
-        if (currentSection == 'B') {
-          outBirth |= (1u << digit);
-        } else if (currentSection == 'S') {
-          outSurvive |= (1u << digit);
-        }
-      }
-    }
-    return true;
+  const std::size_t slash = normalized.find('/');
+  if (slash == std::string::npos ||
+      normalized.find('/', slash + 1) != std::string::npos) {
+    return false;
   }
-
-  // Fallback: S/B format (e.g. "23/3")
-  const std::size_t slashPos = ruleStr.find('/');
-  if (slashPos != std::string::npos) {
-    for (std::size_t i = 0; i < slashPos; ++i) {
-      if (ruleStr[i] >= '0' && ruleStr[i] <= '8') {
-        outSurvive |= (1u << static_cast<unsigned int>(ruleStr[i] - '0'));
-      }
-    }
-    for (std::size_t i = slashPos + 1; i < ruleStr.size(); ++i) {
-      if (ruleStr[i] >= '0' && ruleStr[i] <= '8') {
-        outBirth |= (1u << static_cast<unsigned int>(ruleStr[i] - '0'));
-      }
-    }
-    return true;
+  const std::string first = normalized.substr(0, slash);
+  const std::string second = normalized.substr(slash + 1);
+  unsigned int birth = 0, survive = 0;
+  const bool labeled = (!first.empty() && (first[0] == 'B' || first[0] == 'S'));
+  if (labeled && (second.empty() ||
+                  (first[0] == 'B' ? second[0] != 'S' : second[0] != 'B'))) {
+    return false;
   }
-
-  return false;
+  for (int section = 0; section < 2; ++section) {
+    const std::string& part = section == 0 ? first : second;
+    unsigned int mask = 0;
+    for (std::size_t i = labeled ? 1u : 0u; i < part.size(); ++i) {
+      if (part[i] < '0' || part[i] > '8') {
+        return false;
+      }
+      mask |= 1u << static_cast<unsigned int>(part[i] - '0');
+    }
+    const bool isBirth = labeled ? part[0] == 'B' : section == 1;
+    if (isBirth) {
+      birth = mask;
+    } else {
+      survive = mask;
+    }
+  }
+  outBirth = birth;
+  outSurvive = survive;
+  return true;
 }
 
 RuleSetRegistry::RuleSetRegistry()
 {
   loadBuiltinDefaults();
-  loadFromDefaultLocations();
 }
 
 void
@@ -99,20 +87,45 @@ RuleSetRegistry::clear()
   rules.clear();
 }
 
-void
-RuleSetRegistry::registerRule(const RuleDefinition& def)
+static bool
+insertRule(std::vector<RuleDefinition>& rules, const RuleDefinition& def)
 {
-  const std::string norm = normalizeId(def.id);
+  const std::string norm = RuleSetRegistry::normalizeId(def.id);
+  if (norm.empty()) {
+    return false;
+  }
+  if (def.family == "life_like") {
+    unsigned int birth = 0, survive = 0;
+    if ((def.birthMask & ~0x1FEu) != 0u || (def.surviveMask & ~0x1FFu) != 0u ||
+        (!def.rule.empty() &&
+         (!RuleSetRegistry::parseLifeLikeRuleString(def.rule, birth, survive) ||
+          (birth & 1u) != 0u))) {
+      return false;
+    }
+  } else if (def.family == "elementary_1d") {
+    if (def.ruleNumber > 255u || (def.ruleNumber & 1u) != 0u) {
+      return false;
+    }
+  } else if (def.family != "generations" && def.family != "wireworld") {
+    return false;
+  }
   for (RuleDefinition& existing : rules) {
     if (existing.id == norm) {
       existing = def;
       existing.id = norm;
-      return;
+      return true;
     }
   }
   RuleDefinition copy = def;
   copy.id = norm;
   rules.push_back(copy);
+  return true;
+}
+
+bool
+RuleSetRegistry::registerRule(const RuleDefinition& def)
+{
+  return insertRule(rules, def);
 }
 
 void
@@ -201,124 +214,136 @@ RuleSetRegistry::loadBuiltinDefaults()
   registerRule(r184);
 }
 
-bool
-RuleSetRegistry::loadFromFile(const std::string& filePath)
+static bool
+readUnsigned(const nlohmann::json& value,
+             unsigned int maximum,
+             unsigned int& result)
 {
-  std::ifstream file(filePath);
-  if (!file.is_open()) {
+  if (value.is_number_unsigned()) {
+    const std::uint64_t number = value.get<std::uint64_t>();
+    if (number > maximum) {
+      return false;
+    }
+    result = static_cast<unsigned int>(number);
+    return true;
+  }
+  if (value.is_number_integer()) {
+    const std::int64_t number = value.get<std::int64_t>();
+    if (number < 0 || static_cast<std::uint64_t>(number) > maximum) {
+      return false;
+    }
+    result = static_cast<unsigned int>(number);
+    return true;
+  }
+  return false;
+}
+
+static bool
+readNeighborMask(const nlohmann::json& values, unsigned int& mask)
+{
+  if (!values.is_array()) {
     return false;
   }
+  mask = 0;
+  for (const nlohmann::json& value : values) {
+    unsigned int count = 0;
+    if (!readUnsigned(value, 8u, count)) {
+      return false;
+    }
+    mask |= 1u << count;
+  }
+  return true;
+}
 
+static bool
+readPaletteColor(const nlohmann::json& values,
+                 std::array<unsigned char, 3>& color)
+{
+  if (!values.is_array() || values.size() != 3u) {
+    return false;
+  }
+  for (std::size_t i = 0; i < color.size(); ++i) {
+    unsigned int channel = 0;
+    if (!readUnsigned(values[i], 255u, channel)) {
+      return false;
+    }
+    color[i] = static_cast<unsigned char>(channel);
+  }
+  return true;
+}
+
+bool
+RuleSetRegistry::loadFromText(const std::string& text)
+{
   nlohmann::json root;
   try {
-    file >> root;
+    root = nlohmann::json::parse(text);
     if (!root.is_array()) {
       return false;
     }
 
-    for (const auto& item : root) {
+    std::vector<RuleDefinition> pending = rules;
+    for (const nlohmann::json& item : root) {
       if (!item.is_object()) {
-        continue;
+        return false;
       }
       RuleDefinition def;
       def.id = normalizeId(item.value("id", ""));
       if (def.id.empty()) {
-        continue;
+        return false;
       }
       def.name = item.value("name", def.id);
       def.family = item.value("family", "life_like");
       def.rule = item.value("rule", "");
 
       if (def.family == "life_like") {
-        if (!def.rule.empty()) {
-          parseLifeLikeRuleString(def.rule, def.birthMask, def.surviveMask);
+        if (!def.rule.empty() && !parseLifeLikeRuleString(
+                                   def.rule, def.birthMask, def.surviveMask)) {
+          return false;
         }
-        if (item.contains("birth") && item["birth"].is_array()) {
-          def.birthMask = 0u;
-          for (const auto& b : item["birth"]) {
-            if (b.is_number_unsigned()) {
-              def.birthMask |= (1u << b.get<unsigned int>());
-            }
-          }
+        if (item.contains("birth") &&
+            !readNeighborMask(item["birth"], def.birthMask)) {
+          return false;
         }
-        if (item.contains("survive") && item["survive"].is_array()) {
-          def.surviveMask = 0u;
-          for (const auto& s : item["survive"]) {
-            if (s.is_number_unsigned()) {
-              def.surviveMask |= (1u << s.get<unsigned int>());
-            }
-          }
+        if (item.contains("survive") &&
+            !readNeighborMask(item["survive"], def.surviveMask)) {
+          return false;
         }
       } else if (def.family == "elementary_1d") {
-        def.ruleNumber = item.value("rule_number", 0u);
-      }
-
-      if (item.contains("palette") && item["palette"].is_object()) {
-        const auto& pal = item["palette"];
-        if (pal.contains("alive") && pal["alive"].is_array() &&
-            pal["alive"].size() == 3) {
-          def.aliveColor[0] = pal["alive"][0].get<unsigned char>();
-          def.aliveColor[1] = pal["alive"][1].get<unsigned char>();
-          def.aliveColor[2] = pal["alive"][2].get<unsigned char>();
-          def.hasCustomPalette = true;
-        }
-        if (pal.contains("dead") && pal["dead"].is_array() &&
-            pal["dead"].size() == 3) {
-          def.deadColor[0] = pal["dead"][0].get<unsigned char>();
-          def.deadColor[1] = pal["dead"][1].get<unsigned char>();
-          def.deadColor[2] = pal["dead"][2].get<unsigned char>();
-          def.hasCustomPalette = true;
+        if (item.contains("rule_number") &&
+            !readUnsigned(item["rule_number"], 255u, def.ruleNumber)) {
+          return false;
         }
       }
 
-      registerRule(def);
+      if (item.contains("palette")) {
+        const nlohmann::json& pal = item["palette"];
+        if (!pal.is_object()) {
+          return false;
+        }
+        if (pal.contains("alive")) {
+          if (!readPaletteColor(pal["alive"], def.aliveColor)) {
+            return false;
+          }
+          def.hasCustomPalette = true;
+        }
+        if (pal.contains("dead")) {
+          if (!readPaletteColor(pal["dead"], def.deadColor)) {
+            return false;
+          }
+          def.hasCustomPalette = true;
+        }
+      }
+
+      if (!insertRule(pending, def)) {
+        return false;
+      }
     }
+    rules.swap(pending);
     return true;
   } catch (...) {
     return false;
   }
-}
-
-bool
-RuleSetRegistry::loadFromDefaultLocations()
-{
-#ifdef _WIN32
-  std::string executablePath(MAX_PATH, '\0');
-  const DWORD pathLength =
-    GetModuleFileNameA(nullptr,
-                       executablePath.data(),
-                       static_cast<unsigned long>(executablePath.size()));
-  if (pathLength > 0 &&
-      static_cast<std::size_t>(pathLength) < executablePath.size()) {
-    executablePath.resize(pathLength);
-    const std::filesystem::path exeDir =
-      std::filesystem::path(executablePath).parent_path();
-    const std::filesystem::path candidate = exeDir / "rulesets.json";
-    if (std::filesystem::exists(candidate)) {
-      if (loadFromFile(candidate.string())) {
-        return true;
-      }
-    }
-  }
-#endif
-
-  const std::filesystem::path curCandidate =
-    std::filesystem::current_path() / "rulesets.json";
-  if (std::filesystem::exists(curCandidate)) {
-    if (loadFromFile(curCandidate.string())) {
-      return true;
-    }
-  }
-
-  const std::filesystem::path subCandidate =
-    std::filesystem::current_path() / "IllumoGame" / "rulesets.json";
-  if (std::filesystem::exists(subCandidate)) {
-    if (loadFromFile(subCandidate.string())) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 bool

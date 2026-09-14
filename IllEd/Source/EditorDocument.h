@@ -46,6 +46,9 @@ public:
   bool translate(const std::string& id, float dx, float dy);
   bool translate(const std::string& id, const Vector3& deltaWorld);
   bool pick(float worldX, float worldY, std::string* id) const;
+  bool pickRay(const Vector3& origin,
+               const Vector3& direction,
+               std::string* id) const;
   Matrix4 worldMatrix(const std::string& id) const;
   Transform3D makeEditPlaneTransform(float planeX, float planeY) const;
   EditorSceneDetail sceneDetail(const std::string& selectedId) const;
@@ -57,7 +60,6 @@ private:
   unsigned int m_nextId;
 
   std::string allocateId();
-  void refreshNextId();
   size_t indexOf(const std::string& id) const;
   bool wouldCreateCycle(const std::string& id,
                         const std::string& parentId) const;

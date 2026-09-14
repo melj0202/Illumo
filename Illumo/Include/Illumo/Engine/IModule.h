@@ -20,4 +20,7 @@ public:
   virtual void Update(double dt) = 0;
   virtual void DispatchDrawables(Scene* scene) = 0;
   virtual void Exit() = 0;
+  // Main-thread close negotiation. Return false to keep updating, then request
+  // close again after any product confirmation completes.
+  virtual bool OnCloseRequested() { return true; }
 };

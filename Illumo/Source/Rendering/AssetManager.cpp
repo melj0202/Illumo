@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <memory>
 #include <sstream>
 
 static const char* kFallbackVertexShader = R"(
@@ -188,132 +189,133 @@ TextureHandle
 AssetManager::acquireCubemap(const std::array<std::string, 6>& facePaths,
                              AssetLoadMode mode)
 {
-  (void)mode;
-  if (renderer == nullptr) {
-    return TextureHandle{};
+  (void)mode; // Preserve synchronous initial cubemap acquisition.
+  std::array<std::string, 6> paths;
+  std::string key = "cubemap_6faces";
+  for (size_t i = 0; i < paths.size(); ++i) {
+    paths[i] = canonicalPath(facePaths[i]);
+    key += "|" + paths[i];
   }
-  std::string combinedKey = "cubemap_6faces";
-  for (size_t i = 0; i < 6; ++i) {
-    combinedKey += "|" + canonicalPath(facePaths[i]);
-  }
-  std::unordered_map<std::string, uint32_t>::iterator cached =
-    textureCache.find(combinedKey);
-  if (cached != textureCache.end()) {
-    TextureEntry& entry = textures[cached->second];
-    entry.referenceCount += 1;
-    return entry.handle;
-  }
-
-  std::array<unsigned char*, 6> loadedData{};
-  int faceWidth = 0;
-  int faceHeight = 0;
-  int faceChannels = 0;
-  bool loadFailed = false;
-
-  for (size_t i = 0; i < 6; ++i) {
-    int w = 0;
-    int h = 0;
-    int ch = 0;
-    std::string path = facePaths[i];
-    unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 0);
-    if (!data) {
-      path = canonicalPath(facePaths[i]);
-      data = stbi_load(path.c_str(), &w, &h, &ch, 0);
-    }
-    if (!data) {
-      Logger::LogError(
-        ("acquireCubemap: failed to load face: " + facePaths[i]).c_str());
-      loadFailed = true;
-      break;
-    }
-    if (i == 0) {
-      faceWidth = w;
-      faceHeight = h;
-      faceChannels = ch;
-    } else if (w != faceWidth || h != faceHeight) {
-      Logger::LogError("acquireCubemap: face dimension mismatch");
-      stbi_image_free(data);
-      loadFailed = true;
-      break;
-    }
-    loadedData[i] = data;
-  }
-
-  if (loadFailed) {
-    for (size_t i = 0; i < 6; ++i) {
-      if (loadedData[i] != nullptr) {
-        stbi_image_free(loadedData[i]);
-      }
-    }
-    return TextureHandle{};
-  }
-
-  std::array<const unsigned char*, 6> facePtrs = {
-    loadedData[0], loadedData[1], loadedData[2],
-    loadedData[3], loadedData[4], loadedData[5]
-  };
-  TextureHandle handle =
-    renderer->enrollCubemap(facePtrs, faceWidth, faceHeight, faceChannels);
-
-  for (size_t i = 0; i < 6; ++i) {
-    stbi_image_free(loadedData[i]);
-  }
-
-  if (!handle.isValid()) {
-    return TextureHandle{};
-  }
-
-  TextureEntry entry;
-  entry.handle = handle;
-  entry.path = facePaths[0];
-  entry.cacheKey = combinedKey;
-  entry.info = { faceWidth, faceHeight, faceChannels };
-  entry.state = AssetState::Ready;
-  entry.lastWriteTime = writeTime(canonicalPath(facePaths[0]));
-  textures[handle.slot] = entry;
-  textureCache[combinedKey] = handle.slot;
-  return handle;
+  return acquireCubemapSources(TextureSourceKind::CubemapFaces, paths, key);
 }
 
 TextureHandle
 AssetManager::acquireCubemapFromCross(const std::string& crossPath,
                                       AssetLoadMode mode)
 {
-  (void)mode;
+  (void)mode; // Preserve synchronous initial cubemap acquisition.
+  std::array<std::string, 6> paths;
+  paths[0] = canonicalPath(crossPath);
+  return acquireCubemapSources(
+    TextureSourceKind::CubemapCross, paths, "cubemap_cross|" + paths[0]);
+}
+
+TextureHandle
+AssetManager::acquireCubemapSources(TextureSourceKind kind,
+                                    const std::array<std::string, 6>& paths,
+                                    const std::string& key)
+{
   if (renderer == nullptr) {
-    return TextureHandle{};
+    return {};
   }
-  const std::string canonical = canonicalPath(crossPath);
-  const std::string key = "cubemap_cross|" + canonical;
   std::unordered_map<std::string, uint32_t>::iterator cached =
     textureCache.find(key);
   if (cached != textureCache.end()) {
     TextureEntry& entry = textures[cached->second];
-    entry.referenceCount += 1;
+    ++entry.referenceCount;
     return entry.handle;
   }
+  LoadJob job;
+  job.sourceKind = kind;
+  job.sourcePaths = paths;
+  LoadResult result = executeJob(job);
+  if (!result.success) {
+    Logger::LogError(result.error.c_str());
+    return {};
+  }
+  std::array<const unsigned char*, 6> faces;
+  for (size_t i = 0; i < faces.size(); ++i) {
+    faces[i] = result.faces[i].data();
+  }
+  const TextureHandle handle = renderer->enrollCubemap(
+    faces, result.width, result.height, result.channels);
+  if (!handle.isValid()) {
+    return {};
+  }
+  TextureEntry entry;
+  entry.handle = handle;
+  entry.path = paths[0];
+  entry.sourceKind = kind;
+  entry.sourcePaths = paths;
+  entry.sourceWriteTimes = result.sourceWriteTimes;
+  entry.cacheKey = key;
+  entry.info = { result.width, result.height, result.channels };
+  entry.state = AssetState::Ready;
+  entry.revision = 1;
+  textures[handle.slot] = entry;
+  textureCache[key] = handle.slot;
+  return handle;
+}
 
+void
+AssetManager::decodeCubemap(const LoadJob& job, LoadResult& result)
+{
+  const size_t count =
+    job.sourceKind == TextureSourceKind::CubemapFaces ? 6 : 1;
+  for (size_t i = 0; i < count; ++i) {
+    result.sourceWriteTimes[i] = writeTime(job.sourcePaths[i]);
+  }
+  result.channels = STBI_rgb_alpha;
+  if (job.sourceKind == TextureSourceKind::CubemapFaces) {
+    for (size_t i = 0; i < count; ++i) {
+      int width = 0;
+      int height = 0;
+      int sourceChannels = 0;
+      std::unique_ptr<unsigned char, decltype(&stbi_image_free)> decoded(
+        stbi_load(job.sourcePaths[i].c_str(),
+                  &width,
+                  &height,
+                  &sourceChannels,
+                  STBI_rgb_alpha),
+        stbi_image_free);
+      if (!decoded || width <= 0 || width != height ||
+          (i != 0 && (width != result.width || height != result.height))) {
+        result.error = "Unable to decode matching square cubemap face: " +
+                       job.sourcePaths[i];
+        return;
+      }
+      result.width = width;
+      result.height = height;
+      const size_t bytes =
+        static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+      result.faces[i].assign(decoded.get(), decoded.get() + bytes);
+    }
+    result.success = true;
+    return;
+  }
   int width = 0;
   int height = 0;
-  int channels = 0;
-  unsigned char* data =
-    stbi_load(crossPath.c_str(), &width, &height, &channels, 0);
-  if (!data) {
-    data = stbi_load(canonical.c_str(), &width, &height, &channels, 0);
+  int sourceChannels = 0;
+  std::unique_ptr<unsigned char, decltype(&stbi_image_free)> decoded(
+    stbi_load(job.sourcePaths[0].c_str(),
+              &width,
+              &height,
+              &sourceChannels,
+              STBI_rgb_alpha),
+    stbi_image_free);
+  if (!decoded || width <= 0 || height <= 0) {
+    result.error = "Unable to decode cubemap cross: " + job.sourcePaths[0];
+    return;
   }
-  if (!data) {
-    Logger::LogError(
-      ("acquireCubemapFromCross: failed to load " + crossPath).c_str());
-    return TextureHandle{};
-  }
-
+  const unsigned char* data = decoded.get();
+  const int channels = STBI_rgb_alpha;
   int faceSize = 0;
   int faceCols[6];
   int faceRows[6];
   bool flipH[6] = { false, false, false, false, false, false };
   bool flipV[6] = { false, false, false, false, false, false };
 
-  if (width * 3 == height * 4) {
+  if (static_cast<int64_t>(width) * 3 == static_cast<int64_t>(height) * 4) {
     // 4:3 Horizontal Cross (4 columns, 3 rows)
     // OpenGL cubemap face sampling convention views the cube from the inside
     // out: side faces (+X, -X, +Z, -Z) require horizontal flip so left/right
@@ -338,7 +340,8 @@ AssetManager::acquireCubemapFromCross(const std::string& crossPath,
     faceCols[5] = 1;
     faceRows[5] = 1; // -Z (Front)
     flipH[5] = true;
-  } else if (width * 4 == height * 3) {
+  } else if (static_cast<int64_t>(width) * 4 ==
+             static_cast<int64_t>(height) * 3) {
     // 3:4 Vertical Cross (3 columns, 4 rows)
     faceSize = width / 3;
     faceCols[0] = 2;
@@ -359,7 +362,7 @@ AssetManager::acquireCubemapFromCross(const std::string& crossPath,
     faceCols[5] = 1;
     faceRows[5] = 1; // -Z (Front)
     flipH[5] = true;
-  } else if (width == 6 * height) {
+  } else if (static_cast<int64_t>(width) == 6 * static_cast<int64_t>(height)) {
     // 6:1 Horizontal Strip: +X, -X, +Y, -Y, +Z, -Z
     faceSize = height;
     for (int i = 0; i < 6; ++i) {
@@ -374,7 +377,7 @@ AssetManager::acquireCubemapFromCross(const std::string& crossPath,
     }
   }
 
-  std::vector<std::vector<unsigned char>> faceBuffers(6);
+  std::array<std::vector<unsigned char>, 6>& faceBuffers = result.faces;
   for (size_t f = 0; f < 6; ++f) {
     faceBuffers[f].resize(static_cast<size_t>(faceSize) * faceSize * channels);
     const int col = faceCols[f];
@@ -410,29 +413,9 @@ AssetManager::acquireCubemapFromCross(const std::string& crossPath,
     }
   }
 
-  std::array<const unsigned char*, 6> facePtrs = {
-    faceBuffers[0].data(), faceBuffers[1].data(), faceBuffers[2].data(),
-    faceBuffers[3].data(), faceBuffers[4].data(), faceBuffers[5].data()
-  };
-
-  TextureHandle handle =
-    renderer->enrollCubemap(facePtrs, faceSize, faceSize, channels);
-  stbi_image_free(data);
-
-  if (!handle.isValid()) {
-    return TextureHandle{};
-  }
-
-  TextureEntry entry;
-  entry.handle = handle;
-  entry.path = canonical;
-  entry.cacheKey = key;
-  entry.info = { faceSize, faceSize, channels };
-  entry.state = AssetState::Ready;
-  entry.lastWriteTime = writeTime(canonical);
-  textures[handle.slot] = entry;
-  textureCache[key] = handle.slot;
-  return handle;
+  result.width = faceSize;
+  result.height = faceSize;
+  result.success = faceSize > 0;
 }
 
 ShaderHandle
@@ -630,13 +613,21 @@ AssetManager::reload(ShaderHandle handle)
 size_t
 AssetManager::reload(const std::string& path)
 {
+  if (path.empty()) {
+    return 0;
+  }
   const std::string canonical = canonicalPath(path);
   size_t count = 0;
   for (std::unordered_map<uint32_t, TextureEntry>::iterator it =
          textures.begin();
        it != textures.end();
        ++it) {
-    if (it->second.path == canonical && reload(it->second.handle)) {
+    const TextureEntry& entry = it->second;
+    const bool matches = entry.path == canonical ||
+                         std::find(entry.sourcePaths.begin(),
+                                   entry.sourcePaths.end(),
+                                   canonical) != entry.sourcePaths.end();
+    if (matches && reload(entry.handle)) {
       count += 1;
     }
   }
@@ -688,6 +679,8 @@ AssetManager::queueTexture(TextureEntry& entry)
   job.generation = entry.handle.generation;
   job.requestSerial = entry.requestSerial;
   job.pathA = entry.path;
+  job.sourceKind = entry.sourceKind;
+  job.sourcePaths = entry.sourcePaths;
   job.textureOptions = entry.options;
   enqueue(job);
 }
@@ -757,8 +750,13 @@ AssetManager::executeJob(const LoadJob& job)
   result.generation = job.generation;
   result.requestSerial = job.requestSerial;
   result.textureOptions = job.textureOptions;
+  result.sourceKind = job.sourceKind;
 
   if (job.kind == AssetKind::Texture) {
+    if (job.sourceKind != TextureSourceKind::Image2D) {
+      decodeCubemap(job, result);
+      return result;
+    }
     int sourceChannels = 0;
     unsigned char* decoded = stbi_load(
       job.pathA.c_str(), &result.width, &result.height, &sourceChannels, 4);
@@ -833,12 +831,26 @@ AssetManager::processResult(LoadResult& result)
     TextureEntry& entry = it->second;
     entry.reloadPending = false;
     entry.lastWriteTime = writeTime(entry.path);
-    if (!result.success || !renderer->replaceTexture(entry.handle,
-                                                     result.pixels.data(),
-                                                     result.width,
-                                                     result.height,
-                                                     result.channels,
-                                                     result.textureOptions)) {
+    bool uploaded = false;
+    if (entry.sourceKind != TextureSourceKind::Image2D) {
+      entry.sourceWriteTimes = result.sourceWriteTimes;
+      if (result.success) {
+        std::array<const unsigned char*, 6> faces;
+        for (size_t i = 0; i < faces.size(); ++i) {
+          faces[i] = result.faces[i].data();
+        }
+        uploaded = renderer->replaceCubemap(
+          entry.handle, faces, result.width, result.height, result.channels);
+      }
+    } else if (result.success) {
+      uploaded = renderer->replaceTexture(entry.handle,
+                                          result.pixels.data(),
+                                          result.width,
+                                          result.height,
+                                          result.channels,
+                                          result.textureOptions);
+    }
+    if (!uploaded) {
       entry.lastError =
         result.error.empty() ? "Texture upload failed" : result.error;
       if (entry.revision == 0) {
@@ -903,6 +915,19 @@ AssetManager::pollHotReload()
        it != textures.end();
        ++it) {
     TextureEntry& entry = it->second;
+    if (entry.sourceKind != TextureSourceKind::Image2D) {
+      const size_t count =
+        entry.sourceKind == TextureSourceKind::CubemapFaces ? 6 : 1;
+      bool changed = false;
+      for (size_t i = 0; i < count; ++i) {
+        changed = changed ||
+                  writeTime(entry.sourcePaths[i]) != entry.sourceWriteTimes[i];
+      }
+      if (changed && !entry.reloadPending) {
+        queueTexture(entry);
+      }
+      continue;
+    }
     const std::filesystem::file_time_type current = writeTime(entry.path);
     if (!entry.reloadPending && current != std::filesystem::file_time_type{} &&
         current != entry.lastWriteTime) {

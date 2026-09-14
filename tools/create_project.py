@@ -84,14 +84,45 @@ class ProjectCreationError(RuntimeError):
     """Failure during project creation."""
 
 
+# Keep these aligned with the copied engine/editor and generated root targets.
+# Case-insensitive rejection matches the supported Windows filesystem.
+RESERVED_PROJECT_NAMES = {
+    "illumo", "illed", "cmake", "build", "docs",
+    "illumoplatformentry", "illumotestsupport", "illumotests",
+    "illumotestsdiscover", "illumotestsshaderstage", "illumopublicheadersmoke", "illumocapture",
+    "illumocapturegputests", "illumodocs", "illumoruntests",
+    "illumocoverage", "illumotidy", "illumoruntimestage",
+    "illumocaptureruntimestage", "illedcore", "illedtests",
+    "illedtestsdiscover", "illedclosewindowtests", "illedruntimestage",
+    "illed_envvars_json_stage",
+    "glfw", "glm", "freetype", "glew_s", "uninstall",
+    "all", "clean", "help", "install", "test", "package", "package_source",
+    "edit_cache", "rebuild_cache", "all_build", "zero_check", "run_tests",
+    "nightlymemorycheck", "con", "prn", "aux", "nul",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+    *(mode + step for mode in ("nightly", "experimental", "continuous")
+      for step in ("", "start", "update", "configure", "build", "test",
+                   "coverage", "memcheck", "submit")),
+}
+
+
 def validate_project_name(name: str) -> str:
     """Validate that the project name is a valid C++ identifier."""
     if not name:
         raise ProjectCreationError("Project name cannot be empty.")
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
         raise ProjectCreationError(
             f"Invalid project name '{name}'. Must start with a letter or underscore "
             "and contain only alphanumeric characters and underscores."
+        )
+    generated_names = {
+        name.casefold() + suffix
+        for suffix in ("", "core", "tests", "testsdiscover", "runtimestage")
+    }
+    if generated_names & RESERVED_PROJECT_NAMES:
+        raise ProjectCreationError(
+            f"Project name '{name}' is reserved by Windows or workspace build infrastructure."
         )
     return name
 
@@ -151,6 +182,7 @@ def instantiate_template(
     verbose: bool = False,
 ) -> int:
     """Instantiate a template directory into destination, replacing @PROJECT_NAME@ tokens."""
+    project_name = validate_project_name(project_name)
     if not template_dir.is_dir():
         raise ProjectCreationError(
             f"Template directory not found at: {template_dir}"
@@ -206,7 +238,7 @@ def generate_root_cmake(
     debug_tools_sub = "add_subdirectory(IllEd)\n" if include_debug_tools else ""
     debug_tools_test = "IllEdTestsDiscover " if include_debug_tools else ""
 
-    return f"""cmake_minimum_required(VERSION 3.20)
+    return f"""cmake_minimum_required(VERSION 3.25)
 
 project({project_name}Workspace LANGUAGES C CXX)
 
@@ -230,24 +262,7 @@ if(BUILD_TESTING)
 endif()
 
 if(ILLUMO_ENABLE_COVERAGE)
-  find_program(ILLUMO_LLVM_PROFDATA_EXECUTABLE NAMES llvm-profdata REQUIRED)
-  find_program(ILLUMO_LLVM_COV_EXECUTABLE NAMES llvm-cov REQUIRED)
-  add_custom_target(IllumoCoverage
-    COMMAND ${{CMAKE_COMMAND}}
-      "-DTEST_BINARY_ILLUMO=$<TARGET_FILE:IllumoTests>"
-      "-DTEST_BINARY_GAME=$<TARGET_FILE:{project_name}Tests>"
-      "-DBINARY_DIR=${{CMAKE_BINARY_DIR}}"
-      "-DCTEST_COMMAND=${{CMAKE_CTEST_COMMAND}}"
-      "-DCONFIG=$<CONFIG>"
-      "-DLLVM_PROFDATA=${{ILLUMO_LLVM_PROFDATA_EXECUTABLE}}"
-      "-DLLVM_COV=${{ILLUMO_LLVM_COV_EXECUTABLE}}"
-      "-DMINIMUM_LINE_COVERAGE=85"
-      -P "${{CMAKE_CURRENT_SOURCE_DIR}}/cmake/RunWorkspaceCoverage.cmake"
-    DEPENDS IllumoTestsDiscover {project_name}TestsDiscover
-      IllumoPublicHeaderSmoke
-    USES_TERMINAL
-    COMMENT "Running combined {project_name} workspace coverage"
-  )
+  illumo_add_workspace_coverage()
 endif()
 
 if(ILLUMO_ENABLE_CLANG_TIDY)
@@ -280,6 +295,13 @@ def generate_readme(project_name: str, app_folder_name: str) -> str:
     return f"""# {project_name}
 
 An interactive application built on the **Illumo** engine framework.
+
+Requires CMake 3.25 or newer and a C++23-capable compiler.
+
+Illumo exposes its public headers and GLM math headers. Other vendor APIs require
+an explicit dependency in your application's CMake configuration.
+
+Engine PDF sources are not included; PDF builds default off in this workspace.
 
 ## Project Structure (Unreal Engine Style)
 

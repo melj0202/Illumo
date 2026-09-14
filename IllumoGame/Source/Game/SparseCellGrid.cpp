@@ -149,8 +149,8 @@ struct SparseCellGrid::ChunkMemoState
 
   std::array<Shard, kShardCount> shards;
   AdaptiveMode mode = AdaptiveMode::Probe;
-  const std::type_info* ruleType = nullptr;
-  std::uint64_t ruleRevision = 0u;
+  RuleSet::TransitionTable transitions{};
+  bool hasTransitions = false;
   unsigned int cooldownGenerations = 0u;
   unsigned int lowHitGenerations = 0u;
   bool generationEnabled = false;
@@ -636,8 +636,9 @@ SparseCellGrid::publishChangedChunkRevision(const ChunkAddress& address,
 void
 SparseCellGrid::collectChangedChunksBetweenMaps()
 {
+  const ChunkMap& sourceChunks = generationChunks();
   beginNextChangedChunks();
-  for (ChunkMap::const_reference entry : chunks) {
+  for (ChunkMap::const_reference entry : sourceChunks) {
     const ChunkMap::const_iterator next = m_nextChunks.find(entry.first);
     OccupancyMask stateChanged;
     OccupancyMask countedChanged;
@@ -653,7 +654,7 @@ SparseCellGrid::collectChangedChunksBetweenMaps()
     }
   }
   for (ChunkMap::const_reference entry : m_nextChunks) {
-    if (chunks.find(entry.first) == chunks.end()) {
+    if (sourceChunks.find(entry.first) == sourceChunks.end()) {
       OccupancyMask stateChanged;
       OccupancyMask countedChanged;
       buildChangeMasks(nullptr, &entry.second, &stateChanged, &countedChanged);
@@ -864,12 +865,12 @@ SparseCellGrid::floorDivide(std::int64_t value, std::int64_t divisor)
   if (divisor <= 0) {
     return 0;
   }
-  const std::int64_t quotient = value / divisor;
-  const std::int64_t remainder = value % divisor;
-  if (remainder < 0) {
-    return quotient - 1;
+  if (value < 0) {
+    // Shift before negating so INT64_MIN remains representable. Keeping the
+    // division nonnegative also avoids endpoint-sensitive signed reduction.
+    return -1 - (-(value + 1)) / divisor;
   }
-  return quotient;
+  return value / divisor;
 }
 
 std::int64_t
@@ -2102,7 +2103,7 @@ SparseCellGrid::finishNextChunks(bool changesPrepared)
       collectChangedChunksBetweenMaps();
       changed = m_frontierInvalid || !m_nextChangedChunks.empty();
     } catch (const std::bad_alloc&) {
-      changed = !sameChunkMaps(chunks, m_nextChunks);
+      changed = !sameChunkMaps(generationChunks(), m_nextChunks);
       m_frontierInvalid = true;
     }
   }
@@ -3042,12 +3043,12 @@ SparseCellGrid::beginChunkMemoGeneration(std::size_t haloTargetCount,
   }
 
   ChunkMemoState& memo = *m_chunkMemo;
-  const std::type_info* ruleType = &typeid(ruleSet);
-  const std::uint64_t ruleRevision = ruleSet.getTransitionRevision();
-  if (memo.ruleType != ruleType || memo.ruleRevision != ruleRevision) {
+  const RuleSet::TransitionTable& transitions = ruleSet.getTransitionTable();
+  // Instance revisions and rule tags do not identify transition semantics.
+  if (!memo.hasTransitions || memo.transitions != transitions) {
     memo.clearEntries();
-    memo.ruleType = ruleType;
-    memo.ruleRevision = ruleRevision;
+    memo.transitions = transitions;
+    memo.hasTransitions = true;
     memo.mode = ChunkMemoState::AdaptiveMode::Probe;
     memo.cooldownGenerations = 0u;
     memo.lowHitGenerations = 0u;
@@ -3821,43 +3822,93 @@ SparseCellGrid::advanceElementarySpaceTime(const RuleSet& ruleSet)
       }
     }
   }
-  if (!found) {
-    return true;
+  const std::int64_t minimumCoordinate =
+    std::numeric_limits<std::int64_t>::min();
+  const std::int64_t maximumCoordinate =
+    std::numeric_limits<std::int64_t>::max();
+  if (found && sourceY == maximumCoordinate) {
+    return false;
   }
-
   CellAddress destination{ 0, sourceY + 1 };
   destination = canonicalizeCell(destination);
   const std::int64_t destY = destination.y;
 
-  struct PendingWrite
-  {
-    std::int64_t x = 0;
-    unsigned char state = 1;
-  };
-  std::vector<PendingWrite> writes;
-  for (std::int64_t x = minX - 1; x <= maxX + 1; ++x) {
-    const unsigned char left = source.getCell(CellAddress{ x - 1, sourceY });
-    const unsigned char center = source.getCell(CellAddress{ x, sourceY });
-    const unsigned char right = source.getCell(CellAddress{ x + 1, sourceY });
-    PendingWrite write;
-    write.x = x;
-    write.state = ruleSet.nextElementary(left, center, right);
-    writes.push_back(write);
+  const bool previousFrontierInvalid = m_frontierInvalid;
+  m_nextChunksMirrorCurrent = false;
+  m_inactiveCatchupDeltaValid = false;
+  m_inactiveCatchupFullReplacement = false;
+  if (!prepareNextChunks(source.chunks.size())) {
+    return false;
   }
-
-  if (&source != this) {
-    copyStateFrom(source);
-  }
-  for (std::size_t i = 0; i < writes.size(); ++i) {
-    CellAddress dest{ writes[i].x, destY };
-    dest = canonicalizeCell(dest);
-    if (!isCellInWorldBounds(dest)) {
-      continue;
+  try {
+    for (ChunkMap::const_reference entry : source.chunks) {
+      insertNextChunk(entry.first, entry.second);
     }
-    setCell(dest, writes[i].state);
+    const std::int64_t firstX = minX == minimumCoordinate ? minX : minX - 1;
+    const std::int64_t lastX = maxX == maximumCoordinate ? maxX : maxX + 1;
+    for (std::int64_t x = firstX; found; ++x) {
+      unsigned char left = BackgroundState;
+      if (x > minimumCoordinate) {
+        const CellAddress neighbor{ x - 1, sourceY };
+        left = source.getCell(neighbor);
+      }
+      const unsigned char center = source.getCell(CellAddress{ x, sourceY });
+      unsigned char right = BackgroundState;
+      if (x < maximumCoordinate) {
+        const CellAddress neighbor{ x + 1, sourceY };
+        right = source.getCell(neighbor);
+      }
+      const unsigned char state = ruleSet.nextElementary(left, center, right);
+      const CellAddress dest = canonicalizeCell(CellAddress{ x, destY });
+      if (isCellInWorldBounds(dest)) {
+        const ChunkAddress address = chunkAddressForCell(dest);
+        const std::size_t index =
+          static_cast<std::size_t>(localIndexForCell(dest));
+        ChunkMap::iterator chunk = m_nextChunks.find(address);
+        const unsigned char previous = chunk == m_nextChunks.end()
+                                         ? BackgroundState
+                                         : chunk->second.cells[index];
+        if (previous != state) {
+          if (m_elementaryWriteFailureCountdown == 0) {
+            m_elementaryWriteFailureCountdown = -1;
+            throw std::bad_alloc();
+          }
+          if (m_elementaryWriteFailureCountdown > 0) {
+            --m_elementaryWriteFailureCountdown;
+          }
+          if (chunk == m_nextChunks.end()) {
+            ChunkData empty;
+            empty.cells.fill(BackgroundState);
+            chunk = insertNextChunk(address, empty);
+          }
+          removeChunkStatistics(chunk->second, &m_nextChunkStatistics);
+          chunk->second.cells[index] = state;
+          setOccupied(&chunk->second, index, state != BackgroundState);
+          setCounted(&chunk->second, index, state == CountedNeighborState);
+          if (hasOccupiedCells(chunk->second)) {
+            addChunkStatistics(chunk->second, &m_nextChunkStatistics);
+          } else {
+            m_nextChunks.erase(chunk);
+          }
+        }
+      }
+      // Test before incrementing so an inclusive endpoint never overflows.
+      if (x == lastX) {
+        break;
+      }
+    }
+
+    m_frontierInvalid = false;
+    collectChangedChunksBetweenMaps();
+    lastAdvanceStats.targetChunkCount = found ? 1u : 0u;
+    lastAdvanceStats.producedChunkCount = m_nextChunks.size();
+    // Cached candidate sources borrow chunk addresses across generations.
+    m_nextCandidateTopologyChanged = true;
+    finishNextChunks(true);
+  } catch (...) {
+    m_frontierInvalid = previousFrontierInvalid;
+    return false;
   }
-  lastAdvanceStats.targetChunkCount = 1u;
-  lastAdvanceStats.producedChunkCount = 1u;
   return true;
 }
 
@@ -4005,8 +4056,13 @@ SparseCellGrid::advanceFrom(const SparseCellGrid& source,
   }
 
   m_generationSourceGrid = &source;
-  revision = source.revision;
-  const bool advanced = advanceImpl(ruleSet, false);
+  bool advanced = false;
+  try {
+    advanced = advanceImpl(ruleSet, false);
+  } catch (...) {
+    m_generationSourceGrid = nullptr;
+    return false;
+  }
   m_generationSourceGrid = nullptr;
   return advanced;
 }

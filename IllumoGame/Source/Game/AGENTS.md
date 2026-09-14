@@ -15,6 +15,12 @@ factory. Do not add a process entry point, frame loop, logger lifetime,
 SysCmdLine implementation, BuildInfo, native SDK code, or platform
 implementation under IllumoGame.
 
+The required-module factory initializes the shared rules catalog once before
+constructing menu or game modules. `RuleCatalogLoader` owns catalog file reads
+and executable/current/product-directory precedence using engine-owned path
+discovery. Rulesets owns text validation and factories, with no filesystem or
+native platform dependencies.
+
 ## Domain and presentation invariants
 
 - `SparseCellGrid` is production state: signed 64-bit world coordinates,

@@ -2,6 +2,18 @@
 \label{sec:game}
 
 \subsection{CellGameModule}
+Camera navigation accepts finite world coordinates with absolute value at most
+$16(2^{63}-2^{32})$ per axis, reserving space for bounded cache arithmetic.
+Commands, sparse metadata, and pending pan/zoom targets validate this range
+before mutation. Saves reject invalid camera metadata before replacement.
+Invalid cursor samples are ignored; an invalid direct camera preserves the
+previous safe view cache. This presentation margin does not limit sparse cell
+storage or guarantee cell-level rendering precision at extreme coordinates.
+Clipboard operations iterate bounded local offsets even at signed endpoints.
+Elementary rules use background beyond representable X coordinates and omit
+unrepresentable children; a source row at maximum signed Y rejects advancement
+before changing cells or revision.
+
 Primary gameplay module. Owns a \symbolref{CellContext} and an enum
 \symbolref{CellState}:
 \begin{center}
@@ -44,6 +56,30 @@ Delete fill, R/F buffer rotate/flip, and console commands
 \texttt{inspect} HUD reports generation count, hover cell, and census.
 Life-like B/S rules share \texttt{LifeLikeRuleSet} masks behind existing mode
 strings. Rule 90 and Rule 184 are elementary 1D space-time diagrams (D-G2).
+Catalog registration rejects B0 and odd elementary rules: the current sparse
+representation requires a stable background in infinite and finite worlds.
+JSON catalog loading validates the entire document and all definitions before
+publishing replacements. Neighbor arrays accept integers 0--8; elementary rule
+numbers and palette channels accept 0--255. Invalid direct life-like neighbor
+counts above eight return background before any shift.
+Manual stepping counts completed generations and stops at failure. Async failure
+preserves the published world, pauses in edit mode and retains one explicit
+retry; \texttt{run} schedules it without another time-step charge. Elementary
+evolution stages history and destination writes in the retained inactive chunk
+map and publishes once. Failed staging preserves live cells, revision and the
+previous delta. Empty external sources replace stale spare state; borrowed
+source bindings are released on every exit. Staging work scales with history.
+Pattern autodetection honors leading \texttt{!} plaintext comments and skips
+\texttt{\#} RLE comments. Ambiguous multiline cell-only text uses plaintext
+rows; the \texttt{rle} and \texttt{plaintext} commands select their named
+parser. Ctrl+V rejects malformed or occupancy-empty clipboard text without
+reusing a previous internal pattern or changing the world. Console
+\texttt{paste} uses the retained buffer, preserving rotate/flip workflows.
+RLE export retains \texttt{o}/\texttt{b} for states 0/1 and uses the project
+extension \texttt{p\{N\}} for states 2--255. Parsing accepts braced byte values
+and legacy single-digit \texttt{pD} tokens; \texttt{p23o} still means state 2
+followed by three live cells. Earlier unbraced multi-digit exports are ambiguous
+and require correction to braces. Sparse world saves are unaffected.
 
 The persisted \texttt{render3dTest} flag defaults to \texttt{0}. Setting it to
 \texttt{1} replaces CanvasView with a rendering diagnostic scene: fixed axes
@@ -196,10 +232,18 @@ Active rules are cataloged in \pathref{rulesets.json} and registered via
 Life Without Death, Seeds, Wireworld, Rule 90, and Rule 184. Implementations are
 organized by mathematical family: \texttt{LifeLikeRuleSet} for binary Moore B/S
 rules, \texttt{Elementary1DRuleSet} for Wolfram 1D space-time rules
-(\texttt{NeighborhoodKind::Elementary1D}, D-G2), \texttt{BriansBrainRuleSet} for
+(\texttt{NeighborhoodKind::}\allowbreak\texttt{Elementary1D}, D-G2), \texttt{BriansBrainRuleSet} for
 3-state decay, and \texttt{WireworldRuleSet} for digital circuit simulation.
 Additional rules added to \pathref{rulesets.json} are discovered dynamically at
 runtime without C++ recompilation.
+\texttt{RuleSetRegistry} constructs built-ins and validates text transactionally.
+Game's \texttt{RuleCatalogLoader} selects the first valid catalog beside the
+executable, in the working directory, or in its \texttt{IllumoGame} subdirectory.
+Invalid or unreadable files fall through without partial publication. The module
+factory loads the shared catalog once before menu/direct-game construction.
+The engine's configuration path supplies executable location; Rulesets has no
+filesystem or native API dependency. Callers use the loader for files and
+\texttt{loadFromText} for text (D-GC1).
 
 \begin{lstlisting}
 class RuleSet {
@@ -246,7 +290,9 @@ class RuleSet {
         worker pool for 32 or more targets.
   \item For at least 32 halo targets, sample the exact sharded neighborhood
         memo. Activate it only when its observed hit rate offsets key creation;
-        cool it down for unique inputs and invalidate it with rule transitions.
+        cool it down for unique inputs and invalidate it by exact comparison
+        of the complete transition table. Instance revisions and rule names
+        cannot identify transition semantics across different ruleset objects.
   \item Install non-background results serially into the retained inactive map,
         reusing extracted chunk-node handles before allocating new nodes. Build
         sparse candidates directly in mapped node storage and bulk-copy dense

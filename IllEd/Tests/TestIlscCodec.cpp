@@ -1,7 +1,10 @@
 #include "IlscCodec.h"
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <cmath>
 #include <filesystem>
+#include <limits>
+#include <nlohmann/json.hpp>
 #include <string>
 
 static TestCounters g;
@@ -145,11 +148,83 @@ testFileRoundTrip()
     g, IlscCodec::readFile(path.string(), &loaded, &error), "reads scene file");
   testEqSize(g, loaded.nodes.size(), 1u, "loaded one node");
   testEqStr(g, loaded.nodes[0].name, "Solo", "name round trips");
+  document.nodes[0].name = "Replacement";
+  testTrue(g,
+           IlscCodec::writeFile(path.string(), document, &error),
+           "replaces existing scene after finalization");
+  testTrue(g,
+           IlscCodec::readFile(path.string(), &loaded, &error) &&
+             loaded.nodes[0].name == "Replacement",
+           "replacement stays format compatible");
 }
 
 void
 registerIlscCodecTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Ilsc.NumericRanges", []() {
+    g = {};
+    IlscDocument baseline;
+    IlscNode node;
+    node.id = "sentinel";
+    node.kind = SceneNodeKind::SolidCube;
+    baseline.nodes.push_back(node);
+    const std::string original = IlscCodec::encode(baseline);
+    const nlohmann::json base = nlohmann::json::parse(original);
+    for (const char* path : { "/camera/yaw",
+                              "/camera/pitch",
+                              "/camera/zoom",
+                              "/nodes/0/transform/position/0",
+                              "/nodes/0/transform/scale/1",
+                              "/nodes/0/transform/rotation/w",
+                              "/nodes/0/primitive/extent/2" }) {
+      for (double extreme : { 1e100, -1e100 }) {
+        nlohmann::json invalid = base;
+        invalid[nlohmann::json::json_pointer(path)] = extreme;
+        IlscDocument output = baseline;
+        std::string error;
+        testTrue(g,
+                 !IlscCodec::parse(invalid.dump(), &output, &error),
+                 "out-of-float-range value rejected");
+        testEqStr(g,
+                  IlscCodec::encode(output),
+                  original,
+                  "numeric rejection preserves destination");
+      }
+    }
+    for (const char* largeInteger :
+         { "4294967297", "-4294967295", "18446744073709551615" }) {
+      for (const char* path : { "/version", "/nodes/0/primitive/color/0" }) {
+        nlohmann::json invalid = base;
+        invalid[nlohmann::json::json_pointer(path)] =
+          nlohmann::json::parse(largeInteger);
+        IlscDocument output = baseline;
+        std::string error;
+        testTrue(g,
+                 !IlscCodec::parse(invalid.dump(), &output, &error),
+                 "integer overflow cannot wrap into valid version or color");
+        testEqStr(g,
+                  IlscCodec::encode(output),
+                  original,
+                  "integer rejection is transactional");
+      }
+    }
+    baseline.camera.yaw = std::numeric_limits<float>::max();
+    baseline.camera.pitch = -std::numeric_limits<float>::max();
+    baseline.nodes[0].transform.position.x = std::numeric_limits<float>::max();
+    baseline.nodes[0].primitive.extent.x =
+      std::numeric_limits<float>::denorm_min();
+    const std::string boundary = IlscCodec::encode(baseline);
+    IlscDocument output;
+    std::string error;
+    testTrue(g,
+             IlscCodec::parse(boundary, &output, &error),
+             "finite float boundaries accepted");
+    testTrue(
+      g, std::isfinite(output.camera.yaw), "accepted yaw remains finite");
+    testEqStr(
+      g, IlscCodec::encode(output), boundary, "float boundaries round trip");
+    return g.failures;
+  });
   registry.add("IllEd.Ilsc.RoundTrip", []() {
     g = {};
     testRoundTrip();

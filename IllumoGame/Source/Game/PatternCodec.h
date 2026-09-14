@@ -3,12 +3,20 @@
 #include "CellPattern.h"
 #include <string>
 
+enum class PatternFormat
+{
+  Auto,
+  Rle,
+  Plaintext
+};
+
 class PatternCodec
 {
 public:
   static bool parse(const std::string& text,
                     CellPattern* pattern,
-                    std::string* error);
+                    std::string* error,
+                    PatternFormat format = PatternFormat::Auto);
   static bool parseRle(const std::string& text,
                        CellPattern* pattern,
                        std::string* error);

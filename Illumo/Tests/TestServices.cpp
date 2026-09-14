@@ -14,6 +14,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -320,6 +321,79 @@ testEnvVarsTypesAndPersistence()
 }
 
 static void
+testEnvVarsFailedLoadPreservation()
+{
+  testSection("EnvVars: failed loads preserve disk and live state");
+  const std::filesystem::path path = "test-envvars-recovery.json";
+  const std::string invalid[] = { "{broken",
+                                  "[]",
+                                  "null",
+                                  "{\"a\":\"new\",\"z\":{\"value\":7}}",
+                                  "{\"a\":\"new\"}garbage",
+                                  "{\"a\":\"new\"}{}" };
+  for (const std::string& contents : invalid) {
+    {
+      std::ofstream fixture(path);
+      fixture << contents;
+    }
+    {
+      EnvVars env(path);
+      testTrue(
+        g, env.getVars().empty(), "failed initial load publishes no values");
+      env.setVar("a", "old");
+      env.load();
+      testTrue(
+        g, env.getVar("a").value == "old", "failed reload is transactional");
+      env.save();
+    }
+    std::ifstream preserved(path);
+    const std::string bytes((std::istreambuf_iterator<char>(preserved)),
+                            std::istreambuf_iterator<char>());
+    testTrue(g,
+             bytes == contents,
+             "explicit save and destruction preserve rejected bytes");
+  }
+  {
+    EnvVars env(path);
+    {
+      std::ofstream repaired(path);
+      repaired << "{\"a\":\"repaired\"}";
+    }
+    env.load();
+    testTrue(g, env.getVar("a").value == "repaired", "corrected file reloads");
+    env.setVar("a", "saved");
+  }
+  {
+    EnvVars env(path);
+    testTrue(g,
+             env.getVar("a").value == "saved",
+             "successful reload re-enables persistence");
+  }
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  {
+    EnvVars env(path);
+    env.setVar("created", "yes");
+  }
+  {
+    EnvVars env(path);
+    testTrue(g,
+             env.getVar("created").value == "yes",
+             "missing file supports first-run persistence");
+  }
+  std::filesystem::remove(path, error);
+  std::filesystem::create_directory(path, error);
+  {
+    EnvVars env(path);
+    env.setVar("a", "ignored");
+    env.save();
+  }
+  testTrue(
+    g, std::filesystem::is_directory(path), "unreadable path remains intact");
+  std::filesystem::remove(path, error);
+}
+
+static void
 testEnvVarsApplicationPath()
 {
   testSection("EnvVars: application configuration ignores working directory");
@@ -421,6 +495,80 @@ testCommandRegistryQueueLifecycle()
   testEqSize(g, received.size(), 2u, "queued arguments are preserved");
   registry.ExecuteQueue();
   testEqInt(g, calls, 1, "execute clears the queue");
+}
+
+static void
+testCommandRegistryReentrancy()
+{
+  testSection("CommandRegistry: detached batches and callback retirement");
+  CommandRegistry registry;
+  int calls = 0;
+  registry.RegisterCommand(
+    "later", [&calls](const std::vector<std::string>&) { ++calls; });
+  registry.RegisterCommand(
+    "enqueue", [&](const std::vector<std::string>& args) {
+      for (int index = 0; index < 256; ++index) {
+        registry.QueueCommand("later");
+      }
+      registry.ExecuteQueue();
+      testEqInt(g, calls, 0, "nested execution defers newly queued work");
+      testTrue(g,
+               args.size() == 1u && args[0] == "stable",
+               "enqueue preserves active arguments");
+      registry.UnregisterCommand("enqueue");
+      testTrue(
+        g, args[0] == "stable", "self retirement preserves active callback");
+    });
+  registry.QueueCommand("enqueue", { "stable" });
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 0, "new commands wait for next dispatch");
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 256, "next dispatch executes new commands exactly once");
+
+  registry.QueueCommand("later");
+  registry.UnregisterCommand("later");
+  registry.RegisterCommand(
+    "later", [&calls](const std::vector<std::string>&) { ++calls; });
+  registry.QueueCommand("later");
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 257, "replacement does not revive retired queued work");
+
+  registry.RegisterCommand("retire", [&](const std::vector<std::string>&) {
+    registry.UnregisterCommand("later");
+  });
+  registry.QueueCommand("retire");
+  registry.QueueCommand("later");
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 257, "retirement cancels remaining detached work");
+
+  registry.RegisterCommand(
+    "later", [&calls](const std::vector<std::string>&) { ++calls; });
+  registry.RegisterCommand("clear", [&](const std::vector<std::string>& args) {
+    registry.QueueCommand("later");
+    registry.ClearQueue();
+    testTrue(
+      g, args[0] == "stable", "clear preserves active callback arguments");
+  });
+  registry.QueueCommand("clear", { "stable" });
+  registry.QueueCommand("later");
+  registry.ExecuteQueue();
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 257, "clear cancels pending work and batch remainder");
+
+  registry.RegisterCommand("throw", [&](const std::vector<std::string>&) {
+    registry.QueueCommand("later");
+    throw std::runtime_error("callback failure");
+  });
+  registry.QueueCommand("throw");
+  bool threw = false;
+  try {
+    registry.ExecuteQueue();
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  testTrue(g, threw, "callback exceptions propagate");
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 258, "dispatch recovers after callback exception");
 }
 
 static void
@@ -610,10 +758,15 @@ registerServiceTests(IllumoTestRegistry& registry)
                []() { return runServiceCase(testCameraPerspectiveLookAt); });
   registry.add("Illumo.EnvVars.TypesAndPersistence",
                []() { return runServiceCase(testEnvVarsTypesAndPersistence); });
+  registry.add("Illumo.EnvVars.FailedLoadPreservation", []() {
+    return runServiceCase(testEnvVarsFailedLoadPreservation);
+  });
   registry.add("Illumo.EnvVars.ApplicationPath",
                []() { return runServiceCase(testEnvVarsApplicationPath); });
   registry.add("Illumo.CommandRegistry.Metadata",
                []() { return runServiceCase(testCommandRegistryMetadata); });
+  registry.add("Illumo.CommandRegistry.Reentrancy",
+               []() { return runServiceCase(testCommandRegistryReentrancy); });
   registry.add("Illumo.CommandRegistry.QueueLifecycle", []() {
     return runServiceCase(testCommandRegistryQueueLifecycle);
   });

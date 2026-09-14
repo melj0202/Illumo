@@ -2,6 +2,7 @@
 
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
+#include <array>
 #include <memory>
 
 struct IllumoContext;
@@ -46,4 +47,6 @@ private:
   float m_rotationSpeed{ 1.2f };
   bool m_paused{ false };
   bool m_showGrid{ true };
+  std::array<bool, 5> m_keysDown{};
+  std::array<bool, 5> m_keysBlocked{};
 };

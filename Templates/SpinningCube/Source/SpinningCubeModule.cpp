@@ -32,6 +32,8 @@ SpinningCubeModule::Start(IllumoContext* context)
   if (ic == nullptr) {
     return false;
   }
+  m_keysDown.fill(false);
+  m_keysBlocked.fill(false);
 
   if (ic->envVars != nullptr) {
     const EnvVar& speedVar = ic->envVars->getVar("cubeRotationSpeed");
@@ -95,38 +97,46 @@ SpinningCubeModule::Update(double dt)
     return;
   }
 
-  // Input handling
+  // Captured keys must be released before they can affect the application.
   if (ic->inputManager != nullptr) {
-    static bool spaceWasPressed = false;
-    if (ic->inputManager->isKeyPressed(KeyCode::Space)) {
-      if (!spaceWasPressed) {
-        m_paused = !m_paused;
+    const bool captured = ic->commandLine != nullptr && ic->commandLine->isOpen;
+    const std::array<KeyCode, 5> keys{
+      KeyCode::Space, KeyCode::R, KeyCode::G, KeyCode::Up, KeyCode::Down
+    };
+    for (size_t index = 0; index < keys.size(); ++index) {
+      const bool down = ic->inputManager->isKeyPressed(keys[index]);
+      const bool pressed = down && !m_keysDown[index];
+      m_keysDown[index] = down;
+      if (captured || !down) {
+        m_keysBlocked[index] = down;
       }
-      spaceWasPressed = true;
-    } else {
-      spaceWasPressed = false;
-    }
-
-    if (ic->inputManager->isKeyPressed(KeyCode::R)) {
-      resetRotation();
-    }
-
-    static bool gWasPressed = false;
-    if (ic->inputManager->isKeyPressed(KeyCode::G)) {
-      if (!gWasPressed) {
-        m_showGrid = !m_showGrid;
+      if (captured || m_keysBlocked[index] || !down) {
+        continue;
       }
-      gWasPressed = true;
-    } else {
-      gWasPressed = false;
-    }
-
-    if (ic->inputManager->isKeyPressed(KeyCode::Up)) {
-      m_rotationSpeed += static_cast<float>(dt) * 2.0f;
-    }
-    if (ic->inputManager->isKeyPressed(KeyCode::Down)) {
-      m_rotationSpeed =
-        std::max(0.0f, m_rotationSpeed - static_cast<float>(dt) * 2.0f);
+      switch (keys[index]) {
+        case KeyCode::Space:
+          if (pressed) {
+            m_paused = !m_paused;
+          }
+          break;
+        case KeyCode::R:
+          resetRotation();
+          break;
+        case KeyCode::G:
+          if (pressed) {
+            m_showGrid = !m_showGrid;
+          }
+          break;
+        case KeyCode::Up:
+          m_rotationSpeed += static_cast<float>(dt) * 2.0f;
+          break;
+        case KeyCode::Down:
+          m_rotationSpeed =
+            std::max(0.0f, m_rotationSpeed - static_cast<float>(dt) * 2.0f);
+          break;
+        default:
+          break;
+      }
     }
   }
 

@@ -63,6 +63,7 @@ public:
   IllumoContext& context();
   const IllumoContext& context() const;
   bool shouldClose() const;
+  bool processCloseRequest();
 
 private:
   friend class IllumoTestAccess;
@@ -107,6 +108,7 @@ private:
   std::unique_ptr<IModule> m_pendingModuleTransition;
   bool m_initialized{ false };
   bool m_modulesStarted{ false };
+  bool m_terminalCloseRequested{ false };
   bool m_motionBlurPipelineConfigured{ false };
   float m_configuredBlurAmount{ 0.0f };
   float m_configuredBlurMax{ 0.0f };

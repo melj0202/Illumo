@@ -10,6 +10,7 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <cstdio>
+#include <limits>
 
 static TestCounters g;
 
@@ -534,6 +535,32 @@ testElementarySpaceTime()
   traffic.setCell(CellAddress{ 1, 0 }, 1);
   testTrue(g, traffic.advance(rule184), "Rule 184 advances");
   testEqUChar(g, traffic.getCell(CellAddress{ 1, 1 }), 0, "car moved right");
+  const std::int64_t minimum = std::numeric_limits<std::int64_t>::min();
+  const std::int64_t maximum = std::numeric_limits<std::int64_t>::max();
+  for (const std::int64_t endpoint : { minimum, maximum }) {
+    SparseCellGrid edge;
+    edge.setCell(CellAddress{ endpoint, minimum }, 0);
+    testTrue(g, edge.advance(rule90), "Rule 90 advances at signed X endpoint");
+    const std::int64_t childX =
+      endpoint == minimum ? endpoint + 1 : endpoint - 1;
+    testEqUChar(g,
+                edge.getCell(CellAddress{ childX, minimum + 1 }),
+                0,
+                "representable endpoint child is alive");
+    testEqUChar(g,
+                edge.getCell(CellAddress{ endpoint, minimum + 1 }),
+                1,
+                "out-of-domain neighbor is background");
+  }
+  SparseCellGrid lastRow;
+  lastRow.setCell(CellAddress{ 0, maximum }, 0);
+  const std::uint64_t revision = lastRow.getRevision();
+  testTrue(
+    g, !lastRow.advance(rule90), "unrepresentable destination row fails");
+  testTrue(g,
+           lastRow.getRevision() == revision &&
+             lastRow.getCell(CellAddress{ 0, maximum }) == 0,
+           "failed endpoint advance preserves grid contents and revision");
 }
 
 static void
@@ -643,6 +670,91 @@ testRuleSetRegistryDynamicRegistration()
   testEqUChar(g, replicator->nextState(1, 2), 1, "replicator no birth on 2");
 }
 
+static void
+testRuleSetRegistryValidation()
+{
+  testSection("RuleSetRegistry: validated transactional definitions");
+  RuleSetRegistry registry;
+  registry.loadBuiltinDefaults();
+  const std::vector<std::string> originalNames = registry.getKnownRules();
+  const std::string replacement = R"({"id":"GAME_OF_LIFE","rule":"B2/S"})";
+  const std::vector<std::string> invalid = {
+    R"({"id":"BAD","rule":"B0/S23"})",
+    R"({"id":"BAD","rule":"B3/S9"})",
+    R"({"id":"BAD","rule":"B3/S23garbage"})",
+    R"({"id":"BAD","rule":"B3//S23"})",
+    R"({"id":"BAD","family":"unknown"})",
+    R"({"id":"BAD","birth":[32]})",
+    R"({"id":"BAD","birth":[0]})",
+    R"({"id":"BAD","birth":[-1]})",
+    R"({"id":"BAD","birth":[3.0]})",
+    R"({"id":"BAD","birth":["3"]})",
+    R"({"id":"BAD","birth":[true]})",
+    R"({"id":"BAD","survive":[9]})",
+    R"({"id":"BAD","survive":[18446744073709551615]})",
+    R"({"id":"BAD","family":"elementary_1d","rule_number":256})",
+    R"({"id":"BAD","family":"elementary_1d","rule_number":1})",
+    R"({"id":"BAD","palette":{"alive":[0,0,256]}})",
+    R"({"id":"BAD","name":false})",
+    "null"
+  };
+  for (const std::string& item : invalid) {
+    testTrue(g,
+             !registry.loadFromText('[' + replacement + ',' + item + ']'),
+             "invalid later definition rejects batch");
+    testTrue(g,
+             registry.getKnownRules() == originalNames &&
+               registry.getRuleDefinition("GAME_OF_LIFE")->birthMask ==
+                 (1u << 3),
+             "failed batch preserves catalog and earlier replaced definition");
+  }
+  for (const std::string& tail : { " garbage", " []" }) {
+    testTrue(g,
+             !registry.loadFromText('[' + replacement + ']' + tail) &&
+               registry.getRuleDefinition("GAME_OF_LIFE")->birthMask ==
+                 (1u << 3),
+             "strict JSON rejects trailing input without publishing");
+  }
+  testTrue(
+    g,
+    registry.loadFromText(
+      R"([{"id":"VALID","birth":[2,8],"survive":[0,8],"palette":{"alive":[0,128,255]}}])"),
+    "valid bounded arrays and palette load");
+  const RuleDefinition* valid = registry.getRuleDefinition("VALID");
+  testTrue(g,
+           valid != nullptr && valid->birthMask == ((1u << 2) | (1u << 8)) &&
+             valid->surviveMask == ((1u << 0) | (1u << 8)) &&
+             valid->aliveColor[2] == 255,
+           "valid definition retains exact masks and palette");
+  RuleDefinition unsupported;
+  unsupported.id = "DIRECT_BAD";
+  unsupported.family = "life_like";
+  unsupported.birthMask = 1u;
+  testTrue(g,
+           !registry.registerRule(unsupported) &&
+             !registry.isKnownRule("DIRECT_BAD"),
+           "direct registration rejects nonquiescent B0");
+  unsupported.birthMask = 1u << 20;
+  testTrue(g,
+           !registry.registerRule(unsupported),
+           "direct registration rejects high mask bits");
+  unsigned int birth = 0, survive = 0;
+  for (const std::string& malformed :
+       { "B9/S23", "B3/S23junk", "B3", "B3/B2", "23/3x" }) {
+    testTrue(
+      g,
+      !RuleSetRegistry::parseLifeLikeRuleString(malformed, birth, survive),
+      "malformed rule grammar rejected");
+  }
+  LifeLikeRuleSet rule(nullptr, "BOUNDS", 1u << 3, (1u << 2) | (1u << 3));
+  for (int count = 9; count <= 255; ++count) {
+    testTrue(g,
+             rule.nextState(0, static_cast<unsigned char>(count)) == 1 &&
+               rule.nextState(1, static_cast<unsigned char>(count)) == 1,
+             "invalid neighbor count returns background without shifting");
+  }
+}
+
 static int
 runRuleSetCase(void (*testFunction)())
 {
@@ -654,6 +766,8 @@ runRuleSetCase(void (*testFunction)())
 void
 registerRuleSetTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.Rules.RegistryValidation",
+               []() { return runRuleSetCase(testRuleSetRegistryValidation); });
   registry.add("IllumoGame.Rules.TransitionTable", []() {
     return runRuleSetCase(testTransitionTableCacheAndEquivalence);
   });

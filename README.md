@@ -55,10 +55,11 @@ under `docs/`. Start with:
 - `docs/latex/architecture-map.tex` — the current chart-only entrypoint
 - `docs/output/*.pdf` — generated locally; never sources of truth
 
-**Current stack (short):** reusable 2D token renderer (`AppendCommands` →
+**Current stack (short):** reusable world-mesh and 2D token renderer (`AppendCommands` →
 `IBackend`) with typed generational handles, a persistent handle-based scene
 hierarchy, painter-correct primitives, dynamic quad buffers,
-primitive-composed themed UI, and asynchronous texture/shader assets. The
+primitive-composed themed UI, cubemaps, offscreen passes, and managed
+texture/cubemap/shader assets. The
 retained `SceneGraph` is extracted as one drawable into the existing per-frame
 render list; it does not replace CSim's sparse domain. `SparseCellGrid` uses
 published dual-grid simulation,
@@ -68,7 +69,8 @@ cached 256x9 transitions, and infinite or finite toroidal topology.
 `CanvasView` presents a padded, integer-LOD
 camera cache through a world-space `GameVisual` sprite, with active-texel RGB
 fades and tiled multi-rectangle uploads through a non-waiting PBO ring.
-Headless `IllumoTests` and `IllumoGameTests` use `Illumo::TestSupport` and
+Headless `IllumoTests`, `IllumoGameTests`, `IllEdTests`, and
+`IllMeshViewerTests` use `Illumo::TestSupport` and
 `MockBackend`. Windows is the supported runtime;
 Linux and macOS retain stale source/CMake scaffolding pending native validation.
 
@@ -287,6 +289,10 @@ exist. Capture requires a real graphics context; Linux remains unverified.
 
 To scaffold a new Illumo application project, use the project creation tool:
 
+Names must be ASCII C++ identifiers and must not collide with Windows device
+names or workspace/build infrastructure, ignoring case (for example `Illumo`,
+`IllEd`, `cmake`, `build`, or `IllumoTests`). Rejection happens before copying.
+
 ```bash
 python build.py new-project <destination_path> [--name <ApplicationName>]
 ```
@@ -302,6 +308,26 @@ This generates a turnkey standalone workspace following an Unreal Engine style l
 - `IllEd/`: Debug tools and the SceneGraph world editor
 - `<ApplicationName>/` (default: `IllumoGame/`): Game application containing the starter template (a 3D lit spinning cube with perspective camera, controls, configuration, and automated tests)
 - `cmake/`, `build.py`, `CMakeLists.txt`, `README.md`: Workspace build orchestration and configuration
+
+Starter controls yield while the console is open. Keys held during capture must
+be released before they can control the cube again; animation continues.
+
+Generated workspaces omit engine PDF sources, so `ILLUMO_BUILD_DOCUMENTATION`
+defaults off there. This repository defaults it on when the documentation inputs
+are present. Explicitly enabling it without those inputs fails at configure time.
+
+Parallel builds order shared asset/shader staging for each runtime directory.
+Default-file seeding locks its check-and-copy operation and preserves existing
+settings; the first successful seed supplies a missing file.
+
+To exercise project creation and a complete default generated build on a Windows
+development machine with CMake, LLVM, PowerShell, and LaTeX installed:
+
+```powershell
+$env:ILLUMO_TEST_GENERATED_BUILD = "1"
+python -B -m unittest discover -s tools -p test_create_project.py
+Remove-Item Env:ILLUMO_TEST_GENERATED_BUILD
+```
 
 To build and run the newly generated application:
 
@@ -340,7 +366,7 @@ machine-readable output. The interactive build console exposes this through
 When standard input or output is redirected, running `python build.py` without
 a command performs the normal Release build instead of opening the console.
 That build retains CMake's existing all-target behavior: it builds the
-library, `IllumoGame`, both test runners, every registered workspace case, and
+library, all three applications, all four test runners, every registered workspace case, and
 the PDFs when the documentation toolchain is available.
 
 Use `--no-docs` for a build tree that should skip the optional PDF target,
@@ -357,6 +383,9 @@ the selected executable immediately and fails clearly if that configuration
 has not been built yet. The normal `run` command still configures and builds
 before launching.
 
+Builds require CMake 3.25 or newer, including generated workspaces and standalone
+engine builds. The third-party SYSTEM subdirectory handling requires this version.
+
 Direct CMake remains fully supported and is the escape hatch for anything the
 front end does not expose:
 
@@ -367,7 +396,8 @@ cmake --build build --config Release
 
 The canonical workspace build produces `Illumo`, `IllumoGameCore`,
 `IllumoGame`, `IllEdCore`, `IllEd`, `IllumoTests`, `IllumoGameTests`,
-`IllEdTests`, and the consumer-header smoke target in a single output
+`IllEdTests`, `IllMeshViewerCore`, `IllMeshViewer`, `IllMeshViewerTests`, and
+the consumer-header smoke target in a single output
 folder. With a Visual Studio generator, the orchestrator's default artifacts
 are under `build-workspace/Release/`; the direct CMake example above uses
 `build/Release/` instead.
@@ -395,10 +425,10 @@ ctest --test-dir build -C Release -N -L IllumoWorkspace
 # editor: build/Release/IllEdTests.exe --run IllEd.Ilsc.RoundTrip
 ```
 
-CTest registers one process-isolated entry per logical case. Both runners
-support `--list` and exact `--run`; `build.py test` dispatches by the
-`Illumo.*` or `IllumoGame.*` prefix. Each case gets an isolated directory
-under `build/Testing/Illumo/` or `build/Testing/IllumoGame/`.
+CTest registers one process-isolated entry per logical case. All four runners
+support `--list` and exact `--run`; `build.py test` dispatches by the discovered
+product or runner prefix. Each CTest case gets an isolated directory under
+`build/Testing/<runner-label>/`.
 
 Clang/LLVM coverage (85% production-line gate and HTML report):
 
@@ -410,14 +440,24 @@ cmake -S . -B build-coverage -G Ninja \
 cmake --build build-coverage --target IllumoCoverage
 ```
 
-The combined report measures headless-testable first-party code from both
-production targets. Tests, TestSupport, vendored/system code, the concrete live
+The combined report measures headless-testable first-party code linked into all
+registered workspace test runners: Illumo, IllumoGame, IllEd, and IllMeshViewer.
+Coverage builds and refreshes discovery for every runner before running CTest;
+generated projects include their custom application and optional editor runners.
+Tests, TestSupport, vendored/system code, the concrete live
 window, and the OpenGL backend are excluded;
 native dialogs, window behavior, and live OpenGL still require smoke testing.
 See `Illumo/Tests/README.md` and `IllumoGame/Tests/README.md` for the exact
 scope and commands.
 
 clang-tidy (first-party sources, warnings as errors):
+
+The batch target reads the compile database and selects sources inside the
+workspace, excluding `thirdparty` and the configured build tree. Custom
+application names and tool directories are included. The exact selected
+entries are saved to `build-tidy/tidy-compile-commands/compile_commands.json`;
+the LLVM batch driver uses that database directly. Selection and failure
+propagation tests run with `python -B -m unittest discover -s tools -p test_workspace_tidy.py`.
 
 ```bash
 cmake -S . -B build-tidy -G Ninja \

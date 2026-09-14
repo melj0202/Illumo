@@ -10,9 +10,9 @@ cmake --build build --config Release
 ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 \end{lstlisting}
 The build produces the static \texttt{Illumo} library,
-\texttt{IllumoGameCore}, \texttt{IllumoGame}, \texttt{IllumoTests},
-\texttt{IllumoGameTests}, and \texttt{IllumoPublicHeaderSmoke}. The aggregate
-\texttt{IllumoRunTests} target refreshes both per-configuration test inventories
+three application cores and executables (IllumoGame, IllEd, IllMeshViewer),
+four test runners, and \texttt{IllumoPublicHeaderSmoke}. The aggregate
+\texttt{IllumoRunTests} target refreshes all per-configuration test inventories
 before running the workspace label. There is no compatibility executable named
 \texttt{Illumo}.
 
@@ -127,6 +127,12 @@ components and god-object candidates, with optional \texttt{-n} count limits,
 \texttt{--min-loc} thresholds, \texttt{--include-tests}, category filters, and JSON output.
 
 \subsection{Standalone library}
+Public math types intentionally use GLM. CMake prepares a GLM-only public include
+directory under the build tree, preserving \texttt{<glm/...>} while keeping
+unrelated vendor headers private (D-DEP1). Header content and membership changes
+refresh that directory; identical files retain their timestamps. Consumers must
+declare their own dependency when they need another vendor API.
+
 The supported library-only build remains independently configurable:
 \begin{lstlisting}[language={}]
 cmake -S Illumo -B build-illumo
@@ -138,7 +144,8 @@ consumer smoke without seeing IllumoGame sources.
 
 \subsection{Tests}
 \texttt{IllumoTests} owns \texttt{Illumo.*}; \texttt{IllumoGameTests} owns
-\texttt{IllumoGame.*}. Both support exact \texttt{--list} and \texttt{--run}.
+\texttt{IllumoGame.*}. The editor and mesh-viewer runners own their product
+cases. All support exact \texttt{--list} and \texttt{--run}.
 CTest runs each case in an isolated working directory and selects a runner path
 for the requested configuration in multi-config build trees. Headless tests do
 not prove live OpenGL pixels, native dialogs, or native window lifecycle.
@@ -151,8 +158,11 @@ cmake -S . -B build-coverage -G Ninja \
   -DILLUMO_BUILD_DOCUMENTATION=OFF -DILLUMO_ENABLE_COVERAGE=ON
 cmake --build build-coverage --target IllumoCoverage
 \end{lstlisting}
-The workspace target runs both inventories and public-header smoke, merges
-profiles from both instrumented products, writes
+The workspace target builds every registered runner, refreshes discovery, and
+builds public-header smoke before running the aggregate test label. Its binary
+manifest includes the engine, simulator, editor, and mesh viewer. Generated
+projects use the same registration for their application and optional editor.
+It merges all runner profiles, writes
 \pathref{build-coverage/coverage-html/index.html}, and enforces the existing
 85\% headless-testable first-party production-line gate. Tests, TestSupport,
 vendored/system code, the concrete live window, and the OpenGL implementation
@@ -177,12 +187,18 @@ diagnostics as errors (D-T3). Disable with
 from \pathref{compile\_commands.json}. Vendored third-party sources are
 excluded. \texttt{modernize-use-auto} stays disabled because house style
 forbids \texttt{auto} (D-008).
+The batch selects compile-database sources under the workspace root, excluding
+the configured build tree and \texttt{thirdparty} directories. Custom application
+names and tool sources are included. The selected database is saved in the build
+tree's \texttt{tidy-compile-commands} directory and supplied directly to LLVM;
+compilation variants are retained.
 
 \subsection{Runtime staging}
 The Illumo-owned helper copies shaders, assets, notices, and licenses beside
-\texttt{IllumoGame.exe}; tracked changes retrigger staging, and removed assets
-are removed from the staged copy. IllumoGame's \texttt{envvars.json} uses
-copy-if-missing so user runtime settings survive rebuilds.
+consuming executables. Staging copies current inputs but does not prune stale
+output files. Shared copy stages are ordered. Product \texttt{envvars.json}
+seeds use a locked copy-if-missing operation so existing settings survive;
+the first successful seed wins when products share an output directory.
 
 \subsection{Documentation}
 Run \texttt{python build.py docs} or \pathref{docs/build.ps1}. The script builds

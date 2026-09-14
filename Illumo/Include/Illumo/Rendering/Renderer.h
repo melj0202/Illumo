@@ -36,6 +36,8 @@ public:
   };
 
 private:
+  std::shared_ptr<const void> _lifetimeIdentity =
+    std::make_shared<const unsigned char>(0);
   // Owned when constructed with unique_ptr or takeOwnership=true; null when the
   // composition root or test fixture retains ownership of the backend.
   std::unique_ptr<IBackend> _ownedBackend;
@@ -97,6 +99,12 @@ public:
 
   ~Renderer();
 
+  // Opaque non-owning cache identity; distinct even when an address is reused.
+  std::weak_ptr<const void> getLifetimeIdentity() const
+  {
+    return _lifetimeIdentity;
+  }
+
   IBackend* getBackend() { return _backend; }
   const IBackend* getBackend() const { return _backend; }
   bool ownsBackend() const { return _ownedBackend != nullptr; }
@@ -157,6 +165,11 @@ public:
     int height,
     int channels = 3);
 
+  bool replaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels);
   bool replaceTexture(TextureHandle handle,
                       const unsigned char* data,
                       int width,
@@ -216,6 +229,7 @@ public:
   void pushClearColor(float r, float g, float b, float a);
   void pushClearScreen(float r, float g, float b, float a);
   void pushClearDepth();
+  void pushClearDepth(float value);
   void pushViewport(int x, int y, int width, int height);
   void pushPipelineState(const PipelineState& state);
   void pushSetShader(ShaderHandle handle);

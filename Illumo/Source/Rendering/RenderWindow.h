@@ -36,6 +36,7 @@ public:
   int getRefreshRate() const override;
   void swapBuffers() override;
   void requestClose() override;
+  void cancelCloseRequest() override;
 
 private:
   friend std::unique_ptr<IRenderWindow> CreateCaptureWindow(int width,

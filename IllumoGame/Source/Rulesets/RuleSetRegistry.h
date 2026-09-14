@@ -33,9 +33,8 @@ public:
 
   RuleSetRegistry();
 
-  void registerRule(const RuleDefinition& def);
-  bool loadFromFile(const std::string& filePath);
-  bool loadFromDefaultLocations();
+  bool registerRule(const RuleDefinition& def);
+  bool loadFromText(const std::string& text);
   void loadBuiltinDefaults();
   void clear();
 

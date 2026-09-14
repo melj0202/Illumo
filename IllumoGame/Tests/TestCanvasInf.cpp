@@ -1,8 +1,10 @@
+#include "Game/CanvasCoordinatePolicy.h"
 #include "Game/CanvasView.h"
 #include "Game/Cursor.h"
 #include "Game/SimulationRunner.h"
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/BriansBrainRuleSet.h"
+#include "Rulesets/Elementary1DRuleSet.h"
 #include "Rulesets/LifeLikeRuleSet.h"
 #include "Rulesets/RuleSet.h"
 #include "Rulesets/WireworldRuleSet.h"
@@ -35,6 +37,18 @@ static void
 testNegativeChunkMapping()
 {
   testSection("SparseCellGrid: negative coordinates and chunk boundaries");
+  const std::int64_t minimum = std::numeric_limits<std::int64_t>::min();
+  const std::int64_t maximum = std::numeric_limits<std::int64_t>::max();
+  testTrue(
+    g,
+    SparseCellGrid::floorDivide(minimum, 1) == minimum &&
+      SparseCellGrid::floorDivide(minimum, 16) == -576460752303423488LL &&
+      SparseCellGrid::floorDivide(minimum + 15, 16) == -576460752303423488LL &&
+      SparseCellGrid::floorDivide(minimum, 3) == -3074457345618258603LL &&
+      SparseCellGrid::floorDivide(maximum, 16) == 576460752303423487LL &&
+      SparseCellGrid::floorDivide(-1, maximum) == -1 &&
+      SparseCellGrid::floorDivide(minimum, 0) == 0,
+    "floor division preserves full signed range and invalid divisor policy");
   testEqInt(g,
             static_cast<int>(SparseCellGrid::floorDivide(-1, 16)),
             -1,
@@ -223,6 +237,157 @@ sameSparseRecords(const std::vector<SparseChunkRecord>& left,
     }
   }
   return true;
+}
+
+static void
+testElementaryTransactions()
+{
+  testSection("Sparse elementary generation: failure rollback and publication");
+  Elementary1DRuleSet rule(nullptr, "RULE_90", 90u);
+  SparseCellGrid grid;
+  grid.setCell(CellAddress{ 0, 0 }, 0);
+  SparseCellGrid prior;
+  prior.copyStateFrom(grid);
+  const std::uint64_t priorRevision = grid.getRevision();
+  grid.setCell(CellAddress{ 32, 0 }, 0);
+  const std::uint64_t revision = grid.getRevision();
+  const std::vector<SparseChunkRecord> original = grid.collectChunkRecords();
+  grid.setElementaryWriteFailureForTesting(1);
+  testTrue(g,
+           !grid.advance(rule),
+           "failure injected after a staged destination write");
+  testTrue(g,
+           grid.getRevision() == revision &&
+             sameSparseRecords(original, grid.collectChunkRecords()),
+           "failed staged generation preserves cells and revision");
+  SparseGenerationDelta previousDelta;
+  testTrue(g,
+           grid.captureGenerationDelta(priorRevision, &previousDelta) &&
+             prior.applyGenerationDelta(previousDelta) &&
+             sameSparseRecords(original, prior.collectChunkRecords()),
+           "failure preserves previous successful presentation delta");
+  testTrue(g,
+           grid.advance(rule) && grid.getRevision() == revision + 1,
+           "retry publishes once for the whole generation");
+  SparseGenerationDelta delta;
+  testTrue(g,
+           grid.captureGenerationDelta(revision, &delta) &&
+             prior.applyGenerationDelta(delta) &&
+             sameSparseRecords(grid.collectChunkRecords(),
+                               prior.collectChunkRecords()),
+           "published delta reproduces complete output and history");
+
+  SparseCellGrid destination;
+  destination.setCell(CellAddress{ 100, 4 }, 0);
+  const std::vector<SparseChunkRecord> oldDestination =
+    destination.collectChunkRecords();
+  const std::uint64_t destinationRevision = destination.getRevision();
+  destination.setElementaryWriteFailureForTesting(1);
+  testTrue(
+    g,
+    !destination.advanceFrom(grid, rule) &&
+      destination.getRevision() == destinationRevision &&
+      sameSparseRecords(oldDestination, destination.collectChunkRecords()),
+    "external-source failure preserves destination");
+  testTrue(g,
+           destination.advance(rule) &&
+             destination.getCell(CellAddress{ 99, 5 }) == 0,
+           "failed external-source binding is released before direct advance");
+  SparseCellGrid expected;
+  expected.copyStateFrom(grid);
+  expected.advance(rule);
+  testTrue(g,
+           destination.advanceFrom(grid, rule) &&
+             sameSparseRecords(destination.collectChunkRecords(),
+                               expected.collectChunkRecords()),
+           "external-source retry produces complete source history");
+  SparseCellGrid empty;
+  testTrue(g,
+           destination.advanceFrom(empty, rule) &&
+             destination.getAllocatedChunkCount() == 0 &&
+             destination.getRevision() == empty.getRevision(),
+           "empty external source replaces stale spare state");
+
+  SparseCellGrid torus(1, 1);
+  torus.setCell(CellAddress{ 8, 0 }, 0);
+  torus.setCell(CellAddress{ 8, 15 }, 0);
+  const std::vector<SparseChunkRecord> oldTorus = torus.collectChunkRecords();
+  torus.setElementaryWriteFailureForTesting(1);
+  testTrue(g,
+           !torus.advance(rule) &&
+             sameSparseRecords(oldTorus, torus.collectChunkRecords()),
+           "wrapped destination overwrite is transactional");
+  testTrue(
+    g,
+    torus.advance(rule) && torus.getCell(CellAddress{ 8, 0 }) == 1 &&
+      torus.getCell(CellAddress{ 7, 0 }) == 0 &&
+      torus.getCell(CellAddress{ 9, 0 }) == 0 &&
+      torus.getCell(CellAddress{ 8, 15 }) == 0,
+    "finite retry replaces destination row while preserving source history");
+
+  LifeLikeRuleSet life(nullptr, "LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  SparseCellGrid evolving;
+  evolving.setCell(CellAddress{ 8, 0 }, 0);
+  SparseCellGrid cached;
+  SparseCellGrid::setCellCandidateOverrideForTesting(1);
+  SparseCellGrid::setWorkerOverrideForTesting(2);
+  for (int generation = 0; generation < 4; ++generation) {
+    SparseCellGrid fresh;
+    testTrue(g,
+             cached.advanceFrom(evolving, life) &&
+               !cached.getLastAdvanceStats().reusedCandidateTopology &&
+               fresh.advanceFrom(evolving, life) &&
+               sameSparseRecords(cached.collectChunkRecords(),
+                                 fresh.collectChunkRecords()),
+             "cached Moore sources survive elementary map replacement");
+    testTrue(g,
+             cached.advanceFrom(evolving, life) &&
+               cached.getLastAdvanceStats().reusedCandidateTopology,
+             "unchanged source reuses linked candidate topology");
+    testTrue(g, evolving.advance(rule), "elementary replacement advances");
+  }
+  SparseCellGrid::setCellCandidateOverrideForTesting(0);
+  SparseCellGrid::setWorkerOverrideForTesting(0);
+}
+
+static void
+testElementaryHistoryBench()
+{
+  testSection("Sparse elementary history latency");
+  Elementary1DRuleSet rule(nullptr, "RULE_90", 90u);
+  for (const int historyRows : { 0, 1024 }) {
+    SparseCellGrid source;
+    for (int y = -historyRows; y < 0; ++y) {
+      for (int x = 0; x < 128; ++x) {
+        source.setCell(CellAddress{ x, y }, 0);
+      }
+    }
+    source.setCell(CellAddress{ 0, 0 }, 0);
+    SparseCellGrid destination;
+    for (int warmup = 0; warmup < 3; ++warmup) {
+      destination.advanceFrom(source, rule);
+    }
+    const std::chrono::steady_clock::time_point started =
+      std::chrono::steady_clock::now();
+    bool succeeded = true;
+    constexpr int iterations = 64;
+    for (int i = 0; i < iterations; ++i) {
+      succeeded = destination.advanceFrom(source, rule) && succeeded;
+    }
+    const double milliseconds = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - started)
+                                  .count() /
+                                iterations;
+    std::printf("ElementaryHistoryBench: historyRows=%d historyWidth=128 "
+                "iterations=%d ms/generation=%.6f\n",
+                historyRows,
+                iterations,
+                milliseconds);
+    testTrue(g,
+             succeeded && destination.getCell(CellAddress{ -1, 1 }) == 0 &&
+               destination.getCell(CellAddress{ 1, 1 }) == 0,
+             "retained history benchmark preserves next-row result");
+  }
 }
 
 static void
@@ -985,6 +1150,44 @@ testSparseChunkMemoization()
              sparseCandidate.getLastAdvanceStats().memoProbeCount,
              0u,
              "candidate-only evaluation bypasses halo memoization");
+}
+
+static void
+testSparseMemoRuleSemantics()
+{
+  testSection("SparseCellGrid: warm memo invalidation by transition semantics");
+  LifeLikeRuleSet life(nullptr);
+  LifeLikeRuleSet seeds(nullptr, "SEEDS", 1u << 2, 0u);
+  LifeLikeRuleSet sameTagSeeds(nullptr, "GAME_OF_LIFE", 1u << 2, 0u);
+  const RuleSet* replacements[] = { &seeds, &sameTagSeeds };
+  SparseCellGrid::setCellCandidateOverrideForTesting(-1);
+  SparseCellGrid::setWorkerOverrideForTesting(1);
+  for (const RuleSet* replacement : replacements) {
+    SparseCellGrid cached;
+    seedRepeatedDenseChunks(&cached, 64);
+    const std::vector<SparseChunkRecord> original =
+      cached.collectChunkRecords();
+    SparseCellGrid::setChunkMemoOverrideForTesting(1);
+    testTrue(g, cached.advance(life), "warm original rule entries");
+    testTrue(g,
+             cached.getLastAdvanceStats().memoHitCount > 0u,
+             "fixture exercises warm memo hits");
+    // Restore exact keys without clearing the retained memo.
+    for (const SparseChunkRecord& record : original) {
+      testTrue(g, cached.assignChunk(record), "restore original neighborhood");
+    }
+    SparseCellGrid reference;
+    reference.copyStateFrom(cached);
+    testTrue(
+      g, cached.advance(*replacement), "advance cached replacement rule");
+    SparseCellGrid::setChunkMemoOverrideForTesting(-1);
+    testTrue(
+      g, reference.advance(*replacement), "advance uncached replacement rule");
+    testTrue(g,
+             sameSparseRecords(cached.collectChunkRecords(),
+                               reference.collectChunkRecords()),
+             "equal instance revisions and tags cannot reuse old transitions");
+  }
 }
 
 static void
@@ -2204,6 +2407,66 @@ testBoundedDirtyUploadRectangles()
 }
 
 static void
+testAsyncSimulationLifecycle()
+{
+  testSection("Sparse simulation: repeated startup and teardown");
+  SparseCellGrid published;
+  published.setCell(CellAddress{ -1, 0 }, 0);
+  published.setCell(CellAddress{ 0, 0 }, 0);
+  published.setCell(CellAddress{ 1, 0 }, 0);
+  LifeLikeRuleSet rules(nullptr);
+  SparseCellGrid expected;
+  expected.copyStateFrom(published);
+  testTrue(g, expected.advance(rules), "reference generation succeeds");
+
+  for (int iteration = 0; iteration < 128; ++iteration) {
+    {
+      SimulationRunner idleRunner;
+      testTrue(g, !idleRunner.isBusy(), "fresh runner is idle");
+    }
+
+    SparseCellGrid working;
+    {
+      SimulationRunner runner;
+      SparseGenerationDelta mirrorDelta;
+      const bool started = runner.start(
+        &working, &published, &rules, std::move(mirrorDelta), false);
+      testTrue(g, started, "fresh runner accepts immediate work");
+      if (started) {
+        SparseCellGrid* completedGrid = nullptr;
+        bool succeeded = false;
+        testTrue(g,
+                 runner.waitAndTakeCompleted(
+                   &completedGrid, nullptr, nullptr, &succeeded),
+                 "fresh runner completes immediate work");
+        testTrue(g,
+                 succeeded && completedGrid == &working &&
+                   sameSparseRecords(working.collectChunkRecords(),
+                                     expected.collectChunkRecords()),
+                 "first generation matches synchronous output");
+      }
+      runner.shutdown();
+      runner.shutdown();
+      testTrue(g, !runner.isBusy(), "repeated shutdown leaves runner idle");
+    }
+
+    working.clear();
+    {
+      SimulationRunner runner;
+      SparseGenerationDelta mirrorDelta;
+      testTrue(g,
+               runner.start(
+                 &working, &published, &rules, std::move(mirrorDelta), false),
+               "fresh runner accepts work before immediate destruction");
+    }
+    testTrue(g,
+             sameSparseRecords(working.collectChunkRecords(),
+                               expected.collectChunkRecords()),
+             "destruction joins and drains the submitted generation");
+  }
+}
+
+static void
 testAsyncSimulationPublication()
 {
   testSection("Sparse simulation: dual-grid publication and delta mirroring");
@@ -2762,6 +3025,49 @@ runCanvasInfCase(void (*testFunction)())
 void
 registerCanvasInfTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.CanvasInf.ElementaryTransactions",
+               []() { return runCanvasInfCase(testElementaryTransactions); });
+  registry.add("IllumoGame.Sim.ElementaryHistoryBench",
+               []() { return runCanvasInfCase(testElementaryHistoryBench); });
+  registry.add("IllumoGame.CanvasInf.CameraCoordinateBounds", []() {
+    g = {};
+    std::int64_t cell = 123;
+    testTrue(g,
+             !CanvasCoordinatePolicy::tryWorldToCell(1e300, &cell) &&
+               cell == 123,
+             "huge coordinate rejected before narrowing");
+    testTrue(g,
+             CanvasCoordinatePolicy::tryWorldToCell(
+               CanvasCoordinatePolicy::kMaximumWorld, &cell) &&
+               cell == CanvasCoordinatePolicy::kMaximumCell,
+             "positive boundary converts exactly");
+    testTrue(g,
+             CanvasCoordinatePolicy::tryWorldToCell(
+               -CanvasCoordinatePolicy::kMaximumWorld, &cell) &&
+               cell == -CanvasCoordinatePolicy::kMaximumCell,
+             "negative boundary converts exactly");
+    NullRenderWindow window(1280, 720);
+    EnvVars env;
+    Camera camera(glm::vec2(0), 0.1f, &env);
+    SparseCellGrid grid;
+    CanvasView view(80, 60, &grid, &window, &camera, nullptr);
+    for (double position : { CanvasCoordinatePolicy::kMaximumWorld,
+                             -CanvasCoordinatePolicy::kMaximumWorld }) {
+      camera.SetPositionPrecise(position, position);
+      view.syncVisibleRegion();
+      testTrue(g,
+               view.getCacheCellWidth() > 0 && view.getCacheCellHeight() > 0,
+               "endpoint margin supports padded cache and opposite-end jump");
+    }
+    const CellAddress prior = view.getCacheFirstCell();
+    camera.SetPositionPrecise(1e300, -1e300);
+    view.syncVisibleRegion();
+    testTrue(g,
+             view.getCacheFirstCell().x == prior.x &&
+               view.getCacheFirstCell().y == prior.y,
+             "invalid direct camera preserves previous safe cache");
+    return g.failures;
+  });
   registry.add("IllumoGame.CanvasInf.NegativeChunkMapping",
                []() { return runCanvasInfCase(testNegativeChunkMapping); });
   registry.add("IllumoGame.CanvasInf.UnboundedChunks",
@@ -2800,6 +3106,8 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CanvasInf.SparsePreciseActivityMasks", []() {
     return runCanvasInfCase(testSparsePreciseActivityMasks);
   });
+  registry.add("IllumoGame.CanvasInf.SparseMemoRuleSemantics",
+               []() { return runCanvasInfCase(testSparseMemoRuleSemantics); });
   registry.add("IllumoGame.CanvasInf.SparseChunkMemoization",
                []() { return runCanvasInfCase(testSparseChunkMemoization); });
   registry.add("IllumoGame.CanvasInf.SparseCachedStatistics",
@@ -2849,6 +3157,8 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CanvasInf.BoundedDirtyUploadRects", []() {
     return runCanvasInfCase(testBoundedDirtyUploadRectangles);
   });
+  registry.add("IllumoGame.CanvasInf.AsyncSimulationLifecycle",
+               []() { return runCanvasInfCase(testAsyncSimulationLifecycle); });
   registry.add("IllumoGame.CanvasInf.AsyncSimulationPublication", []() {
     return runCanvasInfCase(testAsyncSimulationPublication);
   });

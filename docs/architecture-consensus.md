@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-09-11
+**Last updated:** 2026-09-14
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -14,7 +14,7 @@ This file **merges and supersedes** scattered design memory into one coherent st
 | Grok architecture reviews + local code review | Strengths, bugs, debt |
 | In-repo LaTeX design notes + decision log | Formal decision IDs (D-\*) |
 | `docs/current-issues.md` | Product/correctness punch list |
-| **Current code under `Illumo/` and `IllumoGame/`** | **Wins** when anything conflicts |
+| **Current code under `Illumo/`, `IllumoGame/`, `IllEd/`, and `IllMeshViewer/`** | Current-state evidence; resolve conflicts with approved intent explicitly |
 
 **Rule:** If this document and the code disagree, **code wins** until this file is updated in the same change set.
 
@@ -48,6 +48,27 @@ Optional deeper reading (not required to resume work):
 ---
 
 ## Charter milestones (2026-09-11)
+
+IllEd 3D body selection uses nearest forward ray intersections with transformed
+local bounds, including hierarchy and nonuniform scale. Hidden/disabled ancestry
+and invalid transforms exclude candidates. Ground-plane intersection is used
+for placement, while 3D selection uses the screen ray directly; 2D picking is
+unchanged. Empty nodes retain a small proxy and picking remains bounds-based.
+
+Scene pass precedence is explicit: nonempty application `SetLayerPasses`
+overrides win over host `SetDefaultLayerPasses` fallbacks. Clearing or resetting
+overrides restores current host defaults. Motion-blur configuration updates
+fallbacks only, preserving passes installed in Start, Update, and dispatch.
+See decision D-RP1.
+
+Audit repairs add explicit close negotiation: the runner calls
+`Illumo::processCloseRequest()`, and started modules may defer through optional
+`OnCloseRequested()`. The window flag is cleared on deferral so editor Cancel
+continues normally. Default acceptance preserves other products; failed required
+module transitions remain terminal. IllEd reuses Save/Discard/Cancel for native
+and toolbar exit. Product saves use `AtomicFile` sibling staging and verified
+write/flush/close before replacement; formats remain unchanged. See decisions
+D-L1 and D-IO1 and the [remediation ledger](codebase-audit-remediation-plan.md).
 
 [Charter direction](charter-direction.md) separates later physics, object
 lifetime, tooling and Linux requirements from current contracts. The owner
@@ -141,6 +162,12 @@ Live consumers:
 | `Renderer::RenderScene` | `ArenaAlloc frameArena` | Immediate-drawable pointer list per frame |
 | `CellGameModule::LoadCellGame` | standard temporary vectors | Validated sparse/legacy load state |
 | `SparseCellGrid` | standard authoritative hash map + retained inactive map, node handles, flat index/vector | Unbounded 16×16 chunks plus allocation-reusing generation output, separate stored/counting masks, and per-target candidate/halo selection |
+
+Arena and stack allocations align actual addresses and use aligned backing
+storage for stronger requests without relocating live allocations. Typed pool
+storage honors element alignment. The four-chunk cap, bulk reset and LIFO
+contracts remain unchanged; invalid alignments and overflowing sizes are
+rejected before use. Allocation failures may throw.
 
 A general-purpose allocator (mimalloc-class) is a different product; do not reinvent it.
 
@@ -254,7 +281,7 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **Render split** | Enroll once; emit tokens per frame; backend executes (D-R1–D-R8, D-R10). |
 | **Rulesets** | Strategy hierarchy; pure `nextState` + `evalCell`; double-buffered generation (D-P3). |
 | **Scene model** | Persistent handle-based `SceneGraph` for world organization (D-E8), extracted as one drawable into the unchanged per-frame rendering list (D-E4). |
-| **Tests** | Independent `IllumoTests` and `IllumoGameTests` runners, plus consumer-header smoke, exact process-isolated cases, `IllumoWorkspace` aggregation, combined Clang/LLVM coverage (D-T1), and compile-time `clang-tidy` (D-T3). |
+| **Tests** | Independent `IllumoTests`, `IllumoGameTests`, `IllEdTests`, and `IllMeshViewerTests` runners, plus consumer-header smoke, exact process-isolated cases, `IllumoWorkspace` aggregation, combined Clang/LLVM coverage (D-T1), and compile-time `clang-tidy` (D-T3). Coverage dependencies and binary inputs derive from the registered runners, including generated applications and optional editor runners. |
 | **Debt hygiene** | Dead experiments under `archive/` rather than half-live. |
 
 ---
@@ -269,12 +296,21 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **Illumo/Source/Scene/** | Persistent nodes, hierarchy, cached transforms, subtree state, and render attachment extraction; supported contracts are under `Illumo/Include/Illumo/Scene`. |
 | **IllumoGame/Source/Game/** | CA definition/config, module factory, domain + presentation (`SparseCellGrid`, `CanvasView`, `CellGameModule`, `CellContext`); dense Canvas types are compatibility-only. |
 | **IllumoGame/Source/Rulesets/** | CA rules (GoL family, Wireworld, …). |
-| **Illumo/Source/Rendering/** | Reusable 2D front end, managed assets, Scene list, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
+| **Illumo/Source/Rendering/** | Reusable world-mesh and 2D front end, cubemaps, offscreen passes, managed assets, Scene list, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
+| **IllEd/Source/** | SceneGraph world editor, document model, `.ilsc` codec, and product UI. |
+| **IllMeshViewer/Source/** | Mesh-viewer application, camera, configuration, input, and product UI. |
 | **Illumo/Source/Services/** | Generic log, env, input, system CLI, branded console UI, and allocators. |
 | **Illumo/Source/Foundation/** | BuildInfo, macros, and implementation support; public aliases/utilities are under `Illumo/Include/Illumo/Foundation`. |
 | **Illumo/Source/Platform/** | OS entry, public SaveLoad implementation boundary, and native dialogs. |
 | **`Illumo/Assets/`** | Runtime files outside `Illumo/Source/`; there is no `Source/Assets` package. |
-| **Illumo/Tests, IllumoGame/Tests** | Independent library and product suites. |
+| **Illumo/Tests, IllumoGame/Tests, IllEd/Tests, IllMeshViewer/Tests** | Four independent library and product runners. |
+
+`Illumo::Illumo` exports supported public headers and a GLM-only generated include
+directory. GLM types and `<glm/...>` paths are intentional public math contracts;
+the rest of the vendor tree stays private. CMake tracks GLM header content and
+membership, preserves unchanged timestamps, and removes stale generated headers.
+Consumers that need another vendor API declare that dependency explicitly
+(D-DEP1). Vendored source files and versions are unchanged.
 
 House style (D-008 / `docs/contributing.md`): avoid `auto`; avoid namespaces (prefer static classes/structs); no recursion; third-party via PR — unless a later decision waives.
 
@@ -405,7 +441,9 @@ ortho matrix (D-R21).
 
 V1 deliberately has no ECS components, update callbacks, serialization,
 prefabs, bounds/culling structure, physics, scripting, or retained UI. The
-current IllumoGame cellular-automata path does not instantiate a graph. The
+IllumoGame sparse domain and product UI remain separate from the graph; its
+opt-in `render3dTest` diagnostic attaches world meshes. IllEd uses the graph
+for document geometry. The
 complete contract is `docs/scene-graph-v1-design.md`.
 
 ### 5.5 Rendering architecture (shipped)
@@ -431,25 +469,26 @@ IBackend::SubmitCommandQueue
 | Piece | Job |
 |-------|-----|
 | **Modules** | Choose what should appear this frame; place drawables into Scene layers. |
-| **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug). One main pass. |
+| **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug), with ordinary screen rendering or effective custom pass sequences per layer. |
 | **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, Sprite, and Skybox are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world; Skybox positions at the far plane with translation-stripped view-projection. |
-| **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. |
+| **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. Read-only pending position/zoom access lets products validate interpolated navigation targets. CA navigation and sparse camera metadata reserve a `2^32`-cell endpoint margin: finite world axes satisfy `abs(axis) <= 16 * (2^63 - 2^32)`. This protects view arithmetic without restricting sparse storage. |
 | **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
-| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, and motion blur are CPU-side drawable state emitted as `WorldLook` uniforms; products persist them through EnvVars. One attachment per scene node; compose complex objects with child nodes. Replaces the former `DebugDraw3D` diagnostic host (D-R21). |
+| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, and motion blur are CPU-side drawable state emitted as `WorldLook` uniforms; products persist them through EnvVars. A node borrows at most one attachment; one MeshVisual can contain multiple items. Use child nodes for independent transforms and subtree state. Replaces the former `DebugDraw3D` diagnostic host (D-R21). |
 | **SkyboxVisual** | World cubemap host and `ISceneRenderAttachment`: unit cube geometry rendered with `RenderStyleId::Skybox` at the far depth plane (`xyww`), translation-stripped view matrix `projection * mat4(mat3(view))`, seamless cubemap sampling (`IBackend::CreateCubemap`, `AssetManager::acquireCubemapFromCross`), and optional tint color. Consumed by 3D viewers (e.g. `IllMeshViewer`). |
 | **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `CommandLine`, `GLString`, `ExitConfirmDialog`, and `EditorConfirmDialog` compose these primitives without introducing a retained widget hierarchy. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
 | **Renderer** | Backend-neutral: owns style table; frame setup; walk layers; submit. Depends only on `IBackend*` (D-R11). |
-| **IBackend** | Allocates typed slot+generation handles; validates create/replace/destroy/query operations; queues and submits. GPU objects live in backend registries. Supports 2D textures and 6-face cubemaps (`CreateCubemap`) with seamless filtering and clamp-to-edge wrap. |
+| **IBackend** | Allocates typed slot+generation handles; validates create/replace/destroy/query operations; queues and submits. GPU objects live in backend registries. Supports 2D textures and 6-face cubemaps (`CreateCubemap`, optional `ReplaceCubemap`) with seamless filtering and clamp-to-edge wrap. Replacement preserves texture kind and publishes a complete resource before retiring the previous one. |
 | **AssetManager** | Canonical-path texture/cubemap/shader cache with reference counts, stable per-request fallback resources (the shader fallback follows the custom 2D binding contract), synchronous or one-worker CPU loading, cubemap cross/strip extraction (`acquireCubemapFromCross`), include-dependency tracking for automatic hot reload, render-thread `pump`, explicit reload, and Debug timestamp polling. The Debug demo manages both its atlas and sprite shader through this path. |
 | **ShaderPreprocessor** | Backend-neutral GLSL preprocessor: resolves `#include` directives against virtual in-memory module registry (`<illumo/...>`) and disk paths, injects compile-time `#define` macros, enforces `#pragma once` & recursion guards, preserves `#version` at line 1, emits `#line` markers, and discovers transitive include dependencies. |
 | **Composition (`Illumo::initialize`)** | Calls fallible window/backend factories, initializes the backend exactly once, transfers `unique_ptr<IBackend>` to Renderer, and calls `ensureBuiltinStyles()`. |
 | **GLBackend / GLDevice** | Real OpenGL under `Rendering/OpenGL/`: handle registries, execute tokens, PBO texture updates, bind-state tracking, blend-func-on-enable (D-R5). |
 | **MockBackend** | Exposed only by `Illumo::TestSupport`: records creates + command order for headless tests. |
 
-**Layers vs passes:** layers are composition buckets on the default framebuffer
-(single clear). They are not multi-target GPU render passes. Unimplemented pass
-scaffolding was removed; offscreen targets remain future work.
+**Layers vs passes:** layers are ordered composition buckets. Ordinary layers
+draw to the screen; a layer's effective pass sequence can select offscreen
+targets, viewports, and independent clear settings. Application overrides take
+precedence over host defaults. This explicit pass mechanism is not a render graph.
 
 **Acquire/enroll (rare):** backend `Create*` returns non-convertible
 `MeshHandle`, `ShaderHandle`, or `TextureHandle` values with slot+generation;
@@ -573,8 +612,9 @@ that 18x18 neighborhood. The bounded four-way cache is sharded by the main and
 worker slots, so evaluation needs no locks; a hash selects candidates but a
 full key comparison is required for a hit. It samples 16 targets per shard,
 activates at a 25% hit rate, and cools down for 32 generations after
-unprofitable sampling or three active generations below 10%. Ruleset type or
-transition-table revision changes invalidate every entry. Candidate-only and
+unprofitable sampling or three active generations below 10%. An exact comparison
+of the complete transition table invalidates every entry when semantics change;
+instance revisions, rule names, and C++ types are not semantic identities. Candidate-only and
 sub-32-target generations bypass it. Coarse mixed/candidate
 evaluation uses up to four automatic workers once there are at least 16,384
 work cells. Preparation uses about eight retained ranges per worker, capped at
@@ -624,8 +664,38 @@ invalidate current chunks before the next step.
 
 ### 5.7 Rules and encoding
 
+`RuleSetRegistry` constructs built-ins and validates catalog text transactionally.
+Game's `RuleCatalogLoader` owns ordered file discovery: executable directory,
+working directory, then its `IllumoGame` subdirectory. The first valid catalog
+wins; failed files do not partially replace definitions. The required-module
+factory loads the shared catalog once before menu/direct-game construction.
+Engine-owned configuration-path discovery supplies the executable directory.
+Independent registries require explicit loading through the loader or
+`loadFromText`; Rulesets has no filesystem or native API dependency (D-GC1).
+
 **Active rules** (factory / AllSets): Game of Life, Seeds, Brian's Brain, Highlife, Day & Night, Life Without Death, Wireworld, Rule 90, and Rule 184.  
 Life-like B/S modes share `LifeLikeRuleSet` masks. Rule 90 / 184 use `NeighborhoodKind::Elementary1D` and a serial space-time `SparseCellGrid` advance (D-G2).
+Catalog registration rejects B0 and odd elementary rules because sparse storage
+requires a stable background. Strict JSON loading validates all entries before
+publishing a replacement catalog; neighbor indices are 0..8, and elementary
+numbers/palette channels are 0..255. Direct life-like counts above eight return
+background without shifting.
+Failed manual generations do not count; async failure preserves the published
+world, pauses with a diagnostic, and retains one explicit retry without another
+time-step charge. Elementary history and next-row writes stage in the existing
+inactive chunk map and publish once, preserving live state on staging failure.
+External-source binding is cleared on every exit, including empty-source advances.
+At signed X endpoints, elementary rules use background for unrepresentable
+neighbors and omit unrepresentable children. A source row at maximum signed Y
+rejects advancement before changing grid contents or revision. Clipboard
+capture/fill iterate bounded offsets, permitting small endpoint selections.
+Pattern detection honors plaintext comments and retains plaintext rows for
+ambiguous cell-only text. Explicit `rle`/`plaintext` commands choose their named
+parser. Ctrl+V rejects invalid or occupancy-empty clipboard text without pasting
+a previous internal pattern; console `paste` explicitly uses the retained buffer.
+RLE exports preserve binary `o`/`b` and use project-extension `p{N}` byte-state
+tokens. Parsing preserves old single-digit `pD` meanings; ambiguous historical
+unbraced multi-digit exports require explicit correction rather than guessing.
 
 ```
 class RuleSet {
@@ -744,7 +814,13 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
 - `CellGameModule` registers simulation, canvas, camera, ruleset, and save/load
   commands through `CommandRegistry`; registry metadata drives help and Tab
   completion.
-- Registered commands execute from the queue without falling through as unknown.
+- Registered commands execute in a detached batch. Reentrant enqueue is deferred
+  to the next top-level dispatch; retirement cancels unstarted callbacks and
+  clearing cancels the batch remainder. The non-copyable registry and input
+  manager retain instance-local ownership. See [Services](packages/services.md)
+  for exception and configuration recovery contracts. Failed configuration
+  loads preserve live values and original bytes, disabling teardown saves until
+  a successful reload.
 - Save always writes version 3 sparse records (magic/version, ruleset, camera,
   topology, deterministic sorted canonical chunks). Load validates into
   temporary state, accepts versions 3 and 2 plus the prior dense format, treats
@@ -830,7 +906,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-UI3** | Console can be mounted or floating; floating mode supports title-bar drag and corner resize. |
 | **D-DOC1** | Established one first-party documentation tree; refined by D-DOC2. |
 | **D-DOC2** | Canonical technical documentation remains under `docs/`; `illumo.tex` is the prose book and `architecture-map.tex` the chart pack. Root/nested `AGENTS.md` and `.agent/` are operational-guidance exceptions. |
-| **D-T1** | Independent compile-efficient `IllumoTests` and `IllumoGameTests` runners expose exact cases; `IllumoWorkspace` aggregates them and combined Clang/LLVM coverage enforces at least 85% production line coverage. |
+| **D-T1** | Independent compile-efficient test runners expose exact cases; `IllumoWorkspace` aggregates all registered runners and combined Clang/LLVM coverage enforces at least 85% production line coverage across their linked production code. |
 | **D-T2** | Introduced workspace `IllumoTidy`; superseded for default-build invocation by D-T3. |
 | **D-T3** | First-party C++ runs `clang-tidy` during the default build (`ILLUMO_ENABLE_CLANG_TIDY` ON). Disable with `-DILLUMO_ENABLE_CLANG_TIDY=OFF` or `python build.py build --no-tidy`. `python build.py tidy` remains the batch Ninja/Clang compile-database run. |
 

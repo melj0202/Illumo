@@ -93,7 +93,7 @@ RunIllumoApplication(int argc,
     FramePacer framePacer;
     std::chrono::steady_clock::time_point lastTime =
       std::chrono::steady_clock::now();
-    while (!illumo.shouldClose()) {
+    while (!illumo.processCloseRequest()) {
       FrameMark;
       const std::chrono::steady_clock::time_point currentTime =
         std::chrono::steady_clock::now();

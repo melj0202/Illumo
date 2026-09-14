@@ -1,6 +1,8 @@
 #include "CellGameModule.h"
 #include "IllumoGameConfig.h"
 #include "MainMenuModule.h"
+#include "RuleCatalogLoader.h"
+#include "Rulesets/RuleSetRegistry.h"
 
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Engine/IModule.h>
@@ -10,6 +12,11 @@
 static std::unique_ptr<IModule>
 createIllumoGameModule(IEnvVars* environment)
 {
+  // Catalog policy is initialized once, before either product module reads
+  // modes.
+  static const bool catalogLoaded =
+    RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
+  (void)catalogLoaded;
   if (environment != nullptr &&
       environment->getVar("LaunchDirect").valueAsBool) {
     return std::make_unique<CellGameModule>();

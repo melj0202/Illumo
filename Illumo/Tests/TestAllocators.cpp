@@ -5,8 +5,10 @@
 #include <Illumo/Services/PoolAlloc.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <array>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <vector>
 
@@ -363,6 +365,112 @@ testStackNestedCStringFrames()
   testEqSize(g, stack.getDepth(), 0, "depth 0");
 }
 
+template<size_t Alignment>
+static void
+testOverAlignedStorage()
+{
+  struct alignas(Alignment) Value
+  {
+    std::array<int, Alignment / sizeof(int)> values{ 17 };
+  };
+  ArenaAlloc arena(sizeof(Value));
+  ChainedStackAlloc stack(sizeof(Value));
+  ChainedPoolAlloc<Value> pool(2);
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    std::vector<Value*> stackValues;
+    std::vector<Value*> poolValues;
+    for (size_t i = 0; i < ArenaAlloc::kMaxChunks; ++i) {
+      Value* a = arena.Allocate<Value>();
+      Value* s = stack.Allocate<Value>();
+      testTrue(
+        g, a != nullptr && s != nullptr, "full-size aligned chunks allocate");
+      testTrue(g,
+               reinterpret_cast<std::uintptr_t>(a) % Alignment == 0 &&
+                 reinterpret_cast<std::uintptr_t>(s) % Alignment == 0,
+               "arena and stack honor over-alignment");
+      if (a != nullptr) {
+        testEqInt(g, a->values[0], 17, "arena object constructed");
+      }
+      if (s != nullptr) {
+        stackValues.push_back(s);
+      }
+    }
+    testTrue(g,
+             arena.Allocate<Value>() == nullptr &&
+               stack.Allocate<Value>() == nullptr,
+             "aligned allocations preserve four-chunk cap");
+    for (size_t i = 0; i < 8; ++i) {
+      Value* p = pool.Allocate();
+      testTrue(g,
+               p != nullptr &&
+                 reinterpret_cast<std::uintptr_t>(p) % Alignment == 0,
+               "every pool slot and grown chunk is aligned");
+      if (p != nullptr) {
+        ::new (p) Value();
+        poolValues.push_back(p);
+      }
+    }
+    testTrue(g, pool.Allocate() == nullptr, "pool cap preserved");
+    for (Value* p : poolValues) {
+      p->~Value();
+      pool.Deallocate(p);
+    }
+    Value* recycled = pool.Allocate();
+    testTrue(g,
+             !poolValues.empty() && recycled == poolValues.back(),
+             "aligned pool slot recycled");
+    while (!stackValues.empty()) {
+      testTrue(g, stack.Deallocate(stackValues.back()), "aligned LIFO unwind");
+      stackValues.pop_back();
+    }
+    testTrue(g,
+             stack.getOffset() == 0 && stack.getNumChunks() == 1 &&
+               stack.getDepth() == 0,
+             "alignment padding and growth unwind exactly");
+    arena.Clear();
+    stack.Clear();
+    pool.Clear();
+  }
+}
+
+static void
+testAllocatorOverAlignment()
+{
+  testOverAlignedStorage<256>();
+  testOverAlignedStorage<4096>();
+  ArenaAlloc arena(512);
+  ChainedStackAlloc stack(512);
+  char* a = arena.Allocate<char>('a');
+  char* s = stack.Allocate<char>('s');
+  void* alignedA = arena.AllocateBytes(256, 256);
+  void* alignedS = stack.AllocateBytes(256, 256);
+  testTrue(g,
+           alignedA != nullptr && alignedS != nullptr &&
+             reinterpret_cast<std::uintptr_t>(alignedA) % 256 == 0 &&
+             reinterpret_cast<std::uintptr_t>(alignedS) % 256 == 0 &&
+             *a == 'a' && *s == 's',
+           "mixed alignment preserves earlier live storage");
+  const size_t offset = stack.getOffset();
+  const size_t depth = stack.getDepth();
+  testTrue(g,
+           arena.AllocateBytes(1, 3) == nullptr &&
+             stack.AllocateBytes(1, 3) == nullptr &&
+             stack.getOffset() == offset && stack.getDepth() == depth,
+           "non-power-of-two alignment rejected without mutation");
+  testTrue(
+    g,
+    arena.AllocateCString("x", std::numeric_limits<size_t>::max()) == nullptr &&
+      stack.AllocateCString("x", std::numeric_limits<size_t>::max()) == nullptr,
+    "string size overflow rejected");
+  bool rejected = false;
+  try {
+    ChainedPoolAlloc<Aligned16> huge(std::numeric_limits<size_t>::max());
+  } catch (const std::bad_array_new_length&) {
+    rejected = true;
+  }
+  testTrue(g, rejected, "pool size overflow rejected before allocation");
+}
+
 static int
 runAllocatorCase(void (*testFunction)())
 {
@@ -375,6 +483,8 @@ runAllocatorCase(void (*testFunction)())
 void
 registerAllocatorTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Alloc.OverAlignment",
+               []() { return runAllocatorCase(testAllocatorOverAlignment); });
   registry.add("Illumo.Alloc.ArenaBasicAndReuse",
                []() { return runAllocatorCase(testArenaBasicAndReuse); });
   registry.add("Illumo.Alloc.ArenaChunkGrowthAndCap",

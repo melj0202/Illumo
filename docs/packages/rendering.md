@@ -1,5 +1,10 @@
 # Illumo Rendering
 
+Scene keeps host fallback passes separate from application `SetLayerPasses`
+overrides. Nonempty overrides win; empty lists, clear, and reset restore the
+current fallback. Host motion-blur changes preserve overrides installed in
+Start, Update, or dispatch. Effective pass queries include the fallback.
+
 The supported reusable path is:
 
 ```text
@@ -34,6 +39,29 @@ switch to perspective look-at without a private view-projection helper.
 The Debug renderer demo proves assets, sprites, transforms, animation, and
 reload through the same library path consumed by IllumoGame. D-E6 supersedes
 the prior deferred-extraction rule: the public static-library boundary now
-exists. D-E8 adds a deliberately bounded persistent scene hierarchy for future
-consumers. The current IllumoGame cellular-automata path does not instantiate a
-graph and keeps the simulator's sparse domain and product UI unwired.
+exists. D-E8 adds the deliberately bounded persistent scene hierarchy consumed
+by IllEd geometry and IllumoGame's opt-in `render3dTest` diagnostic. The
+simulator's sparse cell domain and product UI remain separate from that graph.
+
+Cubemap assets preserve their source kind and all six canonical dependencies
+(or one cross path). Initial acquisition remains synchronous. Reloads decode
+complete RGBA faces on the CPU queue and publish through
+`Renderer::replaceCubemap` on pump. Missing or mismatched faces and rejected
+replacements retain the previous ready resource and revision. Explicit path
+reload and timestamp polling observe every face; cross orientation is shared
+by initial and reload decoding.
+
+The initial frame clear and ordinary layer boundaries explicitly select the
+screen framebuffer and full-window viewport. Custom passes establish their own
+targets. The OpenGL framebuffer cache starts unknown for each submission, so
+screen binding cannot be skipped based on a stale zero value.
+
+Pass color and depth clears are independent. Depth-clear tokens carry the
+requested value; no-argument depth clears and combined screen clears default
+to depth one instead of inheriting a previous pass's custom value.
+
+Font atlas caches use a weak renderer lifetime identity instead of its address.
+Each live renderer retains a separate enrollment; expired entries are pruned
+and retired texture handles are reenrolled. Fonts do not own renderer or GPU
+lifetimes. Renderer destruction invalidates its identity before backend
+teardown, so shared fonts safely survive successive renderer lifetimes.

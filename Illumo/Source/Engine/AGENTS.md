@@ -37,8 +37,17 @@ Engine must remain independent of Game and Rulesets.
   key/char events at the end of each host update.
 - Keep window/input/module/render work on the main thread. Worker threads owned
   by another subsystem must join or quiesce before their owner is destroyed.
+- Negotiate ordinary close through `processCloseRequest` and started modules'
+  optional `OnCloseRequested`. Deferral clears the native close flag and keeps
+  frames running. Failed required-module startup/transition remains terminal;
+  never let an optional module veto that failure shutdown.
 - Keep the `Renderer` backend-neutral. Engine composes
   `CreateOpenGLBackend`; modules see only the context/interface boundary.
+- Host pipeline configuration writes Scene default passes only. Preserve
+  application overrides installed during Start, Update, or dispatch; clearing
+  an override restores the current host fallback.
+  Required-module transitions reset all application overrides to detach borrowed
+  callbacks; optional modules reinstall their overrides after transitions.
 - Detach logger sinks and callbacks before destroying the objects they target.
   Shutdown must be safe after partial initialization and must release the
   graphics context after dependent resources.

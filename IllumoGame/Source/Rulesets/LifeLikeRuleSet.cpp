@@ -21,6 +21,9 @@ unsigned char
 LifeLikeRuleSet::nextState(unsigned char cell,
                            unsigned char aliveNeighbors) const
 {
+  if (aliveNeighbors > 8) {
+    return 1;
+  }
   const unsigned int bit = 1u << aliveNeighbors;
   if (cell == 0) {
     return ((surviveMask & bit) != 0u) ? 0 : 1;

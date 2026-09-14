@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 add_library(IllEdCore STATIC
   Source/EditorAttachment.cpp
@@ -41,6 +41,15 @@ illumo_stage_msvc_asan(IllEd)
 illed_stage_assets(IllEd)
 
 if(BUILD_TESTING)
+  if(WIN32)
+    # Explicit native-window regression; excluded from headless builds/tests.
+    add_executable(IllEdCloseWindowTests EXCLUDE_FROM_ALL tools/CloseWindowTests.cpp)
+    target_include_directories(IllEdCloseWindowTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
+    target_link_libraries(IllEdCloseWindowTests PRIVATE IllEdCore glfw)
+    illumo_configure_runtime_target(IllEdCloseWindowTests)
+    illumo_stage_msvc_asan(IllEdCloseWindowTests)
+    illed_stage_assets(IllEdCloseWindowTests)
+  endif()
   add_executable(IllEdTests
     Tests/TestMain.cpp
     Tests/TestEditorDocument.cpp

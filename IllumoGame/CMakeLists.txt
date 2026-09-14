@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 add_library(IllumoGameCore STATIC
   Source/Game/BuiltinPatterns.cpp
@@ -17,6 +17,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/IllumoGameConfig.cpp
   Source/Game/MainMenuModule.cpp
   Source/Game/PatternCodec.cpp
+  Source/Game/RuleCatalogLoader.cpp
   Source/Game/SimulationRunner.cpp
   Source/Game/SparseCellGrid.cpp
   Source/Game/SparseWorkerPool.cpp
@@ -49,6 +50,7 @@ if(BUILD_TESTING)
   add_executable(IllumoGameTests
     Tests/TestMain.cpp
     Tests/TestRuleSets.cpp
+    Tests/TestRuleCatalogLoader.cpp
     Tests/TestCellContext.cpp
     Tests/TestCanvasDomain.cpp
     Tests/TestDomainBoundary.cpp

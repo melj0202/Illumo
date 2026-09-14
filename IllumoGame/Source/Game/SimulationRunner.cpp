@@ -5,8 +5,10 @@
 #include <utility>
 
 SimulationRunner::SimulationRunner()
-  : worker(&SimulationRunner::workerLoop, this)
 {
+  // The worker can read request/result state as soon as it starts.
+  // Launch only after every member has finished initialization.
+  worker = std::thread(&SimulationRunner::workerLoop, this);
 }
 
 SimulationRunner::~SimulationRunner()

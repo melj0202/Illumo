@@ -273,6 +273,12 @@ RenderWindow::requestClose()
   glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
+void
+RenderWindow::cancelCloseRequest()
+{
+  glfwSetWindowShouldClose(window, GLFW_FALSE);
+}
+
 int
 RenderWindow::getRefreshRate() const
 {

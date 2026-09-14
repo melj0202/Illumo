@@ -19,5 +19,5 @@ build/Release/IllEdTests.exe --list
 build/Release/IllEdTests.exe --run <exact-test-name>
 ```
 
-The aggregate workspace label is `IllumoWorkspace`. Combined coverage does not
-include IllEd yet.
+The aggregate workspace label is `IllumoWorkspace`. Combined workspace coverage
+builds this runner, refreshes discovery, and includes its production objects.

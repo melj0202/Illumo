@@ -21,6 +21,26 @@ The library owns reusable cross-cutting facilities:
   \item \textbf{Allocators} --- pool, arena, chain, and Debug allocation tools.
 \end{itemize}
 
+Arena and stack allocations align actual addresses. Empty backing storage may
+gain stronger alignment; live allocations never move. New chunks and typed
+pool storage honor over-aligned requests. The four-chunk cap, bulk clear and
+stack LIFO behavior remain unchanged. Byte alignment zero means one; other
+non-power-of-two alignments and overflowing sizes are rejected before use.
+Underlying allocation failures may throw.
+
+Command dispatch detaches one batch. Newly queued callbacks wait until the next
+top-level dispatch; nested dispatch is ignored. Retiring or replacing a
+registration cancels its unstarted callbacks. Clearing cancels pending work and
+the detached remainder while preserving the active callback. Exceptions
+propagate and discard the remainder, but dispatch can subsequently resume.
+The registry and input manager are non-copyable and non-movable owners.
+
+Configuration loads are transactional. Invalid or unreadable input disables
+saving, including destruction-time saving, without overwriting the original
+file. Repair or remove the file and successfully reload to restore persistence.
+A missing file permits first-run creation. Failure diagnostics do not depend
+on logger lifetime.
+
 \subsection{IllumoGame policy}
 IllumoGame owns \pathref{IllumoGame/envvars.json}, CA defaults (canvas,
 topology, ruleset, TPS, speed, and fade), CA option/help descriptors, and its
@@ -54,6 +74,26 @@ and filename defaults through \symbolref{SaveLoadDialogSpec}. Source presence
 and CMake selection do not establish support: a port still requires native
 configure, build, launch, tests, rendering/input, dialogs, and shutdown
 validation.
+
+Product save codecs use \texttt{AtomicFile::write}: exclusively create a sibling
+staging file, encode, check write/flush/close, then replace the destination.
+Reported failures preserve prior bytes and clean only owned staging files.
+Windows replacement uses \texttt{MoveFileExW} without cross-volume copy fallback;
+POSIX rename remains unverified scaffolding. Formats stay product-owned and
+unchanged. This is not a power-loss durability guarantee.
+
+The IllEd \texttt{.ilsc} parser validates numeric destination ranges before
+narrowing: float fields reject finite doubles outside the finite float range;
+integer fields check signed or unsigned JSON values before conversion to int.
+Version and color validation therefore cannot be bypassed by integer wrapping.
+Rejected input preserves the destination document. Accepted float boundary
+values remain finite when stored and round-trip through scene serialization.
+
+Imported node identifiers are opaque strings. New nodes search for an unused
+\texttt{n} plus decimal counter, starting at one after load and checking every
+candidate against existing IDs. The unsigned counter wraps explicitly to one;
+a complete occupied cycle returns failure without inserting a node. Existing
+IDs and parent references are preserved, including long numeric-looking IDs.
 
 \subsection{Third-party and runtime data}
 Dependencies remain vendored under \pathref{Illumo/thirdparty/}. Illumo owns

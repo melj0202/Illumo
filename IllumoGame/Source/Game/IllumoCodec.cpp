@@ -1,6 +1,8 @@
 #include "IllumoCodec.h"
+#include "CanvasCoordinatePolicy.h"
 #include "CellContext.h"
 #include "Rulesets/RuleSet.h"
+#include <Illumo/Platform/AtomicFile.h>
 
 #include <algorithm>
 #include <cmath>
@@ -51,60 +53,64 @@ IllumoCodec::writeFile(const std::string& path,
     setError(error, "Save path is empty");
     return false;
   }
-
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  if (!file.is_open()) {
-    setError(error, "Failed to open for saving: " + path);
+  if (!CanvasCoordinatePolicy::validPosition(document.cameraX,
+                                             document.cameraY) ||
+      !std::isfinite(document.cameraZoom) || document.cameraZoom < 0.1 ||
+      document.cameraZoom > 100.0) {
+    setError(error, "Camera metadata is outside the supported range");
     return false;
   }
 
-  const char magic[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '3', '\0' };
-  const std::uint32_t version = 3;
-  char ruleTag[MAX_RULETAG_SIZE] = {};
-  const std::string activeTag = document.ruleString;
-  const std::size_t tagBytes =
-    std::min(activeTag.size(), static_cast<std::size_t>(MAX_RULETAG_SIZE - 1));
-  std::memcpy(ruleTag, activeTag.data(), tagBytes);
+  return AtomicFile::write(
+    path,
+    [&document](std::ostream& file, std::string*) {
+      const char magic[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '3', '\0' };
+      const std::uint32_t version = 3;
+      char ruleTag[MAX_RULETAG_SIZE] = {};
+      const std::string activeTag = document.ruleString;
+      const std::size_t tagBytes = std::min(
+        activeTag.size(), static_cast<std::size_t>(MAX_RULETAG_SIZE - 1));
+      std::memcpy(ruleTag, activeTag.data(), tagBytes);
 
-  const double cameraX = document.cameraX;
-  const double cameraY = document.cameraY;
-  const double cameraZoom = document.cameraZoom;
-  const std::int64_t worldChunkWidth = document.worldChunkWidth;
-  const std::int64_t worldChunkHeight = document.worldChunkHeight;
-  const SparseCellGrid* grid =
-    document.sourceGrid != nullptr ? document.sourceGrid : document.grid.get();
-  std::vector<SparseChunkRecord> records;
-  if (grid != nullptr) {
-    records = grid->collectChunkRecords();
-  }
-  const std::uint64_t chunkCount = static_cast<std::uint64_t>(records.size());
+      const double cameraX = document.cameraX;
+      const double cameraY = document.cameraY;
+      const double cameraZoom = document.cameraZoom;
+      const std::int64_t worldChunkWidth = document.worldChunkWidth;
+      const std::int64_t worldChunkHeight = document.worldChunkHeight;
+      const SparseCellGrid* grid = document.sourceGrid != nullptr
+                                     ? document.sourceGrid
+                                     : document.grid.get();
+      std::vector<SparseChunkRecord> records;
+      if (grid != nullptr) {
+        records = grid->collectChunkRecords();
+      }
+      const std::uint64_t chunkCount =
+        static_cast<std::uint64_t>(records.size());
 
-  file.write(magic, sizeof(magic));
-  file.write(reinterpret_cast<const char*>(&version), sizeof(version));
-  file.write(ruleTag, sizeof(ruleTag));
-  file.write(reinterpret_cast<const char*>(&cameraX), sizeof(cameraX));
-  file.write(reinterpret_cast<const char*>(&cameraY), sizeof(cameraY));
-  file.write(reinterpret_cast<const char*>(&cameraZoom), sizeof(cameraZoom));
-  file.write(reinterpret_cast<const char*>(&worldChunkWidth),
-             sizeof(worldChunkWidth));
-  file.write(reinterpret_cast<const char*>(&worldChunkHeight),
-             sizeof(worldChunkHeight));
-  file.write(reinterpret_cast<const char*>(&chunkCount), sizeof(chunkCount));
-  for (const SparseChunkRecord& record : records) {
-    file.write(reinterpret_cast<const char*>(&record.chunkX),
-               sizeof(record.chunkX));
-    file.write(reinterpret_cast<const char*>(&record.chunkY),
-               sizeof(record.chunkY));
-    file.write(reinterpret_cast<const char*>(record.cells.data()),
-               static_cast<std::streamsize>(record.cells.size()));
-  }
-  const bool succeeded = file.good();
-  file.close();
-  if (!succeeded) {
-    setError(error, "Failed while writing: " + path);
-    return false;
-  }
-  return true;
+      file.write(magic, sizeof(magic));
+      file.write(reinterpret_cast<const char*>(&version), sizeof(version));
+      file.write(ruleTag, sizeof(ruleTag));
+      file.write(reinterpret_cast<const char*>(&cameraX), sizeof(cameraX));
+      file.write(reinterpret_cast<const char*>(&cameraY), sizeof(cameraY));
+      file.write(reinterpret_cast<const char*>(&cameraZoom),
+                 sizeof(cameraZoom));
+      file.write(reinterpret_cast<const char*>(&worldChunkWidth),
+                 sizeof(worldChunkWidth));
+      file.write(reinterpret_cast<const char*>(&worldChunkHeight),
+                 sizeof(worldChunkHeight));
+      file.write(reinterpret_cast<const char*>(&chunkCount),
+                 sizeof(chunkCount));
+      for (const SparseChunkRecord& record : records) {
+        file.write(reinterpret_cast<const char*>(&record.chunkX),
+                   sizeof(record.chunkX));
+        file.write(reinterpret_cast<const char*>(&record.chunkY),
+                   sizeof(record.chunkY));
+        file.write(reinterpret_cast<const char*>(record.cells.data()),
+                   static_cast<std::streamsize>(record.cells.size()));
+      }
+      return file.good();
+    },
+    error);
 }
 
 bool
@@ -178,7 +184,7 @@ IllumoCodec::readFile(const std::string& path,
     }
     const std::uint32_t expectedVersion = sparseV3 ? 3u : 2u;
     if (version != expectedVersion || chunkCount > 10000000ULL ||
-        !std::isfinite(savedCameraX) || !std::isfinite(savedCameraY) ||
+        !CanvasCoordinatePolicy::validPosition(savedCameraX, savedCameraY) ||
         !std::isfinite(savedCameraZoom) || savedCameraZoom < 0.1 ||
         savedCameraZoom > 100.0 ||
         !SparseCellGrid::isValidTopology(loadedWorldChunkWidth,

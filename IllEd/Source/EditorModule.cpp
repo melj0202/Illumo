@@ -52,6 +52,7 @@ EditorModule::Start(IllumoContext* context)
   }
   ic = context;
 
+  m_exitApproved = false;
   m_toolbar = std::make_unique<EditorToolbar>(ic->window, ic->renderer);
   m_sceneGraphView =
     std::make_unique<EditorSceneGraphView>(ic->window, ic->renderer);
@@ -534,6 +535,24 @@ EditorModule::requestAction(EditorPendingAction action)
   performPendingAction();
 }
 
+bool
+EditorModule::OnCloseRequested()
+{
+  if (m_exitApproved) {
+    // Another started module may veto this attempt after the editor accepts.
+    m_exitApproved = false;
+    return true;
+  }
+  if (!m_document.isDirty()) {
+    return true;
+  }
+  // Preserve an existing confirmation (including New/Open) on repeated close.
+  if (!m_confirm || !m_confirm->isOpen()) {
+    requestAction(EditorPendingAction::ExitEditor);
+  }
+  return false;
+}
+
 void
 EditorModule::performPendingAction()
 {
@@ -545,6 +564,7 @@ EditorModule::performPendingAction()
     openDocument();
   } else if (action == EditorPendingAction::ExitEditor) {
     if (ic != nullptr && ic->window != nullptr) {
+      m_exitApproved = true;
       ic->window->requestClose();
     }
   }
@@ -1026,15 +1046,15 @@ EditorModule::updateSelection(double dt)
 
   float worldX = 0.0f;
   float worldY = 0.0f;
-  if (!screenToWorld(mouseScreenX, mouseScreenY, &worldX, &worldY)) {
-    m_mouseWasDown = left;
-    return;
-  }
+  const bool groundHit =
+    screenToWorld(mouseScreenX, mouseScreenY, &worldX, &worldY);
 
   if (left && !m_mouseWasDown) {
     if (m_activeTool != EditorCommand::SelectTool &&
         m_activeTool != EditorCommand::None) {
-      applyActiveToolAt(worldX, worldY);
+      if (groundHit) {
+        applyActiveToolAt(worldX, worldY);
+      }
     } else {
       // Check if gizmo handle was clicked first
       if (hasSelection) {
@@ -1066,13 +1086,37 @@ EditorModule::updateSelection(double dt)
 
       // If no gizmo handle hit, perform object picking
       std::string hit;
-      if (m_document.pick(worldX, worldY, &hit)) {
+      glm::vec3 pickOrigin{ 0.0f };
+      glm::vec3 pickDirection{ 0.0f };
+      const bool picked =
+        m_document.worldMode() == IlscWorldMode::World3D
+          ? (screenToWorldRay(
+               mouseScreenX, mouseScreenY, &pickOrigin, &pickDirection) &&
+             m_document.pickRay(pickOrigin, pickDirection, &hit))
+          : (groundHit && m_document.pick(worldX, worldY, &hit));
+      if (picked) {
         m_selectedId = hit;
         m_dragging = true;
         m_activeGizmoPart = GizmoPart::Center;
         const Matrix4 mat = m_document.worldMatrix(m_selectedId);
         m_dragGizmoOrigin = glm::vec3(mat[3][0], mat[3][1], mat[3][2]);
-        m_dragGizmoHitOffset = glm::vec3(0.0f);
+        glm::vec3 rayOrigin{ 0.0f };
+        glm::vec3 rayDir{ 0.0f };
+        glm::vec3 initialHit{ 0.0f };
+        m_dragging =
+          screenToWorldRay(mouseScreenX, mouseScreenY, &rayOrigin, &rayDir) &&
+          intersectGizmoConstraint(m_activeGizmoPart,
+                                   m_dragGizmoOrigin,
+                                   rayOrigin,
+                                   rayDir,
+                                   &initialHit);
+        if (m_dragging) {
+          // Keep the picked body point under the cursor instead of snapping
+          // the object's origin to it on the next held frame.
+          m_dragGizmoHitOffset = initialHit - m_dragGizmoOrigin;
+        } else {
+          m_activeGizmoPart = GizmoPart::None;
+        }
       } else {
         m_selectedId.clear();
         m_dragging = false;
@@ -1087,6 +1131,9 @@ EditorModule::updateSelection(double dt)
 void
 EditorModule::Update(double dt)
 {
+  // Resuming a frame means close negotiation was canceled, possibly before
+  // this module was consulted. Approval cannot survive further editing.
+  m_exitApproved = false;
   if (ic == nullptr) {
     return;
   }

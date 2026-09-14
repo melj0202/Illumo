@@ -3,6 +3,7 @@
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/ResourceHandle.h>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -39,7 +40,7 @@ struct AssetStatus
   std::string lastError;
 };
 
-// Cached 2D texture/shader assets. CPU file/decode work may run on one worker;
+// Cached texture/shader assets. CPU file/decode work may run on one worker;
 // pump() performs every backend mutation on the render thread.
 class AssetManager
 {
@@ -50,6 +51,8 @@ public:
   TextureHandle acquireTexture(const std::string& path,
                                const TextureOptions& options = TextureOptions{},
                                AssetLoadMode mode = AssetLoadMode::Async);
+  // Initial cubemap acquisition is synchronous; mode is retained for source
+  // compatibility. Subsequent reloads use the shared CPU queue and pump.
   TextureHandle acquireCubemap(const std::array<std::string, 6>& facePaths,
                                AssetLoadMode mode = AssetLoadMode::Synchronous);
   TextureHandle acquireCubemapFromCross(
@@ -88,8 +91,18 @@ private:
     Shader
   };
 
+  enum class TextureSourceKind
+  {
+    Image2D,
+    CubemapFaces,
+    CubemapCross
+  };
+
   struct TextureEntry
   {
+    TextureSourceKind sourceKind = TextureSourceKind::Image2D;
+    std::array<std::string, 6> sourcePaths;
+    std::array<std::filesystem::file_time_type, 6> sourceWriteTimes{};
     TextureHandle handle{};
     std::string path;
     std::string cacheKey;
@@ -124,6 +137,8 @@ private:
 
   struct LoadJob
   {
+    TextureSourceKind sourceKind = TextureSourceKind::Image2D;
+    std::array<std::string, 6> sourcePaths;
     AssetKind kind = AssetKind::Texture;
     uint32_t slot = 0;
     uint32_t generation = 0;
@@ -136,6 +151,9 @@ private:
 
   struct LoadResult
   {
+    TextureSourceKind sourceKind = TextureSourceKind::Image2D;
+    std::array<std::vector<unsigned char>, 6> faces;
+    std::array<std::filesystem::file_time_type, 6> sourceWriteTimes{};
     AssetKind kind = AssetKind::Texture;
     uint32_t slot = 0;
     uint32_t generation = 0;
@@ -173,6 +191,10 @@ private:
   static std::string shaderKey(const ShaderPaths& paths);
   static std::filesystem::file_time_type writeTime(const std::string& path);
   static LoadResult executeJob(const LoadJob& job);
+  static void decodeCubemap(const LoadJob& job, LoadResult& result);
+  TextureHandle acquireCubemapSources(TextureSourceKind kind,
+                                      const std::array<std::string, 6>& paths,
+                                      const std::string& key);
 
   void workerMain();
   void enqueue(const LoadJob& job);

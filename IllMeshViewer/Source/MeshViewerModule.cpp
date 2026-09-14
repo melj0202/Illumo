@@ -725,63 +725,40 @@ MeshViewerModule::Update(double dt)
   handleAction(action);
 
   if (!consoleOpen && ic->inputManager != nullptr) {
-    // Hotkeys
-    if (ic->inputManager->isKeyPressed(KeyCode::O)) {
-      static bool oWasPressed = false;
-      if (!oWasPressed) {
-        openMeshDialog();
+    std::queue<InputManager::KeyPressEvent>& keys =
+      ic->inputManager->getKeyQueue();
+    std::queue<InputManager::KeyPressEvent> remaining;
+    while (!keys.empty()) {
+      const InputManager::KeyPressEvent event = keys.front();
+      keys.pop();
+      MeshViewerAction shortcut = MeshViewerAction::None;
+      switch (event.key) {
+        case KeyCode::O:
+          shortcut = MeshViewerAction::OpenMesh;
+          break;
+        case KeyCode::F:
+        case KeyCode::R:
+          shortcut = MeshViewerAction::ResetView;
+          break;
+        case KeyCode::G:
+          shortcut = MeshViewerAction::ToggleGrid;
+          break;
+        case KeyCode::X:
+          shortcut = MeshViewerAction::ToggleWireframe;
+          break;
+        case KeyCode::B:
+          shortcut = MeshViewerAction::ToggleSkybox;
+          break;
+        default:
+          break;
       }
-      oWasPressed = true;
-    } else {
-      static bool oWasPressed = false;
-      oWasPressed = false;
-    }
-
-    if (ic->inputManager->isKeyPressed(KeyCode::F) ||
-        ic->inputManager->isKeyPressed(KeyCode::R)) {
-      static bool rWasPressed = false;
-      if (!rWasPressed) {
-        resetCamera();
+      if (shortcut == MeshViewerAction::None) {
+        remaining.push(event);
+      } else if (event.action == InputAction::Press) {
+        handleAction(shortcut);
       }
-      rWasPressed = true;
-    } else {
-      static bool rWasPressed = false;
-      rWasPressed = false;
     }
-
-    if (ic->inputManager->isKeyPressed(KeyCode::G)) {
-      static bool gWasPressed = false;
-      if (!gWasPressed) {
-        setShowGrid(!m_showGrid);
-      }
-      gWasPressed = true;
-    } else {
-      static bool gWasPressed = false;
-      gWasPressed = false;
-    }
-
-    if (ic->inputManager->isKeyPressed(KeyCode::X)) {
-      static bool xWasPressed = false;
-      if (!xWasPressed) {
-        setShowWireframe(!m_showWireframe);
-      }
-      xWasPressed = true;
-    } else {
-      static bool xWasPressed = false;
-      xWasPressed = false;
-    }
-
-    if (ic->inputManager->isKeyPressed(KeyCode::B)) {
-      static bool bWasPressed = false;
-      if (!bWasPressed) {
-        setShowSkybox(!m_showSkybox);
-      }
-      bWasPressed = true;
-    } else {
-      static bool bWasPressed = false;
-      bWasPressed = false;
-    }
-
+    keys.swap(remaining);
     const bool uiConsumed = m_ui && m_ui->consumedPress();
     if (!uiConsumed) {
       updateCameraInput(dt);

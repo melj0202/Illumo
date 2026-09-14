@@ -207,4 +207,7 @@ struct RenderCommand
     CmdUpdateTexture updateTexture;
     CmdUpdateBuffer updateBuffer;
   };
+  // Append fields to preserve existing positional aggregate initialization.
+  // ClearDepthBuffer, ClearScreen and ClearAll default to the far depth.
+  float clearDepthValue = 1.0f;
 };

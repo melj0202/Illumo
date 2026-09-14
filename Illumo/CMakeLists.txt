@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(Illumo LANGUAGES C CXX)
@@ -23,6 +23,7 @@ if(WIN32)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/Windows/WinMain.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/Windows/WinSaveLoad.cpp
+    Source/Platform/Windows/WinAtomicFile.cpp
     Source/Platform/Windows/WinClipboard.cpp
     Source/Platform/Windows/WinTimer.cpp
     Source/Platform/Windows/WinProcessMemoryStats.cpp)
@@ -32,6 +33,7 @@ elseif(APPLE)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/macOS/Main.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/macOS/MacSaveLoad.mm
+    Source/Platform/PosixAtomicFile.cpp
     Source/Platform/macOS/MacClipboard.cpp
     Source/Platform/macOS/MacTimer.cpp
     Source/Platform/UnsupportedProcessMemoryStats.cpp)
@@ -44,6 +46,7 @@ elseif(UNIX)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/Linux/_main.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/Linux/LinuxSaveLoad.cpp
+    Source/Platform/PosixAtomicFile.cpp
     Source/Platform/Linux/LinuxClipboard.cpp
     Source/Platform/Linux/LinuxTimer.cpp
     Source/Platform/UnsupportedProcessMemoryStats.cpp)
@@ -78,6 +81,7 @@ add_library(Illumo STATIC
   Source/Scene/SceneGraph.cpp
   Source/Services/CommandLine.cpp
   Source/Services/CommandLineCore.cpp
+  Source/Platform/AtomicFile.cpp
   Source/Services/DebugAlloc.cpp
   Source/Services/EnvVars.cpp
   Source/Services/InputManager.cpp
@@ -128,8 +132,11 @@ target_include_directories(Illumo
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/tracy-0.13.1/public"
 )
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoPublicMath.cmake")
+illumo_prepare_public_math(_illumo_public_math_include)
 target_include_directories(Illumo SYSTEM PUBLIC
-  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/thirdparty>")
+  "$<BUILD_INTERFACE:${_illumo_public_math_include}>")
+unset(_illumo_public_math_include)
 target_include_directories(Illumo SYSTEM PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glfw-3.4/deps"
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glfw-3.4/include"
@@ -166,6 +173,7 @@ if(BUILD_TESTING)
     Tests/TestRendererE2E.cpp
     Tests/TestUITokens.cpp
     Tests/TestServices.cpp
+    Tests/TestAtomicFile.cpp
     Tests/TestRuntimeUtilities.cpp
     Tests/TestAllocators.cpp
     Tests/TestGameVisual.cpp
@@ -237,7 +245,7 @@ if(ILLUMO_BUILD_CAPTURE)
   if(BUILD_TESTING)
     # Explicit real-GPU check, never part of the headless default CTest suite.
     add_executable(IllumoCaptureGpuTests EXCLUDE_FROM_ALL tools/CaptureGpuTests.cpp)
-    target_link_libraries(IllumoCaptureGpuTests PRIVATE Illumo::Illumo)
+    target_link_libraries(IllumoCaptureGpuTests PRIVATE Illumo::Illumo glew_s)
     illumo_configure_runtime_target(IllumoCaptureGpuTests)
     illumo_stage_msvc_asan(IllumoCaptureGpuTests)
     add_test(NAME Illumo.Capture.Help COMMAND IllumoCapture --help)
@@ -249,9 +257,20 @@ if(ILLUMO_BUILD_CAPTURE)
   endif()
 endif()
 
+set(_illumo_documentation_available OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../docs/build.ps1" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../docs/latex/illumo.tex" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../docs/latex/architecture-map.tex")
+  set(_illumo_documentation_available ON)
+endif()
 option(ILLUMO_BUILD_DOCUMENTATION
-  "Build the Illumo PDFs with the default build" ON)
+  "Build the Illumo PDFs with the default build" ${_illumo_documentation_available})
 if(ILLUMO_BUILD_DOCUMENTATION AND NOT TARGET IllumoDocs)
+  if(NOT _illumo_documentation_available)
+    message(FATAL_ERROR
+      "ILLUMO_BUILD_DOCUMENTATION=ON requires the engine docs source tree. "
+      "Generated workspaces omit it; use -DILLUMO_BUILD_DOCUMENTATION=OFF.")
+  endif()
   find_program(ILLUMO_POWERSHELL_EXECUTABLE NAMES powershell pwsh)
   find_program(ILLUMO_LATEXMK_EXECUTABLE NAMES latexmk)
   if(WIN32 AND ILLUMO_POWERSHELL_EXECUTABLE AND ILLUMO_LATEXMK_EXECUTABLE)
@@ -266,3 +285,4 @@ if(ILLUMO_BUILD_DOCUMENTATION AND NOT TARGET IllumoDocs)
     message(STATUS "IllumoDocs skipped: PowerShell and latexmk are required")
   endif()
 endif()
+unset(_illumo_documentation_available)

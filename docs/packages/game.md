@@ -3,6 +3,22 @@
 The live game path is a sparse cellular-automata world with configurable
 infinite or finite toroidal topology plus a bounded presentation view.
 
+## Rule catalogs
+
+`RuleSetRegistry` constructs built-ins and validates catalog text transactionally.
+`RuleCatalogLoader` owns file reads and chooses the first valid `rulesets.json`
+beside the executable, in the working directory, or in its `IllumoGame`
+subdirectory. Invalid or unreadable candidates fall through; failed validation
+does not partially replace definitions. The required-module factory loads the
+shared catalog once before constructing the menu or direct game module, using
+the engine's application-configuration path to locate the executable directory.
+Rulesets does not call platform APIs or discover files.
+
+Product C++ callers migrate registry file-loading methods to `RuleCatalogLoader`
+and use `RuleSetRegistry::loadFromText` for in-memory catalogs. Independent
+registry instances contain only built-ins until explicitly loaded. Catalog
+syntax and application startup behavior remain compatible.
+
 ## SparseCellGrid (simulation domain)
 
 - Authoritative signed 64-bit cell coordinates.
@@ -195,6 +211,61 @@ topology, and deterministically sorted canonical chunks. Load validates
 temporary state first, reads versions 3 and 2 plus the prior dense format,
 treats older formats as infinite, imports legacy cells around the world origin,
 and restores saved ruleset/camera metadata.
+
+Camera navigation reserves a `2^32`-cell margin from signed 64-bit endpoints:
+each world-space axis must be finite and at most `16 * (2^63 - 2^32)` in
+absolute value. Commands and sparse metadata reject unsupported positions
+before changing live state; saves reject invalid camera metadata before
+replacing the destination. Pan and cursor-centered zoom validate pending
+targets. Checked cursor conversion rejects unsupported samples. A directly
+supplied invalid camera leaves the view's previous safe cache intact;
+`CanvasView::worldToCell` returns zero for invalid input, while editing uses
+the checked conversion. The margin protects cache padding and alignment;
+it does not restrict sparse storage or guarantee cell-level rendering precision
+at extreme coordinates.
+
+Clipboard capture/fill use bounded local offsets, so small selections at signed
+coordinate endpoints remain valid. Elementary rules treat neighbors beyond the
+representable X domain as background and omit unrepresentable children. A source
+row at maximum signed Y fails to advance without changing cells or revision.
+
+Pattern autodetection honors leading `!` plaintext comments and skips `#` RLE
+comments. Unambiguous RLE syntax selects RLE; ambiguous multiline cell-only
+text retains plaintext rows. The `rle` and `plaintext` commands select their
+named parser explicitly. Ctrl+V clipboard paste rejects malformed text or text with
+no occupied cells and leaves the world unchanged, without reusing a previous
+internal pattern. Console `paste` and explicit pattern APIs use the retained
+buffer, preserving the rotate/flip workflow.
+
+RLE export uses `o` for state 0, `b` for background 1, and the project extension
+`p{N}` for states 2..255. The parser accepts braced values 0..255 and preserves
+legacy single-digit `pD`/`PD` tokens: `p23o` means state 2 followed by three live
+cells. Braces separate state numbers from the next run count. Earlier exports
+with unbraced multi-digit state numbers are ambiguous and require correction
+to braced tokens; they cannot be recovered reliably by guessing. Binary RLE
+syntax is unchanged. Sparse world-save encoding is unaffected.
+
+Ruleset registration returns success/failure and rejects life-like B0 rules and
+elementary rules with a birth from an empty neighborhood (odd rule numbers).
+The current sparse representation requires a stable background for both infinite
+and finite worlds. Catalog JSON loads atomically: all entries and the entire
+JSON document must be valid before replacements become visible. Neighbor arrays
+contain integers 0..8; elementary numbers and palette channels are bounded to
+0..255. Life-like strings use labeled B/S or S/B, or legacy numeric S/B grammar.
+Invalid direct transition neighbor counts above eight return background.
+
+Manual stepping stops on the first failed generation and reports completed versus
+requested counts. Async failure leaves the published grid intact, pauses in edit
+mode and reports an explicit pending retry. `run` retries that work without
+waiting for another time step; a successful manual step also satisfies it.
+Failures do not automatically spin or count as completed generations.
+Elementary evolution copies history into the retained inactive chunk map, stages
+all destination writes there, and publishes once after success. Allocation or
+evaluation failure preserves live cells, revision and the previous delta.
+External-source advances clear their borrowed source on every exit and replace
+stale spare state even when the source has no counted cells. Full-history staging
+adds history-proportional work; the headless ElementaryHistoryBench reports that
+cost without making a comparative speed claim.
 
 Wireworld retains the sticky head/empty/tail/conductor brush (`1`/`H`, `2`,
 `3`/`T`, `4`).

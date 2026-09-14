@@ -17,6 +17,16 @@
 
 static TestCounters g;
 
+class InputManagerTestAccess
+{
+public:
+  static void setKey(InputManager& input, KeyCode key, bool down)
+  {
+    input.inputStatesCurrent[key] =
+      down ? InputAction::Press : InputAction::Release;
+  }
+};
+
 struct SpinningCubeFixture
 {
   NullRenderWindow window;
@@ -137,6 +147,60 @@ testDispatchDrawables()
   testTrue(g, true, "drawables dispatched to scene");
 }
 
+static void
+testConsoleCapture()
+{
+  SpinningCubeFixture fixture;
+  for (KeyCode key :
+       { KeyCode::Space, KeyCode::R, KeyCode::G, KeyCode::Up, KeyCode::Down }) {
+    fixture.module.setPaused(false);
+    fixture.module.setShowGrid(true);
+    fixture.module.setRotationSpeed(1.2f);
+    fixture.module.Update(0.5);
+    const float angle = fixture.module.rotationAngle();
+    fixture.console.isOpen = true;
+    InputManagerTestAccess::setKey(fixture.input, key, true);
+    fixture.module.Update(0.25);
+    testTrue(g,
+             !fixture.module.isPaused() && fixture.module.showGrid() &&
+               fixture.module.rotationSpeed() == 1.2f &&
+               std::abs(fixture.module.rotationAngle() - angle - 0.3f) < 0.001f,
+             "console typing and history keys leave controls unchanged while "
+             "animation continues");
+    fixture.console.isOpen = false;
+    const float closingAngle = fixture.module.rotationAngle();
+    fixture.module.Update(0.25);
+    testTrue(g,
+             !fixture.module.isPaused() && fixture.module.showGrid() &&
+               fixture.module.rotationSpeed() == 1.2f &&
+               std::abs(fixture.module.rotationAngle() - closingAngle - 0.3f) <
+                 0.001f,
+             "key held across console close stays blocked");
+    InputManagerTestAccess::setKey(fixture.input, key, false);
+    fixture.module.Update(0);
+    InputManagerTestAccess::setKey(fixture.input, key, true);
+    fixture.module.Update(0.1);
+    const bool acted =
+      key == KeyCode::Space ? fixture.module.isPaused()
+      : key == KeyCode::G   ? !fixture.module.showGrid()
+      : key == KeyCode::R   ? fixture.module.rotationAngle() < 0.2f
+      : key == KeyCode::Up  ? fixture.module.rotationSpeed() > 1.2f
+                            : fixture.module.rotationSpeed() < 1.2f;
+    testTrue(g, acted, "fresh press resumes control after capture");
+    InputManagerTestAccess::setKey(fixture.input, key, false);
+    fixture.module.Update(0);
+  }
+  SpinningCubeFixture second;
+  InputManagerTestAccess::setKey(fixture.input, KeyCode::Space, true);
+  InputManagerTestAccess::setKey(second.input, KeyCode::Space, true);
+  fixture.module.setPaused(false);
+  fixture.module.Update(0);
+  second.module.Update(0);
+  testTrue(g,
+           fixture.module.isPaused() && second.module.isPaused(),
+           "instances track edges independently");
+}
+
 static int
 runModuleCase(void (*testFunction)())
 {
@@ -148,6 +212,8 @@ runModuleCase(void (*testFunction)())
 void
 registerSpinningCubeModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add("@PROJECT_NAME@.Module.ConsoleCapture",
+               []() { return runModuleCase(testConsoleCapture); });
   registry.add("@PROJECT_NAME@.Module.StartupAndLifecycle",
                []() { return runModuleCase(testModuleStartupAndLifecycle); });
   registry.add("@PROJECT_NAME@.Module.RotationAndUpdate",

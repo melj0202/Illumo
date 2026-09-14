@@ -421,7 +421,8 @@ GLBackend::CreateCubemap(const std::array<const unsigned char*, 6>& facesData,
       return TextureHandle{};
     }
   }
-  if (width <= 0 || height <= 0) {
+  if (width <= 0 || height <= 0 || width != height ||
+      (channels != 1 && channels != 3 && channels != 4)) {
     return TextureHandle{};
   }
   TextureHandle handle = textureHandles.allocate();
@@ -429,6 +430,10 @@ GLBackend::CreateCubemap(const std::array<const unsigned char*, 6>& facesData,
   entry.generation = handle.generation;
   entry.resource =
     std::make_unique<GLTexture>(facesData, width, height, channels);
+  if (entry.resource->getID() == 0) {
+    textureHandles.release(handle);
+    return {};
+  }
   _textureRegistryLookup[handle.slot] = std::move(entry);
   return handle;
 }
@@ -448,7 +453,8 @@ GLBackend::ReplaceTexture(TextureHandle handle,
     Logger::LogWarning("ReplaceTexture: stale texture handle ignored");
     return false;
   }
-  if (data == nullptr || width <= 0 || height <= 0) {
+  if (!it->second.resource || it->second.resource->isCubemap() ||
+      data == nullptr || width <= 0 || height <= 0) {
     Logger::LogWarning("ReplaceTexture: invalid texture data ignored");
     return false;
   }
@@ -456,6 +462,35 @@ GLBackend::ReplaceTexture(TextureHandle handle,
     std::make_unique<GLTexture>(data, width, height, channels, options);
   if (it->second.resource) {
     it->second.resource->Destroy();
+  }
+  it->second.resource = std::move(replacement);
+  return true;
+}
+
+bool
+GLBackend::ReplaceCubemap(TextureHandle handle,
+                          const std::array<const unsigned char*, 6>& faces,
+                          int width,
+                          int height,
+                          int channels)
+{
+  std::unordered_map<uint32_t, GLTextureResourceEntry>::iterator it =
+    _textureRegistryLookup.find(handle.slot);
+  if (it == _textureRegistryLookup.end() ||
+      it->second.generation != handle.generation || !it->second.resource ||
+      !it->second.resource->isCubemap() || width <= 0 || width != height ||
+      (channels != 1 && channels != 3 && channels != 4)) {
+    return false;
+  }
+  for (const unsigned char* face : faces) {
+    if (face == nullptr) {
+      return false;
+    }
+  }
+  std::unique_ptr<GLTexture> replacement =
+    std::make_unique<GLTexture>(faces, width, height, channels);
+  if (replacement->getID() == 0) {
+    return false;
   }
   it->second.resource = std::move(replacement);
   return true;

@@ -1,6 +1,7 @@
 #include <Illumo/Services/EnvVars.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -31,44 +32,70 @@ EnvVars::ApplicationConfigPath()
 void
 EnvVars::load()
 {
-  std::ifstream file(m_filePath);
-  if (!file.is_open()) {
-    return;
-  }
-  nlohmann::json j;
+  m_persistenceEligible = false;
   try {
-    file >> j;
-    for (auto it = j.begin(); it != j.end(); ++it) {
-      std::string key = it.key();
-      auto item = it.value();
+    std::error_code error;
+    const bool exists = std::filesystem::exists(m_filePath, error);
+    if (!exists && !error) {
+      m_persistenceEligible = true;
+      return;
+    }
+    std::ifstream file(m_filePath);
+    if (error || !file.is_open()) {
+      std::fputs(
+        "EnvVars: configuration is unreadable; preserving original file\n",
+        stderr);
+      return;
+    }
+    const nlohmann::json j = nlohmann::json::parse(file);
+    if (!j.is_object() || file.bad()) {
+      std::fputs(
+        "EnvVars: invalid configuration object; preserving original file\n",
+        stderr);
+      return;
+    }
+    std::unordered_map<std::string, EnvVar> staged = m_vars;
+    for (nlohmann::json::const_iterator it = j.cbegin(); it != j.cend(); ++it) {
+      const nlohmann::json& item = it.value();
       if (item.is_string()) {
-        setVar(key, item.get<std::string>());
+        staged[it.key()] = parseValue(item.get<std::string>());
       } else if (item.is_object()) {
-        setVar(key, item.value("value", ""));
+        staged[it.key()] = parseValue(item.value("value", ""));
       }
     }
+    m_vars.swap(staged);
+    m_persistenceEligible = true;
   } catch (...) {
-    // Ignore JSON parsing errors
+    std::fputs("EnvVars: configuration load failed; preserving original file\n",
+               stderr);
   }
-  file.close();
 }
 
 void
 EnvVars::save()
 {
-  nlohmann::json j;
-  for (const auto& pair : m_vars) {
-    j[pair.first] = pair.second.value;
+  if (!m_persistenceEligible) {
+    return;
   }
-  std::ofstream file(m_filePath);
-  if (file.is_open()) {
-    file << j.dump(1);
+  try {
+    nlohmann::json j = nlohmann::json::object();
+    for (const std::pair<const std::string, EnvVar>& pair : m_vars) {
+      j[pair.first] = pair.second.value;
+    }
+    const std::string serialized = j.dump(1);
+    std::ofstream file(m_filePath);
+    file << serialized;
     file.close();
+    if (!file) {
+      std::fputs("EnvVars: configuration save failed\n", stderr);
+    }
+  } catch (...) {
+    std::fputs("EnvVars: configuration save failed\n", stderr);
   }
 }
 
-void
-EnvVars::setVar(const std::string& key, const std::string& value)
+EnvVar
+EnvVars::parseValue(const std::string& value)
 {
   EnvVar var;
   var.value = value;
@@ -93,7 +120,13 @@ EnvVars::setVar(const std::string& key, const std::string& value)
   var.valueAsBool = (lowerValue == "true" || lowerValue == "1" ||
                      lowerValue == "yes" || lowerValue == "on");
 
-  m_vars[key] = var;
+  return var;
+}
+
+void
+EnvVars::setVar(const std::string& key, const std::string& value)
+{
+  m_vars[key] = parseValue(value);
 }
 
 void

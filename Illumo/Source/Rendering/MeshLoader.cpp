@@ -270,6 +270,29 @@ private:
     const std::vector<tinyobj::shape_t>& shapes = reader.GetShapes();
     const std::vector<tinyobj::material_t>& materials = reader.GetMaterials();
 
+    // tinyobj may succeed with warnings for invalid positive references.
+    // Validate the complete input before publishing any converted data.
+    for (const tinyobj::shape_t& shape : shapes) {
+      for (const tinyobj::index_t& index : shape.mesh.indices) {
+        if (index.vertex_index < 0 ||
+            static_cast<size_t>(index.vertex_index) >=
+              attrib.vertices.size() / 3u ||
+            index.normal_index < -1 || index.texcoord_index < -1 ||
+            (index.normal_index >= 0 &&
+             static_cast<size_t>(index.normal_index) >=
+               attrib.normals.size() / 3u) ||
+            (index.texcoord_index >= 0 &&
+             static_cast<size_t>(index.texcoord_index) >=
+               attrib.texcoords.size() / 2u) ||
+            (!attrib.colors.empty() &&
+             static_cast<size_t>(index.vertex_index) >=
+               attrib.colors.size() / 3u)) {
+          outResult->error = "OBJ attribute index is out of range";
+          return false;
+        }
+      }
+    }
+
     MeshData& mesh = outResult->mesh;
 
     // Convert materials
@@ -317,27 +340,31 @@ private:
           if (it == uniqueVertices.end()) {
             MeshVertex vertex;
             if (idx.vertex_index >= 0) {
-              vertex.position.x = attrib.vertices[3 * idx.vertex_index + 0];
-              vertex.position.y = attrib.vertices[3 * idx.vertex_index + 1];
-              vertex.position.z = attrib.vertices[3 * idx.vertex_index + 2];
+              const size_t offset = 3u * static_cast<size_t>(idx.vertex_index);
+              vertex.position.x = attrib.vertices[offset + 0u];
+              vertex.position.y = attrib.vertices[offset + 1u];
+              vertex.position.z = attrib.vertices[offset + 2u];
 
               if (!attrib.colors.empty()) {
-                vertex.color.r = attrib.colors[3 * idx.vertex_index + 0];
-                vertex.color.g = attrib.colors[3 * idx.vertex_index + 1];
-                vertex.color.b = attrib.colors[3 * idx.vertex_index + 2];
+                vertex.color.r = attrib.colors[offset + 0u];
+                vertex.color.g = attrib.colors[offset + 1u];
+                vertex.color.b = attrib.colors[offset + 2u];
                 vertex.color.a = 1.0f;
               }
             }
 
             if (idx.normal_index >= 0 && !attrib.normals.empty()) {
-              vertex.normal.x = attrib.normals[3 * idx.normal_index + 0];
-              vertex.normal.y = attrib.normals[3 * idx.normal_index + 1];
-              vertex.normal.z = attrib.normals[3 * idx.normal_index + 2];
+              const size_t offset = 3u * static_cast<size_t>(idx.normal_index);
+              vertex.normal.x = attrib.normals[offset + 0u];
+              vertex.normal.y = attrib.normals[offset + 1u];
+              vertex.normal.z = attrib.normals[offset + 2u];
             }
 
             if (idx.texcoord_index >= 0 && !attrib.texcoords.empty()) {
-              vertex.texCoords.x = attrib.texcoords[2 * idx.texcoord_index + 0];
-              float texV = attrib.texcoords[2 * idx.texcoord_index + 1];
+              const size_t offset =
+                2u * static_cast<size_t>(idx.texcoord_index);
+              vertex.texCoords.x = attrib.texcoords[offset + 0u];
+              float texV = attrib.texcoords[offset + 1u];
               vertex.texCoords.y =
                 options.flipTexCoordsV ? (1.0f - texV) : texV;
             }

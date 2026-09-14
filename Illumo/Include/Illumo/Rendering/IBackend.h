@@ -105,6 +105,20 @@ public:
                               int height,
                               int channels,
                               const TextureOptions& options) = 0;
+  // Preserve handle and cubemap kind; rejection leaves the previous resource.
+  virtual bool ReplaceCubemap(TextureHandle handle,
+                              const std::array<const unsigned char*, 6>& faces,
+                              int width,
+                              int height,
+                              int channels)
+  {
+    (void)handle;
+    (void)faces;
+    (void)width;
+    (void)height;
+    (void)channels;
+    return false;
+  }
   virtual bool DestroyTexture(TextureHandle handle) = 0;
   virtual bool IsTextureValid(TextureHandle handle) const = 0;
   virtual TextureInfo GetTextureInfo(TextureHandle handle) const = 0;

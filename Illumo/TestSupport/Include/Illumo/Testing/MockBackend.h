@@ -25,6 +25,7 @@ public:
       ReplaceMesh,
       ReplaceShader,
       ReplaceTexture,
+      ReplaceCubemap,
       DestroyMesh,
       DestroyShader,
       DestroyTexture
@@ -69,6 +70,7 @@ private:
   std::unordered_map<uint32_t, uint32_t> liveTextures;
   std::unordered_map<uint32_t, uint32_t> liveFramebuffers;
   std::unordered_map<uint32_t, TextureInfo> textureInfos;
+  std::unordered_map<uint32_t, bool> cubemapKinds;
 
   bool isCommandResourceValid(const RenderCommand& command) const
   {
@@ -111,6 +113,7 @@ public:
     liveShaders.clear();
     liveTextures.clear();
     textureInfos.clear();
+    cubemapKinds.clear();
     meshHandles.clear();
     shaderHandles.clear();
     textureHandles.clear();
@@ -343,6 +346,7 @@ public:
     TextureHandle handle = textureHandles.allocate();
     CreateRecord rec;
     rec.kind = CreateRecord::Kind::CubemapData;
+    cubemapKinds[handle.slot] = true;
     rec.slot = handle.slot;
     rec.generation = handle.generation;
     rec.width = width;
@@ -367,7 +371,8 @@ public:
                       const TextureOptions& options) override
   {
     (void)data;
-    if (!IsTextureValid(handle) || rejectNextTextureReplacement) {
+    if (!IsTextureValid(handle) || cubemapKinds.contains(handle.slot) ||
+        rejectNextTextureReplacement) {
       rejectNextTextureReplacement = false;
       return false;
     }
@@ -379,6 +384,41 @@ public:
     rec.height = height;
     rec.channels = channels;
     rec.filter = options.filter;
+    creates.push_back(rec);
+    TextureInfo info;
+    info.width = width;
+    info.height = height;
+    info.channels = channels;
+    textureInfos[handle.slot] = info;
+    return true;
+  }
+
+  bool ReplaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels) override
+  {
+    if (!IsTextureValid(handle) || !cubemapKinds.contains(handle.slot) ||
+        width <= 0 || width != height ||
+        (channels != 1 && channels != 3 && channels != 4) ||
+        rejectNextTextureReplacement) {
+      rejectNextTextureReplacement = false;
+      return false;
+    }
+    for (const unsigned char* face : faces) {
+      if (face == nullptr) {
+        return false;
+      }
+    }
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::ReplaceCubemap;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    rec.width = width;
+    rec.height = height;
+    rec.channels = channels;
+    rec.filter = TextureFilter::Linear;
     creates.push_back(rec);
     TextureInfo info;
     info.width = width;
@@ -400,6 +440,7 @@ public:
     creates.push_back(rec);
     liveTextures.erase(handle.slot);
     textureInfos.erase(handle.slot);
+    cubemapKinds.erase(handle.slot);
     return textureHandles.release(handle);
   }
 

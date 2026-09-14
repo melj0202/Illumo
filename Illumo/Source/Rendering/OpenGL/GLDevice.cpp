@@ -75,6 +75,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
   _boundProgram = 0;
   _boundVao = 0;
   _boundFbo = 0;
+  _boundFboKnown = false;
   _boundFboHandle = FramebufferHandle{};
   for (int s = 0; s < 8; ++s) {
     _boundTexture[s] = 0;
@@ -122,11 +123,12 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::SetFramebuffer: {
         if (!cmd.bindFramebuffer.handle.isValid()) {
-          if (_boundFbo != 0) {
+          if (!_boundFboKnown || _boundFbo != 0) {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             _boundFbo = 0;
           }
           _boundFboHandle = FramebufferHandle{};
+          _boundFboKnown = true;
           break;
         }
         const GLFramebufferResourceEntry* fb =
@@ -135,14 +137,16 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
           reportFrameError("SetFramebuffer: unknown framebuffer handle");
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           _boundFbo = 0;
+          _boundFboKnown = true;
           _boundFboHandle = FramebufferHandle{};
           break;
         }
-        if (fb->fboId != _boundFbo) {
+        if (!_boundFboKnown || fb->fboId != _boundFbo) {
           glBindFramebuffer(GL_FRAMEBUFFER, fb->fboId);
           _boundFbo = fb->fboId;
         }
         _boundFboHandle = cmd.bindFramebuffer.handle;
+        _boundFboKnown = true;
         break;
       }
 
@@ -259,22 +263,24 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
           break;
         }
         // PBO ping-pong + dirty-rect copy lives on GLTexture (P4).
-        const int channels = (cmd.updateTexture.channels > 0)
-                               ? cmd.updateTexture.channels
-                               : texture->getChannels();
-        texture->UpdateSubImage(cmd.updateTexture.x,
-                                cmd.updateTexture.y,
-                                cmd.updateTexture.width,
-                                cmd.updateTexture.height,
-                                channels,
-                                cmd.updateTexture.data,
-                                cmd.updateTexture.srcRowStride);
+        if (!texture->UpdateSubImage(cmd.updateTexture.x,
+                                     cmd.updateTexture.y,
+                                     cmd.updateTexture.width,
+                                     cmd.updateTexture.height,
+                                     cmd.updateTexture.channels,
+                                     cmd.updateTexture.data,
+                                     cmd.updateTexture.srcRowStride)) {
+          reportFrameError(
+            "UpdateTexture: invalid rectangle, channels, or stride");
+          break;
+        }
         // Texture bind may have changed inside UpdateSubImage.
         _boundTexture[0] = static_cast<GLuint>(texture->getID());
         break;
       }
 
       case CommandType::ClearScreen: {
+        glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
         const GLFramebufferResourceEntry* fb =
           _boundFboHandle.isValid()
             ? resolveFramebuffer(tables, _boundFboHandle)
@@ -303,6 +309,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       }
 
       case CommandType::ClearDepthBuffer:
+        glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
         glClear(GL_DEPTH_BUFFER_BIT);
         break;
 
@@ -332,6 +339,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
         break;
 
       case CommandType::ClearAll: {
+        glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
         const GLFramebufferResourceEntry* fb =
           _boundFboHandle.isValid()
             ? resolveFramebuffer(tables, _boundFboHandle)

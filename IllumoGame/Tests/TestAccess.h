@@ -6,6 +6,16 @@
 class CellGameModuleTestAccess
 {
 public:
+  static std::uint64_t getSimulationGeneration(const CellGameModule& module)
+  {
+    return module.simulationGeneration;
+  }
+
+  static bool isSimulationRetryPending(const CellGameModule& module)
+  {
+    return module.simulationRetryPending;
+  }
+
   static CellContext* getCellContext(CellGameModule& module)
   {
     return module.cellContext;

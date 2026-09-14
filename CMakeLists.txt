@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 project(IllumoWorkspace LANGUAGES C CXX)
 
@@ -24,24 +24,7 @@ if(BUILD_TESTING)
 endif()
 
 if(ILLUMO_ENABLE_COVERAGE)
-  find_program(ILLUMO_LLVM_PROFDATA_EXECUTABLE NAMES llvm-profdata REQUIRED)
-  find_program(ILLUMO_LLVM_COV_EXECUTABLE NAMES llvm-cov REQUIRED)
-  add_custom_target(IllumoCoverage
-    COMMAND ${CMAKE_COMMAND}
-      "-DTEST_BINARY_ILLUMO=$<TARGET_FILE:IllumoTests>"
-      "-DTEST_BINARY_GAME=$<TARGET_FILE:IllumoGameTests>"
-      "-DBINARY_DIR=${CMAKE_BINARY_DIR}"
-      "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
-      "-DCONFIG=$<CONFIG>"
-      "-DLLVM_PROFDATA=${ILLUMO_LLVM_PROFDATA_EXECUTABLE}"
-      "-DLLVM_COV=${ILLUMO_LLVM_COV_EXECUTABLE}"
-      "-DMINIMUM_LINE_COVERAGE=85"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunWorkspaceCoverage.cmake"
-    DEPENDS IllumoTestsDiscover IllumoGameTestsDiscover
-      IllumoPublicHeaderSmoke
-    USES_TERMINAL
-    COMMENT "Running combined Illumo workspace coverage"
-  )
+  illumo_add_workspace_coverage()
 endif()
 
 if(ILLUMO_ENABLE_CLANG_TIDY)

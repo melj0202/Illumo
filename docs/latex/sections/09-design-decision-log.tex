@@ -1837,6 +1837,69 @@ shared ticks, additional backends and Linux support remain later work. Existing
 application and persistence contracts remain. See the milestone execution plan.
 \end{decisionbox}
 
+\subsection*{D-L1 --- Product close negotiation}
+\begin{decisionbox}[title={D-L1 \quad 2026-09-13}]
+\textbf{Decision:} The runner explicitly negotiates a pending native close with
+started modules through optional \texttt{OnCloseRequested}. Default acceptance
+preserves existing consumers; deferral clears the window flag and keeps frames
+running. Required startup/transition failure remains terminal.
+\textbf{Why:} Native close previously bypassed IllEd's unsaved-document guard.
+\textbf{Consequences:} IllEd routes native and toolbar exit through its existing
+Save/Discard/Cancel confirmation. Approved discard may close a dirty document.
+Custom windows used with deferring modules implement close cancellation. No
+editor policy moves into Illumo.
+\end{decisionbox}
+
+\subsection*{D-IO1 --- Finalized save publication}
+\begin{decisionbox}[title={D-IO1 \quad 2026-09-13}]
+\textbf{Decision:} Product saves use the shared platform atomic-file operation:
+exclusive sibling staging, writer/flush/close checks, then replacement.
+\textbf{Why:} Direct truncation destroyed prior valid saves before late I/O
+errors could be reported.
+\textbf{Consequences:} Product formats and encoders remain product-owned.
+Failure leaves prior destination bytes intact. This is not a power-loss
+durability or security-metadata preservation guarantee. Windows is verified;
+POSIX rename remains unverified scaffolding.
+\end{decisionbox}
+
+\subsection*{D-RP1 --- Host defaults and application pass precedence}
+\begin{decisionbox}[title={D-RP1 \quad 2026-09-13}]
+\textbf{Decision:} Scene retains host default pass lists separately from
+application overrides. Nonempty overrides take precedence; clearing them
+restores the current fallback. Host motion blur writes only defaults.
+\textbf{Why:} Per-frame host configuration previously erased passes installed
+in module Start or Update.
+\textbf{Consequences:} Existing application setters remain available. Empty
+lists and reset restore defaults. Effective pass queries include fallbacks.
+Resource ownership and synchronous token submission remain unchanged.
+\end{decisionbox}
+
+\subsection*{D-GC1 --- Product-owned rules catalog discovery}
+\begin{decisionbox}[title={D-GC1 \quad 2026-09-14}]
+\textbf{Decision:} Game's RuleCatalogLoader owns catalog file reads and ordered
+discovery. The required-module factory loads the singleton once before either
+menu or direct-game construction. RuleSetRegistry constructs built-ins and
+accepts catalog text with transactional validation.\\
+\textbf{Why:} Domain registry construction previously called Win32 and read
+ambient files, contradicting the Rulesets dependency boundary.\\
+\textbf{Consequences:} Executable/current/product-directory precedence and
+first-valid fallback remain. Product C++ file-loading calls migrate to the
+loader; independent registries require explicit catalog loading. No engine
+API or catalog format changes. Native path discovery stays engine-owned.
+\end{decisionbox}
+
+\subsection*{D-DEP1 --- Narrow public math dependency exposure}
+\begin{decisionbox}[title={D-DEP1 \quad 2026-09-14}]
+\textbf{Decision:} Illumo exports its public headers and a CMake-managed GLM-only
+include directory. Other vendor roots remain private.\\
+\textbf{Why:} Public math types intentionally expose GLM, but exporting the
+entire thirdparty parent directory exposed unrelated libraries too.\\
+\textbf{Consequences:} GLM header paths and types remain unchanged. Configure
+tracks header content and membership; deleted headers leave the generated
+include tree. Vendored sources and versions are unchanged. Consumers of other
+vendor APIs must declare those dependencies explicitly.
+\end{decisionbox}
+
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

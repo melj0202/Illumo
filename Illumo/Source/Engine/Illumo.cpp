@@ -174,6 +174,7 @@ Illumo::initialize()
     m_inputManager =
       std::make_unique<InputManager>(m_window->getWindowInstance());
     m_scene = std::make_unique<Scene>(m_window.get(), m_camera.get());
+    m_motionBlurPipelineConfigured = false;
     GLString::setRenderWindow(m_window.get());
 
     m_context.envVars = m_environment.get();
@@ -187,6 +188,7 @@ Illumo::initialize()
     m_context.scene = m_scene.get();
     m_context.moduleHost = this;
     m_initialized = true;
+    m_terminalCloseRequested = false;
     return true;
   } catch (const std::exception& exception) {
     Logger::LogError(std::string("Illumo initialization failed: ") +
@@ -283,7 +285,14 @@ Illumo::applyPendingModuleTransition()
   for (std::vector<RegisteredModule>::iterator it = m_modules.begin();
        it != m_modules.end();) {
     if (it->requirement == ModuleRequirement::Required) {
+      if (m_scene != nullptr) {
+        m_scene->ResetDefaultPasses();
+      }
       stopModule(*it, false);
+      // Exit may install callbacks too; detach before destroying their owners.
+      if (m_scene != nullptr) {
+        m_scene->ResetDefaultPasses();
+      }
       it = m_modules.erase(it);
     } else {
       ++it;
@@ -315,11 +324,16 @@ Illumo::applyPendingModuleTransition()
   if (!accepted) {
     Logger::LogError(
       "A transitioned required module failed to start; closing application");
+    m_terminalCloseRequested = true;
     if (nextModule) {
       try {
         nextModule->Exit();
       } catch (...) {
       }
+    }
+    if (m_scene != nullptr) {
+      m_scene->ResetDefaultPasses();
+      m_scene->ClearDrawables();
     }
     if (m_window != nullptr) {
       m_window->requestClose();
@@ -384,10 +398,9 @@ Illumo::processGlobalHotkeys()
           if (m_environment != nullptr) {
             const bool current =
               m_environment->getVar("fullscreen").valueAsBool;
-            m_environment->setVar("fullscreen", !current);
             if (m_commandLine != nullptr) {
               m_commandLine->logSuccess(std::string("Fullscreen: ") +
-                                        (!current ? "on" : "off"));
+                                        (current ? "on" : "off"));
             }
           }
         }
@@ -475,8 +488,7 @@ Illumo::configureScenePipeline()
     }
 
     if (m_motionBlurPipelineConfigured && m_configuredBlurAmount == amount &&
-        m_configuredBlurMax == maxVel && m_configuredBlurSamples == samples &&
-        m_scene->hasCustomPasses(RenderLayerId::World)) {
+        m_configuredBlurMax == maxVel && m_configuredBlurSamples == samples) {
       return;
     }
 
@@ -545,12 +557,11 @@ Illumo::configureScenePipeline()
     std::vector<RenderPassDesc> worldPasses;
     worldPasses.push_back(std::move(geomPass));
     worldPasses.push_back(std::move(postPass));
-    m_scene->SetLayerPasses(RenderLayerId::World, std::move(worldPasses));
+    m_scene->SetDefaultLayerPasses(RenderLayerId::World,
+                                   std::move(worldPasses));
   } else {
     m_motionBlurPipelineConfigured = false;
-    if (m_scene->hasCustomPasses(RenderLayerId::World)) {
-      m_scene->ClearLayerPasses(RenderLayerId::World);
-    }
+    m_scene->SetDefaultLayerPasses(RenderLayerId::World, {});
   }
 }
 
@@ -661,4 +672,24 @@ bool
 Illumo::shouldClose() const
 {
   return !m_window || m_window->shouldWindowClose();
+}
+
+bool
+Illumo::processCloseRequest()
+{
+  if (!m_window || m_terminalCloseRequested) {
+    return true;
+  }
+  if (!m_window->shouldWindowClose()) {
+    return false;
+  }
+  if (m_modulesStarted) {
+    for (RegisteredModule& registration : m_modules) {
+      if (registration.started && !registration.module->OnCloseRequested()) {
+        m_window->cancelCloseRequest();
+        return false;
+      }
+    }
+  }
+  return true;
 }

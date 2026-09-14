@@ -46,7 +46,7 @@ private:
   bool SaveCellGame(std::string filename);
   bool LoadCellGame(std::string filename);
   void setRunning(bool running);
-  void stepSimulation(int generations);
+  int stepSimulation(int generations);
   void printStatus() const;
   void CameraPan();
   void CameraRotate();
@@ -73,7 +73,8 @@ private:
   bool cutSelection();
   bool pasteAtCursor();
   bool stampNamed(const std::string& name);
-  bool importPatternText(const std::string& text);
+  bool importPatternText(const std::string& text,
+                         PatternFormat format = PatternFormat::Auto);
   void handleEditorHotkeys();
   bool isRender3dTestEnabled() const;
   void ensureRender3dTestDrawables();
@@ -108,6 +109,7 @@ private:
   SimulationRunnerTimings lastSimulationRunnerTimings;
   SparseGenerationDelta mirrorDelta;
   bool mirrorDeltaValid;
+  bool simulationRetryPending = false;
   // Wireworld left-paint state: 0 head, 1 empty, 2 tail, 3 conductor.
   // Selected with keys 1/H, 2, 3/T, 4 while the console is closed.
   unsigned char wireworldBrush;
