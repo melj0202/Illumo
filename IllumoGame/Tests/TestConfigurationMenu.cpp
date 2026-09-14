@@ -32,6 +32,11 @@ struct ConfigurationMenuFixture
     , input(nullptr)
     , menu(&window, &renderer)
   {
+    // Preferences are explicit so repeated runs cannot inherit a saved draft.
+    env.setVar("fps", 60);
+    env.setVar("showInspector", false);
+    env.setVar("reducedUiMotion", false);
+    env.setVar("uiScale", 1);
     env.setVar("WinX", 640);
     env.setVar("WinY", 480);
     mock.Initialize();
@@ -161,7 +166,7 @@ testConfigurationNavigationAndActions()
            fixture.menu.getValuePulseForTesting() == 0.0f,
            "value accent pulse fades to rest");
 
-  for (int row = 0; row < 10; ++row) {
+  for (int row = 0; row < 13; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -199,7 +204,7 @@ testConfigurationNavigationAndActions()
            "F1 cancels an open menu");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 12; ++row) {
+  for (int row = 0; row < 15; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -267,7 +272,20 @@ testConfigurationMenuTokensAtReleaseWindowSize()
            foundFriendlyRuleName,
            "ruleset value uses a human-readable display name");
   testTrue(g, foundControlHelp, "keyboard controls are split into clear help");
-  testTrue(g, foundExitAction, "settings menu renders an Exit action");
+  testTrue(
+    g, !foundExitAction, "offscreen actions are not drawn over the footer");
+  fixture.press(KeyCode::End);
+  fixture.menu.update(&fixture.input);
+  fixture.menu.tick(1.0f);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  for (std::size_t index = 0; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    foundExitAction =
+      foundExitAction || (text != nullptr && text->content == "Exit simulator");
+  }
+  testTrue(g, foundExitAction, "End scrolls Exit into the visible viewport");
   testTrue(g, foundRestartNote, "settings menu renders restart note footer");
 
   fixture.menu.close();
@@ -278,6 +296,100 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   testTrue(g,
            fixture.mock.getLastSubmittedCount() == 0u,
            "closed settings menu emits no commands");
+}
+
+static void
+testDisplaySettingsAndScrolling()
+{
+  ConfigurationMenuFixture fixture;
+  fixture.env.setVar("uiScale", 4);
+  fixture.menu.open(defaultConfiguration());
+  for (int row = 0; row < 10; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  SimulatorConfiguration parsed;
+  std::string error;
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.fpsCap == 90,
+           "FPS presets cycle from 60 to 90");
+  fixture.type('1');
+  fixture.type('4');
+  fixture.type('4');
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.fpsCap == 144,
+           "custom FPS cap replaces the selected value");
+  fixture.press(KeyCode::Backspace);
+  fixture.type('9');
+  fixture.type('9');
+  fixture.type('9');
+  fixture.type('9');
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           !fixture.menu.readConfiguration(&parsed, &error) &&
+             error.find("FPS cap") != std::string::npos,
+           "out of range FPS cap is rejected");
+  fixture.press(KeyCode::Delete);
+  fixture.menu.update(&fixture.input);
+  // Selecting again restores replace-on-type, even after an invalid long draft.
+  fixture.press(KeyCode::Up);
+  fixture.press(KeyCode::Down);
+  fixture.type('0');
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.fpsCap == 0,
+           "zero explicitly disables the software FPS cap");
+  fixture.press(KeyCode::Down);
+  fixture.press(KeyCode::Right);
+  fixture.press(KeyCode::Down);
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.showInspector && parsed.reducedUiMotion,
+           "inspector and reduced motion are independent toggles");
+  testTrue(g,
+           fixture.menu.getAnimationProgressForTesting() == 1.0f &&
+             fixture.menu.getSelectionPositionForTesting() == 12.0f &&
+             fixture.menu.getValuePulseForTesting() == 0.0f,
+           "reduced motion immediately snaps reveal, selection, and pulse");
+  fixture.press(KeyCode::Home);
+  fixture.menu.update(&fixture.input);
+  *fixture.input.getMouseScrollOffset() = -1.0;
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.getSelectedRowForTesting() == 1 &&
+             *fixture.input.getMouseScrollOffset() == 0.0,
+           "wheel navigates once and is consumed");
+  fixture.press(KeyCode::End);
+  fixture.menu.update(&fixture.input);
+  Scene scene(&fixture.window, &fixture.camera);
+  scene.AddDrawable(&fixture.menu, RenderLayerId::UI);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  GameVisual& visual = fixture.menu.getVisual();
+  const float fittedScale =
+    visual.getTransform().scaleX * fixture.renderer.getUiScale();
+  bool foundCap = false;
+  for (std::size_t index = 0; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text == nullptr) {
+      continue;
+    }
+    foundCap = foundCap || text->content == "FPS cap";
+    testTrue(
+      g,
+      text->y * fittedScale >= 0.0f &&
+        (text->y + text->sizePt) * fittedScale <= 480.0f,
+      "scrolled text stays within the small window at 4x preferred UI scale");
+  }
+  testTrue(g, foundCap, "scrolling to actions retains nearby display controls");
 }
 
 static int
@@ -291,6 +403,9 @@ runConfigurationMenuCase(void (*testFunction)())
 void
 registerConfigurationMenuTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.ConfigurationMenu.DisplaySettings", []() {
+    return runConfigurationMenuCase(testDisplaySettingsAndScrolling);
+  });
   registry.add("IllumoGame.ConfigurationMenu.Validation", []() {
     return runConfigurationMenuCase(
       testConfigurationParsingAndTopologyValidation);

@@ -80,6 +80,11 @@ struct CellGameFixture
     , module()
     , started(false)
   {
+    // Preferences are explicit so repeated runs cannot inherit a saved draft.
+    env.setVar("fps", 60);
+    env.setVar("showInspector", false);
+    env.setVar("reducedUiMotion", false);
+    env.setVar("uiScale", 1);
     env.setVar("WinX", 640);
     env.setVar("WinY", 480);
     env.setVar("CanvasX", width);
@@ -554,6 +559,9 @@ testReleaseConfigurationWorkflow()
   configuration.fadeSpeed = 4.0;
   configuration.vsync = false;
   configuration.fullscreen = true;
+  configuration.fpsCap = 144;
+  configuration.showInspector = true;
+  configuration.reducedUiMotion = true;
   testTrue(
     g,
     CellGameModuleTestAccess::applyConfiguration(fixture.module, configuration),
@@ -581,8 +589,21 @@ testReleaseConfigurationWorkflow()
             1,
             "fullscreen applies immediately once");
 
-  menu->open(CellGameModuleTestAccess::currentConfiguration(fixture.module));
-  for (int row = 0; row < 12; ++row) {
+  const SimulatorConfiguration applied =
+    CellGameModuleTestAccess::currentConfiguration(fixture.module);
+  testTrue(
+    g,
+    applied.fpsCap == 144 && applied.showInspector && applied.reducedUiMotion &&
+      fixture.env.getVar("fps").valueAsLong == 144,
+    "new display preferences round trip through runtime and environment");
+  configuration.fpsCap = -1;
+  testTrue(g,
+           !CellGameModuleTestAccess::applyConfiguration(fixture.module,
+                                                         configuration) &&
+             fixture.env.getVar("fps").valueAsLong == 144,
+           "invalid FPS cap leaves applied preferences intact");
+  menu->open(applied);
+  for (int row = 0; row < 15; ++row) {
     fixture.input.getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
   }

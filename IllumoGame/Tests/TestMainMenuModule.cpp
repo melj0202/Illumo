@@ -5,6 +5,7 @@
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
+#include <Illumo/Testing/TestAccess.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <memory>
@@ -60,6 +61,11 @@ struct MainMenuFixture
     , module()
     , started(false)
   {
+    // Preferences are explicit so repeated runs cannot inherit a saved draft.
+    env.setVar("fps", 60);
+    env.setVar("showInspector", false);
+    env.setVar("reducedUiMotion", false);
+    env.setVar("uiScale", 1);
     env.setVar("WinX", 640);
     env.setVar("WinY", 480);
     env.setVar("ModeString", "GAME_OF_LIFE");
@@ -205,6 +211,98 @@ testMainMenuSettingsWorkflow()
 }
 
 static void
+testMainMenuSettingsApply()
+{
+  MainMenuFixture fixture;
+  fixture.env.setVar("fps", 144);
+  fixture.env.setVar("uiScale", 2);
+  fixture.env.setVar("msaa", 8);
+  fixture.env.setVar("cellFadeSpeed", 0);
+  fixture.env.setVar("showInspector", true);
+  fixture.env.setVar("reducedUiMotion", true);
+  fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           fixture.module.isSettingsOpenForTesting(),
+           "F1 opens settings on the main menu");
+  for (int row = 0; row < 10; ++row) {
+    fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  }
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  for (int row = 0; row < 3; ++row) {
+    fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  }
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.module.isSettingsOpenForTesting() &&
+             fixture.env.getVar("fps").valueAsLong == 165,
+           "Apply commits changed FPS cap from main menu");
+  testTrue(g,
+           fixture.env.getVar("uiScale").valueAsLong == 2 &&
+             fixture.env.getVar("msaa").valueAsLong == 8 &&
+             fixture.env.getVar("cellFadeSpeed").valueAsDouble == 0.0 &&
+             fixture.env.getVar("showInspector").valueAsBool &&
+             fixture.env.getVar("reducedUiMotion").valueAsBool,
+           "Apply preserves existing display and zero-fade preferences");
+  fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  for (int row = 0; row < 10; ++row) {
+    fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  }
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           fixture.env.getVar("fps").valueAsLong == 165,
+           "Discard preserves the applied FPS cap");
+}
+
+static void
+testSettingsMouseIsolation()
+{
+  MainMenuFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  fixture.env.setVar("fps", 60);
+  fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  for (int row = 0; row < 10; ++row) {
+    fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  }
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  for (int row = 0; row < 3; ++row) {
+    fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  }
+  fixture.module.Update(0.016);
+  // In the 640x480 viewport Apply overlaps the underlying main-menu Exit card.
+  fixture.window.mouseX = 390.0;
+  fixture.window.mouseY = 390.0;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.module.isSettingsOpenForTesting() &&
+             fixture.env.getVar("fps").valueAsLong == 90,
+           "clicking the scrolled Apply row commits the draft");
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.window.closeRequested &&
+             !fixture.host.HasPendingTransition(),
+           "holding Apply does not activate the underlying main-menu action");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           fixture.window.closeRequested,
+           "settings Exit requests normal close from the main menu");
+}
+
+static void
 testMainMenuYieldsToConsole()
 {
   testSection("MainMenuModule: open console blocks menu input");
@@ -291,6 +389,10 @@ runMainMenuCase(void (*testFunction)())
 void
 registerMainMenuTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.MainMenu.MouseIsolation",
+               []() { return runMainMenuCase(testSettingsMouseIsolation); });
+  registry.add("IllumoGame.MainMenu.SettingsApply",
+               []() { return runMainMenuCase(testMainMenuSettingsApply); });
   registry.add("IllumoGame.MainMenu.StartAndDrawables",
                []() { return runMainMenuCase(testMainMenuStartAndDrawables); });
   registry.add("IllumoGame.MainMenu.Navigation",

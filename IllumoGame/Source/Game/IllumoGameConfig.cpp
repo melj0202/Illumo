@@ -25,6 +25,8 @@ IllumoGameConfig::ApplyDefaults(IEnvVars* environment)
     { "cellFadeSpeed", "8" },
     { "uiScale", "1" },
     { "msaa", "4" },
+    { "reducedUiMotion", "0" },
+    { "showInspector", "0" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (environment->getVar(defaultValue.name).value.empty()) {

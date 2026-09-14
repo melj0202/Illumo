@@ -39,7 +39,11 @@ non-toroidal; positive chunk dimensions select a finite torus.
 
 F1 opens a Release-visible, primitive-composed \symbolref{ConfigurationMenu}.
 It configures ruleset, world chunk width/height, TPS, simulation speed, fade
-speed, VSync, and fullscreen. Both dimensions must be positive for a finite
+speed, VSync, fullscreen, UI scale, restart-only MSAA, FPS cap, simulation
+inspector, and reduced menu motion. FPS presets include uncapped through 360;
+custom values accept 0--1000. Zero disables the existing engine software cap;
+VSync remains independent. Both main-menu and in-game Apply save preferences
+and apply fullscreen immediately. Both dimensions must be positive for a finite
 torus; \texttt{0}/\texttt{0} and \texttt{inf}/\texttt{inf} select the infinite
 canvas. Applying a topology change drains simulation and starts a fresh
 centered world. The overlay uses larger high-contrast labels, readable ruleset
@@ -47,7 +51,13 @@ names, split keyboard instructions, and a short explanation for the selected
 setting. Pressing Q or activating Exit opens a confirmation overlay; confirming
 requests window closure and leaves normal engine shutdown to the App main loop. A short eased reveal, staggered row fade, gliding
 selection highlight, and value-change pulse are advanced from frame delta time;
-input remains active throughout.
+input remains active throughout. Rows scroll with selection, wheel, Page Up/Down,
+and Home/End rather than shrinking text to fit the list. Rendering and mouse
+conversion share a fitted UI scale. Main-menu F1 opens the same overlay; the
+main-menu card adds cyan/violet accents, drifting cell outlines, staggered
+labels, and selection glow. Reduced menu motion snaps transitions and stops
+decorative motion without changing simulation or cell fading. The in-game
+settings button eases its hover highlight and displays the F1 shortcut.
 
 EDIT mode supports Shift+drag marquee selection, Ctrl+C/X/V copy/cut/paste,
 Delete fill, R/F buffer rotate/flip, and console commands

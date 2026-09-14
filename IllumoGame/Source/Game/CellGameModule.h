@@ -133,6 +133,7 @@ private:
   float hamburgerSize;
   bool hamburgerHovered;
   bool hamburgerMouseWasDown;
+  float hamburgerHoverBlend = 0.0f;
   GameVisual selectionVisual;
   GameVisual inspectorVisual;
   CellClipboard clipboard;

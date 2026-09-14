@@ -55,7 +55,7 @@ struct EditorFixture
   CellGameModule module;
   bool started;
 
-  EditorFixture()
+  explicit EditorFixture(bool showInspector = false)
     : window(640, 480)
     , env()
     , camera(glm::vec2(1.0f, 1.0f), 1.0f, &env)
@@ -70,6 +70,11 @@ struct EditorFixture
     , module()
     , started(false)
   {
+    // Preferences are explicit so repeated runs cannot inherit a saved draft.
+    env.setVar("fps", 60);
+    env.setVar("showInspector", showInspector);
+    env.setVar("reducedUiMotion", false);
+    env.setVar("uiScale", 1);
     env.setVar("WinX", 640);
     env.setVar("WinY", 480);
     env.setVar("CanvasX", 8);
@@ -426,6 +431,18 @@ testCDoesNotClearWorld()
 }
 
 static void
+testInspectorPreference()
+{
+  EditorFixture fixture(true);
+  fixture.module.Update(0.016);
+  GameVisual* inspector =
+    CellGameModuleTestAccess::getInspectorVisual(fixture.module);
+  testTrue(g,
+           inspector != nullptr && inspector->isVisible(),
+           "persisted inspector preference is honored at startup");
+}
+
+static void
 testInspectorTokens()
 {
   testSection("Editor: inspector HUD emits UI tokens");
@@ -632,6 +649,8 @@ registerEditorTests(IllumoTestRegistry& registry)
                []() { return runEditorCase(testPasteDrainsSimulation); });
   registry.add("IllumoGame.Editor.CDoesNotClearWorld",
                []() { return runEditorCase(testCDoesNotClearWorld); });
+  registry.add("IllumoGame.Editor.InspectorPreference",
+               []() { return runEditorCase(testInspectorPreference); });
   registry.add("IllumoGame.Editor.InspectorTokens",
                []() { return runEditorCase(testInspectorTokens); });
   registry.add("IllumoGame.Editor.CellClipboardOperations",

@@ -790,7 +790,11 @@ GLFW callbacks / poll → InputManager → module / controller logic
 
 `CellGameModule` owns a primitive-composed F1 settings overlay in every build.
 It edits ruleset, world chunk width/height, TPS, simulation speed, fade speed,
-VSync, and fullscreen. Positive dimensions apply finite toroidal topology;
+VSync, fullscreen, UI scale, restart-only MSAA, FPS cap, simulation inspector,
+and reduced menu motion. FPS cap uses the existing engine `fps` setting and
+frame pacer: 0 disables software limiting and VSync remains independent.
+Both main-menu and in-game Apply persist display preferences and apply fullscreen
+immediately. Main-menu F1 opens the same settings overlay. Positive dimensions apply finite toroidal topology;
 `0`/`0` or `inf`/`inf` applies infinite topology. Topology changes drain the
 worker and intentionally start a fresh centered world before persisting values.
 Larger high-contrast labels, readable ruleset names, split keyboard help, and a
@@ -799,7 +803,13 @@ action open a confirmation overlay; confirming requests window closure so the
 Illumo application runner performs normal engine shutdown.
 Animation remains local value state: the overlay eases into place, rows reveal
 in sequence, selection glides, and changed values pulse without adding widgets
-or blocking input.
+or blocking input. Rows retain readable height and scroll with selection, wheel,
+Page Up/Down, and Home/End; drawing and pointer conversion share a fitted UI
+scale. A held opening click is consumed until release. The main-menu card adds
+bounded decorative cell outlines, layered color accents, staggered text, and
+selection glow. `reducedUiMotion` snaps menu animations and disables decorative
+motion; it does not change domain simulation or cell fading. `showInspector`
+loads at product startup and applies to the existing inspector drawable.
 
 **D-E2:** InputManager must not depend on Game types.  
 Callbacks should record events/state, not own game policy long-term (CA design PDF — still the direction of travel).

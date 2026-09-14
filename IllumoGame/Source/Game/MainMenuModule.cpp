@@ -5,6 +5,7 @@
 #include "CellGameModule.h"
 #include "PatternCodec.h"
 #include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -25,7 +26,7 @@ easeOutCubic(float progress)
 }
 
 MainMenuModule::MainMenuModule()
-  : m_menuVisual(512u)
+  : m_menuVisual(2048u)
   , m_selectedItem(kPlayItem)
   , m_animationElapsed(0.0f)
   , m_selectionFromItem(0.0f)
@@ -83,6 +84,7 @@ MainMenuModule::Start(IllumoContext* context)
   m_selectionFromItem = 0.0f;
   m_selectionAnimationElapsed = kSelectionAnimationSeconds;
   m_animationElapsed = 0.0f;
+  m_revealElapsed = 0.0f;
   m_bgSimAccum = 0.0;
   m_mouseWasDown = false;
 
@@ -151,19 +153,44 @@ MainMenuModule::updateLayout()
     height = std::max(1, dimensions[1]);
   }
 
-  m_panelWidth = std::min(480.0f, static_cast<float>(width) - 48.0f);
-  m_panelHeight = 400.0f;
-  m_panelX = (static_cast<float>(width) - m_panelWidth) * 0.5f;
-  m_panelY = (static_cast<float>(height) - m_panelHeight) * 0.5f;
-
+  const float scale = ic != nullptr && ic->renderer != nullptr
+                        ? std::max(1.0f, ic->renderer->getUiScale())
+                        : 1.0f;
+  m_layoutScale =
+    std::min(scale,
+             std::max(0.25f,
+                      std::min(static_cast<float>(width) / 640.0f,
+                               static_cast<float>(height) / 480.0f)));
+  Transform2D fit;
+  fit.scaleX = m_layoutScale / scale;
+  fit.scaleY = fit.scaleX;
+  m_menuVisual.setTransform(fit);
+  const float virtualWidth = static_cast<float>(width) / m_layoutScale;
+  const float virtualHeight = static_cast<float>(height) / m_layoutScale;
+  m_panelWidth = std::min(540.0f, virtualWidth - 48.0f);
+  m_panelHeight = std::min(488.0f, virtualHeight - 24.0f);
+  m_panelX = (virtualWidth - m_panelWidth) * 0.5f;
+  const float reveal =
+    reducedMotion() ? 1.0f : easeOutCubic(m_revealElapsed / 0.45f);
+  m_panelY = (virtualHeight - m_panelHeight) * 0.5f + 12.0f * (1.0f - reveal);
   m_itemWidth = m_panelWidth - 56.0f;
-  m_itemHeight = 42.0f;
+  m_itemHeight = (m_panelHeight - 196.0f) / 4.0f;
   m_firstItemY = m_panelY + 140.0f;
+}
+
+bool
+MainMenuModule::reducedMotion() const
+{
+  return ic != nullptr && ic->envVars != nullptr &&
+         ic->envVars->getVar("reducedUiMotion").valueAsBool;
 }
 
 float
 MainMenuModule::itemPosition() const
 {
+  if (reducedMotion()) {
+    return static_cast<float>(m_selectedItem);
+  }
   const float progress = easeOutCubic(std::clamp(
     m_selectionAnimationElapsed / kSelectionAnimationSeconds, 0.0f, 1.0f));
   return m_selectionFromItem +
@@ -266,11 +293,18 @@ MainMenuModule::currentConfiguration() const
     config.speedFactor = 1.0;
   }
   config.fadeSpeed = ic->envVars->getVar("cellFadeSpeed").valueAsDouble;
-  if (config.fadeSpeed <= 0.0) {
+  if (config.fadeSpeed < 0.0) {
     config.fadeSpeed = 8.0;
   }
   config.vsync = ic->envVars->getVar("vsync").valueAsBool;
   config.fullscreen = ic->envVars->getVar("fullscreen").valueAsBool;
+  const EnvVar& scaleVar = ic->envVars->getVar("uiScale");
+  config.uiScale = scaleVar.value.empty() ? 1 : scaleVar.valueAsLong;
+  const EnvVar& msaaVar = ic->envVars->getVar("msaa");
+  config.msaa = msaaVar.value.empty() ? 4 : msaaVar.valueAsLong;
+  config.fpsCap = getTargetFps(ic->envVars);
+  config.showInspector = ic->envVars->getVar("showInspector").valueAsBool;
+  config.reducedUiMotion = ic->envVars->getVar("reducedUiMotion").valueAsBool;
   return config;
 }
 
@@ -280,6 +314,11 @@ MainMenuModule::applyConfiguration(const SimulatorConfiguration& configuration)
   if (ic == nullptr || ic->envVars == nullptr) {
     return false;
   }
+  if (configuration.fpsCap < 0 || configuration.fpsCap > 1000) {
+    return false;
+  }
+  const bool fullscreenChanged =
+    configuration.fullscreen != ic->envVars->getVar("fullscreen").valueAsBool;
   ic->envVars->setVar("ModeString", configuration.ruleSet);
   ic->envVars->setVar("WorldChunksX",
                       static_cast<long>(configuration.worldChunkWidth));
@@ -288,8 +327,17 @@ MainMenuModule::applyConfiguration(const SimulatorConfiguration& configuration)
   ic->envVars->setVar("tps", configuration.tps);
   ic->envVars->setVar("speedFactor", configuration.speedFactor);
   ic->envVars->setVar("cellFadeSpeed", configuration.fadeSpeed);
+  ic->envVars->setVar("fps", configuration.fpsCap);
+  ic->envVars->setVar("showInspector", configuration.showInspector);
+  ic->envVars->setVar("reducedUiMotion", configuration.reducedUiMotion);
   ic->envVars->setVar("vsync", configuration.vsync);
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
+  ic->envVars->setVar("uiScale", configuration.uiScale);
+  ic->envVars->setVar("msaa", configuration.msaa);
+  if (fullscreenChanged && ic->window != nullptr) {
+    ic->window->toggleFullscreen();
+  }
+  ic->envVars->save();
   return true;
 }
 
@@ -300,17 +348,29 @@ MainMenuModule::Update(double dt)
     return;
   }
 
-  m_animationElapsed += static_cast<float>(dt);
+  if (!std::isfinite(dt) || dt < 0.0) {
+    dt = 0.0;
+  }
+  m_revealElapsed = std::min(0.6f, m_revealElapsed + static_cast<float>(dt));
+  m_animationElapsed =
+    reducedMotion()
+      ? 0.0f
+      : std::fmod(m_animationElapsed + static_cast<float>(std::min(dt, 0.1)),
+                  12.0f);
   m_selectionAnimationElapsed =
     std::min(kSelectionAnimationSeconds,
              m_selectionAnimationElapsed + static_cast<float>(dt));
 
-  advanceAmbientSimulation(dt);
+  advanceAmbientSimulation(std::min(dt, 0.25));
 
   const bool consoleOpen =
     ic->commandLine != nullptr && ic->commandLine->isOpen;
 
   if (m_configurationMenu != nullptr && m_configurationMenu->isOpen()) {
+    // Preserve the button edge across modal close; Apply must not click the
+    // main-menu action underneath it on the following frame.
+    m_mouseWasDown = ic->inputManager != nullptr &&
+                     ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
     m_configurationMenu->tick(static_cast<float>(dt));
     if (!consoleOpen) {
       const ConfigurationMenuAction action =
@@ -319,16 +379,23 @@ MainMenuModule::Update(double dt)
         SimulatorConfiguration config;
         std::string error;
         if (m_configurationMenu->readConfiguration(&config, &error)) {
-          applyConfiguration(config);
-          m_configurationMenu->close();
+          if (applyConfiguration(config)) {
+            m_configurationMenu->close();
+          } else {
+            m_configurationMenu->setError("Unable to apply settings.");
+          }
         } else {
           m_configurationMenu->setError(error);
         }
       } else if (action == ConfigurationMenuAction::Cancel ||
                  action == ConfigurationMenuAction::Exit) {
         m_configurationMenu->close();
+        if (action == ConfigurationMenuAction::Exit && ic->window != nullptr) {
+          ic->window->requestClose();
+        }
       }
     }
+    rebuildVisual();
     return;
   }
 
@@ -349,7 +416,10 @@ MainMenuModule::Update(double dt)
           event.action != InputAction::Hold) {
         continue;
       }
-      if (event.key == KeyCode::Up || event.key == KeyCode::W) {
+      if (event.key == KeyCode::F1) {
+        m_configurationMenu->open(currentConfiguration());
+        break;
+      } else if (event.key == KeyCode::Up || event.key == KeyCode::W) {
         selectItem(m_selectedItem - 1);
       } else if (event.key == KeyCode::Down || event.key == KeyCode::S ||
                  event.key == KeyCode::Tab) {
@@ -363,25 +433,33 @@ MainMenuModule::Update(double dt)
       }
     }
     keyQueue.swap(remainingKeys);
+    if (m_configurationMenu->isOpen()) {
+      rebuildVisual();
+      return;
+    }
 
     std::queue<unsigned int>& charQueue = ic->inputManager->getCharQueue();
     while (!charQueue.empty()) {
       charQueue.pop();
     }
 
-    const std::array<double, 2> mouse = ic->inputManager->getMousePosition();
-    const float mouseX = static_cast<float>(mouse[0]);
-    const float mouseY = static_cast<float>(mouse[1]);
+    const std::array<double, 2> mouse = ic->window->getMouseCoords();
+    const float mouseX = static_cast<float>(mouse[0]) / m_layoutScale;
+    const float mouseY = static_cast<float>(mouse[1]) / m_layoutScale;
+    const bool moved = mouseX != m_previousMouseX || mouseY != m_previousMouseY;
+    m_previousMouseX = mouseX;
+    m_previousMouseY = mouseY;
     const bool mouseDown =
       ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
 
     const float itemX = m_panelX + 28.0f;
-    const float itemGap = 12.0f;
+    const float itemGap = 8.0f;
     for (int i = 0; i < kItemCount; ++i) {
       const float currentItemY =
         m_firstItemY + static_cast<float>(i) * (m_itemHeight + itemGap);
-      if (mouseX >= itemX && mouseX <= itemX + m_itemWidth &&
-          mouseY >= currentItemY && mouseY <= currentItemY + m_itemHeight) {
+      if ((moved || (mouseDown && !m_mouseWasDown)) && mouseX >= itemX &&
+          mouseX <= itemX + m_itemWidth && mouseY >= currentItemY &&
+          mouseY <= currentItemY + m_itemHeight) {
         if (m_selectedItem != i) {
           selectItem(i);
         }
@@ -400,91 +478,186 @@ MainMenuModule::Update(double dt)
 void
 MainMenuModule::rebuildVisual()
 {
-  m_menuVisual.clearPrimitives();
-
-  int width = 1280;
-  int height = 720;
-  if (ic != nullptr && ic->window != nullptr) {
-    const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-    width = std::max(1, dimensions[0]);
-    height = std::max(1, dimensions[1]);
-  }
   updateLayout();
+  m_menuVisual.clearPrimitives();
+  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+  const float width = static_cast<float>(dimensions[0]) / m_layoutScale;
+  const float height = static_cast<float>(dimensions[1]) / m_layoutScale;
+  const float reveal =
+    reducedMotion() ? 1.0f : easeOutCubic(m_revealElapsed / 0.45f);
+  const unsigned char opacity = static_cast<unsigned char>(255.0f * reveal);
+  const float breathe =
+    reducedMotion() ? 0.5f
+                    : 0.5f + 0.5f * std::sin(m_animationElapsed * 1.04719755f);
+  const ColorRgba cyan{ 87, 221, 242, 255 };
+  const ColorRgba violet{ 151, 128, 245, 255 };
+  m_menuVisual.addFilledRect(
+    0.0f, 0.0f, width, height, ColorRgba{ 7, 12, 24, 225 });
 
-  // Dim background over ambient simulation
-  m_menuVisual.addFilledRect(0.0f,
-                             0.0f,
-                             static_cast<float>(width),
-                             static_cast<float>(height),
-                             ColorRgba{ 10, 14, 23, 180 });
+  // Bounded layers of translucent color create ambient light without textures.
+  for (int band = 0; band < 12; ++band) {
+    const float inset = static_cast<float>(band) * 18.0f;
+    const unsigned char alpha =
+      static_cast<unsigned char>(2.0f + breathe * 2.0f);
+    m_menuVisual.addFilledRect(inset,
+                               0.0f,
+                               std::max(0.0f, width * 0.45f - inset),
+                               height,
+                               ColorRgba{ 30, 110, 155, alpha });
+    m_menuVisual.addFilledRect(width * 0.65f + inset,
+                               0.0f,
+                               std::max(0.0f, width * 0.35f - inset),
+                               height,
+                               ColorRgba{ 91, 55, 155, alpha });
+  }
+  // A slow cell constellation echoes the simulator without random per-frame
+  // work.
+  for (int cell = 0; cell < 28; ++cell) {
+    const float phase = static_cast<float>(cell) * 0.73f;
+    const float drift =
+      reducedMotion()
+        ? 0.0f
+        : std::sin(m_animationElapsed * 0.52359877f + phase) * 9.0f;
+    const float x = std::fmod(static_cast<float>(cell * 137 + 31), width);
+    const float y = std::fmod(static_cast<float>(cell * 79 + 17), height);
+    m_menuVisual.addOutlineRect(
+      x,
+      std::clamp(y + drift, 0.0f, height - 8.0f),
+      8.0f,
+      8.0f,
+      ColorRgba{
+        85, 180, 225, static_cast<unsigned char>(25.0f + 25.0f * breathe) },
+      1.0f);
+  }
 
-  // Main Card Panel
   GuiPanelChrome chrome;
-  chrome.background = UiTheme::applyOpacity(UiTheme::panelSurface(), 245);
-  chrome.border = UiTheme::applyOpacity(UiTheme::panelBorder(), 255);
-  chrome.shadow = UiTheme::applyOpacity(UiTheme::panelShadow(), 240);
-  chrome.shadowOffset = 6.0f;
+  chrome.background =
+    UiTheme::applyOpacity(ColorRgba{ 14, 23, 39, 247 }, opacity);
+  chrome.border =
+    UiTheme::applyOpacity(ColorRgba{ 65, 101, 133, 255 }, opacity);
+  chrome.shadow = UiTheme::applyOpacity(UiTheme::panelShadow(), opacity);
+  chrome.shadowOffset = 8.0f;
   chrome.drawShadow = true;
-  chrome.drawAccent = true;
-  chrome.accent = UiTheme::accent();
-  chrome.accentWidth = 5.0f;
+  chrome.drawAccent = false;
   GuiKit::drawPanel(
     m_menuVisual, m_panelX, m_panelY, m_panelWidth, m_panelHeight, chrome);
-
-  // Title & Subtitle
-  m_menuVisual.addText("ILLUMO",
+  m_menuVisual.addFilledRect(m_panelX,
+                             m_panelY,
+                             m_panelWidth * 0.65f * reveal,
+                             3.0f,
+                             UiTheme::applyOpacity(cyan, opacity));
+  m_menuVisual.addFilledRect(m_panelX + m_panelWidth * 0.65f,
+                             m_panelY,
+                             m_panelWidth * 0.35f * reveal,
+                             3.0f,
+                             UiTheme::applyOpacity(violet, opacity));
+  m_menuVisual.addText("I L L U M O",
                        m_panelX + 28.0f,
                        m_panelY + 28.0f,
-                       32.0f,
-                       UiTheme::textPrimary());
-  m_menuVisual.addText("Cellular Automata Engine",
+                       34.0f,
+                       UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
+  m_menuVisual.addText("Small rules. Endless possibilities.",
                        m_panelX + 28.0f,
-                       m_panelY + 76.0f,
+                       m_panelY + 78.0f,
                        15.0f,
-                       UiTheme::textMuted());
+                       UiTheme::applyOpacity(cyan, opacity));
+  m_menuVisual.addText("CELLULAR AUTOMATA SANDBOX",
+                       m_panelX + 28.0f,
+                       m_panelY + 108.0f,
+                       11.0f,
+                       UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
 
-  // Separator Line
-  m_menuVisual.addFilledRect(m_panelX + 28.0f,
-                             m_panelY + 110.0f,
-                             m_itemWidth,
-                             1.0f,
-                             UiTheme::panelBorder());
+  const unsigned int logoRows[5] = { 4u, 2u, 14u, 0u, 0u };
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 4; ++col) {
+      const bool lit = (logoRows[row] & (1u << col)) != 0u;
+      m_menuVisual.addFilledRect(
+        m_panelX + m_panelWidth - 91.0f + static_cast<float>(col) * 14.0f,
+        m_panelY + 34.0f + static_cast<float>(row) * 14.0f,
+        10.0f,
+        10.0f,
+        UiTheme::applyOpacity(lit ? cyan : ColorRgba{ 34, 51, 73, 255 },
+                              opacity));
+    }
+  }
 
-  const char* itemLabels[kItemCount] = { "Play / New Simulation",
-                                         "Load Saved Simulation",
-                                         "Settings",
-                                         "Exit to Desktop" };
-
+  const char* labels[kItemCount] = {
+    "New simulation", "Load simulation", "Settings", "Exit to desktop"
+  };
+  const char* descriptions[kItemCount] = {
+    "Create, experiment, and watch patterns evolve",
+    "Continue exploring a saved world",
+    "Tune simulation, display, and motion",
+    "Close IllumoGame"
+  };
   const float itemX = m_panelX + 28.0f;
-  const float itemGap = 12.0f;
-
-  for (int i = 0; i < kItemCount; ++i) {
-    const float currentItemY =
-      m_firstItemY + static_cast<float>(i) * (m_itemHeight + itemGap);
+  const float stride = m_itemHeight + 8.0f;
+  for (int item = 0; item < kItemCount; ++item) {
+    const float y = m_firstItemY + static_cast<float>(item) * stride;
     m_menuVisual.addFilledRect(
-      itemX, currentItemY, m_itemWidth, m_itemHeight, UiTheme::panelRaised());
+      itemX,
+      y,
+      m_itemWidth,
+      m_itemHeight,
+      UiTheme::applyOpacity(UiTheme::panelRaised(), opacity));
   }
-
-  // Animated Selection indicator
-  const float currentSelectionY =
-    m_firstItemY + itemPosition() * (m_itemHeight + itemGap);
+  const float selectionY = m_firstItemY + itemPosition() * stride;
   m_menuVisual.addFilledRect(
-    itemX, currentSelectionY, m_itemWidth, m_itemHeight, UiTheme::selection());
-  m_menuVisual.addFilledRect(
-    itemX, currentSelectionY, 4.0f, m_itemHeight, UiTheme::accent());
-
-  for (int i = 0; i < kItemCount; ++i) {
-    const float currentItemY =
-      m_firstItemY + static_cast<float>(i) * (m_itemHeight + itemGap);
-    const bool selected = i == m_selectedItem;
-    m_menuVisual.addText(itemLabels[i],
-                         itemX + 20.0f,
-                         currentItemY + 11.0f,
-                         17.0f,
-                         selected ? UiTheme::textPrimary()
-                                  : UiTheme::textMuted());
+    itemX,
+    selectionY,
+    m_itemWidth,
+    m_itemHeight,
+    UiTheme::applyOpacity(ColorRgba{ 32, 74, 99, 230 }, opacity));
+  m_menuVisual.addOutlineRect(
+    itemX,
+    selectionY,
+    m_itemWidth,
+    m_itemHeight,
+    UiTheme::applyOpacity(
+      ColorRgba{
+        87, 221, 242, static_cast<unsigned char>(100.0f + 70.0f * breathe) },
+      opacity),
+    1.0f);
+  m_menuVisual.addFilledRect(itemX,
+                             selectionY,
+                             3.0f,
+                             m_itemHeight,
+                             UiTheme::applyOpacity(cyan, opacity));
+  for (int item = 0; item < kItemCount; ++item) {
+    const float rowReveal =
+      reducedMotion()
+        ? 1.0f
+        : easeOutCubic((m_revealElapsed - static_cast<float>(item) * 0.035f) /
+                       0.32f);
+    const unsigned char rowOpacity =
+      static_cast<unsigned char>(255.0f * rowReveal);
+    const float y = m_firstItemY + static_cast<float>(item) * stride;
+    const float slide = (1.0f - rowReveal) * 10.0f;
+    m_menuVisual.addText(
+      labels[item],
+      itemX + 18.0f + slide,
+      y + 9.0f,
+      18.0f,
+      UiTheme::applyOpacity(
+        item == m_selectedItem ? cyan : UiTheme::textPrimary(), rowOpacity));
+    m_menuVisual.addText(
+      descriptions[item],
+      itemX + 18.0f + slide,
+      y + 34.0f,
+      11.0f,
+      UiTheme::applyOpacity(UiTheme::textMuted(), rowOpacity));
+    m_menuVisual.addText(item == m_selectedItem ? ">" : ".",
+                         itemX + m_itemWidth - 24.0f,
+                         y + 16.0f,
+                         18.0f,
+                         UiTheme::applyOpacity(cyan, rowOpacity));
   }
-
+  m_menuVisual.addText(
+    "ARROWS / MOUSE   Select     ENTER   Open     F1   Settings",
+    m_panelX + 28.0f,
+    m_panelY + m_panelHeight - 23.0f,
+    10.0f,
+    UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
   m_menuVisual.setVisible(true);
 }
 

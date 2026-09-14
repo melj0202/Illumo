@@ -68,4 +68,9 @@ private:
   float m_firstItemY;
   float m_itemHeight;
   float m_itemWidth;
+  float m_layoutScale = 1.0f;
+  float m_revealElapsed = 0.0f;
+  float m_previousMouseX = -1.0f;
+  float m_previousMouseY = -1.0f;
+  bool reducedMotion() const;
 };

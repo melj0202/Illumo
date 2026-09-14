@@ -6,6 +6,7 @@
 #include "PatternCodec.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
@@ -184,6 +185,7 @@ CellGameModule::Start(IllumoContext* context)
     return false;
   }
   ic = context;
+  inspectorEnabled = ic->envVars->getVar("showInspector").valueAsBool;
 
   // Prefer ModeString from envvars / previous console command.
   std::string startMode = ic->envVars->getVar("ModeString").value;
@@ -464,6 +466,11 @@ CellGameModule::currentConfiguration() const
   }
   const EnvVar& msaaVar = ic->envVars->getVar("msaa");
   configuration.msaa = msaaVar.value.empty() ? 4 : msaaVar.valueAsLong;
+  configuration.fpsCap = getTargetFps(ic->envVars);
+  configuration.showInspector =
+    ic->envVars->getVar("showInspector").valueAsBool;
+  configuration.reducedUiMotion =
+    ic->envVars->getVar("reducedUiMotion").valueAsBool;
   return configuration;
 }
 
@@ -479,7 +486,8 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
       configuration.speedFactor <= 0.0 || configuration.speedFactor > 100.0 ||
       !std::isfinite(configuration.fadeSpeed) ||
       configuration.fadeSpeed < 0.0 || configuration.fadeSpeed > 100.0 ||
-      configuration.uiScale < 1 || configuration.uiScale > 8) {
+      configuration.uiScale < 1 || configuration.uiScale > 8 ||
+      configuration.fpsCap < 0 || configuration.fpsCap > 1000) {
     return false;
   }
 
@@ -516,6 +524,10 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
   ic->envVars->setVar("tps", configuration.tps);
   ic->envVars->setVar("speedFactor", configuration.speedFactor);
   ic->envVars->setVar("cellFadeSpeed", configuration.fadeSpeed);
+  ic->envVars->setVar("fps", configuration.fpsCap);
+  inspectorEnabled = configuration.showInspector;
+  ic->envVars->setVar("showInspector", configuration.showInspector);
+  ic->envVars->setVar("reducedUiMotion", configuration.reducedUiMotion);
   ic->envVars->setVar("vsync", configuration.vsync);
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
   ic->envVars->setVar("uiScale", configuration.uiScale);
@@ -2081,7 +2093,6 @@ CellGameModule::isHamburgerHovered() const
 void
 CellGameModule::updateHamburgerVisual(double dt)
 {
-  (void)dt;
   hamburgerVisual.clearPrimitives();
   if (ic == nullptr || ic->window == nullptr) {
     hamburgerVisual.setVisible(false);
@@ -2117,15 +2128,27 @@ CellGameModule::updateHamburgerVisual(double dt)
     ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
   const bool isPressed = hamburgerHovered && isMouseDown;
 
-  // Background and border opacity
-  // Resting: subtle and translucent (~35%)
-  // Hovered: noticeable (~85%)
-  // Pressed: accented highlight
-  const unsigned char bgAlpha = isPressed ? 180 : (hamburgerHovered ? 150 : 60);
+  const float target = hamburgerHovered ? 1.0f : 0.0f;
+  const bool reducedMotion = ic->envVars != nullptr &&
+                             ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  const float blend =
+    reducedMotion
+      ? 1.0f
+      : (std::isfinite(dt) && dt > 0.0
+           ? static_cast<float>(1.0 - std::exp(-14.0 * std::min(dt, 0.25)))
+           : 0.0f);
+  hamburgerHoverBlend += (target - hamburgerHoverBlend) * blend;
+  const unsigned char bgAlpha =
+    isPressed ? 180
+              : static_cast<unsigned char>(60.0f + 90.0f * hamburgerHoverBlend);
   const unsigned char borderAlpha =
-    isPressed ? 230 : (hamburgerHovered ? 200 : 90);
+    isPressed
+      ? 230
+      : static_cast<unsigned char>(90.0f + 110.0f * hamburgerHoverBlend);
   const unsigned char barAlpha =
-    isPressed ? 255 : (hamburgerHovered ? 240 : 130);
+    isPressed
+      ? 255
+      : static_cast<unsigned char>(130.0f + 110.0f * hamburgerHoverBlend);
 
   ColorRgba bgColor = UiTheme::panelSurface();
   bgColor.a = bgAlpha;
@@ -2146,7 +2169,7 @@ CellGameModule::updateHamburgerVisual(double dt)
                    1.0f);
 
   // 3 horizontal bars (hamburger lines)
-  const float barWidth = 16.0f;
+  const float barWidth = 16.0f + 4.0f * hamburgerHoverBlend;
   const float barHeight = 2.0f;
   const float barX = hamburgerX + (hamburgerSize - barWidth) * 0.5f;
   const float startY = hamburgerY + 9.0f;
@@ -2155,6 +2178,16 @@ CellGameModule::updateHamburgerVisual(double dt)
   for (int i = 0; i < 3; ++i) {
     const float y = startY + static_cast<float>(i) * spacing;
     hamburgerVisual.addFilledRect(barX, y, barWidth, barHeight, barColor);
+  }
+
+  if (hamburgerHoverBlend > 0.01f) {
+    const unsigned char opacity =
+      static_cast<unsigned char>(255.0f * hamburgerHoverBlend);
+    hamburgerVisual.addText("Settings  F1",
+                            hamburgerX - 102.0f,
+                            hamburgerY + 10.0f,
+                            12.0f,
+                            UiTheme::applyOpacity(UiTheme::accent(), opacity));
   }
 
   hamburgerVisual.setVisible(true);
