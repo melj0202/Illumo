@@ -19,5 +19,6 @@
  "uiScale": "1",
  "msaa": "4",
  "reducedUiMotion": "0",
- "showInspector": "0"
+ "showInspector": "0",
+ "editHints": "1"
 }

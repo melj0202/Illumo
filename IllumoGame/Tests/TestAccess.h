@@ -32,6 +32,21 @@ public:
     return module.simulationRetryPending;
   }
 
+  static CellClipboard& getClipboard(CellGameModule& module)
+  {
+    return module.clipboard;
+  }
+
+  static GameVisual& getSelectionVisual(CellGameModule& module)
+  {
+    return module.selectionVisual;
+  }
+
+  static GameVisual& getEditHintsVisual(CellGameModule& module)
+  {
+    return module.editHintsVisual;
+  }
+
   static CellContext* getCellContext(CellGameModule& module)
   {
     return module.cellContext;

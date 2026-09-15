@@ -313,6 +313,8 @@ MainMenuModule::currentConfiguration() const
   if (config.fadeSpeed < 0.0) {
     config.fadeSpeed = 8.0;
   }
+  const EnvVar& hintsVar = ic->envVars->getVar("editHints");
+  config.editHints = hintsVar.value.empty() || hintsVar.valueAsBool;
   config.vsync = ic->envVars->getVar("vsync").valueAsBool;
   config.fullscreen = ic->envVars->getVar("fullscreen").valueAsBool;
   const EnvVar& scaleVar = ic->envVars->getVar("uiScale");
@@ -347,6 +349,7 @@ MainMenuModule::applyConfiguration(const SimulatorConfiguration& configuration)
   ic->envVars->setVar("fps", configuration.fpsCap);
   ic->envVars->setVar("showInspector", configuration.showInspector);
   ic->envVars->setVar("reducedUiMotion", configuration.reducedUiMotion);
+  ic->envVars->setVar("editHints", configuration.editHints);
   ic->envVars->setVar("vsync", configuration.vsync);
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
   ic->envVars->setVar("uiScale", configuration.uiScale);

@@ -68,6 +68,9 @@ public:
            grid->setCell(address, state);
   }
   void syncVisibleRegion();
+  // Reserve a bottom UI band in window pixels without moving world coordinates.
+  void setBottomInsetPixels(int pixels);
+  int getBottomInsetPixels() const { return bottomInsetPixels; }
   void rebuildTargetsFromGrid();
   void rebuildPalette(const RuleSet* rules);
   void rebuildDefaultPalette();
@@ -127,6 +130,7 @@ private:
   };
 
   int baseViewWidth;
+  int bottomInsetPixels = 0;
   int baseViewHeight;
   int textureWidth;
   int textureHeight;

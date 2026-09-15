@@ -190,6 +190,7 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
   speedText = decimalText(current.speedFactor);
   fadeText = decimalText(current.fadeSpeed);
   vsync = current.vsync;
+  editHints = current.editHints;
   fullscreen = current.fullscreen;
   uiScale = current.uiScale > 0 ? current.uiScale : 1;
   msaa = current.msaa;
@@ -526,6 +527,9 @@ ConfigurationMenu::cycleSelected(int direction)
   } else if (selectedRow == kReducedMotionRow) {
     reducedUiMotion = !reducedUiMotion;
     changed = true;
+  } else if (selectedRow == kEditHintsRow) {
+    editHints = !editHints;
+    changed = true;
   } else if (selectedRow == kVsyncRow) {
     vsync = !vsync;
     changed = true;
@@ -587,7 +591,8 @@ ConfigurationMenu::activateSelected()
   if (selectedRow == kRulesetRow || selectedRow == kVsyncRow ||
       selectedRow == kFullscreenRow || selectedRow == kUiScaleRow ||
       selectedRow == kMsaaRow || selectedRow == kFpsCapRow ||
-      selectedRow == kInspectorRow || selectedRow == kReducedMotionRow) {
+      selectedRow == kInspectorRow || selectedRow == kReducedMotionRow ||
+      selectedRow == kEditHintsRow) {
     cycleSelected(1);
   }
   return ConfigurationMenuAction::None;
@@ -740,6 +745,7 @@ ConfigurationMenu::readConfiguration(SimulatorConfiguration* configuration,
   parsed.showInspector = showInspector;
   parsed.reducedUiMotion = reducedUiMotion;
   parsed.vsync = vsync;
+  parsed.editHints = editHints;
   parsed.fullscreen = fullscreen;
   parsed.uiScale = uiScale > 0 ? uiScale : 1;
   parsed.msaa = msaa;
@@ -872,6 +878,7 @@ ConfigurationMenu::rebuildVisual()
                                           "FPS cap",
                                           "Simulation inspector",
                                           "Reduced menu motion",
+                                          "Edit control hints",
                                           "Apply changes",
                                           "Discard changes",
                                           "Exit simulator" };
@@ -889,6 +896,7 @@ ConfigurationMenu::rebuildVisual()
     fpsCapText == "0" ? "Uncapped" : fpsCapText + " FPS",
     showInspector ? "On" : "Off",
     reducedUiMotion ? "On" : "Off",
+    editHints ? "On" : "Off",
     "ENTER",
     "ENTER",
     "ENTER"
@@ -907,6 +915,7 @@ ConfigurationMenu::rebuildVisual()
     "0 = uncapped; 1-1000 FPS. VSync still limits to monitor refresh.",
     "Show generation, cell coordinates, and population in the simulation.",
     "Disable decorative motion and snap menu transitions.",
+    "Show input hints at the bottom while editing.",
     "Validate, save, and apply the displayed settings.",
     "Close the menu without changing any settings.",
     "Leave IllumoGame (confirmation appears during a simulation)."

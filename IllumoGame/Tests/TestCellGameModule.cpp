@@ -604,7 +604,7 @@ testReleaseConfigurationWorkflow()
              fixture.env.getVar("fps").valueAsLong == 144,
            "invalid FPS cap leaves applied preferences intact");
   menu->open(applied);
-  for (int row = 0; row < 15; ++row) {
+  for (int row = 0; row < 16; ++row) {
     fixture.input.getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
   }

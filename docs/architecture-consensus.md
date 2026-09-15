@@ -803,6 +803,17 @@ GLFW callbacks / poll → InputManager → module / controller logic
 **Today:** InputManager holds key/mouse state and contexts. `DebugModule` consumes Grave and open-console editing first as a global Debug overlay; product modules then read remaining events and yield while the console is open. Unconsumed key/char events are discarded at the end of the host update. Not every behavior is extracted into tiny controller classes—acceptable.
 
 `CellGameModule` owns a primitive-composed F1 settings overlay in every build.
+Its persisted `editHints` option defaults on and controls a wrapping bottom
+legend in Edit mode, including Wireworld brush keys. The flat menu-themed footer uses muted text
+and shows selection actions only when selected. Its opaque bottom band is
+excluded from canvas drawing and pointer input; disabling hints releases it.
+Canvas clipping uses backend-neutral scissor tokens without shifting camera
+coordinates and restores scissor state before drawing the UI. Selection drags finish
+on mouse release; releasing Shift first does not start painting. Painting,
+erasing, or leaving Edit clears the selection while preserving the copied
+pattern. Clipboard hotkeys act only in Edit; explicit console commands remain
+mode-independent. Modal overlays and the console hide the legend and selection
+outline and interrupt active paint/selection drags.
 It edits ruleset, world chunk width/height, TPS, simulation speed, fade speed,
 VSync, fullscreen, UI scale, restart-only MSAA, FPS cap, simulation inspector,
 and reduced menu motion. FPS cap uses the existing engine `fps` setting and
