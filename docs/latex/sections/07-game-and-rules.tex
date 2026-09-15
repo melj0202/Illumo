@@ -2,6 +2,15 @@
 \label{sec:game}
 
 \subsection{CellGameModule}
+
+Edit mode includes a bottom \textbf{Cell paint} drawer, initially closed. A centered
+pull tab toggles an eased vertical slide and chevron; rounded GuiKit surfaces, UiTheme colors, and animated
+row emphasis match the other product menus. Reduced UI motion snaps transitions.
+Swatches read active ruleset colors and select Alive, Dead/erase, Brian's Brain's
+Dying state, or Wireworld's four states. Right-click remains erase and Wireworld
+shortcuts remain synchronized. Drawing and hit testing share a fitted UI scale;
+palette gestures capture pointer input until release. Modal menus and the console
+take precedence. The module owns this ordinary GameVisual on the existing UI layer.
 Camera navigation accepts finite world coordinates with absolute value at most
 $16(2^{63}-2^{32})$ per axis, reserving space for bounded cache arithmetic.
 Commands, sparse metadata, and pending pan/zoom targets validate this range

@@ -14,6 +14,7 @@
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -58,6 +59,7 @@ private:
   void showModeSplash(const char* label);
   void updateEditorCursor();
   void updateHamburgerVisual(double dt);
+  void updatePaintPalette(double dt);
   void advanceCanvasEntrance(double dt);
   void requestMainMenuReturn();
   void completeMainMenuReturn();
@@ -135,6 +137,15 @@ private:
   bool render3dCameraApplied;
   Cursor editorCursor;
   GameVisual hamburgerVisual;
+  GameVisual m_paintPaletteVisual;
+  bool m_paintPaletteExpanded = false;
+  bool m_paintPaletteMouseWasDown = false;
+  bool m_paintPaletteCapturing = false;
+  bool m_paintPaletteHovered = false;
+  float m_paintPaletteReveal = 0.0f;
+  std::array<float, 4> m_paintPaletteEmphasis{};
+  unsigned char m_paintBrush = 0;
+  std::string m_paintRuleTag;
   GameVisual canvasEntranceVisual{ 1024u };
   static constexpr double kCanvasEntranceSeconds = 0.72;
   double canvasEntranceElapsed = kCanvasEntranceSeconds;
