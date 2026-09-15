@@ -6,6 +6,7 @@
 #include "Cursor.h"
 #include "ExitConfirmDialog.h"
 #include "Game/SimulationRunner.h"
+#include "NewSimulationMenu.h"
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -15,6 +16,7 @@
 #include <Illumo/Scene/SceneGraph.h>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <tracy/Tracy.hpp>
 
 enum class CellState
@@ -30,6 +32,7 @@ class CellGameModule : public IModule
 
 public:
   explicit CellGameModule(std::string initialSaveFile = {});
+  explicit CellGameModule(const NewSimulationConfiguration& configuration);
   ~CellGameModule() override;
   bool Start(IllumoContext* context) override;
   void Update(double dt) override;
@@ -160,4 +163,5 @@ private:
   bool inspectHeld;
   bool deleteHeld;
   std::string initialSaveFile;
+  std::optional<NewSimulationConfiguration> initialCanvas;
 };

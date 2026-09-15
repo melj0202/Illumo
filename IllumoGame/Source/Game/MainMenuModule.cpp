@@ -75,6 +75,8 @@ MainMenuModule::Start(IllumoContext* context)
   m_configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
 
+  m_newSimulationMenu =
+    std::make_unique<NewSimulationMenu>(ic->window, ic->renderer);
   m_menuVisual.setSpace(PrimitiveSpace::Pixels);
   m_menuVisual.setLayerHint(RenderLayerId::UI);
   m_menuVisual.setWindow(ic->window);
@@ -218,6 +220,17 @@ MainMenuModule::selectItem(int item)
 }
 
 void
+MainMenuModule::openCanvasSetup()
+{
+  NewSimulationConfiguration initial;
+  initial.ruleSet = ic->envVars->getVar("ModeString").value;
+  initial.worldChunkWidth = ic->envVars->getVar("WorldChunksX").valueAsLong;
+  initial.worldChunkHeight = ic->envVars->getVar("WorldChunksY").valueAsLong;
+  m_configurationMenu->close();
+  m_newSimulationMenu->open(initial, reducedMotion());
+}
+
+void
 MainMenuModule::activateSelectedItem()
 {
   if (ic == nullptr || ic->moduleHost == nullptr) {
@@ -226,7 +239,7 @@ MainMenuModule::activateSelectedItem()
 
   switch (m_selectedItem) {
     case kPlayItem: {
-      ic->moduleHost->RequestTransition(std::make_unique<CellGameModule>());
+      openCanvasSetup();
       break;
     }
     case kLoadItem: {
@@ -370,6 +383,25 @@ MainMenuModule::Update(double dt)
   const bool consoleOpen =
     ic->commandLine != nullptr && ic->commandLine->isOpen;
 
+  if (m_newSimulationMenu->isOpen()) {
+    m_mouseWasDown = ic->inputManager != nullptr &&
+                     ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+    m_newSimulationMenu->tick(static_cast<float>(dt));
+    if (!consoleOpen) {
+      const NewSimulationAction action =
+        m_newSimulationMenu->update(ic->inputManager);
+      if (action == NewSimulationAction::Create) {
+        ic->moduleHost->RequestTransition(std::make_unique<CellGameModule>(
+          m_newSimulationMenu->configuration()));
+        m_newSimulationMenu->close();
+      } else if (action == NewSimulationAction::Back) {
+        m_newSimulationMenu->close();
+      }
+    }
+    rebuildVisual();
+    return;
+  }
+
   if (m_configurationMenu != nullptr && m_configurationMenu->isOpen()) {
     // Preserve the button edge across modal close; Apply must not click the
     // main-menu action underneath it on the following frame.
@@ -409,6 +441,7 @@ MainMenuModule::Update(double dt)
     std::queue<InputManager::KeyPressEvent>& keyQueue =
       ic->inputManager->getKeyQueue();
     std::queue<InputManager::KeyPressEvent> remainingKeys;
+    bool activated = false;
     while (!keyQueue.empty()) {
       const InputManager::KeyPressEvent event = keyQueue.front();
       keyQueue.pop();
@@ -416,13 +449,13 @@ MainMenuModule::Update(double dt)
         remainingKeys.push(event);
         continue;
       }
-      if (event.action != InputAction::Press &&
-          event.action != InputAction::Hold) {
+      if (activated || (event.action != InputAction::Press &&
+                        event.action != InputAction::Hold)) {
         continue;
       }
       if (event.key == KeyCode::F1) {
         m_configurationMenu->open(currentConfiguration());
-        break;
+        activated = true;
       } else if (event.key == KeyCode::Up || event.key == KeyCode::W) {
         selectItem(m_selectedItem - 1);
       } else if (event.key == KeyCode::Down || event.key == KeyCode::S ||
@@ -430,6 +463,7 @@ MainMenuModule::Update(double dt)
         selectItem(m_selectedItem + 1);
       } else if (event.key == KeyCode::Enter || event.key == KeyCode::Space) {
         activateSelectedItem();
+        activated = true;
       } else if (event.key == KeyCode::Escape) {
         if (ic->window != nullptr) {
           ic->window->requestClose();
@@ -437,7 +471,7 @@ MainMenuModule::Update(double dt)
       }
     }
     keyQueue.swap(remainingKeys);
-    if (m_configurationMenu->isOpen()) {
+    if (m_configurationMenu->isOpen() || m_newSimulationMenu->isOpen()) {
       rebuildVisual();
       return;
     }
@@ -844,6 +878,9 @@ MainMenuModule::DispatchDrawables(Scene* scene)
     scene->AddDrawable(m_bgContext->getCanvasView(), RenderLayerId::World);
   }
   scene->AddDrawable(&m_menuVisual, RenderLayerId::UI);
+  if (m_newSimulationMenu != nullptr && m_newSimulationMenu->isOpen()) {
+    scene->AddDrawable(&m_newSimulationMenu->getVisual(), RenderLayerId::UI);
+  }
   if (m_configurationMenu != nullptr && m_configurationMenu->isOpen()) {
     scene->AddDrawable(m_configurationMenu.get(), RenderLayerId::UI);
   }
@@ -865,11 +902,11 @@ MainMenuModule::registerConsoleCommands()
         return;
       }
       if (ic->moduleHost != nullptr) {
-        ic->moduleHost->RequestTransition(std::make_unique<CellGameModule>());
+        openCanvasSetup();
       }
     },
     "play",
-    "Start simulation game module");
+    "Open new canvas setup");
 }
 
 void
@@ -885,6 +922,7 @@ void
 MainMenuModule::Exit()
 {
   unregisterConsoleCommands();
+  m_newSimulationMenu.reset();
   m_configurationMenu.reset();
   m_bgContext.reset();
 }

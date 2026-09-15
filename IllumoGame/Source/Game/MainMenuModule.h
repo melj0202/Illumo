@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ConfigurationMenu.h"
+#include "NewSimulationMenu.h"
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <memory>
@@ -28,6 +29,10 @@ public:
 
   int getSelectedItemForTesting() const { return m_selectedItem; }
   bool isSettingsOpenForTesting() const;
+  bool isCanvasSetupOpenForTesting() const
+  {
+    return m_newSimulationMenu && m_newSimulationMenu->isOpen();
+  }
   void selectItemForTesting(int item);
   void activateSelectedItemForTesting();
 
@@ -39,6 +44,7 @@ private:
   static const int kItemCount = 4;
   static constexpr float kSelectionAnimationSeconds = 0.14f;
 
+  void openCanvasSetup();
   void seedAmbientPattern();
   void advanceAmbientSimulation(double dt);
   void updateLayout();
@@ -54,6 +60,7 @@ private:
 
   std::unique_ptr<CellContext> m_bgContext;
   std::unique_ptr<ConfigurationMenu> m_configurationMenu;
+  std::unique_ptr<NewSimulationMenu> m_newSimulationMenu;
   GameVisual m_menuVisual;
   std::shared_ptr<Font> m_titleFont;
   int m_titleRasterSize = 0;

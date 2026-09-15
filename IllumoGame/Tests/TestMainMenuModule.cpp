@@ -1,4 +1,6 @@
+#include "Game/CellGameModule.h"
 #include "Game/MainMenuModule.h"
+#include "TestAccess.h"
 #include "TestHarness.h"
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/IllumoContext.h>
@@ -206,8 +208,17 @@ testMainMenuPlayTransition()
   fixture.module.Update(0.016);
 
   testTrue(g,
+           fixture.module.isCanvasSetupOpenForTesting() &&
+             !fixture.module.isSettingsOpenForTesting() &&
+             !fixture.host.HasPendingTransition(),
+           "New simulation opens its own setup without starting");
+  fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
            fixture.host.HasPendingTransition(),
-           "Play action requests module transition");
+           "Create requests module transition");
   testTrue(g,
            fixture.host.transitionRequested != nullptr,
            "transitioned module instance is valid");
@@ -407,8 +418,111 @@ testMainMenuConsoleCommands()
   fixture.registry.QueueCommand("play", {});
   fixture.registry.ExecuteQueue();
 
+  testTrue(g,
+           fixture.module.isCanvasSetupOpenForTesting() &&
+             !fixture.host.HasPendingTransition(),
+           "play command opens canvas setup");
+}
+
+static void
+testCanvasSetupValidation()
+{
+  MainMenuFixture fixture;
+  NewSimulationConfiguration config;
+  config.worldChunkWidth = 2;
+  config.worldChunkHeight = 0;
+  CellGameModule invalid(config);
+  testTrue(g,
+           !invalid.Start(&fixture.context),
+           "mixed infinite/finite topology rejected before startup");
+  config.worldChunkHeight = 2;
+  config.ruleSet = "NOT_A_RULE";
+  testTrue(g, !config.isValid(), "unknown ruleset rejected");
+  config.ruleSet = "WIREWORLD";
+  fixture.module.Exit();
+  fixture.started = false;
+  CellGameModule seeded(config);
   testTrue(
-    g, fixture.host.HasPendingTransition(), "play command triggers transition");
+    g, seeded.Start(&fixture.context), "valid non-default ruleset starts");
+  CellContext* cells = CellGameModuleTestAccess::getCellContext(seeded);
+  testTrue(g,
+           cells && cells->getModeString() == "WIREWORLD" &&
+             cells->getGrid()->getAllocatedChunkCount() > 0,
+           "chosen ruleset and starter pattern reach canvas");
+  seeded.Exit();
+}
+
+static void
+testCanvasSetupDraft()
+{
+  MainMenuFixture fixture;
+  fixture.env.setVar("WorldChunksX", 0);
+  fixture.env.setVar("WorldChunksY", 0);
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.host.HasPendingTransition(),
+           "opening Enter cannot create a canvas");
+  fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.module.isCanvasSetupOpenForTesting() &&
+             !fixture.module.isSettingsOpenForTesting() &&
+             !fixture.host.HasPendingTransition(),
+           "Escape discards setup and F1 does not open global settings");
+  testTrue(g,
+           fixture.env.getVar("WorldChunksX").valueAsLong == 0 &&
+             fixture.env.getVar("WorldChunksY").valueAsLong == 0 &&
+             fixture.env.getVar("fps").valueAsLong == 60,
+           "discard changes neither canvas defaults nor display preferences");
+}
+
+static void
+testCanvasSetupCreatesConfiguredWorld()
+{
+  MainMenuFixture fixture;
+  fixture.env.setVar("WorldChunksX", 0);
+  fixture.env.setVar("WorldChunksY", 0);
+  fixture.module.activateSelectedItemForTesting();
+  for (KeyCode key : { KeyCode::Down,
+                       KeyCode::Right,
+                       KeyCode::Down,
+                       KeyCode::Right,
+                       KeyCode::Down,
+                       KeyCode::Down,
+                       KeyCode::Right,
+                       KeyCode::Down,
+                       KeyCode::Enter }) {
+    fixture.input.getKeyQueue().push({ key, InputAction::Press, 0 });
+  }
+  fixture.module.Update(0.016);
+  testTrue(
+    g, fixture.host.HasPendingTransition(), "configured canvas is submitted");
+  if (!fixture.host.HasPendingTransition())
+    return;
+  fixture.module.Exit();
+  fixture.started = false;
+  CellGameModule* game =
+    static_cast<CellGameModule*>(fixture.host.transitionRequested.get());
+  const bool started = game->Start(&fixture.context);
+  testTrue(g, started, "configured game starts");
+  CellContext* cells = CellGameModuleTestAccess::getCellContext(*game);
+  testTrue(g,
+           cells && cells->getWorldChunkWidth() == 33 &&
+             cells->getWorldChunkHeight() == 24,
+           "chosen dimensions reach actual sparse canvas");
+  testTrue(g,
+           cells && cells->getGrid()->getAllocatedChunkCount() == 0,
+           "empty choice omits startup pattern");
+  testTrue(g,
+           fixture.env.getVar("fps").valueAsLong == 60 &&
+             fixture.env.getVar("tps").valueAsLong == 30,
+           "canvas creation preserves performance settings");
+  game->Exit();
 }
 
 static int
@@ -422,6 +536,13 @@ runMainMenuCase(void (*testFunction)())
 void
 registerMainMenuTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.MainMenu.CanvasSetupValidation",
+               []() { return runMainMenuCase(testCanvasSetupValidation); });
+  registry.add("IllumoGame.MainMenu.CanvasSetupDiscard",
+               []() { return runMainMenuCase(testCanvasSetupDraft); });
+  registry.add("IllumoGame.MainMenu.CanvasSetupCreate", []() {
+    return runMainMenuCase(testCanvasSetupCreatesConfiguredWorld);
+  });
   registry.add("IllumoGame.MainMenu.TitleResolution",
                []() { return runMainMenuCase(testTitleRasterResolution); });
 

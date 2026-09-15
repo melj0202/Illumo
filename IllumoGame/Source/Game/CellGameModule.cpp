@@ -171,6 +171,12 @@ CellGameModule::CellGameModule(std::string initialSavePath)
   ic = nullptr;
 }
 
+CellGameModule::CellGameModule(const NewSimulationConfiguration& configuration)
+  : CellGameModule(std::string{})
+{
+  initialCanvas = configuration;
+}
+
 CellGameModule::~CellGameModule() {}
 
 bool
@@ -184,6 +190,10 @@ CellGameModule::Start(IllumoContext* context)
     ic = context;
     return false;
   }
+  if (initialCanvas.has_value() && !initialCanvas->isValid()) {
+    Logger::LogError("Invalid new canvas configuration");
+    return false;
+  }
   ic = context;
   inspectorEnabled = ic->envVars->getVar("showInspector").valueAsBool;
 
@@ -191,6 +201,10 @@ CellGameModule::Start(IllumoContext* context)
   std::string startMode = ic->envVars->getVar("ModeString").value;
   if (startMode.empty()) {
     startMode = "GAME_OF_LIFE";
+  }
+
+  if (initialCanvas.has_value()) {
+    startMode = initialCanvas->ruleSet;
   }
 
   InputEvent ac;
@@ -221,6 +235,16 @@ CellGameModule::Start(IllumoContext* context)
   ic->inputManager->setActiveInputContext(inputContextId);
   this->cellContext = new CellContext(
     startMode, ic->envVars, ic->window, ic->camera, ic->renderer);
+  if (initialCanvas.has_value() &&
+      !cellContext->resetWorld(initialCanvas->worldChunkWidth,
+                               initialCanvas->worldChunkHeight)) {
+    Logger::LogError("Unable to allocate new canvas");
+    delete cellContext;
+    cellContext = nullptr;
+    ic->inputManager->unregisterInputContext(inputContextId);
+    inputContextId = -1;
+    return false;
+  }
   // Canvas-dependent settings are applied only after domain construction.
   simAccum = 0.0;
   syncSimRateFromEnv();
@@ -230,7 +254,7 @@ CellGameModule::Start(IllumoContext* context)
 
   if (!initialSaveFile.empty()) {
     LoadCellGame(initialSaveFile);
-  } else {
+  } else if (!initialCanvas.has_value() || initialCanvas->starterPattern) {
     // Ruleset-aware startup seed (GoL glider, Wireworld electron-on-wire, …).
     seedInitialPattern();
   }

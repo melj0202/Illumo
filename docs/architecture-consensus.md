@@ -828,6 +828,17 @@ The large main-menu title uses a separate font atlas at 64, 128, or 256 pixels,
 selected to cover its fitted display size without upscaling glyphs. Smaller
 labels retain the default font atlas; resizing reuses the bounded title sizes.
 
+New simulation and the menu console command `play` open a dedicated canvas
+setup screen, independent of F1 configuration. It offers the rules catalog,
+infinite or wrapping boundaries, width and height in 16-cell increments, and
+empty or starter contents. Infinite mode disables dimensions while retaining
+the finite draft. Create passes validated canvas values to CellGameModule;
+Back or Escape discards the draft. Display and performance preferences are not
+part of this payload. The screen fits all rows, respects reduced menu motion,
+and consumes wheel input without changing selection or values. Raised cards,
+eased focus lighting, value pulses, and a decorative cell colony match the
+main menu; reduced motion freezes the colony and snaps focus feedback.
+
 Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
 A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
 retires after completion. It covers the canvas and HUD but remains beneath

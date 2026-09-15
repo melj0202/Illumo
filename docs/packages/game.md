@@ -19,6 +19,17 @@ and use `RuleSetRegistry::loadFromText` for in-memory catalogs. Independent
 registry instances contain only built-ins until explicitly loaded. Catalog
 syntax and application startup behavior remain compatible.
 
+New simulation and the menu console command `play` open a dedicated canvas
+setup screen, independent of F1 configuration. It offers the rules catalog,
+infinite or wrapping boundaries, width and height in 16-cell increments, and
+empty or starter contents. Infinite mode disables dimensions while retaining
+the finite draft. Create passes validated canvas values to CellGameModule;
+Back or Escape discards the draft. Display and performance preferences are not
+part of this payload. The screen fits all rows, respects reduced menu motion,
+and consumes wheel input without changing selection or values. Raised cards,
+eased focus lighting, value pulses, and a decorative cell colony match the
+main menu; reduced motion freezes the colony and snaps focus feedback.
+
 ## SparseCellGrid (simulation domain)
 
 - Authoritative signed 64-bit cell coordinates.
