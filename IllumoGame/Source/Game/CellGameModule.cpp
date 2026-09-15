@@ -306,6 +306,21 @@ CellGameModule::Start(IllumoContext* context)
     hamburgerVisual.prepare(ic->renderer);
   }
 
+  m_paintPaletteVisual.setRenderer(ic->renderer);
+  m_paintPaletteVisual.setWindow(ic->window);
+  m_paintPaletteVisual.setSpace(PrimitiveSpace::Pixels);
+  m_paintPaletteVisual.setLayerHint(RenderLayerId::UI);
+  m_paintPaletteVisual.prepare(ic->renderer);
+  m_paintPaletteVisual.setVisible(false);
+  m_paintPaletteExpanded = false;
+  m_paintPaletteReveal = 0.0f;
+  m_paintPaletteMouseWasDown = false;
+  m_paintPaletteCapturing = false;
+  m_paintPaletteHovered = false;
+  m_paintPaletteEmphasis.fill(0.0f);
+  m_paintBrush = 0;
+  m_paintRuleTag.clear();
+
   canvasEntranceVisual.setRenderer(ic->renderer);
   canvasEntranceVisual.setWindow(ic->window);
   canvasEntranceVisual.setSpace(PrimitiveSpace::Pixels);
@@ -1443,6 +1458,7 @@ CellGameModule::Update(double dt)
   }
 
   if (exitConfirmOpen) {
+    updatePaintPalette(dt);
     exitConfirmDialog->tick(static_cast<float>(dt));
     const ExitConfirmAction action =
       consoleOpen ? ExitConfirmAction::None
@@ -1466,6 +1482,7 @@ CellGameModule::Update(double dt)
   }
 
   if (configurationMenu != nullptr && configurationMenu->isOpen()) {
+    updatePaintPalette(dt);
     configurationMenu->tick(static_cast<float>(dt));
     const ConfigurationMenuAction action =
       consoleOpen ? ConfigurationMenuAction::None
@@ -1537,8 +1554,32 @@ CellGameModule::Update(double dt)
     }
   }
 
-  // Common behavior: camera panning & scroll zoom (only when console is closed)
-  if (!ic->commandLine->isOpen) {
+  // Toggle between NORMAL and EDIT states with 'E' key (only when console is
+  // closed)
+  if (!ic->commandLine->isOpen &&
+      ic->inputManager->isActionActive("ToggleState")) {
+    if (currentState == CellState::NORMAL) {
+      drainSimulation();
+      currentState = CellState::EDIT;
+      showModeSplash("EDIT");
+      Logger::LogInfo("State changed to EDIT");
+    } else {
+      currentState = CellState::NORMAL;
+      simAccum = 0.0;
+      achievedSimulationTps = 0.0;
+      showModeSplash("NORMAL");
+      Logger::LogInfo("State changed to NORMAL");
+    }
+    lastSimulationSteps = 0;
+    simulationDebtDropped = false;
+    simulationBudgetLimited = false;
+  }
+
+  updatePaintPalette(dt);
+
+  // Palette gestures own pointer input until both mouse buttons are released.
+  if (!ic->commandLine->isOpen && !m_paintPaletteHovered &&
+      !m_paintPaletteCapturing) {
     CameraPan();
 
     // Zoom behavior using scroll offset
@@ -1559,27 +1600,6 @@ CellGameModule::Update(double dt)
         ic->camera->ZoomAt(static_cast<float>(zoomFactor), worldMouse);
       }
     }
-  }
-
-  // Toggle between NORMAL and EDIT states with 'E' key (only when console is
-  // closed)
-  if (!ic->commandLine->isOpen &&
-      ic->inputManager->isActionActive("ToggleState")) {
-    if (currentState == CellState::NORMAL) {
-      drainSimulation();
-      currentState = CellState::EDIT;
-      showModeSplash("EDIT");
-      Logger::LogInfo("State changed to EDIT");
-    } else {
-      currentState = CellState::NORMAL;
-      simAccum = 0.0;
-      achievedSimulationTps = 0.0;
-      showModeSplash("NORMAL");
-      Logger::LogInfo("State changed to NORMAL");
-    }
-    lastSimulationSteps = 0;
-    simulationDebtDropped = false;
-    simulationBudgetLimited = false;
   }
 
   // State dependent behavior
@@ -1635,6 +1655,8 @@ CellGameModule::Exit()
   render3dTestStatic.reset();
   hamburgerVisual.clearPrimitives();
   hamburgerVisual.setVisible(false);
+  m_paintPaletteVisual.clearPrimitives();
+  m_paintPaletteVisual.setVisible(false);
   canvasEntranceVisual.clearPrimitives();
   canvasEntranceVisual.setVisible(false);
   canvasEntranceElapsed = kCanvasEntranceSeconds;
@@ -2035,9 +2057,6 @@ CellGameModule::Edit(double dt)
     CellAddress{ currentX, currentY });
 
   if (!ic->commandLine->isOpen) {
-    if (cellContext->getModeString() == "WIREWORLD") {
-      updateWireworldBrushFromInput();
-    }
     handleEditorHotkeys();
 
     bool isLeftPressed =
@@ -2046,7 +2065,9 @@ CellGameModule::Edit(double dt)
       ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
     const bool shift = ic->inputManager->isShiftPressed();
 
-    const bool pointerInWorld = hoverValid && !isHamburgerHovered();
+    const bool pointerInWorld = hoverValid && !isHamburgerHovered() &&
+                                !m_paintPaletteHovered &&
+                                !m_paintPaletteCapturing;
     if (shift && isLeftPressed && pointerInWorld) {
       if (!clipboard.isSelecting()) {
         clipboard.startSelection(currentX, currentY);
@@ -2058,8 +2079,8 @@ CellGameModule::Edit(double dt)
       clipboard.stopSelectionDrag();
       if ((isLeftPressed || isRightPressed) && pointerInWorld) {
         mirrorDeltaValid = false;
-        unsigned char colorVal = isLeftPressed ? 0 : 1;
-        if (cellContext->getModeString() == "WIREWORLD") {
+        unsigned char colorVal = isLeftPressed ? m_paintBrush : 1;
+        if (cellContext->getRuleSet()->getRuleTag() == "WIREWORLD") {
           colorVal =
             isLeftPressed ? wireworldBrush : WireworldRuleSet::CELL_EMPTY;
         }
@@ -2105,6 +2126,241 @@ CellGameModule::Edit(double dt)
     wasPressed = false;
     clipboard.stopSelectionDrag();
   }
+}
+
+void
+CellGameModule::updatePaintPalette(double dt)
+{
+  m_paintPaletteVisual.clearPrimitives();
+  m_paintPaletteVisual.setVisible(false);
+  m_paintPaletteHovered = false;
+  if (ic == nullptr || ic->window == nullptr || ic->inputManager == nullptr ||
+      cellContext == nullptr) {
+    return;
+  }
+  const bool leftDown =
+    ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+  const bool rightDown =
+    ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
+  const bool clicked = leftDown && !m_paintPaletteMouseWasDown;
+  m_paintPaletteMouseWasDown = leftDown;
+  if (!leftDown && !rightDown) {
+    m_paintPaletteCapturing = false;
+  }
+  if (currentState != CellState::EDIT ||
+      (ic->commandLine != nullptr && ic->commandLine->isOpen) ||
+      (configurationMenu != nullptr && configurationMenu->isOpen()) ||
+      (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen())) {
+    return;
+  }
+
+  const RuleSet* rules = cellContext->getRuleSet();
+  const std::string tag = rules->getRuleTag();
+  const bool wireworld = tag == "WIREWORLD";
+  const int stateCount = wireworld ? 4 : (tag == "BRIANS_BRAIN" ? 3 : 2);
+  if (tag != m_paintRuleTag) {
+    m_paintRuleTag = tag;
+    m_paintBrush = 0;
+    m_paintPaletteEmphasis.fill(0.0f);
+  }
+  if (wireworld) {
+    updateWireworldBrushFromInput();
+  }
+  unsigned char& brush = wireworld ? wireworldBrush : m_paintBrush;
+  const std::array<const char*, 4> labels =
+    wireworld
+      ? std::array<const char*, 4>{ "Head  1/H",
+                                    "Empty  2",
+                                    "Tail  3/T",
+                                    "Conductor  4" }
+      : std::array<const char*, 4>{ "Alive", "Dead / erase", "Dying", "" };
+  const float scale = ic->renderer != nullptr
+                        ? std::max(0.01f, ic->renderer->getUiScale())
+                        : 1.0f;
+  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+  const float width = static_cast<float>(stateCount) * 132.0f + 24.0f;
+  const float header = 32.0f;
+  const float body = 110.0f;
+  const float fit = std::max(
+    0.01f,
+    std::min({ 1.0f,
+               static_cast<float>(dimensions[0]) / ((width + 24.0f) * scale),
+               static_cast<float>(dimensions[1]) /
+                 ((header + body + 24.0f) * scale) }));
+  Transform2D transform;
+  transform.scaleX = fit;
+  transform.scaleY = fit;
+  const float screenWidth = static_cast<float>(dimensions[0]) / (scale * fit);
+  const float screenHeight = static_cast<float>(dimensions[1]) / (scale * fit);
+  const float x = (screenWidth - width) * 0.5f;
+  const float tabWidth = 160.0f;
+  const float tabX = (screenWidth - tabWidth) * 0.5f;
+  const std::array<double, 2> mouse = ic->window->getMouseCoords();
+  const float mx = static_cast<float>(mouse[0]) / (scale * fit);
+  const float my = static_cast<float>(mouse[1]) / (scale * fit);
+  const float previousY = screenHeight - header - body * m_paintPaletteReveal;
+  const bool headerHovered =
+    GuiKit::isPointInRect(mx, my, tabX, previousY, tabWidth, header);
+  if (clicked && headerHovered) {
+    m_paintPaletteExpanded = !m_paintPaletteExpanded;
+  }
+  const bool reducedMotion = ic->envVars != nullptr &&
+                             ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  const float blend =
+    reducedMotion
+      ? 1.0f
+      : (std::isfinite(dt) && dt > 0.0
+           ? static_cast<float>(1.0 - std::exp(-14.0 * std::min(dt, 0.25)))
+           : 0.0f);
+  m_paintPaletteReveal +=
+    ((m_paintPaletteExpanded ? 1.0f : 0.0f) - m_paintPaletteReveal) * blend;
+  const float y = screenHeight - header - body * m_paintPaletteReveal;
+  m_paintPaletteHovered =
+    GuiKit::isPointInRect(mx, my, tabX, y, tabWidth, header) ||
+    (m_paintPaletteReveal > 0.001f &&
+     GuiKit::isPointInRect(mx, my, x, y + header, width, body));
+  // Capture before a reduced-motion toggle moves the tab away from the click.
+  // Keep the gesture captured when dragging off the drawer onto the world.
+  if ((m_paintPaletteHovered || (clicked && headerHovered)) &&
+      (leftDown || rightDown)) {
+    m_paintPaletteCapturing = true;
+  }
+  if (m_paintPaletteHovered || m_paintPaletteCapturing) {
+    *ic->inputManager->getMouseScrollOffset() = 0.0;
+  }
+  // Draw one joined silhouette, then cover the shared edge with its surface.
+  // Opaque fills avoid darker seams where the tab and drawer meet.
+  ColorRgba surface = UiTheme::panelSurface();
+  surface.a = 255;
+  ColorRgba rim = UiTheme::panelBorder();
+  rim.a = 255;
+  GuiKit::drawRoundedRect(
+    m_paintPaletteVisual, tabX, y, tabWidth, header + 16.0f, 12.0f, rim);
+  if (m_paintPaletteReveal > 0.001f) {
+    GuiKit::drawRoundedRect(
+      m_paintPaletteVisual, x, y + header, width, body + 20.0f, 12.0f, rim);
+    GuiKit::drawRoundedRect(m_paintPaletteVisual,
+                            x + 1.0f,
+                            y + header + 1.0f,
+                            width - 2.0f,
+                            body + 20.0f,
+                            11.0f,
+                            surface);
+  }
+  GuiKit::drawRoundedRect(m_paintPaletteVisual,
+                          tabX + 1.0f,
+                          y + 1.0f,
+                          tabWidth - 2.0f,
+                          header + 16.0f,
+                          11.0f,
+                          surface);
+  m_paintPaletteVisual.addFilledRect(
+    tabX + 1.0f, y + header - 1.0f, tabWidth - 2.0f, 18.0f, surface);
+  if (headerHovered) {
+    GuiKit::drawRoundedRect(m_paintPaletteVisual,
+                            tabX + 8.0f,
+                            y + 5.0f,
+                            tabWidth - 16.0f,
+                            header - 10.0f,
+                            6.0f,
+                            UiTheme::applyOpacity(UiTheme::accentSoft(), 40));
+  }
+  m_paintPaletteVisual.addText(
+    "Cell paint", tabX + 16.0f, y + 10.0f, 12.0f, UiTheme::textPrimary());
+  const float arrowX = tabX + tabWidth - 23.0f;
+  const float arrowY = y + 16.0f;
+  const float direction = 2.0f * m_paintPaletteReveal - 1.0f;
+  m_paintPaletteVisual.addLine(arrowX - 5.0f,
+                               arrowY - 2.0f * direction,
+                               arrowX,
+                               arrowY + 3.0f * direction,
+                               UiTheme::accent(),
+                               2.0f);
+  m_paintPaletteVisual.addLine(arrowX,
+                               arrowY + 3.0f * direction,
+                               arrowX + 5.0f,
+                               arrowY - 2.0f * direction,
+                               UiTheme::accent(),
+                               2.0f);
+  for (int state = 0; state < stateCount; ++state) {
+    const float cardX = x + 12.0f + static_cast<float>(state) * 132.0f;
+    const float cardY = y + header + 12.0f;
+    const bool hovered =
+      m_paintPaletteExpanded && my < screenHeight &&
+      GuiKit::isPointInRect(mx, my, cardX, cardY, 124.0f, 64.0f);
+    if (hovered && clicked) {
+      brush = static_cast<unsigned char>(state);
+    }
+    float& emphasis = m_paintPaletteEmphasis[static_cast<std::size_t>(state)];
+    emphasis +=
+      ((brush == state ? 1.0f : (hovered ? 0.5f : 0.0f)) - emphasis) * blend;
+    if (m_paintPaletteReveal <= 0.001f) {
+      continue;
+    }
+    GuiKit::drawRoundedRect(m_paintPaletteVisual,
+                            cardX,
+                            cardY,
+                            124.0f,
+                            64.0f,
+                            8.0f,
+                            UiTheme::panelRaised());
+    GuiKit::drawRoundedRect(
+      m_paintPaletteVisual,
+      cardX,
+      cardY,
+      124.0f,
+      64.0f,
+      8.0f,
+      UiTheme::applyOpacity(UiTheme::selection(),
+                            static_cast<unsigned char>(65.0f * emphasis)));
+    unsigned char rgb[3]{};
+    rules->evalCell(static_cast<unsigned char>(state), rgb);
+    GuiKit::drawCard(m_paintPaletteVisual,
+                     cardX + 49.0f,
+                     cardY + 8.0f,
+                     26.0f,
+                     26.0f,
+                     ColorRgba{ rgb[0], rgb[1], rgb[2], 255 },
+                     UiTheme::panelBorder());
+    GuiKit::drawTextCentered(m_paintPaletteVisual,
+                             labels[static_cast<std::size_t>(state)],
+                             cardX + 62.0f,
+                             cardY + 48.0f,
+                             11.0f,
+                             UiTheme::textPrimary());
+    if (brush == state) {
+      m_paintPaletteVisual.addFilledRect(
+        cardX + 50.0f, cardY + 60.0f, 24.0f, 2.0f, UiTheme::accentSoft());
+    }
+  }
+  if (m_paintPaletteReveal > 0.001f) {
+    GuiKit::drawTextCentered(m_paintPaletteVisual,
+                             "Left: paint   Right: erase",
+                             screenWidth * 0.5f,
+                             y + header + 94.0f,
+                             11.0f,
+                             UiTheme::textMuted());
+  }
+  // GameVisual scales about its content origin.
+  // Cancel that pivot translation so pointer conversion uses screen-origin
+  // scale.
+  float originX = tabX;
+  float originY = y;
+  for (std::size_t index = 0; index < m_paintPaletteVisual.shapeCount();
+       ++index) {
+    const ShapePrimitive* shape = m_paintPaletteVisual.getShape(index);
+    if (shape->kind == ShapeKind::Line) {
+      originX = std::min({ originX, shape->x0, shape->x1 });
+      originY = std::min({ originY, shape->y0, shape->y1 });
+    } else {
+      originX = std::min(originX, shape->rect.x);
+      originY = std::min(originY, shape->rect.y);
+    }
+  }
+  transform.x = (fit - 1.0f) * originX;
+  transform.y = (fit - 1.0f) * originY;
+  m_paintPaletteVisual.setTransform(transform);
+  m_paintPaletteVisual.setVisible(true);
 }
 
 void
@@ -2263,7 +2519,8 @@ CellGameModule::updateEditorCursor()
   }
 
   const bool canShow =
-    (currentState == CellState::EDIT) &&
+    (currentState == CellState::EDIT) && !m_paintPaletteHovered &&
+    !m_paintPaletteCapturing &&
     (ic->commandLine == nullptr || !ic->commandLine->isOpen) &&
     (configurationMenu == nullptr || !configurationMenu->isOpen()) &&
     (exitConfirmDialog == nullptr || !exitConfirmDialog->isOpen());
@@ -2651,6 +2908,9 @@ CellGameModule::DispatchDrawables(Scene* scene)
   }
   if (hamburgerVisual.isVisible()) {
     scene->AddDrawable(&hamburgerVisual, RenderLayerId::UI);
+  }
+  if (currentState == CellState::EDIT && m_paintPaletteVisual.isVisible()) {
+    scene->AddDrawable(&m_paintPaletteVisual, RenderLayerId::UI);
   }
   advanceCanvasEntrance(0.0);
   if (canvasEntranceVisual.isVisible()) {

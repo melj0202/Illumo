@@ -280,3 +280,16 @@ cost without making a comparative speed claim.
 
 Wireworld retains the sticky head/empty/tail/conductor brush (`1`/`H`, `2`,
 `3`/`T`, `4`).
+
+In Edit mode, the **Cell paint** drawer at the bottom selects the left-button
+brush. It starts closed. Click the centered pull tab to slide the drawer up;
+click it again to slide it below the bottom edge. Binary rules offer Alive and
+Dead/erase, Brian's Brain also offers Dying, and Wireworld offers all four states.
+Swatches use the active ruleset's actual colors, including catalog palettes.
+Right-click always erases; Wireworld keyboard shortcuts stay synchronized with
+the palette. A ruleset change resets the generic brush to Alive.
+The panel uses shared rounded GuiKit surfaces and UiTheme colors, an eased
+vertical slide and chevron, and animated hover/selection emphasis. Reduced UI
+motion snaps transitions. Drawing and hit testing share the fitted UI scale. Palette
+gestures capture input through mouse release, preventing paint-through and
+camera zoom; settings, confirmation dialogs, and the console take precedence.
