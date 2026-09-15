@@ -10,6 +10,7 @@
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Rendering/CommandQueue.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/TextPrimitive.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -87,6 +88,7 @@ struct EditorFixture
     env.setVar("WorldChunksY", 0);
     env.setVar("vsync", true);
     env.setVar("fullscreen", false);
+    env.setVar("editHints", true);
     mock.Initialize();
     started = module.Start(&context);
   }
@@ -616,6 +618,273 @@ testIllumoCodecDirect()
   std::filesystem::remove(testFile);
 }
 
+static void
+testSelectionLifecycle()
+{
+  testSection("Editor: selection ends on painting and mode changes");
+  EditorFixture fixture;
+  SparseCellGrid* grid =
+    CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+  CellClipboard& clipboard =
+    CellGameModuleTestAccess::getClipboard(fixture.module);
+  grid->clear();
+  fixture.window.mouseX = 200.0;
+  fixture.window.mouseY = 200.0;
+  InputManagerTestAccess::setModifierFlags(fixture.input, 1); // Shift
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.0);
+  fixture.window.mouseX = 248.0;
+  fixture.module.Update(0.0);
+  testTrue(g, clipboard.isSelecting(), "Shift-drag creates a selection");
+  InputManagerTestAccess::setModifierFlags(fixture.input, 0);
+  fixture.module.Update(0.0);
+  testTrue(g, clipboard.isSelecting(), "releasing Shift keeps the drag");
+  testEqSize(
+    g, grid->getAllocatedChunkCount(), 0, "selection never paints cells");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.0);
+  testTrue(g,
+           clipboard.hasSelection() && !clipboard.isSelecting(),
+           "mouse release preserves the completed selection for copying");
+
+  CellPattern pattern;
+  pattern.setExtent(1, 1);
+  pattern.addCell(0, 0, 0);
+  clipboard.setClipboardPattern(pattern);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.0);
+  testTrue(g, !clipboard.hasSelection(), "plain left click clears selection");
+  testTrue(
+    g,
+    !CellGameModuleTestAccess::getSelectionVisual(fixture.module).isVisible(),
+    "outline disappears on the same frame");
+  testEqSize(g,
+             clipboard.getClipboardPattern().getCells().size(),
+             1,
+             "clearing selection preserves the copied buffer");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  clipboard.setSelection(0, 0, 1, 1);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Press);
+  fixture.module.Update(0.0);
+  testTrue(g,
+           CellGameModuleTestAccess::getState(fixture.module) ==
+             CellState::NORMAL,
+           "E enters Normal mode");
+  testTrue(g, !clipboard.hasSelection(), "E clears the selection state");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Release);
+  queueAndRun(fixture, "pause");
+  clipboard.setSelection(0, 0, 1, 1);
+  queueAndRun(fixture, "run");
+  testTrue(g, !clipboard.hasSelection(), "console run also clears selection");
+  testEqSize(g,
+             clipboard.getClipboardPattern().getCells().size(),
+             1,
+             "mode changes preserve the copied buffer");
+
+  grid->clear();
+  InputManagerTestAccess::setModifierFlags(fixture.input, 2); // Control
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::V, InputAction::Press);
+  fixture.module.Update(0.0);
+  testEqSize(
+    g, grid->getAllocatedChunkCount(), 0, "paste hotkey is inactive in Normal");
+}
+
+static void
+testEditHints()
+{
+  testSection("Editor: hints follow settings, mode, and overlays");
+  EditorFixture fixture;
+  fixture.module.Update(0.0);
+  GameVisual& hints =
+    CellGameModuleTestAccess::getEditHintsVisual(fixture.module);
+  testTrue(g, hints.isVisible() && hints.textCount() > 0, "hints default on");
+  std::string allText;
+  for (std::size_t i = 0; i < hints.textCount(); ++i) {
+    TextPrimitive* text = hints.getText(i);
+    allText += text->content;
+    testTrue(g,
+             text->y >= 0.0f && text->y + text->sizePt <= 480.0f,
+             "hint text stays inside the window");
+  }
+  testTrue(g,
+           allText.find("Shift+Left") != std::string::npos &&
+             allText.find("Ctrl+V") != std::string::npos,
+           "hints explain selection and clipboard modifiers");
+  testTrue(g,
+           allText.find("Ctrl+C/X") == std::string::npos,
+           "selection actions stay hidden until relevant");
+  CellGameModuleTestAccess::getClipboard(fixture.module)
+    .setSelection(0, 0, 1, 1);
+  fixture.module.Update(0.0);
+  allText.clear();
+  for (std::size_t i = 0; i < hints.textCount(); ++i) {
+    allText += hints.getText(i)->content;
+  }
+  testTrue(g,
+           allText.find("Ctrl+C/X") != std::string::npos &&
+             allText.find("Delete") != std::string::npos,
+           "selecting cells reveals copy, cut, and erase hints");
+  CellGameModuleTestAccess::getClipboard(fixture.module).clearSelection();
+  fixture.scene.ClearDrawables();
+  fixture.scene.AddDrawable(&hints, RenderLayerId::UI);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed) > 0,
+           "hints emit render tokens");
+
+  SimulatorConfiguration configuration =
+    CellGameModuleTestAccess::currentConfiguration(fixture.module);
+  configuration.editHints = false;
+  testTrue(
+    g,
+    CellGameModuleTestAccess::applyConfiguration(fixture.module, configuration),
+    "hint setting applies");
+  fixture.module.Update(0.0);
+  testTrue(g,
+           !hints.isVisible() && !fixture.env.getVar("editHints").valueAsBool,
+           "hint setting is saved to environment and hides the legend");
+  testTrue(
+    g,
+    !CellGameModuleTestAccess::currentConfiguration(fixture.module).editHints,
+    "reopening settings retains the hint preference");
+  configuration.editHints = true;
+  CellGameModuleTestAccess::applyConfiguration(fixture.module, configuration);
+  fixture.console.isOpen = true;
+  fixture.module.Update(0.0);
+  testTrue(g, !hints.isVisible(), "console hides hints");
+  fixture.console.isOpen = false;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::F1, InputAction::Press);
+  fixture.module.Update(0.0);
+  testTrue(g, !hints.isVisible(), "settings hide hints");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::F1, InputAction::Release);
+  CellGameModuleTestAccess::getConfigurationMenu(fixture.module)->close();
+  queueAndRun(fixture, "run");
+  fixture.module.Update(0.0);
+  testTrue(g, !hints.isVisible(), "Normal mode hides hints");
+  queueAndRun(fixture, "pause");
+  fixture.module.Update(0.0);
+  testTrue(g, hints.isVisible(), "returning to Edit restores enabled hints");
+  fixture.env.setVar("uiScale", 2);
+  queueAndRun(fixture, "ruleset WIREWORLD");
+  fixture.module.Update(0.0);
+  const std::shared_ptr<Font> font = Font::getDefaultFont();
+  testTrue(g, font != nullptr, "font metrics available for layout checks");
+  allText.clear();
+  for (std::size_t i = 0; i < hints.textCount(); ++i) {
+    TextPrimitive* text = hints.getText(i);
+    allText += text->content;
+    if (font != nullptr) {
+      const TextBounds bounds = font->measureText(text->content, text->sizePt);
+      testTrue(g,
+               text->x + bounds.width <= 320.1f &&
+                 text->y + bounds.height <= 240.1f,
+               "Wireworld hints fit at double UI scale");
+    }
+  }
+  testTrue(g,
+           allText.find("4: conductor") != std::string::npos,
+           "Wireworld hints include the brush keys");
+}
+
+static void
+testFooterReservation()
+{
+  EditorFixture fixture;
+  CellContext* context =
+    CellGameModuleTestAccess::getCellContext(fixture.module);
+  CanvasView* canvas = context->getCanvasView();
+  SparseCellGrid* grid = context->getGrid();
+  grid->clear();
+  fixture.module.Update(0.0);
+  const int inset = canvas->getBottomInsetPixels();
+  testTrue(
+    g, inset > 0 && inset < 100, "footer reserves a compact bottom band");
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  bool clipped = false;
+  bool restored = false;
+  bool canvasDrawClipped = false;
+  for (std::size_t i = 0; i < fixture.mock.getLastNonEmptySubmittedCount();
+       ++i) {
+    const RenderCommand& command = fixture.mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetScissorState) {
+      if (command.scissor.enabled) {
+        clipped =
+          command.scissor.y == inset && command.scissor.height == 480 - inset;
+      } else if (clipped) {
+        restored = true;
+      }
+    }
+    if (command.commandType == CommandType::DrawIndexed && clipped &&
+        !restored) {
+      canvasDrawClipped = true;
+    }
+  }
+  testTrue(g,
+           canvasDrawClipped && restored,
+           "canvas clips above footer and restores scissor before UI drawing");
+
+  fixture.window.mouseX = 320.0;
+  fixture.window.mouseY = 479.0;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.0);
+  testEqSize(
+    g, grid->getAllocatedChunkCount(), 0, "clicking footer does not paint");
+  InputManagerTestAccess::setModifierFlags(fixture.input, 1);
+  fixture.module.Update(0.0);
+  CellClipboard& clipboard =
+    CellGameModuleTestAccess::getClipboard(fixture.module);
+  testTrue(
+    g, !clipboard.hasSelection(), "Shift-clicking footer does not select");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  CellPattern pattern;
+  pattern.setExtent(1, 1);
+  pattern.addCell(0, 0, 0);
+  clipboard.setClipboardPattern(pattern);
+  InputManagerTestAccess::setModifierFlags(fixture.input, 2);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::V, InputAction::Press);
+  const float zoom = fixture.camera.GetTargetZoom();
+  *fixture.input.getMouseScrollOffset() = 1.0;
+  fixture.module.Update(0.0);
+  testEqSize(g,
+             grid->getAllocatedChunkCount(),
+             0,
+             "paste over footer leaves world alone");
+  testTrue(g,
+           fixture.camera.GetTargetZoom() == zoom &&
+             *fixture.input.getMouseScrollOffset() == 0.0,
+           "footer consumes scrolling without zooming the canvas");
+
+  InputManagerTestAccess::setModifierFlags(fixture.input, 0);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::V, InputAction::Release);
+  fixture.env.setVar("editHints", false);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.0);
+  testTrue(g,
+           canvas->getBottomInsetPixels() == 0 &&
+             grid->getAllocatedChunkCount() > 0,
+           "disabling hints restores the bottom canvas area immediately");
+}
+
 static int
 runEditorCase(void (*testFunction)())
 {
@@ -628,6 +897,12 @@ runEditorCase(void (*testFunction)())
 void
 registerEditorTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.Editor.FooterReservation",
+               []() { return runEditorCase(testFooterReservation); });
+  registry.add("IllumoGame.Editor.SelectionLifecycle",
+               []() { return runEditorCase(testSelectionLifecycle); });
+  registry.add("IllumoGame.Editor.EditHints",
+               []() { return runEditorCase(testEditHints); });
   registry.add("IllumoGame.Editor.CopyPasteIdentity",
                []() { return runEditorCase(testCopyPasteIdentity); });
   registry.add("IllumoGame.Editor.TorusSkip",

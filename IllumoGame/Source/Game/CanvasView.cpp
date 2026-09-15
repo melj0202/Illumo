@@ -1098,6 +1098,12 @@ CanvasView::tryScrollCache(const CacheLayout& nextLayout)
 }
 
 void
+CanvasView::setBottomInsetPixels(int pixels)
+{
+  bottomInsetPixels = std::max(0, pixels);
+}
+
+void
 CanvasView::syncVisibleRegion()
 {
   ZoneScopedN("CanvasView.syncVisibleRegion");
@@ -1343,5 +1349,19 @@ CanvasView::AppendCommands(Renderer* activeRenderer)
   }
   visual.setRenderer(activeRenderer);
   visual.setVisible(isVisible());
-  return visual.AppendCommands(activeRenderer);
+  if (bottomInsetPixels == 0 || window == nullptr) {
+    return visual.AppendCommands(activeRenderer);
+  }
+  const std::array<int, 2> dimensions = window->getWindowDimensions();
+  const std::array<int, 4> viewport = activeRenderer->getCurrentPassViewport();
+  const int inset = std::clamp(
+    static_cast<int>(std::ceil(static_cast<double>(bottomInsetPixels) *
+                               viewport[3] / std::max(1, dimensions[1]))),
+    0,
+    viewport[3]);
+  activeRenderer->pushScissor(
+    true, viewport[0], viewport[1] + inset, viewport[2], viewport[3] - inset);
+  const bool appended = visual.AppendCommands(activeRenderer);
+  activeRenderer->pushScissor(false, 0, 0, 0, 0);
+  return appended;
 }

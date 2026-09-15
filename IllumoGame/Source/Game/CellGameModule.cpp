@@ -11,6 +11,7 @@
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Services/InputManager.h>
@@ -22,6 +23,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <glm/gtc/matrix_transform.hpp>
 #include <new>
 #include <queue>
@@ -278,6 +280,13 @@ CellGameModule::Start(IllumoContext* context)
   // Start before the first mouse sample).
   editorCursor.setVisible(false);
 
+  editHintsVisual.setRenderer(ic->renderer);
+  editHintsVisual.setWindow(ic->window);
+  editHintsVisual.setSpace(PrimitiveSpace::Pixels);
+  editHintsVisual.setLayerHint(RenderLayerId::UI);
+  editHintsVisual.setVisible(false);
+  editHintsVisual.prepare(ic->renderer);
+
   selectionVisual.setRenderer(ic->renderer);
   selectionVisual.setWindow(ic->window);
   selectionVisual.setCamera(ic->camera);
@@ -491,6 +500,8 @@ CellGameModule::currentConfiguration() const
   if (configuration.fadeSpeed < 0.0 || configuration.fadeSpeed > 100.0) {
     configuration.fadeSpeed = 6.0;
   }
+  const EnvVar& hintsVar = ic->envVars->getVar("editHints");
+  configuration.editHints = hintsVar.value.empty() || hintsVar.valueAsBool;
   configuration.vsync = ic->envVars->getVar("vsync").valueAsBool;
   configuration.fullscreen = ic->envVars->getVar("fullscreen").valueAsBool;
   const EnvVar& uiScaleVar = ic->envVars->getVar("uiScale");
@@ -562,6 +573,7 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
   inspectorEnabled = configuration.showInspector;
   ic->envVars->setVar("showInspector", configuration.showInspector);
   ic->envVars->setVar("reducedUiMotion", configuration.reducedUiMotion);
+  ic->envVars->setVar("editHints", configuration.editHints);
   ic->envVars->setVar("vsync", configuration.vsync);
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
   ic->envVars->setVar("uiScale", configuration.uiScale);
@@ -1161,6 +1173,10 @@ CellGameModule::setRunning(bool running)
 {
   prepareGridMutation();
   currentState = running ? CellState::NORMAL : CellState::EDIT;
+  paintStrokeActive = false;
+  clipboard.clearSelection();
+  selectionVisual.setVisible(false);
+  editHintsVisual.setVisible(false);
   simAccum = 0.0;
   achievedSimulationTps = 0.0;
   lastSimulationStepMilliseconds = 0.0;
@@ -1389,6 +1405,7 @@ CellGameModule::Update(double dt)
   if (cellContext == nullptr || ic == nullptr) {
     return;
   }
+  updateEditHintsVisual();
   advanceCanvasEntrance(dt);
   if (mainMenuReturnPending) {
     // The accepted exit owns product input until the host replaces this module.
@@ -1442,6 +1459,12 @@ CellGameModule::Update(double dt)
     toggleSettingsMenu();
   }
 
+  if (consoleOpen || exitConfirmOpen ||
+      (configurationMenu != nullptr && configurationMenu->isOpen())) {
+    paintStrokeActive = false;
+    clipboard.stopSelectionDrag();
+  }
+
   if (exitConfirmOpen) {
     exitConfirmDialog->tick(static_cast<float>(dt));
     const ExitConfirmAction action =
@@ -1456,6 +1479,7 @@ CellGameModule::Update(double dt)
     } else if (action == ExitConfirmAction::Cancel) {
       exitConfirmDialog->close();
     }
+    updateEditHintsVisual();
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -1493,6 +1517,7 @@ CellGameModule::Update(double dt)
         configurationMenu->close();
       }
     }
+    updateEditHintsVisual();
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -1510,6 +1535,7 @@ CellGameModule::Update(double dt)
     } else if (ic->window != nullptr) {
       ic->window->requestClose();
     }
+    updateEditHintsVisual();
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -1546,7 +1572,7 @@ CellGameModule::Update(double dt)
     glm::dvec2 worldMouse = ic->camera->ScreenToWorldPrecise(
       glm::dvec2(mouseCoords[0], mouseCoords[1]));
     double* scroll = ic->inputManager->getMouseScrollOffset();
-    if (*scroll != 0.0f) {
+    if (*scroll != 0.0f && !isPointerOverEditHints()) {
       double zoomFactor = (*scroll > 0.0f) ? 1.15 : 0.85;
       const glm::dvec2 target = ic->camera->GetTargetPositionPrecise();
       const float oldZoom = ic->camera->GetTargetZoom();
@@ -1558,6 +1584,9 @@ CellGameModule::Update(double dt)
       if (CanvasCoordinatePolicy::validPosition(next.x, next.y)) {
         ic->camera->ZoomAt(static_cast<float>(zoomFactor), worldMouse);
       }
+    }
+    if (isPointerOverEditHints()) {
+      *scroll = 0.0;
     }
   }
 
@@ -1577,10 +1606,14 @@ CellGameModule::Update(double dt)
       showModeSplash("NORMAL");
       Logger::LogInfo("State changed to NORMAL");
     }
+    clipboard.clearSelection();
+    paintStrokeActive = false;
     lastSimulationSteps = 0;
     simulationDebtDropped = false;
     simulationBudgetLimited = false;
   }
+
+  updateEditHintsVisual();
 
   // State dependent behavior
   switch (currentState) {
@@ -1605,6 +1638,7 @@ CellGameModule::Update(double dt)
   updateHamburgerVisual(dt);
   updateSelectionVisual();
   updateInspectorVisual();
+  updateEditHintsVisual();
 
   // Map dirty life cells to palette target colors, then ease display toward
   // them.
@@ -1797,6 +1831,9 @@ CellGameModule::cutSelection()
 bool
 CellGameModule::pasteAtCursor()
 {
+  if (isPointerOverEditHints()) {
+    return false;
+  }
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
     return false;
@@ -1880,26 +1917,27 @@ CellGameModule::handleEditorHotkeys()
   const bool inspectDown = ic->inputManager->isKeyPressed(KeyCode::I);
   const bool deleteDown = ic->inputManager->isKeyPressed(KeyCode::Delete);
 
-  if (copyDown && !copyHeld) {
+  if (currentState == CellState::EDIT && copyDown && !copyHeld) {
     copySelection();
   }
-  if (cutDown && !cutHeld) {
+  if (currentState == CellState::EDIT && cutDown && !cutHeld) {
     cutSelection();
   }
-  if (pasteDown && !pasteHeld) {
+  if (currentState == CellState::EDIT && pasteDown && !pasteHeld) {
     pasteAtCursor();
   }
-  if (rotateDown && !rotateHeld && !control) {
+  if (currentState == CellState::EDIT && rotateDown && !rotateHeld &&
+      !control) {
     clipboard.rotateCw();
   }
-  if (flipDown && !flipHeld && !control) {
+  if (currentState == CellState::EDIT && flipDown && !flipHeld && !control) {
     clipboard.flipHorizontal();
   }
   if (inspectDown && !inspectHeld && !control) {
     inspectorEnabled = !inspectorEnabled;
     ic->envVars->setVar("showInspector", inspectorEnabled);
   }
-  if (deleteDown && !deleteHeld) {
+  if (currentState == CellState::EDIT && deleteDown && !deleteHeld) {
     fillSelection(SparseCellGrid::BackgroundState);
   }
 
@@ -1913,10 +1951,121 @@ CellGameModule::handleEditorHotkeys()
 }
 
 void
+CellGameModule::updateEditHintsVisual()
+{
+  editHintsVisual.clearPrimitives();
+  editHintsVisual.setVisible(false);
+  editHintsInsetPixels = 0;
+  if (cellContext != nullptr) {
+    cellContext->getCanvasView()->setBottomInsetPixels(0);
+  }
+  if (currentState != CellState::EDIT || ic == nullptr ||
+      ic->window == nullptr || ic->commandLine->isOpen ||
+      (configurationMenu != nullptr && configurationMenu->isOpen()) ||
+      (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen())) {
+    return;
+  }
+  const EnvVar& hintsVar = ic->envVars->getVar("editHints");
+  if (!hintsVar.value.empty() && !hintsVar.valueAsBool) {
+    return;
+  }
+
+  const float scale = std::max(1.0f, ic->renderer->getUiScale());
+  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+  const float width = static_cast<float>(dimensions[0]) / scale;
+  const float height = static_cast<float>(dimensions[1]) / scale;
+  if (width < 120.0f || height < 100.0f) {
+    return;
+  }
+  std::vector<std::string> hints = {
+    "Left drag: paint", "Right drag: erase", "Shift+Left drag: select",
+    "Middle drag: pan", "Wheel: zoom",       "Ctrl+V: paste",
+    "E: run",           "I: inspector",      "F1: settings"
+  };
+  if (clipboard.hasSelection()) {
+    hints.emplace_back("Ctrl+C/X: copy/cut");
+    hints.emplace_back("Delete: erase selection");
+  }
+  if (!clipboard.getClipboardPattern().empty()) {
+    hints.emplace_back("R/F: rotate/flip buffer");
+  }
+  if (cellContext->getModeString() == "WIREWORLD") {
+    hints.emplace_back("1: head  2: empty  3: tail  4: conductor");
+  }
+  // Wrap complete hints, preserving each key/action pair at narrow sizes.
+  const float availableWidth = width - 24.0f;
+  const std::shared_ptr<Font> font = Font::getDefaultFont();
+  const std::function<float(const std::string&, float)> measureWidth =
+    [&font](const std::string& text, float size) {
+      return font != nullptr ? font->measureText(text, size).width
+                             : GuiKit::estimateTextWidth(text, size);
+    };
+  float fontSize = 11.0f;
+  for (const std::string& hint : hints) {
+    const float hintWidth = measureWidth(hint, fontSize);
+    if (hintWidth > availableWidth) {
+      fontSize *= availableWidth / hintWidth;
+    }
+  }
+  std::vector<std::string> lines;
+  std::string line;
+  for (const std::string& hint : hints) {
+    const std::string candidate = line.empty() ? hint : line + "    " + hint;
+    if (!line.empty() && measureWidth(candidate, fontSize) > availableWidth) {
+      lines.push_back(line);
+      line = hint;
+    } else {
+      line = candidate;
+    }
+  }
+  lines.push_back(line);
+  float lineHeight = font != nullptr ? font->getLineHeight(fontSize)
+                                     : GuiKit::defaultLineHeight(fontSize);
+  float panelHeight = lineHeight * static_cast<float>(lines.size()) + 12.0f;
+  if (panelHeight > height - 16.0f) {
+    const float fit = (height - 28.0f) / (panelHeight - 12.0f);
+    fontSize *= fit;
+    lineHeight *= fit;
+    panelHeight = height - 16.0f;
+  }
+  editHintsInsetPixels =
+    std::min(dimensions[1], static_cast<int>(std::ceil(panelHeight * scale)));
+  panelHeight = static_cast<float>(editHintsInsetPixels) / scale;
+  const float top = height - panelHeight;
+  // A flat, opaque footer reserves its own band; no canvas shows through.
+  editHintsVisual.addFilledRect(
+    0.0f, top, width, panelHeight, UiTheme::menuSurface());
+  editHintsVisual.addLine(0.0f, top, width, top, UiTheme::divider(), 1.0f);
+  float y = top + 6.0f;
+  for (const std::string& hintLine : lines) {
+    editHintsVisual.addText(hintLine, 12.0f, y, fontSize, UiTheme::textMuted());
+    y += lineHeight;
+  }
+  cellContext->getCanvasView()->setBottomInsetPixels(editHintsInsetPixels);
+  editHintsVisual.setVisible(true);
+}
+
+bool
+CellGameModule::isPointerOverEditHints() const
+{
+  if (editHintsInsetPixels <= 0 || ic == nullptr || ic->window == nullptr) {
+    return false;
+  }
+  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+  const std::array<double, 2> mouse = ic->window->getMouseCoords();
+  return mouse[0] >= 0.0 && mouse[0] < dimensions[0] &&
+         mouse[1] >= dimensions[1] - editHintsInsetPixels &&
+         mouse[1] < dimensions[1];
+}
+
+void
 CellGameModule::updateSelectionVisual()
 {
   selectionVisual.clearPrimitives();
-  if (!clipboard.hasSelection() || ic == nullptr || ic->camera == nullptr) {
+  if (currentState != CellState::EDIT || !clipboard.hasSelection() ||
+      ic == nullptr || ic->camera == nullptr || ic->commandLine->isOpen ||
+      (configurationMenu != nullptr && configurationMenu->isOpen()) ||
+      (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen())) {
     selectionVisual.setVisible(false);
     return;
   }
@@ -2012,9 +2161,12 @@ void
 CellGameModule::Edit(double dt)
 {
   (void)dt;
-  static bool wasPressed = false;
-  static std::int64_t lastMouseX = 0;
-  static std::int64_t lastMouseY = 0;
+  if (isPointerOverEditHints()) {
+    hoverValid = false;
+    paintStrokeActive = false;
+    clipboard.stopSelectionDrag();
+    return;
+  }
 
   std::array<double, 2> mouseCoords = ic->window->getMouseCoords();
   glm::dvec2 worldPos = ic->camera->ScreenToWorldPrecise(
@@ -2024,7 +2176,7 @@ CellGameModule::Edit(double dt)
   if (!CanvasCoordinatePolicy::tryWorldToCell(worldPos.x, &currentX) ||
       !CanvasCoordinatePolicy::tryWorldToCell(worldPos.y, &currentY)) {
     hoverValid = false;
-    wasPressed = false;
+    paintStrokeActive = false;
     clipboard.stopSelectionDrag();
     editorCursor.setVisible(false);
     return;
@@ -2047,16 +2199,23 @@ CellGameModule::Edit(double dt)
     const bool shift = ic->inputManager->isShiftPressed();
 
     const bool pointerInWorld = hoverValid && !isHamburgerHovered();
-    if (shift && isLeftPressed && pointerInWorld) {
+    // A selection drag lasts until mouse release, even if Shift is
+    // released first. It must not turn into a paint stroke.
+    if (isLeftPressed && (shift || clipboard.isSelecting())) {
+      if (!pointerInWorld) {
+        paintStrokeActive = false;
+        return;
+      }
       if (!clipboard.isSelecting()) {
         clipboard.startSelection(currentX, currentY);
       } else {
         clipboard.updateSelectionDrag(currentX, currentY);
       }
-      wasPressed = false;
+      paintStrokeActive = false;
     } else {
       clipboard.stopSelectionDrag();
       if ((isLeftPressed || isRightPressed) && pointerInWorld) {
+        clipboard.clearSelection();
         mirrorDeltaValid = false;
         unsigned char colorVal = isLeftPressed ? 0 : 1;
         if (cellContext->getModeString() == "WIREWORLD") {
@@ -2064,9 +2223,9 @@ CellGameModule::Edit(double dt)
             isLeftPressed ? wireworldBrush : WireworldRuleSet::CELL_EMPTY;
         }
 
-        if (wasPressed) {
-          std::int64_t x0 = lastMouseX;
-          std::int64_t y0 = lastMouseY;
+        if (paintStrokeActive) {
+          std::int64_t x0 = lastPaintX;
+          std::int64_t y0 = lastPaintY;
           const std::int64_t x1 = currentX;
           const std::int64_t y1 = currentY;
           const std::int64_t dx = std::llabs(x1 - x0);
@@ -2094,15 +2253,15 @@ CellGameModule::Edit(double dt)
           this->cellContext->getCanvasView()->setCanvasPixel(
             currentX, currentY, colorVal);
         }
-        wasPressed = true;
-        lastMouseX = currentX;
-        lastMouseY = currentY;
+        paintStrokeActive = true;
+        lastPaintX = currentX;
+        lastPaintY = currentY;
       } else {
-        wasPressed = false;
+        paintStrokeActive = false;
       }
     }
   } else {
-    wasPressed = false;
+    paintStrokeActive = false;
     clipboard.stopSelectionDrag();
   }
 }
@@ -2256,6 +2415,11 @@ CellGameModule::updateHamburgerVisual(double dt)
 void
 CellGameModule::updateEditorCursor()
 {
+  if (isPointerOverEditHints()) {
+    hoverValid = false;
+    editorCursor.setVisible(false);
+    return;
+  }
   if (!ic || !ic->window || !ic->camera || !cellContext ||
       !cellContext->getCanvasView()) {
     editorCursor.setVisible(false);
@@ -2263,7 +2427,7 @@ CellGameModule::updateEditorCursor()
   }
 
   const bool canShow =
-    (currentState == CellState::EDIT) &&
+    (currentState == CellState::EDIT) && !isPointerOverEditHints() &&
     (ic->commandLine == nullptr || !ic->commandLine->isOpen) &&
     (configurationMenu == nullptr || !configurationMenu->isOpen()) &&
     (exitConfirmDialog == nullptr || !exitConfirmDialog->isOpen());
@@ -2387,7 +2551,8 @@ CellGameModule::CameraPan()
   static glm::dvec2 lastMousePos = worldMouse;
   static bool wasPressed = false;
 
-  if (ic->inputManager->isMouseButtonPressed(KeyCode::MouseMiddle)) {
+  if (ic->inputManager->isMouseButtonPressed(KeyCode::MouseMiddle) &&
+      !isPointerOverEditHints()) {
     if (!wasPressed) {
       lastMousePos = worldMouse;
       wasPressed = true;
@@ -2624,8 +2789,8 @@ CellGameModule::DispatchDrawables(Scene* scene)
     return;
   }
   // Owners implement AppendCommands (domain + GameVisual). Scene lists
-  // Drawable hosts by layer (World → UI → Debug). The opt-in diagnostic scene
-  // replaces CanvasView so its depth-tested primitives start from a clear
+  // Drawable hosts by layer (World → UI → Debug). The opt-in diagnostic
+  // scene replaces CanvasView so its depth-tested primitives start from a clear
   // depth buffer rather than inheriting 2D presentation writes.
   if (isRender3dTestEnabled()) {
     ensureRender3dTestDrawables();
@@ -2642,6 +2807,9 @@ CellGameModule::DispatchDrawables(Scene* scene)
   }
   if (selectionVisual.isVisible()) {
     scene->AddDrawable(&selectionVisual, RenderLayerId::UI);
+  }
+  if (editHintsVisual.isVisible()) {
+    scene->AddDrawable(&editHintsVisual, RenderLayerId::UI);
   }
   if (inspectorVisual.isVisible()) {
     scene->AddDrawable(&inspectorVisual, RenderLayerId::UI);

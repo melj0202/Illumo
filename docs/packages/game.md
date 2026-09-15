@@ -176,8 +176,19 @@ are dropped while fractional time is retained. Pause, edit, save/load, ruleset
 changes, manual stepping, and shutdown drain first. Painting, Bresenham strokes, rectangular selection, copy/cut/paste, built-in
 stamps, RLE/plaintext import, `setcell`,
 randomization, and clearing operate directly on signed world coordinates.
+The bottom edit-control legend defaults on and follows the persisted
+`editHints` option in F1 settings. A flat, opaque menu-themed footer with muted
+text reserves a bottom band. Canvas tokens scissor out the band and restore
+scissor state before UI submission; picking, paint, paste, pan, and zoom ignore
+that area. The camera mapping stays fixed when the band changes. Selection
+actions appear only with a selection. It wraps key/action hints and includes
+Wireworld brush keys. Selection ends on mouse release even when Shift is
+released first. Painting, erasing, or leaving Edit clears the selection while
+preserving the copied pattern; clipboard hotkeys act only in Edit mode.
+Modal overlays and the console hide hints and selection outlines and stop
+active strokes. Explicit console pattern commands remain mode-independent.
 Pattern text is a clipboard/console side path and does not bump the sparse v3
-save format (D-G1). `C`/`X`/`V` are editor clipboard keys; full clear remains
+save format (D-G1). `Ctrl+C`/`Ctrl+X`/`Ctrl+V` are editor clipboard keys; full clear remains
 `clear_canvas`. An optional inspector HUD reports generation, hover address,
 state, chunk, and census (`inspect` or `I`).
 Startup patterns are centered around `(0, 0)`. Infinite mode is non-toroidal;

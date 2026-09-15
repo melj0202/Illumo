@@ -27,6 +27,7 @@ IllumoGameConfig::ApplyDefaults(IEnvVars* environment)
     { "msaa", "4" },
     { "reducedUiMotion", "0" },
     { "showInspector", "0" },
+    { "editHints", "1" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (environment->getVar(defaultValue.name).value.empty()) {

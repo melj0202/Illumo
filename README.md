@@ -508,7 +508,19 @@ Visual Studio: open the generated solution from the build directory, or generate
   (Simulation starts in edit mode, same as paused)
 - **Left mouse** (Edit) — Place living cells
 - **Right mouse** (Edit) — Place dead cells
-- **C** (Edit) — Clear the cell colony
+- **Shift + left drag** (Edit) — Select a rectangle; release the mouse to finish
+- **Ctrl+C / Ctrl+X / Ctrl+V** (Edit) — Copy / cut / paste at the pointer
+- **Delete** (Edit) — Erase selected cells
+- **R / F** (Edit) — Rotate / flip the pattern buffer
+- **Middle drag / wheel** — Pan / zoom
+- **I** — Toggle the inspector
+- Painting or erasing clears the selection. Leaving Edit mode clears it too,
+  while preserving the copied pattern.
+- The bottom control legend is enabled by default. Toggle **Edit control hints**
+  in **F1 settings**, then apply; the preference persists across launches.
+  The compact themed footer reserves a bottom band for hints; painting, selecting,
+  pasting, panning, and zooming do not act through it. Selection-specific hints
+  appear only while selected. Hiding hints returns that area to the canvas.
 - **F1** — Open the Release-visible simulator settings menu
 - **Q** / **ESC** — Quit
 - **`** — Toggle the developer console

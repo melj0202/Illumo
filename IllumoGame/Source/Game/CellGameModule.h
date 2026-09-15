@@ -65,6 +65,8 @@ private:
   bool isHamburgerHovered() const;
   void toggleSettingsMenu();
   void updateSelectionVisual();
+  void updateEditHintsVisual();
+  bool isPointerOverEditHints() const;
   void updateInspectorVisual();
   void normalizeSelection(std::int64_t* x0,
                           std::int64_t* y0,
@@ -147,6 +149,11 @@ private:
   bool hamburgerHovered;
   bool hamburgerMouseWasDown;
   float hamburgerHoverBlend = 0.0f;
+  GameVisual editHintsVisual;
+  int editHintsInsetPixels = 0;
+  bool paintStrokeActive = false;
+  std::int64_t lastPaintX = 0;
+  std::int64_t lastPaintY = 0;
   GameVisual selectionVisual;
   GameVisual inspectorVisual;
   CellClipboard clipboard;

@@ -101,6 +101,20 @@ Delete fill, R/F buffer rotate/flip, and console commands
 \texttt{select}/\texttt{copy}/\texttt{cut}/\texttt{paste}/\texttt{stamp}/
 \texttt{rle}/\texttt{plaintext}. Patterns are a side path (D-G1). Optional
 \texttt{inspect} HUD reports generation count, hover cell, and census.
+The bottom input legend is enabled by default and can be disabled through
+the persisted \texttt{editHints} setting (Edit control hints in F1 settings).
+It wraps to the available window width and includes Wireworld brush keys.
+A compact, flat menu-themed footer uses muted text and contextual selection
+actions. Its opaque bottom band is reserved: canvas tokens clip above it, and
+paint, selection, paste, pan, and zoom ignore pointer input there. The camera
+mapping stays fixed; hiding hints releases the band. Scissor state is restored
+before UI submission.
+Hints and selection outlines hide behind modal overlays and the console.
+Selection drags finish on mouse release, even if Shift is released first.
+Painting, erasing, and leaving EDIT clear the selection but preserve the
+copied pattern. Clipboard hotkeys act only in EDIT; explicit console pattern
+commands remain available independently of mode. Paint strokes belong to
+the module and stop across mode changes and modal input interruptions.
 Life-like B/S rules share \texttt{LifeLikeRuleSet} masks behind existing mode
 strings. Rule 90 and Rule 184 are elementary 1D space-time diagrams (D-G2).
 Catalog registration rejects B0 and odd elementary rules: the current sparse

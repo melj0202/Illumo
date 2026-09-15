@@ -18,6 +18,7 @@ struct SimulatorConfiguration
   double speedFactor = 1.0;
   double fadeSpeed = 6.0;
   bool vsync = true;
+  bool editHints = true;
   bool fullscreen = false;
   long uiScale = 1;
   long msaa = 4;
@@ -82,10 +83,11 @@ private:
   static const int kFpsCapRow = 10;
   static const int kInspectorRow = 11;
   static const int kReducedMotionRow = 12;
-  static const int kApplyRow = 13;
-  static const int kCancelRow = 14;
-  static const int kExitRow = 15;
-  static const int kRowCount = 16;
+  static const int kEditHintsRow = 13;
+  static const int kApplyRow = 14;
+  static const int kCancelRow = 15;
+  static const int kExitRow = 16;
+  static const int kRowCount = 17;
   static constexpr float kOpenAnimationSeconds = 0.42f;
   static constexpr float kSelectionAnimationSeconds = 0.14f;
   static constexpr float kValuePulseSeconds = 0.20f;
@@ -121,6 +123,7 @@ private:
   std::string speedText;
   std::string fadeText;
   bool vsync;
+  bool editHints = true;
   bool fullscreen;
   long uiScale;
   long msaa;

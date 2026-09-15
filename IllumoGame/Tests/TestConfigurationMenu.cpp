@@ -166,7 +166,7 @@ testConfigurationNavigationAndActions()
            fixture.menu.getValuePulseForTesting() == 0.0f,
            "value accent pulse fades to rest");
 
-  for (int row = 0; row < 13; ++row) {
+  for (int row = 0; row < 14; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -204,7 +204,21 @@ testConfigurationNavigationAndActions()
            "F1 cancels an open menu");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 15; ++row) {
+  for (int row = 0; row < 13; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) && !parsed.editHints,
+           "Enter toggles edit hints off");
+  fixture.menu.open(parsed);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) && !parsed.editHints,
+           "reopening preserves the hints setting");
+
+  fixture.menu.open(defaultConfiguration());
+  for (int row = 0; row < 16; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
