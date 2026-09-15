@@ -1,6 +1,23 @@
 \section{Runtime loop and modules}
 \label{sec:runtime}
 
+\subsection{In-game frame profiler}
+\symbolref{FrameProfiler} is a main-thread, engine-owned 120-frame timing ring.
+Sequential steady-clock marks partition each measured loop body into input,
+camera, optional and required updates, scene preparation, asset pumping, command
+generation/submission, backend presentation, frame limiting, and remaining time.
+The renderer can return the timestamp between submission and presentation;
+ordinary untimed calls keep their previous behavior. GPU execution and concurrent
+simulation workers are excluded. Disabled sampling performs no clock queries.
+
+DebugModule borrows the collector explicitly and owns a bounded GameVisual pie
+with text. F6 or \texttt{profiler on} enables it; keys 1--3 drill into groups and
+0 returns to Frame. Values refresh four times per second, including resize and
+navigation updates. The console takes priority. Visible profiler navigation
+captures both number events and held-key polling before the product update.
+FPS and memory visibility remain independent. See
+\pathref{docs/frame-profiler.md} and decision D-PROF1.
+
 \subsection{Illumo application runtime}
 \pathref{Illumo/Source/Engine/Application.cpp} owns logger lifetime, argument
 parsing mechanics, module registration, the frame loop, and the explicit

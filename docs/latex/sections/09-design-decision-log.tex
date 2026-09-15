@@ -1900,6 +1900,20 @@ include tree. Vendored sources and versions are unchanged. Consumers of other
 vendor APIs must declare those dependencies explicitly.
 \end{decisionbox}
 
+\subsection*{D-PROF1 --- Bounded in-game frame timing pie}
+\begin{decisionbox}[title={D-PROF1 \quad 2026-09-14}]
+\textbf{Decision:} Illumo owns a fixed 120-frame main-thread elapsed-time
+collector. DebugModule borrows it explicitly and renders a navigable GameVisual
+pie in Debug and RelWithDebInfo.\\
+\textbf{Why:} In-game attribution exposes expensive frame phases without
+requiring a separate profiler client. CPU command submission and presentation
+must be separate so pacing is not mistaken for rendering work.\\
+\textbf{Consequences:} No GPU timing or asynchronous worker totals are included.
+The collector is off by default; enabling does not depend on FPS, memory, or
+Tracy. Number-key capture covers both events and polling without synthetic
+releases. Existing context ownership, module order, and rendering tokens remain.
+\end{decisionbox}
+
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

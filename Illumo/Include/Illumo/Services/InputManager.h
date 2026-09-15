@@ -119,6 +119,7 @@ private:
 
   long nextContextId = 0;
   int m_modifierFlags;
+  std::array<bool, static_cast<size_t>(KeyCode::F12) + 1> m_suppressedKeys{};
 
   KeyCode TranslateKeyCodeToGLFW(int glfwKey);
 
@@ -141,6 +142,12 @@ public:
   void clearKeyQueue();
 
   void update();
+
+  // Overlay capture masks keyboard polling until the next update. Queue
+  // ownership remains with the caller; mouse and modifier polling are
+  // unchanged.
+  void suppressKeyForFrame(KeyCode key);
+  bool isKeySuppressed(KeyCode key) const;
 
   InputAction GetInputAction(KeyCode keyCode);
 

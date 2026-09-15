@@ -19,8 +19,187 @@
 #include <vector>
 
 #include "Engine/DebugOverlayState.h"
+#include "Engine/ProfilerOverlay.h"
 
 static TestCounters g;
+
+static FrameProfiler::TimePoint
+profilerTime(int milliseconds)
+{
+  return FrameProfiler::TimePoint{} + std::chrono::milliseconds(milliseconds);
+}
+
+static void
+testFrameProfilerAccounting()
+{
+  FrameProfiler profiler;
+  profiler.beginFrame(profilerTime(0));
+  profiler.mark(FramePhase::Input, profilerTime(2));
+  profiler.endFrame(profilerTime(10));
+  testEqInt(
+    g, static_cast<int>(profiler.sampleCount()), 0, "disabled does not record");
+  profiler.setEnabled(true);
+  profiler.beginFrame(profilerTime(0));
+  profiler.mark(FramePhase::Input, profilerTime(1));
+  profiler.mark(FramePhase::Commands, profilerTime(3));
+  profiler.mark(FramePhase::Presentation, profilerTime(7));
+  profiler.mark(FramePhase::Pacing, profilerTime(12));
+  profiler.endFrame(profilerTime(16));
+  profiler.endFrame(profilerTime(20));
+  const FrameProfiler::Sample sample = profiler.average();
+  testTrue(g,
+           sample[static_cast<size_t>(FramePhase::Other)] == 1.0,
+           "unmarked work is explicit Other time");
+  testTrue(g,
+           sample[static_cast<size_t>(FramePhase::Input)] == 2.0,
+           "input time is exclusive");
+  testTrue(g,
+           sample[static_cast<size_t>(FramePhase::Commands)] == 4.0,
+           "submission excludes presentation");
+  testTrue(g,
+           sample[static_cast<size_t>(FramePhase::Presentation)] == 5.0,
+           "presentation has its own elapsed time");
+  double total = 0.0;
+  for (double phase : sample) {
+    total += phase;
+  }
+  testTrue(
+    g, total == 16.0, "slices sum to full frame without double counting");
+  testEqInt(
+    g, static_cast<int>(profiler.sampleCount()), 1, "duplicate end ignored");
+
+  for (size_t i = 0; i < FrameProfiler::kWindowFrames; ++i) {
+    profiler.beginFrame(profilerTime(0));
+    profiler.mark(FramePhase::ProductUpdate, profilerTime(0));
+    profiler.endFrame(profilerTime(8));
+  }
+  testEqInt(
+    g, static_cast<int>(profiler.sampleCount()), 120, "history is bounded");
+  testTrue(g,
+           profiler.average()[static_cast<size_t>(FramePhase::ProductUpdate)] ==
+             8.0,
+           "rolling window evicts the old frame");
+  testTrue(g,
+           profiler.average()[static_cast<size_t>(FramePhase::Presentation)] ==
+             0.0,
+           "evicted phases no longer contribute");
+  profiler.beginFrame(profilerTime(0));
+  profiler.setEnabled(false);
+  profiler.endFrame(profilerTime(100));
+  profiler.setEnabled(true);
+  testEqInt(g,
+            static_cast<int>(profiler.sampleCount()),
+            0,
+            "toggle clears history and partial frame");
+  profiler.beginFrame(profilerTime(5));
+  profiler.mark(FramePhase::Input, profilerTime(3));
+  profiler.mark(FramePhase::Count, profilerTime(6));
+  profiler.endFrame(profilerTime(10));
+  testTrue(g,
+           profiler.average()[static_cast<size_t>(FramePhase::Other)] == 5.0,
+           "invalid or backwards marks cannot corrupt samples");
+}
+
+static void
+testProfilerOverlayControlsAndTokens()
+{
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  FrameProfiler profiler;
+  ProfilerOverlay overlay(profiler);
+  overlay.prepare(&renderer, &window, &camera);
+  testTrue(g,
+           !overlay.handleKey(KeyCode::Num1, InputAction::Press, false, false),
+           "hidden profiler leaves product number keys alone");
+  testTrue(g,
+           !overlay.handleKey(KeyCode::F6, InputAction::Press, true, false),
+           "console owns keys while open");
+  testTrue(g,
+           !overlay.handleKey(KeyCode::F6, InputAction::Press, false, true),
+           "modified shortcuts are preserved");
+  overlay.handleKey(KeyCode::F6, InputAction::Press, false, false);
+  overlay.handleKey(KeyCode::F6, InputAction::Hold, false, false);
+  testTrue(g, profiler.enabled(), "repeat does not toggle repeatedly");
+  InputManager input(nullptr);
+  InputManagerTestAccess::setAction(input, KeyCode::Num1, InputAction::Hold);
+  InputManagerTestAccess::setAction(input, KeyCode::H, InputAction::Press);
+  testTrue(g,
+           input.isKeyPressed(KeyCode::Num1),
+           "held product shortcut starts active");
+  input.getCharQueue().push('1');
+  input.getCharQueue().push('A');
+  input.getCharQueue().push('4');
+  overlay.captureInput(input, false);
+  testTrue(g,
+           input.getCharQueue().size() == 1 &&
+             input.getCharQueue().front() == 'A',
+           "navigation cannot type digits into a product text field");
+  testTrue(g,
+           !input.isKeyPressed(KeyCode::Num1) && input.isKeyPressed(KeyCode::H),
+           "profiler captures polled digits without blocking other brush keys");
+  testTrue(g,
+           input.GetInputAction(KeyCode::Num1) == InputAction::None &&
+             !input.isKeyReleased(KeyCode::Num1),
+           "capture does not synthesize release");
+  input.update();
+  InputManagerTestAccess::setAction(input, KeyCode::Num1, InputAction::Hold);
+  testTrue(g,
+           input.isKeyPressed(KeyCode::Num1),
+           "capture clears on next input update");
+  overlay.captureInput(input, true);
+  testTrue(
+    g, input.isKeyPressed(KeyCode::Num1), "console retains input ownership");
+  overlay.update(0.0, 640, 480);
+  testTrue(
+    g, overlay.visual().textCount() > 0, "empty sample has explanatory text");
+  profiler.beginFrame(profilerTime(0));
+  profiler.mark(FramePhase::Commands, profilerTime(0));
+  profiler.mark(FramePhase::Presentation, profilerTime(4));
+  profiler.endFrame(profilerTime(10));
+  overlay.update(0.25, 640, 480);
+  testTrue(g,
+           overlay.visual().shapeCount() >= 98,
+           "pie uses bounded triangle geometry");
+  testTrue(g,
+           overlay.visual().getSpace() == PrimitiveSpace::Pixels &&
+             overlay.visual().getLayerHint() == RenderLayerId::Debug,
+           "profiler uses screen-space debug layer");
+  renderer.BeginFrame();
+  testTrue(g,
+           overlay.visual().AppendCommands(&renderer),
+           "overlay emits renderer tokens");
+  FrameProfiler::TimePoint presentationStart{};
+  const FrameProfiler::TimePoint before = FrameProfiler::Clock::now();
+  renderer.EndFrame(&presentationStart);
+  testTrue(g,
+           presentationStart >= before &&
+             presentationStart <= FrameProfiler::Clock::now(),
+           "timed EndFrame returns a CPU presentation boundary");
+  testTrue(g,
+           mock.getLastNonEmptySubmittedCount() > 0,
+           "backend receives overlay commands");
+  overlay.handleKey(KeyCode::Num2, InputAction::Press, false, false);
+  testEqInt(g, overlay.group(), 1, "second root slice opens Rendering");
+  overlay.handleKey(KeyCode::Num1, InputAction::Press, false, false);
+  testEqInt(g, overlay.group(), 1, "leaf selection does not change groups");
+  overlay.update(0.0, 320, 240);
+  const Transform2D transform = overlay.visual().getTransform();
+  testTrue(g,
+           transform.x >= 0 && transform.y >= 0 &&
+             transform.x + 470 * transform.scaleX <= 320 &&
+             transform.y + 430 * transform.scaleY <= 240,
+           "small-window panel bounds fit");
+  overlay.handleKey(KeyCode::Num0, InputAction::Press, false, false);
+  testEqInt(g, overlay.group(), -1, "zero returns to Frame");
+  overlay.handleKey(KeyCode::F6, InputAction::Press, false, false);
+  testTrue(g, !profiler.enabled(), "F6 hides and disables collection");
+}
 static int g_memoryQueries = 0;
 static bool g_memoryAvailable = true;
 static ProcessMemoryStats g_memorySample;
@@ -760,6 +939,12 @@ runRuntimeUtilityCase(void (*testFunction)())
 void
 registerRuntimeUtilityTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Profiler.Accounting", []() {
+    return runRuntimeUtilityCase(testFrameProfilerAccounting);
+  });
+  registry.add("Illumo.Profiler.ControlsAndTokens", []() {
+    return runRuntimeUtilityCase(testProfilerOverlayControlsAndTokens);
+  });
   registry.add("Illumo.DebugOverlay.Memory",
                []() { return runRuntimeUtilityCase(testDebugOverlayMemory); });
   registry.add("Illumo.Platform.ProcessMemory",

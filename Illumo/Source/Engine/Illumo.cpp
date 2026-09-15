@@ -445,12 +445,17 @@ Illumo::update(double dt)
     applyPendingModuleTransition();
   }
   ZoneScoped;
+  m_frameProfiler.mark(FramePhase::Input);
   m_inputManager->update();
   processGlobalHotkeys();
+  m_frameProfiler.mark(FramePhase::Camera);
   m_camera->Update(static_cast<float>(dt));
   // Optional overlays (DebugModule) consume global console input first.
+  m_frameProfiler.mark(FramePhase::DebugUpdate);
   updateStartedModules(ModuleRequirement::Optional, dt);
+  m_frameProfiler.mark(FramePhase::ProductUpdate);
   updateStartedModules(ModuleRequirement::Required, dt);
+  m_frameProfiler.mark(FramePhase::Other);
   // Key/char queues are per-frame events. Unconsumed leftovers must not
   // retrigger on the next update.
   if (m_inputManager != nullptr) {
@@ -572,13 +577,16 @@ Illumo::render()
     return;
   }
   ZoneScopedN("Illumo.Render");
+  m_frameProfiler.mark(FramePhase::ScenePreparation);
   configureScenePipeline();
   m_scene->ClearDrawables();
   // Product content first; optional overlays (console, FPS, demo) on top.
   dispatchStartedModules(ModuleRequirement::Required);
   dispatchStartedModules(ModuleRequirement::Optional);
 
+  m_frameProfiler.mark(FramePhase::Assets);
   m_assetManager->pump();
+  m_frameProfiler.mark(FramePhase::Commands);
   m_renderer->BeginFrame();
   {
     ZoneScopedN("Illumo.RenderScene");
@@ -586,8 +594,15 @@ Illumo::render()
   }
   {
     ZoneScopedN("Illumo.EndFrame");
-    m_renderer->EndFrame();
+    if (m_frameProfiler.recording()) {
+      FrameProfiler::TimePoint presentationStart;
+      m_renderer->EndFrame(&presentationStart);
+      m_frameProfiler.mark(FramePhase::Presentation, presentationStart);
+    } else {
+      m_renderer->EndFrame();
+    }
   }
+  m_frameProfiler.mark(FramePhase::Other);
 }
 
 void

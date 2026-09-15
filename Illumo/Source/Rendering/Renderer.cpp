@@ -302,7 +302,16 @@ Renderer::BeginFrame()
 void
 Renderer::EndFrame()
 {
+  EndFrame(nullptr);
+}
+
+void
+Renderer::EndFrame(std::chrono::steady_clock::time_point* presentationStart)
+{
   _backend->SubmitCommandQueue();
+  if (presentationStart != nullptr) {
+    *presentationStart = std::chrono::steady_clock::now();
+  }
   _backend->EndFrame();
 }
 

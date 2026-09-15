@@ -474,6 +474,22 @@ Vendored translation units are excluded. Disable it with
 `python build.py tidy` still configures a Ninja/Clang tree under
 `build-workspace-tidy` and builds the batch `IllumoTidy` target.
 
+### In-game frame profiler
+
+In **Debug and RelWithDebInfo**, press **F6** or run `profiler on` in the
+console for the in-game timing pie. `profiler off` hides it; `profiler toggle`
+toggles it, and `profiler` reports its state. It starts off each run,
+independently of FPS and memory visibility. Close the console, then press
+**1–3** to inspect Update, Rendering, or Presentation / waits, and **0** to
+return to Frame. Number keys belong to the profiler while it is visible.
+
+The chart shows average milliseconds and percentages over the latest **120
+completed frames**, refreshed four times per second. These are **main-thread
+elapsed times**: CPU command submission is separate from presentation / swap
+and the frame limiter. GPU execution and asynchronous simulation-worker time
+are excluded. Its own update and drawing costs remain included. See
+[measurement details](docs/frame-profiler.md). Use Tracy for deeper analysis.
+
 ### Optimized Tracy profiling
 
 Keep the normal Release optimization level while enabling application Tracy
