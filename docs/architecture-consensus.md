@@ -95,6 +95,13 @@ and first-frame depth state are explicit; normal application defaults remain.
 
 ## 0. One-line summary
 
+The simulator's Edit-mode Cell paint drawer is a module-owned GameVisual using
+GuiKit rounded surfaces and UiTheme colors. Its bottom pull tab, vertical slide, chevron, and
+row emphasis follow reducedUiMotion. State swatches read the active ruleset's
+palette and select the existing paint path; right-click remains erase. Fitted
+drawing and pointer coordinates agree, and palette gestures capture pointer
+input through release. See [game controls](packages/game.md).
+
 **The workspace separates the reusable `Illumo` static library from in-tree
 applications. Illumo owns the generic application runner, platform
 entry/dialogs, BuildInfo, SysCmdLine, host, services, rendering, persistent

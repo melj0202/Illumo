@@ -6,6 +6,22 @@
 class CellGameModuleTestAccess
 {
 public:
+  static bool isPaintPaletteExpanded(const CellGameModule& module)
+  {
+    return module.m_paintPaletteExpanded;
+  }
+  static float getPaintPaletteReveal(const CellGameModule& module)
+  {
+    return module.m_paintPaletteReveal;
+  }
+  static unsigned char getPaintBrush(const CellGameModule& module)
+  {
+    return module.m_paintBrush;
+  }
+  static GameVisual& getPaintPaletteVisual(CellGameModule& module)
+  {
+    return module.m_paintPaletteVisual;
+  }
   static std::uint64_t getSimulationGeneration(const CellGameModule& module)
   {
     return module.simulationGeneration;

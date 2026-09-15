@@ -626,6 +626,237 @@ testReleaseConfigurationWorkflow()
 }
 
 static void
+openPaintDrawer(CellGameFixture& fixture)
+{
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           "drawer starts closed with only the bottom pull tab");
+  const float scale =
+    fixture.renderer.getUiScale() *
+    CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module)
+      .getTransform()
+      .scaleX;
+  fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
+  fixture.window.mouseY =
+    static_cast<double>(fixture.window.height) - 16.0 * scale;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           "bottom pull tab opens the drawer");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+}
+
+static void
+pointAtPaintCard(CellGameFixture& fixture, int stateCount, int state)
+{
+  const float scale =
+    fixture.renderer.getUiScale() *
+    CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module)
+      .getTransform()
+      .scaleX;
+  const float width = static_cast<float>(stateCount) * 132.0f + 24.0f;
+  fixture.window.mouseX =
+    static_cast<double>(fixture.window.width) * 0.5 +
+    (-width * 0.5f + 74.0f + static_cast<float>(state) * 132.0f) * scale;
+  fixture.window.mouseY =
+    static_cast<double>(fixture.window.height) - 66.0f * scale;
+}
+static void
+testPaintPalette()
+{
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  openPaintDrawer(fixture);
+  SparseCellGrid* grid =
+    CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+  const std::uint64_t revision = grid->getRevision();
+  pointAtPaintCard(fixture, 2, 1);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testEqInt(g,
+            CellGameModuleTestAccess::getPaintBrush(fixture.module),
+            1,
+            "dead swatch selects the erase brush");
+  testTrue(g,
+           grid->getRevision() == revision,
+           "swatch click does not mutate the world");
+  fixture.window.mouseX = 400.0;
+  fixture.window.mouseY = 300.0;
+  fixture.module.Update(0.016);
+  testTrue(
+    g, grid->getRevision() == revision, "dragging off palette stays captured");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+
+  fixture.env.setVar("ModeString", "BRIANS_BRAIN");
+  fixture.module.Update(0.016);
+  testEqInt(g,
+            CellGameModuleTestAccess::getPaintBrush(fixture.module),
+            0,
+            "ruleset change resets generic brush");
+  pointAtPaintCard(fixture, 3, 2);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testEqInt(g,
+            CellGameModuleTestAccess::getPaintBrush(fixture.module),
+            2,
+            "Brian's Brain exposes dying cells");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  fixture.window.mouseX = 400.0;
+  fixture.window.mouseY = 300.0;
+  const glm::dvec2 world =
+    fixture.camera.ScreenToWorldPrecise({ 400.0, 300.0 });
+  std::int64_t cellX = 0;
+  std::int64_t cellY = 0;
+  testTrue(g,
+           CanvasCoordinatePolicy::tryWorldToCell(world.x, &cellX) &&
+             CanvasCoordinatePolicy::tryWorldToCell(world.y, &cellY),
+           "paint target converts to cell coordinates");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testEqInt(g,
+            grid->getCell({ cellX, cellY }),
+            2,
+            "selected dying brush paints the canvas");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseRight, InputAction::Press);
+  fixture.module.Update(0.016);
+  testEqInt(g,
+            grid->getCell({ cellX, cellY }),
+            1,
+            "right mouse still erases regardless of brush");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseRight, InputAction::Release);
+
+  fixture.env.setVar("ModeString", "WIREWORLD");
+  fixture.module.Update(0.016);
+  pointAtPaintCard(fixture, 4, 0);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testEqInt(g,
+            CellGameModuleTestAccess::getWireworldBrush(fixture.module),
+            0,
+            "Wireworld swatch updates its existing brush");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  fixture.env.setVar("reducedUiMotion", false);
+  fixture.window.mouseX = 320.0;
+  fixture.window.mouseY = 354.0;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  const float reveal =
+    CellGameModuleTestAccess::getPaintPaletteReveal(fixture.module);
+  testTrue(g,
+           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
+             reveal > 0.0f && reveal < 1.0f,
+           "header starts an eased collapse");
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           "held header click does not toggle repeatedly");
+  fixture.env.setVar("reducedUiMotion", true);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CellGameModuleTestAccess::getPaintPaletteReveal(fixture.module) ==
+             0.0f,
+           "reduced motion snaps the collapsed panel");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  fixture.console.isOpen = true;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module)
+               .isVisible() &&
+             !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           "console owns input and hides palette");
+}
+
+static void
+testPaintPaletteFittedInput()
+{
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  fixture.env.setVar("ModeString", "WIREWORLD");
+  fixture.window.handleResize(200, 240);
+  openPaintDrawer(fixture);
+  GameVisual& visual =
+    CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module);
+  const float fit = visual.getTransform().scaleX;
+  testTrue(g, fit > 0.0f && fit < 1.0f, "small window fits the entire palette");
+  const float scale = fixture.renderer.getUiScale() * fit;
+  pointAtPaintCard(fixture, 4, 2);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testEqInt(g,
+            CellGameModuleTestAccess::getWireworldBrush(fixture.module),
+            2,
+            "fitted coordinates select the visible tail swatch");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  fixture.window.mouseX = 100.0;
+  fixture.window.mouseY = 240.0 - 126.0 * scale;
+  const SparseCellGrid* grid =
+    CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+  const std::uint64_t beforeClose = grid->getRevision();
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
+             visual.textCount() == 1u,
+           "fitted header collapses and removes body labels");
+  testTrue(g,
+           grid->getRevision() == beforeClose,
+           "snapping the tab closed cannot paint through its former position");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  fixture.window.mouseY = 240.0 - 16.0 * scale;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
+             visual.textCount() == 6u,
+           "second header click restores all state labels and help");
+  testEqInt(g,
+            CellGameModuleTestAccess::getWireworldBrush(fixture.module),
+            2,
+            "collapse preserves the selected brush");
+  fixture.scene.ClearDrawables();
+  fixture.scene.AddDrawable(&visual, RenderLayerId::UI);
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed) > 0u,
+           "fitted palette emits backend-neutral draw commands");
+}
+
+static void
 testHamburgerMenuButton()
 {
   testSection("CellGameModule: hamburger icon toggles settings menu");
@@ -1586,6 +1817,11 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CellGame.ReleaseConfiguration", []() {
     return runCellGameModuleCase(testReleaseConfigurationWorkflow);
+  });
+  registry.add("IllumoGame.CellGame.PaintPalette",
+               []() { return runCellGameModuleCase(testPaintPalette); });
+  registry.add("IllumoGame.CellGame.PaintPaletteFittedInput", []() {
+    return runCellGameModuleCase(testPaintPaletteFittedInput);
   });
   registry.add("IllumoGame.CellGame.HamburgerMenu",
                []() { return runCellGameModuleCase(testHamburgerMenuButton); });
