@@ -8,6 +8,7 @@
 #include <Illumo/Rendering/ResourceHandlePool.h>
 #include <Illumo/Services/ArenaAlloc.h>
 #include <array>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -220,6 +221,9 @@ public:
     }
   }
   void EndFrame();
+  // Optional CPU timestamp after submission, before backend presentation.
+  // This measures an elapsed-time boundary, not GPU execution.
+  void EndFrame(std::chrono::steady_clock::time_point* presentationStart);
   void SubmitOnly();
 
   // =========================================================================

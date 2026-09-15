@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Engine/FrameProfiler.h>
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/IllumoContext.h>
 
@@ -48,6 +49,7 @@ public:
   EnvVars& environment();
   const EnvVars& environment() const;
   const std::string& applicationName() const;
+  FrameProfiler& frameProfiler() { return m_frameProfiler; }
 
   bool initialize();
   void addModule(std::unique_ptr<IModule> module,
@@ -91,6 +93,7 @@ private:
   void configureScenePipeline();
   void releaseServices();
 
+  FrameProfiler m_frameProfiler;
   std::string m_applicationName;
   WindowFactory m_windowFactory;
   BackendFactory m_backendFactory;

@@ -1,3 +1,4 @@
+#include "../Source/Engine/ProfilerOverlay.h"
 #include <GL/glew.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/FrameCapture.h>
@@ -192,14 +193,96 @@ testCubemapUploads(Renderer& renderer, Camera&, std::string& error)
   return glGetError() == GL_NO_ERROR;
 }
 
+static FrameCaptureResult
+captureProfiler(int width, int height, bool renderingGroup)
+{
+  FrameCaptureOptions options;
+  options.width = width;
+  options.height = height;
+  return FrameCapture::render(
+    options,
+    [width, height, renderingGroup](
+      Renderer& renderer, Camera& camera, std::string&) {
+      FrameProfiler profiler;
+      ProfilerOverlay overlay(profiler);
+      overlay.prepare(&renderer, renderer.getWindow(), &camera);
+      overlay.setEnabled(true);
+      for (size_t frame = 0; frame < FrameProfiler::kWindowFrames; ++frame) {
+        const FrameProfiler::TimePoint start{};
+        profiler.beginFrame(start);
+        profiler.mark(FramePhase::Input, start);
+        profiler.mark(FramePhase::ProductUpdate,
+                      start + std::chrono::milliseconds(1));
+        profiler.mark(FramePhase::ScenePreparation,
+                      start + std::chrono::milliseconds(3));
+        profiler.mark(FramePhase::Assets, start + std::chrono::milliseconds(4));
+        profiler.mark(FramePhase::Commands,
+                      start + std::chrono::milliseconds(5));
+        profiler.mark(FramePhase::Presentation,
+                      start + std::chrono::milliseconds(8));
+        profiler.mark(FramePhase::Pacing,
+                      start + std::chrono::milliseconds(15));
+        profiler.endFrame(start + std::chrono::milliseconds(16));
+      }
+      if (renderingGroup) {
+        overlay.handleKey(KeyCode::Num2, InputAction::Press, false, false);
+      }
+      overlay.update(
+        0.0, static_cast<float>(width), static_cast<float>(height));
+      renderer.pushClearScreen(0.04f, 0.05f, 0.07f, 1.0f);
+      Scene scene(renderer.getWindow(), &camera);
+      scene.AddDrawable(&overlay.visual(), RenderLayerId::Debug);
+      renderer.RenderScene(&scene, &camera);
+      renderer.SubmitOnly();
+      return true;
+    });
+}
+
 int
-main()
+main(int argc, char** argv)
 {
   Logger::setConsoleToStderr(true);
+  if (argc == 3 && std::string(argv[1]) == "--profiler-preview") {
+    const FrameCaptureResult preview = captureProfiler(800, 600, false);
+    std::string error;
+    if (!preview.success() ||
+        !FrameCapture::savePng(argv[2], preview.image, &error)) {
+      std::cerr << preview.error << error << '\n';
+      return 1;
+    }
+    return 0;
+  }
+  if (argc != 1) {
+    std::cerr
+      << "Usage: IllumoCaptureGpuTests [--profiler-preview output.png]\n";
+    return 2;
+  }
   FrameCaptureOptions options;
   options.width = 32;
   options.height = 32;
   int failures = 0;
+  for (int view = 0; view < 2; ++view) {
+    const FrameCaptureResult chart =
+      captureProfiler(view == 0 ? 800 : 320, view == 0 ? 600 : 240, view != 0);
+    size_t greenPixels = 0;
+    size_t purplePixels = 0;
+    for (size_t i = 0; i + 3 < chart.image.pixels.size(); i += 4) {
+      greenPixels += chart.image.pixels[i] == 185 &&
+                         chart.image.pixels[i + 1] == 224 &&
+                         chart.image.pixels[i + 2] == 91
+                       ? 1
+                       : 0;
+      purplePixels += chart.image.pixels[i] == 146 &&
+                          chart.image.pixels[i + 1] == 116 &&
+                          chart.image.pixels[i + 2] == 245
+                        ? 1
+                        : 0;
+    }
+    if (!chart.success() || greenPixels < 100 || purplePixels < 100) {
+      std::cerr << "Profiler geometry capture failed: " << chart.error << '\n';
+      ++failures;
+    }
+  }
   std::shared_ptr<Font> persistentFont = Font::getDefaultFont();
   std::vector<unsigned char> previousTextPixels;
   for (int capture = 0; capture < 3; ++capture) {

@@ -2,6 +2,7 @@
 #define GLFW_INCLUDE_NONE
 #endif
 #include "DebugOverlayState.h"
+#include "ProfilerOverlay.h"
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/DebugModule.h>
 #include <Illumo/Rendering/Font.h>
@@ -10,8 +11,9 @@
 #include <queue>
 #include <tracy/Tracy.hpp>
 
-DebugModule::DebugModule()
-  : diagnosticsLabel(nullptr)
+DebugModule::DebugModule(FrameProfiler* profiler)
+  : m_profiler(profiler)
+  , diagnosticsLabel(nullptr)
   , diagnostics(std::make_unique<DebugOverlayState>())
   , watermarkLabel(nullptr)
   , rendererDemo(nullptr)
@@ -40,6 +42,11 @@ DebugModule::Start(IllumoContext* context)
     return false;
   }
   ic = context;
+
+  if (m_profiler != nullptr) {
+    m_profilerOverlay = std::make_unique<ProfilerOverlay>(*m_profiler);
+    m_profilerOverlay->prepare(ic->renderer, ic->window, ic->camera);
+  }
 
   // Required for GLString / SplashText screen-space drawing
   GLString::setRenderWindow(ic->window);
@@ -152,6 +159,27 @@ DebugModule::createRendererDemo()
 void
 DebugModule::registerRendererCommands()
 {
+  if (m_profilerOverlay != nullptr) {
+    ic->commandRegistry->RegisterCommand(
+      "profiler",
+      [this](const std::vector<std::string>& args) {
+        if (args.size() > 1 || (!args.empty() && args[0] != "on" &&
+                                args[0] != "off" && args[0] != "toggle")) {
+          ic->commandLine->logError("Usage: profiler [on|off|toggle]");
+          return;
+        }
+        if (!args.empty()) {
+          const bool enabled =
+            args[0] == "toggle" ? !m_profiler->enabled() : args[0] == "on";
+          m_profilerOverlay->setEnabled(enabled);
+        }
+        ic->commandLine->logSuccess(std::string("Frame profiler: ") +
+                                    (m_profiler->enabled() ? "on" : "off"));
+      },
+      "profiler [on|off|toggle]",
+      "Main-thread timing pie; F6 toggles, 1-3 drill down, 0 returns",
+      { "on", "off", "toggle" });
+  }
   ic->commandRegistry->RegisterCommand(
     "renderer_demo",
     [this](const std::vector<std::string>& args) {
@@ -217,6 +245,9 @@ DebugModule::unregisterRendererCommands()
     return;
   }
   ic->commandRegistry->UnregisterCommand("renderer_demo");
+  if (m_profiler != nullptr) {
+    ic->commandRegistry->UnregisterCommand("profiler");
+  }
   ic->commandRegistry->UnregisterCommand("assets");
   ic->commandRegistry->UnregisterCommand("asset_reload");
 }
@@ -306,6 +337,13 @@ DebugModule::Update(double dt)
     bool controlPressed = (event.modifiers & GLFW_MOD_CONTROL) != 0;
     bool shiftPressed = (event.modifiers & GLFW_MOD_SHIFT) != 0;
 
+    if (m_profilerOverlay != nullptr &&
+        m_profilerOverlay->handleKey(
+          key, action, ic->commandLine->isOpen, event.modifiers != 0)) {
+      ic->inputManager->suppressKeyForFrame(key);
+      continue;
+    }
+
     if (key == KeyCode::Grave && action == InputAction::Press) {
       ic->commandLine->Toggle();
       ic->inputManager->clearCharQueue();
@@ -352,6 +390,15 @@ DebugModule::Update(double dt)
     }
   }
   keyQueue.swap(remainingKeys);
+
+  if (m_profilerOverlay != nullptr) {
+    m_profilerOverlay->captureInput(*ic->inputManager, ic->commandLine->isOpen);
+    const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+    const float scale = ic->renderer->getUiScale();
+    m_profilerOverlay->update(dt,
+                              static_cast<float>(dimensions[0]) / scale,
+                              static_cast<float>(dimensions[1]) / scale);
+  }
 
   std::queue<unsigned int>& charQueue = ic->inputManager->getCharQueue();
   if (ic->commandLine->isOpen) {
@@ -404,6 +451,10 @@ void
 DebugModule::Exit()
 {
   unregisterRendererCommands();
+  m_profilerOverlay.reset();
+  if (m_profiler != nullptr) {
+    m_profiler->setEnabled(false);
+  }
   if (rendererDemo != nullptr) {
     delete rendererDemo;
     rendererDemo = nullptr;
@@ -445,6 +496,9 @@ DebugModule::DispatchDrawables(Scene* scene)
   }
   if (diagnosticsLabel && diagnosticsLabel->isVisible()) {
     scene->AddDrawable(diagnosticsLabel, RenderLayerId::Debug);
+  }
+  if (m_profilerOverlay != nullptr && m_profiler->enabled()) {
+    scene->AddDrawable(&m_profilerOverlay->visual(), RenderLayerId::Debug);
   }
   if (watermarkLabel && watermarkLabel->isVisible()) {
     scene->AddDrawable(watermarkLabel, RenderLayerId::Debug);

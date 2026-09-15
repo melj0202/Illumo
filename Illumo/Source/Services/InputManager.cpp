@@ -384,6 +384,7 @@ InputManager::clearKeyQueue()
 void
 InputManager::update()
 {
+  m_suppressedKeys.fill(false);
   ZoneNamed(InputManagerUpdateZone, "InputManager Update");
   *scrollOffset = 0.0;
   if (window != nullptr) {
@@ -411,9 +412,27 @@ InputManager::update()
   }
 }
 
+void
+InputManager::suppressKeyForFrame(KeyCode key)
+{
+  if (key >= KeyCode::Space && key <= KeyCode::F12) {
+    m_suppressedKeys[static_cast<size_t>(key)] = true;
+  }
+}
+
+bool
+InputManager::isKeySuppressed(KeyCode key) const
+{
+  return key >= KeyCode::Space && key <= KeyCode::F12 &&
+         m_suppressedKeys[static_cast<size_t>(key)];
+}
+
 InputAction
 InputManager::GetInputAction(KeyCode keyCode)
 {
+  if (isKeySuppressed(keyCode)) {
+    return InputAction::None;
+  }
   if (keyCode == KeyCode::None || window == nullptr) {
     return InputAction::None;
   }
@@ -430,6 +449,9 @@ InputManager::GetInputAction(KeyCode keyCode)
 bool
 InputManager::isKeyPressed(KeyCode key)
 {
+  if (isKeySuppressed(key)) {
+    return false;
+  }
   if (window == nullptr) {
     std::unordered_map<KeyCode, InputAction>::const_iterator it =
       inputStatesCurrent.find(key);
@@ -446,6 +468,9 @@ InputManager::isKeyPressed(KeyCode key)
 bool
 InputManager::isKeyReleased(KeyCode key)
 {
+  if (isKeySuppressed(key)) {
+    return false;
+  }
   if (window == nullptr) {
     return false;
   }
@@ -554,6 +579,9 @@ InputManager::isActionActive(std::string actionTag)
     return false;
   }
   InputEvent ie = activeInputContext->getActionTag(actionTag);
+  if (isKeySuppressed(ie.keyCode)) {
+    return false;
+  }
   return inputStatesCurrent[ie.keyCode] == ie.inputAction;
 }
 

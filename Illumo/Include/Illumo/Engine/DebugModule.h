@@ -7,11 +7,13 @@
 #include <memory>
 
 class DebugOverlayState;
+class FrameProfiler;
+class ProfilerOverlay;
 
 class DebugModule : public IModule
 {
 public:
-  DebugModule();
+  explicit DebugModule(FrameProfiler* profiler = nullptr);
   ~DebugModule();
   DebugModule(const DebugModule&) = delete;
   DebugModule& operator=(const DebugModule&) = delete;
@@ -23,6 +25,8 @@ public:
   void Exit() override;
 
 private:
+  FrameProfiler* m_profiler;
+  std::unique_ptr<ProfilerOverlay> m_profilerOverlay;
   void updateDiagnostics(double dt);
   void updateWatermarkPosition();
   void registerRendererCommands();

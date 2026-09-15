@@ -49,6 +49,13 @@ Optional deeper reading (not required to resume work):
 
 ## Charter milestones (2026-09-11)
 
+The optional [frame profiler](frame-profiler.md) adds an engine-owned,
+bounded 120-frame main-thread timing collector and a DebugModule pie overlay.
+Update, rendering, presentation, limiter, and remaining time partition each
+sampled loop body. CPU submission is separated from backend presentation;
+GPU and asynchronous worker execution are excluded. DebugModule borrows the
+collector explicitly and emits ordinary GameVisual tokens. See decision D-PROF1.
+
 IllEd 3D body selection uses nearest forward ray intersections with transformed
 local bounds, including hierarchy and nonuniform scale. Hidden/disabled ancestry
 and invalid transforms exclude candidates. Ground-plane intersection is used
