@@ -232,7 +232,7 @@ NewSimulationMenu::rebuild()
   visual.addText("Choose the space. Then see what emerges.",
                  x + 28,
                  y + 80,
-                 12,
+                 13,
                  UiTheme::textMuted());
   // A bounded decorative cell colony echoes the main menu without simulating.
   for (int cy = 0; cy < 6; ++cy) {
@@ -241,11 +241,11 @@ NewSimulationMenu::rebuild()
         0.5f + 0.5f * std::sin(ambientPhase * 1.5f +
                                static_cast<float>(cx - cy) * 0.8f);
       const bool live = (cx + cy * 3) % 5 < 2;
-      const float size = live ? 8 + wave * 2 : 8;
+      const float size = live ? 7 + wave : 7;
       GuiKit::drawRoundedRect(
         visual,
-        x + width - 103 + static_cast<float>(cx) * 12,
-        y + 22 + static_cast<float>(cy) * 12,
+        x + width - 90 + static_cast<float>(cx) * 10,
+        y + 15 + static_cast<float>(cy) * 10,
         size,
         size,
         2,
@@ -255,6 +255,34 @@ NewSimulationMenu::rebuild()
           : UiTheme::menuCard());
     }
   }
+  const float modeBadgeX = x + width - 164;
+  const float modeBadgeY = y + 79;
+  GuiKit::drawRoundedRect(visual,
+                          modeBadgeX,
+                          modeBadgeY,
+                          140,
+                          22,
+                          8,
+                          UiTheme::applyOpacity(UiTheme::accentCool(), 100));
+  GuiKit::drawRoundedRect(
+    visual, modeBadgeX + 1, modeBadgeY + 1, 138, 20, 7, UiTheme::panelInset());
+  visual.addFilledEllipse(modeBadgeX + 10,
+                          modeBadgeY + 8,
+                          6,
+                          6,
+                          finite ? UiTheme::accentViolet()
+                                 : UiTheme::accentCool());
+  visual.addText(finite ? "FINITE TORUS" : "INFINITE FIELD",
+                 modeBadgeX + 22,
+                 modeBadgeY + 6,
+                 10,
+                 UiTheme::textPrimary());
+  visual.addFilledRect(x + 24,
+                       y + 103,
+                       width - 48,
+                       1,
+                       UiTheme::applyOpacity(UiTheme::accentCool(), 80));
+
   const RuleDefinition* rule =
     RuleSetRegistry::instance().getRuleDefinition(draft.ruleSet);
   std::string ruleName = rule == nullptr ? draft.ruleSet : rule->name;
@@ -312,6 +340,15 @@ NewSimulationMenu::rebuild()
       9,
       UiTheme::applyOpacity(UiTheme::selection(),
                             static_cast<unsigned char>(emphasis * 220)));
+    GuiKit::drawRoundedRect(
+      visual,
+      x + 30,
+      ry + 10 - lift,
+      3,
+      rowHeight - 23,
+      1.5f,
+      UiTheme::applyOpacity(UiTheme::accentCool(),
+                            static_cast<unsigned char>(emphasis * 230)));
     if (!disabled && row < 5) {
       GuiKit::drawRoundedRect(visual,
                               x + width * 0.45f,
@@ -346,24 +383,21 @@ NewSimulationMenu::rebuild()
                             : row == selected || row == 5
                               ? UiTheme::accentCool()
                               : UiTheme::textPrimary();
-    visual.addText(
-      labels[row], x + 36, ry + (rowHeight - 18) / 2 - lift, 14, color);
-    visual.addText(values[row],
-                   x + width * 0.45f + 27,
-                   ry + (rowHeight - 18) / 2 - lift,
-                   11,
-                   color);
+    const float labelY = ry + std::max(2.0f, (rowHeight - 16.0f) * 0.5f) - lift;
+    const float valueY = ry + std::max(2.0f, (rowHeight - 14.0f) * 0.5f) - lift;
+    visual.addText(labels[row], x + 40, labelY, 16, color);
+    visual.addText(values[row], x + width * 0.45f + 27, valueY, 14, color);
   }
   visual.addText(selected == 2 || selected == 3
                    ? "LEFT / RIGHT or click either half: resize by 16 cells"
                    : "UP / DOWN: select   LEFT / RIGHT: change   ENTER: choose",
                  x + 28,
                  y + height - 43,
-                 10,
+                 11,
                  UiTheme::textMuted());
   visual.addText("ESC: back     Display and performance settings remain in F1.",
                  x + 28,
                  y + height - 25,
-                 10,
+                 11,
                  UiTheme::textMuted());
 }
