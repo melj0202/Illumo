@@ -21,6 +21,9 @@ struct SimulatorConfiguration
   bool fullscreen = false;
   long uiScale = 1;
   long msaa = 4;
+  long fpsCap = 60;
+  bool showInspector = false;
+  bool reducedUiMotion = false;
 };
 
 enum class ConfigurationMenuAction
@@ -52,6 +55,7 @@ public:
   void setError(const std::string& message);
   GameVisual& getVisual() { return visual; }
 
+  int getFirstVisibleRowForTesting() const { return firstVisibleRow; }
   int getSelectedRowForTesting() const { return selectedRow; }
   float getAnimationProgressForTesting() const;
   float getSelectionPositionForTesting() const;
@@ -75,11 +79,14 @@ private:
   static const int kFullscreenRow = 7;
   static const int kUiScaleRow = 8;
   static const int kMsaaRow = 9;
-  static const int kApplyRow = 10;
-  static const int kCancelRow = 11;
-  static const int kExitRow = 12;
-  static const int kRowCount = 13;
-  static constexpr float kOpenAnimationSeconds = 0.36f;
+  static const int kFpsCapRow = 10;
+  static const int kInspectorRow = 11;
+  static const int kReducedMotionRow = 12;
+  static const int kApplyRow = 13;
+  static const int kCancelRow = 14;
+  static const int kExitRow = 15;
+  static const int kRowCount = 16;
+  static constexpr float kOpenAnimationSeconds = 0.42f;
   static constexpr float kSelectionAnimationSeconds = 0.14f;
   static constexpr float kValuePulseSeconds = 0.20f;
 
@@ -100,6 +107,12 @@ private:
   float panelHeight;
   float firstRowY;
   float rowHeight;
+  int firstVisibleRow = 0;
+  int visibleRows = kRowCount;
+  float ambientPhase = 0.0f;
+  float layoutScale = 1.0f;
+  float previousMouseX = -1.0f;
+  float previousMouseY = -1.0f;
 
   std::string ruleSet;
   std::string worldWidthText;
@@ -111,6 +124,9 @@ private:
   bool fullscreen;
   long uiScale;
   long msaa;
+  std::string fpsCapText;
+  bool showInspector = false;
+  bool reducedUiMotion = false;
   std::string errorMessage;
 
   void updateLayout();

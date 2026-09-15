@@ -545,7 +545,15 @@ It is a rendering smoke path, not a model or lighting feature; set it back to
 `0` to restore the normal orthographic canvas.
 
 The F1 menu configures ruleset, world width/height in 16x16 chunks, TPS,
-simulation speed, fade speed, VSync, and fullscreen in both Debug and Release.
+simulation speed, fade speed, VSync, fullscreen, UI scale, restart-only MSAA,
+FPS cap, simulation inspector, and reduced menu motion in both Debug and Release.
+FPS presets are Uncapped, 30, 60, 90, 120, 144, 165, 240, and 360; type a custom
+integer from 0 to 1000. Zero disables software limiting; VSync still limits
+presentation to monitor refresh. Applying changes takes effect immediately
+except MSAA and saves through the existing environment service from either menu.
+Scroll or use Page Up/Down to browse; Home/End jump to the first/last row.
+Click a setting's label to cycle backward or its value to cycle forward.
+Large UI scales are fitted to the window so actions remain reachable.
 Positive width and height select a finite torus whose opposite edges are
 adjacent. Enter `0`/`0` or `inf`/`inf` for the infinite canvas; mixed finite and
 infinite axes are rejected. The finite world is drawn once inside its centered
@@ -555,7 +563,12 @@ labels use larger, high-contrast text, readable ruleset names, and contextual
 help for the selected setting. The final menu action exits through Illumo's
 normal runtime shutdown path; Discard, Escape, and F1 only close the menu. A short eased
 reveal, gliding row highlight, and value-change pulse provide motion without
-delaying input.
+delaying input. The main menu uses a larger responsive title area, rounded raised
+action cards with icons, a glowing animated cell motif, layered cyan/violet
+lighting, drifting cell outlines, staggered entry, and animated selection. Reduced menu motion snaps
+transitions and suppresses decorative motion in both menus without changing
+simulation speed or cell fading. The in-game settings button eases on hover
+and displays its F1 shortcut. F1 also opens settings from the main menu.
 
 ## Global hotkeys
 

@@ -797,7 +797,11 @@ GLFW callbacks / poll → InputManager → module / controller logic
 
 `CellGameModule` owns a primitive-composed F1 settings overlay in every build.
 It edits ruleset, world chunk width/height, TPS, simulation speed, fade speed,
-VSync, and fullscreen. Positive dimensions apply finite toroidal topology;
+VSync, fullscreen, UI scale, restart-only MSAA, FPS cap, simulation inspector,
+and reduced menu motion. FPS cap uses the existing engine `fps` setting and
+frame pacer: 0 disables software limiting and VSync remains independent.
+Both main-menu and in-game Apply persist display preferences and apply fullscreen
+immediately. Main-menu F1 opens the same settings overlay. Positive dimensions apply finite toroidal topology;
 `0`/`0` or `inf`/`inf` applies infinite topology. Topology changes drain the
 worker and intentionally start a fresh centered world before persisting values.
 Larger high-contrast labels, readable ruleset names, split keyboard help, and a
@@ -806,7 +810,52 @@ action open a confirmation overlay; confirming requests window closure so the
 Illumo application runner performs normal engine shutdown.
 Animation remains local value state: the overlay eases into place, rows reveal
 in sequence, selection glides, and changed values pulse without adding widgets
-or blocking input.
+or blocking input. The mouse wheel scrolls the viewport without changing the
+selected row; an offscreen selection has no visible highlight. Keyboard navigation
+keeps the selected row visible, including Page Up/Down and Home/End. Rows retain
+readable height; drawing and pointer conversion share a fitted UI
+scale. A held opening click is consumed until release. The main-menu card adds
+a larger responsive title area, rounded raised action cards with icons, a
+glowing animated cell motif, flowing cyan/violet light ribbons, softly lit grid,
+and drifting glider clusters that crossfade between phases. The background uses
+fixed primitive counts and a continuous 12-second decorative cycle. Settings
+share the rounded panel, raised rows, inset values, and toggle pills; the pause
+and exit dialog uses the same chrome, raised actions, and gliding selection.
+`GuiKit::drawRoundedRect` composes non-overlapping triangles and rectangles in
+the existing GameVisual stream; `drawRoundedPanel` shares theme colors and
+layered chrome. `GuiDialog` provides opt-in rounded presentation with a fitted
+visual/pointer scale; its default presentation remains available to other apps.
+The game advances pause-dialog time once per frame, and submission refreshes
+the visual even while input yields to the console. `reducedUiMotion` snaps menu
+animations and disables decorative motion, including pause/exit transitions;
+it does not change domain simulation or cell fading. `showInspector`
+loads at product startup and applies to the existing inspector drawable.
+
+The large main-menu title uses a separate font atlas at 64, 128, or 256 pixels,
+selected to cover its fitted display size without upscaling glyphs. Smaller
+labels retain the default font atlas; resizing reuses the bounded title sizes.
+
+New simulation and the menu console command `play` open a dedicated canvas
+setup screen, independent of F1 configuration. It offers the rules catalog,
+infinite or wrapping boundaries, width and height in 16-cell increments, and
+empty or starter contents. Infinite mode disables dimensions while retaining
+the finite draft. Create passes validated canvas values to CellGameModule;
+Back or Escape discards the draft. Display and performance preferences are not
+part of this payload. The screen fits all rows, respects reduced menu motion,
+and consumes wheel input without changing selection or values. Raised cards,
+eased focus lighting, value pulses, and a decorative cell colony match the
+main menu; reduced motion freezes the colony and snaps focus feedback.
+
+Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
+A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
+retires after completion. It covers the canvas and HUD but remains beneath
+settings and confirmation dialogs. The transition never changes camera or
+simulation state and does not block input. Reduced menu motion and the 3D
+diagnostic view skip it from the first frame. Returning to the main menu reverses
+this veil over 0.48 seconds, then submits one module transition. Repeated return
+requests do not restart it; product input is consumed during the accepted exit,
+while the global console retains its input. Reduced motion returns immediately.
+Both the pause-menu action and the console menu command use this path.
 
 **D-E2:** InputManager must not depend on Game types.  
 Callbacks should record events/state, not own game policy long-term (CA design PDF — still the direction of travel).

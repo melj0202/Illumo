@@ -72,6 +72,107 @@ GuiKit::drawLabelValue(GameVisual& visual,
   visual.addText(value, valX, y, sizePt, valueColor);
 }
 
+// Non-overlapping quarter fans keep translucent rounded surfaces evenly tinted.
+void
+GuiKit::drawRoundedRect(GameVisual& visual,
+                        float x,
+                        float y,
+                        float width,
+                        float height,
+                        float radius,
+                        ColorRgba color)
+{
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
+      !std::isfinite(height) || !std::isfinite(radius) || width <= 0.0f ||
+      height <= 0.0f || color.a == 0) {
+    return;
+  }
+  radius = std::clamp(radius, 0.0f, std::min(width, height) * 0.5f);
+  if (radius == 0.0f) {
+    visual.addFilledRect(x, y, width, height, color);
+    return;
+  }
+  visual.addFilledRect(x + radius, y, width - 2.0f * radius, height, color);
+  visual.addFilledRect(x, y + radius, radius, height - 2.0f * radius, color);
+  visual.addFilledRect(
+    x + width - radius, y + radius, radius, height - 2.0f * radius, color);
+  const float centersX[4] = {
+    x + radius, x + width - radius, x + width - radius, x + radius
+  };
+  const float centersY[4] = {
+    y + radius, y + radius, y + height - radius, y + height - radius
+  };
+  const float starts[4] = { 3.14159265f, 4.71238898f, 0.0f, 1.57079633f };
+  for (int corner = 0; corner < 4; ++corner) {
+    for (int segment = 0; segment < 6; ++segment) {
+      const float a =
+        starts[corner] + static_cast<float>(segment) * 0.26179939f;
+      const float b = a + 0.26179939f;
+      visual.addFilledTriangle(centersX[corner],
+                               centersY[corner],
+                               centersX[corner] + std::cos(a) * radius,
+                               centersY[corner] + std::sin(a) * radius,
+                               centersX[corner] + std::cos(b) * radius,
+                               centersY[corner] + std::sin(b) * radius,
+                               color);
+    }
+  }
+}
+
+void
+GuiKit::drawRoundedPanel(GameVisual& visual,
+                         float x,
+                         float y,
+                         float width,
+                         float height,
+                         unsigned char opacity)
+{
+  for (int layer = 4; layer > 0; --layer) {
+    const float spread = static_cast<float>(layer) * 6.0f;
+    drawRoundedRect(
+      visual,
+      x - spread,
+      y - spread * 0.4f,
+      width + spread * 2.0f,
+      height + spread * 0.8f,
+      22.0f + spread,
+      UiTheme::applyOpacity(UiTheme::accentCool(),
+                            static_cast<unsigned char>(opacity / 80u)));
+  }
+  drawRoundedRect(visual,
+                  x + 2.0f,
+                  y + 10.0f,
+                  width,
+                  height,
+                  22.0f,
+                  UiTheme::applyOpacity(UiTheme::panelShadow(), opacity));
+  drawRoundedRect(visual,
+                  x,
+                  y,
+                  width,
+                  height,
+                  22.0f,
+                  UiTheme::applyOpacity(UiTheme::menuBorder(), opacity));
+  drawRoundedRect(visual,
+                  x + 1.0f,
+                  y + 1.0f,
+                  width - 2.0f,
+                  height - 2.0f,
+                  21.0f,
+                  UiTheme::applyOpacity(UiTheme::menuSurface(), opacity));
+  const float stripeWidth = std::max(0.0f, width - 48.0f);
+  visual.addFilledRect(x + 24.0f,
+                       y,
+                       stripeWidth * 0.57f,
+                       2.0f,
+                       UiTheme::applyOpacity(UiTheme::accentCool(), opacity));
+  visual.addFilledRect(x + 24.0f + stripeWidth * 0.57f,
+                       y,
+                       stripeWidth * 0.43f,
+                       2.0f,
+                       UiTheme::applyOpacity(UiTheme::accentViolet(), opacity));
+}
+
 bool
 GuiKit::isPointInRect(float px,
                       float py,

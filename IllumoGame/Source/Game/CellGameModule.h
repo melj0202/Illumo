@@ -6,6 +6,7 @@
 #include "Cursor.h"
 #include "ExitConfirmDialog.h"
 #include "Game/SimulationRunner.h"
+#include "NewSimulationMenu.h"
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -15,6 +16,7 @@
 #include <Illumo/Scene/SceneGraph.h>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <tracy/Tracy.hpp>
 
 enum class CellState
@@ -30,6 +32,7 @@ class CellGameModule : public IModule
 
 public:
   explicit CellGameModule(std::string initialSaveFile = {});
+  explicit CellGameModule(const NewSimulationConfiguration& configuration);
   ~CellGameModule() override;
   bool Start(IllumoContext* context) override;
   void Update(double dt) override;
@@ -55,6 +58,10 @@ private:
   void showModeSplash(const char* label);
   void updateEditorCursor();
   void updateHamburgerVisual(double dt);
+  void advanceCanvasEntrance(double dt);
+  void requestMainMenuReturn();
+  void completeMainMenuReturn();
+  void rebuildCanvasEntrance();
   bool isHamburgerHovered() const;
   void toggleSettingsMenu();
   void updateSelectionVisual();
@@ -128,11 +135,18 @@ private:
   bool render3dCameraApplied;
   Cursor editorCursor;
   GameVisual hamburgerVisual;
+  GameVisual canvasEntranceVisual{ 1024u };
+  static constexpr double kCanvasEntranceSeconds = 0.72;
+  double canvasEntranceElapsed = kCanvasEntranceSeconds;
+  static constexpr double kCanvasExitSeconds = 0.48;
+  bool mainMenuReturnPending = false;
+  bool mainMenuReturnSubmitted = false;
   float hamburgerX;
   float hamburgerY;
   float hamburgerSize;
   bool hamburgerHovered;
   bool hamburgerMouseWasDown;
+  float hamburgerHoverBlend = 0.0f;
   GameVisual selectionVisual;
   GameVisual inspectorVisual;
   CellClipboard clipboard;
@@ -149,4 +163,5 @@ private:
   bool inspectHeld;
   bool deleteHeld;
   std::string initialSaveFile;
+  std::optional<NewSimulationConfiguration> initialCanvas;
 };

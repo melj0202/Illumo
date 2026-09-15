@@ -36,6 +36,11 @@ public:
   static ColorRgba success() { return ColorRgba{ 92, 224, 150, 255 }; }
   static ColorRgba warning() { return ColorRgba{ 246, 194, 82, 255 }; }
   static ColorRgba error() { return ColorRgba{ 245, 102, 112, 255 }; }
+  static ColorRgba accentCool() { return ColorRgba{ 87, 221, 242, 255 }; }
+  static ColorRgba accentViolet() { return ColorRgba{ 151, 128, 245, 255 }; }
+  static ColorRgba menuSurface() { return ColorRgba{ 14, 23, 40, 255 }; }
+  static ColorRgba menuCard() { return ColorRgba{ 26, 39, 59, 255 }; }
+  static ColorRgba menuBorder() { return ColorRgba{ 69, 110, 142, 255 }; }
 
   static UiPanelStyle statusPanel()
   {

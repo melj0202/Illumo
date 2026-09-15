@@ -72,7 +72,7 @@ void
 GuiDialog::open()
 {
   m_open = true;
-  m_mouseWasDown = false;
+  m_mouseWasDown = m_roundedStyle;
   m_animElapsed = 0.0f;
   m_hoveredButton = -1;
   m_selectionAnimElapsed = kSelectionAnimationSeconds;
@@ -124,9 +124,10 @@ GuiDialog::setPanelDimensions(float width, float height)
 void
 GuiDialog::tick(float dt)
 {
-  if (m_open) {
-    m_animElapsed += dt;
-    m_selectionAnimElapsed += dt;
+  if (m_open && std::isfinite(dt) && dt > 0.0f) {
+    m_animElapsed = std::min(kOpenAnimationSeconds, m_animElapsed + dt);
+    m_selectionAnimElapsed =
+      std::min(kSelectionAnimationSeconds, m_selectionAnimElapsed + dt);
   }
 }
 
@@ -136,7 +137,9 @@ GuiDialog::animationProgress() const
   if (!m_open) {
     return 0.0f;
   }
-  return std::clamp(m_animElapsed / kOpenAnimationSeconds, 0.0f, 1.0f);
+  return m_reducedMotion
+           ? 1.0f
+           : std::clamp(m_animElapsed / kOpenAnimationSeconds, 0.0f, 1.0f);
 }
 
 float
@@ -154,7 +157,10 @@ GuiDialog::selectionPosition() const
     return 0.0f;
   }
   const float t =
-    std::clamp(m_selectionAnimElapsed / kSelectionAnimationSeconds, 0.0f, 1.0f);
+    m_reducedMotion
+      ? 1.0f
+      : std::clamp(
+          m_selectionAnimElapsed / kSelectionAnimationSeconds, 0.0f, 1.0f);
   const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
   return m_selectionFromButton +
          (static_cast<float>(m_selectedButton) - m_selectionFromButton) * ease;
@@ -217,10 +223,23 @@ GuiDialog::updateLayout()
     height = std::max(1, dimensions[1]);
   }
   const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
-  const float virtualHeight =
-    static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
+  m_layoutScale = scale;
+  if (m_roundedStyle) {
+    const float fontScale = m_fontSize / kDefaultFontSize;
+    m_layoutScale =
+      std::min(scale,
+               std::max(0.01f,
+                        std::min(static_cast<float>(width) /
+                                   (m_panelWidth * fontScale + 32.0f),
+                                 static_cast<float>(height) /
+                                   (m_panelHeight * fontScale + 32.0f))));
+  }
+  Transform2D fit;
+  fit.scaleX = m_layoutScale / scale;
+  fit.scaleY = fit.scaleX;
+  m_visual.setTransform(fit);
+  const float virtualWidth = static_cast<float>(width) / m_layoutScale;
+  const float virtualHeight = static_cast<float>(height) / m_layoutScale;
 
   const float fontScale = m_fontSize / kDefaultFontSize;
   const float scaledWidth = m_panelWidth * fontScale;
@@ -232,8 +251,10 @@ GuiDialog::updateLayout()
   m_panelX = std::max(0.0f, (virtualWidth - effectiveWidth) * 0.5f);
   m_panelY = std::max(0.0f, (virtualHeight - effectiveHeight) * 0.5f);
 
-  m_buttonHeight = std::clamp(32.0f * fontScale, 24.0f, 44.0f);
-  m_buttonY = m_panelY + effectiveHeight - m_buttonHeight - 16.0f * fontScale;
+  m_buttonHeight = m_roundedStyle ? 62.0f * fontScale
+                                  : std::clamp(32.0f * fontScale, 24.0f, 44.0f);
+  m_buttonY = m_panelY + effectiveHeight - m_buttonHeight -
+              (m_roundedStyle ? 48.0f : 16.0f) * fontScale;
 
   const size_t btnCount = m_buttons.size();
   m_buttonX.resize(btnCount, 0.0f);
@@ -244,7 +265,7 @@ GuiDialog::updateLayout()
       std::clamp((availWidth - buttonGap * static_cast<float>(btnCount - 1)) /
                    static_cast<float>(btnCount),
                  40.0f,
-                 120.0f * fontScale);
+                 (m_roundedStyle ? 172.0f : 120.0f) * fontScale);
     const float totalButtonsW = m_buttonWidth * static_cast<float>(btnCount) +
                                 buttonGap * static_cast<float>(btnCount - 1);
     float startX = m_panelX + (effectiveWidth - totalButtonsW) * 0.5f;
@@ -268,7 +289,7 @@ GuiDialog::update(InputManager* inputManager, float dt)
   m_hoveredButton = -1;
   if (m_window != nullptr) {
     const std::array<double, 2> mouseCoords = m_window->getMouseCoords();
-    const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
+    const float scale = m_layoutScale;
     m_mouseX =
       static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
     m_mouseY =
@@ -334,9 +355,10 @@ GuiDialog::update(InputManager* inputManager, float dt)
     const bool mouseDown =
       inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
     if (mouseDown && !m_mouseWasDown) {
-      const std::array<double, 2> mouse = inputManager->getMousePosition();
-      const float scale =
-        m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
+      const std::array<double, 2> mouse = m_window != nullptr
+                                            ? m_window->getMouseCoords()
+                                            : inputManager->getMousePosition();
+      const float scale = m_layoutScale;
       const float clickX =
         static_cast<float>(mouse[0]) / (scale > 0.0f ? scale : 1.0f);
       const float clickY =
@@ -368,7 +390,7 @@ GuiDialog::rebuildVisual()
     width = std::max(1, dimensions[0]);
     height = std::max(1, dimensions[1]);
   }
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
+  const float scale = m_layoutScale;
   const float virtualWidth =
     static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
   const float virtualHeight =
@@ -393,6 +415,15 @@ GuiDialog::rebuildVisual()
     std::min(m_panelWidth * fontScale, virtualWidth - 32.0f);
   const float effectiveHeight =
     std::min(m_panelHeight * fontScale, virtualHeight - 32.0f);
+
+  if (m_roundedStyle) {
+    drawRoundedContents(curPanelY,
+                        effectiveWidth,
+                        effectiveHeight,
+                        fontScale,
+                        static_cast<unsigned char>(255.0f * ease));
+    return;
+  }
 
   // Panel card
   GuiPanelChrome chrome;
@@ -463,11 +494,137 @@ GuiDialog::rebuildVisual()
   }
 }
 
+void
+GuiDialog::drawRoundedContents(float panelY,
+                               float width,
+                               float height,
+                               float fontScale,
+                               unsigned char opacity)
+{
+  GuiKit::drawRoundedPanel(m_visual, m_panelX, panelY, width, height, opacity);
+  const float centerX = m_panelX + width * 0.5f;
+  GuiKit::drawTextCentered(
+    m_visual,
+    m_title,
+    centerX,
+    panelY + 46.0f * fontScale,
+    25.0f * fontScale,
+    UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
+  GuiKit::drawTextCentered(
+    m_visual,
+    m_message,
+    centerX,
+    panelY + 86.0f * fontScale,
+    m_fontSize,
+    UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+  for (int cell = 0; cell < 7; ++cell) {
+    GuiKit::drawRoundedRect(
+      m_visual,
+      centerX + (static_cast<float>(cell) - 3.0f) * 11.0f * fontScale,
+      panelY + 117.0f * fontScale,
+      5.0f * fontScale,
+      5.0f * fontScale,
+      2.0f,
+      UiTheme::applyOpacity(
+        cell < 4 ? UiTheme::accentCool() : UiTheme::accentViolet(), opacity));
+  }
+  const float y = m_buttonY - panelOffsetY();
+  for (size_t index = 0; index < m_buttons.size(); ++index) {
+    const float x = m_buttonX[index];
+    GuiKit::drawRoundedRect(
+      m_visual,
+      x,
+      y + 4.0f,
+      m_buttonWidth,
+      m_buttonHeight,
+      12.0f,
+      UiTheme::applyOpacity(UiTheme::panelShadow(), opacity));
+    GuiKit::drawRoundedRect(
+      m_visual,
+      x,
+      y,
+      m_buttonWidth,
+      m_buttonHeight,
+      12.0f,
+      UiTheme::applyOpacity(static_cast<int>(index) == m_hoveredButton
+                              ? UiTheme::accentCool()
+                              : UiTheme::panelBorder(),
+                            opacity));
+    GuiKit::drawRoundedRect(
+      m_visual,
+      x + 1.0f,
+      y + 1.0f,
+      m_buttonWidth - 2.0f,
+      m_buttonHeight - 2.0f,
+      11.0f,
+      UiTheme::applyOpacity(UiTheme::menuCard(), opacity));
+  }
+  if (!m_buttons.empty()) {
+    const ColorRgba accent = m_buttons[m_selectedButton].isDestructive
+                               ? UiTheme::error()
+                               : UiTheme::accentCool();
+    const float gap = m_buttonX.size() > 1 ? m_buttonX[1] - m_buttonX[0] : 0.0f;
+    const float x = m_buttonX[0] + selectionPosition() * gap;
+    GuiKit::drawRoundedRect(m_visual,
+                            x - 1.0f,
+                            y - 1.0f,
+                            m_buttonWidth + 2.0f,
+                            m_buttonHeight + 2.0f,
+                            13.0f,
+                            UiTheme::applyOpacity(accent, opacity));
+    GuiKit::drawRoundedRect(
+      m_visual,
+      x,
+      y,
+      m_buttonWidth,
+      m_buttonHeight,
+      12.0f,
+      UiTheme::applyOpacity(UiTheme::menuCard(), opacity));
+    GuiKit::drawRoundedRect(
+      m_visual,
+      x,
+      y,
+      m_buttonWidth,
+      m_buttonHeight,
+      12.0f,
+      UiTheme::applyOpacity(accent, static_cast<unsigned char>(opacity / 5u)));
+  }
+  for (size_t index = 0; index < m_buttons.size(); ++index) {
+    const GuiButtonDef& button = m_buttons[index];
+    const ColorRgba accent =
+      button.isDestructive ? UiTheme::error() : UiTheme::accentCool();
+    const ColorRgba text = static_cast<int>(index) == m_selectedButton
+                             ? accent
+                             : UiTheme::textPrimary();
+    GuiKit::drawTextCentered(m_visual,
+                             button.label,
+                             m_buttonX[index] + m_buttonWidth * 0.5f,
+                             y + m_buttonHeight * 0.36f,
+                             17.0f * fontScale,
+                             UiTheme::applyOpacity(text, opacity));
+    GuiKit::drawTextCentered(
+      m_visual,
+      button.shortcut,
+      m_buttonX[index] + m_buttonWidth * 0.5f,
+      y + m_buttonHeight * 0.73f,
+      10.0f * fontScale,
+      UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+  }
+  GuiKit::drawTextCentered(
+    m_visual,
+    "ARROWS / MOUSE   Select     ENTER   Open",
+    centerX,
+    panelY + height - 21.0f * fontScale,
+    10.0f * fontScale,
+    UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+}
+
 bool
 GuiDialog::AppendCommands(Renderer* renderer)
 {
   if (!m_open) {
     return true;
   }
+  rebuildVisual();
   return m_visual.AppendCommands(renderer);
 }

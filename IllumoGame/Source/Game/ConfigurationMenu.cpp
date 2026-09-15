@@ -193,14 +193,22 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
   fullscreen = current.fullscreen;
   uiScale = current.uiScale > 0 ? current.uiScale : 1;
   msaa = current.msaa;
+  fpsCapText = std::to_string(std::max(0L, current.fpsCap));
+  showInspector = current.showInspector;
+  reducedUiMotion = current.reducedUiMotion;
+  firstVisibleRow = 0;
+  ambientPhase = 0.0f;
+  previousMouseX = -1.0f;
+  previousMouseY = -1.0f;
   errorMessage.clear();
   selectedRow = 0;
   selectionFromRow = 0.0f;
   selectionAnimationElapsed = kSelectionAnimationSeconds;
   valuePulseElapsed = kValuePulseSeconds;
   replaceFieldOnType = true;
-  mouseWasDown = false;
-  animationElapsed = 0.0f;
+  // Ignore a held click that opened the modal until its first release.
+  mouseWasDown = true;
+  animationElapsed = reducedUiMotion ? kOpenAnimationSeconds : 0.0f;
   openState = true;
   setVisible(true);
   updateLayout();
@@ -210,6 +218,16 @@ void
 ConfigurationMenu::tick(float deltaSeconds)
 {
   if (!openState || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0f) {
+    return;
+  }
+  ambientPhase =
+    reducedUiMotion
+      ? 0.0f
+      : std::fmod(ambientPhase + std::min(deltaSeconds, 0.1f), 12.0f);
+  if (reducedUiMotion) {
+    animationElapsed = kOpenAnimationSeconds;
+    selectionAnimationElapsed = kSelectionAnimationSeconds;
+    valuePulseElapsed = kValuePulseSeconds;
     return;
   }
   animationElapsed =
@@ -223,6 +241,9 @@ ConfigurationMenu::tick(float deltaSeconds)
 float
 ConfigurationMenu::animationProgress() const
 {
+  if (reducedUiMotion) {
+    return 1.0f;
+  }
   return std::clamp(animationElapsed / kOpenAnimationSeconds, 0.0f, 1.0f);
 }
 
@@ -242,6 +263,9 @@ easeOutCubic(float progress)
 float
 ConfigurationMenu::panelReveal() const
 {
+  if (reducedUiMotion) {
+    return 1.0f;
+  }
   return easeOutCubic(std::clamp(animationElapsed / 0.24f, 0.0f, 1.0f));
 }
 
@@ -254,7 +278,11 @@ ConfigurationMenu::panelOffsetY() const
 float
 ConfigurationMenu::rowReveal(int row) const
 {
-  const float delay = static_cast<float>(std::max(0, row)) * 0.012f;
+  if (reducedUiMotion) {
+    return 1.0f;
+  }
+  const float delay =
+    static_cast<float>(std::max(0, row - firstVisibleRow)) * 0.012f;
   return easeOutCubic(
     std::clamp((animationElapsed - delay) / 0.22f, 0.0f, 1.0f));
 }
@@ -262,6 +290,9 @@ ConfigurationMenu::rowReveal(int row) const
 float
 ConfigurationMenu::selectionRowPosition() const
 {
+  if (reducedUiMotion) {
+    return static_cast<float>(selectedRow);
+  }
   const float progress = easeOutCubic(std::clamp(
     selectionAnimationElapsed / kSelectionAnimationSeconds, 0.0f, 1.0f));
   return selectionFromRow +
@@ -277,6 +308,9 @@ ConfigurationMenu::getSelectionPositionForTesting() const
 float
 ConfigurationMenu::valuePulse() const
 {
+  if (reducedUiMotion) {
+    return 0.0f;
+  }
   const float progress =
     std::clamp(valuePulseElapsed / kValuePulseSeconds, 0.0f, 1.0f);
   return 1.0f - progress;
@@ -319,10 +353,18 @@ ConfigurationMenu::updateLayout()
     height = std::max(1, dimensions[1]);
   }
   const float scale = renderer != nullptr ? renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
-  const float virtualHeight =
-    static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
+  // Fit oversized UI preferences uniformly; hit testing uses the same scale.
+  layoutScale =
+    std::min(std::max(1.0f, scale),
+             std::max(0.25f,
+                      std::min(static_cast<float>(width) / 640.0f,
+                               static_cast<float>(height) / 480.0f)));
+  Transform2D fit;
+  fit.scaleX = layoutScale / std::max(1.0f, scale);
+  fit.scaleY = fit.scaleX;
+  visual.setTransform(fit);
+  const float virtualWidth = static_cast<float>(width) / layoutScale;
+  const float virtualHeight = static_cast<float>(height) / layoutScale;
   panelWidth = std::min(720.0f, std::max(200.0f, virtualWidth - 32.0f));
   if (panelWidth > virtualWidth) {
     panelWidth = virtualWidth;
@@ -341,10 +383,11 @@ ConfigurationMenu::updateLayout()
                                ? 52.0f
                                : std::clamp(panelHeight * 0.10f, 28.0f, 52.0f);
   firstRowY = panelY + headerHeight;
-  const float availableRowsH =
-    std::max(12.0f * static_cast<float>(kRowCount),
-             panelHeight - headerHeight - footerHeight);
-  rowHeight = availableRowsH / static_cast<float>(kRowCount);
+  const float availableRowsH = panelHeight - headerHeight - footerHeight;
+  visibleRows =
+    std::clamp(static_cast<int>(availableRowsH / 34.0f), 1, kRowCount);
+  rowHeight = availableRowsH / static_cast<float>(visibleRows);
+  firstVisibleRow = std::clamp(firstVisibleRow, 0, kRowCount - visibleRows);
 }
 
 void
@@ -355,6 +398,12 @@ ConfigurationMenu::selectRow(int row)
     selectionFromRow = selectionRowPosition();
     selectedRow = nextRow;
     selectionAnimationElapsed = 0.0f;
+  }
+  if (selectedRow < firstVisibleRow) {
+    firstVisibleRow = selectedRow;
+  }
+  if (selectedRow >= firstVisibleRow + visibleRows) {
+    firstVisibleRow = selectedRow - visibleRows + 1;
   }
   replaceFieldOnType = true;
   errorMessage.clear();
@@ -370,6 +419,8 @@ ConfigurationMenu::editableField()
       return &worldHeightText;
     case kTpsRow:
       return &tpsText;
+    case kFpsCapRow:
+      return &fpsCapText;
     case kSpeedRow:
       return &speedText;
     case kFadeRow:
@@ -395,7 +446,7 @@ ConfigurationMenu::addCharacter(unsigned int codepoint)
   } else if (selectedRow == kSpeedRow || selectedRow == kFadeRow) {
     accepted = accepted || character == '.';
   }
-  if (!accepted || field->size() >= 16u) {
+  if (!accepted || (!replaceFieldOnType && field->size() >= 16u)) {
     return;
   }
   if (replaceFieldOnType) {
@@ -445,6 +496,35 @@ ConfigurationMenu::cycleSelected(int direction)
       index = (index + rulesets.size() - 1u) % rulesets.size();
     }
     ruleSet = rulesets[index];
+    changed = true;
+  } else if (selectedRow == kFpsCapRow) {
+    const std::array<long, 9> presets = {
+      0, 30, 60, 90, 120, 144, 165, 240, 360
+    };
+    long cap = 0;
+    parseLongText(fpsCapText, 0, 1000, &cap);
+    long next = direction > 0 ? presets.front() : presets.back();
+    if (direction > 0) {
+      for (long preset : presets) {
+        if (preset > cap) {
+          next = preset;
+          break;
+        }
+      }
+    } else {
+      for (long preset : presets) {
+        if (preset < cap) {
+          next = preset;
+        }
+      }
+    }
+    fpsCapText = std::to_string(next);
+    changed = true;
+  } else if (selectedRow == kInspectorRow) {
+    showInspector = !showInspector;
+    changed = true;
+  } else if (selectedRow == kReducedMotionRow) {
+    reducedUiMotion = !reducedUiMotion;
     changed = true;
   } else if (selectedRow == kVsyncRow) {
     vsync = !vsync;
@@ -506,7 +586,8 @@ ConfigurationMenu::activateSelected()
   }
   if (selectedRow == kRulesetRow || selectedRow == kVsyncRow ||
       selectedRow == kFullscreenRow || selectedRow == kUiScaleRow ||
-      selectedRow == kMsaaRow) {
+      selectedRow == kMsaaRow || selectedRow == kFpsCapRow ||
+      selectedRow == kInspectorRow || selectedRow == kReducedMotionRow) {
     cycleSelected(1);
   }
   return ConfigurationMenuAction::None;
@@ -536,6 +617,14 @@ ConfigurationMenu::update(InputManager* inputManager)
       selectRow(selectedRow - 1);
     } else if (event.key == KeyCode::Down || event.key == KeyCode::Tab) {
       selectRow((selectedRow + 1) % kRowCount);
+    } else if (event.key == KeyCode::PageDown) {
+      selectRow(selectedRow + visibleRows);
+    } else if (event.key == KeyCode::PageUp) {
+      selectRow(selectedRow - visibleRows);
+    } else if (event.key == KeyCode::Home) {
+      selectRow(0);
+    } else if (event.key == KeyCode::End) {
+      selectRow(kRowCount - 1);
     } else if (event.key == KeyCode::Left) {
       cycleSelected(-1);
     } else if (event.key == KeyCode::Right) {
@@ -555,25 +644,43 @@ ConfigurationMenu::update(InputManager* inputManager)
     addCharacter(codepoint);
   }
 
+  double* scroll = inputManager->getMouseScrollOffset();
+  const bool wheelScrolled =
+    scroll != nullptr && std::isfinite(*scroll) && *scroll != 0.0;
+  if (wheelScrolled) {
+    const int rows = static_cast<int>(
+      std::ceil(std::min(std::abs(*scroll), static_cast<double>(kRowCount))));
+    firstVisibleRow =
+      std::clamp(firstVisibleRow + (*scroll > 0.0 ? -rows : rows),
+                 0,
+                 kRowCount - visibleRows);
+    *scroll = 0.0;
+  }
+  updateLayout();
   const bool mouseDown = inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
-  if (mouseDown && !mouseWasDown) {
-    const std::array<double, 2> mouse = inputManager->getMousePosition();
-    const float scale = renderer != nullptr ? renderer->getUiScale() : 1.0f;
-    const float mouseX =
-      static_cast<float>(mouse[0]) / (scale > 0.0f ? scale : 1.0f);
-    const float mouseY =
-      static_cast<float>(mouse[1]) / (scale > 0.0f ? scale : 1.0f);
-    const float animatedFirstRowY = firstRowY + panelOffsetY();
-    if (mouseX >= panelX + 20.0f && mouseX <= panelX + panelWidth - 20.0f &&
-        mouseY >= animatedFirstRowY &&
-        mouseY <
-          animatedFirstRowY + rowHeight * static_cast<float>(kRowCount)) {
-      const int row =
-        static_cast<int>((mouseY - animatedFirstRowY) / rowHeight);
+  const std::array<double, 2> mouse = window != nullptr
+                                        ? window->getMouseCoords()
+                                        : inputManager->getMousePosition();
+  const float mouseX = static_cast<float>(mouse[0]) / layoutScale;
+  const float mouseY = static_cast<float>(mouse[1]) / layoutScale;
+  const bool moved = mouseX != previousMouseX || mouseY != previousMouseY;
+  previousMouseX = mouseX;
+  previousMouseY = mouseY;
+  const float animatedFirstRowY = firstRowY + panelOffsetY();
+  if (((moved && !wheelScrolled) || (mouseDown && !mouseWasDown)) &&
+      mouseX >= panelX + 20.0f && mouseX <= panelX + panelWidth - 20.0f &&
+      mouseY >= animatedFirstRowY &&
+      mouseY <
+        animatedFirstRowY + rowHeight * static_cast<float>(visibleRows)) {
+    const int row = firstVisibleRow +
+                    static_cast<int>((mouseY - animatedFirstRowY) / rowHeight);
+    if (row != selectedRow) {
       selectRow(row);
-      if (row == kApplyRow || row == kCancelRow || row == kExitRow ||
-          row == kRulesetRow || row == kVsyncRow || row == kFullscreenRow ||
-          row == kUiScaleRow || row == kMsaaRow) {
+    }
+    if (mouseDown && !mouseWasDown) {
+      if (row < kApplyRow && mouseX < panelX + panelWidth * 0.54f) {
+        cycleSelected(-1);
+      } else {
         action = activateSelected();
       }
     }
@@ -624,6 +731,14 @@ ConfigurationMenu::readConfiguration(SimulatorConfiguration* configuration,
     }
     return false;
   }
+  if (!parseLongText(fpsCapText, 0, 1000, &parsed.fpsCap)) {
+    if (error != nullptr) {
+      *error = "FPS cap: enter 0 (uncapped) to 1000.";
+    }
+    return false;
+  }
+  parsed.showInspector = showInspector;
+  parsed.reducedUiMotion = reducedUiMotion;
   parsed.vsync = vsync;
   parsed.fullscreen = fullscreen;
   parsed.uiScale = uiScale > 0 ? uiScale : 1;
@@ -648,17 +763,16 @@ ConfigurationMenu::rebuildVisual()
     height = std::max(1, dimensions[1]);
   }
 
-  const float scale = renderer != nullptr ? renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
-  const float virtualHeight =
-    static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
+  const float virtualWidth = static_cast<float>(width) / layoutScale;
+  const float virtualHeight = static_cast<float>(height) / layoutScale;
 
   const float reveal = panelReveal();
   const float animatedPanelY = panelY + panelOffsetY();
   const float animatedFirstRowY = firstRowY + panelOffsetY();
-  const unsigned char backdropOpacity = static_cast<unsigned char>(
-    std::round(std::clamp(animationElapsed / 0.18f, 0.0f, 1.0f) * 255.0f));
+  const unsigned char backdropOpacity = static_cast<unsigned char>(std::round(
+    (reducedUiMotion ? 1.0f
+                     : std::clamp(animationElapsed / 0.18f, 0.0f, 1.0f)) *
+    255.0f));
   const unsigned char panelOpacity =
     static_cast<unsigned char>(std::round(reveal * 255.0f));
 
@@ -668,19 +782,33 @@ ConfigurationMenu::rebuildVisual()
     virtualWidth,
     virtualHeight,
     UiTheme::applyOpacity(UiTheme::canvasShade(), backdropOpacity));
-  GuiPanelChrome chrome;
-  chrome.background =
-    UiTheme::applyOpacity(UiTheme::panelSurface(), panelOpacity);
-  chrome.border = UiTheme::applyOpacity(UiTheme::panelBorder(), panelOpacity);
-  chrome.shadow =
-    ColorRgba{ 0, 0, 0, static_cast<unsigned char>(180.0f * reveal) };
-  chrome.shadowOffset = 6.0f;
-  chrome.drawShadow = true;
-  chrome.drawAccent = true;
-  chrome.accent = UiTheme::applyOpacity(UiTheme::accent(), panelOpacity);
-  chrome.accentWidth = 5.0f;
-  GuiKit::drawPanel(
-    visual, panelX, animatedPanelY, panelWidth, panelHeight, chrome);
+  GuiKit::drawRoundedPanel(
+    visual, panelX, animatedPanelY, panelWidth, panelHeight, panelOpacity);
+  const float breathe =
+    reducedUiMotion ? 0.5f : 0.5f + 0.5f * std::sin(ambientPhase * 1.04719755f);
+  GuiKit::drawRoundedRect(
+    visual,
+    panelX + 20.0f,
+    animatedFirstRowY - 5.0f,
+    (panelWidth - 40.0f) * reveal,
+    2.0f,
+    1.0f,
+    UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
+  if (visibleRows < kRowCount) {
+    const float trackHeight = rowHeight * static_cast<float>(visibleRows);
+    visual.addFilledRect(panelX + panelWidth - 13.0f,
+                         animatedFirstRowY,
+                         3.0f,
+                         trackHeight,
+                         UiTheme::panelInset());
+    visual.addFilledRect(
+      panelX + panelWidth - 13.0f,
+      animatedFirstRowY +
+        trackHeight * static_cast<float>(firstVisibleRow) / kRowCount,
+      3.0f,
+      trackHeight * static_cast<float>(visibleRows) / kRowCount,
+      UiTheme::applyOpacity(UiTheme::accent(), panelOpacity));
+  }
 
   const float headerHeight = panelHeight >= 400.0f
                                ? 104.0f
@@ -692,7 +820,7 @@ ConfigurationMenu::rebuildVisual()
     panelHeight >= 360.0f ? 24.0f
                           : std::clamp(headerHeight * 0.35f, 12.0f, 24.0f);
   const float subFontSize = panelHeight >= 400.0f
-                              ? 13.0f
+                              ? 11.0f
                               : std::clamp(headerHeight * 0.18f, 9.0f, 13.0f);
   const float noteFontSize = panelHeight >= 400.0f
                                ? 11.0f
@@ -701,57 +829,70 @@ ConfigurationMenu::rebuildVisual()
                                ? 13.0f
                                : std::clamp(footerHeight * 0.30f, 9.0f, 13.0f);
 
+  if (headerHeight >= 90.0f) {
+    visual.addText("M A K E   I T   Y O U R S",
+                   panelX + 28.0f,
+                   animatedPanelY + 16.0f,
+                   10.0f,
+                   UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
+  }
   visual.addText("SIMULATOR SETTINGS",
                  panelX + 28.0f,
                  animatedPanelY + (panelHeight >= 400.0f
-                                     ? 22.0f
+                                     ? 34.0f
                                      : std::max(4.0f, headerHeight * 0.10f)),
                  titleFontSize,
                  UiTheme::applyOpacity(UiTheme::textPrimary(), panelOpacity));
   const ColorRgba secondaryText{ 190, 207, 222, 255 };
   if (headerHeight >= 60.0f) {
-    visual.addText("UP/DOWN: select    LEFT/RIGHT: change    TYPE: edit value",
+    visual.addText("UP/DOWN: select   LEFT/RIGHT: change   TYPE: edit",
                    panelX + 28.0f,
                    animatedPanelY +
-                     (panelHeight >= 400.0f ? 58.0f : headerHeight * 0.48f),
+                     (panelHeight >= 400.0f ? 65.0f : headerHeight * 0.48f),
                    subFontSize,
                    UiTheme::applyOpacity(secondaryText, panelOpacity));
-    visual.addText("ENTER: activate    F1 or ESC: close without applying",
+    visual.addText("SCROLL / PGDN: more   ENTER: activate   ESC: discard",
                    panelX + 28.0f,
                    animatedPanelY +
-                     (panelHeight >= 400.0f ? 77.0f : headerHeight * 0.72f),
+                     (panelHeight >= 400.0f ? 82.0f : headerHeight * 0.72f),
                    subFontSize,
                    UiTheme::applyOpacity(secondaryText, panelOpacity));
   }
 
   const std::string labels[kRowCount] = { "Ruleset",
-                                          "World width (chunks)",
-                                          "World height (chunks)",
+                                          "Width (chunks)",
+                                          "Height (chunks)",
                                           "Simulation rate (TPS)",
                                           "Speed multiplier",
                                           "Fade speed",
                                           "Vertical sync",
                                           "Fullscreen",
                                           "UI scale",
-                                          "Anti-aliasing (MSAA)*",
+                                          "Anti-aliasing*",
+                                          "FPS cap",
+                                          "Simulation inspector",
+                                          "Reduced menu motion",
                                           "Apply changes",
                                           "Discard changes",
                                           "Exit simulator" };
-  const std::string values[kRowCount] = { displayRuleSetName(ruleSet),
-                                          worldWidthText,
-                                          worldHeightText,
-                                          tpsText,
-                                          speedText,
-                                          fadeText,
-                                          vsync ? "On" : "Off",
-                                          fullscreen ? "On" : "Off",
-                                          std::to_string(uiScale) + "x",
-                                          msaa == 0
-                                            ? "Off"
-                                            : std::to_string(msaa) + "x",
-                                          "ENTER",
-                                          "ENTER",
-                                          "ENTER" };
+  const std::string values[kRowCount] = {
+    displayRuleSetName(ruleSet),
+    worldWidthText,
+    worldHeightText,
+    tpsText,
+    speedText,
+    fadeText,
+    vsync ? "On" : "Off",
+    fullscreen ? "On" : "Off",
+    std::to_string(uiScale) + "x",
+    msaa == 0 ? "Off" : std::to_string(msaa) + "x",
+    fpsCapText == "0" ? "Uncapped" : fpsCapText + " FPS",
+    showInspector ? "On" : "Off",
+    reducedUiMotion ? "On" : "Off",
+    "ENTER",
+    "ENTER",
+    "ENTER"
+  };
   const std::string help[kRowCount] = {
     "Choose the cellular-automaton rules.",
     "Enter a positive chunk count, or inf on both world axes.",
@@ -763,73 +904,141 @@ ConfigurationMenu::rebuildVisual()
     "Use the entire display.",
     "Scale interface size: 1x, 2x, 3x, 4x.",
     "Multisample anti-aliasing: Off, 2x, 4x, 8x. (*Requires restart)",
+    "0 = uncapped; 1-1000 FPS. VSync still limits to monitor refresh.",
+    "Show generation, cell coordinates, and population in the simulation.",
+    "Disable decorative motion and snap menu transitions.",
     "Validate, save, and apply the displayed settings.",
     "Close the menu without changing any settings.",
-    "Ask for confirmation, then exit IllumoGame through the normal "
-    "shutdown path."
+    "Leave IllumoGame (confirmation appears during a simulation)."
   };
   const float valueColumnX = panelX + panelWidth * 0.54f;
   const float rowFontSize = panelHeight >= 360.0f
                               ? std::clamp(rowHeight * 0.56f, 16.0f, 18.0f)
                               : std::clamp(rowHeight * 0.52f, 9.0f, 18.0f);
-  for (int row = 0; row < kRowCount; ++row) {
-    const float y = animatedFirstRowY + rowHeight * static_cast<float>(row);
+  for (int row = firstVisibleRow; row < firstVisibleRow + visibleRows; ++row) {
+    const float y =
+      animatedFirstRowY + rowHeight * static_cast<float>(row - firstVisibleRow);
     const unsigned char rowOpacity =
       static_cast<unsigned char>(std::round(rowReveal(row) * 255.0f));
-    visual.addFilledRect(
+    GuiKit::drawRoundedRect(
+      visual,
+      panelX + 20.0f,
+      y + 2.0f,
+      panelWidth - 40.0f,
+      rowHeight - 4.0f,
+      8.0f,
+      UiTheme::applyOpacity(UiTheme::panelShadow(), rowOpacity));
+    GuiKit::drawRoundedRect(
+      visual,
       panelX + 20.0f,
       y,
       panelWidth - 40.0f,
       rowHeight - 4.0f,
-      UiTheme::applyOpacity(UiTheme::panelRaised(), rowOpacity));
-    if (row < kApplyRow) {
-      visual.addFilledRect(
-        valueColumnX - 12.0f,
-        y + 2.0f,
-        panelX + panelWidth - 20.0f - valueColumnX + 12.0f,
-        rowHeight - 8.0f,
-        UiTheme::applyOpacity(UiTheme::panelInset(), rowOpacity));
-    }
+      8.0f,
+      UiTheme::applyOpacity(UiTheme::panelBorder(), rowOpacity));
+    GuiKit::drawRoundedRect(
+      visual,
+      panelX + 21.0f,
+      y + 1.0f,
+      panelWidth - 42.0f,
+      rowHeight - 6.0f,
+      7.0f,
+      UiTheme::applyOpacity(UiTheme::menuCard(), rowOpacity));
   }
 
   const float selectionY =
-    animatedFirstRowY + rowHeight * selectionRowPosition();
+    animatedFirstRowY +
+    rowHeight *
+      (std::clamp(selectionRowPosition(),
+                  static_cast<float>(firstVisibleRow),
+                  static_cast<float>(firstVisibleRow + visibleRows - 1)) -
+       static_cast<float>(firstVisibleRow));
+  const bool selectionVisible = selectedRow >= firstVisibleRow &&
+                                selectedRow < firstVisibleRow + visibleRows;
   const unsigned char selectionOpacity =
-    static_cast<unsigned char>(std::round(rowReveal(selectedRow) * 255.0f));
-  visual.addFilledRect(
+    selectionVisible
+      ? static_cast<unsigned char>(std::round(rowReveal(selectedRow) * 255.0f))
+      : 0;
+  GuiKit::drawRoundedRect(
+    visual,
+    panelX + 19.0f,
+    selectionY - 1.0f,
+    panelWidth - 38.0f,
+    rowHeight - 2.0f,
+    9.0f,
+    UiTheme::applyOpacity(
+      UiTheme::accentCool(),
+      static_cast<unsigned char>(selectionOpacity * (0.55f + 0.2f * breathe))));
+  GuiKit::drawRoundedRect(
+    visual,
     panelX + 20.0f,
     selectionY,
     panelWidth - 40.0f,
     rowHeight - 4.0f,
+    8.0f,
     UiTheme::applyOpacity(UiTheme::selection(), selectionOpacity));
-  visual.addFilledRect(
-    panelX + 20.0f,
-    selectionY,
-    4.0f,
-    (rowHeight - 4.0f) * rowReveal(selectedRow),
-    UiTheme::applyOpacity(UiTheme::accent(), selectionOpacity));
-  for (int row = 0; row < kRowCount; ++row) {
-    const float y = animatedFirstRowY + rowHeight * static_cast<float>(row);
+  for (int row = firstVisibleRow; row < firstVisibleRow + visibleRows; ++row) {
+    const float y =
+      animatedFirstRowY + rowHeight * static_cast<float>(row - firstVisibleRow);
     const bool selected = row == selectedRow;
     const float textY = y + std::max(2.0f, (rowHeight - rowFontSize) * 0.5f);
     const unsigned char rowOpacity =
       static_cast<unsigned char>(std::round(rowReveal(row) * 255.0f));
-    if (row == selectedRow && row < kApplyRow && valuePulse() > 0.0f) {
-      const unsigned char pulseOpacity = static_cast<unsigned char>(
-        std::round(valuePulse() * static_cast<float>(rowOpacity)));
-      visual.addOutlineRect(
+    if (row < kApplyRow) {
+      const float fieldWidth =
+        panelX + panelWidth - 25.0f - valueColumnX + 12.0f;
+      GuiKit::drawRoundedRect(
+        visual,
         valueColumnX - 12.0f,
-        y + 2.0f,
-        panelX + panelWidth - 20.0f - valueColumnX + 12.0f,
-        rowHeight - 8.0f,
-        UiTheme::applyOpacity(UiTheme::accent(), pulseOpacity),
-        2.0f);
+        y + 3.0f,
+        fieldWidth,
+        rowHeight - 10.0f,
+        6.0f,
+        UiTheme::applyOpacity(UiTheme::panelInset(), rowOpacity));
+      if (selected && valuePulse() > 0.0f) {
+        GuiKit::drawRoundedRect(
+          visual,
+          valueColumnX - 12.0f,
+          y + 3.0f,
+          fieldWidth,
+          rowHeight - 10.0f,
+          6.0f,
+          UiTheme::applyOpacity(
+            UiTheme::accentCool(),
+            static_cast<unsigned char>(valuePulse() * rowOpacity * 0.3f)));
+      }
+      if (row == 6 || row == 7 || row == 11 || row == 12) {
+        const bool enabled = row == 6    ? vsync
+                             : row == 7  ? fullscreen
+                             : row == 11 ? showInspector
+                                         : reducedUiMotion;
+        const float toggleX = panelX + panelWidth - 75.0f;
+        const float toggleY = y + (rowHeight - 20.0f) * 0.5f;
+        GuiKit::drawRoundedRect(visual,
+                                toggleX,
+                                toggleY,
+                                36.0f,
+                                16.0f,
+                                8.0f,
+                                UiTheme::applyOpacity(enabled
+                                                        ? UiTheme::accentCool()
+                                                        : UiTheme::menuBorder(),
+                                                      rowOpacity));
+        GuiKit::drawRoundedRect(
+          visual,
+          toggleX + (enabled ? 21.0f : 3.0f),
+          toggleY + 3.0f,
+          10.0f,
+          10.0f,
+          5.0f,
+          UiTheme::applyOpacity(UiTheme::textPrimary(), rowOpacity));
+      }
     }
     visual.addText(labels[row],
                    panelX + 36.0f,
                    textY,
                    rowFontSize,
-                   UiTheme::applyOpacity(selected ? UiTheme::accent()
+                   UiTheme::applyOpacity(selected ? UiTheme::accentCool()
                                                   : UiTheme::textPrimary(),
                                          rowOpacity));
     visual.addText(values[row],
@@ -840,7 +1049,7 @@ ConfigurationMenu::rebuildVisual()
                                          : row == kExitRow ? UiTheme::error()
                                          : row == kCancelRow
                                            ? UiTheme::warning()
-                                         : selected ? UiTheme::accent()
+                                         : selected ? UiTheme::accentCool()
                                                     : UiTheme::textPrimary(),
                                          rowOpacity));
   }

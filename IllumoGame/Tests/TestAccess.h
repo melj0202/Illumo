@@ -128,6 +128,15 @@ public:
     return &module.inspectorVisual;
   }
 
+  static GameVisual& getCanvasEntranceVisual(CellGameModule& module)
+  {
+    return module.canvasEntranceVisual;
+  }
+  static void advanceCanvasEntrance(CellGameModule& module, double dt)
+  {
+    module.advanceCanvasEntrance(dt);
+  }
+
   static GameVisual* getHamburgerVisual(CellGameModule& module)
   {
     return &module.hamburgerVisual;
