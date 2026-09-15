@@ -8,6 +8,7 @@
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Platform/SaveLoad.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
@@ -625,11 +626,29 @@ MainMenuModule::rebuildVisual()
                        m_panelY + 23.0f,
                        9.0f + room * 2.0f,
                        UiTheme::applyOpacity(cyan, opacity));
-  m_menuVisual.addText("ILLUMO",
-                       m_panelX + 28.0f,
-                       m_panelY + 43.0f,
-                       40.0f + room * 18.0f,
-                       UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
+  const float titleSize = 40.0f + room * 18.0f;
+  const float displayedTitleSize = titleSize * m_layoutScale;
+  // Three cached resolutions cover the supported 1x-4x UI scales without
+  // enlarging the default 32px glyphs or caching an atlas for every resize.
+  const int rasterSize = displayedTitleSize <= 64.0f    ? 64
+                         : displayedTitleSize <= 128.0f ? 128
+                                                        : 256;
+  if (m_titleRasterSize != rasterSize) {
+    m_titleFont = Font::getDefaultFont();
+    if (m_titleFont != nullptr && !m_titleFont->getPath().empty() &&
+        m_titleFont->getPath() != "<memory>") {
+      m_titleFont = Font::loadFromFile(m_titleFont->getPath(),
+                                       static_cast<float>(rasterSize));
+    }
+    m_titleRasterSize = rasterSize;
+  }
+  const size_t titleIndex = m_menuVisual.addText(
+    "ILLUMO",
+    m_panelX + 28.0f,
+    m_panelY + 43.0f,
+    titleSize,
+    UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
+  m_menuVisual.getText(titleIndex)->font = m_titleFont;
   m_menuVisual.addText(
     "Small rules. Endless possibilities.",
     m_panelX + 30.0f,

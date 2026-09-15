@@ -7,6 +7,7 @@
 #include <string>
 
 class CanvasView;
+class Font;
 class CellContext;
 
 class MainMenuModule : public IModule
@@ -54,6 +55,8 @@ private:
   std::unique_ptr<CellContext> m_bgContext;
   std::unique_ptr<ConfigurationMenu> m_configurationMenu;
   GameVisual m_menuVisual;
+  std::shared_ptr<Font> m_titleFont;
+  int m_titleRasterSize = 0;
   int m_selectedItem;
   float m_animationElapsed;
   float m_selectionFromItem;

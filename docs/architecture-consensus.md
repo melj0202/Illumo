@@ -824,6 +824,10 @@ animations and disables decorative motion, including pause/exit transitions;
 it does not change domain simulation or cell fading. `showInspector`
 loads at product startup and applies to the existing inspector drawable.
 
+The large main-menu title uses a separate font atlas at 64, 128, or 256 pixels,
+selected to cover its fitted display size without upscaling glyphs. Smaller
+labels retain the default font atlas; resizing reuses the bounded title sizes.
+
 Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
 A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
 retires after completion. It covers the canvas and HUD but remains beneath

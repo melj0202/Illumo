@@ -2,6 +2,7 @@
 #include "TestHarness.h"
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
@@ -109,6 +110,38 @@ testMainMenuStartAndDrawables()
              fixture.scene.drawablesIn(RenderLayerId::UI).size(),
              1u,
              "menu visual is in UI layer");
+}
+
+static void
+testTitleRasterResolution()
+{
+  MainMenuFixture fixture;
+  fixture.window.handleResize(3840, 2160);
+  for (int scale : { 1, 2, 4 }) {
+    fixture.env.setVar("uiScale", scale);
+    fixture.module.Update(0.0);
+    fixture.scene.ClearDrawables();
+    fixture.module.DispatchDrawables(&fixture.scene);
+    GameVisual* visual = static_cast<GameVisual*>(
+      fixture.scene.drawablesIn(RenderLayerId::UI).front());
+    bool found = false;
+    for (size_t index = 0; index < visual->textCount(); ++index) {
+      const TextPrimitive* text = visual->getText(index);
+      if (text->content == "ILLUMO") {
+        found = true;
+        testTrue(g,
+                 text->font != nullptr && text->font->getMetrics().pixelSize >=
+                                            text->sizePt *
+                                              visual->getTransform().scaleY *
+                                              static_cast<float>(scale),
+                 "title glyphs are never magnified at supported UI scales");
+        testTrue(g,
+                 text->font != Font::getDefaultFont(),
+                 "title atlas does not replace the small-text default font");
+      }
+    }
+    testTrue(g, found, "main-menu title is present");
+  }
 }
 
 static void
@@ -389,6 +422,9 @@ runMainMenuCase(void (*testFunction)())
 void
 registerMainMenuTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.MainMenu.TitleResolution",
+               []() { return runMainMenuCase(testTitleRasterResolution); });
+
   registry.add("IllumoGame.MainMenu.MouseIsolation",
                []() { return runMainMenuCase(testSettingsMouseIsolation); });
   registry.add("IllumoGame.MainMenu.SettingsApply",

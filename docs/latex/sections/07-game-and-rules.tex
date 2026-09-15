@@ -70,6 +70,10 @@ input. Reduced menu motion snaps all menu transitions, including pause/exit,
 and stops decorative motion without changing simulation or cell fading. The in-game
 settings button eases its hover highlight and displays the F1 shortcut.
 
+The large main-menu title uses a separate font atlas at 64, 128, or 256 pixels,
+selected to cover its fitted display size without upscaling glyphs. Smaller
+labels retain the default font atlas; resizing reuses the bounded title sizes.
+
 Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
 A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
 retires after completion. It covers the canvas and HUD but remains beneath
