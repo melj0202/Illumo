@@ -632,6 +632,17 @@ openPaintDrawer(CellGameFixture& fixture)
   testTrue(g,
            !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
            "drawer starts closed with only the bottom pull tab");
+  fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
+  fixture.window.mouseY = static_cast<double>(fixture.window.height) - 1.0;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           "footer click cannot open the palette");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
   const float scale =
     fixture.renderer.getUiScale() *
     CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module)
@@ -639,7 +650,11 @@ openPaintDrawer(CellGameFixture& fixture)
       .scaleX;
   fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
   fixture.window.mouseY =
-    static_cast<double>(fixture.window.height) - 16.0 * scale;
+    static_cast<double>(fixture.window.height -
+                        CellGameModuleTestAccess::getCellContext(fixture.module)
+                          ->getCanvasView()
+                          ->getBottomInsetPixels()) -
+    16.0 * scale;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
   fixture.module.Update(0.016);
@@ -664,7 +679,11 @@ pointAtPaintCard(CellGameFixture& fixture, int stateCount, int state)
     static_cast<double>(fixture.window.width) * 0.5 +
     (-width * 0.5f + 74.0f + static_cast<float>(state) * 132.0f) * scale;
   fixture.window.mouseY =
-    static_cast<double>(fixture.window.height) - 66.0f * scale;
+    static_cast<double>(fixture.window.height -
+                        CellGameModuleTestAccess::getCellContext(fixture.module)
+                          ->getCanvasView()
+                          ->getBottomInsetPixels()) -
+    66.0f * scale;
 }
 static void
 testPaintPalette()
@@ -687,7 +706,7 @@ testPaintPalette()
            grid->getRevision() == revision,
            "swatch click does not mutate the world");
   fixture.window.mouseX = 400.0;
-  fixture.window.mouseY = 300.0;
+  fixture.window.mouseY = 200.0;
   fixture.module.Update(0.016);
   testTrue(
     g, grid->getRevision() == revision, "dragging off palette stays captured");
@@ -713,9 +732,9 @@ testPaintPalette()
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
   fixture.module.Update(0.016);
   fixture.window.mouseX = 400.0;
-  fixture.window.mouseY = 300.0;
+  fixture.window.mouseY = 200.0;
   const glm::dvec2 world =
-    fixture.camera.ScreenToWorldPrecise({ 400.0, 300.0 });
+    fixture.camera.ScreenToWorldPrecise({ 400.0, 200.0 });
   std::int64_t cellX = 0;
   std::int64_t cellY = 0;
   testTrue(g,
@@ -757,7 +776,10 @@ testPaintPalette()
   fixture.module.Update(0.016);
   fixture.env.setVar("reducedUiMotion", false);
   fixture.window.mouseX = 320.0;
-  fixture.window.mouseY = 354.0;
+  fixture.window.mouseY =
+    354.0 - CellGameModuleTestAccess::getCellContext(fixture.module)
+              ->getCanvasView()
+              ->getBottomInsetPixels();
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
   fixture.module.Update(0.016);
@@ -816,7 +838,12 @@ testPaintPaletteFittedInput()
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
   fixture.module.Update(0.016);
   fixture.window.mouseX = 100.0;
-  fixture.window.mouseY = 240.0 - 126.0 * scale;
+  fixture.window.mouseY =
+    240.0 -
+    CellGameModuleTestAccess::getCellContext(fixture.module)
+      ->getCanvasView()
+      ->getBottomInsetPixels() -
+    126.0 * scale;
   const SparseCellGrid* grid =
     CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
   const std::uint64_t beforeClose = grid->getRevision();
@@ -833,7 +860,12 @@ testPaintPaletteFittedInput()
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
   fixture.module.Update(0.016);
-  fixture.window.mouseY = 240.0 - 16.0 * scale;
+  fixture.window.mouseY =
+    240.0 -
+    CellGameModuleTestAccess::getCellContext(fixture.module)
+      ->getCanvasView()
+      ->getBottomInsetPixels() -
+    16.0 * scale;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
   fixture.module.Update(0.016);

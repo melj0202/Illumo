@@ -51,6 +51,28 @@ parseIntegerArgument(const std::string& text, int* value)
   }
 }
 
+static float
+advanceModeChromeReveal(float reveal,
+                        double* delay,
+                        bool targetVisible,
+                        double dt)
+{
+  if (delay == nullptr || !std::isfinite(dt) || dt <= 0.0) {
+    return reveal;
+  }
+  double animationDt = std::min(dt, 0.25);
+  if (*delay > 0.0) {
+    const double delayedDt = std::min(animationDt, *delay);
+    *delay -= delayedDt;
+    animationDt -= delayedDt;
+  }
+  if (animationDt <= 0.0) {
+    return reveal;
+  }
+  const float blend = static_cast<float>(1.0 - std::exp(-14.0 * animationDt));
+  return reveal + ((targetVisible ? 1.0f : 0.0f) - reveal) * blend;
+}
+
 static bool
 parseWorldCoordinate(const std::string& text, std::int64_t* value)
 {
@@ -1420,7 +1442,6 @@ CellGameModule::Update(double dt)
   if (cellContext == nullptr || ic == nullptr) {
     return;
   }
-  updateEditHintsVisual();
   advanceCanvasEntrance(dt);
   if (mainMenuReturnPending) {
     // The accepted exit owns product input until the host replaces this module.
@@ -1481,7 +1502,6 @@ CellGameModule::Update(double dt)
   }
 
   if (exitConfirmOpen) {
-    updatePaintPalette(dt);
     exitConfirmDialog->tick(static_cast<float>(dt));
     const ExitConfirmAction action =
       consoleOpen ? ExitConfirmAction::None
@@ -1495,7 +1515,8 @@ CellGameModule::Update(double dt)
     } else if (action == ExitConfirmAction::Cancel) {
       exitConfirmDialog->close();
     }
-    updateEditHintsVisual();
+    updateEditHintsVisual(dt);
+    updatePaintPalette(dt);
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -1506,7 +1527,6 @@ CellGameModule::Update(double dt)
   }
 
   if (configurationMenu != nullptr && configurationMenu->isOpen()) {
-    updatePaintPalette(dt);
     configurationMenu->tick(static_cast<float>(dt));
     const ConfigurationMenuAction action =
       consoleOpen ? ConfigurationMenuAction::None
@@ -1534,7 +1554,8 @@ CellGameModule::Update(double dt)
         configurationMenu->close();
       }
     }
-    updateEditHintsVisual();
+    updateEditHintsVisual(dt);
+    updatePaintPalette(dt);
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -1552,7 +1573,8 @@ CellGameModule::Update(double dt)
     } else if (ic->window != nullptr) {
       ic->window->requestClose();
     }
-    updateEditHintsVisual();
+    updateEditHintsVisual(dt);
+    updatePaintPalette(dt);
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -1601,6 +1623,7 @@ CellGameModule::Update(double dt)
     simulationBudgetLimited = false;
   }
 
+  updateEditHintsVisual(dt);
   updatePaintPalette(dt);
 
   // Palette gestures own pointer input until both mouse buttons are released.
@@ -1654,8 +1677,6 @@ CellGameModule::Update(double dt)
   updateHamburgerVisual(dt);
   updateSelectionVisual();
   updateInspectorVisual();
-  updateEditHintsVisual();
-
   // Map dirty life cells to palette target colors, then ease display toward
   // them.
   updateVisualTargets();
@@ -1969,30 +1990,84 @@ CellGameModule::handleEditorHotkeys()
 }
 
 void
-CellGameModule::updateEditHintsVisual()
+CellGameModule::updateEditHintsVisual(double dt)
 {
+  const bool overlaysOpen =
+    (ic->commandLine != nullptr && ic->commandLine->isOpen) ||
+    (configurationMenu != nullptr && configurationMenu->isOpen()) ||
+    (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen());
+  const bool editChromeActive =
+    currentState == CellState::EDIT && !overlaysOpen;
+  const bool reducedMotion = ic->envVars != nullptr &&
+                             ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  if (editChromeActive != m_modeChromeTarget) {
+    m_modeChromeTarget = editChromeActive;
+    m_hintsModeDelay = editChromeActive ? 0.0 : 0.08;
+    m_paletteModeDelay = editChromeActive ? 0.08 : 0.0;
+  }
+  if (overlaysOpen || reducedMotion) {
+    m_editChromeReveal = editChromeActive ? 1.0f : 0.0f;
+    m_paintPaletteChromeReveal = m_editChromeReveal;
+    m_hintsModeDelay = 0.0;
+    m_paletteModeDelay = 0.0;
+  } else {
+    m_editChromeReveal = advanceModeChromeReveal(
+      m_editChromeReveal, &m_hintsModeDelay, editChromeActive, dt);
+    m_paintPaletteChromeReveal = advanceModeChromeReveal(
+      m_paintPaletteChromeReveal, &m_paletteModeDelay, editChromeActive, dt);
+  }
+  m_editChromeReveal = std::clamp(m_editChromeReveal, 0.0f, 1.0f);
+  m_paintPaletteChromeReveal =
+    std::clamp(m_paintPaletteChromeReveal, 0.0f, 1.0f);
+
+  bool hintsEnabled = true;
+  if (ic->envVars != nullptr) {
+    const EnvVar& hintsVar = ic->envVars->getVar("editHints");
+    hintsEnabled = hintsVar.value.empty() || hintsVar.valueAsBool;
+  }
+  const bool buildHints =
+    editChromeActive && hintsEnabled && ic->window != nullptr;
+  if (!buildHints) {
+    // Retain the last footer geometry while it slides away. A disabled hint
+    // preference releases its band immediately without hiding the palette.
+    if ((editChromeActive && !hintsEnabled) || ic->window == nullptr) {
+      editHintsVisual.clearPrimitives();
+      editHintsFullInsetPixels = 0;
+    }
+    const float scale = ic->renderer != nullptr
+                          ? std::max(1.0f, ic->renderer->getUiScale())
+                          : 1.0f;
+    editHintsInsetPixels = static_cast<int>(std::ceil(
+      static_cast<float>(editHintsFullInsetPixels) * m_editChromeReveal));
+    Transform2D transform;
+    transform.y = (1.0f - m_editChromeReveal) *
+                  static_cast<float>(editHintsFullInsetPixels) / scale;
+    editHintsVisual.setTransform(transform);
+    const bool visible =
+      editHintsFullInsetPixels > 0 && m_editChromeReveal > 0.001f;
+    editHintsVisual.setVisible(visible);
+    if (!visible) {
+      editHintsVisual.clearPrimitives();
+      editHintsFullInsetPixels = 0;
+      editHintsInsetPixels = 0;
+    }
+    if (cellContext != nullptr) {
+      cellContext->getCanvasView()->setBottomInsetPixels(editHintsInsetPixels);
+    }
+    return;
+  }
+
   editHintsVisual.clearPrimitives();
-  editHintsVisual.setVisible(false);
-  editHintsInsetPixels = 0;
-  if (cellContext != nullptr) {
-    cellContext->getCanvasView()->setBottomInsetPixels(0);
-  }
-  if (currentState != CellState::EDIT || ic == nullptr ||
-      ic->window == nullptr || ic->commandLine->isOpen ||
-      (configurationMenu != nullptr && configurationMenu->isOpen()) ||
-      (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen())) {
-    return;
-  }
-  const EnvVar& hintsVar = ic->envVars->getVar("editHints");
-  if (!hintsVar.value.empty() && !hintsVar.valueAsBool) {
-    return;
-  }
 
   const float scale = std::max(1.0f, ic->renderer->getUiScale());
   const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
   const float width = static_cast<float>(dimensions[0]) / scale;
   const float height = static_cast<float>(dimensions[1]) / scale;
   if (width < 120.0f || height < 100.0f) {
+    editHintsFullInsetPixels = 0;
+    editHintsInsetPixels = 0;
+    editHintsVisual.setVisible(false);
+    cellContext->getCanvasView()->setBottomInsetPixels(0);
     return;
   }
   std::vector<std::string> hints = {
@@ -2046,9 +2121,9 @@ CellGameModule::updateEditHintsVisual()
     lineHeight *= fit;
     panelHeight = height - 16.0f;
   }
-  editHintsInsetPixels =
+  editHintsFullInsetPixels =
     std::min(dimensions[1], static_cast<int>(std::ceil(panelHeight * scale)));
-  panelHeight = static_cast<float>(editHintsInsetPixels) / scale;
+  panelHeight = static_cast<float>(editHintsFullInsetPixels) / scale;
   const float top = height - panelHeight;
   // A flat, opaque footer reserves its own band; no canvas shows through.
   editHintsVisual.addFilledRect(
@@ -2059,8 +2134,13 @@ CellGameModule::updateEditHintsVisual()
     editHintsVisual.addText(hintLine, 12.0f, y, fontSize, UiTheme::textMuted());
     y += lineHeight;
   }
+  editHintsInsetPixels = static_cast<int>(std::ceil(
+    static_cast<float>(editHintsFullInsetPixels) * m_editChromeReveal));
+  Transform2D transform;
+  transform.y = (1.0f - m_editChromeReveal) * panelHeight;
+  editHintsVisual.setTransform(transform);
+  editHintsVisual.setVisible(m_editChromeReveal > 0.001f);
   cellContext->getCanvasView()->setBottomInsetPixels(editHintsInsetPixels);
-  editHintsVisual.setVisible(true);
 }
 
 bool
@@ -2292,14 +2372,17 @@ CellGameModule::updatePaintPalette(double dt)
   const bool rightDown =
     ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
   const bool clicked = leftDown && !m_paintPaletteMouseWasDown;
+  const bool overlaysOpen =
+    (ic->commandLine != nullptr && ic->commandLine->isOpen) ||
+    (configurationMenu != nullptr && configurationMenu->isOpen()) ||
+    (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen());
+  const bool paletteInteractive =
+    currentState == CellState::EDIT && !overlaysOpen;
   m_paintPaletteMouseWasDown = leftDown;
   if (!leftDown && !rightDown) {
     m_paintPaletteCapturing = false;
   }
-  if (currentState != CellState::EDIT ||
-      (ic->commandLine != nullptr && ic->commandLine->isOpen) ||
-      (configurationMenu != nullptr && configurationMenu->isOpen()) ||
-      (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen())) {
+  if (overlaysOpen || m_paintPaletteChromeReveal <= 0.001f) {
     return;
   }
 
@@ -2312,7 +2395,7 @@ CellGameModule::updatePaintPalette(double dt)
     m_paintBrush = 0;
     m_paintPaletteEmphasis.fill(0.0f);
   }
-  if (wireworld) {
+  if (wireworld && paletteInteractive) {
     updateWireworldBrushFromInput();
   }
   unsigned char& brush = wireworld ? wireworldBrush : m_paintBrush;
@@ -2328,27 +2411,36 @@ CellGameModule::updatePaintPalette(double dt)
                         : 1.0f;
   const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
   const float width = static_cast<float>(stateCount) * 132.0f + 24.0f;
+  const int availableHeight =
+    std::max(0, dimensions[1] - editHintsFullInsetPixels);
   const float header = 32.0f;
   const float body = 110.0f;
   const float fit = std::max(
     0.01f,
     std::min({ 1.0f,
                static_cast<float>(dimensions[0]) / ((width + 24.0f) * scale),
-               static_cast<float>(dimensions[1]) /
+               static_cast<float>(availableHeight) /
                  ((header + body + 24.0f) * scale) }));
   Transform2D transform;
   transform.scaleX = fit;
   transform.scaleY = fit;
   const float screenWidth = static_cast<float>(dimensions[0]) / (scale * fit);
-  const float screenHeight = static_cast<float>(dimensions[1]) / (scale * fit);
+  const float screenHeight =
+    static_cast<float>(availableHeight) / (scale * fit);
   const float x = (screenWidth - width) * 0.5f;
   const float tabWidth = 160.0f;
   const float tabX = (screenWidth - tabWidth) * 0.5f;
   const std::array<double, 2> mouse = ic->window->getMouseCoords();
   const float mx = static_cast<float>(mouse[0]) / (scale * fit);
   const float my = static_cast<float>(mouse[1]) / (scale * fit);
-  const float previousY = screenHeight - header - body * m_paintPaletteReveal;
+  const float footerHeight =
+    static_cast<float>(editHintsFullInsetPixels) / (scale * fit);
+  const float modeSlide = (1.0f - m_paintPaletteChromeReveal) *
+                          (header + body * m_paintPaletteReveal + footerHeight);
+  const float previousY =
+    screenHeight - header - body * m_paintPaletteReveal + modeSlide;
   const bool headerHovered =
+    paletteInteractive && my < screenHeight &&
     GuiKit::isPointInRect(mx, my, tabX, previousY, tabWidth, header);
   if (clicked && headerHovered) {
     m_paintPaletteExpanded = !m_paintPaletteExpanded;
@@ -2363,11 +2455,13 @@ CellGameModule::updatePaintPalette(double dt)
            : 0.0f);
   m_paintPaletteReveal +=
     ((m_paintPaletteExpanded ? 1.0f : 0.0f) - m_paintPaletteReveal) * blend;
-  const float y = screenHeight - header - body * m_paintPaletteReveal;
+  const float y =
+    screenHeight - header - body * m_paintPaletteReveal + modeSlide;
   m_paintPaletteHovered =
-    GuiKit::isPointInRect(mx, my, tabX, y, tabWidth, header) ||
-    (m_paintPaletteReveal > 0.001f &&
-     GuiKit::isPointInRect(mx, my, x, y + header, width, body));
+    paletteInteractive && my < screenHeight &&
+    (GuiKit::isPointInRect(mx, my, tabX, y, tabWidth, header) ||
+     (m_paintPaletteReveal > 0.001f &&
+      GuiKit::isPointInRect(mx, my, x, y + header, width, body)));
   // Capture before a reduced-motion toggle moves the tab away from the click.
   // Keep the gesture captured when dragging off the drawer onto the world.
   if ((m_paintPaletteHovered || (clicked && headerHovered)) &&
@@ -2435,7 +2529,7 @@ CellGameModule::updatePaintPalette(double dt)
     const float cardX = x + 12.0f + static_cast<float>(state) * 132.0f;
     const float cardY = y + header + 12.0f;
     const bool hovered =
-      m_paintPaletteExpanded && my < screenHeight &&
+      paletteInteractive && m_paintPaletteExpanded && my < screenHeight &&
       GuiKit::isPointInRect(mx, my, cardX, cardY, 124.0f, 64.0f);
     if (hovered && clicked) {
       brush = static_cast<unsigned char>(state);
@@ -3055,6 +3149,10 @@ CellGameModule::DispatchDrawables(Scene* scene)
   if (selectionVisual.isVisible()) {
     scene->AddDrawable(&selectionVisual, RenderLayerId::UI);
   }
+  if (m_paintPaletteVisual.isVisible()) {
+    scene->AddDrawable(&m_paintPaletteVisual, RenderLayerId::UI);
+  }
+  // The opaque footer masks drawer overflow throughout the slide animation.
   if (editHintsVisual.isVisible()) {
     scene->AddDrawable(&editHintsVisual, RenderLayerId::UI);
   }
@@ -3066,9 +3164,6 @@ CellGameModule::DispatchDrawables(Scene* scene)
   }
   if (hamburgerVisual.isVisible()) {
     scene->AddDrawable(&hamburgerVisual, RenderLayerId::UI);
-  }
-  if (currentState == CellState::EDIT && m_paintPaletteVisual.isVisible()) {
-    scene->AddDrawable(&m_paintPaletteVisual, RenderLayerId::UI);
   }
   advanceCanvasEntrance(0.0);
   if (canvasEntranceVisual.isVisible()) {

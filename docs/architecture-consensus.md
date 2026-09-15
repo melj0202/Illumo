@@ -100,7 +100,13 @@ GuiKit rounded surfaces and UiTheme colors. Its bottom pull tab, vertical slide,
 row emphasis follow reducedUiMotion. State swatches read the active ruleset's
 palette and select the existing paint path; right-click remains erase. Fitted
 drawing and pointer coordinates agree, and palette gestures capture pointer
-input through release. See [game controls](packages/game.md).
+input through release. The drawer anchors above the controls-hint band,
+fits the remaining height, and leaves footer input to the hints. The opaque
+footer covers drawer overflow during its slide. On entering Edit, the controls
+hint bar leads the palette tab by a short stagger; on exit, the tab leads the
+bar. The canvas inset tracks the visible portion of the moving footer. Reduced
+UI motion snaps this transition. The tab travels by its own height plus the
+full footer height before it is removed. See [game controls](packages/game.md).
 
 **The workspace separates the reusable `Illumo` static library from in-tree
 applications. Illumo owns the generic application runner, platform

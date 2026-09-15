@@ -20,6 +20,7 @@
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -704,6 +705,9 @@ testEditHints()
   fixture.module.Update(0.0);
   GameVisual& hints =
     CellGameModuleTestAccess::getEditHintsVisual(fixture.module);
+  CanvasView* canvas =
+    CellGameModuleTestAccess::getCellContext(fixture.module)->getCanvasView();
+  const int fullHintInset = canvas->getBottomInsetPixels();
   testTrue(g, hints.isVisible() && hints.textCount() > 0, "hints default on");
   std::string allText;
   for (std::size_t i = 0; i < hints.textCount(); ++i) {
@@ -773,8 +777,17 @@ testEditHints()
   fixture.module.Update(0.0);
   testTrue(g, !hints.isVisible(), "Normal mode hides hints");
   queueAndRun(fixture, "pause");
-  fixture.module.Update(0.0);
-  testTrue(g, hints.isVisible(), "returning to Edit restores enabled hints");
+  fixture.module.Update(0.05);
+  testTrue(g,
+           hints.isVisible() && canvas->getBottomInsetPixels() > 0 &&
+             canvas->getBottomInsetPixels() < fullHintInset,
+           "returning to Edit begins sliding the hints into view");
+  for (int frame = 0; frame < 12; ++frame) {
+    fixture.module.Update(0.05);
+  }
+  testTrue(g,
+           hints.isVisible() && canvas->getBottomInsetPixels() == fullHintInset,
+           "returning to Edit restores the full hint area");
   fixture.env.setVar("uiScale", 2);
   queueAndRun(fixture, "ruleset WIREWORLD");
   fixture.module.Update(0.0);
@@ -838,7 +851,8 @@ testFooterReservation()
            canvasDrawClipped && restored,
            "canvas clips above footer and restores scissor before UI drawing");
 
-  fixture.window.mouseX = 320.0;
+  // Stay outside the centered palette tab when the footer is disabled.
+  fixture.window.mouseX = 100.0;
   fixture.window.mouseY = 479.0;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
@@ -885,6 +899,74 @@ testFooterReservation()
            "disabling hints restores the bottom canvas area immediately");
 }
 
+static void
+testEditChromeModeTransition()
+{
+  testSection("Editor: hint bar and palette follow mode transitions");
+  EditorFixture fixture;
+  fixture.module.Update(0.0);
+  GameVisual& hints =
+    CellGameModuleTestAccess::getEditHintsVisual(fixture.module);
+  GameVisual& palette =
+    CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module);
+  CanvasView* canvas =
+    CellGameModuleTestAccess::getCellContext(fixture.module)->getCanvasView();
+  const int fullInset = canvas->getBottomInsetPixels();
+  const float editTabY = palette.getShape(0)->rect.y;
+
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Press);
+  fixture.module.Update(0.04);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Release);
+  testTrue(
+    g,
+    CellGameModuleTestAccess::getState(fixture.module) == CellState::NORMAL &&
+      hints.isVisible() && palette.isVisible() &&
+      canvas->getBottomInsetPixels() == fullInset &&
+      hints.getTransform().y == 0.0f && palette.getShape(0)->rect.y > editTabY,
+    "the palette starts its exit cascade before the hint bar");
+  fixture.module.Update(0.10);
+  testTrue(g,
+           hints.getTransform().y > 0.0f &&
+             canvas->getBottomInsetPixels() < fullInset &&
+             palette.getShape(0)->rect.y - editTabY >
+               static_cast<float>(fullInset),
+           "the tab travels the footer and tab heights before the bar follows");
+  for (int frame = 0; frame < 12; ++frame) {
+    fixture.module.Update(0.05);
+  }
+  testTrue(g,
+           !hints.isVisible() && !palette.isVisible() &&
+             canvas->getBottomInsetPixels() == 0,
+           "both controls leave the screen and release the canvas inset");
+
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Press);
+  fixture.module.Update(0.04);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Release);
+  testTrue(g,
+           CellGameModuleTestAccess::getState(fixture.module) ==
+               CellState::EDIT &&
+             hints.isVisible() && !palette.isVisible() &&
+             canvas->getBottomInsetPixels() > 0 &&
+             canvas->getBottomInsetPixels() < fullInset &&
+             hints.getTransform().y > 0.0f,
+           "the hint bar starts its entry cascade before the palette");
+  fixture.module.Update(0.10);
+  testTrue(g,
+           palette.isVisible() && canvas->getBottomInsetPixels() < fullInset,
+           "the palette follows the hint bar onto the screen");
+  for (int frame = 0; frame < 12; ++frame) {
+    fixture.module.Update(0.05);
+  }
+  testTrue(g,
+           canvas->getBottomInsetPixels() == fullInset &&
+             std::abs(hints.getTransform().y) < 0.01f,
+           "the hint bar restores its full canvas reservation");
+}
+
 static int
 runEditorCase(void (*testFunction)())
 {
@@ -903,6 +985,8 @@ registerEditorTests(IllumoTestRegistry& registry)
                []() { return runEditorCase(testSelectionLifecycle); });
   registry.add("IllumoGame.Editor.EditHints",
                []() { return runEditorCase(testEditHints); });
+  registry.add("IllumoGame.Editor.ModeChromeTransition",
+               []() { return runEditorCase(testEditChromeModeTransition); });
   registry.add("IllumoGame.Editor.CopyPasteIdentity",
                []() { return runEditorCase(testCopyPasteIdentity); });
   registry.add("IllumoGame.Editor.TorusSkip",

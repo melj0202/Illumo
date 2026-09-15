@@ -9,8 +9,14 @@ row emphasis match the other product menus. Reduced UI motion snaps transitions.
 Swatches read active ruleset colors and select Alive, Dead/erase, Brian's Brain's
 Dying state, or Wireworld's four states. Right-click remains erase and Wireworld
 shortcuts remain synchronized. Drawing and hit testing share a fitted UI scale;
-palette gestures capture pointer input until release. Modal menus and the console
-take precedence. The module owns this ordinary GameVisual on the existing UI layer.
+palette gestures capture pointer input until release. The drawer anchors above the controls-hint band,
+fits the remaining height, and leaves footer input to the hints. The opaque
+footer covers drawer overflow during its slide. Modal menus and the console
+take precedence. Entering Edit staggers the hint bar before the palette tab;
+leaving Edit staggers the tab before the bar. The canvas reservation follows
+the visible footer area. The tab travels by its own height plus the footer
+height before it is removed. Reduced UI motion snaps the transition. The module owns these ordinary
+GameVisuals on the existing UI layer.
 Camera navigation accepts finite world coordinates with absolute value at most
 $16(2^{63}-2^{32})$ per axis, reserving space for bounded cache arithmetic.
 Commands, sparse metadata, and pending pan/zoom targets validate this range

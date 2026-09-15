@@ -67,7 +67,7 @@ private:
   bool isHamburgerHovered() const;
   void toggleSettingsMenu();
   void updateSelectionVisual();
-  void updateEditHintsVisual();
+  void updateEditHintsVisual(double dt);
   bool isPointerOverEditHints() const;
   void updateInspectorVisual();
   void normalizeSelection(std::int64_t* x0,
@@ -145,6 +145,11 @@ private:
   bool m_paintPaletteCapturing = false;
   bool m_paintPaletteHovered = false;
   float m_paintPaletteReveal = 0.0f;
+  float m_paintPaletteChromeReveal = 1.0f;
+  float m_editChromeReveal = 1.0f;
+  double m_paletteModeDelay = 0.0;
+  double m_hintsModeDelay = 0.0;
+  bool m_modeChromeTarget = true;
   std::array<float, 4> m_paintPaletteEmphasis{};
   unsigned char m_paintBrush = 0;
   std::string m_paintRuleTag;
@@ -162,6 +167,7 @@ private:
   float hamburgerHoverBlend = 0.0f;
   GameVisual editHintsVisual;
   int editHintsInsetPixels = 0;
+  int editHintsFullInsetPixels = 0;
   bool paintStrokeActive = false;
   std::int64_t lastPaintX = 0;
   std::int64_t lastPaintY = 0;
