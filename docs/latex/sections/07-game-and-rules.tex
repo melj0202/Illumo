@@ -297,8 +297,9 @@ schema.
         Exact-cell LOD fades changing colors; density overviews snap. Finite worlds are
         drawn only inside their centered canonical rectangle; camera space
         outside it stays background-colored while opposite-edge simulation
-        neighbors still wrap. Their changes conservatively trigger a bounded
-        refill.
+        neighbors still wrap. A theme-accented outline keeps all four wrap
+        edges visible at a stable screen thickness without tiling the world.
+        Their changes conservatively trigger a bounded refill.
   \item GPU: one reusable nearest-filtered RGB display texture and one
         world-space \symbolref{GameVisual} quad that shares its cell bounds
         with the editor cursor. Dirty 16$\times$16-texel tiles merge into at

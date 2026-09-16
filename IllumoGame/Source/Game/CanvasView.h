@@ -185,6 +185,9 @@ private:
   int quadCellHeight;
   int quadActiveWidth;
   int quadActiveHeight;
+  std::int64_t quadWorldChunkWidth;
+  std::int64_t quadWorldChunkHeight;
+  float quadBoundaryZoom;
   std::uint64_t lastGridRevision;
   bool regionReady;
   bool paletteDirty;
