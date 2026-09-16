@@ -124,6 +124,19 @@ focusWorkshopControl(RulesetWorkshopMenu& menu,
 }
 
 static bool
+hasWorkshopTextCaret(RulesetWorkshopMenu& menu)
+{
+  GameVisual& visual = menu.getVisual();
+  for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == "|") {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool
 openWorkshop(RulesetWorkshopMenu& menu,
              const RuleSetDefinition& rule,
              bool reducedMotion)
@@ -1858,12 +1871,30 @@ testRulesetWorkshopF2Draft()
   fixture.module.Update(0.016);
   testTrue(g, menu->isOpen(), "F2 opens the separate rule workshop");
   bool hasWorkshopTitle = false;
+  bool hasReadableRowLabel = false;
+  bool hasReadableStepperValue = false;
+  bool hasReadableControlHelp = false;
   for (std::size_t index = 0u; index < menu->getVisual().textCount(); ++index) {
     TextPrimitive* text = menu->getVisual().getText(index);
     hasWorkshopTitle = hasWorkshopTitle ||
                        (text != nullptr && text->content == "RULESET WORKSHOP");
+    hasReadableRowLabel = hasReadableRowLabel ||
+                          (text != nullptr && text->content == "Starter rule" &&
+                           text->sizePt >= 15.0f);
+    hasReadableStepperValue =
+      hasReadableStepperValue ||
+      (text != nullptr && text->content == "Conway's Game of Life" &&
+       text->sizePt >= 12.0f);
+    hasReadableControlHelp =
+      hasReadableControlHelp ||
+      (text != nullptr && text->content.find("ARROWS / W,S MOVE") == 0u &&
+       text->sizePt >= 12.0f);
   }
   testTrue(g, hasWorkshopTitle, "the menu presents the Ruleset Workshop name");
+  testTrue(g,
+           hasReadableRowLabel && hasReadableStepperValue &&
+             hasReadableControlHelp,
+           "workshop labels, values, and controls use readable type sizes");
   testTrue(g,
            menu->getAnimationProgressForTesting() > 0.0f &&
              menu->getAnimationProgressForTesting() < 1.0f,
@@ -1886,6 +1917,16 @@ testRulesetWorkshopF2Draft()
              menu->getSelectedControlForTesting() == "Starter rule" &&
              *fixture.input.getMouseScrollOffset() == 0.0,
            "wheel scrolls the workshop view without moving selection");
+
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Ruleset name") &&
+             hasWorkshopTextCaret(*menu),
+           "focused workshop text field renders a visible caret");
+  menu->tick(0.6f);
+  menu->update(&fixture.input);
+  testTrue(g,
+           !hasWorkshopTextCaret(*menu),
+           "workshop text caret alternates off during its blink cycle");
 
   const bool birthFocused =
     focusWorkshopControl(*menu, fixture.input, "Birth counts");
@@ -1929,6 +1970,15 @@ testRulesetWorkshopF2Draft()
              reducedMenu->getAnimationProgressForTesting() == 1.0f &&
              reducedMenu->getValuePulseForTesting() == 0.0f,
            "reduced motion snaps the workshop reveal and disables pulses");
+  testTrue(g,
+           focusWorkshopControl(
+             *reducedMenu, reducedMotionFixture.input, "Ruleset name"),
+           "reduced-motion workshop can focus a text field");
+  reducedMenu->tick(0.6f);
+  reducedMenu->update(&reducedMotionFixture.input);
+  testTrue(g,
+           hasWorkshopTextCaret(*reducedMenu),
+           "reduced motion keeps the focused text caret steadily visible");
 }
 
 static void

@@ -114,6 +114,7 @@ private:
   static constexpr float kOpenAnimationSeconds = 0.42f;
   static constexpr float kSelectionAnimationSeconds = 0.14f;
   static constexpr float kValuePulseSeconds = 0.20f;
+  static constexpr float kCaretBlinkPeriodSeconds = 1.0f;
   IRenderWindow* window;
   Renderer* renderer;
   GameVisual visual;
@@ -131,6 +132,7 @@ private:
   float selectionAnimationElapsed = kSelectionAnimationSeconds;
   float valuePulseElapsed = kValuePulseSeconds;
   float ambientPhase = 0.0f;
+  float caretBlinkElapsed = 0.0f;
   float layoutScale = 1.0f;
   float panelX = 0.0f;
   float panelY = 0.0f;

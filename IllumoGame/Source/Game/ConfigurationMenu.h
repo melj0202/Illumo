@@ -93,6 +93,7 @@ private:
   static constexpr float kOpenAnimationSeconds = 0.42f;
   static constexpr float kSelectionAnimationSeconds = 0.14f;
   static constexpr float kValuePulseSeconds = 0.20f;
+  static constexpr float kCaretBlinkPeriodSeconds = 1.0f;
 
   IRenderWindow* window;
   Renderer* renderer;
@@ -114,6 +115,7 @@ private:
   int firstVisibleRow = 0;
   int visibleRows = kRowCount;
   float ambientPhase = 0.0f;
+  float caretBlinkElapsed = 0.0f;
   float layoutScale = 1.0f;
   float previousMouseX = -1.0f;
   float previousMouseY = -1.0f;
