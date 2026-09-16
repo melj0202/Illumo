@@ -177,6 +177,9 @@ main menu; reduced motion freezes the colony and snaps focus feedback.
   explicitly releases the texture.
 - Uses nearest filtering so discrete cell colors stay sharp; the editor cursor
   uses the same centered cell bounds.
+- Finite worlds add a screen-thickness-stable, theme-accented outline around
+  the centered canonical rectangle so all four wrap edges remain visible while
+  panning and zooming. Infinite worlds do not emit this boundary.
 - CPU palette targets fade through `displayRgb` at exact-cell LOD; density
   overviews and newly revealed cells snap to their current color. A retained
   active-texel set makes each fade tick and
@@ -229,7 +232,8 @@ Startup patterns are centered around `(0, 0)`. Infinite mode is non-toroidal;
 positive chunk width and height select a finite torus. `0 x 0` selects the
 infinite canvas, while mixed zero/positive dimensions are rejected. Finite
 presentation is clipped to the centered canonical rectangle; camera space
-outside it remains blank even though generation neighbors wrap at its edges.
+outside it remains blank even though generation neighbors wrap at its edges. A
+contrasting accent outline marks those wrap edges without repeating the world.
 
 F1 opens a primitive-composed settings overlay in both Release and Debug. It
 edits family and its ruleset, world chunk dimensions, TPS, simulation speed, fade speed,
