@@ -8,6 +8,7 @@
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -20,21 +21,10 @@
 #include <cmath>
 #include <queue>
 
-static float
-easeOutCubic(float progress)
-{
-  const float remaining = 1.0f - std::clamp(progress, 0.0f, 1.0f);
-  return 1.0f - remaining * remaining * remaining;
-}
-
 MainMenuModule::MainMenuModule()
   : m_menuVisual(4096u)
   , m_selectedItem(kPlayItem)
-  , m_animationElapsed(0.0f)
-  , m_selectionFromItem(0.0f)
-  , m_selectionAnimationElapsed(kSelectionAnimationSeconds)
   , m_bgSimAccum(0.0)
-  , m_mouseWasDown(false)
   , m_panelX(0.0f)
   , m_panelY(0.0f)
   , m_panelWidth(440.0f)
@@ -85,13 +75,14 @@ MainMenuModule::Start(IllumoContext* context)
   m_menuVisual.prepare(ic->renderer);
 
   m_selectedItem = kPlayItem;
-  m_selectionFromItem = 0.0f;
-  m_selectionAnimationElapsed = kSelectionAnimationSeconds;
-  m_animationElapsed = 0.0f;
+  m_animator.setReducedMotion(reducedMotion());
+  m_animator.restart();
   m_revealElapsed = 0.0f;
   m_bgSimAccum = 0.0;
-  m_mouseWasDown = ic->inputManager != nullptr &&
-                   ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+  // Preserve the press edge so a click that left another screen is not
+  // re-delivered to the first menu item.
+  m_pointer.reset(ic->inputManager != nullptr &&
+                  ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft));
 
   registerConsoleCommands();
   updateLayout();
@@ -150,39 +141,30 @@ MainMenuModule::advanceAmbientSimulation(double dt)
 void
 MainMenuModule::updateLayout()
 {
-  int width = 1280;
-  int height = 720;
-  if (ic != nullptr && ic->window != nullptr) {
-    const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-    width = std::max(1, dimensions[0]);
-    height = std::max(1, dimensions[1]);
-  }
-
-  const float scale = ic != nullptr && ic->renderer != nullptr
-                        ? std::max(1.0f, ic->renderer->getUiScale())
-                        : 1.0f;
-  m_layoutScale =
-    std::min(scale,
-             std::max(0.25f,
-                      std::min(static_cast<float>(width) / 640.0f,
-                               static_cast<float>(height) / 480.0f)));
-  Transform2D fit;
-  fit.scaleX = m_layoutScale / scale;
-  fit.scaleY = fit.scaleX;
-  m_menuVisual.setTransform(fit);
-  const float virtualWidth = static_cast<float>(width) / m_layoutScale;
-  const float virtualHeight = static_cast<float>(height) / m_layoutScale;
+  m_panelFit = GuiPanelLayout::fit(ic != nullptr ? ic->window : nullptr,
+                                   ic != nullptr ? ic->renderer : nullptr,
+                                   &m_menuVisual);
+  const float virtualWidth = m_panelFit.virtualWidth;
+  const float virtualHeight = m_panelFit.virtualHeight;
   m_panelWidth = std::min(680.0f, virtualWidth - 100.0f);
   m_panelHeight = std::min(600.0f, virtualHeight - 24.0f);
   m_panelX = (virtualWidth - m_panelWidth) * 0.5f;
-  const float reveal =
-    reducedMotion() ? 1.0f : easeOutCubic(m_revealElapsed / 0.45f);
+  const float reveal = entranceReveal();
   m_panelY = (virtualHeight - m_panelHeight) * 0.5f + 12.0f * (1.0f - reveal);
   m_itemWidth = m_panelWidth - 56.0f;
   const float headerHeight =
     140.0f + 48.0f * std::clamp((m_panelHeight - 456.0f) / 144.0f, 0.0f, 1.0f);
   m_itemHeight = (m_panelHeight - headerHeight - 56.0f) / 4.0f;
   m_firstItemY = m_panelY + headerHeight;
+}
+
+float
+MainMenuModule::entranceReveal() const
+{
+  if (reducedMotion()) {
+    return 1.0f;
+  }
+  return GuiEasing::outCubic(m_revealElapsed / kEntranceSeconds);
 }
 
 bool
@@ -195,13 +177,7 @@ MainMenuModule::reducedMotion() const
 float
 MainMenuModule::itemPosition() const
 {
-  if (reducedMotion()) {
-    return static_cast<float>(m_selectedItem);
-  }
-  const float progress = easeOutCubic(std::clamp(
-    m_selectionAnimationElapsed / kSelectionAnimationSeconds, 0.0f, 1.0f));
-  return m_selectionFromItem +
-         (static_cast<float>(m_selectedItem) - m_selectionFromItem) * progress;
+  return m_animator.selectionPosition(static_cast<float>(m_selectedItem));
 }
 
 void
@@ -214,9 +190,8 @@ MainMenuModule::selectItem(int item)
     nextItem = 0;
   }
   if (nextItem != m_selectedItem) {
-    m_selectionFromItem = itemPosition();
+    m_animator.beginSelectionTravel(itemPosition());
     m_selectedItem = nextItem;
-    m_selectionAnimationElapsed = 0.0f;
   }
 }
 
@@ -397,15 +372,11 @@ MainMenuModule::Update(double dt)
   if (!std::isfinite(dt) || dt < 0.0) {
     dt = 0.0;
   }
-  m_revealElapsed = std::min(0.6f, m_revealElapsed + static_cast<float>(dt));
-  m_animationElapsed =
-    reducedMotion()
-      ? 0.0f
-      : std::fmod(m_animationElapsed + static_cast<float>(std::min(dt, 0.1)),
-                  12.0f);
-  m_selectionAnimationElapsed =
-    std::min(kSelectionAnimationSeconds,
-             m_selectionAnimationElapsed + static_cast<float>(dt));
+  m_revealElapsed =
+    std::min(kEntranceCeilingSeconds, m_revealElapsed + static_cast<float>(dt));
+  // Reduced motion is a live preference; the shared clocks follow it.
+  m_animator.setReducedMotion(reducedMotion());
+  m_animator.tick(static_cast<float>(dt));
 
   advanceAmbientSimulation(std::min(dt, 0.25));
 
@@ -413,8 +384,9 @@ MainMenuModule::Update(double dt)
     ic->commandLine != nullptr && ic->commandLine->isOpen;
 
   if (m_newSimulationMenu->isOpen()) {
-    m_mouseWasDown = ic->inputManager != nullptr &&
-                     ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+    m_pointer.adoptPressed(
+      ic->inputManager != nullptr &&
+      ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft));
     m_newSimulationMenu->tick(static_cast<float>(dt));
     if (!consoleOpen) {
       const NewSimulationAction action =
@@ -434,8 +406,9 @@ MainMenuModule::Update(double dt)
   if (m_configurationMenu != nullptr && m_configurationMenu->isOpen()) {
     // Preserve the button edge across modal close; Apply must not click the
     // main-menu action underneath it on the following frame.
-    m_mouseWasDown = ic->inputManager != nullptr &&
-                     ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+    m_pointer.adoptPressed(
+      ic->inputManager != nullptr &&
+      ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft));
     m_configurationMenu->tick(static_cast<float>(dt));
     if (!consoleOpen) {
       const ConfigurationMenuAction action =
@@ -510,33 +483,27 @@ MainMenuModule::Update(double dt)
       charQueue.pop();
     }
 
-    const std::array<double, 2> mouse = ic->window->getMouseCoords();
-    const float mouseX = static_cast<float>(mouse[0]) / m_layoutScale;
-    const float mouseY = static_cast<float>(mouse[1]) / m_layoutScale;
-    const bool moved = mouseX != m_previousMouseX || mouseY != m_previousMouseY;
-    m_previousMouseX = mouseX;
-    m_previousMouseY = mouseY;
-    const bool mouseDown =
-      ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+    m_pointer.sample(ic->window, ic->inputManager, m_panelFit.layoutScale);
+    const float mouseX = m_pointer.x();
+    const float mouseY = m_pointer.y();
 
     const float itemX = m_panelX + 28.0f;
     const float itemGap = 8.0f;
     for (int i = 0; i < kItemCount; ++i) {
       const float currentItemY =
         m_firstItemY + static_cast<float>(i) * (m_itemHeight + itemGap);
-      if ((moved || (mouseDown && !m_mouseWasDown)) && mouseX >= itemX &&
+      if ((m_pointer.moved() || m_pointer.clicked()) && mouseX >= itemX &&
           mouseX <= itemX + m_itemWidth && mouseY >= currentItemY &&
           mouseY <= currentItemY + m_itemHeight) {
         if (m_selectedItem != i) {
           selectItem(i);
         }
-        if (mouseDown && !m_mouseWasDown) {
+        if (m_pointer.clicked()) {
           activateSelectedItem();
         }
         break;
       }
     }
-    m_mouseWasDown = mouseDown;
   }
 
   rebuildVisual();
@@ -575,20 +542,17 @@ MainMenuModule::rebuildVisual()
 {
   updateLayout();
   m_menuVisual.clearPrimitives();
-  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-  const float width = static_cast<float>(dimensions[0]) / m_layoutScale;
-  const float height = static_cast<float>(dimensions[1]) / m_layoutScale;
-  const float reveal =
-    reducedMotion() ? 1.0f : easeOutCubic(m_revealElapsed / 0.45f);
+  const float width = m_panelFit.virtualWidth;
+  const float height = m_panelFit.virtualHeight;
+  const float reveal = entranceReveal();
   const unsigned char opacity = static_cast<unsigned char>(255.0f * reveal);
-  const float breathe =
-    reducedMotion() ? 0.5f
-                    : 0.5f + 0.5f * std::sin(m_animationElapsed * 1.04719755f);
+  const float ambient = m_animator.ambientPhase();
+  const float breathe = 0.5f + 0.5f * std::sin(ambient * 1.04719755f);
   const ColorRgba cyan = UiTheme::accentCool();
   const ColorRgba violet = UiTheme::accentViolet();
   m_menuVisual.addFilledRect(
     0.0f, 0.0f, width, height, ColorRgba{ 8, 14, 28, 250 });
-  const float phase = reducedMotion() ? 0.0f : m_animationElapsed * 0.52359877f;
+  const float phase = ambient * 0.52359877f;
 
   // Fixed primitive counts keep the animated light field independent of
   // resolution.
@@ -651,10 +615,10 @@ MainMenuModule::rebuildVisual()
     const float y = height * (0.12f + static_cast<float>(clusterRow) * 0.18f) +
                     std::cos(orbit) * 22.0f;
     const float cellSize = 5.0f + static_cast<float>(cluster % 3) * 2.0f;
-    const float generation =
-      (reducedMotion() ? 0.0f : m_animationElapsed / 3.0f) + seed;
+    const float generation = ambient / 3.0f + seed;
     const int frame = static_cast<int>(generation) % 4;
-    const float blend = easeOutCubic(generation - std::floor(generation));
+    const float blend =
+      GuiEasing::outCubic(generation - std::floor(generation));
     const ColorRgba tint = cluster % 3 == 0 ? violet : cyan;
     for (int cell = 0; cell < 9; ++cell) {
       const int cellRow = cell / 3;
@@ -690,7 +654,7 @@ MainMenuModule::rebuildVisual()
                        9.0f + room * 2.0f,
                        UiTheme::applyOpacity(cyan, opacity));
   const float titleSize = 40.0f + room * 18.0f;
-  const float displayedTitleSize = titleSize * m_layoutScale;
+  const float displayedTitleSize = titleSize * m_panelFit.layoutScale;
   // Three cached resolutions cover the supported 1x-4x UI scales without
   // enlarging the default 32px glyphs or caching an atlas for every resize.
   const int rasterSize = displayedTitleSize <= 64.0f    ? 64
@@ -735,10 +699,12 @@ MainMenuModule::rebuildVisual()
   for (int row = 0; row < 7; ++row) {
     for (int col = 0; col < 7; ++col) {
       const bool lit = (motifRows[row] & (1u << col)) != 0u;
+      // The per-cell phase offset must not survive as a static pattern when
+      // decorative motion is off.
       const float shimmer =
         reducedMotion()
           ? 0.5f
-          : 0.5f + 0.5f * std::sin(m_animationElapsed * 1.57079633f -
+          : 0.5f + 0.5f * std::sin(ambient * 1.57079633f -
                                    static_cast<float>(row + col) * 0.65f);
       const float x = motifX + static_cast<float>(col) * cellStep;
       const float y = motifY + static_cast<float>(row) * cellStep;
@@ -841,10 +807,11 @@ MainMenuModule::rebuildVisual()
     UiTheme::applyOpacity(ColorRgba{ 28, 78, 102, 255 }, opacity));
   for (int item = 0; item < kItemCount; ++item) {
     const float rowReveal =
-      reducedMotion()
-        ? 1.0f
-        : easeOutCubic((m_revealElapsed - static_cast<float>(item) * 0.035f) /
-                       0.32f);
+      reducedMotion() ? 1.0f
+                      : GuiEasing::outCubic(
+                          (m_revealElapsed - static_cast<float>(item) *
+                                               kItemEntranceStaggerSeconds) /
+                          kItemEntranceSeconds);
     const unsigned char rowOpacity =
       static_cast<unsigned char>(255.0f * rowReveal);
     const float y = m_firstItemY + static_cast<float>(item) * stride;

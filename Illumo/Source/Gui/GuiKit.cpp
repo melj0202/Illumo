@@ -15,6 +15,34 @@ GuiKit::defaultLineHeight(float sizePt)
   return sizePt * 1.35f;
 }
 
+float
+GuiKit::caretOriginAfterText(const std::string& text, float textX, float sizePt)
+{
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font == nullptr) {
+    return textX + estimateTextWidth(text, sizePt);
+  }
+  const FontMetrics& metrics = font->getMetrics();
+  const float scale =
+    metrics.pixelSize > 0.0f ? sizePt / metrics.pixelSize : 1.0f;
+  float inkRight = textX;
+  if (!text.empty()) {
+    // Measured advance excludes the final glyph's right side bearing.
+    const TextBounds bounds = font->measureText(text, sizePt);
+    const GlyphInfo* lastGlyph =
+      font->getGlyph(static_cast<unsigned char>(text.back()));
+    inkRight += bounds.width;
+    if (lastGlyph != nullptr) {
+      inkRight +=
+        (lastGlyph->bearingX + lastGlyph->width - lastGlyph->advanceX) * scale;
+    }
+  }
+  const GlyphInfo* caretGlyph = font->getGlyph('|');
+  const float caretBearing =
+    caretGlyph == nullptr ? 0.0f : caretGlyph->bearingX * scale;
+  return inkRight + 1.0f - caretBearing;
+}
+
 void
 GuiKit::drawTextCentered(GameVisual& visual,
                          const std::string& text,

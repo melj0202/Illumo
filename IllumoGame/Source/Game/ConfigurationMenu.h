@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <cstdint>
@@ -90,22 +91,15 @@ private:
   static const int kCancelRow = 16;
   static const int kExitRow = 17;
   static const int kRowCount = 18;
-  static constexpr float kOpenAnimationSeconds = 0.42f;
-  static constexpr float kSelectionAnimationSeconds = 0.14f;
-  static constexpr float kValuePulseSeconds = 0.20f;
-  static constexpr float kCaretBlinkPeriodSeconds = 1.0f;
 
   IRenderWindow* window;
   Renderer* renderer;
   GameVisual visual;
+  GuiMenuAnimator animator;
+  GuiPointerTracker pointer;
   bool openState;
-  bool mouseWasDown;
   bool replaceFieldOnType;
   int selectedRow;
-  float animationElapsed;
-  float selectionFromRow;
-  float selectionAnimationElapsed;
-  float valuePulseElapsed;
   float panelX;
   float panelY;
   float panelWidth;
@@ -114,11 +108,7 @@ private:
   float rowHeight;
   int firstVisibleRow = 0;
   int visibleRows = kRowCount;
-  float ambientPhase = 0.0f;
-  float caretBlinkElapsed = 0.0f;
-  float layoutScale = 1.0f;
-  float previousMouseX = -1.0f;
-  float previousMouseY = -1.0f;
+  GuiPanelFit panelFit;
 
   std::string family;
   std::string ruleSet;
@@ -139,13 +129,8 @@ private:
 
   void updateLayout();
   void rebuildVisual();
-  float animationProgress() const;
-  float panelReveal() const;
-  float panelOffsetY() const;
   float rowReveal(int row) const;
   float selectionRowPosition() const;
-  float valuePulse() const;
-  void triggerValuePulse();
   void selectRow(int row);
   void cycleSelected(int direction);
   ConfigurationMenuAction activateSelected();

@@ -79,7 +79,14 @@ cycle keep the background bounded. Settings share rounded panel chrome, raised
 rows, inset values, and toggle pills; the pause/exit dialog shares rounded
 actions and a gliding highlight. Stateless GuiKit rounded-surface helpers use
 non-overlapping triangles and rectangles. GuiDialog's rounded style is opt-in
-and fits drawing and pointer coordinates together. The product advances dialog
+and fits drawing and pointer coordinates together. Every menu screen draws its
+motion and layout arithmetic from the shared \symbolref{GuiMenuShell}: easing
+curves, reveal, staggered row entrance, gliding selection, value pulse, ambient
+cycle, and caret blink from \symbolref{GuiMenuAnimator}; fitted virtual space,
+visible-row window, and wheel scrolling from \symbolref{GuiPanelLayout}; hover
+and press edges from \symbolref{GuiPointerTracker}. Each screen keeps only its
+own rows, layout constants, and drawing, so a new interface inherits the
+existing theming and animation rather than restating it. The product advances dialog
 time once per frame; submission refreshes visuals even while the console owns
 input. Reduced menu motion snaps all menu transitions, including pause/exit,
 and stops decorative motion without changing simulation or cell fading. The in-game

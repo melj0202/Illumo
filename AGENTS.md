@@ -112,9 +112,12 @@ Product UI is primitive-composed rather than a separate widget system.
 `CommandLine` and the Release-visible `ConfigurationMenu` build their panels
 from `GameVisual` fills, outlines, lines, and text; `GLString` may add cached
 panel chrome; FPS and `SplashText` use that decorated-label path. `UiTheme` is
-shared value-only styling. Preserve the
-existing drawable owners and Scene layers; do not introduce a retained UI tree
-for this surface.
+shared value-only styling, and `Illumo/Gui` is the single home for reusable UI
+behavior: `GuiKit` drawing helpers, `GuiDialog` modals, and `GuiMenuShell`
+overlay easing, animation clocks, virtual-space fitting, row windows, and
+pointer edges. A new screen composes those rather than restating them.
+Preserve the existing drawable owners and Scene layers; do not introduce a
+retained UI tree for this surface.
 
 Canvas truth (verify here before trusting older notes):
 

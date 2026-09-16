@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorDocument.h"
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/ResourceHandle.h>
@@ -81,7 +82,7 @@ private:
   TextureHandle m_atlas{};
   std::vector<TreeRow> m_rows;
 
-  bool m_mouseWasDown;
+  GuiPointerTracker m_pointer;
   bool m_consumedPress;
   bool m_isDragging;
   std::string m_draggedNodeId;

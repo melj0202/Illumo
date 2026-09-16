@@ -340,6 +340,17 @@ Frame-delta-driven scalar state provides an eased reveal, staggered rows, a
 gliding selection highlight, and a short pulse after values change; input
 remains live during every transition.
 
+That behavior is not restated per screen. `MainMenuModule`,
+`ConfigurationMenu`, `NewSimulationMenu`, and `RulesetWorkshopMenu` share
+`Illumo/Gui/GuiMenuShell`: `GuiEasing` curves, `GuiMenuAnimator`
+reveal/row-stagger/selection/value-pulse/ambient/caret clocks including
+`reducedUiMotion`, `GuiPanelLayout` virtual-resolution fitting plus visible-row
+window and wheel scrolling, and `GuiPointerTracker` virtual-space pointer
+sampling with hover and press edges. Each screen supplies only its rows, layout
+constants, and `GameVisual` composition, so a new interface inherits the
+existing theming and animation. The title screen keeps its own slower entrance
+clock and per-item stagger.
+
 The inactive mirror does not retain a second copy of the outgoing delta.
 Incremental catch-up uses its existing changed-address journal and skips prior
 states replaced by an incoming record. Broad full replacements carry no chunk

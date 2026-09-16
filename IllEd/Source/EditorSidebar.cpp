@@ -25,7 +25,6 @@ EditorSidebar::EditorSidebar(IRenderWindow* window, Renderer* renderer)
   , m_renderer(renderer)
   , m_visual(1024u)
   , m_activeTool(EditorCommand::SelectTool)
-  , m_mouseWasDown(false)
   , m_consumedPress(false)
   , m_fontSize(EditorToolbar::kDefaultFontSize)
   , m_width(kDefaultWidth)
@@ -121,18 +120,9 @@ EditorSidebar::setActiveTool(EditorCommand tool)
 void
 EditorSidebar::updateLayout()
 {
-  int width = 1280;
-  int height = 720;
-  if (m_window != nullptr) {
-    const std::array<int, 2> dimensions = m_window->getWindowDimensions();
-    width = std::max(1, dimensions[0]);
-    height = std::max(1, dimensions[1]);
-  }
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
-  const float virtualHeight =
-    static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
+  const GuiPanelFit view = GuiPanelLayout::viewport(m_window, m_renderer);
+  const float virtualWidth = view.virtualWidth;
+  const float virtualHeight = view.virtualHeight;
 
   const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
   m_collapsedWidth = std::max(24.0f, std::round(24.0f * fontScale));
@@ -226,14 +216,11 @@ EditorSidebar::update(InputManager* inputManager, float dt)
   m_animTime += std::max(0.0f, dt);
   const float targetMode =
     (m_detail.worldMode == IlscWorldMode::World3D) ? 1.0f : 0.0f;
-  m_modeAnim +=
-    (targetMode - m_modeAnim) * std::min(1.0f, std::max(0.0f, dt) * 16.0f);
+  m_modeAnim = GuiEasing::approachLinear(
+    m_modeAnim, targetMode, 16.0f, std::max(0.0f, dt), 0.0f);
   const float targetCollapse = m_collapsed ? 1.0f : 0.0f;
-  m_collapseAnim += (targetCollapse - m_collapseAnim) *
-                    std::min(1.0f, std::max(0.0f, dt) * 18.0f);
-  if (std::abs(m_collapseAnim - targetCollapse) < 0.001f) {
-    m_collapseAnim = targetCollapse;
-  }
+  m_collapseAnim = GuiEasing::approachLinear(
+    m_collapseAnim, targetCollapse, 18.0f, std::max(0.0f, dt), 0.001f);
 
   updateLayout();
   const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
@@ -253,13 +240,12 @@ EditorSidebar::update(InputManager* inputManager, float dt)
   m_hoverColor = false;
   m_hoverCollapse = false;
 
+  m_pointer.sample(m_window,
+                   inputManager,
+                   GuiPanelLayout::viewport(m_window, m_renderer).layoutScale);
   if (m_window != nullptr) {
-    const std::array<double, 2> mouseCoords = m_window->getMouseCoords();
-    const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-    m_mouseX =
-      static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
-    m_mouseY =
-      static_cast<float>(mouseCoords[1]) / (scale > 0.0f ? scale : 1.0f);
+    m_mouseX = m_pointer.x();
+    m_mouseY = m_pointer.y();
 
     if (containsScreenPoint(m_mouseX, m_mouseY)) {
       if (m_collapsed) {
@@ -299,25 +285,12 @@ EditorSidebar::update(InputManager* inputManager, float dt)
 
   EditorCommand command = EditorCommand::None;
   m_consumedPress = false;
-  if (inputManager != nullptr) {
-    const bool mouseDown =
-      inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
-    if (mouseDown && !m_mouseWasDown) {
-      std::array<double, 2> mouse{ 0.0, 0.0 };
-      if (m_window != nullptr) {
-        mouse = m_window->getMouseCoords();
-      }
-      const float scale =
-        m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-      const float uiX =
-        static_cast<float>(mouse[0]) / (scale > 0.0f ? scale : 1.0f);
-      const float uiY =
-        static_cast<float>(mouse[1]) / (scale > 0.0f ? scale : 1.0f);
-      command = clickAt(uiX, uiY);
-      m_consumedPress =
-        command != EditorCommand::None || containsScreenPoint(uiX, uiY);
-    }
-    m_mouseWasDown = mouseDown;
+  if (m_pointer.clicked()) {
+    const float uiX = m_pointer.x();
+    const float uiY = m_pointer.y();
+    command = clickAt(uiX, uiY);
+    m_consumedPress =
+      command != EditorCommand::None || containsScreenPoint(uiX, uiY);
   }
   rebuildVisual();
   return command;

@@ -2050,6 +2050,35 @@ Tracy. Number-key capture covers both events and polling without synthetic
 releases. Existing context ownership, module order, and rendering tokens remain.
 \end{decisionbox}
 
+\subsection*{D-UI1 --- One shared menu shell for primitive-composed overlays}
+\begin{decisionbox}[title={D-UI1 \quad 2026-09-16}]
+\textbf{Decision:} Overlay behavior that more than one screen needs lives in
+\symbolref{Illumo/Gui/GuiMenuShell}: \symbolref{GuiEasing} curves,
+\symbolref{GuiMenuAnimator} reveal/row-stagger/selection/value-pulse/ambient/
+caret clocks with reduced motion, \symbolref{GuiPanelLayout} virtual-resolution
+fitting plus row-window and wheel arithmetic, and \symbolref{GuiPointerTracker}
+virtual-space pointer sampling with press-edge detection. IllumoGame's menus
+compose it instead of carrying private copies.\\
+\textbf{Why:} Drawing and color were already shared through GuiKit and UiTheme,
+but each menu had re-derived the same clocks, easing curve, UI-scale fit,
+scroll clamping, and mouse-edge bookkeeping. Adding another interface meant
+copying that machinery again, and the copies had already drifted in their
+scale floor and reveal durations.\\
+\textbf{Consequences:} A new screen supplies only its rows, layout constants,
+and GameVisual composition. Menu timings are defined once, so theming and
+animation stay consistent across screens. NewSimulationMenu adopts the shared
+0.25 scale floor and the shared panel reveal in place of its own 0.35\,s
+entrance; its per-row focus weights remain screen-local. MainMenuModule keeps
+its slower title-screen entrance clock. GuiDialog keeps its own dialog-fitted
+layout and clocks and shares only the easing curve. No retained widget tree is
+introduced, and GuiMenuShell performs no drawing. IllEd's docked panels and
+IllMeshViewer's overlay adopt the same shell for pointer edges, easing, and
+viewport resolution: \symbolref{GuiPanelLayout::viewport} anchors docked chrome
+to the real window where \symbolref{GuiPanelLayout::fit} would wrongly impose
+the centered-overlay design floor. EditorModule keeps its own world-picking and
+gizmo drag state, which is world input rather than panel chrome.
+\end{decisionbox}
+
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

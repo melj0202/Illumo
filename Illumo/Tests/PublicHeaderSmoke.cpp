@@ -24,6 +24,7 @@
 #include <Illumo/Gui/GridAtlas.h>
 #include <Illumo/Gui/GuiDialog.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Gui/GuiTypes.h>
 #include <Illumo/Platform/AtomicFile.h>
 #include <Illumo/Platform/Clipboard.h>

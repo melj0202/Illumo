@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <array>
 #include <cstdint>
@@ -48,21 +49,18 @@ private:
   IRenderWindow* window;
   Renderer* renderer;
   GameVisual visual{ 4096u };
+  GuiMenuAnimator animator;
+  GuiPointerTracker pointer;
+  GuiPanelFit panelFit;
   NewSimulationConfiguration draft;
   bool finite = false;
   bool openState = false;
-  bool reduced = false;
-  bool mouseWasDown = true;
   int selected = 0;
-  float elapsed = 0;
-  float ambientPhase = 0;
-  float valuePulse = 0;
+  // Per-row emphasis; this menu lifts every row rather than gliding one
+  // highlight, so it keeps its own focus weights alongside the shared clocks.
   std::array<float, kRowCount> focus{};
-  float scale = 1;
   float x = 0;
   float y = 0;
   float width = 0;
   float rowHeight = 0;
-  float previousX = -1;
-  float previousY = -1;
 };

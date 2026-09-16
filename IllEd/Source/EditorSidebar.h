@@ -2,6 +2,7 @@
 
 #include "EditorDocument.h"
 #include "EditorToolbar.h"
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/ResourceHandle.h>
@@ -61,7 +62,7 @@ private:
   TextureHandle m_atlas{};
   EditorSceneDetail m_detail;
   EditorCommand m_activeTool;
-  bool m_mouseWasDown;
+  GuiPointerTracker m_pointer;
   bool m_consumedPress;
   float m_fontSize;
   float m_width;

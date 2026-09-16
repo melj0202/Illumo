@@ -21,7 +21,6 @@ EditorSceneGraphView::EditorSceneGraphView(IRenderWindow* window,
   : m_window(window)
   , m_renderer(renderer)
   , m_visual(2048u)
-  , m_mouseWasDown(false)
   , m_consumedPress(false)
   , m_isDragging(false)
   , m_dropValid(false)
@@ -95,16 +94,8 @@ EditorSceneGraphView::setAtlas(TextureHandle atlas)
 void
 EditorSceneGraphView::updateLayout()
 {
-  int width = 1280;
-  int height = 720;
-  if (m_window != nullptr) {
-    const std::array<int, 2> dimensions = m_window->getWindowDimensions();
-    width = std::max(1, dimensions[0]);
-    height = std::max(1, dimensions[1]);
-  }
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
   const float virtualHeight =
-    static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
+    GuiPanelLayout::viewport(m_window, m_renderer).virtualHeight;
 
   const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
   m_collapsedWidth = std::max(24.0f, std::round(24.0f * fontScale));
@@ -276,11 +267,8 @@ EditorSceneGraphView::update(InputManager* inputManager,
 {
   m_animTime += std::max(0.0f, dt);
   const float targetCollapse = m_collapsed ? 1.0f : 0.0f;
-  m_collapseAnim += (targetCollapse - m_collapseAnim) *
-                    std::min(1.0f, std::max(0.0f, dt) * 18.0f);
-  if (std::abs(m_collapseAnim - targetCollapse) < 0.001f) {
-    m_collapseAnim = targetCollapse;
-  }
+  m_collapseAnim = GuiEasing::approachLinear(
+    m_collapseAnim, targetCollapse, 18.0f, std::max(0.0f, dt), 0.001f);
   updateLayout();
   if (m_collapseAnim < 0.99f) {
     rebuildTreeRows(document);
@@ -292,13 +280,12 @@ EditorSceneGraphView::update(InputManager* inputManager,
   bool hierarchyChanged = false;
 
   // Track mouse coordinates
+  m_pointer.sample(m_window,
+                   inputManager,
+                   GuiPanelLayout::viewport(m_window, m_renderer).layoutScale);
   if (m_window != nullptr) {
-    const std::array<double, 2> mouseCoords = m_window->getMouseCoords();
-    const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-    m_mouseX =
-      static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
-    m_mouseY =
-      static_cast<float>(mouseCoords[1]) / (scale > 0.0f ? scale : 1.0f);
+    m_mouseX = m_pointer.x();
+    m_mouseY = m_pointer.y();
   }
 
   const bool inPanel = containsScreenPoint(m_mouseX, m_mouseY);
@@ -321,11 +308,10 @@ EditorSceneGraphView::update(InputManager* inputManager,
   }
 
   if (inputManager != nullptr) {
-    const bool mouseDown =
-      inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+    const bool mouseDown = m_pointer.pressed();
 
     // Mouse Press event
-    if (mouseDown && !m_mouseWasDown) {
+    if (m_pointer.clicked()) {
       if (m_collapsed) {
         if (inPanel) {
           m_consumedPress = true;
@@ -391,7 +377,7 @@ EditorSceneGraphView::update(InputManager* inputManager,
     }
 
     // Mouse Release event
-    if (!mouseDown && m_mouseWasDown) {
+    if (m_pointer.released()) {
       if (m_isDragging && !m_draggedNodeId.empty()) {
         if (inPanel && m_dropValid && document != nullptr) {
           if (document->setParent(m_draggedNodeId, m_dropTargetNodeId)) {
@@ -407,8 +393,6 @@ EditorSceneGraphView::update(InputManager* inputManager,
       m_dropTargetNodeId.clear();
       m_dropValid = false;
     }
-
-    m_mouseWasDown = mouseDown;
   }
 
   const std::string activeSel = selectedId ? *selectedId : std::string{};

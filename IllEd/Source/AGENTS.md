@@ -20,6 +20,13 @@ cellular-automata product.
 - Write UTF-8 JSON `.ilsc` version 1 with 2D/3D primitive kinds and
   `world_mode`. Do not write `.illumo` or serialize `SceneNodeHandle` values.
 - Keep UI primitive-composed through `GameVisual`. No retained widget tree.
+- Toolbar, sidebar, and scene-graph panels take shared behavior from
+  `Illumo/Gui/GuiMenuShell`: `GuiPanelLayout::viewport` for the UI-scale
+  viewport docked chrome anchors to, `GuiPointerTracker` for virtual-space
+  pointer position and press/release edges, and `GuiEasing` for reveal curves
+  and panel slides. Do not restate those in a panel. `EditorModule` keeps its
+  own world-picking and gizmo drag state; that is world input, not panel
+  chrome.
 - Main-thread affine. Iterative hierarchy walks only.
 
 ## Persistence

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <string>
@@ -113,13 +114,12 @@ private:
     std::string detail;
   };
 
-  static constexpr float kOpenAnimationSeconds = 0.42f;
-  static constexpr float kSelectionAnimationSeconds = 0.14f;
-  static constexpr float kValuePulseSeconds = 0.20f;
-  static constexpr float kCaretBlinkPeriodSeconds = 1.0f;
   IRenderWindow* window;
   Renderer* renderer;
   GameVisual visual;
+  GuiMenuAnimator animator;
+  GuiPointerTracker pointer;
+  GuiPanelFit panelFit;
   RuleFamilyDefinition familyDraft;
   RuleSetDefinition draft;
   std::vector<MenuRow> rows;
@@ -129,13 +129,6 @@ private:
   int firstVisibleRow = 0;
   int bodyRowCount = 0;
   int visibleRows = 1;
-  float animationElapsed = 0.0f;
-  float selectionFromRow = 0.0f;
-  float selectionAnimationElapsed = kSelectionAnimationSeconds;
-  float valuePulseElapsed = kValuePulseSeconds;
-  float ambientPhase = 0.0f;
-  float caretBlinkElapsed = 0.0f;
-  float layoutScale = 1.0f;
   float panelX = 0.0f;
   float panelY = 0.0f;
   float panelWidth = 0.0f;
@@ -150,10 +143,6 @@ private:
   unsigned int previewState = 0u;
   unsigned int paletteState = 0u;
   bool openState = false;
-  bool mouseWasDown = false;
-  float previousMouseX = -1.0f;
-  float previousMouseY = -1.0f;
-  bool reducedMotion = false;
   bool familyChanged = false;
   bool previewDirty = true;
   unsigned char previewInputState = 0u;
@@ -162,13 +151,8 @@ private:
   std::string previewText;
 
   void updateLayout();
-  float animationProgress() const;
-  float panelReveal() const;
-  float panelOffsetY() const;
   float rowReveal(int row) const;
   float selectionRowPosition() const;
-  float valuePulse() const;
-  void triggerValuePulse();
   void selectRow(int row);
   void changeSelected(int direction);
   void moveSelection(int direction);

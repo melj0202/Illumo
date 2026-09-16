@@ -14,7 +14,6 @@ MeshViewerUi::MeshViewerUi(IRenderWindow* window, Renderer* renderer)
   , m_renderer(renderer)
   , m_visual(2048u)
   , m_fontSize(kDefaultFontSize)
-  , m_mouseWasDown(false)
   , m_consumedPress(false)
   , m_showGrid(true)
   , m_showWireframe(false)
@@ -75,12 +74,9 @@ MeshViewerUi::containsScreenPoint(float x, float y) const
   if (m_window == nullptr) {
     return false;
   }
-  const std::array<int, 2> dimensions = m_window->getWindowDimensions();
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(dimensions[0]) / (scale > 0.0f ? scale : 1.0f);
-  const float virtualHeight =
-    static_cast<float>(dimensions[1]) / (scale > 0.0f ? scale : 1.0f);
+  const GuiPanelFit view = GuiPanelLayout::viewport(m_window, m_renderer);
+  const float virtualWidth = view.virtualWidth;
+  const float virtualHeight = view.virtualHeight;
 
   const float fontScale = m_fontSize / kDefaultFontSize;
 
@@ -135,21 +131,16 @@ MeshViewerUi::update(InputManager* inputManager, float dt)
     return MeshViewerAction::None;
   }
 
-  const std::array<int, 2> dimensions = m_window->getWindowDimensions();
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(dimensions[0]) / (scale > 0.0f ? scale : 1.0f);
-  const float virtualHeight =
-    static_cast<float>(dimensions[1]) / (scale > 0.0f ? scale : 1.0f);
+  const GuiPanelFit view = GuiPanelLayout::viewport(m_window, m_renderer);
+  const float virtualWidth = view.virtualWidth;
+  const float virtualHeight = view.virtualHeight;
 
   float mouseX = 0.0f;
   float mouseY = 0.0f;
-  bool isDown = false;
   if (inputManager != nullptr) {
-    const std::array<double, 2> coords = m_window->getMouseCoords();
-    mouseX = static_cast<float>(coords[0]) / (scale > 0.0f ? scale : 1.0f);
-    mouseY = static_cast<float>(coords[1]) / (scale > 0.0f ? scale : 1.0f);
-    isDown = inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+    m_pointer.sample(m_window, inputManager, view.layoutScale);
+    mouseX = m_pointer.x();
+    mouseY = m_pointer.y();
   }
 
   // Update button hover and clicks
@@ -161,7 +152,7 @@ MeshViewerUi::update(InputManager* inputManager, float dt)
     if (GuiKit::isPointInRect(
           mouseX, mouseY, btn.x, btn.y, btn.width, btn.height)) {
       m_hoveredButton = static_cast<int>(i);
-      if (isDown && !m_mouseWasDown) {
+      if (m_pointer.clicked()) {
         m_consumedPress = true;
         triggeredAction = btn.action;
       }
@@ -169,11 +160,9 @@ MeshViewerUi::update(InputManager* inputManager, float dt)
     }
   }
 
-  if (isDown && !m_mouseWasDown && containsScreenPoint(mouseX, mouseY)) {
+  if (m_pointer.clicked() && containsScreenPoint(mouseX, mouseY)) {
     m_consumedPress = true;
   }
-
-  m_mouseWasDown = isDown;
 
   rebuildVisual(virtualWidth, virtualHeight);
   return triggeredAction;

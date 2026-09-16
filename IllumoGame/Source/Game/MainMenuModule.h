@@ -3,6 +3,7 @@
 #include "ConfigurationMenu.h"
 #include "NewSimulationMenu.h"
 #include <Illumo/Engine/IModule.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <memory>
 #include <string>
@@ -42,7 +43,12 @@ private:
   static const int kSettingsItem = 2;
   static const int kExitItem = 3;
   static const int kItemCount = 4;
-  static constexpr float kSelectionAnimationSeconds = 0.14f;
+  // The shell's modal reveal is tuned for overlays; the title screen enters
+  // more slowly behind its own clock.
+  static constexpr float kEntranceSeconds = 0.45f;
+  static constexpr float kEntranceCeilingSeconds = 0.6f;
+  static constexpr float kItemEntranceSeconds = 0.32f;
+  static constexpr float kItemEntranceStaggerSeconds = 0.035f;
 
   void openCanvasSetup();
   void seedAmbientPattern();
@@ -62,14 +68,13 @@ private:
   std::unique_ptr<ConfigurationMenu> m_configurationMenu;
   std::unique_ptr<NewSimulationMenu> m_newSimulationMenu;
   GameVisual m_menuVisual;
+  GuiMenuAnimator m_animator;
+  GuiPointerTracker m_pointer;
+  GuiPanelFit m_panelFit;
   std::shared_ptr<Font> m_titleFont;
   int m_titleRasterSize = 0;
   int m_selectedItem;
-  float m_animationElapsed;
-  float m_selectionFromItem;
-  float m_selectionAnimationElapsed;
   double m_bgSimAccum;
-  bool m_mouseWasDown;
 
   float m_panelX;
   float m_panelY;
@@ -78,9 +83,7 @@ private:
   float m_firstItemY;
   float m_itemHeight;
   float m_itemWidth;
-  float m_layoutScale = 1.0f;
   float m_revealElapsed = 0.0f;
-  float m_previousMouseX = -1.0f;
-  float m_previousMouseY = -1.0f;
+  float entranceReveal() const;
   bool reducedMotion() const;
 };

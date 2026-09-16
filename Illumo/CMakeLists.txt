@@ -112,6 +112,7 @@ add_library(Illumo STATIC
   Source/Gui/GridAtlas.cpp
   Source/Gui/GuiDialog.cpp
   Source/Gui/GuiKit.cpp
+  Source/Gui/GuiMenuShell.cpp
   ${ILLUMO_PLATFORM_SOURCES}
   thirdparty/tracy-0.13.1/public/TracyClient.cpp
 )

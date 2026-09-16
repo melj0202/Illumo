@@ -14,6 +14,10 @@ public:
   // --- Text Metrics & Layout ---
   static float estimateTextWidth(const std::string& text, float sizePt);
   static float defaultLineHeight(float sizePt);
+  // X origin at which a '|' caret sits flush after the given text.
+  static float caretOriginAfterText(const std::string& text,
+                                    float textX,
+                                    float sizePt);
   static void drawTextCentered(GameVisual& visual,
                                const std::string& text,
                                float centerX,
