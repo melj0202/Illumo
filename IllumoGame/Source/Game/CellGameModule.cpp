@@ -53,6 +53,19 @@ parseIntegerArgument(const std::string& text, int* value)
   }
 }
 
+static std::uint64_t
+seedHash(std::int64_t x, std::int64_t y, std::uint64_t salt)
+{
+  std::uint64_t value = static_cast<std::uint64_t>(x) * 0x9E3779B185EBCA87ULL ^
+                        static_cast<std::uint64_t>(y) * 0xC2B2AE3D27D4EB4FULL ^
+                        salt;
+  value ^= value >> 30u;
+  value *= 0xBF58476D1CE4E5B9ULL;
+  value ^= value >> 27u;
+  value *= 0x94D049BB133111EBULL;
+  return value ^ (value >> 31u);
+}
+
 static float
 advanceModeChromeReveal(float reveal,
                         double* delay,
@@ -451,10 +464,66 @@ CellGameModule::seedInitialPattern()
 {
   SparseCellGrid* grid = cellContext->getGrid();
   const RuleSet* rules = cellContext->getRuleSet();
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(rules->getRuleTag());
+  const RuleFamilyDefinition* family =
+    definition == nullptr
+      ? nullptr
+      : RuleSetRegistry::instance().getFamilyDefinition(definition->familyId);
+  RuleSeedPattern seedPattern = definition == nullptr
+                                  ? RuleSeedPattern::Automatic
+                                  : definition->seedPattern;
+  const unsigned int seedRadius =
+    definition == nullptr ? 18u : definition->seedRadius;
+  const unsigned int seedDensity =
+    definition == nullptr ? 42u : definition->seedDensity;
 
-  if (rules->getStateCount() >= 4u && rules->getStateName(0u) == "Head" &&
-      rules->getStateName(2u) == "Tail" &&
-      rules->getStateName(3u) == "Conductor") {
+  if (seedPattern == RuleSeedPattern::Automatic) {
+    if (family != nullptr) {
+      switch (family->kind) {
+        case RuleFamily::Generations:
+        case RuleFamily::LargerThanLife:
+          seedPattern = RuleSeedPattern::ActiveSoup;
+          break;
+        case RuleFamily::MooreTable:
+          seedPattern = RuleSeedPattern::ExcitableBreak;
+          break;
+        case RuleFamily::Cyclic:
+          seedPattern = RuleSeedPattern::PhaseSoup;
+          break;
+        case RuleFamily::SpeciesLife:
+        case RuleFamily::Dominance:
+          seedPattern = RuleSeedPattern::SpeciesSoup;
+          break;
+        case RuleFamily::Hodgepodge:
+          seedPattern = RuleSeedPattern::PhaseSoup;
+          break;
+        case RuleFamily::Turmite:
+          seedPattern = RuleSeedPattern::TurmiteSwarm;
+          break;
+        case RuleFamily::LatticeGas:
+          seedPattern = RuleSeedPattern::ParticleCloud;
+          break;
+        case RuleFamily::Elementary1D:
+          seedPattern = RuleSeedPattern::SingleCell;
+          break;
+        case RuleFamily::LifeLike:
+        default:
+          seedPattern = RuleSeedPattern::Glider;
+          break;
+      }
+    } else if (rules->getNeighborhoodKind() ==
+               RuleSet::NeighborhoodKind::Elementary1D) {
+      seedPattern = RuleSeedPattern::SingleCell;
+    } else {
+      seedPattern = RuleSeedPattern::Glider;
+    }
+  }
+
+  if (seedPattern == RuleSeedPattern::Wire ||
+      (rules->getStateCount() >= 4u && rules->getStateName(0u) == "Head" &&
+       rules->getStateName(2u) == "Tail" &&
+       rules->getStateName(3u) == "Conductor")) {
     // Horizontal conductor with a head+tail pair so one electron travels right.
     const std::int64_t y = 0;
     const std::int64_t startX = -4;
@@ -466,13 +535,104 @@ CellGameModule::seedInitialPattern()
     return;
   }
 
-  if (rules->getNeighborhoodKind() == RuleSet::NeighborhoodKind::Elementary1D) {
+  if (seedPattern == RuleSeedPattern::SingleCell) {
     grid->setCell(CellAddress{ 0, 0 }, 0);
     return;
   }
 
-  // Classic Game-of-Life glider (pointing down-right). Works for most binary
-  // life-like rules as a visible non-empty startup.
+  if (seedPattern == RuleSeedPattern::ActiveSoup) {
+    const int radius = static_cast<int>(seedRadius);
+    for (int y = -radius; y <= radius; ++y) {
+      for (int x = -radius; x <= radius; ++x) {
+        if (seedHash(x, y, 0xA11CE5EEDULL) % 100u < seedDensity) {
+          grid->setCell(CellAddress{ x, y }, 0u);
+        }
+      }
+    }
+    return;
+  }
+
+  if (seedPattern == RuleSeedPattern::PhaseSoup ||
+      seedPattern == RuleSeedPattern::ExcitableBreak) {
+    const unsigned int stateCount = rules->getStateCount();
+    const int radius = static_cast<int>(seedRadius);
+    for (int y = -radius; y <= radius; ++y) {
+      for (int x = -radius; x <= radius; ++x) {
+        if (x * x + y * y > radius * radius) {
+          continue;
+        }
+        const std::uint64_t value = seedHash(x, y, 0xC1C1CA14ULL);
+        if (seedPattern == RuleSeedPattern::ExcitableBreak &&
+            value % 100u >= seedDensity) {
+          continue;
+        }
+        const unsigned int state =
+          static_cast<unsigned int>(value % stateCount);
+        if (state != SparseCellGrid::BackgroundState) {
+          grid->setCell(CellAddress{ x, y }, static_cast<unsigned char>(state));
+        }
+      }
+    }
+    return;
+  }
+
+  if (seedPattern == RuleSeedPattern::SpeciesSoup) {
+    const unsigned int stateCount = rules->getStateCount();
+    const unsigned int speciesCount = stateCount - 1u;
+    const int radius = static_cast<int>(seedRadius);
+    for (int y = -radius; y <= radius; ++y) {
+      for (int x = -radius; x <= radius; ++x) {
+        const std::uint64_t value = seedHash(x, y, 0x5EEC1E5ULL);
+        if (value % 100u >= seedDensity) {
+          continue;
+        }
+        unsigned int species = static_cast<unsigned int>(value % speciesCount);
+        if (species >= 1u) {
+          species += 1u;
+        }
+        grid->setCell(CellAddress{ x, y }, static_cast<unsigned char>(species));
+      }
+    }
+    return;
+  }
+
+  if (seedPattern == RuleSeedPattern::TurmiteSwarm) {
+    const unsigned int tapeColorCount = rules->getStateCount() / 5u;
+    const std::array<CellAddress, 9> positions = {
+      CellAddress{ -8, -8 }, CellAddress{ 0, -9 }, CellAddress{ 8, -8 },
+      CellAddress{ -9, 0 },  CellAddress{ 0, 0 },  CellAddress{ 9, 0 },
+      CellAddress{ -8, 8 },  CellAddress{ 0, 9 },  CellAddress{ 8, 8 }
+    };
+    for (std::size_t index = 0u; index < positions.size(); ++index) {
+      const unsigned int direction = static_cast<unsigned int>(index % 4u);
+      grid->setCell(positions[index],
+                    static_cast<unsigned char>(tapeColorCount + direction));
+    }
+    return;
+  }
+
+  if (seedPattern == RuleSeedPattern::ParticleCloud) {
+    const int radius = static_cast<int>(seedRadius);
+    for (int y = -radius; y <= radius; ++y) {
+      for (int x = -radius; x <= radius; ++x) {
+        if (x * x + y * y > radius * radius) {
+          continue;
+        }
+        const std::uint64_t value = seedHash(x, y, 0x6A5C10DULL);
+        if (value % 100u >= seedDensity) {
+          continue;
+        }
+        const unsigned int particleMask =
+          1u + static_cast<unsigned int>((value >> 8u) % 15u);
+        const unsigned char state =
+          particleMask == 1u ? 0u : static_cast<unsigned char>(particleMask);
+        grid->setCell(CellAddress{ x, y }, state);
+      }
+    }
+    return;
+  }
+
+  // Classic Game-of-Life glider (pointing down-right).
   grid->setCell(CellAddress{ 1, 0 }, 0);
   grid->setCell(CellAddress{ 2, 1 }, 0);
   grid->setCell(CellAddress{ 0, 2 }, 0);

@@ -517,6 +517,9 @@ private:
   std::size_t estimateCompleteAdvanceWork() const;
   bool advanceChangedFrontier(const RuleSet& ruleSet, bool useCandidateScratch);
   bool advanceImpl(const RuleSet& ruleSet, bool allowFrontier);
+  bool advanceStateHistogram(const RuleSet& ruleSet);
+  bool advanceExtendedRange(const RuleSet& ruleSet);
+  bool advanceDirectionalNeighborhood(const RuleSet& ruleSet);
   bool advanceToroidal(const RuleSet& ruleSet);
   bool advanceElementarySpaceTime(const RuleSet& ruleSet);
   void enrollToroidalCandidate(const CellAddress& address,

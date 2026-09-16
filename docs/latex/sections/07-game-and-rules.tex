@@ -143,10 +143,11 @@ copied pattern. Clipboard hotkeys act only in EDIT; explicit console pattern
 commands remain available independently of mode. Paint strokes belong to
 the module and stop across mode changes and modal input interruptions.
 The versioned JSON catalog describes every shipped transition and palette.
-Schema v2 supports \texttt{life\_like}, \texttt{generations},
-\texttt{moore\_table}, and \texttt{elementary\_1d}; schema-v1 arrays remain
-readable. These compile to the common \texttt{DataRuleSet} and cached 256-by-9
-table, except elementary 1D rules, which retain their dedicated history path.
+Schema v3 supports \texttt{life\_like}, \texttt{generations},
+\texttt{moore\_table}, \texttt{cyclic}, and \texttt{elementary\_1d}; schema-v1
+arrays remain readable. These compile to the common \texttt{DataRuleSet} and
+cached 256-by-9 table, except cyclic rules use a full neighbor-state histogram
+and elementary 1D rules retain their dedicated history path.
 Stable IDs continue to match saved worlds. Rule 90 and Rule 184 are elementary
 1D space-time diagrams (D-G2). Catalog registration rejects B0 and odd
 elementary rules: the current sparse representation requires a stable
@@ -301,8 +302,9 @@ schema.
         Exact-cell LOD fades changing colors; density overviews snap. Finite worlds are
         drawn only inside their centered canonical rectangle; camera space
         outside it stays background-colored while opposite-edge simulation
-        neighbors still wrap. Their changes conservatively trigger a bounded
-        refill.
+        neighbors still wrap. A theme-accented outline keeps all four wrap
+        edges visible at a stable screen thickness without tiling the world.
+        Their changes conservatively trigger a bounded refill.
   \item GPU: one reusable nearest-filtered RGB display texture and one
         world-space \symbolref{GameVisual} quad that shares its cell bounds
         with the editor cursor. Dirty 16$\times$16-texel tiles merge into at
@@ -329,17 +331,68 @@ resources do not scale with chunk count.
 \subsection{Rulesets}
 The shipped \pathref{families.json} defines cell-state schemas and palettes;
 \pathref{rulesets.json} defines Game of Life, Brian's Brain, Day
-\& Night, Highlife, Life Without Death, Seeds, Wireworld, Rule 90, and Rule 184.
+\& Night, Highlife, Life Without Death, Seeds, Wireworld, Rule 90, Rule 184,
+Star Wars, Nova Trails, two Excitable Waves thresholds, Prism Rush, Chromatic
+Storm, Crystal Domains, Elemental Surge, and Aurora Conflict.
+The researched expansion adds Immigration, QuadLife, Bosco/Bugs, Bugsmovie,
+Globe, Banners, Transers, Fireworks, and the classic 14-color cyclic automaton.
 \texttt{RuleSetRegistry} starts empty, validates text transactionally, and
 compiles version-3 rule definitions referencing version-1 family definitions.
 Families own their stable IDs, simulation models, state counts, labels, and
 colors. Rules own stable IDs, names, one required family ID, and transition
 parameters. Unversioned and schema-v1/v2 legacy rule catalogs remain readable
-and normalize into separated definitions. Life-like and Generations rules
-compile from B/S neighbor counts; Wireworld is a Moore table. Rule 90 / 184 use the dedicated
+and normalize into separated definitions. Life-like, Generations, and
+colorized-Life rules
+compile from B/S neighbor counts; Wireworld and the five-phase excitable-media
+family are Moore tables. The twelve-state Prismatic Ecology and nine-state
+Elemental Court are cyclic families: a cell advances by a coprime step when its
+successor state meets the rule threshold among eight neighbors. The four-phase Generations family shares a neon decay
+schema between Star Wars (B2/S345/C4) and Nova Trails (B23/S34/C4). The
+excitable-media family shares an excited/resting/three-stage refractory schema;
+its two rules activate resting cells at thresholds one and two. Rule 90 / 184 use the dedicated
 \texttt{NeighborhoodKind::}\allowbreak\texttt{Elementary1D} serial history
 path (D-G2). Adding a definition requires no C++ factory change while it fits
 one of these families.
+
+Immigration and QuadLife count every non-background state as live. Survival
+retains the current species; births inherit the majority parent color, except
+that three distinct QuadLife parents produce the absent fourth species. They
+reuse the full-state Moore histogram path. The classic cyclic rule implements
+the 14-color random-initial-condition experiment described by Fisch, Gravner,
+and Griffeath.
+
+Larger-than-Life definitions carry range, optional center counting, inclusive
+birth/survival intervals, and square or circular neighborhood shape. Range is
+bounded to 16 and B0 is rejected. Bosco/Bugs, Bugsmovie, and Globe use the
+parameters documented by Golly. Their serial sparse kernel expands occupied
+chunks by the required chunk radius and uses authoritative cell lookup before
+transactional output publication; it does not alter the optimized radius-one
+paths.
+
+Rules may also own deterministic starter data. Active soups drive Generations
+and Larger-than-Life, phase soups drive cyclic systems, species soups include
+every live kind, and excitable breaks replace the former generic glider for
+wave media. Research sources are Golly's official Generations and
+Larger-than-Life documentation, Fisch--Gravner--Griffeath's 1991 paper, and the
+January 1979 BYTE Quad-Life description.
+
+The second researched expansion adds Hodgepodge chemistry, Turmites, HPP
+lattice gas, and five-species dominance. Hodgepodge exposes 101 color levels
+and computes healthy infection, active averaging, and ill recovery from the
+complete Moore histogram. RPSLS uses the same histogram with two prey offsets
+per species and deterministic synchronous invasion thresholds.
+
+Turmites and HPP preserve north/east/south/west identity through
+\texttt{NeighborhoodKind::}\allowbreak\texttt{VonNeumannDirectional}.
+The RL, RRL, and RRLL Turmites combine two to four tape colors with four agent
+directions per color. HPP's sixteen states encode every combination of four
+directional particles; opposing pairs rotate before streaming. Both dense
+compatibility and serial sparse execution use the same direction ordering and
+transactional publication. Deterministic agent swarms and particle clouds make
+these rules move immediately. Sources include Dewdney's contemporary account
+of the Gerhardt--Schuster Hodgepodge Machine, Moreira and Gajardo's Turmite
+formalization, Hardy--Pomeau--de Pazzis lattice gas, Toffoli and Margolus's
+cellular-automata treatment, and Vukov--Szolnoki--Szabó five-species dominance.
 
 Game's \texttt{RuleCatalogLoader} selects the first valid base family/rule
 catalog pair beside the executable, in the working directory, or in its
@@ -360,13 +413,24 @@ class RuleSet {
   // Pure transition: cell + Moore count of alive (value==0) neighbors.
   virtual unsigned char nextState(unsigned char cell,
                                   unsigned char aliveNeighbors) const;
+  virtual unsigned char nextStateFromNeighborhood(
+    unsigned char cell,
+    const NeighborStateCounts& neighborStateCounts) const;
+  virtual unsigned char nextStateFromDirectionalNeighborhood(
+    unsigned char cell,
+    const DirectionalNeighbors& neighbors) const;
+  virtual unsigned char nextStateFromExtendedCount(
+    unsigned char cell,
+    unsigned int aliveCount) const;
   virtual void evalCell(const unsigned char& target,
                         unsigned char dest[3]) const; // palette colors
   const TransitionTable& getTransitionTable() const;
 };
 \end{lstlisting}
 
-\textbf{Generation:}
+\textbf{Generation:} Full-state, directional von Neumann, and extended-range
+rules first route to their isolated correctness kernels. Radius-one count rules
+use the optimized path below.
 \begin{enumerate}
   \item Read cached stored/counting totals and the candidate-preferred chunk
         count. If the retained changed frontier is empty, return immediately
@@ -413,6 +477,14 @@ class RuleSet {
 Before worker dispatch, the active ruleset lazily builds its 2,304-entry
 transition table. Candidate, halo, and compatibility dense loops index this
 immutable table rather than invoking virtual transitions for every cell.
+Cyclic rules instead use an isolated serial sparse kernel that expands occupied
+chunks by one, counts all byte-valued neighbor states, and reuses the existing
+transactional output and change journal. The optimized count-table paths remain
+unchanged. Dense compatibility evaluation uses the same histogram contract.
+Colorized-Life shares that histogram kernel. Larger-than-Life uses a separate
+serial extended-range kernel and the same transactional result/change-journal
+machinery. Hodgepodge and dominance share the histogram kernel; Turmites and
+HPP share the serial direction-preserving kernel.
 
 \begin{decisionbox}[title={Keep rules pure}]
 Rulesets stay free of rendering and input. They read/write cell buffers only

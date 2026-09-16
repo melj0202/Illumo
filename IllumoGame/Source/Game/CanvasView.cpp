@@ -3,6 +3,7 @@
 #include "Rulesets/RuleSet.h"
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <algorithm>
 #include <array>
@@ -67,6 +68,9 @@ CanvasView::CanvasView(int width,
   , quadCellHeight(0)
   , quadActiveWidth(0)
   , quadActiveHeight(0)
+  , quadWorldChunkWidth(0)
+  , quadWorldChunkHeight(0)
+  , quadBoundaryZoom(0.0f)
   , lastGridRevision(std::numeric_limits<std::uint64_t>::max())
   , regionReady(false)
   , paletteDirty(true)
@@ -383,10 +387,19 @@ CanvasView::buildUploadRects()
 void
 CanvasView::rebuildWorldQuad()
 {
+  const std::int64_t worldChunkWidth =
+    grid == nullptr ? 0 : grid->getWorldChunkWidth();
+  const std::int64_t worldChunkHeight =
+    grid == nullptr ? 0 : grid->getWorldChunkHeight();
+  const float boundaryZoom =
+    camera == nullptr ? 1.0f : std::max(0.1f, camera->GetZoom());
   if (worldQuadReady && sameAddress(quadFirstCell, cacheFirstCell) &&
       quadCellWidth == cacheCellWidth && quadCellHeight == cacheCellHeight &&
       quadActiveWidth == activeViewWidth &&
-      quadActiveHeight == activeViewHeight) {
+      quadActiveHeight == activeViewHeight &&
+      quadWorldChunkWidth == worldChunkWidth &&
+      quadWorldChunkHeight == worldChunkHeight &&
+      quadBoundaryZoom == boundaryZoom) {
     return;
   }
 
@@ -411,11 +424,42 @@ CanvasView::rebuildWorldQuad()
                    v0,
                    u1,
                    0.0f);
+  if (worldChunkWidth > 0 && worldChunkHeight > 0) {
+    const std::int64_t minimumCellX =
+      -(worldChunkWidth / 2) * SparseCellGrid::kChunkDim;
+    const std::int64_t minimumCellY =
+      -(worldChunkHeight / 2) * SparseCellGrid::kChunkDim;
+    const float boundaryLeft =
+      static_cast<float>(minimumCellX) * kCellSize - kCellSize * 0.5f;
+    const float boundaryBottom =
+      static_cast<float>(minimumCellY) * kCellSize - kCellSize * 0.5f;
+    const float boundaryWidth =
+      static_cast<float>(worldChunkWidth * SparseCellGrid::kChunkDim) *
+      kCellSize;
+    const float boundaryHeight =
+      static_cast<float>(worldChunkHeight * SparseCellGrid::kChunkDim) *
+      kCellSize;
+    visual.addOutlineRect(boundaryLeft,
+                          boundaryBottom,
+                          boundaryWidth,
+                          boundaryHeight,
+                          UiTheme::menuSurface(),
+                          4.0f / boundaryZoom);
+    visual.addOutlineRect(boundaryLeft,
+                          boundaryBottom,
+                          boundaryWidth,
+                          boundaryHeight,
+                          UiTheme::error(),
+                          2.0f / boundaryZoom);
+  }
   quadFirstCell = cacheFirstCell;
   quadCellWidth = cacheCellWidth;
   quadCellHeight = cacheCellHeight;
   quadActiveWidth = activeViewWidth;
   quadActiveHeight = activeViewHeight;
+  quadWorldChunkWidth = worldChunkWidth;
+  quadWorldChunkHeight = worldChunkHeight;
+  quadBoundaryZoom = boundaryZoom;
   worldQuadReady = true;
 }
 
@@ -1464,6 +1508,7 @@ CanvasView::syncVisibleRegion()
   visibleViewWidth = nextVisibleViewWidth;
   visibleViewHeight = nextVisibleViewHeight;
   if (!refill) {
+    rebuildWorldQuad();
     return;
   }
 

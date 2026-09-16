@@ -1965,6 +1965,65 @@ Built-in family edits become custom copies; user families are persisted before
 the rules that reference them.
 \end{decisionbox}
 
+\subsection*{D-GC5 --- Isolated cyclic multistate interaction}
+\begin{decisionbox}[title={D-GC5 \quad 2026-09-15}]
+\textbf{Decision:} Add a typed \texttt{cyclic} family whose rules advance a
+cell by a nonzero coprime step when a threshold number of Moore neighbors hold
+that successor state. Expose full 256-state neighbor counts through
+\texttt{RuleSet}; evaluate them in a separate serial sparse kernel that reuses
+transactional output and change journals.\\
+\textbf{Why:} Count-of-state-zero and Moore-table models cannot express many
+cell kinds directly chasing one another. A general pairwise language would be
+harder to author and unnecessary for the requested dynamic ecology.\\
+\textbf{Consequences:} Existing optimized binary/counting paths and save
+formats remain unchanged. State 1 stays sparse background and is quiescent
+without successor neighbors. Cyclic rule JSON owns threshold and step; the
+workshop edits both. The first histogram kernel prioritizes determinism and
+correctness over parity with specialized sparse performance.
+\end{decisionbox}
+
+\subsection*{D-GC6 --- Researched interaction and extended-range families}
+\begin{decisionbox}[title={D-GC6 \quad 2026-09-15}]
+\textbf{Decision:} Add typed \texttt{species\_life} and
+\texttt{larger\_than\_life} families. Colorized Life uses the existing
+full-state Moore histogram to preserve or select a live species.
+Larger-than-Life adds a bounded extended-range contract with square/circular
+shape, optional center counting, and inclusive transition intervals; its first
+sparse implementation is an isolated serial correctness kernel. Store an
+optional deterministic starter strategy with each rule.\\
+\textbf{Why:} Documented multi-species, long-decay, cyclic, and wide-range
+systems provide visibly different interactions, but a Life glider is not a
+meaningful initial condition for most of them. Repeated radius-one updates are
+not equivalent to a wide-neighborhood rule.\\
+\textbf{Consequences:} Immigration, QuadLife, Bosco/Bugs, Bugsmovie, Globe,
+Banners, Transers, Fireworks, and classic 14-color CCA ship as data. Existing
+catalog files remain readable because the new keys are additive. B0 remains
+invalid for sparse infinite worlds; extended range is capped at 16 and does not
+use the specialized radius-one candidate, memo, or worker paths. Starter soups
+are coordinate-hashed and repeatable. Continuous and block-partitioned
+automata remain out of scope.
+\end{decisionbox}
+
+\subsection*{D-GC7 --- Directional agents, lattice gas, and multilevel chemistry}
+\begin{decisionbox}[title={D-GC7 \quad 2026-09-15}]
+\textbf{Decision:} Add typed \texttt{hodgepodge}, \texttt{turmite},
+\texttt{lattice\_gas}, and \texttt{dominance} families. Preserve cardinal
+direction through a four-entry von Neumann rule contract and an isolated serial
+sparse evaluator. Reuse the complete Moore histogram for chemical levels and
+species predators. Keep state 1 as sparse background through explicit state
+encoding maps.\\
+\textbf{Why:} Unordered live counts cannot express moving directional agents,
+particle streaming, or weighted chemical infection. These models add genuinely
+different interactions while still fitting the byte-state synchronous domain.\\
+\textbf{Consequences:} RL/RRL/RRLL Turmites, 16-state HPP gas, 101-level
+Hodgepodge, and five-species RPSLS ship as data. Directional and histogram
+kernels publish transactionally but initially remain serial. Multi-agent
+Turmite collisions annihilate deterministically. The synchronous RPSLS rule is
+inspired by, not identical to, stochastic Monte Carlo scheduling. FHP/hexagonal
+gas, continuous chemistry, and generic Turing-machine controllers remain out of
+scope.
+\end{decisionbox}
+
 \subsection*{D-DEP1 --- Narrow public math dependency exposure}
 \begin{decisionbox}[title={D-DEP1 \quad 2026-09-14}]
 \textbf{Decision:} Illumo exports its public headers and a CMake-managed GLM-only

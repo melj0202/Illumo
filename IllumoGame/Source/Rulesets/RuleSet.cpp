@@ -1,5 +1,6 @@
 #include "RuleSet.h"
 #include "Game/CellGrid.h"
+#include <algorithm>
 #include <thread>
 #include <tracy/Tracy.hpp>
 #include <vector>
@@ -301,6 +302,146 @@ RuleSet::calcGeneration(const int& x_start,
 
   const unsigned char* src = canvas->lifeCanvas;
   unsigned char* dst = canvas->getLifeBackBuffer();
+  if (getNeighborhoodKind() == NeighborhoodKind::ExtendedRange) {
+    const int radius = static_cast<int>(getNeighborhoodRadius());
+    const bool includeCenter = includesCenterInNeighborCount();
+    const ExtendedNeighborhoodShape shape = getExtendedNeighborhoodShape();
+    int minX = width;
+    int minY = height;
+    int maxX = -1;
+    int maxY = -1;
+    bool anyChange = false;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        unsigned int aliveCount = 0u;
+        for (int offsetY = -radius; offsetY <= radius; ++offsetY) {
+          for (int offsetX = -radius; offsetX <= radius; ++offsetX) {
+            if ((!includeCenter && offsetX == 0 && offsetY == 0) ||
+                (shape == ExtendedNeighborhoodShape::Circular &&
+                 offsetX * offsetX + offsetY * offsetY > radius * radius)) {
+              continue;
+            }
+            const int neighborX = ((x + offsetX) % width + width) % width;
+            const int neighborY = ((y + offsetY) % height + height) % height;
+            const std::size_t neighborIndex =
+              static_cast<std::size_t>(neighborY) *
+                static_cast<std::size_t>(width) +
+              static_cast<std::size_t>(neighborX);
+            if (src[neighborIndex] == 0u) {
+              aliveCount += 1u;
+            }
+          }
+        }
+        const std::size_t index =
+          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+        const unsigned char next =
+          nextStateFromExtendedCount(src[index], aliveCount);
+        dst[index] = next;
+        if (next != src[index]) {
+          anyChange = true;
+          minX = std::min(minX, x);
+          minY = std::min(minY, y);
+          maxX = std::max(maxX, x);
+          maxY = std::max(maxY, y);
+        }
+      }
+    }
+    if (anyChange) {
+      canvas->swapLifeBuffers();
+      canvas->markCellsDirtyRegion(minX, minY, maxX, maxY);
+    }
+    return;
+  }
+  if (getNeighborhoodKind() == NeighborhoodKind::VonNeumannDirectional) {
+    int minX = width;
+    int minY = height;
+    int maxX = -1;
+    int maxY = -1;
+    bool anyChange = false;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const int northY = (y - 1 + height) % height;
+        const int eastX = (x + 1) % width;
+        const int southY = (y + 1) % height;
+        const int westX = (x - 1 + width) % width;
+        const DirectionalNeighbors neighbors = {
+          src[static_cast<std::size_t>(northY) *
+                static_cast<std::size_t>(width) +
+              static_cast<std::size_t>(x)],
+          src[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+              static_cast<std::size_t>(eastX)],
+          src[static_cast<std::size_t>(southY) *
+                static_cast<std::size_t>(width) +
+              static_cast<std::size_t>(x)],
+          src[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+              static_cast<std::size_t>(westX)]
+        };
+        const std::size_t index =
+          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+        const unsigned char next =
+          nextStateFromDirectionalNeighborhood(src[index], neighbors);
+        dst[index] = next;
+        if (next != src[index]) {
+          anyChange = true;
+          minX = std::min(minX, x);
+          minY = std::min(minY, y);
+          maxX = std::max(maxX, x);
+          maxY = std::max(maxY, y);
+        }
+      }
+    }
+    if (anyChange) {
+      canvas->swapLifeBuffers();
+      canvas->markCellsDirtyRegion(minX, minY, maxX, maxY);
+    }
+    return;
+  }
+  if (getNeighborhoodKind() == NeighborhoodKind::MooreStateCounts) {
+    int minX = width;
+    int minY = height;
+    int maxX = -1;
+    int maxY = -1;
+    bool anyChange = false;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        NeighborStateCounts counts{};
+        for (int offsetY = -1; offsetY <= 1; ++offsetY) {
+          for (int offsetX = -1; offsetX <= 1; ++offsetX) {
+            if (offsetX == 0 && offsetY == 0) {
+              continue;
+            }
+            const int neighborX = (x + offsetX + width) % width;
+            const int neighborY = (y + offsetY + height) % height;
+            const std::size_t neighborIndex =
+              static_cast<std::size_t>(neighborY) *
+                static_cast<std::size_t>(width) +
+              static_cast<std::size_t>(neighborX);
+            counts[src[neighborIndex]] += 1u;
+          }
+        }
+        const std::size_t index =
+          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+        const unsigned char next =
+          nextStateFromNeighborhood(src[index], counts);
+        dst[index] = next;
+        if (next != src[index]) {
+          anyChange = true;
+          minX = std::min(minX, x);
+          minY = std::min(minY, y);
+          maxX = std::max(maxX, x);
+          maxY = std::max(maxY, y);
+        }
+      }
+    }
+    if (anyChange) {
+      canvas->swapLifeBuffers();
+      canvas->markCellsDirtyRegion(minX, minY, maxX, maxY);
+    }
+    return;
+  }
   const unsigned char* transitions = getTransitionTable().data();
 
   int minX = width;

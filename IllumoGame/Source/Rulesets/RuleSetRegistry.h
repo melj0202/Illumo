@@ -12,7 +12,28 @@ enum class RuleFamily
   LifeLike,
   Generations,
   MooreTable,
+  Cyclic,
+  SpeciesLife,
+  LargerThanLife,
+  Hodgepodge,
+  Turmite,
+  LatticeGas,
+  Dominance,
   Elementary1D
+};
+
+enum class RuleSeedPattern
+{
+  Automatic,
+  Glider,
+  SingleCell,
+  Wire,
+  ActiveSoup,
+  PhaseSoup,
+  SpeciesSoup,
+  ExcitableBreak,
+  TurmiteSwarm,
+  ParticleCloud
 };
 
 struct RuleSetDefinition
@@ -26,6 +47,25 @@ struct RuleSetDefinition
   unsigned int birthMask = 0u;
   unsigned int surviveMask = 0u;
   unsigned int ruleNumber = 0u;
+  unsigned int cyclicThreshold = 1u;
+  unsigned int cyclicStep = 1u;
+  unsigned int neighborhoodRadius = 1u;
+  unsigned int birthMinimum = 3u;
+  unsigned int birthMaximum = 3u;
+  unsigned int survivalMinimum = 2u;
+  unsigned int survivalMaximum = 3u;
+  unsigned int infectionDivisor = 2u;
+  unsigned int illDivisor = 3u;
+  unsigned int infectionIncrement = 1u;
+  unsigned int dominanceThreshold = 1u;
+  std::vector<unsigned int> dominancePreyOffsets;
+  std::string turnSequence;
+  RuleSet::ExtendedNeighborhoodShape extendedNeighborhoodShape =
+    RuleSet::ExtendedNeighborhoodShape::Square;
+  bool includeCenter = false;
+  RuleSeedPattern seedPattern = RuleSeedPattern::Automatic;
+  unsigned int seedRadius = 18u;
+  unsigned int seedDensity = 42u;
   // Compiled transition artifacts; these are not serialized into ruleset data.
   bool hasTransitionTable = false;
   unsigned int transitionTableStateCount = 0u;
@@ -52,6 +92,9 @@ public:
   static std::string normalizeId(std::string id);
   static bool parseFamily(const std::string& value, RuleFamily& family);
   static const char* familyName(RuleFamily family);
+  static bool parseSeedPattern(const std::string& value,
+                               RuleSeedPattern& pattern);
+  static const char* seedPatternName(RuleSeedPattern pattern);
   static bool parseLifeLikeRuleString(const std::string& ruleStr,
                                       unsigned int& outBirth,
                                       unsigned int& outSurvive);

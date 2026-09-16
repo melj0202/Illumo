@@ -10,9 +10,81 @@ data-backed `DataRuleSet` instances. `IllumoGame/families.json` defines family
 identity, model, state count, labels, and colors. `IllumoGame/rulesets.json`
 defines each rule's stable identity, required `family_id`, and transition data.
 The current rules schema is version 3; it supports Life-like B/S, Generations,
-explicit Moore tables, and Wolfram elementary 1D. The reader retains
+explicit Moore tables, cyclic interaction, colorized Life, Larger-than-Life,
+Hodgepodge chemistry, directional Turmites, HPP lattice gas, five-species
+dominance, and Wolfram elementary 1D. Rules can also select a deterministic starter
+strategy and soup radius/density. The reader retains
 unversioned and schema-v1/v2 rule-catalog compatibility. Stable built-in IDs
 remain unchanged for saved worlds.
+
+The shipped catalog also demonstrates the family/rule split beyond the original
+set. `GENERATIONS_4_PHASE` supplies a neon four-state decay palette shared by
+Star Wars (B2/S345/C4) and Nova Trails (B23/S34/C4). The five-state
+`EXCITABLE_MEDIA_5_PHASE` family supplies an excited/resting/refractory schema
+for two Greenberg-Hastings-style Moore tables: threshold one launches broad
+wave fronts, while threshold two requires two excited neighbors and favors
+colliding waves. State `0` remains the counted excited state and state `1` the
+quiescent background, so both families use the existing sparse simulation path.
+
+`PRISMATIC_ECOLOGY_12` and `ELEMENTAL_COURT_9` make every declared state an
+actor. In a cyclic rule, a cell advances by the rule's cycle step only when its
+successor state reaches the configured threshold among the eight neighbors.
+Steps must be coprime with the family state count, so one cycle visits every
+kind. Prism Rush, Chromatic Storm, Crystal Domains, Elemental Surge, and Aurora
+Conflict combine thresholds one through three with short and long successor
+jumps. `CLASSIC_CCA_14_T1` implements the one-step 14-color experiment from
+Fisch, Gravner, and Griffeath's 1991 paper and starts from a deterministic mixed
+phase soup, matching the paper's random-initial-condition regime.
+
+`IMMIGRATION_LIFE_2_SPECIES` and `QUADLIFE_4_SPECIES` add colorized Life. All
+non-background states count as live under B3/S23. Surviving cells retain their
+species; births inherit the majority parent species. QuadLife's three-distinct-
+parent case produces the missing fourth species. The rule was described in the
+January 1979 BYTE article, and both dense compatibility and sparse production
+evaluate the full Moore state histogram.
+
+`LARGER_THAN_LIFE_BINARY` adds range 1..16 square or circular neighborhoods,
+optional center counting, and inclusive birth/survival intervals. The shipped
+Bosco/Bugs, Bugsmovie, and Globe parameters follow Golly's official
+Larger-than-Life documentation. These rules use an isolated serial sparse
+evaluator that expands occupied source chunks by the required chunk radius;
+the optimized radius-one candidate/halo paths remain unchanged.
+
+The Generations catalog also includes the documented Banners and Transers
+five-state rules and Fireworks with twenty-one visible phases. Model-appropriate
+starters replace the old one-glider-for-most-rules heuristic: Generations and
+Larger-than-Life use active soups, cyclic rules use phase soups, colorized Life
+uses all live species, and excitable tables use mixed activation breaks. Seeds
+are coordinate-hashed and therefore reproducible.
+
+Research references: [Golly Generations](https://golly.sourceforge.io/Help/Algorithms/Generations.html),
+[Golly Larger than Life](https://golly.sourceforge.io/Help/Algorithms/Larger_than_Life.html),
+[Cyclic Cellular Automata in Two Dimensions](https://www.math.ucdavis.edu/~gravner/papers/cca.pdf),
+and [BYTE, January 1979](https://www.worldradiohistory.com/Archive-Byte/70s/Byte-1979-01.pdf).
+
+The second researched expansion adds four distinct interaction contracts.
+`HODGEPODGE_101_LEVEL` implements healthy, infected, and ill transitions over
+one hundred visible infection levels; two rules vary the infection increment.
+Three Turmite families implement the researched RL, RRL, and RRLL turn words
+with two, three, and four tape colors. Each tape color has four visible agent
+directions. `HPP_LATTICE_GAS_16` treats each state as a combination of four
+directional particles, rotates head-on pairs, and streams them without changing
+particle count. `RPSLS_5_SPECIES` gives every species two prey and two predators;
+threshold-one invasion creates fast fronts and threshold two creates reinforced
+domains.
+
+Turmites and HPP use a direction-preserving north/east/south/west von Neumann
+contract in both dense compatibility and the serial sparse evaluator.
+Hodgepodge and dominance reuse the complete Moore state histogram. All four
+paths retain state 1 as sparse background and publish new chunks
+transactionally. Deterministic Turmite swarms, particle clouds, chemical phase
+soups, and five-species soups make the shipped rules active immediately.
+
+Further research references: [Dewdney's Hodgepodge Machine description](https://people.sc.fsu.edu/~jburkardt/classes/ysp_2003/dewdney_hodgepodge.pdf),
+[Langton's ant and Turmites](https://www.ci2ma.udec.cl/pdf/pre-publicaciones2/2016/pp16-19.pdf),
+[Hardy--Pomeau--de Pazzis lattice gas](https://doi.org/10.1103/PhysRevA.13.1949),
+[Cellular Automata Machines](https://people.csail.mit.edu/nhm/cam-book.pdf), and
+[five-species cyclic dominance](https://arxiv.org/abs/1308.0964).
 
 `RuleCatalogLoader` owns file reads and selects the first valid base catalog
 pair beside the executable, in the working directory, or in its `IllumoGame`
@@ -29,9 +101,14 @@ selector is filtered to the chosen family, and each ruleset remains bound to
 exactly one family. F2 family edits own the cell-state schema and palette while
 rule edits own transition parameters. Changing Family in the staged editor
 preserves the custom rule ID and display name while loading starter parameters
-for that family. Life-like and Generations rules show
+for that family. Life-like, Generations, and colorized-Life rules show
 B/S count chips, Generations adds its state count, elementary rules show their
-Wolfram number, and Moore tables explain that transitions are edited in JSON.
+Wolfram number, cyclic rules expose successor threshold and cycle step, and
+Moore tables explain that transitions are edited in JSON. Larger-than-Life
+shows its canonical range/threshold summary and uses JSON import for parameter
+editing. Hodgepodge, Turmite, lattice-gas, and dominance definitions show their
+compiled interaction contract and retain their parameters through JSON
+import/export.
 Rule settings and a configurable transition example come first; state labels
 and colors plus JSON import/export are lower sections in the same scrollable
 page. Save & Apply and Discard stay in a pinned action area below the scrolling
@@ -151,14 +228,24 @@ main menu; reduced motion freezes the colony and snaps focus feedback.
   candidate-only or small halo workloads. Ruleset transition changes clear it.
 - Its revision changes only when a generation or edit changes the stored cell
   contents, allowing dependent views to skip idle resampling.
-- Rulesets supply pure `nextState` and `evalCell` behavior. Data-defined rules
-  compile to the same transition interface. Each ruleset's
+- Rulesets supply pure `nextState`, `nextStateFromNeighborhood`,
+  `nextStateFromExtendedCount`, and `evalCell`
+  behavior. Data-defined rules compile to the same transition interface. Each ruleset's
   complete 256x9 transition table is cached once and shared by all serial and
   worker hot loops. Life-like and Generations definitions compile from neighbor
   masks. Rule 90 and
   Rule 184 are elementary 1D space-time rules: the source row is the maximum
   counted Y, the destination is Y+1, and older rows remain history (D-G2).
-  Dense `calcGeneration` remains Moore/compatibility only.
+  Cyclic rules request a full 256-state Moore histogram. Their correctness-first
+  serial sparse evaluator expands each occupied source chunk by one, reuses the
+  transactional output and change-journal machinery, and leaves optimized
+  count-table kernels unchanged. Dense `calcGeneration` retains a compatible
+  histogram path for tests and legacy consumers.
+  Larger-than-Life rules use a separate serial extended-range evaluator. It
+  builds the exact affected chunk band, counts square or circular neighborhoods
+  through authoritative lookup (including torus wrapping), and reuses the
+  transactional result/change-journal machinery. Range is capped at 16 and B0
+  is rejected so infinite sparse backgrounds remain quiescent.
   `CellGrid`/`Canvas` remain compatibility coverage.
 
 ## CanvasView (presentation)
@@ -180,6 +267,9 @@ main menu; reduced motion freezes the colony and snaps focus feedback.
   explicitly releases the texture.
 - Uses nearest filtering so discrete cell colors stay sharp; the editor cursor
   uses the same centered cell bounds.
+- Finite worlds add a screen-thickness-stable, theme-accented outline around
+  the centered canonical rectangle so all four wrap edges remain visible while
+  panning and zooming. Infinite worlds do not emit this boundary.
 - CPU palette targets fade through `displayRgb` at exact-cell LOD; density
   overviews and newly revealed cells snap to their current color. A retained
   active-texel set makes each fade tick and
@@ -234,7 +324,8 @@ Startup patterns are centered around `(0, 0)`. Infinite mode is non-toroidal;
 positive chunk width and height select a finite torus. `0 x 0` selects the
 infinite canvas, while mixed zero/positive dimensions are rejected. Finite
 presentation is clipped to the centered canonical rectangle; camera space
-outside it remains blank even though generation neighbors wrap at its edges.
+outside it remains blank even though generation neighbors wrap at its edges. A
+contrasting accent outline marks those wrap edges without repeating the world.
 
 F1 opens a primitive-composed settings overlay in both Release and Debug. It
 edits family and its ruleset, world chunk dimensions, TPS, simulation speed, fade speed,

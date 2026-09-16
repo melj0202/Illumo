@@ -2144,6 +2144,10 @@ testCanvasViewUsesWorldCellQuad()
   testTrue(g,
            view.getVisual().getSpace() == PrimitiveSpace::World,
            "CanvasView uses the camera world space");
+  testEqSize(g,
+             view.getVisual().shapeCount(),
+             0u,
+             "infinite canvas has no finite-world boundary");
   SpritePrimitive* sprite = view.getVisual().getSprite(0);
   testTrue(g, sprite != nullptr, "CanvasView owns one display sprite");
   if (sprite != nullptr) {
@@ -2163,6 +2167,49 @@ testCanvasViewUsesWorldCellQuad()
              sprite->region.v0 == 1.0f && sprite->region.v1 == 0.0f,
              "display sprite keeps world-up rows upright");
   }
+
+  SparseCellGrid finiteGrid(4, 2);
+  CanvasView finiteView(4, 4, &finiteGrid, &window, &camera, &renderer);
+  finiteView.rebuildTargetsFromGrid();
+  testEqSize(g,
+             finiteView.getVisual().shapeCount(),
+             2u,
+             "finite canvas has contrasting wrap boundary outlines");
+  ShapePrimitive* boundaryUnderlay = finiteView.getVisual().getShape(0);
+  ShapePrimitive* boundaryAccent = finiteView.getVisual().getShape(1);
+  const float expectedBoundaryX = -520.0f;
+  const float expectedBoundaryY = -264.0f;
+  const float expectedBoundaryWidth = 1024.0f;
+  const float expectedBoundaryHeight = 512.0f;
+  testTrue(g,
+           boundaryUnderlay != nullptr && boundaryAccent != nullptr &&
+             boundaryUnderlay->kind == ShapeKind::OutlineRect &&
+             boundaryAccent->kind == ShapeKind::OutlineRect &&
+             boundaryUnderlay->rect.x == expectedBoundaryX &&
+             boundaryUnderlay->rect.y == expectedBoundaryY &&
+             boundaryUnderlay->rect.w == expectedBoundaryWidth &&
+             boundaryUnderlay->rect.h == expectedBoundaryHeight &&
+             boundaryAccent->rect.x == expectedBoundaryX &&
+             boundaryAccent->rect.y == expectedBoundaryY &&
+             boundaryAccent->rect.w == expectedBoundaryWidth &&
+             boundaryAccent->rect.h == expectedBoundaryHeight,
+           "finite boundary follows the canonical torus cell edges");
+  testTrue(g,
+           boundaryUnderlay != nullptr && boundaryAccent != nullptr &&
+             boundaryUnderlay->lineWidth == 4.0f &&
+             boundaryAccent->lineWidth == 2.0f &&
+             boundaryAccent->color.r == 245 && boundaryAccent->color.g == 102 &&
+             boundaryAccent->color.b == 112,
+           "finite boundary uses a two-pixel red edge at unit zoom");
+  camera.SetZoom(0.25f);
+  finiteView.syncVisibleRegion();
+  boundaryUnderlay = finiteView.getVisual().getShape(0);
+  boundaryAccent = finiteView.getVisual().getShape(1);
+  testTrue(g,
+           boundaryUnderlay != nullptr && boundaryAccent != nullptr &&
+             boundaryUnderlay->lineWidth == 16.0f &&
+             boundaryAccent->lineWidth == 8.0f,
+           "finite boundary keeps its screen thickness while zooming");
 }
 
 static void

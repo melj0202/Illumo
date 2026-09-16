@@ -197,13 +197,16 @@ Canvas truth (verify here before trusting older notes):
 
 Ruleset truth:
 
-- Active: Game of Life, Seeds, Brian's Brain, Highlife, Day & Night, Life
-  Without Death, Wireworld, Rule 90, and Rule 184.
+- Active catalogs include Life-like, Generations, Wireworld, elementary 1D,
+  cyclic/CCA, colorized Life, Larger-than-Life, Hodgepodge chemistry,
+  directional Turmites, HPP lattice gas, and five-species dominance rules.
 - Binary rules encode `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, conductor `3`.
 - Rule 90 and Rule 184 are elementary 1D space-time diagrams: source row is the
   maximum counted Y, destination is Y+1, older rows stay history.
-- `RuleSet` transitions (`nextState`) build a cached 256x9 table and palette
+- Count-based `RuleSet` transitions (`nextState`) build a cached 256x9 table;
+  full-state histograms, extended counts, and north/east/south/west directional
+  neighborhoods use isolated contracts. Palette
   evaluation (`evalCell`) supplies colors. Production hot loops index the table
   instead of making virtual transition calls and use separate stored/counting masks,
   retained chunk-local candidate scratch, and a generation-stamped flat address

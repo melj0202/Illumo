@@ -539,8 +539,8 @@ The live path is intentionally a full replacement of the finite dense runtime:
 |-------|------|----------|
 | **Domain** | `SparseCellGrid` | signed 64-bit cells in a hash map of non-background 16×16 chunks; `0 x 0` selects the infinite non-toroidal domain, while positive chunk dimensions select a finite torus with canonical wrapped cells |
 | **Simulation** | `SimulationRunner` + two `SparseCellGrid`s | one worker generation may be in flight; the main thread reads only the published grid and publishes completions at frame boundaries. Incremental completions apply `SparseGenerationDelta` before the former display grid is reused. Broad completions and one-revision journals of at least 2,048 presentation chunks carry a lightweight replacement marker: the spare advances directly from the immutable published grid and updates its own authoritative nodes in place, avoiding a full snapshot and mirror pass. Overdue whole steps are dropped without a backlog, and edits, persistence, ruleset changes, manual stepping, and shutdown drain first. `SparseCellGrid::advance` retains the transactional totals/frontier/candidate/halo/node-reuse paths described below. |
-| **View** | `CanvasView` | visible dimensions remain diagnostics while sampling uses a globally aligned cache padded by two chunks per side; motion inside it copies retained texels and resamples only newly exposed strips when the aligned origin shifts, otherwise it changes only the MVP. Near LOD is one texel/cell; far LOD is an integer density level with immediate coarsening and 80% refinement hysteresis. Published deltas use exact changed-cell masks to deduplicate affected cache bins; far-zoom bins are reset and recomputed together in one occupied-chunk traversal, while dense exact-cell changes may still select a complete sample at the quarter-cache threshold. LOD/resize, non-aligned jumps, revision gaps, palette change, torus wrap, and replacement refill the bounded cache. Complete overview refills and incremental overview strips initialize background bins, walk only intersecting occupied chunks, and snap-convert sampled RGB in one pass. Exact-cell CPU RGB fades; density overviews and newly revealed cells snap. |
-| **GPU** | `CanvasView` + `GameVisual` | one reusable nearest-filtered RGB staging texture and one world-space quad; dirty 16×16-texel tiles merge into at most eight update rectangles or their AABB. Uploads through 64 KiB are direct; larger requests use a non-waiting three-PBO/fence ring with direct fallback. |
+| **View** | `CanvasView` | visible dimensions remain diagnostics while sampling uses a globally aligned cache padded by two chunks per side; motion inside it copies retained texels and resamples only newly exposed strips when the aligned origin shifts, otherwise it changes only the MVP. Near LOD is one texel/cell; far LOD is an integer density level with immediate coarsening and 80% refinement hysteresis. One-revision changed chunks map to deduplicated exact or overview cache bins, with a complete cache resample when those bins cover at least a quarter of the cache; LOD/resize, non-aligned jumps, revision gaps, palette change, torus wrap, and replacement refill the bounded cache. Complete overview resamples walk occupied cells and snap-convert sampled RGB in one pass. Exact-cell CPU RGB fades; density overviews and newly revealed cells snap. |
+| **GPU** | `CanvasView` + `GameVisual` | one reusable nearest-filtered RGB staging texture and one world-space quad; finite worlds add a screen-thickness-stable themed outline around the canonical rectangle so wrap edges remain visible without tiling the world. Dirty 16×16-texel tiles merge into at most eight update rectangles or their AABB. Uploads through 64 KiB are direct; larger requests use a non-waiting three-PBO/fence ring with direct fallback. |
 
 Rulesets provide stateless `nextState` and `evalCell` functions. Each ruleset's
 complete 256-state by 9-neighbor transition table is built once before worker
@@ -698,9 +698,11 @@ invalidate current chunks before the next step.
 data-backed rules. The shipped `families.json` (schema 1) owns family IDs,
 simulation models, state counts, state labels, and colors. The separate
 `rulesets.json` (schema 3) owns stable rule IDs, display names, one required
-`family_id`, and transition parameters. Life-like, Generations, Moore-table,
-and elementary 1D definitions compile to the existing `DataRuleSet`; the
-elementary rules retain their separate history path. Older unversioned,
+`family_id`, transition parameters, and an optional deterministic starter
+strategy. Life-like, Generations, Moore-table, cyclic, colorized-Life,
+Larger-than-Life, Hodgepodge, Turmite, lattice-gas, dominance, and elementary
+1D definitions compile to the existing `DataRuleSet`;
+the elementary rules retain their separate history path. Older unversioned,
 schema-v1, and schema-v2 rules catalogs are normalized into compatible family
 and rule definitions in memory.
 
@@ -724,9 +726,65 @@ Version-4 `.illumo` saves store both IDs; version-3, version-2, and legacy
 dense saves derive the family from their saved rule ID.
 
 **Active rules**: Game of Life, Seeds, Brian's Brain, Highlife, Day & Night,
-Life Without Death, Wireworld, Rule 90, and Rule 184. They compile to the common
-`DataRuleSet`; life-like and Generations definitions use neighbor masks, while
-Wireworld uses an explicit Moore transition table. Rule 90 / 184 use
+Life Without Death, Wireworld, Rule 90, Rule 184, Star Wars, Nova Trails, two
+Excitable Waves thresholds, Prism Rush, Chromatic Storm, Crystal Domains,
+Elemental Surge, Aurora Conflict, Immigration, QuadLife, Bosco/Bugs,
+Bugsmovie, Globe, Banners, Transers, Fireworks, the classic 14-color cyclic
+automaton, Hodgepodge Classic and Spiral Bloom, Langton's Ant plus RRL and RRLL
+Turmites, HPP Gas, and two five-species RPSLS thresholds. They compile to the
+common `DataRuleSet`;
+life-like and Generations definitions use neighbor masks, while Wireworld and
+the five-phase excitable-media family use explicit Moore transition tables.
+The twelve-state Prismatic Ecology and nine-state Elemental Court use cyclic
+interaction: a cell advances by a coprime cycle step when enough neighbors hold
+that successor state. Their serial histogram kernel expands occupied chunks by
+one, counts every byte-valued neighbor state, and reuses the transactional
+sparse output/change-journal machinery without altering optimized binary paths
+(D-GC5). A multi-state medallion seed gives every kind immediate interaction.
+The classic cyclic rule follows Fisch, Gravner, and Griffeath's 14-color,
+random-initial-condition experiment. Immigration and QuadLife use the same
+B3/S23 population geometry as Life while inspecting all parent colors;
+Immigration inherits the majority species and a three-color QuadLife birth
+selects the absent fourth species. Both dense compatibility and sparse
+production use the full-state histogram contract.
+
+Larger-than-Life rules carry radius, optional center counting, inclusive birth
+and survival intervals, and square or circular neighborhood shape. Range is
+bounded to 16 and B0 is rejected. The correctness-first sparse evaluator
+expands each occupied chunk by the necessary chunk radius, counts state-zero
+cells directly, and commits through the existing transactional output/change
+journal. It intentionally does not enter the radius-one candidate, halo, memo,
+or worker fast paths (D-GC6). Shipped parameters match Golly's documented
+Bosco/Bugs, Bugsmovie, and Globe examples.
+
+Hodgepodge rules expose 101 visible chemical levels. Healthy state 1 is the
+sparse background; state 0 encodes infection level one, and numeric states
+2..100 retain their conceptual levels. The Moore histogram supplies infected
+and ill counts plus the weighted neighborhood sum for the Gerhardt--Schuster--
+Tyson transition. RPSLS dominance uses that same histogram with five species,
+two prey offsets per species, and a deterministic synchronous invasion
+threshold (D-GC7).
+
+Turmites and HPP gas use `NeighborhoodKind::VonNeumannDirectional`. Its four
+entries retain north/east/south/west identity rather than collapsing neighbors
+into counts. Turmite state is `n` tape colors plus `4n` agent states;
+simultaneous arrivals annihilate deterministically. HPP's 16 states encode four
+particle-direction bits. Opposing pairs collide into the perpendicular axis
+before all particles stream. The serial sparse evaluator expands source chunks
+by one and publishes through the same transactional map and change journal as
+the histogram and extended-range paths.
+
+Rules may request deterministic glider, single-cell, wire, active-soup,
+phase-soup, species-soup, excitable-break, Turmite-swarm, or particle-cloud
+starters. Omitted data keeps a
+model-appropriate default. This replaces the former assumption that a Life
+glider is meaningful for every Moore-count rule: Generations and
+Larger-than-Life begin from reproducible active soups, cyclic systems from
+mixed phases, and species rules from all declared live kinds.
+The four-phase Generations family shares its state schema between Star Wars and
+Nova Trails; the excitable-media rules share a five-state
+excited/resting/refractory palette while varying their activation threshold.
+Rule 90 / 184 use
 `NeighborhoodKind::Elementary1D` and a serial space-time `SparseCellGrid`
 advance (D-G2).
 Catalog registration rejects B0 and odd elementary rules because sparse storage
@@ -755,6 +813,15 @@ unbraced multi-digit exports require explicit correction rather than guessing.
 class RuleSet {
   virtual unsigned char nextState(unsigned char cell,
                                   unsigned char aliveNeighbors) const;
+  virtual unsigned char nextStateFromNeighborhood(
+    unsigned char cell,
+    const NeighborStateCounts& neighborStateCounts) const;
+  virtual unsigned char nextStateFromDirectionalNeighborhood(
+    unsigned char cell,
+    const DirectionalNeighbors& neighbors) const;
+  virtual unsigned char nextStateFromExtendedCount(
+    unsigned char cell,
+    unsigned int aliveCount) const;
   virtual void evalCell(const unsigned char& target,
                         unsigned char dest[3]) const; // palette colors
 };
@@ -765,23 +832,33 @@ class RuleSet {
 | Binary / life-like | `0` = alive, `1` = dead; neighbor count treats value `0` as live |
 | Multi-state (e.g. Brian's Brain) | `≥2` additional states (e.g. dying = 2) |
 | **Wireworld** | `0` head, `1` empty, `2` tail, `3` conductor (head = 0 reuses head-neighbor counting) |
+| Cyclic ecology | `1` remains sparse background; all declared values can trigger their predecessor |
+| Colorized Life | `1` background; every other declared value is a live species |
+| Larger-than-Life | binary encoding with a radius 1..16 extended neighborhood |
+| Hodgepodge | `1` healthy; `0` level one; `2..100` infection/ill levels |
+| Turmite | `n` tape states followed by `4n` directional agent states |
+| HPP gas | remapped 4-bit north/east/south/west particle occupancy; `1` vacuum |
+| Dominance | `1` empty; all other states are competing species |
 
 **Generation path:**
 
-1. Read the cached stored/counting totals and candidate-preferred chunk count.
+1. Route full-state histograms, directional von Neumann, and extended-range
+   rules to their isolated correctness kernels. Standard radius-one count
+   rules continue below.
+2. Read the cached stored/counting totals and candidate-preferred chunk count.
    If the retained changed frontier is empty, return immediately without
    visiting allocated chunks. Otherwise enroll each changed chunk and only the
    neighbors touched by its exact counting-change edge/corner bits. For
    sparse local sources, build target-local candidate masks and select candidate
    or halo evaluation independently.
-2. Compare exact frontier preparation/evaluation work units with a complete-path
+3. Compare exact frontier preparation/evaluation work units with a complete-path
    estimate derived from cached totals. Evaluate and patch the frontier when it
    is no more expensive; otherwise use the complete path. Retain at most 16,384
    changed addresses between generations so tracking can resume after a dense
    burst; the work comparison, not that cap, selects evaluation.
-3. Use the cached candidate-preferred count to select the complete
+4. Use the cached candidate-preferred count to select the complete
    adaptive or all-dense path.
-4. If any source chunk is counting-sparse, derive affected target addresses
+5. If any source chunk is counting-sparse, derive affected target addresses
    from source counting-mask edges/corners and insert them into the retained
    generation-stamped flat index. Initialize neighbor counts only as candidate
    bits are enrolled. Build serial scratch source-by-source, or prepare large
@@ -792,15 +869,15 @@ class RuleSet {
    Dense-majority frontiers and frontiers with at least 2,048 targets skip
    candidate scratch construction.
    Large mixed work sets use coarse work-count ranges in the worker pool.
-5. If every source chunk is counting-dense, bypass candidate scratch. Build the
+6. If every source chunk is counting-dense, bypass candidate scratch. Build the
    expanded target set in its retained generation-stamped flat index, retain
    address/result vector capacity, and evaluate serially or through the bounded
    pool for 32+ targets. Construct rolling neighbor rows directly from chunk
    counting masks without a temporary 18×18 byte halo.
-6. For at least 32 halo targets, sample an exact sharded 18×18-state memo. Use
+7. For at least 32 halo targets, sample an exact sharded 18×18-state memo. Use
    it only after the observed hit rate pays for key construction, and bypass or
    cool it down on unique neighborhoods. Invalidate on transition changes.
-7. Build the complete next map serially using retained buckets and recycled
+8. Build the complete next map serially using retained buckets and recycled
    chunk nodes. Construct sparse candidate output directly in mapped node
    storage; keep dense halo output as a bulk array copy. Compare to the
    authoritative map, then swap transactionally only when contents differ.
@@ -875,8 +952,9 @@ and transitions. The family-aware form previews a representative transition
 and state palette, and imports or exports family/rule packages. Save & Apply
 validates and persists the family before its referencing rule, drains the
 simulation, rejects state-schema changes that invalidate live cells, then
-activates the pair. Moore transition tables remain JSON-edited rather than
-expanding the UI into a large matrix editor.
+activates the pair. Cyclic families expose successor threshold and coprime cycle
+step controls with a successor-neighbor preview. Moore transition tables remain
+JSON-edited rather than expanding the UI into a large matrix editor.
 Animation remains local value state: the overlay eases into place, rows reveal
 in sequence, selection glides, and changed values pulse without adding widgets
 or blocking input. The mouse wheel scrolls the viewport without changing the
@@ -1151,6 +1229,7 @@ disabled.
 | **D-G2** | Elementary 1D rules use a serial space-time advance, not the Moore 256×9 table. |
 | **D-GC2** | Shipped and custom rules compile from versioned data; F2 edits staged drafts (catalog layering and save version are updated by D-GC4). |
 | **D-GC4** | Families own cell schemas and palettes; every ruleset references one family; F1/runtime/saves carry both IDs, with v4 writes and legacy derivation. |
+| **D-GC5** | Cyclic families use full Moore neighbor-state histograms with threshold/coprime-step rules in an isolated serial sparse kernel. |
 | **D-F1** | MacroDefs / Windows.h include toxicity deferred until real pain. |
 
 ---

@@ -3,6 +3,7 @@
 #include "Rulesets/RuleSetRegistry.h"
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/EnvVars.h>
@@ -72,6 +73,80 @@ defaultConfiguration()
   configuration.uiScale = 1;
   configuration.msaa = 4;
   return configuration;
+}
+
+static bool
+hasSwitchBeside(GameVisual& visual, const std::string& label)
+{
+  float labelY = -1000.0f;
+  for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == label) {
+      labelY = text->y;
+      break;
+    }
+  }
+  if (labelY < 0.0f) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < visual.shapeCount(); ++index) {
+    ShapePrimitive* shape = visual.getShape(index);
+    if (shape != nullptr && shape->kind == ShapeKind::FilledRect &&
+        std::abs(shape->rect.w - 20.0f) < 0.1f &&
+        std::abs(shape->rect.h - 16.0f) < 0.1f &&
+        std::abs(shape->rect.y - labelY) < 4.0f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool
+hasTextCaret(GameVisual& visual)
+{
+  for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == "|") {
+      return true;
+    }
+  }
+  return false;
+}
+
+static float
+textCaretGap(GameVisual& visual, const std::string& value)
+{
+  TextPrimitive* valueText = nullptr;
+  TextPrimitive* caretText = nullptr;
+  for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == value) {
+      valueText = text;
+    } else if (text != nullptr && text->content == "|") {
+      caretText = text;
+    }
+  }
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (valueText == nullptr || caretText == nullptr || font == nullptr ||
+      value.empty()) {
+    return 1000.0f;
+  }
+  const FontMetrics& metrics = font->getMetrics();
+  const float scale =
+    metrics.pixelSize > 0.0f ? valueText->sizePt / metrics.pixelSize : 1.0f;
+  const TextBounds bounds = font->measureText(value, valueText->sizePt);
+  const GlyphInfo* valueGlyph =
+    font->getGlyph(static_cast<unsigned char>(value.back()));
+  const GlyphInfo* caretGlyph = font->getGlyph('|');
+  float valueRight = valueText->x + bounds.width;
+  if (valueGlyph != nullptr) {
+    valueRight +=
+      (valueGlyph->bearingX + valueGlyph->width - valueGlyph->advanceX) * scale;
+  }
+  const float caretLeft =
+    caretText->x +
+    (caretGlyph == nullptr ? 0.0f : caretGlyph->bearingX * scale);
+  return caretLeft - valueRight;
 }
 
 static void
@@ -290,8 +365,35 @@ testConfigurationMenuTokensAtReleaseWindowSize()
            foundFriendlyRuleName,
            "ruleset value uses a human-readable display name");
   testTrue(g, foundControlHelp, "keyboard controls are split into clear help");
+  testTrue(g,
+           !hasSwitchBeside(visual, "Fade speed"),
+           "numeric fade speed does not render a misplaced switch");
+  testTrue(g,
+           hasSwitchBeside(visual, "Vertical sync"),
+           "vertical sync renders its switch on the matching row");
   testTrue(
     g, !foundExitAction, "offscreen actions are not drawn over the footer");
+  for (int row = 0; row < 6; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.menu.update(&fixture.input);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           hasTextCaret(visual),
+           "focused editable setting renders a visible text caret");
+  const float caretGap = textCaretGap(visual, "8");
+  testTrue(g,
+           caretGap >= 0.0f && caretGap <= 2.0f,
+           "text caret sits directly beside the final rendered glyph");
+  fixture.menu.tick(0.6f);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           !hasTextCaret(visual),
+           "editable setting caret alternates off during its blink cycle");
   fixture.press(KeyCode::End);
   fixture.menu.update(&fixture.input);
   fixture.menu.tick(1.0f);
@@ -304,6 +406,14 @@ testConfigurationMenuTokensAtReleaseWindowSize()
       foundExitAction || (text != nullptr && text->content == "Exit simulator");
   }
   testTrue(g, foundExitAction, "End scrolls Exit into the visible viewport");
+  testTrue(g,
+           !hasSwitchBeside(visual, "FPS cap"),
+           "numeric FPS cap does not render a misplaced switch");
+  testTrue(g,
+           hasSwitchBeside(visual, "Simulation inspector") &&
+             hasSwitchBeside(visual, "Reduced menu motion") &&
+             hasSwitchBeside(visual, "Edit control hints"),
+           "lower boolean settings render switches on their matching rows");
   testTrue(g, foundRestartNote, "settings menu renders restart note footer");
 
   fixture.menu.close();
