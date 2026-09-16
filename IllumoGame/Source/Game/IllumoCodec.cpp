@@ -2,6 +2,7 @@
 #include "CanvasCoordinatePolicy.h"
 #include "CellContext.h"
 #include "Rulesets/RuleSet.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Platform/AtomicFile.h>
 
 #include <algorithm>
@@ -60,16 +61,54 @@ IllumoCodec::writeFile(const std::string& path,
     setError(error, "Camera metadata is outside the supported range");
     return false;
   }
+  const RuleSetDefinition* rule =
+    RuleSetRegistry::instance().getRuleSetDefinition(document.ruleString);
+  const RuleFamilyDefinition* family =
+    RuleSetRegistry::instance().getFamilyDefinition(document.familyString);
+  if (rule == nullptr || family == nullptr ||
+      rule->familyId != document.familyString) {
+    setError(error, "Save requires a matching ruleset and family");
+    return false;
+  }
+  if (document.familyString.size() >= MAX_RULETAG_SIZE ||
+      document.ruleString.size() >= MAX_RULETAG_SIZE ||
+      !SparseCellGrid::isValidTopology(document.worldChunkWidth,
+                                       document.worldChunkHeight)) {
+    setError(
+      error,
+      "Save identity or topology metadata is outside the supported range");
+    return false;
+  }
+  const SparseCellGrid* grid =
+    document.sourceGrid != nullptr ? document.sourceGrid : document.grid.get();
+  std::vector<SparseChunkRecord> records;
+  if (grid != nullptr) {
+    records = grid->collectChunkRecords();
+    for (const SparseChunkRecord& record : records) {
+      for (const unsigned char state : record.cells) {
+        if (static_cast<unsigned int>(state) >= family->stateCount) {
+          setError(error,
+                   "Save contains a state that is invalid for its family");
+          return false;
+        }
+      }
+    }
+  }
 
   return AtomicFile::write(
     path,
-    [&document](std::ostream& file, std::string*) {
-      const char magic[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '3', '\0' };
-      const std::uint32_t version = 3;
+    [&document, &records](std::ostream& file, std::string*) {
+      const char magic[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '4', '\0' };
+      const std::uint32_t version = 4;
+      char familyTag[MAX_RULETAG_SIZE] = {};
       char ruleTag[MAX_RULETAG_SIZE] = {};
+      const std::size_t familyBytes =
+        std::min(document.familyString.size(),
+                 static_cast<std::size_t>(MAX_RULETAG_SIZE - 1));
       const std::string activeTag = document.ruleString;
       const std::size_t tagBytes = std::min(
         activeTag.size(), static_cast<std::size_t>(MAX_RULETAG_SIZE - 1));
+      std::memcpy(familyTag, document.familyString.data(), familyBytes);
       std::memcpy(ruleTag, activeTag.data(), tagBytes);
 
       const double cameraX = document.cameraX;
@@ -77,18 +116,12 @@ IllumoCodec::writeFile(const std::string& path,
       const double cameraZoom = document.cameraZoom;
       const std::int64_t worldChunkWidth = document.worldChunkWidth;
       const std::int64_t worldChunkHeight = document.worldChunkHeight;
-      const SparseCellGrid* grid = document.sourceGrid != nullptr
-                                     ? document.sourceGrid
-                                     : document.grid.get();
-      std::vector<SparseChunkRecord> records;
-      if (grid != nullptr) {
-        records = grid->collectChunkRecords();
-      }
       const std::uint64_t chunkCount =
         static_cast<std::uint64_t>(records.size());
 
       file.write(magic, sizeof(magic));
       file.write(reinterpret_cast<const char*>(&version), sizeof(version));
+      file.write(familyTag, sizeof(familyTag));
       file.write(ruleTag, sizeof(ruleTag));
       file.write(reinterpret_cast<const char*>(&cameraX), sizeof(cameraX));
       file.write(reinterpret_cast<const char*>(&cameraY), sizeof(cameraY));
@@ -133,6 +166,7 @@ IllumoCodec::readFile(const std::string& path,
     return false;
   }
 
+  const char expectedMagicV4[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '4', '\0' };
   const char expectedMagicV3[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '3', '\0' };
   const char expectedMagicV2[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '2', '\0' };
   char magic[sizeof(expectedMagicV3)] = {};
@@ -152,14 +186,18 @@ IllumoCodec::readFile(const std::string& path,
   double savedCameraZoom = 1.0;
   int fileVersion = 1;
 
+  const bool sparseV4 = std::memcmp(magic, expectedMagicV4, sizeof(magic)) == 0;
   const bool sparseV3 = std::memcmp(magic, expectedMagicV3, sizeof(magic)) == 0;
   const bool sparseV2 = std::memcmp(magic, expectedMagicV2, sizeof(magic)) == 0;
-  if (sparseV3 || sparseV2) {
-    fileVersion = sparseV3 ? 3 : 2;
+  std::string familyString;
+  if (sparseV4 || sparseV3 || sparseV2) {
+    fileVersion = sparseV4 ? 4 : sparseV3 ? 3 : 2;
     std::uint32_t version = 0;
+    char familyTag[MAX_RULETAG_SIZE] = {};
     char ruleTag[MAX_RULETAG_SIZE] = {};
     std::uint64_t chunkCount = 0;
     if (!file.read(reinterpret_cast<char*>(&version), sizeof(version)) ||
+        (sparseV4 && !file.read(familyTag, sizeof(familyTag))) ||
         !file.read(ruleTag, sizeof(ruleTag)) ||
         !file.read(reinterpret_cast<char*>(&savedCameraX),
                    sizeof(savedCameraX)) ||
@@ -170,7 +208,7 @@ IllumoCodec::readFile(const std::string& path,
       setError(error, "Invalid or truncated sparse save header");
       return false;
     }
-    if (sparseV3 &&
+    if ((sparseV3 || sparseV4) &&
         (!file.read(reinterpret_cast<char*>(&loadedWorldChunkWidth),
                     sizeof(loadedWorldChunkWidth)) ||
          !file.read(reinterpret_cast<char*>(&loadedWorldChunkHeight),
@@ -182,7 +220,7 @@ IllumoCodec::readFile(const std::string& path,
       setError(error, "Invalid or truncated sparse save header");
       return false;
     }
-    const std::uint32_t expectedVersion = sparseV3 ? 3u : 2u;
+    const std::uint32_t expectedVersion = sparseV4 ? 4u : sparseV3 ? 3u : 2u;
     if (version != expectedVersion || chunkCount > 10000000ULL ||
         !CanvasCoordinatePolicy::validPosition(savedCameraX, savedCameraY) ||
         !std::isfinite(savedCameraZoom) || savedCameraZoom < 0.1 ||
@@ -194,6 +232,9 @@ IllumoCodec::readFile(const std::string& path,
     }
     loadedGrid = std::make_unique<SparseCellGrid>(loadedWorldChunkWidth,
                                                   loadedWorldChunkHeight);
+    if (sparseV4) {
+      familyString = boundedRuleTag(familyTag, sizeof(familyTag));
+    }
     ruleString = boundedRuleTag(ruleTag, sizeof(ruleTag));
     bool havePreviousChunk = false;
     std::int64_t previousChunkX = 0;
@@ -287,12 +328,37 @@ IllumoCodec::readFile(const std::string& path,
     }
   }
 
-  if (!CellContext::IsKnownModeString(ruleString)) {
+  const RuleSetDefinition* rule =
+    RuleSetRegistry::instance().getRuleSetDefinition(ruleString);
+  if (rule == nullptr) {
     setError(error, "Save uses unsupported ruleset: " + ruleString);
     return false;
   }
+  if (!sparseV4) {
+    familyString = rule->familyId;
+  } else if (familyString != rule->familyId) {
+    setError(error, "Save ruleset does not belong to its recorded family");
+    return false;
+  }
+  const RuleFamilyDefinition* family =
+    RuleSetRegistry::instance().getFamilyDefinition(familyString);
+  if (family == nullptr) {
+    setError(error, "Save uses unsupported family: " + familyString);
+    return false;
+  }
+  std::vector<SparseChunkRecord> records;
+  loadedGrid->collectChunkRecords(&records);
+  for (const SparseChunkRecord& record : records) {
+    for (const unsigned char state : record.cells) {
+      if (static_cast<unsigned int>(state) >= family->stateCount) {
+        setError(error, "Save contains a state that is invalid for its family");
+        return false;
+      }
+    }
+  }
 
   document->version = fileVersion;
+  document->familyString = familyString;
   document->ruleString = ruleString;
   document->cameraX = savedCameraX;
   document->cameraY = savedCameraY;

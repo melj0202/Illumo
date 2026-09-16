@@ -9,6 +9,15 @@ RuleSet::RuleSet(CellGrid* targetCanvas)
 {
 }
 
+RuleSet::RuleSet(CellGrid* targetCanvas,
+                 const TransitionTable& precompiledTransitions)
+  : canvas(targetCanvas)
+  , transitionTable(precompiledTransitions)
+  , transitionTableReady(true)
+  , transitionRevision(1u)
+{
+}
+
 int RuleSet::workerOverride = 0;
 
 const RuleSet::TransitionTable&

@@ -19,10 +19,12 @@ add_library(IllumoGameCore STATIC
   Source/Game/NewSimulationMenu.cpp
   Source/Game/PatternCodec.cpp
   Source/Game/RuleCatalogLoader.cpp
+  Source/Game/RulesetWorkshopMenu.cpp
   Source/Game/SimulationRunner.cpp
   Source/Game/SparseCellGrid.cpp
   Source/Game/SparseWorkerPool.cpp
   Source/Rulesets/BriansBrainRuleSet.cpp
+  Source/Rulesets/DataRuleSet.cpp
   Source/Rulesets/Elementary1DRuleSet.cpp
   Source/Rulesets/LifeLikeRuleSet.cpp
   Source/Rulesets/RuleSet.cpp
@@ -43,8 +45,10 @@ illumo_configure_runtime_target(IllumoGame)
 illumo_stage_runtime(IllumoGame)
 illumo_stage_default_file(IllumoGame
   "${CMAKE_CURRENT_SOURCE_DIR}/envvars.json" envvars.json)
-illumo_stage_default_file(IllumoGame
+illumo_stage_runtime_file(IllumoGame
   "${CMAKE_CURRENT_SOURCE_DIR}/rulesets.json" rulesets.json)
+illumo_stage_runtime_file(IllumoGame
+  "${CMAKE_CURRENT_SOURCE_DIR}/families.json" families.json)
 illumo_stage_msvc_asan(IllumoGame)
 
 if(BUILD_TESTING)
@@ -76,5 +80,8 @@ if(BUILD_TESTING)
   illumo_configure_runtime_target(IllumoGameTests)
   illumo_discover_test_runner(IllumoGameTests IllumoGame)
   illumo_stage_msvc_asan(IllumoGameTests)
-  add_dependencies(IllumoGameTests IllumoGameRuntimeStage)
+  add_dependencies(IllumoGameTests
+    IllumoGameRuntimeStage
+    IllumoGame_rulesets_json_RuntimeStage
+    IllumoGame_families_json_RuntimeStage)
 endif()

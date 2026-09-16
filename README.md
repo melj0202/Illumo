@@ -645,7 +645,8 @@ in a non-waiting three-PBO/fence ring and fall back to direct upload when all
 slots are busy or mapping fails. Replacements preserve the opaque handle while
 deleting the old GL texture, PBOs, and fences.
 
-Save commands append `.illumo` when no extension is supplied. Version 3 saves
-include world topology as well as ruleset, camera, and sorted sparse chunks.
-Loading validates the save before changing the canvas, reads version 3,
-version 2, and legacy dense files, and activates the stored ruleset.
+Save commands append `.illumo` when no extension is supplied. Version 4 saves
+include family and ruleset IDs, world topology, camera, and sorted sparse
+chunks. Loading validates the save before changing the canvas, reads versions
+4, 3, and 2 plus legacy dense files, derives the family for older saves, and
+activates the stored family/ruleset pair.

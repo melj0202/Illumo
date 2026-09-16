@@ -1,19 +1,24 @@
 #include "Game/CanvasCoordinatePolicy.h"
 #include "Game/CellGameModule.h"
+#include "Game/RuleCatalogLoader.h"
 #include "Rulesets/RuleSet.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -26,6 +31,56 @@
 static TestCounters g;
 static std::string gSaveDialogResult;
 static std::string gLoadDialogResult;
+
+class WorkingDirectoryFixture
+{
+public:
+  WorkingDirectoryFixture()
+  {
+    std::error_code error;
+    previousDirectory = std::filesystem::current_path(error);
+    if (error) {
+      return;
+    }
+    const std::filesystem::path temporaryDirectory =
+      std::filesystem::temp_directory_path(error) /
+      ("illumo-rule-workshop-" +
+       std::to_string(
+         std::chrono::steady_clock::now().time_since_epoch().count()));
+    if (error ||
+        !std::filesystem::create_directory(temporaryDirectory, error) ||
+        error) {
+      return;
+    }
+    directory = temporaryDirectory;
+    std::filesystem::current_path(directory, error);
+    ready = !error;
+  }
+
+  ~WorkingDirectoryFixture()
+  {
+    std::error_code error;
+    if (!previousDirectory.empty()) {
+      std::filesystem::current_path(previousDirectory, error);
+    }
+    if (!directory.empty()) {
+      std::filesystem::remove_all(directory, error);
+    }
+  }
+
+  WorkingDirectoryFixture(const WorkingDirectoryFixture&) = delete;
+  WorkingDirectoryFixture& operator=(const WorkingDirectoryFixture&) = delete;
+  WorkingDirectoryFixture(WorkingDirectoryFixture&&) = delete;
+  WorkingDirectoryFixture& operator=(WorkingDirectoryFixture&&) = delete;
+
+  bool isReady() const { return ready; }
+  const std::filesystem::path& getDirectory() const { return directory; }
+
+private:
+  std::filesystem::path previousDirectory;
+  std::filesystem::path directory;
+  bool ready = false;
+};
 
 std::string
 SaveLoad::GetSaveLocation(const SaveLoadDialogSpec&)
@@ -49,6 +104,43 @@ historyContains(const CommandLine& console, const std::string& text)
     }
   }
   return false;
+}
+
+static bool
+focusWorkshopControl(RulesetWorkshopMenu& menu,
+                     InputManager& input,
+                     const std::string& label)
+{
+  input.getKeyQueue().push({ KeyCode::Home, InputAction::Press, 0 });
+  menu.update(&input);
+  for (int attempt = 0; attempt < 32; ++attempt) {
+    if (menu.getSelectedControlForTesting() == label) {
+      return true;
+    }
+    input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+    menu.update(&input);
+  }
+  return menu.getSelectedControlForTesting() == label;
+}
+
+static bool
+openWorkshop(RulesetWorkshopMenu& menu,
+             const RuleSetDefinition& rule,
+             bool reducedMotion)
+{
+  const RuleFamilyDefinition* family =
+    RuleSetRegistry::instance().getFamilyDefinition(rule.familyId);
+  return family != nullptr && menu.open(*family, rule, reducedMotion);
+}
+
+static void
+setWorkshopDraft(RulesetWorkshopMenu& menu, const RuleSetDefinition& rule)
+{
+  const RuleFamilyDefinition* family =
+    RuleSetRegistry::instance().getFamilyDefinition(rule.familyId);
+  if (family != nullptr) {
+    menu.setDraft(*family, rule);
+  }
 }
 
 struct CellGameFixture
@@ -81,6 +173,7 @@ struct CellGameFixture
     , module()
     , started(false)
   {
+    RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
     // Preferences are explicit so repeated runs cannot inherit a saved draft.
     env.setVar("fps", 60);
     env.setVar("showInspector", false);
@@ -90,6 +183,8 @@ struct CellGameFixture
     env.setVar("WinY", 480);
     env.setVar("CanvasX", width);
     env.setVar("CanvasY", height);
+    env.setVar("FamilyString", "LIFE_LIKE_BINARY");
+    env.setVar("RuleSetString", "GAME_OF_LIFE");
     env.setVar("ModeString", "GAME_OF_LIFE");
     env.setVar("tps", 30);
     env.setVar("speedFactor", 1.0);
@@ -318,10 +413,14 @@ testWireworldSeedAndBrush()
 {
   testSection("CellGameModule: Wireworld seed and brush state");
   CellGameFixture fixture(16, 12);
+  fixture.env.setVar("FamilyString", "WIREWORLD_FAMILY");
+  fixture.env.setVar("RuleSetString", "WIREWORLD");
   fixture.env.setVar("ModeString", "WIREWORLD");
   // Restart under Wireworld so seedInitialPattern runs for that ruleset.
   fixture.module.Exit();
   fixture.started = false;
+  fixture.env.setVar("FamilyString", "WIREWORLD_FAMILY");
+  fixture.env.setVar("RuleSetString", "WIREWORLD");
   fixture.env.setVar("ModeString", "WIREWORLD");
   fixture.module.Start(&fixture.context);
   fixture.started =
@@ -333,6 +432,10 @@ testWireworldSeedAndBrush()
   testTrue(g, cellContext != nullptr, "Wireworld cellContext exists");
   testTrue(
     g, cellContext->getModeString() == "WIREWORLD", "ModeString is WIREWORLD");
+  testTrue(g,
+           cellContext->getRuleSet()->getStateCount() == 4u &&
+             cellContext->getRuleSet()->getStateName(0u) == "Head",
+           "Wireworld rule metadata is present before seeding");
 
   CanvasView* canvas = cellContext->getCanvasView();
   const std::int64_t y = 0;
@@ -400,8 +503,9 @@ testSaveLoadRoundTrip()
            CellGameModuleTestAccess::load(fixture.module, savePath.string()),
            "saved canvas loads");
   testTrue(g,
-           cellContext->getModeString() == "WIREWORLD",
-           "saved ruleset is restored");
+           cellContext->getModeString() == "WIREWORLD" &&
+             cellContext->getFamilyString() == "WIREWORLD_FAMILY",
+           "saved family and ruleset pair are restored");
   testTrue(g,
            cellContext->getWorldChunkWidth() == 2 &&
              cellContext->getWorldChunkHeight() == 2,
@@ -437,7 +541,7 @@ testSaveLoadRoundTrip()
   testTrue(g, firstSave == secondSave, "sparse save output is deterministic");
   testEqSize(g,
              std::filesystem::file_size(savePath),
-             static_cast<std::size_t>(188 + 2 * (16 * 16 + 16)),
+             static_cast<std::size_t>(316 + 2 * (16 * 16 + 16)),
              "save contains the sparse header and two chunk records");
 }
 
@@ -495,10 +599,36 @@ testSparseV2Compatibility()
               "version 2 sparse cell is restored");
   testTrue(g,
            cellContext->getModeString() == "SEEDS" &&
+             cellContext->getFamilyString() == "LIFE_LIKE_BINARY" &&
              fixture.camera.GetPositionPrecise() ==
                glm::dvec2(cameraX, cameraY) &&
              fixture.camera.GetZoom() == static_cast<float>(cameraZoom),
            "version 2 ruleset and camera are restored");
+
+  const char magicV3[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '3', '\0' };
+  const std::uint32_t versionV3 = 3u;
+  const std::int64_t infiniteTopology = 0;
+  const std::uint64_t noChunks = 0u;
+  {
+    std::ofstream output("valid-v3.illumo", std::ios::binary | std::ios::trunc);
+    output.write(magicV3, sizeof(magicV3));
+    output.write(reinterpret_cast<const char*>(&versionV3), sizeof(versionV3));
+    output.write(ruleTag, sizeof(ruleTag));
+    output.write(reinterpret_cast<const char*>(&cameraX), sizeof(cameraX));
+    output.write(reinterpret_cast<const char*>(&cameraY), sizeof(cameraY));
+    output.write(reinterpret_cast<const char*>(&cameraZoom),
+                 sizeof(cameraZoom));
+    output.write(reinterpret_cast<const char*>(&infiniteTopology),
+                 sizeof(infiniteTopology));
+    output.write(reinterpret_cast<const char*>(&infiniteTopology),
+                 sizeof(infiniteTopology));
+    output.write(reinterpret_cast<const char*>(&noChunks), sizeof(noChunks));
+  }
+  testTrue(g,
+           CellGameModuleTestAccess::load(fixture.module, "valid-v3.illumo") &&
+             cellContext->getModeString() == "SEEDS" &&
+             cellContext->getFamilyString() == "LIFE_LIKE_BINARY",
+           "version 3 derives the family from its ruleset ID");
 }
 
 static void
@@ -604,7 +734,7 @@ testReleaseConfigurationWorkflow()
              fixture.env.getVar("fps").valueAsLong == 144,
            "invalid FPS cap leaves applied preferences intact");
   menu->open(applied);
-  for (int row = 0; row < 16; ++row) {
+  for (int row = 0; row < 17; ++row) {
     fixture.input.getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
   }
@@ -683,7 +813,7 @@ pointAtPaintCard(CellGameFixture& fixture, int stateCount, int state)
                         CellGameModuleTestAccess::getCellContext(fixture.module)
                           ->getCanvasView()
                           ->getBottomInsetPixels()) -
-    66.0f * scale;
+    94.0f * scale;
 }
 static void
 testPaintPalette()
@@ -777,7 +907,7 @@ testPaintPalette()
   fixture.env.setVar("reducedUiMotion", false);
   fixture.window.mouseX = 320.0;
   fixture.window.mouseY =
-    354.0 - CellGameModuleTestAccess::getCellContext(fixture.module)
+    326.0 - CellGameModuleTestAccess::getCellContext(fixture.module)
               ->getCanvasView()
               ->getBottomInsetPixels();
   InputManagerTestAccess::setAction(
@@ -843,7 +973,7 @@ testPaintPaletteFittedInput()
     CellGameModuleTestAccess::getCellContext(fixture.module)
       ->getCanvasView()
       ->getBottomInsetPixels() -
-    126.0 * scale;
+    154.0 * scale;
   const SparseCellGrid* grid =
     CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
   const std::uint64_t beforeClose = grid->getRevision();
@@ -871,8 +1001,28 @@ testPaintPaletteFittedInput()
   fixture.module.Update(0.016);
   testTrue(g,
            CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
-             visual.textCount() == 6u,
+             visual.textCount() == 7u,
            "second header click restores all state labels and help");
+  const TextPrimitive* instruction = visual.getText(6u);
+  const float localPanelWidth = 4.0f * 132.0f + 24.0f;
+  const float localScreenWidth = static_cast<float>(fixture.window.width) /
+                                 (fixture.renderer.getUiScale() * fit);
+  const float panelLeft = (localScreenWidth - localPanelWidth) * 0.5f;
+  const float panelRight = panelLeft + localPanelWidth;
+  const std::shared_ptr<Font> font = Font::getDefaultFont();
+  const float instructionWidth =
+    instruction != nullptr && font != nullptr
+      ? font->measureText(instruction->content, instruction->sizePt).width
+      : (instruction != nullptr ? GuiKit::estimateTextWidth(
+                                    instruction->content, instruction->sizePt)
+                                : 0.0f);
+  testTrue(g,
+           instruction != nullptr &&
+             instruction->content ==
+               "Wheel browse   Left paint   Right erase" &&
+             instruction->x >= panelLeft + 14.0f &&
+             instruction->x + instructionWidth <= panelRight - 14.0f,
+           "palette instructions stay inside the drawer surface");
   testEqInt(g,
             CellGameModuleTestAccess::getWireworldBrush(fixture.module),
             2,
@@ -1693,6 +1843,736 @@ testInputRegistrationLifetime()
            "failed startup preserves selection");
 }
 
+static void
+testRulesetWorkshopF2Draft()
+{
+  CellGameFixture fixture;
+  RulesetWorkshopMenu* menu =
+    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+  const RuleSetDefinition* original =
+    RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
+  testTrue(g,
+           menu != nullptr && original != nullptr,
+           "rule workshop and built-in definition are available");
+  fixture.input.getKeyQueue().push({ KeyCode::F2, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g, menu->isOpen(), "F2 opens the separate rule workshop");
+  bool hasWorkshopTitle = false;
+  for (std::size_t index = 0u; index < menu->getVisual().textCount(); ++index) {
+    TextPrimitive* text = menu->getVisual().getText(index);
+    hasWorkshopTitle = hasWorkshopTitle ||
+                       (text != nullptr && text->content == "RULESET WORKSHOP");
+  }
+  testTrue(g, hasWorkshopTitle, "the menu presents the Ruleset Workshop name");
+  testTrue(g,
+           menu->getAnimationProgressForTesting() > 0.0f &&
+             menu->getAnimationProgressForTesting() < 1.0f,
+           "workshop panel reveal advances smoothly");
+  testTrue(g,
+           menu->getDraft().id.rfind("CUSTOM_GAME_OF_LIFE", 0u) == 0u,
+           "editing a built-in stages a custom stable ID");
+  testEqStr(g,
+            menu->getPreviewText(),
+            "Alive + 3 live neighbors -> Alive",
+            "workshop opens with a readable transition preview");
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Starter rule",
+           "workshop focuses the starter rule on open");
+
+  *fixture.input.getMouseScrollOffset() = -1.0;
+  fixture.module.Update(0.016);
+  testTrue(g,
+           menu->getFirstVisibleRowForTesting() == 1 &&
+             menu->getSelectedControlForTesting() == "Starter rule" &&
+             *fixture.input.getMouseScrollOffset() == 0.0,
+           "wheel scrolls the workshop view without moving selection");
+
+  const bool birthFocused =
+    focusWorkshopControl(*menu, fixture.input, "Birth counts");
+  testTrue(
+    g, birthFocused, "keyboard focus reaches the family-specific birth chips");
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           menu->getValuePulseForTesting() > 0.0f,
+           "editing a rule briefly highlights the changed value");
+  testTrue(g,
+           (menu->getDraft().birthMask & (1u << 3u)) == 0u,
+           "enter toggles the selected birth count in the staged draft");
+  const float selectionBefore = menu->getSelectionPositionForTesting();
+  fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  fixture.module.Update(0.07);
+  testTrue(
+    g,
+    menu->getSelectionPositionForTesting() > selectionBefore &&
+      menu->getSelectionPositionForTesting() <
+        static_cast<float>(menu->getControlIndexForTesting("Survival counts")),
+    "workshop selection highlight glides between rows");
+  fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g, !menu->isOpen(), "Escape discards the staged draft");
+  testTrue(g,
+           original->birthMask == (1u << 3u),
+           "discard leaves the active catalog definition unchanged");
+
+  CellGameFixture reducedMotionFixture;
+  reducedMotionFixture.env.setVar("reducedUiMotion", true);
+  RulesetWorkshopMenu* reducedMenu =
+    CellGameModuleTestAccess::getRulesetWorkshopMenu(
+      reducedMotionFixture.module);
+  reducedMotionFixture.input.getKeyQueue().push(
+    { KeyCode::F2, InputAction::Press, 0 });
+  reducedMotionFixture.module.Update(0.016);
+  testTrue(g,
+           reducedMenu != nullptr &&
+             reducedMenu->getAnimationProgressForTesting() == 1.0f &&
+             reducedMenu->getValuePulseForTesting() == 0.0f,
+           "reduced motion snaps the workshop reveal and disables pulses");
+}
+
+static void
+testRulesetWorkshopFamilyControls()
+{
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  RulesetWorkshopMenu* menu =
+    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+  const RuleSetDefinition* life =
+    RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
+  const RuleSetDefinition* generations =
+    RuleSetRegistry::instance().getRuleSetDefinition("BRIANS_BRAIN");
+  const RuleSetDefinition* table =
+    RuleSetRegistry::instance().getRuleSetDefinition("WIREWORLD");
+  const RuleSetDefinition* elementary =
+    RuleSetRegistry::instance().getRuleSetDefinition("RULE_90");
+  testTrue(g,
+           menu != nullptr && life != nullptr && generations != nullptr &&
+             table != nullptr && elementary != nullptr,
+           "built-in definitions cover all workshop rule families");
+  if (menu == nullptr || life == nullptr || generations == nullptr ||
+      table == nullptr || elementary == nullptr) {
+    return;
+  }
+
+  testTrue(g,
+           openWorkshop(*menu, *life, true) &&
+             menu->hasControlForTesting("Starter rule") &&
+             menu->hasControlForTesting("Cell family") &&
+             menu->hasControlForTesting("Ruleset name") &&
+             menu->getFamilyDraft().kind == RuleFamily::LifeLike,
+           "ruleset identity and behavior family have separate controls");
+  const std::string originalId = menu->getDraft().id;
+  const std::string originalName = menu->getDraft().name;
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Cell family"),
+           "family can be selected independently from the starter rule");
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(
+    g,
+    menu->getFamilyDraft().kind == RuleFamily::Generations &&
+      menu->getDraft().id == originalId &&
+      menu->getDraft().name == originalName &&
+      menu->hasControlForTesting("Number of states"),
+    "family change preserves ruleset identity and loads family controls");
+
+  testTrue(g,
+           openWorkshop(*menu, *life, true) &&
+             menu->hasControlForTesting("Birth counts") &&
+             menu->hasControlForTesting("Survival counts") &&
+             !menu->hasControlForTesting("Number of states") &&
+             !menu->hasControlForTesting("Wolfram rule number") &&
+             !menu->hasControlForTesting("Transition table"),
+           "Life-like family shows only its B/S rule controls");
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Live neighbors (0-8)"),
+           "preview inputs are independently keyboard navigable");
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getPreviewText().find("4 live neighbors") != std::string::npos,
+           "changing a preview input refreshes its example transition");
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Birth counts"),
+           "birth chips are reachable after changing the preview");
+  TextPrimitive* birthLabel = nullptr;
+  for (std::size_t index = 0u; index < menu->getVisual().textCount(); ++index) {
+    TextPrimitive* text = menu->getVisual().getText(index);
+    if (text != nullptr && text->content == "Birth counts") {
+      birthLabel = text;
+      break;
+    }
+  }
+  testTrue(g, birthLabel != nullptr, "focused birth chips are visible");
+  if (birthLabel != nullptr) {
+    fixture.window.mouseX = 440.0;
+    fixture.window.mouseY = birthLabel->y + birthLabel->sizePt * 0.5f;
+    menu->update(&fixture.input);
+    InputManagerTestAccess::setAction(
+      fixture.input, KeyCode::MouseLeft, InputAction::Press);
+    menu->update(&fixture.input);
+    InputManagerTestAccess::setAction(
+      fixture.input, KeyCode::MouseLeft, InputAction::Release);
+    menu->update(&fixture.input);
+    testTrue(g,
+             (menu->getDraft().birthMask & (1u << 3u)) == 0u,
+             "clicking the visible birth count chip toggles that count");
+  }
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           (menu->getDraft().birthMask & (1u << 3u)) != 0u,
+           "Enter toggles the selected B/S count chip");
+
+  testTrue(g,
+           openWorkshop(*menu, *generations, true) &&
+             menu->hasControlForTesting("Birth counts") &&
+             menu->hasControlForTesting("Survival counts") &&
+             menu->hasControlForTesting("Number of states") &&
+             !menu->hasControlForTesting("Wolfram rule number"),
+           "Generations form adds its state-count control to B/S");
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Number of states"),
+           "Generations state count is keyboard navigable");
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getFamilyDraft().stateCount ==
+             RuleSetRegistry::instance()
+                 .getFamilyDefinition(generations->familyId)
+                 ->stateCount +
+               1u,
+           "state-count stepper updates the staged definition");
+
+  testTrue(g,
+           openWorkshop(*menu, *table, true) &&
+             menu->hasControlForTesting("Transition table") &&
+             !menu->hasControlForTesting("Birth counts") &&
+             !menu->hasControlForTesting("Survival counts") &&
+             !menu->hasControlForTesting("Wolfram rule number"),
+           "Moore-table form explains JSON editing without irrelevant fields");
+
+  testTrue(g,
+           openWorkshop(*menu, *elementary, true) &&
+             menu->hasControlForTesting("Wolfram rule number") &&
+             menu->hasControlForTesting("Example neighborhood") &&
+             !menu->hasControlForTesting("Birth counts") &&
+             !menu->hasControlForTesting("Survival counts") &&
+             !menu->hasControlForTesting("Live neighbors (0-8)"),
+           "elementary form shows its rule number and 1D preview pattern");
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Example neighborhood"),
+           "elementary preview neighborhood is keyboard navigable");
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getPreviewText().find("011 ->") == 0u,
+           "elementary preview shows the selected left-center-right pattern");
+
+  fixture.window.handleResize(320, 240);
+  menu->update(&fixture.input);
+  bool hasApply = false;
+  bool hasDiscard = false;
+  for (std::size_t index = 0u; index < menu->getVisual().textCount(); ++index) {
+    TextPrimitive* text = menu->getVisual().getText(index);
+    if (text != nullptr && text->content == "SAVE & APPLY") {
+      hasApply = true;
+    } else if (text != nullptr && text->content == "DISCARD") {
+      hasDiscard = true;
+    }
+  }
+  testTrue(
+    g,
+    hasApply && hasDiscard &&
+      menu->getBodyBottomForTesting() <= menu->getFooterTopForTesting(),
+    "compact layout keeps both actions visible below the scroll viewport");
+  menu->close();
+}
+
+static void
+testRulesetWorkshopPointerNavigation()
+{
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  RulesetWorkshopMenu* menu =
+    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+  const RuleSetDefinition* gameOfLife =
+    RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
+  testTrue(g,
+           menu != nullptr && gameOfLife != nullptr &&
+             openWorkshop(*menu, *gameOfLife, true),
+           "workshop opens for pointer navigation");
+  if (menu == nullptr || gameOfLife == nullptr || !menu->isOpen()) {
+    return;
+  }
+
+  menu->update(&fixture.input);
+  const std::string startingId = menu->getDraft().id;
+  bool foundStarterRule = false;
+  float templateCenterY = 0.0f;
+  GameVisual& visual = menu->getVisual();
+  for (std::size_t index = 0; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == "Starter rule") {
+      templateCenterY = text->y + text->sizePt * 0.5f;
+      foundStarterRule = true;
+      break;
+    }
+  }
+  testTrue(
+    g, foundStarterRule, "starter-rule row is visible for pointer focus");
+  if (!foundStarterRule) {
+    return;
+  }
+
+  fixture.window.mouseX = 350.0;
+  fixture.window.mouseY = templateCenterY;
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Starter rule",
+           "pointer motion focuses the named template control");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Starter rule" &&
+             menu->getDraft().id != startingId,
+           "clicking the visible minus control changes the starting template");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  menu->update(&fixture.input);
+
+  fixture.window.mouseX = 580.0;
+  menu->update(&fixture.input);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getDraft().id == startingId,
+           "clicking the right value area cycles the template forward");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  menu->update(&fixture.input);
+
+  fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Discard",
+           "End focuses the persistent discard action");
+  fixture.window.mouseX = 500.0;
+  fixture.window.mouseY = 443.0;
+  menu->update(&fixture.input);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  testTrue(g,
+           menu->update(&fixture.input) == RulesetWorkshopAction::Cancel,
+           "clicking the pinned discard button cancels the draft");
+}
+
+static void
+testRulesetWorkshopNavigation()
+{
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  RulesetWorkshopMenu* menu =
+    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+  const RuleSetDefinition* gameOfLife =
+    RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
+  testTrue(g,
+           menu != nullptr && gameOfLife != nullptr &&
+             openWorkshop(*menu, *gameOfLife, true),
+           "workshop opens for input navigation");
+  if (menu == nullptr || gameOfLife == nullptr || !menu->isOpen()) {
+    return;
+  }
+
+  GameVisual& visual = menu->getVisual();
+  TextPrimitive* birthLabel = nullptr;
+  for (std::size_t index = 0; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == "Birth counts") {
+      birthLabel = text;
+      break;
+    }
+  }
+  testTrue(g, birthLabel != nullptr, "visible rules expose hoverable rows");
+  if (birthLabel != nullptr) {
+    fixture.window.mouseX = 320.0;
+    fixture.window.mouseY = birthLabel->y + birthLabel->sizePt * 0.5f;
+    menu->update(&fixture.input);
+    testTrue(g,
+             menu->getSelectedControlForTesting() == "Birth counts",
+             "moving the pointer focuses the row under it");
+  }
+
+  *fixture.input.getMouseScrollOffset() = -1.0;
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getFirstVisibleRowForTesting() == 1 &&
+             menu->getSelectedControlForTesting() == "Birth counts" &&
+             *fixture.input.getMouseScrollOffset() == 0.0,
+           "wheel scrolls the workshop viewport without stealing focus");
+
+  fixture.input.getKeyQueue().push({ KeyCode::W, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Ruleset name",
+           "W moves focus upward to the rule name");
+  fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  fixture.input.getKeyQueue().push({ KeyCode::S, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Survival counts",
+           "S moves focus down across actionable controls");
+  fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Example cell state",
+           "Tab advances to the next actionable control");
+  InputManagerTestAccess::setModifierFlags(fixture.input, 1);
+  fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 1 });
+  menu->update(&fixture.input);
+  InputManagerTestAccess::setModifierFlags(fixture.input, 0);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Survival counts",
+           "Shift+Tab moves focus backward");
+
+  fixture.input.getKeyQueue().push({ KeyCode::Home, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::W, InputAction::Press, 0 });
+  fixture.input.getCharQueue().push('W');
+  fixture.input.getKeyQueue().push({ KeyCode::Space, InputAction::Press, 0 });
+  fixture.input.getCharQueue().push(' ');
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Ruleset name" &&
+             menu->getDraft().name.size() >= 2u &&
+             menu->getDraft().name.substr(menu->getDraft().name.size() - 2u) ==
+               "W ",
+           "text fields keep W, S, and Space available for typing");
+
+  fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Discard",
+           "End reaches the final pinned action");
+  fixture.input.getKeyQueue().push({ KeyCode::PageUp, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() != "Discard" &&
+             menu->getFirstVisibleRowForTesting() <
+               menu->getControlIndexForTesting("Import rules from JSON"),
+           "PageUp navigates a page and keeps focus visible");
+  fixture.input.getKeyQueue().push(
+    { KeyCode::PageDown, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getSelectedControlForTesting() == "Discard",
+           "PageDown returns to the final workshop action");
+  fixture.input.getKeyQueue().push({ KeyCode::Space, InputAction::Press, 0 });
+  testTrue(g,
+           menu->update(&fixture.input) == RulesetWorkshopAction::Cancel,
+           "Space activates the focused discard action");
+}
+
+static void
+testRulesetWorkshopRejectsRemovingLiveStates()
+{
+  CellGameFixture fixture;
+  fixture.execute("ruleset", { "WIREWORLD" });
+  fixture.module.Update(0.016);
+  CellContext* context =
+    CellGameModuleTestAccess::getCellContext(fixture.module);
+  testTrue(g,
+           context != nullptr && context->getRuleSet()->getStateCount() == 4u,
+           "Wireworld is active before testing a smaller custom rule");
+  context->getGrid()->setCell(CellAddress{ 5, 5 }, 3u);
+
+  RulesetWorkshopMenu* menu =
+    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+  const RuleSetDefinition* wireworld =
+    RuleSetRegistry::instance().getRuleSetDefinition("WIREWORLD");
+  testTrue(g,
+           menu != nullptr && wireworld != nullptr,
+           "workshop and Wireworld definition are available");
+  fixture.input.getKeyQueue().push({ KeyCode::F2, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  RuleSetDefinition reduced = *wireworld;
+  RuleFamilyDefinition reducedFamily =
+    *RuleSetRegistry::instance().getFamilyDefinition(wireworld->familyId);
+  reducedFamily.id = "CUSTOM_WIREWORLD_TWO_STATE";
+  reducedFamily.name = "Two-state Wireworld test";
+  reducedFamily.builtIn = false;
+  reducedFamily.stateCount = 2u;
+  reducedFamily.stateNames.resize(2u);
+  reducedFamily.stateColors.resize(2u);
+  reduced.transitionTable.fill(1u);
+  reduced.transitionTableStateCount = 2u;
+  reduced.familyId = reducedFamily.id;
+  reduced.builtIn = false;
+  menu->setDraft(reducedFamily, reduced);
+  fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+
+  testTrue(g,
+           menu->isOpen() && !menu->getError().empty(),
+           "Apply rejects a state-count reduction that invalidates the world");
+  testTrue(g,
+           context->getModeString() == "WIREWORLD" &&
+             context->getGrid()->getCell(CellAddress{ 5, 5 }) == 3u,
+           "rejected Apply preserves the active rule and live state");
+}
+
+static void
+testRulesetWorkshopApplyPersistsAndActivates()
+{
+  RuleSetRegistry baseCatalog;
+  {
+    CellGameFixture fixture;
+    baseCatalog = RuleSetRegistry::instance();
+    WorkingDirectoryFixture workingDirectory;
+    testTrue(g,
+             workingDirectory.isReady(),
+             "isolated user catalog directory is available");
+    if (workingDirectory.isReady()) {
+      RulesetWorkshopMenu* menu =
+        CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+      const RuleSetDefinition* gameOfLife =
+        RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
+      testTrue(g,
+               menu != nullptr && gameOfLife != nullptr,
+               "workshop and source definition are available");
+      fixture.input.getKeyQueue().push({ KeyCode::F2, InputAction::Press, 0 });
+      fixture.module.Update(0.016);
+
+      RuleSetDefinition custom = *gameOfLife;
+      custom.id = "CUSTOM_F2_APPLY";
+      custom.name = "Workshop Apply Test";
+      custom.builtIn = false;
+      custom.rule = "B2/S";
+      custom.birthMask = 1u << 2u;
+      custom.surviveMask = 0u;
+      setWorkshopDraft(*menu, custom);
+      testTrue(g,
+               focusWorkshopControl(*menu, fixture.input, "Family name"),
+               "family appearance can be edited in the staged draft");
+      fixture.input.getCharQueue().push('X');
+      menu->update(&fixture.input);
+      fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
+      fixture.input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
+      fixture.input.getKeyQueue().push(
+        { KeyCode::Enter, InputAction::Press, 0 });
+      fixture.module.Update(0.016);
+
+      CellContext* activeContext =
+        CellGameModuleTestAccess::getCellContext(fixture.module);
+      const bool firstApplySucceeded =
+        activeContext != nullptr && !menu->isOpen() &&
+        activeContext->getModeString() == "CUSTOM_F2_APPLY";
+      testTrue(g,
+               firstApplySucceeded,
+               (menu->getError().empty()
+                  ? "Save & Apply activates the validated custom ID"
+                  : ("Save & Apply failed: " + menu->getError()).c_str()));
+      if (firstApplySucceeded) {
+        testTrue(g,
+                 activeContext->getRuleSet()->nextState(1u, 2u) == 0u,
+                 "first custom definition controls the active transition");
+        fixture.input.getKeyQueue().push(
+          { KeyCode::F2, InputAction::Press, 0 });
+        fixture.module.Update(0.016);
+        const RuleSetDefinition* activeDefinition =
+          RuleSetRegistry::instance().getRuleSetDefinition("CUSTOM_F2_APPLY");
+        if (menu->isOpen() && activeDefinition != nullptr) {
+          RuleSetDefinition updated = *activeDefinition;
+          updated.rule = "B3/S23";
+          updated.birthMask = 1u << 3u;
+          updated.surviveMask = (1u << 2u) | (1u << 3u);
+          setWorkshopDraft(*menu, updated);
+          testTrue(g,
+                   menu->getDraft().id == "CUSTOM_F2_APPLY",
+                   "re-editing retains the active custom ID");
+          fixture.input.getKeyQueue().push(
+            { KeyCode::End, InputAction::Press, 0 });
+          fixture.input.getKeyQueue().push(
+            { KeyCode::Up, InputAction::Press, 0 });
+          fixture.input.getKeyQueue().push(
+            { KeyCode::Enter, InputAction::Press, 0 });
+          fixture.module.Update(0.016);
+        } else {
+          testTrue(g, false, "F2 reopens the active custom rule");
+        }
+        testTrue(g,
+                 !menu->isOpen() &&
+                   activeContext->getRuleSet()->nextState(1u, 2u) == 1u,
+                 "Save & Apply recompiles edits to the active custom ID");
+      }
+      RuleSetRegistry imported;
+      testTrue(
+        g,
+        RuleCatalogLoader::loadFromDefaultLocations(imported) &&
+          imported.isKnownRule("CUSTOM_F2_APPLY") &&
+          imported.getRuleSetDefinition("CUSTOM_F2_APPLY")
+              ->familyId.rfind("CUSTOM_FAMILY_", 0u) == 0u &&
+          imported
+              .getFamilyDefinition(
+                imported.getRuleSetDefinition("CUSTOM_F2_APPLY")->familyId)
+              ->name.find("Custom ") == 0u,
+        "Save & Apply persists the family and rule overlays");
+      testTrue(g,
+               imported.getRuleSetDefinition("CUSTOM_F2_APPLY") != nullptr &&
+                 imported.getRuleSetDefinition("CUSTOM_F2_APPLY")->rule ==
+                   "B3/S23",
+               "re-edit persists the replacement rule definition");
+    }
+  }
+  RuleSetRegistry::instance() = baseCatalog;
+}
+
+static void
+testRulesetWorkshopImportRejectsReducingActiveStateRange()
+{
+  RuleSetRegistry baseCatalog;
+  gLoadDialogResult.clear();
+  {
+    CellGameFixture fixture;
+    baseCatalog = RuleSetRegistry::instance();
+    WorkingDirectoryFixture workingDirectory;
+    testTrue(
+      g, workingDirectory.isReady(), "isolated import directory is available");
+    if (workingDirectory.isReady()) {
+      RuleSetRegistry& registry = RuleSetRegistry::instance();
+      const RuleFamilyDefinition* generations =
+        registry.getFamilyDefinition("GENERATIONS_3_STATE");
+      const RuleSetDefinition* briansBrain =
+        registry.getRuleSetDefinition("BRIANS_BRAIN");
+      RulesetWorkshopMenu* menu =
+        CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+      CellContext* context =
+        CellGameModuleTestAccess::getCellContext(fixture.module);
+      testTrue(g,
+               generations != nullptr && briansBrain != nullptr &&
+                 menu != nullptr && context != nullptr,
+               "catalog, workshop, and live context are available");
+      if (generations != nullptr && briansBrain != nullptr && menu != nullptr &&
+          context != nullptr) {
+        RuleFamilyDefinition expandedFamily = *generations;
+        expandedFamily.id = "CUSTOM_IMPORT_GENERATIONS";
+        expandedFamily.name = "Six-state import test";
+        expandedFamily.stateCount = 6u;
+        expandedFamily.builtIn = false;
+        for (unsigned int state = 3u; state < expandedFamily.stateCount;
+             ++state) {
+          expandedFamily.stateNames.push_back("State " + std::to_string(state));
+          expandedFamily.stateColors.push_back({ 160u, 160u, 160u });
+        }
+        RuleSetDefinition expandedRule = *briansBrain;
+        expandedRule.id = "CUSTOM_IMPORT_GENERATIONS_RULE";
+        expandedRule.name = "Six-state import rule";
+        expandedRule.familyId = expandedFamily.id;
+        expandedRule.builtIn = false;
+        const bool registered = registry.registerFamily(expandedFamily) &&
+                                registry.registerRule(expandedRule);
+        testTrue(g, registered, "six-state custom family and rule register");
+        if (registered &&
+            context->setRuleSet(expandedFamily.id, expandedRule.id)) {
+          context->getGrid()->setCell(CellAddress{ 5, 5 }, 5u);
+          RuleFamilyDefinition reducedFamily = expandedFamily;
+          reducedFamily.stateCount = 3u;
+          reducedFamily.stateNames.resize(3u);
+          reducedFamily.stateColors.resize(3u);
+          const RuleSetDefinition* registeredRule =
+            registry.getRuleSetDefinition(expandedRule.id);
+          const std::filesystem::path catalogPath =
+            workingDirectory.getDirectory() / "reduced-family.json";
+          std::ofstream catalogFile(catalogPath, std::ios::binary);
+          if (registeredRule != nullptr) {
+            catalogFile << RuleSetRegistry::serializeRulePackage(
+              reducedFamily, *registeredRule);
+          }
+          catalogFile.close();
+          const bool catalogWritten =
+            registeredRule != nullptr && static_cast<bool>(catalogFile);
+          testTrue(
+            g, catalogWritten, "reduced family package is written for import");
+          if (catalogWritten) {
+            gLoadDialogResult = catalogPath.string();
+            fixture.input.getKeyQueue().push(
+              { KeyCode::F2, InputAction::Press, 0 });
+            fixture.module.Update(0.016);
+            testTrue(g,
+                     focusWorkshopControl(
+                       *menu, fixture.input, "Import rules from JSON"),
+                     "workshop import control can be selected");
+            fixture.input.getKeyQueue().push(
+              { KeyCode::Enter, InputAction::Press, 0 });
+            fixture.module.Update(0.016);
+            const RuleFamilyDefinition* unchangedFamily =
+              registry.getFamilyDefinition(expandedFamily.id);
+            testTrue(g,
+                     menu->isOpen() && menu->getError().find(
+                                         "active ruleset") != std::string::npos,
+                     "import reports the active ruleset state-range conflict");
+            testTrue(g,
+                     unchangedFamily != nullptr &&
+                       unchangedFamily->stateCount == 6u &&
+                       context->getRuleSet()->getStateCount() == 6u &&
+                       context->getGrid()->getCell(CellAddress{ 5, 5 }) == 5u,
+                     "rejected import preserves registry and live world");
+            testTrue(
+              g,
+              !std::filesystem::exists(workingDirectory.getDirectory() /
+                                       "families.user.json") &&
+                !std::filesystem::exists(workingDirectory.getDirectory() /
+                                         "rulesets.user.json"),
+              "rejected import does not persist partial overlays");
+
+            context->getGrid()->setCell(CellAddress{ 5, 5 }, 2u);
+            testTrue(g,
+                     focusWorkshopControl(
+                       *menu, fixture.input, "Import rules from JSON"),
+                     "workshop import can be selected again after rejection");
+            fixture.input.getKeyQueue().push(
+              { KeyCode::Enter, InputAction::Press, 0 });
+            fixture.module.Update(0.016);
+            unchangedFamily = registry.getFamilyDefinition(expandedFamily.id);
+            testTrue(
+              g,
+              menu->isOpen() &&
+                menu->getError().find("active ruleset") != std::string::npos,
+              "import rejects shrinking states the active rule can produce");
+            testTrue(
+              g,
+              unchangedFamily != nullptr && unchangedFamily->stateCount == 6u &&
+                context->getRuleSet()->getStateCount() == 6u &&
+                context->getGrid()->getCell(CellAddress{ 5, 5 }) == 2u,
+              "state-range rejection preserves valid live cells and registry");
+            testTrue(
+              g,
+              !std::filesystem::exists(workingDirectory.getDirectory() /
+                                       "families.user.json") &&
+                !std::filesystem::exists(workingDirectory.getDirectory() /
+                                         "rulesets.user.json"),
+              "state-range rejection does not persist partial overlays");
+          }
+        } else {
+          testTrue(
+            g, false, "custom family and rule activate before import test");
+        }
+      }
+    }
+  }
+  gLoadDialogResult.clear();
+  RuleSetRegistry::instance() = baseCatalog;
+}
+
 class CanvasReturnHost : public IModuleHost
 {
 public:
@@ -1830,6 +2710,28 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
 
   registry.add("IllumoGame.CellGame.InputRegistrationLifetime", []() {
     return runCellGameModuleCase(testInputRegistrationLifetime);
+  });
+  registry.add("IllumoGame.CellGame.RulesetWorkshopF2", []() {
+    return runCellGameModuleCase(testRulesetWorkshopF2Draft);
+  });
+  registry.add("IllumoGame.CellGame.RulesetWorkshopFamilyControls", []() {
+    return runCellGameModuleCase(testRulesetWorkshopFamilyControls);
+  });
+  registry.add("IllumoGame.CellGame.RulesetWorkshopPointerNavigation", []() {
+    return runCellGameModuleCase(testRulesetWorkshopPointerNavigation);
+  });
+  registry.add("IllumoGame.CellGame.RulesetWorkshopNavigation", []() {
+    return runCellGameModuleCase(testRulesetWorkshopNavigation);
+  });
+  registry.add("IllumoGame.CellGame.RulesetWorkshopStateGuard", []() {
+    return runCellGameModuleCase(testRulesetWorkshopRejectsRemovingLiveStates);
+  });
+  registry.add("IllumoGame.CellGame.RulesetWorkshopApply", []() {
+    return runCellGameModuleCase(testRulesetWorkshopApplyPersistsAndActivates);
+  });
+  registry.add("IllumoGame.CellGame.RulesetWorkshopImportStateGuard", []() {
+    return runCellGameModuleCase(
+      testRulesetWorkshopImportRejectsReducingActiveStateRange);
   });
   registry.add("IllumoGame.CellGame.StartAndRegistration", []() {
     return runCellGameModuleCase(testStartRegistersGameFeatures);

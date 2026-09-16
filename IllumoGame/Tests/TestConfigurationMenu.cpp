@@ -1,4 +1,6 @@
 #include "Game/ConfigurationMenu.h"
+#include "Game/RuleCatalogLoader.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -32,6 +34,7 @@ struct ConfigurationMenuFixture
     , input(nullptr)
     , menu(&window, &renderer)
   {
+    RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
     // Preferences are explicit so repeated runs cannot inherit a saved draft.
     env.setVar("fps", 60);
     env.setVar("showInspector", false);
@@ -87,6 +90,7 @@ testConfigurationParsingAndTopologyValidation()
            parsed.worldChunkWidth == 0 && parsed.worldChunkHeight == 0,
            "inf / inf maps to zero topology dimensions");
 
+  fixture.press(KeyCode::Down);
   fixture.press(KeyCode::Down);
   fixture.type('4');
   fixture.menu.update(&fixture.input);
@@ -166,7 +170,7 @@ testConfigurationNavigationAndActions()
            fixture.menu.getValuePulseForTesting() == 0.0f,
            "value accent pulse fades to rest");
 
-  for (int row = 0; row < 14; ++row) {
+  for (int row = 0; row < 15; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -176,7 +180,7 @@ testConfigurationNavigationAndActions()
            "Enter activates the Apply row");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 8; ++row) {
+  for (int row = 0; row < 9; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Right);
@@ -187,7 +191,7 @@ testConfigurationNavigationAndActions()
            "right cycles UI scale from 1x to 2x");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 9; ++row) {
+  for (int row = 0; row < 10; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Right);
@@ -204,7 +208,7 @@ testConfigurationNavigationAndActions()
            "F1 cancels an open menu");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 13; ++row) {
+  for (int row = 0; row < 14; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -218,7 +222,7 @@ testConfigurationNavigationAndActions()
            "reopening preserves the hints setting");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 16; ++row) {
+  for (int row = 0; row < 17; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -269,7 +273,7 @@ testConfigurationMenuTokensAtReleaseWindowSize()
       foundReadableLabel || (text->content == "Ruleset" &&
                              text->sizePt >= 16.0f && text->color.a == 255);
     foundFriendlyRuleName =
-      foundFriendlyRuleName || text->content == "Game of Life";
+      foundFriendlyRuleName || text->content == "Conway's Game of Life";
     foundControlHelp =
       foundControlHelp ||
       text->content.find("UP/DOWN: select") != std::string::npos;
@@ -318,7 +322,7 @@ testDisplaySettingsAndScrolling()
   ConfigurationMenuFixture fixture;
   fixture.env.setVar("uiScale", 4);
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 10; ++row) {
+  for (int row = 0; row < 11; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Right);
@@ -369,7 +373,7 @@ testDisplaySettingsAndScrolling()
            "inspector and reduced motion are independent toggles");
   testTrue(g,
            fixture.menu.getAnimationProgressForTesting() == 1.0f &&
-             fixture.menu.getSelectionPositionForTesting() == 12.0f &&
+             fixture.menu.getSelectionPositionForTesting() == 13.0f &&
              fixture.menu.getValuePulseForTesting() == 0.0f,
            "reduced motion immediately snaps reveal, selection, and pulse");
   fixture.press(KeyCode::Home);

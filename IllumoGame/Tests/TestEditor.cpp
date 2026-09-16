@@ -4,7 +4,9 @@
 #include "Game/CellPattern.h"
 #include "Game/IllumoCodec.h"
 #include "Game/PatternCodec.h"
+#include "Game/RuleCatalogLoader.h"
 #include "Game/SparseCellGrid.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
 #include <Illumo/Engine/IllumoContext.h>
@@ -22,6 +24,7 @@
 #include <Illumo/Testing/TestRegistry.h>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -72,6 +75,7 @@ struct EditorFixture
     , module()
     , started(false)
   {
+    RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
     // Preferences are explicit so repeated runs cannot inherit a saved draft.
     env.setVar("fps", 60);
     env.setVar("showInspector", showInspector);
@@ -81,6 +85,8 @@ struct EditorFixture
     env.setVar("WinY", 480);
     env.setVar("CanvasX", 8);
     env.setVar("CanvasY", 6);
+    env.setVar("FamilyString", "LIFE_LIKE_BINARY");
+    env.setVar("RuleSetString", "GAME_OF_LIFE");
     env.setVar("ModeString", "GAME_OF_LIFE");
     env.setVar("tps", 30);
     env.setVar("speedFactor", 1.0);
@@ -571,6 +577,7 @@ static void
 testIllumoCodecDirect()
 {
   testSection("Persistence: IllumoCodec direct file serialization");
+  RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
   testTrue(g,
            IllumoCodec::withIllumoExtension("world") == "world.illumo",
            "adds .illumo extension");
@@ -580,6 +587,7 @@ testIllumoCodecDirect()
 
   IllumoDocument doc;
   doc.version = IllumoCodec::kVersion;
+  doc.familyString = "LIFE_LIKE_BINARY";
   doc.ruleString = "GAME_OF_LIFE";
   doc.cameraX = 15.25;
   doc.cameraY = -27.5;
@@ -600,7 +608,28 @@ testIllumoCodecDirect()
   testTrue(g,
            IllumoCodec::readFile(testFile, &loaded, &error),
            "direct readFile succeeds");
-  testEqInt(g, loaded.version, 3, "loaded version is 3");
+  testEqInt(g, loaded.version, 4, "new saves use version 4");
+  testEqStr(
+    g, loaded.familyString, "LIFE_LIKE_BINARY", "family ID is preserved");
+  doc.familyString = "ELEMENTARY_1D_BINARY";
+  testTrue(g,
+           !IllumoCodec::writeFile(testFile, doc, &error),
+           "mismatched family and ruleset cannot be saved");
+  doc.familyString = "LIFE_LIKE_BINARY";
+  {
+    std::fstream corrupt(testFile,
+                         std::ios::binary | std::ios::in | std::ios::out);
+    char familyTag[MAX_RULETAG_SIZE] = {};
+    std::memcpy(familyTag, "ELEMENTARY_1D_BINARY", 20u);
+    corrupt.seekp(12, std::ios::beg);
+    corrupt.write(familyTag, sizeof(familyTag));
+  }
+  testTrue(g,
+           !IllumoCodec::readFile(testFile, &loaded, &error),
+           "mismatched family and ruleset are rejected while loading");
+  testTrue(g,
+           IllumoCodec::writeFile(testFile, doc, &error),
+           "valid family/ruleset pair restores the save");
   testEqStr(g, loaded.ruleString, "GAME_OF_LIFE", "rule tag preserved");
   testTrue(g, loaded.cameraX == 15.25, "cameraX preserved");
   testTrue(g, loaded.cameraY == -27.5, "cameraY preserved");
@@ -615,7 +644,7 @@ testIllumoCodecDirect()
   testTrue(g,
            IllumoCodec::readFile(testFile, &loaded, &error) &&
              loaded.grid->getCell(CellAddress{ 8, 9 }) == 0,
-           "replacement remains sparse version 3 compatible");
+           "replacement remains sparse version 4 compatible");
   std::filesystem::remove(testFile);
 }
 

@@ -16,7 +16,9 @@ createIllumoGameModule(IEnvVars* environment)
   // modes.
   static const bool catalogLoaded =
     RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
-  (void)catalogLoaded;
+  if (!catalogLoaded) {
+    return nullptr;
+  }
   if (environment != nullptr &&
       environment->getVar("LaunchDirect").valueAsBool) {
     return std::make_unique<CellGameModule>();
@@ -38,14 +40,18 @@ CreateIllumoApplication()
     { "-ch", "cells", "CanvasY", "Cell canvas height" },
   };
   application.commandLine.helpSections = {
-    "Rulesets:\n"
+    "Built-in rulesets (catalogs may add more IDs):\n"
     "GAME_OF_LIFE\t\t Conway's Game of Life\n"
     "BRIANS_BRAIN\t\t Brian's Brain\n"
     "LIFE_WITHOUT_DEATH\t Life Without Death\n"
     "HIGHLIFE\t\t HighLife\n"
     "SEEDS\t\t\t Seeds\n"
     "DAY_AND_NIGHT\t\t Day & Night\n"
-    "WIREWORLD\t\t Wireworld\n",
+    "WIREWORLD\t\t Wireworld\n"
+    "RULE_90 / RULE_184\t Elementary 1D rules\n"
+    "Define families in families.json and rules in rulesets.json; custom "
+    "definitions are saved in families.user.json and rulesets.user.json. "
+    "Press F2 in the canvas to edit a rule.\n",
   };
   application.applyDefaults = IllumoGameConfig::ApplyDefaults;
   application.createRequiredModule = createIllumoGameModule;

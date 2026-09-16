@@ -6,9 +6,9 @@
 Edit mode includes a bottom \textbf{Cell paint} drawer, initially closed. A centered
 pull tab toggles an eased vertical slide and chevron; rounded GuiKit surfaces, UiTheme colors, and animated
 row emphasis match the other product menus. Reduced UI motion snaps transitions.
-Swatches read active ruleset colors and select Alive, Dead/erase, Brian's Brain's
-Dying state, or Wireworld's four states. Right-click remains erase and Wireworld
-shortcuts remain synchronized. Drawing and hit testing share a fitted UI scale;
+Swatches read every declared active-rule state name and color; the drawer scrolls
+when a catalog defines more states than fit at once. Right-click remains erase
+and Wireworld shortcuts remain synchronized. Drawing and hit testing share a fitted UI scale;
 palette gestures capture pointer input until release. The drawer anchors above the controls-hint band,
 fits the remaining height, and leaves footer input to the hints. The opaque
 footer covers drawer overflow during its slide. Modal menus and the console
@@ -53,7 +53,7 @@ non-toroidal; positive chunk dimensions select a finite torus.
 \end{statusbox}
 
 F1 opens a Release-visible, primitive-composed \symbolref{ConfigurationMenu}.
-It configures ruleset, world chunk width/height, TPS, simulation speed, fade
+It configures the cell family and its filtered ruleset, world chunk width/height, TPS, simulation speed, fade
 speed, VSync, fullscreen, UI scale, restart-only MSAA, FPS cap, simulation
 inspector, and reduced menu motion. FPS presets include uncapped through 360;
 custom values accept 0--1000. Zero disables the existing engine software cap;
@@ -84,6 +84,18 @@ time once per frame; submission refreshes visuals even while the console owns
 input. Reduced menu motion snaps all menu transitions, including pause/exit,
 and stops decorative motion without changing simulation or cell fading. The in-game
 settings button eases its hover highlight and displays the F1 shortcut.
+
+F2 opens a separate Ruleset Workshop in the canvas. Family and ruleset drafts
+are separate, and every rule references one required family. Family data owns
+state count, labels, and colors; rule data owns transition parameters. The
+family-aware Rule, Preview, Appearance, and Files sections show only applicable
+controls and a labeled sample transition. Import/export uses a portable family
+and ruleset package. Save \& Apply validates the pair, drains the simulation,
+rejects family schema changes that invalidate live cells, persists family data
+before its rule, then activates the pair. Moore transition tables remain JSON
+editable rather than a large in-game matrix. Wheel scrolling does not steal
+keyboard focus, and reduced-motion preference snaps transitions and stops
+decorative pulsing.
 
 The large main-menu title uses a separate font atlas at 64, 128, or 256 pixels,
 selected to cover its fitted display size without upscaling glyphs. Smaller
@@ -130,14 +142,19 @@ Painting, erasing, and leaving EDIT clear the selection but preserve the
 copied pattern. Clipboard hotkeys act only in EDIT; explicit console pattern
 commands remain available independently of mode. Paint strokes belong to
 the module and stop across mode changes and modal input interruptions.
-Life-like B/S rules share \texttt{LifeLikeRuleSet} masks behind existing mode
-strings. Rule 90 and Rule 184 are elementary 1D space-time diagrams (D-G2).
-Catalog registration rejects B0 and odd elementary rules: the current sparse
-representation requires a stable background in infinite and finite worlds.
-JSON catalog loading validates the entire document and all definitions before
-publishing replacements. Neighbor arrays accept integers 0--8; elementary rule
-numbers and palette channels accept 0--255. Invalid direct life-like neighbor
-counts above eight return background before any shift.
+The versioned JSON catalog describes every shipped transition and palette.
+Schema v2 supports \texttt{life\_like}, \texttt{generations},
+\texttt{moore\_table}, and \texttt{elementary\_1d}; schema-v1 arrays remain
+readable. These compile to the common \texttt{DataRuleSet} and cached 256-by-9
+table, except elementary 1D rules, which retain their dedicated history path.
+Stable IDs continue to match saved worlds. Rule 90 and Rule 184 are elementary
+1D space-time diagrams (D-G2). Catalog registration rejects B0 and odd
+elementary rules: the current sparse representation requires a stable
+background in infinite and finite worlds. JSON catalog loading validates the
+entire document and all definitions before publishing replacements. Neighbor
+arrays accept integers 0--8; elementary rule numbers and palette channels
+accept 0--255. Invalid direct life-like neighbor counts above eight return
+background before any shift.
 Manual stepping counts completed generations and stops at failure. Async failure
 preserves the published world, pauses in edit mode and retains one explicit
 retry; \texttt{run} schedules it without another time-step charge. Elementary
@@ -165,20 +182,23 @@ UI continue normally; disabling the flag restores the canvas immediately.
 \subsection{Domain console commands and persistence}
 \symbolref{CellGameModule} registers domain commands through
 \symbolref{CommandRegistry}; Services remains free of Game types. Save always
-writes version 3 sparse files with magic/version, ruleset, camera, topology,
+writes version 4 sparse files with magic/version, family, ruleset, camera, topology,
 and sorted 16$\times$16 canonical chunk records. Load validates temporary
-state before mutation, accepts versions 3 and 2 plus the prior dense format,
+state before mutation, accepts versions 4, 3, and 2 plus the prior dense format,
 treats older formats as infinite, imports legacy cells around the origin,
-restores ruleset/camera metadata, and snaps the bounded view. Native picker variants route through the platform
+derives the family for pre-v4 saves, restores the validated pair/camera, and
+snaps the bounded view. Native picker variants route through the platform
 \symbolref{SaveLoad} API. See D-CLI1 and
 \cref{sec:session-2026-08-04}.
 
 \subsection{CellContext}
 Constructs two \symbolref{SparseCellGrid} buffers and bounded
-\symbolref{CanvasView} from
-env vars (\texttt{CanvasX}, \texttt{CanvasY}, \texttt{WorldChunksX},
-\texttt{WorldChunksY}) and selects a \symbolref{RuleSet} from the configured
-mode name. Mode changes update the ruleset and rebuild the canvas palette.
+\symbolref{CanvasView} from env vars (\texttt{CanvasX}, \texttt{CanvasY},
+\texttt{WorldChunksX}, \texttt{WorldChunksY}) and selects a validated family
+and ruleset pair from \texttt{FamilyString} and \texttt{RuleSetString}. Legacy
+\texttt{ModeString} inputs derive their family from the selected rule. Rule
+changes update compiled behavior and rebuild the canvas palette from the family
+schema.
 
 \subsection{SparseCellGrid (domain) and CanvasView (view --- D-C3)}
 \begin{itemize}
@@ -303,23 +323,33 @@ resources do not scale with chunk count.
 \end{statusbox}
 
 \subsection{Rulesets}
-Active rules are cataloged in \pathref{rulesets.json} and registered via
-\texttt{RuleSetRegistry}: Game of Life, Brian's Brain, Day \& Night, Highlife,
-Life Without Death, Seeds, Wireworld, Rule 90, and Rule 184. Implementations are
-organized by mathematical family: \texttt{LifeLikeRuleSet} for binary Moore B/S
-rules, \texttt{Elementary1DRuleSet} for Wolfram 1D space-time rules
-(\texttt{NeighborhoodKind::}\allowbreak\texttt{Elementary1D}, D-G2), \texttt{BriansBrainRuleSet} for
-3-state decay, and \texttt{WireworldRuleSet} for digital circuit simulation.
-Additional rules added to \pathref{rulesets.json} are discovered dynamically at
-runtime without C++ recompilation.
-\texttt{RuleSetRegistry} constructs built-ins and validates text transactionally.
-Game's \texttt{RuleCatalogLoader} selects the first valid catalog beside the
-executable, in the working directory, or in its \texttt{IllumoGame} subdirectory.
-Invalid or unreadable files fall through without partial publication. The module
-factory loads the shared catalog once before menu/direct-game construction.
-The engine's configuration path supplies executable location; Rulesets has no
-filesystem or native API dependency. Callers use the loader for files and
-\texttt{loadFromText} for text (D-GC1).
+The shipped \pathref{families.json} defines cell-state schemas and palettes;
+\pathref{rulesets.json} defines Game of Life, Brian's Brain, Day
+\& Night, Highlife, Life Without Death, Seeds, Wireworld, Rule 90, and Rule 184.
+\texttt{RuleSetRegistry} starts empty, validates text transactionally, and
+compiles version-3 rule definitions referencing version-1 family definitions.
+Families own their stable IDs, simulation models, state counts, labels, and
+colors. Rules own stable IDs, names, one required family ID, and transition
+parameters. Unversioned and schema-v1/v2 legacy rule catalogs remain readable
+and normalize into separated definitions. Life-like and Generations rules
+compile from B/S neighbor counts; Wireworld is a Moore table. Rule 90 / 184 use the dedicated
+\texttt{NeighborhoodKind::}\allowbreak\texttt{Elementary1D} serial history
+path (D-G2). Adding a definition requires no C++ factory change while it fits
+one of these families.
+
+Game's \texttt{RuleCatalogLoader} selects the first valid base family/rule
+catalog pair beside the executable, in the working directory, or in its
+\texttt{IllumoGame} subdirectory. It then transactionally layers the
+working-directory \pathref{families.user.json} and
+\pathref{rulesets.user.json}; later matching IDs replace earlier definitions.
+Invalid or unreadable base files fall through, and malformed overlays preserve
+the active catalog. The module factory loads the catalog once before
+menu/direct-game construction. The engine's configuration path supplies
+executable location; Rulesets has no filesystem or native API dependency.
+Callers use the loader for files and \texttt{loadFromText} for text (D-GC1,
+D-GC2, D-GC4). F1, New Simulation, runtime status, and saved worlds carry an
+explicit family/ruleset pair. Save version 4 writes both IDs; version 3,
+version 2, and dense legacy readers derive the family from the saved rule ID.
 
 \begin{lstlisting}
 class RuleSet {

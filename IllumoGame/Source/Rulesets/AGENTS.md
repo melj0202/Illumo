@@ -13,7 +13,8 @@ Rendering, Services, Engine, platform APIs, and OpenGL.
 ## Required invariants
 
 - `nextState` is a pure function of current state and neighbor counts. Keep the
-  cached 256x9 transition table equivalent to direct virtual evaluation.
+  cached 256x9 transition table equivalent to direct evaluation. Production
+  rules are compiled from validated `RuleSetDefinition` data into `DataRuleSet`.
 - Binary rules encode state `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, and conductor `3`; only
   states declared by its counting mask contribute to neighbors.
@@ -24,17 +25,28 @@ Rendering, Services, Engine, platform APIs, and OpenGL.
 - Do not add allocation, I/O, rendering, mutable global state, or concurrency
   to transition evaluation.
 
-## Adding or changing a ruleset
+## Rule definitions and compatibility
 
-New rules for supported families (`LifeLikeRuleSet` for binary B/S,
-`Elementary1DRuleSet` for Wolfram 1D) are cataloged in `rulesets.json` and
-loaded by Game's `RuleCatalogLoader` during product startup. `RuleSetRegistry`
-constructs only built-ins and accepts catalog text transactionally; it must not
-discover files or call native APIs. When introducing a new family or
-specialized transition logic, implement the family `.h`/`.cpp` pair, update
-`RuleSetRegistry`, source lists, palette behavior, and focused domain tests
-together. Preserve existing mode names used in persisted files unless a
-compatibility migration is authorized.
+`RuleFamilyDefinition` owns the family ID, simulation model, state count,
+labels, and colors. `RuleSetDefinition` owns stable rule identity, transition
+parameters, and exactly one required `familyId`; it must not duplicate family
+state metadata. The staged `IllumoGame/families.json` and
+`IllumoGame/rulesets.json` are the source of truth for shipped definitions.
+Family models are `life_like`, `generations`, `moore_table`, and
+`elementary_1d`. Family catalogs use schema 1 and ruleset catalogs schema 3;
+unversioned and schema-v1/v2 legacy rule catalogs normalize into separated
+definitions in memory. Validation must be transactional and preserve state `1`
+as a quiescent background and state `0` as the only Moore-counted state. Rule
+90/184 continue through the existing elementary 1D history path.
+
+Game's `RuleCatalogLoader` owns file discovery and layers working-directory
+`families.user.json` and `rulesets.user.json` overlays onto one valid base pair.
+The registry is text-only, starts empty, and must not discover files or call
+native APIs. Preserve existing rule IDs because saves reference them. New
+transition semantics should extend the normalized definition/compiler only
+when an existing family cannot express them; do not add a C++ class for a rule
+that its data family can already describe. Keep parity references and tests
+for legacy implementations until compatibility coverage no longer needs them.
 
 ## Documentation and verification
 

@@ -1,6 +1,7 @@
 #include "ConfigurationMenu.h"
 #include "Game/CellContext.h"
 #include "Game/SparseCellGrid.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -147,42 +148,22 @@ ConfigurationMenu::decimalText(double value)
 std::string
 ConfigurationMenu::displayRuleSetName(const std::string& mode)
 {
-  if (mode == "GAME_OF_LIFE") {
-    return "Game of Life";
-  }
-  if (mode == "BRIANS_BRAIN") {
-    return "Brian's Brain";
-  }
-  if (mode == "DAY_AND_NIGHT") {
-    return "Day & Night";
-  }
-  if (mode == "HIGHLIFE") {
-    return "Highlife";
-  }
-  if (mode == "LIFE_WITHOUT_DEATH") {
-    return "Life Without Death";
-  }
-  if (mode == "SEEDS") {
-    return "Seeds";
-  }
-  if (mode == "WIREWORLD") {
-    return "Wireworld";
-  }
-  if (mode == "RULE_90") {
-    return "Rule 90";
-  }
-  if (mode == "RULE_184") {
-    return "Rule 184";
-  }
-  return mode;
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(mode);
+  return definition == nullptr ? mode : definition->name;
 }
 
 void
 ConfigurationMenu::open(const SimulatorConfiguration& current)
 {
+  family = CellContext::NormalizeFamilyString(current.family);
   ruleSet = CellContext::NormalizeModeString(current.ruleSet);
-  if (!CellContext::IsKnownModeString(ruleSet)) {
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(ruleSet);
+  if (definition == nullptr || definition->familyId != family) {
     ruleSet = "GAME_OF_LIFE";
+    definition = RuleSetRegistry::instance().getRuleSetDefinition(ruleSet);
+    family = definition == nullptr ? std::string() : definition->familyId;
   }
   worldWidthText = topologyText(current.worldChunkWidth);
   worldHeightText = topologyText(current.worldChunkHeight);
@@ -483,9 +464,33 @@ ConfigurationMenu::cycleSelected(int direction)
     return;
   }
   bool changed = false;
-  if (selectedRow == kRulesetRow) {
+  if (selectedRow == kFamilyRow) {
+    const std::vector<std::string> families =
+      CellContext::GetKnownFamilyStrings();
+    if (families.empty()) {
+      return;
+    }
+    std::size_t index = 0u;
+    const std::vector<std::string>::const_iterator found =
+      std::find(families.begin(), families.end(), family);
+    if (found != families.end()) {
+      index = static_cast<std::size_t>(found - families.begin());
+    }
+    for (std::size_t attempt = 0u; attempt < families.size(); ++attempt) {
+      index = direction > 0 ? (index + 1u) % families.size()
+                            : (index + families.size() - 1u) % families.size();
+      const std::vector<std::string> candidates =
+        CellContext::GetKnownRuleStrings(families[index]);
+      if (!candidates.empty()) {
+        family = families[index];
+        ruleSet = candidates.front();
+        changed = true;
+        break;
+      }
+    }
+  } else if (selectedRow == kRulesetRow) {
     const std::vector<std::string> rulesets =
-      CellContext::GetKnownModeStrings();
+      CellContext::GetKnownRuleStrings(family);
     std::vector<std::string>::const_iterator found =
       std::find(rulesets.begin(), rulesets.end(), ruleSet);
     std::size_t index = found == rulesets.end()
@@ -588,11 +593,11 @@ ConfigurationMenu::activateSelected()
   if (selectedRow == kExitRow) {
     return ConfigurationMenuAction::Exit;
   }
-  if (selectedRow == kRulesetRow || selectedRow == kVsyncRow ||
-      selectedRow == kFullscreenRow || selectedRow == kUiScaleRow ||
-      selectedRow == kMsaaRow || selectedRow == kFpsCapRow ||
-      selectedRow == kInspectorRow || selectedRow == kReducedMotionRow ||
-      selectedRow == kEditHintsRow) {
+  if (selectedRow == kFamilyRow || selectedRow == kRulesetRow ||
+      selectedRow == kVsyncRow || selectedRow == kFullscreenRow ||
+      selectedRow == kUiScaleRow || selectedRow == kMsaaRow ||
+      selectedRow == kFpsCapRow || selectedRow == kInspectorRow ||
+      selectedRow == kReducedMotionRow || selectedRow == kEditHintsRow) {
     cycleSelected(1);
   }
   return ConfigurationMenuAction::None;
@@ -702,10 +707,15 @@ ConfigurationMenu::readConfiguration(SimulatorConfiguration* configuration,
     return false;
   }
   SimulatorConfiguration parsed;
+  parsed.family = CellContext::NormalizeFamilyString(family);
   parsed.ruleSet = CellContext::NormalizeModeString(ruleSet);
-  if (!CellContext::IsKnownModeString(parsed.ruleSet)) {
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(parsed.ruleSet);
+  if (definition == nullptr ||
+      !CellContext::IsKnownFamilyString(parsed.family) ||
+      definition->familyId != parsed.family) {
     if (error != nullptr) {
-      *error = "Select a supported ruleset.";
+      *error = "Select a ruleset that belongs to the chosen family.";
     }
     return false;
   }
@@ -865,7 +875,8 @@ ConfigurationMenu::rebuildVisual()
                    UiTheme::applyOpacity(secondaryText, panelOpacity));
   }
 
-  const std::string labels[kRowCount] = { "Ruleset",
+  const std::string labels[kRowCount] = { "Family",
+                                          "Ruleset",
                                           "Width (chunks)",
                                           "Height (chunks)",
                                           "Simulation rate (TPS)",
@@ -883,6 +894,9 @@ ConfigurationMenu::rebuildVisual()
                                           "Discard changes",
                                           "Exit simulator" };
   const std::string values[kRowCount] = {
+    RuleSetRegistry::instance().getFamilyDefinition(family) == nullptr
+      ? family
+      : RuleSetRegistry::instance().getFamilyDefinition(family)->name,
     displayRuleSetName(ruleSet),
     worldWidthText,
     worldHeightText,
@@ -902,7 +916,8 @@ ConfigurationMenu::rebuildVisual()
     "ENTER"
   };
   const std::string help[kRowCount] = {
-    "Choose the cellular-automaton rules.",
+    "Choose the cell family; the ruleset list is filtered to this family.",
+    "Choose transition behavior that belongs to the selected family.",
     "Enter a positive chunk count, or inf on both world axes.",
     "Enter a positive chunk count, or inf on both world axes.",
     "Target simulation ticks per second: 1 to 1000.",

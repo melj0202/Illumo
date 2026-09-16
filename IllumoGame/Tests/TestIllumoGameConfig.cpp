@@ -64,6 +64,9 @@ testSimulatorOverridesArePreserved()
              environment.getVar("ModeString").value == "WIREWORLD",
              "persisted ruleset is retained");
     testTrue(g,
+             environment.getVar("RuleSetString").value == "WIREWORLD",
+             "legacy ModeString is migrated into the explicit ruleset key");
+    testTrue(g,
              environment.getVar("tps").value == "144",
              "persisted timing is retained");
     testTrue(g,

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "families": [
+    {
+      "id": "LIFE_LIKE_BINARY",
+      "name": "Binary Life-like",
+      "model": "life_like",
+      "state_count": 2,
+      "states": [
+        { "value": 0, "name": "Alive", "color": [0, 0, 0] },
+        { "value": 1, "name": "Background", "color": [255, 255, 255] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_3_STATE",
+      "name": "Three-state Generations",
+      "model": "generations",
+      "state_count": 3,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [0, 0, 0] },
+        { "value": 1, "name": "Background", "color": [255, 255, 255] },
+        { "value": 2, "name": "Refractory", "color": [0, 164, 128] }
+      ]
+    },
+    {
+      "id": "WIREWORLD_FAMILY",
+      "name": "Wireworld",
+      "model": "moore_table",
+      "state_count": 4,
+      "states": [
+        { "value": 0, "name": "Head", "color": [0, 80, 255] },
+        { "value": 1, "name": "Empty", "color": [255, 255, 255] },
+        { "value": 2, "name": "Tail", "color": [255, 40, 40] },
+        { "value": 3, "name": "Conductor", "color": [255, 200, 40] }
+      ]
+    },
+    {
+      "id": "ELEMENTARY_1D_BINARY",
+      "name": "Elementary Binary",
+      "model": "elementary_1d",
+      "state_count": 2,
+      "states": [
+        { "value": 0, "name": "Alive", "color": [0, 0, 0] },
+        { "value": 1, "name": "Background", "color": [255, 255, 255] }
+      ]
+    }
+  ]
+}

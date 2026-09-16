@@ -2,11 +2,22 @@
 
 #include <Illumo/Services/IEnvVars.h>
 
+#include <string>
+
 void
 IllumoGameConfig::ApplyDefaults(IEnvVars* environment)
 {
   if (environment == nullptr) {
     return;
+  }
+
+  // A pre-family configuration may contain only ModeString. Seed the new
+  // ruleset key from that alias before filling defaults so it keeps its value.
+  if (environment->getVar("RuleSetString").value.empty()) {
+    const std::string legacyRule = environment->getVar("ModeString").value;
+    if (!legacyRule.empty()) {
+      environment->setVar("RuleSetString", legacyRule);
+    }
   }
 
   struct DefaultValue
@@ -17,6 +28,8 @@ IllumoGameConfig::ApplyDefaults(IEnvVars* environment)
   const DefaultValue defaults[] = {
     { "CanvasX", "80" },
     { "CanvasY", "60" },
+    { "FamilyString", "LIFE_LIKE_BINARY" },
+    { "RuleSetString", "GAME_OF_LIFE" },
     { "ModeString", "GAME_OF_LIFE" },
     { "WorldChunksX", "0" },
     { "WorldChunksY", "0" },

@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-09-14
+**Last updated:** 2026-09-15
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -97,7 +97,7 @@ and first-frame depth state are explicit; normal application defaults remain.
 
 The simulator's Edit-mode Cell paint drawer is a module-owned GameVisual using
 GuiKit rounded surfaces and UiTheme colors. Its bottom pull tab, vertical slide, chevron, and
-row emphasis follow reducedUiMotion. State swatches read the active ruleset's
+row emphasis follow reducedUiMotion. State swatches read the active family's
 palette and select the existing paint path; right-click remains erase. Fitted
 drawing and pointer coordinates agree, and palette gestures capture pointer
 input through release. The drawer anchors above the controls-hint band,
@@ -684,17 +684,41 @@ invalidate current chunks before the next step.
 
 ### 5.7 Rules and encoding
 
-`RuleSetRegistry` constructs built-ins and validates catalog text transactionally.
-Game's `RuleCatalogLoader` owns ordered file discovery: executable directory,
-working directory, then its `IllumoGame` subdirectory. The first valid catalog
-wins; failed files do not partially replace definitions. The required-module
-factory loads the shared catalog once before menu/direct-game construction.
-Engine-owned configuration-path discovery supplies the executable directory.
-Independent registries require explicit loading through the loader or
-`loadFromText`; Rulesets has no filesystem or native API dependency (D-GC1).
+`RuleSetRegistry` starts empty and transactionally compiles catalog text into
+data-backed rules. The shipped `families.json` (schema 1) owns family IDs,
+simulation models, state counts, state labels, and colors. The separate
+`rulesets.json` (schema 3) owns stable rule IDs, display names, one required
+`family_id`, and transition parameters. Life-like, Generations, Moore-table,
+and elementary 1D definitions compile to the existing `DataRuleSet`; the
+elementary rules retain their separate history path. Older unversioned,
+schema-v1, and schema-v2 rules catalogs are normalized into compatible family
+and rule definitions in memory.
 
-**Active rules** (factory / AllSets): Game of Life, Seeds, Brian's Brain, Highlife, Day & Night, Life Without Death, Wireworld, Rule 90, and Rule 184.  
-Life-like B/S modes share `LifeLikeRuleSet` masks. Rule 90 / 184 use `NeighborhoodKind::Elementary1D` and a serial space-time `SparseCellGrid` advance (D-G2).
+Game's `RuleCatalogLoader` selects a valid base catalog pair beside the
+executable, in the working directory, or in its `IllumoGame` subdirectory. It
+then layers the working-directory `families.user.json` and
+`rulesets.user.json` overlays as one validated pair. The required-module factory
+loads the shared catalog once before menu/direct-game construction. Engine-owned
+configuration-path discovery supplies the executable directory. Independent
+registries require explicit text/file loading; Rulesets has no filesystem or
+native API dependency (D-GC1, D-GC2, D-GC4).
+
+`RuleFamilyDefinition` owns cell schema and appearance. `RuleSetDefinition`
+owns transition behavior and refers to exactly one family ID; the typed
+`RuleFamily` value identifies the evaluator contract. Registry compilation
+resolves the pair into the immutable runtime `RuleSet` view used by Game and
+`SparseCellGrid`. F1, New Simulation, status, console output, and `CellContext`
+carry the family/rule pair. New startup configuration stores both values while
+legacy `ModeString` inputs derive the family from the selected rule.
+Version-4 `.illumo` saves store both IDs; version-3, version-2, and legacy
+dense saves derive the family from their saved rule ID.
+
+**Active rules**: Game of Life, Seeds, Brian's Brain, Highlife, Day & Night,
+Life Without Death, Wireworld, Rule 90, and Rule 184. They compile to the common
+`DataRuleSet`; life-like and Generations definitions use neighbor masks, while
+Wireworld uses an explicit Moore transition table. Rule 90 / 184 use
+`NeighborhoodKind::Elementary1D` and a serial space-time `SparseCellGrid`
+advance (D-G2).
 Catalog registration rejects B0 and odd elementary rules because sparse storage
 requires a stable background. Strict JSON loading validates all entries before
 publishing a replacement catalog; neighbor indices are 0..8, and elementary
@@ -777,7 +801,9 @@ results. Hot loops share that immutable table, eliminating virtual dispatch and
 repeated rule branches after the first use. Rules stay free of rendering and
 input. `evalCell` supplies palette/RGB colors only.
 
-**Optional cleanup (from CA PDF, not required for correctness):** collapse life-like rules into one family + JSON birth/survive tables:
+**Implemented in D-GC2/D-GC3:** data-driven rule families compile into the
+common `DataRuleSet`; a typed family selector and independent ruleset identity
+make customization explicit without changing serialized IDs:
 
 ```json
 { "family": "life_like", "birth": [3], "survive": [2, 3] }
@@ -820,7 +846,7 @@ erasing, or leaving Edit clears the selection while preserving the copied
 pattern. Clipboard hotkeys act only in Edit; explicit console commands remain
 mode-independent. Modal overlays and the console hide the legend and selection
 outline and interrupt active paint/selection drags.
-It edits ruleset, world chunk width/height, TPS, simulation speed, fade speed,
+It edits family and its filtered ruleset, world chunk width/height, TPS, simulation speed, fade speed,
 VSync, fullscreen, UI scale, restart-only MSAA, FPS cap, simulation inspector,
 and reduced menu motion. FPS cap uses the existing engine `fps` setting and
 frame pacer: 0 disables software limiting and VSync remains independent.
@@ -832,6 +858,15 @@ Larger high-contrast labels, readable ruleset names, split keyboard help, and a
 selected-setting explanation keep the Release surface legible. Q and its Exit
 action open a confirmation overlay; confirming requests window closure so the
 Illumo application runner performs normal engine shutdown.
+F2 opens the separate Ruleset Workshop in the canvas. Family and transition
+drafts are independent, and every ruleset remains bound to one family. Family
+edits own cell-state names, colors, and state count; ruleset edits own identity
+and transitions. The family-aware form previews a representative transition
+and state palette, and imports or exports family/rule packages. Save & Apply
+validates and persists the family before its referencing rule, drains the
+simulation, rejects state-schema changes that invalidate live cells, then
+activates the pair. Moore transition tables remain JSON-edited rather than
+expanding the UI into a large matrix editor.
 Animation remains local value state: the overlay eases into place, rows reveal
 in sequence, selection glides, and changed values pulse without adding widgets
 or blocking input. The mouse wheel scrolls the viewport without changing the
@@ -901,11 +936,12 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
   for exception and configuration recovery contracts. Failed configuration
   loads preserve live values and original bytes, disabling teardown saves until
   a successful reload.
-- Save always writes version 3 sparse records (magic/version, ruleset, camera,
+- Save always writes version 4 sparse records (magic/version, family, ruleset, camera,
   topology, deterministic sorted canonical chunks). Load validates into
-  temporary state, accepts versions 3 and 2 plus the prior dense format, treats
-  older formats as infinite, imports legacy cells centered at the origin, then
-  restores ruleset/camera and rebuilds the bounded view.
+  temporary state, accepts versions 4, 3, and 2 plus the prior dense format,
+  treats older formats as infinite, imports legacy cells centered at the origin,
+  derives family IDs for pre-v4 saves, then restores the validated pair/camera
+  and rebuilds the bounded view.
 - `vid_restart` is not advertised: safely recreating an OpenGL context requires a
   complete resource re-enrollment design, so the old no-op now reports that limit.
 - Editing supports measured caret placement, selection, Home/End, Delete,
@@ -1022,7 +1058,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-C3** | Replace the finite production path with signed-coordinate `SparseCellGrid` chunks plus bounded `CanvasView`; retain dense types only as compatibility fixtures. |
 | **D-C4** | `CanvasView` is a nearest-filtered, world-space quad with exact cell texels at normal zoom and cursor-aligned world-cell editing. |
 | **D-C5** | At far zoom, `CanvasView` uses a revision-gated density overview capped at roughly four screen pixels per texel; this visual budget does not cap sparse simulation chunks. |
-| **D-C6** | Keep `0 x 0` as the infinite sparse world; positive chunk dimensions select a finite torus. Configure it through the Release F1 overlay, reset on topology change, and preserve it in sparse save version 3. |
+| **D-C6** | Keep `0 x 0` as the infinite sparse world; positive chunk dimensions select a finite torus. Configure it through the Release F1 overlay, reset on topology change, and persist it in sparse saves (introduced in v3; current v4 via D-GC4). |
 
 `MeshVisual` is the world mesh host and scene-graph attachment (D-R21). It
 tessellates colored lines/triangles and textured quads, clones Shape/Sprite
@@ -1099,9 +1135,11 @@ disabled.
 | **D-E10** | `.ilsc` v1 is the editor-owned UTF-8 JSON scene interchange; SceneGraph does not serialize itself. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
-| **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and version 3 topology persistence. |
-| **D-G1** | Editor patterns (RLE/plaintext/stamps/clipboard) are a side path; sparse v3 world saves are unchanged. |
+| **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |
+| **D-G1** | Editor patterns (RLE/plaintext/stamps/clipboard) are a side path; the sparse world-save format is maintained separately (current v4; D-GC4). |
 | **D-G2** | Elementary 1D rules use a serial space-time advance, not the Moore 256×9 table. |
+| **D-GC2** | Shipped and custom rules compile from versioned data; F2 edits staged drafts (catalog layering and save version are updated by D-GC4). |
+| **D-GC4** | Families own cell schemas and palettes; every ruleset references one family; F1/runtime/saves carry both IDs, with v4 writes and legacy derivation. |
 | **D-F1** | MacroDefs / Windows.h include toxicity deferred until real pain. |
 
 ---
@@ -1140,8 +1178,9 @@ From local code review / `docs/current-issues.md` (fix when touching related cod
 ### 8.2 Closed test gaps
 
 Wireworld now has explicit two-head birth and three-head no-birth truth-table
-coverage. File-backed save/load tests cover version 3 topology round trips,
-version 2 compatibility, ruleset restoration, dimension overlap,
+coverage. File-backed save/load tests cover version 4 family/ruleset and
+topology round trips, version 3 and version 2 compatibility, ruleset
+restoration, dimension overlap,
 missing/truncated/invalid files, extension fallback, and dialog cancellation.
 Finite Life/Wireworld seams and Release settings behavior have focused
 headless coverage. Native dialog and live window UI still need platform smoke
@@ -1197,7 +1236,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 | Sparse sim + bounded view memory | Sparse simulation scales with stored and counted cells; mixed targets independently use candidates or halos, dense counted chunks use at most eight reusable workers, and presentation scales with the configured visible view |
 | MacroDefs + Windows.h | D-F1 deferred |
 | IllumoContext growth | Frozen; third module = explicit deps |
-| Life-like JSON family collapse | Optional cleanup of repetitive RuleSet classes |
+| Additional rule families | Add only when current Moore/elementary data forms cannot express a needed rule |
 | GPU/SYCL acceleration | Optional after bounded CPU parallel benchmark / product need; CPU sparse stepping is the production baseline |
 | File asset formats | AssetManager manages textures/shaders. MeshLoader imports OBJ on the CPU behind a replaceable loader; MeshVisual consumes mesh data and procedural geometry. Game-object persistence remains separate future work. |
 
@@ -1231,7 +1270,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 13. Keep the established Illumo public boundary narrow; add install/export or
     shared-library ABI work only for a real distribution requirement.
 14. Non-string uniforms / second real backend (OpenGL factory already at composition).
-15. Data-driven life-like rule family (JSON birth/survive).
+15. ~~Data-driven rules and the F2 Ruleset Workshop — D-GC2; typed family and ruleset identity separation — D-GC3.~~
 16. Narrow `IllumoContext` into capability bags only when a third module needs different deps (D-E5).
 
 ### Explicitly deferred (engine PDF + consensus)

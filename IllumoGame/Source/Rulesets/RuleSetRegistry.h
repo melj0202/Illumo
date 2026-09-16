@@ -2,23 +2,46 @@
 
 #include "RuleSet.h"
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-struct RuleDefinition
+enum class RuleFamily
 {
-  std::string id;   // e.g. "GAME_OF_LIFE"
-  std::string name; // e.g. "Conway's Game of Life"
-  std::string
-    family;         // "life_like", "elementary_1d", "generations", "wireworld"
+  LifeLike,
+  Generations,
+  MooreTable,
+  Elementary1D
+};
+
+struct RuleSetDefinition
+{
+  // A ruleset owns transition behavior and references one cell family.
+  std::string id;
+  std::string name;
+  std::string familyId;
+  bool builtIn = false;
   std::string rule; // e.g. "B3/S23"
   unsigned int birthMask = 0u;
   unsigned int surviveMask = 0u;
   unsigned int ruleNumber = 0u;
-  bool hasCustomPalette = false;
-  std::array<unsigned char, 3> aliveColor = { 0, 0, 0 };
-  std::array<unsigned char, 3> deadColor = { 255, 255, 255 };
+  // Compiled transition artifacts; these are not serialized into ruleset data.
+  bool hasTransitionTable = false;
+  unsigned int transitionTableStateCount = 0u;
+  RuleSet::TransitionTable transitionTable{};
+  std::array<unsigned char, 8> elementaryTransitions{};
+};
+
+struct RuleFamilyDefinition
+{
+  std::string id;
+  std::string name;
+  bool builtIn = false;
+  RuleFamily kind = RuleFamily::LifeLike;
+  unsigned int stateCount = 2u;
+  std::vector<std::string> stateNames;
+  std::vector<std::array<unsigned char, 3>> stateColors;
 };
 
 class RuleSetRegistry
@@ -27,24 +50,51 @@ public:
   static RuleSetRegistry& instance();
 
   static std::string normalizeId(std::string id);
+  static bool parseFamily(const std::string& value, RuleFamily& family);
+  static const char* familyName(RuleFamily family);
   static bool parseLifeLikeRuleString(const std::string& ruleStr,
                                       unsigned int& outBirth,
                                       unsigned int& outSurvive);
 
   RuleSetRegistry();
+  RuleSetRegistry(const RuleSetRegistry&) = default;
+  RuleSetRegistry& operator=(const RuleSetRegistry&) = default;
+  RuleSetRegistry(RuleSetRegistry&&) noexcept = default;
+  RuleSetRegistry& operator=(RuleSetRegistry&&) noexcept = default;
 
-  bool registerRule(const RuleDefinition& def);
+  bool registerFamily(const RuleFamilyDefinition& definition);
+  bool registerRule(const RuleSetDefinition& def);
   bool loadFromText(const std::string& text);
-  void loadBuiltinDefaults();
+  bool loadFamiliesFromText(const std::string& text);
+  bool loadFromCatalogTexts(const std::string& familiesText,
+                            const std::string& rulesText);
+  bool loadRulePackage(const std::string& text);
   void clear();
 
+  bool isKnownFamily(const std::string& id) const;
   bool isKnownRule(const std::string& id) const;
+  std::vector<std::string> getKnownFamilies() const;
   std::vector<std::string> getKnownRules() const;
-  const RuleDefinition* getRuleDefinition(const std::string& id) const;
+  std::vector<std::string> getKnownRules(const std::string& familyId) const;
+  const RuleFamilyDefinition* getFamilyDefinition(const std::string& id) const;
+  const RuleSetDefinition* getRuleSetDefinition(const std::string& id) const;
+  const std::vector<RuleFamilyDefinition>& getFamilyDefinitions() const
+  {
+    return families;
+  }
+  const std::vector<RuleSetDefinition>& getDefinitions() const { return rules; }
+  static std::string serializeFamilies(
+    const std::vector<RuleFamilyDefinition>& definitions);
+  static std::string serializeCatalog(
+    const std::vector<RuleFamilyDefinition>& families,
+    const std::vector<RuleSetDefinition>& definitions);
+  static std::string serializeRulePackage(const RuleFamilyDefinition& family,
+                                          const RuleSetDefinition& definition);
 
   std::unique_ptr<RuleSet> createRuleSet(const std::string& id,
                                          CellGrid* canvas = nullptr) const;
 
 private:
-  std::vector<RuleDefinition> rules;
+  std::vector<RuleFamilyDefinition> families;
+  std::vector<RuleSetDefinition> rules;
 };

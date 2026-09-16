@@ -1,220 +1,40 @@
 #include "RuleSetRegistry.h"
-#include "BriansBrainRuleSet.h"
-#include "Elementary1DRuleSet.h"
-#include "LifeLikeRuleSet.h"
-#include "WireworldRuleSet.h"
+#include "DataRuleSet.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <iomanip>
 #include <nlohmann/json.hpp>
+#include <sstream>
+#include <utility>
 
-RuleSetRegistry&
-RuleSetRegistry::instance()
-{
-  static RuleSetRegistry s_instance;
-  return s_instance;
-}
+namespace {
 
-std::string
-RuleSetRegistry::normalizeId(std::string id)
+const unsigned int kMaximumStateCount = 256u;
+const unsigned int kMaximumNeighborCount = 8u;
+const unsigned char kBackgroundState = 1u;
+const unsigned char kCountedState = 0u;
+
+struct LegacyRuleSetDefinition
 {
-  for (std::size_t i = 0; i < id.size(); ++i) {
-    id[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(id[i])));
-  }
-  return id;
-}
+  std::string id;
+  std::string name;
+  RuleFamily family = RuleFamily::LifeLike;
+  std::string rule;
+  unsigned int birthMask = 0u;
+  unsigned int surviveMask = 0u;
+  unsigned int ruleNumber = 0u;
+  unsigned int stateCount = 2u;
+  std::vector<std::string> stateNames;
+  std::vector<std::array<unsigned char, 3>> stateColors;
+  RuleSet::TransitionTable transitionTable{};
+  std::array<unsigned char, 8> elementaryTransitions{};
+  bool hasCustomPalette = false;
+  std::array<unsigned char, 3> aliveColor = { 0, 0, 0 };
+  std::array<unsigned char, 3> deadColor = { 255, 255, 255 };
+};
 
 bool
-RuleSetRegistry::parseLifeLikeRuleString(const std::string& ruleStr,
-                                         unsigned int& outBirth,
-                                         unsigned int& outSurvive)
-{
-  outBirth = 0u;
-  outSurvive = 0u;
-  if (ruleStr.empty()) {
-    return false;
-  }
-
-  std::string normalized;
-  for (const char character : ruleStr) {
-    if (std::isspace(static_cast<unsigned char>(character)) == 0) {
-      normalized.push_back(
-        static_cast<char>(std::toupper(static_cast<unsigned char>(character))));
-    }
-  }
-  const std::size_t slash = normalized.find('/');
-  if (slash == std::string::npos ||
-      normalized.find('/', slash + 1) != std::string::npos) {
-    return false;
-  }
-  const std::string first = normalized.substr(0, slash);
-  const std::string second = normalized.substr(slash + 1);
-  unsigned int birth = 0, survive = 0;
-  const bool labeled = (!first.empty() && (first[0] == 'B' || first[0] == 'S'));
-  if (labeled && (second.empty() ||
-                  (first[0] == 'B' ? second[0] != 'S' : second[0] != 'B'))) {
-    return false;
-  }
-  for (int section = 0; section < 2; ++section) {
-    const std::string& part = section == 0 ? first : second;
-    unsigned int mask = 0;
-    for (std::size_t i = labeled ? 1u : 0u; i < part.size(); ++i) {
-      if (part[i] < '0' || part[i] > '8') {
-        return false;
-      }
-      mask |= 1u << static_cast<unsigned int>(part[i] - '0');
-    }
-    const bool isBirth = labeled ? part[0] == 'B' : section == 1;
-    if (isBirth) {
-      birth = mask;
-    } else {
-      survive = mask;
-    }
-  }
-  outBirth = birth;
-  outSurvive = survive;
-  return true;
-}
-
-RuleSetRegistry::RuleSetRegistry()
-{
-  loadBuiltinDefaults();
-}
-
-void
-RuleSetRegistry::clear()
-{
-  rules.clear();
-}
-
-static bool
-insertRule(std::vector<RuleDefinition>& rules, const RuleDefinition& def)
-{
-  const std::string norm = RuleSetRegistry::normalizeId(def.id);
-  if (norm.empty()) {
-    return false;
-  }
-  if (def.family == "life_like") {
-    unsigned int birth = 0, survive = 0;
-    if ((def.birthMask & ~0x1FEu) != 0u || (def.surviveMask & ~0x1FFu) != 0u ||
-        (!def.rule.empty() &&
-         (!RuleSetRegistry::parseLifeLikeRuleString(def.rule, birth, survive) ||
-          (birth & 1u) != 0u))) {
-      return false;
-    }
-  } else if (def.family == "elementary_1d") {
-    if (def.ruleNumber > 255u || (def.ruleNumber & 1u) != 0u) {
-      return false;
-    }
-  } else if (def.family != "generations" && def.family != "wireworld") {
-    return false;
-  }
-  for (RuleDefinition& existing : rules) {
-    if (existing.id == norm) {
-      existing = def;
-      existing.id = norm;
-      return true;
-    }
-  }
-  RuleDefinition copy = def;
-  copy.id = norm;
-  rules.push_back(copy);
-  return true;
-}
-
-bool
-RuleSetRegistry::registerRule(const RuleDefinition& def)
-{
-  return insertRule(rules, def);
-}
-
-void
-RuleSetRegistry::loadBuiltinDefaults()
-{
-  rules.clear();
-
-  // 1. Conway's Game of Life
-  RuleDefinition gol;
-  gol.id = "GAME_OF_LIFE";
-  gol.name = "Conway's Game of Life";
-  gol.family = "life_like";
-  gol.rule = "B3/S23";
-  gol.birthMask = 1u << 3;
-  gol.surviveMask = (1u << 2) | (1u << 3);
-  registerRule(gol);
-
-  // 2. Brian's Brain
-  RuleDefinition bb;
-  bb.id = "BRIANS_BRAIN";
-  bb.name = "Brian's Brain";
-  bb.family = "generations";
-  registerRule(bb);
-
-  // 3. Day & Night
-  RuleDefinition dn;
-  dn.id = "DAY_AND_NIGHT";
-  dn.name = "Day & Night";
-  dn.family = "life_like";
-  dn.rule = "B3678/S34678";
-  dn.birthMask = (1u << 3) | (1u << 6) | (1u << 7) | (1u << 8);
-  dn.surviveMask = (1u << 3) | (1u << 4) | (1u << 6) | (1u << 7) | (1u << 8);
-  registerRule(dn);
-
-  // 4. HighLife
-  RuleDefinition hl;
-  hl.id = "HIGHLIFE";
-  hl.name = "HighLife";
-  hl.family = "life_like";
-  hl.rule = "B36/S23";
-  hl.birthMask = (1u << 3) | (1u << 6);
-  hl.surviveMask = (1u << 2) | (1u << 3);
-  registerRule(hl);
-
-  // 5. Life Without Death
-  RuleDefinition lwd;
-  lwd.id = "LIFE_WITHOUT_DEATH";
-  lwd.name = "Life Without Death";
-  lwd.family = "life_like";
-  lwd.rule = "B3/S012345678";
-  lwd.birthMask = 1u << 3;
-  lwd.surviveMask = (1u << 9) - 1u;
-  registerRule(lwd);
-
-  // 6. Seeds
-  RuleDefinition seeds;
-  seeds.id = "SEEDS";
-  seeds.name = "Seeds";
-  seeds.family = "life_like";
-  seeds.rule = "B2/S";
-  seeds.birthMask = 1u << 2;
-  seeds.surviveMask = 0u;
-  registerRule(seeds);
-
-  // 7. Wireworld
-  RuleDefinition ww;
-  ww.id = "WIREWORLD";
-  ww.name = "Wireworld";
-  ww.family = "wireworld";
-  registerRule(ww);
-
-  // 8. Wolfram Rule 90
-  RuleDefinition r90;
-  r90.id = "RULE_90";
-  r90.name = "Wolfram Rule 90";
-  r90.family = "elementary_1d";
-  r90.ruleNumber = 90u;
-  registerRule(r90);
-
-  // 9. Wolfram Rule 184
-  RuleDefinition r184;
-  r184.id = "RULE_184";
-  r184.name = "Wolfram Rule 184";
-  r184.family = "elementary_1d";
-  r184.ruleNumber = 184u;
-  registerRule(r184);
-}
-
-static bool
 readUnsigned(const nlohmann::json& value,
              unsigned int maximum,
              unsigned int& result)
@@ -238,16 +58,16 @@ readUnsigned(const nlohmann::json& value,
   return false;
 }
 
-static bool
+bool
 readNeighborMask(const nlohmann::json& values, unsigned int& mask)
 {
   if (!values.is_array()) {
     return false;
   }
-  mask = 0;
+  mask = 0u;
   for (const nlohmann::json& value : values) {
-    unsigned int count = 0;
-    if (!readUnsigned(value, 8u, count)) {
+    unsigned int count = 0u;
+    if (!readUnsigned(value, kMaximumNeighborCount, count)) {
       return false;
     }
     mask |= 1u << count;
@@ -255,91 +75,1039 @@ readNeighborMask(const nlohmann::json& values, unsigned int& mask)
   return true;
 }
 
-static bool
-readPaletteColor(const nlohmann::json& values,
-                 std::array<unsigned char, 3>& color)
+bool
+readColor(const nlohmann::json& values, std::array<unsigned char, 3>& color)
 {
-  if (!values.is_array() || values.size() != 3u) {
+  if (!values.is_array() || values.size() != color.size()) {
     return false;
   }
-  for (std::size_t i = 0; i < color.size(); ++i) {
-    unsigned int channel = 0;
-    if (!readUnsigned(values[i], 255u, channel)) {
+  for (std::size_t index = 0u; index < color.size(); ++index) {
+    unsigned int channel = 0u;
+    if (!readUnsigned(values[index], 255u, channel)) {
       return false;
     }
-    color[i] = static_cast<unsigned char>(channel);
+    color[index] = static_cast<unsigned char>(channel);
   }
+  return true;
+}
+
+void
+setDefaultStates(LegacyRuleSetDefinition& definition)
+{
+  definition.stateNames.clear();
+  definition.stateColors.clear();
+  definition.stateNames.reserve(definition.stateCount);
+  definition.stateColors.reserve(definition.stateCount);
+
+  for (unsigned int state = 0u; state < definition.stateCount; ++state) {
+    definition.stateNames.push_back("State " + std::to_string(state));
+    definition.stateColors.push_back({ 180u, 180u, 180u });
+  }
+  if (definition.stateCount >= 2u) {
+    definition.stateNames[0] = "Active";
+    definition.stateNames[kBackgroundState] = "Background";
+    definition.stateColors[0] = { 0u, 0u, 0u };
+    definition.stateColors[kBackgroundState] = { 255u, 255u, 255u };
+  }
+  if (definition.family == RuleFamily::Generations &&
+      definition.stateCount >= 3u) {
+    definition.stateNames[0] = "Firing";
+    definition.stateNames[2] = "Refractory";
+    definition.stateColors[2] = { 0u, 164u, 128u };
+  }
+  definition.aliveColor = definition.stateColors[0];
+  definition.deadColor = definition.stateColors[kBackgroundState];
+}
+
+void
+setWireworldTransitions(LegacyRuleSetDefinition& definition)
+{
+  definition.family = RuleFamily::MooreTable;
+  definition.stateCount = 4u;
+  definition.birthMask = 0u;
+  definition.surviveMask = 0u;
+  definition.transitionTable.fill(kBackgroundState);
+  for (unsigned char neighbors = 0u; neighbors < RuleSet::kNeighborCountCount;
+       ++neighbors) {
+    definition.transitionTable[RuleSet::transitionIndex(0u, neighbors)] = 2u;
+    definition.transitionTable[RuleSet::transitionIndex(1u, neighbors)] = 1u;
+    definition.transitionTable[RuleSet::transitionIndex(2u, neighbors)] = 3u;
+    definition.transitionTable[RuleSet::transitionIndex(3u, neighbors)] =
+      (neighbors == 1u || neighbors == 2u) ? 0u : 3u;
+  }
+  setDefaultStates(definition);
+}
+
+bool
+readStates(const nlohmann::json& values, LegacyRuleSetDefinition& definition)
+{
+  if (!values.is_array() || values.size() != definition.stateCount) {
+    return false;
+  }
+  definition.stateNames.resize(definition.stateCount);
+  definition.stateColors.resize(definition.stateCount);
+  std::vector<bool> seen(definition.stateCount, false);
+  for (const nlohmann::json& value : values) {
+    if (!value.is_object()) {
+      return false;
+    }
+    unsigned int state = 0u;
+    if (!value.contains("value") ||
+        !readUnsigned(value["value"], definition.stateCount - 1u, state) ||
+        seen[state] || !value.contains("name") || !value["name"].is_string() ||
+        !value.contains("color") ||
+        !readColor(value["color"], definition.stateColors[state])) {
+      return false;
+    }
+    definition.stateNames[state] = value["name"].get<std::string>();
+    if (definition.stateNames[state].empty()) {
+      return false;
+    }
+    seen[state] = true;
+  }
+  return std::find(seen.begin(), seen.end(), false) == seen.end();
+}
+
+bool
+readTransitionRows(const nlohmann::json& values,
+                   LegacyRuleSetDefinition& definition)
+{
+  if (!values.is_array() || values.size() != definition.stateCount) {
+    return false;
+  }
+  definition.transitionTable.fill(kBackgroundState);
+  for (unsigned int state = 0u; state < definition.stateCount; ++state) {
+    const nlohmann::json& row = values[state];
+    if (!row.is_array() || row.size() != RuleSet::kNeighborCountCount) {
+      return false;
+    }
+    for (unsigned int neighbors = 0u; neighbors < RuleSet::kNeighborCountCount;
+         ++neighbors) {
+      unsigned int nextState = 0u;
+      if (!readUnsigned(
+            row[neighbors], definition.stateCount - 1u, nextState)) {
+        return false;
+      }
+      definition.transitionTable[RuleSet::transitionIndex(
+        static_cast<unsigned char>(state),
+        static_cast<unsigned char>(neighbors))] =
+        static_cast<unsigned char>(nextState);
+    }
+  }
+  return true;
+}
+
+bool
+compileDefinition(LegacyRuleSetDefinition& definition)
+{
+  definition.id = RuleSetRegistry::normalizeId(definition.id);
+  bool validId = !definition.id.empty() && definition.id.size() <= 64u;
+  for (const unsigned char character : definition.id) {
+    if ((character < 'A' || character > 'Z') &&
+        (character < '0' || character > '9') && character != '_') {
+      validId = false;
+    }
+  }
+  if (!validId || RuleSetRegistry::familyName(definition.family) == nullptr ||
+      definition.stateCount < 2u ||
+      definition.stateCount > kMaximumStateCount) {
+    return false;
+  }
+  if (definition.name.empty()) {
+    definition.name = definition.id;
+  }
+  if ((definition.family == RuleFamily::LifeLike ||
+       definition.family == RuleFamily::Generations) &&
+      !definition.rule.empty()) {
+    unsigned int parsedBirth = 0u;
+    unsigned int parsedSurvive = 0u;
+    if (!RuleSetRegistry::parseLifeLikeRuleString(
+          definition.rule, parsedBirth, parsedSurvive)) {
+      return false;
+    }
+    definition.birthMask = parsedBirth;
+    definition.surviveMask = parsedSurvive;
+  }
+  if (definition.stateNames.empty() || definition.stateColors.empty()) {
+    setDefaultStates(definition);
+  }
+  if (definition.stateNames.size() != definition.stateCount ||
+      definition.stateColors.size() != definition.stateCount) {
+    return false;
+  }
+  for (unsigned int state = 0u; state < definition.stateCount; ++state) {
+    if (definition.stateNames[state].empty()) {
+      return false;
+    }
+  }
+
+  if (definition.family == RuleFamily::LifeLike ||
+      definition.family == RuleFamily::Generations) {
+    if ((definition.birthMask & ~0x1FFu) != 0u ||
+        (definition.surviveMask & ~0x1FFu) != 0u ||
+        (definition.birthMask & 1u) != 0u) {
+      return false;
+    }
+    if (definition.family == RuleFamily::LifeLike &&
+        definition.stateCount != 2u) {
+      return false;
+    }
+    if (definition.family == RuleFamily::Generations &&
+        definition.stateCount < 3u) {
+      return false;
+    }
+    definition.transitionTable.fill(kBackgroundState);
+    for (unsigned int state = 0u; state < definition.stateCount; ++state) {
+      for (unsigned int neighbors = 0u;
+           neighbors < RuleSet::kNeighborCountCount;
+           ++neighbors) {
+        const bool activeNeighbors =
+          ((definition.birthMask >> neighbors) & 1u) != 0u;
+        const bool survivingNeighbors =
+          ((definition.surviveMask >> neighbors) & 1u) != 0u;
+        unsigned char next = kBackgroundState;
+        if (state == 0u) {
+          if (survivingNeighbors) {
+            next = 0u;
+          } else if (definition.family == RuleFamily::Generations) {
+            next = 2u;
+          }
+        } else if (state == kBackgroundState) {
+          next = activeNeighbors ? 0u : kBackgroundState;
+        } else if (definition.family == RuleFamily::Generations) {
+          next = state + 1u < definition.stateCount
+                   ? static_cast<unsigned char>(state + 1u)
+                   : kBackgroundState;
+        }
+        definition.transitionTable[RuleSet::transitionIndex(
+          static_cast<unsigned char>(state),
+          static_cast<unsigned char>(neighbors))] = next;
+      }
+    }
+    if (definition.family == RuleFamily::LifeLike ||
+        definition.family == RuleFamily::Generations) {
+      definition.rule = "B";
+      for (unsigned int neighbors = 0u; neighbors <= kMaximumNeighborCount;
+           ++neighbors) {
+        if (((definition.birthMask >> neighbors) & 1u) != 0u) {
+          definition.rule += std::to_string(neighbors);
+        }
+      }
+      definition.rule += "/S";
+      for (unsigned int neighbors = 0u; neighbors <= kMaximumNeighborCount;
+           ++neighbors) {
+        if (((definition.surviveMask >> neighbors) & 1u) != 0u) {
+          definition.rule += std::to_string(neighbors);
+        }
+      }
+    }
+  } else if (definition.family == RuleFamily::MooreTable) {
+    if (definition.stateCount > kMaximumStateCount) {
+      return false;
+    }
+    for (unsigned int state = 0u; state < definition.stateCount; ++state) {
+      for (unsigned int neighbors = 0u;
+           neighbors < RuleSet::kNeighborCountCount;
+           ++neighbors) {
+        const unsigned char next =
+          definition.transitionTable[RuleSet::transitionIndex(
+            static_cast<unsigned char>(state),
+            static_cast<unsigned char>(neighbors))];
+        if (static_cast<unsigned int>(next) >= definition.stateCount) {
+          return false;
+        }
+      }
+    }
+  } else if (definition.family == RuleFamily::Elementary1D) {
+    if (definition.stateCount != 2u || definition.ruleNumber > 255u ||
+        (definition.ruleNumber & 1u) != 0u) {
+      return false;
+    }
+    for (unsigned int pattern = 0u; pattern < 8u; ++pattern) {
+      definition.elementaryTransitions[pattern] =
+        ((definition.ruleNumber >> pattern) & 1u) != 0u ? 0u : 1u;
+    }
+    definition.transitionTable.fill(kBackgroundState);
+  } else {
+    return false;
+  }
+
+  if (definition.family == RuleFamily::Elementary1D) {
+    if (definition.elementaryTransitions[0] != kBackgroundState) {
+      return false;
+    }
+  } else if (definition.transitionTable[RuleSet::transitionIndex(
+               kBackgroundState, 0u)] != kBackgroundState) {
+    return false;
+  }
+
+  definition.aliveColor = definition.stateColors[0];
+  definition.deadColor = definition.stateColors[kBackgroundState];
+  return true;
+}
+
+bool
+parseLegacyDefinition(const nlohmann::json& item,
+                      LegacyRuleSetDefinition& definition)
+{
+  if (!item.is_object()) {
+    return false;
+  }
+  definition.id = RuleSetRegistry::normalizeId(item.value("id", ""));
+  if (definition.id.empty()) {
+    return false;
+  }
+  definition.name = item.value("name", definition.id);
+  const std::string family = item.value("family", "life_like");
+  const bool isLegacyWireworld = family == "wireworld";
+  if (isLegacyWireworld) {
+    definition.family = RuleFamily::MooreTable;
+  } else if (!RuleSetRegistry::parseFamily(family, definition.family)) {
+    return false;
+  }
+  definition.rule = item.value("rule", "");
+  definition.stateCount = 2u;
+
+  if (definition.family == RuleFamily::LifeLike) {
+    if (!definition.rule.empty() &&
+        !RuleSetRegistry::parseLifeLikeRuleString(
+          definition.rule, definition.birthMask, definition.surviveMask)) {
+      return false;
+    }
+    if (item.contains("birth") &&
+        !readNeighborMask(item["birth"], definition.birthMask)) {
+      return false;
+    }
+    if (item.contains("survive") &&
+        !readNeighborMask(item["survive"], definition.surviveMask)) {
+      return false;
+    }
+    if (item.contains("birth") || item.contains("survive")) {
+      definition.rule.clear();
+    }
+  } else if (definition.family == RuleFamily::Elementary1D) {
+    if (!item.contains("rule_number") ||
+        !readUnsigned(item["rule_number"], 255u, definition.ruleNumber)) {
+      return false;
+    }
+  } else if (definition.family == RuleFamily::Generations) {
+    definition.stateCount = 3u;
+    definition.birthMask = 1u << 2u;
+    definition.surviveMask = 0u;
+  } else if (isLegacyWireworld) {
+    setWireworldTransitions(definition);
+  } else {
+    return false;
+  }
+
+  setDefaultStates(definition);
+  if (isLegacyWireworld) {
+    definition.stateNames = { "Head", "Empty", "Tail", "Conductor" };
+    definition.stateColors = { { 0u, 80u, 255u },
+                               { 255u, 255u, 255u },
+                               { 255u, 40u, 40u },
+                               { 255u, 200u, 40u } };
+  }
+  if (item.contains("palette")) {
+    const nlohmann::json& palette = item["palette"];
+    if (!palette.is_object()) {
+      return false;
+    }
+    if (palette.contains("alive")) {
+      if (!readColor(palette["alive"], definition.stateColors[0])) {
+        return false;
+      }
+      definition.hasCustomPalette = true;
+    }
+    if (palette.contains("dead")) {
+      if (!readColor(palette["dead"],
+                     definition.stateColors[kBackgroundState])) {
+        return false;
+      }
+      definition.hasCustomPalette = true;
+    }
+  }
+  return compileDefinition(definition);
+}
+
+bool
+parseVersionTwoDefinition(const nlohmann::json& item,
+                          LegacyRuleSetDefinition& definition)
+{
+  if (!item.is_object()) {
+    return false;
+  }
+  definition.id = RuleSetRegistry::normalizeId(item.value("id", ""));
+  if (definition.id.empty() || !item.contains("family") ||
+      !item["family"].is_string() || !item.contains("state_count") ||
+      !readUnsigned(
+        item["state_count"], kMaximumStateCount, definition.stateCount) ||
+      definition.stateCount < 2u) {
+    return false;
+  }
+  definition.name = item.value("name", definition.id);
+  if (!RuleSetRegistry::parseFamily(item["family"].get<std::string>(),
+                                    definition.family)) {
+    return false;
+  }
+
+  if (definition.family == RuleFamily::LifeLike ||
+      definition.family == RuleFamily::Generations) {
+    if (item.contains("rule") && !item["rule"].is_string()) {
+      return false;
+    }
+    definition.rule = item.value("rule", "");
+    if (!definition.rule.empty() &&
+        !RuleSetRegistry::parseLifeLikeRuleString(
+          definition.rule, definition.birthMask, definition.surviveMask)) {
+      return false;
+    }
+    if (item.contains("birth")) {
+      unsigned int parsedBirth = 0u;
+      if (!readNeighborMask(item["birth"], parsedBirth) ||
+          (!definition.rule.empty() && parsedBirth != definition.birthMask)) {
+        return false;
+      }
+      definition.birthMask = parsedBirth;
+    }
+    if (item.contains("survive")) {
+      unsigned int parsedSurvive = 0u;
+      if (!readNeighborMask(item["survive"], parsedSurvive) ||
+          (!definition.rule.empty() &&
+           parsedSurvive != definition.surviveMask)) {
+        return false;
+      }
+      definition.surviveMask = parsedSurvive;
+    }
+  } else if (definition.family == RuleFamily::MooreTable) {
+    if (!item.contains("transition_table") ||
+        !readTransitionRows(item["transition_table"], definition)) {
+      return false;
+    }
+  } else if (definition.family == RuleFamily::Elementary1D) {
+    if (!item.contains("rule_number") ||
+        !readUnsigned(item["rule_number"], 255u, definition.ruleNumber)) {
+      return false;
+    }
+  } else {
+    return false;
+  }
+
+  if (!item.contains("states") || !readStates(item["states"], definition)) {
+    return false;
+  }
+  return compileDefinition(definition);
+}
+
+nlohmann::json
+neighborCountsToJson(unsigned int mask)
+{
+  nlohmann::json counts = nlohmann::json::array();
+  for (unsigned int count = 0u; count <= kMaximumNeighborCount; ++count) {
+    if (((mask >> count) & 1u) != 0u) {
+      counts.push_back(count);
+    }
+  }
+  return counts;
+}
+
+bool
+validId(std::string& id)
+{
+  id = RuleSetRegistry::normalizeId(std::move(id));
+  if (id.empty() || id.size() > 64u) {
+    return false;
+  }
+  for (const unsigned char character : id) {
+    if ((character < 'A' || character > 'Z') &&
+        (character < '0' || character > '9') && character != '_') {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool
+validateFamily(RuleFamilyDefinition& definition)
+{
+  if (!validId(definition.id) ||
+      RuleSetRegistry::familyName(definition.kind) == nullptr ||
+      definition.stateCount < 2u ||
+      definition.stateCount > kMaximumStateCount ||
+      definition.stateNames.size() != definition.stateCount ||
+      definition.stateColors.size() != definition.stateCount) {
+    return false;
+  }
+  if (definition.name.empty()) {
+    definition.name = definition.id;
+  }
+  if ((definition.kind == RuleFamily::LifeLike &&
+       definition.stateCount != 2u) ||
+      (definition.kind == RuleFamily::Generations &&
+       definition.stateCount < 3u) ||
+      (definition.kind == RuleFamily::Elementary1D &&
+       definition.stateCount != 2u)) {
+    return false;
+  }
+  for (unsigned int state = 0u; state < definition.stateCount; ++state) {
+    if (definition.stateNames[state].empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool
+sameFamilySchema(const RuleFamilyDefinition& left,
+                 const RuleFamilyDefinition& right)
+{
+  return left.kind == right.kind && left.stateCount == right.stateCount &&
+         left.stateNames == right.stateNames &&
+         left.stateColors == right.stateColors;
+}
+
+std::string
+legacyFamilyId(const RuleFamilyDefinition& family)
+{
+  std::uint64_t hash = 14695981039346656037ULL;
+  const auto mix = [&hash](unsigned char value) {
+    hash ^= value;
+    hash *= 1099511628211ULL;
+  };
+  mix(static_cast<unsigned char>(family.kind));
+  for (unsigned int state = 0u; state < family.stateCount; ++state) {
+    for (const unsigned char character : family.stateNames[state]) {
+      mix(character);
+    }
+    mix(0u);
+    for (const unsigned char channel : family.stateColors[state]) {
+      mix(channel);
+    }
+  }
+  std::ostringstream id;
+  id << "LEGACY_" << RuleSetRegistry::familyName(family.kind) << '_'
+     << std::uppercase << std::hex << std::setw(16) << std::setfill('0')
+     << hash;
+  std::string result = id.str();
+  std::replace(result.begin(), result.end(), '-', '_');
+  std::replace(result.begin(), result.end(), '.', '_');
+  return result;
+}
+
+RuleFamilyDefinition
+familyFromLegacy(const LegacyRuleSetDefinition& legacy)
+{
+  RuleFamilyDefinition family;
+  family.name = RuleSetRegistry::familyName(legacy.family);
+  family.kind = legacy.family;
+  family.stateCount = legacy.stateCount;
+  family.stateNames = legacy.stateNames;
+  family.stateColors = legacy.stateColors;
+  family.id = legacyFamilyId(family);
+  return family;
+}
+
+bool
+compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
+{
+  if (!validId(definition.id)) {
+    return false;
+  }
+  definition.familyId = RuleSetRegistry::normalizeId(definition.familyId);
+  if (definition.familyId != family.id) {
+    return false;
+  }
+  if (definition.name.empty()) {
+    definition.name = definition.id;
+  }
+  const unsigned int stateCount = family.stateCount;
+  if (family.kind == RuleFamily::LifeLike ||
+      family.kind == RuleFamily::Generations) {
+    if (!definition.rule.empty()) {
+      unsigned int parsedBirth = 0u;
+      unsigned int parsedSurvive = 0u;
+      if (!RuleSetRegistry::parseLifeLikeRuleString(
+            definition.rule, parsedBirth, parsedSurvive)) {
+        return false;
+      }
+      definition.birthMask = parsedBirth;
+      definition.surviveMask = parsedSurvive;
+    }
+    if ((definition.birthMask & ~0x1FFu) != 0u ||
+        (definition.surviveMask & ~0x1FFu) != 0u ||
+        (definition.birthMask & 1u) != 0u ||
+        (family.kind == RuleFamily::LifeLike && stateCount != 2u) ||
+        (family.kind == RuleFamily::Generations && stateCount < 3u)) {
+      return false;
+    }
+    definition.transitionTable.fill(kBackgroundState);
+    for (unsigned int state = 0u; state < stateCount; ++state) {
+      for (unsigned int neighbors = 0u;
+           neighbors < RuleSet::kNeighborCountCount;
+           ++neighbors) {
+        const bool activeNeighbors =
+          ((definition.birthMask >> neighbors) & 1u) != 0u;
+        const bool survivingNeighbors =
+          ((definition.surviveMask >> neighbors) & 1u) != 0u;
+        unsigned char next = kBackgroundState;
+        if (state == 0u) {
+          if (survivingNeighbors) {
+            next = 0u;
+          } else if (family.kind == RuleFamily::Generations) {
+            next = 2u;
+          }
+        } else if (state == kBackgroundState) {
+          next = activeNeighbors ? 0u : kBackgroundState;
+        } else if (family.kind == RuleFamily::Generations) {
+          next = state + 1u < stateCount
+                   ? static_cast<unsigned char>(state + 1u)
+                   : kBackgroundState;
+        }
+        definition.transitionTable[RuleSet::transitionIndex(
+          static_cast<unsigned char>(state),
+          static_cast<unsigned char>(neighbors))] = next;
+      }
+    }
+    definition.rule = "B";
+    for (unsigned int neighbors = 0u; neighbors <= kMaximumNeighborCount;
+         ++neighbors) {
+      if (((definition.birthMask >> neighbors) & 1u) != 0u) {
+        definition.rule += std::to_string(neighbors);
+      }
+    }
+    definition.rule += "/S";
+    for (unsigned int neighbors = 0u; neighbors <= kMaximumNeighborCount;
+         ++neighbors) {
+      if (((definition.surviveMask >> neighbors) & 1u) != 0u) {
+        definition.rule += std::to_string(neighbors);
+      }
+    }
+    definition.hasTransitionTable = false;
+  } else if (family.kind == RuleFamily::MooreTable) {
+    if (!definition.hasTransitionTable ||
+        definition.transitionTableStateCount != stateCount) {
+      return false;
+    }
+    for (unsigned int state = 0u; state < stateCount; ++state) {
+      for (unsigned int neighbors = 0u;
+           neighbors < RuleSet::kNeighborCountCount;
+           ++neighbors) {
+        if (static_cast<unsigned int>(
+              definition.transitionTable[RuleSet::transitionIndex(
+                static_cast<unsigned char>(state),
+                static_cast<unsigned char>(neighbors))]) >= stateCount) {
+          return false;
+        }
+      }
+    }
+  } else if (family.kind == RuleFamily::Elementary1D) {
+    if (stateCount != 2u || definition.ruleNumber > 255u ||
+        (definition.ruleNumber & 1u) != 0u) {
+      return false;
+    }
+    for (unsigned int pattern = 0u; pattern < 8u; ++pattern) {
+      definition.elementaryTransitions[pattern] =
+        ((definition.ruleNumber >> pattern) & 1u) != 0u ? 0u : 1u;
+    }
+    definition.transitionTable.fill(kBackgroundState);
+    definition.hasTransitionTable = false;
+  } else {
+    return false;
+  }
+  definition.transitionTableStateCount = stateCount;
+  if (family.kind == RuleFamily::Elementary1D) {
+    if (definition.elementaryTransitions[0] != kBackgroundState) {
+      return false;
+    }
+  } else if (definition.transitionTable[RuleSet::transitionIndex(
+               kBackgroundState, 0u)] != kBackgroundState) {
+    return false;
+  }
+  return true;
+}
+
+bool
+readFamilyDefinition(const nlohmann::json& item,
+                     RuleFamilyDefinition& definition)
+{
+  if (!item.is_object() || !item.contains("id") || !item["id"].is_string() ||
+      !item.contains("model") || !item["model"].is_string() ||
+      !item.contains("state_count") ||
+      !readUnsigned(
+        item["state_count"], kMaximumStateCount, definition.stateCount) ||
+      !item.contains("states") || !item["states"].is_array()) {
+    return false;
+  }
+  definition.id = item["id"].get<std::string>();
+  definition.name = item.value("name", definition.id);
+  if (!RuleSetRegistry::parseFamily(item["model"].get<std::string>(),
+                                    definition.kind) ||
+      item["states"].size() != definition.stateCount) {
+    return false;
+  }
+  definition.stateNames.resize(definition.stateCount);
+  definition.stateColors.resize(definition.stateCount);
+  std::vector<bool> seen(definition.stateCount, false);
+  for (const nlohmann::json& stateItem : item["states"]) {
+    if (!stateItem.is_object() || !stateItem.contains("value")) {
+      return false;
+    }
+    unsigned int state = 0u;
+    if (!readUnsigned(stateItem["value"], definition.stateCount - 1u, state) ||
+        seen[state] || !stateItem.contains("name") ||
+        !stateItem["name"].is_string() || !stateItem.contains("color") ||
+        !readColor(stateItem["color"], definition.stateColors[state])) {
+      return false;
+    }
+    definition.stateNames[state] = stateItem["name"].get<std::string>();
+    if (definition.stateNames[state].empty()) {
+      return false;
+    }
+    seen[state] = true;
+  }
+  return std::find(seen.begin(), seen.end(), false) == seen.end() &&
+         validateFamily(definition);
+}
+
+bool
+parseModernRule(const nlohmann::json& item,
+                const RuleFamilyDefinition& family,
+                RuleSetDefinition& definition)
+{
+  if (!item.is_object() || !item.contains("id") || !item["id"].is_string() ||
+      !item.contains("family_id") || !item["family_id"].is_string()) {
+    return false;
+  }
+  definition.id = item["id"].get<std::string>();
+  definition.name = item.value("name", definition.id);
+  definition.familyId = item["family_id"].get<std::string>();
+  if (family.kind == RuleFamily::LifeLike ||
+      family.kind == RuleFamily::Generations) {
+    if (item.contains("rule") && !item["rule"].is_string()) {
+      return false;
+    }
+    definition.rule = item.value("rule", "");
+    if (!definition.rule.empty() &&
+        !RuleSetRegistry::parseLifeLikeRuleString(
+          definition.rule, definition.birthMask, definition.surviveMask)) {
+      return false;
+    }
+    if (item.contains("birth")) {
+      unsigned int birth = 0u;
+      if (!readNeighborMask(item["birth"], birth) ||
+          (!definition.rule.empty() && birth != definition.birthMask)) {
+        return false;
+      }
+      definition.birthMask = birth;
+    }
+    if (item.contains("survive")) {
+      unsigned int survive = 0u;
+      if (!readNeighborMask(item["survive"], survive) ||
+          (!definition.rule.empty() && survive != definition.surviveMask)) {
+        return false;
+      }
+      definition.surviveMask = survive;
+    }
+  } else if (family.kind == RuleFamily::MooreTable) {
+    LegacyRuleSetDefinition legacy;
+    legacy.stateCount = family.stateCount;
+    if (!item.contains("transition_table") ||
+        !readTransitionRows(item["transition_table"], legacy)) {
+      return false;
+    }
+    definition.transitionTable = legacy.transitionTable;
+    definition.hasTransitionTable = true;
+    definition.transitionTableStateCount = family.stateCount;
+  } else if (family.kind == RuleFamily::Elementary1D) {
+    if (!item.contains("rule_number") ||
+        !readUnsigned(item["rule_number"], 255u, definition.ruleNumber)) {
+      return false;
+    }
+  } else {
+    return false;
+  }
+  return compileRule(definition, family);
+}
+
+nlohmann::json
+familyToJson(const RuleFamilyDefinition& definition)
+{
+  nlohmann::json item;
+  item["id"] = definition.id;
+  item["name"] = definition.name;
+  item["model"] = RuleSetRegistry::familyName(definition.kind);
+  item["state_count"] = definition.stateCount;
+  item["states"] = nlohmann::json::array();
+  for (unsigned int state = 0u; state < definition.stateCount; ++state) {
+    item["states"].push_back({ { "value", state },
+                               { "name", definition.stateNames[state] },
+                               { "color", definition.stateColors[state] } });
+  }
+  return item;
+}
+
+nlohmann::json
+ruleToJson(const RuleSetDefinition& definition,
+           const RuleFamilyDefinition& family)
+{
+  nlohmann::json item;
+  item["id"] = definition.id;
+  item["name"] = definition.name;
+  item["family_id"] = definition.familyId;
+  if (family.kind == RuleFamily::LifeLike ||
+      family.kind == RuleFamily::Generations) {
+    item["birth"] = neighborCountsToJson(definition.birthMask);
+    item["survive"] = neighborCountsToJson(definition.surviveMask);
+  } else if (family.kind == RuleFamily::MooreTable) {
+    item["transition_table"] = nlohmann::json::array();
+    for (unsigned int state = 0u; state < family.stateCount; ++state) {
+      nlohmann::json row = nlohmann::json::array();
+      for (unsigned int neighbors = 0u;
+           neighbors < RuleSet::kNeighborCountCount;
+           ++neighbors) {
+        row.push_back(definition.transitionTable[RuleSet::transitionIndex(
+          static_cast<unsigned char>(state),
+          static_cast<unsigned char>(neighbors))]);
+      }
+      item["transition_table"].push_back(row);
+    }
+  } else if (family.kind == RuleFamily::Elementary1D) {
+    item["rule_number"] = definition.ruleNumber;
+  }
+  return item;
+}
+
+} // namespace
+
+RuleSetRegistry&
+RuleSetRegistry::instance()
+{
+  static RuleSetRegistry s_instance;
+  return s_instance;
+}
+
+std::string
+RuleSetRegistry::normalizeId(std::string id)
+{
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    id[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(id[i])));
+  }
+  return id;
+}
+
+bool
+RuleSetRegistry::parseFamily(const std::string& value, RuleFamily& family)
+{
+  if (value == "life_like") {
+    family = RuleFamily::LifeLike;
+  } else if (value == "generations") {
+    family = RuleFamily::Generations;
+  } else if (value == "moore_table") {
+    family = RuleFamily::MooreTable;
+  } else if (value == "elementary_1d") {
+    family = RuleFamily::Elementary1D;
+  } else {
+    return false;
+  }
+  return true;
+}
+
+const char*
+RuleSetRegistry::familyName(RuleFamily family)
+{
+  switch (family) {
+    case RuleFamily::LifeLike:
+      return "life_like";
+    case RuleFamily::Generations:
+      return "generations";
+    case RuleFamily::MooreTable:
+      return "moore_table";
+    case RuleFamily::Elementary1D:
+      return "elementary_1d";
+    default:
+      return nullptr;
+  }
+}
+
+bool
+RuleSetRegistry::parseLifeLikeRuleString(const std::string& ruleStr,
+                                         unsigned int& outBirth,
+                                         unsigned int& outSurvive)
+{
+  outBirth = 0u;
+  outSurvive = 0u;
+  if (ruleStr.empty()) {
+    return false;
+  }
+
+  std::string normalized;
+  for (const char character : ruleStr) {
+    if (std::isspace(static_cast<unsigned char>(character)) == 0) {
+      normalized.push_back(
+        static_cast<char>(std::toupper(static_cast<unsigned char>(character))));
+    }
+  }
+  const std::size_t slash = normalized.find('/');
+  if (slash == std::string::npos ||
+      normalized.find('/', slash + 1u) != std::string::npos) {
+    return false;
+  }
+  const std::string first = normalized.substr(0u, slash);
+  const std::string second = normalized.substr(slash + 1u);
+  const bool labeled = !first.empty() && (first[0] == 'B' || first[0] == 'S');
+  if (labeled && (second.empty() ||
+                  (first[0] == 'B' ? second[0] != 'S' : second[0] != 'B'))) {
+    return false;
+  }
+  unsigned int birth = 0u;
+  unsigned int survive = 0u;
+  for (int section = 0; section < 2; ++section) {
+    const std::string& part = section == 0 ? first : second;
+    unsigned int mask = 0u;
+    const std::size_t firstDigit = labeled ? 1u : 0u;
+    for (std::size_t index = firstDigit; index < part.size(); ++index) {
+      if (part[index] < '0' || part[index] > '8') {
+        return false;
+      }
+      mask |= 1u << static_cast<unsigned int>(part[index] - '0');
+    }
+    const bool isBirth = labeled ? part[0] == 'B' : section == 1;
+    if (isBirth) {
+      birth = mask;
+    } else {
+      survive = mask;
+    }
+  }
+  outBirth = birth;
+  outSurvive = survive;
+  return true;
+}
+
+RuleSetRegistry::RuleSetRegistry() = default;
+
+void
+RuleSetRegistry::clear()
+{
+  families.clear();
+  rules.clear();
+}
+
+bool
+RuleSetRegistry::registerFamily(const RuleFamilyDefinition& definition)
+{
+  RuleFamilyDefinition compiled = definition;
+  if (!validateFamily(compiled)) {
+    return false;
+  }
+  RuleSetRegistry staged = *this;
+  bool replaced = false;
+  for (RuleFamilyDefinition& existing : staged.families) {
+    if (existing.id == compiled.id) {
+      existing = compiled;
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) {
+    staged.families.push_back(compiled);
+  }
+  for (RuleSetDefinition& rule : staged.rules) {
+    if (rule.familyId == compiled.id && !compileRule(rule, compiled)) {
+      return false;
+    }
+  }
+  *this = std::move(staged);
+  return true;
+}
+
+bool
+RuleSetRegistry::registerRule(const RuleSetDefinition& definition)
+{
+  RuleSetDefinition compiled = definition;
+  const RuleFamilyDefinition* family = getFamilyDefinition(compiled.familyId);
+  if (family == nullptr || !compileRule(compiled, *family)) {
+    return false;
+  }
+  for (RuleSetDefinition& existing : rules) {
+    if (existing.id == compiled.id) {
+      existing = compiled;
+      return true;
+    }
+  }
+  rules.push_back(compiled);
   return true;
 }
 
 bool
 RuleSetRegistry::loadFromText(const std::string& text)
 {
-  nlohmann::json root;
   try {
-    root = nlohmann::json::parse(text);
+    const nlohmann::json root = nlohmann::json::parse(text);
+    unsigned int schemaVersion = 1u;
+    const nlohmann::json* definitions = &root;
     if (!root.is_array()) {
-      return false;
+      if (!root.is_object() || !root.contains("schema_version") ||
+          !root.contains("rules") ||
+          !readUnsigned(root["schema_version"], 3u, schemaVersion) ||
+          (schemaVersion != 2u && schemaVersion != 3u) ||
+          !root["rules"].is_array()) {
+        return false;
+      }
+      definitions = &root["rules"];
     }
 
-    std::vector<RuleDefinition> pending = rules;
-    for (const nlohmann::json& item : root) {
-      if (!item.is_object()) {
-        return false;
-      }
-      RuleDefinition def;
-      def.id = normalizeId(item.value("id", ""));
-      if (def.id.empty()) {
-        return false;
-      }
-      def.name = item.value("name", def.id);
-      def.family = item.value("family", "life_like");
-      def.rule = item.value("rule", "");
-
-      if (def.family == "life_like") {
-        if (!def.rule.empty() && !parseLifeLikeRuleString(
-                                   def.rule, def.birthMask, def.surviveMask)) {
+    RuleSetRegistry pending = *this;
+    for (const nlohmann::json& item : *definitions) {
+      if (schemaVersion < 3u) {
+        LegacyRuleSetDefinition legacy;
+        const bool parsed = schemaVersion == 1u
+                              ? parseLegacyDefinition(item, legacy)
+                              : parseVersionTwoDefinition(item, legacy);
+        if (!parsed) {
           return false;
         }
-        if (item.contains("birth") &&
-            !readNeighborMask(item["birth"], def.birthMask)) {
-          return false;
-        }
-        if (item.contains("survive") &&
-            !readNeighborMask(item["survive"], def.surviveMask)) {
-          return false;
-        }
-      } else if (def.family == "elementary_1d") {
-        if (item.contains("rule_number") &&
-            !readUnsigned(item["rule_number"], 255u, def.ruleNumber)) {
-          return false;
-        }
-      }
-
-      if (item.contains("palette")) {
-        const nlohmann::json& pal = item["palette"];
-        if (!pal.is_object()) {
-          return false;
-        }
-        if (pal.contains("alive")) {
-          if (!readPaletteColor(pal["alive"], def.aliveColor)) {
-            return false;
+        RuleFamilyDefinition family = familyFromLegacy(legacy);
+        const RuleFamilyDefinition* matchingFamily = nullptr;
+        for (const RuleFamilyDefinition& existing : pending.families) {
+          if (sameFamilySchema(existing, family)) {
+            matchingFamily = &existing;
+            break;
           }
-          def.hasCustomPalette = true;
         }
-        if (pal.contains("dead")) {
-          if (!readPaletteColor(pal["dead"], def.deadColor)) {
-            return false;
-          }
-          def.hasCustomPalette = true;
+        if (matchingFamily != nullptr) {
+          family.id = matchingFamily->id;
+        } else if (!pending.registerFamily(family)) {
+          return false;
         }
-      }
-
-      if (!insertRule(pending, def)) {
-        return false;
+        RuleSetDefinition definition;
+        definition.id = legacy.id;
+        definition.name = legacy.name;
+        definition.familyId = family.id;
+        definition.rule = legacy.rule;
+        definition.birthMask = legacy.birthMask;
+        definition.surviveMask = legacy.surviveMask;
+        definition.ruleNumber = legacy.ruleNumber;
+        definition.transitionTable = legacy.transitionTable;
+        definition.hasTransitionTable = family.kind == RuleFamily::MooreTable;
+        definition.transitionTableStateCount = family.stateCount;
+        if (!pending.registerRule(definition)) {
+          return false;
+        }
+      } else {
+        if (!item.is_object() || !item.contains("family_id") ||
+            !item["family_id"].is_string()) {
+          return false;
+        }
+        const RuleFamilyDefinition* family =
+          pending.getFamilyDefinition(item["family_id"].get<std::string>());
+        RuleSetDefinition definition;
+        if (family == nullptr || !parseModernRule(item, *family, definition) ||
+            !pending.registerRule(definition)) {
+          return false;
+        }
       }
     }
-    rules.swap(pending);
+    *this = std::move(pending);
     return true;
   } catch (...) {
     return false;
@@ -347,10 +1115,96 @@ RuleSetRegistry::loadFromText(const std::string& text)
 }
 
 bool
+RuleSetRegistry::loadFamiliesFromText(const std::string& text)
+{
+  try {
+    const nlohmann::json root = nlohmann::json::parse(text);
+    unsigned int schemaVersion = 0u;
+    if (!root.is_object() || !root.contains("schema_version") ||
+        !readUnsigned(root["schema_version"], 1u, schemaVersion) ||
+        schemaVersion != 1u || !root.contains("families") ||
+        !root["families"].is_array()) {
+      return false;
+    }
+    RuleSetRegistry staged = *this;
+    for (const nlohmann::json& item : root["families"]) {
+      RuleFamilyDefinition definition;
+      if (!readFamilyDefinition(item, definition) ||
+          !staged.registerFamily(definition)) {
+        return false;
+      }
+    }
+    *this = std::move(staged);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool
+RuleSetRegistry::loadFromCatalogTexts(const std::string& familiesText,
+                                      const std::string& rulesText)
+{
+  RuleSetRegistry staged;
+  if (!familiesText.empty() && !staged.loadFamiliesFromText(familiesText)) {
+    return false;
+  }
+  if (rulesText.empty() || !staged.loadFromText(rulesText)) {
+    return false;
+  }
+  for (RuleFamilyDefinition& family : staged.families) {
+    family.builtIn = true;
+  }
+  for (RuleSetDefinition& rule : staged.rules) {
+    rule.builtIn = true;
+  }
+  *this = std::move(staged);
+  return true;
+}
+
+bool
+RuleSetRegistry::loadRulePackage(const std::string& text)
+{
+  try {
+    const nlohmann::json root = nlohmann::json::parse(text);
+    if (root.is_array() || !root.is_object() ||
+        !root.contains("schema_version")) {
+      return loadFromText(text);
+    }
+    unsigned int schemaVersion = 0u;
+    if (!readUnsigned(root["schema_version"], 1u, schemaVersion) ||
+        schemaVersion != 1u || !root.contains("families") ||
+        !root["families"].is_array() || !root.contains("rules") ||
+        !root["rules"].is_array()) {
+      return false;
+    }
+    nlohmann::json familyCatalog = { { "schema_version", 1u },
+                                     { "families", root["families"] } };
+    nlohmann::json ruleCatalog = { { "schema_version", 3u },
+                                   { "rules", root["rules"] } };
+    RuleSetRegistry staged = *this;
+    if (!staged.loadFamiliesFromText(familyCatalog.dump()) ||
+        !staged.loadFromText(ruleCatalog.dump())) {
+      return false;
+    }
+    *this = std::move(staged);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool
+RuleSetRegistry::isKnownFamily(const std::string& id) const
+{
+  return getFamilyDefinition(id) != nullptr;
+}
+
+bool
 RuleSetRegistry::isKnownRule(const std::string& id) const
 {
-  for (const RuleDefinition& r : rules) {
-    if (r.id == id) {
+  for (const RuleSetDefinition& rule : rules) {
+    if (rule.id == id) {
       return true;
     }
   }
@@ -358,57 +1212,119 @@ RuleSetRegistry::isKnownRule(const std::string& id) const
 }
 
 std::vector<std::string>
-RuleSetRegistry::getKnownRules() const
+RuleSetRegistry::getKnownFamilies() const
 {
   std::vector<std::string> result;
-  result.reserve(rules.size());
-  for (const RuleDefinition& r : rules) {
-    result.push_back(r.id);
+  result.reserve(families.size());
+  for (const RuleFamilyDefinition& family : families) {
+    result.push_back(family.id);
   }
   return result;
 }
 
-const RuleDefinition*
-RuleSetRegistry::getRuleDefinition(const std::string& id) const
+std::vector<std::string>
+RuleSetRegistry::getKnownRules() const
 {
-  const std::string norm = normalizeId(id);
-  for (const RuleDefinition& r : rules) {
-    if (r.id == norm) {
-      return &r;
+  std::vector<std::string> result;
+  result.reserve(rules.size());
+  for (const RuleSetDefinition& rule : rules) {
+    result.push_back(rule.id);
+  }
+  return result;
+}
+
+std::vector<std::string>
+RuleSetRegistry::getKnownRules(const std::string& familyId) const
+{
+  const std::string normalized = normalizeId(familyId);
+  std::vector<std::string> result;
+  for (const RuleSetDefinition& rule : rules) {
+    if (rule.familyId == normalized) {
+      result.push_back(rule.id);
+    }
+  }
+  return result;
+}
+
+const RuleFamilyDefinition*
+RuleSetRegistry::getFamilyDefinition(const std::string& id) const
+{
+  const std::string normalized = normalizeId(id);
+  for (const RuleFamilyDefinition& family : families) {
+    if (family.id == normalized) {
+      return &family;
     }
   }
   return nullptr;
 }
 
+const RuleSetDefinition*
+RuleSetRegistry::getRuleSetDefinition(const std::string& id) const
+{
+  const std::string normalized = normalizeId(id);
+  for (const RuleSetDefinition& rule : rules) {
+    if (rule.id == normalized) {
+      return &rule;
+    }
+  }
+  return nullptr;
+}
+
+std::string
+RuleSetRegistry::serializeFamilies(
+  const std::vector<RuleFamilyDefinition>& definitions)
+{
+  nlohmann::json root;
+  root["schema_version"] = 1u;
+  root["families"] = nlohmann::json::array();
+  for (const RuleFamilyDefinition& definition : definitions) {
+    root["families"].push_back(familyToJson(definition));
+  }
+  return root.dump(2);
+}
+
+std::string
+RuleSetRegistry::serializeCatalog(
+  const std::vector<RuleFamilyDefinition>& familyDefinitions,
+  const std::vector<RuleSetDefinition>& definitions)
+{
+  nlohmann::json root;
+  root["schema_version"] = 3u;
+  root["rules"] = nlohmann::json::array();
+  for (const RuleSetDefinition& definition : definitions) {
+    const RuleFamilyDefinition* family = nullptr;
+    for (const RuleFamilyDefinition& candidate : familyDefinitions) {
+      if (candidate.id == definition.familyId) {
+        family = &candidate;
+        break;
+      }
+    }
+    if (family != nullptr) {
+      root["rules"].push_back(ruleToJson(definition, *family));
+    }
+  }
+  return root.dump(2);
+}
+
+std::string
+RuleSetRegistry::serializeRulePackage(const RuleFamilyDefinition& family,
+                                      const RuleSetDefinition& definition)
+{
+  nlohmann::json root;
+  root["schema_version"] = 1u;
+  root["families"] = nlohmann::json::array({ familyToJson(family) });
+  root["rules"] = nlohmann::json::array({ ruleToJson(definition, family) });
+  return root.dump(2);
+}
+
 std::unique_ptr<RuleSet>
 RuleSetRegistry::createRuleSet(const std::string& id, CellGrid* canvas) const
 {
-  const RuleDefinition* def = getRuleDefinition(id);
-  if (def == nullptr) {
+  const RuleSetDefinition* definition = getRuleSetDefinition(id);
+  const RuleFamilyDefinition* family =
+    definition == nullptr ? nullptr : getFamilyDefinition(definition->familyId);
+  if (definition == nullptr || family == nullptr) {
     return nullptr;
   }
-
-  if (def->family == "life_like") {
-    return std::make_unique<LifeLikeRuleSet>(canvas,
-                                             def->id,
-                                             def->birthMask,
-                                             def->surviveMask,
-                                             def->aliveColor,
-                                             def->deadColor);
-  }
-
-  if (def->family == "elementary_1d") {
-    return std::make_unique<Elementary1DRuleSet>(
-      canvas, def->id, def->ruleNumber, def->aliveColor, def->deadColor);
-  }
-
-  if (def->family == "generations" || def->id == "BRIANS_BRAIN") {
-    return std::make_unique<BriansBrainRuleSet>(canvas);
-  }
-
-  if (def->family == "wireworld" || def->id == "WIREWORLD") {
-    return std::make_unique<WireworldRuleSet>(canvas);
-  }
-
-  return nullptr;
+  return std::make_unique<DataRuleSet>(*definition, *family, canvas);
 }

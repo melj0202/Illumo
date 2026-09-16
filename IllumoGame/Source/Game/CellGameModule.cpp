@@ -4,7 +4,8 @@
 #include "IllumoCodec.h"
 #include "MainMenuModule.h"
 #include "PatternCodec.h"
-#include "Rulesets/WireworldRuleSet.h"
+#include "RuleCatalogLoader.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
@@ -22,6 +23,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <glm/gtc/matrix_transform.hpp>
@@ -135,6 +137,49 @@ cellGameContextComplete(const IllumoContext* context)
 }
 
 static std::string
+uniqueCustomFamilyId(const std::string& sourceId)
+{
+  const std::string prefix = "CUSTOM_FAMILY_";
+  std::string base = RuleSetRegistry::normalizeId(sourceId);
+  const std::size_t maximumBaseLength = 64u - prefix.size() - 5u;
+  if (base.size() > maximumBaseLength) {
+    base.resize(maximumBaseLength);
+  }
+  const std::vector<std::string> knownFamilies =
+    RuleSetRegistry::instance().getKnownFamilies();
+  for (unsigned int suffix = 1u; suffix < 10000u; ++suffix) {
+    const std::string suffixText =
+      suffix == 1u ? "" : "_" + std::to_string(suffix);
+    std::string candidateBase = base;
+    if (candidateBase.size() + suffixText.size() > maximumBaseLength) {
+      candidateBase.resize(maximumBaseLength - suffixText.size());
+    }
+    const std::string candidate = prefix + candidateBase + suffixText;
+    if (std::find(knownFamilies.begin(), knownFamilies.end(), candidate) ==
+        knownFamilies.end()) {
+      return candidate;
+    }
+  }
+  return {};
+}
+
+static bool
+hasInvalidCellState(const SparseCellGrid& grid, unsigned int stateCount)
+{
+  std::vector<SparseChunkRecord> chunks;
+  grid.collectChunkRecords(&chunks);
+  for (const SparseChunkRecord& chunk : chunks) {
+    for (const unsigned char state : chunk.cells) {
+      if (state != SparseCellGrid::BackgroundState &&
+          static_cast<unsigned int>(state) >= stateCount) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static std::string
 withIllumoExtension(const std::string& filename)
 {
   const std::string extension = ".illumo";
@@ -164,7 +209,6 @@ CellGameModule::CellGameModule(std::string initialSavePath)
   , simulationDebtDropped(false)
   , simulationBudgetLimited(false)
   , mirrorDeltaValid(false)
-  , wireworldBrush(WireworldRuleSet::CELL_CONDUCTOR)
   , modeSplash(nullptr)
   , configurationMenu(nullptr)
   , exitConfirmDialog(nullptr)
@@ -221,8 +265,11 @@ CellGameModule::Start(IllumoContext* context)
   ic = context;
   inspectorEnabled = ic->envVars->getVar("showInspector").valueAsBool;
 
-  // Prefer ModeString from envvars / previous console command.
-  std::string startMode = ic->envVars->getVar("ModeString").value;
+  // Prefer the explicit ruleset setting, then retain the old mode alias.
+  std::string startMode = ic->envVars->getVar("RuleSetString").value;
+  if (startMode.empty()) {
+    startMode = ic->envVars->getVar("ModeString").value;
+  }
   if (startMode.empty()) {
     startMode = "GAME_OF_LIFE";
   }
@@ -259,6 +306,24 @@ CellGameModule::Start(IllumoContext* context)
   ic->inputManager->setActiveInputContext(inputContextId);
   this->cellContext = new CellContext(
     startMode, ic->envVars, ic->window, ic->camera, ic->renderer);
+  if (cellContext->getRuleSet() == nullptr) {
+    Logger::LogError("No valid ruleset is available to start the canvas");
+    delete cellContext;
+    cellContext = nullptr;
+    ic->inputManager->unregisterInputContext(inputContextId);
+    inputContextId = -1;
+    return false;
+  }
+  m_paintBrush = 0u;
+  for (unsigned int state = 0u;
+       state < cellContext->getRuleSet()->getStateCount();
+       ++state) {
+    if (cellContext->getRuleSet()->getStateName(
+          static_cast<unsigned char>(state)) == "Conductor") {
+      m_paintBrush = static_cast<unsigned char>(state);
+      break;
+    }
+  }
   if (initialCanvas.has_value() &&
       !cellContext->resetWorld(initialCanvas->worldChunkWidth,
                                initialCanvas->worldChunkHeight)) {
@@ -274,7 +339,6 @@ CellGameModule::Start(IllumoContext* context)
   syncSimRateFromEnv();
 
   currentState = CellState::EDIT;
-  wireworldBrush = WireworldRuleSet::CELL_CONDUCTOR;
 
   if (!initialSaveFile.empty()) {
     LoadCellGame(initialSaveFile);
@@ -348,8 +412,8 @@ CellGameModule::Start(IllumoContext* context)
   m_paintPaletteMouseWasDown = false;
   m_paintPaletteCapturing = false;
   m_paintPaletteHovered = false;
-  m_paintPaletteEmphasis.fill(0.0f);
-  m_paintBrush = 0;
+  m_paintPaletteEmphasis.clear();
+  m_paintPaletteStateOffset = 0u;
   m_paintRuleTag.clear();
 
   canvasEntranceVisual.setRenderer(ic->renderer);
@@ -364,6 +428,8 @@ CellGameModule::Start(IllumoContext* context)
 
   configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
+  rulesetWorkshopMenu =
+    std::make_unique<RulesetWorkshopMenu>(ic->window, ic->renderer);
   exitConfirmDialog =
     std::make_unique<ExitConfirmDialog>(ic->window, ic->renderer);
 
@@ -384,22 +450,23 @@ void
 CellGameModule::seedInitialPattern()
 {
   SparseCellGrid* grid = cellContext->getGrid();
+  const RuleSet* rules = cellContext->getRuleSet();
 
-  if (cellContext->getModeString() == "WIREWORLD") {
+  if (rules->getStateCount() >= 4u && rules->getStateName(0u) == "Head" &&
+      rules->getStateName(2u) == "Tail" &&
+      rules->getStateName(3u) == "Conductor") {
     // Horizontal conductor with a head+tail pair so one electron travels right.
     const std::int64_t y = 0;
     const std::int64_t startX = -4;
     for (int i = 0; i < 8; ++i) {
-      grid->setCell(CellAddress{ startX + i, y },
-                    WireworldRuleSet::CELL_CONDUCTOR);
+      grid->setCell(CellAddress{ startX + i, y }, 3u);
     }
-    grid->setCell(CellAddress{ startX, y }, WireworldRuleSet::CELL_HEAD);
-    grid->setCell(CellAddress{ startX + 1, y }, WireworldRuleSet::CELL_TAIL);
+    grid->setCell(CellAddress{ startX, y }, 0u);
+    grid->setCell(CellAddress{ startX + 1, y }, 2u);
     return;
   }
 
-  if (cellContext->getModeString() == "RULE_90" ||
-      cellContext->getModeString() == "RULE_184") {
+  if (rules->getNeighborhoodKind() == RuleSet::NeighborhoodKind::Elementary1D) {
     grid->setCell(CellAddress{ 0, 0 }, 0);
     return;
   }
@@ -414,24 +481,38 @@ CellGameModule::seedInitialPattern()
 }
 
 void
-CellGameModule::updateWireworldBrushFromInput()
+CellGameModule::updatePaintBrushFromInput()
 {
   if (ic == nullptr || ic->inputManager == nullptr ||
       ic->commandLine == nullptr || ic->commandLine->isOpen) {
     return;
   }
-  // Sticky brush: last selected key wins until another is pressed.
-  // 1/H = head, 2 = empty, 3/T = tail, 4 = conductor (default).
-  if (ic->inputManager->isKeyPressed(KeyCode::Num1) ||
-      ic->inputManager->isKeyPressed(KeyCode::H)) {
-    wireworldBrush = WireworldRuleSet::CELL_HEAD;
+  // The numeric shortcuts select the first four declared states.
+  const RuleSet* rules = cellContext->getRuleSet();
+  const unsigned int stateCount = rules->getStateCount();
+  const bool selectHead = ic->inputManager->isKeyPressed(KeyCode::H);
+  const bool selectTail = ic->inputManager->isKeyPressed(KeyCode::T);
+  if (selectHead || selectTail) {
+    const std::string wanted = selectHead ? "Head" : "Tail";
+    for (unsigned int state = 0u; state < stateCount; ++state) {
+      if (rules->getStateName(static_cast<unsigned char>(state)) == wanted) {
+        m_paintBrush = static_cast<unsigned char>(state);
+        break;
+      }
+    }
+    return;
+  }
+  if (ic->inputManager->isKeyPressed(KeyCode::Num1)) {
+    m_paintBrush = 0u;
   } else if (ic->inputManager->isKeyPressed(KeyCode::Num2)) {
-    wireworldBrush = WireworldRuleSet::CELL_EMPTY;
-  } else if (ic->inputManager->isKeyPressed(KeyCode::Num3) ||
-             ic->inputManager->isKeyPressed(KeyCode::T)) {
-    wireworldBrush = WireworldRuleSet::CELL_TAIL;
+    if (stateCount > 1u)
+      m_paintBrush = 1u;
+  } else if (ic->inputManager->isKeyPressed(KeyCode::Num3)) {
+    if (stateCount > 2u)
+      m_paintBrush = 2u;
   } else if (ic->inputManager->isKeyPressed(KeyCode::Num4)) {
-    wireworldBrush = WireworldRuleSet::CELL_CONDUCTOR;
+    if (stateCount > 3u)
+      m_paintBrush = 3u;
   }
 }
 
@@ -522,7 +603,8 @@ CellGameModule::currentConfiguration() const
   if (cellContext == nullptr || ic == nullptr || ic->envVars == nullptr) {
     return configuration;
   }
-  configuration.ruleSet = cellContext->getModeString();
+  configuration.family = cellContext->getFamilyString();
+  configuration.ruleSet = cellContext->getRuleSetString();
   configuration.worldChunkWidth = cellContext->getWorldChunkWidth();
   configuration.worldChunkHeight = cellContext->getWorldChunkHeight();
   configuration.tps = ic->envVars->getVar("tps").valueAsLong;
@@ -560,6 +642,7 @@ bool
 CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
 {
   if (cellContext == nullptr || ic == nullptr || ic->envVars == nullptr ||
+      !CellContext::IsKnownFamilyString(configuration.family) ||
       !CellContext::IsKnownModeString(configuration.ruleSet) ||
       !SparseCellGrid::isValidTopology(configuration.worldChunkWidth,
                                        configuration.worldChunkHeight) ||
@@ -573,11 +656,19 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
     return false;
   }
 
+  const RuleSetDefinition* requestedRule =
+    RuleSetRegistry::instance().getRuleSetDefinition(configuration.ruleSet);
+  if (requestedRule == nullptr ||
+      requestedRule->familyId != configuration.family) {
+    return false;
+  }
+
   const bool topologyChanged =
     configuration.worldChunkWidth != cellContext->getWorldChunkWidth() ||
     configuration.worldChunkHeight != cellContext->getWorldChunkHeight();
   const bool rulesetChanged =
-    configuration.ruleSet != cellContext->getModeString();
+    configuration.ruleSet != cellContext->getRuleSetString() ||
+    configuration.family != cellContext->getFamilyString();
   const bool fullscreenChanged =
     configuration.fullscreen != ic->envVars->getVar("fullscreen").valueAsBool;
   const bool msaaChanged =
@@ -595,13 +686,19 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
     }
   }
   if (rulesetChanged) {
-    cellContext->setRuleSet(configuration.ruleSet);
+    if (!cellContext->setRuleSet(configuration.family, configuration.ruleSet) &&
+        (configuration.ruleSet != cellContext->getRuleSetString() ||
+         configuration.family != cellContext->getFamilyString())) {
+      return false;
+    }
   }
 
   ic->envVars->setVar("WorldChunksX",
                       static_cast<long>(configuration.worldChunkWidth));
   ic->envVars->setVar("WorldChunksY",
                       static_cast<long>(configuration.worldChunkHeight));
+  ic->envVars->setVar("FamilyString", configuration.family);
+  ic->envVars->setVar("RuleSetString", configuration.ruleSet);
   ic->envVars->setVar("ModeString", configuration.ruleSet);
   ic->envVars->setVar("tps", configuration.tps);
   ic->envVars->setVar("speedFactor", configuration.speedFactor);
@@ -635,9 +732,6 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
     updateVisualTargets();
     cellContext->getCanvasView()->snapVisualToTargets();
   }
-  if (cellContext->getModeString() == "WIREWORLD") {
-    wireworldBrush = WireworldRuleSet::CELL_CONDUCTOR;
-  }
   syncSimRateFromEnv();
   if (fullscreenChanged && ic->window != nullptr) {
     ic->window->toggleFullscreen();
@@ -656,9 +750,21 @@ CellGameModule::registerConsoleCommands()
 
   const std::vector<std::string> rulesets = CellContext::GetKnownModeStrings();
   CommandFn rulesetCommand = [this](const std::vector<std::string>& args) {
+    const RuleSetDefinition* activeRule =
+      RuleSetRegistry::instance().getRuleSetDefinition(
+        cellContext->getRuleSetString());
+    const RuleFamilyDefinition* activeFamily =
+      RuleSetRegistry::instance().getFamilyDefinition(
+        cellContext->getFamilyString());
     if (args.empty()) {
-      ic->commandLine->logNormal("Current ruleset: " +
-                                 cellContext->getModeString());
+      if (activeFamily != nullptr) {
+        ic->commandLine->logNormal("Current family: " + activeFamily->name +
+                                   " [" + activeFamily->id + "]");
+      }
+      if (activeRule != nullptr) {
+        ic->commandLine->logNormal("Current ruleset: " + activeRule->name +
+                                   " [" + activeRule->id + "]");
+      }
       ic->commandLine->logNormal("Usage: ruleset <name>");
       return;
     }
@@ -678,7 +784,17 @@ CellGameModule::registerConsoleCommands()
       cellContext->getCanvasView()->rebuildPalette(cellContext->getRuleSet());
       updateVisualTargets();
     }
-    ic->commandLine->logSuccess("Ruleset: " + cellContext->getModeString());
+    const RuleSetDefinition* selectedRule =
+      RuleSetRegistry::instance().getRuleSetDefinition(
+        cellContext->getRuleSetString());
+    const RuleFamilyDefinition* selectedFamily =
+      RuleSetRegistry::instance().getFamilyDefinition(
+        cellContext->getFamilyString());
+    if (selectedFamily != nullptr && selectedRule != nullptr) {
+      ic->commandLine->logSuccess(
+        "Family: " + selectedFamily->name + " [" + selectedFamily->id +
+        "]; ruleset: " + selectedRule->name + " [" + selectedRule->id + "]");
+    }
   };
   ic->commandRegistry->RegisterCommand(
     "ruleset",
@@ -913,16 +1029,21 @@ CellGameModule::registerConsoleCommands()
       canvas->syncVisibleRegion();
       std::mt19937 generator(std::random_device{}());
       std::uniform_real_distribution<double> distribution(0.0, 100.0);
-      const bool wireworld = cellContext->getModeString() == "WIREWORLD";
+      const RuleSet* rules = cellContext->getRuleSet();
+      unsigned char occupiedState = 0u;
+      for (unsigned int state = 0u; state < rules->getStateCount(); ++state) {
+        if (rules->getStateName(static_cast<unsigned char>(state)) ==
+            "Conductor") {
+          occupiedState = static_cast<unsigned char>(state);
+          break;
+        }
+      }
       const CellAddress firstCell = canvas->getVisibleFirstCell();
       for (int y = 0; y < canvas->getVisibleCellHeight(); ++y) {
         for (int x = 0; x < canvas->getVisibleCellWidth(); ++x) {
           const bool selected = distribution(generator) < density;
           const unsigned char state =
-            wireworld ? (selected ? WireworldRuleSet::CELL_CONDUCTOR
-                                  : WireworldRuleSet::CELL_EMPTY)
-                      : (selected ? static_cast<unsigned char>(0)
-                                  : static_cast<unsigned char>(1));
+            selected ? occupiedState : SparseCellGrid::BackgroundState;
           const CellAddress address{ firstCell.x + x, firstCell.y - y };
           canvas->setCanvasPixel(address.x, address.y, state);
         }
@@ -931,7 +1052,7 @@ CellGameModule::registerConsoleCommands()
                                   std::to_string(density) + "% density");
     },
     "randomize [density-percent]",
-    "Fill the canvas randomly; Wireworld creates conductors");
+    "Fill the canvas randomly using its declared active state");
 
   ic->commandRegistry->RegisterCommand(
     "setcell",
@@ -1262,7 +1383,20 @@ CellGameModule::printStatus() const
   ic->commandLine->logNormal(
     std::string("State: ") +
     (currentState == CellState::NORMAL ? "RUNNING" : "PAUSED/EDIT"));
-  ic->commandLine->logNormal("Ruleset: " + cellContext->getModeString());
+  const RuleFamilyDefinition* family =
+    RuleSetRegistry::instance().getFamilyDefinition(
+      cellContext->getFamilyString());
+  const RuleSetDefinition* rule =
+    RuleSetRegistry::instance().getRuleSetDefinition(
+      cellContext->getRuleSetString());
+  if (family != nullptr) {
+    ic->commandLine->logNormal("Family: " + family->name + " [" + family->id +
+                               "]");
+  }
+  if (rule != nullptr) {
+    ic->commandLine->logNormal("Ruleset: " + rule->name + " [" + rule->id +
+                               "]");
+  }
   ic->commandLine->logNormal("Generation: " +
                              std::to_string(simulationGeneration));
   ic->commandLine->logNormal(
@@ -1489,7 +1623,9 @@ CellGameModule::Update(double dt)
                                 !hamburgerMouseWasDown;
   hamburgerMouseWasDown = mouseLeftDown;
 
-  if (!consoleOpen && !exitConfirmOpen && configurationMenu != nullptr &&
+  if (!consoleOpen && !exitConfirmOpen &&
+      (rulesetWorkshopMenu == nullptr || !rulesetWorkshopMenu->isOpen()) &&
+      configurationMenu != nullptr &&
       (ic->inputManager->isActionActive("ToggleSettings") ||
        hamburgerClicked)) {
     toggleSettingsMenu();
@@ -1565,6 +1701,254 @@ CellGameModule::Update(double dt)
     return;
   }
 
+  if (!consoleOpen && !exitConfirmOpen &&
+      (configurationMenu == nullptr || !configurationMenu->isOpen()) &&
+      rulesetWorkshopMenu != nullptr && !rulesetWorkshopMenu->isOpen() &&
+      consumeKeyPress(ic->inputManager, KeyCode::F2)) {
+    const RuleSetDefinition* definition =
+      RuleSetRegistry::instance().getRuleSetDefinition(
+        cellContext->getModeString());
+    const RuleFamilyDefinition* family =
+      definition == nullptr
+        ? nullptr
+        : RuleSetRegistry::instance().getFamilyDefinition(definition->familyId);
+    if (definition != nullptr && family != nullptr) {
+      drainSimulation();
+      const bool reducedMotion =
+        ic->envVars != nullptr &&
+        ic->envVars->getVar("reducedUiMotion").valueAsBool;
+      rulesetWorkshopMenu->open(*family, *definition, reducedMotion);
+      ic->inputManager->clearCharQueue();
+    }
+  }
+
+  if (rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen()) {
+    rulesetWorkshopMenu->tick(static_cast<float>(dt));
+    const RulesetWorkshopAction action =
+      consoleOpen ? RulesetWorkshopAction::None
+                  : rulesetWorkshopMenu->update(ic->inputManager);
+    if (action == RulesetWorkshopAction::Cancel) {
+      rulesetWorkshopMenu->close();
+    } else if (action == RulesetWorkshopAction::Import) {
+      const SaveLoadDialogSpec specification{ "Illumo Rules Catalog",
+                                              "rulesets.json",
+                                              "*.JSON" };
+      const std::string filename = SaveLoad::GetLoadLocation(specification);
+      if (!filename.empty()) {
+        RuleSetRegistry imported;
+        if (!RuleCatalogLoader::loadFromFile(imported, filename) ||
+            imported.getDefinitions().empty() ||
+            imported.getFamilyDefinitions().empty()) {
+          rulesetWorkshopMenu->setError("The selected catalog is invalid.");
+        } else {
+          std::vector<RuleFamilyDefinition> families =
+            imported.getFamilyDefinitions();
+          const std::vector<RuleSetDefinition> definitions =
+            imported.getDefinitions();
+          const RuleSet* currentActiveRule = cellContext->getRuleSet();
+          RuleSetRegistry staged = RuleSetRegistry::instance();
+          bool valid = true;
+          for (RuleFamilyDefinition& familyDefinition : families) {
+            const RuleFamilyDefinition* existing =
+              staged.getFamilyDefinition(familyDefinition.id);
+            if (existing != nullptr && existing->builtIn) {
+              const bool identical =
+                existing->name == familyDefinition.name &&
+                existing->kind == familyDefinition.kind &&
+                existing->stateCount == familyDefinition.stateCount &&
+                existing->stateNames == familyDefinition.stateNames &&
+                existing->stateColors == familyDefinition.stateColors;
+              if (!identical) {
+                valid = false;
+                break;
+              }
+              familyDefinition.builtIn = true;
+            }
+            if (!staged.registerFamily(familyDefinition)) {
+              valid = false;
+              break;
+            }
+          }
+          for (const RuleSetDefinition& definition : definitions) {
+            const RuleSetDefinition* existing =
+              staged.getRuleSetDefinition(definition.id);
+            if (valid && existing != nullptr && existing->builtIn) {
+              valid = false;
+            }
+            if (valid && !staged.registerRule(definition)) {
+              valid = false;
+              break;
+            }
+          }
+          bool reducesActiveRuleStateRange = false;
+          if (valid && currentActiveRule != nullptr) {
+            const RuleFamilyDefinition* stagedActiveFamily =
+              staged.getFamilyDefinition(cellContext->getFamilyString());
+            if (stagedActiveFamily != nullptr &&
+                stagedActiveFamily->stateCount <
+                  currentActiveRule->getStateCount()) {
+              reducesActiveRuleStateRange = true;
+            }
+          }
+          std::error_code errorCode;
+          const std::filesystem::path workingDirectory =
+            std::filesystem::current_path(errorCode);
+          std::string error;
+          std::vector<RuleFamilyDefinition> userFamilies;
+          for (const RuleFamilyDefinition& familyDefinition : families) {
+            if (!familyDefinition.builtIn) {
+              userFamilies.push_back(familyDefinition);
+            }
+          }
+          if (!valid || reducesActiveRuleStateRange || errorCode ||
+              (!userFamilies.empty() &&
+               !RuleCatalogLoader::saveUserFamilies(
+                 workingDirectory, userFamilies, &error)) ||
+              !RuleCatalogLoader::saveUserRules(
+                workingDirectory, definitions, &error)) {
+            if (reducesActiveRuleStateRange) {
+              rulesetWorkshopMenu->setError(
+                "The import would invalidate states of the active ruleset.");
+            } else {
+              rulesetWorkshopMenu->setError(
+                error.empty() ? "The selected catalog could not be imported."
+                              : error);
+            }
+          } else {
+            RuleSetRegistry::instance() = std::move(staged);
+            const RuleSetDefinition* selected =
+              RuleSetRegistry::instance().getRuleSetDefinition(
+                definitions.front().id);
+            const RuleFamilyDefinition* selectedFamily =
+              selected == nullptr
+                ? nullptr
+                : RuleSetRegistry::instance().getFamilyDefinition(
+                    selected->familyId);
+            if (selected != nullptr && selectedFamily != nullptr) {
+              rulesetWorkshopMenu->setDraft(*selectedFamily, *selected);
+            }
+          }
+        }
+      }
+    } else if (action == RulesetWorkshopAction::Export) {
+      const SaveLoadDialogSpec specification{
+        "Illumo Rule Definition",
+        rulesetWorkshopMenu->getDraft().id + ".json",
+        "*.JSON"
+      };
+      const std::string filename = SaveLoad::GetSaveLocation(specification);
+      if (!filename.empty()) {
+        RuleFamilyDefinition familyDraft =
+          rulesetWorkshopMenu->getFamilyDraft();
+        RuleSetDefinition ruleDraft = rulesetWorkshopMenu->getDraft();
+        bool canExport = true;
+        if (rulesetWorkshopMenu->isFamilyDraftChanged() &&
+            familyDraft.builtIn) {
+          const std::string customFamilyId =
+            uniqueCustomFamilyId(familyDraft.id);
+          if (customFamilyId.empty()) {
+            rulesetWorkshopMenu->setError(
+              "Unable to allocate an ID for the copied family.");
+            canExport = false;
+          } else {
+            familyDraft.id = customFamilyId;
+            familyDraft.name = "Custom " + familyDraft.name;
+            familyDraft.builtIn = false;
+            ruleDraft.familyId = customFamilyId;
+          }
+        }
+        std::string error;
+        if (canExport && !RuleCatalogLoader::saveCatalog(
+                           filename, familyDraft, ruleDraft, &error)) {
+          rulesetWorkshopMenu->setError(
+            error.empty() ? "The rule could not be exported." : error);
+        }
+      }
+    } else if (action == RulesetWorkshopAction::Apply) {
+      // The published grid can advance while the workshop is open. Drain
+      // first so validation sees the latest generation and the runner no
+      // longer borrows the active RuleSet when it is replaced below.
+      prepareGridMutation();
+      RuleFamilyDefinition familyDraft = rulesetWorkshopMenu->getFamilyDraft();
+      RuleSetDefinition draft = rulesetWorkshopMenu->getDraft();
+      bool validFamilyId = true;
+      if (rulesetWorkshopMenu->isFamilyDraftChanged() && familyDraft.builtIn) {
+        const std::string customFamilyId = uniqueCustomFamilyId(familyDraft.id);
+        if (customFamilyId.empty()) {
+          rulesetWorkshopMenu->setError(
+            "Unable to allocate an ID for the copied family.");
+          validFamilyId = false;
+        } else {
+          familyDraft.id = customFamilyId;
+          familyDraft.name = "Custom " + familyDraft.name;
+          familyDraft.builtIn = false;
+        }
+      }
+      draft.familyId = familyDraft.id;
+      const bool containsInvalidState =
+        hasInvalidCellState(*cellContext->getGrid(), familyDraft.stateCount);
+      RuleSetRegistry staged = RuleSetRegistry::instance();
+      if (!validFamilyId) {
+        // The explanatory allocation error was set above.
+      } else if (containsInvalidState) {
+        rulesetWorkshopMenu->setError(
+          "The current world contains states this rule would remove.");
+      } else if (!staged.registerFamily(familyDraft) ||
+                 !staged.registerRule(draft)) {
+        rulesetWorkshopMenu->setError(
+          "This family and ruleset are invalid or incompatible.");
+      } else {
+        const RuleSetDefinition* compiled =
+          staged.getRuleSetDefinition(draft.id);
+        std::error_code errorCode;
+        const std::filesystem::path workingDirectory =
+          std::filesystem::current_path(errorCode);
+        std::string error;
+        const RuleFamilyDefinition* compiledFamily =
+          staged.getFamilyDefinition(familyDraft.id);
+        if (compiled == nullptr || compiledFamily == nullptr || errorCode ||
+            (!compiledFamily->builtIn &&
+             !RuleCatalogLoader::saveUserFamily(
+               workingDirectory, *compiledFamily, &error)) ||
+            !RuleCatalogLoader::saveUserRule(
+              workingDirectory, *compiled, &error)) {
+          rulesetWorkshopMenu->setError(
+            error.empty() ? "The user catalog could not be saved." : error);
+        } else {
+          RuleSetRegistry::instance() = std::move(staged);
+          const bool activePairUnchanged =
+            cellContext->getFamilyString() == draft.familyId &&
+            cellContext->getRuleSetString() == draft.id;
+          const bool activated =
+            activePairUnchanged
+              ? cellContext->refreshRuleSet()
+              : cellContext->setRuleSet(draft.familyId, draft.id);
+          if (activated) {
+            cellContext->getCanvasView()->rebuildPalette(
+              cellContext->getRuleSet());
+            m_paintBrush = 0u;
+            updateVisualTargets();
+            rulesetWorkshopMenu->close();
+          } else {
+            rulesetWorkshopMenu->setError(
+              "The saved rule could not be "
+              "activated; the world was preserved.");
+          }
+        }
+      }
+    }
+    paintStrokeActive = false;
+    updateEditHintsVisual(dt);
+    updatePaintPalette(dt);
+    updateEditorCursor();
+    updateHamburgerVisual(dt);
+    updateSelectionVisual();
+    updateInspectorVisual();
+    updateVisualTargets();
+    cellContext->getCanvasView()->tickVisual(static_cast<float>(dt));
+    return;
+  }
+
   if (!consoleOpen && consumeKeyPress(ic->inputManager, KeyCode::Q)) {
     if (exitConfirmDialog != nullptr) {
       ic->inputManager->clearCharQueue();
@@ -1595,9 +1979,7 @@ CellGameModule::Update(double dt)
         // Same life values, new colors → rebuild palette only (no cell
         // re-upload).
         cellContext->getCanvasView()->rebuildPalette(cellContext->getRuleSet());
-        if (cellContext->getModeString() == "WIREWORLD") {
-          wireworldBrush = WireworldRuleSet::CELL_CONDUCTOR;
-        }
+        m_paintBrush = 0u;
       }
     }
   }
@@ -1618,6 +2000,8 @@ CellGameModule::Update(double dt)
       showModeSplash("NORMAL");
       Logger::LogInfo("State changed to NORMAL");
     }
+    clipboard.clearSelection();
+    selectionVisual.setVisible(false);
     lastSimulationSteps = 0;
     simulationDebtDropped = false;
     simulationBudgetLimited = false;
@@ -1695,6 +2079,7 @@ CellGameModule::Exit()
   restoreRender3dTestCamera();
   unregisterConsoleCommands();
   exitConfirmDialog.reset();
+  rulesetWorkshopMenu.reset();
   configurationMenu.reset();
   modeSplash.reset();
   render3dSceneGraph.clear();
@@ -1994,6 +2379,7 @@ CellGameModule::updateEditHintsVisual(double dt)
 {
   const bool overlaysOpen =
     (ic->commandLine != nullptr && ic->commandLine->isOpen) ||
+    (rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen()) ||
     (configurationMenu != nullptr && configurationMenu->isOpen()) ||
     (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen());
   const bool editChromeActive =
@@ -2073,7 +2459,8 @@ CellGameModule::updateEditHintsVisual(double dt)
   std::vector<std::string> hints = {
     "Left drag: paint", "Right drag: erase", "Shift+Left drag: select",
     "Middle drag: pan", "Wheel: zoom",       "Ctrl+V: paste",
-    "E: run",           "I: inspector",      "F1: settings"
+    "E: run",           "I: inspector",      "F1: settings",
+    "F2: rules"
   };
   if (clipboard.hasSelection()) {
     hints.emplace_back("Ctrl+C/X: copy/cut");
@@ -2082,9 +2469,28 @@ CellGameModule::updateEditHintsVisual(double dt)
   if (!clipboard.getClipboardPattern().empty()) {
     hints.emplace_back("R/F: rotate/flip buffer");
   }
-  if (cellContext->getModeString() == "WIREWORLD") {
-    hints.emplace_back("1: head  2: empty  3: tail  4: conductor");
+  std::string stateHints;
+  const RuleSet* rules = cellContext->getRuleSet();
+  const unsigned int shortcutCount = std::min(rules->getStateCount(), 4u);
+  for (unsigned int state = 0u; state < shortcutCount; ++state) {
+    std::string stateName =
+      rules->getStateName(static_cast<unsigned char>(state));
+    if (!stateName.empty() && stateName[0] >= 'A' && stateName[0] <= 'Z') {
+      stateName[0] = static_cast<char>(stateName[0] + ('a' - 'A'));
+    }
+    if (!stateHints.empty()) {
+      stateHints += "  ";
+    }
+    stateHints += std::to_string(state + 1u);
+    if (stateName == "head") {
+      stateHints += "/H";
+    } else if (stateName == "tail") {
+      stateHints += "/T";
+    }
+    stateHints += ": " + stateName;
   }
+  hints.emplace_back(stateHints.empty() ? "1-4: choose a paint state"
+                                        : stateHints);
   // Wrap complete hints, preserving each key/action pair at narrow sizes.
   const float availableWidth = width - 24.0f;
   const std::shared_ptr<Font> font = Font::getDefaultFont();
@@ -2210,7 +2616,8 @@ CellGameModule::updateInspectorVisual()
     const bool inBounds = cellContext->getGrid()->isCellInWorldBounds(address);
     text << "cell " << hoverX << "," << hoverY << " state "
          << static_cast<int>(state) << "\n";
-    text << cellContext->getModeString() << "\n";
+    text << cellContext->getFamilyString() << " / "
+         << cellContext->getRuleSetString() << "\n";
     text << "chunk " << chunk.x << "," << chunk.y
          << (inBounds ? " in-bounds" : " outside") << "\n";
   } else {
@@ -2296,7 +2703,9 @@ CellGameModule::Edit(double dt)
     const bool pointerInWorld = hoverValid && !isHamburgerHovered() &&
                                 !m_paintPaletteHovered &&
                                 !m_paintPaletteCapturing;
-    if (shift && isLeftPressed && pointerInWorld) {
+    // Shift starts a selection, but releasing Shift before the mouse button
+    // must not turn the same drag into a paint stroke.
+    if ((shift || clipboard.isSelecting()) && isLeftPressed && pointerInWorld) {
       if (!clipboard.isSelecting()) {
         clipboard.startSelection(currentX, currentY);
       } else {
@@ -2308,11 +2717,8 @@ CellGameModule::Edit(double dt)
       if ((isLeftPressed || isRightPressed) && pointerInWorld) {
         clipboard.clearSelection();
         mirrorDeltaValid = false;
-        unsigned char colorVal = isLeftPressed ? m_paintBrush : 1;
-        if (cellContext->getRuleSet()->getRuleTag() == "WIREWORLD") {
-          colorVal =
-            isLeftPressed ? wireworldBrush : WireworldRuleSet::CELL_EMPTY;
-        }
+        const unsigned char colorVal =
+          isLeftPressed ? m_paintBrush : SparseCellGrid::BackgroundState;
 
         if (paintStrokeActive) {
           std::int64_t x0 = lastPaintX;
@@ -2374,6 +2780,7 @@ CellGameModule::updatePaintPalette(double dt)
   const bool clicked = leftDown && !m_paintPaletteMouseWasDown;
   const bool overlaysOpen =
     (ic->commandLine != nullptr && ic->commandLine->isOpen) ||
+    (rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen()) ||
     (configurationMenu != nullptr && configurationMenu->isOpen()) ||
     (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen());
   const bool paletteInteractive =
@@ -2388,39 +2795,51 @@ CellGameModule::updatePaintPalette(double dt)
 
   const RuleSet* rules = cellContext->getRuleSet();
   const std::string tag = rules->getRuleTag();
-  const bool wireworld = tag == "WIREWORLD";
-  const int stateCount = wireworld ? 4 : (tag == "BRIANS_BRAIN" ? 3 : 2);
+  const unsigned int stateCount = rules->getStateCount();
+  if (stateCount == 0u) {
+    return;
+  }
   if (tag != m_paintRuleTag) {
     m_paintRuleTag = tag;
     m_paintBrush = 0;
-    m_paintPaletteEmphasis.fill(0.0f);
+    m_paintPaletteStateOffset = 0u;
+    for (unsigned int state = 0u; state < stateCount; ++state) {
+      if (rules->getStateName(static_cast<unsigned char>(state)) ==
+          "Conductor") {
+        m_paintBrush = static_cast<unsigned char>(state);
+        break;
+      }
+    }
   }
-  if (wireworld && paletteInteractive) {
-    updateWireworldBrushFromInput();
+  m_paintPaletteEmphasis.resize(stateCount, 0.0f);
+  if (m_paintBrush >= stateCount) {
+    m_paintBrush = 0u;
   }
-  unsigned char& brush = wireworld ? wireworldBrush : m_paintBrush;
-  const std::array<const char*, 4> labels =
-    wireworld
-      ? std::array<const char*, 4>{ "Head  1/H",
-                                    "Empty  2",
-                                    "Tail  3/T",
-                                    "Conductor  4" }
-      : std::array<const char*, 4>{ "Alive", "Dead / erase", "Dying", "" };
+  if (paletteInteractive) {
+    updatePaintBrushFromInput();
+  }
+  const unsigned int visibleStateCount = std::min(stateCount, 4u);
+  const unsigned int maximumOffset = stateCount - visibleStateCount;
+  m_paintPaletteStateOffset =
+    std::min(m_paintPaletteStateOffset, maximumOffset);
   const float scale = ic->renderer != nullptr
                         ? std::max(0.01f, ic->renderer->getUiScale())
                         : 1.0f;
   const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-  const float width = static_cast<float>(stateCount) * 132.0f + 24.0f;
+  const float width = static_cast<float>(visibleStateCount) * 132.0f + 24.0f;
   const int availableHeight =
     std::max(0, dimensions[1] - editHintsFullInsetPixels);
   const float header = 32.0f;
   const float body = 110.0f;
+  const float panelBottomExtension = 20.0f;
+  const float footerClearance = 8.0f;
+  const float drawerTravel = body + panelBottomExtension + footerClearance;
   const float fit = std::max(
     0.01f,
     std::min({ 1.0f,
                static_cast<float>(dimensions[0]) / ((width + 24.0f) * scale),
                static_cast<float>(availableHeight) /
-                 ((header + body + 24.0f) * scale) }));
+                 ((header + drawerTravel + 4.0f) * scale) }));
   Transform2D transform;
   transform.scaleX = fit;
   transform.scaleY = fit;
@@ -2435,10 +2854,11 @@ CellGameModule::updatePaintPalette(double dt)
   const float my = static_cast<float>(mouse[1]) / (scale * fit);
   const float footerHeight =
     static_cast<float>(editHintsFullInsetPixels) / (scale * fit);
-  const float modeSlide = (1.0f - m_paintPaletteChromeReveal) *
-                          (header + body * m_paintPaletteReveal + footerHeight);
+  const float modeSlide =
+    (1.0f - m_paintPaletteChromeReveal) *
+    (header + drawerTravel * m_paintPaletteReveal + footerHeight);
   const float previousY =
-    screenHeight - header - body * m_paintPaletteReveal + modeSlide;
+    screenHeight - header - drawerTravel * m_paintPaletteReveal + modeSlide;
   const bool headerHovered =
     paletteInteractive && my < screenHeight &&
     GuiKit::isPointInRect(mx, my, tabX, previousY, tabWidth, header);
@@ -2456,20 +2876,32 @@ CellGameModule::updatePaintPalette(double dt)
   m_paintPaletteReveal +=
     ((m_paintPaletteExpanded ? 1.0f : 0.0f) - m_paintPaletteReveal) * blend;
   const float y =
-    screenHeight - header - body * m_paintPaletteReveal + modeSlide;
+    screenHeight - header - drawerTravel * m_paintPaletteReveal + modeSlide;
   m_paintPaletteHovered =
     paletteInteractive && my < screenHeight &&
     (GuiKit::isPointInRect(mx, my, tabX, y, tabWidth, header) ||
      (m_paintPaletteReveal > 0.001f &&
-      GuiKit::isPointInRect(mx, my, x, y + header, width, body)));
+      GuiKit::isPointInRect(
+        mx, my, x, y + header, width, body + panelBottomExtension)));
+  double* paletteScroll = ic->inputManager->getMouseScrollOffset();
+  if (paletteScroll != nullptr && m_paintPaletteHovered &&
+      *paletteScroll != 0.0) {
+    const int direction = *paletteScroll > 0.0 ? -1 : 1;
+    const int nextOffset =
+      static_cast<int>(m_paintPaletteStateOffset) + direction;
+    m_paintPaletteStateOffset = static_cast<unsigned int>(
+      std::clamp(nextOffset, 0, static_cast<int>(maximumOffset)));
+    *paletteScroll = 0.0;
+  }
   // Capture before a reduced-motion toggle moves the tab away from the click.
   // Keep the gesture captured when dragging off the drawer onto the world.
   if ((m_paintPaletteHovered || (clicked && headerHovered)) &&
       (leftDown || rightDown)) {
     m_paintPaletteCapturing = true;
   }
-  if (m_paintPaletteHovered || m_paintPaletteCapturing) {
-    *ic->inputManager->getMouseScrollOffset() = 0.0;
+  if (paletteScroll != nullptr &&
+      (m_paintPaletteHovered || m_paintPaletteCapturing)) {
+    *paletteScroll = 0.0;
   }
   // Draw one joined silhouette, then cover the shared edge with its surface.
   // Opaque fills avoid darker seams where the tab and drawer meet.
@@ -2525,18 +2957,20 @@ CellGameModule::updatePaintPalette(double dt)
                                arrowY - 2.0f * direction,
                                UiTheme::accent(),
                                2.0f);
-  for (int state = 0; state < stateCount; ++state) {
-    const float cardX = x + 12.0f + static_cast<float>(state) * 132.0f;
+  for (unsigned int card = 0u; card < visibleStateCount; ++card) {
+    const unsigned int state = m_paintPaletteStateOffset + card;
+    const float cardX = x + 12.0f + static_cast<float>(card) * 132.0f;
     const float cardY = y + header + 12.0f;
     const bool hovered =
       paletteInteractive && m_paintPaletteExpanded && my < screenHeight &&
       GuiKit::isPointInRect(mx, my, cardX, cardY, 124.0f, 64.0f);
     if (hovered && clicked) {
-      brush = static_cast<unsigned char>(state);
+      m_paintBrush = static_cast<unsigned char>(state);
     }
     float& emphasis = m_paintPaletteEmphasis[static_cast<std::size_t>(state)];
     emphasis +=
-      ((brush == state ? 1.0f : (hovered ? 0.5f : 0.0f)) - emphasis) * blend;
+      ((m_paintBrush == state ? 1.0f : (hovered ? 0.5f : 0.0f)) - emphasis) *
+      blend;
     if (m_paintPaletteReveal <= 0.001f) {
       continue;
     }
@@ -2565,23 +2999,52 @@ CellGameModule::updatePaintPalette(double dt)
                      26.0f,
                      ColorRgba{ rgb[0], rgb[1], rgb[2], 255 },
                      UiTheme::panelBorder());
-    GuiKit::drawTextCentered(m_paintPaletteVisual,
-                             labels[static_cast<std::size_t>(state)],
-                             cardX + 62.0f,
-                             cardY + 48.0f,
-                             11.0f,
-                             UiTheme::textPrimary());
-    if (brush == state) {
+    GuiKit::drawTextCentered(
+      m_paintPaletteVisual,
+      rules->getStateName(static_cast<unsigned char>(state)),
+      cardX + 62.0f,
+      cardY + 48.0f,
+      11.0f,
+      UiTheme::textPrimary());
+    if (m_paintBrush == state) {
       m_paintPaletteVisual.addFilledRect(
         cardX + 50.0f, cardY + 60.0f, 24.0f, 2.0f, UiTheme::accentSoft());
     }
   }
   if (m_paintPaletteReveal > 0.001f) {
+    m_paintPaletteVisual.addLine(x + 18.0f,
+                                 y + header + 82.0f,
+                                 x + width - 18.0f,
+                                 y + header + 82.0f,
+                                 UiTheme::divider(),
+                                 1.0f);
+    GuiKit::drawTextCentered(
+      m_paintPaletteVisual,
+      "States " + std::to_string(m_paintPaletteStateOffset + 1u) + "-" +
+        std::to_string(m_paintPaletteStateOffset + visibleStateCount) + " of " +
+        std::to_string(stateCount),
+      screenWidth * 0.5f,
+      y + header + 91.0f,
+      9.5f,
+      UiTheme::textMuted());
+    const std::string instructionText =
+      "Wheel browse   Left paint   Right erase";
+    const float instructionSize = 9.0f;
+    const float instructionWidth = width - 28.0f;
+    const std::shared_ptr<Font> font = Font::getDefaultFont();
+    const float measuredInstructionWidth =
+      font != nullptr
+        ? font->measureText(instructionText, instructionSize).width
+        : GuiKit::estimateTextWidth(instructionText, instructionSize);
+    const float fittedInstructionSize =
+      measuredInstructionWidth > instructionWidth
+        ? instructionSize * instructionWidth / measuredInstructionWidth
+        : instructionSize;
     GuiKit::drawTextCentered(m_paintPaletteVisual,
-                             "Left: paint   Right: erase",
+                             instructionText,
                              screenWidth * 0.5f,
-                             y + header + 94.0f,
-                             11.0f,
+                             y + header + 109.0f,
+                             fittedInstructionSize,
                              UiTheme::textMuted());
   }
   // GameVisual scales about its content origin.
@@ -2814,6 +3277,7 @@ CellGameModule::SaveCellGame(std::string filename)
 
   IllumoDocument doc;
   doc.version = IllumoCodec::kVersion;
+  doc.familyString = cellContext->getFamilyString();
   doc.ruleString = cellContext->getRuleSet()->getRuleTag();
   if (ic != nullptr && ic->camera != nullptr) {
     const glm::dvec2 cameraPosition = ic->camera->GetPositionPrecise();
@@ -2864,7 +3328,15 @@ CellGameModule::LoadCellGame(std::string filename)
     }
     return false;
   }
-  cellContext->setRuleSet(doc.ruleString);
+  if ((doc.familyString != cellContext->getFamilyString() ||
+       doc.ruleString != cellContext->getRuleSetString()) &&
+      !cellContext->setRuleSet(doc.familyString, doc.ruleString)) {
+    if (ic != nullptr && ic->commandLine != nullptr) {
+      ic->commandLine->logError(
+        "Saved family and ruleset could not be activated");
+    }
+    return false;
+  }
   if (doc.grid != nullptr) {
     cellContext->getGrid()->swap(*doc.grid);
   }
@@ -3172,6 +3644,9 @@ CellGameModule::DispatchDrawables(Scene* scene)
   }
   if (configurationMenu != nullptr && configurationMenu->isOpen()) {
     scene->AddDrawable(configurationMenu.get(), RenderLayerId::UI);
+  }
+  if (rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen()) {
+    scene->AddDrawable(rulesetWorkshopMenu.get(), RenderLayerId::UI);
   }
   if (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen()) {
     scene->AddDrawable(exitConfirmDialog.get(), RenderLayerId::UI);

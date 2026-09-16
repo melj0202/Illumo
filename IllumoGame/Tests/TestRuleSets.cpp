@@ -1,5 +1,6 @@
 // Headless cellular-automaton rules tests (no OpenGL window).
 
+#include "Game/RuleCatalogLoader.h"
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/BriansBrainRuleSet.h"
 #include "Rulesets/Elementary1DRuleSet.h"
@@ -606,7 +607,9 @@ testRuleSetRegistryFactory()
 {
   testSection("RuleSetRegistry: default rule registration and creation");
   RuleSetRegistry registry;
-  registry.loadBuiltinDefaults();
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "shipped rule catalog loads");
 
   const std::vector<std::string> known = registry.getKnownRules();
   testTrue(g, known.size() >= 9u, "at least 9 default rules registered");
@@ -649,12 +652,19 @@ testRuleSetRegistryDynamicRegistration()
 {
   testSection("RuleSetRegistry: dynamic rule registration");
   RuleSetRegistry registry;
-  registry.loadBuiltinDefaults();
 
-  RuleDefinition custom;
+  RuleSetDefinition custom;
   custom.id = "REPLICATOR";
   custom.name = "Replicator";
-  custom.family = "life_like";
+  RuleFamilyDefinition family;
+  family.id = "LIFE_BINARY_TEST";
+  family.name = "Binary test";
+  family.kind = RuleFamily::LifeLike;
+  family.stateCount = 2u;
+  family.stateNames = { "Alive", "Background" };
+  family.stateColors = { { 0u, 0u, 0u }, { 255u, 255u, 255u } };
+  testTrue(g, registry.registerFamily(family), "test family registered");
+  custom.familyId = family.id;
   custom.rule = "B1357/S1357";
   RuleSetRegistry::parseLifeLikeRuleString(
     custom.rule, custom.birthMask, custom.surviveMask);
@@ -675,7 +685,9 @@ testRuleSetRegistryValidation()
 {
   testSection("RuleSetRegistry: validated transactional definitions");
   RuleSetRegistry registry;
-  registry.loadBuiltinDefaults();
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "shipped rule catalog loads");
   const std::vector<std::string> originalNames = registry.getKnownRules();
   const std::string replacement = R"({"id":"GAME_OF_LIFE","rule":"B2/S"})";
   const std::vector<std::string> invalid = {
@@ -704,14 +716,14 @@ testRuleSetRegistryValidation()
              "invalid later definition rejects batch");
     testTrue(g,
              registry.getKnownRules() == originalNames &&
-               registry.getRuleDefinition("GAME_OF_LIFE")->birthMask ==
+               registry.getRuleSetDefinition("GAME_OF_LIFE")->birthMask ==
                  (1u << 3),
              "failed batch preserves catalog and earlier replaced definition");
   }
   for (const std::string& tail : { " garbage", " []" }) {
     testTrue(g,
              !registry.loadFromText('[' + replacement + ']' + tail) &&
-               registry.getRuleDefinition("GAME_OF_LIFE")->birthMask ==
+               registry.getRuleSetDefinition("GAME_OF_LIFE")->birthMask ==
                  (1u << 3),
              "strict JSON rejects trailing input without publishing");
   }
@@ -720,15 +732,29 @@ testRuleSetRegistryValidation()
     registry.loadFromText(
       R"([{"id":"VALID","birth":[2,8],"survive":[0,8],"palette":{"alive":[0,128,255]}}])"),
     "valid bounded arrays and palette load");
-  const RuleDefinition* valid = registry.getRuleDefinition("VALID");
+  const RuleSetDefinition* valid = registry.getRuleSetDefinition("VALID");
+  std::unique_ptr<RuleSet> validRule = registry.createRuleSet("VALID");
+  unsigned char validColor[3] = {};
+  if (validRule != nullptr) {
+    validRule->evalCell(0u, validColor);
+  }
   testTrue(g,
            valid != nullptr && valid->birthMask == ((1u << 2) | (1u << 8)) &&
              valid->surviveMask == ((1u << 0) | (1u << 8)) &&
-             valid->aliveColor[2] == 255,
-           "valid definition retains exact masks and palette");
-  RuleDefinition unsupported;
+             validRule != nullptr && validColor[2] == 255,
+           "valid legacy definition retains masks and converts its palette to "
+           "a family");
+  testTrue(
+    g,
+    registry.loadFromText(
+      R"([{"id":"MASK_OVERRIDE","rule":"B3/S23","birth":[2],"survive":[3]}])") &&
+      registry.getRuleSetDefinition("MASK_OVERRIDE") != nullptr &&
+      registry.getRuleSetDefinition("MASK_OVERRIDE")->birthMask == (1u << 2) &&
+      registry.getRuleSetDefinition("MASK_OVERRIDE")->surviveMask == (1u << 3),
+    "schema-v1 explicit masks override the compact rule string");
+  RuleSetDefinition unsupported;
   unsupported.id = "DIRECT_BAD";
-  unsupported.family = "life_like";
+  unsupported.familyId = "LIFE_LIKE_BINARY";
   unsupported.birthMask = 1u;
   testTrue(g,
            !registry.registerRule(unsupported) &&
@@ -755,6 +781,155 @@ testRuleSetRegistryValidation()
   }
 }
 
+static void
+testDataCatalogParity()
+{
+  testSection("RuleSetRegistry: data rules match the former built-in rules");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "shipped schema-v3 catalog loads");
+  RuleFamily parsedFamily = RuleFamily::LifeLike;
+  testTrue(g,
+           RuleSetRegistry::parseFamily("elementary_1d", parsedFamily) &&
+             parsedFamily == RuleFamily::Elementary1D &&
+             std::string(RuleSetRegistry::familyName(parsedFamily)) ==
+               "elementary_1d" &&
+             !RuleSetRegistry::parseFamily("wireworld", parsedFamily),
+           "typed families map to stable schema names without legacy aliases");
+  std::vector<std::unique_ptr<RuleSet>> legacyRules;
+  legacyRules.push_back(std::make_unique<LifeLikeRuleSet>(
+    nullptr, "GAME_OF_LIFE", 1u << 3u, (1u << 2u) | (1u << 3u)));
+  legacyRules.push_back(std::make_unique<BriansBrainRuleSet>(nullptr));
+  legacyRules.push_back(std::make_unique<LifeLikeRuleSet>(
+    nullptr,
+    "DAY_AND_NIGHT",
+    (1u << 3u) | (1u << 6u) | (1u << 7u) | (1u << 8u),
+    (1u << 3u) | (1u << 4u) | (1u << 6u) | (1u << 7u) | (1u << 8u)));
+  legacyRules.push_back(std::make_unique<LifeLikeRuleSet>(
+    nullptr, "HIGHLIFE", (1u << 3u) | (1u << 6u), (1u << 2u) | (1u << 3u)));
+  legacyRules.push_back(std::make_unique<LifeLikeRuleSet>(
+    nullptr, "LIFE_WITHOUT_DEATH", 1u << 3u, 0x1FFu));
+  legacyRules.push_back(
+    std::make_unique<LifeLikeRuleSet>(nullptr, "SEEDS", 1u << 2u, 0u));
+  legacyRules.push_back(std::make_unique<WireworldRuleSet>(nullptr));
+  legacyRules.push_back(
+    std::make_unique<Elementary1DRuleSet>(nullptr, "RULE_90", 90u));
+  legacyRules.push_back(
+    std::make_unique<Elementary1DRuleSet>(nullptr, "RULE_184", 184u));
+  const std::vector<std::string> ids = registry.getKnownRules();
+  testEqInt(g,
+            static_cast<int>(ids.size()),
+            static_cast<int>(legacyRules.size()),
+            "the data file contains the nine supported built-ins");
+  for (std::size_t index = 0u; index < legacyRules.size(); ++index) {
+    const std::string& id = legacyRules[index]->getRuleTag();
+    std::unique_ptr<RuleSet> compiled = registry.createRuleSet(id);
+    testTrue(
+      g, compiled != nullptr, "data-backed rule factory creates each ID");
+    if (compiled == nullptr) {
+      continue;
+    }
+    testEqInt(g,
+              static_cast<int>(compiled->getStateCount()),
+              static_cast<int>(legacyRules[index]->getStateCount()),
+              "data-backed rule preserves state count");
+    if (compiled->getNeighborhoodKind() ==
+        RuleSet::NeighborhoodKind::Elementary1D) {
+      for (unsigned char left = 0u; left < 2u; ++left) {
+        for (unsigned char center = 0u; center < 2u; ++center) {
+          for (unsigned char right = 0u; right < 2u; ++right) {
+            testEqUChar(
+              g,
+              compiled->nextElementary(left, center, right),
+              legacyRules[index]->nextElementary(left, center, right),
+              "data-backed rule preserves each elementary neighborhood");
+          }
+        }
+      }
+    } else {
+      for (unsigned int state = 0u; state < compiled->getStateCount();
+           ++state) {
+        for (unsigned int neighbors = 0u; neighbors <= 8u; ++neighbors) {
+          testEqUChar(
+            g,
+            compiled->nextState(static_cast<unsigned char>(state),
+                                static_cast<unsigned char>(neighbors)),
+            legacyRules[index]->nextState(
+              static_cast<unsigned char>(state),
+              static_cast<unsigned char>(neighbors)),
+            "data-backed rule preserves its Moore transition table");
+        }
+        unsigned char compiledColor[3]{};
+        unsigned char legacyColor[3]{};
+        compiled->evalCell(static_cast<unsigned char>(state), compiledColor);
+        legacyRules[index]->evalCell(static_cast<unsigned char>(state),
+                                     legacyColor);
+        const std::string paletteMessage = id + " preserves every palette";
+        testTrue(g,
+                 compiledColor[0] == legacyColor[0] &&
+                   compiledColor[1] == legacyColor[1] &&
+                   compiledColor[2] == legacyColor[2],
+                 paletteMessage.c_str());
+      }
+    }
+  }
+
+  RuleSetDefinition generations;
+  generations.id = "CUSTOM_GENERATIONS";
+  generations.name = "Six-state decay";
+  RuleFamilyDefinition generationsFamily =
+    *registry.getFamilyDefinition("GENERATIONS_3_STATE");
+  generationsFamily.id = "CUSTOM_GENERATIONS_FAMILY";
+  generationsFamily.name = "Six-state family";
+  generationsFamily.builtIn = false;
+  generationsFamily.stateNames.resize(6u);
+  generationsFamily.stateColors.resize(6u);
+  for (unsigned int state = 3u; state < 6u; ++state) {
+    generationsFamily.stateNames[state] = "State " + std::to_string(state);
+    generationsFamily.stateColors[state] = { 180u, 180u, 180u };
+  }
+  generationsFamily.stateCount = 6u;
+  testTrue(g,
+           registry.registerFamily(generationsFamily),
+           "custom generations family registers independently");
+  generations.familyId = generationsFamily.id;
+  generations.birthMask = 1u << 2u;
+  testTrue(g,
+           registry.registerRule(generations),
+           "data compiler accepts a custom generations state count");
+  std::unique_ptr<RuleSet> decay = registry.createRuleSet("CUSTOM_GENERATIONS");
+  testTrue(g,
+           decay != nullptr && decay->getStateCount() == 6u &&
+             decay->getStateName(5u) == "State 5",
+           "custom state metadata reaches the runtime rule");
+  if (decay != nullptr) {
+    testEqUChar(g, decay->nextState(0u, 0u), 2u, "active begins decay");
+    testEqUChar(g, decay->nextState(2u, 0u), 3u, "decay advances");
+    testEqUChar(g, decay->nextState(5u, 0u), 1u, "decay returns to background");
+    testEqUChar(
+      g, decay->nextState(1u, 2u), 0u, "birth count activates a cell");
+  }
+
+  RuleSetRegistry roundTrip;
+  const std::string serialized = RuleSetRegistry::serializeCatalog(
+    registry.getFamilyDefinitions(), registry.getDefinitions());
+  const bool loaded = roundTrip.loadFromCatalogTexts(
+    RuleSetRegistry::serializeFamilies(registry.getFamilyDefinitions()),
+    serialized);
+  bool familyRoundTrip =
+    loaded && roundTrip.getKnownRules() == registry.getKnownRules();
+  for (const RuleSetDefinition& definition : registry.getDefinitions()) {
+    const RuleSetDefinition* reloaded =
+      roundTrip.getRuleSetDefinition(definition.id);
+    familyRoundTrip = familyRoundTrip && reloaded != nullptr &&
+                      reloaded->familyId == definition.familyId;
+  }
+  testTrue(g,
+           familyRoundTrip,
+           "compiled definitions serialize and reload transactionally");
+}
+
 static int
 runRuleSetCase(void (*testFunction)())
 {
@@ -768,6 +943,8 @@ registerRuleSetTests(IllumoTestRegistry& registry)
 {
   registry.add("IllumoGame.Rules.RegistryValidation",
                []() { return runRuleSetCase(testRuleSetRegistryValidation); });
+  registry.add("IllumoGame.Rules.DataCatalogParity",
+               []() { return runRuleSetCase(testDataCatalogParity); });
   registry.add("IllumoGame.Rules.TransitionTable", []() {
     return runRuleSetCase(testTransitionTableCacheAndEquivalence);
   });

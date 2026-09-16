@@ -1,6 +1,8 @@
 {
  "CanvasX": "80",
  "CanvasY": "60",
+ "FamilyString": "LIFE_LIKE_BINARY",
+ "RuleSetString": "GAME_OF_LIFE",
  "ModeString": "GAME_OF_LIFE",
  "WorldChunksX": "0",
  "WorldChunksY": "0",

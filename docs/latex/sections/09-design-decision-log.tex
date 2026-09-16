@@ -1888,6 +1888,62 @@ loader; independent registries require explicit catalog loading. No engine
 API or catalog format changes. Native path discovery stays engine-owned.
 \end{decisionbox}
 
+\subsection*{D-GC2 --- Data-driven rules and runtime workshop}
+\begin{decisionbox}[title={D-GC2 \quad 2026-09-15}]
+\textbf{Decision:} Shipped and custom rules use versioned JSON definitions
+compiled into data-backed rules. Keep the schema-v1 reader and stable rule IDs;
+layer the working-directory \pathref{rulesets.user.json} after the selected
+base catalog. F2 edits a staged custom rule and Save \& Apply drains the
+simulation, validates live states, atomically persists the draft, then
+activates it.\\
+\textbf{Supersedes:} D-GC1's built-in-construction clause; its file-discovery
+and Rulesets dependency-boundary clauses remain in force.\\
+\textbf{Why:} Ruleset behavior and palettes should have one data source, and
+specific rule experiments should not require recompiling or silently changing
+IDs already stored in worlds.\\
+\textbf{Consequences:} Life-like, Generations, Moore-table, and elementary 1D
+families compile through the existing simulator contracts. The sparse-domain
+background/counting invariants and \texttt{.illumo} v3 format stay unchanged.
+Moore tables remain JSON-edited; the in-game menu focuses on common family
+parameters and palettes. A custom world still requires its rule catalog at
+load time.
+\end{decisionbox}
+
+\subsection*{D-GC3 --- Separate ruleset identity from family}
+\begin{decisionbox}[title={D-GC3 \quad 2026-09-15}]
+\textbf{Decision:} Keep each ruleset's stable ID and display name independent
+from a typed \texttt{RuleFamily}. The Ruleset Workshop exposes starter rule,
+family, and ruleset name as separate choices. Changing family retains the
+custom ID/name and loads that family's starter parameters.\
+\textbf{Why:} A family describes transition semantics; it should not be
+conflated with the named, save-referenced rule that uses those semantics.\
+\textbf{Consequences:} Schema-v1/v2 JSON family strings and existing
+\texttt{.illumo} rule IDs remain unchanged. Family conversion is explicit at
+the registry boundary and the workshop rebuilds controls for the selected
+family.\
+\end{decisionbox}
+
+\subsection*{D-GC4 --- Family-owned cell schemas and pair persistence}
+\begin{decisionbox}[title={D-GC4 \quad 2026-09-15}]
+\textbf{Decision:} Store family and ruleset as separate data definitions.
+Families own the cell-state schema, labels, colors, and simulation model;
+every ruleset references exactly one family and owns its transition behavior.
+F1, New Simulation, runtime status, and saves carry the validated pair.
+Write \texttt{.illumo} version 4 with both IDs and retain readers that derive
+the family from the rule in older saves. Layer
+\pathref{families.user.json} and \pathref{rulesets.user.json} together after
+the selected valid base catalog pair.\\
+\textbf{Supersedes:} D-GC2's single rules overlay and version-3 save outcome;
+D-GC3's separation of UI identity is retained and now has separate family data.\\
+\textbf{Why:} Cell appearance and available states are family properties;
+transition parameters belong to one named ruleset bound to that family. This
+keeps cell schemas reusable while preventing meaningless cross-family pairs.\\
+\textbf{Consequences:} Legacy catalogs normalize in memory, old save formats
+remain readable, and pair validation occurs before catalog or world mutation.
+Built-in family edits become custom copies; user families are persisted before
+the rules that reference them.
+\end{decisionbox}
+
 \subsection*{D-DEP1 --- Narrow public math dependency exposure}
 \begin{decisionbox}[title={D-DEP1 \quad 2026-09-14}]
 \textbf{Decision:} Illumo exports its public headers and a CMake-managed GLM-only

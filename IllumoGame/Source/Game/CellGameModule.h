@@ -7,6 +7,7 @@
 #include "ExitConfirmDialog.h"
 #include "Game/SimulationRunner.h"
 #include "NewSimulationMenu.h"
+#include "RulesetWorkshopMenu.h"
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -19,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <tracy/Tracy.hpp>
+#include <vector>
 
 enum class CellState
 {
@@ -55,7 +57,7 @@ private:
   void CameraPan();
   void CameraRotate();
   void seedInitialPattern();
-  void updateWireworldBrushFromInput();
+  void updatePaintBrushFromInput();
   void showModeSplash(const char* label);
   void updateEditorCursor();
   void updateHamburgerVisual(double dt);
@@ -121,12 +123,10 @@ private:
   SparseGenerationDelta mirrorDelta;
   bool mirrorDeltaValid;
   bool simulationRetryPending = false;
-  // Wireworld left-paint state: 0 head, 1 empty, 2 tail, 3 conductor.
-  // Selected with keys 1/H, 2, 3/T, 4 while the console is closed.
-  unsigned char wireworldBrush;
   // Module-owned mode label (EDIT/NORMAL); not a file-scope global.
   std::unique_ptr<SplashText> modeSplash;
   std::unique_ptr<ConfigurationMenu> configurationMenu;
+  std::unique_ptr<RulesetWorkshopMenu> rulesetWorkshopMenu;
   std::unique_ptr<ExitConfirmDialog> exitConfirmDialog;
   SceneGraph render3dSceneGraph;
   SceneNodeHandle render3dRootNode;
@@ -150,7 +150,8 @@ private:
   double m_paletteModeDelay = 0.0;
   double m_hintsModeDelay = 0.0;
   bool m_modeChromeTarget = true;
-  std::array<float, 4> m_paintPaletteEmphasis{};
+  std::vector<float> m_paintPaletteEmphasis;
+  unsigned int m_paintPaletteStateOffset = 0u;
   unsigned char m_paintBrush = 0;
   std::string m_paintRuleTag;
   GameVisual canvasEntranceVisual{ 1024u };

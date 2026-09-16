@@ -10,6 +10,7 @@ class InputManager;
 // Startup-only canvas choices; deliberately independent of display preferences.
 struct NewSimulationConfiguration
 {
+  std::string family = "LIFE_LIKE_BINARY";
   std::string ruleSet = "GAME_OF_LIFE";
   std::int64_t worldChunkWidth = 0;
   std::int64_t worldChunkHeight = 0;
@@ -39,6 +40,7 @@ public:
   GameVisual& getVisual() { return visual; }
 
 private:
+  static constexpr int kRowCount = 8;
   void rebuild();
   void change(int direction);
   void select(int direction);
@@ -55,7 +57,7 @@ private:
   float elapsed = 0;
   float ambientPhase = 0;
   float valuePulse = 0;
-  std::array<float, 7> focus{};
+  std::array<float, kRowCount> focus{};
   float scale = 1;
   float x = 0;
   float y = 0;

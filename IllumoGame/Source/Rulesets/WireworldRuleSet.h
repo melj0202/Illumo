@@ -29,4 +29,20 @@ public:
   void evalCell(const unsigned char& target,
                 unsigned char dest[3]) const override;
   std::string getRuleTag() const override { return "WIREWORLD"; }
+  unsigned int getStateCount() const override { return 4u; }
+  std::string getStateName(unsigned char state) const override
+  {
+    switch (state) {
+      case CELL_HEAD:
+        return "Head";
+      case CELL_EMPTY:
+        return "Empty";
+      case CELL_TAIL:
+        return "Tail";
+      case CELL_CONDUCTOR:
+        return "Conductor";
+      default:
+        return "Unknown";
+    }
+  }
 };

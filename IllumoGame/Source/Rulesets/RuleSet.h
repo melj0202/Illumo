@@ -32,6 +32,11 @@ public:
 
   RuleSet(CellGrid* targetCanvas);
 
+protected:
+  RuleSet(CellGrid* targetCanvas,
+          const TransitionTable& precompiledTransitions);
+
+public:
   virtual ~RuleSet() = default;
 
   // Advance one generation over the full canvas (rect args kept for API
@@ -50,6 +55,20 @@ public:
   }
 
   virtual std::string getRuleTag() const { return "BASE_CLASS"; }
+
+  virtual std::string getFamilyTag() const { return "BASE_FAMILY"; }
+
+  virtual unsigned int getStateCount() const { return 2u; }
+
+  virtual std::string getStateName(unsigned char state) const
+  {
+    return state == 0u ? "Active" : (state == 1u ? "Background" : "Unknown");
+  }
+
+  virtual bool isValidState(unsigned char state) const
+  {
+    return state < getStateCount();
+  }
 
   // Worker count for calcGeneration: 0 = auto (size threshold + HW), 1 =
   // force serial, N = force up to N workers. Used by tests and optional

@@ -1,5 +1,7 @@
 #include "Game/CellGameModule.h"
 #include "Game/MainMenuModule.h"
+#include "Game/RuleCatalogLoader.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
 #include <Illumo/Engine/IModuleHost.h>
@@ -64,6 +66,7 @@ struct MainMenuFixture
     , module()
     , started(false)
   {
+    RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
     // Preferences are explicit so repeated runs cannot inherit a saved draft.
     env.setVar("fps", 60);
     env.setVar("showInspector", false);
@@ -71,6 +74,8 @@ struct MainMenuFixture
     env.setVar("uiScale", 1);
     env.setVar("WinX", 640);
     env.setVar("WinY", 480);
+    env.setVar("FamilyString", "LIFE_LIKE_BINARY");
+    env.setVar("RuleSetString", "GAME_OF_LIFE");
     env.setVar("ModeString", "GAME_OF_LIFE");
     env.setVar("tps", 30);
     mock.Initialize();
@@ -269,7 +274,7 @@ testMainMenuSettingsApply()
   testTrue(g,
            fixture.module.isSettingsOpenForTesting(),
            "F1 opens settings on the main menu");
-  for (int row = 0; row < 10; ++row) {
+  for (int row = 0; row < 11; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
@@ -291,7 +296,7 @@ testMainMenuSettingsApply()
            "Apply preserves existing display and zero-fade preferences");
   fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
   fixture.module.Update(0.016);
-  for (int row = 0; row < 10; ++row) {
+  for (int row = 0; row < 11; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
@@ -310,7 +315,7 @@ testSettingsMouseIsolation()
   fixture.env.setVar("fps", 60);
   fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
   fixture.module.Update(0.016);
-  for (int row = 0; row < 10; ++row) {
+  for (int row = 0; row < 11; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
@@ -439,6 +444,7 @@ testCanvasSetupValidation()
   config.ruleSet = "NOT_A_RULE";
   testTrue(g, !config.isValid(), "unknown ruleset rejected");
   config.ruleSet = "WIREWORLD";
+  config.family = "WIREWORLD_FAMILY";
   fixture.module.Exit();
   fixture.started = false;
   CellGameModule seeded(config);
@@ -489,12 +495,13 @@ testCanvasSetupCreatesConfiguredWorld()
   fixture.env.setVar("WorldChunksY", 0);
   fixture.module.activateSelectedItemForTesting();
   for (KeyCode key : { KeyCode::Down,
-                       KeyCode::Right,
                        KeyCode::Down,
                        KeyCode::Right,
                        KeyCode::Down,
-                       KeyCode::Down,
                        KeyCode::Right,
+                       KeyCode::Down,
+                       KeyCode::Down,
+                       KeyCode::Enter,
                        KeyCode::Down,
                        KeyCode::Enter }) {
     fixture.input.getKeyQueue().push({ key, InputAction::Press, 0 });

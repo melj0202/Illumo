@@ -51,7 +51,8 @@ CellContext::CellContext(std::string modeString,
   canvasView = new CanvasView(
     static_cast<int>(cx), static_cast<int>(cy), grid, window, camera, renderer);
   ruleSet = nullptr;
-  ModeString = "";
+  FamilyString = "";
+  RuleSetString = "";
   setRuleSet(modeString);
 }
 
@@ -81,6 +82,30 @@ CellContext::GetKnownModeStrings()
   return RuleSetRegistry::instance().getKnownRules();
 }
 
+std::string
+CellContext::NormalizeFamilyString(std::string familyString)
+{
+  return RuleSetRegistry::normalizeId(std::move(familyString));
+}
+
+bool
+CellContext::IsKnownFamilyString(const std::string& familyString)
+{
+  return RuleSetRegistry::instance().isKnownFamily(familyString);
+}
+
+std::vector<std::string>
+CellContext::GetKnownFamilyStrings()
+{
+  return RuleSetRegistry::instance().getKnownFamilies();
+}
+
+std::vector<std::string>
+CellContext::GetKnownRuleStrings(const std::string& familyString)
+{
+  return RuleSetRegistry::instance().getKnownRules(familyString);
+}
+
 bool
 CellContext::setRuleSet(std::string modeString)
 {
@@ -89,26 +114,72 @@ CellContext::setRuleSet(std::string modeString)
     modeString = "GAME_OF_LIFE";
   }
 
-  // Avoid thrashing if console/env re-asserts the same mode.
-  if (ruleSet != nullptr && modeString == ModeString) {
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(modeString);
+  if (definition == nullptr) {
+    Logger::LogError("Invalid rule set name: " + modeString);
+    modeString = "GAME_OF_LIFE";
+    definition = RuleSetRegistry::instance().getRuleSetDefinition(modeString);
+  }
+  if (definition == nullptr) {
+    return false;
+  }
+  return setRuleSet(definition->familyId, modeString);
+}
+
+bool
+CellContext::setRuleSet(std::string familyString, std::string ruleSetString)
+{
+  return setRuleSetInternal(
+    std::move(familyString), std::move(ruleSetString), false);
+}
+
+bool
+CellContext::refreshRuleSet()
+{
+  if (FamilyString.empty() || RuleSetString.empty()) {
+    return false;
+  }
+  return setRuleSetInternal(FamilyString, RuleSetString, true);
+}
+
+bool
+CellContext::setRuleSetInternal(std::string familyString,
+                                std::string ruleSetString,
+                                bool forceRefresh)
+{
+  familyString = NormalizeFamilyString(std::move(familyString));
+  ruleSetString = NormalizeModeString(std::move(ruleSetString));
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(ruleSetString);
+  if (familyString.empty() || ruleSetString.empty() || definition == nullptr ||
+      definition->familyId != familyString) {
+    Logger::LogError("The selected ruleset does not belong to that family");
+    return false;
+  }
+
+  // Avoid thrashing if settings reassert the same validated pair.
+  if (!forceRefresh && ruleSet != nullptr && ruleSetString == RuleSetString &&
+      familyString == FamilyString) {
     return false;
   }
 
   std::unique_ptr<RuleSet> newRuleSet =
-    RuleSetRegistry::instance().createRuleSet(modeString, nullptr);
+    RuleSetRegistry::instance().createRuleSet(ruleSetString, nullptr);
   if (!newRuleSet) {
-    Logger::LogError("Invalid rule set name: " + modeString);
-    newRuleSet =
-      RuleSetRegistry::instance().createRuleSet("GAME_OF_LIFE", nullptr);
-    modeString = "GAME_OF_LIFE";
+    Logger::LogError("Failed to compile ruleset: " + ruleSetString);
+    return false;
   }
 
   delete ruleSet;
   ruleSet = newRuleSet.release();
 
-  ModeString = modeString;
+  FamilyString = familyString;
+  RuleSetString = ruleSetString;
   if (envVars) {
-    envVars->setVar("ModeString", ModeString);
+    envVars->setVar("FamilyString", FamilyString);
+    envVars->setVar("RuleSetString", RuleSetString);
+    envVars->setVar("ModeString", RuleSetString);
   }
   return true;
 }

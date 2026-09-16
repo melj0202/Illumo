@@ -12,7 +12,7 @@ function(_illumo_runtime_output_directory output_variable)
 endfunction()
 
 function(_illumo_order_shared_runtime_stage stage_target runtime_directory)
-  # Runtime and shader stages can write the same files in parallel builds.
+  # Runtime assets and shader stages can write shared files in parallel builds.
   # Order only these shared copies, not product-specific default-file seeds.
   file(TO_CMAKE_PATH "${runtime_directory}" stage_directory)
   if(WIN32)
@@ -140,6 +140,26 @@ function(illumo_stage_default_file target_name source_file destination_name)
     VERBATIM
     COMMENT "Seeding ${destination_name} for ${target_name}")
   set_target_properties(${stage_target} PROPERTIES FOLDER "staging")
+  add_dependencies(${target_name} ${stage_target})
+endfunction()
+
+function(illumo_stage_runtime_file target_name source_file destination_name)
+  target_sources(${target_name} PRIVATE "${source_file}")
+  set_source_files_properties("${source_file}"
+    PROPERTIES HEADER_FILE_ONLY TRUE)
+
+  _illumo_runtime_output_directory(runtime_directory)
+  string(MAKE_C_IDENTIFIER "${destination_name}" dest_identifier)
+  set(stage_target "${target_name}_${dest_identifier}_RuntimeStage")
+  add_custom_target(${stage_target}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${source_file}"
+      "${runtime_directory}/${destination_name}"
+    DEPENDS "${source_file}"
+    VERBATIM
+    COMMENT "Staging ${destination_name} for ${target_name}")
+  set_target_properties(${stage_target} PROPERTIES FOLDER "staging")
+  _illumo_order_shared_runtime_stage(${stage_target} "${runtime_directory}")
   add_dependencies(${target_name} ${stage_target})
 endfunction()
 

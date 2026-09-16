@@ -11,6 +11,7 @@ class Renderer;
 
 struct SimulatorConfiguration
 {
+  std::string family = "LIFE_LIKE_BINARY";
   std::string ruleSet = "GAME_OF_LIFE";
   std::int64_t worldChunkWidth = 0;
   std::int64_t worldChunkHeight = 0;
@@ -70,24 +71,25 @@ public:
   bool AppendCommands(Renderer* renderer) override;
 
 private:
-  static const int kRulesetRow = 0;
-  static const int kWorldWidthRow = 1;
-  static const int kWorldHeightRow = 2;
-  static const int kTpsRow = 3;
-  static const int kSpeedRow = 4;
-  static const int kFadeRow = 5;
-  static const int kVsyncRow = 6;
-  static const int kFullscreenRow = 7;
-  static const int kUiScaleRow = 8;
-  static const int kMsaaRow = 9;
-  static const int kFpsCapRow = 10;
-  static const int kInspectorRow = 11;
-  static const int kReducedMotionRow = 12;
-  static const int kEditHintsRow = 13;
-  static const int kApplyRow = 14;
-  static const int kCancelRow = 15;
-  static const int kExitRow = 16;
-  static const int kRowCount = 17;
+  static const int kFamilyRow = 0;
+  static const int kRulesetRow = 1;
+  static const int kWorldWidthRow = 2;
+  static const int kWorldHeightRow = 3;
+  static const int kTpsRow = 4;
+  static const int kSpeedRow = 5;
+  static const int kFadeRow = 6;
+  static const int kVsyncRow = 7;
+  static const int kFullscreenRow = 8;
+  static const int kUiScaleRow = 9;
+  static const int kMsaaRow = 10;
+  static const int kFpsCapRow = 11;
+  static const int kInspectorRow = 12;
+  static const int kReducedMotionRow = 13;
+  static const int kEditHintsRow = 14;
+  static const int kApplyRow = 15;
+  static const int kCancelRow = 16;
+  static const int kExitRow = 17;
+  static const int kRowCount = 18;
   static constexpr float kOpenAnimationSeconds = 0.42f;
   static constexpr float kSelectionAnimationSeconds = 0.14f;
   static constexpr float kValuePulseSeconds = 0.20f;
@@ -116,6 +118,7 @@ private:
   float previousMouseX = -1.0f;
   float previousMouseY = -1.0f;
 
+  std::string family;
   std::string ruleSet;
   std::string worldWidthText;
   std::string worldHeightText;

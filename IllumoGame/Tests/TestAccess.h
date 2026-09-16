@@ -104,17 +104,22 @@ public:
 
   static unsigned char getWireworldBrush(const CellGameModule& module)
   {
-    return module.wireworldBrush;
+    return module.m_paintBrush;
   }
 
   static void setWireworldBrush(CellGameModule& module, unsigned char state)
   {
-    module.wireworldBrush = state;
+    module.m_paintBrush = state;
   }
 
   static ConfigurationMenu* getConfigurationMenu(CellGameModule& module)
   {
     return module.configurationMenu.get();
+  }
+
+  static RulesetWorkshopMenu* getRulesetWorkshopMenu(CellGameModule& module)
+  {
+    return module.rulesetWorkshopMenu.get();
   }
 
   static ExitConfirmDialog* getExitConfirmDialog(CellGameModule& module)

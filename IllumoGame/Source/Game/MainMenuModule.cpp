@@ -4,6 +4,7 @@
 #include "CellContext.h"
 #include "CellGameModule.h"
 #include "PatternCodec.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
@@ -223,7 +224,16 @@ void
 MainMenuModule::openCanvasSetup()
 {
   NewSimulationConfiguration initial;
-  initial.ruleSet = ic->envVars->getVar("ModeString").value;
+  initial.ruleSet = ic->envVars->getVar("RuleSetString").value;
+  if (initial.ruleSet.empty()) {
+    initial.ruleSet = ic->envVars->getVar("ModeString").value;
+  }
+  initial.family = ic->envVars->getVar("FamilyString").value;
+  const RuleSetDefinition* initialRule =
+    RuleSetRegistry::instance().getRuleSetDefinition(initial.ruleSet);
+  if (initialRule != nullptr && initial.family != initialRule->familyId) {
+    initial.family = initialRule->familyId;
+  }
   initial.worldChunkWidth = ic->envVars->getVar("WorldChunksX").valueAsLong;
   initial.worldChunkHeight = ic->envVars->getVar("WorldChunksY").valueAsLong;
   m_configurationMenu->close();
@@ -295,9 +305,18 @@ MainMenuModule::currentConfiguration() const
   if (ic == nullptr || ic->envVars == nullptr) {
     return config;
   }
-  config.ruleSet = ic->envVars->getVar("ModeString").value;
+  config.ruleSet = ic->envVars->getVar("RuleSetString").value;
+  if (config.ruleSet.empty()) {
+    config.ruleSet = ic->envVars->getVar("ModeString").value;
+  }
   if (config.ruleSet.empty()) {
     config.ruleSet = "GAME_OF_LIFE";
+  }
+  config.family = ic->envVars->getVar("FamilyString").value;
+  const RuleSetDefinition* rule =
+    RuleSetRegistry::instance().getRuleSetDefinition(config.ruleSet);
+  if (rule != nullptr && config.family != rule->familyId) {
+    config.family = rule->familyId;
   }
   config.worldChunkWidth = ic->envVars->getVar("WorldChunksX").valueAsLong;
   config.worldChunkHeight = ic->envVars->getVar("WorldChunksY").valueAsLong;
@@ -336,8 +355,15 @@ MainMenuModule::applyConfiguration(const SimulatorConfiguration& configuration)
   if (configuration.fpsCap < 0 || configuration.fpsCap > 1000) {
     return false;
   }
+  const RuleSetDefinition* rule =
+    RuleSetRegistry::instance().getRuleSetDefinition(configuration.ruleSet);
+  if (rule == nullptr || rule->familyId != configuration.family) {
+    return false;
+  }
   const bool fullscreenChanged =
     configuration.fullscreen != ic->envVars->getVar("fullscreen").valueAsBool;
+  ic->envVars->setVar("FamilyString", configuration.family);
+  ic->envVars->setVar("RuleSetString", configuration.ruleSet);
   ic->envVars->setVar("ModeString", configuration.ruleSet);
   ic->envVars->setVar("WorldChunksX",
                       static_cast<long>(configuration.worldChunkWidth));

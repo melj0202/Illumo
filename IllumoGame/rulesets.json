@@ -1,54 +1,70 @@
-[
-  {
-    "id": "GAME_OF_LIFE",
-    "name": "Conway's Game of Life",
-    "family": "life_like",
-    "rule": "B3/S23"
-  },
-  {
-    "id": "BRIANS_BRAIN",
-    "name": "Brian's Brain",
-    "family": "generations"
-  },
-  {
-    "id": "DAY_AND_NIGHT",
-    "name": "Day & Night",
-    "family": "life_like",
-    "rule": "B3678/S34678"
-  },
-  {
-    "id": "HIGHLIFE",
-    "name": "HighLife",
-    "family": "life_like",
-    "rule": "B36/S23"
-  },
-  {
-    "id": "LIFE_WITHOUT_DEATH",
-    "name": "Life Without Death",
-    "family": "life_like",
-    "rule": "B3/S012345678"
-  },
-  {
-    "id": "SEEDS",
-    "name": "Seeds",
-    "family": "life_like",
-    "rule": "B2/S"
-  },
-  {
-    "id": "WIREWORLD",
-    "name": "Wireworld",
-    "family": "wireworld"
-  },
-  {
-    "id": "RULE_90",
-    "name": "Wolfram Rule 90",
-    "family": "elementary_1d",
-    "rule_number": 90
-  },
-  {
-    "id": "RULE_184",
-    "name": "Wolfram Rule 184",
-    "family": "elementary_1d",
-    "rule_number": 184
-  }
-]
+{
+  "schema_version": 3,
+  "rules": [
+    {
+      "id": "GAME_OF_LIFE",
+      "name": "Conway's Game of Life",
+      "family_id": "LIFE_LIKE_BINARY",
+      "birth": [3],
+      "survive": [2, 3]
+    },
+    {
+      "id": "BRIANS_BRAIN",
+      "name": "Brian's Brain",
+      "family_id": "GENERATIONS_3_STATE",
+      "birth": [2],
+      "survive": []
+    },
+    {
+      "id": "DAY_AND_NIGHT",
+      "name": "Day & Night",
+      "family_id": "LIFE_LIKE_BINARY",
+      "birth": [3, 6, 7, 8],
+      "survive": [3, 4, 6, 7, 8]
+    },
+    {
+      "id": "HIGHLIFE",
+      "name": "HighLife",
+      "family_id": "LIFE_LIKE_BINARY",
+      "birth": [3, 6],
+      "survive": [2, 3]
+    },
+    {
+      "id": "LIFE_WITHOUT_DEATH",
+      "name": "Life Without Death",
+      "family_id": "LIFE_LIKE_BINARY",
+      "birth": [3],
+      "survive": [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    },
+    {
+      "id": "SEEDS",
+      "name": "Seeds",
+      "family_id": "LIFE_LIKE_BINARY",
+      "birth": [2],
+      "survive": []
+    },
+    {
+      "id": "WIREWORLD",
+      "name": "Wireworld",
+      "family_id": "WIREWORLD_FAMILY",
+      "transition_table": [
+        [2, 2, 2, 2, 2, 2, 2, 2, 2],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [3, 3, 3, 3, 3, 3, 3, 3, 3],
+        [3, 0, 0, 3, 3, 3, 3, 3, 3]
+      ]
+    },
+    {
+      "id": "RULE_90",
+      "name": "Wolfram Rule 90",
+      "family_id": "ELEMENTARY_1D_BINARY",
+      "rule_number": 90
+    },
+    {
+      "id": "RULE_184",
+      "name": "Wolfram Rule 184",
+      "family_id": "ELEMENTARY_1D_BINARY",
+      "rule_number": 184
+    }
+  ]
+}

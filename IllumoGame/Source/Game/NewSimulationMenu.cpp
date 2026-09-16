@@ -1,4 +1,5 @@
 #include "NewSimulationMenu.h"
+#include "CellContext.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "SparseCellGrid.h"
 #include <Illumo/Gui/GuiKit.h>
@@ -12,7 +13,9 @@
 bool
 NewSimulationConfiguration::isValid() const
 {
-  return RuleSetRegistry::instance().isKnownRule(ruleSet) &&
+  const RuleSetDefinition* rule =
+    RuleSetRegistry::instance().getRuleSetDefinition(ruleSet);
+  return rule != nullptr && rule->familyId == family &&
          SparseCellGrid::isValidTopology(worldChunkWidth, worldChunkHeight);
 }
 
@@ -70,7 +73,7 @@ NewSimulationMenu::tick(float dt)
     elapsed = std::min(0.35f, elapsed + step);
     ambientPhase = reduced ? 0 : std::fmod(ambientPhase + step, 12.0f);
     valuePulse = reduced ? 0 : std::max(0.0f, valuePulse - step * 4);
-    for (int row = 0; row < 7; ++row) {
+    for (int row = 0; row < kRowCount; ++row) {
       const float target = row == selected ? 1.0f : 0.0f;
       focus[static_cast<std::size_t>(row)] +=
         (target - focus[static_cast<std::size_t>(row)]) *
@@ -84,8 +87,8 @@ void
 NewSimulationMenu::select(int direction)
 {
   do {
-    selected = (selected + direction + 7) % 7;
-  } while (!finite && (selected == 2 || selected == 3));
+    selected = (selected + direction + kRowCount) % kRowCount;
+  } while (!finite && (selected == 3 || selected == 4));
 }
 
 void
@@ -93,8 +96,31 @@ NewSimulationMenu::change(int direction)
 {
   valuePulse = reduced ? 0.0f : 1.0f;
   if (selected == 0) {
+    const std::vector<std::string> families =
+      CellContext::GetKnownFamilyStrings();
+    if (!families.empty()) {
+      std::size_t index = 0u;
+      const std::vector<std::string>::const_iterator found =
+        std::find(families.begin(), families.end(), draft.family);
+      if (found != families.end()) {
+        index = static_cast<std::size_t>(found - families.begin());
+      }
+      for (std::size_t attempt = 0u; attempt < families.size(); ++attempt) {
+        index = direction > 0
+                  ? (index + 1u) % families.size()
+                  : (index + families.size() - 1u) % families.size();
+        const std::vector<std::string> rules =
+          CellContext::GetKnownRuleStrings(families[index]);
+        if (!rules.empty()) {
+          draft.family = families[index];
+          draft.ruleSet = rules.front();
+          break;
+        }
+      }
+    }
+  } else if (selected == 1) {
     const std::vector<std::string> rules =
-      RuleSetRegistry::instance().getKnownRules();
+      RuleSetRegistry::instance().getKnownRules(draft.family);
     if (!rules.empty()) {
       const int count = static_cast<int>(rules.size());
       const int index = static_cast<int>(
@@ -102,15 +128,15 @@ NewSimulationMenu::change(int direction)
       draft.ruleSet =
         rules[static_cast<std::size_t>((index + direction + count) % count)];
     }
-  } else if (selected == 1) {
+  } else if (selected == 2) {
     finite = !finite;
-  } else if (finite && (selected == 2 || selected == 3)) {
+  } else if (finite && (selected == 3 || selected == 4)) {
     std::int64_t& dimension =
-      selected == 2 ? draft.worldChunkWidth : draft.worldChunkHeight;
+      selected == 3 ? draft.worldChunkWidth : draft.worldChunkHeight;
     dimension = std::clamp(dimension + direction,
                            std::int64_t{ 1 },
                            SparseCellGrid::kMaximumWorldChunksPerAxis);
-  } else if (selected == 4) {
+  } else if (selected == 5) {
     draft.starterPattern = !draft.starterPattern;
   }
 }
@@ -118,11 +144,11 @@ NewSimulationMenu::change(int direction)
 NewSimulationAction
 NewSimulationMenu::activate()
 {
-  if (selected == 5) {
+  if (selected == 6) {
     return configuration().isValid() ? NewSimulationAction::Create
                                      : NewSimulationAction::None;
   }
-  if (selected == 6) {
+  if (selected == 7) {
     return NewSimulationAction::Back;
   }
   change(1);
@@ -163,7 +189,7 @@ NewSimulationMenu::update(InputManager* input)
     else if (event.key == KeyCode::Home)
       selected = 0;
     else if (event.key == KeyCode::End)
-      selected = 6;
+      selected = kRowCount - 1;
     else if (event.key == KeyCode::Enter && event.action == InputAction::Press)
       result = activate();
   }
@@ -182,12 +208,12 @@ NewSimulationMenu::update(InputManager* input)
   if (result == NewSimulationAction::None &&
       ((mx != previousX || my != previousY) || (down && !mouseWasDown)) &&
       mx >= x + 24 && mx < x + width - 24 && my >= y + 110 &&
-      my < y + 110 + rowHeight * 7) {
+      my < y + 110 + rowHeight * kRowCount) {
     const int row = static_cast<int>((my - y - 110) / rowHeight);
-    if (finite || (row != 2 && row != 3)) {
+    if (finite || (row != 3 && row != 4)) {
       selected = row;
       if (down && !mouseWasDown) {
-        if (selected < 5 && mx < x + width * 0.55f)
+        if (selected < 6 && mx < x + width * 0.55f)
           change(-1);
         else
           result = activate();
@@ -223,7 +249,7 @@ NewSimulationMenu::rebuild()
   const float reveal = 1 - std::pow(1 - progress, 3.0f);
   x = (screenWidth - width) / 2;
   y = (screenHeight - height) / 2 + 16 * (1 - reveal);
-  rowHeight = (height - 164) / 7;
+  rowHeight = (height - 164) / static_cast<float>(kRowCount);
   visual.clearPrimitives();
   GuiKit::drawBackdrop(visual, screenWidth, screenHeight, 160);
   GuiKit::drawRoundedPanel(visual, x, y, width, height);
@@ -283,15 +309,20 @@ NewSimulationMenu::rebuild()
                        1,
                        UiTheme::applyOpacity(UiTheme::accentCool(), 80));
 
-  const RuleDefinition* rule =
-    RuleSetRegistry::instance().getRuleDefinition(draft.ruleSet);
+  const RuleSetDefinition* rule =
+    RuleSetRegistry::instance().getRuleSetDefinition(draft.ruleSet);
   std::string ruleName = rule == nullptr ? draft.ruleSet : rule->name;
   if (ruleName.size() > 30)
     ruleName = ruleName.substr(0, 27) + "...";
-  const std::string labels[] = { "Ruleset", "Canvas boundary", "Width",
-                                 "Height",  "Starting cells",  "Create canvas",
-                                 "Back" };
+  const RuleFamilyDefinition* family =
+    RuleSetRegistry::instance().getFamilyDefinition(draft.family);
+  const std::string familyName =
+    family == nullptr ? draft.family : family->name;
+  const std::string labels[] = { "Cell family",   "Ruleset", "Canvas boundary",
+                                 "Width",         "Height",  "Starting cells",
+                                 "Create canvas", "Back" };
   const std::string values[] = {
+    familyName,
     ruleName,
     finite ? "Wrap opposite edges" : "Infinite",
     finite ? std::to_string(draft.worldChunkWidth * 16) + " cells"
@@ -302,8 +333,8 @@ NewSimulationMenu::rebuild()
     "Enter to begin  >",
     "Discard choices"
   };
-  for (int row = 0; row < 7; ++row) {
-    const bool disabled = !finite && (row == 2 || row == 3);
+  for (int row = 0; row < kRowCount; ++row) {
+    const bool disabled = !finite && (row == 3 || row == 4);
     const float ry = y + 110 + static_cast<float>(row) * rowHeight;
     const float emphasis = reduced ? (row == selected ? 1.0f : 0.0f)
                                    : focus[static_cast<std::size_t>(row)];
@@ -321,7 +352,7 @@ NewSimulationMenu::rebuild()
                             width - 48,
                             rowHeight - 5,
                             10,
-                            row == 5 ? ColorRgba{ 43, 111, 133, 255 }
+                            row == 6 ? ColorRgba{ 43, 111, 133, 255 }
                                      : UiTheme::menuBorder());
     GuiKit::drawRoundedRect(visual,
                             x + 25,
@@ -329,7 +360,7 @@ NewSimulationMenu::rebuild()
                             width - 50,
                             rowHeight - 7,
                             9,
-                            row == 5 ? ColorRgba{ 24, 66, 86, 255 }
+                            row == 6 ? ColorRgba{ 24, 66, 86, 255 }
                                      : UiTheme::menuCard());
     GuiKit::drawRoundedRect(
       visual,
@@ -349,7 +380,7 @@ NewSimulationMenu::rebuild()
       1.5f,
       UiTheme::applyOpacity(UiTheme::accentCool(),
                             static_cast<unsigned char>(emphasis * 230)));
-    if (!disabled && row < 5) {
+    if (!disabled && row < 6) {
       GuiKit::drawRoundedRect(visual,
                               x + width * 0.45f,
                               ry + 5 - lift,
@@ -380,7 +411,7 @@ NewSimulationMenu::rebuild()
       }
     }
     const ColorRgba color = disabled ? UiTheme::textMuted()
-                            : row == selected || row == 5
+                            : row == selected || row == 6
                               ? UiTheme::accentCool()
                               : UiTheme::textPrimary();
     const float labelY = ry + std::max(2.0f, (rowHeight - 16.0f) * 0.5f) - lift;
@@ -388,7 +419,7 @@ NewSimulationMenu::rebuild()
     visual.addText(labels[row], x + 40, labelY, 16, color);
     visual.addText(values[row], x + width * 0.45f + 27, valueY, 14, color);
   }
-  visual.addText(selected == 2 || selected == 3
+  visual.addText(selected == 3 || selected == 4
                    ? "LEFT / RIGHT or click either half: resize by 16 cells"
                    : "UP / DOWN: select   LEFT / RIGHT: change   ENTER: choose",
                  x + 28,

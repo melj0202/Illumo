@@ -5,19 +5,51 @@ infinite or finite toroidal topology plus a bounded presentation view.
 
 ## Rule catalogs
 
-`RuleSetRegistry` constructs built-ins and validates catalog text transactionally.
-`RuleCatalogLoader` owns file reads and chooses the first valid `rulesets.json`
-beside the executable, in the working directory, or in its `IllumoGame`
-subdirectory. Invalid or unreadable candidates fall through; failed validation
-does not partially replace definitions. The required-module factory loads the
-shared catalog once before constructing the menu or direct game module, using
-the engine's application-configuration path to locate the executable directory.
-Rulesets does not call platform APIs or discover files.
+`RuleSetRegistry` starts empty and compiles validated catalog text into
+data-backed `DataRuleSet` instances. `IllumoGame/families.json` defines family
+identity, model, state count, labels, and colors. `IllumoGame/rulesets.json`
+defines each rule's stable identity, required `family_id`, and transition data.
+The current rules schema is version 3; it supports Life-like B/S, Generations,
+explicit Moore tables, and Wolfram elementary 1D. The reader retains
+unversioned and schema-v1/v2 rule-catalog compatibility. Stable built-in IDs
+remain unchanged for saved worlds.
 
-Product C++ callers migrate registry file-loading methods to `RuleCatalogLoader`
-and use `RuleSetRegistry::loadFromText` for in-memory catalogs. Independent
-registry instances contain only built-ins until explicitly loaded. Catalog
-syntax and application startup behavior remain compatible.
+`RuleCatalogLoader` owns file reads and selects the first valid base catalog
+pair beside the executable, in the working directory, or in its `IllumoGame`
+subdirectory. It then layers the working-directory `families.user.json` and
+`rulesets.user.json` files as one validated pair, where matching IDs replace
+shipped entries. Invalid or unreadable base pairs fall through, and malformed
+overlays leave the published catalog unchanged.
+The required-module factory loads the catalog once before constructing the menu
+or direct game module. Rulesets does not call platform APIs or discover files.
+
+F2 opens the separate in-game Ruleset Workshop; F1 remains the display and
+simulation settings menu. Both menus carry a family/ruleset pair; the rule
+selector is filtered to the chosen family, and each ruleset remains bound to
+exactly one family. F2 family edits own the cell-state schema and palette while
+rule edits own transition parameters. Changing Family in the staged editor
+preserves the custom rule ID and display name while loading starter parameters
+for that family. Life-like and Generations rules show
+B/S count chips, Generations adds its state count, elementary rules show their
+Wolfram number, and Moore tables explain that transitions are edited in JSON.
+Rule settings and a configurable transition example come first; state labels
+and colors plus JSON import/export are lower sections in the same scrollable
+page. Save & Apply and Discard stay in a pinned action area below the scrolling
+content. Values show their step controls, and B/S counts can be toggled directly
+with the mouse or by focusing a count and pressing Enter.
+Save & Apply validates the draft, drains the simulation, rejects family schema
+changes that would invalidate live cells, writes family data before the
+referencing rule, then activates the pair. Import also rejects a replacement for
+the active family if its smaller state range would invalidate the active rule,
+even when current cells do not use the removed states. Moore tables can be
+authored in JSON and imported. The
+workshop uses the F1 menu's eased reveal, focus glide, theme, and reduced-motion
+preference. Wheel scrolling changes the visible row window while keyboard focus
+stays put. Pointer hover moves focus; arrows/WASD and Tab/Shift+Tab navigate
+editable controls and pinned actions, Page Up/Down move by a page, and Home/End
+jump to the first control or last action. Left/right adjust focused values;
+Enter toggles focused B/S counts or activates buttons. W/S and Space remain
+available for text entry while a name or state-label field is focused.
 
 New simulation and the menu console command `play` open a dedicated canvas
 setup screen, independent of F1 configuration. It offers the rules catalog,
@@ -119,9 +151,11 @@ main menu; reduced motion freezes the colony and snaps focus feedback.
   candidate-only or small halo workloads. Ruleset transition changes clear it.
 - Its revision changes only when a generation or edit changes the stored cell
   contents, allowing dependent views to skip idle resampling.
-- Rulesets supply pure `nextState` and `evalCell` behavior. Each ruleset's
+- Rulesets supply pure `nextState` and `evalCell` behavior. Data-defined rules
+  compile to the same transition interface. Each ruleset's
   complete 256x9 transition table is cached once and shared by all serial and
-  worker hot loops. Binary B/S modes share `LifeLikeRuleSet` masks. Rule 90 and
+  worker hot loops. Life-like and Generations definitions compile from neighbor
+  masks. Rule 90 and
   Rule 184 are elementary 1D space-time rules: the source row is the maximum
   counted Y, the destination is Y+1, and older rows remain history (D-G2).
   Dense `calcGeneration` remains Moore/compatibility only.
@@ -198,7 +232,7 @@ presentation is clipped to the centered canonical rectangle; camera space
 outside it remains blank even though generation neighbors wrap at its edges.
 
 F1 opens a primitive-composed settings overlay in both Release and Debug. It
-edits ruleset, world chunk dimensions, TPS, simulation speed, fade speed,
+edits family and its ruleset, world chunk dimensions, TPS, simulation speed, fade speed,
 VSync, and fullscreen. Applying a topology change drains the worker and starts
 a fresh centered world; other valid settings update the live runtime and the
 persisted environment. The overlay uses larger high-contrast setting text,
@@ -228,11 +262,11 @@ It also separates requested and achieved published TPS and reports rolling
 256-sample p50/p95/max values for worker generations, mirror/advance/capture
 stages, cache refills, requested upload bytes, and upload rectangles.
 
-Save always writes version 3 sparse files containing the ruleset, camera,
-topology, and deterministically sorted canonical chunks. Load validates
-temporary state first, reads versions 3 and 2 plus the prior dense format,
+Save always writes version 4 sparse files containing the family and ruleset,
+camera, topology, and deterministically sorted canonical chunks. Load validates
+temporary state first, reads versions 4, 3, and 2 plus the prior dense format,
 treats older formats as infinite, imports legacy cells around the world origin,
-and restores saved ruleset/camera metadata.
+derives the family for pre-v4 saves, and restores the validated pair and camera.
 
 Camera navigation reserves a `2^32`-cell margin from signed 64-bit endpoints:
 each world-space axis must be finite and at most `16 * (2^63 - 2^32)` in
@@ -294,11 +328,10 @@ Wireworld retains the sticky head/empty/tail/conductor brush (`1`/`H`, `2`,
 
 In Edit mode, the **Cell paint** drawer at the bottom selects the left-button
 brush. It starts closed. Click the centered pull tab to slide the drawer up;
-click it again to slide it below the bottom edge. Binary rules offer Alive and
-Dead/erase, Brian's Brain also offers Dying, and Wireworld offers all four states.
-Swatches use the active ruleset's actual colors, including catalog palettes.
-Right-click always erases; Wireworld keyboard shortcuts stay synchronized with
-the palette. A ruleset change resets the generic brush to Alive.
+click it again to slide it below the bottom edge. Swatches use active rule
+metadata for every declared state and its actual catalog color; the drawer
+scrolls through larger state sets. Right-click always erases. A ruleset change
+resets the generic brush to state 0.
 The panel uses shared rounded GuiKit surfaces and UiTheme colors, an eased
 vertical slide and chevron, and animated hover/selection emphasis. Reduced UI
 motion snaps transitions. Drawing and hit testing share the fitted UI scale. Palette
