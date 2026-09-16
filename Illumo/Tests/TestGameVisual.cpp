@@ -465,6 +465,125 @@ testGameVisualEmptyAndInvisible()
 }
 
 static void
+testGameVisualViewportCulling()
+{
+  testSection("GameVisual: pixel viewport culls wholly offscreen quads");
+  NullRenderWindow window(100, 80);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  GameVisual visual;
+  visual.setWindow(&window);
+  visual.prepare(&renderer);
+  visual.addFilledRect(
+    10.0f, 10.0f, 20.0f, 20.0f, ColorRgba{ 255, 255, 255, 255 });
+  visual.addFilledRect(
+    120.0f, 10.0f, 20.0f, 20.0f, ColorRgba{ 255, 0, 0, 255 });
+
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "viewport-cull append");
+  renderer.EndFrame();
+
+  const RenderCommand* draw =
+    findSubmittedCommand(mock, CommandType::DrawIndexed, 0);
+  testTrue(g, draw != nullptr, "visible quad still draws");
+  if (draw != nullptr) {
+    testEqInt(g,
+              static_cast<int>(draw->drawIndexed.elementCount),
+              6,
+              "offscreen quad is absent from the draw range");
+  }
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::SetScissorState),
+             0u,
+             "viewport culling relies on the existing viewport clip");
+
+  window.handleResize(160, 80);
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "resized viewport append");
+  renderer.EndFrame();
+  draw = findSubmittedCommand(mock, CommandType::DrawIndexed, 0);
+  testTrue(g,
+           draw != nullptr && draw->drawIndexed.elementCount == 12,
+           "viewport resize rebuilds visibility and reveals the second quad");
+}
+
+static void
+testGameVisualClipCullingAndNesting()
+{
+  testSection("GameVisual: clip rect culls quads and restores outer scissor");
+  NullRenderWindow window(100, 100);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  unsigned char pixels[4] = { 255, 255, 255, 255 };
+  const TextureHandle texture = renderer.enrollTexture(pixels, 1, 1, 4);
+
+  GameVisual visual;
+  visual.setWindow(&window);
+  visual.prepare(&renderer);
+  visual.setPixelClipRect(Rect2{ 20.0f, 10.0f, 50.0f, 50.0f });
+  testTrue(g, visual.hasPixelClipRect(), "clip rect is enabled");
+  visual.addSprite(texture, 25.0f, 15.0f, 10.0f, 10.0f);
+  visual.addSprite(texture, 65.0f, 55.0f, 10.0f, 10.0f);
+  visual.addSprite(texture, 75.0f, 15.0f, 10.0f, 10.0f);
+
+  renderer.BeginFrame();
+  renderer.pushScissor(true, 0, 0, 80, 80);
+  testTrue(g, visual.AppendCommands(&renderer), "clipped append");
+  renderer.pushScissor(false, 0, 0, 0, 0);
+  renderer.EndFrame();
+
+  const RenderCommand* draw =
+    findSubmittedCommand(mock, CommandType::DrawIndexed, 0);
+  testTrue(g, draw != nullptr, "clipped sprites still draw");
+  if (draw != nullptr) {
+    testEqInt(
+      g,
+      static_cast<int>(draw->drawIndexed.elementCount),
+      12,
+      "inside and partially clipped sprites draw; outside sprite culls");
+  }
+
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::SetScissorState),
+             4u,
+             "outer, nested, restored, and disabled scissor states emit");
+  const RenderCommand* nested =
+    findSubmittedCommand(mock, CommandType::SetScissorState, 1);
+  testTrue(g,
+           nested != nullptr && nested->scissor.enabled &&
+             nested->scissor.x == 20 && nested->scissor.y == 40 &&
+             nested->scissor.width == 50 && nested->scissor.height == 40,
+           "logical top-left clip intersects the physical outer scissor");
+  const RenderCommand* restored =
+    findSubmittedCommand(mock, CommandType::SetScissorState, 2);
+  testTrue(g,
+           restored != nullptr && restored->scissor.enabled &&
+             restored->scissor.x == 0 && restored->scissor.y == 0 &&
+             restored->scissor.width == 80 && restored->scissor.height == 80,
+           "nested clip restores the previous scissor exactly");
+
+  visual.clearPixelClipRect();
+  testTrue(g, !visual.hasPixelClipRect(), "clip rect can be disabled");
+
+  visual.setPixelClipRect(Rect2{ 20.0f, 10.0f, 0.0f, 50.0f });
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "empty clip append");
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             0u,
+             "empty clip culls all geometry before upload and draw");
+}
+
+static void
 testGameVisualTransformAndAtlas()
 {
   testSection("GameVisual: pivot rotation, atlas UVs, and flips");
@@ -740,6 +859,12 @@ registerGameVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.GameVisual.EmptyAndInvisible", []() {
     return runGameVisualCase(testGameVisualEmptyAndInvisible);
+  });
+  registry.add("Illumo.GameVisual.ViewportCulling", []() {
+    return runGameVisualCase(testGameVisualViewportCulling);
+  });
+  registry.add("Illumo.GameVisual.ClipCullingAndNesting", []() {
+    return runGameVisualCase(testGameVisualClipCullingAndNesting);
   });
   registry.add("Illumo.GameVisual.TransformAndAtlas", []() {
     return runGameVisualCase(testGameVisualTransformAndAtlas);

@@ -6,9 +6,9 @@
 #include <Illumo/Rendering/RenderLayerId.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/EnvVars.h>
+#include <algorithm>
 #include <cstring>
 #include <glm/glm.hpp>
-#include <vector>
 
 namespace {
 
@@ -297,6 +297,8 @@ Renderer::BeginFrame()
   const std::array<int, 2> dims =
     _window ? _window->getWindowDimensions() : std::array<int, 2>{ 0, 0 };
   _currentPassViewport = { 0, 0, dims[0], dims[1] };
+  currentScissorState = ScissorState{};
+  scissorStateStack.clear();
 }
 
 void
@@ -499,14 +501,61 @@ Renderer::pushDrawIndexed(unsigned int elementCount, unsigned int firstIndex)
 void
 Renderer::pushScissor(bool enabled, int x, int y, int width, int height)
 {
+  currentScissorState.enabled = enabled;
+  currentScissorState.x = x;
+  currentScissorState.y = y;
+  currentScissorState.width = std::max(width, 0);
+  currentScissorState.height = std::max(height, 0);
   RenderCommand cmd;
   cmd.commandType = CommandType::SetScissorState;
   cmd.scissor.enabled = enabled;
   cmd.scissor.x = x;
   cmd.scissor.y = y;
-  cmd.scissor.width = width;
-  cmd.scissor.height = height;
+  cmd.scissor.width = currentScissorState.width;
+  cmd.scissor.height = currentScissorState.height;
   _backend->PushToCommandQueue(cmd);
+}
+
+void
+Renderer::pushClipRect(int x, int y, int width, int height)
+{
+  scissorStateStack.push_back(currentScissorState);
+  int clippedX = x;
+  int clippedY = y;
+  int clippedWidth = std::max(width, 0);
+  int clippedHeight = std::max(height, 0);
+  if (currentScissorState.enabled) {
+    const long long left = std::max(
+      static_cast<long long>(x), static_cast<long long>(currentScissorState.x));
+    const long long bottom = std::max(
+      static_cast<long long>(y), static_cast<long long>(currentScissorState.y));
+    const long long right =
+      std::min(static_cast<long long>(x) + clippedWidth,
+               static_cast<long long>(currentScissorState.x) +
+                 currentScissorState.width);
+    const long long top =
+      std::min(static_cast<long long>(y) + clippedHeight,
+               static_cast<long long>(currentScissorState.y) +
+                 currentScissorState.height);
+    clippedX = static_cast<int>(left);
+    clippedY = static_cast<int>(bottom);
+    clippedWidth = static_cast<int>(std::max(0LL, right - left));
+    clippedHeight = static_cast<int>(std::max(0LL, top - bottom));
+  }
+  pushScissor(true, clippedX, clippedY, clippedWidth, clippedHeight);
+}
+
+void
+Renderer::popClipRect()
+{
+  if (scissorStateStack.empty()) {
+    reportFrameError("Scissor clip stack underflow");
+    return;
+  }
+  const ScissorState previous = scissorStateStack.back();
+  scissorStateStack.pop_back();
+  pushScissor(
+    previous.enabled, previous.x, previous.y, previous.width, previous.height);
 }
 
 void

@@ -743,6 +743,48 @@ CanvasView::markChangedCacheChunk(const ChunkAddress& address)
 }
 
 void
+CanvasView::markChangedCacheCells(const ChunkAddress& address,
+                                  const SparseChunkMask& changed)
+{
+  if (tooManyChangedSampleTexels()) {
+    return;
+  }
+  const std::int64_t cacheMaximumX =
+    cacheFirstCell.x + static_cast<std::int64_t>(cacheCellWidth) - 1;
+  const std::int64_t cacheMinimumY =
+    cacheFirstCell.y - static_cast<std::int64_t>(cacheCellHeight) + 1;
+  const std::int64_t chunkMinimumX = address.x * SparseCellGrid::kChunkDim;
+  const std::int64_t chunkMinimumY = address.y * SparseCellGrid::kChunkDim;
+  for (std::size_t wordIndex = 0u; wordIndex < changed.size(); ++wordIndex) {
+    std::uint64_t bits = changed[wordIndex];
+    while (bits != 0u) {
+      const unsigned int bitOffset = std::countr_zero(bits);
+      const std::size_t cellIndex = wordIndex * 64u + bitOffset;
+      bits &= bits - 1u;
+      const std::int64_t cellX =
+        chunkMinimumX +
+        static_cast<std::int64_t>(cellIndex % SparseCellGrid::kChunkDim);
+      const std::int64_t cellY =
+        chunkMinimumY +
+        static_cast<std::int64_t>(cellIndex / SparseCellGrid::kChunkDim);
+      if (cellX < cacheFirstCell.x || cellX > cacheMaximumX ||
+          cellY < cacheMinimumY || cellY > cacheFirstCell.y) {
+        continue;
+      }
+      const int outputX =
+        static_cast<int>((cellX - cacheFirstCell.x) / cellsPerTexel);
+      const int outputY =
+        static_cast<int>((cacheFirstCell.y - cellY) / cellsPerTexel);
+      const int outputIndex = outputY * textureWidth + outputX;
+      if (changedSampleFlags[static_cast<std::size_t>(outputIndex)] == 0u) {
+        changedSampleFlags[static_cast<std::size_t>(outputIndex)] = 1u;
+        changedSampleTexels.push_back(outputIndex);
+      }
+    }
+  }
+}
+
+void
 CanvasView::clearChangedSampleTexels()
 {
   for (int index : changedSampleTexels) {
@@ -774,8 +816,126 @@ void
 CanvasView::resampleMarkedCacheTexels(bool snap)
 {
   ZoneScopedN("CanvasView.resampleMarkedCacheTexels");
+  if (cellsPerTexel > 1 && grid != nullptr && !grid->isToroidal()) {
+    resampleMarkedOverviewTexels(snap);
+    return;
+  }
   for (int index : changedSampleTexels) {
     sampleCacheTexel(index % textureWidth, index / textureWidth, snap);
+    changedSampleFlags[static_cast<std::size_t>(index)] = 0u;
+  }
+  lastSampledTexelCount = changedSampleTexels.size();
+  changedSampleTexels.clear();
+}
+
+void
+CanvasView::resampleMarkedOverviewTexels(bool snap)
+{
+  ZoneScopedN("CanvasView.resampleMarkedOverviewTexels");
+  const int backgroundBase = SparseCellGrid::BackgroundState * 3;
+  const float backgroundR =
+    static_cast<float>(paletteRgb[backgroundBase + 0]) / 255.0f;
+  const float backgroundG =
+    static_cast<float>(paletteRgb[backgroundBase + 1]) / 255.0f;
+  const float backgroundB =
+    static_cast<float>(paletteRgb[backgroundBase + 2]) / 255.0f;
+  for (int index : changedSampleTexels) {
+    const int base = index * 3;
+    sampledRgb[base + 0] = backgroundR;
+    sampledRgb[base + 1] = backgroundG;
+    sampledRgb[base + 2] = backgroundB;
+  }
+
+  float paletteOffset[kPaletteSize * 3];
+  for (int state = 0; state < kPaletteSize; ++state) {
+    const int paletteIndex = state * 3;
+    paletteOffset[paletteIndex + 0] =
+      static_cast<float>(paletteRgb[paletteIndex + 0]) / 255.0f - backgroundR;
+    paletteOffset[paletteIndex + 1] =
+      static_cast<float>(paletteRgb[paletteIndex + 1]) / 255.0f - backgroundG;
+    paletteOffset[paletteIndex + 2] =
+      static_cast<float>(paletteRgb[paletteIndex + 2]) / 255.0f - backgroundB;
+  }
+
+  const std::int64_t cacheMaximumX =
+    cacheFirstCell.x + static_cast<std::int64_t>(cacheCellWidth) - 1;
+  const std::int64_t cacheMinimumY =
+    cacheFirstCell.y - static_cast<std::int64_t>(cacheCellHeight) + 1;
+  const ChunkAddress minimumChunk = SparseCellGrid::chunkAddressForCell(
+    CellAddress{ cacheFirstCell.x, cacheMinimumY });
+  const ChunkAddress maximumChunk = SparseCellGrid::chunkAddressForCell(
+    CellAddress{ cacheMaximumX, cacheFirstCell.y });
+  const int fullColumns = cacheCellWidth / cellsPerTexel;
+  const int fullRows = cacheCellHeight / cellsPerTexel;
+  const float interiorInverse =
+    1.0f / static_cast<float>(std::max(1, cellsPerTexel * cellsPerTexel));
+  grid->visitOccupiedChunksInBounds(
+    minimumChunk,
+    maximumChunk,
+    [this,
+     cacheMaximumX,
+     cacheMinimumY,
+     fullColumns,
+     fullRows,
+     interiorInverse,
+     &paletteOffset](const ChunkAddress& chunkAddress,
+                     const SparseCellGrid::ChunkCells& cells,
+                     const SparseChunkMask& occupied) {
+      for (std::size_t wordIndex = 0u; wordIndex < occupied.size();
+           ++wordIndex) {
+        std::uint64_t bits = occupied[wordIndex];
+        while (bits != 0u) {
+          const unsigned int bitOffset = std::countr_zero(bits);
+          const std::size_t cellIndex = wordIndex * 64u + bitOffset;
+          bits &= bits - 1u;
+          const std::int64_t cellX =
+            chunkAddress.x * SparseCellGrid::kChunkDim +
+            static_cast<std::int64_t>(cellIndex % SparseCellGrid::kChunkDim);
+          const std::int64_t cellY =
+            chunkAddress.y * SparseCellGrid::kChunkDim +
+            static_cast<std::int64_t>(cellIndex / SparseCellGrid::kChunkDim);
+          if (cellX < cacheFirstCell.x || cellX > cacheMaximumX ||
+              cellY < cacheMinimumY || cellY > cacheFirstCell.y) {
+            continue;
+          }
+          const int outputX =
+            static_cast<int>((cellX - cacheFirstCell.x) / cellsPerTexel);
+          const int outputY =
+            static_cast<int>((cacheFirstCell.y - cellY) / cellsPerTexel);
+          const int outputIndex = outputY * textureWidth + outputX;
+          if (changedSampleFlags[static_cast<std::size_t>(outputIndex)] == 0u) {
+            continue;
+          }
+          const unsigned char state = cells[cellIndex];
+          if (state == SparseCellGrid::BackgroundState) {
+            continue;
+          }
+          const float inverseSample =
+            (outputX < fullColumns && outputY < fullRows)
+              ? interiorInverse
+              : 1.0f / static_cast<float>(getSlotSampleCount(outputX, outputY));
+          const int base = outputIndex * 3;
+          const int paletteIndex = static_cast<int>(state) * 3;
+          sampledRgb[base + 0] +=
+            paletteOffset[paletteIndex + 0] * inverseSample;
+          sampledRgb[base + 1] +=
+            paletteOffset[paletteIndex + 1] * inverseSample;
+          sampledRgb[base + 2] +=
+            paletteOffset[paletteIndex + 2] * inverseSample;
+        }
+      }
+    });
+
+  for (int index : changedSampleTexels) {
+    const int base = index * 3;
+    setTargetForSlot(index,
+                     sampledRgb[base + 0],
+                     sampledRgb[base + 1],
+                     sampledRgb[base + 2],
+                     snap);
+    if (snap) {
+      writeTexel(index, index % textureWidth, index / textureWidth);
+    }
     changedSampleFlags[static_cast<std::size_t>(index)] = 0u;
   }
   lastSampledTexelCount = changedSampleTexels.size();
@@ -834,7 +994,7 @@ CanvasView::adoptGrid(SparseCellGrid* nextGrid,
       if (tooManyChangedSampleTexels()) {
         break;
       }
-      markChangedCacheChunk(record.address);
+      markChangedCacheCells(record.address, record.stateChanged);
     }
     if (tooManyChangedSampleTexels()) {
       clearChangedSampleTexels();
@@ -1003,11 +1163,148 @@ CanvasView::sampleCacheRectangle(int minimumX,
                                  int maximumY)
 {
   ZoneScopedN("CanvasView.sampleCacheRectangle");
+  if (cellsPerTexel > 1) {
+    sampleSparseCacheRectangle(minimumX, maximumX, minimumY, maximumY);
+    return;
+  }
   for (int y = minimumY; y <= maximumY; ++y) {
     for (int x = minimumX; x <= maximumX; ++x) {
       const int index = y * textureWidth + x;
       fadingFlags[static_cast<std::size_t>(index)] = 0u;
       sampleCacheTexel(x, y, true);
+      lastSampledTexelCount += 1u;
+    }
+  }
+}
+
+void
+CanvasView::sampleSparseCacheRectangle(int minimumX,
+                                       int maximumX,
+                                       int minimumY,
+                                       int maximumY)
+{
+  ZoneScopedN("CanvasView.sampleSparseCacheRectangle");
+  if (grid == nullptr || minimumX > maximumX || minimumY > maximumY) {
+    return;
+  }
+
+  const int backgroundBase = SparseCellGrid::BackgroundState * 3;
+  const float backgroundR =
+    static_cast<float>(paletteRgb[backgroundBase + 0]) / 255.0f;
+  const float backgroundG =
+    static_cast<float>(paletteRgb[backgroundBase + 1]) / 255.0f;
+  const float backgroundB =
+    static_cast<float>(paletteRgb[backgroundBase + 2]) / 255.0f;
+  for (int y = minimumY; y <= maximumY; ++y) {
+    for (int x = minimumX; x <= maximumX; ++x) {
+      const int base = (y * textureWidth + x) * 3;
+      sampledRgb[base + 0] = backgroundR;
+      sampledRgb[base + 1] = backgroundG;
+      sampledRgb[base + 2] = backgroundB;
+    }
+  }
+
+  float paletteOffset[kPaletteSize * 3];
+  for (int state = 0; state < kPaletteSize; ++state) {
+    const int paletteIndex = state * 3;
+    paletteOffset[paletteIndex + 0] =
+      static_cast<float>(paletteRgb[paletteIndex + 0]) / 255.0f - backgroundR;
+    paletteOffset[paletteIndex + 1] =
+      static_cast<float>(paletteRgb[paletteIndex + 1]) / 255.0f - backgroundG;
+    paletteOffset[paletteIndex + 2] =
+      static_cast<float>(paletteRgb[paletteIndex + 2]) / 255.0f - backgroundB;
+  }
+
+  const std::int64_t sourceMinimumX =
+    cacheFirstCell.x + static_cast<std::int64_t>(minimumX) * cellsPerTexel;
+  const std::int64_t sourceMaximumX =
+    cacheFirstCell.x +
+    std::min<std::int64_t>(
+      cacheCellWidth, static_cast<std::int64_t>(maximumX + 1) * cellsPerTexel) -
+    1;
+  const std::int64_t sourceMaximumY =
+    cacheFirstCell.y - static_cast<std::int64_t>(minimumY) * cellsPerTexel;
+  const std::int64_t sourceMinimumY =
+    cacheFirstCell.y -
+    std::min<std::int64_t>(cacheCellHeight,
+                           static_cast<std::int64_t>(maximumY + 1) *
+                             cellsPerTexel) +
+    1;
+  const ChunkAddress minimumChunk = SparseCellGrid::chunkAddressForCell(
+    CellAddress{ sourceMinimumX, sourceMinimumY });
+  const ChunkAddress maximumChunk = SparseCellGrid::chunkAddressForCell(
+    CellAddress{ sourceMaximumX, sourceMaximumY });
+  grid->visitOccupiedChunksInBounds(
+    minimumChunk,
+    maximumChunk,
+    [this,
+     minimumX,
+     maximumX,
+     minimumY,
+     maximumY,
+     sourceMinimumX,
+     sourceMaximumX,
+     sourceMinimumY,
+     sourceMaximumY,
+     &paletteOffset](const ChunkAddress& chunkAddress,
+                     const SparseCellGrid::ChunkCells& cells,
+                     const SparseChunkMask& occupied) {
+      for (std::size_t wordIndex = 0u; wordIndex < occupied.size();
+           ++wordIndex) {
+        std::uint64_t bits = occupied[wordIndex];
+        while (bits != 0u) {
+          const unsigned int bitOffset = std::countr_zero(bits);
+          const std::size_t index = wordIndex * 64u + bitOffset;
+          bits &= bits - 1u;
+          const int localX =
+            static_cast<int>(index % SparseCellGrid::kChunkDim);
+          const int localY =
+            static_cast<int>(index / SparseCellGrid::kChunkDim);
+          const std::int64_t cellX =
+            chunkAddress.x * SparseCellGrid::kChunkDim + localX;
+          const std::int64_t cellY =
+            chunkAddress.y * SparseCellGrid::kChunkDim + localY;
+          if (cellX < sourceMinimumX || cellX > sourceMaximumX ||
+              cellY < sourceMinimumY || cellY > sourceMaximumY) {
+            continue;
+          }
+          const int outputX =
+            static_cast<int>((cellX - cacheFirstCell.x) / cellsPerTexel);
+          const int outputY =
+            static_cast<int>((cacheFirstCell.y - cellY) / cellsPerTexel);
+          if (outputX < minimumX || outputX > maximumX || outputY < minimumY ||
+              outputY > maximumY) {
+            continue;
+          }
+          const unsigned char state = cells[index];
+          if (state == SparseCellGrid::BackgroundState) {
+            continue;
+          }
+          const int base = (outputY * textureWidth + outputX) * 3;
+          const int paletteIndex = static_cast<int>(state) * 3;
+          const float inverseSample =
+            1.0f / static_cast<float>(getSlotSampleCount(outputX, outputY));
+          sampledRgb[base + 0] +=
+            paletteOffset[paletteIndex + 0] * inverseSample;
+          sampledRgb[base + 1] +=
+            paletteOffset[paletteIndex + 1] * inverseSample;
+          sampledRgb[base + 2] +=
+            paletteOffset[paletteIndex + 2] * inverseSample;
+        }
+      }
+    });
+
+  for (int y = minimumY; y <= maximumY; ++y) {
+    for (int x = minimumX; x <= maximumX; ++x) {
+      const int index = y * textureWidth + x;
+      const int base = index * 3;
+      fadingFlags[static_cast<std::size_t>(index)] = 0u;
+      setTargetForSlot(index,
+                       sampledRgb[base + 0],
+                       sampledRgb[base + 1],
+                       sampledRgb[base + 2],
+                       true);
+      writeTexel(index, x, y);
       lastSampledTexelCount += 1u;
     }
   }
@@ -1081,6 +1378,8 @@ CanvasView::tryScrollCache(const CacheLayout& nextLayout)
   }
 
   ZoneNamedN(CanvasViewScrollZone, "CanvasView.scrollCache", true);
+  const std::chrono::steady_clock::time_point scrollStart =
+    std::chrono::steady_clock::now();
   const int deltaTexelsX = static_cast<int>(deltaTexelsX64);
   const int deltaTexelsY = static_cast<int>(deltaTexelsY64);
   copyCacheOverlap(deltaTexelsX, deltaTexelsY);
@@ -1094,6 +1393,9 @@ CanvasView::tryScrollCache(const CacheLayout& nextLayout)
   rebuildWorldQuad();
   sampleExposedCacheStrips(deltaTexelsX, deltaTexelsY);
   markFullActiveUpload();
+  cacheScrollMetric.add(std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - scrollStart)
+                          .count());
   return true;
 }
 

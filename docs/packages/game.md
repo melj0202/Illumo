@@ -166,7 +166,10 @@ main menu; reduced motion freezes the colony and snaps focus feedback.
 - Separates the visible viewport from a globally aligned sampled cache padded
   by two 16-cell chunks on every side. Camera motion within the cache changes
   only the MVP. Aligned origin shifts copy retained CPU texels and resample
-  only newly exposed strips. Near zoom uses one exact texel per cell; far zoom uses a stable
+  only newly exposed strips. Far-zoom strips initialize background bins and
+  accumulate occupied cells from intersecting sparse chunks, avoiding work
+  proportional to the empty world area behind each overview texel. Near zoom
+  uses one exact texel per cell; far zoom uses a stable
   integer density LOD bounded to roughly four screen pixels per texel. LOD
   coarsens immediately to fit and refines only when the next level fits within
   80% of the output budget.
@@ -183,17 +186,19 @@ main menu; reduced motion freezes the colony and snaps focus feedback.
   zero-speed snap visit only colors still changing; repeated unchanged
   `setFadeSpeed(0)` calls are constant-time. Stable grid/camera/palette state
   skips resampling and texture upload. A one-revision grid change publishes
-  current or removed chunks and resamples only affected cache texels at both
-  exact and overview LODs unless those bins cover at least a quarter of the
-  cache, in which case the complete bounded cache is resampled. Changed-bin
-  marking stops once that quarter-cache threshold is reached. Revision gaps,
+  current or removed chunks. Published generations map exact changed-cell
+  masks to affected bins; overview bins reset together and recompute in one
+  occupied-chunk traversal. Dense exact-cell bins covering at least a quarter
+  of the cache select a complete bounded sample. Revision gaps,
   non-aligned jumps, resize, palette changes, torus wrap, and whole-grid
   replacement fall back to a complete bounded refill. Dirty
   16x16-texel tiles merge into at most eight rectangles when that covers no
   more than half the enclosing AABB; otherwise one AABB is submitted.
 - Overview sampling visits only sparse chunks intersecting the visible source
-  region and accumulates occupied cells into density bins. Overview snaps
-  convert the sampled RGB in one pass instead of per-texel fade enrollment.
+  region and accumulates occupied cells into density bins. Incremental overview
+  updates batch all marked bins through the same traversal, avoiding per-bin
+  hash probes. Overview snaps convert the sampled RGB in one pass instead of
+  per-texel fade enrollment.
   The visual texel budget does not limit stored chunks or world cells.
 - `CellGameModule` dispatches the view on the World layer and the cursor,
   selection outline, inspector, splash, and configuration overlay on UI.
@@ -260,7 +265,8 @@ preparation/evaluation/change/recycle/output/merge stage timings, fading texels,
 last sampled/faded texel work, and frame-step debt.
 It also separates requested and achieved published TPS and reports rolling
 256-sample p50/p95/max values for worker generations, mirror/advance/capture
-stages, cache refills, requested upload bytes, and upload rectangles.
+stages, cache refills, cache scrolls, requested upload bytes, and upload
+rectangles.
 
 Save always writes version 4 sparse files containing the family and ruleset,
 camera, topology, and deterministically sorted canonical chunks. Load validates

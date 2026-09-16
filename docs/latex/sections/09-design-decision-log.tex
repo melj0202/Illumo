@@ -1822,6 +1822,27 @@ and E2E suite; integrated into \texttt{IllMeshViewer}.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-R23 --- Pixel clipping and conservative quad culling}
+\begin{decisionbox}[title={D-R23 \quad 2026-09-15}]
+\textbf{Decision:} During pixel-space rebuilds, \symbolref{GameVisual} tests
+each final quad against the logical viewport and omits wholly excluded geometry
+before buffer upload. An optional top-left logical-pixel clip further narrows
+that rectangle. Partial overlap emits ordinary geometry bracketed by
+\texttt{Renderer::pushClipRect}/\texttt{popClipRect}; the renderer intersects
+nested physical-pixel scissors and restores the prior state.\\
+\textbf{Why:} Offscreen UI, sprites, and glyphs previously consumed dynamic
+quad capacity, CPU vertex writes, upload bytes, and vertex work even though the
+viewport or a product clip discarded every fragment. Existing low-level
+scissor tokens could clip pixels but did not remove that work or safely nest.\\
+\textbf{Consequences:} Painter order, adjacent-only batching, partial-primitive
+rasterization, and explicit low-level scissor emission are preserved. Window
+or UI-scale changes invalidate the cached pixel cull rectangle and rebuild
+visibility. World-space \symbolref{GameVisual}, \symbolref{MeshVisual}, and
+SceneGraph extraction are unchanged; no frustum hierarchy or spatial index is
+introduced.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{D-CAP1 --- Bounded standalone rendering and charter baseline}
 \begin{decisionbox}[title={D-CAP1 \quad 2026-09-11}]
 \textbf{Decision:} Reuse the token renderer for direct and SceneGraph frame capture
