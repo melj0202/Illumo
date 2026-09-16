@@ -3,6 +3,7 @@
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -15,6 +16,33 @@
 #include <queue>
 #include <sstream>
 #include <vector>
+
+static float
+caretOriginAfterText(const std::string& text, float textX, float fontSize)
+{
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font == nullptr) {
+    return textX + GuiKit::estimateTextWidth(text, fontSize);
+  }
+  const FontMetrics& metrics = font->getMetrics();
+  const float scale =
+    metrics.pixelSize > 0.0f ? fontSize / metrics.pixelSize : 1.0f;
+  float inkRight = textX;
+  if (!text.empty()) {
+    const TextBounds bounds = font->measureText(text, fontSize);
+    const GlyphInfo* lastGlyph =
+      font->getGlyph(static_cast<unsigned char>(text.back()));
+    inkRight += bounds.width;
+    if (lastGlyph != nullptr) {
+      inkRight +=
+        (lastGlyph->bearingX + lastGlyph->width - lastGlyph->advanceX) * scale;
+    }
+  }
+  const GlyphInfo* caretGlyph = font->getGlyph('|');
+  const float caretBearing =
+    caretGlyph == nullptr ? 0.0f : caretGlyph->bearingX * scale;
+  return inkRight + 1.0f - caretBearing;
+}
 
 static bool
 parseTopologyText(const std::string& text, std::int64_t* value)
@@ -180,6 +208,7 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
   reducedUiMotion = current.reducedUiMotion;
   firstVisibleRow = 0;
   ambientPhase = 0.0f;
+  caretBlinkElapsed = 0.0f;
   previousMouseX = -1.0f;
   previousMouseY = -1.0f;
   errorMessage.clear();
@@ -206,6 +235,10 @@ ConfigurationMenu::tick(float deltaSeconds)
     reducedUiMotion
       ? 0.0f
       : std::fmod(ambientPhase + std::min(deltaSeconds, 0.1f), 12.0f);
+  caretBlinkElapsed =
+    reducedUiMotion
+      ? 0.0f
+      : std::fmod(caretBlinkElapsed + deltaSeconds, kCaretBlinkPeriodSeconds);
   if (reducedUiMotion) {
     animationElapsed = kOpenAnimationSeconds;
     selectionAnimationElapsed = kSelectionAnimationSeconds;
@@ -380,6 +413,7 @@ ConfigurationMenu::selectRow(int row)
     selectionFromRow = selectionRowPosition();
     selectedRow = nextRow;
     selectionAnimationElapsed = 0.0f;
+    caretBlinkElapsed = 0.0f;
   }
   if (selectedRow < firstVisibleRow) {
     firstVisibleRow = selectedRow;
@@ -436,6 +470,7 @@ ConfigurationMenu::addCharacter(unsigned int codepoint)
     replaceFieldOnType = false;
   }
   field->push_back(character);
+  caretBlinkElapsed = 0.0f;
   triggerValuePulse();
   errorMessage.clear();
 }
@@ -453,6 +488,7 @@ ConfigurationMenu::eraseCharacter()
   } else if (!field->empty()) {
     field->pop_back();
   }
+  caretBlinkElapsed = 0.0f;
   triggerValuePulse();
   errorMessage.clear();
 }
@@ -1005,6 +1041,9 @@ ConfigurationMenu::rebuildVisual()
     const float y =
       animatedFirstRowY + rowHeight * static_cast<float>(row - firstVisibleRow);
     const bool selected = row == selectedRow;
+    const bool textField = row == kWorldWidthRow || row == kWorldHeightRow ||
+                           row == kTpsRow || row == kSpeedRow ||
+                           row == kFadeRow || row == kFpsCapRow;
     const float textY = y + std::max(2.0f, (rowHeight - rowFontSize) * 0.5f);
     const unsigned char rowOpacity =
       static_cast<unsigned char>(std::round(rowReveal(row) * 255.0f));
@@ -1031,11 +1070,15 @@ ConfigurationMenu::rebuildVisual()
             UiTheme::accentCool(),
             static_cast<unsigned char>(valuePulse() * rowOpacity * 0.3f)));
       }
-      if (row == 6 || row == 7 || row == 11 || row == 12) {
-        const bool enabled = row == 6    ? vsync
-                             : row == 7  ? fullscreen
-                             : row == 11 ? showInspector
-                                         : reducedUiMotion;
+      const bool toggleRow = row == kVsyncRow || row == kFullscreenRow ||
+                             row == kInspectorRow || row == kReducedMotionRow ||
+                             row == kEditHintsRow;
+      if (toggleRow) {
+        const bool enabled = row == kVsyncRow           ? vsync
+                             : row == kFullscreenRow    ? fullscreen
+                             : row == kInspectorRow     ? showInspector
+                             : row == kReducedMotionRow ? reducedUiMotion
+                                                        : editHints;
         const float toggleX = panelX + panelWidth - 75.0f;
         const float toggleY = y + (rowHeight - 20.0f) * 0.5f;
         GuiKit::drawRoundedRect(visual,
@@ -1076,6 +1119,18 @@ ConfigurationMenu::rebuildVisual()
                                          : selected ? UiTheme::accentCool()
                                                     : UiTheme::textPrimary(),
                                          rowOpacity));
+    const bool caretVisible =
+      reducedUiMotion || caretBlinkElapsed < kCaretBlinkPeriodSeconds * 0.55f;
+    if (selected && textField && caretVisible) {
+      const float caretX =
+        std::min(caretOriginAfterText(values[row], valueColumnX, rowFontSize),
+                 panelX + panelWidth - 31.0f);
+      visual.addText("|",
+                     caretX,
+                     textY,
+                     rowFontSize,
+                     UiTheme::applyOpacity(UiTheme::accentCool(), rowOpacity));
+    }
   }
   const ColorRgba restartNoteColor{ 255, 200, 100, 255 };
   const float noteY = panelHeight >= 400.0f

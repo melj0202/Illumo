@@ -1,6 +1,7 @@
 #include "RulesetWorkshopMenu.h"
 #include "RuleCatalogLoader.h"
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -11,6 +12,33 @@
 #include <queue>
 
 namespace {
+
+float
+caretOriginAfterText(const std::string& text, float textX, float fontSize)
+{
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font == nullptr) {
+    return textX + GuiKit::estimateTextWidth(text, fontSize);
+  }
+  const FontMetrics& metrics = font->getMetrics();
+  const float scale =
+    metrics.pixelSize > 0.0f ? fontSize / metrics.pixelSize : 1.0f;
+  float inkRight = textX;
+  if (!text.empty()) {
+    const TextBounds bounds = font->measureText(text, fontSize);
+    const GlyphInfo* lastGlyph =
+      font->getGlyph(static_cast<unsigned char>(text.back()));
+    inkRight += bounds.width;
+    if (lastGlyph != nullptr) {
+      inkRight +=
+        (lastGlyph->bearingX + lastGlyph->width - lastGlyph->advanceX) * scale;
+    }
+  }
+  const GlyphInfo* caretGlyph = font->getGlyph('|');
+  const float caretBearing =
+    caretGlyph == nullptr ? 0.0f : caretGlyph->bearingX * scale;
+  return inkRight + 1.0f - caretBearing;
+}
 
 float
 easeOutCubic(float progress)
@@ -125,18 +153,19 @@ drawValueStepper(GameVisual& visual,
     std::max(1.0f, height - 4.0f),
     4.0f,
     UiTheme::applyOpacity(UiTheme::panelBorder(), opacity));
-  const float textY = y + std::max(2.0f, (height - 11.0f) * 0.5f);
+  const float controlFont = std::clamp(height * 0.58f, 12.0f, 14.0f);
+  const float textY = y + std::max(2.0f, (height - controlFont) * 0.5f);
   visual.addText("-",
-                 x + sideWidth * 0.5f - 2.5f,
+                 x + sideWidth * 0.5f - controlFont * 0.22f,
                  textY,
-                 11.0f,
+                 controlFont,
                  UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
   visual.addText("+",
-                 x + width - sideWidth * 0.5f - 3.0f,
+                 x + width - sideWidth * 0.5f - controlFont * 0.25f,
                  textY,
-                 11.0f,
+                 controlFont,
                  UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
-  const float valueFont = std::clamp(height * 0.38f, 8.0f, 12.0f);
+  const float valueFont = std::clamp(height * 0.58f, 12.0f, 14.0f);
   const float valueWidth = static_cast<float>(value.size()) * valueFont * 0.58f;
   visual.addText(value,
                  x + std::max(sideWidth + 4.0f, (width - valueWidth) * 0.5f),
@@ -174,7 +203,7 @@ drawActionButton(GameVisual& visual,
     8.0f,
     UiTheme::applyOpacity(
       tint, static_cast<unsigned char>(selected ? opacity : opacity * 0.55f)));
-  const float fontSize = std::clamp(height * 0.36f, 9.0f, 13.0f);
+  const float fontSize = std::clamp(height * 0.42f, 12.0f, 15.0f);
   const float textWidth = static_cast<float>(label.size()) * fontSize * 0.58f;
   visual.addText(
     label,
@@ -224,6 +253,7 @@ RulesetWorkshopMenu::open(const RuleFamilyDefinition& currentFamily,
   selectionAnimationElapsed = kSelectionAnimationSeconds;
   valuePulseElapsed = kValuePulseSeconds;
   ambientPhase = 0.0f;
+  caretBlinkElapsed = 0.0f;
   mouseWasDown = true;
   previousMouseX = -1.0f;
   previousMouseY = -1.0f;
@@ -295,6 +325,7 @@ RulesetWorkshopMenu::tick(float deltaSeconds)
     selectionAnimationElapsed = kSelectionAnimationSeconds;
     valuePulseElapsed = kValuePulseSeconds;
     ambientPhase = 0.0f;
+    caretBlinkElapsed = 0.0f;
     return;
   }
   animationElapsed =
@@ -304,6 +335,8 @@ RulesetWorkshopMenu::tick(float deltaSeconds)
   valuePulseElapsed =
     std::min(kValuePulseSeconds, valuePulseElapsed + deltaSeconds);
   ambientPhase = std::fmod(ambientPhase + std::min(deltaSeconds, 0.1f), 12.0f);
+  caretBlinkElapsed =
+    std::fmod(caretBlinkElapsed + deltaSeconds, kCaretBlinkPeriodSeconds);
 }
 
 float
@@ -460,7 +493,7 @@ RulesetWorkshopMenu::updateLayout()
   firstRowY = panelY + headerHeight;
   const float availableRowsHeight =
     std::max(1.0f, panelHeight - headerHeight - footerHeight - 4.0f);
-  visibleRows = std::clamp(static_cast<int>(availableRowsHeight / 29.0f),
+  visibleRows = std::clamp(static_cast<int>(availableRowsHeight / 34.0f),
                            1,
                            std::max(1, bodyRowCount));
   rowHeight = availableRowsHeight / static_cast<float>(visibleRows);
@@ -488,6 +521,7 @@ RulesetWorkshopMenu::selectRow(int row)
       selectionAnimationElapsed = kSelectionAnimationSeconds;
     }
     selectedRow = row;
+    caretBlinkElapsed = 0.0f;
   }
   if (nextBody >= 0) {
     if (nextBody < firstVisibleRow) {
@@ -702,6 +736,7 @@ RulesetWorkshopMenu::update(InputManager* input)
         familyChanged = familyChanged || control == Control::FamilyName ||
                         control == Control::StateName;
         previewDirty = true;
+        caretBlinkElapsed = 0.0f;
         triggerValuePulse();
       }
     }
@@ -729,6 +764,7 @@ RulesetWorkshopMenu::update(InputManager* input)
         familyChanged = familyChanged || control == Control::FamilyName ||
                         control == Control::StateName;
         previewDirty = true;
+        caretBlinkElapsed = 0.0f;
         triggerValuePulse();
       }
     }
@@ -1367,12 +1403,12 @@ RulesetWorkshopMenu::rebuildVisual()
     1.0f,
     UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
 
-  const float titleFont = std::clamp(panelWidth * 0.038f, 13.0f, 24.0f);
-  const float smallFont = panelHeight >= 400.0f ? 10.0f : 8.0f;
+  const float titleFont = std::clamp(panelWidth * 0.038f, 16.0f, 26.0f);
+  const float smallFont = panelHeight >= 400.0f ? 12.0f : 10.0f;
   visual.addText("F2  /  RULESET WORKSHOP",
                  panelX + 28.0f,
                  animatedPanelY + 14.0f,
-                 10.0f,
+                 11.0f,
                  UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
   visual.addText("RULESET WORKSHOP",
                  panelX + 28.0f,
@@ -1382,13 +1418,13 @@ RulesetWorkshopMenu::rebuildVisual()
   visual.addText(draft.name,
                  panelX + 30.0f,
                  animatedPanelY + (headerHeight >= 90.0f ? 63.0f : 52.0f),
-                 11.0f,
+                 14.0f,
                  UiTheme::applyOpacity(UiTheme::textMuted(), panelOpacity));
 
   const std::string family = familyLabel(familyDraft.kind);
   const float familyChipWidth =
-    std::max(84.0f, static_cast<float>(family.size()) * 6.0f + 18.0f);
-  const float stateChipWidth = 78.0f;
+    std::max(92.0f, static_cast<float>(family.size()) * 7.0f + 18.0f);
+  const float stateChipWidth = 88.0f;
   const float chipGap = 7.0f;
   const float chipGroupWidth = familyChipWidth + stateChipWidth + chipGap;
   const float familyChipX = panelX + panelWidth - chipGroupWidth - 24.0f;
@@ -1399,13 +1435,13 @@ RulesetWorkshopMenu::rebuildVisual()
       familyChipX,
       chipY,
       familyChipWidth,
-      23.0f,
+      25.0f,
       7.0f,
       UiTheme::applyOpacity(UiTheme::panelInset(), panelOpacity));
     visual.addText(family,
                    familyChipX + 8.0f,
-                   chipY + 6.0f,
-                   9.0f,
+                   chipY + 7.0f,
+                   11.0f,
                    UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
     const float stateChipX = familyChipX + familyChipWidth + chipGap;
     GuiKit::drawRoundedRect(
@@ -1413,13 +1449,13 @@ RulesetWorkshopMenu::rebuildVisual()
       stateChipX,
       chipY,
       stateChipWidth,
-      23.0f,
+      25.0f,
       7.0f,
       UiTheme::applyOpacity(UiTheme::panelInset(), panelOpacity));
     visual.addText(std::to_string(familyDraft.stateCount) + " STATES",
                    stateChipX + 8.0f,
-                   chipY + 6.0f,
-                   9.0f,
+                   chipY + 7.0f,
+                   11.0f,
                    UiTheme::applyOpacity(UiTheme::textPrimary(), panelOpacity));
   }
   if (headerHeight >= 78.0f) {
@@ -1431,7 +1467,7 @@ RulesetWorkshopMenu::rebuildVisual()
       UiTheme::applyOpacity(UiTheme::textMuted(), panelOpacity));
   }
 
-  const float rowFontSize = std::clamp(rowHeight * 0.42f, 8.0f, 13.0f);
+  const float rowFontSize = std::clamp(rowHeight * 0.48f, 15.0f, 17.0f);
   const float valueLeft = panelX + panelWidth * 0.53f;
   const float valueRight = panelX + panelWidth - 36.0f;
   const float valueWidth = std::max(24.0f, valueRight - valueLeft);
@@ -1450,7 +1486,7 @@ RulesetWorkshopMenu::rebuildVisual()
       visual.addText(row.label,
                      panelX + 28.0f,
                      textY,
-                     std::clamp(rowFontSize * 0.82f, 8.0f, 10.0f),
+                     std::clamp(rowFontSize * 0.78f, 11.0f, 13.0f),
                      UiTheme::applyOpacity(UiTheme::accentCool(), rowOpacity));
       const float dividerX =
         panelX + 34.0f + static_cast<float>(row.label.size()) * 7.2f;
@@ -1498,7 +1534,7 @@ RulesetWorkshopMenu::rebuildVisual()
                        textY,
                        rowFontSize,
                        UiTheme::applyOpacity(UiTheme::textMuted(), rowOpacity));
-        const float previewFont = std::clamp(rowFontSize * 0.9f, 7.0f, 11.0f);
+        const float previewFont = std::clamp(rowFontSize * 0.78f, 11.0f, 13.0f);
         visual.addText(
           previewText,
           valueLeft + swatchSize * 2.0f + 14.0f,
@@ -1515,7 +1551,7 @@ RulesetWorkshopMenu::rebuildVisual()
         visual.addText(row.detail,
                        valueLeft,
                        textY,
-                       std::clamp(rowFontSize * 0.82f, 7.0f, 10.0f),
+                       std::clamp(rowFontSize * 0.78f, 11.0f, 13.0f),
                        UiTheme::applyOpacity(UiTheme::textMuted(), rowOpacity));
       }
       continue;
@@ -1613,17 +1649,32 @@ RulesetWorkshopMenu::rebuildVisual()
         (control == Control::StateName &&
          paletteState < familyDraft.stateNames.size() &&
          familyDraft.stateNames[paletteState].empty());
-      visual.addText(value.substr(0u, 32u),
+      const std::string displayValue = value.substr(0u, 32u);
+      const float fieldFont = std::clamp(rowFontSize * 0.86f, 13.0f, 15.0f);
+      visual.addText(displayValue,
                      valueLeft + 8.0f,
                      textY,
-                     std::clamp(rowFontSize * 0.9f, 7.0f, 11.0f),
+                     fieldFont,
                      UiTheme::applyOpacity(placeholder ? UiTheme::textMuted()
                                                        : UiTheme::textPrimary(),
                                            rowOpacity));
+      const bool caretVisible =
+        reducedMotion || caretBlinkElapsed < kCaretBlinkPeriodSeconds * 0.55f;
+      if (selected && caretVisible) {
+        const float caretX = std::min(
+          caretOriginAfterText(displayValue, valueLeft + 8.0f, fieldFont),
+          valueRight - 44.0f);
+        visual.addText(
+          "|",
+          caretX,
+          textY,
+          fieldFont,
+          UiTheme::applyOpacity(UiTheme::accentCool(), rowOpacity));
+      }
       visual.addText(editHint,
                      valueRight - 30.0f,
                      textY,
-                     7.0f,
+                     10.0f,
                      UiTheme::applyOpacity(UiTheme::accentCool(), rowOpacity));
     } else if (control == Control::Import || control == Control::Export) {
       const float actionWidth = std::min(valueWidth, 210.0f);
@@ -1744,7 +1795,7 @@ RulesetWorkshopMenu::rebuildVisual()
     visual.addText(footerMessage.substr(0u, 100u),
                    panelX + 28.0f,
                    footerY + 7.0f,
-                   std::clamp(smallFont * 0.9f, 7.0f, 9.0f),
+                   std::clamp(smallFont * 0.95f, 10.0f, 12.0f),
                    UiTheme::applyOpacity(footerColor, panelOpacity));
   }
   const float buttonGap = 8.0f;
