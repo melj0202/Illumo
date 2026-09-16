@@ -65,6 +65,227 @@
       "name": "Wolfram Rule 184",
       "family_id": "ELEMENTARY_1D_BINARY",
       "rule_number": 184
+    },
+    {
+      "id": "STAR_WARS",
+      "name": "Star Wars (B2/S345/C4)",
+      "family_id": "GENERATIONS_4_PHASE",
+      "birth": [2],
+      "survive": [3, 4, 5]
+    },
+    {
+      "id": "NOVA_TRAILS",
+      "name": "Nova Trails (B23/S34/C4)",
+      "family_id": "GENERATIONS_4_PHASE",
+      "birth": [2, 3],
+      "survive": [3, 4]
+    },
+    {
+      "id": "EXCITABLE_WAVES_T1",
+      "name": "Excitable Waves (threshold 1)",
+      "family_id": "EXCITABLE_MEDIA_5_PHASE",
+      "transition_table": [
+        [2, 2, 2, 2, 2, 2, 2, 2, 2],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0],
+        [3, 3, 3, 3, 3, 3, 3, 3, 3],
+        [4, 4, 4, 4, 4, 4, 4, 4, 4],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1]
+      ]
+    },
+    {
+      "id": "EXCITABLE_WAVES_T2",
+      "name": "Excitable Waves (threshold 2)",
+      "family_id": "EXCITABLE_MEDIA_5_PHASE",
+      "transition_table": [
+        [2, 2, 2, 2, 2, 2, 2, 2, 2],
+        [1, 1, 0, 0, 0, 0, 0, 0, 0],
+        [3, 3, 3, 3, 3, 3, 3, 3, 3],
+        [4, 4, 4, 4, 4, 4, 4, 4, 4],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1]
+      ]
+    },
+    {
+      "id": "PRISM_RUSH",
+      "name": "Prism Rush",
+      "family_id": "PRISMATIC_ECOLOGY_12",
+      "threshold": 1,
+      "step": 1
+    },
+    {
+      "id": "CHROMATIC_STORM",
+      "name": "Chromatic Storm",
+      "family_id": "PRISMATIC_ECOLOGY_12",
+      "threshold": 2,
+      "step": 5
+    },
+    {
+      "id": "CRYSTAL_DOMAINS",
+      "name": "Crystal Domains",
+      "family_id": "PRISMATIC_ECOLOGY_12",
+      "threshold": 3,
+      "step": 1
+    },
+    {
+      "id": "ELEMENTAL_SURGE",
+      "name": "Elemental Surge",
+      "family_id": "ELEMENTAL_COURT_9",
+      "threshold": 1,
+      "step": 2
+    },
+    {
+      "id": "AURORA_CONFLICT",
+      "name": "Aurora Conflict",
+      "family_id": "ELEMENTAL_COURT_9",
+      "threshold": 2,
+      "step": 4
+    },
+    {
+      "id": "IMMIGRATION",
+      "name": "Immigration (two-species Life)",
+      "family_id": "IMMIGRATION_LIFE_2_SPECIES",
+      "birth": [3],
+      "survive": [2, 3],
+      "seed": { "pattern": "species_soup", "radius": 28, "density": 38 }
+    },
+    {
+      "id": "QUADLIFE",
+      "name": "QuadLife (four-species Life)",
+      "family_id": "QUADLIFE_4_SPECIES",
+      "birth": [3],
+      "survive": [2, 3],
+      "seed": { "pattern": "species_soup", "radius": 30, "density": 40 }
+    },
+    {
+      "id": "BOSCO",
+      "name": "Bosco / Bugs",
+      "family_id": "LARGER_THAN_LIFE_BINARY",
+      "radius": 5,
+      "include_center": true,
+      "survive_min": 34,
+      "survive_max": 58,
+      "birth_min": 34,
+      "birth_max": 45,
+      "neighborhood": "square",
+      "seed": { "pattern": "active_soup", "radius": 40, "density": 35 }
+    },
+    {
+      "id": "BUGSMOVIE",
+      "name": "Bugsmovie",
+      "family_id": "LARGER_THAN_LIFE_BINARY",
+      "radius": 10,
+      "include_center": true,
+      "survive_min": 123,
+      "survive_max": 212,
+      "birth_min": 123,
+      "birth_max": 170,
+      "neighborhood": "square",
+      "seed": { "pattern": "active_soup", "radius": 50, "density": 35 }
+    },
+    {
+      "id": "GLOBE",
+      "name": "Globe",
+      "family_id": "LARGER_THAN_LIFE_BINARY",
+      "radius": 8,
+      "include_center": false,
+      "survive_min": 163,
+      "survive_max": 223,
+      "birth_min": 74,
+      "birth_max": 252,
+      "neighborhood": "square",
+      "seed": { "pattern": "active_soup", "radius": 44, "density": 36 }
+    },
+    {
+      "id": "BANNERS",
+      "name": "Banners (S2367/B3457/C5)",
+      "family_id": "GENERATIONS_5_PHASE",
+      "birth": [3, 4, 5, 7],
+      "survive": [2, 3, 6, 7],
+      "seed": { "pattern": "active_soup", "radius": 28, "density": 36 }
+    },
+    {
+      "id": "TRANSERS",
+      "name": "Transers (S345/B26/C5)",
+      "family_id": "GENERATIONS_5_PHASE",
+      "birth": [2, 6],
+      "survive": [3, 4, 5],
+      "seed": { "pattern": "active_soup", "radius": 28, "density": 38 }
+    },
+    {
+      "id": "FIREWORKS",
+      "name": "Fireworks (S2/B13/C21)",
+      "family_id": "GENERATIONS_21_PHASE",
+      "birth": [1, 3],
+      "survive": [2],
+      "seed": { "pattern": "active_soup", "radius": 32, "density": 34 }
+    },
+    {
+      "id": "CLASSIC_CCA_14_T1",
+      "name": "Classic 14-color CCA",
+      "family_id": "CLASSIC_CCA_14",
+      "threshold": 1,
+      "step": 1,
+      "seed": { "pattern": "phase_soup", "radius": 32, "density": 100 }
+    },
+    {
+      "id": "HODGEPODGE_CLASSIC_G9",
+      "name": "Hodgepodge Classic G9",
+      "family_id": "HODGEPODGE_101_LEVEL",
+      "infection_divisor": 2,
+      "ill_divisor": 3,
+      "increment": 9,
+      "seed": { "pattern": "phase_soup", "radius": 30, "density": 100 }
+    },
+    {
+      "id": "HODGEPODGE_SPIRAL_G28",
+      "name": "Hodgepodge Spiral Bloom G28",
+      "family_id": "HODGEPODGE_101_LEVEL",
+      "infection_divisor": 3,
+      "ill_divisor": 3,
+      "increment": 28,
+      "seed": { "pattern": "phase_soup", "radius": 34, "density": 100 }
+    },
+    {
+      "id": "LANGTON_ANT_RL",
+      "name": "Langton's Ant RL Swarm",
+      "family_id": "TURMITE_2_COLOR",
+      "turn_sequence": "RL",
+      "seed": { "pattern": "turmite_swarm", "radius": 12, "density": 100 }
+    },
+    {
+      "id": "TURMITE_RRL",
+      "name": "Three-color Turmite RRL",
+      "family_id": "TURMITE_3_COLOR",
+      "turn_sequence": "RRL",
+      "seed": { "pattern": "turmite_swarm", "radius": 12, "density": 100 }
+    },
+    {
+      "id": "TURMITE_RRLL",
+      "name": "Four-color Turmite RRLL",
+      "family_id": "TURMITE_4_COLOR",
+      "turn_sequence": "RRLL",
+      "seed": { "pattern": "turmite_swarm", "radius": 12, "density": 100 }
+    },
+    {
+      "id": "HPP_GAS",
+      "name": "Hardy-Pomeau-de Pazzis Gas",
+      "family_id": "HPP_LATTICE_GAS_16",
+      "seed": { "pattern": "particle_cloud", "radius": 34, "density": 42 }
+    },
+    {
+      "id": "RPSLS_INVASION_T1",
+      "name": "RPSLS Invasion Fronts",
+      "family_id": "RPSLS_5_SPECIES",
+      "threshold": 1,
+      "prey_offsets": [1, 3],
+      "seed": { "pattern": "species_soup", "radius": 34, "density": 100 }
+    },
+    {
+      "id": "RPSLS_DOMAINS_T2",
+      "name": "RPSLS Reinforced Domains",
+      "family_id": "RPSLS_5_SPECIES",
+      "threshold": 2,
+      "prey_offsets": [1, 3],
+      "seed": { "pattern": "species_soup", "radius": 34, "density": 100 }
     }
   ]
 }

@@ -288,7 +288,7 @@ testStartRegistersGameFeatures()
            "command usage metadata registered");
   testEqSize(g,
              fixture.registry.GetCommandCompletions("ruleset").size(),
-             9,
+             RuleSetRegistry::instance().getKnownRules().size(),
              "ruleset completion candidates registered");
   testTrue(g,
            CellGameModuleTestAccess::getConfigurationMenu(fixture.module) !=
@@ -465,6 +465,209 @@ testWireworldSeedAndBrush()
               CellGameModuleTestAccess::getWireworldBrush(fixture.module)),
             static_cast<int>(WireworldRuleSet::CELL_HEAD),
             "brush can select head for left-paint");
+}
+
+static void
+testCyclicMultistateSeed()
+{
+  testSection("CellGameModule: cyclic rules seed many interacting states");
+  CellGameFixture fixture(24, 18);
+  fixture.module.Exit();
+  fixture.started = false;
+  fixture.env.setVar("FamilyString", "PRISMATIC_ECOLOGY_12");
+  fixture.env.setVar("RuleSetString", "PRISM_RUSH");
+  fixture.env.setVar("ModeString", "PRISM_RUSH");
+  fixture.started = fixture.module.Start(&fixture.context);
+  CellContext* context =
+    CellGameModuleTestAccess::getCellContext(fixture.module);
+  testTrue(g,
+           fixture.started && context != nullptr &&
+             context->getRuleSet()->getStateCount() == 12u,
+           "Prism Rush starts with its twelve-state family");
+  if (context == nullptr) {
+    return;
+  }
+  std::array<bool, 12u> seen{};
+  for (int y = -9; y <= 9; ++y) {
+    for (int x = -9; x <= 9; ++x) {
+      const unsigned char state = context->getGrid()->getCell({ x, y });
+      if (state < seen.size()) {
+        seen[state] = true;
+      }
+    }
+  }
+  const std::size_t distinct =
+    static_cast<std::size_t>(std::count(seen.begin(), seen.end(), true));
+  testTrue(g,
+           distinct == seen.size(),
+           "startup medallion includes every declared cell kind");
+}
+
+static void
+testResearchedStarterSeeds()
+{
+  testSection("CellGameModule: researched rules start with active populations");
+  CellGameFixture fixture(24, 18);
+  fixture.module.Exit();
+  fixture.started = false;
+  fixture.env.setVar("FamilyString", "QUADLIFE_4_SPECIES");
+  fixture.env.setVar("RuleSetString", "QUADLIFE");
+  fixture.env.setVar("ModeString", "QUADLIFE");
+  fixture.started = fixture.module.Start(&fixture.context);
+  CellContext* context =
+    CellGameModuleTestAccess::getCellContext(fixture.module);
+  testTrue(g,
+           fixture.started && context != nullptr,
+           "QuadLife starts from its researched catalog entry");
+  if (context != nullptr) {
+    std::array<bool, 5u> seen{};
+    for (int y = -30; y <= 30; ++y) {
+      for (int x = -30; x <= 30; ++x) {
+        const unsigned char state = context->getGrid()->getCell({ x, y });
+        if (state < seen.size()) {
+          seen[state] = true;
+        }
+      }
+    }
+    testTrue(g,
+             std::count(seen.begin(), seen.end(), true) ==
+               static_cast<std::ptrdiff_t>(seen.size()),
+             "QuadLife starter includes all four species and background");
+  }
+
+  fixture.module.Exit();
+  fixture.started = false;
+  fixture.env.setVar("FamilyString", "GENERATIONS_21_PHASE");
+  fixture.env.setVar("RuleSetString", "FIREWORKS");
+  fixture.env.setVar("ModeString", "FIREWORKS");
+  fixture.started = fixture.module.Start(&fixture.context);
+  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  testTrue(g,
+           fixture.started && context != nullptr,
+           "Fireworks starts from its twenty-one-state family");
+  if (context != nullptr) {
+    for (int generation = 0; generation < 8; ++generation) {
+      testTrue(g,
+               context->getGrid()->advance(*context->getRuleSet()),
+               "Fireworks starter advances without becoming invalid");
+    }
+    std::array<bool, 21u> seen{};
+    for (int y = -40; y <= 40; ++y) {
+      for (int x = -40; x <= 40; ++x) {
+        const unsigned char state = context->getGrid()->getCell({ x, y });
+        if (state < seen.size()) {
+          seen[state] = true;
+        }
+      }
+    }
+    testTrue(g,
+             std::count(seen.begin(), seen.end(), true) >= 6,
+             "Fireworks starter develops a multi-phase colored trail");
+  }
+
+  fixture.module.Exit();
+  fixture.started = false;
+  fixture.env.setVar("FamilyString", "HODGEPODGE_101_LEVEL");
+  fixture.env.setVar("RuleSetString", "HODGEPODGE_SPIRAL_G28");
+  fixture.env.setVar("ModeString", "HODGEPODGE_SPIRAL_G28");
+  fixture.started = fixture.module.Start(&fixture.context);
+  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  testTrue(g,
+           fixture.started && context != nullptr,
+           "Hodgepodge starts from its 101-level family");
+  if (context != nullptr) {
+    std::array<bool, 101u> seen{};
+    for (int y = -34; y <= 34; ++y) {
+      for (int x = -34; x <= 34; ++x) {
+        const unsigned char state = context->getGrid()->getCell({ x, y });
+        if (state < seen.size()) {
+          seen[state] = true;
+        }
+      }
+    }
+    testTrue(g,
+             std::count(seen.begin(), seen.end(), true) >= 90,
+             "Hodgepodge starter exposes nearly its full infection spectrum");
+  }
+
+  fixture.module.Exit();
+  fixture.started = false;
+  fixture.env.setVar("FamilyString", "TURMITE_3_COLOR");
+  fixture.env.setVar("RuleSetString", "TURMITE_RRL");
+  fixture.env.setVar("ModeString", "TURMITE_RRL");
+  fixture.started = fixture.module.Start(&fixture.context);
+  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  testTrue(g,
+           fixture.started && context != nullptr,
+           "three-color Turmite starts from its directional family");
+  if (context != nullptr) {
+    int agentCount = 0;
+    for (int y = -12; y <= 12; ++y) {
+      for (int x = -12; x <= 12; ++x) {
+        if (context->getGrid()->getCell({ x, y }) >= 3u) {
+          agentCount += 1;
+        }
+      }
+    }
+    testTrue(g, agentCount == 9, "Turmite starter launches a nine-agent swarm");
+    testTrue(g,
+             context->getGrid()->advance(*context->getRuleSet()),
+             "Turmite swarm advances immediately");
+  }
+
+  fixture.module.Exit();
+  fixture.started = false;
+  fixture.env.setVar("FamilyString", "HPP_LATTICE_GAS_16");
+  fixture.env.setVar("RuleSetString", "HPP_GAS");
+  fixture.env.setVar("ModeString", "HPP_GAS");
+  fixture.started = fixture.module.Start(&fixture.context);
+  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  testTrue(g,
+           fixture.started && context != nullptr,
+           "HPP starts from its sixteen-state particle family");
+  if (context != nullptr) {
+    std::array<bool, 16u> seen{};
+    for (int y = -34; y <= 34; ++y) {
+      for (int x = -34; x <= 34; ++x) {
+        const unsigned char state = context->getGrid()->getCell({ x, y });
+        if (state < seen.size()) {
+          seen[state] = true;
+        }
+      }
+    }
+    testTrue(g,
+             std::count(seen.begin(), seen.end(), true) >= 14,
+             "particle cloud includes almost every directional occupancy");
+    testTrue(g,
+             context->getGrid()->advance(*context->getRuleSet()),
+             "particle cloud streams and collides immediately");
+  }
+
+  fixture.module.Exit();
+  fixture.started = false;
+  fixture.env.setVar("FamilyString", "RPSLS_5_SPECIES");
+  fixture.env.setVar("RuleSetString", "RPSLS_INVASION_T1");
+  fixture.env.setVar("ModeString", "RPSLS_INVASION_T1");
+  fixture.started = fixture.module.Start(&fixture.context);
+  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  testTrue(g,
+           fixture.started && context != nullptr,
+           "RPSLS starts from its five-species family");
+  if (context != nullptr) {
+    std::array<bool, 6u> seen{};
+    for (int y = -35; y <= 35; ++y) {
+      for (int x = -35; x <= 35; ++x) {
+        const unsigned char state = context->getGrid()->getCell({ x, y });
+        if (state < seen.size()) {
+          seen[state] = true;
+        }
+      }
+    }
+    testTrue(g,
+             std::count(seen.begin(), seen.end(), true) ==
+               static_cast<std::ptrdiff_t>(seen.size()),
+             "RPSLS starter includes all five species and empty space");
+  }
 }
 
 static void
@@ -1946,12 +2149,14 @@ testRulesetWorkshopFamilyControls()
     RuleSetRegistry::instance().getRuleSetDefinition("WIREWORLD");
   const RuleSetDefinition* elementary =
     RuleSetRegistry::instance().getRuleSetDefinition("RULE_90");
+  const RuleSetDefinition* cyclic =
+    RuleSetRegistry::instance().getRuleSetDefinition("PRISM_RUSH");
   testTrue(g,
            menu != nullptr && life != nullptr && generations != nullptr &&
-             table != nullptr && elementary != nullptr,
-           "built-in definitions cover all workshop rule families");
+             table != nullptr && elementary != nullptr && cyclic != nullptr,
+           "built-in definitions cover every workshop rule family");
   if (menu == nullptr || life == nullptr || generations == nullptr ||
-      table == nullptr || elementary == nullptr) {
+      table == nullptr || elementary == nullptr || cyclic == nullptr) {
     return;
   }
 
@@ -2044,6 +2249,38 @@ testRulesetWorkshopFamilyControls()
                  ->stateCount +
                1u,
            "state-count stepper updates the staged definition");
+
+  testTrue(
+    g,
+    openWorkshop(*menu, *cyclic, true) &&
+      menu->hasControlForTesting("Successor threshold") &&
+      menu->hasControlForTesting("Cycle step") &&
+      !menu->hasControlForTesting("Birth counts") &&
+      !menu->hasControlForTesting("Transition table"),
+    "cyclic form exposes interaction controls without count-table fields");
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Successor threshold"),
+           "cyclic successor threshold is keyboard navigable");
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getDraft().cyclicThreshold == 2u,
+           "threshold stepper changes the staged cyclic rule");
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Cycle step"),
+           "cyclic cycle step is keyboard navigable");
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getDraft().cyclicStep == 5u,
+           "cycle step skips values that would exclude declared states");
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Live neighbors (0-8)"),
+           "cyclic preview successor count is navigable");
+  testTrue(
+    g,
+    menu->getPreviewText().find("successor neighbors") != std::string::npos,
+    "cyclic preview explains that neighbors are matched by successor state");
 
   testTrue(g,
            openWorkshop(*menu, *table, true) &&
@@ -2743,6 +2980,12 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
                []() { return runCellGameModuleCase(testRender3dTestFlag); });
   registry.add("IllumoGame.CellGame.WireworldSeedAndBrush", []() {
     return runCellGameModuleCase(testWireworldSeedAndBrush);
+  });
+  registry.add("IllumoGame.CellGame.CyclicMultistateSeed", []() {
+    return runCellGameModuleCase(testCyclicMultistateSeed);
+  });
+  registry.add("IllumoGame.CellGame.ResearchedStarterSeeds", []() {
+    return runCellGameModuleCase(testResearchedStarterSeeds);
   });
   registry.add("IllumoGame.CellGame.SaveLoadRoundTrip",
                []() { return runCellGameModuleCase(testSaveLoadRoundTrip); });

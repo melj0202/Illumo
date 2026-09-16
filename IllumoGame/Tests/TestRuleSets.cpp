@@ -612,7 +612,7 @@ testRuleSetRegistryFactory()
            "shipped rule catalog loads");
 
   const std::vector<std::string> known = registry.getKnownRules();
-  testTrue(g, known.size() >= 9u, "at least 9 default rules registered");
+  testTrue(g, known.size() >= 13u, "at least 13 default rules registered");
   testTrue(g, registry.isKnownRule("GAME_OF_LIFE"), "GoL known");
   testTrue(g,
            registry.isKnownRule(RuleSetRegistry::normalizeId("game_of_life")),
@@ -622,6 +622,10 @@ testRuleSetRegistryFactory()
   testTrue(g, registry.isKnownRule("RULE_90"), "Rule 90 known");
   testTrue(g, registry.isKnownRule("BRIANS_BRAIN"), "Brian's Brain known");
   testTrue(g, registry.isKnownRule("WIREWORLD"), "Wireworld known");
+  testTrue(g, registry.isKnownRule("STAR_WARS"), "Star Wars known");
+  testTrue(g,
+           registry.isKnownRule("EXCITABLE_WAVES_T2"),
+           "excitable-media rule known");
   testTrue(g, !registry.isKnownRule("NONEXISTENT_RULE"), "unknown rejected");
 
   std::unique_ptr<RuleSet> gol = registry.createRuleSet("GAME_OF_LIFE");
@@ -818,10 +822,9 @@ testDataCatalogParity()
   legacyRules.push_back(
     std::make_unique<Elementary1DRuleSet>(nullptr, "RULE_184", 184u));
   const std::vector<std::string> ids = registry.getKnownRules();
-  testEqInt(g,
-            static_cast<int>(ids.size()),
-            static_cast<int>(legacyRules.size()),
-            "the data file contains the nine supported built-ins");
+  testTrue(g,
+           ids.size() >= legacyRules.size(),
+           "the data file retains all nine compatibility built-ins");
   for (std::size_t index = 0u; index < legacyRules.size(); ++index) {
     const std::string& id = legacyRules[index]->getRuleTag();
     std::unique_ptr<RuleSet> compiled = registry.createRuleSet(id);
@@ -930,6 +933,769 @@ testDataCatalogParity()
            "compiled definitions serialize and reload transactionally");
 }
 
+static void
+testShippedExperimentalFamilies()
+{
+  testSection(
+    "RuleSetRegistry: shipped Generations and excitable-media families");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "shipped catalog with experimental families loads");
+
+  const RuleFamilyDefinition* generations =
+    registry.getFamilyDefinition("GENERATIONS_4_PHASE");
+  const RuleFamilyDefinition* excitable =
+    registry.getFamilyDefinition("EXCITABLE_MEDIA_5_PHASE");
+  testTrue(g,
+           generations != nullptr &&
+             generations->kind == RuleFamily::Generations &&
+             generations->stateCount == 4u &&
+             generations->stateNames[2] == "Afterglow",
+           "four-phase Generations family owns its decay schema");
+  testTrue(g,
+           excitable != nullptr && excitable->kind == RuleFamily::MooreTable &&
+             excitable->stateCount == 5u &&
+             excitable->stateNames[4] == "Refractory III",
+           "excitable-media family owns five named phases");
+  testTrue(g,
+           registry.getKnownRules("GENERATIONS_4_PHASE") ==
+             std::vector<std::string>{ "STAR_WARS", "NOVA_TRAILS" },
+           "Generations family exposes only its two shipped rules");
+  testTrue(
+    g,
+    registry.getKnownRules("EXCITABLE_MEDIA_5_PHASE") ==
+      std::vector<std::string>{ "EXCITABLE_WAVES_T1", "EXCITABLE_WAVES_T2" },
+    "excitable-media family exposes only its two thresholds");
+
+  std::unique_ptr<RuleSet> starWars = registry.createRuleSet("STAR_WARS");
+  std::unique_ptr<RuleSet> novaTrails = registry.createRuleSet("NOVA_TRAILS");
+  testTrue(g,
+           starWars != nullptr && starWars->getStateCount() == 4u,
+           "Star Wars compiles against the four-phase family");
+  testTrue(g,
+           novaTrails != nullptr && novaTrails->getStateCount() == 4u,
+           "Nova Trails compiles against the four-phase family");
+  if (starWars != nullptr) {
+    testEqUChar(g, starWars->nextState(1u, 2u), 0u, "Star Wars births on two");
+    testEqUChar(
+      g, starWars->nextState(0u, 4u), 0u, "Star Wars survives on four");
+    testEqUChar(g,
+                starWars->nextState(0u, 2u),
+                2u,
+                "Star Wars enters afterglow when it does not survive");
+    testEqUChar(
+      g,
+      starWars->nextState(2u, 8u),
+      3u,
+      "Star Wars advances through recovery independently of neighbors");
+    testEqUChar(g,
+                starWars->nextState(3u, 0u),
+                1u,
+                "Star Wars recovery returns to background");
+  }
+  if (novaTrails != nullptr) {
+    testEqUChar(
+      g, novaTrails->nextState(1u, 3u), 0u, "Nova Trails adds birth on three");
+    testEqUChar(g,
+                novaTrails->nextState(0u, 5u),
+                2u,
+                "Nova Trails has a narrower survival band");
+  }
+
+  std::unique_ptr<RuleSet> thresholdOne =
+    registry.createRuleSet("EXCITABLE_WAVES_T1");
+  std::unique_ptr<RuleSet> thresholdTwo =
+    registry.createRuleSet("EXCITABLE_WAVES_T2");
+  testTrue(g,
+           thresholdOne != nullptr && thresholdOne->getStateCount() == 5u,
+           "threshold-one excitable media compiles");
+  testTrue(g,
+           thresholdTwo != nullptr && thresholdTwo->getStateCount() == 5u,
+           "threshold-two excitable media compiles");
+  if (thresholdOne != nullptr && thresholdTwo != nullptr) {
+    testEqUChar(g,
+                thresholdOne->nextState(1u, 1u),
+                0u,
+                "threshold one excites a resting cell from one neighbor");
+    testEqUChar(g,
+                thresholdTwo->nextState(1u, 1u),
+                1u,
+                "threshold two ignores one excited neighbor");
+    testEqUChar(g,
+                thresholdTwo->nextState(1u, 2u),
+                0u,
+                "threshold two excites from two neighbors");
+    testEqUChar(g,
+                thresholdTwo->nextState(0u, 8u),
+                2u,
+                "excitation enters the refractory chain");
+    testEqUChar(g,
+                thresholdTwo->nextState(2u, 0u),
+                3u,
+                "first refractory phase advances");
+    testEqUChar(g,
+                thresholdTwo->nextState(3u, 0u),
+                4u,
+                "second refractory phase advances");
+    testEqUChar(
+      g, thresholdTwo->nextState(4u, 0u), 1u, "final refractory phase rests");
+
+    SparseCellGrid wave;
+    wave.setCell(CellAddress{ -1, 0 }, 0u);
+    wave.setCell(CellAddress{ 1, 0 }, 0u);
+    testTrue(g, wave.advance(*thresholdTwo), "threshold-two wave advances");
+    testEqUChar(g,
+                wave.getCell(CellAddress{ 0, 0 }),
+                0u,
+                "two excited cells ignite their shared resting neighbor");
+    testEqUChar(g,
+                wave.getCell(CellAddress{ -1, 0 }),
+                2u,
+                "source excitation enters refractory state in the sparse grid");
+  }
+}
+
+static void
+testCyclicMultistateFamilies()
+{
+  testSection("RuleSetRegistry: cyclic multistate interaction families");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "shipped cyclic catalog loads");
+
+  RuleFamily parsedFamily = RuleFamily::LifeLike;
+  testTrue(g,
+           RuleSetRegistry::parseFamily("cyclic", parsedFamily) &&
+             parsedFamily == RuleFamily::Cyclic &&
+             std::string(RuleSetRegistry::familyName(parsedFamily)) == "cyclic",
+           "cyclic model has a stable schema name");
+  const RuleFamilyDefinition* prism =
+    registry.getFamilyDefinition("PRISMATIC_ECOLOGY_12");
+  const RuleFamilyDefinition* elemental =
+    registry.getFamilyDefinition("ELEMENTAL_COURT_9");
+  testTrue(g,
+           prism != nullptr && prism->kind == RuleFamily::Cyclic &&
+             prism->stateCount == 12u && prism->stateNames[11] == "Rose",
+           "prismatic family exposes twelve named interacting states");
+  testTrue(g,
+           elemental != nullptr && elemental->kind == RuleFamily::Cyclic &&
+             elemental->stateCount == 9u && elemental->stateNames[8] == "Gold",
+           "elemental family exposes nine named interacting states");
+  if (prism == nullptr || elemental == nullptr) {
+    return;
+  }
+  testTrue(g,
+           registry.getKnownRules("PRISMATIC_ECOLOGY_12") ==
+             std::vector<std::string>{
+               "PRISM_RUSH", "CHROMATIC_STORM", "CRYSTAL_DOMAINS" },
+           "prismatic family exposes its three threshold and step variants");
+  testTrue(g,
+           registry.getKnownRules("ELEMENTAL_COURT_9") ==
+             std::vector<std::string>{ "ELEMENTAL_SURGE", "AURORA_CONFLICT" },
+           "elemental family exposes its two conflict variants");
+
+  std::unique_ptr<RuleSet> rush = registry.createRuleSet("PRISM_RUSH");
+  std::unique_ptr<RuleSet> storm = registry.createRuleSet("CHROMATIC_STORM");
+  testTrue(g,
+           rush != nullptr && rush->getNeighborhoodKind() ==
+                                RuleSet::NeighborhoodKind::MooreStateCounts,
+           "cyclic rules request full neighbor-state counts");
+  testTrue(g,
+           storm != nullptr && storm->getStateCount() == 12u,
+           "long-step cyclic rule compiles against its family");
+  if (rush != nullptr) {
+    RuleSet::NeighborStateCounts counts{};
+    counts[3] = 1u;
+    testEqUChar(g,
+                rush->nextStateFromNeighborhood(2u, counts),
+                3u,
+                "one successor neighbor advances a Prism Rush cell");
+    counts.fill(0u);
+    counts[4] = 8u;
+    testEqUChar(g,
+                rush->nextStateFromNeighborhood(2u, counts),
+                2u,
+                "non-successor states do not trigger a cyclic transition");
+    counts.fill(0u);
+    testEqUChar(g,
+                rush->nextStateFromNeighborhood(1u, counts),
+                1u,
+                "sparse background stays quiescent without its successor");
+
+    HeadlessCanvasFixture dense(5, 5);
+    dense.canvas->setCanvasPixel(2, 2, 4u);
+    dense.canvas->setCanvasPixel(3, 2, 5u);
+    std::unique_ptr<RuleSet> denseRush =
+      registry.createRuleSet("PRISM_RUSH", dense.canvas);
+    if (denseRush != nullptr) {
+      denseRush->calcGeneration(0, 0, 5, 5);
+    }
+    testEqUChar(g,
+                dense.at(2, 2),
+                5u,
+                "dense compatibility grid uses the same state interaction");
+
+    SparseCellGrid boundary;
+    boundary.setCell(CellAddress{ 15, 0 }, 4u);
+    boundary.setCell(CellAddress{ 16, 0 }, 5u);
+    testTrue(g,
+             boundary.advance(*rush),
+             "cyclic interaction advances across a sparse chunk boundary");
+    testEqUChar(g,
+                boundary.getCell(CellAddress{ 15, 0 }),
+                5u,
+                "successor across the chunk boundary advances the cell");
+
+    SparseCellGrid torus(1, 1);
+    torus.setCell(CellAddress{ 0, 0 }, 2u);
+    torus.setCell(CellAddress{ 15, 0 }, 3u);
+    testTrue(g, torus.advance(*rush), "cyclic rule advances on a finite torus");
+    testEqUChar(g,
+                torus.getCell(CellAddress{ 0, 0 }),
+                3u,
+                "wrapped successor neighbor participates in the interaction");
+
+    SparseCellGrid source;
+    source.setCell(CellAddress{ -17, 4 }, 6u);
+    source.setCell(CellAddress{ -16, 4 }, 7u);
+    SparseCellGrid destination;
+    testTrue(g,
+             destination.advanceFrom(source, *rush),
+             "direct cyclic generation advances into a spare grid");
+    testEqUChar(g,
+                destination.getCell(CellAddress{ -17, 4 }),
+                7u,
+                "direct generation preserves multistate interaction");
+  }
+  if (storm != nullptr) {
+    RuleSet::NeighborStateCounts counts{};
+    counts[7] = 1u;
+    testEqUChar(g,
+                storm->nextStateFromNeighborhood(2u, counts),
+                2u,
+                "Chromatic Storm waits below its successor threshold");
+    counts[7] = 2u;
+    testEqUChar(g,
+                storm->nextStateFromNeighborhood(2u, counts),
+                7u,
+                "Chromatic Storm advances five states at its threshold");
+  }
+
+  RuleSetRegistry validation;
+  RuleFamilyDefinition customFamily = *prism;
+  customFamily.id = "CYCLIC_TEST_FAMILY";
+  customFamily.builtIn = false;
+  testTrue(g,
+           validation.registerFamily(customFamily),
+           "custom cyclic family registers");
+  RuleSetDefinition valid;
+  valid.id = "CYCLIC_TEST";
+  valid.familyId = customFamily.id;
+  valid.cyclicThreshold = 4u;
+  valid.cyclicStep = 5u;
+  testTrue(g, validation.registerRule(valid), "valid cyclic rule registers");
+  RuleSetDefinition invalid = valid;
+  invalid.id = "CYCLIC_BAD_STEP";
+  invalid.cyclicStep = 6u;
+  testTrue(g,
+           !validation.registerRule(invalid),
+           "non-coprime step that skips declared states is rejected");
+  invalid.id = "CYCLIC_BAD_THRESHOLD";
+  invalid.cyclicStep = 5u;
+  invalid.cyclicThreshold = 0u;
+  testTrue(
+    g, !validation.registerRule(invalid), "zero cyclic threshold is rejected");
+
+  RuleSetRegistry roundTrip;
+  const std::string familyJson =
+    RuleSetRegistry::serializeFamilies(validation.getFamilyDefinitions());
+  const std::string ruleJson = RuleSetRegistry::serializeCatalog(
+    validation.getFamilyDefinitions(), validation.getDefinitions());
+  testTrue(g,
+           roundTrip.loadFromCatalogTexts(familyJson, ruleJson),
+           "cyclic catalog serializes and reloads");
+  const RuleSetDefinition* reloaded =
+    roundTrip.getRuleSetDefinition("CYCLIC_TEST");
+  testTrue(g,
+           reloaded != nullptr && reloaded->cyclicThreshold == 4u &&
+             reloaded->cyclicStep == 5u,
+           "cyclic threshold and step survive round-trip serialization");
+}
+
+static void
+testResearchedInteractionFamilies()
+{
+  testSection("RuleSetRegistry: researched interaction families");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "researched family catalog loads");
+
+  const RuleFamilyDefinition* immigrationFamily =
+    registry.getFamilyDefinition("IMMIGRATION_LIFE_2_SPECIES");
+  const RuleFamilyDefinition* quadFamily =
+    registry.getFamilyDefinition("QUADLIFE_4_SPECIES");
+  const RuleFamilyDefinition* largerFamily =
+    registry.getFamilyDefinition("LARGER_THAN_LIFE_BINARY");
+  const RuleFamilyDefinition* fireworksFamily =
+    registry.getFamilyDefinition("GENERATIONS_21_PHASE");
+  const RuleFamilyDefinition* classicCcaFamily =
+    registry.getFamilyDefinition("CLASSIC_CCA_14");
+  testTrue(g,
+           immigrationFamily != nullptr &&
+             immigrationFamily->kind == RuleFamily::SpeciesLife &&
+             immigrationFamily->stateCount == 3u,
+           "Immigration declares two live species and a background");
+  testTrue(g,
+           quadFamily != nullptr &&
+             quadFamily->kind == RuleFamily::SpeciesLife &&
+             quadFamily->stateCount == 5u,
+           "QuadLife declares four interacting live species");
+  testTrue(g,
+           largerFamily != nullptr &&
+             largerFamily->kind == RuleFamily::LargerThanLife,
+           "Larger-than-Life has a dedicated model");
+  testTrue(g,
+           fireworksFamily != nullptr && fireworksFamily->stateCount == 21u,
+           "Fireworks exposes its full twenty-one-state decay trail");
+  testTrue(g,
+           classicCcaFamily != nullptr && classicCcaFamily->stateCount == 14u,
+           "classic CCA exposes the paper's fourteen colors");
+
+  std::unique_ptr<RuleSet> immigration = registry.createRuleSet("IMMIGRATION");
+  std::unique_ptr<RuleSet> quadLife = registry.createRuleSet("QUADLIFE");
+  testTrue(g,
+           immigration != nullptr &&
+             immigration->getNeighborhoodKind() ==
+               RuleSet::NeighborhoodKind::MooreStateCounts,
+           "Immigration requests full parent-color counts");
+  testTrue(g,
+           quadLife != nullptr && quadLife->getStateCount() == 5u,
+           "QuadLife compiles with four live colors");
+  if (immigration != nullptr) {
+    RuleSet::NeighborStateCounts counts{};
+    counts[0] = 2u;
+    counts[2] = 1u;
+    testEqUChar(g,
+                immigration->nextStateFromNeighborhood(1u, counts),
+                0u,
+                "Immigration birth inherits the majority parent species");
+    counts[0] = 1u;
+    counts[2] = 2u;
+    testEqUChar(g,
+                immigration->nextStateFromNeighborhood(1u, counts),
+                2u,
+                "the other Immigration species can win a birth");
+    testEqUChar(g,
+                immigration->nextStateFromNeighborhood(2u, counts),
+                2u,
+                "a surviving live cell preserves its species");
+  }
+  if (quadLife != nullptr) {
+    RuleSet::NeighborStateCounts counts{};
+    counts[0] = 1u;
+    counts[2] = 1u;
+    counts[3] = 1u;
+    testEqUChar(g,
+                quadLife->nextStateFromNeighborhood(1u, counts),
+                4u,
+                "three distinct QuadLife parents produce the fourth species");
+
+    SparseCellGrid boundary;
+    boundary.setCell(CellAddress{ 14, -1 }, 0u);
+    boundary.setCell(CellAddress{ 15, -1 }, 2u);
+    boundary.setCell(CellAddress{ 16, -1 }, 3u);
+    testTrue(g, boundary.advance(*quadLife), "QuadLife advances sparsely");
+    testEqUChar(g,
+                boundary.getCell(CellAddress{ 15, 0 }),
+                4u,
+                "fourth-species birth works across a sparse chunk boundary");
+
+    HeadlessCanvasFixture dense(7, 7);
+    dense.canvas->setCanvasPixel(2, 2, 0u);
+    dense.canvas->setCanvasPixel(3, 2, 2u);
+    dense.canvas->setCanvasPixel(4, 2, 3u);
+    std::unique_ptr<RuleSet> denseQuad =
+      registry.createRuleSet("QUADLIFE", dense.canvas);
+    if (denseQuad != nullptr) {
+      denseQuad->calcGeneration(0, 0, 7, 7);
+    }
+    testEqUChar(g,
+                dense.at(3, 3),
+                4u,
+                "dense compatibility uses the same QuadLife color birth");
+  }
+
+  const RuleSetDefinition* boscoDefinition =
+    registry.getRuleSetDefinition("BOSCO");
+  std::unique_ptr<RuleSet> bosco = registry.createRuleSet("BOSCO");
+  testTrue(g,
+           boscoDefinition != nullptr && bosco != nullptr &&
+             bosco->getNeighborhoodKind() ==
+               RuleSet::NeighborhoodKind::ExtendedRange &&
+             bosco->getNeighborhoodRadius() == 5u &&
+             bosco->includesCenterInNeighborCount(),
+           "Bosco compiles its range-five center-counted neighborhood");
+  if (bosco != nullptr) {
+    testEqUChar(g,
+                bosco->nextStateFromExtendedCount(1u, 34u),
+                0u,
+                "Bosco births at its lower threshold");
+    testEqUChar(g,
+                bosco->nextStateFromExtendedCount(1u, 33u),
+                1u,
+                "Bosco rejects counts below its birth interval");
+    testEqUChar(g,
+                bosco->nextStateFromExtendedCount(0u, 58u),
+                0u,
+                "Bosco survives at its upper threshold");
+    testEqUChar(g,
+                bosco->nextStateFromExtendedCount(0u, 59u),
+                1u,
+                "Bosco dies above its survival interval");
+  }
+
+  if (largerFamily != nullptr) {
+    RuleSetRegistry customRegistry;
+    testTrue(g,
+             customRegistry.registerFamily(*largerFamily),
+             "extended-range family registers independently");
+    RuleSetDefinition spread;
+    spread.id = "RANGE_TWO_SPREAD";
+    spread.name = "Range two spread";
+    spread.familyId = largerFamily->id;
+    spread.neighborhoodRadius = 2u;
+    spread.birthMinimum = 1u;
+    spread.birthMaximum = 1u;
+    spread.survivalMinimum = 0u;
+    spread.survivalMaximum = 0u;
+    testTrue(
+      g, customRegistry.registerRule(spread), "valid range-two rule registers");
+    std::unique_ptr<RuleSet> spreadRule =
+      customRegistry.createRuleSet("RANGE_TWO_SPREAD");
+    if (spreadRule != nullptr) {
+      SparseCellGrid sparse;
+      sparse.setCell(CellAddress{ 15, 0 }, 0u);
+      testTrue(
+        g, sparse.advance(*spreadRule), "range-two sparse rule advances");
+      testEqUChar(g,
+                  sparse.getCell(CellAddress{ 17, 2 }),
+                  0u,
+                  "extended neighborhood crosses sparse chunk boundaries");
+      testEqUChar(g,
+                  sparse.getCell(CellAddress{ 18, 0 }),
+                  1u,
+                  "cells beyond the declared range remain background");
+
+      SparseCellGrid torus(1, 1);
+      torus.setCell(CellAddress{ 0, 0 }, 0u);
+      testTrue(
+        g, torus.advance(*spreadRule), "range-two rule advances on a torus");
+      testEqUChar(g,
+                  torus.getCell(CellAddress{ 15, 0 }),
+                  0u,
+                  "extended toroidal neighborhood wraps at the world edge");
+    }
+
+    RuleSetDefinition circular = spread;
+    circular.id = "RANGE_TWO_CIRCULAR";
+    circular.extendedNeighborhoodShape =
+      RuleSet::ExtendedNeighborhoodShape::Circular;
+    testTrue(g,
+             customRegistry.registerRule(circular),
+             "circular extended neighborhood registers");
+    std::unique_ptr<RuleSet> circularRule =
+      customRegistry.createRuleSet("RANGE_TWO_CIRCULAR");
+    if (circularRule != nullptr) {
+      SparseCellGrid circularGrid;
+      circularGrid.setCell(CellAddress{ 0, 0 }, 0u);
+      testTrue(g,
+               circularGrid.advance(*circularRule),
+               "circular range-two rule advances");
+      testEqUChar(g,
+                  circularGrid.getCell(CellAddress{ 2, 0 }),
+                  0u,
+                  "circular neighborhood includes its axial radius");
+      testEqUChar(g,
+                  circularGrid.getCell(CellAddress{ 2, 2 }),
+                  1u,
+                  "circular neighborhood excludes square-only corners");
+    }
+
+    RuleSetDefinition invalid = spread;
+    invalid.id = "RANGE_B0_INVALID";
+    invalid.birthMinimum = 0u;
+    testTrue(g,
+             !customRegistry.registerRule(invalid),
+             "extended B0 is rejected for a sparse infinite background");
+    invalid = spread;
+    invalid.id = "RANGE_TOO_WIDE";
+    invalid.neighborhoodRadius = 17u;
+    testTrue(g,
+             !customRegistry.registerRule(invalid),
+             "extended range above the supported bound is rejected");
+  }
+
+  const RuleSetDefinition* quadDefinition =
+    registry.getRuleSetDefinition("QUADLIFE");
+  testTrue(g,
+           quadDefinition != nullptr &&
+             quadDefinition->seedPattern == RuleSeedPattern::SpeciesSoup &&
+             boscoDefinition != nullptr &&
+             boscoDefinition->seedPattern == RuleSeedPattern::ActiveSoup,
+           "researched rules carry model-appropriate deterministic seeds");
+
+  RuleSetRegistry roundTrip;
+  const std::string familiesJson =
+    RuleSetRegistry::serializeFamilies(registry.getFamilyDefinitions());
+  const std::string rulesJson = RuleSetRegistry::serializeCatalog(
+    registry.getFamilyDefinitions(), registry.getDefinitions());
+  testTrue(g,
+           roundTrip.loadFromCatalogTexts(familiesJson, rulesJson),
+           "researched family catalog round-trips");
+  const RuleSetDefinition* reloadedBosco =
+    roundTrip.getRuleSetDefinition("BOSCO");
+  testTrue(
+    g,
+    reloadedBosco != nullptr && reloadedBosco->neighborhoodRadius == 5u &&
+      reloadedBosco->birthMinimum == 34u &&
+      reloadedBosco->birthMaximum == 45u && reloadedBosco->includeCenter &&
+      reloadedBosco->seedPattern == RuleSeedPattern::ActiveSoup,
+    "extended thresholds and seed strategy survive serialization");
+}
+
+static void
+testDirectionalAndChemicalFamilies()
+{
+  testSection("RuleSetRegistry: directional and chemical families");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "second researched family catalog loads");
+
+  const RuleFamilyDefinition* hodgeFamily =
+    registry.getFamilyDefinition("HODGEPODGE_101_LEVEL");
+  const RuleFamilyDefinition* antFamily =
+    registry.getFamilyDefinition("TURMITE_2_COLOR");
+  const RuleFamilyDefinition* gasFamily =
+    registry.getFamilyDefinition("HPP_LATTICE_GAS_16");
+  const RuleFamilyDefinition* dominanceFamily =
+    registry.getFamilyDefinition("RPSLS_5_SPECIES");
+  testTrue(g,
+           hodgeFamily != nullptr &&
+             hodgeFamily->kind == RuleFamily::Hodgepodge &&
+             hodgeFamily->stateCount == 101u,
+           "Hodgepodge exposes one hundred infection levels plus healthy");
+  testTrue(g,
+           antFamily != nullptr && antFamily->kind == RuleFamily::Turmite &&
+             antFamily->stateCount == 10u,
+           "two-color Turmite includes tape and directional agent states");
+  testTrue(g,
+           gasFamily != nullptr && gasFamily->kind == RuleFamily::LatticeGas &&
+             gasFamily->stateCount == 16u,
+           "HPP exposes all four-direction occupancy combinations");
+  testTrue(g,
+           dominanceFamily != nullptr &&
+             dominanceFamily->kind == RuleFamily::Dominance &&
+             dominanceFamily->stateCount == 6u,
+           "RPSLS exposes five species plus empty space");
+
+  std::unique_ptr<RuleSet> hodge =
+    registry.createRuleSet("HODGEPODGE_CLASSIC_G9");
+  testTrue(g,
+           hodge != nullptr && hodge->getNeighborhoodKind() ==
+                                 RuleSet::NeighborhoodKind::MooreStateCounts,
+           "Hodgepodge uses full neighborhood state levels");
+  if (hodge != nullptr) {
+    RuleSet::NeighborStateCounts counts{};
+    counts[0] = 4u;
+    counts[100] = 3u;
+    testEqUChar(g,
+                hodge->nextStateFromNeighborhood(1u, counts),
+                3u,
+                "healthy cell combines infected and ill neighbor weights");
+    counts.fill(0u);
+    counts[50] = 1u;
+    testEqUChar(g,
+                hodge->nextStateFromNeighborhood(50u, counts),
+                59u,
+                "infected cell averages active levels and adds g");
+    testEqUChar(g,
+                hodge->nextStateFromNeighborhood(100u, counts),
+                1u,
+                "maximally ill cell recovers to healthy");
+
+    SparseCellGrid boundary;
+    boundary.setCell(CellAddress{ 15, -1 }, 100u);
+    boundary.setCell(CellAddress{ 15, 0 }, 100u);
+    boundary.setCell(CellAddress{ 15, 1 }, 100u);
+    testTrue(g, boundary.advance(*hodge), "Hodgepodge advances sparsely");
+    testEqUChar(g,
+                boundary.getCell(CellAddress{ 16, 0 }),
+                0u,
+                "Hodgepodge infection crosses a sparse chunk boundary");
+  }
+
+  std::unique_ptr<RuleSet> ant = registry.createRuleSet("LANGTON_ANT_RL");
+  testTrue(g,
+           ant != nullptr && ant->getNeighborhoodKind() ==
+                               RuleSet::NeighborhoodKind::VonNeumannDirectional,
+           "Turmite preserves directional von Neumann input");
+  if (ant != nullptr) {
+    SparseCellGrid trail;
+    trail.setCell(CellAddress{ 15, 0 }, 2u);
+    testTrue(g, trail.advance(*ant), "Langton ant advances sparsely");
+    testEqUChar(g,
+                trail.getCell(CellAddress{ 15, 0 }),
+                0u,
+                "ant increments the tape color it leaves");
+    testEqUChar(g,
+                trail.getCell(CellAddress{ 16, 0 }),
+                3u,
+                "right turn moves east across a sparse chunk boundary");
+    testTrue(g, trail.advance(*ant), "Langton ant advances a second time");
+    testEqUChar(g,
+                trail.getCell(CellAddress{ 16, 1 }),
+                4u,
+                "second right turn carries the south-facing ant state");
+
+    HeadlessCanvasFixture dense(5, 5);
+    dense.canvas->setCanvasPixel(2, 2, 2u);
+    std::unique_ptr<RuleSet> denseAnt =
+      registry.createRuleSet("LANGTON_ANT_RL", dense.canvas);
+    if (denseAnt != nullptr) {
+      denseAnt->calcGeneration(0, 0, 5, 5);
+    }
+    testEqUChar(
+      g, dense.at(2, 2), 0u, "dense Turmite writes its departed tape cell");
+    testEqUChar(g,
+                dense.at(3, 2),
+                3u,
+                "dense directional compatibility moves the ant east");
+  }
+
+  std::unique_ptr<RuleSet> gas = registry.createRuleSet("HPP_GAS");
+  testTrue(g,
+           gas != nullptr && gas->getNeighborhoodKind() ==
+                               RuleSet::NeighborhoodKind::VonNeumannDirectional,
+           "HPP gas uses directional streaming");
+  if (gas != nullptr) {
+    SparseCellGrid stream;
+    stream.setCell(CellAddress{ 0, -1 }, 4u);
+    testTrue(g, stream.advance(*gas), "single HPP particle streams");
+    testEqUChar(g,
+                stream.getCell(CellAddress{ 0, 0 }),
+                4u,
+                "south-moving particle retains direction after streaming");
+
+    SparseCellGrid collision;
+    collision.setCell(CellAddress{ 0, 0 }, 5u);
+    testTrue(g, collision.advance(*gas), "head-on HPP pair collides");
+    testEqUChar(g,
+                collision.getCell(CellAddress{ 1, 0 }),
+                2u,
+                "north-south collision emits an east particle");
+    testEqUChar(g,
+                collision.getCell(CellAddress{ -1, 0 }),
+                8u,
+                "north-south collision emits a west particle");
+
+    SparseCellGrid torus(1, 1);
+    torus.setCell(CellAddress{ 15, 0 }, 2u);
+    testTrue(g, torus.advance(*gas), "HPP gas advances on a finite torus");
+    testEqUChar(g,
+                torus.getCell(CellAddress{ 0, 0 }),
+                2u,
+                "east particle wraps across the finite world");
+
+    HeadlessCanvasFixture dense(5, 5);
+    dense.canvas->setCanvasPixel(2, 2, 5u);
+    std::unique_ptr<RuleSet> denseGas =
+      registry.createRuleSet("HPP_GAS", dense.canvas);
+    if (denseGas != nullptr) {
+      denseGas->calcGeneration(0, 0, 5, 5);
+    }
+    testEqUChar(g,
+                dense.at(3, 2),
+                2u,
+                "dense HPP compatibility emits the east collision product");
+    testEqUChar(g,
+                dense.at(1, 2),
+                8u,
+                "dense HPP compatibility emits the west collision product");
+  }
+
+  std::unique_ptr<RuleSet> dominance =
+    registry.createRuleSet("RPSLS_DOMAINS_T2");
+  if (dominance != nullptr) {
+    RuleSet::NeighborStateCounts counts{};
+    counts[5] = 2u;
+    counts[3] = 1u;
+    testEqUChar(g,
+                dominance->nextStateFromNeighborhood(0u, counts),
+                5u,
+                "strongest qualifying predator invades its prey");
+    counts[5] = 1u;
+    testEqUChar(g,
+                dominance->nextStateFromNeighborhood(0u, counts),
+                0u,
+                "reinforced domains resist a lone predator");
+
+    SparseCellGrid front;
+    front.setCell(CellAddress{ 16, 0 }, 0u);
+    front.setCell(CellAddress{ 15, -1 }, 5u);
+    front.setCell(CellAddress{ 15, 0 }, 5u);
+    testTrue(g, front.advance(*dominance), "dominance front advances sparsely");
+    testEqUChar(g,
+                front.getCell(CellAddress{ 16, 0 }),
+                5u,
+                "species invasion crosses a sparse chunk boundary");
+  }
+
+  const RuleSetDefinition* rrl = registry.getRuleSetDefinition("TURMITE_RRL");
+  const RuleSetDefinition* rrll = registry.getRuleSetDefinition("TURMITE_RRLL");
+  testTrue(g,
+           rrl != nullptr && rrl->turnSequence == "RRL" && rrll != nullptr &&
+             rrll->turnSequence == "RRLL",
+           "researched multi-color Turmite words are preserved");
+
+  RuleSetRegistry roundTrip;
+  const std::string familiesJson =
+    RuleSetRegistry::serializeFamilies(registry.getFamilyDefinitions());
+  const std::string rulesJson = RuleSetRegistry::serializeCatalog(
+    registry.getFamilyDefinitions(), registry.getDefinitions());
+  testTrue(g,
+           roundTrip.loadFromCatalogTexts(familiesJson, rulesJson),
+           "directional and chemical catalog round-trips");
+  const RuleSetDefinition* reloadedHodge =
+    roundTrip.getRuleSetDefinition("HODGEPODGE_SPIRAL_G28");
+  const RuleSetDefinition* reloadedDominance =
+    roundTrip.getRuleSetDefinition("RPSLS_INVASION_T1");
+  testTrue(g,
+           reloadedHodge != nullptr && reloadedHodge->infectionDivisor == 3u &&
+             reloadedHodge->infectionIncrement == 28u &&
+             reloadedDominance != nullptr &&
+             reloadedDominance->dominancePreyOffsets.size() == 2u &&
+             reloadedDominance->seedPattern == RuleSeedPattern::SpeciesSoup,
+           "new interaction parameters and starters survive serialization");
+
+  if (antFamily != nullptr) {
+    RuleSetRegistry validation;
+    testTrue(g,
+             validation.registerFamily(*antFamily),
+             "Turmite family registers independently");
+    RuleSetDefinition invalidAnt;
+    invalidAnt.id = "INVALID_ANT";
+    invalidAnt.familyId = antFamily->id;
+    invalidAnt.turnSequence = "R";
+    testTrue(g,
+             !validation.registerRule(invalidAnt),
+             "Turmite turn word must match its tape color count");
+  }
+}
+
 static int
 runRuleSetCase(void (*testFunction)())
 {
@@ -945,6 +1711,17 @@ registerRuleSetTests(IllumoTestRegistry& registry)
                []() { return runRuleSetCase(testRuleSetRegistryValidation); });
   registry.add("IllumoGame.Rules.DataCatalogParity",
                []() { return runRuleSetCase(testDataCatalogParity); });
+  registry.add("IllumoGame.Rules.ExperimentalFamilies", []() {
+    return runRuleSetCase(testShippedExperimentalFamilies);
+  });
+  registry.add("IllumoGame.Rules.CyclicMultistate",
+               []() { return runRuleSetCase(testCyclicMultistateFamilies); });
+  registry.add("IllumoGame.Rules.ResearchedInteractions", []() {
+    return runRuleSetCase(testResearchedInteractionFamilies);
+  });
+  registry.add("IllumoGame.Rules.DirectionalChemicalFamilies", []() {
+    return runRuleSetCase(testDirectionalAndChemicalFamilies);
+  });
   registry.add("IllumoGame.Rules.TransitionTable", []() {
     return runRuleSetCase(testTransitionTableCacheAndEquivalence);
   });

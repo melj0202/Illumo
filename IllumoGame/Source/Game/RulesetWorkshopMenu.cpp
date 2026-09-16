@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numeric>
 #include <queue>
 
 namespace {
@@ -39,6 +40,20 @@ familyLabel(RuleFamily family)
       return "GENERATIONS";
     case RuleFamily::MooreTable:
       return "MOORE TABLE";
+    case RuleFamily::Cyclic:
+      return "CYCLIC INTERACTION";
+    case RuleFamily::SpeciesLife:
+      return "COLORIZED LIFE";
+    case RuleFamily::LargerThanLife:
+      return "LARGER THAN LIFE";
+    case RuleFamily::Hodgepodge:
+      return "HODGEPODGE CHEMISTRY";
+    case RuleFamily::Turmite:
+      return "DIRECTIONAL TURMITE";
+    case RuleFamily::LatticeGas:
+      return "LATTICE GAS";
+    case RuleFamily::Dominance:
+      return "SPECIES DOMINANCE";
     case RuleFamily::Elementary1D:
       return "ELEMENTARY 1D";
     default:
@@ -77,7 +92,8 @@ uniqueCustomId(const std::string& prefix,
 bool
 isCountMaskFamily(RuleFamily family)
 {
-  return family == RuleFamily::LifeLike || family == RuleFamily::Generations;
+  return family == RuleFamily::LifeLike || family == RuleFamily::Generations ||
+         family == RuleFamily::SpeciesLife;
 }
 
 std::string
@@ -578,6 +594,24 @@ RulesetWorkshopMenu::rebuildRows()
     appendInformation(Control::TableInformation,
                       "Transition table",
                       "Edit transitions in JSON, then import the rule.");
+  } else if (familyDraft.kind == RuleFamily::Cyclic) {
+    appendControl(Control::CyclicThreshold, "Successor threshold");
+    appendControl(Control::CyclicStep, "Cycle step");
+  } else if (familyDraft.kind == RuleFamily::LargerThanLife) {
+    appendInformation(Control::TableInformation,
+                      "Extended neighborhood",
+                      draft.rule.empty()
+                        ? "Edit range and thresholds in JSON, then import."
+                        : draft.rule);
+  } else if (familyDraft.kind == RuleFamily::Hodgepodge ||
+             familyDraft.kind == RuleFamily::Turmite ||
+             familyDraft.kind == RuleFamily::LatticeGas ||
+             familyDraft.kind == RuleFamily::Dominance) {
+    appendInformation(Control::TableInformation,
+                      "Interaction contract",
+                      draft.rule.empty()
+                        ? "Edit family parameters in JSON, then import."
+                        : draft.rule);
   }
 
   if (familyDraft.kind == RuleFamily::Generations) {
@@ -968,6 +1002,32 @@ RulesetWorkshopMenu::changeControl(Control control, int direction)
     if (changed) {
       resizeGenerationStates(static_cast<unsigned int>(count));
     }
+  } else if (control == Control::CyclicThreshold &&
+             familyDraft.kind == RuleFamily::Cyclic) {
+    const int next = static_cast<int>(draft.cyclicThreshold) + direction - 1;
+    const unsigned int wrapped =
+      static_cast<unsigned int>((next % 8 + 8) % 8 + 1);
+    changed = wrapped != draft.cyclicThreshold;
+    draft.cyclicThreshold = wrapped;
+    previewDirty = true;
+  } else if (control == Control::CyclicStep &&
+             familyDraft.kind == RuleFamily::Cyclic) {
+    const unsigned int stateCount = std::max(2u, familyDraft.stateCount);
+    unsigned int next = draft.cyclicStep;
+    for (unsigned int attempt = 0u; attempt < stateCount; ++attempt) {
+      const int candidate = static_cast<int>(next) + direction - 1;
+      next = static_cast<unsigned int>(
+        (candidate % static_cast<int>(stateCount - 1u) +
+         static_cast<int>(stateCount - 1u)) %
+          static_cast<int>(stateCount - 1u) +
+        1);
+      if (std::gcd(next, stateCount) == 1u) {
+        break;
+      }
+    }
+    changed = next != draft.cyclicStep;
+    draft.cyclicStep = next;
+    previewDirty = true;
   } else if (control == Control::WolframNumber &&
              familyDraft.kind == RuleFamily::Elementary1D) {
     const int next = static_cast<int>(draft.ruleNumber) + 2 * direction;
@@ -1179,13 +1239,49 @@ RulesetWorkshopMenu::refreshPreview()
   previewState =
     std::min(previewState, std::max(1u, familyDraft.stateCount) - 1u);
   previewInputState = static_cast<unsigned char>(previewState);
-  const unsigned char next =
-    rule->nextState(static_cast<unsigned char>(previewState),
-                    static_cast<unsigned char>(previewNeighborCount));
+  unsigned char next = 1u;
+  if (familyDraft.kind == RuleFamily::Cyclic) {
+    RuleSet::NeighborStateCounts counts{};
+    const unsigned int successor =
+      (previewState + draft.cyclicStep) % familyDraft.stateCount;
+    counts[successor] = static_cast<unsigned char>(previewNeighborCount);
+    next = rule->nextStateFromNeighborhood(
+      static_cast<unsigned char>(previewState), counts);
+  } else if (familyDraft.kind == RuleFamily::SpeciesLife) {
+    RuleSet::NeighborStateCounts counts{};
+    unsigned int speciesState = previewState;
+    if (speciesState == 1u) {
+      speciesState = 0u;
+    }
+    counts[speciesState] = static_cast<unsigned char>(previewNeighborCount);
+    next = rule->nextStateFromNeighborhood(
+      static_cast<unsigned char>(previewState), counts);
+  } else if (familyDraft.kind == RuleFamily::LargerThanLife) {
+    next = rule->nextStateFromExtendedCount(
+      static_cast<unsigned char>(previewState), previewNeighborCount);
+  } else if (familyDraft.kind == RuleFamily::Hodgepodge ||
+             familyDraft.kind == RuleFamily::Dominance) {
+    RuleSet::NeighborStateCounts counts{};
+    counts[0] = static_cast<unsigned char>(previewNeighborCount);
+    next = rule->nextStateFromNeighborhood(
+      static_cast<unsigned char>(previewState), counts);
+  } else if (familyDraft.kind == RuleFamily::Turmite ||
+             familyDraft.kind == RuleFamily::LatticeGas) {
+    RuleSet::DirectionalNeighbors neighbors{};
+    neighbors.fill(1u);
+    next = rule->nextStateFromDirectionalNeighborhood(
+      static_cast<unsigned char>(previewState), neighbors);
+  } else {
+    next = rule->nextState(static_cast<unsigned char>(previewState),
+                           static_cast<unsigned char>(previewNeighborCount));
+  }
   previewOutputState = next;
-  previewText = stateLabel(familyDraft, previewState) + " + " +
-                std::to_string(previewNeighborCount) + " live neighbors -> " +
-                stateLabel(familyDraft, next);
+  previewText =
+    stateLabel(familyDraft, previewState) + " + " +
+    std::to_string(previewNeighborCount) +
+    (familyDraft.kind == RuleFamily::Cyclic ? " successor neighbors -> "
+                                            : " live neighbors -> ") +
+    stateLabel(familyDraft, next);
 }
 
 std::string
@@ -1217,6 +1313,12 @@ RulesetWorkshopMenu::valueForControl(Control control) const
   }
   if (control == Control::GenerationStates) {
     return std::to_string(familyDraft.stateCount) + " states";
+  }
+  if (control == Control::CyclicThreshold) {
+    return std::to_string(draft.cyclicThreshold) + " neighbors";
+  }
+  if (control == Control::CyclicStep) {
+    return "+" + std::to_string(draft.cyclicStep) + " state";
   }
   if (control == Control::WolframNumber) {
     return std::to_string(draft.ruleNumber);
@@ -1284,6 +1386,12 @@ RulesetWorkshopMenu::helpForControl(Control control) const
   if (control == Control::GenerationStates) {
     return "Change the length of this rule's decay sequence.";
   }
+  if (control == Control::CyclicThreshold) {
+    return "Advance when this many neighbors hold the successor state.";
+  }
+  if (control == Control::CyclicStep) {
+    return "Choose which state each cell chases around the full cycle.";
+  }
   if (control == Control::WolframNumber) {
     return "Adjust the elementary rule number in steps of two.";
   }
@@ -1291,7 +1399,9 @@ RulesetWorkshopMenu::helpForControl(Control control) const
     return "Choose the cell state used in the example transition.";
   }
   if (control == Control::PreviewNeighbors) {
-    return "Choose how many of the eight neighbors are active.";
+    return familyDraft.kind == RuleFamily::Cyclic
+             ? "Choose how many neighbors hold the successor state."
+             : "Choose how many of the eight neighbors are active.";
   }
   if (control == Control::PreviewNeighborhood) {
     return "Choose a left-center-right pattern from 000 to 111.";
