@@ -86,6 +86,8 @@ private:
         return IsTextureValid(command.bindTexture.handle);
       case CommandType::UpdateBuffer:
         return IsMeshValid(command.updateBuffer.handle);
+      case CommandType::UpdateIndexBuffer:
+        return IsMeshValid(command.updateIndexBuffer.handle);
       case CommandType::UpdateTexture:
         return IsTextureValid(command.updateTexture.handle);
       default:

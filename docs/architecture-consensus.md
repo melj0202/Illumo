@@ -430,7 +430,10 @@ consume those frame values instead of querying the window and recomputing the
 same matrix independently; direct token emitters retain their local fallback.
 `CanvasView` retains upload-rectangle scratch storage, `MeshVisual` retains
 dynamic mesh handles and uploads only dirty geometry, and `SceneGraph` retains
-its traversal stack. These caches do not retain or replay command queues.
+its traversal stack. Triangle geometry preserves shared vertices and its source
+index topology in independently sized dynamic vertex and index buffers; dirty
+edits update both buffers without changing the mesh handle. These caches do not
+retain or replay command queues.
 
 `RenderWindow` defaults to swap interval one. The persisted `vsync` environment
 value can select synchronized or uncapped presentation and is reapplied only
@@ -1164,6 +1167,9 @@ are the same CPU-side state. MeshVisual does not read EnvVars; IllMeshViewer
 persists those values and calls the setters. It does not own a camera, model
 loader, or material system. Overlay chrome stays on `GameVisual` with a
 screen ortho `uMVP` so HUD does not pan with the world camera.
+Triangle uploads retain unique `LitVertex` values plus their original unsigned
+index stream. Vertex and index capacities grow independently, and unchanged
+frames reuse both allocations without upload work.
 
 IllumoGame's persisted `render3dTest=1` flag replaces `CanvasView` with a
 `SceneGraph` of `MeshVisual` attachments and switches the product `Camera` to

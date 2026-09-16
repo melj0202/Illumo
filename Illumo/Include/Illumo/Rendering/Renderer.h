@@ -145,7 +145,8 @@ public:
                         MeshVertexLayout layout,
                         bool dynamic);
 
-  // Dynamic VBO (capacityBytes) + static index buffer; for UI text/console.
+  // Dynamic vertex capacity plus an optional index payload or index capacity.
+  // A null indices pointer with nonzero indicesSize reserves a dynamic EBO.
   MeshHandle enrollDynamicMesh(size_t vertexCapacityBytes,
                                const void* indices,
                                size_t indicesSize,
@@ -276,6 +277,10 @@ public:
                         unsigned int offsetBytes,
                         unsigned int sizeBytes,
                         const void* data);
+  void pushUpdateIndexBuffer(MeshHandle meshHandle,
+                             unsigned int offsetBytes,
+                             unsigned int sizeBytes,
+                             const void* data);
 
   // =========================================================================
   // Render targets & pass execution helpers

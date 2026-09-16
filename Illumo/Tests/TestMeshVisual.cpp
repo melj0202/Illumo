@@ -156,6 +156,167 @@ testMeshVisualDynamicMeshReuse()
              "expanded geometry updates the retained buffer");
 }
 
+static MeshData
+makeSharedQuadMesh(bool alternateDiagonal)
+{
+  MeshData mesh;
+  MeshVertex vertex;
+  vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+  vertex.position = glm::vec3(-1.0f, -1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  vertex.position = glm::vec3(1.0f, -1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  vertex.position = glm::vec3(1.0f, 1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  vertex.position = glm::vec3(-1.0f, 1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  if (alternateDiagonal) {
+    mesh.indices = { 0, 1, 3, 1, 2, 3 };
+  } else {
+    mesh.indices = { 0, 1, 2, 0, 2, 3 };
+  }
+  return mesh;
+}
+
+static void
+testMeshVisualIndexedTriangles()
+{
+  testSection("MeshVisual: triangles preserve shared indexed geometry");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addMesh(makeSharedQuadMesh(false));
+
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "indexed quad emits tokens");
+  renderer.EndFrame();
+
+  const RenderCommand* vertexUpdate =
+    findSubmittedCommand(mock, CommandType::UpdateBuffer, 0);
+  const RenderCommand* indexUpdate =
+    findSubmittedCommand(mock, CommandType::UpdateIndexBuffer, 0);
+  testTrue(g, vertexUpdate != nullptr, "indexed quad uploads vertices");
+  testTrue(g, indexUpdate != nullptr, "indexed quad uploads indices");
+  if (vertexUpdate != nullptr) {
+    testEqSize(g,
+               vertexUpdate->updateBuffer.sizeBytes,
+               4u * 36u,
+               "four unique LitVertex values are uploaded");
+  }
+  if (indexUpdate != nullptr) {
+    testEqSize(g,
+               indexUpdate->updateIndexBuffer.sizeBytes,
+               6u * sizeof(unsigned int),
+               "six source indices are uploaded");
+    const unsigned int expected[6] = { 0, 1, 2, 0, 2, 3 };
+    const unsigned int* uploaded =
+      static_cast<const unsigned int*>(indexUpdate->updateIndexBuffer.data);
+    testTrue(g,
+             uploaded != nullptr &&
+               std::memcmp(uploaded, expected, sizeof(expected)) == 0,
+             "source index topology is preserved byte-for-byte");
+  }
+
+  MeshHandle retainedHandle{};
+  size_t indexedDrawCount = 0;
+  bool allDrawCountsMatch = true;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetMesh &&
+        !retainedHandle.isValid()) {
+      retainedHandle = command.bindMesh.handle;
+    }
+    if (command.commandType == CommandType::DrawIndexed) {
+      indexedDrawCount += 1;
+      allDrawCountsMatch =
+        allDrawCountsMatch && command.drawIndexed.elementCount == 6u;
+    }
+  }
+  testTrue(g, retainedHandle.isValid(), "indexed triangle mesh is retained");
+  testTrue(g,
+           indexedDrawCount >= 1u && allDrawCountsMatch,
+           "every triangle pass draws the six source indices");
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "unchanged quad still draws");
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             0u,
+             "unchanged triangle vertices skip upload");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateIndexBuffer),
+             0u,
+             "unchanged triangle indices skip upload");
+
+  visual.clearPrimitives();
+  visual.addMesh(makeSharedQuadMesh(true));
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g,
+           visual.AppendCommands(&renderer),
+           "changed topology inside capacity emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* changedMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           changedMesh != nullptr &&
+             changedMesh->bindMesh.handle == retainedHandle,
+           "changed topology inside capacity reuses the mesh handle");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "changed topology refreshes unique vertices once");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateIndexBuffer),
+             1u,
+             "changed topology refreshes indices once");
+
+  visual.clearPrimitives();
+  for (size_t i = 0; i < 17u; ++i) {
+    visual.addMesh(makeSharedQuadMesh(false));
+  }
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "capacity growth emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* grownMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           grownMesh != nullptr && grownMesh->bindMesh.handle == retainedHandle,
+           "capacity growth replaces storage without changing the handle");
+
+  MeshData invalid = makeSharedQuadMesh(false);
+  invalid.indices[5] = 4;
+  MeshVisual invalidVisual;
+  invalidVisual.prepare(&renderer);
+  invalidVisual.addMesh(invalid);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g,
+           invalidVisual.AppendCommands(&renderer),
+           "invalid mesh is rejected without failing extraction");
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             0u,
+             "invalid mesh uploads no vertices");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateIndexBuffer),
+             0u,
+             "invalid mesh uploads no indices");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             0u,
+             "invalid mesh emits no draw");
+}
+
 static void
 testMeshVisualSpriteAndCube()
 {
@@ -810,6 +971,9 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
 {
   registry.add("Illumo.MeshVisual.DynamicMeshReuse", []() {
     return runMeshVisualCase(testMeshVisualDynamicMeshReuse);
+  });
+  registry.add("Illumo.MeshVisual.IndexedTriangles", []() {
+    return runMeshVisualCase(testMeshVisualIndexedTriangles);
   });
   registry.add("Illumo.MeshVisual.SpriteAndCube",
                []() { return runMeshVisualCase(testMeshVisualSpriteAndCube); });

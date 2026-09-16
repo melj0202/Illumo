@@ -121,9 +121,12 @@ preserving defaults. Optional modules reinstall their overrides after a transiti
         \symbolref{MeshVisual} read configuration.
         One host can contain multiple visual items. Use child scene nodes for
         independent transforms and subtree state; each node borrows at most
-        one attachment. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
-        meshes upload dirty vertices through \texttt{UpdateBuffer}; capacity
-        growth replaces the backing allocation.
+        one attachment. Overlay HUD stays on \symbolref{GameVisual}. Triangle
+        geometry retains unique vertices and its source index topology in
+        independently sized dynamic VBO and EBO storage. Dirty geometry emits
+        vertex and index update tokens; unchanged frames reuse both buffers,
+        while capacity growth replaces the backing allocation without changing
+        its mesh handle.
 \end{itemize}
 
 \subsection{Managed texture and shader assets (D-R17)}
