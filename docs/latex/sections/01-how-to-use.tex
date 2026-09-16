@@ -56,11 +56,11 @@ From the repo root (requires PowerShell and a TeX distribution with
 \pathref{docs/output/architecture-map.pdf}.
 
 \begin{statusbox}
-As of 2026-09-14 (current-state audit): engine, scene, system, and platform code is
+As of 2026-09-16 (current-state audit): engine, scene, system, and platform code is
 under \pathref{Illumo/Include} and \pathref{Illumo/Source}; IllumoGame contains
 only game and ruleset production code. IllEd authors worlds and IllMeshViewer
 inspects meshes. The reusable world-mesh and 2D token renderer has
-typed generational resources, managed texture/cubemap/shader assets, offscreen passes, painter-correct
+typed generational resources, managed texture/cubemap/shader/static-mesh assets, offscreen passes, painter-correct
 primitives, and mock tests; the persistent \symbolref{SceneGraph} owns
 generational hierarchy nodes and extracts borrowed render attachments through
 that token path;

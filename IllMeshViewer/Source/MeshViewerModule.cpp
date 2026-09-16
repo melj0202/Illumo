@@ -23,7 +23,8 @@ viewerContextComplete(const IllumoContext* context)
   return context != nullptr && context->envVars != nullptr &&
          context->window != nullptr && context->camera != nullptr &&
          context->renderer != nullptr && context->inputManager != nullptr &&
-         context->commandLine != nullptr && context->scene != nullptr;
+         context->commandLine != nullptr && context->scene != nullptr &&
+         context->assetManager != nullptr;
 }
 
 MeshViewerModule::MeshViewerModule(std::string initialMeshPath)
@@ -132,6 +133,10 @@ MeshViewerModule::Exit()
   m_meshVisual.reset();
   m_gridVisual.reset();
   m_skyboxVisual.reset();
+  if (ic != nullptr && ic->assetManager != nullptr && m_meshAsset.isValid()) {
+    ic->assetManager->releaseMesh(m_meshAsset);
+  }
+  m_meshAsset = MeshHandle{};
   m_meshData.clear();
   m_meshPath.clear();
 }
@@ -162,11 +167,25 @@ MeshViewerModule::loadMesh(const std::string& path)
     return false;
   }
 
+  if (ic == nullptr || ic->assetManager == nullptr) {
+    return false;
+  }
+  const MeshHandle meshAsset = ic->assetManager->acquireMesh(result.mesh);
+  const MeshAssetInfo meshInfo = ic->assetManager->getMeshInfo(meshAsset);
+  if (!meshInfo.isValid()) {
+    return false;
+  }
+
+  const MeshHandle previousAsset = m_meshAsset;
+  m_meshAsset = meshAsset;
   m_meshPath = path;
   m_meshData = result.mesh;
 
   rebuildMeshVisual();
   rebuildWireframe();
+  if (previousAsset.isValid()) {
+    ic->assetManager->releaseMesh(previousAsset);
+  }
 
   m_camera.frameBounds(m_meshData.minBounds, m_meshData.maxBounds);
   if (ic != nullptr && ic->camera != nullptr) {
@@ -200,11 +219,25 @@ MeshViewerModule::loadMeshFromMemory(const std::string& content,
     return false;
   }
 
+  if (ic == nullptr || ic->assetManager == nullptr) {
+    return false;
+  }
+  const MeshHandle meshAsset = ic->assetManager->acquireMesh(result.mesh);
+  const MeshAssetInfo meshInfo = ic->assetManager->getMeshInfo(meshAsset);
+  if (!meshInfo.isValid()) {
+    return false;
+  }
+
+  const MeshHandle previousAsset = m_meshAsset;
+  m_meshAsset = meshAsset;
   m_meshPath = name;
   m_meshData = result.mesh;
 
   rebuildMeshVisual();
   rebuildWireframe();
+  if (previousAsset.isValid()) {
+    ic->assetManager->releaseMesh(previousAsset);
+  }
 
   m_camera.frameBounds(m_meshData.minBounds, m_meshData.maxBounds);
   if (ic != nullptr && ic->camera != nullptr) {
@@ -544,16 +577,19 @@ MeshViewerModule::applyMotionBlurFromEnv()
 void
 MeshViewerModule::rebuildMeshVisual()
 {
-  if (!m_meshVisual || ic == nullptr || ic->renderer == nullptr) {
+  if (!m_meshVisual || ic == nullptr || ic->renderer == nullptr ||
+      ic->assetManager == nullptr) {
     return;
   }
   m_meshVisual->clearPrimitives();
 
-  if (m_meshData.isEmpty()) {
+  const MeshAssetInfo meshInfo = ic->assetManager->getMeshInfo(m_meshAsset);
+  if (m_meshData.isEmpty() || !meshInfo.isValid()) {
+    m_meshVisual->clearMeshAsset();
     return;
   }
 
-  m_meshVisual->addMesh(m_meshData, ColorRgba{ 225, 230, 240, 255 });
+  m_meshVisual->setMeshAsset(meshInfo, ColorRgba{ 225, 230, 240, 255 });
 }
 
 void

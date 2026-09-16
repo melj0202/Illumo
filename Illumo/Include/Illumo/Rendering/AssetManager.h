@@ -2,6 +2,7 @@
 
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ITexture.h>
+#include <Illumo/Rendering/MeshLoader.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <array>
 #include <chrono>
@@ -40,8 +41,20 @@ struct AssetStatus
   std::string lastError;
 };
 
-// Cached texture/shader assets. CPU file/decode work may run on one worker;
-// pump() performs every backend mutation on the render thread.
+struct MeshAssetInfo
+{
+  MeshHandle handle{};
+  unsigned int vertexCount = 0;
+  unsigned int indexCount = 0;
+  glm::vec3 minBounds = glm::vec3(0.0f);
+  glm::vec3 maxBounds = glm::vec3(0.0f);
+
+  bool isValid() const { return handle.isValid() && indexCount > 0; }
+};
+
+// Cached texture/shader/mesh assets. CPU texture/shader file work may run on
+// one worker; pump() performs their backend mutation on the render thread.
+// Mesh acquisition is synchronous and main-thread affine.
 class AssetManager
 {
 public:
@@ -60,15 +73,22 @@ public:
     AssetLoadMode mode = AssetLoadMode::Synchronous);
   ShaderHandle acquireShader(const ShaderPaths& paths,
                              AssetLoadMode mode = AssetLoadMode::Async);
+  MeshHandle acquireMesh(const MeshData& mesh);
+  MeshHandle acquireMesh(const std::string& path,
+                         const MeshLoadOptions& options = MeshLoadOptions{});
 
   bool retainTexture(TextureHandle handle);
   bool retainShader(ShaderHandle handle);
+  bool retainMesh(MeshHandle handle);
   bool releaseTexture(TextureHandle handle);
   bool releaseShader(ShaderHandle handle);
+  bool releaseMesh(MeshHandle handle);
 
   AssetStatus getState(TextureHandle handle) const;
   AssetStatus getState(ShaderHandle handle) const;
+  AssetStatus getState(MeshHandle handle) const;
   TextureInfo getTextureInfo(TextureHandle handle) const;
+  MeshAssetInfo getMeshInfo(MeshHandle handle) const;
 
   bool reload(TextureHandle handle);
   bool reload(ShaderHandle handle);
@@ -135,6 +155,15 @@ private:
       dependencyWriteTimes;
   };
 
+  struct MeshEntry
+  {
+    MeshHandle handle{};
+    MeshAssetInfo info;
+    std::string path;
+    std::string cacheKey;
+    unsigned int referenceCount = 1;
+  };
+
   struct LoadJob
   {
     TextureSourceKind sourceKind = TextureSourceKind::Image2D;
@@ -172,8 +201,10 @@ private:
   Renderer* renderer;
   std::unordered_map<uint32_t, TextureEntry> textures;
   std::unordered_map<uint32_t, ShaderEntry> shaders;
+  std::unordered_map<uint32_t, MeshEntry> meshes;
   std::unordered_map<std::string, uint32_t> textureCache;
   std::unordered_map<std::string, uint32_t> shaderCache;
+  std::unordered_map<std::string, uint32_t> meshCache;
 
   mutable std::mutex queueMutex;
   std::condition_variable queueCondition;
@@ -189,12 +220,17 @@ private:
   static std::string textureKey(const std::string& canonical,
                                 const TextureOptions& options);
   static std::string shaderKey(const ShaderPaths& paths);
+  static std::string meshKey(const std::string& canonical,
+                             const MeshLoadOptions& options);
   static std::filesystem::file_time_type writeTime(const std::string& path);
   static LoadResult executeJob(const LoadJob& job);
   static void decodeCubemap(const LoadJob& job, LoadResult& result);
   TextureHandle acquireCubemapSources(TextureSourceKind kind,
                                       const std::array<std::string, 6>& paths,
                                       const std::string& key);
+  MeshHandle enrollMesh(const MeshData& mesh,
+                        const std::string& path,
+                        const std::string& cacheKey);
 
   void workerMain();
   void enqueue(const LoadJob& job);

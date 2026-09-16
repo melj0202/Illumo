@@ -707,6 +707,75 @@ testAssetManagerEnrollment()
 }
 
 static void
+testAssetManagerMeshLifecycle()
+{
+  testSection("AssetManager: shared mesh cache and reference lifetime");
+  HeadlessRenderFixture fixture(4, 4);
+  AssetManager assets(&fixture.renderer, false);
+  const std::filesystem::path path =
+    std::filesystem::current_path() / "asset-cache-test.obj";
+  {
+    std::ofstream file(path, std::ios::binary);
+    file << "v 0 0 0\n"
+            "v 1 0 0\n"
+            "v 0 1 0\n"
+            "vt 0 0\n"
+            "vt 1 0\n"
+            "vt 0 1\n"
+            "f 1/1 2/2 3/3\n";
+  }
+
+  const size_t createsBefore = fixture.mock.getCreateCount();
+  const MeshHandle first = assets.acquireMesh(path.string());
+  const MeshHandle duplicate =
+    assets.acquireMesh((path.parent_path() / "." / path.filename()).string());
+  testTrue(g,
+           first.isValid() && first == duplicate,
+           "canonical duplicate mesh returns one handle");
+  testEqSize(g,
+             fixture.mock.getCreateCount(),
+             createsBefore + 1,
+             "duplicate mesh performs one backend upload");
+  const AssetStatus sharedStatus = assets.getState(first);
+  testTrue(g,
+           sharedStatus.state == AssetState::Ready &&
+             sharedStatus.referenceCount == 2,
+           "duplicate mesh acquisition increments references");
+  const MeshAssetInfo info = assets.getMeshInfo(first);
+  testTrue(g,
+           info.isValid() && info.vertexCount == 3 && info.indexCount == 3,
+           "managed mesh exposes immutable draw metadata");
+
+  testTrue(g, assets.releaseMesh(first), "first mesh release succeeds");
+  testTrue(g,
+           fixture.mock.IsMeshValid(first),
+           "shared mesh survives while one reference remains");
+  testTrue(g, assets.releaseMesh(first), "last mesh release succeeds");
+  testTrue(g,
+           !fixture.mock.IsMeshValid(first),
+           "last mesh release destroys backend resource");
+
+  MeshLoadOptions alternateOptions;
+  alternateOptions.flipTexCoordsV = false;
+  const MeshHandle alternate =
+    assets.acquireMesh(path.string(), alternateOptions);
+  testTrue(g,
+           alternate.isValid() && alternate != first,
+           "geometry-affecting loader options use a separate cache entry");
+  testTrue(g,
+           assets.retainMesh(alternate),
+           "explicit mesh retain supports sharing an uncopied handle");
+  testTrue(g,
+           assets.getState(alternate).referenceCount == 2,
+           "explicit retain increments the managed reference count");
+  testTrue(g, assets.releaseMesh(alternate), "retained mesh releases once");
+  testTrue(g, assets.releaseMesh(alternate), "retained mesh releases finally");
+  std::error_code removeError;
+  std::filesystem::remove(path, removeError);
+  testTrue(g, !removeError, "mesh cache fixture is removed");
+}
+
+static void
 testAssetManagerLookupAndShutdown()
 {
   testSection("AssetManager: reload retention and pending cancellation");
@@ -968,6 +1037,9 @@ registerRuntimeUtilityTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.AssetManager.Enrollment", []() {
     return runRuntimeUtilityCase(testAssetManagerEnrollment);
+  });
+  registry.add("Illumo.AssetManager.MeshLifecycle", []() {
+    return runRuntimeUtilityCase(testAssetManagerMeshLifecycle);
   });
   registry.add("Illumo.AssetManager.LookupAndShutdown", []() {
     return runRuntimeUtilityCase(testAssetManagerLookupAndShutdown);

@@ -15,6 +15,7 @@ struct WorldLook
   static constexpr const char* kMotionBlurEnabledUniform = "uMotionBlurEnabled";
   static constexpr const char* kMotionBlurAmountUniform = "uMotionBlurAmount";
   static constexpr const char* kMotionBlurMaxUniform = "uMotionBlurMax";
+  static constexpr const char* kTintUniform = "uTint";
   static constexpr const char* kLightSpaceMatrixUniform = "uLightSpaceMatrix";
   static constexpr const char* kLightDirUniform = "uLightDir";
   static constexpr const char* kLightColorUniform = "uLightColor";

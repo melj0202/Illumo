@@ -34,6 +34,10 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
 - Resource handles are backend-neutral identifiers. The owning backend
   registry controls concrete resource lifetime; enrollment is rare and
   per-frame work emits commands rather than recreating resources.
+- `AssetManager` reference-counts immutable static mesh assets and owns their
+  backend-handle lifecycle. `MeshVisual` mesh-asset bindings are non-owning;
+  the acquiring owner must retain the manager reference until every visual is
+  detached. Procedural dynamic geometry remains visual-owned.
 - Keep coordinate space and layer explicit. Overlay chrome uses a screen ortho
   `uMVP`; world objects use the camera view-projection. Do not mix those
   matrices or texture-space sampling implicitly.

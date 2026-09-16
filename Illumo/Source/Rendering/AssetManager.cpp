@@ -7,8 +7,33 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <sstream>
+
+struct ManagedMeshVertex
+{
+  float x;
+  float y;
+  float z;
+  float nx;
+  float ny;
+  float nz;
+  unsigned char r;
+  unsigned char g;
+  unsigned char b;
+  unsigned char a;
+  float u;
+  float v;
+};
+
+static_assert(sizeof(ManagedMeshVertex) == 36);
+
+static unsigned char
+meshColorChannel(float value)
+{
+  return static_cast<unsigned char>(std::clamp(value * 255.0f, 0.0f, 255.0f));
+}
 
 static const char* kFallbackVertexShader = R"(
 #version 330 core
@@ -70,6 +95,11 @@ AssetManager::~AssetManager()
   }
 
   if (renderer != nullptr) {
+    for (std::unordered_map<uint32_t, MeshEntry>::iterator it = meshes.begin();
+         it != meshes.end();
+         ++it) {
+      renderer->destroyMesh(it->second.handle);
+    }
     for (std::unordered_map<uint32_t, TextureEntry>::iterator it =
            textures.begin();
          it != textures.end();
@@ -120,6 +150,23 @@ AssetManager::shaderKey(const ShaderPaths& paths)
 {
   return canonicalPath(paths.vertexPath) + "|" +
          canonicalPath(paths.fragmentPath);
+}
+
+std::string
+AssetManager::meshKey(const std::string& canonical,
+                      const MeshLoadOptions& options)
+{
+  std::ostringstream key;
+  key.precision(std::numeric_limits<float>::max_digits10);
+  key << canonical << '|' << (options.triangulate ? '1' : '0') << '|'
+      << (options.generateNormalsIfMissing ? '1' : '0') << '|'
+      << (options.flipTexCoordsV ? '1' : '0') << '|'
+      << (options.centerAndNormalize ? '1' : '0') << '|' << options.targetRadius
+      << '|';
+  if (!options.materialSearchPath.empty()) {
+    key << canonicalPath(options.materialSearchPath);
+  }
+  return key.str();
 }
 
 std::filesystem::file_time_type
@@ -472,6 +519,102 @@ AssetManager::acquireShader(const ShaderPaths& paths, AssetLoadMode mode)
   return handle;
 }
 
+MeshHandle
+AssetManager::acquireMesh(const MeshData& mesh)
+{
+  return enrollMesh(mesh, "memory", "");
+}
+
+MeshHandle
+AssetManager::acquireMesh(const std::string& path,
+                          const MeshLoadOptions& options)
+{
+  if (renderer == nullptr || path.empty()) {
+    return MeshHandle{};
+  }
+  const std::string canonical = canonicalPath(path);
+  const std::string key = meshKey(canonical, options);
+  std::unordered_map<std::string, uint32_t>::iterator cached =
+    meshCache.find(key);
+  if (cached != meshCache.end()) {
+    MeshEntry& entry = meshes[cached->second];
+    entry.referenceCount += 1;
+    return entry.handle;
+  }
+
+  const MeshLoadResult loaded = MeshLoader::loadFromFile(canonical, options);
+  if (!loaded.success) {
+    Logger::LogError(loaded.error.c_str());
+    return MeshHandle{};
+  }
+  return enrollMesh(loaded.mesh, canonical, key);
+}
+
+MeshHandle
+AssetManager::enrollMesh(const MeshData& mesh,
+                         const std::string& path,
+                         const std::string& cacheKey)
+{
+  if (renderer == nullptr || mesh.vertices.empty() || mesh.indices.empty() ||
+      mesh.vertices.size() > std::numeric_limits<unsigned int>::max() ||
+      mesh.indices.size() > std::numeric_limits<unsigned int>::max()) {
+    return MeshHandle{};
+  }
+  for (size_t i = 0; i < mesh.indices.size(); ++i) {
+    if (mesh.indices[i] >= mesh.vertices.size()) {
+      return MeshHandle{};
+    }
+  }
+
+  std::vector<ManagedMeshVertex> vertices;
+  vertices.reserve(mesh.vertices.size());
+  glm::vec3 minBounds(std::numeric_limits<float>::max());
+  glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
+  for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+    const MeshVertex& source = mesh.vertices[i];
+    vertices.push_back({ source.position.x,
+                         source.position.y,
+                         source.position.z,
+                         source.normal.x,
+                         source.normal.y,
+                         source.normal.z,
+                         meshColorChannel(source.color.r),
+                         meshColorChannel(source.color.g),
+                         meshColorChannel(source.color.b),
+                         meshColorChannel(source.color.a),
+                         source.texCoords.x,
+                         source.texCoords.y });
+    minBounds = glm::min(minBounds, source.position);
+    maxBounds = glm::max(maxBounds, source.position);
+  }
+
+  const MeshHandle handle =
+    renderer->enrollMesh(vertices.data(),
+                         vertices.size() * sizeof(ManagedMeshVertex),
+                         mesh.indices.data(),
+                         mesh.indices.size() * sizeof(uint32_t),
+                         MeshVertexLayout::Pos3Norm3Color4U8Uv2,
+                         false);
+  if (!handle.isValid()) {
+    return MeshHandle{};
+  }
+
+  MeshEntry entry;
+  entry.handle = handle;
+  entry.info.handle = handle;
+  entry.info.vertexCount = static_cast<unsigned int>(mesh.vertices.size());
+  entry.info.indexCount = static_cast<unsigned int>(mesh.indices.size());
+  entry.info.minBounds = minBounds;
+  entry.info.maxBounds = maxBounds;
+  entry.path = path;
+  entry.cacheKey = cacheKey;
+  meshes[handle.slot] = entry;
+  if (!cacheKey.empty()) {
+    meshCache[cacheKey] = handle.slot;
+  }
+  return handle;
+}
+
 bool
 AssetManager::retainTexture(TextureHandle handle)
 {
@@ -490,6 +633,18 @@ AssetManager::retainShader(ShaderHandle handle)
   std::unordered_map<uint32_t, ShaderEntry>::iterator it =
     shaders.find(handle.slot);
   if (it == shaders.end() || it->second.handle != handle) {
+    return false;
+  }
+  it->second.referenceCount += 1;
+  return true;
+}
+
+bool
+AssetManager::retainMesh(MeshHandle handle)
+{
+  std::unordered_map<uint32_t, MeshEntry>::iterator it =
+    meshes.find(handle.slot);
+  if (it == meshes.end() || it->second.handle != handle) {
     return false;
   }
   it->second.referenceCount += 1;
@@ -529,6 +684,26 @@ AssetManager::releaseShader(ShaderHandle handle)
   shaderCache.erase(it->second.cacheKey);
   renderer->destroyShader(handle);
   shaders.erase(it);
+  return true;
+}
+
+bool
+AssetManager::releaseMesh(MeshHandle handle)
+{
+  std::unordered_map<uint32_t, MeshEntry>::iterator it =
+    meshes.find(handle.slot);
+  if (it == meshes.end() || it->second.handle != handle) {
+    return false;
+  }
+  if (it->second.referenceCount > 1) {
+    it->second.referenceCount -= 1;
+    return true;
+  }
+  if (!it->second.cacheKey.empty()) {
+    meshCache.erase(it->second.cacheKey);
+  }
+  renderer->destroyMesh(handle);
+  meshes.erase(it);
   return true;
 }
 
@@ -573,6 +748,24 @@ AssetManager::getState(ShaderHandle handle) const
   return status;
 }
 
+AssetStatus
+AssetManager::getState(MeshHandle handle) const
+{
+  AssetStatus status;
+  std::unordered_map<uint32_t, MeshEntry>::const_iterator it =
+    meshes.find(handle.slot);
+  if (it == meshes.end() || it->second.handle != handle) {
+    status.state = AssetState::Failed;
+    status.lastError = "Unknown or stale mesh handle";
+    return status;
+  }
+  status.state = AssetState::Ready;
+  status.revision = 1;
+  status.referenceCount = it->second.referenceCount;
+  status.path = it->second.path;
+  return status;
+}
+
 TextureInfo
 AssetManager::getTextureInfo(TextureHandle handle) const
 {
@@ -580,6 +773,17 @@ AssetManager::getTextureInfo(TextureHandle handle) const
     textures.find(handle.slot);
   if (it == textures.end() || it->second.handle != handle) {
     return TextureInfo{};
+  }
+  return it->second.info;
+}
+
+MeshAssetInfo
+AssetManager::getMeshInfo(MeshHandle handle) const
+{
+  std::unordered_map<uint32_t, MeshEntry>::const_iterator it =
+    meshes.find(handle.slot);
+  if (it == meshes.end() || it->second.handle != handle) {
+    return MeshAssetInfo{};
   }
   return it->second.info;
 }
@@ -1006,6 +1210,15 @@ std::vector<std::string>
 AssetManager::describeAssets() const
 {
   std::vector<std::string> descriptions;
+  for (std::unordered_map<uint32_t, MeshEntry>::const_iterator it =
+         meshes.begin();
+       it != meshes.end();
+       ++it) {
+    const MeshEntry& entry = it->second;
+    descriptions.push_back(
+      "mesh state=ready refs=" + std::to_string(entry.referenceCount) +
+      " rev=1 path=" + entry.path);
+  }
   for (std::unordered_map<uint32_t, TextureEntry>::const_iterator it =
          textures.begin();
        it != textures.end();
