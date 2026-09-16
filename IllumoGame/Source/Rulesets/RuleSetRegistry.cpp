@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <nlohmann/json.hpp>
+#include <numeric>
 #include <sstream>
 #include <utility>
 
@@ -12,6 +13,7 @@ namespace {
 
 const unsigned int kMaximumStateCount = 256u;
 const unsigned int kMaximumNeighborCount = 8u;
+const unsigned int kMaximumExtendedRadius = 16u;
 const unsigned char kBackgroundState = 1u;
 const unsigned char kCountedState = 0u;
 
@@ -545,6 +547,18 @@ validateFamily(RuleFamilyDefinition& definition)
        definition.stateCount != 2u) ||
       (definition.kind == RuleFamily::Generations &&
        definition.stateCount < 3u) ||
+      (definition.kind == RuleFamily::SpeciesLife &&
+       definition.stateCount != 3u && definition.stateCount != 5u) ||
+      (definition.kind == RuleFamily::LargerThanLife &&
+       definition.stateCount != 2u) ||
+      (definition.kind == RuleFamily::Hodgepodge &&
+       definition.stateCount < 3u) ||
+      (definition.kind == RuleFamily::Turmite &&
+       (definition.stateCount < 10u || definition.stateCount % 5u != 0u)) ||
+      (definition.kind == RuleFamily::LatticeGas &&
+       definition.stateCount != 16u) ||
+      (definition.kind == RuleFamily::Dominance &&
+       definition.stateCount < 4u) ||
       (definition.kind == RuleFamily::Elementary1D &&
        definition.stateCount != 2u)) {
     return false;
@@ -622,7 +636,8 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
   }
   const unsigned int stateCount = family.stateCount;
   if (family.kind == RuleFamily::LifeLike ||
-      family.kind == RuleFamily::Generations) {
+      family.kind == RuleFamily::Generations ||
+      family.kind == RuleFamily::SpeciesLife) {
     if (!definition.rule.empty()) {
       unsigned int parsedBirth = 0u;
       unsigned int parsedSurvive = 0u;
@@ -640,32 +655,38 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
         (family.kind == RuleFamily::Generations && stateCount < 3u)) {
       return false;
     }
+    if (family.kind == RuleFamily::SpeciesLife && stateCount != 3u &&
+        stateCount != 5u) {
+      return false;
+    }
     definition.transitionTable.fill(kBackgroundState);
-    for (unsigned int state = 0u; state < stateCount; ++state) {
-      for (unsigned int neighbors = 0u;
-           neighbors < RuleSet::kNeighborCountCount;
-           ++neighbors) {
-        const bool activeNeighbors =
-          ((definition.birthMask >> neighbors) & 1u) != 0u;
-        const bool survivingNeighbors =
-          ((definition.surviveMask >> neighbors) & 1u) != 0u;
-        unsigned char next = kBackgroundState;
-        if (state == 0u) {
-          if (survivingNeighbors) {
-            next = 0u;
+    if (family.kind != RuleFamily::SpeciesLife) {
+      for (unsigned int state = 0u; state < stateCount; ++state) {
+        for (unsigned int neighbors = 0u;
+             neighbors < RuleSet::kNeighborCountCount;
+             ++neighbors) {
+          const bool activeNeighbors =
+            ((definition.birthMask >> neighbors) & 1u) != 0u;
+          const bool survivingNeighbors =
+            ((definition.surviveMask >> neighbors) & 1u) != 0u;
+          unsigned char next = kBackgroundState;
+          if (state == 0u) {
+            if (survivingNeighbors) {
+              next = 0u;
+            } else if (family.kind == RuleFamily::Generations) {
+              next = 2u;
+            }
+          } else if (state == kBackgroundState) {
+            next = activeNeighbors ? 0u : kBackgroundState;
           } else if (family.kind == RuleFamily::Generations) {
-            next = 2u;
+            next = state + 1u < stateCount
+                     ? static_cast<unsigned char>(state + 1u)
+                     : kBackgroundState;
           }
-        } else if (state == kBackgroundState) {
-          next = activeNeighbors ? 0u : kBackgroundState;
-        } else if (family.kind == RuleFamily::Generations) {
-          next = state + 1u < stateCount
-                   ? static_cast<unsigned char>(state + 1u)
-                   : kBackgroundState;
+          definition.transitionTable[RuleSet::transitionIndex(
+            static_cast<unsigned char>(state),
+            static_cast<unsigned char>(neighbors))] = next;
         }
-        definition.transitionTable[RuleSet::transitionIndex(
-          static_cast<unsigned char>(state),
-          static_cast<unsigned char>(neighbors))] = next;
       }
     }
     definition.rule = "B";
@@ -682,6 +703,47 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
         definition.rule += std::to_string(neighbors);
       }
     }
+    definition.hasTransitionTable = false;
+  } else if (family.kind == RuleFamily::LargerThanLife) {
+    if (stateCount != 2u || definition.neighborhoodRadius < 1u ||
+        definition.neighborhoodRadius > kMaximumExtendedRadius ||
+        definition.birthMinimum == 0u ||
+        definition.birthMinimum > definition.birthMaximum ||
+        definition.survivalMinimum > definition.survivalMaximum) {
+      return false;
+    }
+    const unsigned int diameter = definition.neighborhoodRadius * 2u + 1u;
+    unsigned int maximumCount = diameter * diameter;
+    if (!definition.includeCenter) {
+      maximumCount -= 1u;
+    }
+    if (definition.extendedNeighborhoodShape ==
+        RuleSet::ExtendedNeighborhoodShape::Circular) {
+      maximumCount = definition.includeCenter ? 1u : 0u;
+      const int radius = static_cast<int>(definition.neighborhoodRadius);
+      for (int y = -radius; y <= radius; ++y) {
+        for (int x = -radius; x <= radius; ++x) {
+          if ((x != 0 || y != 0) && x * x + y * y <= radius * radius) {
+            maximumCount += 1u;
+          }
+        }
+      }
+    }
+    if (definition.birthMaximum > maximumCount ||
+        definition.survivalMaximum > maximumCount) {
+      return false;
+    }
+    definition.rule = "R" + std::to_string(definition.neighborhoodRadius) +
+                      ",C2,M" + (definition.includeCenter ? "1" : "0") + ",S" +
+                      std::to_string(definition.survivalMinimum) + ".." +
+                      std::to_string(definition.survivalMaximum) + ",B" +
+                      std::to_string(definition.birthMinimum) + ".." +
+                      std::to_string(definition.birthMaximum) +
+                      (definition.extendedNeighborhoodShape ==
+                           RuleSet::ExtendedNeighborhoodShape::Circular
+                         ? ",NC"
+                         : ",NM");
+    definition.transitionTable.fill(kBackgroundState);
     definition.hasTransitionTable = false;
   } else if (family.kind == RuleFamily::MooreTable) {
     if (!definition.hasTransitionTable ||
@@ -700,6 +762,65 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
         }
       }
     }
+  } else if (family.kind == RuleFamily::Cyclic) {
+    if (definition.cyclicThreshold < 1u ||
+        definition.cyclicThreshold > kMaximumNeighborCount ||
+        definition.cyclicStep < 1u || definition.cyclicStep >= stateCount ||
+        std::gcd(definition.cyclicStep, stateCount) != 1u) {
+      return false;
+    }
+    definition.transitionTable.fill(kBackgroundState);
+    definition.hasTransitionTable = false;
+  } else if (family.kind == RuleFamily::Hodgepodge) {
+    if (definition.infectionDivisor < 1u || definition.illDivisor < 1u ||
+        definition.infectionIncrement < 1u ||
+        definition.infectionIncrement >= stateCount) {
+      return false;
+    }
+    definition.rule = "HODGE/C" + std::to_string(stateCount) + "/K" +
+                      std::to_string(definition.infectionDivisor) + ',' +
+                      std::to_string(definition.illDivisor) + "/G" +
+                      std::to_string(definition.infectionIncrement);
+    definition.transitionTable.fill(kBackgroundState);
+    definition.hasTransitionTable = false;
+  } else if (family.kind == RuleFamily::Turmite) {
+    const unsigned int tapeColorCount = stateCount / 5u;
+    if (definition.turnSequence.size() != tapeColorCount) {
+      return false;
+    }
+    for (char turn : definition.turnSequence) {
+      if (turn != 'L' && turn != 'R') {
+        return false;
+      }
+    }
+    definition.rule = "TURMITE/" + definition.turnSequence;
+    definition.transitionTable.fill(kBackgroundState);
+    definition.hasTransitionTable = false;
+  } else if (family.kind == RuleFamily::LatticeGas) {
+    if (stateCount != 16u) {
+      return false;
+    }
+    definition.rule = "HPP";
+    definition.transitionTable.fill(kBackgroundState);
+    definition.hasTransitionTable = false;
+  } else if (family.kind == RuleFamily::Dominance) {
+    const unsigned int speciesCount = stateCount - 1u;
+    if (definition.dominanceThreshold < 1u ||
+        definition.dominanceThreshold > kMaximumNeighborCount ||
+        definition.dominancePreyOffsets.empty()) {
+      return false;
+    }
+    std::vector<bool> seen(speciesCount, false);
+    for (unsigned int offset : definition.dominancePreyOffsets) {
+      if (offset == 0u || offset >= speciesCount || seen[offset]) {
+        return false;
+      }
+      seen[offset] = true;
+    }
+    definition.rule =
+      "DOMINANCE/T" + std::to_string(definition.dominanceThreshold);
+    definition.transitionTable.fill(kBackgroundState);
+    definition.hasTransitionTable = false;
   } else if (family.kind == RuleFamily::Elementary1D) {
     if (stateCount != 2u || definition.ruleNumber > 255u ||
         (definition.ruleNumber & 1u) != 0u) {
@@ -719,7 +840,8 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
     if (definition.elementaryTransitions[0] != kBackgroundState) {
       return false;
     }
-  } else if (definition.transitionTable[RuleSet::transitionIndex(
+  } else if (family.kind != RuleFamily::Cyclic &&
+             definition.transitionTable[RuleSet::transitionIndex(
                kBackgroundState, 0u)] != kBackgroundState) {
     return false;
   }
@@ -782,7 +904,8 @@ parseModernRule(const nlohmann::json& item,
   definition.name = item.value("name", definition.id);
   definition.familyId = item["family_id"].get<std::string>();
   if (family.kind == RuleFamily::LifeLike ||
-      family.kind == RuleFamily::Generations) {
+      family.kind == RuleFamily::Generations ||
+      family.kind == RuleFamily::SpeciesLife) {
     if (item.contains("rule") && !item["rule"].is_string()) {
       return false;
     }
@@ -808,6 +931,32 @@ parseModernRule(const nlohmann::json& item,
       }
       definition.surviveMask = survive;
     }
+  } else if (family.kind == RuleFamily::LargerThanLife) {
+    if (!item.contains("radius") || !item.contains("include_center") ||
+        !item["include_center"].is_boolean() || !item.contains("birth_min") ||
+        !item.contains("birth_max") || !item.contains("survive_min") ||
+        !item.contains("survive_max") || !item.contains("neighborhood") ||
+        !item["neighborhood"].is_string() ||
+        !readUnsigned(item["radius"],
+                      kMaximumExtendedRadius,
+                      definition.neighborhoodRadius) ||
+        !readUnsigned(item["birth_min"], 1089u, definition.birthMinimum) ||
+        !readUnsigned(item["birth_max"], 1089u, definition.birthMaximum) ||
+        !readUnsigned(item["survive_min"], 1089u, definition.survivalMinimum) ||
+        !readUnsigned(item["survive_max"], 1089u, definition.survivalMaximum)) {
+      return false;
+    }
+    definition.includeCenter = item["include_center"].get<bool>();
+    const std::string neighborhood = item["neighborhood"].get<std::string>();
+    if (neighborhood == "square") {
+      definition.extendedNeighborhoodShape =
+        RuleSet::ExtendedNeighborhoodShape::Square;
+    } else if (neighborhood == "circular") {
+      definition.extendedNeighborhoodShape =
+        RuleSet::ExtendedNeighborhoodShape::Circular;
+    } else {
+      return false;
+    }
   } else if (family.kind == RuleFamily::MooreTable) {
     LegacyRuleSetDefinition legacy;
     legacy.stateCount = family.stateCount;
@@ -818,6 +967,49 @@ parseModernRule(const nlohmann::json& item,
     definition.transitionTable = legacy.transitionTable;
     definition.hasTransitionTable = true;
     definition.transitionTableStateCount = family.stateCount;
+  } else if (family.kind == RuleFamily::Cyclic) {
+    if (!item.contains("threshold") || !item.contains("step") ||
+        !readUnsigned(item["threshold"],
+                      kMaximumNeighborCount,
+                      definition.cyclicThreshold) ||
+        !readUnsigned(
+          item["step"], family.stateCount - 1u, definition.cyclicStep)) {
+      return false;
+    }
+  } else if (family.kind == RuleFamily::Hodgepodge) {
+    if (!item.contains("infection_divisor") || !item.contains("ill_divisor") ||
+        !item.contains("increment") ||
+        !readUnsigned(
+          item["infection_divisor"], 255u, definition.infectionDivisor) ||
+        !readUnsigned(item["ill_divisor"], 255u, definition.illDivisor) ||
+        !readUnsigned(item["increment"],
+                      family.stateCount - 1u,
+                      definition.infectionIncrement)) {
+      return false;
+    }
+  } else if (family.kind == RuleFamily::Turmite) {
+    if (!item.contains("turn_sequence") || !item["turn_sequence"].is_string()) {
+      return false;
+    }
+    definition.turnSequence = item["turn_sequence"].get<std::string>();
+  } else if (family.kind == RuleFamily::LatticeGas) {
+    // HPP has no rule parameters beyond its fixed 16-state family.
+  } else if (family.kind == RuleFamily::Dominance) {
+    if (!item.contains("threshold") || !item.contains("prey_offsets") ||
+        !item["prey_offsets"].is_array() ||
+        !readUnsigned(item["threshold"],
+                      kMaximumNeighborCount,
+                      definition.dominanceThreshold)) {
+      return false;
+    }
+    definition.dominancePreyOffsets.clear();
+    for (const nlohmann::json& offsetValue : item["prey_offsets"]) {
+      unsigned int offset = 0u;
+      if (!readUnsigned(offsetValue, family.stateCount - 2u, offset)) {
+        return false;
+      }
+      definition.dominancePreyOffsets.push_back(offset);
+    }
   } else if (family.kind == RuleFamily::Elementary1D) {
     if (!item.contains("rule_number") ||
         !readUnsigned(item["rule_number"], 255u, definition.ruleNumber)) {
@@ -825,6 +1017,26 @@ parseModernRule(const nlohmann::json& item,
     }
   } else {
     return false;
+  }
+
+  if (item.contains("seed")) {
+    const nlohmann::json& seed = item["seed"];
+    if (!seed.is_object() || !seed.contains("pattern") ||
+        !seed["pattern"].is_string() ||
+        !RuleSetRegistry::parseSeedPattern(seed["pattern"].get<std::string>(),
+                                           definition.seedPattern)) {
+      return false;
+    }
+    if (seed.contains("radius") &&
+        (!readUnsigned(seed["radius"], 128u, definition.seedRadius) ||
+         definition.seedRadius < 1u)) {
+      return false;
+    }
+    if (seed.contains("density") &&
+        (!readUnsigned(seed["density"], 100u, definition.seedDensity) ||
+         definition.seedDensity < 1u)) {
+      return false;
+    }
   }
   return compileRule(definition, family);
 }
@@ -855,9 +1067,21 @@ ruleToJson(const RuleSetDefinition& definition,
   item["name"] = definition.name;
   item["family_id"] = definition.familyId;
   if (family.kind == RuleFamily::LifeLike ||
-      family.kind == RuleFamily::Generations) {
+      family.kind == RuleFamily::Generations ||
+      family.kind == RuleFamily::SpeciesLife) {
     item["birth"] = neighborCountsToJson(definition.birthMask);
     item["survive"] = neighborCountsToJson(definition.surviveMask);
+  } else if (family.kind == RuleFamily::LargerThanLife) {
+    item["radius"] = definition.neighborhoodRadius;
+    item["include_center"] = definition.includeCenter;
+    item["birth_min"] = definition.birthMinimum;
+    item["birth_max"] = definition.birthMaximum;
+    item["survive_min"] = definition.survivalMinimum;
+    item["survive_max"] = definition.survivalMaximum;
+    item["neighborhood"] = definition.extendedNeighborhoodShape ==
+                               RuleSet::ExtendedNeighborhoodShape::Circular
+                             ? "circular"
+                             : "square";
   } else if (family.kind == RuleFamily::MooreTable) {
     item["transition_table"] = nlohmann::json::array();
     for (unsigned int state = 0u; state < family.stateCount; ++state) {
@@ -871,8 +1095,27 @@ ruleToJson(const RuleSetDefinition& definition,
       }
       item["transition_table"].push_back(row);
     }
+  } else if (family.kind == RuleFamily::Cyclic) {
+    item["threshold"] = definition.cyclicThreshold;
+    item["step"] = definition.cyclicStep;
+  } else if (family.kind == RuleFamily::Hodgepodge) {
+    item["infection_divisor"] = definition.infectionDivisor;
+    item["ill_divisor"] = definition.illDivisor;
+    item["increment"] = definition.infectionIncrement;
+  } else if (family.kind == RuleFamily::Turmite) {
+    item["turn_sequence"] = definition.turnSequence;
+  } else if (family.kind == RuleFamily::Dominance) {
+    item["threshold"] = definition.dominanceThreshold;
+    item["prey_offsets"] = definition.dominancePreyOffsets;
   } else if (family.kind == RuleFamily::Elementary1D) {
     item["rule_number"] = definition.ruleNumber;
+  }
+  if (definition.seedPattern != RuleSeedPattern::Automatic) {
+    item["seed"] = {
+      { "pattern", RuleSetRegistry::seedPatternName(definition.seedPattern) },
+      { "radius", definition.seedRadius },
+      { "density", definition.seedDensity }
+    };
   }
   return item;
 }
@@ -904,6 +1147,20 @@ RuleSetRegistry::parseFamily(const std::string& value, RuleFamily& family)
     family = RuleFamily::Generations;
   } else if (value == "moore_table") {
     family = RuleFamily::MooreTable;
+  } else if (value == "cyclic") {
+    family = RuleFamily::Cyclic;
+  } else if (value == "species_life") {
+    family = RuleFamily::SpeciesLife;
+  } else if (value == "larger_than_life") {
+    family = RuleFamily::LargerThanLife;
+  } else if (value == "hodgepodge") {
+    family = RuleFamily::Hodgepodge;
+  } else if (value == "turmite") {
+    family = RuleFamily::Turmite;
+  } else if (value == "lattice_gas") {
+    family = RuleFamily::LatticeGas;
+  } else if (value == "dominance") {
+    family = RuleFamily::Dominance;
   } else if (value == "elementary_1d") {
     family = RuleFamily::Elementary1D;
   } else {
@@ -922,8 +1179,81 @@ RuleSetRegistry::familyName(RuleFamily family)
       return "generations";
     case RuleFamily::MooreTable:
       return "moore_table";
+    case RuleFamily::Cyclic:
+      return "cyclic";
+    case RuleFamily::SpeciesLife:
+      return "species_life";
+    case RuleFamily::LargerThanLife:
+      return "larger_than_life";
+    case RuleFamily::Hodgepodge:
+      return "hodgepodge";
+    case RuleFamily::Turmite:
+      return "turmite";
+    case RuleFamily::LatticeGas:
+      return "lattice_gas";
+    case RuleFamily::Dominance:
+      return "dominance";
     case RuleFamily::Elementary1D:
       return "elementary_1d";
+    default:
+      return nullptr;
+  }
+}
+
+bool
+RuleSetRegistry::parseSeedPattern(const std::string& value,
+                                  RuleSeedPattern& pattern)
+{
+  if (value == "automatic") {
+    pattern = RuleSeedPattern::Automatic;
+  } else if (value == "glider") {
+    pattern = RuleSeedPattern::Glider;
+  } else if (value == "single_cell") {
+    pattern = RuleSeedPattern::SingleCell;
+  } else if (value == "wire") {
+    pattern = RuleSeedPattern::Wire;
+  } else if (value == "active_soup") {
+    pattern = RuleSeedPattern::ActiveSoup;
+  } else if (value == "phase_soup") {
+    pattern = RuleSeedPattern::PhaseSoup;
+  } else if (value == "species_soup") {
+    pattern = RuleSeedPattern::SpeciesSoup;
+  } else if (value == "excitable_break") {
+    pattern = RuleSeedPattern::ExcitableBreak;
+  } else if (value == "turmite_swarm") {
+    pattern = RuleSeedPattern::TurmiteSwarm;
+  } else if (value == "particle_cloud") {
+    pattern = RuleSeedPattern::ParticleCloud;
+  } else {
+    return false;
+  }
+  return true;
+}
+
+const char*
+RuleSetRegistry::seedPatternName(RuleSeedPattern pattern)
+{
+  switch (pattern) {
+    case RuleSeedPattern::Automatic:
+      return "automatic";
+    case RuleSeedPattern::Glider:
+      return "glider";
+    case RuleSeedPattern::SingleCell:
+      return "single_cell";
+    case RuleSeedPattern::Wire:
+      return "wire";
+    case RuleSeedPattern::ActiveSoup:
+      return "active_soup";
+    case RuleSeedPattern::PhaseSoup:
+      return "phase_soup";
+    case RuleSeedPattern::SpeciesSoup:
+      return "species_soup";
+    case RuleSeedPattern::ExcitableBreak:
+      return "excitable_break";
+    case RuleSeedPattern::TurmiteSwarm:
+      return "turmite_swarm";
+    case RuleSeedPattern::ParticleCloud:
+      return "particle_cloud";
     default:
       return nullptr;
   }

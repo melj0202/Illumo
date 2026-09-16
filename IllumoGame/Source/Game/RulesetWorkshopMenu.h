@@ -86,6 +86,8 @@ private:
     BirthCounts,
     SurvivalCounts,
     GenerationStates,
+    CyclicThreshold,
+    CyclicStep,
     WolframNumber,
     TableInformation,
     PreviewState,

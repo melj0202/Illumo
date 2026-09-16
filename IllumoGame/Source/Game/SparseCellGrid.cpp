@@ -4068,6 +4068,383 @@ SparseCellGrid::advanceFrom(const SparseCellGrid& source,
 }
 
 bool
+SparseCellGrid::advanceStateHistogram(const RuleSet& ruleSet)
+{
+  const SparseCellGrid& source = generationSource();
+  const ChunkMap& sourceChunks = source.chunks;
+  try {
+    beginAddressSet(
+      &m_completeTargets, &m_completeTargetIndex, &m_completeTargetGeneration);
+    for (ChunkMap::const_reference entry : sourceChunks) {
+      for (int offsetY = -1; offsetY <= 1; ++offsetY) {
+        for (int offsetX = -1; offsetX <= 1; ++offsetX) {
+          const ChunkAddress target = canonicalizeChunk(
+            ChunkAddress{ entry.first.x + offsetX, entry.first.y + offsetY });
+          insertAddressSet(target,
+                           &m_completeTargets,
+                           &m_completeTargetIndex,
+                           m_completeTargetGeneration);
+        }
+      }
+    }
+
+    lastAdvanceStats.targetChunkCount = m_completeTargets.size();
+    lastAdvanceStats.haloTargetCount = m_completeTargets.size();
+    lastAdvanceStats.workerCount = 1u;
+    m_completeResults.resize(m_completeTargets.size());
+    m_frontierInvalid = false;
+    beginNextChangedChunks();
+
+    for (std::size_t targetIndex = 0u; targetIndex < m_completeTargets.size();
+         ++targetIndex) {
+      TargetResult& result = m_completeResults[targetIndex];
+      result.address = m_completeTargets[targetIndex];
+      result.cells.fill(BackgroundState);
+      result.occupied.fill(0u);
+      result.counted.fill(0u);
+      result.stateChanged.fill(0u);
+      result.countedChanged.fill(0u);
+      result.hasNonBackground = false;
+      result.completeCells = true;
+
+      const std::int64_t originX = result.address.x * kChunkDim;
+      const std::int64_t originY = result.address.y * kChunkDim;
+      for (int localY = 0; localY < kChunkDim; ++localY) {
+        for (int localX = 0; localX < kChunkDim; ++localX) {
+          const CellAddress address{ originX + localX, originY + localY };
+          const unsigned char current = source.getCell(address);
+          RuleSet::NeighborStateCounts counts{};
+          for (int neighborY = -1; neighborY <= 1; ++neighborY) {
+            for (int neighborX = -1; neighborX <= 1; ++neighborX) {
+              if (neighborX == 0 && neighborY == 0) {
+                continue;
+              }
+              const unsigned char neighbor = source.getCell(
+                CellAddress{ address.x + neighborX, address.y + neighborY });
+              counts[neighbor] += 1u;
+            }
+          }
+          const unsigned char next =
+            ruleSet.nextStateFromNeighborhood(current, counts);
+          const std::size_t cellIndex =
+            static_cast<std::size_t>(localY * kChunkDim + localX);
+          const std::size_t wordIndex = cellIndex / 64u;
+          const std::uint64_t bit =
+            static_cast<std::uint64_t>(1u)
+            << static_cast<unsigned int>(cellIndex % 64u);
+          result.cells[cellIndex] = next;
+          if (next != BackgroundState) {
+            result.occupied[wordIndex] |= bit;
+            result.hasNonBackground = true;
+          }
+          if (next == CountedNeighborState) {
+            result.counted[wordIndex] |= bit;
+          }
+          if (next != current) {
+            result.stateChanged[wordIndex] |= bit;
+          }
+          if ((next == CountedNeighborState) !=
+              (current == CountedNeighborState)) {
+            result.countedChanged[wordIndex] |= bit;
+          }
+        }
+      }
+      if (hasMaskBits(result.stateChanged)) {
+        markNextChangedChunk(
+          result.address, result.stateChanged, result.countedChanged);
+      }
+    }
+
+    const bool directSourceGeneration = m_generationSourceGrid != nullptr;
+    const bool prepared = directSourceGeneration
+                            ? prepareDirectChunks(m_completeResults.size())
+                            : prepareNextChunks(m_completeResults.size());
+    if (!prepared) {
+      return false;
+    }
+    m_nextCandidateTopologyChanged = true;
+    for (const TargetResult& result : m_completeResults) {
+      recordNextCandidateTopology(result);
+      if (!result.hasNonBackground) {
+        continue;
+      }
+      const bool inserted = directSourceGeneration
+                              ? insertDirectResultChunk(result)
+                              : insertNextResultChunk(result);
+      if (!inserted) {
+        return false;
+      }
+      lastAdvanceStats.producedChunkCount += 1u;
+    }
+  } catch (const std::bad_alloc&) {
+    return false;
+  } catch (const std::exception&) {
+    return false;
+  }
+
+  if (m_generationSourceGrid != nullptr) {
+    finishDirectChunks();
+  } else {
+    finishNextChunks(true);
+  }
+  return true;
+}
+
+bool
+SparseCellGrid::advanceDirectionalNeighborhood(const RuleSet& ruleSet)
+{
+  ZoneScopedN("SparseCellGrid.advanceDirectionalNeighborhood");
+  const SparseCellGrid& source = generationSource();
+  const ChunkMap& sourceChunks = source.chunks;
+  try {
+    beginAddressSet(
+      &m_completeTargets, &m_completeTargetIndex, &m_completeTargetGeneration);
+    for (ChunkMap::const_reference entry : sourceChunks) {
+      for (int offsetY = -1; offsetY <= 1; ++offsetY) {
+        for (int offsetX = -1; offsetX <= 1; ++offsetX) {
+          const ChunkAddress target = canonicalizeChunk(
+            ChunkAddress{ entry.first.x + offsetX, entry.first.y + offsetY });
+          insertAddressSet(target,
+                           &m_completeTargets,
+                           &m_completeTargetIndex,
+                           m_completeTargetGeneration);
+        }
+      }
+    }
+
+    lastAdvanceStats.targetChunkCount = m_completeTargets.size();
+    lastAdvanceStats.haloTargetCount = m_completeTargets.size();
+    lastAdvanceStats.workerCount = 1u;
+    m_completeResults.resize(m_completeTargets.size());
+    m_frontierInvalid = false;
+    beginNextChangedChunks();
+
+    for (std::size_t targetIndex = 0u; targetIndex < m_completeTargets.size();
+         ++targetIndex) {
+      TargetResult& result = m_completeResults[targetIndex];
+      result.address = m_completeTargets[targetIndex];
+      result.cells.fill(BackgroundState);
+      result.occupied.fill(0u);
+      result.counted.fill(0u);
+      result.stateChanged.fill(0u);
+      result.countedChanged.fill(0u);
+      result.hasNonBackground = false;
+      result.completeCells = true;
+
+      const std::int64_t originX = result.address.x * kChunkDim;
+      const std::int64_t originY = result.address.y * kChunkDim;
+      for (int localY = 0; localY < kChunkDim; ++localY) {
+        for (int localX = 0; localX < kChunkDim; ++localX) {
+          const CellAddress address{ originX + localX, originY + localY };
+          const unsigned char current = source.getCell(address);
+          const RuleSet::DirectionalNeighbors neighbors = {
+            source.getCell(CellAddress{ address.x, address.y - 1 }),
+            source.getCell(CellAddress{ address.x + 1, address.y }),
+            source.getCell(CellAddress{ address.x, address.y + 1 }),
+            source.getCell(CellAddress{ address.x - 1, address.y })
+          };
+          const unsigned char next =
+            ruleSet.nextStateFromDirectionalNeighborhood(current, neighbors);
+          const std::size_t cellIndex =
+            static_cast<std::size_t>(localY * kChunkDim + localX);
+          const std::size_t wordIndex = cellIndex / 64u;
+          const std::uint64_t bit =
+            static_cast<std::uint64_t>(1u)
+            << static_cast<unsigned int>(cellIndex % 64u);
+          result.cells[cellIndex] = next;
+          if (next != BackgroundState) {
+            result.occupied[wordIndex] |= bit;
+            result.hasNonBackground = true;
+          }
+          if (next == CountedNeighborState) {
+            result.counted[wordIndex] |= bit;
+          }
+          if (next != current) {
+            result.stateChanged[wordIndex] |= bit;
+          }
+          if ((next == CountedNeighborState) !=
+              (current == CountedNeighborState)) {
+            result.countedChanged[wordIndex] |= bit;
+          }
+        }
+      }
+      if (hasMaskBits(result.stateChanged)) {
+        markNextChangedChunk(
+          result.address, result.stateChanged, result.countedChanged);
+      }
+    }
+
+    const bool directSourceGeneration = m_generationSourceGrid != nullptr;
+    const bool prepared = directSourceGeneration
+                            ? prepareDirectChunks(m_completeResults.size())
+                            : prepareNextChunks(m_completeResults.size());
+    if (!prepared) {
+      return false;
+    }
+    m_nextCandidateTopologyChanged = true;
+    for (const TargetResult& result : m_completeResults) {
+      recordNextCandidateTopology(result);
+      if (!result.hasNonBackground) {
+        continue;
+      }
+      const bool inserted = directSourceGeneration
+                              ? insertDirectResultChunk(result)
+                              : insertNextResultChunk(result);
+      if (!inserted) {
+        return false;
+      }
+      lastAdvanceStats.producedChunkCount += 1u;
+    }
+  } catch (const std::bad_alloc&) {
+    return false;
+  } catch (const std::exception&) {
+    return false;
+  }
+
+  if (m_generationSourceGrid != nullptr) {
+    finishDirectChunks();
+  } else {
+    finishNextChunks(true);
+  }
+  return true;
+}
+
+bool
+SparseCellGrid::advanceExtendedRange(const RuleSet& ruleSet)
+{
+  ZoneScopedN("SparseCellGrid.advanceExtendedRange");
+  const SparseCellGrid& source = generationSource();
+  const ChunkMap& sourceChunks = source.chunks;
+  const int radius = static_cast<int>(ruleSet.getNeighborhoodRadius());
+  const int chunkRadius =
+    (radius + SparseCellGrid::kChunkDim - 1) / SparseCellGrid::kChunkDim;
+  const bool includeCenter = ruleSet.includesCenterInNeighborCount();
+  const RuleSet::ExtendedNeighborhoodShape shape =
+    ruleSet.getExtendedNeighborhoodShape();
+  try {
+    beginAddressSet(
+      &m_completeTargets, &m_completeTargetIndex, &m_completeTargetGeneration);
+    for (ChunkMap::const_reference entry : sourceChunks) {
+      for (int offsetY = -chunkRadius; offsetY <= chunkRadius; ++offsetY) {
+        for (int offsetX = -chunkRadius; offsetX <= chunkRadius; ++offsetX) {
+          const ChunkAddress target = canonicalizeChunk(
+            ChunkAddress{ entry.first.x + offsetX, entry.first.y + offsetY });
+          insertAddressSet(target,
+                           &m_completeTargets,
+                           &m_completeTargetIndex,
+                           m_completeTargetGeneration);
+        }
+      }
+    }
+
+    lastAdvanceStats.targetChunkCount = m_completeTargets.size();
+    lastAdvanceStats.haloTargetCount = m_completeTargets.size();
+    lastAdvanceStats.workerCount = 1u;
+    m_completeResults.resize(m_completeTargets.size());
+    m_frontierInvalid = false;
+    beginNextChangedChunks();
+
+    for (std::size_t targetIndex = 0u; targetIndex < m_completeTargets.size();
+         ++targetIndex) {
+      TargetResult& result = m_completeResults[targetIndex];
+      result.address = m_completeTargets[targetIndex];
+      result.cells.fill(BackgroundState);
+      result.occupied.fill(0u);
+      result.counted.fill(0u);
+      result.stateChanged.fill(0u);
+      result.countedChanged.fill(0u);
+      result.hasNonBackground = false;
+      result.completeCells = true;
+
+      const std::int64_t originX = result.address.x * kChunkDim;
+      const std::int64_t originY = result.address.y * kChunkDim;
+      for (int localY = 0; localY < kChunkDim; ++localY) {
+        for (int localX = 0; localX < kChunkDim; ++localX) {
+          const CellAddress address{ originX + localX, originY + localY };
+          const unsigned char current = source.getCell(address);
+          unsigned int aliveCount = 0u;
+          for (int neighborY = -radius; neighborY <= radius; ++neighborY) {
+            for (int neighborX = -radius; neighborX <= radius; ++neighborX) {
+              if ((!includeCenter && neighborX == 0 && neighborY == 0) ||
+                  (shape == RuleSet::ExtendedNeighborhoodShape::Circular &&
+                   neighborX * neighborX + neighborY * neighborY >
+                     radius * radius)) {
+                continue;
+              }
+              if (source.getCell(CellAddress{ address.x + neighborX,
+                                              address.y + neighborY }) ==
+                  CountedNeighborState) {
+                aliveCount += 1u;
+              }
+            }
+          }
+          const unsigned char next =
+            ruleSet.nextStateFromExtendedCount(current, aliveCount);
+          const std::size_t cellIndex =
+            static_cast<std::size_t>(localY * kChunkDim + localX);
+          const std::size_t wordIndex = cellIndex / 64u;
+          const std::uint64_t bit =
+            static_cast<std::uint64_t>(1u)
+            << static_cast<unsigned int>(cellIndex % 64u);
+          result.cells[cellIndex] = next;
+          if (next != BackgroundState) {
+            result.occupied[wordIndex] |= bit;
+            result.hasNonBackground = true;
+          }
+          if (next == CountedNeighborState) {
+            result.counted[wordIndex] |= bit;
+          }
+          if (next != current) {
+            result.stateChanged[wordIndex] |= bit;
+          }
+          if ((next == CountedNeighborState) !=
+              (current == CountedNeighborState)) {
+            result.countedChanged[wordIndex] |= bit;
+          }
+        }
+      }
+      if (hasMaskBits(result.stateChanged)) {
+        markNextChangedChunk(
+          result.address, result.stateChanged, result.countedChanged);
+      }
+    }
+
+    const bool directSourceGeneration = m_generationSourceGrid != nullptr;
+    const bool prepared = directSourceGeneration
+                            ? prepareDirectChunks(m_completeResults.size())
+                            : prepareNextChunks(m_completeResults.size());
+    if (!prepared) {
+      return false;
+    }
+    m_nextCandidateTopologyChanged = true;
+    for (const TargetResult& result : m_completeResults) {
+      recordNextCandidateTopology(result);
+      if (!result.hasNonBackground) {
+        continue;
+      }
+      const bool inserted = directSourceGeneration
+                              ? insertDirectResultChunk(result)
+                              : insertNextResultChunk(result);
+      if (!inserted) {
+        return false;
+      }
+      lastAdvanceStats.producedChunkCount += 1u;
+    }
+  } catch (const std::bad_alloc&) {
+    return false;
+  } catch (const std::exception&) {
+    return false;
+  }
+
+  if (m_generationSourceGrid != nullptr) {
+    finishDirectChunks();
+  } else {
+    finishNextChunks(true);
+  }
+  return true;
+}
+
+bool
 SparseCellGrid::advanceImpl(const RuleSet& ruleSet, bool allowFrontier)
 {
   ZoneScopedN("SparseCellGrid.advance");
@@ -4133,6 +4510,19 @@ SparseCellGrid::advanceImpl(const RuleSet& ruleSet, bool allowFrontier)
   lastAdvanceStats.usedChunkMemo = false;
   lastAdvanceStats.chunkMemoActive = false;
   m_nextCandidateTopologyChanged = false;
+
+  if (ruleSet.getNeighborhoodKind() ==
+      RuleSet::NeighborhoodKind::MooreStateCounts) {
+    return advanceStateHistogram(ruleSet);
+  }
+  if (ruleSet.getNeighborhoodKind() ==
+      RuleSet::NeighborhoodKind::VonNeumannDirectional) {
+    return advanceDirectionalNeighborhood(ruleSet);
+  }
+  if (ruleSet.getNeighborhoodKind() ==
+      RuleSet::NeighborhoodKind::ExtendedRange) {
+    return advanceExtendedRange(ruleSet);
+  }
 
   const std::string ruleTag = ruleSet.getRuleTag();
   if (lastRuleType != &typeid(ruleSet) || lastRuleTag != ruleTag) {

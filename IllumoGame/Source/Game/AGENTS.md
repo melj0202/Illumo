@@ -41,6 +41,9 @@ dependencies.
   allocation failure invalidates the journal. Journals of at least 2,048
   presentation chunks capture a lightweight replacement marker instead of
   per-chunk payloads.
+- Full-state, extended-range, and directional von Neumann models use isolated
+  serial correctness kernels and the same transactional inactive-map
+  publication. Directional neighbors are ordered north, east, south, west.
 - Worker pools are grid-owned implementation details. Bound work, join before
   destruction, and do not expose partially written state to the frame thread.
 - `CanvasView` is a bounded world-space view over the sparse domain. It owns a

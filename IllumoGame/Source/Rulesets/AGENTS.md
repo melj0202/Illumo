@@ -12,9 +12,13 @@ Rendering, Services, Engine, platform APIs, and OpenGL.
 
 ## Required invariants
 
-- `nextState` is a pure function of current state and neighbor counts. Keep the
+- Rule transitions are pure functions of current state and their declared
+  neighborhood contract. Keep the
   cached 256x9 transition table equivalent to direct evaluation. Production
   rules are compiled from validated `RuleSetDefinition` data into `DataRuleSet`.
+- Directional von Neumann rules receive neighbors in north, east, south, west
+  order. Preserve that ordering in dense and sparse evaluators; do not collapse
+  Turmite or lattice-gas input into an unordered histogram.
 - Binary rules encode state `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, and conductor `3`; only
   states declared by its counting mask contribute to neighbors.
@@ -32,8 +36,10 @@ labels, and colors. `RuleSetDefinition` owns stable rule identity, transition
 parameters, and exactly one required `familyId`; it must not duplicate family
 state metadata. The staged `IllumoGame/families.json` and
 `IllumoGame/rulesets.json` are the source of truth for shipped definitions.
-Family models are `life_like`, `generations`, `moore_table`, and
-`elementary_1d`. Family catalogs use schema 1 and ruleset catalogs schema 3;
+Family models include `life_like`, `generations`, `moore_table`, `cyclic`,
+`species_life`, `larger_than_life`, `hodgepodge`, `turmite`, `lattice_gas`,
+`dominance`, and `elementary_1d`. Family catalogs use schema 1 and ruleset
+catalogs schema 3;
 unversioned and schema-v1/v2 legacy rule catalogs normalize into separated
 definitions in memory. Validation must be transactional and preserve state `1`
 as a quiescent background and state `0` as the only Moore-counted state. Rule
