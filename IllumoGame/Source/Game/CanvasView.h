@@ -99,6 +99,10 @@ public:
   {
     return cacheRefillMetric;
   }
+  const RollingMetric& getCacheScrollMetric() const
+  {
+    return cacheScrollMetric;
+  }
   const RollingMetric& getUploadByteMetric() const { return uploadByteMetric; }
   const RollingMetric& getUploadRectMetric() const { return uploadRectMetric; }
   std::size_t getLastSnapVisitCountForTesting() const
@@ -165,6 +169,7 @@ private:
   std::size_t lastUploadRectCount;
   std::size_t cacheRefillCount;
   RollingMetric cacheRefillMetric;
+  RollingMetric cacheScrollMetric;
   RollingMetric uploadByteMetric;
   RollingMetric uploadRectMetric;
   float fadeSpeed;
@@ -223,15 +228,22 @@ private:
                             int maximumX,
                             int minimumY,
                             int maximumY);
+  void sampleSparseCacheRectangle(int minimumX,
+                                  int maximumX,
+                                  int minimumY,
+                                  int maximumY);
   void sampleExposedCacheStrips(int deltaTexelsX, int deltaTexelsY);
   void sampleGrid(bool snap);
   bool sampleChangedChunks(std::uint64_t previousRevision);
   void sampleCacheTexel(int x, int y, bool snap);
   void markChangedCacheChunk(const ChunkAddress& address);
+  void markChangedCacheCells(const ChunkAddress& address,
+                             const SparseChunkMask& changed);
   void clearChangedSampleTexels();
   bool shouldSnapSample() const;
   bool tooManyChangedSampleTexels() const;
   void resampleMarkedCacheTexels(bool snap);
+  void resampleMarkedOverviewTexels(bool snap);
   void applySampledTargets(bool snap);
   void applySnappedSampledTargets();
   void clearFadingTexels();

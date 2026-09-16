@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 class Camera;
 class IRenderWindow;
@@ -70,6 +71,17 @@ private:
   MeshHandle _fullscreenQuadMeshHandle{};
   FramebufferHandle _currentPassFbo{};
   std::array<int, 4> _currentPassViewport{ 0, 0, 0, 0 };
+
+  struct ScissorState
+  {
+    bool enabled = false;
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+  };
+  ScissorState currentScissorState;
+  std::vector<ScissorState> scissorStateStack;
 
   // Per-frame scratch (immediate-draw pointer list, etc.). Cleared at the
   // start of RenderScene and again after submission so token payload pointers
@@ -248,6 +260,10 @@ public:
   void pushUniformMat4(const char* name, const float* m16);
   void pushDrawIndexed(unsigned int elementCount, unsigned int firstIndex = 0);
   void pushScissor(bool enabled, int x, int y, int width, int height);
+  // Intersects with the active scissor and restores it on pop. Coordinates
+  // use the backend viewport's bottom-left pixel convention.
+  void pushClipRect(int x, int y, int width, int height);
+  void popClipRect();
   void pushUpdateTexture(TextureHandle handle,
                          int x,
                          int y,

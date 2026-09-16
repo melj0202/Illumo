@@ -102,6 +102,11 @@ preserving defaults. Optional modules reinstall their overrides after a transiti
         normalized pivots, atlas regions/flips, and integer draw order build one
         stable cross-type stream. Only adjacent compatible items batch, so
         transparent painter order is never changed by a global texture sort.
+        Pixel-space rebuilds conservatively reject quads outside the logical
+        viewport. An optional top-left logical-pixel clip rejects fully
+        excluded quads before upload and uses nested, intersected scissor
+        tokens for partial content; popping the clip restores any outer
+        scissor (D-R23). World-space behavior is unchanged.
         Dynamic buffers reserve 1,024 quads, double as needed, and stop at a
         configurable 65,536 default ceiling.
   \item \symbolref{MeshVisual} (D-R21) is the world mesh host and
@@ -204,6 +209,11 @@ counts. Rejection logs once per reset interval.
 \symbolref{RenderCommand}: tagged union (\texttt{CommandType} + POD payload)
 including pipeline, bind, uniforms, \texttt{UpdateTexture}, \texttt{UpdateBuffer},
 clear, draw, and explicit enabled/disabled scissor state (D-R1).
+
+Renderer maintains a per-frame scissor stack for \texttt{pushClipRect}/
+\texttt{popClipRect}. Nested clips intersect in physical viewport coordinates
+and restore the prior state; low-level \texttt{pushScissor} remains the explicit
+state-token path (D-R23).
 
 \symbolref{GLTexture::UpdateSubImage}: rectangles through 64\,KiB use direct
 \texttt{glTexSubImage2D}. Larger uploads select a signaled slot from a

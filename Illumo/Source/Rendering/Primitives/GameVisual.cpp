@@ -37,6 +37,37 @@ includeBounds(bool& any,
   maxY = std::max(maxY, y1);
 }
 
+static Rect2
+normalizedRect(const Rect2& rect)
+{
+  if (!std::isfinite(rect.x) || !std::isfinite(rect.y) ||
+      !std::isfinite(rect.w) || !std::isfinite(rect.h)) {
+    return Rect2{};
+  }
+  const float x0 = std::min(rect.x, rect.x + rect.w);
+  const float y0 = std::min(rect.y, rect.y + rect.h);
+  const float x1 = std::max(rect.x, rect.x + rect.w);
+  const float y1 = std::max(rect.y, rect.y + rect.h);
+  return Rect2{ x0, y0, x1 - x0, y1 - y0 };
+}
+
+static Rect2
+intersectRects(const Rect2& left, const Rect2& right)
+{
+  const float x0 = std::max(left.x, right.x);
+  const float y0 = std::max(left.y, right.y);
+  const float x1 = std::min(left.x + left.w, right.x + right.w);
+  const float y1 = std::min(left.y + left.h, right.y + right.h);
+  return Rect2{ x0, y0, std::max(0.0f, x1 - x0), std::max(0.0f, y1 - y0) };
+}
+
+static bool
+sameRect(const Rect2& left, const Rect2& right)
+{
+  return left.x == right.x && left.y == right.y && left.w == right.w &&
+         left.h == right.h;
+}
+
 GameVisual::GameVisual(unsigned int maxQuads)
   : maxQuadCount(maxQuads == 0 ? 1 : maxQuads)
 {
@@ -93,6 +124,26 @@ GameVisual::setTransform(const Transform2D& value)
 {
   transform = value;
   markDirty();
+}
+
+void
+GameVisual::setPixelClipRect(const Rect2& value)
+{
+  const Rect2 normalized = normalizedRect(value);
+  if (!pixelClipEnabled || !sameRect(pixelClipRect, normalized)) {
+    pixelClipRect = normalized;
+    pixelClipEnabled = true;
+    markDirty();
+  }
+}
+
+void
+GameVisual::clearPixelClipRect()
+{
+  if (pixelClipEnabled) {
+    pixelClipEnabled = false;
+    markDirty();
+  }
 }
 
 void
@@ -574,6 +625,9 @@ GameVisual::pushShapeQuad(Point2 p0,
                           Point2 p3,
                           ColorRgba color)
 {
+  if (quadOutsideCullRect(p0, p1, p2, p3)) {
+    return true;
+  }
   if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
     return false;
   }
@@ -592,6 +646,27 @@ GameVisual::pushShapeQuad(Point2 p0,
   };
   shapeQuadCount += 1;
   return true;
+}
+
+bool
+GameVisual::quadOutsideCullRect(Point2 p0,
+                                Point2 p1,
+                                Point2 p2,
+                                Point2 p3) const
+{
+  if (!geometryCullEnabled) {
+    return false;
+  }
+  if (geometryCullRect.w <= 0.0f || geometryCullRect.h <= 0.0f) {
+    return true;
+  }
+  const float minX = std::min(std::min(p0.x, p1.x), std::min(p2.x, p3.x));
+  const float minY = std::min(std::min(p0.y, p1.y), std::min(p2.y, p3.y));
+  const float maxX = std::max(std::max(p0.x, p1.x), std::max(p2.x, p3.x));
+  const float maxY = std::max(std::max(p0.y, p1.y), std::max(p2.y, p3.y));
+  return maxX <= geometryCullRect.x || maxY <= geometryCullRect.y ||
+         minX >= geometryCullRect.x + geometryCullRect.w ||
+         minY >= geometryCullRect.y + geometryCullRect.h;
 }
 
 bool
@@ -674,9 +749,6 @@ bool
 GameVisual::pushSpriteQuad(const SpritePrimitive& sprite,
                            const Rect2& hostBounds)
 {
-  if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
-    return false;
-  }
   const Rect2 bounds = sprite.rect;
   Point2 p0 = transformPoint({ bounds.x, bounds.y }, bounds, sprite.transform);
   Point2 p1 =
@@ -689,6 +761,13 @@ GameVisual::pushSpriteQuad(const SpritePrimitive& sprite,
   p1 = applyHostTransform(p1, hostBounds);
   p2 = applyHostTransform(p2, hostBounds);
   p3 = applyHostTransform(p3, hostBounds);
+
+  if (quadOutsideCullRect(p0, p1, p2, p3)) {
+    return true;
+  }
+  if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
+    return false;
+  }
 
   float u0 = sprite.region.u0;
   float v0 = sprite.region.v0;
@@ -747,9 +826,6 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
       continue;
     }
     if (glyph->visible && glyph->width > 0.0f && glyph->height > 0.0f) {
-      if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
-        return false;
-      }
       const float x0 = text.x + penX + glyph->bearingX * scale;
       const float y0 = text.y + penY + (ascender - glyph->bearingY * scale);
       const float x1 = x0 + glyph->width * scale;
@@ -759,6 +835,14 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
       Point2 p1 = applyHostTransform({ x1, y0 }, hostBounds);
       Point2 p2 = applyHostTransform({ x1, y1 }, hostBounds);
       Point2 p3 = applyHostTransform({ x0, y1 }, hostBounds);
+
+      if (quadOutsideCullRect(p0, p1, p2, p3)) {
+        penX += glyph->advanceX * scale;
+        continue;
+      }
+      if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
+        return false;
+      }
 
       const unsigned int base = spriteQuadCount * 4;
       const ColorRgba color = text.color;
@@ -806,11 +890,15 @@ GameVisual::appendBatch(BatchKind kind,
 }
 
 void
-GameVisual::rebuildGeometry()
+GameVisual::rebuildGeometry(const Rect2* cullRect)
 {
   shapeQuadCount = 0;
   spriteQuadCount = 0;
   drawBatches.clear();
+  geometryCullEnabled = cullRect != nullptr;
+  if (cullRect != nullptr) {
+    geometryCullRect = *cullRect;
+  }
   const Rect2 hostBounds = contentBounds();
   std::vector<VisualItem> ordered = items;
   std::stable_sort(ordered.begin(),
@@ -962,8 +1050,39 @@ GameVisual::AppendCommands(Renderer* value)
   if (!gpuReady) {
     return false;
   }
-  if (geometryDirty) {
-    rebuildGeometry();
+  const Renderer::FrameContext& frameContext = value->getFrameContext();
+  std::array<int, 2> dimensions{ 1280, 720 };
+  const bool useFrameDimensions =
+    frameContext.active && window != nullptr && window == value->getWindow();
+  if (useFrameDimensions) {
+    dimensions = frameContext.windowDimensions;
+  } else if (window != nullptr) {
+    dimensions = window->getWindowDimensions();
+  }
+  const float width = static_cast<float>(dimensions[0]);
+  const float height = static_cast<float>(dimensions[1]);
+  const bool usePixels = space == PrimitiveSpace::Pixels;
+  const float uiScale = value != nullptr ? value->getUiScale() : 1.0f;
+  const float resolutionX =
+    (usePixels && uiScale > 0.0f) ? width / uiScale : width;
+  const float resolutionY =
+    (usePixels && uiScale > 0.0f) ? height / uiScale : height;
+  Rect2 effectiveCullRect;
+  const Rect2* cullRect = nullptr;
+  if (usePixels) {
+    const Rect2 viewportRect{
+      0.0f, 0.0f, std::max(resolutionX, 0.0f), std::max(resolutionY, 0.0f)
+    };
+    effectiveCullRect = pixelClipEnabled
+                          ? intersectRects(viewportRect, pixelClipRect)
+                          : viewportRect;
+    cullRect = &effectiveCullRect;
+  }
+  const bool cullChanged =
+    (cullRect != nullptr) != geometryCullEnabled ||
+    (cullRect != nullptr && !sameRect(geometryCullRect, *cullRect));
+  if (geometryDirty || cullChanged) {
+    rebuildGeometry(cullRect);
   }
   if (!ensureGpuCapacity()) {
     return false;
@@ -989,23 +1108,6 @@ GameVisual::AppendCommands(Renderer* value)
     spriteUploadPending = false;
   }
 
-  const Renderer::FrameContext& frameContext = value->getFrameContext();
-  std::array<int, 2> dimensions{ 1280, 720 };
-  const bool useFrameDimensions =
-    frameContext.active && window != nullptr && window == value->getWindow();
-  if (useFrameDimensions) {
-    dimensions = frameContext.windowDimensions;
-  } else if (window != nullptr) {
-    dimensions = window->getWindowDimensions();
-  }
-  const float width = static_cast<float>(dimensions[0]);
-  const float height = static_cast<float>(dimensions[1]);
-  const bool usePixels = space == PrimitiveSpace::Pixels;
-  const float uiScale = value != nullptr ? value->getUiScale() : 1.0f;
-  const float resolutionX =
-    (usePixels && uiScale > 0.0f) ? width / uiScale : width;
-  const float resolutionY =
-    (usePixels && uiScale > 0.0f) ? height / uiScale : height;
   float mvp[16] = {
     1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
   };
@@ -1028,10 +1130,34 @@ GameVisual::AppendCommands(Renderer* value)
     std::memcpy(mvp, glm::value_ptr(overlay), sizeof(mvp));
   }
 
+  bool clipPushed = false;
+  if (usePixels && pixelClipEnabled) {
+    const std::array<int, 4> viewport = value->getCurrentPassViewport();
+    const double scaleX =
+      resolutionX > 0.0f ? static_cast<double>(viewport[2]) / resolutionX : 0.0;
+    const double scaleY =
+      resolutionY > 0.0f ? static_cast<double>(viewport[3]) / resolutionY : 0.0;
+    const int left =
+      viewport[0] + static_cast<int>(std::floor(effectiveCullRect.x * scaleX));
+    const int right =
+      viewport[0] + static_cast<int>(std::ceil(
+                      (effectiveCullRect.x + effectiveCullRect.w) * scaleX));
+    const int top = viewport[1] + viewport[3] -
+                    static_cast<int>(std::floor(effectiveCullRect.y * scaleY));
+    const int bottom = viewport[1] + viewport[3] -
+                       static_cast<int>(std::ceil(
+                         (effectiveCullRect.y + effectiveCullRect.h) * scaleY));
+    value->pushClipRect(
+      left, bottom, std::max(0, right - left), std::max(0, top - bottom));
+    clipPushed = true;
+  }
+
+  bool appended = true;
   for (size_t i = 0; i < drawBatches.size(); ++i) {
     const DrawBatch& batch = drawBatches[i];
     if (!value->bindStyle(batch.styleHandle)) {
-      return false;
+      appended = false;
+      break;
     }
     value->pushSetMesh(batch.kind == BatchKind::Shape ? shapeMeshHandle
                                                       : spriteMeshHandle);
@@ -1045,5 +1171,8 @@ GameVisual::AppendCommands(Renderer* value)
     }
     value->pushDrawIndexed(batch.quadCount * 6, batch.firstQuad * 6);
   }
-  return true;
+  if (clipPushed) {
+    value->popClipRect();
+  }
+  return appended;
 }

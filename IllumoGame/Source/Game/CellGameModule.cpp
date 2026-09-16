@@ -1655,6 +1655,10 @@ CellGameModule::printStatus() const
     std::to_string(canvas->getCacheRefillMetric().median()) + "/" +
     std::to_string(canvas->getCacheRefillMetric().p95()) + "/" +
     std::to_string(canvas->getCacheRefillMetric().maximum()) +
+    " ms, scroll p50/p95/max=" +
+    std::to_string(canvas->getCacheScrollMetric().median()) + "/" +
+    std::to_string(canvas->getCacheScrollMetric().p95()) + "/" +
+    std::to_string(canvas->getCacheScrollMetric().maximum()) +
     " ms, last upload=" + std::to_string(canvas->getLastUploadByteCount()) +
     " bytes/" + std::to_string(canvas->getLastUploadRectCount()) +
     " rects, upload bytes p50/p95/max=" +

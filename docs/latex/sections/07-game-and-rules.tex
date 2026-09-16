@@ -288,10 +288,14 @@ schema.
   \item View: \symbolref{CanvasView} samples a globally aligned camera cache
         padded by two chunks per side. Motion inside it changes only the MVP;
         aligned origin shifts copy retained texels and resample newly exposed
-        strips. One-revision changes map chunks to deduplicated exact or overview bins
-        and resample the complete cache when those bins cover a quarter of it;
-        marking stops once that threshold is reached. Overview resamples walk
-        occupied cells and snap-convert sampled RGB in one pass.
+        strips. Far-zoom strips initialize background bins and accumulate only
+        occupied cells from intersecting sparse chunks instead of probing every
+        covered source cell. Published generations map exact changed-cell masks
+        to deduplicated cache bins. Far-zoom bins reset together, accumulate in
+        one occupied-chunk traversal, and finalize once; dense exact-cell
+        changes may still select a complete cache sample at the quarter-cache
+        threshold. Overview resamples walk occupied cells and snap-convert
+        sampled RGB in one pass.
         Near zoom is one texel per cell; far zoom uses integer density LOD with
         80\% refinement hysteresis. Revision gaps, non-aligned jumps, LOD/resize,
         palette changes, torus wrap, and replacement perform a bounded refill.

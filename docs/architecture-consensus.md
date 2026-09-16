@@ -492,7 +492,7 @@ IBackend::SubmitCommandQueue
 | **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug), with ordinary screen rendering or effective custom pass sequences per layer. |
 | **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, Sprite, and Skybox are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world; Skybox positions at the far plane with translation-stripped view-projection. |
 | **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. Read-only pending position/zoom access lets products validate interpolated navigation targets. CA navigation and sparse camera metadata reserve a `2^32`-cell endpoint margin: finite world axes satisfy `abs(axis) <= 16 * (2^63 - 2^32)`. This protects view arithmetic without restricting sparse storage. |
-| **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
+| **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Pixel-space rebuilds conservatively reject quads outside the logical viewport. An optional top-left logical-pixel clip rejects wholly excluded quads before upload and brackets partial content with a nested, intersected scissor that restores any outer clip (D-R23). Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
 | **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, and motion blur are CPU-side drawable state emitted as `WorldLook` uniforms; products persist them through EnvVars. A node borrows at most one attachment; one MeshVisual can contain multiple items. Use child nodes for independent transforms and subtree state. Replaces the former `DebugDraw3D` diagnostic host (D-R21). |
 | **SkyboxVisual** | World cubemap host and `ISceneRenderAttachment`: unit cube geometry rendered with `RenderStyleId::Skybox` at the far depth plane (`xyww`), translation-stripped view matrix `projection * mat4(mat3(view))`, seamless cubemap sampling (`IBackend::CreateCubemap`, `AssetManager::acquireCubemapFromCross`), and optional tint color. Consumed by 3D viewers (e.g. `IllMeshViewer`). |
 | **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `CommandLine`, `GLString`, `ExitConfirmDialog`, and `EditorConfirmDialog` compose these primitives without introducing a retained widget hierarchy. |
@@ -519,6 +519,10 @@ releases the GL texture, PBOs, and fences before recycling that handle.
 configurable 65,536 default ceiling while tracking high-water and rejected
 counts. `RenderCommand` remains a tagged union (bind, uniform, update
 texture/buffer, draw, clear, viewport, scissor state, pipeline).
+`Renderer::pushClipRect`/`popClipRect` retain a per-frame scissor stack, so
+primitive clips intersect and restore an existing product-owned scissor rather
+than disabling it. Low-level `pushScissor` remains available for explicit
+state emission.
 **Not current (old engine PDF):** separate Opaque/Transparent/UI pass *objects*, MeshDrawCommand-only world draws, entity mesh tables.
 
 **Production pure-token drawables (D-R10):** CanvasView/GameVisual, Cursor,
@@ -555,19 +559,25 @@ is sorted by `(chunkY, chunkX)` for deterministic saves and tests. The view
 visits only chunks intersecting its cache bounds. The cache is globally aligned
 and extends two 16-cell chunks beyond the visible viewport on every side, so
 sub-cache pan/zoom changes only the camera MVP and aligned origin shifts copy
-retained CPU texels while resampling only the newly exposed strips. The grid publishes a
-revision-scoped changed-chunk list for edits and completed generations. When
-exactly one revision is unseen, the view maps changed chunks to deduplicated
-exact-cell or overview bins. Marking those bins stops once they cover a quarter
-of the cache, then the complete bounded cache is resampled. Revision gaps, non-aligned jumps, palette changes,
+retained CPU texels while resampling only the newly exposed strips. Overview
+strips initialize their bounded output bins to the background and accumulate
+only occupied cells from intersecting sparse chunks instead of probing every
+source cell. The grid publishes a
+revision-scoped changed-chunk list for edits and completed generations. Direct
+grid edits conservatively map changed chunks, while published generations map
+exact changed-cell masks to deduplicated cache bins. Far-zoom bins reset
+together, accumulate in one occupied-chunk traversal, and finalize once,
+avoiding per-bin hash probes and full overview refills for sparse broad
+changes. Dense exact-cell marking stops once it covers a quarter of the cache,
+then the complete bounded cache is resampled. Revision gaps, non-aligned jumps, palette changes,
 whole-grid replacement, LOD changes, torus wrap, and resize use a complete bounded refill.
 Far LOD coarsens immediately to fit and refines only at 80% budget occupancy.
 A retained active-texel set
 makes fade ticks and zero-speed snaps proportional to colors still changing;
 reapplying an unchanged zero fade speed does no scan. Exact-cell LOD keeps that
-fade; density overviews snap color changes. Dense one-revision bins that cover
-at least a quarter of the cache resample the complete bounded cache; bin
-marking stops once that threshold is reached. At far zoom it limits
+fade; density overviews snap color changes. Dense exact-cell one-revision bins
+that cover at least a quarter of the cache resample the complete bounded cache;
+bin marking stops once that threshold is reached. At far zoom it limits
 the active texture to `max(CanvasX/Y, window / 4)` texels and accumulates
 palette density into each overview texel. This presentation budget neither
 caps chunks nor discards simulation cells. Rendering never creates per-chunk
@@ -1130,6 +1140,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R19** | Superseded by D-E6: the sibling IllumoGame consumer establishes the explicit library boundary. Future downstream repositories still require install/package validation. |
 | **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. |
 | **D-R21** | One world look (`uMVP`). Sprites are textured quads; 2D vs 3D is the camera projection. `MeshVisual` is the world object host; `GameVisual` remains overlay/painter composition. |
+| **D-R23** | Pixel-space `GameVisual` geometry culls wholly excluded quads against the logical viewport or an optional clip before upload. Partial clips use nested, intersected scissor tokens that restore the prior state. World-space and SceneGraph culling remain unchanged. |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
 | **D-C2** | `CellGrid` domain + `Canvas` presentation; rulesets depend only on `CellGrid`. |
@@ -1343,8 +1354,9 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 
 ### D. Only if product or learning goals require it
 
-10. Font atlases, UTF-8 text layout, clipping, and nine-slice UI.
-11. Chunked tilemaps, sprite culling, and particle emitters.
+10. Font atlases, UTF-8 text layout, and nine-slice UI. General pixel
+    viewport/rect clipping is complete in D-R23; text shaping remains future work.
+11. Chunked tilemaps, world-space sprite culling, and particle emitters.
 12. Multiple cameras, offscreen targets, compositing, and post-processing.
 13. Keep the established Illumo public boundary narrow; add install/export or
     shared-library ABI work only for a real distribution requirement.

@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <type_traits>
 #include <vector>
 
@@ -2048,6 +2049,72 @@ testDenseVisibleChangesUseCompleteSample()
 }
 
 static void
+seedVisibleSparseBlinkers(SparseCellGrid* grid)
+{
+  if (grid == nullptr) {
+    return;
+  }
+  for (int chunkY = -12; chunkY < 13; ++chunkY) {
+    for (int chunkX = -20; chunkX < 20; ++chunkX) {
+      const std::int64_t centerX = chunkX * SparseCellGrid::kChunkDim + 8;
+      const std::int64_t centerY = chunkY * SparseCellGrid::kChunkDim + 8;
+      grid->setCell(CellAddress{ centerX - 1, centerY }, 0);
+      grid->setCell(CellAddress{ centerX, centerY }, 0);
+      grid->setCell(CellAddress{ centerX + 1, centerY }, 0);
+    }
+  }
+}
+
+static bool
+sameVisibleWorldTexels(const CanvasView& left,
+                       const CanvasView& right,
+                       const char* context);
+
+static void
+testSparseOverviewPublicationStaysIncremental()
+{
+  testSection("CanvasView: sparse overview publication remains incremental");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera(glm::vec2(0.0f, 0.0f), 0.1f, &env);
+  SparseCellGrid published;
+  seedVisibleSparseBlinkers(&published);
+  CanvasView view(80, 60, &published, &window, &camera, nullptr);
+  view.setFadeSpeed(0.0f);
+  view.rebuildTargetsFromGrid();
+
+  LifeLikeRuleSet rules(nullptr);
+  SparseCellGrid next;
+  testTrue(g,
+           next.advanceFrom(published, rules),
+           "sparse overview source advances one generation");
+  SparseGenerationDelta delta;
+  testTrue(g,
+           next.captureGenerationDelta(published.getRevision(), &delta, false),
+           "sparse overview generation captures a presentation delta");
+  testTrue(g,
+           !delta.fullReplacement && !delta.changedChunks.empty(),
+           "sparse overview generation retains precise changed chunks");
+
+  view.adoptGrid(&next, delta);
+  CanvasView reference(80, 60, &next, &window, &camera, nullptr);
+  reference.setFadeSpeed(0.0f);
+  reference.rebuildTargetsFromGrid();
+  const std::size_t fullCacheTexels =
+    static_cast<std::size_t>(view.getCachedTexelWidth()) *
+    static_cast<std::size_t>(view.getCachedTexelHeight());
+  testTrue(g,
+           view.getLastSampledTexelCount() < fullCacheTexels / 4u,
+           "sparse changed-cell masks avoid a broad overview refill");
+  testTrue(g,
+           sameVisibleWorldTexels(
+             view, reference, "sparse overview generation publication"),
+           "incremental sparse publication matches a fresh overview refill");
+}
+
+static void
 testCanvasViewUsesWorldCellQuad()
 {
   testSection("CanvasView: world-space cell-aligned presentation");
@@ -2349,7 +2416,14 @@ seedScrollPattern(SparseCellGrid* grid)
   for (std::int64_t y = -120; y <= 120; ++y) {
     for (std::int64_t x = -120; x <= 280; ++x) {
       if ((x % 5 == 0) || (y % 7 == 0)) {
-        grid->setCell(CellAddress{ x, y }, 0);
+        const unsigned char states[] = {
+          WireworldRuleSet::CELL_HEAD,
+          WireworldRuleSet::CELL_TAIL,
+          WireworldRuleSet::CELL_CONDUCTOR,
+        };
+        const std::uint64_t selector =
+          static_cast<std::uint64_t>(std::llabs(x * 3 + y * 5));
+        grid->setCell(CellAddress{ x, y }, states[selector % 3u]);
       }
     }
   }
@@ -2365,8 +2439,9 @@ testCameraCacheScrollMatchesRefill()
   env.setVar("WinY", 720);
   SparseCellGrid grid;
   seedScrollPattern(&grid);
+  WireworldRuleSet wireworld(nullptr);
 
-  const float zooms[] = { 1.0f, 0.1f };
+  const float zooms[] = { 1.0f, 0.16f, 0.1f };
   const double cellWorld = 16.0;
   const double panXs[] = { 3.0 * cellWorld, -3.0 * cellWorld, 3.0 * cellWorld };
   const double panYs[] = { 0.0, 0.0, 3.0 * cellWorld };
@@ -2376,6 +2451,7 @@ testCameraCacheScrollMatchesRefill()
       Camera camera(glm::vec2(0.0f, 0.0f), zoom, &env);
       CanvasView view(80, 60, &grid, &window, &camera, nullptr);
       view.setFadeSpeed(0.0f);
+      view.rebuildPalette(&wireworld);
       view.rebuildTargetsFromGrid();
       const std::size_t initialRefills = view.getCacheRefillCount();
       for (int frame = 1; frame <= 40; ++frame) {
@@ -2399,12 +2475,38 @@ testCameraCacheScrollMatchesRefill()
                "near-zoom pan keeps using cache scroll");
       CanvasView reference(80, 60, &grid, &window, &camera, nullptr);
       reference.setFadeSpeed(0.0f);
+      reference.rebuildPalette(&wireworld);
       reference.rebuildTargetsFromGrid();
       testTrue(g,
                sameVisibleWorldTexels(view, reference, context),
                "scrolled visible texels match a full refill");
     }
   }
+
+  SparseCellGrid emptyGrid;
+  Camera emptyCamera(glm::vec2(0.0f, 0.0f), 0.1f, &env);
+  CanvasView emptyView(80, 60, &emptyGrid, &window, &emptyCamera, nullptr);
+  emptyView.setFadeSpeed(0.0f);
+  emptyView.rebuildPalette(&wireworld);
+  emptyView.rebuildTargetsFromGrid();
+  const std::size_t emptyInitialRefills = emptyView.getCacheRefillCount();
+  for (int frame = 1; frame <= 40; ++frame) {
+    emptyCamera.SetPositionPrecise(
+      -static_cast<double>(frame) * 3.0 * cellWorld,
+      static_cast<double>(frame) * 3.0 * cellWorld);
+    emptyView.rebuildTargetsFromGrid();
+  }
+  CanvasView emptyReference(80, 60, &emptyGrid, &window, &emptyCamera, nullptr);
+  emptyReference.setFadeSpeed(0.0f);
+  emptyReference.rebuildPalette(&wireworld);
+  emptyReference.rebuildTargetsFromGrid();
+  testTrue(g,
+           emptyView.getCacheRefillCount() - emptyInitialRefills < 40u,
+           "empty far-zoom diagonal pan does not refill every frame");
+  testTrue(g,
+           sameVisibleWorldTexels(
+             emptyView, emptyReference, "empty zoom=0.1 negative diagonal"),
+           "empty scrolled texels match a full refill");
 }
 
 static void
@@ -2960,6 +3062,30 @@ testPresentationFrameLatencyBench()
   const std::size_t panRefills = view.getCacheRefillCount() - panRefillsBefore;
 
   camera.SetPositionPrecise(0.0, 0.0);
+  camera.SetZoom(0.1f);
+  view.syncVisibleRegion();
+  double farPanWorldX = 0.0;
+  for (int frame = 0; frame < warmupFrames; ++frame) {
+    farPanWorldX += panStepWorld;
+    camera.SetPositionPrecise(farPanWorldX, 0.0);
+    view.syncVisibleRegion();
+  }
+  const std::size_t farPanRefillsBefore = view.getCacheRefillCount();
+  RollingMetric farPanMetric;
+  for (int frame = 0; frame < measuredFrames; ++frame) {
+    farPanWorldX += panStepWorld;
+    const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+    camera.SetPositionPrecise(farPanWorldX, 0.0);
+    view.syncVisibleRegion();
+    farPanMetric.add(std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - start)
+                       .count());
+  }
+  const std::size_t farPanRefills =
+    view.getCacheRefillCount() - farPanRefillsBefore;
+
+  camera.SetPositionPrecise(0.0, 0.0);
   camera.SetZoom(1.0f);
   view.syncVisibleRegion();
   for (int frame = 0; frame < warmupFrames; ++frame) {
@@ -2999,6 +3125,13 @@ testPresentationFrameLatencyBench()
               panMetric.p95(),
               panMetric.maximum(),
               panRefills);
+  std::printf("BENCH: Presentation far-zoom sparse-pan N=%d p50/p95/max="
+              "%.3f/%.3f/%.3f ms refills=%zu\n",
+              measuredFrames,
+              farPanMetric.median(),
+              farPanMetric.p95(),
+              farPanMetric.maximum(),
+              farPanRefills);
   std::printf("BENCH: Presentation smooth-zoom N=%d p50/p95/max="
               "%.3f/%.3f/%.3f ms refills=%zu\n",
               measuredFrames,
@@ -3013,8 +3146,101 @@ testPresentationFrameLatencyBench()
   testTrue(
     g, panRefills == 0u, "aligned pan scrolls the cache instead of refilling");
   testTrue(g,
+           farPanRefills == 0u,
+           "far-zoom aligned pan scrolls the cache instead of refilling");
+  testTrue(g,
+           view.getCacheScrollMetric().size() > 0u,
+           "presentation records cache-scroll timing samples");
+  testTrue(g,
            zoomRefills < static_cast<std::size_t>(measuredFrames),
            "padded cache avoids a refill on every smooth-zoom frame");
+
+  SparseCellGrid published;
+  SparseCellGrid working;
+  seedVisibleSparseBlinkers(&published);
+  SparseCellGrid* currentGrid = &published;
+  SparseCellGrid* nextGrid = &working;
+  Camera publicationCamera(glm::vec2(0.0f, 0.0f), 0.1f, &env);
+  CanvasView incrementalPublication(
+    80, 60, currentGrid, &window, &publicationCamera, nullptr);
+  CanvasView forcedFullPublication(
+    80, 60, currentGrid, &window, &publicationCamera, nullptr);
+  incrementalPublication.setFadeSpeed(0.0f);
+  forcedFullPublication.setFadeSpeed(0.0f);
+  incrementalPublication.rebuildTargetsFromGrid();
+  forcedFullPublication.rebuildTargetsFromGrid();
+  LifeLikeRuleSet publicationRules(nullptr);
+  RollingMetric incrementalPublicationMetric;
+  RollingMetric forcedFullPublicationMetric;
+  const std::size_t incrementalRefillsBefore =
+    incrementalPublication.getCacheRefillCount();
+  const std::size_t forcedFullRefillsBefore =
+    forcedFullPublication.getCacheRefillCount();
+  bool publicationWorkSucceeded = true;
+  for (int frame = 0; frame < warmupFrames + measuredFrames; ++frame) {
+    publicationWorkSucceeded =
+      nextGrid->advanceFrom(*currentGrid, publicationRules) &&
+      publicationWorkSucceeded;
+    SparseGenerationDelta publicationDelta;
+    publicationWorkSucceeded =
+      nextGrid->captureGenerationDelta(
+        currentGrid->getRevision(), &publicationDelta, false) &&
+      publicationWorkSucceeded;
+    SparseGenerationDelta forcedFullDelta = publicationDelta;
+    forcedFullDelta.fullReplacement = true;
+    const std::chrono::steady_clock::time_point incrementalStart =
+      std::chrono::steady_clock::now();
+    incrementalPublication.adoptGrid(nextGrid, publicationDelta);
+    const std::chrono::steady_clock::time_point forcedFullStart =
+      std::chrono::steady_clock::now();
+    forcedFullPublication.adoptGrid(nextGrid, forcedFullDelta);
+    const std::chrono::steady_clock::time_point publicationEnd =
+      std::chrono::steady_clock::now();
+    if (frame >= warmupFrames) {
+      incrementalPublicationMetric.add(
+        std::chrono::duration<double, std::milli>(forcedFullStart -
+                                                  incrementalStart)
+          .count());
+      forcedFullPublicationMetric.add(std::chrono::duration<double, std::milli>(
+                                        publicationEnd - forcedFullStart)
+                                        .count());
+    }
+    SparseCellGrid* priorGrid = currentGrid;
+    currentGrid = nextGrid;
+    nextGrid = priorGrid;
+  }
+  const std::size_t incrementalPublicationRefills =
+    incrementalPublication.getCacheRefillCount() - incrementalRefillsBefore;
+  const std::size_t forcedFullPublicationRefills =
+    forcedFullPublication.getCacheRefillCount() - forcedFullRefillsBefore;
+  std::printf("BENCH: Presentation zoom0.1 sparse-publication N=%d "
+              "incremental p50/p95/max=%.3f/%.3f/%.3f ms "
+              "forced-full=%.3f/%.3f/%.3f ms refills=%zu/%zu\n",
+              measuredFrames,
+              incrementalPublicationMetric.median(),
+              incrementalPublicationMetric.p95(),
+              incrementalPublicationMetric.maximum(),
+              forcedFullPublicationMetric.median(),
+              forcedFullPublicationMetric.p95(),
+              forcedFullPublicationMetric.maximum(),
+              incrementalPublicationRefills,
+              forcedFullPublicationRefills);
+  testTrue(g,
+           publicationWorkSucceeded,
+           "publication benchmark advances and captures every sparse delta");
+  testEqSize(g,
+             incrementalPublicationRefills,
+             0u,
+             "precise sparse publications avoid complete overview refills");
+  testTrue(g,
+           forcedFullPublicationRefills >=
+             static_cast<std::size_t>(measuredFrames),
+           "forced-full control exercises complete overview refills");
+  testTrue(g,
+           sameVisibleWorldTexels(incrementalPublication,
+                                  forcedFullPublication,
+                                  "zoom0.1 sparse publication benchmark"),
+           "incremental publication remains byte-identical to a full refill");
 }
 
 static void
@@ -3188,6 +3414,10 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   registry.add(
     "IllumoGame.CanvasInf.DenseVisibleChangesUseCompleteSample", []() {
       return runCanvasInfCase(testDenseVisibleChangesUseCompleteSample);
+    });
+  registry.add(
+    "IllumoGame.CanvasInf.SparseOverviewPublicationStaysIncremental", []() {
+      return runCanvasInfCase(testSparseOverviewPublicationStaysIncremental);
     });
   registry.add("IllumoGame.CanvasInf.WorldCellPresentation", []() {
     return runCanvasInfCase(testCanvasViewUsesWorldCellQuad);

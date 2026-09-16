@@ -36,6 +36,12 @@ public:
 
   void setTransform(const Transform2D& value);
   const Transform2D& getTransform() const { return transform; }
+  // Optional top-left logical-pixel clip. Pixel-space geometry outside the
+  // clip is culled before upload; partial geometry is clipped by scissor.
+  void setPixelClipRect(const Rect2& value);
+  void clearPixelClipRect();
+  bool hasPixelClipRect() const { return pixelClipEnabled; }
+  const Rect2& getPixelClipRect() const { return pixelClipRect; }
   void setLayerHint(RenderLayerId layer) { layerHint = layer; }
   RenderLayerId getLayerHint() const { return layerHint; }
 
@@ -157,6 +163,10 @@ private:
   PrimitiveSpace space = PrimitiveSpace::Pixels;
   RenderLayerId layerHint = RenderLayerId::World;
   Transform2D transform;
+  Rect2 pixelClipRect;
+  Rect2 geometryCullRect;
+  bool pixelClipEnabled = false;
+  bool geometryCullEnabled = false;
 
   std::vector<ShapePrimitive> shapes;
   std::vector<SpritePrimitive> sprites;
@@ -184,7 +194,7 @@ private:
 
   void markDirty() { geometryDirty = true; }
   void enrollGpuResources();
-  void rebuildGeometry();
+  void rebuildGeometry(const Rect2* cullRect);
   bool ensureCpuCapacity(unsigned int required);
   bool ensureGpuCapacity();
   std::vector<unsigned int> buildIndices(unsigned int capacity) const;
@@ -195,6 +205,7 @@ private:
                         const Transform2D& local) const;
   Point2 applyHostTransform(Point2 point, const Rect2& contentBounds) const;
   Rect2 contentBounds() const;
+  bool quadOutsideCullRect(Point2 p0, Point2 p1, Point2 p2, Point2 p3) const;
   bool pushShapeQuad(Point2 p0,
                      Point2 p1,
                      Point2 p2,
