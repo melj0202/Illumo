@@ -195,6 +195,9 @@ private:
   MeshHandle meshAssetHandle{};
   unsigned int meshAssetIndexCount = 0;
   ColorRgba meshAssetTint{ 255, 255, 255, 255 };
+  glm::vec3 meshAssetBoundsMin = glm::vec3(0.0f);
+  glm::vec3 meshAssetBoundsMax = glm::vec3(0.0f);
+  bool meshAssetBoundsValid = false;
   RenderStyleHandle lineStyleHandle{};
   RenderStyleHandle triangleStyleHandle{};
   RenderStyleHandle spriteStyleHandle{};

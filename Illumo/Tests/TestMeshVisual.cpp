@@ -395,10 +395,10 @@ testMeshVisualSharedMeshAsset()
     if (firstMvp != nullptr && secondMvp != nullptr) {
       glm::mat4 firstMatrix(1.0f);
       std::memcpy(glm::value_ptr(firstMatrix),
-                  firstMvp->uniformMat4.m,
+                  firstMvp->uniformMat4.value,
                   16 * sizeof(float));
       testTrue(g,
-               !matricesNear(secondMvp->uniformMat4.m, firstMatrix),
+               !matricesNear(secondMvp->uniformMat4.value, firstMatrix),
                "shared geometry keeps per-instance transforms distinct");
     }
   }
@@ -409,6 +409,79 @@ testMeshVisualSharedMeshAsset()
   testTrue(g, assets.releaseMesh(handle), "asset owner releases shared mesh");
   testTrue(
     g, !mock.IsMeshValid(handle), "final asset release destroys shared mesh");
+}
+
+static void
+testMeshVisualManagedAssetParticipatesInSceneShadowPass()
+{
+  testSection("MeshVisual: managed asset participates in scene shadow pass");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  AssetManager assets(&renderer, false);
+
+  MeshData mesh;
+  MeshVertex a;
+  a.position = glm::vec3(-1.0f, -1.0f, 0.0f);
+  MeshVertex b;
+  b.position = glm::vec3(1.0f, -1.0f, 0.0f);
+  MeshVertex c;
+  c.position = glm::vec3(0.0f, 1.0f, 0.0f);
+  mesh.vertices = { a, b, c };
+  mesh.indices = { 0, 1, 2 };
+  const MeshHandle handle = assets.acquireMesh(mesh);
+  const MeshAssetInfo info = assets.getMeshInfo(handle);
+  testTrue(g, info.isValid(), "managed mesh enrollment succeeds");
+
+  {
+    MeshVisual visual;
+    visual.prepare(&renderer);
+    visual.setMeshAsset(info);
+
+    Scene scene(&window, &camera);
+    scene.AddDrawable(&visual, RenderLayerId::World);
+
+    mock.resetCounters();
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+
+    bool insideShadowTarget = false;
+    MeshHandle boundMesh{};
+    size_t managedShadowDraws = 0;
+    size_t managedShadowTextureBinds = 0;
+    for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+      const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+      if (command.commandType == CommandType::SetFramebuffer) {
+        insideShadowTarget = command.bindFramebuffer.handle.isValid();
+      } else if (command.commandType == CommandType::SetMesh) {
+        boundMesh = command.bindMesh.handle;
+      } else if (command.commandType == CommandType::DrawIndexed &&
+                 insideShadowTarget && boundMesh == handle) {
+        managedShadowDraws += 1;
+      } else if (command.commandType == CommandType::SetTexture &&
+                 !insideShadowTarget &&
+                 command.bindTexture.slot == WorldLook::kShadowTextureUnit) {
+        managedShadowTextureBinds += 1;
+      }
+    }
+
+    testEqSize(g,
+               managedShadowDraws,
+               1u,
+               "managed mesh contributes one draw to the shared depth pass");
+    testEqSize(g,
+               managedShadowTextureBinds,
+               1u,
+               "managed mesh samples the shared scene shadow texture");
+  }
+
+  testTrue(g, assets.releaseMesh(handle), "asset owner releases managed mesh");
 }
 
 static void
@@ -819,15 +892,16 @@ testMeshVisualSceneShadowPassCoversVisibleSet()
   if (firstLightMatrix != nullptr && secondLightMatrix != nullptr) {
     bool matricesMatch = true;
     for (int i = 0; i < 16; ++i) {
-      matricesMatch = matricesMatch &&
-                      std::abs(firstLightMatrix->uniformMat4.m[i] -
-                               secondLightMatrix->uniformMat4.m[i]) < 0.0001f;
+      matricesMatch =
+        matricesMatch &&
+        std::abs(firstLightMatrix->uniformMat4.value[i] -
+                 secondLightMatrix->uniformMat4.value[i]) < 0.0001f;
     }
     testTrue(g, matricesMatch, "all receivers use one light-space matrix");
 
     glm::mat4 lightSpace(1.0f);
     std::memcpy(glm::value_ptr(lightSpace),
-                firstLightMatrix->uniformMat4.m,
+                firstLightMatrix->uniformMat4.value,
                 16 * sizeof(float));
     const glm::vec4 leftClip = lightSpace * glm::vec4(-4.0f, 0.0f, 0.0f, 1.0f);
     const glm::vec4 rightClip = lightSpace * glm::vec4(4.0f, 0.0f, 0.0f, 1.0f);
@@ -1158,8 +1232,15 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   registry.add("Illumo.MeshVisual.DynamicMeshReuse", []() {
     return runMeshVisualCase(testMeshVisualDynamicMeshReuse);
   });
+  registry.add("Illumo.MeshVisual.IndexedTriangles", []() {
+    return runMeshVisualCase(testMeshVisualIndexedTriangles);
+  });
   registry.add("Illumo.MeshVisual.SharedMeshAsset", []() {
     return runMeshVisualCase(testMeshVisualSharedMeshAsset);
+  });
+  registry.add("Illumo.MeshVisual.ManagedAssetSceneShadow", []() {
+    return runMeshVisualCase(
+      testMeshVisualManagedAssetParticipatesInSceneShadowPass);
   });
   registry.add("Illumo.MeshVisual.SpriteAndCube",
                []() { return runMeshVisualCase(testMeshVisualSpriteAndCube); });

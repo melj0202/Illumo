@@ -132,6 +132,10 @@ private:
 
   void beginFrameContext(Camera* camera);
   void endFrameContext();
+  void resetShadowFrame();
+  bool prepareShadowPass();
+  void ensureShadowResources(int mapSize);
+  void releaseShadowResources();
   const float* retainUniformMatrix(const float* value);
   void clearCommandQueue();
 

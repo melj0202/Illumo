@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 namespace {
 

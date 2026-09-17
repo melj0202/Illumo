@@ -641,7 +641,7 @@ testPassClearMasks()
 }
 
 static void
-testRenderSceneMeshVisualRestoresPassTarget()
+testRenderSceneShadowPassPrecedesCustomTarget()
 {
   std::printf(
     "\n--- e2e: scene shadow pass precedes custom world target ---\n");
@@ -724,8 +724,9 @@ testRenderSceneMeshVisualRestoresPassTarget()
   // The scene shadow pass completes before custom World passes begin:
   // 1. Shared shadow FBO
   // 2. Restored default screen target
-  // 3. WorldColorVelocity geometry target
-  // 4. Post-process screen target
+  // 3. Main-frame clear target
+  // 4. WorldColorVelocity geometry target
+  // 5. Post-process screen target
   std::vector<FramebufferHandle> boundFbos;
   bool sawLinePrevMvp = false;
   bool sawLineMotionBlur = false;
@@ -750,13 +751,13 @@ testRenderSceneMeshVisualRestoresPassTarget()
 
   e2eTrue(boundFbos.size() >= 5, "at least 5 framebuffer binds submitted");
   if (boundFbos.size() >= 5) {
-    e2eTrue(!boundFbos[0].isValid(), "frame clear binds screen first");
-    e2eTrue(boundFbos[1] == pooledTarget.fboHandle,
-            "pass initially binds target FBO");
-    e2eTrue(boundFbos[2].isValid() && boundFbos[2] != pooledTarget.fboHandle,
-            "shadow pass binds shadow FBO");
+    e2eTrue(boundFbos[0].isValid() && boundFbos[0] != pooledTarget.fboHandle,
+            "scene pass binds the shared shadow FBO first");
+    e2eTrue(!boundFbos[1].isValid(), "scene pass restores the default target");
+    e2eTrue(!boundFbos[2].isValid(),
+            "main-frame clear remains on the default target");
     e2eTrue(boundFbos[3] == pooledTarget.fboHandle,
-            "MeshVisual restored target FBO, not screen 0");
+            "custom World geometry then binds its target FBO");
     e2eTrue(!boundFbos[4].isValid(), "post-process pass binds screen 0");
   }
 }

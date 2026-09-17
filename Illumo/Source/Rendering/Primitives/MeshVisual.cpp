@@ -544,6 +544,17 @@ MeshVisual::setMeshAsset(const MeshAssetInfo& asset, ColorRgba tint)
   meshAssetHandle = asset.handle;
   meshAssetIndexCount = asset.indexCount;
   meshAssetTint = tint;
+  meshAssetBoundsMin = asset.minBounds;
+  meshAssetBoundsMax = asset.maxBounds;
+  meshAssetBoundsValid = true;
+  for (int axis = 0; axis < 3; ++axis) {
+    if (!std::isfinite(meshAssetBoundsMin[axis]) ||
+        !std::isfinite(meshAssetBoundsMax[axis]) ||
+        meshAssetBoundsMin[axis] > meshAssetBoundsMax[axis]) {
+      meshAssetBoundsValid = false;
+      break;
+    }
+  }
 }
 
 void
@@ -552,6 +563,9 @@ MeshVisual::clearMeshAsset()
   meshAssetHandle = MeshHandle{};
   meshAssetIndexCount = 0;
   meshAssetTint = ColorRgba{ 255, 255, 255, 255 };
+  meshAssetBoundsMin = glm::vec3(0.0f);
+  meshAssetBoundsMax = glm::vec3(0.0f);
+  meshAssetBoundsValid = false;
 }
 
 bool
@@ -786,21 +800,34 @@ MeshVisual::collectShadowCasterWithWorld(Renderer* value,
                                          const glm::mat4& nodeWorld)
 {
   if (!isVisible() || !lightingEnabled || !shadowsEnabled ||
-      !prepareForCommands(value) || !triangleBoundsValid ||
-      !triangleMeshHandle.isValid()) {
+      !prepareForCommands(value)) {
+    return;
+  }
+
+  const bool hasTriangles = triangleBoundsValid &&
+                            triangleMeshHandle.isValid() &&
+                            !triangleIndices.empty();
+  const bool hasMeshAsset = meshAssetBoundsValid && meshAssetHandle.isValid() &&
+                            meshAssetIndexCount > 0;
+  if (!hasTriangles && !hasMeshAsset) {
     return;
   }
 
   const glm::mat4 world = nodeWorld * modelMatrix;
+  glm::vec3 localMin = hasTriangles ? triangleBoundsMin : meshAssetBoundsMin;
+  glm::vec3 localMax = hasTriangles ? triangleBoundsMax : meshAssetBoundsMax;
+  if (hasMeshAsset && hasTriangles) {
+    localMin = glm::min(localMin, meshAssetBoundsMin);
+    localMax = glm::max(localMax, meshAssetBoundsMax);
+  }
   glm::vec3 worldMin(std::numeric_limits<float>::max());
   glm::vec3 worldMax(std::numeric_limits<float>::lowest());
   for (int x = 0; x < 2; ++x) {
     for (int y = 0; y < 2; ++y) {
       for (int z = 0; z < 2; ++z) {
-        const glm::vec3 corner(
-          x == 0 ? triangleBoundsMin.x : triangleBoundsMax.x,
-          y == 0 ? triangleBoundsMin.y : triangleBoundsMax.y,
-          z == 0 ? triangleBoundsMin.z : triangleBoundsMax.z);
+        const glm::vec3 corner(x == 0 ? localMin.x : localMax.x,
+                               y == 0 ? localMin.y : localMax.y,
+                               z == 0 ? localMin.z : localMax.z);
         const glm::vec3 worldCorner =
           glm::vec3(world * glm::vec4(corner, 1.0f));
         worldMin = glm::min(worldMin, worldCorner);
@@ -826,8 +853,15 @@ MeshVisual::appendShadowCommandsWithWorld(Renderer* value,
                                           const glm::mat4& nodeWorld)
 {
   if (!isVisible() || !lightingEnabled || !shadowsEnabled ||
-      !prepareForCommands(value) || triangleDrawVertices.empty() ||
-      !triangleMeshHandle.isValid()) {
+      !prepareForCommands(value)) {
+    return;
+  }
+
+  const bool hasTriangles =
+    !triangleIndices.empty() && triangleMeshHandle.isValid();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
+  if (!hasTriangles && !hasMeshAsset) {
     return;
   }
 
@@ -841,10 +875,15 @@ MeshVisual::appendShadowCommandsWithWorld(Renderer* value,
               shadow.lightSpaceMatrix.data(),
               shadow.lightSpaceMatrix.size() * sizeof(float));
   const glm::mat4 lightMvp = lightSpaceMatrix * nodeWorld * modelMatrix;
-  value->pushSetMesh(triangleMeshHandle);
   value->pushUniformMat4(WorldLook::kMvpUniform, glm::value_ptr(lightMvp));
-  value->pushDrawIndexed(
-    static_cast<unsigned int>(triangleDrawVertices.size()));
+  if (hasTriangles) {
+    value->pushSetMesh(triangleMeshHandle);
+    value->pushDrawIndexed(static_cast<unsigned int>(triangleIndices.size()));
+  }
+  if (hasMeshAsset) {
+    value->pushSetMesh(meshAssetHandle);
+    value->pushDrawIndexed(meshAssetIndexCount);
+  }
 }
 
 bool
@@ -858,8 +897,11 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   }
 
   const bool hasLines = !lineDrawVertices.empty();
-  const bool hasTriangles = !triangleDrawVertices.empty();
+  const bool hasTriangles =
+    !triangleVertices.empty() && !triangleIndices.empty();
   const bool hasSprites = !sprites.empty();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
 
   glm::mat4 viewProjection(1.0f);
   glm::mat4 view(1.0f);
@@ -872,57 +914,21 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   const glm::mat4 previousMvp =
     hasPreviousMvp ? previousColoredMvp : coloredMvp;
 
-  // Directional lighting & shadow setup. Viewer meshes are normalized to
-  // radius 1; a tight ortho keeps shadow texels on the object instead of
-  // a 30-unit empty volume. Light and shadow parameters come from drawable
-  // state (products persist those values in EnvVars).
-  const glm::vec3 lightPos = lightDirection * lightDistance;
-  const glm::mat4 lightView =
-    glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-  const glm::mat4 lightProj = glm::ortho(-shadowRadius,
-                                         shadowRadius,
-                                         -shadowRadius,
-                                         shadowRadius,
-                                         0.5f,
-                                         lightDistance + shadowRadius);
-  const glm::mat4 lightSpaceMatrix = lightProj * lightView;
-
-  // Pass 1: Directional Shadow Depth Pass (when lighting and shadow depth are
-  // valid)
-  bool shadowMapBound = false;
-  if (lightingEnabled && shadowsEnabled && (hasTriangles || hasMeshAsset) &&
-      shadowDepthStyleHandle.isValid()) {
-    ensureShadowResources(value);
-    if (shadowFboHandle.isValid()) {
-      value->pushFramebuffer(shadowFboHandle);
-      value->pushViewport(0, 0, shadowMapSize, shadowMapSize);
-      // Depth-only FBO has no color attachment. A color clear is a no-op and
-      // leaves uninitialized depth at 0, so the main pass shadows every
-      // fragment and lighting collapses to ambient.
-      value->pushClearDepth();
-
-      const glm::mat4 lightMvp = lightSpaceMatrix * coloredWorld;
-      value->bindStyle(shadowDepthStyleHandle);
-      value->pushUniformMat4(WorldLook::kMvpUniform, glm::value_ptr(lightMvp));
-      if (hasTriangles && triangleMeshHandle.isValid()) {
-        value->pushSetMesh(triangleMeshHandle);
-        value->pushDrawIndexed(
-          static_cast<unsigned int>(triangleDrawVertices.size()));
-      }
-      if (hasMeshAsset) {
-        value->pushSetMesh(meshAssetHandle);
-        value->pushDrawIndexed(meshAssetIndexCount);
-      }
-
-      // Restore pass framebuffer & viewport
-      value->pushFramebuffer(value->getCurrentPassFramebuffer());
-      const std::array<int, 4> vp = value->getCurrentPassViewport();
-      value->pushViewport(vp[0], vp[1], vp[2], vp[3]);
-      shadowMapBound = shadowDepthTextureHandle.isValid();
-    }
+  const Renderer::ShadowFrameContext& shadow = value->getShadowFrameContext();
+  const bool shadowMapBound = lightingEnabled && shadowsEnabled &&
+                              shadow.active && shadow.depthTexture.isValid();
+  glm::mat4 lightSpaceMatrix(1.0f);
+  glm::vec3 activeLightDirection = lightDirection;
+  if (shadowMapBound) {
+    std::memcpy(glm::value_ptr(lightSpaceMatrix),
+                shadow.lightSpaceMatrix.data(),
+                shadow.lightSpaceMatrix.size() * sizeof(float));
+    activeLightDirection = glm::vec3(shadow.lightDirection[0],
+                                     shadow.lightDirection[1],
+                                     shadow.lightDirection[2]);
   }
 
-  // Pass 2: Main Render Pass
+  // The renderer has already emitted the one shared scene shadow pass.
   if (hasLines && lineMeshHandle.isValid()) {
     if (!value->bindStyle(lineStyleHandle)) {
       return false;
@@ -1007,9 +1013,9 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
     value->pushUniformMat4(WorldLook::kLightSpaceMatrixUniform,
                            glm::value_ptr(lightSpaceMatrix));
     value->pushUniformVec3(WorldLook::kLightDirUniform,
-                           lightDirection.x,
-                           lightDirection.y,
-                           lightDirection.z);
+                           activeLightDirection.x,
+                           activeLightDirection.y,
+                           activeLightDirection.z);
     value->pushUniformVec3(WorldLook::kLightColorUniform,
                            lightingEnabled ? lightColor.x : 0.0f,
                            lightingEnabled ? lightColor.y : 0.0f,
@@ -1040,8 +1046,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
                            static_cast<float>(meshAssetTint.b) / 255.0f,
                            static_cast<float>(meshAssetTint.a) / 255.0f);
     if (lightingEnabled && shadowMapBound) {
-      value->pushSetTexture(shadowDepthTextureHandle,
-                            WorldLook::kShadowTextureUnit);
+      value->pushSetTexture(shadow.depthTexture, WorldLook::kShadowTextureUnit);
       value->pushUniformInt(WorldLook::kShadowMapUniform,
                             WorldLook::kShadowTextureUnit);
     }
@@ -1077,6 +1082,18 @@ void
 MeshVisual::rebuildMeshes()
 {
   expandIndexedVertices(lineVertices, lineIndices, &lineDrawVertices);
+  triangleBoundsValid = !triangleVertices.empty() && !triangleIndices.empty();
+  if (triangleBoundsValid) {
+    const LitVertex& first = triangleVertices[0];
+    triangleBoundsMin = glm::vec3(first.x, first.y, first.z);
+    triangleBoundsMax = triangleBoundsMin;
+    for (size_t i = 1; i < triangleVertices.size(); ++i) {
+      const LitVertex& vertex = triangleVertices[i];
+      const glm::vec3 position(vertex.x, vertex.y, vertex.z);
+      triangleBoundsMin = glm::min(triangleBoundsMin, position);
+      triangleBoundsMax = glm::max(triangleBoundsMax, position);
+    }
+  }
   spriteVertices.clear();
   spriteVertices.reserve(sprites.size() * 6);
   for (size_t i = 0; i < sprites.size(); ++i) {
