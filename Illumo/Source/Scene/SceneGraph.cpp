@@ -9,6 +9,13 @@
 
 static std::atomic<uint64_t> g_nextSceneGraphId{ 1 };
 
+enum class SceneAttachmentPass
+{
+  CollectShadow,
+  ShadowDepth,
+  Color
+};
+
 static uint64_t
 allocateSceneGraphId()
 {
@@ -194,6 +201,73 @@ struct SceneGraph::Impl
            child != slot.children.rend();
            ++child) {
         pending.push_back(TransformVisit{ *child, recompute });
+      }
+    }
+  }
+
+  void visitRenderAttachments(Renderer* renderer, SceneAttachmentPass pass)
+  {
+    if (renderTraversalActive) {
+      return;
+    }
+
+    RenderTraversalGuard traversalGuard(&renderTraversalActive);
+
+    std::vector<RenderVisit>& pending = renderTraversalScratch;
+    pending.clear();
+    if (pending.capacity() < nodeCount) {
+      pending.reserve(nodeCount);
+    }
+    for (std::vector<SceneNodeHandle>::const_reverse_iterator root =
+           roots.rbegin();
+         root != roots.rend();
+         ++root) {
+      pending.push_back(RenderVisit{ *root, false, true, true });
+    }
+
+    while (!pending.empty()) {
+      const RenderVisit visit = pending.back();
+      pending.pop_back();
+      if (!isCurrent(visit.node)) {
+        continue;
+      }
+
+      NodeSlot& slot = slots[visit.node.slot];
+      const bool recompute = visit.ancestorDirty || slot.transformDirty;
+      if (recompute) {
+        if (isCurrent(slot.parent)) {
+          slot.worldTransform =
+            slots[slot.parent.slot].worldTransform * slot.localTransform;
+        } else {
+          slot.worldTransform = slot.localTransform;
+        }
+        slot.transformDirty = false;
+      }
+
+      const bool enabled = visit.ancestorsEnabled && slot.enabled;
+      const bool nodeVisible = visit.ancestorsVisible && slot.visible;
+      if (!enabled || !nodeVisible) {
+        continue;
+      }
+
+      if (slot.renderAttachment != nullptr) {
+        if (pass == SceneAttachmentPass::CollectShadow) {
+          slot.renderAttachment->collectSceneShadowCasters(renderer,
+                                                           slot.worldTransform);
+        } else if (pass == SceneAttachmentPass::ShadowDepth) {
+          slot.renderAttachment->appendSceneShadowCommands(renderer,
+                                                           slot.worldTransform);
+        } else {
+          slot.renderAttachment->appendSceneCommands(renderer,
+                                                     slot.worldTransform);
+        }
+      }
+      for (std::vector<SceneNodeHandle>::const_reverse_iterator child =
+             slot.children.rbegin();
+           child != slot.children.rend();
+           ++child) {
+        pending.push_back(
+          RenderVisit{ *child, recompute, enabled, nodeVisible });
       }
     }
   }
@@ -538,59 +612,23 @@ SceneGraph::AppendCommands(Renderer* renderer)
   if (!isVisible()) {
     return true;
   }
-  if (m_impl->renderTraversalActive) {
-    return true;
-  }
-
-  Impl::RenderTraversalGuard traversalGuard(&m_impl->renderTraversalActive);
-
-  std::vector<Impl::RenderVisit>& pending = m_impl->renderTraversalScratch;
-  pending.clear();
-  if (pending.capacity() < m_impl->nodeCount) {
-    pending.reserve(m_impl->nodeCount);
-  }
-  for (std::vector<SceneNodeHandle>::const_reverse_iterator root =
-         m_impl->roots.rbegin();
-       root != m_impl->roots.rend();
-       ++root) {
-    pending.push_back(Impl::RenderVisit{ *root, false, true, true });
-  }
-
-  while (!pending.empty()) {
-    const Impl::RenderVisit visit = pending.back();
-    pending.pop_back();
-    if (!m_impl->isCurrent(visit.node)) {
-      continue;
-    }
-
-    Impl::NodeSlot& slot = m_impl->slots[visit.node.slot];
-    const bool recompute = visit.ancestorDirty || slot.transformDirty;
-    if (recompute) {
-      if (m_impl->isCurrent(slot.parent)) {
-        slot.worldTransform =
-          m_impl->slots[slot.parent.slot].worldTransform * slot.localTransform;
-      } else {
-        slot.worldTransform = slot.localTransform;
-      }
-      slot.transformDirty = false;
-    }
-
-    const bool enabled = visit.ancestorsEnabled && slot.enabled;
-    const bool nodeVisible = visit.ancestorsVisible && slot.visible;
-    if (!enabled || !nodeVisible) {
-      continue;
-    }
-
-    if (slot.renderAttachment != nullptr) {
-      slot.renderAttachment->appendSceneCommands(renderer, slot.worldTransform);
-    }
-    for (std::vector<SceneNodeHandle>::const_reverse_iterator child =
-           slot.children.rbegin();
-         child != slot.children.rend();
-         ++child) {
-      pending.push_back(
-        Impl::RenderVisit{ *child, recompute, enabled, nodeVisible });
-    }
-  }
+  m_impl->visitRenderAttachments(renderer, SceneAttachmentPass::Color);
   return true;
+}
+
+void
+SceneGraph::CollectShadowCasters(Renderer* renderer)
+{
+  if (isVisible()) {
+    m_impl->visitRenderAttachments(renderer,
+                                   SceneAttachmentPass::CollectShadow);
+  }
+}
+
+void
+SceneGraph::AppendShadowCommands(Renderer* renderer)
+{
+  if (isVisible()) {
+    m_impl->visitRenderAttachments(renderer, SceneAttachmentPass::ShadowDepth);
+  }
 }

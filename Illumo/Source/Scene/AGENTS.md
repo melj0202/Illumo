@@ -24,6 +24,9 @@ keep them alive while reachable by render traversal.
   extraction.
 - Emit only backend-neutral renderer tokens through
   `ISceneRenderAttachment`; Scene must not import OpenGL or game-domain types.
+- Forward collection, shared shadow-depth, and color extraction through the
+  same enabled/visible transform traversal so SceneGraph attachments participate
+  in the Renderer-owned scene shadow pass without transferring ownership.
 - Reject node, hierarchy, state, and attachment mutation while render
   attachments are being visited; callbacks must not invalidate traversal
   storage.

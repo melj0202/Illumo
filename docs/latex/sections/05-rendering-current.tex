@@ -112,8 +112,9 @@ preserving defaults. Optional modules reinstall their overrides after a transiti
   \item \symbolref{MeshVisual} (D-R21/D-R24) is the world mesh host and
         \symbolref{ISceneRenderAttachment}: colored lines/triangles, textured
         quads (sprites), optional camera-facing billboards, optional
-        directional lighting with a depth-only shadow pass, and optional
-        object motion blur from the previous clip pose. It clones
+        directional lighting with participation in a scene-level depth-only
+        shadow pass, and optional object motion blur from the previous clip
+        pose. It clones
         Shape/Sprite styles with depth-tested pipelines and emits
         \texttt{uMVP}. Lit meshes also emit \texttt{WorldLook} light, shadow,
         and motion-blur uniforms from CPU-side drawable state; products

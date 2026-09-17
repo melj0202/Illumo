@@ -420,9 +420,10 @@ flags plus game-provided canvas/help descriptors before host initialization.
 `--help` and `--version` return explicit process results; library code does not
 call `std::exit`.
 
-Typical combined draw order (Scene layers, one main pass): World canvas;
-UI splash + console + editor cursor + selection outline + optional inspector HUD;
-Debug FPS (Debug builds via DebugModule).
+Typical combined draw order: an optional Renderer-owned directional-shadow
+depth pass over visible World casters, then configured World color passes,
+followed by UI splash + console + editor cursor + selection outline + optional
+inspector HUD, then Debug FPS (Debug builds via DebugModule).
 
 At the start of `RenderScene`, `Renderer` captures the active window dimensions
 and primary camera MVP once for that extraction. Matching `GameVisual` instances
@@ -1174,7 +1175,15 @@ styles with depth-tested pipelines, and emits `uMVP = cameraVP * nodeWorld *
 local` (billboard replaces local rotation with camera axes). Lit triangle
 meshes also emit `uLightDir`, `uLightColor`, `uAmbientColor`,
 `uLightSpaceMatrix`, `uShadowMap`, and shadow filter uniforms from drawable
-lighting state. Lit meshes retain the previous `uMVP` and emit `uPrevMVP`,
+lighting state. Before color rendering, direct MeshVisual drawables and visible
+SceneGraph attachments contribute transformed triangle bounds to Renderer;
+Renderer fits one directional light-space matrix to the combined bounds,
+clears one shared depth map, and traverses every caster. All receivers sample
+that same map, so separate objects cast onto one another. The first visible
+caster deterministically selects light direction; maximum requested map size,
+minimum radius, and light distance cover the participating set. Per-receiver
+bias, slope scale, normal offset, and PCF remain drawable state. Lit meshes
+retain the previous `uMVP` and emit `uPrevMVP`,
 `uMotionBlurEnabled`, `uMotionBlurAmount`, and `uMotionBlurMax`; the lit
 vertex shader stretches trailing vertices toward that previous clip pose so
 object and camera motion smear the silhouette. Shadow map size, ortho radius,

@@ -680,9 +680,9 @@ testMeshVisualNewPrimitivesEmitTokens()
 }
 
 static void
-testMeshVisualLitShadowPassClearsDepth()
+testMeshVisualSceneShadowPassCoversVisibleSet()
 {
-  testSection("MeshVisual: lit shadow pass clears depth before drawing");
+  testSection("MeshVisual: one scene shadow pass covers every visible caster");
   NullRenderWindow window(640, 480);
   EnvVars env;
   env.setVar("WinX", 640);
@@ -692,61 +692,152 @@ testMeshVisualLitShadowPassClearsDepth()
   mock.Initialize();
   Renderer renderer(&window, &env, &camera, &mock, false);
 
-  MeshVisual visual;
-  visual.prepare(&renderer);
-  visual.addSolidCube(
+  MeshVisual directVisual;
+  directVisual.prepare(&renderer);
+  directVisual.addSolidCube(
     glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+  directVisual.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(-4.0f, 0.0f, 0.0f)));
+
+  MeshVisual attachedVisual;
+  attachedVisual.prepare(&renderer);
+  attachedVisual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 160, 180, 220, 255 });
+
+  SceneGraph graph;
+  const SceneNodeHandle attachedNode = graph.createNode();
+  graph.setLocalTransform(
+    attachedNode, glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, 0.0f, 0.0f)));
+  graph.setRenderAttachment(attachedNode, &attachedVisual);
+
+  Scene scene(&window, &camera);
+  scene.AddDrawable(&directVisual, RenderLayerId::World);
+  scene.AddDrawable(&graph, RenderLayerId::World);
 
   mock.resetCounters();
   renderer.BeginFrame();
-  testTrue(g, visual.AppendCommands(&renderer), "cube appends lit tokens");
+  renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();
 
-  bool sawShadowFramebuffer = false;
+  size_t shadowFramebufferBinds = 0;
+  size_t shadowDepthClears = 0;
+  size_t shadowDraws = 0;
   bool clearedDepthBeforeShadowDraw = false;
   bool sawColorClearOnShadowTarget = false;
-  bool shadowDrawIssued = false;
   bool lightingUniformsPresent = false;
+  bool insideShadowTarget = false;
+  TextureHandle sharedShadowTexture{};
+  size_t shadowTextureBinds = 0;
 
   for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
     const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
     if (command.commandType == CommandType::SetFramebuffer &&
         command.bindFramebuffer.handle.isValid()) {
-      sawShadowFramebuffer = true;
+      shadowFramebufferBinds += 1;
+      insideShadowTarget = true;
       clearedDepthBeforeShadowDraw = false;
-      shadowDrawIssued = false;
       continue;
     }
-    if (!sawShadowFramebuffer || shadowDrawIssued) {
+    if (command.commandType == CommandType::SetFramebuffer &&
+        !command.bindFramebuffer.handle.isValid()) {
+      insideShadowTarget = false;
+      continue;
+    }
+    if (!insideShadowTarget) {
       if (command.commandType == CommandType::SetUniformVec3 &&
           std::strcmp(command.uniformVec3.name, WorldLook::kLightDirUniform) ==
             0) {
         lightingUniformsPresent = true;
       }
+      if (command.commandType == CommandType::SetTexture &&
+          command.bindTexture.slot == WorldLook::kShadowTextureUnit) {
+        if (!sharedShadowTexture.isValid()) {
+          sharedShadowTexture = command.bindTexture.handle;
+        }
+        testTrue(g,
+                 command.bindTexture.handle == sharedShadowTexture,
+                 "every receiver binds the same scene shadow texture");
+        shadowTextureBinds += 1;
+      }
       continue;
     }
-    if (command.commandType == CommandType::ClearColorBuffer) {
+    if (command.commandType == CommandType::ClearColorBuffer ||
+        command.commandType == CommandType::ClearScreen) {
       sawColorClearOnShadowTarget = true;
     }
     if (command.commandType == CommandType::ClearDepthBuffer) {
+      shadowDepthClears += 1;
       clearedDepthBeforeShadowDraw = true;
     }
     if (command.commandType == CommandType::DrawIndexed) {
-      shadowDrawIssued = true;
+      testTrue(g,
+               clearedDepthBeforeShadowDraw,
+               "scene depth is cleared before every shadow draw");
+      shadowDraws += 1;
     }
   }
 
-  testTrue(g, sawShadowFramebuffer, "lit cube binds a shadow framebuffer");
-  testTrue(g, shadowDrawIssued, "shadow pass issues an indexed depth draw");
-  testTrue(g,
-           clearedDepthBeforeShadowDraw,
-           "shadow pass clears depth before drawing into the depth FBO");
+  testEqSize(g,
+             shadowFramebufferBinds,
+             1u,
+             "the scene binds one shared shadow framebuffer");
+  testEqSize(g, shadowDepthClears, 1u, "the scene shadow map is cleared once");
+  testEqSize(g,
+             shadowDraws,
+             2u,
+             "direct and SceneGraph meshes both enter the shared depth pass");
   testTrue(g,
            !sawColorClearOnShadowTarget,
            "shadow pass does not color-clear a depth-only target");
   testTrue(g,
            lightingUniformsPresent,
            "main pass still pushes directional lighting uniforms");
+  testEqSize(g,
+             shadowTextureBinds,
+             2u,
+             "both receivers sample the shared scene shadow map");
+  size_t shadowDepthTextureCreates = 0;
+  for (size_t i = 0; i < mock.getCreateCount(); ++i) {
+    const MockBackend::CreateRecord& create = mock.getCreate(i);
+    if (create.kind == MockBackend::CreateRecord::Kind::TextureData &&
+        create.width == 1024 && create.height == 1024 && create.channels == 1) {
+      shadowDepthTextureCreates += 1;
+    }
+  }
+  testEqSize(g,
+             shadowDepthTextureCreates,
+             1u,
+             "multiple casters allocate one scene depth texture");
+
+  const RenderCommand* firstLightMatrix =
+    findSubmittedUniformMat4(mock, WorldLook::kLightSpaceMatrixUniform, 0);
+  const RenderCommand* secondLightMatrix =
+    findSubmittedUniformMat4(mock, WorldLook::kLightSpaceMatrixUniform, 1);
+  testTrue(g,
+           firstLightMatrix != nullptr && secondLightMatrix != nullptr,
+           "both receivers receive a light-space matrix");
+  if (firstLightMatrix != nullptr && secondLightMatrix != nullptr) {
+    bool matricesMatch = true;
+    for (int i = 0; i < 16; ++i) {
+      matricesMatch = matricesMatch &&
+                      std::abs(firstLightMatrix->uniformMat4.m[i] -
+                               secondLightMatrix->uniformMat4.m[i]) < 0.0001f;
+    }
+    testTrue(g, matricesMatch, "all receivers use one light-space matrix");
+
+    glm::mat4 lightSpace(1.0f);
+    std::memcpy(glm::value_ptr(lightSpace),
+                firstLightMatrix->uniformMat4.m,
+                16 * sizeof(float));
+    const glm::vec4 leftClip = lightSpace * glm::vec4(-4.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec4 rightClip = lightSpace * glm::vec4(4.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec3 leftNdc = glm::vec3(leftClip) / leftClip.w;
+    const glm::vec3 rightNdc = glm::vec3(rightClip) / rightClip.w;
+    testTrue(g,
+             std::abs(leftNdc.x) <= 1.0f && std::abs(leftNdc.y) <= 1.0f &&
+               std::abs(rightNdc.x) <= 1.0f && std::abs(rightNdc.y) <= 1.0f,
+             "combined caster bounds fit inside the shadow projection");
+  }
 }
 
 static bool
@@ -876,8 +967,9 @@ testMeshVisualShadowUniformsFromSetters()
 
   mock.resetCounters();
   renderer.BeginFrame();
-  testTrue(
-    g, visual.AppendCommands(&renderer), "lit cube appends shadow tokens");
+  Scene scene(&window, &camera);
+  scene.AddDrawable(&visual, RenderLayerId::World);
+  renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();
 
   bool sawShadowViewport = false;
@@ -928,8 +1020,7 @@ testMeshVisualShadowUniformsFromSetters()
   visual.setShadowsEnabled(false);
   mock.resetCounters();
   renderer.BeginFrame();
-  testTrue(
-    g, visual.AppendCommands(&renderer), "unshadowed cube appends tokens");
+  renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();
 
   bool sawShadowFramebuffer = false;
@@ -978,7 +1069,7 @@ testMeshVisualMotionBlurUniformsFromSetters()
   renderer.EndFrame();
 
   const RenderCommand* firstMvp =
-    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 1);
+    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
   const RenderCommand* firstPrev =
     findSubmittedUniformMat4(mock, WorldLook::kPrevMvpUniform, 0);
   testTrue(g, firstMvp != nullptr, "main pass emits uMVP");
@@ -1023,7 +1114,7 @@ testMeshVisualMotionBlurUniformsFromSetters()
   renderer.EndFrame();
 
   const RenderCommand* secondMvp =
-    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 1);
+    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
   const RenderCommand* secondPrev =
     findSubmittedUniformMat4(mock, WorldLook::kPrevMvpUniform, 0);
   testTrue(g,
@@ -1080,8 +1171,8 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   registry.add("Illumo.MeshVisual.NewPrimitives", []() {
     return runMeshVisualCase(testMeshVisualNewPrimitivesEmitTokens);
   });
-  registry.add("Illumo.MeshVisual.LitShadowPassClearsDepth", []() {
-    return runMeshVisualCase(testMeshVisualLitShadowPassClearsDepth);
+  registry.add("Illumo.MeshVisual.SceneShadowPassCoversVisibleSet", []() {
+    return runMeshVisualCase(testMeshVisualSceneShadowPassCoversVisibleSet);
   });
   registry.add("Illumo.MeshVisual.LightingUniformsFromSetters", []() {
     return runMeshVisualCase(testMeshVisualLightingUniformsFromSetters);

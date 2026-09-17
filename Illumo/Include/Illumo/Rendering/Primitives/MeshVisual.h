@@ -119,8 +119,14 @@ public:
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
+  void CollectShadowCasters(Renderer* renderer) override;
+  void AppendShadowCommands(Renderer* renderer) override;
   void appendSceneCommands(Renderer* renderer,
                            const Matrix4& worldTransform) override;
+  void collectSceneShadowCasters(Renderer* renderer,
+                                 const Matrix4& worldTransform) override;
+  void appendSceneShadowCommands(Renderer* renderer,
+                                 const Matrix4& worldTransform) override;
 
 private:
   struct ColorVertex
@@ -193,9 +199,6 @@ private:
   RenderStyleHandle triangleStyleHandle{};
   RenderStyleHandle spriteStyleHandle{};
   RenderStyleHandle litMeshStyleHandle{};
-  RenderStyleHandle shadowDepthStyleHandle{};
-  FramebufferHandle shadowFboHandle{};
-  TextureHandle shadowDepthTextureHandle{};
   size_t lineMeshCapacity = 0;
   size_t triangleVertexCapacity = 0;
   size_t triangleIndexCapacity = 0;
@@ -212,11 +215,13 @@ private:
   glm::mat4 previousColoredMvp = glm::mat4(1.0f);
   float motionBlurAmount = 0.5f;
   float motionBlurMax = 0.2f;
+  glm::vec3 triangleBoundsMin = glm::vec3(0.0f);
+  glm::vec3 triangleBoundsMax = glm::vec3(0.0f);
+  bool triangleBoundsValid = false;
   glm::vec3 lightDirection = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
   glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
   glm::vec3 ambientColor = glm::vec3(0.2f, 0.22f, 0.25f);
   int shadowMapSize = 1024;
-  int enrolledShadowMapSize = 0;
   float shadowRadius = 2.5f;
   float lightDistance = 8.0f;
   float shadowBias = 0.001f;
@@ -224,7 +229,11 @@ private:
   float shadowNormalOffset = 0.015f;
 
   void ensureStyles();
-  void ensureShadowResources(Renderer* renderer);
+  bool prepareForCommands(Renderer* renderer);
+  void collectShadowCasterWithWorld(Renderer* renderer,
+                                    const glm::mat4& nodeWorld);
+  void appendShadowCommandsWithWorld(Renderer* renderer,
+                                     const glm::mat4& nodeWorld);
   bool appendCommandsWithWorld(Renderer* renderer, const glm::mat4& nodeWorld);
   void rebuildMeshes();
   bool ensureMeshCapacity(MeshHandle* meshHandle,
@@ -239,7 +248,6 @@ private:
                                     std::vector<ColorVertex>* drawVertices);
   void releaseMeshes();
   void releaseStyles();
-  void releaseShadowResources();
   bool resolveViewProjection(Renderer* renderer,
                              glm::mat4* viewProjection,
                              glm::mat4* view) const;

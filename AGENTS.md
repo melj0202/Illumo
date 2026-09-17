@@ -344,6 +344,10 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 - Production drawables append `RenderCommand` tokens to the backend-neutral
   `Renderer`; `IBackend` executes them. Any pointer carried by a command must
   remain valid until synchronous queue submission returns.
+- Directional shadows use one Renderer-owned depth pass over all visible World
+  casters before color rendering. Direct `MeshVisual` drawables and SceneGraph
+  attachments contribute bounds and depth tokens to the same fitted light-space
+  matrix and shared map; per-object shadow framebuffers are forbidden.
 - `Rendering::Scene` is a non-owning ordered list rebuilt each frame.
   `SceneGraph` separately owns persistent nodes and cached transforms, uses
   graph-ID-plus-slot-plus-generation handles, borrows render attachments, and

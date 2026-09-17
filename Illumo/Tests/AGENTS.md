@@ -15,7 +15,7 @@ SceneGraph cases are `Illumo.SceneGraph.HandlesAndLifetime`,
 `Illumo.MeshVisual.SpriteAndCube`,
 `Illumo.MeshVisual.Billboard`, `Illumo.MeshVisual.SceneAttachment`,
 `Illumo.MeshVisual.NewPrimitives`,
-`Illumo.MeshVisual.LitShadowPassClearsDepth`,
+`Illumo.MeshVisual.SceneShadowPassCoversVisibleSet`,
 `Illumo.MeshVisual.LightingUniformsFromSetters`,
 `Illumo.MeshVisual.ShadowUniformsFromSetters`, and
 `Illumo.MeshVisual.MotionBlurUniformsFromSetters`.

@@ -28,6 +28,10 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
   claim a dropped frame was complete.
 - `Scene` is a non-owning ordered drawable list rebuilt each frame. It does not
   own drawables and must not become a retained scene graph or ECS.
+- Directional shadows are one Renderer-owned pass over visible World casters
+  before color rendering. Drawables and SceneGraph attachments only contribute
+  bounds and depth tokens; they must not allocate private per-object shadow
+  maps or clear depth once per object.
 - The separate `SceneGraph` may enter `Scene` as one drawable. Its borrowed
   `ISceneRenderAttachment` values receive resolved world transforms and emit
   tokens only; do not make Rendering own graph nodes or graph lifetime.

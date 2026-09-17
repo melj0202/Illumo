@@ -31,6 +31,12 @@ public:
     return false;
   }
 
+  // Optional scene-level directional-shadow extraction. Renderer invokes the
+  // collection phase for visible World drawables, prepares one shared depth
+  // target, then invokes the command phase before ordinary color rendering.
+  virtual void CollectShadowCasters(Renderer* renderer) { (void)renderer; }
+  virtual void AppendShadowCommands(Renderer* renderer) { (void)renderer; }
+
   bool isVisible() const { return visible; }
   void setVisible(bool v) { visible = v; }
 
