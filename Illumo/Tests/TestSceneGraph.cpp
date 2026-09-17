@@ -283,6 +283,51 @@ testSceneGraphHierarchyAndTransforms()
   testTrue(g,
            translationEquals(world, 7.0f, 8.0f, 9.0f),
            "Transform3D local transform propagates to world transform");
+
+  SceneGraph branchGraph;
+  const SceneNodeHandle branchRoot = branchGraph.createNode();
+  const SceneNodeHandle leftParent = branchGraph.createNode(branchRoot);
+  const SceneNodeHandle leftLeaf = branchGraph.createNode(leftParent);
+  const SceneNodeHandle rightParent = branchGraph.createNode(branchRoot);
+  const SceneNodeHandle rightLeaf = branchGraph.createNode(rightParent);
+
+  branchGraph.setLocalTransform(
+    branchRoot, glm::translate(Matrix4(1.0f), Vector3(1.0f, 0.0f, 0.0f)));
+  branchGraph.setLocalTransform(
+    leftParent, glm::translate(Matrix4(1.0f), Vector3(0.0f, 2.0f, 0.0f)));
+  branchGraph.setLocalTransform(
+    leftLeaf, glm::translate(Matrix4(1.0f), Vector3(0.0f, 0.0f, 3.0f)));
+  branchGraph.setLocalTransform(
+    rightParent, glm::translate(Matrix4(1.0f), Vector3(0.0f, 4.0f, 0.0f)));
+  branchGraph.setLocalTransform(
+    rightLeaf, glm::translate(Matrix4(1.0f), Vector3(0.0f, 0.0f, 5.0f)));
+  branchGraph.updateWorldTransforms();
+
+  branchGraph.setLocalTransform(
+    leftParent, glm::translate(Matrix4(1.0f), Vector3(0.0f, 6.0f, 0.0f)));
+  branchGraph.setLocalTransform(
+    rightParent, glm::translate(Matrix4(1.0f), Vector3(0.0f, 8.0f, 0.0f)));
+
+  Matrix4 leftWorld(1.0f);
+  testTrue(g,
+           branchGraph.getWorldTransform(leftLeaf, &leftWorld),
+           "dirty branch world transform resolves on demand");
+  testTrue(g,
+           translationEquals(leftWorld, 1.0f, 6.0f, 3.0f),
+           "on-demand query composes the complete dirty ancestor chain");
+
+  Matrix4 cachedLeftWorld(1.0f);
+  branchGraph.getWorldTransform(leftLeaf, &cachedLeftWorld);
+  testTrue(g,
+           translationEquals(cachedLeftWorld, 1.0f, 6.0f, 3.0f),
+           "repeated cached query preserves the resolved world transform");
+
+  Matrix4 rightWorld(1.0f);
+  branchGraph.getWorldTransform(rightLeaf, &rightWorld);
+  testTrue(
+    g,
+    translationEquals(rightWorld, 1.0f, 8.0f, 5.0f),
+    "querying one branch leaves another dirty branch independently resolvable");
 }
 
 static void

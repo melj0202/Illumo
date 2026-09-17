@@ -42,6 +42,8 @@ public:
   bool setLocalTransform(SceneNodeHandle node, const Matrix4& transform);
   bool setLocalTransform(SceneNodeHandle node, const Transform3D& transform);
   bool getLocalTransform(SceneNodeHandle node, Matrix4* transform) const;
+  // Resolves only this node's dirty dependency chain. Cached reads are O(1);
+  // dirty reads are O(depth), independent of unrelated graph nodes.
   bool getWorldTransform(SceneNodeHandle node, Matrix4* transform);
   bool getWorldBounds(SceneNodeHandle node, AxisAlignedBounds3* bounds);
   void updateWorldTransforms();
