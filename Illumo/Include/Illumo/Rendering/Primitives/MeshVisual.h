@@ -179,9 +179,7 @@ private:
   std::vector<LitVertex> triangleVertices;
   std::vector<unsigned int> triangleIndices;
   std::vector<ColorVertex> lineDrawVertices;
-  std::vector<LitVertex> triangleDrawVertices;
   std::vector<unsigned int> lineMeshIndices;
-  std::vector<unsigned int> triangleMeshIndices;
   std::vector<SpriteItem> sprites;
   std::vector<SpriteVertex> spriteVertices;
   std::vector<unsigned int> spriteMeshIndices;
@@ -199,7 +197,8 @@ private:
   FramebufferHandle shadowFboHandle{};
   TextureHandle shadowDepthTextureHandle{};
   size_t lineMeshCapacity = 0;
-  size_t triangleMeshCapacity = 0;
+  size_t triangleVertexCapacity = 0;
+  size_t triangleIndexCapacity = 0;
   size_t spriteMeshCapacity = 0;
   bool geometryDirty = true;
   bool lineUploadPending = false;
@@ -233,12 +232,11 @@ private:
                           size_t* capacity,
                           size_t required,
                           MeshVertexLayout layout);
+  bool ensureTriangleMeshCapacity(size_t requiredVertices,
+                                  size_t requiredIndices);
   static void expandIndexedVertices(const std::vector<ColorVertex>& vertices,
                                     const std::vector<unsigned int>& indices,
                                     std::vector<ColorVertex>* drawVertices);
-  static void expandIndexedLitVertices(const std::vector<LitVertex>& vertices,
-                                       const std::vector<unsigned int>& indices,
-                                       std::vector<LitVertex>* drawVertices);
   void releaseMeshes();
   void releaseStyles();
   void releaseShadowResources();

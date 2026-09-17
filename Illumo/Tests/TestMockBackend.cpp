@@ -236,6 +236,41 @@ testCommandSubmit()
 }
 
 static void
+testIndexBufferCommandValidation()
+{
+  std::printf("\n--- index buffer command validation ---\n");
+  MockBackend mock;
+  mock.Initialize();
+  const unsigned int indices[6] = { 0, 1, 2, 0, 2, 3 };
+  const MeshHandle mesh = mock.CreateMesh(
+    nullptr, 256, nullptr, sizeof(indices), MeshVertexLayout::Pos3, true);
+
+  RenderCommand valid{};
+  valid.commandType = CommandType::UpdateIndexBuffer;
+  valid.updateIndexBuffer.handle = mesh;
+  valid.updateIndexBuffer.offsetBytes = 0;
+  valid.updateIndexBuffer.sizeBytes = sizeof(indices);
+  valid.updateIndexBuffer.data = indices;
+  mock.PushToCommandQueue(valid);
+  mock.SubmitCommandQueue();
+  expectEqSize(
+    mock.getLastSubmittedCount(), 1u, "live mesh accepts index update token");
+  expectEqSize(mock.getRejectedStaleCommandCount(),
+               0u,
+               "live index update is not rejected");
+
+  mock.ClearCommandQueue();
+  expectTrue(mock.DestroyMesh(mesh), "index update mesh can be destroyed");
+  mock.PushToCommandQueue(valid);
+  mock.SubmitCommandQueue();
+  expectEqSize(
+    mock.getLastSubmittedCount(), 0u, "stale index update token is rejected");
+  expectEqSize(mock.getRejectedStaleCommandCount(),
+               1u,
+               "stale index update rejection is reported");
+}
+
+static void
 testProofLikeSequence()
 {
   std::printf("\n--- proof-like token sequence ---\n");
@@ -552,6 +587,9 @@ registerMockBackendTests(IllumoTestRegistry& registry)
                []() { return runMockBackendCase(testCreateRecords); });
   registry.add("Illumo.MockBackend.CommandSubmit",
                []() { return runMockBackendCase(testCommandSubmit); });
+  registry.add("Illumo.MockBackend.IndexBufferCommand", []() {
+    return runMockBackendCase(testIndexBufferCommandValidation);
+  });
   registry.add("Illumo.MockBackend.ProofLikeSequence",
                []() { return runMockBackendCase(testProofLikeSequence); });
   registry.add("Illumo.MockBackend.CanvasLikeUpdateTexture", []() {

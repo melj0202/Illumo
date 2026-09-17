@@ -31,6 +31,7 @@ enum class CommandType
   // Resource updates (same-frame pointer validity)
   UpdateTexture,
   UpdateBuffer,
+  UpdateIndexBuffer,
 
   // Clear
   ClearScreen,
@@ -207,6 +208,7 @@ struct RenderCommand
     CmdDrawInstanced drawInstanced;
     CmdUpdateTexture updateTexture;
     CmdUpdateBuffer updateBuffer;
+    CmdUpdateBuffer updateIndexBuffer;
   };
   // Append fields to preserve existing positional aggregate initialization.
   // ClearDepthBuffer, ClearScreen and ClearAll default to the far depth.

@@ -420,6 +420,20 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
         break;
       }
 
+      case CommandType::UpdateIndexBuffer: {
+        GLMesh* mesh = resolveMesh(tables, cmd.updateIndexBuffer.handle);
+        if (!mesh || !cmd.updateIndexBuffer.data) {
+          reportFrameError("UpdateIndexBuffer: invalid handle or null data");
+          break;
+        }
+        if (!mesh->UpdateIndexData(cmd.updateIndexBuffer.data,
+                                   cmd.updateIndexBuffer.sizeBytes,
+                                   cmd.updateIndexBuffer.offsetBytes)) {
+          reportFrameError("UpdateIndexBuffer: range exceeds index capacity");
+        }
+        break;
+      }
+
       default:
         break;
     }

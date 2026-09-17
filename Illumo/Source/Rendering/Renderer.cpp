@@ -632,6 +632,21 @@ Renderer::pushUpdateBuffer(MeshHandle meshHandle,
   _backend->PushToCommandQueue(cmd);
 }
 
+void
+Renderer::pushUpdateIndexBuffer(MeshHandle meshHandle,
+                                unsigned int offsetBytes,
+                                unsigned int sizeBytes,
+                                const void* data)
+{
+  RenderCommand cmd;
+  cmd.commandType = CommandType::UpdateIndexBuffer;
+  cmd.updateIndexBuffer.handle = meshHandle;
+  cmd.updateIndexBuffer.offsetBytes = offsetBytes;
+  cmd.updateIndexBuffer.sizeBytes = sizeBytes;
+  cmd.updateIndexBuffer.data = data;
+  _backend->PushToCommandQueue(cmd);
+}
+
 PooledRenderTarget
 Renderer::acquireRenderTarget(const PooledRenderTargetDesc& desc)
 {

@@ -492,6 +492,11 @@ MeshVisual::addMesh(const MeshData& mesh, ColorRgba tint)
   if (mesh.vertices.empty() || mesh.indices.empty()) {
     return;
   }
+  for (uint32_t index : mesh.indices) {
+    if (index >= mesh.vertices.size()) {
+      return;
+    }
+  }
 
   const unsigned int vertexOffset =
     static_cast<unsigned int>(triangleVertices.size());
@@ -718,7 +723,8 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   }
 
   const bool hasLines = !lineDrawVertices.empty();
-  const bool hasTriangles = !triangleDrawVertices.empty();
+  const bool hasTriangles =
+    !triangleVertices.empty() && !triangleIndices.empty();
   const bool hasSprites = !sprites.empty();
   const bool hasMeshAsset =
     meshAssetHandle.isValid() && meshAssetIndexCount > 0;
@@ -743,12 +749,8 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
                                       MeshVertexLayout::Pos3Color4U8)) {
     return false;
   }
-  if (hasTriangles &&
-      !ensureMeshCapacity(&triangleMeshHandle,
-                          &triangleMeshIndices,
-                          &triangleMeshCapacity,
-                          triangleDrawVertices.size(),
-                          MeshVertexLayout::Pos3Norm3Color4U8Uv2)) {
+  if (hasTriangles && !ensureTriangleMeshCapacity(triangleVertices.size(),
+                                                  triangleIndices.size())) {
     return false;
   }
   if (hasSprites && !ensureMeshCapacity(&spriteMeshHandle,
@@ -768,11 +770,16 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
     lineUploadPending = false;
   }
   if (triangleUploadPending && triangleMeshHandle.isValid()) {
-    value->pushUpdateBuffer(triangleMeshHandle,
-                            0,
-                            static_cast<unsigned int>(
-                              triangleDrawVertices.size() * sizeof(LitVertex)),
-                            triangleDrawVertices.data());
+    value->pushUpdateBuffer(
+      triangleMeshHandle,
+      0,
+      static_cast<unsigned int>(triangleVertices.size() * sizeof(LitVertex)),
+      triangleVertices.data());
+    value->pushUpdateIndexBuffer(
+      triangleMeshHandle,
+      0,
+      static_cast<unsigned int>(triangleIndices.size() * sizeof(unsigned int)),
+      triangleIndices.data());
     triangleUploadPending = false;
   }
   if (spriteUploadPending && spriteMeshHandle.isValid()) {
@@ -905,8 +912,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
         value->pushUniformInt(WorldLook::kShadowMapUniform,
                               WorldLook::kShadowTextureUnit);
       }
-      value->pushDrawIndexed(
-        static_cast<unsigned int>(triangleDrawVertices.size()));
+      value->pushDrawIndexed(static_cast<unsigned int>(triangleIndices.size()));
     } else {
       if (!value->bindStyle(triangleStyleHandle)) {
         return false;
@@ -917,8 +923,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
                              glm::value_ptr(previousMvp));
       value->pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
                             motionBlurEnabled ? 1 : 0);
-      value->pushDrawIndexed(
-        static_cast<unsigned int>(triangleDrawVertices.size()));
+      value->pushDrawIndexed(static_cast<unsigned int>(triangleIndices.size()));
     }
   }
   if (hasMeshAsset) {
@@ -1002,8 +1007,6 @@ void
 MeshVisual::rebuildMeshes()
 {
   expandIndexedVertices(lineVertices, lineIndices, &lineDrawVertices);
-  expandIndexedLitVertices(
-    triangleVertices, triangleIndices, &triangleDrawVertices);
   spriteVertices.clear();
   spriteVertices.reserve(sprites.size() * 6);
   for (size_t i = 0; i < sprites.size(); ++i) {
@@ -1056,7 +1059,7 @@ MeshVisual::rebuildMeshes()
     }
   }
   lineUploadPending = !lineDrawVertices.empty();
-  triangleUploadPending = !triangleDrawVertices.empty();
+  triangleUploadPending = !triangleVertices.empty() && !triangleIndices.empty();
   spriteUploadPending = !spriteVertices.empty();
   geometryDirty = false;
 }
@@ -1116,27 +1119,62 @@ MeshVisual::ensureMeshCapacity(MeshHandle* meshHandle,
   return true;
 }
 
+bool
+MeshVisual::ensureTriangleMeshCapacity(size_t requiredVertices,
+                                       size_t requiredIndices)
+{
+  if (requiredVertices == 0 || requiredIndices == 0) {
+    return true;
+  }
+  if (renderer == nullptr) {
+    return false;
+  }
+  if (triangleMeshHandle.isValid() &&
+      triangleVertexCapacity >= requiredVertices &&
+      triangleIndexCapacity >= requiredIndices) {
+    return true;
+  }
+
+  size_t nextVertexCapacity =
+    triangleVertexCapacity == 0 ? 64u : triangleVertexCapacity;
+  while (nextVertexCapacity < requiredVertices) {
+    nextVertexCapacity *= 2u;
+  }
+  size_t nextIndexCapacity =
+    triangleIndexCapacity == 0 ? 64u : triangleIndexCapacity;
+  while (nextIndexCapacity < requiredIndices) {
+    nextIndexCapacity *= 2u;
+  }
+
+  const size_t vertexCapacityBytes = nextVertexCapacity * sizeof(LitVertex);
+  const size_t indexCapacityBytes = nextIndexCapacity * sizeof(unsigned int);
+  if (triangleMeshHandle.isValid()) {
+    if (!renderer->replaceDynamicMesh(triangleMeshHandle,
+                                      vertexCapacityBytes,
+                                      nullptr,
+                                      indexCapacityBytes,
+                                      MeshVertexLayout::Pos3Norm3Color4U8Uv2)) {
+      return false;
+    }
+  } else {
+    triangleMeshHandle =
+      renderer->enrollDynamicMesh(vertexCapacityBytes,
+                                  nullptr,
+                                  indexCapacityBytes,
+                                  MeshVertexLayout::Pos3Norm3Color4U8Uv2);
+    if (!triangleMeshHandle.isValid()) {
+      return false;
+    }
+  }
+  triangleVertexCapacity = nextVertexCapacity;
+  triangleIndexCapacity = nextIndexCapacity;
+  return true;
+}
+
 void
 MeshVisual::expandIndexedVertices(const std::vector<ColorVertex>& vertices,
                                   const std::vector<unsigned int>& indices,
                                   std::vector<ColorVertex>* drawVertices)
-{
-  if (drawVertices == nullptr) {
-    return;
-  }
-  drawVertices->clear();
-  drawVertices->reserve(indices.size());
-  for (unsigned int index : indices) {
-    if (index < vertices.size()) {
-      drawVertices->push_back(vertices[index]);
-    }
-  }
-}
-
-void
-MeshVisual::expandIndexedLitVertices(const std::vector<LitVertex>& vertices,
-                                     const std::vector<unsigned int>& indices,
-                                     std::vector<LitVertex>* drawVertices)
 {
   if (drawVertices == nullptr) {
     return;
@@ -1169,10 +1207,10 @@ MeshVisual::releaseMeshes()
     spriteMeshHandle = MeshHandle{};
   }
   lineMeshCapacity = 0;
-  triangleMeshCapacity = 0;
+  triangleVertexCapacity = 0;
+  triangleIndexCapacity = 0;
   spriteMeshCapacity = 0;
   lineMeshIndices.clear();
-  triangleMeshIndices.clear();
   spriteMeshIndices.clear();
   lineUploadPending = false;
   triangleUploadPending = false;
