@@ -6,8 +6,13 @@
 #include <Illumo/Rendering/RenderLayerId.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/EnvVars.h>
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -72,6 +77,169 @@ Renderer::endFrameContext()
   frameContext.hasWorldMvp = false;
   frameContext.worldCamera = nullptr;
   frameContext.uiScale = 1.0f;
+  shadowFrameContext.active = false;
+  shadowFrameContext.depthTexture = TextureHandle{};
+}
+
+void
+Renderer::resetShadowFrame()
+{
+  shadowBoundsValid = false;
+  requestedShadowMapSize = 0;
+  requestedShadowMinimumRadius = 0.0f;
+  requestedShadowLightDistance = 0.0f;
+  shadowFrameContext = ShadowFrameContext{};
+}
+
+void
+Renderer::registerShadowCaster(const ShadowCasterDesc& caster)
+{
+  for (size_t axis = 0; axis < 3; ++axis) {
+    if (!std::isfinite(caster.boundsMin[axis]) ||
+        !std::isfinite(caster.boundsMax[axis]) ||
+        caster.boundsMin[axis] > caster.boundsMax[axis]) {
+      return;
+    }
+  }
+
+  const glm::vec3 requestedDirection(caster.lightDirection[0],
+                                     caster.lightDirection[1],
+                                     caster.lightDirection[2]);
+  const float directionLength = glm::length(requestedDirection);
+  if (!std::isfinite(directionLength) || directionLength <= 0.0001f) {
+    return;
+  }
+
+  if (!shadowBoundsValid) {
+    shadowBoundsMin = caster.boundsMin;
+    shadowBoundsMax = caster.boundsMax;
+    const glm::vec3 normalizedDirection = requestedDirection / directionLength;
+    requestedShadowLightDirection = { normalizedDirection.x,
+                                      normalizedDirection.y,
+                                      normalizedDirection.z };
+    shadowBoundsValid = true;
+  } else {
+    for (size_t axis = 0; axis < 3; ++axis) {
+      shadowBoundsMin[axis] =
+        std::min(shadowBoundsMin[axis], caster.boundsMin[axis]);
+      shadowBoundsMax[axis] =
+        std::max(shadowBoundsMax[axis], caster.boundsMax[axis]);
+    }
+  }
+
+  requestedShadowMapSize =
+    std::max(requestedShadowMapSize, std::max(caster.mapSize, 1));
+  requestedShadowMinimumRadius = std::max(requestedShadowMinimumRadius,
+                                          std::max(caster.minimumRadius, 0.1f));
+  requestedShadowLightDistance = std::max(requestedShadowLightDistance,
+                                          std::max(caster.lightDistance, 0.5f));
+}
+
+void
+Renderer::ensureShadowResources(int mapSize)
+{
+  if (shadowFramebuffer.isValid() && enrolledShadowMapSize == mapSize) {
+    return;
+  }
+
+  releaseShadowResources();
+  shadowFramebuffer =
+    enrollDepthFramebuffer(mapSize, mapSize, &shadowDepthTexture);
+  if (shadowFramebuffer.isValid()) {
+    enrolledShadowMapSize = mapSize;
+  }
+}
+
+void
+Renderer::releaseShadowResources()
+{
+  if (_backend != nullptr && shadowFramebuffer.isValid()) {
+    destroyFramebuffer(shadowFramebuffer);
+  }
+  shadowFramebuffer = FramebufferHandle{};
+  shadowDepthTexture = TextureHandle{};
+  enrolledShadowMapSize = 0;
+}
+
+bool
+Renderer::prepareShadowPass()
+{
+  if (!shadowBoundsValid || requestedShadowMapSize <= 0) {
+    return false;
+  }
+
+  ensureBuiltinStyles();
+  if (!getBuiltinStyleHandle(RenderStyleId::ShadowDepth).isValid()) {
+    return false;
+  }
+
+  ensureShadowResources(requestedShadowMapSize);
+  if (!shadowFramebuffer.isValid() || !shadowDepthTexture.isValid()) {
+    return false;
+  }
+
+  const glm::vec3 boundsMin(
+    shadowBoundsMin[0], shadowBoundsMin[1], shadowBoundsMin[2]);
+  const glm::vec3 boundsMax(
+    shadowBoundsMax[0], shadowBoundsMax[1], shadowBoundsMax[2]);
+  const glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
+  const float sceneRadius = glm::length(boundsMax - boundsMin) * 0.5f;
+  const glm::vec3 lightDirection(requestedShadowLightDirection[0],
+                                 requestedShadowLightDirection[1],
+                                 requestedShadowLightDirection[2]);
+  glm::vec3 lightUp(0.0f, 1.0f, 0.0f);
+  if (std::abs(glm::dot(lightDirection, lightUp)) > 0.98f) {
+    lightUp = glm::vec3(0.0f, 0.0f, 1.0f);
+  }
+
+  const float lightDistance =
+    std::max(requestedShadowLightDistance, sceneRadius + 0.5f);
+  const glm::mat4 lightView =
+    glm::lookAt(center + lightDirection * lightDistance, center, lightUp);
+
+  glm::vec3 lightBoundsMin(std::numeric_limits<float>::max());
+  glm::vec3 lightBoundsMax(std::numeric_limits<float>::lowest());
+  for (int x = 0; x < 2; ++x) {
+    for (int y = 0; y < 2; ++y) {
+      for (int z = 0; z < 2; ++z) {
+        const glm::vec3 corner(x == 0 ? boundsMin.x : boundsMax.x,
+                               y == 0 ? boundsMin.y : boundsMax.y,
+                               z == 0 ? boundsMin.z : boundsMax.z);
+        const glm::vec3 lightCorner =
+          glm::vec3(lightView * glm::vec4(corner, 1.0f));
+        lightBoundsMin = glm::min(lightBoundsMin, lightCorner);
+        lightBoundsMax = glm::max(lightBoundsMax, lightCorner);
+      }
+    }
+  }
+
+  const glm::vec2 lightCenter =
+    glm::vec2(lightBoundsMin + lightBoundsMax) * 0.5f;
+  const glm::vec2 lightHalfExtents =
+    glm::vec2(lightBoundsMax - lightBoundsMin) * 0.5f;
+  const float fitPadding = std::max(0.05f, sceneRadius * 0.02f);
+  const float halfExtent =
+    std::max(requestedShadowMinimumRadius,
+             std::max(lightHalfExtents.x, lightHalfExtents.y) + fitPadding);
+  const float depthPadding = std::max(0.05f, sceneRadius * 0.05f);
+  const float nearPlane = std::max(0.01f, -lightBoundsMax.z - depthPadding);
+  const float farPlane =
+    std::max(nearPlane + 0.1f, -lightBoundsMin.z + depthPadding);
+  const glm::mat4 lightProjection = glm::ortho(lightCenter.x - halfExtent,
+                                               lightCenter.x + halfExtent,
+                                               lightCenter.y - halfExtent,
+                                               lightCenter.y + halfExtent,
+                                               nearPlane,
+                                               farPlane);
+  const glm::mat4 lightSpaceMatrix = lightProjection * lightView;
+
+  std::memcpy(shadowFrameContext.lightSpaceMatrix.data(),
+              glm::value_ptr(lightSpaceMatrix),
+              shadowFrameContext.lightSpaceMatrix.size() * sizeof(float));
+  shadowFrameContext.lightDirection = requestedShadowLightDirection;
+  shadowFrameContext.depthTexture = shadowDepthTexture;
+  shadowFrameContext.active = true;
+  return true;
 }
 
 Renderer::Renderer(IRenderWindow* window,
@@ -106,6 +274,7 @@ Renderer::Renderer(IRenderWindow* window,
 
 Renderer::~Renderer()
 {
+  releaseShadowResources();
   _renderTargetPool.releaseAll();
   if (_ownedBackend) {
     _ownedBackend->Shutdown();
@@ -530,13 +699,17 @@ Renderer::ensureFullscreenQuadMesh()
     return;
   }
   const float verts[32] = {
-    1.0f,  1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,  -1.0f, 0.0f,
-    1.0f,  1.0f, 1.0f, 1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, 1.0f,  1.0f,
-    0.0f,  0.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f,
+    1.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f,  1.0f,  1.0f, 1.0f, -1.0f, 0.0f,
+    1.0f, 1.0f, 1.0f,  1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 1.0f, 1.0f,  1.0f,
+    0.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f,  1.0f,  1.0f, 0.0f, 1.0f,
   };
   const unsigned int indices[6] = { 0, 1, 2, 0, 2, 3 };
-  _fullscreenQuadMeshHandle = enrollMesh(
-    verts, sizeof(verts), indices, sizeof(indices), MeshVertexLayout::Pos3Color3Uv2, false);
+  _fullscreenQuadMeshHandle = enrollMesh(verts,
+                                         sizeof(verts),
+                                         indices,
+                                         sizeof(indices),
+                                         MeshVertexLayout::Pos3Color3Uv2,
+                                         false);
   _fullscreenQuadReady = _fullscreenQuadMeshHandle.isValid();
 }
 
@@ -592,8 +765,7 @@ Renderer::executePostProcessPass(const RenderPassDesc& pass,
                      pass.uniformFloats[i].value);
   }
   for (size_t i = 0; i < pass.uniformInts.size(); ++i) {
-    pushUniformInt(pass.uniformInts[i].name.c_str(),
-                   pass.uniformInts[i].value);
+    pushUniformInt(pass.uniformInts[i].name.c_str(), pass.uniformInts[i].value);
   }
   for (size_t i = 0; i < pass.uniformMat4s.size(); ++i) {
     pushUniformMat4(pass.uniformMat4s[i].name.c_str(),
@@ -615,8 +787,44 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
 
   frameArena.Clear();
   beginFrameContext(_camera);
+  resetShadowFrame();
+  _currentPassFbo = FramebufferHandle{};
+  _currentPassViewport = {
+    0, 0, frameContext.windowDimensions[0], frameContext.windowDimensions[1]
+  };
 
-  // Single main pass (default FB): clear once, then World → UI → Debug.
+  if (scene != nullptr) {
+    const std::vector<DrawableBase*>& worldDrawables =
+      scene->drawablesIn(RenderLayerId::World);
+    for (size_t i = 0; i < worldDrawables.size(); ++i) {
+      DrawableBase* drawable = worldDrawables[i];
+      if (drawable != nullptr && drawable->isVisible()) {
+        drawable->CollectShadowCasters(this);
+      }
+    }
+
+    if (prepareShadowPass()) {
+      const FramebufferHandle restoredFramebuffer = _currentPassFbo;
+      const std::array<int, 4> restoredViewport = _currentPassViewport;
+      pushFramebuffer(shadowFramebuffer);
+      pushViewport(0, 0, requestedShadowMapSize, requestedShadowMapSize);
+      pushClearDepth();
+      bindStyle(RenderStyleId::ShadowDepth);
+      for (size_t i = 0; i < worldDrawables.size(); ++i) {
+        DrawableBase* drawable = worldDrawables[i];
+        if (drawable != nullptr && drawable->isVisible()) {
+          drawable->AppendShadowCommands(this);
+        }
+      }
+      pushFramebuffer(restoredFramebuffer);
+      pushViewport(restoredViewport[0],
+                   restoredViewport[1],
+                   restoredViewport[2],
+                   restoredViewport[3]);
+    }
+  }
+
+  // Main rendering follows the shared world-shadow pass.
   const std::array<int, 2>& dims = frameContext.windowDimensions;
   pushViewport(0, 0, dims[0], dims[1]);
 
@@ -645,9 +853,10 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
 
       if (!scene->hasCustomPasses(layer)) {
         _currentPassFbo = FramebufferHandle{};
-        _currentPassViewport = {
-          0, 0, frameContext.windowDimensions[0], frameContext.windowDimensions[1]
-        };
+        _currentPassViewport = { 0,
+                                 0,
+                                 frameContext.windowDimensions[0],
+                                 frameContext.windowDimensions[1] };
         for (size_t i = 0; i < list.size(); ++i) {
           DrawableBase* drawable = list[i];
           if (!drawable) {
@@ -728,8 +937,7 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                 continue;
               }
               if (!drawable->AppendCommands(this)) {
-                if (immediateList != nullptr &&
-                    immediateCount < immediateCap) {
+                if (immediateList != nullptr && immediateCount < immediateCap) {
                   immediateList[immediateCount] = drawable;
                   immediateCount += 1;
                 }
@@ -765,14 +973,13 @@ Renderer::ensureProofResources()
   }
 
   const float verts[32] = {
-    1.0f,  1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,  -1.0f, 0.0f,
-    0.0f,  1.0f, 0.0f, 1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,  1.0f,
-    0.0f,  0.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+    1.0f, 1.0f, 0.0f,  1.0f, 0.0f, 0.0f,  1.0f,  1.0f, 1.0f, -1.0f, 0.0f,
+    0.0f, 1.0f, 0.0f,  1.0f, 0.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,  1.0f,
+    0.0f, 0.0f, -1.0f, 1.0f, 0.0f, 1.0f,  1.0f,  0.0f, 0.0f, 1.0f,
   };
   const unsigned int indices[6] = { 0, 1, 2, 0, 2, 3 };
 
-  _proofMeshHandle =
-    enrollMesh(verts, sizeof(verts), indices, sizeof(indices));
+  _proofMeshHandle = enrollMesh(verts, sizeof(verts), indices, sizeof(indices));
 
   ShaderPaths paths;
   paths.vertexPath = "Shader/triangle_vertex.glsl";

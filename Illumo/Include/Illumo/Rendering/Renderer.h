@@ -35,6 +35,26 @@ public:
     bool hasWorldMvp = false;
   };
 
+  struct ShadowCasterDesc
+  {
+    std::array<float, 3> boundsMin{ 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> boundsMax{ 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> lightDirection{ 0.5f, 1.0f, 0.3f };
+    int mapSize = 1024;
+    float minimumRadius = 2.5f;
+    float lightDistance = 8.0f;
+  };
+
+  struct ShadowFrameContext
+  {
+    std::array<float, 16> lightSpaceMatrix{ 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+                                            0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+                                            0.0f, 0.0f, 0.0f, 1.0f };
+    std::array<float, 3> lightDirection{ 0.5f, 1.0f, 0.3f };
+    TextureHandle depthTexture{};
+    bool active = false;
+  };
+
 private:
   // Owned when constructed with unique_ptr or takeOwnership=true; null when the
   // composition root or test fixture retains ownership of the backend.
@@ -74,8 +94,24 @@ private:
   ArenaAlloc frameArena{ 8 * 1024 };
   FrameContext frameContext;
 
+  FramebufferHandle shadowFramebuffer{};
+  TextureHandle shadowDepthTexture{};
+  int enrolledShadowMapSize = 0;
+  bool shadowBoundsValid = false;
+  std::array<float, 3> shadowBoundsMin{ 0.0f, 0.0f, 0.0f };
+  std::array<float, 3> shadowBoundsMax{ 0.0f, 0.0f, 0.0f };
+  std::array<float, 3> requestedShadowLightDirection{ 0.5f, 1.0f, 0.3f };
+  int requestedShadowMapSize = 0;
+  float requestedShadowMinimumRadius = 0.0f;
+  float requestedShadowLightDistance = 0.0f;
+  ShadowFrameContext shadowFrameContext;
+
   void beginFrameContext(Camera* camera);
   void endFrameContext();
+  void resetShadowFrame();
+  bool prepareShadowPass();
+  void ensureShadowResources(int mapSize);
+  void releaseShadowResources();
 
 public:
   // Composition-root path: ownership transferred via unique_ptr (D-R11).
@@ -101,7 +137,13 @@ public:
   IRenderWindow* getWindow() { return _window; }
   Camera* getCamera() { return _camera; }
   const FrameContext& getFrameContext() const { return frameContext; }
+  const ShadowFrameContext& getShadowFrameContext() const
+  {
+    return shadowFrameContext;
+  }
   float getUiScale() const;
+
+  void registerShadowCaster(const ShadowCasterDesc& caster);
 
   // =========================================================================
   // Asset enrollment (not mixed into the per-frame token stream — D-007)
@@ -136,9 +178,7 @@ public:
 
   bool destroyMesh(MeshHandle handle);
 
-  TextureHandle enrollTexture(const unsigned char* data,
-                              int width,
-                              int height);
+  TextureHandle enrollTexture(const unsigned char* data, int width, int height);
 
   TextureHandle enrollTexture(const unsigned char* data,
                               int width,

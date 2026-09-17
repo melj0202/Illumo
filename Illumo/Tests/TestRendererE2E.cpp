@@ -535,10 +535,10 @@ testRenderSceneLayerPassPipeline()
 }
 
 static void
-testRenderSceneMeshVisualRestoresPassTarget()
+testRenderSceneShadowPassPrecedesCustomTarget()
 {
-  std::printf("\n--- e2e: MeshVisual restores active pass target after shadow "
-              "pass ---\n");
+  std::printf(
+    "\n--- e2e: scene shadow pass precedes custom world target ---\n");
   E2ENullRenderWindow window(1280, 720);
   EnvVars env;
   env.setVar("WinX", 1280);
@@ -615,13 +615,11 @@ testRenderSceneMeshVisualRestoresPassTarget()
     renderer.getRenderTarget("WorldColorVelocity");
   e2eTrue(pooledTarget.isValid(), "pooled render target is valid");
 
-  // Verify that after shadow pass, SetFramebuffer was called with
-  // pooledTarget.fboHandle, NOT 0!
-  // Sequence of SetFramebuffer calls:
-  // 1. Initial pass target: WorldColorVelocity FBO
-  // 2. Shadow pass: shadowFboHandle
-  // 3. Restored pass target: WorldColorVelocity FBO (not screen / 0!)
-  // 4. Post-process pass target: screen / 0
+  // The scene shadow pass completes before custom World passes begin:
+  // 1. Shared shadow FBO
+  // 2. Restored default screen target
+  // 3. WorldColorVelocity geometry target
+  // 4. Post-process screen target
   std::vector<FramebufferHandle> boundFbos;
   bool sawLinePrevMvp = false;
   bool sawLineMotionBlur = false;
@@ -646,12 +644,12 @@ testRenderSceneMeshVisualRestoresPassTarget()
 
   e2eTrue(boundFbos.size() >= 4, "at least 4 framebuffer binds submitted");
   if (boundFbos.size() >= 4) {
-    e2eTrue(boundFbos[0] == pooledTarget.fboHandle,
-            "pass initially binds target FBO");
-    e2eTrue(boundFbos[1].isValid() && boundFbos[1] != pooledTarget.fboHandle,
-            "shadow pass binds shadow FBO");
+    e2eTrue(boundFbos[0].isValid() && boundFbos[0] != pooledTarget.fboHandle,
+            "scene pass binds the shared shadow FBO first");
+    e2eTrue(!boundFbos[1].isValid(),
+            "scene pass restores the default target before layer passes");
     e2eTrue(boundFbos[2] == pooledTarget.fboHandle,
-            "MeshVisual restored target FBO, not screen 0");
+            "custom World geometry then binds its target FBO");
     e2eTrue(!boundFbos[3].isValid(), "post-process pass binds screen 0");
   }
 }
@@ -728,8 +726,8 @@ registerRendererE2ETests(IllumoTestRegistry& registry)
   registry.add("Illumo.Renderer.LayerPassPipeline", []() {
     return runRendererE2ECase(testRenderSceneLayerPassPipeline);
   });
-  registry.add("Illumo.Renderer.MeshVisualRestoresPassTarget", []() {
-    return runRendererE2ECase(testRenderSceneMeshVisualRestoresPassTarget);
+  registry.add("Illumo.Renderer.ShadowPassPrecedesCustomTarget", []() {
+    return runRendererE2ECase(testRenderSceneShadowPassPrecedesCustomTarget);
   });
   registry.add("Illumo.Renderer.RenderTargetPoolResizing", []() {
     return runRendererE2ECase(testRenderTargetPoolResizing);

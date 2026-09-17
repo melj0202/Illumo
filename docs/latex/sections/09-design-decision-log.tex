@@ -1752,6 +1752,32 @@ not a 2D engine vs 3D engine.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-R22 --- One scene-level directional shadow pass}
+\begin{decisionbox}[title={D-R22 \quad 2026-09-16}]
+\textbf{Decision:} Directional shadows are extracted once per rendered scene,
+before color passes. Visible World drawables and
+\symbolref{ISceneRenderAttachment} values contribute transformed triangle
+bounds and depth tokens. \symbolref{Renderer} fits one orthographic light-space
+matrix to the combined caster bounds, reuses one depth framebuffer, clears it
+once, renders every caster, and exposes the same matrix and texture to all
+receivers. \symbolref{SceneGraph} forwards collection, depth, and color phases
+through its existing iterative enabled/visible transform traversal.
+\symbolref{MeshVisual} retains geometry and per-receiver bias/filter values but
+owns no shadow framebuffer.\
+\textbf{Why:} A private map in each MeshVisual repeated the pass for every
+object and could contain only that object's geometry, so separate objects could
+not shadow one another. Fitting every private map around the origin also clipped
+translated casters.\
+\textbf{Consequences:} Direct World meshes and graph attachments shadow each
+other in one pass. Frame-list order deterministically selects the first visible
+caster's directional light; maximum requested map size, minimum radius, and
+light distance cover the participating set. Existing MeshVisual tuning setters
+remain source-compatible. The change adds no render graph, retained culling
+structure, backend API, or persistence format.\
+\textbf{Refines:} D-R14 and D-R21.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{D-T2 --- Workspace clang-tidy gate}
 \begin{decisionbox}[title={D-T2 \quad 2026-08-30}]
 \textbf{Decision:} First-party C++ is linted by workspace \texttt{clang-tidy}.

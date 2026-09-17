@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
 
 MeshVisual::MeshVisual() = default;
 
@@ -534,9 +535,35 @@ MeshVisual::AppendCommands(Renderer* value)
 }
 
 void
+MeshVisual::CollectShadowCasters(Renderer* value)
+{
+  collectShadowCasterWithWorld(value, glm::mat4(1.0f));
+}
+
+void
+MeshVisual::AppendShadowCommands(Renderer* value)
+{
+  appendShadowCommandsWithWorld(value, glm::mat4(1.0f));
+}
+
+void
 MeshVisual::appendSceneCommands(Renderer* value, const Matrix4& worldTransform)
 {
   (void)appendCommandsWithWorld(value, worldTransform);
+}
+
+void
+MeshVisual::collectSceneShadowCasters(Renderer* value,
+                                      const Matrix4& worldTransform)
+{
+  collectShadowCasterWithWorld(value, worldTransform);
+}
+
+void
+MeshVisual::appendSceneShadowCommands(Renderer* value,
+                                      const Matrix4& worldTransform)
+{
+  appendShadowCommandsWithWorld(value, worldTransform);
 }
 
 void
@@ -564,8 +591,6 @@ MeshVisual::ensureStyles()
   const RenderStyle* shapeStyle = renderer->getStyle(RenderStyleId::Shape);
   const RenderStyle* spriteStyle = renderer->getStyle(RenderStyleId::Sprite);
   const RenderStyle* litStyle = renderer->getStyle(RenderStyleId::LitMesh);
-  const RenderStyle* shadowStyle =
-    renderer->getStyle(RenderStyleId::ShadowDepth);
 
   if (shapeStyle != nullptr && !lineStyleHandle.isValid()) {
     RenderStyle lineStyle = *shapeStyle;
@@ -596,41 +621,6 @@ MeshVisual::ensureStyles()
   if (litStyle != nullptr && !litMeshStyleHandle.isValid()) {
     litMeshStyleHandle =
       renderer->getBuiltinStyleHandle(RenderStyleId::LitMesh);
-  }
-  if (shadowStyle != nullptr && !shadowDepthStyleHandle.isValid()) {
-    shadowDepthStyleHandle =
-      renderer->getBuiltinStyleHandle(RenderStyleId::ShadowDepth);
-  }
-}
-
-void
-MeshVisual::ensureShadowResources(Renderer* value)
-{
-  if (value == nullptr) {
-    return;
-  }
-  if (shadowFboHandle.isValid() && enrolledShadowMapSize == shadowMapSize) {
-    return;
-  }
-  releaseShadowResources();
-  shadowFboHandle = value->enrollDepthFramebuffer(
-    shadowMapSize, shadowMapSize, &shadowDepthTextureHandle);
-  if (shadowFboHandle.isValid()) {
-    enrolledShadowMapSize = shadowMapSize;
-  }
-}
-
-void
-MeshVisual::releaseShadowResources()
-{
-  if (renderer == nullptr) {
-    return;
-  }
-  if (shadowFboHandle.isValid()) {
-    renderer->destroyFramebuffer(shadowFboHandle);
-    shadowFboHandle = FramebufferHandle{};
-    shadowDepthTextureHandle = TextureHandle{};
-    enrolledShadowMapSize = 0;
   }
 }
 
@@ -677,11 +667,8 @@ MeshVisual::resolveViewProjection(Renderer* value,
 }
 
 bool
-MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
+MeshVisual::prepareForCommands(Renderer* value)
 {
-  if (!isVisible()) {
-    return true;
-  }
   if (value == nullptr || (renderer != nullptr && renderer != value)) {
     return false;
   }
@@ -755,6 +742,89 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
     spriteUploadPending = false;
   }
 
+  return true;
+}
+
+void
+MeshVisual::collectShadowCasterWithWorld(Renderer* value,
+                                         const glm::mat4& nodeWorld)
+{
+  if (!isVisible() || !lightingEnabled || !shadowsEnabled ||
+      !prepareForCommands(value) || !triangleBoundsValid ||
+      !triangleMeshHandle.isValid()) {
+    return;
+  }
+
+  const glm::mat4 world = nodeWorld * modelMatrix;
+  glm::vec3 worldMin(std::numeric_limits<float>::max());
+  glm::vec3 worldMax(std::numeric_limits<float>::lowest());
+  for (int x = 0; x < 2; ++x) {
+    for (int y = 0; y < 2; ++y) {
+      for (int z = 0; z < 2; ++z) {
+        const glm::vec3 corner(
+          x == 0 ? triangleBoundsMin.x : triangleBoundsMax.x,
+          y == 0 ? triangleBoundsMin.y : triangleBoundsMax.y,
+          z == 0 ? triangleBoundsMin.z : triangleBoundsMax.z);
+        const glm::vec3 worldCorner =
+          glm::vec3(world * glm::vec4(corner, 1.0f));
+        worldMin = glm::min(worldMin, worldCorner);
+        worldMax = glm::max(worldMax, worldCorner);
+      }
+    }
+  }
+
+  Renderer::ShadowCasterDesc caster;
+  caster.boundsMin = { worldMin.x, worldMin.y, worldMin.z };
+  caster.boundsMax = { worldMax.x, worldMax.y, worldMax.z };
+  caster.lightDirection = { lightDirection.x,
+                            lightDirection.y,
+                            lightDirection.z };
+  caster.mapSize = shadowMapSize;
+  caster.minimumRadius = shadowRadius;
+  caster.lightDistance = lightDistance;
+  value->registerShadowCaster(caster);
+}
+
+void
+MeshVisual::appendShadowCommandsWithWorld(Renderer* value,
+                                          const glm::mat4& nodeWorld)
+{
+  if (!isVisible() || !lightingEnabled || !shadowsEnabled ||
+      !prepareForCommands(value) || triangleDrawVertices.empty() ||
+      !triangleMeshHandle.isValid()) {
+    return;
+  }
+
+  const Renderer::ShadowFrameContext& shadow = value->getShadowFrameContext();
+  if (!shadow.active || !shadow.depthTexture.isValid()) {
+    return;
+  }
+
+  glm::mat4 lightSpaceMatrix(1.0f);
+  std::memcpy(glm::value_ptr(lightSpaceMatrix),
+              shadow.lightSpaceMatrix.data(),
+              shadow.lightSpaceMatrix.size() * sizeof(float));
+  const glm::mat4 lightMvp = lightSpaceMatrix * nodeWorld * modelMatrix;
+  value->pushSetMesh(triangleMeshHandle);
+  value->pushUniformMat4(WorldLook::kMvpUniform, glm::value_ptr(lightMvp));
+  value->pushDrawIndexed(
+    static_cast<unsigned int>(triangleDrawVertices.size()));
+}
+
+bool
+MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
+{
+  if (!isVisible()) {
+    return true;
+  }
+  if (!prepareForCommands(value)) {
+    return false;
+  }
+
+  const bool hasLines = !lineDrawVertices.empty();
+  const bool hasTriangles = !triangleDrawVertices.empty();
+  const bool hasSprites = !sprites.empty();
+
   glm::mat4 viewProjection(1.0f);
   glm::mat4 view(1.0f);
   if (!resolveViewProjection(value, &viewProjection, &view)) {
@@ -766,51 +836,21 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   const glm::mat4 previousMvp =
     hasPreviousMvp ? previousColoredMvp : coloredMvp;
 
-  // Directional lighting & shadow setup. Viewer meshes are normalized to
-  // radius 1; a tight ortho keeps shadow texels on the object instead of
-  // a 30-unit empty volume. Light and shadow parameters come from drawable
-  // state (products persist those values in EnvVars).
-  const glm::vec3 lightPos = lightDirection * lightDistance;
-  const glm::mat4 lightView =
-    glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-  const glm::mat4 lightProj = glm::ortho(-shadowRadius,
-                                         shadowRadius,
-                                         -shadowRadius,
-                                         shadowRadius,
-                                         0.5f,
-                                         lightDistance + shadowRadius);
-  const glm::mat4 lightSpaceMatrix = lightProj * lightView;
-
-  // Pass 1: Directional Shadow Depth Pass (when lighting and shadow depth are
-  // valid)
-  bool shadowMapBound = false;
-  if (lightingEnabled && shadowsEnabled && hasTriangles &&
-      triangleMeshHandle.isValid() && shadowDepthStyleHandle.isValid()) {
-    ensureShadowResources(value);
-    if (shadowFboHandle.isValid()) {
-      value->pushFramebuffer(shadowFboHandle);
-      value->pushViewport(0, 0, shadowMapSize, shadowMapSize);
-      // Depth-only FBO has no color attachment. A color clear is a no-op and
-      // leaves uninitialized depth at 0, so the main pass shadows every
-      // fragment and lighting collapses to ambient.
-      value->pushClearDepth();
-
-      const glm::mat4 lightMvp = lightSpaceMatrix * coloredWorld;
-      value->bindStyle(shadowDepthStyleHandle);
-      value->pushSetMesh(triangleMeshHandle);
-      value->pushUniformMat4(WorldLook::kMvpUniform, glm::value_ptr(lightMvp));
-      value->pushDrawIndexed(
-        static_cast<unsigned int>(triangleDrawVertices.size()));
-
-      // Restore pass framebuffer & viewport
-      value->pushFramebuffer(value->getCurrentPassFramebuffer());
-      const std::array<int, 4> vp = value->getCurrentPassViewport();
-      value->pushViewport(vp[0], vp[1], vp[2], vp[3]);
-      shadowMapBound = shadowDepthTextureHandle.isValid();
-    }
+  const Renderer::ShadowFrameContext& shadow = value->getShadowFrameContext();
+  const bool shadowMapBound = lightingEnabled && shadowsEnabled &&
+                              shadow.active && shadow.depthTexture.isValid();
+  glm::mat4 lightSpaceMatrix(1.0f);
+  glm::vec3 activeLightDirection = lightDirection;
+  if (shadowMapBound) {
+    std::memcpy(glm::value_ptr(lightSpaceMatrix),
+                shadow.lightSpaceMatrix.data(),
+                shadow.lightSpaceMatrix.size() * sizeof(float));
+    activeLightDirection = glm::vec3(shadow.lightDirection[0],
+                                     shadow.lightDirection[1],
+                                     shadow.lightDirection[2]);
   }
 
-  // Pass 2: Main Render Pass
+  // Main render pass samples the renderer-owned scene shadow map.
   if (hasLines && lineMeshHandle.isValid()) {
     if (!value->bindStyle(lineStyleHandle)) {
       return false;
@@ -835,9 +875,9 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
       value->pushUniformMat4(WorldLook::kLightSpaceMatrixUniform,
                              glm::value_ptr(lightSpaceMatrix));
       value->pushUniformVec3(WorldLook::kLightDirUniform,
-                             lightDirection.x,
-                             lightDirection.y,
-                             lightDirection.z);
+                             activeLightDirection.x,
+                             activeLightDirection.y,
+                             activeLightDirection.z);
       value->pushUniformVec3(WorldLook::kLightColorUniform,
                              lightColor.x,
                              lightColor.y,
@@ -864,7 +904,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
       value->pushUniformFloat(WorldLook::kMotionBlurMaxUniform, motionBlurMax);
 
       if (shadowMapBound) {
-        value->pushSetTexture(shadowDepthTextureHandle,
+        value->pushSetTexture(shadow.depthTexture,
                               WorldLook::kShadowTextureUnit);
         value->pushUniformInt(WorldLook::kShadowMapUniform,
                               WorldLook::kShadowTextureUnit);
@@ -917,6 +957,18 @@ MeshVisual::rebuildMeshes()
   expandIndexedVertices(lineVertices, lineIndices, &lineDrawVertices);
   expandIndexedLitVertices(
     triangleVertices, triangleIndices, &triangleDrawVertices);
+  triangleBoundsValid = !triangleDrawVertices.empty();
+  if (triangleBoundsValid) {
+    const LitVertex& first = triangleDrawVertices[0];
+    triangleBoundsMin = glm::vec3(first.x, first.y, first.z);
+    triangleBoundsMax = triangleBoundsMin;
+    for (size_t i = 1; i < triangleDrawVertices.size(); ++i) {
+      const LitVertex& vertex = triangleDrawVertices[i];
+      const glm::vec3 position(vertex.x, vertex.y, vertex.z);
+      triangleBoundsMin = glm::min(triangleBoundsMin, position);
+      triangleBoundsMax = glm::max(triangleBoundsMax, position);
+    }
+  }
   spriteVertices.clear();
   spriteVertices.reserve(sprites.size() * 6);
   for (size_t i = 0; i < sprites.size(); ++i) {
@@ -1111,6 +1163,4 @@ MeshVisual::releaseStyles()
     spriteStyleHandle = RenderStyleHandle{};
   }
   litMeshStyleHandle = RenderStyleHandle{};
-  shadowDepthStyleHandle = RenderStyleHandle{};
-  releaseShadowResources();
 }

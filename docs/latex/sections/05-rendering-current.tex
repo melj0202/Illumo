@@ -25,7 +25,8 @@ No second real GPU API.
         \texttt{BeginFrame} $\rightarrow$ \texttt{RenderScene} $\rightarrow$
         \texttt{EndFrame} (swap).
   \item \symbolref{Renderer::RenderScene}:
-        one main pass --- clear + viewport tokens; walk layers
+        collect visible World shadow casters; when present, fit and render one
+        shared depth pass; then clear + viewport tokens and walk layers
         World $\rightarrow$ UI $\rightarrow$ Debug; each drawable
         \texttt{AppendCommands}; if a drawable returns false, legacy immediate
         \texttt{Draw()} still runs (hybrid fallback; production drawables return true).
@@ -83,13 +84,19 @@ instantiate a graph.
   \item \symbolref{MeshVisual} (D-R21) is the world mesh host and
         \symbolref{ISceneRenderAttachment}: colored lines/triangles, textured
         quads (sprites), optional camera-facing billboards, optional
-        directional lighting with a depth-only shadow pass, and optional
-        object motion blur from the previous clip pose. It clones
+        directional lighting with participation in a scene-level depth-only
+        shadow pass, and optional object motion blur from the previous clip
+        pose. It clones
         Shape/Sprite styles with depth-tested pipelines and emits
         \texttt{uMVP}. Lit meshes also emit \texttt{WorldLook} light, shadow,
         and motion-blur uniforms from CPU-side drawable state; products
         persist those values through EnvVars rather than having
         \symbolref{MeshVisual} read configuration.
+        Directional shadow ownership is scene-level (D-R22): visible direct
+        meshes and SceneGraph attachments contribute transformed caster bounds
+        and depth tokens; Renderer reuses one framebuffer, fits one shared
+        light-space matrix to the combined bounds, clears once, and exposes the
+        same depth texture to every receiver. MeshVisual owns no shadow FBO.
         Compose complex objects as child scene nodes, each with
         one attachment. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
         meshes upload dirty vertices through \texttt{UpdateBuffer}; capacity

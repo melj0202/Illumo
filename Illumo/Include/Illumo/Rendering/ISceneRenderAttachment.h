@@ -15,4 +15,18 @@ public:
 
   virtual void appendSceneCommands(Renderer* renderer,
                                    const Matrix4& worldTransform) = 0;
+
+  virtual void collectSceneShadowCasters(Renderer* renderer,
+                                         const Matrix4& worldTransform)
+  {
+    (void)renderer;
+    (void)worldTransform;
+  }
+
+  virtual void appendSceneShadowCommands(Renderer* renderer,
+                                         const Matrix4& worldTransform)
+  {
+    (void)renderer;
+    (void)worldTransform;
+  }
 };

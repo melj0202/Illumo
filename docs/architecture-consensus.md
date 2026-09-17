@@ -346,9 +346,10 @@ flags plus game-provided canvas/help descriptors before host initialization.
 `--help` and `--version` return explicit process results; library code does not
 call `std::exit`.
 
-Typical combined draw order (Scene layers, one main pass): World canvas;
-UI splash + console + editor cursor + selection outline + optional inspector HUD;
-Debug FPS (Debug builds via DebugModule).
+Typical combined draw order: an optional Renderer-owned directional-shadow
+depth pass over visible World casters, then configured World color passes,
+followed by UI splash + console + editor cursor + selection outline + optional
+inspector HUD, then Debug FPS (Debug builds via DebugModule).
 
 At the start of `RenderScene`, `Renderer` captures the active window dimensions
 and primary camera MVP once for that extraction. Matching `GameVisual` instances
@@ -356,7 +357,9 @@ consume those frame values instead of querying the window and recomputing the
 same matrix independently; direct token emitters retain their local fallback.
 `CanvasView` retains upload-rectangle scratch storage, `MeshVisual` retains
 dynamic mesh handles and uploads only dirty geometry, and `SceneGraph` retains
-its traversal stack. These caches do not retain or replay command queues.
+its traversal stack. Renderer retains one shared directional-shadow framebuffer
+and fits one light-space matrix to the combined visible caster bounds for each
+frame. These caches do not retain or replay command queues.
 
 `RenderWindow` defaults to swap interval one. The persisted `vsync` environment
 value can select synchronized or uncapped presentation and is reapplied only
@@ -382,8 +385,11 @@ enabled and visible nodes in hierarchy pre-order and supplies each attachment
 with the resolved world transform. It owns no attachment or backend resource.
 `MeshVisual` is the world mesh/sprite attachment: it composes the graph world
 matrix with local transforms and optional camera-facing billboards, then emits
-the canonical `uMVP` look. Overlay chrome stays on `GameVisual` with a screen
-ortho matrix (D-R21).
+the canonical `uMVP` look. The same iterative traversal collects visible caster
+bounds and emits depth tokens for the Renderer-owned shared shadow pass, so
+direct World meshes and graph attachments shadow each other without moving
+resource ownership into SceneGraph. Overlay chrome stays on `GameVisual` with
+a screen ortho matrix (D-R21, D-R22).
 
 V1 deliberately has no ECS components, update callbacks, serialization,
 prefabs, bounds/culling structure, physics, scripting, or retained UI. The
@@ -413,11 +419,11 @@ IBackend::SubmitCommandQueue
 | Piece | Job |
 |-------|-----|
 | **Modules** | Choose what should appear this frame; place drawables into Scene layers. |
-| **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug). One main pass. |
+| **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug). Visible World casters participate in one Renderer-owned shadow pass before configured color/post-process layer passes. |
 | **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, and Sprite are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world. |
 | **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. |
 | **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
-| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, and motion blur are CPU-side drawable state emitted as `WorldLook` uniforms; products persist them through EnvVars. One attachment per scene node; compose complex objects with child nodes. Replaces the former `DebugDraw3D` diagnostic host (D-R21). |
+| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, optional directional lighting, scene-shadow caster/receiver extraction, and object motion blur. It retains geometry and per-receiver lighting/filter values but owns no shadow framebuffer. Products persist tuning through EnvVars. One attachment per scene node; compose complex objects with child nodes. Replaces the former `DebugDraw3D` diagnostic host (D-R21, D-R22). |
 | **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `CommandLine`, `GLString`, `ExitConfirmDialog`, and `EditorConfirmDialog` compose these primitives without introducing a retained widget hierarchy. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
 | **Renderer** | Backend-neutral: owns style table; frame setup; walk layers; submit. Depends only on `IBackend*` (D-R11). |
@@ -428,9 +434,11 @@ IBackend::SubmitCommandQueue
 | **GLBackend / GLDevice** | Real OpenGL under `Rendering/OpenGL/`: handle registries, execute tokens, PBO texture updates, bind-state tracking, blend-func-on-enable (D-R5). |
 | **MockBackend** | Exposed only by `Illumo::TestSupport`: records creates + command order for headless tests. |
 
-**Layers vs passes:** layers are composition buckets on the default framebuffer
-(single clear). They are not multi-target GPU render passes. Unimplemented pass
-scaffolding was removed; offscreen targets remain future work.
+**Layers vs passes:** layers are composition buckets and ordering boundaries,
+not render targets by themselves. Renderer performs one internal directional
+shadow pass before layer color rendering when visible casters request it.
+Configured layer pass descriptors may then target the screen, a pooled
+offscreen target, or a post-process resolve; UI/Debug ordering remains layered.
 
 **Acquire/enroll (rare):** backend `Create*` returns non-convertible
 `MeshHandle`, `ShaderHandle`, or `TextureHandle` values with slot+generation;
@@ -818,6 +826,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R19** | Superseded by D-E6: the sibling IllumoGame consumer establishes the explicit library boundary. Future downstream repositories still require install/package validation. |
 | **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. |
 | **D-R21** | One world look (`uMVP`). Sprites are textured quads; 2D vs 3D is the camera projection. `MeshVisual` is the world object host; `GameVisual` remains overlay/painter composition. |
+| **D-R22** | Directional shadows are one Renderer-owned pass over all visible World casters. Renderer reuses one depth target, fits a shared light-space matrix to combined caster bounds, and exposes the shared map to every receiver; `MeshVisual` and SceneGraph only contribute bounds/depth tokens. |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
 | **D-C2** | `CellGrid` domain + `Canvas` presentation; rulesets depend only on `CellGrid`. |
@@ -826,13 +835,21 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-C5** | At far zoom, `CanvasView` uses a revision-gated density overview capped at roughly four screen pixels per texel; this visual budget does not cap sparse simulation chunks. |
 | **D-C6** | Keep `0 x 0` as the infinite sparse world; positive chunk dimensions select a finite torus. Configure it through the Release F1 overlay, reset on topology change, and preserve it in sparse save version 3. |
 
-`MeshVisual` is the world mesh host and scene-graph attachment (D-R21). It
+`MeshVisual` is the world mesh host and scene-graph attachment (D-R21, D-R22). It
 tessellates colored lines/triangles and textured quads, clones Shape/Sprite
 styles with depth-tested pipelines, and emits `uMVP = cameraVP * nodeWorld *
 local` (billboard replaces local rotation with camera axes). Lit triangle
 meshes also emit `uLightDir`, `uLightColor`, `uAmbientColor`,
 `uLightSpaceMatrix`, `uShadowMap`, and shadow filter uniforms from drawable
-lighting state. Lit meshes retain the previous `uMVP` and emit `uPrevMVP`,
+lighting state. Before color rendering, direct MeshVisual drawables and visible
+SceneGraph attachments contribute transformed triangle bounds to Renderer;
+Renderer fits one directional light-space matrix to the combined bounds,
+clears one shared depth map, and traverses every caster. All receivers sample
+that same map, so separate objects cast onto one another. The first visible
+caster deterministically selects light direction; maximum requested map size,
+minimum radius, and light distance cover the participating set. Per-receiver
+bias, slope scale, normal offset, and PCF remain drawable state. Lit meshes
+retain the previous `uMVP` and emit `uPrevMVP`,
 `uMotionBlurEnabled`, `uMotionBlurAmount`, and `uMotionBlurMax`; the lit
 vertex shader stretches trailing vertices toward that previous clip pose so
 object and camera motion smear the silhouette. Shadow map size, ortho radius,

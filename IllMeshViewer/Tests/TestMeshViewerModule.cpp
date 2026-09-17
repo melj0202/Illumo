@@ -173,8 +173,10 @@ testModuleLightingFromEnvVars()
              std::abs(visual->getAmbientColor().z - 0.3f) < 0.0001f,
            "ambient color from EnvVars");
 
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
   fixture.renderer.BeginFrame();
-  testTrue(g, visual->AppendCommands(&fixture.renderer), "mesh appends tokens");
+  fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
   fixture.renderer.EndFrame();
 
   bool sawConfiguredLightDir = false;
@@ -239,8 +241,10 @@ testModuleShadowFromEnvVars()
            "shadowNormalOffset from EnvVars");
   testTrue(g, !visual->isShadowPcfEnabled(), "shadowPcf 0 disables PCF");
 
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
   fixture.renderer.BeginFrame();
-  testTrue(g, visual->AppendCommands(&fixture.renderer), "mesh appends tokens");
+  fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
   fixture.renderer.EndFrame();
 
   bool sawConfiguredBias = false;

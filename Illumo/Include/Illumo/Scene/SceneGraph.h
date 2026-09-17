@@ -56,6 +56,8 @@ public:
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
+  void CollectShadowCasters(Renderer* renderer) override;
+  void AppendShadowCommands(Renderer* renderer) override;
 
 private:
   struct Impl;
