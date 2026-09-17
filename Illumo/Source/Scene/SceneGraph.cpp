@@ -76,6 +76,7 @@ struct SceneGraph::Impl
   std::vector<NodeSlot> slots{ NodeSlot{} };
   std::vector<uint32_t> freeSlots;
   std::vector<SceneNodeHandle> roots;
+  std::vector<SceneNodeHandle> worldTransformPathScratch;
   std::vector<RenderVisit> renderTraversalScratch;
   size_t nodeCount = 0;
   bool renderTraversalActive = false;
@@ -202,6 +203,32 @@ struct SceneGraph::Impl
            ++child) {
         pending.push_back(TransformVisit{ *child, recompute });
       }
+    }
+  }
+
+  void updateWorldTransform(SceneNodeHandle node)
+  {
+    std::vector<SceneNodeHandle>& path = worldTransformPathScratch;
+    path.clear();
+
+    SceneNodeHandle current = node;
+    while (isCurrent(current) && slots[current.slot].transformDirty) {
+      path.push_back(current);
+      current = slots[current.slot].parent;
+    }
+
+    for (std::vector<SceneNodeHandle>::const_reverse_iterator currentNode =
+           path.rbegin();
+         currentNode != path.rend();
+         ++currentNode) {
+      NodeSlot& slot = slots[currentNode->slot];
+      if (isCurrent(slot.parent)) {
+        slot.worldTransform =
+          slots[slot.parent.slot].worldTransform * slot.localTransform;
+      } else {
+        slot.worldTransform = slot.localTransform;
+      }
+      slot.transformDirty = false;
     }
   }
 
@@ -526,7 +553,7 @@ SceneGraph::getWorldTransform(SceneNodeHandle node, Matrix4* transform)
   if (!m_impl->isCurrent(node) || transform == nullptr) {
     return false;
   }
-  m_impl->updateWorldTransforms();
+  m_impl->updateWorldTransform(node);
   *transform = m_impl->slots[node.slot].worldTransform;
   return true;
 }

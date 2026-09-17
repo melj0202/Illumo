@@ -151,10 +151,14 @@ Reparenting validates both handles, walks the proposed parent's ancestor chain
 to reject cycles, removes the node from its old sibling/root list, appends it to
 the destination list, and iteratively marks its subtree dirty.
 
-World-transform update performs an iterative root-to-leaf traversal. A root's
-world matrix is its local matrix. A child recomputes as `parentWorld * local`
-when either it or an ancestor is dirty. Cached matrices remain queryable after
-an explicit update; `getWorldTransform` performs that update before returning.
+Explicit world-transform update performs an iterative root-to-leaf traversal.
+A root's world matrix is its local matrix. A child recomputes as
+`parentWorld * local` when either it or an ancestor is dirty.
+`getWorldTransform` instead walks only the requested node's dirty ancestor
+chain, stops at the nearest clean cached ancestor, and recomputes that path
+from ancestor to descendant. A cached query is O(1), while a dirty query is
+O(depth) and independent of unrelated nodes. Other dirty branches remain
+deferred until queried, explicitly updated, or reached by render extraction.
 
 Subtree destruction first detaches the root from its parent/root list, gathers
 the subtree iteratively in pre-order, then releases it in reverse order so
