@@ -8,9 +8,11 @@
 #include <Illumo/Rendering/ResourceHandlePool.h>
 #include <Illumo/Services/ArenaAlloc.h>
 #include <array>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 class Camera;
 class IRenderWindow;
@@ -56,6 +58,8 @@ public:
   };
 
 private:
+  std::shared_ptr<const void> _lifetimeIdentity =
+    std::make_shared<const unsigned char>(0);
   // Owned when constructed with unique_ptr or takeOwnership=true; null when the
   // composition root or test fixture retains ownership of the backend.
   std::unique_ptr<IBackend> _ownedBackend;
@@ -88,11 +92,31 @@ private:
   FramebufferHandle _currentPassFbo{};
   std::array<int, 4> _currentPassViewport{ 0, 0, 0, 0 };
 
+  struct ScissorState
+  {
+    bool enabled = false;
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+  };
+  ScissorState currentScissorState;
+  std::vector<ScissorState> scissorStateStack;
+
   // Per-frame scratch (immediate-draw pointer list, etc.). Cleared at the
   // start of RenderScene and again after submission so token payload pointers
   // that live only for the frame never outlive the submit window by design.
   ArenaAlloc frameArena{ 8 * 1024 };
+  static constexpr size_t UNIFORM_MATRICES_PER_CHUNK = 128;
+  static constexpr size_t MAX_UNIFORM_MATRICES = 65536;
+  using UniformMatrix = std::array<float, 16>;
+  using UniformMatrixChunk =
+    std::array<UniformMatrix, UNIFORM_MATRICES_PER_CHUNK>;
+  std::vector<std::unique_ptr<UniformMatrixChunk>> uniformMatrixChunks;
+  size_t uniformMatrixCount = 0;
   FrameContext frameContext;
+  bool m_strictSubmission = false;
+  std::string m_frameError;
 
   FramebufferHandle shadowFramebuffer{};
   TextureHandle shadowDepthTexture{};
@@ -108,10 +132,8 @@ private:
 
   void beginFrameContext(Camera* camera);
   void endFrameContext();
-  void resetShadowFrame();
-  bool prepareShadowPass();
-  void ensureShadowResources(int mapSize);
-  void releaseShadowResources();
+  const float* retainUniformMatrix(const float* value);
+  void clearCommandQueue();
 
 public:
   // Composition-root path: ownership transferred via unique_ptr (D-R11).
@@ -130,6 +152,12 @@ public:
            bool takeOwnership);
 
   ~Renderer();
+
+  // Opaque non-owning cache identity; distinct even when an address is reused.
+  std::weak_ptr<const void> getLifetimeIdentity() const
+  {
+    return _lifetimeIdentity;
+  }
 
   IBackend* getBackend() { return _backend; }
   const IBackend* getBackend() const { return _backend; }
@@ -164,7 +192,8 @@ public:
                         MeshVertexLayout layout,
                         bool dynamic);
 
-  // Dynamic VBO (capacityBytes) + static index buffer; for UI text/console.
+  // Dynamic vertex capacity plus an optional index payload or index capacity.
+  // A null indices pointer with nonzero indicesSize reserves a dynamic EBO.
   MeshHandle enrollDynamicMesh(size_t vertexCapacityBytes,
                                const void* indices,
                                size_t indicesSize,
@@ -191,6 +220,17 @@ public:
                               int channels,
                               const TextureOptions& options);
 
+  TextureHandle enrollCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3);
+
+  bool replaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels);
   bool replaceTexture(TextureHandle handle,
                       const unsigned char* data,
                       int width,
@@ -232,7 +272,18 @@ public:
   // =========================================================================
 
   void BeginFrame();
+  void setStrictSubmission(bool enabled) { m_strictSubmission = enabled; }
+  const std::string& frameError() const { return m_frameError; }
+  void reportFrameError(const std::string& message)
+  {
+    if (m_frameError.empty()) {
+      m_frameError = message;
+    }
+  }
   void EndFrame();
+  // Optional CPU timestamp after submission, before backend presentation.
+  // This measures an elapsed-time boundary, not GPU execution.
+  void EndFrame(std::chrono::steady_clock::time_point* presentationStart);
   void SubmitOnly();
 
   // =========================================================================
@@ -242,6 +293,7 @@ public:
   void pushClearColor(float r, float g, float b, float a);
   void pushClearScreen(float r, float g, float b, float a);
   void pushClearDepth();
+  void pushClearDepth(float value);
   void pushViewport(int x, int y, int width, int height);
   void pushPipelineState(const PipelineState& state);
   void pushSetShader(ShaderHandle handle);
@@ -256,6 +308,10 @@ public:
   void pushUniformMat4(const char* name, const float* m16);
   void pushDrawIndexed(unsigned int elementCount, unsigned int firstIndex = 0);
   void pushScissor(bool enabled, int x, int y, int width, int height);
+  // Intersects with the active scissor and restores it on pop. Coordinates
+  // use the backend viewport's bottom-left pixel convention.
+  void pushClipRect(int x, int y, int width, int height);
+  void popClipRect();
   void pushUpdateTexture(TextureHandle handle,
                          int x,
                          int y,
@@ -268,6 +324,10 @@ public:
                         unsigned int offsetBytes,
                         unsigned int sizeBytes,
                         const void* data);
+  void pushUpdateIndexBuffer(MeshHandle meshHandle,
+                             unsigned int offsetBytes,
+                             unsigned int sizeBytes,
+                             const void* data);
 
   // =========================================================================
   // Render targets & pass execution helpers

@@ -12,7 +12,8 @@ Illumo through supported \texttt{<Illumo/...>} headers. It owns the canvas,
 rulesets, simulation and persistence policy, product commands, CA defaults, and
 a declarative application definition. \textbf{IllEd} is the SceneGraph world
 editor that writes \texttt{.ilsc} documents so later Illumo applications can
-be authored rather than only coded. Neither product contains process entry,
+be authored rather than only coded. \textbf{IllMeshViewer} provides interactive
+mesh inspection. These products do not contain process entry,
 native dialog implementation, logging lifetime, system parser, or frame loop.
 
 IllumoGame supports multiple rule sets (Game of Life, Brian's Brain,
@@ -37,10 +38,10 @@ ABI, or speculative multi-backend framework.
   box/.style={draw, rounded corners, align=center, inner sep=6pt, minimum height=1.1cm},
   arr/.style={-{Latex}, thick}
 ]
-  \node[box, fill=orange!10] (game) {IllumoGame\\Game + Rulesets\\application definition};
+  \node[box, fill=orange!10] (game) {IllumoGame / IllEd\\IllMeshViewer\\application definitions};
   \node[box, fill=green!10, right=2.0cm of game] (lib) {Illumo static library\\Application + Platform + Engine\\Scene + Foundation + Services + Rendering};
   \node[box, fill=purple!8, below=1.0cm of lib] (gl) {private OpenGL backend\\Illumo assets + licenses};
-  \node[box, fill=gray!10, below=1.0cm of game] (tests) {IllumoGameTests\\IllumoTests + TestSupport};
+  \node[box, fill=gray!10, below=1.0cm of game] (tests) {Four test runners\\Illumo::TestSupport};
 
   \draw[arr] (game) -- node[above]{\scriptsize \texttt{Illumo::Illumo}} (lib);
   \draw[arr] (lib) -- (gl);
@@ -52,8 +53,8 @@ ABI, or speculative multi-backend framework.
 \subsection{Runtime one-liner}
 Illumo platform entry $\rightarrow$ \symbolref{CreateIllumoApplication}
 $\rightarrow$ engine-owned \symbolref{RunIllumoApplication} applies supplied
-game defaults and metadata-driven CLI $\rightarrow$ construct and fallibly
-initialize \symbolref{Illumo} $\rightarrow$ register the supplied required game
+product defaults and metadata-driven CLI $\rightarrow$ construct and fallibly
+initialize \symbolref{Illumo} $\rightarrow$ register the supplied required product
 module and engine-owned optional Debug module $\rightarrow$ \texttt{std::chrono} loop
 \{\,\symbolref{update}, \symbolref{render}\,\} until window close.
 

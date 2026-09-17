@@ -4,7 +4,7 @@
 #include "Game/CellGrid.h"
 #include "Game/SimulationRunner.h"
 #include "Game/SparseCellGrid.h"
-#include "Rulesets/GameOfLifeRuleSet.h"
+#include "Rulesets/LifeLikeRuleSet.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Testing/TestHelpers.h>
@@ -81,7 +81,7 @@ testDoubleBufferAndStillLife()
   canvas.onTargetsRebuilt();
   testTrue(g, !canvas.isCellsDirty(), "targets rebuilt clears life dirty");
 
-  GameOfLifeRuleSet rules(&canvas);
+  LifeLikeRuleSet rules(&canvas);
   RuleSet::setWorkerOverride(1);
   rules.calcGeneration(0, 0, 8, 8);
   testTrue(g, !canvas.isCellsDirty(), "still life leaves cells clean");
@@ -102,7 +102,7 @@ testDirtyAabbTightness()
   canvas.setCanvasPixel(8, 9, 0);
   canvas.onTargetsRebuilt();
 
-  GameOfLifeRuleSet rules(&canvas);
+  LifeLikeRuleSet rules(&canvas);
   RuleSet::setWorkerOverride(1);
   rules.calcGeneration(0, 0, 16, 16);
   testTrue(g, canvas.isCellsDirty(), "blinker step dirties");
@@ -127,7 +127,7 @@ testToroidalEdge()
   grid.setCanvasPixel(1, 2, 0);
   grid.setCanvasPixel(4, 2, 0);
 
-  GameOfLifeRuleSet rules(&grid);
+  LifeLikeRuleSet rules(&grid);
   RuleSet::setWorkerOverride(1);
   rules.calcGeneration(0, 0, 5, 5);
   // Neighbors of (0,1)/(0,3) etc. — just ensure we did not crash and grid is
@@ -159,7 +159,7 @@ testSerialParallelIdentical()
   seedRandom(serialGrid, 42u);
   const std::vector<unsigned char> start = snapshot(serialGrid);
 
-  GameOfLifeRuleSet serialRules(&serialGrid);
+  LifeLikeRuleSet serialRules(&serialGrid);
   RuleSet::setWorkerOverride(1);
   for (int i = 0; i < gens; ++i) {
     serialRules.calcGeneration(0, 0, w, h);
@@ -168,7 +168,7 @@ testSerialParallelIdentical()
 
   CellGrid parallelGrid(w, h);
   std::memcpy(parallelGrid.lifeCanvas, start.data(), start.size());
-  GameOfLifeRuleSet parallelRules(&parallelGrid);
+  LifeLikeRuleSet parallelRules(&parallelGrid);
   RuleSet::setWorkerOverride(4);
   for (int i = 0; i < gens; ++i) {
     parallelRules.calcGeneration(0, 0, w, h);
@@ -189,7 +189,7 @@ benchGensPerSecond(int width, int height, int generations, unsigned seed)
 {
   CellGrid grid(width, height);
   seedRandom(grid, seed);
-  GameOfLifeRuleSet rules(&grid);
+  LifeLikeRuleSet rules(&grid);
   RuleSet::setWorkerOverride(1);
 
   // Warmup
@@ -296,7 +296,7 @@ benchSparseGensPerSecond(int chunksPerSide,
 {
   SparseCellGrid grid;
   seedSparseBenchmark(&grid, chunksPerSide, 101u);
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules(nullptr);
   SparseCellGrid::setWorkerOverrideForTesting(workers);
   SparseCellGrid::setCellCandidateOverrideForTesting(-1);
   SparseCellGrid::setChunkMemoOverrideForTesting(memoMode);
@@ -332,7 +332,7 @@ benchSparseWideGensPerSecond(int colonyCount,
 {
   SparseCellGrid grid;
   seedSparseWideBlinkers(&grid, colonyCount);
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules(nullptr);
   SparseCellGrid::setWorkerOverrideForTesting(workers);
   SparseCellGrid::setCellCandidateOverrideForTesting(candidateMode);
   SparseCellGrid::setChunkNodeReuseOverrideForTesting(reuseChunkNodes);
@@ -369,7 +369,7 @@ benchSparseFrontierGensPerSecond(int blockCount,
 {
   SparseCellGrid grid;
   seedSparseStableBlocksAndBlinker(&grid, blockCount);
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules(nullptr);
   SparseCellGrid::setWorkerOverrideForTesting(1);
   SparseCellGrid::setCellCandidateOverrideForTesting(candidateMode);
 
@@ -426,7 +426,7 @@ benchRepeatedDenseGensPerSecond(int chunkCount,
 {
   SparseCellGrid grid;
   seedRepeatedDenseChunks(&grid, chunkCount);
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules(nullptr);
   SparseCellGrid::setWorkerOverrideForTesting(4);
   SparseCellGrid::setCellCandidateOverrideForTesting(-1);
   SparseCellGrid::setChunkMemoOverrideForTesting(memoMode);
@@ -511,7 +511,7 @@ testMicroBenchReport()
     const int dim = 512;
     CellGrid grid(dim, dim);
     seedRandom(grid, 11u);
-    GameOfLifeRuleSet rules(&grid);
+    LifeLikeRuleSet rules(&grid);
     const int gens = 12;
 
     RuleSet::setWorkerOverride(1);
@@ -557,7 +557,7 @@ testMicroBenchReport()
   {
     CellGrid grid(80, 60);
     seedGlider(grid, 10, 10);
-    GameOfLifeRuleSet rules(&grid);
+    LifeLikeRuleSet rules(&grid);
     RuleSet::setWorkerOverride(1);
     for (int i = 0; i < 4; ++i) {
       rules.calcGeneration(0, 0, 80, 60);
@@ -801,7 +801,7 @@ testSparseMicroBenchReport()
     const int denseGenerations = 12;
     SparseCellGrid grid;
     seedSparseBenchmark(&grid, denseChunksPerSide, 303u);
-    GameOfLifeRuleSet rules(nullptr);
+    LifeLikeRuleSet rules(nullptr);
     SparseCellGrid::setWorkerOverrideForTesting(4);
     SparseCellGrid::setCellCandidateOverrideForTesting(0);
     grid.advance(rules);
@@ -861,7 +861,7 @@ testSparseMicroBenchReport()
     SparseCellGrid asyncPublished;
     SparseCellGrid asyncWorking;
     seedSparseBenchmark(&asyncPublished, denseChunksPerSide, 303u);
-    GameOfLifeRuleSet asyncRules(nullptr);
+    LifeLikeRuleSet asyncRules(nullptr);
     SimulationRunner runner;
     SparseGenerationDelta mirrorDelta;
     bool mirrorDeltaValid = false;
@@ -1075,7 +1075,7 @@ static void
 testFrameLatencyBenchReport()
 {
   testSection("Sim: warmed frame-latency report (informational)");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules(nullptr);
   SparseCellGrid::setWorkerOverrideForTesting(0);
   SparseCellGrid::setCellCandidateOverrideForTesting(0);
 

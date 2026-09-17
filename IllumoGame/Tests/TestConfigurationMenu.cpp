@@ -1,6 +1,9 @@
 #include "Game/ConfigurationMenu.h"
+#include "Game/RuleCatalogLoader.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/EnvVars.h>
@@ -32,6 +35,12 @@ struct ConfigurationMenuFixture
     , input(nullptr)
     , menu(&window, &renderer)
   {
+    RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
+    // Preferences are explicit so repeated runs cannot inherit a saved draft.
+    env.setVar("fps", 60);
+    env.setVar("showInspector", false);
+    env.setVar("reducedUiMotion", false);
+    env.setVar("uiScale", 1);
     env.setVar("WinX", 640);
     env.setVar("WinY", 480);
     mock.Initialize();
@@ -66,6 +75,80 @@ defaultConfiguration()
   return configuration;
 }
 
+static bool
+hasSwitchBeside(GameVisual& visual, const std::string& label)
+{
+  float labelY = -1000.0f;
+  for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == label) {
+      labelY = text->y;
+      break;
+    }
+  }
+  if (labelY < 0.0f) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < visual.shapeCount(); ++index) {
+    ShapePrimitive* shape = visual.getShape(index);
+    if (shape != nullptr && shape->kind == ShapeKind::FilledRect &&
+        std::abs(shape->rect.w - 20.0f) < 0.1f &&
+        std::abs(shape->rect.h - 16.0f) < 0.1f &&
+        std::abs(shape->rect.y - labelY) < 4.0f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool
+hasTextCaret(GameVisual& visual)
+{
+  for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == "|") {
+      return true;
+    }
+  }
+  return false;
+}
+
+static float
+textCaretGap(GameVisual& visual, const std::string& value)
+{
+  TextPrimitive* valueText = nullptr;
+  TextPrimitive* caretText = nullptr;
+  for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == value) {
+      valueText = text;
+    } else if (text != nullptr && text->content == "|") {
+      caretText = text;
+    }
+  }
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (valueText == nullptr || caretText == nullptr || font == nullptr ||
+      value.empty()) {
+    return 1000.0f;
+  }
+  const FontMetrics& metrics = font->getMetrics();
+  const float scale =
+    metrics.pixelSize > 0.0f ? valueText->sizePt / metrics.pixelSize : 1.0f;
+  const TextBounds bounds = font->measureText(value, valueText->sizePt);
+  const GlyphInfo* valueGlyph =
+    font->getGlyph(static_cast<unsigned char>(value.back()));
+  const GlyphInfo* caretGlyph = font->getGlyph('|');
+  float valueRight = valueText->x + bounds.width;
+  if (valueGlyph != nullptr) {
+    valueRight +=
+      (valueGlyph->bearingX + valueGlyph->width - valueGlyph->advanceX) * scale;
+  }
+  const float caretLeft =
+    caretText->x +
+    (caretGlyph == nullptr ? 0.0f : caretGlyph->bearingX * scale);
+  return caretLeft - valueRight;
+}
+
 static void
 testConfigurationParsingAndTopologyValidation()
 {
@@ -82,6 +165,7 @@ testConfigurationParsingAndTopologyValidation()
            parsed.worldChunkWidth == 0 && parsed.worldChunkHeight == 0,
            "inf / inf maps to zero topology dimensions");
 
+  fixture.press(KeyCode::Down);
   fixture.press(KeyCode::Down);
   fixture.type('4');
   fixture.menu.update(&fixture.input);
@@ -161,7 +245,7 @@ testConfigurationNavigationAndActions()
            fixture.menu.getValuePulseForTesting() == 0.0f,
            "value accent pulse fades to rest");
 
-  for (int row = 0; row < 10; ++row) {
+  for (int row = 0; row < 15; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -171,7 +255,7 @@ testConfigurationNavigationAndActions()
            "Enter activates the Apply row");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 8; ++row) {
+  for (int row = 0; row < 9; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Right);
@@ -182,7 +266,7 @@ testConfigurationNavigationAndActions()
            "right cycles UI scale from 1x to 2x");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 9; ++row) {
+  for (int row = 0; row < 10; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Right);
@@ -199,7 +283,21 @@ testConfigurationNavigationAndActions()
            "F1 cancels an open menu");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 12; ++row) {
+  for (int row = 0; row < 14; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) && !parsed.editHints,
+           "Enter toggles edit hints off");
+  fixture.menu.open(parsed);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) && !parsed.editHints,
+           "reopening preserves the hints setting");
+
+  fixture.menu.open(defaultConfiguration());
+  for (int row = 0; row < 17; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -250,7 +348,7 @@ testConfigurationMenuTokensAtReleaseWindowSize()
       foundReadableLabel || (text->content == "Ruleset" &&
                              text->sizePt >= 16.0f && text->color.a == 255);
     foundFriendlyRuleName =
-      foundFriendlyRuleName || text->content == "Game of Life";
+      foundFriendlyRuleName || text->content == "Conway's Game of Life";
     foundControlHelp =
       foundControlHelp ||
       text->content.find("UP/DOWN: select") != std::string::npos;
@@ -267,7 +365,55 @@ testConfigurationMenuTokensAtReleaseWindowSize()
            foundFriendlyRuleName,
            "ruleset value uses a human-readable display name");
   testTrue(g, foundControlHelp, "keyboard controls are split into clear help");
-  testTrue(g, foundExitAction, "settings menu renders an Exit action");
+  testTrue(g,
+           !hasSwitchBeside(visual, "Fade speed"),
+           "numeric fade speed does not render a misplaced switch");
+  testTrue(g,
+           hasSwitchBeside(visual, "Vertical sync"),
+           "vertical sync renders its switch on the matching row");
+  testTrue(
+    g, !foundExitAction, "offscreen actions are not drawn over the footer");
+  for (int row = 0; row < 6; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.menu.update(&fixture.input);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           hasTextCaret(visual),
+           "focused editable setting renders a visible text caret");
+  const float caretGap = textCaretGap(visual, "8");
+  testTrue(g,
+           caretGap >= 0.0f && caretGap <= 2.0f,
+           "text caret sits directly beside the final rendered glyph");
+  fixture.menu.tick(0.6f);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           !hasTextCaret(visual),
+           "editable setting caret alternates off during its blink cycle");
+  fixture.press(KeyCode::End);
+  fixture.menu.update(&fixture.input);
+  fixture.menu.tick(1.0f);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  for (std::size_t index = 0; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    foundExitAction =
+      foundExitAction || (text != nullptr && text->content == "Exit simulator");
+  }
+  testTrue(g, foundExitAction, "End scrolls Exit into the visible viewport");
+  testTrue(g,
+           !hasSwitchBeside(visual, "FPS cap"),
+           "numeric FPS cap does not render a misplaced switch");
+  testTrue(g,
+           hasSwitchBeside(visual, "Simulation inspector") &&
+             hasSwitchBeside(visual, "Reduced menu motion") &&
+             hasSwitchBeside(visual, "Edit control hints"),
+           "lower boolean settings render switches on their matching rows");
   testTrue(g, foundRestartNote, "settings menu renders restart note footer");
 
   fixture.menu.close();
@@ -278,6 +424,134 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   testTrue(g,
            fixture.mock.getLastSubmittedCount() == 0u,
            "closed settings menu emits no commands");
+}
+
+static void
+testDisplaySettingsAndScrolling()
+{
+  ConfigurationMenuFixture fixture;
+  fixture.env.setVar("uiScale", 4);
+  fixture.menu.open(defaultConfiguration());
+  for (int row = 0; row < 11; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  SimulatorConfiguration parsed;
+  std::string error;
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.fpsCap == 90,
+           "FPS presets cycle from 60 to 90");
+  fixture.type('1');
+  fixture.type('4');
+  fixture.type('4');
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.fpsCap == 144,
+           "custom FPS cap replaces the selected value");
+  fixture.press(KeyCode::Backspace);
+  fixture.type('9');
+  fixture.type('9');
+  fixture.type('9');
+  fixture.type('9');
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           !fixture.menu.readConfiguration(&parsed, &error) &&
+             error.find("FPS cap") != std::string::npos,
+           "out of range FPS cap is rejected");
+  fixture.press(KeyCode::Delete);
+  fixture.menu.update(&fixture.input);
+  // Selecting again restores replace-on-type, even after an invalid long draft.
+  fixture.press(KeyCode::Up);
+  fixture.press(KeyCode::Down);
+  fixture.type('0');
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.fpsCap == 0,
+           "zero explicitly disables the software FPS cap");
+  fixture.press(KeyCode::Down);
+  fixture.press(KeyCode::Right);
+  fixture.press(KeyCode::Down);
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.showInspector && parsed.reducedUiMotion,
+           "inspector and reduced motion are independent toggles");
+  testTrue(g,
+           fixture.menu.getAnimationProgressForTesting() == 1.0f &&
+             fixture.menu.getSelectionPositionForTesting() == 13.0f &&
+             fixture.menu.getValuePulseForTesting() == 0.0f,
+           "reduced motion immediately snaps reveal, selection, and pulse");
+  fixture.press(KeyCode::Home);
+  fixture.menu.update(&fixture.input);
+  *fixture.input.getMouseScrollOffset() = -1.0;
+  fixture.menu.update(&fixture.input);
+  testTrue(
+    g,
+    fixture.menu.getSelectedRowForTesting() == 0 &&
+      fixture.menu.getFirstVisibleRowForTesting() == 1 &&
+      *fixture.input.getMouseScrollOffset() == 0.0,
+    "wheel moves the view without selecting another button and is consumed");
+  fixture.menu.tick(0.1f);
+  fixture.menu.update(&fixture.input);
+  testEqInt(g,
+            fixture.menu.getFirstVisibleRowForTesting(),
+            1,
+            "later layout updates do not snap back to the selected row");
+  *fixture.input.getMouseScrollOffset() = -100.0;
+  fixture.menu.update(&fixture.input);
+  const int bottomRow = fixture.menu.getFirstVisibleRowForTesting();
+  testTrue(g,
+           bottomRow > 1 && fixture.menu.getSelectedRowForTesting() == 0,
+           "wheel clamps at the bottom while selection stays offscreen");
+  *fixture.input.getMouseScrollOffset() = -1.0;
+  fixture.menu.update(&fixture.input);
+  testEqInt(g,
+            fixture.menu.getFirstVisibleRowForTesting(),
+            bottomRow,
+            "scrolling past the bottom does not wrap");
+  *fixture.input.getMouseScrollOffset() = 100.0;
+  fixture.menu.update(&fixture.input);
+  testEqInt(g,
+            fixture.menu.getFirstVisibleRowForTesting(),
+            0,
+            "wheel clamps at the top");
+  *fixture.input.getMouseScrollOffset() = -3.0;
+  fixture.menu.update(&fixture.input);
+  fixture.press(KeyCode::Down);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.getSelectedRowForTesting() == 1 &&
+             fixture.menu.getFirstVisibleRowForTesting() == 1,
+           "keyboard navigation brings the selected row back into view");
+  fixture.press(KeyCode::End);
+  fixture.menu.update(&fixture.input);
+  Scene scene(&fixture.window, &fixture.camera);
+  scene.AddDrawable(&fixture.menu, RenderLayerId::UI);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  GameVisual& visual = fixture.menu.getVisual();
+  const float fittedScale =
+    visual.getTransform().scaleX * fixture.renderer.getUiScale();
+  bool foundCap = false;
+  for (std::size_t index = 0; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text == nullptr) {
+      continue;
+    }
+    foundCap = foundCap || text->content == "FPS cap";
+    testTrue(
+      g,
+      text->y * fittedScale >= 0.0f &&
+        (text->y + text->sizePt) * fittedScale <= 480.0f,
+      "scrolled text stays within the small window at 4x preferred UI scale");
+  }
+  testTrue(g, foundCap, "scrolling to actions retains nearby display controls");
 }
 
 static int
@@ -291,6 +565,9 @@ runConfigurationMenuCase(void (*testFunction)())
 void
 registerConfigurationMenuTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.ConfigurationMenu.DisplaySettings", []() {
+    return runConfigurationMenuCase(testDisplaySettingsAndScrolling);
+  });
   registry.add("IllumoGame.ConfigurationMenu.Validation", []() {
     return runConfigurationMenuCase(
       testConfigurationParsingAndTopologyValidation);

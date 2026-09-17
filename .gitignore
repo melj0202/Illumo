@@ -96,6 +96,7 @@ __pycache__/
 
 # Local/private configuration and credentials
 /envvars.json
+/build-profiles.local.json
 .priv/
 .agents/*
 !.agents/skills/

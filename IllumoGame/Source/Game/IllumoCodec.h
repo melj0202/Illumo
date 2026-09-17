@@ -8,7 +8,8 @@
 
 struct IllumoDocument
 {
-  int version = 3;
+  int version = 4;
+  std::string familyString;
   std::string ruleString;
   double cameraX = 0.0;
   double cameraY = 0.0;
@@ -23,7 +24,7 @@ struct IllumoDocument
 class IllumoCodec
 {
 public:
-  static constexpr int kVersion = 3;
+  static constexpr int kVersion = 4;
 
   static bool readFile(const std::string& path,
                        IllumoDocument* document,

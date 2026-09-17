@@ -40,11 +40,17 @@ void
 registerShaderPreprocessorTests(IllumoTestRegistry& registry);
 void
 registerFontTests(IllumoTestRegistry& registry);
+void
+registerFrameCaptureTests(IllumoTestRegistry& registry);
+void
+registerAtomicFileTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
 {
   IllumoTestRegistry registry;
+  registerAtomicFileTests(registry);
+  registerFrameCaptureTests(registry);
   registerMockBackendTests(registry);
   registerRendererE2ETests(registry);
   registerUITokenTests(registry);

@@ -1,6 +1,6 @@
 #include "SparseCellGrid.h"
-#include "SparseWorkerPool.h"
 #include "Rulesets/RuleSet.h"
+#include "SparseWorkerPool.h"
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -149,8 +149,8 @@ struct SparseCellGrid::ChunkMemoState
 
   std::array<Shard, kShardCount> shards;
   AdaptiveMode mode = AdaptiveMode::Probe;
-  const std::type_info* ruleType = nullptr;
-  std::uint64_t ruleRevision = 0u;
+  RuleSet::TransitionTable transitions{};
+  bool hasTransitions = false;
   unsigned int cooldownGenerations = 0u;
   unsigned int lowHitGenerations = 0u;
   bool generationEnabled = false;
@@ -636,8 +636,9 @@ SparseCellGrid::publishChangedChunkRevision(const ChunkAddress& address,
 void
 SparseCellGrid::collectChangedChunksBetweenMaps()
 {
+  const ChunkMap& sourceChunks = generationChunks();
   beginNextChangedChunks();
-  for (ChunkMap::const_reference entry : chunks) {
+  for (ChunkMap::const_reference entry : sourceChunks) {
     const ChunkMap::const_iterator next = m_nextChunks.find(entry.first);
     OccupancyMask stateChanged;
     OccupancyMask countedChanged;
@@ -653,7 +654,7 @@ SparseCellGrid::collectChangedChunksBetweenMaps()
     }
   }
   for (ChunkMap::const_reference entry : m_nextChunks) {
-    if (chunks.find(entry.first) == chunks.end()) {
+    if (sourceChunks.find(entry.first) == sourceChunks.end()) {
       OccupancyMask stateChanged;
       OccupancyMask countedChanged;
       buildChangeMasks(nullptr, &entry.second, &stateChanged, &countedChanged);
@@ -864,12 +865,12 @@ SparseCellGrid::floorDivide(std::int64_t value, std::int64_t divisor)
   if (divisor <= 0) {
     return 0;
   }
-  const std::int64_t quotient = value / divisor;
-  const std::int64_t remainder = value % divisor;
-  if (remainder < 0) {
-    return quotient - 1;
+  if (value < 0) {
+    // Shift before negating so INT64_MIN remains representable. Keeping the
+    // division nonnegative also avoids endpoint-sensitive signed reduction.
+    return -1 - (-(value + 1)) / divisor;
   }
-  return quotient;
+  return value / divisor;
 }
 
 std::int64_t
@@ -2102,7 +2103,7 @@ SparseCellGrid::finishNextChunks(bool changesPrepared)
       collectChangedChunksBetweenMaps();
       changed = m_frontierInvalid || !m_nextChangedChunks.empty();
     } catch (const std::bad_alloc&) {
-      changed = !sameChunkMaps(chunks, m_nextChunks);
+      changed = !sameChunkMaps(generationChunks(), m_nextChunks);
       m_frontierInvalid = true;
     }
   }
@@ -2487,6 +2488,7 @@ SparseCellGrid::copyStateFrom(const SparseCellGrid& source)
   m_candidateScratchSourceGrid = nullptr;
   m_candidateScratchSourceTopologyRevision = 0u;
   lastRuleType = source.lastRuleType;
+  lastRuleTag = source.lastRuleTag;
   m_backgroundTransitionsStayBinary = source.m_backgroundTransitionsStayBinary;
   m_countedChangeCoversStateChange = source.m_countedChangeCoversStateChange;
   lastAdvanceStats = source.lastAdvanceStats;
@@ -2804,6 +2806,7 @@ SparseCellGrid::swap(SparseCellGrid& other) noexcept
   m_nextChangedChunkIndex.swap(other.m_nextChangedChunkIndex);
   std::swap(m_nextChangedChunkGeneration, other.m_nextChangedChunkGeneration);
   std::swap(lastRuleType, other.lastRuleType);
+  std::swap(lastRuleTag, other.lastRuleTag);
   std::swap(m_backgroundTransitionsStayBinary,
             other.m_backgroundTransitionsStayBinary);
   std::swap(m_countedChangeCoversStateChange,
@@ -3040,12 +3043,12 @@ SparseCellGrid::beginChunkMemoGeneration(std::size_t haloTargetCount,
   }
 
   ChunkMemoState& memo = *m_chunkMemo;
-  const std::type_info* ruleType = &typeid(ruleSet);
-  const std::uint64_t ruleRevision = ruleSet.getTransitionRevision();
-  if (memo.ruleType != ruleType || memo.ruleRevision != ruleRevision) {
+  const RuleSet::TransitionTable& transitions = ruleSet.getTransitionTable();
+  // Instance revisions and rule tags do not identify transition semantics.
+  if (!memo.hasTransitions || memo.transitions != transitions) {
     memo.clearEntries();
-    memo.ruleType = ruleType;
-    memo.ruleRevision = ruleRevision;
+    memo.transitions = transitions;
+    memo.hasTransitions = true;
     memo.mode = ChunkMemoState::AdaptiveMode::Probe;
     memo.cooldownGenerations = 0u;
     memo.lowHitGenerations = 0u;
@@ -3819,43 +3822,93 @@ SparseCellGrid::advanceElementarySpaceTime(const RuleSet& ruleSet)
       }
     }
   }
-  if (!found) {
-    return true;
+  const std::int64_t minimumCoordinate =
+    std::numeric_limits<std::int64_t>::min();
+  const std::int64_t maximumCoordinate =
+    std::numeric_limits<std::int64_t>::max();
+  if (found && sourceY == maximumCoordinate) {
+    return false;
   }
-
   CellAddress destination{ 0, sourceY + 1 };
   destination = canonicalizeCell(destination);
   const std::int64_t destY = destination.y;
 
-  struct PendingWrite
-  {
-    std::int64_t x = 0;
-    unsigned char state = 1;
-  };
-  std::vector<PendingWrite> writes;
-  for (std::int64_t x = minX - 1; x <= maxX + 1; ++x) {
-    const unsigned char left = source.getCell(CellAddress{ x - 1, sourceY });
-    const unsigned char center = source.getCell(CellAddress{ x, sourceY });
-    const unsigned char right = source.getCell(CellAddress{ x + 1, sourceY });
-    PendingWrite write;
-    write.x = x;
-    write.state = ruleSet.nextElementary(left, center, right);
-    writes.push_back(write);
+  const bool previousFrontierInvalid = m_frontierInvalid;
+  m_nextChunksMirrorCurrent = false;
+  m_inactiveCatchupDeltaValid = false;
+  m_inactiveCatchupFullReplacement = false;
+  if (!prepareNextChunks(source.chunks.size())) {
+    return false;
   }
-
-  if (&source != this) {
-    copyStateFrom(source);
-  }
-  for (std::size_t i = 0; i < writes.size(); ++i) {
-    CellAddress dest{ writes[i].x, destY };
-    dest = canonicalizeCell(dest);
-    if (!isCellInWorldBounds(dest)) {
-      continue;
+  try {
+    for (ChunkMap::const_reference entry : source.chunks) {
+      insertNextChunk(entry.first, entry.second);
     }
-    setCell(dest, writes[i].state);
+    const std::int64_t firstX = minX == minimumCoordinate ? minX : minX - 1;
+    const std::int64_t lastX = maxX == maximumCoordinate ? maxX : maxX + 1;
+    for (std::int64_t x = firstX; found; ++x) {
+      unsigned char left = BackgroundState;
+      if (x > minimumCoordinate) {
+        const CellAddress neighbor{ x - 1, sourceY };
+        left = source.getCell(neighbor);
+      }
+      const unsigned char center = source.getCell(CellAddress{ x, sourceY });
+      unsigned char right = BackgroundState;
+      if (x < maximumCoordinate) {
+        const CellAddress neighbor{ x + 1, sourceY };
+        right = source.getCell(neighbor);
+      }
+      const unsigned char state = ruleSet.nextElementary(left, center, right);
+      const CellAddress dest = canonicalizeCell(CellAddress{ x, destY });
+      if (isCellInWorldBounds(dest)) {
+        const ChunkAddress address = chunkAddressForCell(dest);
+        const std::size_t index =
+          static_cast<std::size_t>(localIndexForCell(dest));
+        ChunkMap::iterator chunk = m_nextChunks.find(address);
+        const unsigned char previous = chunk == m_nextChunks.end()
+                                         ? BackgroundState
+                                         : chunk->second.cells[index];
+        if (previous != state) {
+          if (m_elementaryWriteFailureCountdown == 0) {
+            m_elementaryWriteFailureCountdown = -1;
+            throw std::bad_alloc();
+          }
+          if (m_elementaryWriteFailureCountdown > 0) {
+            --m_elementaryWriteFailureCountdown;
+          }
+          if (chunk == m_nextChunks.end()) {
+            ChunkData empty;
+            empty.cells.fill(BackgroundState);
+            chunk = insertNextChunk(address, empty);
+          }
+          removeChunkStatistics(chunk->second, &m_nextChunkStatistics);
+          chunk->second.cells[index] = state;
+          setOccupied(&chunk->second, index, state != BackgroundState);
+          setCounted(&chunk->second, index, state == CountedNeighborState);
+          if (hasOccupiedCells(chunk->second)) {
+            addChunkStatistics(chunk->second, &m_nextChunkStatistics);
+          } else {
+            m_nextChunks.erase(chunk);
+          }
+        }
+      }
+      // Test before incrementing so an inclusive endpoint never overflows.
+      if (x == lastX) {
+        break;
+      }
+    }
+
+    m_frontierInvalid = false;
+    collectChangedChunksBetweenMaps();
+    lastAdvanceStats.targetChunkCount = found ? 1u : 0u;
+    lastAdvanceStats.producedChunkCount = m_nextChunks.size();
+    // Cached candidate sources borrow chunk addresses across generations.
+    m_nextCandidateTopologyChanged = true;
+    finishNextChunks(true);
+  } catch (...) {
+    m_frontierInvalid = previousFrontierInvalid;
+    return false;
   }
-  lastAdvanceStats.targetChunkCount = 1u;
-  lastAdvanceStats.producedChunkCount = 1u;
   return true;
 }
 
@@ -4003,10 +4056,392 @@ SparseCellGrid::advanceFrom(const SparseCellGrid& source,
   }
 
   m_generationSourceGrid = &source;
-  revision = source.revision;
-  const bool advanced = advanceImpl(ruleSet, false);
+  bool advanced = false;
+  try {
+    advanced = advanceImpl(ruleSet, false);
+  } catch (...) {
+    m_generationSourceGrid = nullptr;
+    return false;
+  }
   m_generationSourceGrid = nullptr;
   return advanced;
+}
+
+bool
+SparseCellGrid::advanceStateHistogram(const RuleSet& ruleSet)
+{
+  const SparseCellGrid& source = generationSource();
+  const ChunkMap& sourceChunks = source.chunks;
+  try {
+    beginAddressSet(
+      &m_completeTargets, &m_completeTargetIndex, &m_completeTargetGeneration);
+    for (ChunkMap::const_reference entry : sourceChunks) {
+      for (int offsetY = -1; offsetY <= 1; ++offsetY) {
+        for (int offsetX = -1; offsetX <= 1; ++offsetX) {
+          const ChunkAddress target = canonicalizeChunk(
+            ChunkAddress{ entry.first.x + offsetX, entry.first.y + offsetY });
+          insertAddressSet(target,
+                           &m_completeTargets,
+                           &m_completeTargetIndex,
+                           m_completeTargetGeneration);
+        }
+      }
+    }
+
+    lastAdvanceStats.targetChunkCount = m_completeTargets.size();
+    lastAdvanceStats.haloTargetCount = m_completeTargets.size();
+    lastAdvanceStats.workerCount = 1u;
+    m_completeResults.resize(m_completeTargets.size());
+    m_frontierInvalid = false;
+    beginNextChangedChunks();
+
+    for (std::size_t targetIndex = 0u; targetIndex < m_completeTargets.size();
+         ++targetIndex) {
+      TargetResult& result = m_completeResults[targetIndex];
+      result.address = m_completeTargets[targetIndex];
+      result.cells.fill(BackgroundState);
+      result.occupied.fill(0u);
+      result.counted.fill(0u);
+      result.stateChanged.fill(0u);
+      result.countedChanged.fill(0u);
+      result.hasNonBackground = false;
+      result.completeCells = true;
+
+      const std::int64_t originX = result.address.x * kChunkDim;
+      const std::int64_t originY = result.address.y * kChunkDim;
+      for (int localY = 0; localY < kChunkDim; ++localY) {
+        for (int localX = 0; localX < kChunkDim; ++localX) {
+          const CellAddress address{ originX + localX, originY + localY };
+          const unsigned char current = source.getCell(address);
+          RuleSet::NeighborStateCounts counts{};
+          for (int neighborY = -1; neighborY <= 1; ++neighborY) {
+            for (int neighborX = -1; neighborX <= 1; ++neighborX) {
+              if (neighborX == 0 && neighborY == 0) {
+                continue;
+              }
+              const unsigned char neighbor = source.getCell(
+                CellAddress{ address.x + neighborX, address.y + neighborY });
+              counts[neighbor] += 1u;
+            }
+          }
+          const unsigned char next =
+            ruleSet.nextStateFromNeighborhood(current, counts);
+          const std::size_t cellIndex =
+            static_cast<std::size_t>(localY * kChunkDim + localX);
+          const std::size_t wordIndex = cellIndex / 64u;
+          const std::uint64_t bit =
+            static_cast<std::uint64_t>(1u)
+            << static_cast<unsigned int>(cellIndex % 64u);
+          result.cells[cellIndex] = next;
+          if (next != BackgroundState) {
+            result.occupied[wordIndex] |= bit;
+            result.hasNonBackground = true;
+          }
+          if (next == CountedNeighborState) {
+            result.counted[wordIndex] |= bit;
+          }
+          if (next != current) {
+            result.stateChanged[wordIndex] |= bit;
+          }
+          if ((next == CountedNeighborState) !=
+              (current == CountedNeighborState)) {
+            result.countedChanged[wordIndex] |= bit;
+          }
+        }
+      }
+      if (hasMaskBits(result.stateChanged)) {
+        markNextChangedChunk(
+          result.address, result.stateChanged, result.countedChanged);
+      }
+    }
+
+    const bool directSourceGeneration = m_generationSourceGrid != nullptr;
+    const bool prepared = directSourceGeneration
+                            ? prepareDirectChunks(m_completeResults.size())
+                            : prepareNextChunks(m_completeResults.size());
+    if (!prepared) {
+      return false;
+    }
+    m_nextCandidateTopologyChanged = true;
+    for (const TargetResult& result : m_completeResults) {
+      recordNextCandidateTopology(result);
+      if (!result.hasNonBackground) {
+        continue;
+      }
+      const bool inserted = directSourceGeneration
+                              ? insertDirectResultChunk(result)
+                              : insertNextResultChunk(result);
+      if (!inserted) {
+        return false;
+      }
+      lastAdvanceStats.producedChunkCount += 1u;
+    }
+  } catch (const std::bad_alloc&) {
+    return false;
+  } catch (const std::exception&) {
+    return false;
+  }
+
+  if (m_generationSourceGrid != nullptr) {
+    finishDirectChunks();
+  } else {
+    finishNextChunks(true);
+  }
+  return true;
+}
+
+bool
+SparseCellGrid::advanceDirectionalNeighborhood(const RuleSet& ruleSet)
+{
+  ZoneScopedN("SparseCellGrid.advanceDirectionalNeighborhood");
+  const SparseCellGrid& source = generationSource();
+  const ChunkMap& sourceChunks = source.chunks;
+  try {
+    beginAddressSet(
+      &m_completeTargets, &m_completeTargetIndex, &m_completeTargetGeneration);
+    for (ChunkMap::const_reference entry : sourceChunks) {
+      for (int offsetY = -1; offsetY <= 1; ++offsetY) {
+        for (int offsetX = -1; offsetX <= 1; ++offsetX) {
+          const ChunkAddress target = canonicalizeChunk(
+            ChunkAddress{ entry.first.x + offsetX, entry.first.y + offsetY });
+          insertAddressSet(target,
+                           &m_completeTargets,
+                           &m_completeTargetIndex,
+                           m_completeTargetGeneration);
+        }
+      }
+    }
+
+    lastAdvanceStats.targetChunkCount = m_completeTargets.size();
+    lastAdvanceStats.haloTargetCount = m_completeTargets.size();
+    lastAdvanceStats.workerCount = 1u;
+    m_completeResults.resize(m_completeTargets.size());
+    m_frontierInvalid = false;
+    beginNextChangedChunks();
+
+    for (std::size_t targetIndex = 0u; targetIndex < m_completeTargets.size();
+         ++targetIndex) {
+      TargetResult& result = m_completeResults[targetIndex];
+      result.address = m_completeTargets[targetIndex];
+      result.cells.fill(BackgroundState);
+      result.occupied.fill(0u);
+      result.counted.fill(0u);
+      result.stateChanged.fill(0u);
+      result.countedChanged.fill(0u);
+      result.hasNonBackground = false;
+      result.completeCells = true;
+
+      const std::int64_t originX = result.address.x * kChunkDim;
+      const std::int64_t originY = result.address.y * kChunkDim;
+      for (int localY = 0; localY < kChunkDim; ++localY) {
+        for (int localX = 0; localX < kChunkDim; ++localX) {
+          const CellAddress address{ originX + localX, originY + localY };
+          const unsigned char current = source.getCell(address);
+          const RuleSet::DirectionalNeighbors neighbors = {
+            source.getCell(CellAddress{ address.x, address.y - 1 }),
+            source.getCell(CellAddress{ address.x + 1, address.y }),
+            source.getCell(CellAddress{ address.x, address.y + 1 }),
+            source.getCell(CellAddress{ address.x - 1, address.y })
+          };
+          const unsigned char next =
+            ruleSet.nextStateFromDirectionalNeighborhood(current, neighbors);
+          const std::size_t cellIndex =
+            static_cast<std::size_t>(localY * kChunkDim + localX);
+          const std::size_t wordIndex = cellIndex / 64u;
+          const std::uint64_t bit =
+            static_cast<std::uint64_t>(1u)
+            << static_cast<unsigned int>(cellIndex % 64u);
+          result.cells[cellIndex] = next;
+          if (next != BackgroundState) {
+            result.occupied[wordIndex] |= bit;
+            result.hasNonBackground = true;
+          }
+          if (next == CountedNeighborState) {
+            result.counted[wordIndex] |= bit;
+          }
+          if (next != current) {
+            result.stateChanged[wordIndex] |= bit;
+          }
+          if ((next == CountedNeighborState) !=
+              (current == CountedNeighborState)) {
+            result.countedChanged[wordIndex] |= bit;
+          }
+        }
+      }
+      if (hasMaskBits(result.stateChanged)) {
+        markNextChangedChunk(
+          result.address, result.stateChanged, result.countedChanged);
+      }
+    }
+
+    const bool directSourceGeneration = m_generationSourceGrid != nullptr;
+    const bool prepared = directSourceGeneration
+                            ? prepareDirectChunks(m_completeResults.size())
+                            : prepareNextChunks(m_completeResults.size());
+    if (!prepared) {
+      return false;
+    }
+    m_nextCandidateTopologyChanged = true;
+    for (const TargetResult& result : m_completeResults) {
+      recordNextCandidateTopology(result);
+      if (!result.hasNonBackground) {
+        continue;
+      }
+      const bool inserted = directSourceGeneration
+                              ? insertDirectResultChunk(result)
+                              : insertNextResultChunk(result);
+      if (!inserted) {
+        return false;
+      }
+      lastAdvanceStats.producedChunkCount += 1u;
+    }
+  } catch (const std::bad_alloc&) {
+    return false;
+  } catch (const std::exception&) {
+    return false;
+  }
+
+  if (m_generationSourceGrid != nullptr) {
+    finishDirectChunks();
+  } else {
+    finishNextChunks(true);
+  }
+  return true;
+}
+
+bool
+SparseCellGrid::advanceExtendedRange(const RuleSet& ruleSet)
+{
+  ZoneScopedN("SparseCellGrid.advanceExtendedRange");
+  const SparseCellGrid& source = generationSource();
+  const ChunkMap& sourceChunks = source.chunks;
+  const int radius = static_cast<int>(ruleSet.getNeighborhoodRadius());
+  const int chunkRadius =
+    (radius + SparseCellGrid::kChunkDim - 1) / SparseCellGrid::kChunkDim;
+  const bool includeCenter = ruleSet.includesCenterInNeighborCount();
+  const RuleSet::ExtendedNeighborhoodShape shape =
+    ruleSet.getExtendedNeighborhoodShape();
+  try {
+    beginAddressSet(
+      &m_completeTargets, &m_completeTargetIndex, &m_completeTargetGeneration);
+    for (ChunkMap::const_reference entry : sourceChunks) {
+      for (int offsetY = -chunkRadius; offsetY <= chunkRadius; ++offsetY) {
+        for (int offsetX = -chunkRadius; offsetX <= chunkRadius; ++offsetX) {
+          const ChunkAddress target = canonicalizeChunk(
+            ChunkAddress{ entry.first.x + offsetX, entry.first.y + offsetY });
+          insertAddressSet(target,
+                           &m_completeTargets,
+                           &m_completeTargetIndex,
+                           m_completeTargetGeneration);
+        }
+      }
+    }
+
+    lastAdvanceStats.targetChunkCount = m_completeTargets.size();
+    lastAdvanceStats.haloTargetCount = m_completeTargets.size();
+    lastAdvanceStats.workerCount = 1u;
+    m_completeResults.resize(m_completeTargets.size());
+    m_frontierInvalid = false;
+    beginNextChangedChunks();
+
+    for (std::size_t targetIndex = 0u; targetIndex < m_completeTargets.size();
+         ++targetIndex) {
+      TargetResult& result = m_completeResults[targetIndex];
+      result.address = m_completeTargets[targetIndex];
+      result.cells.fill(BackgroundState);
+      result.occupied.fill(0u);
+      result.counted.fill(0u);
+      result.stateChanged.fill(0u);
+      result.countedChanged.fill(0u);
+      result.hasNonBackground = false;
+      result.completeCells = true;
+
+      const std::int64_t originX = result.address.x * kChunkDim;
+      const std::int64_t originY = result.address.y * kChunkDim;
+      for (int localY = 0; localY < kChunkDim; ++localY) {
+        for (int localX = 0; localX < kChunkDim; ++localX) {
+          const CellAddress address{ originX + localX, originY + localY };
+          const unsigned char current = source.getCell(address);
+          unsigned int aliveCount = 0u;
+          for (int neighborY = -radius; neighborY <= radius; ++neighborY) {
+            for (int neighborX = -radius; neighborX <= radius; ++neighborX) {
+              if ((!includeCenter && neighborX == 0 && neighborY == 0) ||
+                  (shape == RuleSet::ExtendedNeighborhoodShape::Circular &&
+                   neighborX * neighborX + neighborY * neighborY >
+                     radius * radius)) {
+                continue;
+              }
+              if (source.getCell(CellAddress{ address.x + neighborX,
+                                              address.y + neighborY }) ==
+                  CountedNeighborState) {
+                aliveCount += 1u;
+              }
+            }
+          }
+          const unsigned char next =
+            ruleSet.nextStateFromExtendedCount(current, aliveCount);
+          const std::size_t cellIndex =
+            static_cast<std::size_t>(localY * kChunkDim + localX);
+          const std::size_t wordIndex = cellIndex / 64u;
+          const std::uint64_t bit =
+            static_cast<std::uint64_t>(1u)
+            << static_cast<unsigned int>(cellIndex % 64u);
+          result.cells[cellIndex] = next;
+          if (next != BackgroundState) {
+            result.occupied[wordIndex] |= bit;
+            result.hasNonBackground = true;
+          }
+          if (next == CountedNeighborState) {
+            result.counted[wordIndex] |= bit;
+          }
+          if (next != current) {
+            result.stateChanged[wordIndex] |= bit;
+          }
+          if ((next == CountedNeighborState) !=
+              (current == CountedNeighborState)) {
+            result.countedChanged[wordIndex] |= bit;
+          }
+        }
+      }
+      if (hasMaskBits(result.stateChanged)) {
+        markNextChangedChunk(
+          result.address, result.stateChanged, result.countedChanged);
+      }
+    }
+
+    const bool directSourceGeneration = m_generationSourceGrid != nullptr;
+    const bool prepared = directSourceGeneration
+                            ? prepareDirectChunks(m_completeResults.size())
+                            : prepareNextChunks(m_completeResults.size());
+    if (!prepared) {
+      return false;
+    }
+    m_nextCandidateTopologyChanged = true;
+    for (const TargetResult& result : m_completeResults) {
+      recordNextCandidateTopology(result);
+      if (!result.hasNonBackground) {
+        continue;
+      }
+      const bool inserted = directSourceGeneration
+                              ? insertDirectResultChunk(result)
+                              : insertNextResultChunk(result);
+      if (!inserted) {
+        return false;
+      }
+      lastAdvanceStats.producedChunkCount += 1u;
+    }
+  } catch (const std::bad_alloc&) {
+    return false;
+  } catch (const std::exception&) {
+    return false;
+  }
+
+  if (m_generationSourceGrid != nullptr) {
+    finishDirectChunks();
+  } else {
+    finishNextChunks(true);
+  }
+  return true;
 }
 
 bool
@@ -4076,8 +4511,23 @@ SparseCellGrid::advanceImpl(const RuleSet& ruleSet, bool allowFrontier)
   lastAdvanceStats.chunkMemoActive = false;
   m_nextCandidateTopologyChanged = false;
 
-  if (lastRuleType != &typeid(ruleSet)) {
+  if (ruleSet.getNeighborhoodKind() ==
+      RuleSet::NeighborhoodKind::MooreStateCounts) {
+    return advanceStateHistogram(ruleSet);
+  }
+  if (ruleSet.getNeighborhoodKind() ==
+      RuleSet::NeighborhoodKind::VonNeumannDirectional) {
+    return advanceDirectionalNeighborhood(ruleSet);
+  }
+  if (ruleSet.getNeighborhoodKind() ==
+      RuleSet::NeighborhoodKind::ExtendedRange) {
+    return advanceExtendedRange(ruleSet);
+  }
+
+  const std::string ruleTag = ruleSet.getRuleTag();
+  if (lastRuleType != &typeid(ruleSet) || lastRuleTag != ruleTag) {
     lastRuleType = &typeid(ruleSet);
+    lastRuleTag = ruleTag;
     m_backgroundTransitionsStayBinary = true;
     const RuleSet::TransitionTable& transitions = ruleSet.getTransitionTable();
     for (unsigned char neighbors = 0u; neighbors < RuleSet::kNeighborCountCount;

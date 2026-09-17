@@ -1,0 +1,424 @@
+{
+  "schema_version": 1,
+  "families": [
+    {
+      "id": "LIFE_LIKE_BINARY",
+      "name": "Binary Life-like",
+      "model": "life_like",
+      "state_count": 2,
+      "states": [
+        { "value": 0, "name": "Alive", "color": [0, 0, 0] },
+        { "value": 1, "name": "Background", "color": [255, 255, 255] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_3_STATE",
+      "name": "Three-state Generations",
+      "model": "generations",
+      "state_count": 3,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [0, 0, 0] },
+        { "value": 1, "name": "Background", "color": [255, 255, 255] },
+        { "value": 2, "name": "Refractory", "color": [0, 164, 128] }
+      ]
+    },
+    {
+      "id": "WIREWORLD_FAMILY",
+      "name": "Wireworld",
+      "model": "moore_table",
+      "state_count": 4,
+      "states": [
+        { "value": 0, "name": "Head", "color": [0, 80, 255] },
+        { "value": 1, "name": "Empty", "color": [255, 255, 255] },
+        { "value": 2, "name": "Tail", "color": [255, 40, 40] },
+        { "value": 3, "name": "Conductor", "color": [255, 200, 40] }
+      ]
+    },
+    {
+      "id": "ELEMENTARY_1D_BINARY",
+      "name": "Elementary Binary",
+      "model": "elementary_1d",
+      "state_count": 2,
+      "states": [
+        { "value": 0, "name": "Alive", "color": [0, 0, 0] },
+        { "value": 1, "name": "Background", "color": [255, 255, 255] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_4_PHASE",
+      "name": "Four-phase Generations",
+      "model": "generations",
+      "state_count": 4,
+      "states": [
+        { "value": 0, "name": "Excited", "color": [255, 70, 190] },
+        { "value": 1, "name": "Background", "color": [8, 12, 28] },
+        { "value": 2, "name": "Afterglow", "color": [255, 156, 66] },
+        { "value": 3, "name": "Recovery", "color": [112, 68, 210] }
+      ]
+    },
+    {
+      "id": "EXCITABLE_MEDIA_5_PHASE",
+      "name": "Five-phase Excitable Media",
+      "model": "moore_table",
+      "state_count": 5,
+      "states": [
+        { "value": 0, "name": "Excited", "color": [115, 238, 255] },
+        { "value": 1, "name": "Resting", "color": [7, 11, 25] },
+        { "value": 2, "name": "Refractory I", "color": [255, 82, 174] },
+        { "value": 3, "name": "Refractory II", "color": [190, 70, 255] },
+        { "value": 4, "name": "Refractory III", "color": [82, 48, 166] }
+      ]
+    },
+    {
+      "id": "PRISMATIC_ECOLOGY_12",
+      "name": "Prismatic Ecology",
+      "model": "cyclic",
+      "state_count": 12,
+      "states": [
+        { "value": 0, "name": "Ember", "color": [255, 54, 82] },
+        { "value": 1, "name": "Midnight", "color": [5, 8, 24] },
+        { "value": 2, "name": "Solar", "color": [255, 170, 38] },
+        { "value": 3, "name": "Lemon", "color": [244, 255, 54] },
+        { "value": 4, "name": "Lime", "color": [112, 255, 60] },
+        { "value": 5, "name": "Jade", "color": [28, 232, 148] },
+        { "value": 6, "name": "Cyan", "color": [30, 238, 255] },
+        { "value": 7, "name": "Azure", "color": [45, 132, 255] },
+        { "value": 8, "name": "Indigo", "color": [92, 72, 255] },
+        { "value": 9, "name": "Violet", "color": [174, 62, 255] },
+        { "value": 10, "name": "Magenta", "color": [255, 54, 218] },
+        { "value": 11, "name": "Rose", "color": [255, 98, 152] }
+      ]
+    },
+    {
+      "id": "ELEMENTAL_COURT_9",
+      "name": "Elemental Court",
+      "model": "cyclic",
+      "state_count": 9,
+      "states": [
+        { "value": 0, "name": "Plasma", "color": [255, 45, 76] },
+        { "value": 1, "name": "Night", "color": [4, 10, 30] },
+        { "value": 2, "name": "Tide", "color": [18, 132, 255] },
+        { "value": 3, "name": "Bloom", "color": [60, 255, 118] },
+        { "value": 4, "name": "Storm", "color": [50, 239, 255] },
+        { "value": 5, "name": "Crystal", "color": [168, 90, 255] },
+        { "value": 6, "name": "Flame", "color": [255, 112, 26] },
+        { "value": 7, "name": "Aurora", "color": [255, 54, 210] },
+        { "value": 8, "name": "Gold", "color": [255, 224, 46] }
+      ]
+    },
+    {
+      "id": "IMMIGRATION_LIFE_2_SPECIES",
+      "name": "Immigration Life",
+      "model": "species_life",
+      "state_count": 3,
+      "states": [
+        { "value": 0, "name": "Coral", "color": [255, 70, 105] },
+        { "value": 1, "name": "Background", "color": [6, 10, 24] },
+        { "value": 2, "name": "Cyan", "color": [50, 225, 255] }
+      ]
+    },
+    {
+      "id": "QUADLIFE_4_SPECIES",
+      "name": "QuadLife",
+      "model": "species_life",
+      "state_count": 5,
+      "states": [
+        { "value": 0, "name": "Coral", "color": [255, 65, 92] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Azure", "color": [45, 142, 255] },
+        { "value": 3, "name": "Gold", "color": [255, 214, 55] },
+        { "value": 4, "name": "Violet", "color": [190, 72, 255] }
+      ]
+    },
+    {
+      "id": "LARGER_THAN_LIFE_BINARY",
+      "name": "Larger than Life",
+      "model": "larger_than_life",
+      "state_count": 2,
+      "states": [
+        { "value": 0, "name": "Organism", "color": [255, 118, 42] },
+        { "value": 1, "name": "Background", "color": [7, 10, 22] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_5_PHASE",
+      "name": "Five-state Generations",
+      "model": "generations",
+      "state_count": 5,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [255, 242, 90] },
+        { "value": 1, "name": "Background", "color": [5, 9, 24] },
+        { "value": 2, "name": "Afterglow", "color": [255, 90, 55] },
+        { "value": 3, "name": "Recovery I", "color": [220, 54, 190] },
+        { "value": 4, "name": "Recovery II", "color": [92, 55, 180] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_21_PHASE",
+      "name": "Twenty-one-state Generations",
+      "model": "generations",
+      "state_count": 21,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [255, 250, 190] },
+        { "value": 1, "name": "Background", "color": [3, 7, 20] },
+        { "value": 2, "name": "Trail 01", "color": [255, 70, 70] },
+        { "value": 3, "name": "Trail 02", "color": [255, 105, 48] },
+        { "value": 4, "name": "Trail 03", "color": [255, 150, 42] },
+        { "value": 5, "name": "Trail 04", "color": [255, 205, 45] },
+        { "value": 6, "name": "Trail 05", "color": [215, 245, 48] },
+        { "value": 7, "name": "Trail 06", "color": [145, 245, 60] },
+        { "value": 8, "name": "Trail 07", "color": [70, 235, 105] },
+        { "value": 9, "name": "Trail 08", "color": [40, 225, 165] },
+        { "value": 10, "name": "Trail 09", "color": [38, 218, 225] },
+        { "value": 11, "name": "Trail 10", "color": [50, 165, 255] },
+        { "value": 12, "name": "Trail 11", "color": [70, 112, 255] },
+        { "value": 13, "name": "Trail 12", "color": [100, 78, 240] },
+        { "value": 14, "name": "Trail 13", "color": [145, 62, 225] },
+        { "value": 15, "name": "Trail 14", "color": [190, 55, 210] },
+        { "value": 16, "name": "Trail 15", "color": [225, 50, 180] },
+        { "value": 17, "name": "Trail 16", "color": [205, 42, 145] },
+        { "value": 18, "name": "Trail 17", "color": [165, 35, 125] },
+        { "value": 19, "name": "Trail 18", "color": [120, 30, 105] },
+        { "value": 20, "name": "Trail 19", "color": [72, 24, 78] }
+      ]
+    },
+    {
+      "id": "CLASSIC_CCA_14",
+      "name": "Classic 14-color CCA",
+      "model": "cyclic",
+      "state_count": 14,
+      "states": [
+        { "value": 0, "name": "Phase 00", "color": [255, 55, 70] },
+        { "value": 1, "name": "Phase 01", "color": [255, 92, 45] },
+        { "value": 2, "name": "Phase 02", "color": [255, 145, 38] },
+        { "value": 3, "name": "Phase 03", "color": [255, 208, 45] },
+        { "value": 4, "name": "Phase 04", "color": [205, 245, 52] },
+        { "value": 5, "name": "Phase 05", "color": [120, 245, 70] },
+        { "value": 6, "name": "Phase 06", "color": [48, 230, 125] },
+        { "value": 7, "name": "Phase 07", "color": [35, 220, 205] },
+        { "value": 8, "name": "Phase 08", "color": [40, 180, 255] },
+        { "value": 9, "name": "Phase 09", "color": [58, 120, 255] },
+        { "value": 10, "name": "Phase 10", "color": [92, 78, 255] },
+        { "value": 11, "name": "Phase 11", "color": [145, 62, 245] },
+        { "value": 12, "name": "Phase 12", "color": [205, 55, 220] },
+        { "value": 13, "name": "Phase 13", "color": [255, 50, 155] }
+      ]
+    },
+    {
+      "id": "HODGEPODGE_101_LEVEL",
+      "name": "Hodgepodge Chemical Medium",
+      "model": "hodgepodge",
+      "state_count": 101,
+      "states": [
+        { "value": 0, "name": "Infection 001", "color": [19, 40, 109] },
+        { "value": 1, "name": "Healthy", "color": [4, 7, 18] },
+        { "value": 2, "name": "Infection 002", "color": [20, 45, 119] },
+        { "value": 3, "name": "Infection 003", "color": [22, 50, 128] },
+        { "value": 4, "name": "Infection 004", "color": [23, 55, 137] },
+        { "value": 5, "name": "Infection 005", "color": [24, 61, 147] },
+        { "value": 6, "name": "Infection 006", "color": [25, 66, 156] },
+        { "value": 7, "name": "Infection 007", "color": [26, 71, 165] },
+        { "value": 8, "name": "Infection 008", "color": [28, 76, 174] },
+        { "value": 9, "name": "Infection 009", "color": [29, 81, 184] },
+        { "value": 10, "name": "Infection 010", "color": [30, 86, 193] },
+        { "value": 11, "name": "Infection 011", "color": [31, 91, 202] },
+        { "value": 12, "name": "Infection 012", "color": [32, 96, 212] },
+        { "value": 13, "name": "Infection 013", "color": [34, 101, 221] },
+        { "value": 14, "name": "Infection 014", "color": [35, 106, 230] },
+        { "value": 15, "name": "Infection 015", "color": [36, 111, 240] },
+        { "value": 16, "name": "Infection 016", "color": [37, 117, 249] },
+        { "value": 17, "name": "Infection 017", "color": [38, 122, 254] },
+        { "value": 18, "name": "Infection 018", "color": [38, 129, 252] },
+        { "value": 19, "name": "Infection 019", "color": [38, 136, 250] },
+        { "value": 20, "name": "Infection 020", "color": [37, 143, 248] },
+        { "value": 21, "name": "Infection 021", "color": [37, 150, 246] },
+        { "value": 22, "name": "Infection 022", "color": [37, 157, 244] },
+        { "value": 23, "name": "Infection 023", "color": [37, 164, 242] },
+        { "value": 24, "name": "Infection 024", "color": [37, 171, 240] },
+        { "value": 25, "name": "Infection 025", "color": [37, 178, 238] },
+        { "value": 26, "name": "Infection 026", "color": [36, 184, 235] },
+        { "value": 27, "name": "Infection 027", "color": [36, 191, 233] },
+        { "value": 28, "name": "Infection 028", "color": [36, 198, 231] },
+        { "value": 29, "name": "Infection 029", "color": [36, 205, 229] },
+        { "value": 30, "name": "Infection 030", "color": [36, 212, 227] },
+        { "value": 31, "name": "Infection 031", "color": [35, 219, 225] },
+        { "value": 32, "name": "Infection 032", "color": [35, 226, 223] },
+        { "value": 33, "name": "Infection 033", "color": [35, 233, 221] },
+        { "value": 34, "name": "Infection 034", "color": [37, 236, 215] },
+        { "value": 35, "name": "Infection 035", "color": [40, 237, 207] },
+        { "value": 36, "name": "Infection 036", "color": [44, 238, 199] },
+        { "value": 37, "name": "Infection 037", "color": [47, 239, 191] },
+        { "value": 38, "name": "Infection 038", "color": [50, 241, 184] },
+        { "value": 39, "name": "Infection 039", "color": [54, 242, 176] },
+        { "value": 40, "name": "Infection 040", "color": [57, 243, 168] },
+        { "value": 41, "name": "Infection 041", "color": [60, 244, 160] },
+        { "value": 42, "name": "Infection 042", "color": [64, 245, 152] },
+        { "value": 43, "name": "Infection 043", "color": [67, 247, 145] },
+        { "value": 44, "name": "Infection 044", "color": [70, 248, 137] },
+        { "value": 45, "name": "Infection 045", "color": [74, 249, 129] },
+        { "value": 46, "name": "Infection 046", "color": [77, 250, 121] },
+        { "value": 47, "name": "Infection 047", "color": [80, 251, 113] },
+        { "value": 48, "name": "Infection 048", "color": [83, 253, 106] },
+        { "value": 49, "name": "Infection 049", "color": [87, 254, 98] },
+        { "value": 50, "name": "Infection 050", "color": [90, 255, 90] },
+        { "value": 51, "name": "Infection 051", "color": [100, 253, 87] },
+        { "value": 52, "name": "Infection 052", "color": [110, 251, 85] },
+        { "value": 53, "name": "Infection 053", "color": [120, 250, 82] },
+        { "value": 54, "name": "Infection 054", "color": [130, 248, 79] },
+        { "value": 55, "name": "Infection 055", "color": [140, 246, 76] },
+        { "value": 56, "name": "Infection 056", "color": [149, 244, 74] },
+        { "value": 57, "name": "Infection 057", "color": [159, 242, 71] },
+        { "value": 58, "name": "Infection 058", "color": [169, 241, 68] },
+        { "value": 59, "name": "Infection 059", "color": [179, 239, 66] },
+        { "value": 60, "name": "Infection 060", "color": [189, 237, 63] },
+        { "value": 61, "name": "Infection 061", "color": [199, 235, 60] },
+        { "value": 62, "name": "Infection 062", "color": [209, 233, 58] },
+        { "value": 63, "name": "Infection 063", "color": [219, 232, 55] },
+        { "value": 64, "name": "Infection 064", "color": [229, 230, 52] },
+        { "value": 65, "name": "Infection 065", "color": [239, 228, 49] },
+        { "value": 66, "name": "Infection 066", "color": [248, 226, 47] },
+        { "value": 67, "name": "Infection 067", "color": [255, 222, 45] },
+        { "value": 68, "name": "Infection 068", "color": [255, 213, 46] },
+        { "value": 69, "name": "Infection 069", "color": [255, 205, 46] },
+        { "value": 70, "name": "Infection 070", "color": [255, 196, 47] },
+        { "value": 71, "name": "Infection 071", "color": [255, 187, 48] },
+        { "value": 72, "name": "Infection 072", "color": [255, 179, 48] },
+        { "value": 73, "name": "Infection 073", "color": [255, 170, 49] },
+        { "value": 74, "name": "Infection 074", "color": [255, 161, 49] },
+        { "value": 75, "name": "Infection 075", "color": [255, 153, 50] },
+        { "value": 76, "name": "Infection 076", "color": [255, 144, 51] },
+        { "value": 77, "name": "Infection 077", "color": [255, 135, 51] },
+        { "value": 78, "name": "Infection 078", "color": [255, 126, 52] },
+        { "value": 79, "name": "Infection 079", "color": [255, 118, 52] },
+        { "value": 80, "name": "Infection 080", "color": [255, 109, 53] },
+        { "value": 81, "name": "Infection 081", "color": [255, 100, 54] },
+        { "value": 82, "name": "Infection 082", "color": [255, 92, 54] },
+        { "value": 83, "name": "Infection 083", "color": [255, 83, 55] },
+        { "value": 84, "name": "Infection 084", "color": [255, 86, 61] },
+        { "value": 85, "name": "Infection 085", "color": [255, 95, 70] },
+        { "value": 86, "name": "Infection 086", "color": [255, 105, 80] },
+        { "value": 87, "name": "Infection 087", "color": [255, 114, 89] },
+        { "value": 88, "name": "Infection 088", "color": [255, 123, 98] },
+        { "value": 89, "name": "Infection 089", "color": [255, 133, 108] },
+        { "value": 90, "name": "Infection 090", "color": [255, 142, 117] },
+        { "value": 91, "name": "Infection 091", "color": [255, 151, 126] },
+        { "value": 92, "name": "Infection 092", "color": [255, 161, 136] },
+        { "value": 93, "name": "Infection 093", "color": [255, 170, 145] },
+        { "value": 94, "name": "Infection 094", "color": [255, 179, 154] },
+        { "value": 95, "name": "Infection 095", "color": [255, 188, 163] },
+        { "value": 96, "name": "Infection 096", "color": [255, 198, 173] },
+        { "value": 97, "name": "Infection 097", "color": [255, 207, 182] },
+        { "value": 98, "name": "Infection 098", "color": [255, 216, 191] },
+        { "value": 99, "name": "Infection 099", "color": [255, 226, 201] },
+        { "value": 100, "name": "Ill", "color": [255, 235, 210] }
+      ]
+    },
+    {
+      "id": "TURMITE_2_COLOR",
+      "name": "Two-color Turmite",
+      "model": "turmite",
+      "state_count": 10,
+      "states": [
+        { "value": 0, "name": "Amber Tape", "color": [255, 112, 35] },
+        { "value": 1, "name": "Blank Tape", "color": [5, 8, 20] },
+        { "value": 2, "name": "Blank Ant North", "color": [65, 235, 255] },
+        { "value": 3, "name": "Blank Ant East", "color": [255, 235, 65] },
+        { "value": 4, "name": "Blank Ant South", "color": [255, 70, 190] },
+        { "value": 5, "name": "Blank Ant West", "color": [75, 255, 120] },
+        { "value": 6, "name": "Amber Ant North", "color": [125, 245, 255] },
+        { "value": 7, "name": "Amber Ant East", "color": [255, 250, 145] },
+        { "value": 8, "name": "Amber Ant South", "color": [255, 145, 220] },
+        { "value": 9, "name": "Amber Ant West", "color": [145, 255, 170] }
+      ]
+    },
+    {
+      "id": "TURMITE_3_COLOR",
+      "name": "Three-color Turmite",
+      "model": "turmite",
+      "state_count": 15,
+      "states": [
+        { "value": 0, "name": "Amber Tape", "color": [255, 110, 35] },
+        { "value": 1, "name": "Blank Tape", "color": [5, 8, 20] },
+        { "value": 2, "name": "Violet Tape", "color": [135, 62, 230] },
+        { "value": 3, "name": "Blank Ant North", "color": [55, 235, 255] },
+        { "value": 4, "name": "Blank Ant East", "color": [255, 235, 55] },
+        { "value": 5, "name": "Blank Ant South", "color": [255, 65, 190] },
+        { "value": 6, "name": "Blank Ant West", "color": [65, 255, 120] },
+        { "value": 7, "name": "Amber Ant North", "color": [110, 245, 255] },
+        { "value": 8, "name": "Amber Ant East", "color": [255, 250, 130] },
+        { "value": 9, "name": "Amber Ant South", "color": [255, 130, 215] },
+        { "value": 10, "name": "Amber Ant West", "color": [130, 255, 165] },
+        { "value": 11, "name": "Violet Ant North", "color": [175, 235, 255] },
+        { "value": 12, "name": "Violet Ant East", "color": [255, 245, 175] },
+        { "value": 13, "name": "Violet Ant South", "color": [255, 175, 230] },
+        { "value": 14, "name": "Violet Ant West", "color": [175, 255, 200] }
+      ]
+    },
+    {
+      "id": "TURMITE_4_COLOR",
+      "name": "Four-color Turmite",
+      "model": "turmite",
+      "state_count": 20,
+      "states": [
+        { "value": 0, "name": "Amber Tape", "color": [255, 105, 35] },
+        { "value": 1, "name": "Blank Tape", "color": [5, 8, 20] },
+        { "value": 2, "name": "Violet Tape", "color": [135, 62, 230] },
+        { "value": 3, "name": "Cyan Tape", "color": [25, 190, 210] },
+        { "value": 4, "name": "Blank Ant North", "color": [50, 235, 255] },
+        { "value": 5, "name": "Blank Ant East", "color": [255, 235, 50] },
+        { "value": 6, "name": "Blank Ant South", "color": [255, 60, 190] },
+        { "value": 7, "name": "Blank Ant West", "color": [60, 255, 115] },
+        { "value": 8, "name": "Amber Ant North", "color": [100, 245, 255] },
+        { "value": 9, "name": "Amber Ant East", "color": [255, 250, 115] },
+        { "value": 10, "name": "Amber Ant South", "color": [255, 115, 210] },
+        { "value": 11, "name": "Amber Ant West", "color": [115, 255, 155] },
+        { "value": 12, "name": "Violet Ant North", "color": [155, 235, 255] },
+        { "value": 13, "name": "Violet Ant East", "color": [255, 245, 155] },
+        { "value": 14, "name": "Violet Ant South", "color": [255, 155, 225] },
+        { "value": 15, "name": "Violet Ant West", "color": [155, 255, 190] },
+        { "value": 16, "name": "Cyan Ant North", "color": [205, 245, 255] },
+        { "value": 17, "name": "Cyan Ant East", "color": [255, 250, 205] },
+        { "value": 18, "name": "Cyan Ant South", "color": [255, 205, 240] },
+        { "value": 19, "name": "Cyan Ant West", "color": [205, 255, 220] }
+      ]
+    },
+    {
+      "id": "HPP_LATTICE_GAS_16",
+      "name": "HPP Lattice Gas",
+      "model": "lattice_gas",
+      "state_count": 16,
+      "states": [
+        { "value": 0, "name": "North Particle", "color": [55, 210, 255] },
+        { "value": 1, "name": "Vacuum", "color": [3, 6, 16] },
+        { "value": 2, "name": "East Particle", "color": [255, 220, 50] },
+        { "value": 3, "name": "North East", "color": [100, 255, 185] },
+        { "value": 4, "name": "South Particle", "color": [255, 70, 175] },
+        { "value": 5, "name": "North South", "color": [190, 105, 255] },
+        { "value": 6, "name": "East South", "color": [255, 130, 70] },
+        { "value": 7, "name": "North East South", "color": [255, 245, 160] },
+        { "value": 8, "name": "West Particle", "color": [75, 255, 105] },
+        { "value": 9, "name": "North West", "color": [50, 245, 225] },
+        { "value": 10, "name": "East West", "color": [255, 110, 55] },
+        { "value": 11, "name": "North East West", "color": [180, 255, 120] },
+        { "value": 12, "name": "South West", "color": [255, 85, 225] },
+        { "value": 13, "name": "North South West", "color": [175, 150, 255] },
+        { "value": 14, "name": "East South West", "color": [255, 175, 100] },
+        { "value": 15, "name": "Four-way Density", "color": [255, 255, 245] }
+      ]
+    },
+    {
+      "id": "RPSLS_5_SPECIES",
+      "name": "Five-species Cyclic Dominance",
+      "model": "dominance",
+      "state_count": 6,
+      "states": [
+        { "value": 0, "name": "Rock", "color": [255, 75, 75] },
+        { "value": 1, "name": "Empty", "color": [4, 7, 18] },
+        { "value": 2, "name": "Paper", "color": [60, 155, 255] },
+        { "value": 3, "name": "Scissors", "color": [255, 215, 55] },
+        { "value": 4, "name": "Lizard", "color": [65, 240, 120] },
+        { "value": 5, "name": "Spock", "color": [190, 75, 255] }
+      ]
+    }
+  ]
+}

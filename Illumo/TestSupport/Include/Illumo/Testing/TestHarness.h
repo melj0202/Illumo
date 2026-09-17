@@ -58,6 +58,7 @@ public:
   int getRefreshRate() const override { return 60; }
   void swapBuffers() override {}
   void requestClose() override { closeRequested = true; }
+  void cancelCloseRequest() override { closeRequested = false; }
 };
 
 struct HeadlessRenderFixture

@@ -1,6 +1,23 @@
 \section{Runtime loop and modules}
 \label{sec:runtime}
 
+\subsection{In-game frame profiler}
+\symbolref{FrameProfiler} is a main-thread, engine-owned 120-frame timing ring.
+Sequential steady-clock marks partition each measured loop body into input,
+camera, optional and required updates, scene preparation, asset pumping, command
+generation/submission, backend presentation, frame limiting, and remaining time.
+The renderer can return the timestamp between submission and presentation;
+ordinary untimed calls keep their previous behavior. GPU execution and concurrent
+simulation workers are excluded. Disabled sampling performs no clock queries.
+
+DebugModule borrows the collector explicitly and owns a bounded GameVisual pie
+with text. F6 or \texttt{profiler on} enables it; keys 1--3 drill into groups and
+0 returns to Frame. Values refresh four times per second, including resize and
+navigation updates. The console takes priority. Visible profiler navigation
+captures both number events and held-key polling before the product update.
+FPS and memory visibility remain independent. See
+\pathref{docs/frame-profiler.md} and decision D-PROF1.
+
 \subsection{Illumo application runtime}
 \pathref{Illumo/Source/Engine/Application.cpp} owns logger lifetime, argument
 parsing mechanics, module registration, the frame loop, and the explicit
@@ -66,6 +83,7 @@ public:
   virtual void Update(double dt) = 0;
   virtual void DispatchDrawables(Scene* scene) = 0;
   virtual void Exit() = 0;
+  virtual bool OnCloseRequested() { return true; }
 };
 \end{lstlisting}
 
@@ -74,7 +92,16 @@ public:
   \item \textbf{Update} advances simulation and input behavior.
   \item \textbf{DispatchDrawables} contributes this frame's non-owning draw list.
   \item \textbf{Exit} releases module-owned state.
+  \item \textbf{OnCloseRequested} may defer native close for product confirmation.
 \end{itemize}
+
+The runner invokes \texttt{processCloseRequest} explicitly before termination.
+Only started modules participate; acceptance is the default. Deferral clears the
+native close flag and continues updating/rendering. IllEd shares its existing
+Save/Discard/Cancel flow with native close and records approved discard so a
+dirty document does not prompt repeatedly. Required transition failure remains
+terminal. Custom windows used with deferring modules implement close-flag
+cancellation. The const \texttt{shouldClose} query has no callbacks.
 
 Each registration is \texttt{Required} or \texttt{Optional}. A rejected optional
 module is destroyed immediately and never receives update/draw/exit. Required
@@ -113,3 +140,52 @@ host update.
 \symbolref{RenderWindow} defaults to swap interval one. Persisted
 \texttt{vsync=0} selects uncapped profiling, while Debug metrics distinguish
 paced swap completions from CPU submissions.
+
+The global F11 shortcut asks the window to toggle fullscreen. The window
+publishes the resulting state to EnvVars, and the host reports that value
+without changing it again. A rejected toggle preserves the prior setting.
+
+IllMeshViewer consumes queued Press events for O (open), F/R (reset camera),
+G (grid), X (wireframe), and B (skybox). Hold/repeat and release events do not
+execute these actions. Shortcuts are suppressed while the console is open;
+unrelated keys remain available to the host. No shortcut latch is shared
+between viewer instances.
+
+IllEd body selection records the initial hit offset on the same constraint plane
+used during dragging. Holding or releasing an off-center click without moving
+does not translate the object or dirty the document. If the initial drag-plane
+intersection fails, selection still succeeds but dragging does not begin.
+
+In 3D, IllEd selects the nearest forward screen-ray intersection with an
+object's transformed local bounds. Parent transforms, nonuniform scale and
+rotation are included; inherited hidden/disabled state excludes candidates.
+Singular or nonfinite bounds are skipped. Bounds follow attachment recipes,
+with a small proxy for empty nodes; equal-distance ties prefer later document
+entries. This is bounds-based picking, not triangle-exact picking. 2D picking
+and ground-plane placement retain their existing paths. A 3D selection ray
+need not intersect the ground plane.
+
+
+\subsection{Process memory diagnostics}
+The optional Debug/RelWithDebInfo module composes FPS and memory in one
+\texttt{GLString} status panel. F3 and \texttt{fps} control only FPS;
+\texttt{memory [on|off|toggle]} controls the persisted \texttt{showMemory}
+flag, initially off. Each section may be visible independently. The memory
+rows show current working set, process-lifetime peak working set and private
+committed memory in MiB with one decimal place. Working set includes shared
+pages; private commit need not be resident. These are whole-process values,
+not GPU memory or allocation/leak tracking.
+
+The internal presentation state maintains independent refresh clocks. Memory
+is queried immediately on enable, then once per second while visible; unchanged
+text does not rebuild the drawable. The platform-neutral memory query returns
+byte counts and availability. Windows obtains them through the process-memory
+API; unsupported scaffolds and failures display ``Memory: unavailable'' and
+retry at the normal interval. Native headers stay in the Windows platform
+implementation. No worker or new rendering path is introduced.
+\subsection{Input registration retirement (2026-09-11)}
+InputManager bounds live contexts to 32, reuses released slots and issues distinct
+manager-local IDs. Invalid activation preserves selection; active retirement
+selects neutral input. CellGameModule releases its registration on Exit and
+rejects exhausted startup before allocating domain state. Repeated module entry
+must not consume permanent input slots.

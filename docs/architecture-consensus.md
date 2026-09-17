@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-08-30
+**Last updated:** 2026-09-15
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -14,7 +14,7 @@ This file **merges and supersedes** scattered design memory into one coherent st
 | Grok architecture reviews + local code review | Strengths, bugs, debt |
 | In-repo LaTeX design notes + decision log | Formal decision IDs (D-\*) |
 | `docs/current-issues.md` | Product/correctness punch list |
-| **Current code under `Illumo/` and `IllumoGame/`** | **Wins** when anything conflicts |
+| **Current code under `Illumo/`, `IllumoGame/`, `IllEd/`, and `IllMeshViewer/`** | Current-state evidence; resolve conflicts with approved intent explicitly |
 
 **Rule:** If this document and the code disagree, **code wins** until this file is updated in the same change set.
 
@@ -47,7 +47,66 @@ Optional deeper reading (not required to resume work):
 
 ---
 
+## Charter milestones (2026-09-11)
+
+The optional [frame profiler](frame-profiler.md) adds an engine-owned,
+bounded 120-frame main-thread timing collector and a DebugModule pie overlay.
+Update, rendering, presentation, limiter, and remaining time partition each
+sampled loop body. CPU submission is separated from backend presentation;
+GPU and asynchronous worker execution are excluded. DebugModule borrows the
+collector explicitly and emits ordinary GameVisual tokens. See decision D-PROF1.
+
+IllEd 3D body selection uses nearest forward ray intersections with transformed
+local bounds, including hierarchy and nonuniform scale. Hidden/disabled ancestry
+and invalid transforms exclude candidates. Ground-plane intersection is used
+for placement, while 3D selection uses the screen ray directly; 2D picking is
+unchanged. Empty nodes retain a small proxy and picking remains bounds-based.
+
+Scene pass precedence is explicit: nonempty application `SetLayerPasses`
+overrides win over host `SetDefaultLayerPasses` fallbacks. Clearing or resetting
+overrides restores current host defaults. Motion-blur configuration updates
+fallbacks only, preserving passes installed in Start, Update, and dispatch.
+See decision D-RP1.
+
+Audit repairs add explicit close negotiation: the runner calls
+`Illumo::processCloseRequest()`, and started modules may defer through optional
+`OnCloseRequested()`. The window flag is cleared on deferral so editor Cancel
+continues normally. Default acceptance preserves other products; failed required
+module transitions remain terminal. IllEd reuses Save/Discard/Cancel for native
+and toolbar exit. Product saves use `AtomicFile` sibling staging and verified
+write/flush/close before replacement; formats remain unchanged. See decisions
+D-L1 and D-IO1 and the [remediation ledger](codebase-audit-remediation-plan.md).
+
+[Charter direction](charter-direction.md) separates later physics, object
+lifetime, tooling and Linux requirements from current contracts. The owner
+approved baseline and independent rendering; older CA-only deferrals do not
+exclude those concrete consumers.
+
+InputManager now validates non-reused manager-local IDs, reuses retired storage
+among 32 live slots and selects neutral input after active retirement.
+CellGameModule releases its registration on Exit and rejects exhausted startup
+before domain allocation. Generated standalone projects record source provenance
+in engine-provenance.json, distinguishing clean, dirty and unknown identity.
+
+[FrameCapture and IllumoCapture](frame-capture.md) provide bounded hidden-context
+OpenGL rendering and PNG/JSON output without starting the runtime host. Scene and
+direct producers use the same renderer. Strict capture errors, backend readback
+and first-frame depth state are explicit; normal application defaults remain.
+
 ## 0. One-line summary
+
+The simulator's Edit-mode Cell paint drawer is a module-owned GameVisual using
+GuiKit rounded surfaces and UiTheme colors. Its bottom pull tab, vertical slide, chevron, and
+row emphasis follow reducedUiMotion. State swatches read the active family's
+palette and select the existing paint path; right-click remains erase. Fitted
+drawing and pointer coordinates agree, and palette gestures capture pointer
+input through release. The drawer anchors above the controls-hint band,
+fits the remaining height, and leaves footer input to the hints. The opaque
+footer covers drawer overflow during its slide. On entering Edit, the controls
+hint bar leads the palette tab by a short stagger; on exit, the tab leads the
+bar. The canvas inset tracks the visible portion of the moving footer. Reduced
+UI motion snaps this transition. The tab travels by its own height plus the
+full footer height before it is removed. See [game controls](packages/game.md).
 
 **The workspace separates the reusable `Illumo` static library from in-tree
 applications. Illumo owns the generic application runner, platform
@@ -123,6 +182,12 @@ Live consumers:
 | `Renderer::RenderScene` | `ArenaAlloc frameArena` | Immediate-drawable pointer list per frame |
 | `CellGameModule::LoadCellGame` | standard temporary vectors | Validated sparse/legacy load state |
 | `SparseCellGrid` | standard authoritative hash map + retained inactive map, node handles, flat index/vector | Unbounded 16×16 chunks plus allocation-reusing generation output, separate stored/counting masks, and per-target candidate/halo selection |
+
+Arena and stack allocations align actual addresses and use aligned backing
+storage for stronger requests without relocating live allocations. Typed pool
+storage honors element alignment. The four-chunk cap, bulk reset and LIFO
+contracts remain unchanged; invalid alignments and overflowing sizes are
+rejected before use. Allocation failures may throw.
 
 A general-purpose allocator (mimalloc-class) is a different product; do not reinvent it.
 
@@ -236,7 +301,7 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **Render split** | Enroll once; emit tokens per frame; backend executes (D-R1–D-R8, D-R10). |
 | **Rulesets** | Strategy hierarchy; pure `nextState` + `evalCell`; double-buffered generation (D-P3). |
 | **Scene model** | Persistent handle-based `SceneGraph` for world organization (D-E8), extracted as one drawable into the unchanged per-frame rendering list (D-E4). |
-| **Tests** | Independent `IllumoTests` and `IllumoGameTests` runners, plus consumer-header smoke, exact process-isolated cases, `IllumoWorkspace` aggregation, combined Clang/LLVM coverage (D-T1), and compile-time `clang-tidy` (D-T3). |
+| **Tests** | Independent `IllumoTests`, `IllumoGameTests`, `IllEdTests`, and `IllMeshViewerTests` runners, plus consumer-header smoke, exact process-isolated cases, `IllumoWorkspace` aggregation, combined Clang/LLVM coverage (D-T1), and compile-time `clang-tidy` (D-T3). Coverage dependencies and binary inputs derive from the registered runners, including generated applications and optional editor runners. |
 | **Debt hygiene** | Dead experiments under `archive/` rather than half-live. |
 
 ---
@@ -251,12 +316,21 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **Illumo/Source/Scene/** | Persistent nodes, hierarchy, cached transforms, subtree state, and render attachment extraction; supported contracts are under `Illumo/Include/Illumo/Scene`. |
 | **IllumoGame/Source/Game/** | CA definition/config, module factory, domain + presentation (`SparseCellGrid`, `CanvasView`, `CellGameModule`, `CellContext`); dense Canvas types are compatibility-only. |
 | **IllumoGame/Source/Rulesets/** | CA rules (GoL family, Wireworld, …). |
-| **Illumo/Source/Rendering/** | Reusable 2D front end, managed assets, Scene list, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
+| **Illumo/Source/Rendering/** | Reusable world-mesh and 2D front end, cubemaps, offscreen passes, managed assets, Scene list, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
+| **IllEd/Source/** | SceneGraph world editor, document model, `.ilsc` codec, and product UI. |
+| **IllMeshViewer/Source/** | Mesh-viewer application, camera, configuration, input, and product UI. |
 | **Illumo/Source/Services/** | Generic log, env, input, system CLI, branded console UI, and allocators. |
 | **Illumo/Source/Foundation/** | BuildInfo, macros, and implementation support; public aliases/utilities are under `Illumo/Include/Illumo/Foundation`. |
 | **Illumo/Source/Platform/** | OS entry, public SaveLoad implementation boundary, and native dialogs. |
 | **`Illumo/Assets/`** | Runtime files outside `Illumo/Source/`; there is no `Source/Assets` package. |
-| **Illumo/Tests, IllumoGame/Tests** | Independent library and product suites. |
+| **Illumo/Tests, IllumoGame/Tests, IllEd/Tests, IllMeshViewer/Tests** | Four independent library and product runners. |
+
+`Illumo::Illumo` exports supported public headers and a GLM-only generated include
+directory. GLM types and `<glm/...>` paths are intentional public math contracts;
+the rest of the vendor tree stays private. CMake tracks GLM header content and
+membership, preserves unchanged timestamps, and removes stale generated headers.
+Consumers that need another vendor API declare that dependency explicitly
+(D-DEP1). Vendored source files and versions are unchanged.
 
 House style (D-008 / `docs/contributing.md`): avoid `auto`; avoid namespaces (prefer static classes/structs); no recursion; third-party via PR — unless a later decision waives.
 
@@ -355,11 +429,11 @@ At the start of `RenderScene`, `Renderer` captures the active window dimensions
 and primary camera MVP once for that extraction. Matching `GameVisual` instances
 consume those frame values instead of querying the window and recomputing the
 same matrix independently; direct token emitters retain their local fallback.
-`CanvasView` retains upload-rectangle scratch storage, `MeshVisual` retains
-dynamic mesh handles and uploads only dirty geometry, and `SceneGraph` retains
-its traversal stack. Renderer retains one shared directional-shadow framebuffer
-and fits one light-space matrix to the combined visible caster bounds for each
-frame. These caches do not retain or replay command queues.
+`CanvasView` retains upload-rectangle scratch storage. `MeshVisual` retains
+dynamic handles for procedural geometry and uploads only dirty ranges; immutable
+model geometry is reference-counted once by `AssetManager`, while each visual
+keeps a non-owning mesh handle and per-instance state. `SceneGraph` retains its
+traversal stack. These caches do not retain or replay command queues.
 
 `RenderWindow` defaults to swap interval one. The persisted `vsync` environment
 value can select synchronized or uncapped presentation and is reapplied only
@@ -385,15 +459,15 @@ enabled and visible nodes in hierarchy pre-order and supplies each attachment
 with the resolved world transform. It owns no attachment or backend resource.
 `MeshVisual` is the world mesh/sprite attachment: it composes the graph world
 matrix with local transforms and optional camera-facing billboards, then emits
-the canonical `uMVP` look. The same iterative traversal collects visible caster
-bounds and emits depth tokens for the Renderer-owned shared shadow pass, so
-direct World meshes and graph attachments shadow each other without moving
-resource ownership into SceneGraph. Overlay chrome stays on `GameVisual` with
-a screen ortho matrix (D-R21, D-R22).
+the canonical `uMVP` look. Multiple attachments can bind the same managed mesh
+handle while retaining independent transforms and tint (D-R24). Overlay chrome
+stays on `GameVisual` with a screen ortho matrix (D-R21).
 
 V1 deliberately has no ECS components, update callbacks, serialization,
 prefabs, bounds/culling structure, physics, scripting, or retained UI. The
-current IllumoGame cellular-automata path does not instantiate a graph. The
+IllumoGame sparse domain and product UI remain separate from the graph; its
+opt-in `render3dTest` diagnostic attaches world meshes. IllEd uses the graph
+for document geometry. The
 complete contract is `docs/scene-graph-v1-design.md`.
 
 ### 5.5 Rendering architecture (shipped)
@@ -419,36 +493,47 @@ IBackend::SubmitCommandQueue
 | Piece | Job |
 |-------|-----|
 | **Modules** | Choose what should appear this frame; place drawables into Scene layers. |
-| **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug). Visible World casters participate in one Renderer-owned shadow pass before configured color/post-process layer passes. |
-| **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, and Sprite are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world. |
-| **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. |
-| **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
-| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, optional directional lighting, scene-shadow caster/receiver extraction, and object motion blur. It retains geometry and per-receiver lighting/filter values but owns no shadow framebuffer. Products persist tuning through EnvVars. One attachment per scene node; compose complex objects with child nodes. Replaces the former `DebugDraw3D` diagnostic host (D-R21, D-R22). |
-| **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `CommandLine`, `GLString`, `ExitConfirmDialog`, and `EditorConfirmDialog` compose these primitives without introducing a retained widget hierarchy. |
+| **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug), with ordinary screen rendering or effective custom pass sequences per layer. |
+| **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, Sprite, and Skybox are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world; Skybox positions at the far plane with translation-stripped view-projection. |
+| **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. Read-only pending position/zoom access lets products validate interpolated navigation targets. CA navigation and sparse camera metadata reserve a `2^32`-cell endpoint margin: finite world axes satisfy `abs(axis) <= 16 * (2^63 - 2^32)`. This protects view arithmetic without restricting sparse storage. |
+| **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Pixel-space rebuilds conservatively reject quads outside the logical viewport. An optional top-left logical-pixel clip rejects wholly excluded quads before upload and brackets partial content with a nested, intersected scissor that restores any outer clip (D-R23). Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
+| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, managed immutable mesh handles, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, tint, and motion blur are per-instance CPU state emitted as `WorldLook` uniforms. A node borrows at most one attachment; several visuals/nodes may bind the same managed mesh without another upload. Procedural batches remain visual-owned dynamic buffers (D-R21/D-R24). |
+| **SkyboxVisual** | World cubemap host and `ISceneRenderAttachment`: unit cube geometry rendered with `RenderStyleId::Skybox` at the far depth plane (`xyww`), translation-stripped view matrix `projection * mat4(mat3(view))`, seamless cubemap sampling (`IBackend::CreateCubemap`, `AssetManager::acquireCubemapFromCross`), and optional tint color. Consumed by 3D viewers (e.g. `IllMeshViewer`). |
+| **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, `GuiMenuShell`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, shared overlay behavior, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `GuiMenuShell` holds the behavior every overlay repeats: `GuiEasing` curves and approach helpers, `GuiMenuAnimator` reveal/selection/value-pulse/ambient/caret clocks with reduced motion, `GuiPanelLayout` virtual-resolution fitting (`fit` for centered panels, `viewport` for docked bars) plus row-window arithmetic, and `GuiPointerTracker` virtual-space pointer sampling with press and release edges. `CommandLine`, `GLString`, `ExitConfirmDialog`, `EditorConfirmDialog`, the IllumoGame menus, the IllEd toolbar/sidebar/scene-graph panels, and `MeshViewerUi` compose these primitives without introducing a retained widget hierarchy. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
 | **Renderer** | Backend-neutral: owns style table; frame setup; walk layers; submit. Depends only on `IBackend*` (D-R11). |
-| **IBackend** | Allocates typed slot+generation handles; validates create/replace/destroy/query operations; queues and submits. GPU objects live in backend registries. |
-| **AssetManager** | Canonical-path texture/shader cache with reference counts, stable per-request fallback resources (the shader fallback follows the custom 2D binding contract), synchronous or one-worker CPU loading, include-dependency tracking for automatic hot reload, render-thread `pump`, explicit reload, and Debug timestamp polling. The Debug demo manages both its atlas and sprite shader through this path. |
+| **IBackend** | Allocates typed slot+generation handles; validates create/replace/destroy/query operations; queues and submits. GPU objects live in backend registries. Supports 2D textures and 6-face cubemaps (`CreateCubemap`, optional `ReplaceCubemap`) with seamless filtering and clamp-to-edge wrap. Replacement preserves texture kind and publishes a complete resource before retiring the previous one. |
+| **AssetManager** | Canonical-path texture/cubemap/shader/static-mesh cache with reference counts and stable typed handles. Texture/shader assets retain fallback resources, synchronous or one-worker CPU loading, cubemap extraction, dependency tracking, render-thread `pump`, explicit reload, and Debug polling. Static meshes synchronously decode through `MeshLoader`, enroll one immutable backend mesh per canonical path/options key, expose immutable draw metadata, and are destroyed on final release; mesh hot reload remains deferred (D-R17/D-R24). |
 | **ShaderPreprocessor** | Backend-neutral GLSL preprocessor: resolves `#include` directives against virtual in-memory module registry (`<illumo/...>`) and disk paths, injects compile-time `#define` macros, enforces `#pragma once` & recursion guards, preserves `#version` at line 1, emits `#line` markers, and discovers transitive include dependencies. |
 | **Composition (`Illumo::initialize`)** | Calls fallible window/backend factories, initializes the backend exactly once, transfers `unique_ptr<IBackend>` to Renderer, and calls `ensureBuiltinStyles()`. |
-| **GLBackend / GLDevice** | Real OpenGL under `Rendering/OpenGL/`: handle registries, execute tokens, PBO texture updates, bind-state tracking, blend-func-on-enable (D-R5). |
+| **GLBackend / GLDevice** | Real OpenGL under `Rendering/OpenGL/`: handle registries, execute tokens, PBO texture updates, bind-state tracking, blend-func-on-enable (D-R5). Each `GLShaderProgram` owns its uniform-location cache, so cache hits do not construct combined program/name strings and replacement or destruction retires cached locations with the program. |
 | **MockBackend** | Exposed only by `Illumo::TestSupport`: records creates + command order for headless tests. |
 
-**Layers vs passes:** layers are composition buckets and ordering boundaries,
-not render targets by themselves. Renderer performs one internal directional
-shadow pass before layer color rendering when visible casters request it.
-Configured layer pass descriptors may then target the screen, a pooled
-offscreen target, or a post-process resolve; UI/Debug ordering remains layered.
+**Layers vs passes:** layers are ordered composition buckets. Ordinary layers
+draw to the screen; a layer's effective pass sequence can select offscreen
+targets, viewports, and independent clear settings. Application overrides take
+precedence over host defaults. This explicit pass mechanism is not a render graph.
 
 **Acquire/enroll (rare):** backend `Create*` returns non-convertible
 `MeshHandle`, `ShaderHandle`, or `TextureHandle` values with slot+generation;
-managed file textures/shaders normally come from `AssetManager`. Canvas cache
-growth replaces its texture through the same validated handle and destruction
-releases the GL texture, PBOs, and fences before recycling that handle.
+managed file textures, shaders, and immutable model meshes normally come from
+`AssetManager`. `MeshVisual` borrows a managed handle; the acquiring owner
+retains/releases it. Canvas cache growth replaces its texture through the same
+validated handle and destruction releases the GL texture, PBOs, and fences
+before recycling that handle.
 **Per frame:** growable `CommandQueue` reserves 2,048 tokens and grows to a
 configurable 65,536 default ceiling while tracking high-water and rejected
-counts. `RenderCommand` remains a tagged union (bind, uniform, update
-texture/buffer, draw, clear, viewport, scissor state, pipeline).
+counts. `RenderCommand` remains a 72-byte tagged union on the supported 64-bit
+Windows build (bind, uniform, update texture/buffer, draw, clear, viewport,
+scissor state, pipeline). Matrix-uniform tokens borrow renderer-owned values
+copied into retained 128-matrix chunks; those chunks reset only after command
+submission, remain allocated for reuse, and use a matching default
+65,536-value safety ceiling so rejected token storms cannot grow side storage
+without bound.
+`Renderer::pushClipRect`/`popClipRect` retain a per-frame scissor stack, so
+primitive clips intersect and restore an existing product-owned scissor rather
+than disabling it. Low-level `pushScissor` remains available for explicit
+state emission.
 **Not current (old engine PDF):** separate Opaque/Transparent/UI pass *objects*, MeshDrawCommand-only world draws, entity mesh tables.
 
 **Production pure-token drawables (D-R10):** CanvasView/GameVisual, Cursor,
@@ -466,7 +551,7 @@ The live path is intentionally a full replacement of the finite dense runtime:
 | **Domain** | `SparseCellGrid` | signed 64-bit cells in a hash map of non-background 16×16 chunks; `0 x 0` selects the infinite non-toroidal domain, while positive chunk dimensions select a finite torus with canonical wrapped cells |
 | **Simulation** | `SimulationRunner` + two `SparseCellGrid`s | one worker generation may be in flight; the main thread reads only the published grid and publishes completions at frame boundaries. Incremental completions apply `SparseGenerationDelta` before the former display grid is reused. Broad completions and one-revision journals of at least 2,048 presentation chunks carry a lightweight replacement marker: the spare advances directly from the immutable published grid and updates its own authoritative nodes in place, avoiding a full snapshot and mirror pass. Overdue whole steps are dropped without a backlog, and edits, persistence, ruleset changes, manual stepping, and shutdown drain first. `SparseCellGrid::advance` retains the transactional totals/frontier/candidate/halo/node-reuse paths described below. |
 | **View** | `CanvasView` | visible dimensions remain diagnostics while sampling uses a globally aligned cache padded by two chunks per side; motion inside it copies retained texels and resamples only newly exposed strips when the aligned origin shifts, otherwise it changes only the MVP. Near LOD is one texel/cell; far LOD is an integer density level with immediate coarsening and 80% refinement hysteresis. One-revision changed chunks map to deduplicated exact or overview cache bins, with a complete cache resample when those bins cover at least a quarter of the cache; LOD/resize, non-aligned jumps, revision gaps, palette change, torus wrap, and replacement refill the bounded cache. Complete overview resamples walk occupied cells and snap-convert sampled RGB in one pass. Exact-cell CPU RGB fades; density overviews and newly revealed cells snap. |
-| **GPU** | `CanvasView` + `GameVisual` | one reusable nearest-filtered RGB staging texture and one world-space quad; dirty 16×16-texel tiles merge into at most eight update rectangles or their AABB. Uploads through 64 KiB are direct; larger requests use a non-waiting three-PBO/fence ring with direct fallback. |
+| **GPU** | `CanvasView` + `GameVisual` | one reusable nearest-filtered RGB staging texture and one world-space quad; finite worlds add a screen-thickness-stable themed outline around the canonical rectangle so wrap edges remain visible without tiling the world. Dirty 16×16-texel tiles merge into at most eight update rectangles or their AABB. Uploads through 64 KiB are direct; larger requests use a non-waiting three-PBO/fence ring with direct fallback. |
 
 Rulesets provide stateless `nextState` and `evalCell` functions. Each ruleset's
 complete 256-state by 9-neighbor transition table is built once before worker
@@ -485,19 +570,25 @@ is sorted by `(chunkY, chunkX)` for deterministic saves and tests. The view
 visits only chunks intersecting its cache bounds. The cache is globally aligned
 and extends two 16-cell chunks beyond the visible viewport on every side, so
 sub-cache pan/zoom changes only the camera MVP and aligned origin shifts copy
-retained CPU texels while resampling only the newly exposed strips. The grid publishes a
-revision-scoped changed-chunk list for edits and completed generations. When
-exactly one revision is unseen, the view maps changed chunks to deduplicated
-exact-cell or overview bins. Marking those bins stops once they cover a quarter
-of the cache, then the complete bounded cache is resampled. Revision gaps, non-aligned jumps, palette changes,
+retained CPU texels while resampling only the newly exposed strips. Overview
+strips initialize their bounded output bins to the background and accumulate
+only occupied cells from intersecting sparse chunks instead of probing every
+source cell. The grid publishes a
+revision-scoped changed-chunk list for edits and completed generations. Direct
+grid edits conservatively map changed chunks, while published generations map
+exact changed-cell masks to deduplicated cache bins. Far-zoom bins reset
+together, accumulate in one occupied-chunk traversal, and finalize once,
+avoiding per-bin hash probes and full overview refills for sparse broad
+changes. Dense exact-cell marking stops once it covers a quarter of the cache,
+then the complete bounded cache is resampled. Revision gaps, non-aligned jumps, palette changes,
 whole-grid replacement, LOD changes, torus wrap, and resize use a complete bounded refill.
 Far LOD coarsens immediately to fit and refines only at 80% budget occupancy.
 A retained active-texel set
 makes fade ticks and zero-speed snaps proportional to colors still changing;
 reapplying an unchanged zero fade speed does no scan. Exact-cell LOD keeps that
-fade; density overviews snap color changes. Dense one-revision bins that cover
-at least a quarter of the cache resample the complete bounded cache; bin
-marking stops once that threshold is reached. At far zoom it limits
+fade; density overviews snap color changes. Dense exact-cell one-revision bins
+that cover at least a quarter of the cache resample the complete bounded cache;
+bin marking stops once that threshold is reached. At far zoom it limits
 the active texture to `max(CanvasX/Y, window / 4)` texels and accumulates
 palette density into each overview texel. This presentation budget neither
 caps chunks nor discards simulation cells. Rendering never creates per-chunk
@@ -562,8 +653,9 @@ that 18x18 neighborhood. The bounded four-way cache is sharded by the main and
 worker slots, so evaluation needs no locks; a hash selects candidates but a
 full key comparison is required for a hit. It samples 16 targets per shard,
 activates at a 25% hit rate, and cools down for 32 generations after
-unprofitable sampling or three active generations below 10%. Ruleset type or
-transition-table revision changes invalidate every entry. Candidate-only and
+unprofitable sampling or three active generations below 10%. An exact comparison
+of the complete transition table invalidates every entry when semantics change;
+instance revisions, rule names, and C++ types are not semantic identities. Candidate-only and
 sub-32-target generations bypass it. Coarse mixed/candidate
 evaluation uses up to four automatic workers once there are at least 16,384
 work cells. Preparation uses about eight retained ranges per worker, capped at
@@ -613,13 +705,134 @@ invalidate current chunks before the next step.
 
 ### 5.7 Rules and encoding
 
-**Active rules** (factory / AllSets): Game of Life, Seeds, Brian's Brain, Highlife, Day & Night, Life Without Death, Wireworld, Rule 90, and Rule 184.  
-Life-like B/S modes share `LifeLikeRuleSet` masks. Rule 90 / 184 use `NeighborhoodKind::Elementary1D` and a serial space-time `SparseCellGrid` advance (D-G2).
+`RuleSetRegistry` starts empty and transactionally compiles catalog text into
+data-backed rules. The shipped `families.json` (schema 1) owns family IDs,
+simulation models, state counts, state labels, and colors. The separate
+`rulesets.json` (schema 3) owns stable rule IDs, display names, one required
+`family_id`, transition parameters, and an optional deterministic starter
+strategy. Life-like, Generations, Moore-table, cyclic, colorized-Life,
+Larger-than-Life, Hodgepodge, Turmite, lattice-gas, dominance, and elementary
+1D definitions compile to the existing `DataRuleSet`;
+the elementary rules retain their separate history path. Older unversioned,
+schema-v1, and schema-v2 rules catalogs are normalized into compatible family
+and rule definitions in memory.
+
+Game's `RuleCatalogLoader` selects a valid base catalog pair beside the
+executable, in the working directory, or in its `IllumoGame` subdirectory. It
+then layers the working-directory `families.user.json` and
+`rulesets.user.json` overlays as one validated pair. The required-module factory
+loads the shared catalog once before menu/direct-game construction. Engine-owned
+configuration-path discovery supplies the executable directory. Independent
+registries require explicit text/file loading; Rulesets has no filesystem or
+native API dependency (D-GC1, D-GC2, D-GC4).
+
+`RuleFamilyDefinition` owns cell schema and appearance. `RuleSetDefinition`
+owns transition behavior and refers to exactly one family ID; the typed
+`RuleFamily` value identifies the evaluator contract. Registry compilation
+resolves the pair into the immutable runtime `RuleSet` view used by Game and
+`SparseCellGrid`. F1, New Simulation, status, console output, and `CellContext`
+carry the family/rule pair. New startup configuration stores both values while
+legacy `ModeString` inputs derive the family from the selected rule.
+Version-4 `.illumo` saves store both IDs; version-3, version-2, and legacy
+dense saves derive the family from their saved rule ID.
+
+**Active rules**: Game of Life, Seeds, Brian's Brain, Highlife, Day & Night,
+Life Without Death, Wireworld, Rule 90, Rule 184, Star Wars, Nova Trails, two
+Excitable Waves thresholds, Prism Rush, Chromatic Storm, Crystal Domains,
+Elemental Surge, Aurora Conflict, Immigration, QuadLife, Bosco/Bugs,
+Bugsmovie, Globe, Banners, Transers, Fireworks, the classic 14-color cyclic
+automaton, Hodgepodge Classic and Spiral Bloom, Langton's Ant plus RRL and RRLL
+Turmites, HPP Gas, and two five-species RPSLS thresholds. They compile to the
+common `DataRuleSet`;
+life-like and Generations definitions use neighbor masks, while Wireworld and
+the five-phase excitable-media family use explicit Moore transition tables.
+The twelve-state Prismatic Ecology and nine-state Elemental Court use cyclic
+interaction: a cell advances by a coprime cycle step when enough neighbors hold
+that successor state. Their serial histogram kernel expands occupied chunks by
+one, counts every byte-valued neighbor state, and reuses the transactional
+sparse output/change-journal machinery without altering optimized binary paths
+(D-GC5). A multi-state medallion seed gives every kind immediate interaction.
+The classic cyclic rule follows Fisch, Gravner, and Griffeath's 14-color,
+random-initial-condition experiment. Immigration and QuadLife use the same
+B3/S23 population geometry as Life while inspecting all parent colors;
+Immigration inherits the majority species and a three-color QuadLife birth
+selects the absent fourth species. Both dense compatibility and sparse
+production use the full-state histogram contract.
+
+Larger-than-Life rules carry radius, optional center counting, inclusive birth
+and survival intervals, and square or circular neighborhood shape. Range is
+bounded to 16 and B0 is rejected. The correctness-first sparse evaluator
+expands each occupied chunk by the necessary chunk radius, counts state-zero
+cells directly, and commits through the existing transactional output/change
+journal. It intentionally does not enter the radius-one candidate, halo, memo,
+or worker fast paths (D-GC6). Shipped parameters match Golly's documented
+Bosco/Bugs, Bugsmovie, and Globe examples.
+
+Hodgepodge rules expose 101 visible chemical levels. Healthy state 1 is the
+sparse background; state 0 encodes infection level one, and numeric states
+2..100 retain their conceptual levels. The Moore histogram supplies infected
+and ill counts plus the weighted neighborhood sum for the Gerhardt--Schuster--
+Tyson transition. RPSLS dominance uses that same histogram with five species,
+two prey offsets per species, and a deterministic synchronous invasion
+threshold (D-GC7).
+
+Turmites and HPP gas use `NeighborhoodKind::VonNeumannDirectional`. Its four
+entries retain north/east/south/west identity rather than collapsing neighbors
+into counts. Turmite state is `n` tape colors plus `4n` agent states;
+simultaneous arrivals annihilate deterministically. HPP's 16 states encode four
+particle-direction bits. Opposing pairs collide into the perpendicular axis
+before all particles stream. The serial sparse evaluator expands source chunks
+by one and publishes through the same transactional map and change journal as
+the histogram and extended-range paths.
+
+Rules may request deterministic glider, single-cell, wire, active-soup,
+phase-soup, species-soup, excitable-break, Turmite-swarm, or particle-cloud
+starters. Omitted data keeps a
+model-appropriate default. This replaces the former assumption that a Life
+glider is meaningful for every Moore-count rule: Generations and
+Larger-than-Life begin from reproducible active soups, cyclic systems from
+mixed phases, and species rules from all declared live kinds.
+The four-phase Generations family shares its state schema between Star Wars and
+Nova Trails; the excitable-media rules share a five-state
+excited/resting/refractory palette while varying their activation threshold.
+Rule 90 / 184 use
+`NeighborhoodKind::Elementary1D` and a serial space-time `SparseCellGrid`
+advance (D-G2).
+Catalog registration rejects B0 and odd elementary rules because sparse storage
+requires a stable background. Strict JSON loading validates all entries before
+publishing a replacement catalog; neighbor indices are 0..8, and elementary
+numbers/palette channels are 0..255. Direct life-like counts above eight return
+background without shifting.
+Failed manual generations do not count; async failure preserves the published
+world, pauses with a diagnostic, and retains one explicit retry without another
+time-step charge. Elementary history and next-row writes stage in the existing
+inactive chunk map and publish once, preserving live state on staging failure.
+External-source binding is cleared on every exit, including empty-source advances.
+At signed X endpoints, elementary rules use background for unrepresentable
+neighbors and omit unrepresentable children. A source row at maximum signed Y
+rejects advancement before changing grid contents or revision. Clipboard
+capture/fill iterate bounded offsets, permitting small endpoint selections.
+Pattern detection honors plaintext comments and retains plaintext rows for
+ambiguous cell-only text. Explicit `rle`/`plaintext` commands choose their named
+parser. Ctrl+V rejects invalid or occupancy-empty clipboard text without pasting
+a previous internal pattern; console `paste` explicitly uses the retained buffer.
+RLE exports preserve binary `o`/`b` and use project-extension `p{N}` byte-state
+tokens. Parsing preserves old single-digit `pD` meanings; ambiguous historical
+unbraced multi-digit exports require explicit correction rather than guessing.
 
 ```
 class RuleSet {
   virtual unsigned char nextState(unsigned char cell,
                                   unsigned char aliveNeighbors) const;
+  virtual unsigned char nextStateFromNeighborhood(
+    unsigned char cell,
+    const NeighborStateCounts& neighborStateCounts) const;
+  virtual unsigned char nextStateFromDirectionalNeighborhood(
+    unsigned char cell,
+    const DirectionalNeighbors& neighbors) const;
+  virtual unsigned char nextStateFromExtendedCount(
+    unsigned char cell,
+    unsigned int aliveCount) const;
   virtual void evalCell(const unsigned char& target,
                         unsigned char dest[3]) const; // palette colors
 };
@@ -630,23 +843,33 @@ class RuleSet {
 | Binary / life-like | `0` = alive, `1` = dead; neighbor count treats value `0` as live |
 | Multi-state (e.g. Brian's Brain) | `≥2` additional states (e.g. dying = 2) |
 | **Wireworld** | `0` head, `1` empty, `2` tail, `3` conductor (head = 0 reuses head-neighbor counting) |
+| Cyclic ecology | `1` remains sparse background; all declared values can trigger their predecessor |
+| Colorized Life | `1` background; every other declared value is a live species |
+| Larger-than-Life | binary encoding with a radius 1..16 extended neighborhood |
+| Hodgepodge | `1` healthy; `0` level one; `2..100` infection/ill levels |
+| Turmite | `n` tape states followed by `4n` directional agent states |
+| HPP gas | remapped 4-bit north/east/south/west particle occupancy; `1` vacuum |
+| Dominance | `1` empty; all other states are competing species |
 
 **Generation path:**
 
-1. Read the cached stored/counting totals and candidate-preferred chunk count.
+1. Route full-state histograms, directional von Neumann, and extended-range
+   rules to their isolated correctness kernels. Standard radius-one count
+   rules continue below.
+2. Read the cached stored/counting totals and candidate-preferred chunk count.
    If the retained changed frontier is empty, return immediately without
    visiting allocated chunks. Otherwise enroll each changed chunk and only the
    neighbors touched by its exact counting-change edge/corner bits. For
    sparse local sources, build target-local candidate masks and select candidate
    or halo evaluation independently.
-2. Compare exact frontier preparation/evaluation work units with a complete-path
+3. Compare exact frontier preparation/evaluation work units with a complete-path
    estimate derived from cached totals. Evaluate and patch the frontier when it
    is no more expensive; otherwise use the complete path. Retain at most 16,384
    changed addresses between generations so tracking can resume after a dense
    burst; the work comparison, not that cap, selects evaluation.
-3. Use the cached candidate-preferred count to select the complete
+4. Use the cached candidate-preferred count to select the complete
    adaptive or all-dense path.
-4. If any source chunk is counting-sparse, derive affected target addresses
+5. If any source chunk is counting-sparse, derive affected target addresses
    from source counting-mask edges/corners and insert them into the retained
    generation-stamped flat index. Initialize neighbor counts only as candidate
    bits are enrolled. Build serial scratch source-by-source, or prepare large
@@ -657,15 +880,15 @@ class RuleSet {
    Dense-majority frontiers and frontiers with at least 2,048 targets skip
    candidate scratch construction.
    Large mixed work sets use coarse work-count ranges in the worker pool.
-5. If every source chunk is counting-dense, bypass candidate scratch. Build the
+6. If every source chunk is counting-dense, bypass candidate scratch. Build the
    expanded target set in its retained generation-stamped flat index, retain
    address/result vector capacity, and evaluate serially or through the bounded
    pool for 32+ targets. Construct rolling neighbor rows directly from chunk
    counting masks without a temporary 18×18 byte halo.
-6. For at least 32 halo targets, sample an exact sharded 18×18-state memo. Use
+7. For at least 32 halo targets, sample an exact sharded 18×18-state memo. Use
    it only after the observed hit rate pays for key construction, and bypass or
    cool it down on unique neighborhoods. Invalidate on transition changes.
-7. Build the complete next map serially using retained buckets and recycled
+8. Build the complete next map serially using retained buckets and recycled
    chunk nodes. Construct sparse candidate output directly in mapped node
    storage; keep dense halo output as a bulk array copy. Compare to the
    authoritative map, then swap transactionally only when contents differ.
@@ -676,7 +899,9 @@ results. Hot loops share that immutable table, eliminating virtual dispatch and
 repeated rule branches after the first use. Rules stay free of rendering and
 input. `evalCell` supplies palette/RGB colors only.
 
-**Optional cleanup (from CA PDF, not required for correctness):** collapse life-like rules into one family + JSON birth/survive tables:
+**Implemented in D-GC2/D-GC3:** data-driven rule families compile into the
+common `DataRuleSet`; a typed family selector and independent ruleset identity
+make customization explicit without changing serialized IDs:
 
 ```json
 { "family": "life_like", "birth": [3], "survive": [2, 3] }
@@ -708,17 +933,95 @@ GLFW callbacks / poll → InputManager → module / controller logic
 **Today:** InputManager holds key/mouse state and contexts. `DebugModule` consumes Grave and open-console editing first as a global Debug overlay; product modules then read remaining events and yield while the console is open. Unconsumed key/char events are discarded at the end of the host update. Not every behavior is extracted into tiny controller classes—acceptable.
 
 `CellGameModule` owns a primitive-composed F1 settings overlay in every build.
-It edits ruleset, world chunk width/height, TPS, simulation speed, fade speed,
-VSync, and fullscreen. Positive dimensions apply finite toroidal topology;
+Its persisted `editHints` option defaults on and controls a wrapping bottom
+legend in Edit mode, including Wireworld brush keys. The flat menu-themed footer uses muted text
+and shows selection actions only when selected. Its opaque bottom band is
+excluded from canvas drawing and pointer input; disabling hints releases it.
+Canvas clipping uses backend-neutral scissor tokens without shifting camera
+coordinates and restores scissor state before drawing the UI. Selection drags finish
+on mouse release; releasing Shift first does not start painting. Painting,
+erasing, or leaving Edit clears the selection while preserving the copied
+pattern. Clipboard hotkeys act only in Edit; explicit console commands remain
+mode-independent. Modal overlays and the console hide the legend and selection
+outline and interrupt active paint/selection drags.
+It edits family and its filtered ruleset, world chunk width/height, TPS, simulation speed, fade speed,
+VSync, fullscreen, UI scale, restart-only MSAA, FPS cap, simulation inspector,
+and reduced menu motion. FPS cap uses the existing engine `fps` setting and
+frame pacer: 0 disables software limiting and VSync remains independent.
+Both main-menu and in-game Apply persist display preferences and apply fullscreen
+immediately. Main-menu F1 opens the same settings overlay. Positive dimensions apply finite toroidal topology;
 `0`/`0` or `inf`/`inf` applies infinite topology. Topology changes drain the
 worker and intentionally start a fresh centered world before persisting values.
 Larger high-contrast labels, readable ruleset names, split keyboard help, and a
 selected-setting explanation keep the Release surface legible. Q and its Exit
 action open a confirmation overlay; confirming requests window closure so the
 Illumo application runner performs normal engine shutdown.
+F2 opens the separate Ruleset Workshop in the canvas. Family and transition
+drafts are independent, and every ruleset remains bound to one family. Family
+edits own cell-state names, colors, and state count; ruleset edits own identity
+and transitions. The family-aware form previews a representative transition
+and state palette, and imports or exports family/rule packages. Save & Apply
+validates and persists the family before its referencing rule, drains the
+simulation, rejects state-schema changes that invalidate live cells, then
+activates the pair. Cyclic families expose successor threshold and coprime cycle
+step controls with a successor-neighbor preview. Moore transition tables remain
+JSON-edited rather than expanding the UI into a large matrix editor.
 Animation remains local value state: the overlay eases into place, rows reveal
 in sequence, selection glides, and changed values pulse without adding widgets
-or blocking input.
+or blocking input. The mouse wheel scrolls the viewport without changing the
+selected row; an offscreen selection has no visible highlight. Keyboard navigation
+keeps the selected row visible, including Page Up/Down and Home/End. Rows retain
+readable height; drawing and pointer conversion share a fitted UI
+scale. A held opening click is consumed until release. The main-menu card adds
+a larger responsive title area, rounded raised action cards with icons, a
+glowing animated cell motif, flowing cyan/violet light ribbons, softly lit grid,
+and drifting glider clusters that crossfade between phases. The background uses
+fixed primitive counts and a continuous 12-second decorative cycle. Settings
+share the rounded panel, raised rows, inset values, and toggle pills; the pause
+and exit dialog uses the same chrome, raised actions, and gliding selection.
+`GuiKit::drawRoundedRect` composes non-overlapping triangles and rectangles in
+the existing GameVisual stream; `drawRoundedPanel` shares theme colors and
+layered chrome. `GuiDialog` provides opt-in rounded presentation with a fitted
+visual/pointer scale; its default presentation remains available to other apps.
+`MainMenuModule`, `ConfigurationMenu`, `NewSimulationMenu`, and
+`RulesetWorkshopMenu` share one motion and layout vocabulary through
+`GuiMenuShell` rather than repeating it: the reveal, staggered row entrance,
+gliding selection, value pulse, ambient cycle, and caret blink come from
+`GuiMenuAnimator`; the fitted virtual space, visible-row window, and wheel
+scrolling come from `GuiPanelLayout`; hover and press edges come from
+`GuiPointerTracker`. Each overlay still owns its own layout constants, rows, and
+`GameVisual` composition. The title screen keeps its own slower entrance clock.
+The game advances pause-dialog time once per frame, and submission refreshes
+the visual even while input yields to the console. `reducedUiMotion` snaps menu
+animations and disables decorative motion, including pause/exit transitions;
+it does not change domain simulation or cell fading. `showInspector`
+loads at product startup and applies to the existing inspector drawable.
+
+The large main-menu title uses a separate font atlas at 64, 128, or 256 pixels,
+selected to cover its fitted display size without upscaling glyphs. Smaller
+labels retain the default font atlas; resizing reuses the bounded title sizes.
+
+New simulation and the menu console command `play` open a dedicated canvas
+setup screen, independent of F1 configuration. It offers the rules catalog,
+infinite or wrapping boundaries, width and height in 16-cell increments, and
+empty or starter contents. Infinite mode disables dimensions while retaining
+the finite draft. Create passes validated canvas values to CellGameModule;
+Back or Escape discards the draft. Display and performance preferences are not
+part of this payload. The screen fits all rows, respects reduced menu motion,
+and consumes wheel input without changing selection or values. Raised cards,
+eased focus lighting, value pulses, and a decorative cell colony match the
+main menu; reduced motion freezes the colony and snaps focus feedback.
+
+Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
+A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
+retires after completion. It covers the canvas and HUD but remains beneath
+settings and confirmation dialogs. The transition never changes camera or
+simulation state and does not block input. Reduced menu motion and the 3D
+diagnostic view skip it from the first frame. Returning to the main menu reverses
+this veil over 0.48 seconds, then submits one module transition. Repeated return
+requests do not restart it; product input is consumed during the accepted exit,
+while the global console retains its input. Reduced motion returns immediately.
+Both the pause-menu action and the console menu command use this path.
 
 **D-E2:** InputManager must not depend on Game types.  
 Callbacks should record events/state, not own game policy long-term (CA design PDF — still the direction of travel).
@@ -733,12 +1036,19 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
 - `CellGameModule` registers simulation, canvas, camera, ruleset, and save/load
   commands through `CommandRegistry`; registry metadata drives help and Tab
   completion.
-- Registered commands execute from the queue without falling through as unknown.
-- Save always writes version 3 sparse records (magic/version, ruleset, camera,
+- Registered commands execute in a detached batch. Reentrant enqueue is deferred
+  to the next top-level dispatch; retirement cancels unstarted callbacks and
+  clearing cancels the batch remainder. The non-copyable registry and input
+  manager retain instance-local ownership. See [Services](packages/services.md)
+  for exception and configuration recovery contracts. Failed configuration
+  loads preserve live values and original bytes, disabling teardown saves until
+  a successful reload.
+- Save always writes version 4 sparse records (magic/version, family, ruleset, camera,
   topology, deterministic sorted canonical chunks). Load validates into
-  temporary state, accepts versions 3 and 2 plus the prior dense format, treats
-  older formats as infinite, imports legacy cells centered at the origin, then
-  restores ruleset/camera and rebuilds the bounded view.
+  temporary state, accepts versions 4, 3, and 2 plus the prior dense format,
+  treats older formats as infinite, imports legacy cells centered at the origin,
+  derives family IDs for pre-v4 saves, then restores the validated pair/camera
+  and rebuilds the bounded view.
 - `vid_restart` is not advertised: safely recreating an OpenGL context requires a
   complete resource re-enrollment design, so the old no-op now reports that limit.
 - Editing supports measured caret placement, selection, Home/End, Delete,
@@ -759,6 +1069,29 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
   `DrawIndexed` without a new `UpdateBuffer` (D-P2).
 - `Logger` may mirror output into the console while services are alive. The host
   clears that non-owning logger context before destroying the services.
+
+#### Process memory diagnostics
+
+The optional Debug/RelWithDebInfo `DebugModule` owns one top-left `GLString`
+diagnostics panel. `showFPS` / F3 / `fps` retain FPS-only control;
+`showMemory` (default off) / `memory [on|off|toggle]` independently control
+memory rows. Both settings persist through the existing environment service.
+The console help, completion and `sysinfo` expose memory visibility.
+
+An internal `DebugOverlayState` owns independent FPS and memory refresh clocks
+and cached text; only changed content rebuilds the label. Memory sampling occurs
+on enable and once per second while visible, on the main thread. Hidden memory
+performs no queries. Failure replaces old values with `Memory: unavailable` and
+retries normally. No background worker or allocator instrumentation is added.
+
+The public platform value `ProcessMemoryStats` contains resident, lifetime-peak
+resident and private-commit byte counts. `QueryProcessMemoryStats` returns false
+and clears its output when unavailable. Windows implements it with
+`K32GetProcessMemoryInfo`; existing non-Windows scaffolds return unavailable.
+Win32 headers remain in Platform/Windows. Values cover the whole process and
+are formatted in MiB with one decimal place; private commit is not resident
+memory, and resident memory includes shared pages. GPU and system memory are
+outside this diagnostic's scope.
 
 ### 5.11 Window / platform boundaries
 
@@ -796,7 +1129,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-UI3** | Console can be mounted or floating; floating mode supports title-bar drag and corner resize. |
 | **D-DOC1** | Established one first-party documentation tree; refined by D-DOC2. |
 | **D-DOC2** | Canonical technical documentation remains under `docs/`; `illumo.tex` is the prose book and `architecture-map.tex` the chart pack. Root/nested `AGENTS.md` and `.agent/` are operational-guidance exceptions. |
-| **D-T1** | Independent compile-efficient `IllumoTests` and `IllumoGameTests` runners expose exact cases; `IllumoWorkspace` aggregates them and combined Clang/LLVM coverage enforces at least 85% production line coverage. |
+| **D-T1** | Independent compile-efficient test runners expose exact cases; `IllumoWorkspace` aggregates all registered runners and combined Clang/LLVM coverage enforces at least 85% production line coverage across their linked production code. |
 | **D-T2** | Introduced workspace `IllumoTidy`; superseded for default-build invocation by D-T3. |
 | **D-T3** | First-party C++ runs `clang-tidy` during the default build (`ILLUMO_ENABLE_CLANG_TIDY` ON). Disable with `-DILLUMO_ENABLE_CLANG_TIDY=OFF` or `python build.py build --no-tidy`. `python build.py tidy` remains the batch Ninja/Clang compile-database run. |
 
@@ -826,16 +1159,17 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R19** | Superseded by D-E6: the sibling IllumoGame consumer establishes the explicit library boundary. Future downstream repositories still require install/package validation. |
 | **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. |
 | **D-R21** | One world look (`uMVP`). Sprites are textured quads; 2D vs 3D is the camera projection. `MeshVisual` is the world object host; `GameVisual` remains overlay/painter composition. |
-| **D-R22** | Directional shadows are one Renderer-owned pass over all visible World casters. Renderer reuses one depth target, fits a shared light-space matrix to combined caster bounds, and exposes the shared map to every receiver; `MeshVisual` and SceneGraph only contribute bounds/depth tokens. |
+| **D-R23** | Pixel-space `GameVisual` geometry culls wholly excluded quads against the logical viewport or an optional clip before upload. Partial clips use nested, intersected scissor tokens that restore the prior state. World-space and SceneGraph culling remain unchanged. |
+| **D-R24** | `AssetManager` reference-counts immutable static meshes and canonical file/options cache entries. `MeshVisual` borrows the managed `MeshHandle` and draw metadata, retaining only per-instance transform/tint/lighting state; procedural geometry remains visual-owned and dynamic. Automatic instancing remains a measured follow-up. |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
 | **D-C2** | `CellGrid` domain + `Canvas` presentation; rulesets depend only on `CellGrid`. |
 | **D-C3** | Replace the finite production path with signed-coordinate `SparseCellGrid` chunks plus bounded `CanvasView`; retain dense types only as compatibility fixtures. |
 | **D-C4** | `CanvasView` is a nearest-filtered, world-space quad with exact cell texels at normal zoom and cursor-aligned world-cell editing. |
 | **D-C5** | At far zoom, `CanvasView` uses a revision-gated density overview capped at roughly four screen pixels per texel; this visual budget does not cap sparse simulation chunks. |
-| **D-C6** | Keep `0 x 0` as the infinite sparse world; positive chunk dimensions select a finite torus. Configure it through the Release F1 overlay, reset on topology change, and preserve it in sparse save version 3. |
+| **D-C6** | Keep `0 x 0` as the infinite sparse world; positive chunk dimensions select a finite torus. Configure it through the Release F1 overlay, reset on topology change, and persist it in sparse saves (introduced in v3; current v4 via D-GC4). |
 
-`MeshVisual` is the world mesh host and scene-graph attachment (D-R21, D-R22). It
+`MeshVisual` is the world mesh host and scene-graph attachment (D-R21/D-R24). It
 tessellates colored lines/triangles and textured quads, clones Shape/Sprite
 styles with depth-tested pipelines, and emits `uMVP = cameraVP * nodeWorld *
 local` (billboard replaces local rotation with camera axes). Lit triangle
@@ -856,8 +1190,12 @@ object and camera motion smear the silhouette. Shadow map size, ortho radius,
 light distance, bias, slope scale, normal offset, PCF, and motion-blur amount
 are the same CPU-side state. MeshVisual does not read EnvVars; IllMeshViewer
 persists those values and calls the setters. It does not own a camera, model
-loader, or material system. Overlay chrome stays on `GameVisual` with a
-screen ortho `uMVP` so HUD does not pan with the world camera.
+loader, or material system. For imported/static geometry it stores a non-owning
+managed `MeshHandle`, immutable index count, and per-instance tint; the
+acquiring owner controls the `AssetManager` reference. This lets multiple nodes
+reuse one upload without introducing automatic instance aggregation. Overlay
+chrome stays on `GameVisual` with a screen ortho `uMVP` so HUD does not pan with
+the world camera.
 
 IllumoGame's persisted `render3dTest=1` flag replaces `CanvasView` with a
 `SceneGraph` of `MeshVisual` attachments and switches the product `Camera` to
@@ -918,9 +1256,12 @@ disabled.
 | **D-E10** | `.ilsc` v1 is the editor-owned UTF-8 JSON scene interchange; SceneGraph does not serialize itself. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
-| **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and version 3 topology persistence. |
-| **D-G1** | Editor patterns (RLE/plaintext/stamps/clipboard) are a side path; sparse v3 world saves are unchanged. |
+| **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |
+| **D-G1** | Editor patterns (RLE/plaintext/stamps/clipboard) are a side path; the sparse world-save format is maintained separately (current v4; D-GC4). |
 | **D-G2** | Elementary 1D rules use a serial space-time advance, not the Moore 256×9 table. |
+| **D-GC2** | Shipped and custom rules compile from versioned data; F2 edits staged drafts (catalog layering and save version are updated by D-GC4). |
+| **D-GC4** | Families own cell schemas and palettes; every ruleset references one family; F1/runtime/saves carry both IDs, with v4 writes and legacy derivation. |
+| **D-GC5** | Cyclic families use full Moore neighbor-state histograms with threshold/coprime-step rules in an isolated serial sparse kernel. |
 | **D-F1** | MacroDefs / Windows.h include toxicity deferred until real pain. |
 
 ---
@@ -959,8 +1300,9 @@ From local code review / `docs/current-issues.md` (fix when touching related cod
 ### 8.2 Closed test gaps
 
 Wireworld now has explicit two-head birth and three-head no-birth truth-table
-coverage. File-backed save/load tests cover version 3 topology round trips,
-version 2 compatibility, ruleset restoration, dimension overlap,
+coverage. File-backed save/load tests cover version 4 family/ruleset and
+topology round trips, version 3 and version 2 compatibility, ruleset
+restoration, dimension overlap,
 missing/truncated/invalid files, extension fallback, and dialog cancellation.
 Finite Life/Wireworld seams and Release settings behavior have focused
 headless coverage. Native dialog and live window UI still need platform smoke
@@ -1016,9 +1358,9 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 | Sparse sim + bounded view memory | Sparse simulation scales with stored and counted cells; mixed targets independently use candidates or halos, dense counted chunks use at most eight reusable workers, and presentation scales with the configured visible view |
 | MacroDefs + Windows.h | D-F1 deferred |
 | IllumoContext growth | Frozen; third module = explicit deps |
-| Life-like JSON family collapse | Optional cleanup of repetitive RuleSet classes |
+| Additional rule families | Add only when current Moore/elementary data forms cannot express a needed rule |
 | GPU/SYCL acceleration | Optional after bounded CPU parallel benchmark / product need; CPU sparse stepping is the production baseline |
-| File asset formats | Current managed scope is textures + shaders; font atlases, model import, and general 3D meshes are deferred. `MeshVisual` is procedural world geometry (quads, sprites, cubes, lines) only. |
+| File asset formats | `MeshLoader` imports OBJ to CPU `MeshData` behind a replaceable loader. `AssetManager` synchronously caches/enrolls immutable mesh resources by canonical path plus geometry options, while `MeshVisual` borrows handles; material binding, mesh hot reload, and game-object persistence remain future work. |
 
 ---
 
@@ -1044,13 +1386,14 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 
 ### D. Only if product or learning goals require it
 
-10. Font atlases, UTF-8 text layout, clipping, and nine-slice UI.
-11. Chunked tilemaps, sprite culling, and particle emitters.
+10. Font atlases, UTF-8 text layout, and nine-slice UI. General pixel
+    viewport/rect clipping is complete in D-R23; text shaping remains future work.
+11. Chunked tilemaps, world-space sprite culling, and particle emitters.
 12. Multiple cameras, offscreen targets, compositing, and post-processing.
 13. Keep the established Illumo public boundary narrow; add install/export or
     shared-library ABI work only for a real distribution requirement.
 14. Non-string uniforms / second real backend (OpenGL factory already at composition).
-15. Data-driven life-like rule family (JSON birth/survive).
+15. ~~Data-driven rules and the F2 Ruleset Workshop — D-GC2; typed family and ruleset identity separation — D-GC3.~~
 16. Narrow `IllumoContext` into capability bags only when a third module needs different deps (D-E5).
 
 ### Explicitly deferred (engine PDF + consensus)
@@ -1090,8 +1433,8 @@ Most design questions from the LaTeX open list are **resolved** (see §6). Still
 
 | Topic | Working answer |
 |-------|----------------|
-| Resource ownership long-term | Typed generational handles validate explicit replace/destroy operations; `AssetManager` adds reference-counted file assets, and the resizeable canvas explicitly replaces/releases its texture and PBO ring. |
-| Linux/macOS parity | Both selected bootstraps are known stale and do not match the shared App APIs; keep them unsupported until native configure/build/test/smoke validation succeeds. |
+| Resource ownership long-term | Typed generational handles validate explicit replace/destroy operations; `AssetManager` reference-counts textures, shaders, cubemaps, and immutable model meshes, while the resizeable canvas explicitly replaces/releases its texture and PBO ring. |
+| Linux/macOS parity | The selected bootstraps use the shared application entry contract, but native configure/build/test/smoke evidence is absent; keep them unsupported until that validation succeeds. |
 | Tracy CI policy | Debug-oriented; no strict CI policy yet. |
 | When to introduce SYCL / GPU simulation | Only after a current benchmark and explicit product or learning goal justify a second compute path. Sparse chunks and bounded CPU workers are already live. |
 

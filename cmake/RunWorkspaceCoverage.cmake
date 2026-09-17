@@ -1,13 +1,28 @@
 foreach(required_value
-    TEST_BINARY_ILLUMO TEST_BINARY_GAME BINARY_DIR CTEST_COMMAND
+    TEST_BINARY_MANIFEST BINARY_DIR CTEST_COMMAND
     LLVM_PROFDATA LLVM_COV)
   if(NOT DEFINED ${required_value})
     message(FATAL_ERROR "Coverage value ${required_value} was not supplied")
   endif()
 endforeach()
-if(NOT EXISTS "${TEST_BINARY_ILLUMO}" OR NOT EXISTS "${TEST_BINARY_GAME}")
-  message(FATAL_ERROR "Both workspace test binaries are required for coverage")
+if(NOT EXISTS "${TEST_BINARY_MANIFEST}")
+  message(FATAL_ERROR "Workspace coverage binary manifest is missing")
 endif()
+file(STRINGS "${TEST_BINARY_MANIFEST}" TEST_BINARIES)
+if(NOT TEST_BINARIES)
+  message(FATAL_ERROR "Workspace coverage binary manifest is empty")
+endif()
+set(COVERAGE_OBJECTS)
+foreach(test_binary IN LISTS TEST_BINARIES)
+  if(NOT EXISTS "${test_binary}")
+    message(FATAL_ERROR "Workspace coverage binary is missing: ${test_binary}")
+  endif()
+  if(COVERAGE_OBJECTS)
+    list(APPEND COVERAGE_OBJECTS -object)
+  endif()
+  list(APPEND COVERAGE_OBJECTS "${test_binary}")
+  message(STATUS "Coverage binary: ${test_binary}")
+endforeach()
 if(NOT DEFINED MINIMUM_LINE_COVERAGE)
   set(MINIMUM_LINE_COVERAGE 85)
 endif()
@@ -46,8 +61,6 @@ endif()
 
 set(IGNORE_REGEX
   [=[([/\\]Tests[/\\]|[/\\]TestSupport[/\\]|thirdparty|Program Files|scoop|Microsoft Visual Studio|Windows Kits|Rendering[/\\]OpenGL|Rendering[/\\]RenderWindow[.])]=])
-set(COVERAGE_OBJECTS
-  "${TEST_BINARY_ILLUMO}" -object "${TEST_BINARY_GAME}")
 execute_process(
   COMMAND "${LLVM_COV}" report ${COVERAGE_OBJECTS}
     "--instr-profile=${PROFILE_DATA}"
@@ -74,11 +87,6 @@ if(TOTAL_FIELD_COUNT LESS 10)
 endif()
 list(GET TOTAL_FIELDS 9 LINE_COVERAGE_WITH_PERCENT)
 string(REPLACE "%" "" LINE_COVERAGE "${LINE_COVERAGE_WITH_PERCENT}")
-if(LINE_COVERAGE LESS MINIMUM_LINE_COVERAGE)
-  message(FATAL_ERROR
-    "Production line coverage ${LINE_COVERAGE}% is below ${MINIMUM_LINE_COVERAGE}%")
-endif()
-
 execute_process(
   COMMAND "${LLVM_COV}" show ${COVERAGE_OBJECTS}
     "--instr-profile=${PROFILE_DATA}"
@@ -91,5 +99,9 @@ if(NOT HTML_RESULT EQUAL 0)
 endif()
 
 message(STATUS "Illumo workspace production line coverage: ${LINE_COVERAGE}%")
-message(STATUS "Coverage gate passed: ${MINIMUM_LINE_COVERAGE}% minimum")
 message(STATUS "HTML report: ${REPORT_DIR}/index.html")
+if(LINE_COVERAGE LESS MINIMUM_LINE_COVERAGE)
+  message(FATAL_ERROR
+    "Production line coverage ${LINE_COVERAGE}% is below ${MINIMUM_LINE_COVERAGE}%")
+endif()
+message(STATUS "Coverage gate passed: ${MINIMUM_LINE_COVERAGE}% minimum")

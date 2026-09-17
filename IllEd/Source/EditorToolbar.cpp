@@ -15,7 +15,6 @@ EditorToolbar::EditorToolbar(IRenderWindow* window, Renderer* renderer)
   , m_renderer(renderer)
   , m_visual(512u)
   , m_openMenu(-1)
-  , m_mouseWasDown(false)
   , m_consumedPress(false)
   , m_status("Untitled")
   , m_barWidth(1280.0f)
@@ -146,18 +145,7 @@ EditorToolbar::rebuildMenus()
 void
 EditorToolbar::updateLayout()
 {
-  int width = 1280;
-  int height = 720;
-  if (m_window != nullptr) {
-    const std::array<int, 2> dimensions = m_window->getWindowDimensions();
-    width = std::max(1, dimensions[0]);
-    height = std::max(1, dimensions[1]);
-  }
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
-  (void)height;
-  m_barWidth = virtualWidth;
+  m_barWidth = GuiPanelLayout::viewport(m_window, m_renderer).virtualWidth;
 
   const float fontScale = m_fontSize / kDefaultFontSize;
   m_barHeight = std::max(28.0f, std::round(28.0f * fontScale));
@@ -279,23 +267,19 @@ EditorToolbar::update(InputManager* inputManager, float dt)
   updateLayout();
   const float fontScale = m_fontSize / kDefaultFontSize;
   const float targetMargin = (m_sidebarCollapsed ? 32.0f : 240.0f) * fontScale;
-  m_sidebarMarginAnim += (targetMargin - m_sidebarMarginAnim) *
-                         std::min(1.0f, std::max(0.0f, dt) * 18.0f);
-  if (std::abs(m_sidebarMarginAnim - targetMargin) < 0.1f) {
-    m_sidebarMarginAnim = targetMargin;
-  }
+  m_sidebarMarginAnim = GuiEasing::approachLinear(
+    m_sidebarMarginAnim, targetMargin, 18.0f, std::max(0.0f, dt), 0.1f);
   const float itemHeight = std::max(24.0f, std::round(24.0f * fontScale));
 
   // Mouse hover tracking
   m_hoverMenu = -1;
   m_hoverItem = -1;
+  m_pointer.sample(m_window,
+                   inputManager,
+                   GuiPanelLayout::viewport(m_window, m_renderer).layoutScale);
   if (m_window != nullptr) {
-    const std::array<double, 2> mouseCoords = m_window->getMouseCoords();
-    const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-    m_mouseX =
-      static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
-    m_mouseY =
-      static_cast<float>(mouseCoords[1]) / (scale > 0.0f ? scale : 1.0f);
+    m_mouseX = m_pointer.x();
+    m_mouseY = m_pointer.y();
 
     if (m_mouseY >= 0.0f && m_mouseY <= m_barHeight) {
       for (size_t i = 0; i < m_menus.size(); ++i) {
@@ -358,18 +342,10 @@ EditorToolbar::update(InputManager* inputManager, float dt)
   keyQueue = kept;
 
   m_consumedPress = false;
-  const bool mouseDown = inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
-  if (mouseDown && !m_mouseWasDown) {
+  if (m_pointer.clicked()) {
     const bool menuWasOpen = m_openMenu >= 0;
-    std::array<double, 2> mouse{ 0.0, 0.0 };
-    if (m_window != nullptr) {
-      mouse = m_window->getMouseCoords();
-    }
-    const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-    const float uiX =
-      static_cast<float>(mouse[0]) / (scale > 0.0f ? scale : 1.0f);
-    const float uiY =
-      static_cast<float>(mouse[1]) / (scale > 0.0f ? scale : 1.0f);
+    const float uiX = m_pointer.x();
+    const float uiY = m_pointer.y();
     const EditorCommand clicked = clickAt(uiX, uiY);
     if (clicked != EditorCommand::None) {
       command = clicked;
@@ -377,7 +353,6 @@ EditorToolbar::update(InputManager* inputManager, float dt)
     m_consumedPress = command != EditorCommand::None || menuWasOpen ||
                       containsScreenPoint(uiX, uiY);
   }
-  m_mouseWasDown = mouseDown;
   rebuildVisual();
   return command;
 }
@@ -388,14 +363,8 @@ EditorToolbar::rebuildVisual()
   m_visual.clearPrimitives();
   updateLayout();
 
-  int height = 720;
-  if (m_window != nullptr) {
-    const std::array<int, 2> dimensions = m_window->getWindowDimensions();
-    height = std::max(1, dimensions[1]);
-  }
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
   const float virtualHeight =
-    static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
+    GuiPanelLayout::viewport(m_window, m_renderer).virtualHeight;
 
   const float fontScale = m_fontSize / kDefaultFontSize;
   const float iconSize =
@@ -541,7 +510,7 @@ EditorToolbar::rebuildVisual()
   if (m_openMenu >= 0 && static_cast<size_t>(m_openMenu) < m_menus.size()) {
     const Menu& menu = m_menus[static_cast<size_t>(m_openMenu)];
     const float t = std::clamp(m_dropdownAnim, 0.0f, 1.0f);
-    const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
+    const float ease = GuiEasing::outCubic(t);
     const float animHeight = m_dropdownHeight * (0.6f + 0.4f * ease);
     const float itemHeight = std::max(24.0f, std::round(24.0f * fontScale));
     const float shortcutFont = std::max(9.0f, std::round(11.0f * fontScale));
@@ -612,7 +581,7 @@ EditorToolbar::rebuildVisual()
   // Toast notification banner with life progress bar
   if (m_toastElapsed < m_toastDuration && !m_toastMessage.empty()) {
     const float inT = std::clamp(m_toastElapsed / 0.20f, 0.0f, 1.0f);
-    const float inEase = 1.0f - std::pow(1.0f - inT, 3.0f);
+    const float inEase = GuiEasing::outCubic(inT);
     const float outT =
       std::clamp((m_toastDuration - m_toastElapsed) / 0.35f, 0.0f, 1.0f);
     const float alphaFactor = std::min(inEase, outT);

@@ -15,6 +15,14 @@ factory. Do not add a process entry point, frame loop, logger lifetime,
 SysCmdLine implementation, BuildInfo, native SDK code, or platform
 implementation under IllumoGame.
 
+The required-module factory initializes the shared rules catalog once before
+constructing menu or game modules. `RuleCatalogLoader` owns catalog file reads,
+first-valid base-pair lookup across executable/current/product directories,
+and the working-directory `families.user.json` and `rulesets.user.json`
+overlays. `RuleSetRegistry` starts empty and owns text validation and
+data-backed factories; Rulesets has no filesystem or native platform
+dependencies.
+
 ## Domain and presentation invariants
 
 - `SparseCellGrid` is production state: signed 64-bit world coordinates,
@@ -33,6 +41,9 @@ implementation under IllumoGame.
   allocation failure invalidates the journal. Journals of at least 2,048
   presentation chunks capture a lightweight replacement marker instead of
   per-chunk payloads.
+- Full-state, extended-range, and directional von Neumann models use isolated
+  serial correctness kernels and the same transactional inactive-map
+  publication. Directional neighbors are ordered north, east, south, west.
 - Worker pools are grid-owned implementation details. Bound work, join before
   destruction, and do not expose partially written state to the frame thread.
 - `CanvasView` is a bounded world-space view over the sparse domain. It owns a
@@ -68,17 +79,36 @@ implementation under IllumoGame.
 - Product input (menu, settings, confirm dialogs, camera, editor) yields while
   `CommandLine` is open. Do not drain `KeyCode::Grave`; `DebugModule` owns the
   global console toggle.
+- F1 settings and F2 Ruleset Workshop remain separate. F1 and New Simulation
+  select an explicit family/ruleset pair; each ruleset is bound to exactly one
+  family. The family owns state count, names, and colors; the rule owns
+  transition behavior. F2 stages these definitions separately, validates the
+  pair, drains the simulation, persists a custom family before its referencing
+  rule, then replaces the active pair and refreshes presentation. Reject family
+  schema changes that invalidate live cells. Both menus honor
+  `reducedUiMotion`; F2 wheel input scrolls visible rows without moving
+  keyboard selection.
+- Menu screens take their motion, fitted virtual space, row windows, and
+  pointer edges from `Illumo/Gui/GuiMenuShell` (`GuiEasing`,
+  `GuiMenuAnimator`, `GuiPanelLayout`, `GuiPointerTracker`). Do not restate
+  easing curves, animation timings, UI-scale fitting, scroll clamping, or
+  press-edge bookkeeping in a screen; add a new one by composing the shell and
+  supplying only that screen's rows, layout constants, and drawing.
 - Editor patterns (RLE/plaintext/stamps/clipboard) are a side path. World saves
-  stay sparse version 3. Finite worlds skip out-of-bounds stamp cells.
+  stay sparse; version 4 records family and ruleset IDs, version 3 derives family
+  from its rule ID, and version 2/dense legacy readers remain compatible. Finite
+  worlds skip out-of-bounds stamp cells.
 
 ## Persistence and compatibility
 
-Writes use sparse format version 3; reads accept versions 3 and 2 plus the prior
-dense format. Validate headers, topology, dimensions, rulesets, coordinates,
-counts, and cell states before replacing live state. Loading must be
-transactional. Format,
-endianness, numeric-range, or replacement-policy changes require an explicit
-compatibility plan and tests with fixtures.
+Writes use sparse format version 4; reads accept versions 4, 3, and 2 plus the
+prior dense format. Validate headers, topology, dimensions, the family/ruleset
+pair, coordinates, counts, and family-defined cell states before replacing
+live state. Loading must be transactional. Format, endianness, numeric-range,
+or replacement-policy changes require an explicit compatibility plan and tests
+with fixtures. Custom families and rules remain external catalog entries
+referenced by stable IDs; their catalogs must load before a world that uses
+them can be restored.
 
 ## Documentation and verification
 

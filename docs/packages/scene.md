@@ -14,7 +14,9 @@ The graph is also one token-path `DrawableBase`. When it is placed in the World
 layer of the per-frame `Rendering::Scene`, it resolves dirty transforms and
 calls visible, enabled attachments in hierarchy pre-order. Attachments receive
 the node world matrix and append commands through `Renderer`; the graph owns
-neither attachments nor backend resources. Its iterative render stack is
+neither attachments nor backend resources. One attachment can emit multiple
+visual items; child nodes provide independent transforms and subtree state.
+Its iterative render stack is
 retained private scratch that grows with the graph; v1 does not cache a flattened
 render list.
 
@@ -22,8 +24,8 @@ V1 is main-thread affine and deliberately excludes ECS components, update
 callbacks, serialization, prefabs, bounds/culling, physics, scripting, and
 retained UI. IllEd is the first product consumer: it rebuilds a graph from an
 editor-owned `.ilsc` document (D-E10) and never asks SceneGraph to serialize
-itself. IllumoGame's CA path still does not use the graph for cell storage,
-except the opt-in `render3dTest` diagnostic, which attaches `MeshVisual`
-hosts to scene nodes. The complete contract and rollout boundary are in
+itself. IllumoGame never uses the graph for CA cell storage. Its opt-in
+`render3dTest` diagnostic separately attaches world `MeshVisual` hosts to scene
+nodes. The complete contract and rollout boundary are in
 `../scene-graph-v1-design.md`; formal decisions D-E8, D-E10, and D-R21 record
 the hierarchy, interchange file, and world look.

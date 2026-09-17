@@ -1,6 +1,6 @@
 #include "Game/CanvasView.h"
 #include "Game/SparseCellGrid.h"
-#include "Rulesets/GameOfLifeRuleSet.h"
+#include "Rulesets/LifeLikeRuleSet.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
@@ -172,7 +172,8 @@ static void
 testGameOfLifeAcrossToroidalSeams()
 {
   testSection("SparseCellGrid: Game of Life across toroidal seams");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules(
+    nullptr, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
 
   SparseCellGrid horizontal(2, 2);
   horizontal.setCell(CellAddress{ 15, 0 }, 0);
@@ -236,7 +237,7 @@ testWireworldAndDirectPublicationAcrossSeam()
               WireworldRuleSet::CELL_TAIL,
               "wrapped head advances to tail");
 
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life(nullptr, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   SparseCellGrid source(2, 2);
   source.setCell(CellAddress{ 15, 0 }, 0);
   source.setCell(CellAddress{ -16, 0 }, 0);
@@ -263,7 +264,8 @@ static void
 testFiniteSparseMicroBench()
 {
   testSection("SparseCellGrid: finite versus infinite sparse micro-benchmark");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules(
+    nullptr, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   SparseCellGrid finite(64, 64);
   SparseCellGrid infinite;
   for (int blockY = 0; blockY < 8; ++blockY) {

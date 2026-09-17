@@ -15,6 +15,9 @@ orbit, pan, zoom, and rotate camera controls.
   or IllEdCore.
 - Load meshes through `MeshLoader::loadFromFile` or `MeshLoader::loadFromMemory`.
 - Keep UI primitive-composed through `GameVisual` and `GuiKit`. No retained widget tree.
+- `MeshViewerUi` resolves its viewport with `GuiPanelLayout::viewport` and
+  tracks the pointer with `GuiPointerTracker` from `Illumo/Gui/GuiMenuShell`.
+  Do not restate UI-scale conversion or press-edge bookkeeping.
 - Persist lighting, shadows, and motion blur in EnvVars (`lightingEnabled`,
   `lightDir*`, `lightColor*`, `ambientColor*`, `shadowsEnabled`,
   `shadowMapSize`, `shadowRadius`, `lightDistance`, `shadowBias`,

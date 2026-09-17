@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(Illumo LANGUAGES C CXX)
@@ -23,16 +23,20 @@ if(WIN32)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/Windows/WinMain.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/Windows/WinSaveLoad.cpp
+    Source/Platform/Windows/WinAtomicFile.cpp
     Source/Platform/Windows/WinClipboard.cpp
-    Source/Platform/Windows/WinTimer.cpp)
+    Source/Platform/Windows/WinTimer.cpp
+    Source/Platform/Windows/WinProcessMemoryStats.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm)
 elseif(APPLE)
   enable_language(OBJCXX)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/macOS/Main.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/macOS/MacSaveLoad.mm
+    Source/Platform/PosixAtomicFile.cpp
     Source/Platform/macOS/MacClipboard.cpp
-    Source/Platform/macOS/MacTimer.cpp)
+    Source/Platform/macOS/MacTimer.cpp
+    Source/Platform/UnsupportedProcessMemoryStats.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES
     "-framework Cocoa" "-framework OpenGL" "-framework IOKit"
     "-framework CoreVideo")
@@ -42,8 +46,10 @@ elseif(UNIX)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/Linux/_main.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
     Source/Platform/Linux/LinuxSaveLoad.cpp
+    Source/Platform/PosixAtomicFile.cpp
     Source/Platform/Linux/LinuxClipboard.cpp
-    Source/Platform/Linux/LinuxTimer.cpp)
+    Source/Platform/Linux/LinuxTimer.cpp
+    Source/Platform/UnsupportedProcessMemoryStats.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES ${GTK_LIBRARIES})
 else()
   message(FATAL_ERROR "Illumo has no platform entry implementation")
@@ -75,6 +81,7 @@ add_library(Illumo STATIC
   Source/Scene/SceneGraph.cpp
   Source/Services/CommandLine.cpp
   Source/Services/CommandLineCore.cpp
+  Source/Platform/AtomicFile.cpp
   Source/Services/DebugAlloc.cpp
   Source/Services/EnvVars.cpp
   Source/Services/InputManager.cpp
@@ -84,6 +91,8 @@ add_library(Illumo STATIC
   Source/Rendering/AssetManager.cpp
   Source/Rendering/Camera.cpp
   Source/Rendering/Font.cpp
+  Source/Rendering/FrameCapture.cpp
+  Source/Rendering/FrameCaptureImage.cpp
   Source/Rendering/GLString.cpp
   Source/Rendering/MeshLoader.cpp
   Source/Rendering/Renderer.cpp
@@ -92,6 +101,7 @@ add_library(Illumo STATIC
   Source/Rendering/ShaderPreprocessor.cpp
   Source/Rendering/SplashText.cpp
   Source/Rendering/Primitives/MeshVisual.cpp
+  Source/Rendering/Primitives/SkyboxVisual.cpp
   Source/Rendering/Primitives/GameVisual.cpp
   Source/Rendering/Primitives/SpriteAnimation.cpp
   Source/Rendering/OpenGL/CreateOpenGLBackend.cpp
@@ -102,6 +112,7 @@ add_library(Illumo STATIC
   Source/Gui/GridAtlas.cpp
   Source/Gui/GuiDialog.cpp
   Source/Gui/GuiKit.cpp
+  Source/Gui/GuiMenuShell.cpp
   ${ILLUMO_PLATFORM_SOURCES}
   thirdparty/tracy-0.13.1/public/TracyClient.cpp
 )
@@ -122,9 +133,13 @@ target_include_directories(Illumo
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/tracy-0.13.1/public"
 )
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoPublicMath.cmake")
+illumo_prepare_public_math(_illumo_public_math_include)
 target_include_directories(Illumo SYSTEM PUBLIC
-  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/thirdparty>")
+  "$<BUILD_INTERFACE:${_illumo_public_math_include}>")
+unset(_illumo_public_math_include)
 target_include_directories(Illumo SYSTEM PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glfw-3.4/deps"
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glfw-3.4/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glew-2.1.0/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/json/single_include"
@@ -159,6 +174,7 @@ if(BUILD_TESTING)
     Tests/TestRendererE2E.cpp
     Tests/TestUITokens.cpp
     Tests/TestServices.cpp
+    Tests/TestAtomicFile.cpp
     Tests/TestRuntimeUtilities.cpp
     Tests/TestAllocators.cpp
     Tests/TestGameVisual.cpp
@@ -171,6 +187,7 @@ if(BUILD_TESTING)
     Tests/TestShaderPreprocessor.cpp
     Tests/TestGuiKit.cpp
     Tests/TestFont.cpp
+    Tests/TestFrameCapture.cpp
   )
   target_link_libraries(IllumoTests PRIVATE Illumo::TestSupport glfw)
   target_include_directories(IllumoTests PRIVATE
@@ -201,9 +218,60 @@ if(BUILD_TESTING)
   endif()
 endif()
 
+option(ILLUMO_BUILD_CAPTURE "Build the standalone frame capture tool" ON)
+if(ILLUMO_BUILD_CAPTURE)
+  add_executable(IllumoCapture tools/CaptureMain.cpp)
+  target_link_libraries(IllumoCapture PRIVATE Illumo::Illumo)
+  target_include_directories(IllumoCapture SYSTEM PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/json/single_include")
+  illumo_configure_runtime_target(IllumoCapture)
+  illumo_stage_runtime(IllumoCapture)
+  illumo_stage_msvc_asan(IllumoCapture)
+  set(_capture_revision "unknown")
+  find_package(Git QUIET)
+  if(Git_FOUND)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _git_result
+      OUTPUT_VARIABLE _git_revision OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(_git_result EQUAL 0)
+      set(_capture_revision "${_git_revision}")
+      execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE _git_status ERROR_QUIET)
+      if(NOT _git_status STREQUAL "")
+        string(APPEND _capture_revision "-dirty")
+      endif()
+    endif()
+  endif()
+  target_compile_definitions(IllumoCapture PRIVATE "ILLUMO_CAPTURE_REVISION=\"${_capture_revision}\"")
+  if(BUILD_TESTING)
+    # Explicit real-GPU check, never part of the headless default CTest suite.
+    add_executable(IllumoCaptureGpuTests EXCLUDE_FROM_ALL tools/CaptureGpuTests.cpp)
+    target_link_libraries(IllumoCaptureGpuTests PRIVATE Illumo::Illumo glew_s)
+    illumo_configure_runtime_target(IllumoCaptureGpuTests)
+    illumo_stage_msvc_asan(IllumoCaptureGpuTests)
+    add_test(NAME Illumo.Capture.Help COMMAND IllumoCapture --help)
+    add_test(NAME Illumo.Capture.InvalidDimensions COMMAND IllumoCapture --width 0 --output unused.png)
+    set_tests_properties(Illumo.Capture.InvalidDimensions PROPERTIES WILL_FAIL TRUE)
+    set_tests_properties(Illumo.Capture.Help Illumo.Capture.InvalidDimensions
+      PROPERTIES LABELS "Illumo;IllumoWorkspace")
+    add_dependencies(IllumoTestsDiscover IllumoCapture)
+  endif()
+endif()
+
+set(_illumo_documentation_available OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../docs/build.ps1" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../docs/latex/illumo.tex" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../docs/latex/architecture-map.tex")
+  set(_illumo_documentation_available ON)
+endif()
 option(ILLUMO_BUILD_DOCUMENTATION
-  "Build the Illumo PDFs with the default build" ON)
+  "Build the Illumo PDFs with the default build" ${_illumo_documentation_available})
 if(ILLUMO_BUILD_DOCUMENTATION AND NOT TARGET IllumoDocs)
+  if(NOT _illumo_documentation_available)
+    message(FATAL_ERROR
+      "ILLUMO_BUILD_DOCUMENTATION=ON requires the engine docs source tree. "
+      "Generated workspaces omit it; use -DILLUMO_BUILD_DOCUMENTATION=OFF.")
+  endif()
   find_program(ILLUMO_POWERSHELL_EXECUTABLE NAMES powershell pwsh)
   find_program(ILLUMO_LATEXMK_EXECUTABLE NAMES latexmk)
   if(WIN32 AND ILLUMO_POWERSHELL_EXECUTABLE AND ILLUMO_LATEXMK_EXECUTABLE)
@@ -218,3 +286,4 @@ if(ILLUMO_BUILD_DOCUMENTATION AND NOT TARGET IllumoDocs)
     message(STATUS "IllumoDocs skipped: PowerShell and latexmk are required")
   endif()
 endif()
+unset(_illumo_documentation_available)

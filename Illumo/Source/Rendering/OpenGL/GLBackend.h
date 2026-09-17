@@ -18,6 +18,7 @@ private:
   CommandQueue* commandQueue;
   IRenderWindow* window;
   int fps = 0;
+  size_t m_rejectionsAtFrameStart = 0;
 
   std::unordered_map<uint32_t, GLMeshResourceEntry> _vaoRegistryLookup;
   std::unordered_map<uint32_t, GLShaderResourceEntry> _programRegistryLookup;
@@ -41,6 +42,7 @@ public:
   void PushToCommandQueue(RenderCommand command) override;
   void ClearCommandQueue() override;
   int getFPS() const override { return fps; }
+  FrameReadback readBackbuffer(int width, int height) override;
 
   MeshHandle CreateMesh(const void* vertices,
                         size_t vertexSize,
@@ -77,12 +79,22 @@ public:
                               const int height,
                               int channels,
                               const TextureOptions& options) override;
+  TextureHandle CreateCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3) override;
   bool ReplaceTexture(TextureHandle handle,
                       const unsigned char* data,
                       int width,
                       int height,
                       int channels,
                       const TextureOptions& options) override;
+  bool ReplaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels) override;
   bool DestroyTexture(TextureHandle handle) override;
   bool IsTextureValid(TextureHandle handle) const override;
   TextureInfo GetTextureInfo(TextureHandle handle) const override;

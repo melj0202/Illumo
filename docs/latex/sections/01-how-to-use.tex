@@ -41,7 +41,8 @@
   \item When a decision is made, append a dated entry to the decision log
         \textbf{and} update the consensus Markdown.
   \item When code lands, update the consensus file and the ``current state''
-        sections. If docs and code disagree, \textbf{code wins} until docs catch up.
+        sections. If docs and code disagree, use code as current-state evidence
+        and resolve conflicts with approved intent explicitly.
 \end{enumerate}
 
 \subsection{Building the PDF}
@@ -55,10 +56,11 @@ From the repo root (requires PowerShell and a TeX distribution with
 \pathref{docs/output/architecture-map.pdf}.
 
 \begin{statusbox}
-As of 2026-08-19 (current-state audit): engine, scene, system, and platform code is
+As of 2026-09-16 (current-state audit): engine, scene, system, and platform code is
 under \pathref{Illumo/Include} and \pathref{Illumo/Source}; IllumoGame contains
-only game and ruleset production code. The reusable 2D token renderer has
-typed generational resources, managed texture/shader assets, painter-correct
+only game and ruleset production code. IllEd authors worlds and IllMeshViewer
+inspects meshes. The reusable world-mesh and 2D token renderer has
+typed generational resources, managed texture/cubemap/shader/static-mesh assets, offscreen passes, painter-correct
 primitives, and mock tests; the persistent \symbolref{SceneGraph} owns
 generational hierarchy nodes and extracts borrowed render attachments through
 that token path;
@@ -66,7 +68,8 @@ SparseCellGrid uses signed-coordinate 16$\times$16 chunks, retained candidate
 and changed-frontier structures, and bounded worker evaluation for large
 candidate/halo workloads; CanvasView uses CPU palette targets, \texttt{displayRgb}
 fade, and one dirty-rect RGB display texture/quad; headless
-\texttt{IllumoTests} and \texttt{IllumoGameTests} run through the aggregate
+\texttt{IllumoTests}, \texttt{IllumoGameTests}, \texttt{IllEdTests}, and
+\texttt{IllMeshViewerTests} run through the aggregate
 workspace build; the command console has measured editing,
 metadata-driven help, and module-registered domain commands. Windows MSVC
 Release/Debug builds are the supported target, DebugModule is excluded from

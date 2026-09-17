@@ -3,7 +3,7 @@ include_guard(GLOBAL)
 option(ILLUMO_ENABLE_TRACY
   "Enable Tracy instrumentation in optimized builds" OFF)
 option(ILLUMO_ENABLE_COVERAGE
-  "Instrument both Illumo test runners for LLVM coverage" OFF)
+  "Instrument first-party workspace targets for LLVM coverage" OFF)
 option(ILLUMO_ENABLE_CLANG_TIDY
   "Run clang-tidy on first-party C++ during build" ON)
 
@@ -118,6 +118,7 @@ function(illumo_configure_runtime_target target_name)
 endfunction()
 
 function(illumo_discover_test_runner target_name label_name)
+  set_property(GLOBAL APPEND PROPERTY ILLUMO_WORKSPACE_TEST_RUNNERS ${target_name})
   set(discovery_file
     "${CMAKE_CURRENT_BINARY_DIR}/${target_name}-$<CONFIG>-discovered.cmake")
   set(discovery_include
@@ -160,4 +161,41 @@ function(illumo_discover_test_runner target_name label_name)
     COMMENT "Refreshing ${label_name} CTest discovery")
   set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
     "${discovery_include}")
+endfunction()
+
+# Call after the workspace subdirectories have registered their test runners.
+function(illumo_add_workspace_coverage)
+  if(NOT BUILD_TESTING)
+    message(FATAL_ERROR "ILLUMO_ENABLE_COVERAGE requires BUILD_TESTING=ON")
+  endif()
+  get_property(coverage_runners GLOBAL PROPERTY ILLUMO_WORKSPACE_TEST_RUNNERS)
+  if(NOT coverage_runners)
+    message(FATAL_ERROR "Workspace coverage requires registered test runners")
+  endif()
+  list(REMOVE_DUPLICATES coverage_runners)
+  set(coverage_dependencies IllumoPublicHeaderSmoke)
+  set(coverage_manifest "")
+  foreach(runner IN LISTS coverage_runners)
+    list(APPEND coverage_dependencies ${runner}Discover)
+    string(APPEND coverage_manifest "$<TARGET_FILE:${runner}>\n")
+  endforeach()
+  set(coverage_manifest_path "${CMAKE_BINARY_DIR}/coverage-binaries-$<CONFIG>.txt")
+  file(GENERATE OUTPUT "${coverage_manifest_path}" CONTENT "${coverage_manifest}")
+  find_program(ILLUMO_LLVM_PROFDATA_EXECUTABLE NAMES llvm-profdata REQUIRED)
+  find_program(ILLUMO_LLVM_COV_EXECUTABLE NAMES llvm-cov REQUIRED)
+  add_custom_target(IllumoCoverage
+    COMMAND ${CMAKE_COMMAND}
+      "-DTEST_BINARY_MANIFEST=${coverage_manifest_path}"
+      "-DBINARY_DIR=${CMAKE_BINARY_DIR}"
+      "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+      "-DCONFIG=$<CONFIG>"
+      "-DLLVM_PROFDATA=${ILLUMO_LLVM_PROFDATA_EXECUTABLE}"
+      "-DLLVM_COV=${ILLUMO_LLVM_COV_EXECUTABLE}"
+      "-DMINIMUM_LINE_COVERAGE=85"
+      -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RunWorkspaceCoverage.cmake"
+    DEPENDS ${coverage_dependencies}
+    VERBATIM
+    USES_TERMINAL
+    COMMENT "Running combined Illumo workspace coverage"
+  )
 endfunction()

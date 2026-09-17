@@ -1,7 +1,7 @@
 #include "RenderWindow.h"
-#include <Illumo/Engine/PresentationTiming.h>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Services/Logger.h>
 
 void
@@ -23,8 +23,10 @@ windowSizeCallback(GLFWwindow* window, int width, int height) noexcept
 RenderWindow::RenderWindow(const int width,
                            const int height,
                            const std::string& title,
-                           IEnvVars* envVars)
+                           IEnvVars* envVars,
+                           bool captureOnly)
   : IRenderWindow(width, height, title, envVars)
+  , m_captureOnly(captureOnly)
 {
 
   /*Init member variables*/
@@ -54,6 +56,8 @@ RenderWindow::initialize()
     return false;
   }
   glfwInitialized = true;
+  glfwDefaultWindowHints();
+  glfwWindowHint(GLFW_VISIBLE, m_captureOnly ? GLFW_FALSE : GLFW_TRUE);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -66,9 +70,10 @@ RenderWindow::initialize()
       samples = static_cast<int>(msaaVar.valueAsLong);
     }
   }
-  if (samples > 0) {
-    glfwWindowHint(GLFW_SAMPLES, samples);
+  if (m_captureOnly) {
+    samples = 0;
   }
+  glfwWindowHint(GLFW_SAMPLES, samples);
   /* Create a windowed mode window and its OpenGL context */
 
   if (isFullScreen) {
@@ -112,11 +117,18 @@ RenderWindow::initialize()
   }
   glfwSetWindowUserPointer(window, this);
   glfwSetWindowSizeCallback(window, windowSizeCallback);
-  glfwSetWindowSizeLimits(window, 640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
+  if (!m_captureOnly) {
+    glfwSetWindowSizeLimits(window, 640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
+  }
   // Set initial viewport size based on current framebuffer size
   int fbWidth = 0;
   int fbHeight = 0;
   glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+  if (m_captureOnly && (fbWidth != windowWidth || fbHeight != windowHeight)) {
+    Logger::LogError(
+      "Capture framebuffer size differs from requested dimensions");
+    return false;
+  }
   glViewport(0, 0, fbWidth, fbHeight);
   Logger::LogTrace("Viewport set");
 
@@ -141,7 +153,7 @@ CreateRenderWindow(int width,
 void
 RenderWindow::syncPresentationMode()
 {
-  const bool requestedVsync = isVsyncRequested(envVars);
+  const bool requestedVsync = !m_captureOnly && isVsyncRequested(envVars);
   if (swapIntervalInitialized && requestedVsync == vsyncEnabled) {
     return;
   }
@@ -261,6 +273,12 @@ RenderWindow::requestClose()
   glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
+void
+RenderWindow::cancelCloseRequest()
+{
+  glfwSetWindowShouldClose(window, GLFW_FALSE);
+}
+
 int
 RenderWindow::getRefreshRate() const
 {
@@ -293,4 +311,15 @@ RenderWindow::~RenderWindow()
     glfwTerminate();
     glfwInitialized = false;
   }
+}
+
+std::unique_ptr<IRenderWindow>
+CreateCaptureWindow(int width, int height)
+{
+  std::unique_ptr<RenderWindow> window = std::make_unique<RenderWindow>(
+    width, height, "Illumo capture", nullptr, true);
+  if (!window->initialize()) {
+    return nullptr;
+  }
+  return window;
 }

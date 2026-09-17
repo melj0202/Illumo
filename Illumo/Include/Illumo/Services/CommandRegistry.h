@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -9,21 +10,33 @@ using CommandFn = std::function<void(const std::vector<std::string>&)>;
 
 class CommandRegistry
 {
+  struct Registration
+  {
+    CommandFn fn;
+    std::shared_ptr<const bool> identity = std::make_shared<const bool>(true);
+  };
   struct QueuedCommand
   {
     CommandFn fn;
     std::vector<std::string> args;
+    std::weak_ptr<const bool> identity;
   };
 
-  std::unordered_map<std::string, CommandFn> commands;
+  std::unordered_map<std::string, Registration> commands;
   std::unordered_map<std::string, std::string> usages;
   std::unordered_map<std::string, std::string> descriptions;
   std::unordered_map<std::string, std::vector<std::string>> completions;
   std::vector<QueuedCommand> queue;
+  bool executing = false;
+  bool cancelBatch = false;
 
 public:
   CommandRegistry() {}
   ~CommandRegistry() = default;
+  CommandRegistry(const CommandRegistry&) = delete;
+  CommandRegistry& operator=(const CommandRegistry&) = delete;
+  CommandRegistry(CommandRegistry&&) = delete;
+  CommandRegistry& operator=(CommandRegistry&&) = delete;
 
   void RegisterCommand(
     const std::string& name,
@@ -32,7 +45,7 @@ public:
     const std::string& description = "",
     const std::vector<std::string>& completionCandidates = {})
   {
-    commands[name] = fn;
+    commands.insert_or_assign(name, Registration{ std::move(fn) });
     usages[name] = usage;
     descriptions[name] = description;
     completions[name] = completionCandidates;
@@ -47,22 +60,42 @@ public:
   bool QueueCommand(const std::string& name,
                     const std::vector<std::string>& args = {})
   {
-    std::unordered_map<std::string, CommandFn>::iterator it =
+    std::unordered_map<std::string, Registration>::iterator it =
       commands.find(name);
     if (it != commands.end()) {
-      queue.push_back({ it->second, args });
+      queue.push_back({ it->second.fn, args, it->second.identity });
       return true;
     }
     return false;
   }
-  void ClearQueue() { queue.clear(); }
+  void ClearQueue()
+  {
+    queue.clear();
+    cancelBatch = executing;
+  }
   void ExecuteQueue()
   {
-    for (auto& qc : queue) {
-      if (qc.fn)
-        qc.fn(qc.args);
+    if (executing) {
+      return;
     }
-    queue.clear();
+    std::vector<QueuedCommand> batch;
+    batch.swap(queue);
+    executing = true;
+    cancelBatch = false;
+    try {
+      for (const QueuedCommand& command : batch) {
+        if (cancelBatch) {
+          break;
+        }
+        if (!command.identity.expired() && command.fn) {
+          command.fn(command.args);
+        }
+      }
+    } catch (...) {
+      executing = false;
+      throw;
+    }
+    executing = false;
   }
   bool HasCommand(const std::string& name) const
   {
@@ -89,7 +122,7 @@ public:
   std::vector<std::string> GetCommandNames() const
   {
     std::vector<std::string> names;
-    for (const std::pair<const std::string, CommandFn>& command : commands) {
+    for (const std::pair<const std::string, Registration>& command : commands) {
       names.push_back(command.first);
     }
     std::sort(names.begin(), names.end());

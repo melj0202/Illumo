@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <cstdint>
@@ -11,6 +12,7 @@ class Renderer;
 
 struct SimulatorConfiguration
 {
+  std::string family = "LIFE_LIKE_BINARY";
   std::string ruleSet = "GAME_OF_LIFE";
   std::int64_t worldChunkWidth = 0;
   std::int64_t worldChunkHeight = 0;
@@ -18,9 +20,13 @@ struct SimulatorConfiguration
   double speedFactor = 1.0;
   double fadeSpeed = 6.0;
   bool vsync = true;
+  bool editHints = true;
   bool fullscreen = false;
   long uiScale = 1;
   long msaa = 4;
+  long fpsCap = 60;
+  bool showInspector = false;
+  bool reducedUiMotion = false;
 };
 
 enum class ConfigurationMenuAction
@@ -52,6 +58,7 @@ public:
   void setError(const std::string& message);
   GameVisual& getVisual() { return visual; }
 
+  int getFirstVisibleRowForTesting() const { return firstVisibleRow; }
   int getSelectedRowForTesting() const { return selectedRow; }
   float getAnimationProgressForTesting() const;
   float getSelectionPositionForTesting() const;
@@ -65,42 +72,45 @@ public:
   bool AppendCommands(Renderer* renderer) override;
 
 private:
-  static const int kRulesetRow = 0;
-  static const int kWorldWidthRow = 1;
-  static const int kWorldHeightRow = 2;
-  static const int kTpsRow = 3;
-  static const int kSpeedRow = 4;
-  static const int kFadeRow = 5;
-  static const int kVsyncRow = 6;
-  static const int kFullscreenRow = 7;
-  static const int kUiScaleRow = 8;
-  static const int kMsaaRow = 9;
-  static const int kApplyRow = 10;
-  static const int kCancelRow = 11;
-  static const int kExitRow = 12;
-  static const int kRowCount = 13;
-  static constexpr float kOpenAnimationSeconds = 0.36f;
-  static constexpr float kSelectionAnimationSeconds = 0.14f;
-  static constexpr float kValuePulseSeconds = 0.20f;
+  static const int kFamilyRow = 0;
+  static const int kRulesetRow = 1;
+  static const int kWorldWidthRow = 2;
+  static const int kWorldHeightRow = 3;
+  static const int kTpsRow = 4;
+  static const int kSpeedRow = 5;
+  static const int kFadeRow = 6;
+  static const int kVsyncRow = 7;
+  static const int kFullscreenRow = 8;
+  static const int kUiScaleRow = 9;
+  static const int kMsaaRow = 10;
+  static const int kFpsCapRow = 11;
+  static const int kInspectorRow = 12;
+  static const int kReducedMotionRow = 13;
+  static const int kEditHintsRow = 14;
+  static const int kApplyRow = 15;
+  static const int kCancelRow = 16;
+  static const int kExitRow = 17;
+  static const int kRowCount = 18;
 
   IRenderWindow* window;
   Renderer* renderer;
   GameVisual visual;
+  GuiMenuAnimator animator;
+  GuiPointerTracker pointer;
   bool openState;
-  bool mouseWasDown;
   bool replaceFieldOnType;
   int selectedRow;
-  float animationElapsed;
-  float selectionFromRow;
-  float selectionAnimationElapsed;
-  float valuePulseElapsed;
   float panelX;
   float panelY;
   float panelWidth;
   float panelHeight;
   float firstRowY;
   float rowHeight;
+  int firstVisibleRow = 0;
+  int visibleRows = kRowCount;
+  GuiPanelFit panelFit;
 
+  std::string family;
   std::string ruleSet;
   std::string worldWidthText;
   std::string worldHeightText;
@@ -108,20 +118,19 @@ private:
   std::string speedText;
   std::string fadeText;
   bool vsync;
+  bool editHints = true;
   bool fullscreen;
   long uiScale;
   long msaa;
+  std::string fpsCapText;
+  bool showInspector = false;
+  bool reducedUiMotion = false;
   std::string errorMessage;
 
   void updateLayout();
   void rebuildVisual();
-  float animationProgress() const;
-  float panelReveal() const;
-  float panelOffsetY() const;
   float rowReveal(int row) const;
   float selectionRowPosition() const;
-  float valuePulse() const;
-  void triggerValuePulse();
   void selectRow(int row);
   void cycleSelected(int direction);
   ConfigurationMenuAction activateSelected();

@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <memory>
 #include <new>
 #include <vector>
 
@@ -19,7 +21,18 @@ public:
 private:
   struct Chunk
   {
-    char* data = nullptr;
+    size_t count;
+    T* data;
+    explicit Chunk(size_t blocks)
+      : count(blocks)
+      , data(std::allocator<T>{}.allocate(blocks))
+    {
+    }
+    ~Chunk() { std::allocator<T>{}.deallocate(data, count); }
+    Chunk(const Chunk&) = delete;
+    Chunk& operator=(const Chunk&) = delete;
+    Chunk(Chunk&&) = delete;
+    Chunk& operator=(Chunk&&) = delete;
     Chunk* next = nullptr;
   };
 
@@ -33,8 +46,7 @@ private:
   void populateFreeList(Chunk* targetChunk)
   {
     for (size_t i = 0; i < numBlocks; ++i) {
-      freeList.push_back(
-        reinterpret_cast<T*>(targetChunk->data + (i * blockSize)));
+      freeList.push_back(targetChunk->data + i);
     }
   }
 
@@ -43,8 +55,7 @@ private:
     if (numChunks >= kMaxChunks) {
       return false;
     }
-    Chunk* nextChunk = new Chunk();
-    nextChunk->data = new char[blockSize * numBlocks];
+    Chunk* nextChunk = new Chunk(numBlocks);
     nextChunk->next = nullptr;
     chunk->next = nextChunk;
     chunk = nextChunk;
@@ -59,8 +70,13 @@ public:
     : blockSize(sizeof(T))
     , numBlocks(blocksPerChunk == 0 ? 1 : blocksPerChunk)
   {
-    chunk = new Chunk();
-    chunk->data = new char[blockSize * numBlocks];
+    if (numBlocks > std::numeric_limits<size_t>::max() / blockSize ||
+        numBlocks > std::numeric_limits<size_t>::max() / kMaxChunks) {
+      throw std::bad_array_new_length();
+    }
+    // Growth only populates an empty list; reserve before owning any chunks.
+    freeList.reserve(numBlocks);
+    chunk = new Chunk(numBlocks);
     chunk->next = nullptr;
     chunkHead = chunk;
     numChunks = 1;
@@ -72,7 +88,6 @@ public:
     Chunk* current = chunkHead;
     while (current != nullptr) {
       Chunk* next = current->next;
-      delete[] current->data;
       delete current;
       current = next;
     }
@@ -80,6 +95,8 @@ public:
 
   ChainedPoolAlloc(const ChainedPoolAlloc&) = delete;
   ChainedPoolAlloc& operator=(const ChainedPoolAlloc&) = delete;
+  ChainedPoolAlloc(ChainedPoolAlloc&&) = delete;
+  ChainedPoolAlloc& operator=(ChainedPoolAlloc&&) = delete;
 
   // Returns uninitialized storage for one T, or nullptr when exhausted.
   T* Allocate()
@@ -111,7 +128,6 @@ public:
     Chunk* current = chunkHead->next;
     while (current != nullptr) {
       Chunk* next = current->next;
-      delete[] current->data;
       delete current;
       current = next;
     }

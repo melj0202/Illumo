@@ -1,0 +1,9 @@
+{
+  "windowWidth": "1280",
+  "windowHeight": "720",
+  "windowTitle": "Illumo - Spinning Cube",
+  "vsync": "1",
+  "cubeRotationSpeed": "1.2",
+  "lightingEnabled": "1",
+  "ambientIntensity": "0.3"
+}

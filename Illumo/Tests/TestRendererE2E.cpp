@@ -1,10 +1,12 @@
 // End-to-end drawable → Renderer → MockBackend token tests (no OpenGL).
 // Linked into the current IllumoTests target with TestMockBackend.cpp.
 
+#include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
+#include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/EnvVars.h>
@@ -302,11 +304,15 @@ testRenderSceneTokenDrawable()
 
   // Frame setup prefix
   const CommandType prefix[] = {
+    CommandType::SetFramebuffer,
     CommandType::SetViewport,
     CommandType::SetPipelineState,
     CommandType::ClearScreen,
   };
-  e2eTrue(mock.nonEmptyStartsWith(prefix, 3), "viewport/pipeline/clear prefix");
+  e2eTrue(mock.nonEmptyStartsWith(prefix, 4),
+          "target/viewport/pipeline/clear prefix");
+  e2eTrue(!mock.getLastNonEmptySubmitted(0).bindFramebuffer.handle.isValid(),
+          "frame setup explicitly selects screen target");
 
   e2eEqSize(mock.countNonEmptyOfType(CommandType::DrawIndexed),
             1u,
@@ -319,8 +325,8 @@ testRenderSceneTokenDrawable()
 
   // Viewport matches null window
   e2eEqInt(
-    mock.getLastNonEmptySubmitted(0).viewport.width, 800, "viewport width 800");
-  e2eEqInt(mock.getLastNonEmptySubmitted(0).viewport.height,
+    mock.getLastNonEmptySubmitted(1).viewport.width, 800, "viewport width 800");
+  e2eEqInt(mock.getLastNonEmptySubmitted(1).viewport.height,
            600,
            "viewport height 600");
 
@@ -535,7 +541,107 @@ testRenderSceneLayerPassPipeline()
 }
 
 static void
-testRenderSceneShadowPassPrecedesCustomTarget()
+testOrdinaryLayerTargetRestore()
+{
+  E2ENullRenderWindow window(1280, 720);
+  Camera camera;
+  MockBackend backend;
+  backend.Initialize();
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  Scene scene(&window, &camera);
+  RenderPassDesc pass;
+  pass.useScreenTarget = false;
+  pass.pooledTargetName = "small-world";
+  pass.targetDesc.name = pass.pooledTargetName;
+  pass.targetDesc.windowRelative = false;
+  pass.targetDesc.fixedWidth = 32;
+  pass.targetDesc.fixedHeight = 24;
+  pass.targetDesc.colorAttachments.push_back(FramebufferAttachmentDesc{});
+  pass.customViewport = true;
+  pass.viewportX = 2;
+  pass.viewportY = 3;
+  pass.viewportWidth = 20;
+  pass.viewportHeight = 15;
+  scene.SetLayerPasses(RenderLayerId::World, { pass });
+  TokenQuadDrawable world;
+  TokenQuadDrawable ui;
+  TokenQuadDrawable debug;
+  world.enroll(&renderer);
+  ui.enroll(&renderer);
+  debug.enroll(&renderer);
+  scene.AddDrawable(&world, RenderLayerId::World);
+  scene.AddDrawable(&ui, RenderLayerId::UI);
+  scene.AddDrawable(&debug, RenderLayerId::Debug);
+  renderer.RenderScene(&scene, &camera);
+  bool targetKnown = false;
+  FramebufferHandle target;
+  std::array<int, 4> viewport{};
+  int draws = 0;
+  bool sawClear = false;
+  for (size_t i = 0; i < backend.getLastSubmittedCount(); ++i) {
+    const RenderCommand& command = backend.getLastSubmitted(i);
+    if (command.commandType == CommandType::SetFramebuffer) {
+      target = command.bindFramebuffer.handle;
+      targetKnown = true;
+    } else if (command.commandType == CommandType::SetViewport) {
+      viewport = { command.viewport.x,
+                   command.viewport.y,
+                   command.viewport.width,
+                   command.viewport.height };
+    } else if (command.commandType == CommandType::ClearScreen && !sawClear) {
+      e2eTrue(targetKnown && !target.isValid() &&
+                viewport == std::array<int, 4>{ 0, 0, 1280, 720 },
+              "initial clear explicitly targets the full screen");
+      sawClear = true;
+    } else if (command.commandType == CommandType::DrawIndexed) {
+      e2eTrue(draws == 0 ? target.isValid() &&
+                             viewport == std::array<int, 4>{ 2, 3, 20, 15 }
+                         : targetKnown && !target.isValid() &&
+                             viewport == std::array<int, 4>{ 0, 0, 1280, 720 },
+              "each layer draws to its intended framebuffer and viewport");
+      ++draws;
+    }
+  }
+  e2eTrue(sawClear && draws == 3, "clear and all three layers inspected");
+}
+
+static void
+testPassClearMasks()
+{
+  E2ENullRenderWindow window(128, 128);
+  Camera camera;
+  MockBackend backend;
+  backend.Initialize();
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  for (int mask = 0; mask < 4; ++mask) {
+    Scene scene(&window, &camera);
+    RenderPassDesc pass;
+    pass.clear.clearColor = (mask & 1) != 0;
+    pass.clear.clearDepth = (mask & 2) != 0;
+    pass.clear.clearDepthValue = 0.25f;
+    scene.SetLayerPasses(RenderLayerId::World, { pass });
+    renderer.RenderScene(&scene, &camera);
+    e2eEqSize(backend.countSubmittedOfType(CommandType::ClearScreen),
+              1,
+              "only initial frame setup clears both buffers");
+    e2eEqSize(backend.countSubmittedOfType(CommandType::ClearColorBuffer),
+              (mask & 1) != 0 ? 1 : 0,
+              "pass color clear matches mask");
+    e2eEqSize(backend.countSubmittedOfType(CommandType::ClearDepthBuffer),
+              (mask & 2) != 0 ? 1 : 0,
+              "pass depth clear matches mask");
+    for (size_t i = 0; i < backend.getLastSubmittedCount(); ++i) {
+      const RenderCommand& command = backend.getLastSubmitted(i);
+      if (command.commandType == CommandType::ClearDepthBuffer) {
+        e2eTrue(command.clearDepthValue == 0.25f,
+                "pass preserves requested depth clear value");
+      }
+    }
+  }
+}
+
+static void
+testRenderSceneMeshVisualRestoresPassTarget()
 {
   std::printf(
     "\n--- e2e: scene shadow pass precedes custom world target ---\n");
@@ -642,15 +748,16 @@ testRenderSceneShadowPassPrecedesCustomTarget()
   e2eTrue(sawLinePrevMvp, "lines emit uPrevMVP uniform");
   e2eTrue(sawLineMotionBlur, "lines emit uMotionBlurEnabled uniform");
 
-  e2eTrue(boundFbos.size() >= 4, "at least 4 framebuffer binds submitted");
-  if (boundFbos.size() >= 4) {
-    e2eTrue(boundFbos[0].isValid() && boundFbos[0] != pooledTarget.fboHandle,
-            "scene pass binds the shared shadow FBO first");
-    e2eTrue(!boundFbos[1].isValid(),
-            "scene pass restores the default target before layer passes");
-    e2eTrue(boundFbos[2] == pooledTarget.fboHandle,
-            "custom World geometry then binds its target FBO");
-    e2eTrue(!boundFbos[3].isValid(), "post-process pass binds screen 0");
+  e2eTrue(boundFbos.size() >= 5, "at least 5 framebuffer binds submitted");
+  if (boundFbos.size() >= 5) {
+    e2eTrue(!boundFbos[0].isValid(), "frame clear binds screen first");
+    e2eTrue(boundFbos[1] == pooledTarget.fboHandle,
+            "pass initially binds target FBO");
+    e2eTrue(boundFbos[2].isValid() && boundFbos[2] != pooledTarget.fboHandle,
+            "shadow pass binds shadow FBO");
+    e2eTrue(boundFbos[3] == pooledTarget.fboHandle,
+            "MeshVisual restored target FBO, not screen 0");
+    e2eTrue(!boundFbos[4].isValid(), "post-process pass binds screen 0");
   }
 }
 
@@ -696,6 +803,212 @@ testRenderTargetPoolResizing()
           "releaseAll destroys active FBO");
 }
 
+static void
+testRendererSkyboxVisual()
+{
+  std::printf("\n--- e2e: SkyboxVisual token emission ---\n");
+  E2ENullRenderWindow window(1280, 720);
+  MockBackend backend;
+  backend.Initialize();
+  Camera camera;
+  camera.setPerspective(60.0f, 0.1f, 1000.0f);
+  camera.setProjectionType(ProjectionType::Perspective);
+  camera.lookAt(glm::vec3(0.0f, 0.0f, 5.0f),
+                glm::vec3(0.0f, 0.0f, 0.0f),
+                glm::vec3(0.0f, 1.0f, 0.0f));
+
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  renderer.ensureBuiltinStyles();
+
+  std::array<unsigned char, 4> px = { 100, 150, 200, 255 };
+  std::array<const unsigned char*, 6> faces = {
+    px.data(), px.data(), px.data(), px.data(), px.data(), px.data()
+  };
+  TextureHandle cubemap = renderer.enrollCubemap(faces, 1, 1, 4);
+  e2eTrue(cubemap.isValid(), "Cubemap texture handle should be valid");
+
+  SkyboxVisual skybox(cubemap);
+  skybox.prepare(&renderer);
+
+  Scene scene(&window, &camera);
+  scene.AddDrawable(&skybox, RenderLayerId::World);
+
+  renderer.RenderScene(&scene, &camera);
+
+  bool foundTextureBind = false;
+  bool foundUniformViewProj = false;
+  bool foundDraw = false;
+
+  for (size_t i = 0; i < backend.getLastSubmittedCount(); ++i) {
+    const RenderCommand& cmd = backend.getLastSubmitted(i);
+    if (cmd.commandType == CommandType::SetTexture &&
+        cmd.bindTexture.handle == cubemap) {
+      foundTextureBind = true;
+    }
+    if (cmd.commandType == CommandType::SetUniformMat4 &&
+        std::strcmp(cmd.uniformMat4.name, "uViewProjection") == 0) {
+      foundUniformViewProj = true;
+    }
+    if (cmd.commandType == CommandType::DrawIndexed &&
+        cmd.drawIndexed.elementCount == 36) {
+      foundDraw = true;
+    }
+  }
+
+  e2eTrue(foundTextureBind, "Skybox should bind cubemap texture");
+  e2eTrue(foundUniformViewProj, "Skybox should push uViewProjection matrix");
+  e2eTrue(foundDraw, "Skybox should issue DrawIndexed with 36 indices");
+}
+
+static void
+testAssetManagerCubemapFromCross()
+{
+  std::printf("\n--- e2e: AssetManager cubemap from cross ---\n");
+  E2ENullRenderWindow window(1280, 720);
+  MockBackend backend;
+  backend.Initialize();
+  Camera camera;
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  AssetManager assets(&renderer, false);
+
+  std::string skyboxPath = "Assets/Skybox/skybox-daylight.png";
+  if (!std::filesystem::exists(skyboxPath)) {
+    skyboxPath = (std::filesystem::path(__FILE__).parent_path().parent_path() /
+                  "Assets" / "Skybox" / "skybox-daylight.png")
+                   .string();
+  }
+
+  TextureHandle cubemap =
+    assets.acquireCubemapFromCross(skyboxPath, AssetLoadMode::Synchronous);
+  e2eTrue(cubemap.isValid(),
+          "Should load cubemap cross from skybox-daylight.png");
+
+  TextureInfo info = assets.getTextureInfo(cubemap);
+  e2eEqInt(info.width, 512, "Face width should be 512");
+  e2eEqInt(info.height, 512, "Face height should be 512");
+
+  TextureHandle cached =
+    assets.acquireCubemapFromCross(skyboxPath, AssetLoadMode::Synchronous);
+  e2eTrue(cached == cubemap, "Repeated acquire should return cached handle");
+}
+
+static int
+writeCubemapChannelFixture(const std::string& path, int channels, bool cross)
+{
+  // Uncompressed TGA supports native gray, gray-alpha, RGB, and RGBA.
+  const int width = cross ? 4 : 1;
+  const int height = cross ? 3 : 1;
+  unsigned char header[18]{};
+  header[2] = channels <= 2 ? 3 : 2;
+  header[12] = static_cast<unsigned char>(width);
+  header[14] = static_cast<unsigned char>(height);
+  header[16] = static_cast<unsigned char>(channels * 8);
+  header[17] = static_cast<unsigned char>(
+    0x20 | ((channels == 2 || channels == 4) ? 8 : 0));
+  std::ofstream file(path, std::ios::binary);
+  file.write(reinterpret_cast<const char*>(header), sizeof(header));
+  for (int pixel = 0; pixel < width * height; ++pixel) {
+    const unsigned char gray[] = { 40, 90 };
+    const unsigned char color[] = { 60, 50, 40, 90 };
+    file.write(reinterpret_cast<const char*>(channels <= 2 ? gray : color),
+               channels);
+  }
+  file.close();
+  return file ? 1 : 0;
+}
+
+class CubemapInspectBackend : public MockBackend
+{
+public:
+  bool ReplaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels) override
+  {
+    if (!MockBackend::ReplaceCubemap(handle, faces, width, height, channels)) {
+      return false;
+    }
+    receivedChannels = channels;
+    for (size_t i = 0; i < faces.size(); ++i) {
+      pixels[i].assign(faces[i],
+                       faces[i] + static_cast<size_t>(width) *
+                                    static_cast<size_t>(height) *
+                                    static_cast<size_t>(channels));
+    }
+    return true;
+  }
+  std::array<std::vector<unsigned char>, 6> pixels;
+  int receivedChannels = 0;
+  TextureHandle CreateCubemap(const std::array<const unsigned char*, 6>& faces,
+                              int width,
+                              int height,
+                              int channels) override
+  {
+    receivedChannels = channels;
+    for (std::size_t face = 0; face < faces.size(); ++face) {
+      pixels[face].assign(faces[face],
+                          faces[face] + static_cast<std::size_t>(width) *
+                                          static_cast<std::size_t>(height) *
+                                          static_cast<std::size_t>(channels));
+    }
+    return MockBackend::CreateCubemap(faces, width, height, channels);
+  }
+};
+
+static void
+testCubemapDecodedChannels()
+{
+  E2ENullRenderWindow window(128, 128);
+  CubemapInspectBackend backend;
+  backend.Initialize();
+  Camera camera;
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  AssetManager assets(&renderer, false);
+  const int channels[] = { 4, 3, 2, 1, 3, 4 };
+  std::array<std::string, 6> paths;
+  for (std::size_t face = 0; face < paths.size(); ++face) {
+    paths[face] = "cube-channel-" + std::to_string(face) + ".tga";
+    e2eTrue(writeCubemapChannelFixture(paths[face], channels[face], false) != 0,
+            "write native-channel face fixture");
+  }
+  const TextureHandle cube = assets.acquireCubemap(paths);
+  e2eTrue(cube.isValid() && backend.receivedChannels == 4,
+          "mixed native channels enroll as declared RGBA");
+  for (std::size_t face = 0; face < paths.size(); ++face) {
+    const std::vector<unsigned char> expected = {
+      40,
+      static_cast<unsigned char>(channels[face] <= 2 ? 40 : 50),
+      static_cast<unsigned char>(channels[face] <= 2 ? 40 : 60),
+      static_cast<unsigned char>(
+        channels[face] == 2 || channels[face] == 4 ? 90 : 255)
+    };
+    e2eTrue(backend.pixels[face] == expected,
+            "face bytes match RGBA conversion");
+    std::filesystem::remove(paths[face]);
+  }
+  for (int channelCount = 1; channelCount <= 4; ++channelCount) {
+    const std::string path =
+      "cube-cross-" + std::to_string(channelCount) + ".tga";
+    e2eTrue(writeCubemapChannelFixture(path, channelCount, true) != 0,
+            "write cross fixture");
+    const TextureHandle cross = assets.acquireCubemapFromCross(path);
+    e2eTrue(cross.isValid() && assets.getTextureInfo(cross).channels == 4,
+            "cross reports actual RGBA output channels");
+    const std::vector<unsigned char> expected = {
+      40,
+      static_cast<unsigned char>(channelCount <= 2 ? 40 : 50),
+      static_cast<unsigned char>(channelCount <= 2 ? 40 : 60),
+      static_cast<unsigned char>(channelCount == 2 || channelCount == 4 ? 90
+                                                                        : 255)
+    };
+    for (const std::vector<unsigned char>& face : backend.pixels) {
+      e2eTrue(face == expected, "cross extraction uses decoded RGBA stride");
+    }
+    std::filesystem::remove(path);
+  }
+}
+
 static int
 runRendererE2ECase(void (*testFunction)())
 {
@@ -704,9 +1017,188 @@ runRendererE2ECase(void (*testFunction)())
   return g_e2e_failures;
 }
 
+static void
+testCubemapReload()
+{
+  E2ENullRenderWindow window(128, 128);
+  CubemapInspectBackend backend;
+  backend.Initialize();
+  Camera camera;
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  AssetManager assets(&renderer, false);
+  assets.setHotReloadEnabled(false);
+  std::array<std::string, 6> paths;
+  for (size_t i = 0; i < paths.size(); ++i) {
+    paths[i] = "cube-reload-" + std::to_string(i) + ".tga";
+    e2eTrue(writeCubemapChannelFixture(paths[i], 4, false) != 0,
+            "write reload face");
+  }
+  const TextureHandle cube = assets.acquireCubemap(paths);
+  e2eTrue(cube.isValid() && assets.getState(cube).revision == 1,
+          "initial cubemap has published revision");
+  for (size_t i = 0; i < paths.size(); ++i) {
+    writeCubemapChannelFixture(paths[i], 1, false);
+    e2eTrue(assets.reload(paths[i]) == 1,
+            "every canonical face path triggers reload");
+    assets.completePendingForTests();
+    e2eTrue(assets.getState(cube).state == AssetState::Ready &&
+              assets.getState(cube).revision == i + 2 &&
+              backend.pixels[i] ==
+                std::vector<unsigned char>({ 40, 40, 40, 255 }),
+            "face reload retains kind and publishes new RGBA pixels");
+  }
+  const uint64_t revision = assets.getState(cube).revision;
+  const std::array<std::vector<unsigned char>, 6> previous = backend.pixels;
+  std::filesystem::remove(paths[4]);
+  e2eTrue(assets.reloadAll() == 1, "reloadAll includes cubemap");
+  assets.completePendingForTests();
+  e2eTrue(assets.getState(cube).state == AssetState::Ready &&
+            assets.getState(cube).revision == revision &&
+            !assets.getState(cube).lastError.empty() &&
+            backend.pixels == previous,
+          "missing face retains last valid revision and GPU data");
+  writeCubemapChannelFixture(paths[4], 4, true);
+  assets.reload(cube);
+  assets.completePendingForTests();
+  e2eTrue(assets.getState(cube).revision == revision &&
+            backend.pixels == previous,
+          "nonsquare face rejects complete reload transaction");
+  writeCubemapChannelFixture(paths[4], 4, false);
+  backend.setRejectNextTextureReplacement(true);
+  assets.reload(cube);
+  assets.completePendingForTests();
+  e2eTrue(assets.getState(cube).revision == revision &&
+            backend.pixels == previous,
+          "backend rejection retains prior cubemap");
+  assets.reload(cube);
+  assets.completePendingForTests();
+  e2eTrue(assets.getState(cube).revision == revision + 1 &&
+            assets.getState(cube).lastError.empty(),
+          "valid retry recovers");
+  std::filesystem::last_write_time(paths[5],
+                                   std::filesystem::last_write_time(paths[5]) +
+                                     std::chrono::seconds(2));
+  assets.setHotReloadEnabled(true);
+  assets.pump();
+  e2eTrue(assets.getState(cube).reloadPending,
+          "timestamp polling observes the sixth face dependency");
+  assets.setHotReloadEnabled(false);
+  assets.completePendingForTests();
+  e2eTrue(assets.getState(cube).revision == revision + 2,
+          "polled reload publishes a complete cubemap");
+  assets.reload(cube);
+  assets.releaseTexture(cube);
+  assets.completePendingForTests();
+  e2eTrue(!backend.IsTextureValid(cube),
+          "released queued cubemap is not resurrected");
+  for (const std::string& path : paths) {
+    std::filesystem::remove(path);
+  }
+  const std::string crossPath = "cube-reload-cross.tga";
+  writeCubemapChannelFixture(crossPath, 4, true);
+  const TextureHandle cross = assets.acquireCubemapFromCross(crossPath);
+  e2eTrue(assets.reload(std::string{}) == 0 &&
+            !assets.getState(cross).reloadPending,
+          "empty reload path does not match unused source slots");
+  writeCubemapChannelFixture(crossPath, 1, true);
+  e2eTrue(assets.reload(crossPath) == 1, "cross path triggers cubemap reload");
+  assets.completePendingForTests();
+  e2eTrue(assets.getState(cross).revision == 2 &&
+            backend.pixels[5] ==
+              std::vector<unsigned char>({ 40, 40, 40, 255 }),
+          "cross reload keeps cubemap faces and RGBA stride");
+  std::filesystem::remove(crossPath);
+}
+
+static void
+testCubemapReplacement()
+{
+  E2ENullRenderWindow window(128, 128);
+  MockBackend backend;
+  backend.Initialize();
+  Camera camera;
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  const unsigned char pixel[4] = { 1, 2, 3, 255 };
+  std::array<const unsigned char*, 6> faces;
+  faces.fill(pixel);
+  const TextureHandle cube = renderer.enrollCubemap(faces, 1, 1, 4);
+  const TextureHandle flat = renderer.enrollTexture(pixel, 1, 1);
+  e2eTrue(!renderer.replaceTexture(cube, pixel, 1, 1, 4, TextureOptions{}),
+          "2D replacement rejects cubemap kind");
+  e2eTrue(!renderer.replaceCubemap(flat, faces, 1, 1, 4),
+          "cubemap replacement rejects 2D kind");
+  e2eTrue(renderer.replaceCubemap(cube, faces, 1, 1, 4),
+          "cubemap replacement retains valid handle");
+  faces[3] = nullptr;
+  e2eTrue(!renderer.replaceCubemap(cube, faces, 1, 1, 4),
+          "missing face rejects replacement");
+  faces[3] = pixel;
+  e2eTrue(!renderer.replaceCubemap(cube, faces, 2, 1, 4),
+          "nonsquare replacement rejected");
+  e2eTrue(!renderer.replaceCubemap(cube, faces, 1, 1, 2),
+          "unsupported raw channels rejected");
+  renderer.destroyTexture(cube);
+  const TextureHandle reused = renderer.enrollTexture(pixel, 1, 1);
+  e2eTrue(!renderer.replaceCubemap(cube, faces, 1, 1, 4),
+          "stale generation rejected after slot reuse");
+  e2eTrue(renderer.replaceTexture(reused, pixel, 1, 1, 4, TextureOptions{}),
+          "slot reuse does not retain cubemap kind");
+}
+
+static void
+testUniformMatrixRetention()
+{
+  E2ENullRenderWindow window(128, 128);
+  MockBackend backend;
+  backend.Initialize();
+  Camera camera;
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+
+  renderer.BeginFrame();
+  constexpr size_t matrixCount = 257;
+  for (size_t matrix = 0; matrix < matrixCount; ++matrix) {
+    float value[16];
+    for (size_t element = 0; element < 16; ++element) {
+      value[element] = static_cast<float>(matrix * 100 + element);
+    }
+    renderer.pushUniformMat4("uMVP", value);
+  }
+  renderer.EndFrame();
+
+  e2eEqSize(backend.getLastNonEmptySubmittedCount(),
+            matrixCount,
+            "matrix tokens survive retained-storage chunk growth");
+  bool valuesMatch = true;
+  for (size_t matrix = 0; matrix < matrixCount; ++matrix) {
+    const RenderCommand& command = backend.getLastNonEmptySubmitted(matrix);
+    valuesMatch =
+      valuesMatch && command.commandType == CommandType::SetUniformMat4 &&
+      command.uniformMat4.value != nullptr &&
+      command.uniformMat4.value[0] == static_cast<float>(matrix * 100) &&
+      command.uniformMat4.value[15] == static_cast<float>(matrix * 100 + 15);
+  }
+  e2eTrue(valuesMatch, "retained matrix values match submitted tokens");
+
+  renderer.BeginFrame();
+  renderer.pushUniformMat4("uMVP", nullptr);
+  renderer.EndFrame();
+  e2eTrue(!renderer.frameError().empty(), "null matrix reports a frame error");
+}
+
 void
 registerRendererE2ETests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Renderer.PassClearMasks",
+               []() { return runRendererE2ECase(testPassClearMasks); });
+  registry.add("Illumo.Renderer.OrdinaryLayerTargetRestore", []() {
+    return runRendererE2ECase(testOrdinaryLayerTargetRestore);
+  });
+  registry.add("Illumo.AssetManager.CubemapReload",
+               []() { return runRendererE2ECase(testCubemapReload); });
+  registry.add("Illumo.Renderer.CubemapReplacement",
+               []() { return runRendererE2ECase(testCubemapReplacement); });
+  registry.add("Illumo.AssetManager.CubemapDecodedChannels",
+               []() { return runRendererE2ECase(testCubemapDecodedChannels); });
   registry.add("Illumo.Renderer.InjectsMockBackend", []() {
     return runRendererE2ECase(testRendererInjectsMockBackend);
   });
@@ -731,5 +1223,12 @@ registerRendererE2ETests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Renderer.RenderTargetPoolResizing", []() {
     return runRendererE2ECase(testRenderTargetPoolResizing);
+  });
+  registry.add("Illumo.Renderer.SkyboxVisual",
+               []() { return runRendererE2ECase(testRendererSkyboxVisual); });
+  registry.add("Illumo.Renderer.UniformMatrixRetention",
+               []() { return runRendererE2ECase(testUniformMatrixRetention); });
+  registry.add("Illumo.AssetManager.CubemapLoading", []() {
+    return runRendererE2ECase(testAssetManagerCubemapFromCross);
   });
 }

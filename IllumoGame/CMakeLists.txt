@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 add_library(IllumoGameCore STATIC
   Source/Game/BuiltinPatterns.cpp
@@ -16,24 +16,25 @@ add_library(IllumoGameCore STATIC
   Source/Game/IllumoGameApplication.cpp
   Source/Game/IllumoGameConfig.cpp
   Source/Game/MainMenuModule.cpp
+  Source/Game/NewSimulationMenu.cpp
   Source/Game/PatternCodec.cpp
+  Source/Game/RuleCatalogLoader.cpp
+  Source/Game/RulesetWorkshopMenu.cpp
   Source/Game/SimulationRunner.cpp
   Source/Game/SparseCellGrid.cpp
   Source/Game/SparseWorkerPool.cpp
   Source/Rulesets/BriansBrainRuleSet.cpp
-  Source/Rulesets/DayAndNightRuleSet.cpp
-  Source/Rulesets/GameOfLifeRuleSet.cpp
-  Source/Rulesets/HighlifeRuleSet.cpp
-  Source/Rulesets/LifeWithoutDeathRuleSet.cpp
-  Source/Rulesets/Rule184RuleSet.cpp
-  Source/Rulesets/Rule90RuleSet.cpp
+  Source/Rulesets/DataRuleSet.cpp
+  Source/Rulesets/Elementary1DRuleSet.cpp
+  Source/Rulesets/LifeLikeRuleSet.cpp
   Source/Rulesets/RuleSet.cpp
-  Source/Rulesets/SeedsRuleSet.cpp
+  Source/Rulesets/RuleSetRegistry.cpp
   Source/Rulesets/WireworldRuleSet.cpp
 )
 target_include_directories(IllumoGameCore PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_include_directories(IllumoGameCore SYSTEM PRIVATE
+  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/json/single_include"
   "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
 target_link_libraries(IllumoGameCore PUBLIC Illumo::Illumo)
 illumo_configure_runtime_target(IllumoGameCore)
@@ -44,12 +45,17 @@ illumo_configure_runtime_target(IllumoGame)
 illumo_stage_runtime(IllumoGame)
 illumo_stage_default_file(IllumoGame
   "${CMAKE_CURRENT_SOURCE_DIR}/envvars.json" envvars.json)
+illumo_stage_runtime_file(IllumoGame
+  "${CMAKE_CURRENT_SOURCE_DIR}/rulesets.json" rulesets.json)
+illumo_stage_runtime_file(IllumoGame
+  "${CMAKE_CURRENT_SOURCE_DIR}/families.json" families.json)
 illumo_stage_msvc_asan(IllumoGame)
 
 if(BUILD_TESTING)
   add_executable(IllumoGameTests
     Tests/TestMain.cpp
     Tests/TestRuleSets.cpp
+    Tests/TestRuleCatalogLoader.cpp
     Tests/TestCellContext.cpp
     Tests/TestCanvasDomain.cpp
     Tests/TestDomainBoundary.cpp
@@ -74,5 +80,8 @@ if(BUILD_TESTING)
   illumo_configure_runtime_target(IllumoGameTests)
   illumo_discover_test_runner(IllumoGameTests IllumoGame)
   illumo_stage_msvc_asan(IllumoGameTests)
-  add_dependencies(IllumoGameTests IllumoGameRuntimeStage)
+  add_dependencies(IllumoGameTests
+    IllumoGameRuntimeStage
+    IllumoGame_rulesets_json_RuntimeStage
+    IllumoGame_families_json_RuntimeStage)
 endif()

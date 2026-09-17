@@ -13,6 +13,7 @@ ctest --test-dir build -C Release -L IllumoGame --output-on-failure
 ```
 
 Workspace coverage is configured from the repository root and merges this
-runner with `IllumoTests` before applying the 85% production-line gate. Native
+runner with `IllumoTests`, `IllEdTests`, and `IllMeshViewerTests` before applying
+the 85% production-line gate. Native
 dialogs, real-window behavior, and live OpenGL still require Windows smoke
 tests.

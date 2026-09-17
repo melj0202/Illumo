@@ -7,13 +7,8 @@
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/EnvVars.h>
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <limits>
-#include <vector>
 
 namespace {
 
@@ -242,6 +237,35 @@ Renderer::prepareShadowPass()
   return true;
 }
 
+const float*
+Renderer::retainUniformMatrix(const float* value)
+{
+  if (value == nullptr) {
+    return nullptr;
+  }
+  if (uniformMatrixCount >= MAX_UNIFORM_MATRICES) {
+    return nullptr;
+  }
+
+  const size_t chunkIndex = uniformMatrixCount / UNIFORM_MATRICES_PER_CHUNK;
+  const size_t matrixIndex = uniformMatrixCount % UNIFORM_MATRICES_PER_CHUNK;
+  if (chunkIndex == uniformMatrixChunks.size()) {
+    uniformMatrixChunks.push_back(std::make_unique<UniformMatrixChunk>());
+  }
+
+  UniformMatrix& retained = (*uniformMatrixChunks[chunkIndex])[matrixIndex];
+  std::memcpy(retained.data(), value, retained.size() * sizeof(float));
+  uniformMatrixCount += 1;
+  return retained.data();
+}
+
+void
+Renderer::clearCommandQueue()
+{
+  _backend->ClearCommandQueue();
+  uniformMatrixCount = 0;
+}
+
 Renderer::Renderer(IRenderWindow* window,
                    EnvVars* envVars,
                    Camera* cam,
@@ -274,7 +298,7 @@ Renderer::Renderer(IRenderWindow* window,
 
 Renderer::~Renderer()
 {
-  releaseShadowResources();
+  _lifetimeIdentity.reset();
   _renderTargetPool.releaseAll();
   if (_ownedBackend) {
     _ownedBackend->Shutdown();
@@ -386,6 +410,25 @@ Renderer::enrollTexture(const unsigned char* data,
   return _backend->CreateTexture(data, width, height, channels, options);
 }
 
+TextureHandle
+Renderer::enrollCubemap(const std::array<const unsigned char*, 6>& facesData,
+                        const int width,
+                        const int height,
+                        int channels)
+{
+  return _backend->CreateCubemap(facesData, width, height, channels);
+}
+
+bool
+Renderer::replaceCubemap(TextureHandle handle,
+                         const std::array<const unsigned char*, 6>& faces,
+                         int width,
+                         int height,
+                         int channels)
+{
+  return _backend->ReplaceCubemap(handle, faces, width, height, channels);
+}
+
 bool
 Renderer::replaceTexture(TextureHandle handle,
                          const unsigned char* data,
@@ -439,18 +482,30 @@ Renderer::getTextureInfo(TextureHandle handle) const
 void
 Renderer::BeginFrame()
 {
+  m_frameError.clear();
   _backend->BeginFrame();
-  _backend->ClearCommandQueue();
+  clearCommandQueue();
   _currentPassFbo = FramebufferHandle{};
   const std::array<int, 2> dims =
     _window ? _window->getWindowDimensions() : std::array<int, 2>{ 0, 0 };
   _currentPassViewport = { 0, 0, dims[0], dims[1] };
+  currentScissorState = ScissorState{};
+  scissorStateStack.clear();
 }
 
 void
 Renderer::EndFrame()
 {
+  EndFrame(nullptr);
+}
+
+void
+Renderer::EndFrame(std::chrono::steady_clock::time_point* presentationStart)
+{
   _backend->SubmitCommandQueue();
+  if (presentationStart != nullptr) {
+    *presentationStart = std::chrono::steady_clock::now();
+  }
   _backend->EndFrame();
 }
 
@@ -487,8 +542,15 @@ Renderer::pushClearScreen(float r, float g, float b, float a)
 void
 Renderer::pushClearDepth()
 {
+  pushClearDepth(1.0f);
+}
+
+void
+Renderer::pushClearDepth(float value)
+{
   RenderCommand cmd;
   cmd.commandType = CommandType::ClearDepthBuffer;
+  cmd.clearDepthValue = value;
   _backend->PushToCommandQueue(cmd);
 }
 
@@ -609,12 +671,19 @@ Renderer::pushUniformVec4(const char* name, float x, float y, float z, float w)
 void
 Renderer::pushUniformMat4(const char* name, const float* m16)
 {
+  if (m16 == nullptr) {
+    reportFrameError("SetUniformMat4: null matrix value");
+    return;
+  }
+  const float* retained = retainUniformMatrix(m16);
+  if (retained == nullptr) {
+    reportFrameError("SetUniformMat4: retained matrix ceiling reached");
+    return;
+  }
   RenderCommand cmd;
   cmd.commandType = CommandType::SetUniformMat4;
   copyUniformName(cmd.uniformMat4.name, sizeof(cmd.uniformMat4.name), name);
-  if (m16) {
-    std::memcpy(cmd.uniformMat4.m, m16, 16 * sizeof(float));
-  }
+  cmd.uniformMat4.value = retained;
   _backend->PushToCommandQueue(cmd);
 }
 
@@ -631,14 +700,61 @@ Renderer::pushDrawIndexed(unsigned int elementCount, unsigned int firstIndex)
 void
 Renderer::pushScissor(bool enabled, int x, int y, int width, int height)
 {
+  currentScissorState.enabled = enabled;
+  currentScissorState.x = x;
+  currentScissorState.y = y;
+  currentScissorState.width = std::max(width, 0);
+  currentScissorState.height = std::max(height, 0);
   RenderCommand cmd;
   cmd.commandType = CommandType::SetScissorState;
   cmd.scissor.enabled = enabled;
   cmd.scissor.x = x;
   cmd.scissor.y = y;
-  cmd.scissor.width = width;
-  cmd.scissor.height = height;
+  cmd.scissor.width = currentScissorState.width;
+  cmd.scissor.height = currentScissorState.height;
   _backend->PushToCommandQueue(cmd);
+}
+
+void
+Renderer::pushClipRect(int x, int y, int width, int height)
+{
+  scissorStateStack.push_back(currentScissorState);
+  int clippedX = x;
+  int clippedY = y;
+  int clippedWidth = std::max(width, 0);
+  int clippedHeight = std::max(height, 0);
+  if (currentScissorState.enabled) {
+    const long long left = std::max(
+      static_cast<long long>(x), static_cast<long long>(currentScissorState.x));
+    const long long bottom = std::max(
+      static_cast<long long>(y), static_cast<long long>(currentScissorState.y));
+    const long long right =
+      std::min(static_cast<long long>(x) + clippedWidth,
+               static_cast<long long>(currentScissorState.x) +
+                 currentScissorState.width);
+    const long long top =
+      std::min(static_cast<long long>(y) + clippedHeight,
+               static_cast<long long>(currentScissorState.y) +
+                 currentScissorState.height);
+    clippedX = static_cast<int>(left);
+    clippedY = static_cast<int>(bottom);
+    clippedWidth = static_cast<int>(std::max(0LL, right - left));
+    clippedHeight = static_cast<int>(std::max(0LL, top - bottom));
+  }
+  pushScissor(true, clippedX, clippedY, clippedWidth, clippedHeight);
+}
+
+void
+Renderer::popClipRect()
+{
+  if (scissorStateStack.empty()) {
+    reportFrameError("Scissor clip stack underflow");
+    return;
+  }
+  const ScissorState previous = scissorStateStack.back();
+  scissorStateStack.pop_back();
+  pushScissor(
+    previous.enabled, previous.x, previous.y, previous.width, previous.height);
 }
 
 void
@@ -676,6 +792,21 @@ Renderer::pushUpdateBuffer(MeshHandle meshHandle,
   cmd.updateBuffer.offsetBytes = offsetBytes;
   cmd.updateBuffer.sizeBytes = sizeBytes;
   cmd.updateBuffer.data = data;
+  _backend->PushToCommandQueue(cmd);
+}
+
+void
+Renderer::pushUpdateIndexBuffer(MeshHandle meshHandle,
+                                unsigned int offsetBytes,
+                                unsigned int sizeBytes,
+                                const void* data)
+{
+  RenderCommand cmd;
+  cmd.commandType = CommandType::UpdateIndexBuffer;
+  cmd.updateIndexBuffer.handle = meshHandle;
+  cmd.updateIndexBuffer.offsetBytes = offsetBytes;
+  cmd.updateIndexBuffer.sizeBytes = sizeBytes;
+  cmd.updateIndexBuffer.data = data;
   _backend->PushToCommandQueue(cmd);
 }
 
@@ -826,6 +957,7 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
 
   // Main rendering follows the shared world-shadow pass.
   const std::array<int, 2>& dims = frameContext.windowDimensions;
+  pushFramebuffer(FramebufferHandle{});
   pushViewport(0, 0, dims[0], dims[1]);
 
   PipelineState defaultState;
@@ -857,12 +989,22 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                                  0,
                                  frameContext.windowDimensions[0],
                                  frameContext.windowDimensions[1] };
+        pushFramebuffer(_currentPassFbo);
+        pushViewport(_currentPassViewport[0],
+                     _currentPassViewport[1],
+                     _currentPassViewport[2],
+                     _currentPassViewport[3]);
         for (size_t i = 0; i < list.size(); ++i) {
           DrawableBase* drawable = list[i];
           if (!drawable) {
             continue;
           }
           if (!drawable->AppendCommands(this)) {
+            if (m_strictSubmission) {
+              reportFrameError(
+                "Drawable did not emit a complete token submission");
+              continue;
+            }
             if (immediateList != nullptr && immediateCount < immediateCap) {
               immediateList[immediateCount] = drawable;
               immediateCount += 1;
@@ -906,21 +1048,14 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                        _currentPassViewport[2],
                        _currentPassViewport[3]);
 
-          if (pass.clear.clearColor && pass.clear.clearDepth) {
-            pushClearScreen(pass.clear.clearColorValue[0],
-                            pass.clear.clearColorValue[1],
-                            pass.clear.clearColorValue[2],
-                            pass.clear.clearColorValue[3]);
-          } else {
-            if (pass.clear.clearColor) {
-              pushClearScreen(pass.clear.clearColorValue[0],
-                              pass.clear.clearColorValue[1],
-                              pass.clear.clearColorValue[2],
-                              pass.clear.clearColorValue[3]);
-            }
-            if (pass.clear.clearDepth) {
-              pushClearDepth();
-            }
+          if (pass.clear.clearColor) {
+            pushClearColor(pass.clear.clearColorValue[0],
+                           pass.clear.clearColorValue[1],
+                           pass.clear.clearColorValue[2],
+                           pass.clear.clearColorValue[3]);
+          }
+          if (pass.clear.clearDepth) {
+            pushClearDepth(pass.clear.clearDepthValue);
           }
 
           if (pass.overridePipelineState) {
@@ -937,6 +1072,11 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                 continue;
               }
               if (!drawable->AppendCommands(this)) {
+                if (m_strictSubmission) {
+                  reportFrameError(
+                    "Drawable did not emit a complete token submission");
+                  continue;
+                }
                 if (immediateList != nullptr && immediateCount < immediateCap) {
                   immediateList[immediateCount] = drawable;
                   immediateCount += 1;
@@ -955,7 +1095,7 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
 
   // Submit clear + token drawables before any immediate overlays.
   _backend->SubmitCommandQueue();
-  _backend->ClearCommandQueue();
+  clearCommandQueue();
 
   for (size_t i = 0; i < immediateCount; ++i) {
     immediateList[i]->Draw();
@@ -1001,7 +1141,7 @@ Renderer::RenderProofQuad()
 {
   ensureProofResources();
 
-  _backend->ClearCommandQueue();
+  clearCommandQueue();
 
   std::array<int, 2> dims = _window->getWindowDimensions();
   pushViewport(0, 0, dims[0], dims[1]);
@@ -1027,5 +1167,5 @@ Renderer::RenderProofQuad()
   pushDrawIndexed(6, 0);
 
   _backend->SubmitCommandQueue();
-  _backend->ClearCommandQueue();
+  clearCommandQueue();
 }

@@ -11,7 +11,8 @@ Rulesets, simulator defaults, or product command policy to this runner.
 SceneGraph cases are `Illumo.SceneGraph.HandlesAndLifetime`,
 `Illumo.SceneGraph.HierarchyAndTransforms`, and
 `Illumo.SceneGraph.RenderExtraction`. MeshVisual cases are
-`Illumo.MeshVisual.DynamicMeshReuse`, `Illumo.MeshVisual.SpriteAndCube`,
+`Illumo.MeshVisual.DynamicMeshReuse`, `Illumo.MeshVisual.SharedMeshAsset`,
+`Illumo.MeshVisual.SpriteAndCube`,
 `Illumo.MeshVisual.Billboard`, `Illumo.MeshVisual.SceneAttachment`,
 `Illumo.MeshVisual.NewPrimitives`,
 `Illumo.MeshVisual.SceneShadowPassCoversVisibleSet`,

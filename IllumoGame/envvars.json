@@ -1,6 +1,8 @@
 {
  "CanvasX": "80",
  "CanvasY": "60",
+ "FamilyString": "LIFE_LIKE_BINARY",
+ "RuleSetString": "GAME_OF_LIFE",
  "ModeString": "GAME_OF_LIFE",
  "WorldChunksX": "0",
  "WorldChunksY": "0",
@@ -10,11 +12,15 @@
  "fullscreen": "0",
  "logLevel": "3",
  "showFPS": "1",
+ "showMemory": "0",
  "render3dTest": "0",
  "speedFactor": "1",
  "tps": "12",
  "vsync": "1",
  "cellFadeSpeed": "6",
  "uiScale": "1",
- "msaa": "4"
+ "msaa": "4",
+ "reducedUiMotion": "0",
+ "showInspector": "0",
+ "editHints": "1"
 }

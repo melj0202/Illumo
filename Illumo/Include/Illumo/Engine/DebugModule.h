@@ -4,25 +4,37 @@
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
 
+#include <memory>
+
+class DebugOverlayState;
+class FrameProfiler;
+class ProfilerOverlay;
+
 class DebugModule : public IModule
 {
 public:
-  DebugModule();
+  explicit DebugModule(FrameProfiler* profiler = nullptr);
   ~DebugModule();
+  DebugModule(const DebugModule&) = delete;
+  DebugModule& operator=(const DebugModule&) = delete;
+  DebugModule(DebugModule&&) = delete;
+  DebugModule& operator=(DebugModule&&) = delete;
   virtual bool Start(IllumoContext* context) override;
   void Update(double dt) override;
   void DispatchDrawables(Scene* scene) override;
   void Exit() override;
 
 private:
-  bool isShowFpsEnabled() const;
-  void updateFpsCounter(double dt);
+  FrameProfiler* m_profiler;
+  std::unique_ptr<ProfilerOverlay> m_profilerOverlay;
+  void updateDiagnostics(double dt);
   void updateWatermarkPosition();
   void registerRendererCommands();
   void unregisterRendererCommands();
   void createRendererDemo();
 
-  GLString* fpsLabel;
+  GLString* diagnosticsLabel;
+  std::unique_ptr<DebugOverlayState> diagnostics;
   GLString* watermarkLabel;
   GameVisual* rendererDemo;
   TextureHandle rendererDemoTexture{};
@@ -34,7 +46,4 @@ private:
   size_t rotatingSpriteIndex;
   bool rendererDemoEnabled;
   double rendererDemoRotation;
-  double fpsAccum;
-  int fpsFrames;
-  int fpsDisplay;
 };

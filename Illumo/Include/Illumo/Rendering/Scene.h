@@ -78,13 +78,24 @@ public:
     if (index >= renderLayerCount()) {
       return m_layerPasses[0];
     }
-    return m_layerPasses[index];
+    return m_layerPasses[index].empty() ? m_defaultLayerPasses[index]
+                                        : m_layerPasses[index];
   }
 
   bool hasCustomPasses(RenderLayerId layer) const
   {
     const unsigned index = renderLayerIndex(layer);
-    return (index < renderLayerCount()) && !m_layerPasses[index].empty();
+    return (index < renderLayerCount()) && !passesIn(layer).empty();
+  }
+
+  // Host defaults are fallbacks; nonempty application passes take precedence.
+  void SetDefaultLayerPasses(RenderLayerId layer,
+                             std::vector<RenderPassDesc> passes)
+  {
+    const unsigned index = renderLayerIndex(layer);
+    if (index < renderLayerCount()) {
+      m_defaultLayerPasses[index] = std::move(passes);
+    }
   }
 
   void ClearLayerPasses(RenderLayerId layer)
@@ -112,4 +123,7 @@ private:
   std::array<std::vector<RenderPassDesc>,
              static_cast<size_t>(RenderLayerId::Count)>
     m_layerPasses;
+  std::array<std::vector<RenderPassDesc>,
+             static_cast<size_t>(RenderLayerId::Count)>
+    m_defaultLayerPasses;
 };

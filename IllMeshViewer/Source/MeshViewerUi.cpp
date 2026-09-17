@@ -14,11 +14,11 @@ MeshViewerUi::MeshViewerUi(IRenderWindow* window, Renderer* renderer)
   , m_renderer(renderer)
   , m_visual(2048u)
   , m_fontSize(kDefaultFontSize)
-  , m_mouseWasDown(false)
   , m_consumedPress(false)
   , m_showGrid(true)
   , m_showWireframe(false)
   , m_showAxes(true)
+  , m_showSkybox(true)
   , m_yawDeg(45.0f)
   , m_pitchDeg(25.0f)
   , m_distance(3.5f)
@@ -41,11 +41,13 @@ MeshViewerUi::setMeshMetadata(const MeshMetadata& metadata)
 void
 MeshViewerUi::setDisplayOptions(bool showGrid,
                                 bool showWireframe,
-                                bool showAxes)
+                                bool showAxes,
+                                bool showSkybox)
 {
   m_showGrid = showGrid;
   m_showWireframe = showWireframe;
   m_showAxes = showAxes;
+  m_showSkybox = showSkybox;
 }
 
 void
@@ -72,12 +74,9 @@ MeshViewerUi::containsScreenPoint(float x, float y) const
   if (m_window == nullptr) {
     return false;
   }
-  const std::array<int, 2> dimensions = m_window->getWindowDimensions();
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(dimensions[0]) / (scale > 0.0f ? scale : 1.0f);
-  const float virtualHeight =
-    static_cast<float>(dimensions[1]) / (scale > 0.0f ? scale : 1.0f);
+  const GuiPanelFit view = GuiPanelLayout::viewport(m_window, m_renderer);
+  const float virtualWidth = view.virtualWidth;
+  const float virtualHeight = view.virtualHeight;
 
   const float fontScale = m_fontSize / kDefaultFontSize;
 
@@ -132,21 +131,16 @@ MeshViewerUi::update(InputManager* inputManager, float dt)
     return MeshViewerAction::None;
   }
 
-  const std::array<int, 2> dimensions = m_window->getWindowDimensions();
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(dimensions[0]) / (scale > 0.0f ? scale : 1.0f);
-  const float virtualHeight =
-    static_cast<float>(dimensions[1]) / (scale > 0.0f ? scale : 1.0f);
+  const GuiPanelFit view = GuiPanelLayout::viewport(m_window, m_renderer);
+  const float virtualWidth = view.virtualWidth;
+  const float virtualHeight = view.virtualHeight;
 
   float mouseX = 0.0f;
   float mouseY = 0.0f;
-  bool isDown = false;
   if (inputManager != nullptr) {
-    const std::array<double, 2> coords = m_window->getMouseCoords();
-    mouseX = static_cast<float>(coords[0]) / (scale > 0.0f ? scale : 1.0f);
-    mouseY = static_cast<float>(coords[1]) / (scale > 0.0f ? scale : 1.0f);
-    isDown = inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+    m_pointer.sample(m_window, inputManager, view.layoutScale);
+    mouseX = m_pointer.x();
+    mouseY = m_pointer.y();
   }
 
   // Update button hover and clicks
@@ -158,7 +152,7 @@ MeshViewerUi::update(InputManager* inputManager, float dt)
     if (GuiKit::isPointInRect(
           mouseX, mouseY, btn.x, btn.y, btn.width, btn.height)) {
       m_hoveredButton = static_cast<int>(i);
-      if (isDown && !m_mouseWasDown) {
+      if (m_pointer.clicked()) {
         m_consumedPress = true;
         triggeredAction = btn.action;
       }
@@ -166,11 +160,9 @@ MeshViewerUi::update(InputManager* inputManager, float dt)
     }
   }
 
-  if (isDown && !m_mouseWasDown && containsScreenPoint(mouseX, mouseY)) {
+  if (m_pointer.clicked() && containsScreenPoint(mouseX, mouseY)) {
     m_consumedPress = true;
   }
-
-  m_mouseWasDown = isDown;
 
   rebuildVisual(virtualWidth, virtualHeight);
   return triggeredAction;
@@ -267,6 +259,9 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
   const std::string axesLabel =
     isVeryCompact ? (m_showAxes ? "A:ON" : "A:OFF")
                   : (std::string("Axes: ") + (m_showAxes ? "ON" : "OFF"));
+  const std::string skyboxLabel =
+    isVeryCompact ? (m_showSkybox ? "S:ON" : "S:OFF")
+                  : (std::string("Sky: ") + (m_showSkybox ? "ON" : "OFF"));
 
   addButton(openLabel,
             MeshViewerAction::OpenMesh,
@@ -286,6 +281,10 @@ MeshViewerUi::rebuildVisual(float virtualWidth, float virtualHeight)
             MeshViewerAction::ToggleAxes,
             isVeryCompact ? 50.0f : 90.0f,
             m_showAxes);
+  addButton(skyboxLabel,
+            MeshViewerAction::ToggleSkybox,
+            isVeryCompact ? 50.0f : 90.0f,
+            m_showSkybox);
 
   // 2. Info Card / HUD (Top-Left under header)
   if (m_metadata.hasMesh) {

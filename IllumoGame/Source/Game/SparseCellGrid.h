@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <typeinfo>
 #include <unordered_map>
 #include <vector>
@@ -203,6 +204,10 @@ public:
   // Test-only override: 0 selects the adaptive production worker count.
   static void setWorkerOverrideForTesting(int workers);
   static int getWorkerOverrideForTesting();
+  void setElementaryWriteFailureForTesting(int successfulWrites)
+  {
+    m_elementaryWriteFailureCountdown = successfulWrites;
+  }
   // Test-only override: -1 forces full chunks, 0 selects adaptively, and 1
   // forces cell candidates.
   static void setCellCandidateOverrideForTesting(int mode);
@@ -401,6 +406,7 @@ private:
   std::uint64_t m_changedChunksRevision = 0u;
   bool m_changedChunksRevisionValid = false;
   const std::type_info* lastRuleType = nullptr;
+  std::string lastRuleTag;
   bool m_frontierInvalid = false;
   std::unique_ptr<SparseWorkerPool> workerPool;
   SparseAdvanceStats lastAdvanceStats;
@@ -414,6 +420,7 @@ private:
   bool m_countedChangeCoversStateChange = false;
   mutable std::unique_ptr<ChunkMemoState> m_chunkMemo;
   const SparseCellGrid* m_generationSourceGrid = nullptr;
+  int m_elementaryWriteFailureCountdown = -1;
   std::int64_t m_worldChunkWidth = 0;
   std::int64_t m_worldChunkHeight = 0;
 
@@ -510,6 +517,9 @@ private:
   std::size_t estimateCompleteAdvanceWork() const;
   bool advanceChangedFrontier(const RuleSet& ruleSet, bool useCandidateScratch);
   bool advanceImpl(const RuleSet& ruleSet, bool allowFrontier);
+  bool advanceStateHistogram(const RuleSet& ruleSet);
+  bool advanceExtendedRange(const RuleSet& ruleSet);
+  bool advanceDirectionalNeighborhood(const RuleSet& ruleSet);
   bool advanceToroidal(const RuleSet& ruleSet);
   bool advanceElementarySpaceTime(const RuleSet& ruleSet);
   void enrollToroidalCandidate(const CellAddress& address,

@@ -1,7 +1,7 @@
 #include "Rendering/BackendConfig.h"
-#include <Illumo/Engine/PresentationTiming.h>
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Services/InputContext.h>
@@ -12,12 +12,291 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "Engine/DebugOverlayState.h"
+#include "Engine/ProfilerOverlay.h"
+
 static TestCounters g;
+
+static FrameProfiler::TimePoint
+profilerTime(int milliseconds)
+{
+  return FrameProfiler::TimePoint{} + std::chrono::milliseconds(milliseconds);
+}
+
+static void
+testFrameProfilerAccounting()
+{
+  FrameProfiler profiler;
+  profiler.beginFrame(profilerTime(0));
+  profiler.mark(FramePhase::Input, profilerTime(2));
+  profiler.endFrame(profilerTime(10));
+  testEqInt(
+    g, static_cast<int>(profiler.sampleCount()), 0, "disabled does not record");
+  profiler.setEnabled(true);
+  profiler.beginFrame(profilerTime(0));
+  profiler.mark(FramePhase::Input, profilerTime(1));
+  profiler.mark(FramePhase::Commands, profilerTime(3));
+  profiler.mark(FramePhase::Presentation, profilerTime(7));
+  profiler.mark(FramePhase::Pacing, profilerTime(12));
+  profiler.endFrame(profilerTime(16));
+  profiler.endFrame(profilerTime(20));
+  const FrameProfiler::Sample sample = profiler.average();
+  testTrue(g,
+           sample[static_cast<size_t>(FramePhase::Other)] == 1.0,
+           "unmarked work is explicit Other time");
+  testTrue(g,
+           sample[static_cast<size_t>(FramePhase::Input)] == 2.0,
+           "input time is exclusive");
+  testTrue(g,
+           sample[static_cast<size_t>(FramePhase::Commands)] == 4.0,
+           "submission excludes presentation");
+  testTrue(g,
+           sample[static_cast<size_t>(FramePhase::Presentation)] == 5.0,
+           "presentation has its own elapsed time");
+  double total = 0.0;
+  for (double phase : sample) {
+    total += phase;
+  }
+  testTrue(
+    g, total == 16.0, "slices sum to full frame without double counting");
+  testEqInt(
+    g, static_cast<int>(profiler.sampleCount()), 1, "duplicate end ignored");
+
+  for (size_t i = 0; i < FrameProfiler::kWindowFrames; ++i) {
+    profiler.beginFrame(profilerTime(0));
+    profiler.mark(FramePhase::ProductUpdate, profilerTime(0));
+    profiler.endFrame(profilerTime(8));
+  }
+  testEqInt(
+    g, static_cast<int>(profiler.sampleCount()), 120, "history is bounded");
+  testTrue(g,
+           profiler.average()[static_cast<size_t>(FramePhase::ProductUpdate)] ==
+             8.0,
+           "rolling window evicts the old frame");
+  testTrue(g,
+           profiler.average()[static_cast<size_t>(FramePhase::Presentation)] ==
+             0.0,
+           "evicted phases no longer contribute");
+  profiler.beginFrame(profilerTime(0));
+  profiler.setEnabled(false);
+  profiler.endFrame(profilerTime(100));
+  profiler.setEnabled(true);
+  testEqInt(g,
+            static_cast<int>(profiler.sampleCount()),
+            0,
+            "toggle clears history and partial frame");
+  profiler.beginFrame(profilerTime(5));
+  profiler.mark(FramePhase::Input, profilerTime(3));
+  profiler.mark(FramePhase::Count, profilerTime(6));
+  profiler.endFrame(profilerTime(10));
+  testTrue(g,
+           profiler.average()[static_cast<size_t>(FramePhase::Other)] == 5.0,
+           "invalid or backwards marks cannot corrupt samples");
+}
+
+static void
+testProfilerOverlayControlsAndTokens()
+{
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  FrameProfiler profiler;
+  ProfilerOverlay overlay(profiler);
+  overlay.prepare(&renderer, &window, &camera);
+  testTrue(g,
+           !overlay.handleKey(KeyCode::Num1, InputAction::Press, false, false),
+           "hidden profiler leaves product number keys alone");
+  testTrue(g,
+           !overlay.handleKey(KeyCode::F6, InputAction::Press, true, false),
+           "console owns keys while open");
+  testTrue(g,
+           !overlay.handleKey(KeyCode::F6, InputAction::Press, false, true),
+           "modified shortcuts are preserved");
+  overlay.handleKey(KeyCode::F6, InputAction::Press, false, false);
+  overlay.handleKey(KeyCode::F6, InputAction::Hold, false, false);
+  testTrue(g, profiler.enabled(), "repeat does not toggle repeatedly");
+  InputManager input(nullptr);
+  InputManagerTestAccess::setAction(input, KeyCode::Num1, InputAction::Hold);
+  InputManagerTestAccess::setAction(input, KeyCode::H, InputAction::Press);
+  testTrue(g,
+           input.isKeyPressed(KeyCode::Num1),
+           "held product shortcut starts active");
+  input.getCharQueue().push('1');
+  input.getCharQueue().push('A');
+  input.getCharQueue().push('4');
+  overlay.captureInput(input, false);
+  testTrue(g,
+           input.getCharQueue().size() == 1 &&
+             input.getCharQueue().front() == 'A',
+           "navigation cannot type digits into a product text field");
+  testTrue(g,
+           !input.isKeyPressed(KeyCode::Num1) && input.isKeyPressed(KeyCode::H),
+           "profiler captures polled digits without blocking other brush keys");
+  testTrue(g,
+           input.GetInputAction(KeyCode::Num1) == InputAction::None &&
+             !input.isKeyReleased(KeyCode::Num1),
+           "capture does not synthesize release");
+  input.update();
+  InputManagerTestAccess::setAction(input, KeyCode::Num1, InputAction::Hold);
+  testTrue(g,
+           input.isKeyPressed(KeyCode::Num1),
+           "capture clears on next input update");
+  overlay.captureInput(input, true);
+  testTrue(
+    g, input.isKeyPressed(KeyCode::Num1), "console retains input ownership");
+  overlay.update(0.0, 640, 480);
+  testTrue(
+    g, overlay.visual().textCount() > 0, "empty sample has explanatory text");
+  profiler.beginFrame(profilerTime(0));
+  profiler.mark(FramePhase::Commands, profilerTime(0));
+  profiler.mark(FramePhase::Presentation, profilerTime(4));
+  profiler.endFrame(profilerTime(10));
+  overlay.update(0.25, 640, 480);
+  testTrue(g,
+           overlay.visual().shapeCount() >= 98,
+           "pie uses bounded triangle geometry");
+  testTrue(g,
+           overlay.visual().getSpace() == PrimitiveSpace::Pixels &&
+             overlay.visual().getLayerHint() == RenderLayerId::Debug,
+           "profiler uses screen-space debug layer");
+  renderer.BeginFrame();
+  testTrue(g,
+           overlay.visual().AppendCommands(&renderer),
+           "overlay emits renderer tokens");
+  FrameProfiler::TimePoint presentationStart{};
+  const FrameProfiler::TimePoint before = FrameProfiler::Clock::now();
+  renderer.EndFrame(&presentationStart);
+  testTrue(g,
+           presentationStart >= before &&
+             presentationStart <= FrameProfiler::Clock::now(),
+           "timed EndFrame returns a CPU presentation boundary");
+  testTrue(g,
+           mock.getLastNonEmptySubmittedCount() > 0,
+           "backend receives overlay commands");
+  overlay.handleKey(KeyCode::Num2, InputAction::Press, false, false);
+  testEqInt(g, overlay.group(), 1, "second root slice opens Rendering");
+  overlay.handleKey(KeyCode::Num1, InputAction::Press, false, false);
+  testEqInt(g, overlay.group(), 1, "leaf selection does not change groups");
+  overlay.update(0.0, 320, 240);
+  const Transform2D transform = overlay.visual().getTransform();
+  testTrue(g,
+           transform.x >= 0 && transform.y >= 0 &&
+             transform.x + 470 * transform.scaleX <= 320 &&
+             transform.y + 430 * transform.scaleY <= 240,
+           "small-window panel bounds fit");
+  overlay.handleKey(KeyCode::Num0, InputAction::Press, false, false);
+  testEqInt(g, overlay.group(), -1, "zero returns to Frame");
+  overlay.handleKey(KeyCode::F6, InputAction::Press, false, false);
+  testTrue(g, !profiler.enabled(), "F6 hides and disables collection");
+}
+static int g_memoryQueries = 0;
+static bool g_memoryAvailable = true;
+static ProcessMemoryStats g_memorySample;
+
+static bool
+queryTestMemory(ProcessMemoryStats& stats) noexcept
+{
+  ++g_memoryQueries;
+  stats = g_memorySample;
+  return g_memoryAvailable;
+}
+
+static void
+testDebugOverlayMemory()
+{
+  DebugOverlayState overlay;
+  g_memoryQueries = 0;
+  g_memoryAvailable = true;
+  g_memorySample = { 130547712, 144913203, 163577856 };
+  testTrue(g,
+           !overlay.update(10.0, false, false, true, 60, queryTestMemory),
+           "hidden overlay has no content changes");
+  testEqInt(g, g_memoryQueries, 0, "hidden memory does not sample");
+  testTrue(g, !overlay.visible(), "both sections disabled hides panel");
+  testTrue(g,
+           overlay.update(0.0, false, true, true, 60, queryTestMemory),
+           "enabling memory updates immediately");
+  testTrue(g, overlay.visible(), "memory alone shows panel");
+  testTrue(g,
+           overlay.content() == "RAM: 124.5 MiB\nPeak RAM: 138.2 MiB\n"
+                                "Private commit: 156.0 MiB",
+           "memory uses MiB with one decimal and no leading FPS row");
+  testEqInt(g, g_memoryQueries, 1, "enabling memory samples once");
+  testTrue(g,
+           !overlay.update(0.5, false, true, true, 60, queryTestMemory),
+           "cached content remains unchanged between samples");
+  testEqInt(g, g_memoryQueries, 1, "half-second does not sample");
+  testTrue(g,
+           !overlay.update(0.5, false, true, true, 60, queryTestMemory),
+           "identical values avoid a label rebuild");
+  testEqInt(g, g_memoryQueries, 2, "one-second interval samples");
+  overlay.update(0.0, true, true, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content().find("Paced FPS: 60 | Submit FPS: 0\nRAM:") == 0,
+           "FPS precedes memory when both enabled");
+  testEqInt(g, g_memoryQueries, 2, "FPS visibility does not resample memory");
+  overlay.update(0.5, true, false, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content() == "Paced FPS: 60 | Submit FPS: 0",
+           "FPS-only panel removes memory rows");
+  overlay.update(0.5, true, true, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content().find("Submit FPS: 2\nRAM:") != std::string::npos,
+           "memory toggles do not reset the FPS interval");
+  testEqInt(g, g_memoryQueries, 3, "re-enabling samples immediately");
+  g_memoryAvailable = false;
+  overlay.update(1.0, false, true, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content() == "Memory: unavailable",
+           "failure replaces stale memory values");
+  overlay.update(0.5, false, true, true, 60, queryTestMemory);
+  testEqInt(g, g_memoryQueries, 4, "failed queries still use normal cadence");
+  g_memoryAvailable = true;
+  g_memorySample = { 0, 4294967296ULL, 1048576 };
+  overlay.update(0.5, false, true, true, 60, queryTestMemory);
+  testTrue(g,
+           overlay.content() == "RAM: 0.0 MiB\nPeak RAM: 4096.0 MiB\n"
+                                "Private commit: 1.0 MiB",
+           "query recovers and formats zero and large byte counts");
+  overlay.update(5.0, false, true, true, 60, queryTestMemory);
+  testEqInt(g, g_memoryQueries, 6, "long frame samples only once");
+  overlay.update(0.0, false, false, true, 60, queryTestMemory);
+  testTrue(g,
+           !overlay.visible() && overlay.content().empty(),
+           "disabling both clears panel");
+}
+
+static void
+testProcessMemoryQuery()
+{
+  ProcessMemoryStats stats{ 1, 2, 3 };
+  const bool available = QueryProcessMemoryStats(stats);
+#ifdef _WIN32
+  testTrue(g, available, "Windows process query succeeds");
+  testTrue(g, stats.residentBytes > 0, "resident memory is nonzero");
+  testTrue(g,
+           stats.peakResidentBytes >= stats.residentBytes,
+           "lifetime peak is at least the current working set");
+  testTrue(g, stats.privateCommitBytes > 0, "private commit is nonzero");
+#else
+  testTrue(g, !available, "unsupported platform reports unavailable");
+  testTrue(g,
+           stats.residentBytes == 0 && stats.peakResidentBytes == 0 &&
+             stats.privateCommitBytes == 0,
+           "unavailable query clears output");
+#endif
+}
 
 static void
 testInputContextBindings()
@@ -174,6 +453,35 @@ testInputManagerContextsAndCapacity()
             static_cast<int>(input.registerInputContext(InputContext())),
             -1,
             "context capacity is enforced");
+  InputContext* selected = input.getActiveInputContext();
+  testTrue(g, !input.setActiveInputContext(-1), "negative ID rejected");
+  testTrue(g, !input.setActiveInputContext(999), "unknown ID rejected");
+  testTrue(g,
+           input.getActiveInputContext() == selected,
+           "invalid activation preserves selection");
+  testTrue(g, !input.isActionActive("missing"), "missing action is inert");
+  testTrue(g, input.unregisterInputContext(firstId), "active context retired");
+  testTrue(g, !input.isActionActive("toggle"), "retired actions are inert");
+  testTrue(
+    g, !input.unregisterInputContext(firstId), "double retirement rejected");
+  for (int i = 0; i < NUM_INPUT_CONTEXTS * 4; ++i) {
+    const long replacement = input.registerInputContext(first);
+    testTrue(g, replacement > firstId, "free storage receives fresh ID");
+    testTrue(
+      g, input.setActiveInputContext(replacement), "replacement activates");
+    testTrue(
+      g, !input.setActiveInputContext(firstId), "stale ID never aliases");
+    testTrue(g,
+             !input.unregisterInputContext(firstId),
+             "stale retirement never aliases");
+    testTrue(
+      g, input.unregisterInputContext(replacement), "replacement retires");
+  }
+  InputManagerTestAccess::setNextContextId(input,
+                                           std::numeric_limits<long>::max());
+  testTrue(g,
+           input.registerInputContext(first) == -1,
+           "ID exhaustion fails without overflow");
 }
 
 static void
@@ -396,6 +704,75 @@ testAssetManagerEnrollment()
   testTrue(g,
            atlasInfo.width == 8 && atlasInfo.height == 2,
            "first-party renderer atlas has expected dimensions");
+}
+
+static void
+testAssetManagerMeshLifecycle()
+{
+  testSection("AssetManager: shared mesh cache and reference lifetime");
+  HeadlessRenderFixture fixture(4, 4);
+  AssetManager assets(&fixture.renderer, false);
+  const std::filesystem::path path =
+    std::filesystem::current_path() / "asset-cache-test.obj";
+  {
+    std::ofstream file(path, std::ios::binary);
+    file << "v 0 0 0\n"
+            "v 1 0 0\n"
+            "v 0 1 0\n"
+            "vt 0 0\n"
+            "vt 1 0\n"
+            "vt 0 1\n"
+            "f 1/1 2/2 3/3\n";
+  }
+
+  const size_t createsBefore = fixture.mock.getCreateCount();
+  const MeshHandle first = assets.acquireMesh(path.string());
+  const MeshHandle duplicate =
+    assets.acquireMesh((path.parent_path() / "." / path.filename()).string());
+  testTrue(g,
+           first.isValid() && first == duplicate,
+           "canonical duplicate mesh returns one handle");
+  testEqSize(g,
+             fixture.mock.getCreateCount(),
+             createsBefore + 1,
+             "duplicate mesh performs one backend upload");
+  const AssetStatus sharedStatus = assets.getState(first);
+  testTrue(g,
+           sharedStatus.state == AssetState::Ready &&
+             sharedStatus.referenceCount == 2,
+           "duplicate mesh acquisition increments references");
+  const MeshAssetInfo info = assets.getMeshInfo(first);
+  testTrue(g,
+           info.isValid() && info.vertexCount == 3 && info.indexCount == 3,
+           "managed mesh exposes immutable draw metadata");
+
+  testTrue(g, assets.releaseMesh(first), "first mesh release succeeds");
+  testTrue(g,
+           fixture.mock.IsMeshValid(first),
+           "shared mesh survives while one reference remains");
+  testTrue(g, assets.releaseMesh(first), "last mesh release succeeds");
+  testTrue(g,
+           !fixture.mock.IsMeshValid(first),
+           "last mesh release destroys backend resource");
+
+  MeshLoadOptions alternateOptions;
+  alternateOptions.flipTexCoordsV = false;
+  const MeshHandle alternate =
+    assets.acquireMesh(path.string(), alternateOptions);
+  testTrue(g,
+           alternate.isValid() && alternate != first,
+           "geometry-affecting loader options use a separate cache entry");
+  testTrue(g,
+           assets.retainMesh(alternate),
+           "explicit mesh retain supports sharing an uncopied handle");
+  testTrue(g,
+           assets.getState(alternate).referenceCount == 2,
+           "explicit retain increments the managed reference count");
+  testTrue(g, assets.releaseMesh(alternate), "retained mesh releases once");
+  testTrue(g, assets.releaseMesh(alternate), "retained mesh releases finally");
+  std::error_code removeError;
+  std::filesystem::remove(path, removeError);
+  testTrue(g, !removeError, "mesh cache fixture is removed");
 }
 
 static void
@@ -631,6 +1008,16 @@ runRuntimeUtilityCase(void (*testFunction)())
 void
 registerRuntimeUtilityTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Profiler.Accounting", []() {
+    return runRuntimeUtilityCase(testFrameProfilerAccounting);
+  });
+  registry.add("Illumo.Profiler.ControlsAndTokens", []() {
+    return runRuntimeUtilityCase(testProfilerOverlayControlsAndTokens);
+  });
+  registry.add("Illumo.DebugOverlay.Memory",
+               []() { return runRuntimeUtilityCase(testDebugOverlayMemory); });
+  registry.add("Illumo.Platform.ProcessMemory",
+               []() { return runRuntimeUtilityCase(testProcessMemoryQuery); });
   registry.add("Illumo.InputContext.Bindings", []() {
     return runRuntimeUtilityCase(testInputContextBindings);
   });
@@ -650,6 +1037,9 @@ registerRuntimeUtilityTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.AssetManager.Enrollment", []() {
     return runRuntimeUtilityCase(testAssetManagerEnrollment);
+  });
+  registry.add("Illumo.AssetManager.MeshLifecycle", []() {
+    return runRuntimeUtilityCase(testAssetManagerMeshLifecycle);
   });
   registry.add("Illumo.AssetManager.LookupAndShutdown", []() {
     return runRuntimeUtilityCase(testAssetManagerLookupAndShutdown);

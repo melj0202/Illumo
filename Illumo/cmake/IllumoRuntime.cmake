@@ -11,6 +11,21 @@ function(_illumo_runtime_output_directory output_variable)
   set(${output_variable} "${runtime_directory}" PARENT_SCOPE)
 endfunction()
 
+function(_illumo_order_shared_runtime_stage stage_target runtime_directory)
+  # Runtime assets and shader stages can write shared files in parallel builds.
+  # Order only these shared copies, not product-specific default-file seeds.
+  file(TO_CMAKE_PATH "${runtime_directory}" stage_directory)
+  if(WIN32)
+    string(TOLOWER "${stage_directory}" stage_directory)
+  endif()
+  string(SHA256 stage_key "${stage_directory}")
+  get_property(previous_stage GLOBAL PROPERTY "ILLUMO_RUNTIME_STAGE_${stage_key}")
+  if(previous_stage)
+    add_dependencies(${stage_target} ${previous_stage})
+  endif()
+  set_property(GLOBAL PROPERTY "ILLUMO_RUNTIME_STAGE_${stage_key}" ${stage_target})
+endfunction()
+
 function(illumo_stage_runtime target_name)
   if(NOT DEFINED ILLUMO_LIBRARY_SOURCE_DIR)
     message(FATAL_ERROR "ILLUMO_LIBRARY_SOURCE_DIR is required for staging")
@@ -82,6 +97,7 @@ function(illumo_stage_runtime target_name)
     COMMENT "Staging Illumo runtime assets and licenses for ${target_name}"
   )
   set_target_properties(${stage_target} PROPERTIES FOLDER "staging")
+  _illumo_order_shared_runtime_stage(${stage_target} "${runtime_directory}")
   add_dependencies(${target_name} ${stage_target})
 endfunction()
 
@@ -101,6 +117,7 @@ function(illumo_stage_shaders target_name source_directory)
     VERBATIM
     COMMENT "Staging Illumo shaders for ${target_name}")
   set_target_properties(${stage_target} PROPERTIES FOLDER "staging")
+  _illumo_order_shared_runtime_stage(${stage_target} "${runtime_directory}")
   add_dependencies(${target_name} ${stage_target})
 endfunction()
 
@@ -110,15 +127,39 @@ function(illumo_stage_default_file target_name source_file destination_name)
     PROPERTIES HEADER_FILE_ONLY TRUE)
 
   _illumo_runtime_output_directory(runtime_directory)
-  set(stage_target "${target_name}DefaultFileStage")
+  string(MAKE_C_IDENTIFIER "${destination_name}" dest_identifier)
+  string(TOLOWER "${runtime_directory}/${destination_name}" seed_destination)
+  string(SHA256 seed_key "${seed_destination}")
+  set(stage_target "${target_name}_${dest_identifier}_Stage")
   add_custom_target(${stage_target}
     COMMAND ${CMAKE_COMMAND}
       "-DSOURCE=${source_file}"
       "-DDESTINATION=${runtime_directory}/${destination_name}"
+      "-DLOCK_FILE=${CMAKE_BINARY_DIR}/illumo-stage-locks/$<CONFIG>/${seed_key}.lock"
       -P "${ILLUMO_LIBRARY_SOURCE_DIR}/cmake/CopyIfMissing.cmake"
     VERBATIM
     COMMENT "Seeding ${destination_name} for ${target_name}")
   set_target_properties(${stage_target} PROPERTIES FOLDER "staging")
+  add_dependencies(${target_name} ${stage_target})
+endfunction()
+
+function(illumo_stage_runtime_file target_name source_file destination_name)
+  target_sources(${target_name} PRIVATE "${source_file}")
+  set_source_files_properties("${source_file}"
+    PROPERTIES HEADER_FILE_ONLY TRUE)
+
+  _illumo_runtime_output_directory(runtime_directory)
+  string(MAKE_C_IDENTIFIER "${destination_name}" dest_identifier)
+  set(stage_target "${target_name}_${dest_identifier}_RuntimeStage")
+  add_custom_target(${stage_target}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${source_file}"
+      "${runtime_directory}/${destination_name}"
+    DEPENDS "${source_file}"
+    VERBATIM
+    COMMENT "Staging ${destination_name} for ${target_name}")
+  set_target_properties(${stage_target} PROPERTIES FOLDER "staging")
+  _illumo_order_shared_runtime_stage(${stage_target} "${runtime_directory}")
   add_dependencies(${target_name} ${stage_target})
 endfunction()
 

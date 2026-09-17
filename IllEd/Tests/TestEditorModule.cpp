@@ -54,10 +54,11 @@ seedShippedAtlas()
     std::filesystem::path(__FILE__).parent_path().parent_path() / "Assets" /
     "editor-ui-atlas.jpg";
   std::filesystem::create_directories(destination.parent_path(), error);
-  if (std::filesystem::copy_file(source,
-                                 destination,
-                                 std::filesystem::copy_options::overwrite_existing,
-                                 error)) {
+  if (std::filesystem::copy_file(
+        source,
+        destination,
+        std::filesystem::copy_options::overwrite_existing,
+        error)) {
     if (!g_seededAtlasCreated) {
       g_seededAtlasCreated = true;
       g_seededAtlasPath = destination;
@@ -113,6 +114,85 @@ struct EditorFixture
     }
   }
 };
+
+static void
+testCloseConfirmation()
+{
+  testSection("EditorModule: native close shares unsaved confirmation");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "editor starts");
+  testTrue(g,
+           fixture.module.OnCloseRequested(),
+           "clean document accepts native close");
+  EditorModuleTestAccess::createNode(fixture.module, SceneNodeKind::SolidCube);
+  testTrue(
+    g, !fixture.module.OnCloseRequested(), "dirty native close is deferred");
+  testTrue(g,
+           EditorModuleTestAccess::confirmationOpen(fixture.module),
+           "native close opens confirmation");
+  testTrue(g,
+           !fixture.module.OnCloseRequested(),
+           "repeated request keeps pending confirmation");
+  fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.01);
+  testTrue(g,
+           !fixture.window.shouldWindowClose() &&
+             !EditorModuleTestAccess::confirmationOpen(fixture.module),
+           "cancel leaves editor open");
+
+  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  document.setPath("missing-close-parent/document.ilsc");
+  testTrue(g,
+           !fixture.module.OnCloseRequested(),
+           "new close request reopens confirmation");
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.01);
+  testTrue(g,
+           document.isDirty() && !fixture.window.shouldWindowClose(),
+           "failed save leaves document dirty and open");
+
+  const std::string path = "test-close-saved.ilsc";
+  document.setPath(path);
+  testTrue(g, !fixture.module.OnCloseRequested(), "save can be retried");
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.01);
+  testTrue(g,
+           !document.isDirty() && fixture.window.shouldWindowClose() &&
+             fixture.module.OnCloseRequested(),
+           "successful save permits close");
+  testTrue(g, std::filesystem::exists(path), "successful close writes scene");
+  std::filesystem::remove(path);
+
+  EditorFixture discard;
+  EditorModuleTestAccess::createNode(discard.module, SceneNodeKind::SolidCube);
+  EditorModuleTestAccess::handleCommand(discard.module,
+                                        EditorCommand::ExitEditor);
+  testTrue(g,
+           EditorModuleTestAccess::confirmationOpen(discard.module),
+           "toolbar exit shares confirmation");
+  discard.input.getKeyQueue().push({ KeyCode::N, InputAction::Press, 0 });
+  discard.module.Update(0.01);
+  testTrue(g,
+           EditorModuleTestAccess::document(discard.module).isDirty() &&
+             discard.window.shouldWindowClose() &&
+             discard.module.OnCloseRequested(),
+           "discard closes without re-prompting on dirty document");
+  discard.window.cancelCloseRequest();
+  EditorModuleTestAccess::createNode(discard.module, SceneNodeKind::SolidCube);
+  testTrue(g,
+           !discard.module.OnCloseRequested() &&
+             EditorModuleTestAccess::confirmationOpen(discard.module),
+           "approval is consumed if another module vetoes and editing resumes");
+  discard.input.getKeyQueue().push({ KeyCode::N, InputAction::Press, 0 });
+  discard.module.Update(0.01);
+  discard.window.cancelCloseRequest();
+  discard.module.Update(0.01);
+  testTrue(
+    g,
+    !discard.module.OnCloseRequested() &&
+      EditorModuleTestAccess::confirmationOpen(discard.module),
+    "approval expires when an earlier module vetoes before consultation");
+}
 
 static void
 testUiAtlasSpritesFromStart()
@@ -873,6 +953,253 @@ testTransformGizmoHitAndConstraints()
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Module.PropertyCommands", []() {
+    g = {};
+    EditorFixture fixture;
+    testTrue(g, fixture.started, "editor starts");
+    EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+    EditorModuleTestAccess::createNode(fixture.module, SceneNodeKind::Empty);
+    const std::string parent =
+      EditorModuleTestAccess::selectedId(fixture.module);
+    EditorModuleTestAccess::createNode(fixture.module,
+                                       SceneNodeKind::SolidCube);
+    const std::string child =
+      EditorModuleTestAccess::selectedId(fixture.module);
+    const Vector3 extent = document.findNode(child)->primitive.extent;
+    document.setColor(child, ColorRgba{ 210, 90, 70, 255 });
+    testTrue(g,
+             document.loadFromText(document.encode(), nullptr),
+             "reload clean property baseline");
+    EditorModuleTestAccess::handleCommand(fixture.module,
+                                          EditorCommand::NudgeExtent);
+    testTrue(g,
+             glm::length(document.findNode(child)->primitive.extent -
+                         extent * 1.15f) < 0.0001f,
+             "size command scales all selected extents");
+    testTrue(g, document.isDirty(), "property command marks document dirty");
+    const ColorRgba colors[] = { { 80, 180, 90, 255 },
+                                 { 70, 140, 220, 255 },
+                                 { 210, 90, 70, 255 } };
+    for (const ColorRgba& expected : colors) {
+      EditorModuleTestAccess::handleCommand(fixture.module,
+                                            EditorCommand::CycleColor);
+      const ColorRgba actual = document.findNode(child)->primitive.color;
+      testTrue(g,
+               actual.r == expected.r && actual.g == expected.g &&
+                 actual.b == expected.b && actual.a == expected.a,
+               "color command advances through the full palette cycle");
+    }
+    testEqStr(
+      g, document.findNode(child)->parentId, parent, "child starts parented");
+    EditorModuleTestAccess::handleCommand(fixture.module,
+                                          EditorCommand::UnparentNode);
+    testTrue(g,
+             document.findNode(child)->parentId.empty(),
+             "unparent command detaches child");
+    EditorModuleTestAccess::handleCommand(fixture.module,
+                                          EditorCommand::DeleteNode);
+    testTrue(g,
+             document.findNode(child) == nullptr &&
+               document.findNode(parent) != nullptr,
+             "deleting detached child preserves its former parent");
+    const std::string unchanged = document.encode();
+    testTrue(g,
+             document.loadFromText(unchanged, nullptr),
+             "reload clean no-selection baseline");
+    for (EditorCommand command : { EditorCommand::NudgeExtent,
+                                   EditorCommand::CycleColor,
+                                   EditorCommand::UnparentNode }) {
+      EditorModuleTestAccess::handleCommand(fixture.module, command);
+    }
+    testEqStr(g,
+              document.encode(),
+              unchanged,
+              "property commands without selection preserve document");
+    testTrue(g, !document.isDirty(), "empty selection commands remain clean");
+    return g.failures;
+  });
+  registry.add("IllEd.Module.PanelCommands", []() {
+    g = {};
+    EditorFixture fixture;
+    EditorSceneGraphView* graphView =
+      EditorModuleTestAccess::sceneGraphView(fixture.module);
+    EditorSidebar* sidebar = EditorModuleTestAccess::sidebar(fixture.module);
+    const bool graphCollapsed = graphView->isCollapsed();
+    const bool sidebarCollapsed = sidebar->isCollapsed();
+    const std::string document =
+      EditorModuleTestAccess::document(fixture.module).encode();
+    for (int iteration = 0; iteration < 2; ++iteration) {
+      EditorModuleTestAccess::handleCommand(fixture.module,
+                                            EditorCommand::ToggleSceneGraph);
+      EditorModuleTestAccess::handleCommand(fixture.module,
+                                            EditorCommand::ToggleSidebar);
+      testTrue(g,
+               graphView->isCollapsed() ==
+                 (iteration == 0 ? !graphCollapsed : graphCollapsed),
+               "scene graph toggle is reversible");
+      testTrue(g,
+               sidebar->isCollapsed() ==
+                 (iteration == 0 ? !sidebarCollapsed : sidebarCollapsed),
+               "inspector toggle is reversible");
+    }
+    testEqStr(g,
+              EditorModuleTestAccess::document(fixture.module).encode(),
+              document,
+              "panel commands preserve scene data");
+    return g.failures;
+  });
+  registry.add("IllEd.Module.NewDocumentCommand", []() {
+    g = {};
+    EditorFixture fixture;
+    EditorModuleTestAccess::createNode(fixture.module,
+                                       SceneNodeKind::SolidCube);
+    EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+    document.setPath("previous-scene.ilsc");
+    testTrue(g,
+             document.loadFromText(document.encode(), nullptr),
+             "reload clean reset baseline");
+    fixture.camera.SetPositionPrecise(15.0, -7.0);
+    fixture.camera.SetZoom(8.0f);
+    EditorModuleTestAccess::handleCommand(fixture.module,
+                                          EditorCommand::ResetCamera);
+    testTrue(g,
+             glm::length(fixture.camera.GetPositionPrecise()) < 0.0001 &&
+               fixture.camera.GetZoom() == 32.0f,
+             "reset command restores camera origin and zoom");
+    EditorModuleTestAccess::handleCommand(fixture.module,
+                                          EditorCommand::NewDocument);
+    testEqSize(g, document.nodeCount(), 0u, "new document clears nodes");
+    testTrue(g,
+             document.path().empty() && !document.isDirty(),
+             "new document is clean and untitled");
+    testTrue(g,
+             EditorModuleTestAccess::selectedId(fixture.module).empty(),
+             "new document clears selection");
+    testTrue(g,
+             !EditorModuleTestAccess::confirmationOpen(fixture.module),
+             "clean document needs no confirmation");
+    return g.failures;
+  });
+  registry.add("IllEd.Module.PerspectivePicking", []() {
+    g = {};
+    for (float pitch : { 0.0f, 0.45f }) {
+      EditorFixture fixture;
+      EditorModuleTestAccess::handleCommand(fixture.module,
+                                            EditorCommand::SetMode3D);
+      EditorDocument& document =
+        EditorModuleTestAccess::document(fixture.module);
+      IlscCameraState cameraState = document.camera();
+      cameraState.pitch = pitch;
+      document.setCamera(cameraState);
+      EditorModuleTestAccess::setCameraTargetHeight(
+        fixture.module, pitch == 0.0f ? 0.0f : 6.0f);
+      fixture.module.Update(0.016);
+      glm::vec3 origin{ 0.0f }, direction{ 0.0f };
+      testTrue(g,
+               EditorModuleTestAccess::screenToWorldRay(
+                 fixture.module, 640, 360, &origin, &direction),
+               "perspective screen ray available");
+      if (pitch == 0.0f) {
+        float groundX = 0, groundY = 0;
+        testTrue(g,
+                 !EditorModuleTestAccess::screenToWorld(
+                   fixture.module, 640, 360, &groundX, &groundY),
+                 "horizontal screen ray misses ground plane");
+      }
+      const std::string nearId =
+        document.createNode(SceneNodeKind::SolidCube, {});
+      const std::string farId =
+        document.createNode(SceneNodeKind::SolidCube, {});
+      Transform3D nearTransform = Transform3D::fromEuler(0.3f, 0.7f, 0.2f);
+      nearTransform.position = origin + direction * 5.0f;
+      document.setTransform(nearId, nearTransform);
+      document.setTransform(
+        farId, Transform3D::fromPosition(origin + direction * 8.0f));
+      EditorModuleTestAccess::rebuildGraph(fixture.module);
+      EditorModuleTestAccess::setSelectedId(fixture.module, "");
+      fixture.window.mouseX = 640;
+      fixture.window.mouseY = 360;
+      InputManagerTestAccess::setAction(
+        fixture.input, KeyCode::MouseLeft, InputAction::Press);
+      fixture.module.Update(0.016);
+      testEqStr(g,
+                EditorModuleTestAccess::selectedId(fixture.module),
+                nearId,
+                "screen click selects nearest elevated rotated body");
+    }
+    return g.failures;
+  });
+  registry.add("IllEd.Module.BodyDragOffset", []() {
+    g = {};
+    for (bool world3D : { false, true }) {
+      EditorFixture fixture;
+      if (world3D) {
+        EditorModuleTestAccess::handleCommand(fixture.module,
+                                              EditorCommand::SetMode3D);
+      }
+      EditorModuleTestAccess::createNode(fixture.module,
+                                         world3D ? SceneNodeKind::SolidCube
+                                                 : SceneNodeKind::FilledRect);
+      const std::string id = EditorModuleTestAccess::selectedId(fixture.module);
+      EditorDocument& document =
+        EditorModuleTestAccess::document(fixture.module);
+      document.setTransform(id, Transform3D::fromPosition(Vector3(0.0f)));
+      document.setExtent(id, Vector3(10.0f));
+      std::string error;
+      testTrue(g,
+               document.loadFromText(document.encode(), &error),
+               "reload clean scene");
+      EditorModuleTestAccess::rebuildGraph(fixture.module);
+      EditorModuleTestAccess::setSelectedId(fixture.module, "");
+      fixture.camera.SetPositionPrecise(0.0, 0.0);
+      fixture.camera.SetZoom(32.0f);
+      fixture.module.Update(0.016);
+      fixture.window.mouseX = 650.0;
+      fixture.window.mouseY = 365.0;
+      InputManagerTestAccess::setAction(
+        fixture.input, KeyCode::MouseLeft, InputAction::Press);
+      fixture.module.Update(0.016);
+      testEqStr(g,
+                EditorModuleTestAccess::selectedId(fixture.module),
+                id,
+                "body selected off center");
+      for (int held = 0; held < 3; ++held) {
+        fixture.module.Update(0.016);
+      }
+      const Vector3 position = document.findNode(id)->transform.position;
+      testTrue(g,
+               glm::length(position) < 0.00001f,
+               "stationary selection does not move object");
+      testTrue(
+        g, !document.isDirty(), "stationary selection keeps document clean");
+      InputManagerTestAccess::setAction(
+        fixture.input, KeyCode::MouseLeft, InputAction::Release);
+      fixture.module.Update(0.016);
+      testTrue(g, !document.isDirty(), "stationary click release stays clean");
+      EditorModuleTestAccess::setSelectedId(fixture.module, "");
+      InputManagerTestAccess::setAction(
+        fixture.input, KeyCode::MouseLeft, InputAction::Press);
+      fixture.module.Update(0.016);
+      fixture.window.mouseX += 30.0;
+      fixture.module.Update(0.016);
+      testTrue(g,
+               glm::length(document.findNode(id)->transform.position) > 0.001f,
+               "actual pointer movement drags object");
+      testTrue(g, document.isDirty(), "actual drag marks document dirty");
+      InputManagerTestAccess::setAction(
+        fixture.input, KeyCode::MouseLeft, InputAction::Release);
+      fixture.module.Update(0.016);
+      testTrue(g,
+               !EditorModuleTestAccess::isDragging(fixture.module),
+               "release ends body drag");
+    }
+    return g.failures;
+  });
+  registry.add("IllEd.Module.CloseConfirmation", []() {
+    g = {};
+    testCloseConfirmation();
+    return g.failures;
+  });
   registry.add("IllEd.Module.MousePanningDirection", []() {
     g = {};
     testMousePanningMovesCameraNaturalDirection();

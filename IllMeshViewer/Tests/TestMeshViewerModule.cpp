@@ -17,6 +17,20 @@
 #include <cstring>
 
 static TestCounters g;
+static int g_loadDialogCalls = 0;
+
+std::string
+SaveLoad::GetLoadLocation(const SaveLoadDialogSpec&)
+{
+  ++g_loadDialogCalls;
+  return {};
+}
+
+std::string
+SaveLoad::GetSaveLocation(const SaveLoadDialogSpec&)
+{
+  return {};
+}
 
 static const std::string g_testCubeObj = "# Simple Cube OBJ\n"
                                          "v -1.0 -1.0  1.0\n"
@@ -88,6 +102,12 @@ testModuleStartupAndLifecycle()
   testTrue(g, fixture.started, "module started successfully");
   testTrue(g, fixture.module.showGrid(), "grid enabled by default");
   testTrue(g, !fixture.module.showWireframe(), "wireframe disabled by default");
+  testTrue(g, fixture.module.showSkybox(), "skybox enabled by default");
+
+  fixture.module.setShowSkybox(false);
+  testTrue(g, !fixture.module.showSkybox(), "skybox disabled via setter");
+  fixture.module.setShowSkybox(true);
+  testTrue(g, fixture.module.showSkybox(), "skybox re-enabled via setter");
 
   fixture.module.Update(0.016);
   fixture.module.DispatchDrawables(&fixture.scene);
@@ -335,9 +355,73 @@ runModuleCase(void (*testFunction)())
   return g.failures;
 }
 
+static void
+sendShortcut(ModuleFixture& fixture, KeyCode key, InputAction action)
+{
+  fixture.input.getKeyQueue().push({ key, action, 0 });
+  fixture.module.Update(0.016);
+}
+
+static void
+testRepeatedShortcuts()
+{
+  ModuleFixture fixture;
+  fixture.module.cameraController().setSmoothingSpeed(1000.0f);
+  g_loadDialogCalls = 0;
+  const float resetDistance = fixture.module.cameraController().distance();
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    const bool grid = fixture.module.showGrid();
+    const bool wire = fixture.module.showWireframe();
+    const bool sky = fixture.module.showSkybox();
+    for (KeyCode key : { KeyCode::G, KeyCode::X, KeyCode::B, KeyCode::O }) {
+      sendShortcut(fixture, key, InputAction::Press);
+      sendShortcut(fixture, key, InputAction::Hold);
+      sendShortcut(fixture, key, InputAction::Release);
+    }
+    testTrue(g, fixture.module.showGrid() == !grid, "G toggles each press");
+    testTrue(
+      g, fixture.module.showWireframe() == !wire, "X toggles each press");
+    testTrue(g, fixture.module.showSkybox() == !sky, "B toggles each press");
+    testEqInt(g, g_loadDialogCalls, cycle + 1, "O opens once per press");
+    for (KeyCode key : { KeyCode::F, KeyCode::R }) {
+      fixture.module.cameraController().setDistance(resetDistance * 3.0f);
+      sendShortcut(fixture, key, InputAction::Press);
+      testTrue(g,
+               std::abs(fixture.module.cameraController().distance() -
+                        resetDistance) < 0.001f,
+               "F and R reset repeatedly");
+      fixture.module.cameraController().setDistance(resetDistance * 2.0f);
+      sendShortcut(fixture, key, InputAction::Hold);
+      sendShortcut(fixture, key, InputAction::Release);
+      testTrue(g,
+               fixture.module.cameraController().distance() > resetDistance,
+               "repeat and release do not reset camera");
+    }
+  }
+  fixture.console.isOpen = true;
+  const bool grid = fixture.module.showGrid();
+  sendShortcut(fixture, KeyCode::G, InputAction::Press);
+  testTrue(g, fixture.module.showGrid() == grid, "console suppresses shortcut");
+  fixture.input.clearKeyQueue();
+  fixture.console.isOpen = false;
+  sendShortcut(fixture, KeyCode::G, InputAction::Press);
+  testTrue(
+    g, fixture.module.showGrid() != grid, "shortcut works after console");
+  fixture.input.getKeyQueue().push({ KeyCode::A, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testEqSize(
+    g, fixture.input.getKeyQueue().size(), 1u, "unrelated key preserved");
+  ModuleFixture second;
+  sendShortcut(second, KeyCode::G, InputAction::Press);
+  testTrue(
+    g, !second.module.showGrid(), "second instance has independent shortcuts");
+}
+
 void
 registerMeshViewerModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllMeshViewer.Module.RepeatedShortcuts",
+               []() { return runModuleCase(testRepeatedShortcuts); });
   registry.add("IllMeshViewer.Module.StartupAndLifecycle",
                []() { return runModuleCase(testModuleStartupAndLifecycle); });
   registry.add("IllMeshViewer.Module.MeshLoading",

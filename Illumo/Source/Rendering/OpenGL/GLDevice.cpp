@@ -75,6 +75,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
   _boundProgram = 0;
   _boundVao = 0;
   _boundFbo = 0;
+  _boundFboKnown = false;
   _boundFboHandle = FramebufferHandle{};
   for (int s = 0; s < 8; ++s) {
     _boundTexture[s] = 0;
@@ -83,7 +84,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
   _viewportY = -1;
   _viewportW = -1;
   _viewportH = -1;
-  _activeProgram = 0;
+  _activeProgram = nullptr;
 
   for (size_t i = 0; i < commandQueue.GetCommandCount(); ++i) {
     RenderCommand& cmd = commandQueue.GetCommand(i);
@@ -122,27 +123,30 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::SetFramebuffer: {
         if (!cmd.bindFramebuffer.handle.isValid()) {
-          if (_boundFbo != 0) {
+          if (!_boundFboKnown || _boundFbo != 0) {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             _boundFbo = 0;
           }
           _boundFboHandle = FramebufferHandle{};
+          _boundFboKnown = true;
           break;
         }
         const GLFramebufferResourceEntry* fb =
           resolveFramebuffer(tables, cmd.bindFramebuffer.handle);
         if (!fb) {
-          Logger::LogWarning("SetFramebuffer: unknown framebuffer handle");
+          reportFrameError("SetFramebuffer: unknown framebuffer handle");
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           _boundFbo = 0;
+          _boundFboKnown = true;
           _boundFboHandle = FramebufferHandle{};
           break;
         }
-        if (fb->fboId != _boundFbo) {
+        if (!_boundFboKnown || fb->fboId != _boundFbo) {
           glBindFramebuffer(GL_FRAMEBUFFER, fb->fboId);
           _boundFbo = fb->fboId;
         }
         _boundFboHandle = cmd.bindFramebuffer.handle;
+        _boundFboKnown = true;
         break;
       }
 
@@ -150,10 +154,10 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
         GLShaderProgram* program =
           resolveProgram(tables, cmd.bindShader.handle);
         if (!program) {
-          Logger::LogWarning("SetShader: unknown shader handle");
+          reportFrameError("SetShader: unknown shader handle");
           glUseProgram(0);
           _boundProgram = 0;
-          _activeProgram = 0;
+          _activeProgram = nullptr;
           break;
         }
         GLuint id = static_cast<GLuint>(program->GetID());
@@ -161,14 +165,14 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
           glUseProgram(id);
           _boundProgram = id;
         }
-        _activeProgram = id;
+        _activeProgram = program;
         break;
       }
 
       case CommandType::SetMesh: {
         GLMesh* mesh = resolveMesh(tables, cmd.bindMesh.handle);
         if (!mesh) {
-          Logger::LogWarning("SetMesh: unknown mesh handle");
+          reportFrameError("SetMesh: unknown mesh handle");
           glBindVertexArray(0);
           _boundVao = 0;
           break;
@@ -184,7 +188,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       case CommandType::SetTexture: {
         GLTexture* texture = resolveTexture(tables, cmd.bindTexture.handle);
         if (!texture) {
-          Logger::LogWarning("SetTexture: unknown texture handle");
+          reportFrameError("SetTexture: unknown texture handle");
           break;
         }
         const unsigned int slot = cmd.bindTexture.slot;
@@ -246,8 +250,10 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::SetUniformMat4: {
         GLint loc = getUniformLocation(cmd.uniformMat4.name);
-        if (loc >= 0) {
-          glUniformMatrix4fv(loc, 1, GL_FALSE, cmd.uniformMat4.m);
+        if (loc >= 0 && cmd.uniformMat4.value != nullptr) {
+          glUniformMatrix4fv(loc, 1, GL_FALSE, cmd.uniformMat4.value);
+        } else if (cmd.uniformMat4.value == nullptr) {
+          reportFrameError("SetUniformMat4: null matrix value");
         }
         break;
       }
@@ -255,26 +261,28 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       case CommandType::UpdateTexture: {
         GLTexture* texture = resolveTexture(tables, cmd.updateTexture.handle);
         if (!texture || !cmd.updateTexture.data) {
-          Logger::LogWarning("UpdateTexture: invalid handle or null data");
+          reportFrameError("UpdateTexture: invalid handle or null data");
           break;
         }
         // PBO ping-pong + dirty-rect copy lives on GLTexture (P4).
-        const int channels = (cmd.updateTexture.channels > 0)
-                               ? cmd.updateTexture.channels
-                               : texture->getChannels();
-        texture->UpdateSubImage(cmd.updateTexture.x,
-                                cmd.updateTexture.y,
-                                cmd.updateTexture.width,
-                                cmd.updateTexture.height,
-                                channels,
-                                cmd.updateTexture.data,
-                                cmd.updateTexture.srcRowStride);
+        if (!texture->UpdateSubImage(cmd.updateTexture.x,
+                                     cmd.updateTexture.y,
+                                     cmd.updateTexture.width,
+                                     cmd.updateTexture.height,
+                                     cmd.updateTexture.channels,
+                                     cmd.updateTexture.data,
+                                     cmd.updateTexture.srcRowStride)) {
+          reportFrameError(
+            "UpdateTexture: invalid rectangle, channels, or stride");
+          break;
+        }
         // Texture bind may have changed inside UpdateSubImage.
         _boundTexture[0] = static_cast<GLuint>(texture->getID());
         break;
       }
 
       case CommandType::ClearScreen: {
+        glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
         const GLFramebufferResourceEntry* fb =
           _boundFboHandle.isValid()
             ? resolveFramebuffer(tables, _boundFboHandle)
@@ -303,6 +311,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       }
 
       case CommandType::ClearDepthBuffer:
+        glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
         glClear(GL_DEPTH_BUFFER_BIT);
         break;
 
@@ -332,6 +341,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
         break;
 
       case CommandType::ClearAll: {
+        glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
         const GLFramebufferResourceEntry* fb =
           _boundFboHandle.isValid()
             ? resolveFramebuffer(tables, _boundFboHandle)
@@ -356,7 +366,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::Draw: {
         if (_activeProgram == 0 || _boundVao == 0) {
-          Logger::LogWarning("Draw: missing valid shader or mesh; ignored");
+          reportFrameError("Draw: missing valid shader or mesh; ignored");
           break;
         }
         GLenum mode = mapPrimitives(_currentGLState.primitives);
@@ -368,7 +378,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::DrawIndexed: {
         if (_activeProgram == 0 || _boundVao == 0) {
-          Logger::LogWarning(
+          reportFrameError(
             "DrawIndexed: missing valid shader or mesh; ignored");
           break;
         }
@@ -385,7 +395,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::DrawInstanced: {
         if (_activeProgram == 0 || _boundVao == 0) {
-          Logger::LogWarning(
+          reportFrameError(
             "DrawInstanced: missing valid shader or mesh; ignored");
           break;
         }
@@ -401,12 +411,26 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       case CommandType::UpdateBuffer: {
         GLMesh* mesh = resolveMesh(tables, cmd.updateBuffer.handle);
         if (!mesh || !cmd.updateBuffer.data) {
-          Logger::LogWarning("UpdateBuffer: invalid handle or null data");
+          reportFrameError("UpdateBuffer: invalid handle or null data");
           break;
         }
         mesh->UpdateVertexData(cmd.updateBuffer.data,
                                cmd.updateBuffer.sizeBytes,
                                cmd.updateBuffer.offsetBytes);
+        break;
+      }
+
+      case CommandType::UpdateIndexBuffer: {
+        GLMesh* mesh = resolveMesh(tables, cmd.updateIndexBuffer.handle);
+        if (!mesh || !cmd.updateIndexBuffer.data) {
+          reportFrameError("UpdateIndexBuffer: invalid handle or null data");
+          break;
+        }
+        if (!mesh->UpdateIndexData(cmd.updateIndexBuffer.data,
+                                   cmd.updateIndexBuffer.sizeBytes,
+                                   cmd.updateIndexBuffer.offsetBytes)) {
+          reportFrameError("UpdateIndexBuffer: range exceeds index capacity");
+        }
         break;
       }
 
@@ -487,4 +511,13 @@ GLDevice::GetHWInfo()
 
   glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &info.maxUniformBlocks);
   return info;
+}
+
+void
+GLDevice::reportFrameError(const char* message)
+{
+  if (m_frameError.empty()) {
+    m_frameError = message;
+  }
+  Logger::LogWarning(message);
 }

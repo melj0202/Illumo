@@ -6,6 +6,8 @@
 #include "Cursor.h"
 #include "ExitConfirmDialog.h"
 #include "Game/SimulationRunner.h"
+#include "NewSimulationMenu.h"
+#include "RulesetWorkshopMenu.h"
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -13,9 +15,12 @@
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <tracy/Tracy.hpp>
+#include <vector>
 
 enum class CellState
 {
@@ -30,6 +35,7 @@ class CellGameModule : public IModule
 
 public:
   explicit CellGameModule(std::string initialSaveFile = {});
+  explicit CellGameModule(const NewSimulationConfiguration& configuration);
   ~CellGameModule() override;
   bool Start(IllumoContext* context) override;
   void Update(double dt) override;
@@ -46,18 +52,25 @@ private:
   bool SaveCellGame(std::string filename);
   bool LoadCellGame(std::string filename);
   void setRunning(bool running);
-  void stepSimulation(int generations);
+  int stepSimulation(int generations);
   void printStatus() const;
   void CameraPan();
   void CameraRotate();
   void seedInitialPattern();
-  void updateWireworldBrushFromInput();
+  void updatePaintBrushFromInput();
   void showModeSplash(const char* label);
   void updateEditorCursor();
   void updateHamburgerVisual(double dt);
+  void updatePaintPalette(double dt);
+  void advanceCanvasEntrance(double dt);
+  void requestMainMenuReturn();
+  void completeMainMenuReturn();
+  void rebuildCanvasEntrance();
   bool isHamburgerHovered() const;
   void toggleSettingsMenu();
   void updateSelectionVisual();
+  void updateEditHintsVisual(double dt);
+  bool isPointerOverEditHints() const;
   void updateInspectorVisual();
   void normalizeSelection(std::int64_t* x0,
                           std::int64_t* y0,
@@ -73,7 +86,8 @@ private:
   bool cutSelection();
   bool pasteAtCursor();
   bool stampNamed(const std::string& name);
-  bool importPatternText(const std::string& text);
+  bool importPatternText(const std::string& text,
+                         PatternFormat format = PatternFormat::Auto);
   void handleEditorHotkeys();
   bool isRender3dTestEnabled() const;
   void ensureRender3dTestDrawables();
@@ -90,6 +104,7 @@ private:
   CellContext* cellContext;
   CellState currentState;
   InputContext inputContext;
+  long inputContextId = -1;
   double simAccum;
   double simStepSeconds;
   double requestedSimulationTps;
@@ -107,12 +122,11 @@ private:
   SimulationRunnerTimings lastSimulationRunnerTimings;
   SparseGenerationDelta mirrorDelta;
   bool mirrorDeltaValid;
-  // Wireworld left-paint state: 0 head, 1 empty, 2 tail, 3 conductor.
-  // Selected with keys 1/H, 2, 3/T, 4 while the console is closed.
-  unsigned char wireworldBrush;
+  bool simulationRetryPending = false;
   // Module-owned mode label (EDIT/NORMAL); not a file-scope global.
   std::unique_ptr<SplashText> modeSplash;
   std::unique_ptr<ConfigurationMenu> configurationMenu;
+  std::unique_ptr<RulesetWorkshopMenu> rulesetWorkshopMenu;
   std::unique_ptr<ExitConfirmDialog> exitConfirmDialog;
   SceneGraph render3dSceneGraph;
   SceneNodeHandle render3dRootNode;
@@ -125,11 +139,39 @@ private:
   bool render3dCameraApplied;
   Cursor editorCursor;
   GameVisual hamburgerVisual;
+  GameVisual m_paintPaletteVisual;
+  bool m_paintPaletteExpanded = false;
+  bool m_paintPaletteMouseWasDown = false;
+  bool m_paintPaletteCapturing = false;
+  bool m_paintPaletteHovered = false;
+  float m_paintPaletteReveal = 0.0f;
+  float m_paintPaletteChromeReveal = 1.0f;
+  float m_editChromeReveal = 1.0f;
+  double m_paletteModeDelay = 0.0;
+  double m_hintsModeDelay = 0.0;
+  bool m_modeChromeTarget = true;
+  std::vector<float> m_paintPaletteEmphasis;
+  unsigned int m_paintPaletteStateOffset = 0u;
+  unsigned char m_paintBrush = 0;
+  std::string m_paintRuleTag;
+  GameVisual canvasEntranceVisual{ 1024u };
+  static constexpr double kCanvasEntranceSeconds = 0.72;
+  double canvasEntranceElapsed = kCanvasEntranceSeconds;
+  static constexpr double kCanvasExitSeconds = 0.48;
+  bool mainMenuReturnPending = false;
+  bool mainMenuReturnSubmitted = false;
   float hamburgerX;
   float hamburgerY;
   float hamburgerSize;
   bool hamburgerHovered;
   bool hamburgerMouseWasDown;
+  float hamburgerHoverBlend = 0.0f;
+  GameVisual editHintsVisual;
+  int editHintsInsetPixels = 0;
+  int editHintsFullInsetPixels = 0;
+  bool paintStrokeActive = false;
+  std::int64_t lastPaintX = 0;
+  std::int64_t lastPaintY = 0;
   GameVisual selectionVisual;
   GameVisual inspectorVisual;
   CellClipboard clipboard;
@@ -146,4 +188,5 @@ private:
   bool inspectHeld;
   bool deleteHeld;
   std::string initialSaveFile;
+  std::optional<NewSimulationConfiguration> initialCanvas;
 };

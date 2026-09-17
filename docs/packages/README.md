@@ -1,7 +1,8 @@
 # Source-package maps
 
-These files summarize current ownership across the sibling Illumo and
-IllumoGame projects. They are documentation, not build inputs.
+These files summarize current ownership across the Illumo library and its
+three in-tree applications: IllumoGame, IllEd, and IllMeshViewer. They are
+documentation, not build inputs.
 
 | File | Area |
 |---|---|

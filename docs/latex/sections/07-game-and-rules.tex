@@ -2,6 +2,33 @@
 \label{sec:game}
 
 \subsection{CellGameModule}
+
+Edit mode includes a bottom \textbf{Cell paint} drawer, initially closed. A centered
+pull tab toggles an eased vertical slide and chevron; rounded GuiKit surfaces, UiTheme colors, and animated
+row emphasis match the other product menus. Reduced UI motion snaps transitions.
+Swatches read every declared active-rule state name and color; the drawer scrolls
+when a catalog defines more states than fit at once. Right-click remains erase
+and Wireworld shortcuts remain synchronized. Drawing and hit testing share a fitted UI scale;
+palette gestures capture pointer input until release. The drawer anchors above the controls-hint band,
+fits the remaining height, and leaves footer input to the hints. The opaque
+footer covers drawer overflow during its slide. Modal menus and the console
+take precedence. Entering Edit staggers the hint bar before the palette tab;
+leaving Edit staggers the tab before the bar. The canvas reservation follows
+the visible footer area. The tab travels by its own height plus the footer
+height before it is removed. Reduced UI motion snaps the transition. The module owns these ordinary
+GameVisuals on the existing UI layer.
+Camera navigation accepts finite world coordinates with absolute value at most
+$16(2^{63}-2^{32})$ per axis, reserving space for bounded cache arithmetic.
+Commands, sparse metadata, and pending pan/zoom targets validate this range
+before mutation. Saves reject invalid camera metadata before replacement.
+Invalid cursor samples are ignored; an invalid direct camera preserves the
+previous safe view cache. This presentation margin does not limit sparse cell
+storage or guarantee cell-level rendering precision at extreme coordinates.
+Clipboard operations iterate bounded local offsets even at signed endpoints.
+Elementary rules use background beyond representable X coordinates and omit
+unrepresentable children; a source row at maximum signed Y rejects advancement
+before changing cells or revision.
+
 Primary gameplay module. Owns a \symbolref{CellContext} and an enum
 \symbolref{CellState}:
 \begin{center}
@@ -26,8 +53,12 @@ non-toroidal; positive chunk dimensions select a finite torus.
 \end{statusbox}
 
 F1 opens a Release-visible, primitive-composed \symbolref{ConfigurationMenu}.
-It configures ruleset, world chunk width/height, TPS, simulation speed, fade
-speed, VSync, and fullscreen. Both dimensions must be positive for a finite
+It configures the cell family and its filtered ruleset, world chunk width/height, TPS, simulation speed, fade
+speed, VSync, fullscreen, UI scale, restart-only MSAA, FPS cap, simulation
+inspector, and reduced menu motion. FPS presets include uncapped through 360;
+custom values accept 0--1000. Zero disables the existing engine software cap;
+VSync remains independent. Both main-menu and in-game Apply save preferences
+and apply fullscreen immediately. Both dimensions must be positive for a finite
 torus; \texttt{0}/\texttt{0} and \texttt{inf}/\texttt{inf} select the infinite
 canvas. Applying a topology change drains simulation and starts a fresh
 centered world. The overlay uses larger high-contrast labels, readable ruleset
@@ -35,15 +66,121 @@ names, split keyboard instructions, and a short explanation for the selected
 setting. Pressing Q or activating Exit opens a confirmation overlay; confirming
 requests window closure and leaves normal engine shutdown to the App main loop. A short eased reveal, staggered row fade, gliding
 selection highlight, and value-change pulse are advanced from frame delta time;
-input remains active throughout.
+input remains active throughout. The mouse wheel scrolls the view without
+changing selection; an offscreen selection has no visible highlight. Keyboard
+navigation, including Page Up/Down and Home/End, brings selection into view.
+Rows retain readable height rather than shrinking text to fit the list. Rendering and mouse
+conversion share a fitted UI scale. Main-menu F1 opens the same overlay; the
+main-menu card adds a larger responsive title area, rounded raised action
+cards with icons, a glowing animated cell motif, cyan/violet accents, drifting
+glider clusters that crossfade between phases, a softly lit grid, and flowing
+light ribbons. Fixed primitive counts and a continuous 12-second decorative
+cycle keep the background bounded. Settings share rounded panel chrome, raised
+rows, inset values, and toggle pills; the pause/exit dialog shares rounded
+actions and a gliding highlight. Stateless GuiKit rounded-surface helpers use
+non-overlapping triangles and rectangles. GuiDialog's rounded style is opt-in
+and fits drawing and pointer coordinates together. Every menu screen draws its
+motion and layout arithmetic from the shared \symbolref{GuiMenuShell}: easing
+curves, reveal, staggered row entrance, gliding selection, value pulse, ambient
+cycle, and caret blink from \symbolref{GuiMenuAnimator}; fitted virtual space,
+visible-row window, and wheel scrolling from \symbolref{GuiPanelLayout}; hover
+and press edges from \symbolref{GuiPointerTracker}. Each screen keeps only its
+own rows, layout constants, and drawing, so a new interface inherits the
+existing theming and animation rather than restating it. The product advances dialog
+time once per frame; submission refreshes visuals even while the console owns
+input. Reduced menu motion snaps all menu transitions, including pause/exit,
+and stops decorative motion without changing simulation or cell fading. The in-game
+settings button eases its hover highlight and displays the F1 shortcut.
+
+F2 opens a separate Ruleset Workshop in the canvas. Family and ruleset drafts
+are separate, and every rule references one required family. Family data owns
+state count, labels, and colors; rule data owns transition parameters. The
+family-aware Rule, Preview, Appearance, and Files sections show only applicable
+controls and a labeled sample transition. Import/export uses a portable family
+and ruleset package. Save \& Apply validates the pair, drains the simulation,
+rejects family schema changes that invalidate live cells, persists family data
+before its rule, then activates the pair. Moore transition tables remain JSON
+editable rather than a large in-game matrix. Wheel scrolling does not steal
+keyboard focus, and reduced-motion preference snaps transitions and stops
+decorative pulsing.
+
+The large main-menu title uses a separate font atlas at 64, 128, or 256 pixels,
+selected to cover its fitted display size without upscaling glyphs. Smaller
+labels retain the default font atlas; resizing reuses the bounded title sizes.
+
+New simulation and the menu console command \texttt{play} open a dedicated canvas
+setup screen, independent of F1 configuration. It offers the rules catalog,
+infinite or wrapping boundaries, width and height in 16-cell increments, and
+empty or starter contents. Infinite mode disables dimensions while retaining
+the finite draft. Create passes validated canvas values to CellGameModule;
+Back or Escape discards the draft. Display and performance preferences are not
+part of this payload. The screen fits all rows, respects reduced menu motion,
+and consumes wheel input without changing selection or values. Raised cards,
+eased focus lighting, value pulses, and a decorative cell colony match the
+main menu; reduced motion freezes the colony and snaps focus feedback.
+
+Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
+A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
+retires after completion. It covers the canvas and HUD but remains beneath
+settings and confirmation dialogs. The transition never changes camera or
+simulation state and does not block input. Reduced menu motion and the 3D
+diagnostic view skip it from the first frame. Returning to the main menu reverses
+this veil over 0.48 seconds, then submits one module transition. Repeated return
+requests do not restart it; product input is consumed during the accepted exit,
+while the global console retains its input. Reduced motion returns immediately.
+Both the pause-menu action and the console menu command use this path.
 
 EDIT mode supports Shift+drag marquee selection, Ctrl+C/X/V copy/cut/paste,
 Delete fill, R/F buffer rotate/flip, and console commands
 \texttt{select}/\texttt{copy}/\texttt{cut}/\texttt{paste}/\texttt{stamp}/
 \texttt{rle}/\texttt{plaintext}. Patterns are a side path (D-G1). Optional
 \texttt{inspect} HUD reports generation count, hover cell, and census.
-Life-like B/S rules share \texttt{LifeLikeRuleSet} masks behind existing mode
-strings. Rule 90 and Rule 184 are elementary 1D space-time diagrams (D-G2).
+The bottom input legend is enabled by default and can be disabled through
+the persisted \texttt{editHints} setting (Edit control hints in F1 settings).
+It wraps to the available window width and includes Wireworld brush keys.
+A compact, flat menu-themed footer uses muted text and contextual selection
+actions. Its opaque bottom band is reserved: canvas tokens clip above it, and
+paint, selection, paste, pan, and zoom ignore pointer input there. The camera
+mapping stays fixed; hiding hints releases the band. Scissor state is restored
+before UI submission.
+Hints and selection outlines hide behind modal overlays and the console.
+Selection drags finish on mouse release, even if Shift is released first.
+Painting, erasing, and leaving EDIT clear the selection but preserve the
+copied pattern. Clipboard hotkeys act only in EDIT; explicit console pattern
+commands remain available independently of mode. Paint strokes belong to
+the module and stop across mode changes and modal input interruptions.
+The versioned JSON catalog describes every shipped transition and palette.
+Schema v3 supports \texttt{life\_like}, \texttt{generations},
+\texttt{moore\_table}, \texttt{cyclic}, and \texttt{elementary\_1d}; schema-v1
+arrays remain readable. These compile to the common \texttt{DataRuleSet} and
+cached 256-by-9 table, except cyclic rules use a full neighbor-state histogram
+and elementary 1D rules retain their dedicated history path.
+Stable IDs continue to match saved worlds. Rule 90 and Rule 184 are elementary
+1D space-time diagrams (D-G2). Catalog registration rejects B0 and odd
+elementary rules: the current sparse representation requires a stable
+background in infinite and finite worlds. JSON catalog loading validates the
+entire document and all definitions before publishing replacements. Neighbor
+arrays accept integers 0--8; elementary rule numbers and palette channels
+accept 0--255. Invalid direct life-like neighbor counts above eight return
+background before any shift.
+Manual stepping counts completed generations and stops at failure. Async failure
+preserves the published world, pauses in edit mode and retains one explicit
+retry; \texttt{run} schedules it without another time-step charge. Elementary
+evolution stages history and destination writes in the retained inactive chunk
+map and publishes once. Failed staging preserves live cells, revision and the
+previous delta. Empty external sources replace stale spare state; borrowed
+source bindings are released on every exit. Staging work scales with history.
+Pattern autodetection honors leading \texttt{!} plaintext comments and skips
+\texttt{\#} RLE comments. Ambiguous multiline cell-only text uses plaintext
+rows; the \texttt{rle} and \texttt{plaintext} commands select their named
+parser. Ctrl+V rejects malformed or occupancy-empty clipboard text without
+reusing a previous internal pattern or changing the world. Console
+\texttt{paste} uses the retained buffer, preserving rotate/flip workflows.
+RLE export retains \texttt{o}/\texttt{b} for states 0/1 and uses the project
+extension \texttt{p\{N\}} for states 2--255. Parsing accepts braced byte values
+and legacy single-digit \texttt{pD} tokens; \texttt{p23o} still means state 2
+followed by three live cells. Earlier unbraced multi-digit exports are ambiguous
+and require correction to braces. Sparse world saves are unaffected.
 
 The persisted \texttt{render3dTest} flag defaults to \texttt{0}. Setting it to
 \texttt{1} replaces CanvasView with a rendering diagnostic scene: fixed axes
@@ -53,20 +190,23 @@ UI continue normally; disabling the flag restores the canvas immediately.
 \subsection{Domain console commands and persistence}
 \symbolref{CellGameModule} registers domain commands through
 \symbolref{CommandRegistry}; Services remains free of Game types. Save always
-writes version 3 sparse files with magic/version, ruleset, camera, topology,
+writes version 4 sparse files with magic/version, family, ruleset, camera, topology,
 and sorted 16$\times$16 canonical chunk records. Load validates temporary
-state before mutation, accepts versions 3 and 2 plus the prior dense format,
+state before mutation, accepts versions 4, 3, and 2 plus the prior dense format,
 treats older formats as infinite, imports legacy cells around the origin,
-restores ruleset/camera metadata, and snaps the bounded view. Native picker variants route through the platform
+derives the family for pre-v4 saves, restores the validated pair/camera, and
+snaps the bounded view. Native picker variants route through the platform
 \symbolref{SaveLoad} API. See D-CLI1 and
 \cref{sec:session-2026-08-04}.
 
 \subsection{CellContext}
 Constructs two \symbolref{SparseCellGrid} buffers and bounded
-\symbolref{CanvasView} from
-env vars (\texttt{CanvasX}, \texttt{CanvasY}, \texttt{WorldChunksX},
-\texttt{WorldChunksY}) and selects a \symbolref{RuleSet} from the configured
-mode name. Mode changes update the ruleset and rebuild the canvas palette.
+\symbolref{CanvasView} from env vars (\texttt{CanvasX}, \texttt{CanvasY},
+\texttt{WorldChunksX}, \texttt{WorldChunksY}) and selects a validated family
+and ruleset pair from \texttt{FamilyString} and \texttt{RuleSetString}. Legacy
+\texttt{ModeString} inputs derive their family from the selected rule. Rule
+changes update compiled behavior and rebuild the canvas palette from the family
+schema.
 
 \subsection{SparseCellGrid (domain) and CanvasView (view --- D-C3)}
 \begin{itemize}
@@ -155,18 +295,23 @@ mode name. Mode changes update the ruleset and rebuild the canvas palette.
   \item View: \symbolref{CanvasView} samples a globally aligned camera cache
         padded by two chunks per side. Motion inside it changes only the MVP;
         aligned origin shifts copy retained texels and resample newly exposed
-        strips. One-revision changes map chunks to deduplicated exact or overview bins
-        and resample the complete cache when those bins cover a quarter of it;
-        marking stops once that threshold is reached. Overview resamples walk
-        occupied cells and snap-convert sampled RGB in one pass.
+        strips. Far-zoom strips initialize background bins and accumulate only
+        occupied cells from intersecting sparse chunks instead of probing every
+        covered source cell. Published generations map exact changed-cell masks
+        to deduplicated cache bins. Far-zoom bins reset together, accumulate in
+        one occupied-chunk traversal, and finalize once; dense exact-cell
+        changes may still select a complete cache sample at the quarter-cache
+        threshold. Overview resamples walk occupied cells and snap-convert
+        sampled RGB in one pass.
         Near zoom is one texel per cell; far zoom uses integer density LOD with
         80\% refinement hysteresis. Revision gaps, non-aligned jumps, LOD/resize,
         palette changes, torus wrap, and replacement perform a bounded refill.
         Exact-cell LOD fades changing colors; density overviews snap. Finite worlds are
         drawn only inside their centered canonical rectangle; camera space
         outside it stays background-colored while opposite-edge simulation
-        neighbors still wrap. Their changes conservatively trigger a bounded
-        refill.
+        neighbors still wrap. A theme-accented outline keeps all four wrap
+        edges visible at a stable screen thickness without tiling the world.
+        Their changes conservatively trigger a bounded refill.
   \item GPU: one reusable nearest-filtered RGB display texture and one
         world-space \symbolref{GameVisual} quad that shares its cell bounds
         with the editor cursor. Dirty 16$\times$16-texel tiles merge into at
@@ -191,24 +336,108 @@ resources do not scale with chunk count.
 \end{statusbox}
 
 \subsection{Rulesets}
-Active rules (in \pathref{AllSets.h} / factory): Game of Life, Seeds, Brian's
-Brain, Highlife, Day \& Night, Life Without Death, Wireworld, Rule 90, and
-Rule 184. Binary B/S rules share \texttt{LifeLikeRuleSet} masks. Rule 90 / 184
-use \texttt{NeighborhoodKind::Elementary1D} and a serial space-time advance
-(D-G2).
+The shipped \pathref{families.json} defines cell-state schemas and palettes;
+\pathref{rulesets.json} defines Game of Life, Brian's Brain, Day
+\& Night, Highlife, Life Without Death, Seeds, Wireworld, Rule 90, Rule 184,
+Star Wars, Nova Trails, two Excitable Waves thresholds, Prism Rush, Chromatic
+Storm, Crystal Domains, Elemental Surge, and Aurora Conflict.
+The researched expansion adds Immigration, QuadLife, Bosco/Bugs, Bugsmovie,
+Globe, Banners, Transers, Fireworks, and the classic 14-color cyclic automaton.
+\texttt{RuleSetRegistry} starts empty, validates text transactionally, and
+compiles version-3 rule definitions referencing version-1 family definitions.
+Families own their stable IDs, simulation models, state counts, labels, and
+colors. Rules own stable IDs, names, one required family ID, and transition
+parameters. Unversioned and schema-v1/v2 legacy rule catalogs remain readable
+and normalize into separated definitions. Life-like, Generations, and
+colorized-Life rules
+compile from B/S neighbor counts; Wireworld and the five-phase excitable-media
+family are Moore tables. The twelve-state Prismatic Ecology and nine-state
+Elemental Court are cyclic families: a cell advances by a coprime step when its
+successor state meets the rule threshold among eight neighbors. The four-phase Generations family shares a neon decay
+schema between Star Wars (B2/S345/C4) and Nova Trails (B23/S34/C4). The
+excitable-media family shares an excited/resting/three-stage refractory schema;
+its two rules activate resting cells at thresholds one and two. Rule 90 / 184 use the dedicated
+\texttt{NeighborhoodKind::}\allowbreak\texttt{Elementary1D} serial history
+path (D-G2). Adding a definition requires no C++ factory change while it fits
+one of these families.
+
+Immigration and QuadLife count every non-background state as live. Survival
+retains the current species; births inherit the majority parent color, except
+that three distinct QuadLife parents produce the absent fourth species. They
+reuse the full-state Moore histogram path. The classic cyclic rule implements
+the 14-color random-initial-condition experiment described by Fisch, Gravner,
+and Griffeath.
+
+Larger-than-Life definitions carry range, optional center counting, inclusive
+birth/survival intervals, and square or circular neighborhood shape. Range is
+bounded to 16 and B0 is rejected. Bosco/Bugs, Bugsmovie, and Globe use the
+parameters documented by Golly. Their serial sparse kernel expands occupied
+chunks by the required chunk radius and uses authoritative cell lookup before
+transactional output publication; it does not alter the optimized radius-one
+paths.
+
+Rules may also own deterministic starter data. Active soups drive Generations
+and Larger-than-Life, phase soups drive cyclic systems, species soups include
+every live kind, and excitable breaks replace the former generic glider for
+wave media. Research sources are Golly's official Generations and
+Larger-than-Life documentation, Fisch--Gravner--Griffeath's 1991 paper, and the
+January 1979 BYTE Quad-Life description.
+
+The second researched expansion adds Hodgepodge chemistry, Turmites, HPP
+lattice gas, and five-species dominance. Hodgepodge exposes 101 color levels
+and computes healthy infection, active averaging, and ill recovery from the
+complete Moore histogram. RPSLS uses the same histogram with two prey offsets
+per species and deterministic synchronous invasion thresholds.
+
+Turmites and HPP preserve north/east/south/west identity through
+\texttt{NeighborhoodKind::}\allowbreak\texttt{VonNeumannDirectional}.
+The RL, RRL, and RRLL Turmites combine two to four tape colors with four agent
+directions per color. HPP's sixteen states encode every combination of four
+directional particles; opposing pairs rotate before streaming. Both dense
+compatibility and serial sparse execution use the same direction ordering and
+transactional publication. Deterministic agent swarms and particle clouds make
+these rules move immediately. Sources include Dewdney's contemporary account
+of the Gerhardt--Schuster Hodgepodge Machine, Moreira and Gajardo's Turmite
+formalization, Hardy--Pomeau--de Pazzis lattice gas, Toffoli and Margolus's
+cellular-automata treatment, and Vukov--Szolnoki--Szabó five-species dominance.
+
+Game's \texttt{RuleCatalogLoader} selects the first valid base family/rule
+catalog pair beside the executable, in the working directory, or in its
+\texttt{IllumoGame} subdirectory. It then transactionally layers the
+working-directory \pathref{families.user.json} and
+\pathref{rulesets.user.json}; later matching IDs replace earlier definitions.
+Invalid or unreadable base files fall through, and malformed overlays preserve
+the active catalog. The module factory loads the catalog once before
+menu/direct-game construction. The engine's configuration path supplies
+executable location; Rulesets has no filesystem or native API dependency.
+Callers use the loader for files and \texttt{loadFromText} for text (D-GC1,
+D-GC2, D-GC4). F1, New Simulation, runtime status, and saved worlds carry an
+explicit family/ruleset pair. Save version 4 writes both IDs; version 3,
+version 2, and dense legacy readers derive the family from the saved rule ID.
 
 \begin{lstlisting}
 class RuleSet {
   // Pure transition: cell + Moore count of alive (value==0) neighbors.
   virtual unsigned char nextState(unsigned char cell,
                                   unsigned char aliveNeighbors) const;
+  virtual unsigned char nextStateFromNeighborhood(
+    unsigned char cell,
+    const NeighborStateCounts& neighborStateCounts) const;
+  virtual unsigned char nextStateFromDirectionalNeighborhood(
+    unsigned char cell,
+    const DirectionalNeighbors& neighbors) const;
+  virtual unsigned char nextStateFromExtendedCount(
+    unsigned char cell,
+    unsigned int aliveCount) const;
   virtual void evalCell(const unsigned char& target,
                         unsigned char dest[3]) const; // palette colors
   const TransitionTable& getTransitionTable() const;
 };
 \end{lstlisting}
 
-\textbf{Generation:}
+\textbf{Generation:} Full-state, directional von Neumann, and extended-range
+rules first route to their isolated correctness kernels. Radius-one count rules
+use the optimized path below.
 \begin{enumerate}
   \item Read cached stored/counting totals and the candidate-preferred chunk
         count. If the retained changed frontier is empty, return immediately
@@ -242,7 +471,9 @@ class RuleSet {
         worker pool for 32 or more targets.
   \item For at least 32 halo targets, sample the exact sharded neighborhood
         memo. Activate it only when its observed hit rate offsets key creation;
-        cool it down for unique inputs and invalidate it with rule transitions.
+        cool it down for unique inputs and invalidate it by exact comparison
+        of the complete transition table. Instance revisions and rule names
+        cannot identify transition semantics across different ruleset objects.
   \item Install non-background results serially into the retained inactive map,
         reusing extracted chunk-node handles before allocating new nodes. Build
         sparse candidates directly in mapped node storage and bulk-copy dense
@@ -253,6 +484,14 @@ class RuleSet {
 Before worker dispatch, the active ruleset lazily builds its 2,304-entry
 transition table. Candidate, halo, and compatibility dense loops index this
 immutable table rather than invoking virtual transitions for every cell.
+Cyclic rules instead use an isolated serial sparse kernel that expands occupied
+chunks by one, counts all byte-valued neighbor states, and reuses the existing
+transactional output and change journal. The optimized count-table paths remain
+unchanged. Dense compatibility evaluation uses the same histogram contract.
+Colorized-Life shares that histogram kernel. Larger-than-Life uses a separate
+serial extended-range kernel and the same transactional result/change-journal
+machinery. Hodgepodge and dominance share the histogram kernel; Turmites and
+HPP share the serial direction-preserving kernel.
 
 \begin{decisionbox}[title={Keep rules pure}]
 Rulesets stay free of rendering and input. They read/write cell buffers only

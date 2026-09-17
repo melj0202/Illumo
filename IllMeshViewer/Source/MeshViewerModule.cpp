@@ -23,7 +23,8 @@ viewerContextComplete(const IllumoContext* context)
   return context != nullptr && context->envVars != nullptr &&
          context->window != nullptr && context->camera != nullptr &&
          context->renderer != nullptr && context->inputManager != nullptr &&
-         context->commandLine != nullptr && context->scene != nullptr;
+         context->commandLine != nullptr && context->scene != nullptr &&
+         context->assetManager != nullptr;
 }
 
 MeshViewerModule::MeshViewerModule(std::string initialMeshPath)
@@ -31,6 +32,7 @@ MeshViewerModule::MeshViewerModule(std::string initialMeshPath)
   , m_showGrid(true)
   , m_showWireframe(false)
   , m_showAxes(true)
+  , m_showSkybox(true)
   , m_isOrbiting(false)
   , m_isPanning(false)
   , m_mouseWasDown(false)
@@ -64,6 +66,10 @@ MeshViewerModule::Start(IllumoContext* context)
     if (!wireVar.empty()) {
       m_showWireframe = (wireVar == "1" || wireVar == "true");
     }
+    const std::string skyVar = ic->envVars->getVar("showSkybox").value;
+    if (!skyVar.empty()) {
+      m_showSkybox = (skyVar == "1" || skyVar == "true");
+    }
   }
 
   m_gridVisual = std::make_unique<MeshVisual>();
@@ -74,6 +80,19 @@ MeshViewerModule::Start(IllumoContext* context)
 
   m_wireframeVisual = std::make_unique<MeshVisual>();
   m_wireframeVisual->prepare(ic->renderer);
+
+  if (ic->assetManager != nullptr) {
+    std::string skyboxPath = "Assets/Skybox/skybox-daylight.png";
+    if (!std::filesystem::exists(skyboxPath)) {
+      skyboxPath = "Illumo/Assets/Skybox/skybox-daylight.png";
+    }
+    TextureHandle skyboxCubemap =
+      ic->assetManager->acquireCubemapFromCross(skyboxPath);
+    if (skyboxCubemap.isValid()) {
+      m_skyboxVisual = std::make_unique<SkyboxVisual>(skyboxCubemap);
+      m_skyboxVisual->prepare(ic->renderer);
+    }
+  }
 
   m_ui = std::make_unique<MeshViewerUi>(ic->window, ic->renderer);
   applyLightingFromEnv();
@@ -113,6 +132,11 @@ MeshViewerModule::Exit()
   m_wireframeVisual.reset();
   m_meshVisual.reset();
   m_gridVisual.reset();
+  m_skyboxVisual.reset();
+  if (ic != nullptr && ic->assetManager != nullptr && m_meshAsset.isValid()) {
+    ic->assetManager->releaseMesh(m_meshAsset);
+  }
+  m_meshAsset = MeshHandle{};
   m_meshData.clear();
   m_meshPath.clear();
 }
@@ -143,11 +167,25 @@ MeshViewerModule::loadMesh(const std::string& path)
     return false;
   }
 
+  if (ic == nullptr || ic->assetManager == nullptr) {
+    return false;
+  }
+  const MeshHandle meshAsset = ic->assetManager->acquireMesh(result.mesh);
+  const MeshAssetInfo meshInfo = ic->assetManager->getMeshInfo(meshAsset);
+  if (!meshInfo.isValid()) {
+    return false;
+  }
+
+  const MeshHandle previousAsset = m_meshAsset;
+  m_meshAsset = meshAsset;
   m_meshPath = path;
   m_meshData = result.mesh;
 
   rebuildMeshVisual();
   rebuildWireframe();
+  if (previousAsset.isValid()) {
+    ic->assetManager->releaseMesh(previousAsset);
+  }
 
   m_camera.frameBounds(m_meshData.minBounds, m_meshData.maxBounds);
   if (ic != nullptr && ic->camera != nullptr) {
@@ -181,11 +219,25 @@ MeshViewerModule::loadMeshFromMemory(const std::string& content,
     return false;
   }
 
+  if (ic == nullptr || ic->assetManager == nullptr) {
+    return false;
+  }
+  const MeshHandle meshAsset = ic->assetManager->acquireMesh(result.mesh);
+  const MeshAssetInfo meshInfo = ic->assetManager->getMeshInfo(meshAsset);
+  if (!meshInfo.isValid()) {
+    return false;
+  }
+
+  const MeshHandle previousAsset = m_meshAsset;
+  m_meshAsset = meshAsset;
   m_meshPath = name;
   m_meshData = result.mesh;
 
   rebuildMeshVisual();
   rebuildWireframe();
+  if (previousAsset.isValid()) {
+    ic->assetManager->releaseMesh(previousAsset);
+  }
 
   m_camera.frameBounds(m_meshData.minBounds, m_meshData.maxBounds);
   if (ic != nullptr && ic->camera != nullptr) {
@@ -202,7 +254,8 @@ MeshViewerModule::setShowGrid(bool show)
   m_showGrid = show;
   rebuildGrid();
   if (m_ui) {
-    m_ui->setDisplayOptions(m_showGrid, m_showWireframe, m_showAxes);
+    m_ui->setDisplayOptions(
+      m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
   }
 }
 
@@ -212,7 +265,8 @@ MeshViewerModule::setShowWireframe(bool show)
   m_showWireframe = show;
   rebuildWireframe();
   if (m_ui) {
-    m_ui->setDisplayOptions(m_showGrid, m_showWireframe, m_showAxes);
+    m_ui->setDisplayOptions(
+      m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
   }
 }
 
@@ -222,7 +276,18 @@ MeshViewerModule::setShowAxes(bool show)
   m_showAxes = show;
   rebuildGrid();
   if (m_ui) {
-    m_ui->setDisplayOptions(m_showGrid, m_showWireframe, m_showAxes);
+    m_ui->setDisplayOptions(
+      m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
+  }
+}
+
+void
+MeshViewerModule::setShowSkybox(bool show)
+{
+  m_showSkybox = show;
+  if (m_ui) {
+    m_ui->setDisplayOptions(
+      m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
   }
 }
 
@@ -512,16 +577,19 @@ MeshViewerModule::applyMotionBlurFromEnv()
 void
 MeshViewerModule::rebuildMeshVisual()
 {
-  if (!m_meshVisual || ic == nullptr || ic->renderer == nullptr) {
+  if (!m_meshVisual || ic == nullptr || ic->renderer == nullptr ||
+      ic->assetManager == nullptr) {
     return;
   }
   m_meshVisual->clearPrimitives();
 
-  if (m_meshData.isEmpty()) {
+  const MeshAssetInfo meshInfo = ic->assetManager->getMeshInfo(m_meshAsset);
+  if (m_meshData.isEmpty() || !meshInfo.isValid()) {
+    m_meshVisual->clearMeshAsset();
     return;
   }
 
-  m_meshVisual->addMesh(m_meshData, ColorRgba{ 225, 230, 240, 255 });
+  m_meshVisual->setMeshAsset(meshInfo, ColorRgba{ 225, 230, 240, 255 });
 }
 
 void
@@ -546,7 +614,8 @@ MeshViewerModule::syncUiMetadata()
     meta.hasMesh = false;
   }
   m_ui->setMeshMetadata(meta);
-  m_ui->setDisplayOptions(m_showGrid, m_showWireframe, m_showAxes);
+  m_ui->setDisplayOptions(
+    m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
 }
 
 void
@@ -567,6 +636,9 @@ MeshViewerModule::handleAction(MeshViewerAction action)
       break;
     case MeshViewerAction::ToggleAxes:
       setShowAxes(!m_showAxes);
+      break;
+    case MeshViewerAction::ToggleSkybox:
+      setShowSkybox(!m_showSkybox);
       break;
     case MeshViewerAction::None:
     default:
@@ -689,52 +761,40 @@ MeshViewerModule::Update(double dt)
   handleAction(action);
 
   if (!consoleOpen && ic->inputManager != nullptr) {
-    // Hotkeys
-    if (ic->inputManager->isKeyPressed(KeyCode::O)) {
-      static bool oWasPressed = false;
-      if (!oWasPressed) {
-        openMeshDialog();
+    std::queue<InputManager::KeyPressEvent>& keys =
+      ic->inputManager->getKeyQueue();
+    std::queue<InputManager::KeyPressEvent> remaining;
+    while (!keys.empty()) {
+      const InputManager::KeyPressEvent event = keys.front();
+      keys.pop();
+      MeshViewerAction shortcut = MeshViewerAction::None;
+      switch (event.key) {
+        case KeyCode::O:
+          shortcut = MeshViewerAction::OpenMesh;
+          break;
+        case KeyCode::F:
+        case KeyCode::R:
+          shortcut = MeshViewerAction::ResetView;
+          break;
+        case KeyCode::G:
+          shortcut = MeshViewerAction::ToggleGrid;
+          break;
+        case KeyCode::X:
+          shortcut = MeshViewerAction::ToggleWireframe;
+          break;
+        case KeyCode::B:
+          shortcut = MeshViewerAction::ToggleSkybox;
+          break;
+        default:
+          break;
       }
-      oWasPressed = true;
-    } else {
-      static bool oWasPressed = false;
-      oWasPressed = false;
-    }
-
-    if (ic->inputManager->isKeyPressed(KeyCode::F) ||
-        ic->inputManager->isKeyPressed(KeyCode::R)) {
-      static bool rWasPressed = false;
-      if (!rWasPressed) {
-        resetCamera();
+      if (shortcut == MeshViewerAction::None) {
+        remaining.push(event);
+      } else if (event.action == InputAction::Press) {
+        handleAction(shortcut);
       }
-      rWasPressed = true;
-    } else {
-      static bool rWasPressed = false;
-      rWasPressed = false;
     }
-
-    if (ic->inputManager->isKeyPressed(KeyCode::G)) {
-      static bool gWasPressed = false;
-      if (!gWasPressed) {
-        setShowGrid(!m_showGrid);
-      }
-      gWasPressed = true;
-    } else {
-      static bool gWasPressed = false;
-      gWasPressed = false;
-    }
-
-    if (ic->inputManager->isKeyPressed(KeyCode::X)) {
-      static bool xWasPressed = false;
-      if (!xWasPressed) {
-        setShowWireframe(!m_showWireframe);
-      }
-      xWasPressed = true;
-    } else {
-      static bool xWasPressed = false;
-      xWasPressed = false;
-    }
-
+    keys.swap(remaining);
     const bool uiConsumed = m_ui && m_ui->consumedPress();
     if (!uiConsumed) {
       updateCameraInput(dt);
@@ -758,6 +818,9 @@ MeshViewerModule::Update(double dt)
     m_lastMouseY = mouse[1];
   }
 
+  if (m_skyboxVisual) {
+    m_skyboxVisual->prepare(ic->renderer);
+  }
   if (m_gridVisual) {
     m_gridVisual->prepare(ic->renderer);
   }
@@ -777,6 +840,9 @@ MeshViewerModule::DispatchDrawables(Scene* scene)
 {
   if (scene == nullptr) {
     return;
+  }
+  if (m_showSkybox && m_skyboxVisual) {
+    scene->AddDrawable(m_skyboxVisual.get(), RenderLayerId::World);
   }
   if (m_showGrid && m_gridVisual) {
     scene->AddDrawable(m_gridVisual.get(), RenderLayerId::World);

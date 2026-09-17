@@ -6,11 +6,22 @@ Illumo:
 - `IllumoConfig` carries application name, configuration path, and fallible
   test/factory injection hooks.
 - `Illumo` owns long-lived generic services and drives update/render/shutdown.
+- F11 asks the window to toggle fullscreen and reports its resulting environment
+  value. The window publishes the state; the host does not invert it again.
 - `IllumoContext` is a frozen, non-owning service bag with no game assumptions,
   exposing `IModuleHost*` for deferred module transitions.
 - `IModule` retains `Start` / `Update` / `DispatchDrawables` / `Exit`.
+- Optional `IModule::OnCloseRequested()` accepts by default. The runner calls
+  `Illumo::processCloseRequest()` before termination; started modules may defer
+  close to show product confirmation. Deferral clears the native close flag and
+  normal updates/rendering continue. Failed required-module transition remains
+  terminal. Custom windows serving deferring modules must implement
+  `cancelCloseRequest()`. `shouldClose()` remains a raw observation.
 - `IModuleHost` allows modules to request runtime transitions (`RequestTransition`)
   deferred to frame boundaries with input queue and scene clearing.
+  Transitions reset all application pass overrides before owner retirement and
+  after rejected startup, preserving host defaults. Optional modules must
+  reinstall their overrides after transitions.
 - `DebugModule` is an optional generic renderer/tooling overlay in Debug
   builds. It updates before the required product module so console toggle and
   editing work on every screen, and it dispatches afterward so console, FPS,

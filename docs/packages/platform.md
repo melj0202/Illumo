@@ -18,3 +18,13 @@ Windows is implemented, Linux/macOS return empty/false scaffolds and are not
 supported clipboard ports. Source
 presence does not establish support: each port requires native build, tests,
 live rendering/input, dialogs, and clean shutdown.
+
+`AtomicFile::write` synchronously creates an exclusive sibling staging file,
+streams the caller's format, checks write/flush/close, and publishes by replacing
+the destination. A reported failure preserves the old destination and removes
+only the staging file owned by that call. IllEd and IllumoGame codecs use this
+operation and clear dirty state/report success only after it succeeds. Windows
+uses same-directory `MoveFileExW` with replacement, without cross-volume copy
+fallback ([API contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)).
+This is not a power-loss durability or destination-security-metadata preservation
+guarantee. POSIX rename code is unverified scaffolding.

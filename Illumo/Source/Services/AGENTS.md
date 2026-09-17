@@ -21,10 +21,16 @@ Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
 - Service objects are Engine-owned. Logger sinks, command callbacks, input
   contexts, and non-owning pointers must be detached before their targets die.
 - Input callbacks enqueue events; consumers drain them on the main thread.
+  Overlay keyboard capture must cover both queued events and polling:
+  `suppressKeyForFrame` masks keyboard queries and bound actions until the next
+  input update without synthesizing releases. Consumers still own queue draining.
   Bound or deliberately coalesce queues so a build without a consumer cannot
   grow memory indefinitely.
 - Validate context identifiers before indexing. Registration failure must be
   observable and must not become an out-of-bounds active context.
+  Input IDs are manager-local and never reused; modules retire registrations on
+  exit. Invalid activation preserves selection; retiring the active context
+  selects neutral input. Exhausted startup must not allocate domain state.
 - Command queuing and execution are main-thread operations. If callbacks may
   queue more commands, execution must not invalidate the container currently
   being iterated.

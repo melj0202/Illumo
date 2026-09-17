@@ -25,9 +25,17 @@ public:
   static std::string NormalizeModeString(std::string modeString);
   static bool IsKnownModeString(const std::string& modeString);
   static std::vector<std::string> GetKnownModeStrings();
+  static std::string NormalizeFamilyString(std::string familyString);
+  static bool IsKnownFamilyString(const std::string& familyString);
+  static std::vector<std::string> GetKnownFamilyStrings();
+  static std::vector<std::string> GetKnownRuleStrings(
+    const std::string& familyString);
 
   // Returns true if the active ruleset instance changed.
   bool setRuleSet(std::string modeString);
+  bool setRuleSet(std::string familyString, std::string ruleSetString);
+  // Rebuilds the active instance from the current registry definitions.
+  bool refreshRuleSet();
 
   CanvasView* getCanvas() const { return canvasView; }
   CanvasView* getCellCanvas() const { return canvasView; }
@@ -39,15 +47,22 @@ public:
   bool resetWorld(std::int64_t worldChunkWidth, std::int64_t worldChunkHeight);
   void publishSpareGrid(const SparseGenerationDelta& delta);
   RuleSet* getRuleSet() const { return ruleSet; }
-  std::string getModeString() const { return ModeString; }
+  std::string getModeString() const { return RuleSetString; }
+  const std::string& getRuleSetString() const { return RuleSetString; }
+  const std::string& getFamilyString() const { return FamilyString; }
   CommandLine* getCommandLine() const { return commandLine; }
 
 private:
+  bool setRuleSetInternal(std::string familyString,
+                          std::string ruleSetString,
+                          bool forceRefresh);
+
   RuleSet* ruleSet;
   SparseCellGrid* grid;
   SparseCellGrid* spareGrid;
   CanvasView* canvasView;
-  std::string ModeString;
+  std::string FamilyString;
+  std::string RuleSetString;
   CommandLine* commandLine;
   IEnvVars* envVars;
   IRenderWindow* window;

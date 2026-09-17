@@ -1,3 +1,4 @@
+#include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -156,6 +157,260 @@ testMeshVisualDynamicMeshReuse()
              "expanded geometry updates the retained buffer");
 }
 
+static MeshData
+makeSharedQuadMesh(bool alternateDiagonal)
+{
+  MeshData mesh;
+  MeshVertex vertex;
+  vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+  vertex.position = glm::vec3(-1.0f, -1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  vertex.position = glm::vec3(1.0f, -1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  vertex.position = glm::vec3(1.0f, 1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  vertex.position = glm::vec3(-1.0f, 1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  if (alternateDiagonal) {
+    mesh.indices = { 0, 1, 3, 1, 2, 3 };
+  } else {
+    mesh.indices = { 0, 1, 2, 0, 2, 3 };
+  }
+  return mesh;
+}
+
+static void
+testMeshVisualIndexedTriangles()
+{
+  testSection("MeshVisual: triangles preserve shared indexed geometry");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addMesh(makeSharedQuadMesh(false));
+
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "indexed quad emits tokens");
+  renderer.EndFrame();
+
+  const RenderCommand* vertexUpdate =
+    findSubmittedCommand(mock, CommandType::UpdateBuffer, 0);
+  const RenderCommand* indexUpdate =
+    findSubmittedCommand(mock, CommandType::UpdateIndexBuffer, 0);
+  testTrue(g, vertexUpdate != nullptr, "indexed quad uploads vertices");
+  testTrue(g, indexUpdate != nullptr, "indexed quad uploads indices");
+  if (vertexUpdate != nullptr) {
+    testEqSize(g,
+               vertexUpdate->updateBuffer.sizeBytes,
+               4u * 36u,
+               "four unique LitVertex values are uploaded");
+  }
+  if (indexUpdate != nullptr) {
+    testEqSize(g,
+               indexUpdate->updateIndexBuffer.sizeBytes,
+               6u * sizeof(unsigned int),
+               "six source indices are uploaded");
+    const unsigned int expected[6] = { 0, 1, 2, 0, 2, 3 };
+    const unsigned int* uploaded =
+      static_cast<const unsigned int*>(indexUpdate->updateIndexBuffer.data);
+    testTrue(g,
+             uploaded != nullptr &&
+               std::memcmp(uploaded, expected, sizeof(expected)) == 0,
+             "source index topology is preserved byte-for-byte");
+  }
+
+  MeshHandle retainedHandle{};
+  size_t indexedDrawCount = 0;
+  bool allDrawCountsMatch = true;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetMesh &&
+        !retainedHandle.isValid()) {
+      retainedHandle = command.bindMesh.handle;
+    }
+    if (command.commandType == CommandType::DrawIndexed) {
+      indexedDrawCount += 1;
+      allDrawCountsMatch =
+        allDrawCountsMatch && command.drawIndexed.elementCount == 6u;
+    }
+  }
+  testTrue(g, retainedHandle.isValid(), "indexed triangle mesh is retained");
+  testTrue(g,
+           indexedDrawCount >= 1u && allDrawCountsMatch,
+           "every triangle pass draws the six source indices");
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "unchanged quad still draws");
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             0u,
+             "unchanged triangle vertices skip upload");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateIndexBuffer),
+             0u,
+             "unchanged triangle indices skip upload");
+
+  visual.clearPrimitives();
+  visual.addMesh(makeSharedQuadMesh(true));
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g,
+           visual.AppendCommands(&renderer),
+           "changed topology inside capacity emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* changedMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           changedMesh != nullptr &&
+             changedMesh->bindMesh.handle == retainedHandle,
+           "changed topology inside capacity reuses the mesh handle");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "changed topology refreshes unique vertices once");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateIndexBuffer),
+             1u,
+             "changed topology refreshes indices once");
+
+  visual.clearPrimitives();
+  for (size_t i = 0; i < 17u; ++i) {
+    visual.addMesh(makeSharedQuadMesh(false));
+  }
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "capacity growth emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* grownMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           grownMesh != nullptr && grownMesh->bindMesh.handle == retainedHandle,
+           "capacity growth replaces storage without changing the handle");
+
+  MeshData invalid = makeSharedQuadMesh(false);
+  invalid.indices[5] = 4;
+  MeshVisual invalidVisual;
+  invalidVisual.prepare(&renderer);
+  invalidVisual.addMesh(invalid);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g,
+           invalidVisual.AppendCommands(&renderer),
+           "invalid mesh is rejected without failing extraction");
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             0u,
+             "invalid mesh uploads no vertices");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateIndexBuffer),
+             0u,
+             "invalid mesh uploads no indices");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             0u,
+             "invalid mesh emits no draw");
+}
+
+static void
+testMeshVisualSharedMeshAsset()
+{
+  testSection("MeshVisual: instances share one managed mesh upload");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  AssetManager assets(&renderer, false);
+
+  MeshData mesh;
+  MeshVertex a;
+  a.position = glm::vec3(0.0f, 0.0f, 0.0f);
+  MeshVertex b;
+  b.position = glm::vec3(1.0f, 0.0f, 0.0f);
+  MeshVertex c;
+  c.position = glm::vec3(0.0f, 1.0f, 0.0f);
+  mesh.vertices = { a, b, c };
+  mesh.indices = { 0, 1, 2 };
+  const MeshHandle handle = assets.acquireMesh(mesh);
+  const MeshAssetInfo info = assets.getMeshInfo(handle);
+  testTrue(g, info.isValid(), "mesh asset enrollment succeeds");
+
+  {
+    MeshVisual first;
+    first.prepare(&renderer);
+    first.setShadowsEnabled(false);
+    first.setLightingEnabled(false);
+    first.setMeshAsset(info, ColorRgba{ 255, 128, 64, 255 });
+
+    MeshVisual second;
+    second.prepare(&renderer);
+    second.setShadowsEnabled(false);
+    second.setLightingEnabled(false);
+    second.setModelMatrix(
+      glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)));
+    second.setMeshAsset(info, ColorRgba{ 64, 128, 255, 255 });
+
+    mock.resetCounters();
+    renderer.BeginFrame();
+    testTrue(g, first.AppendCommands(&renderer), "first instance emits tokens");
+    testTrue(
+      g, second.AppendCommands(&renderer), "second instance emits tokens");
+    renderer.EndFrame();
+
+    const RenderCommand* firstMesh =
+      findSubmittedCommand(mock, CommandType::SetMesh, 0);
+    const RenderCommand* secondMesh =
+      findSubmittedCommand(mock, CommandType::SetMesh, 1);
+    testTrue(g,
+             firstMesh != nullptr && secondMesh != nullptr &&
+               firstMesh->bindMesh.handle == handle &&
+               secondMesh->bindMesh.handle == handle,
+             "both instances bind the same managed mesh handle");
+    testEqSize(g,
+               mock.getCreateCount(),
+               0u,
+               "drawing instances performs no additional mesh enrollment");
+    testEqSize(g,
+               mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+               0u,
+               "immutable managed mesh skips per-instance buffer uploads");
+
+    const RenderCommand* firstMvp =
+      findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
+    const RenderCommand* secondMvp =
+      findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 1);
+    testTrue(g,
+             firstMvp != nullptr && secondMvp != nullptr,
+             "both instances emit their own transform");
+    if (firstMvp != nullptr && secondMvp != nullptr) {
+      glm::mat4 firstMatrix(1.0f);
+      std::memcpy(glm::value_ptr(firstMatrix),
+                  firstMvp->uniformMat4.m,
+                  16 * sizeof(float));
+      testTrue(g,
+               !matricesNear(secondMvp->uniformMat4.m, firstMatrix),
+               "shared geometry keeps per-instance transforms distinct");
+    }
+  }
+
+  testTrue(g,
+           mock.IsMeshValid(handle),
+           "destroying visuals does not destroy manager-owned mesh");
+  testTrue(g, assets.releaseMesh(handle), "asset owner releases shared mesh");
+  testTrue(
+    g, !mock.IsMeshValid(handle), "final asset release destroys shared mesh");
+}
+
 static void
 testMeshVisualSpriteAndCube()
 {
@@ -251,7 +506,7 @@ testMeshVisualBillboard()
   testTrue(g, worldMvpCmd != nullptr, "world-aligned sprite submits uMVP");
   float worldMvp[16] = {};
   if (worldMvpCmd != nullptr) {
-    std::memcpy(worldMvp, worldMvpCmd->uniformMat4.m, sizeof(worldMvp));
+    std::memcpy(worldMvp, worldMvpCmd->uniformMat4.value, sizeof(worldMvp));
   }
 
   mock.resetCounters();
@@ -266,7 +521,7 @@ testMeshVisualBillboard()
   float billboardMvp[16] = {};
   if (billboardMvpCmd != nullptr) {
     std::memcpy(
-      billboardMvp, billboardMvpCmd->uniformMat4.m, sizeof(billboardMvp));
+      billboardMvp, billboardMvpCmd->uniformMat4.value, sizeof(billboardMvp));
   }
 
   const float aspect = 640.0f / 480.0f;
@@ -342,7 +597,7 @@ testMeshVisualSceneAttachment()
   const glm::mat4 expected = camera.GetMVPMatrix(aspect) * translation;
   testTrue(g, mvp != nullptr, "attachment submits uMVP");
   testTrue(g,
-           mvp != nullptr && matricesNear(mvp->uniformMat4.m, expected),
+           mvp != nullptr && matricesNear(mvp->uniformMat4.value, expected),
            "uMVP equals camera MVP times node world");
   testTrue(
     g, !submittedUsePixelsOne(mock), "attachment does not use pixel mode");
@@ -823,11 +1078,11 @@ testMeshVisualMotionBlurUniformsFromSetters()
   bool haveFirstMvp = false;
   if (firstMvp != nullptr && firstPrev != nullptr) {
     std::memcpy(glm::value_ptr(firstMvpMatrix),
-                firstMvp->uniformMat4.m,
+                firstMvp->uniformMat4.value,
                 16 * sizeof(float));
     haveFirstMvp = true;
     testTrue(g,
-             matricesNear(firstPrev->uniformMat4.m, firstMvpMatrix),
+             matricesNear(firstPrev->uniformMat4.value, firstMvpMatrix),
              "first frame previous MVP matches current MVP");
   }
 
@@ -867,15 +1122,16 @@ testMeshVisualMotionBlurUniformsFromSetters()
            "moved frame emits current and previous MVP");
   if (haveFirstMvp && secondPrev != nullptr) {
     testTrue(g,
-             matricesNear(secondPrev->uniformMat4.m, firstMvpMatrix),
+             matricesNear(secondPrev->uniformMat4.value, firstMvpMatrix),
              "second frame previous MVP matches the prior current MVP");
   }
   if (secondMvp != nullptr && secondPrev != nullptr) {
     glm::mat4 current(1.0f);
-    std::memcpy(
-      glm::value_ptr(current), secondMvp->uniformMat4.m, 16 * sizeof(float));
+    std::memcpy(glm::value_ptr(current),
+                secondMvp->uniformMat4.value,
+                16 * sizeof(float));
     testTrue(g,
-             !matricesNear(secondPrev->uniformMat4.m, current),
+             !matricesNear(secondPrev->uniformMat4.value, current),
              "moved frame current MVP differs from previous MVP");
   }
 
@@ -901,6 +1157,9 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
 {
   registry.add("Illumo.MeshVisual.DynamicMeshReuse", []() {
     return runMeshVisualCase(testMeshVisualDynamicMeshReuse);
+  });
+  registry.add("Illumo.MeshVisual.SharedMeshAsset", []() {
+    return runMeshVisualCase(testMeshVisualSharedMeshAsset);
   });
   registry.add("Illumo.MeshVisual.SpriteAndCube",
                []() { return runMeshVisualCase(testMeshVisualSpriteAndCube); });

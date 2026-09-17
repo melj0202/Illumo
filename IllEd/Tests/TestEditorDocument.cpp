@@ -155,6 +155,113 @@ test3DTranslateWithParent()
 void
 registerEditorDocumentTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Document.ImportedIdAllocation", []() {
+    g = {};
+    IlscDocument imported;
+    for (const char* id : { "n1",
+                            "n4294967295",
+                            "n18446744073709551615",
+                            "n999999999999999999999999999999999999999999999999",
+                            "n0002",
+                            "arbitrary-id" }) {
+      IlscNode node;
+      node.id = id;
+      imported.nodes.push_back(node);
+    }
+    EditorDocument document;
+    std::string error;
+    testTrue(g,
+             document.loadFromText(IlscCodec::encode(imported), &error),
+             "loads maximum and long opaque ids");
+    for (int count = 0; count < 4; ++count) {
+      const std::string created =
+        document.createNode(SceneNodeKind::SolidCube, "n1");
+      testTrue(
+        g, !created.empty(), "creates unique node after opaque imported ids");
+      IlscDocument parsed;
+      testTrue(g,
+               IlscCodec::parse(document.encode(), &parsed, &error),
+               "created scene reloads with unique ids and valid parent links");
+      testEqSize(g,
+                 parsed.nodes.size(),
+                 imported.nodes.size() + static_cast<size_t>(count) + 1,
+                 "new node is retained");
+    }
+    const std::string saved = document.encode();
+    testTrue(g, document.loadFromText(saved, &error), "reloads extended scene");
+    const std::string next = document.createNode(SceneNodeKind::Empty, {});
+    testTrue(g, !next.empty(), "allocation skips occupied ids after reloading");
+    IlscDocument parsed;
+    testTrue(g,
+             IlscCodec::parse(document.encode(), &parsed, &error),
+             "second generation round trips");
+    return g.failures;
+  });
+  registry.add("IllEd.Document.RayPicking", []() {
+    g = {};
+    EditorDocument document;
+    document.setWorldMode(IlscWorldMode::World3D);
+    const std::string nearId =
+      document.createNode(SceneNodeKind::SolidCube, {});
+    const std::string farId = document.createNode(SceneNodeKind::SolidCube, {});
+    document.setTransform(nearId, Transform3D::fromPosition(Vector3(0, 5, 4)));
+    document.setTransform(farId, Transform3D::fromPosition(Vector3(0, 5, 0)));
+    std::string hit;
+    testTrue(g,
+             document.pickRay(Vector3(0, 5, 10), Vector3(0, 0, -1), &hit),
+             "elevated ray hits");
+    testEqStr(g, hit, nearId, "nearest beats later document entry");
+    document.findNode(farId)->transform.scale = Vector3(20, 3, 4);
+    testTrue(g,
+             document.pickRay(Vector3(0, 5, 10), Vector3(0, 0, -1), &hit),
+             "scaled overlap hits");
+    testEqStr(
+      g, hit, nearId, "world distance wins over shorter local ray distance");
+    document.findNode(farId)->transform.scale = Vector3(1);
+    Transform3D rotated = Transform3D::fromEuler(0, 0, glm::radians(90.0f));
+    rotated.position = Vector3(0, 5, 4);
+    document.setTransform(nearId, rotated);
+    document.setExtent(nearId, Vector3(2, 0.1f, 0.2f));
+    testTrue(g,
+             document.pickRay(Vector3(0, 6.5f, 10), Vector3(0, 0, -1), &hit),
+             "rotated long bound hits");
+    testEqStr(g, hit, nearId, "rotation follows object local axes");
+    testTrue(g,
+             !document.pickRay(Vector3(1.5f, 5, 10), Vector3(0, 0, -1), &hit),
+             "rotated empty region misses");
+    const std::string parent = document.createNode(SceneNodeKind::Empty, {});
+    Transform3D parentTransform = Transform3D::fromPosition(Vector3(0, 5, 0));
+    parentTransform.scale = Vector3(2, 3, -2);
+    document.setTransform(parent, parentTransform);
+    const std::string child =
+      document.createNode(SceneNodeKind::SolidCube, parent);
+    document.setTransform(child, Transform3D::fromPosition(Vector3(2, 0, -2)));
+    testTrue(g,
+             document.pickRay(Vector3(4, 5, 10), Vector3(0, 0, -2), &hit),
+             "parent scaled reflected bound hits");
+    testEqStr(g, hit, child, "child selected through parent transform");
+    document.findNode(parent)->visible = false;
+    testTrue(g,
+             !document.pickRay(Vector3(4, 5, 10), Vector3(0, 0, -1), &hit),
+             "hidden ancestor excludes child");
+    document.findNode(parent)->visible = true;
+    document.findNode(parent)->enabled = false;
+    testTrue(g,
+             !document.pickRay(Vector3(4, 5, 10), Vector3(0, 0, -1), &hit),
+             "disabled ancestor excludes child");
+    document.findNode(parent)->enabled = true;
+    document.findNode(child)->transform.scale = Vector3(0);
+    testTrue(g,
+             !document.pickRay(Vector3(4, 5, 10), Vector3(0, 0, -1), &hit),
+             "singular bound skipped");
+    testTrue(g,
+             !document.pickRay(Vector3(0, 5, 10), Vector3(0), &hit),
+             "zero ray rejected");
+    testTrue(g,
+             !document.pickRay(Vector3(0, 5, 10), Vector3(0, 0, 1), &hit),
+             "objects behind ray rejected");
+    return g.failures;
+  });
   registry.add("IllEd.Document.Hierarchy", []() {
     g = {};
     testCreateParentDelete();

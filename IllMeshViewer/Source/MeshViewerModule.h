@@ -6,6 +6,7 @@
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/MeshData.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
+#include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <memory>
 #include <string>
 
@@ -45,6 +46,9 @@ public:
   bool showAxes() const { return m_showAxes; }
   void setShowAxes(bool show);
 
+  bool showSkybox() const { return m_showSkybox; }
+  void setShowSkybox(bool show);
+
   void resetCamera();
   bool openMeshDialog();
 
@@ -52,6 +56,7 @@ public:
   MeshVisual* meshVisual() { return m_meshVisual.get(); }
   MeshVisual* gridVisual() { return m_gridVisual.get(); }
   MeshVisual* wireframeVisual() { return m_wireframeVisual.get(); }
+  SkyboxVisual* skyboxVisual() { return m_skyboxVisual.get(); }
 
 private:
   void rebuildGrid();
@@ -69,16 +74,19 @@ private:
   std::string m_initialMeshPath;
   std::string m_meshPath;
   MeshData m_meshData;
+  MeshHandle m_meshAsset{};
 
   MeshViewerCamera m_camera;
   std::unique_ptr<MeshVisual> m_meshVisual;
   std::unique_ptr<MeshVisual> m_gridVisual;
   std::unique_ptr<MeshVisual> m_wireframeVisual;
+  std::unique_ptr<SkyboxVisual> m_skyboxVisual;
   std::unique_ptr<MeshViewerUi> m_ui;
 
   bool m_showGrid;
   bool m_showWireframe;
   bool m_showAxes;
+  bool m_showSkybox;
 
   bool m_isOrbiting;
   bool m_isPanning;

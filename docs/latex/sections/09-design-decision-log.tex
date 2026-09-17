@@ -1817,7 +1817,318 @@ the same way; it still rejects combined coverage.\\
 details.
 \end{decisionbox}
 
+\subsection*{D-R22 --- Cubemap and SkyboxVisual rendering}
+\begin{decisionbox}[title={D-R22 \quad 2026-09-04}]
+\textbf{Decision:} The rendering subsystem supports 3D environment skyboxes via
+cubemaps:
+\begin{itemize}
+  \item \symbolref{IBackend} gains \texttt{CreateCubemap} allocating a
+        generational \symbolref{TextureHandle} bound to
+        \texttt{GL\_TEXTURE\_CUBE\_MAP} with 6 face uploads, seamless filtering,
+        and \texttt{GL\_CLAMP\_TO\_EDGE} wrap.
+  \item \symbolref{AssetManager} loads individual face files via
+        \texttt{acquireCubemap} and automatically extracts 6 faces from horizontal
+        crosses (4:3), vertical crosses (3:4), and strips (6:1) via
+        \texttt{acquireCubemapFromCross}.
+  \item Built-in style \texttt{RenderStyleId::Skybox} renders a unit cube
+        at the far depth plane using \texttt{pos.xyww} projection,
+        \texttt{GL\_LEQUAL} depth testing, and no backface culling.
+  \item \symbolref{SkyboxVisual} is the world cubemap host and
+        \symbolref{ISceneRenderAttachment}, emitting tokens with a
+        translation-stripped camera view-projection matrix. Consuming
+        viewers (e.g. \texttt{IllMeshViewer}) expose live toggles and runtime
+        configuration.
+\end{itemize}
+\textbf{Why:} 3D scene visualization and model viewing require environment
+context without polluting the backend-neutral token queue or breaking the
+single-pipeline render model.\\
+\textbf{Consequences:} \pathref{SkyboxVisual.h}, \pathref{GLTexture.h},
+\pathref{IBackend.h}, \pathref{AssetManager.h}; tested via headless mock tokens
+and E2E suite; integrated into \texttt{IllMeshViewer}.
+\end{decisionbox}
+
 %----------------------------------------------------------------------------
+\subsection*{D-R23 --- Pixel clipping and conservative quad culling}
+\begin{decisionbox}[title={D-R23 \quad 2026-09-15}]
+\textbf{Decision:} During pixel-space rebuilds, \symbolref{GameVisual} tests
+each final quad against the logical viewport and omits wholly excluded geometry
+before buffer upload. An optional top-left logical-pixel clip further narrows
+that rectangle. Partial overlap emits ordinary geometry bracketed by
+\texttt{Renderer::pushClipRect}/\texttt{popClipRect}; the renderer intersects
+nested physical-pixel scissors and restores the prior state.\\
+\textbf{Why:} Offscreen UI, sprites, and glyphs previously consumed dynamic
+quad capacity, CPU vertex writes, upload bytes, and vertex work even though the
+viewport or a product clip discarded every fragment. Existing low-level
+scissor tokens could clip pixels but did not remove that work or safely nest.\\
+\textbf{Consequences:} Painter order, adjacent-only batching, partial-primitive
+rasterization, and explicit low-level scissor emission are preserved. Window
+or UI-scale changes invalidate the cached pixel cull rectangle and rebuild
+visibility. World-space \symbolref{GameVisual}, \symbolref{MeshVisual}, and
+SceneGraph extraction are unchanged; no frustum hierarchy or spatial index is
+introduced.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R24 --- Shared immutable mesh assets}
+\begin{decisionbox}[title={D-R24 \quad 2026-09-16}]
+\textbf{Decision:} Extend \symbolref{AssetManager} with reference-counted
+immutable static meshes. Canonical file paths plus geometry-affecting
+\texttt{MeshLoadOptions} identify cached uploads; in-memory \texttt{MeshData}
+can be enrolled once and explicitly retained. \symbolref{MeshVisual} borrows the
+managed \texttt{MeshHandle} and immutable draw count while keeping only
+per-instance transform, tint, lighting, shadow, and motion state. Procedural
+lines, shapes, and sprites retain their visual-owned dynamic buffers.\\
+\textbf{Why:} Copying imported vertices into every \symbolref{MeshVisual}
+duplicated CPU storage and GPU uploads for nodes that displayed the same model.
+Backend generational mesh handles already supplied the stable binding needed to
+separate resource lifetime from instance state.\\
+\textbf{Consequences:} Two nodes can draw one uploaded mesh with independent
+world transforms and tint. Final manager release destroys the backend resource;
+visual destruction does not. Mesh loading and enrollment are synchronous and
+main-thread affine in this milestone. Materials, mesh hot reload, and automatic
+instance aggregation remain deferred until a measured workload justifies their
+additional contracts.\\
+\textbf{Refines:} D-R17's earlier texture/shader-only managed scope and D-R21's
+world-mesh host.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-CAP1 --- Bounded standalone rendering and charter baseline}
+\begin{decisionbox}[title={D-CAP1 \quad 2026-09-11}]
+\textbf{Decision:} Reuse the token renderer for direct and SceneGraph frame capture
+in a hidden OpenGL context. Capture owns a bounded service lifetime, not an
+application loop. Readback and strict diagnostics are public contracts; PNG
+publication does not replace existing artifacts.
+\textbf{Why:} The owner authorized the first two charter milestones: reliable
+baseline behavior and independently usable rendering tools.
+\textbf{Consequences:} Input IDs are validated, retired and never reused within
+a manager; generated copies record commit/dirty/unknown provenance. Broader 3D
+framework direction is separate from current code. Physics, object destruction,
+shared ticks, additional backends and Linux support remain later work. Existing
+application and persistence contracts remain. See the milestone execution plan.
+\end{decisionbox}
+
+\subsection*{D-L1 --- Product close negotiation}
+\begin{decisionbox}[title={D-L1 \quad 2026-09-13}]
+\textbf{Decision:} The runner explicitly negotiates a pending native close with
+started modules through optional \texttt{OnCloseRequested}. Default acceptance
+preserves existing consumers; deferral clears the window flag and keeps frames
+running. Required startup/transition failure remains terminal.
+\textbf{Why:} Native close previously bypassed IllEd's unsaved-document guard.
+\textbf{Consequences:} IllEd routes native and toolbar exit through its existing
+Save/Discard/Cancel confirmation. Approved discard may close a dirty document.
+Custom windows used with deferring modules implement close cancellation. No
+editor policy moves into Illumo.
+\end{decisionbox}
+
+\subsection*{D-IO1 --- Finalized save publication}
+\begin{decisionbox}[title={D-IO1 \quad 2026-09-13}]
+\textbf{Decision:} Product saves use the shared platform atomic-file operation:
+exclusive sibling staging, writer/flush/close checks, then replacement.
+\textbf{Why:} Direct truncation destroyed prior valid saves before late I/O
+errors could be reported.
+\textbf{Consequences:} Product formats and encoders remain product-owned.
+Failure leaves prior destination bytes intact. This is not a power-loss
+durability or security-metadata preservation guarantee. Windows is verified;
+POSIX rename remains unverified scaffolding.
+\end{decisionbox}
+
+\subsection*{D-RP1 --- Host defaults and application pass precedence}
+\begin{decisionbox}[title={D-RP1 \quad 2026-09-13}]
+\textbf{Decision:} Scene retains host default pass lists separately from
+application overrides. Nonempty overrides take precedence; clearing them
+restores the current fallback. Host motion blur writes only defaults.
+\textbf{Why:} Per-frame host configuration previously erased passes installed
+in module Start or Update.
+\textbf{Consequences:} Existing application setters remain available. Empty
+lists and reset restore defaults. Effective pass queries include fallbacks.
+Resource ownership and synchronous token submission remain unchanged.
+\end{decisionbox}
+
+\subsection*{D-GC1 --- Product-owned rules catalog discovery}
+\begin{decisionbox}[title={D-GC1 \quad 2026-09-14}]
+\textbf{Decision:} Game's RuleCatalogLoader owns catalog file reads and ordered
+discovery. The required-module factory loads the singleton once before either
+menu or direct-game construction. RuleSetRegistry constructs built-ins and
+accepts catalog text with transactional validation.\\
+\textbf{Why:} Domain registry construction previously called Win32 and read
+ambient files, contradicting the Rulesets dependency boundary.\\
+\textbf{Consequences:} Executable/current/product-directory precedence and
+first-valid fallback remain. Product C++ file-loading calls migrate to the
+loader; independent registries require explicit catalog loading. No engine
+API or catalog format changes. Native path discovery stays engine-owned.
+\end{decisionbox}
+
+\subsection*{D-GC2 --- Data-driven rules and runtime workshop}
+\begin{decisionbox}[title={D-GC2 \quad 2026-09-15}]
+\textbf{Decision:} Shipped and custom rules use versioned JSON definitions
+compiled into data-backed rules. Keep the schema-v1 reader and stable rule IDs;
+layer the working-directory \pathref{rulesets.user.json} after the selected
+base catalog. F2 edits a staged custom rule and Save \& Apply drains the
+simulation, validates live states, atomically persists the draft, then
+activates it.\\
+\textbf{Supersedes:} D-GC1's built-in-construction clause; its file-discovery
+and Rulesets dependency-boundary clauses remain in force.\\
+\textbf{Why:} Ruleset behavior and palettes should have one data source, and
+specific rule experiments should not require recompiling or silently changing
+IDs already stored in worlds.\\
+\textbf{Consequences:} Life-like, Generations, Moore-table, and elementary 1D
+families compile through the existing simulator contracts. The sparse-domain
+background/counting invariants and \texttt{.illumo} v3 format stay unchanged.
+Moore tables remain JSON-edited; the in-game menu focuses on common family
+parameters and palettes. A custom world still requires its rule catalog at
+load time.
+\end{decisionbox}
+
+\subsection*{D-GC3 --- Separate ruleset identity from family}
+\begin{decisionbox}[title={D-GC3 \quad 2026-09-15}]
+\textbf{Decision:} Keep each ruleset's stable ID and display name independent
+from a typed \texttt{RuleFamily}. The Ruleset Workshop exposes starter rule,
+family, and ruleset name as separate choices. Changing family retains the
+custom ID/name and loads that family's starter parameters.\
+\textbf{Why:} A family describes transition semantics; it should not be
+conflated with the named, save-referenced rule that uses those semantics.\
+\textbf{Consequences:} Schema-v1/v2 JSON family strings and existing
+\texttt{.illumo} rule IDs remain unchanged. Family conversion is explicit at
+the registry boundary and the workshop rebuilds controls for the selected
+family.\
+\end{decisionbox}
+
+\subsection*{D-GC4 --- Family-owned cell schemas and pair persistence}
+\begin{decisionbox}[title={D-GC4 \quad 2026-09-15}]
+\textbf{Decision:} Store family and ruleset as separate data definitions.
+Families own the cell-state schema, labels, colors, and simulation model;
+every ruleset references exactly one family and owns its transition behavior.
+F1, New Simulation, runtime status, and saves carry the validated pair.
+Write \texttt{.illumo} version 4 with both IDs and retain readers that derive
+the family from the rule in older saves. Layer
+\pathref{families.user.json} and \pathref{rulesets.user.json} together after
+the selected valid base catalog pair.\\
+\textbf{Supersedes:} D-GC2's single rules overlay and version-3 save outcome;
+D-GC3's separation of UI identity is retained and now has separate family data.\\
+\textbf{Why:} Cell appearance and available states are family properties;
+transition parameters belong to one named ruleset bound to that family. This
+keeps cell schemas reusable while preventing meaningless cross-family pairs.\\
+\textbf{Consequences:} Legacy catalogs normalize in memory, old save formats
+remain readable, and pair validation occurs before catalog or world mutation.
+Built-in family edits become custom copies; user families are persisted before
+the rules that reference them.
+\end{decisionbox}
+
+\subsection*{D-GC5 --- Isolated cyclic multistate interaction}
+\begin{decisionbox}[title={D-GC5 \quad 2026-09-15}]
+\textbf{Decision:} Add a typed \texttt{cyclic} family whose rules advance a
+cell by a nonzero coprime step when a threshold number of Moore neighbors hold
+that successor state. Expose full 256-state neighbor counts through
+\texttt{RuleSet}; evaluate them in a separate serial sparse kernel that reuses
+transactional output and change journals.\\
+\textbf{Why:} Count-of-state-zero and Moore-table models cannot express many
+cell kinds directly chasing one another. A general pairwise language would be
+harder to author and unnecessary for the requested dynamic ecology.\\
+\textbf{Consequences:} Existing optimized binary/counting paths and save
+formats remain unchanged. State 1 stays sparse background and is quiescent
+without successor neighbors. Cyclic rule JSON owns threshold and step; the
+workshop edits both. The first histogram kernel prioritizes determinism and
+correctness over parity with specialized sparse performance.
+\end{decisionbox}
+
+\subsection*{D-GC6 --- Researched interaction and extended-range families}
+\begin{decisionbox}[title={D-GC6 \quad 2026-09-15}]
+\textbf{Decision:} Add typed \texttt{species\_life} and
+\texttt{larger\_than\_life} families. Colorized Life uses the existing
+full-state Moore histogram to preserve or select a live species.
+Larger-than-Life adds a bounded extended-range contract with square/circular
+shape, optional center counting, and inclusive transition intervals; its first
+sparse implementation is an isolated serial correctness kernel. Store an
+optional deterministic starter strategy with each rule.\\
+\textbf{Why:} Documented multi-species, long-decay, cyclic, and wide-range
+systems provide visibly different interactions, but a Life glider is not a
+meaningful initial condition for most of them. Repeated radius-one updates are
+not equivalent to a wide-neighborhood rule.\\
+\textbf{Consequences:} Immigration, QuadLife, Bosco/Bugs, Bugsmovie, Globe,
+Banners, Transers, Fireworks, and classic 14-color CCA ship as data. Existing
+catalog files remain readable because the new keys are additive. B0 remains
+invalid for sparse infinite worlds; extended range is capped at 16 and does not
+use the specialized radius-one candidate, memo, or worker paths. Starter soups
+are coordinate-hashed and repeatable. Continuous and block-partitioned
+automata remain out of scope.
+\end{decisionbox}
+
+\subsection*{D-GC7 --- Directional agents, lattice gas, and multilevel chemistry}
+\begin{decisionbox}[title={D-GC7 \quad 2026-09-15}]
+\textbf{Decision:} Add typed \texttt{hodgepodge}, \texttt{turmite},
+\texttt{lattice\_gas}, and \texttt{dominance} families. Preserve cardinal
+direction through a four-entry von Neumann rule contract and an isolated serial
+sparse evaluator. Reuse the complete Moore histogram for chemical levels and
+species predators. Keep state 1 as sparse background through explicit state
+encoding maps.\\
+\textbf{Why:} Unordered live counts cannot express moving directional agents,
+particle streaming, or weighted chemical infection. These models add genuinely
+different interactions while still fitting the byte-state synchronous domain.\\
+\textbf{Consequences:} RL/RRL/RRLL Turmites, 16-state HPP gas, 101-level
+Hodgepodge, and five-species RPSLS ship as data. Directional and histogram
+kernels publish transactionally but initially remain serial. Multi-agent
+Turmite collisions annihilate deterministically. The synchronous RPSLS rule is
+inspired by, not identical to, stochastic Monte Carlo scheduling. FHP/hexagonal
+gas, continuous chemistry, and generic Turing-machine controllers remain out of
+scope.
+\end{decisionbox}
+
+\subsection*{D-DEP1 --- Narrow public math dependency exposure}
+\begin{decisionbox}[title={D-DEP1 \quad 2026-09-14}]
+\textbf{Decision:} Illumo exports its public headers and a CMake-managed GLM-only
+include directory. Other vendor roots remain private.\\
+\textbf{Why:} Public math types intentionally expose GLM, but exporting the
+entire thirdparty parent directory exposed unrelated libraries too.\\
+\textbf{Consequences:} GLM header paths and types remain unchanged. Configure
+tracks header content and membership; deleted headers leave the generated
+include tree. Vendored sources and versions are unchanged. Consumers of other
+vendor APIs must declare those dependencies explicitly.
+\end{decisionbox}
+
+\subsection*{D-PROF1 --- Bounded in-game frame timing pie}
+\begin{decisionbox}[title={D-PROF1 \quad 2026-09-14}]
+\textbf{Decision:} Illumo owns a fixed 120-frame main-thread elapsed-time
+collector. DebugModule borrows it explicitly and renders a navigable GameVisual
+pie in Debug and RelWithDebInfo.\\
+\textbf{Why:} In-game attribution exposes expensive frame phases without
+requiring a separate profiler client. CPU command submission and presentation
+must be separate so pacing is not mistaken for rendering work.\\
+\textbf{Consequences:} No GPU timing or asynchronous worker totals are included.
+The collector is off by default; enabling does not depend on FPS, memory, or
+Tracy. Number-key capture covers both events and polling without synthetic
+releases. Existing context ownership, module order, and rendering tokens remain.
+\end{decisionbox}
+
+\subsection*{D-UI1 --- One shared menu shell for primitive-composed overlays}
+\begin{decisionbox}[title={D-UI1 \quad 2026-09-16}]
+\textbf{Decision:} Overlay behavior that more than one screen needs lives in
+\symbolref{Illumo/Gui/GuiMenuShell}: \symbolref{GuiEasing} curves,
+\symbolref{GuiMenuAnimator} reveal/row-stagger/selection/value-pulse/ambient/
+caret clocks with reduced motion, \symbolref{GuiPanelLayout} virtual-resolution
+fitting plus row-window and wheel arithmetic, and \symbolref{GuiPointerTracker}
+virtual-space pointer sampling with press-edge detection. IllumoGame's menus
+compose it instead of carrying private copies.\\
+\textbf{Why:} Drawing and color were already shared through GuiKit and UiTheme,
+but each menu had re-derived the same clocks, easing curve, UI-scale fit,
+scroll clamping, and mouse-edge bookkeeping. Adding another interface meant
+copying that machinery again, and the copies had already drifted in their
+scale floor and reveal durations.\\
+\textbf{Consequences:} A new screen supplies only its rows, layout constants,
+and GameVisual composition. Menu timings are defined once, so theming and
+animation stay consistent across screens. NewSimulationMenu adopts the shared
+0.25 scale floor and the shared panel reveal in place of its own 0.35\,s
+entrance; its per-row focus weights remain screen-local. MainMenuModule keeps
+its slower title-screen entrance clock. GuiDialog keeps its own dialog-fitted
+layout and clocks and shares only the easing curve. No retained widget tree is
+introduced, and GuiMenuShell performs no drawing. IllEd's docked panels and
+IllMeshViewer's overlay adopt the same shell for pointer edges, easing, and
+viewport resolution: \symbolref{GuiPanelLayout::viewport} anchors docked chrome
+to the real window where \symbolref{GuiPanelLayout::fit} would wrongly impose
+the centered-overlay design floor. EditorModule keeps its own world-picking and
+gizmo drag state, which is world input rather than panel chrome.
+\end{decisionbox}
+
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}

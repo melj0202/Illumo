@@ -34,6 +34,8 @@ public:
   }
 
 private:
+  static EnvVar parseValue(const std::string& value);
   std::filesystem::path m_filePath;
   std::unordered_map<std::string, EnvVar> m_vars;
+  bool m_persistenceEligible = false;
 };

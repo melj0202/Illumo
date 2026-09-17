@@ -23,6 +23,8 @@ public:
   }
   virtual ~IRenderWindow() = default;
   virtual void updateWindow() = 0;
+  // The window publishes the resulting fullscreen state to its environment.
+  // A rejected toggle leaves that state unchanged.
   virtual void toggleFullscreen() = 0;
   virtual void reinitializeWindow(const int width,
                                   const int height,
@@ -37,4 +39,6 @@ public:
   virtual int getRefreshRate() const = 0;
   virtual void swapBuffers() = 0;
   virtual void requestClose() = 0;
+  // Custom windows used with modules that defer close must clear their flag.
+  virtual void cancelCloseRequest() {}
 };

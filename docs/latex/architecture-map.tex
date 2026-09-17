@@ -1,6 +1,6 @@
 %==============================================================================
-% Illumo + IllumoGame --- Architecture Map (chart pack only)
-% Derived from the Illumo and IllumoGame source trees, not design prose.
+% Illumo workspace --- Architecture Map (chart pack only)
+% Engine and product inventory, with detailed simulator call paths.
 % Build: docs/build.ps1  ->  docs/output/architecture-map.pdf
 %==============================================================================
 \documentclass[10pt,landscape,a4paper]{article}
@@ -35,7 +35,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \renewcommand{\headrulewidth}{0pt}
-\fancyfoot[L]{\scriptsize Illumo workspace architecture map $\cdot$ code truth: \texttt{Illumo} + \texttt{IllumoGame} + \texttt{IllEd}}
+\fancyfoot[L]{\scriptsize Illumo workspace architecture map $\cdot$ Illumo + IllumoGame + IllEd + IllMeshViewer}
 \fancyfoot[R]{\scriptsize\thepage}
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0pt}
@@ -145,7 +145,7 @@
     {\scriptsize services + DebugModule}};
   \node[layer, pkgfill=pkgGame] (mod) at (12.7,-1.2) {%
     \textbf{\rmfamily Product module}\\[3pt]
-    CellGameModule\\ConfigurationMenu\\[2pt]
+    {\scriptsize CellGameModule}\\{\scriptsize EditorModule}\\{\scriptsize MeshViewerModule}\\[2pt]
     {\scriptsize required at startup}};
   \node[layer, pkgfill=pkgRules] (dom) at (16.3,-1.2) {%
     \textbf{\rmfamily IllumoGame domain}\\[3pt]
@@ -180,10 +180,10 @@
   \node[box, pkgfill=pkgAssets, minimum width=3.8cm, minimum height=2.5cm] (ast) at (18.0,-4.8) {%
     \textbf{\rmfamily Runtime files}\\[4pt]
     Illumo Assets + Shader\\[2pt]
-    {\scriptsize Game envvars separately}};
+    {\scriptsize product envvars separately}};
   \node[box, pkgfill=pkgTests, minimum width=4.2cm, minimum height=2.5cm] (tst) at (22.8,-4.8) {%
     \textbf{\rmfamily Split tests}\\[4pt]
-    IllumoTests + GameTests\\[2pt]
+    four test runners\\[2pt]
     MockBackend via TestSupport};
 
   \draw[owns] (eng.south) -- ++(0,-0.7) -| (svc.north);
@@ -207,7 +207,7 @@
 
   \node[note, minimum width=25.2cm, minimum height=2.3cm] at (12.7,-9.2) {%
     \textbf{Production flow (code)}\\[4pt]
-    Illumo platform entry $\rightarrow$ game definition $\rightarrow$ Application runner composes Illumo + modules $\rightarrow$
+    Illumo platform entry $\rightarrow$ product definition $\rightarrow$ Application runner composes Illumo + modules $\rightarrow$
     Illumo static library owns generic services via \texttt{unique\_ptr} $\rightarrow$
     modules receive non-owning \texttt{IllumoContext*} $\rightarrow$\\[2pt]
     IllumoGame domain (SparseCellGrid / CanvasView / RuleSet) $\rightarrow$
@@ -305,7 +305,7 @@
 
   % Startup: 9 steps, step 0.95cm
   \node[stepbox, pkgfill=pkgEngine] (s1) at (4.0,-1.0) {Logger::initLogger};
-  \node[stepbox, pkgfill=pkgGame] (s2) at (4.0,-1.95) {apply game definition};
+  \node[stepbox, pkgfill=pkgGame] (s2) at (4.0,-1.95) {apply product definition};
   \node[stepbox, pkgfill=pkgEngine] (s3) at (4.0,-2.9) {Illumo::initialize};
   \node[stepbox, pkgfill=pkgEngine] (s4) at (4.0,-3.85) {add required CellGame};
   \node[stepbox, pkgfill=pkgEngine] (s5) at (4.0,-4.8) {add optional Debug};
@@ -502,7 +502,7 @@
   \node[box, pkgfill=pkgPlatform, minimum width=3.8cm] (sv) at (3.0,-6.9) {Illumo SaveLoad API};
   \node[box, pkgfill=pkgGame, minimum width=3.8cm, align=left, font=\scriptsize\ttfamily] (io) at (3.0,-8.1) {%
     SaveCellGame / LoadCellGame\\
-    (fstream in module)
+    (atomic save / file load)
   };
   \node[box, pkgfill=pkgSvc, minimum width=3.8cm] (creg) at (3.0,-9.3) {CommandRegistry};
   \draw[arr] (cgm.south) -- ++(0,-0.5) -| (st.north);
@@ -525,7 +525,7 @@
   \draw[arr] (rs.south) -- (api.north);
 
   % Live rules: two rows, 2.5cm pitch, buses in empty bands only
-  \node[sectitle] at (17.0,-2.4) {Factory live (setRuleSet / AllSets.h)};
+  \node[sectitle] at (17.0,-2.4) {Factory live (RuleSetRegistry)};
   \node[box, pkgfill=pkgRules, minimum width=2.4cm] (r1) at (12.0,-3.55) {GameOfLife};
   \node[box, pkgfill=pkgRules, minimum width=2.4cm] (r2) at (14.6,-3.55) {Seeds};
   \node[box, pkgfill=pkgRules, minimum width=2.4cm] (r3) at (17.2,-3.55) {Highlife};
@@ -551,10 +551,10 @@
   \draw[line width=0.65pt, draw=black!60] (10.5,-4.2) -- (10.5,-5.6);
   \draw[impl] (10.5,-4.2) -- (10.5,-3.4) -- (rs.east);
 
-  % Unwired stubs to the RIGHT (not stacked under DayAndNight / Wireworld)
-  \node[stub, minimum width=2.3cm] (r8) at (22.5,-3.55) {Rule90};
-  \node[stub, minimum width=2.3cm] (r9) at (22.5,-4.9) {Rule184};
-  \node[legend, font=\scriptsize\rmfamily, align=center] at (22.5,-5.75) {not in setRuleSet\\/ AllSets.h};
+  % Elementary rules retain previous rows as history.
+  \node[box, pkgfill=pkgRules, minimum width=2.3cm] (r8) at (22.5,-3.55) {Rule90};
+  \node[box, pkgfill=pkgRules, minimum width=2.3cm] (r9) at (22.5,-4.9) {Rule184};
+  \node[legend, font=\scriptsize\rmfamily, align=center] at (22.5,-5.75) {live elementary rules\\space-time diagrams};
 
   % Compatibility + commands strip
   \node[stub, minimum width=13.0cm, minimum height=0.78cm, align=left, font=\scriptsize\ttfamily] (orph) at (18.05,-7.15) {%
@@ -751,13 +751,14 @@
   \node[card, pkgfill=pkgApp, minimum width=5.9cm, minimum height=2.9cm] at (9.45,-1.5) {%
     \textbf{\rmfamily Illumo Application}\\[3pt]
     RunIllumoApplication · SysCmdLine \textbf{L}\\
-    BuildInfo · SaveLoad contract \textbf{L}};
+    BuildInfo · SaveLoad contract \textbf{L}\\
+    IllEd · IllMeshViewer definitions \textbf{L}};
   \node[card, pkgfill=pkgEngine, minimum width=5.9cm, minimum height=2.9cm] at (15.75,-1.5) {%
     \textbf{\rmfamily Illumo Engine + Scene}\\[3pt]
     Illumo · IllumoContext \textbf{L}\\
     IModule · DebugModule \textbf{L}\\
     SceneGraph · SceneNodeHandle \textbf{L}};
-  \node[card, pkgfill=pkgGame, minimum width=5.9cm, minimum height=2.9cm] at (22.05,-1.5) {%
+  \node[card, pkgfill=pkgGame, text width=5.4cm, minimum width=5.9cm, minimum height=2.9cm] at (22.05,-1.5) {%
     \textbf{\rmfamily IllumoGame Game}\\[3pt]
     Application definition · defaults \textbf{L}\\
     CellGameModule · CellContext \textbf{L}\\
@@ -771,8 +772,8 @@
     RuleSet \textbf{L}\\
     GoL Seeds Highlife D\&N \textbf{L}\\
     LWD BrainsBrain Wireworld \textbf{L}\\
-    Rule90 Rule184 \textbf{S}\\
-    AllSets.h (7 live only)};
+    Rule90 Rule184 \textbf{L}\\
+    nine built-in modes};
   \node[card, pkgfill=pkgRender, minimum width=5.9cm, minimum height=2.9cm] at (9.45,-4.85) {%
     \textbf{\rmfamily Rendering}\\[3pt]
     Frame Scene Camera Renderer \textbf{L}\\
@@ -780,7 +781,8 @@
     CommandQueue AssetManager \textbf{L}\\
     GLString SplashText \textbf{L}\\
     RenderWindow · IBackend \textbf{L}\\
-    RenderPass helpers \textbf{U}};
+    MeshVisual · SkyboxVisual \textbf{L}\\
+    offscreen passes \textbf{L}};
   \node[card, pkgfill=pkgRender, minimum width=5.9cm, minimum height=2.9cm] at (15.75,-4.85) {%
     \textbf{\rmfamily Private OpenGL / TestSupport}\\[3pt]
     GLBackend GLDevice \textbf{L}\\
@@ -804,10 +806,11 @@
     \textbf{\rmfamily Runtime files}\\[3pt]
     Illumo/Assets + Shader\\
     notices + dependency licenses\\
-    IllumoGame/envvars.json};
+    product envvars.json seeds};
   \node[card, pkgfill=pkgTests, minimum width=5.9cm, minimum height=2.5cm] at (15.75,-7.9) {%
     \textbf{\rmfamily Tests}\\[3pt]
     IllumoTests · IllumoGameTests \textbf{T}\\
+    IllEdTests · IllMeshViewerTests \textbf{T}\\
     Illumo::TestSupport \textbf{T}\\
     public-header consumer smoke \textbf{T}};
   \node[card, fill=black!5, draw=black!38, minimum width=5.9cm, minimum height=2.5cm] at (22.05,-7.9) {%
@@ -820,7 +823,7 @@
 
   \node[card, pkgfill=pkgEngine, minimum width=24.8cm, align=left, minimum height=1.7cm] at (12.6,-10.2) {%
     \textbf{\rmfamily Observed dependency direction (production)}\\[3pt]
-    Illumo Platform $\rightarrow$ game definition $\rightarrow$ Application runner $\rightarrow$ Illumo host $\rightarrow$ IModule (required CellGame / optional Debug) $\cdot$
+    Illumo Platform $\rightarrow$ product definition $\rightarrow$ Application runner $\rightarrow$ Illumo host $\rightarrow$ IModule (required product / optional Debug) $\cdot$
     CellGame $\rightarrow$ CellContext $\rightarrow$ SparseCellGrid + CanvasView + RuleSet $\rightarrow$ Renderer tokens\\
     SceneGraph $\rightarrow$ borrowed render attachments $\rightarrow$ Renderer tokens $\cdot$
     Debug $\rightarrow$ CommandLine + GLString $\cdot$

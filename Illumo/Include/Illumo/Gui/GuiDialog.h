@@ -53,6 +53,10 @@ public:
   float panelWidth() const { return m_panelWidth; }
   float panelHeight() const { return m_panelHeight; }
 
+  // Rounded presentation fits the entire dialog to the viewport as one unit.
+  void setRoundedStyle(bool enabled) { m_roundedStyle = enabled; }
+  void setReducedMotion(bool enabled) { m_reducedMotion = enabled; }
+
   void tick(float dt);
   int update(InputManager* inputManager, float dt = 0.016f);
   int clickAt(float x, float y);
@@ -86,6 +90,9 @@ private:
   float m_fontSize;
   float m_panelWidth;
   float m_panelHeight;
+  bool m_roundedStyle = false;
+  bool m_reducedMotion = false;
+  float m_layoutScale = 1.0f;
 
   std::vector<GuiButtonDef> m_buttons;
   std::vector<float> m_buttonX;
@@ -104,4 +111,9 @@ private:
   float m_mouseY;
 
   int activateSelected() const;
+  void drawRoundedContents(float panelY,
+                           float width,
+                           float height,
+                           float fontScale,
+                           unsigned char opacity);
 };

@@ -1,3 +1,14 @@
+// This target consumes only Illumo::Illumo, with no private vendor include
+// paths.
+#if __has_include(<stb/stb_image.h>) || \
+  __has_include(<tinyobjloader/tiny_obj_loader.h>) || \
+  __has_include(<json/single_include/nlohmann/json.hpp>) || \
+  __has_include(<glfw-3.4/include/GLFW/glfw3.h>) || \
+  __has_include(<glew-2.1.0/include/GL/glew.h>) || \
+  __has_include(<tracy-0.13.1/public/tracy/Tracy.hpp>)
+#error "Illumo exports unrelated vendor headers to public consumers"
+#endif
+
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Engine/DebugModule.h>
 #include <Illumo/Engine/IModule.h>
@@ -13,14 +24,18 @@
 #include <Illumo/Gui/GridAtlas.h>
 #include <Illumo/Gui/GuiDialog.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Gui/GuiTypes.h>
+#include <Illumo/Platform/AtomicFile.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/PlatformTimer.h>
+#include <Illumo/Platform/ProcessMemoryStats.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/Drawable.h>
+#include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/IMesh.h>
@@ -77,6 +92,18 @@ int
 main()
 {
   static_assert(!std::is_copy_constructible_v<Illumo>);
+  constexpr RenderCommand legacyPipelineCommand{ CommandType::SetPipelineState,
+                                                 PipelineState{},
+                                                 {} };
+  static_assert(legacyPipelineCommand.clearDepthValue == 1.0f);
+  static_assert(std::is_trivially_copyable_v<RenderCommand>);
+  static_assert(sizeof(RenderCommand) <= 72);
+  static_assert(!std::is_copy_constructible_v<InputManager>);
+  static_assert(!std::is_copy_assignable_v<InputManager>);
+  static_assert(!std::is_move_constructible_v<InputManager>);
+  static_assert(!std::is_move_assignable_v<InputManager>);
+  static_assert(!std::is_copy_constructible_v<CommandRegistry>);
+  static_assert(!std::is_move_constructible_v<CommandRegistry>);
   static_assert(std::is_destructible_v<IllumoConfig>);
   static_assert(std::is_destructible_v<IllumoApplicationDefinition>);
   static_assert(std::has_virtual_destructor_v<IModuleHost>);

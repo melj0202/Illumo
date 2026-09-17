@@ -3,8 +3,9 @@
 #include <Illumo/Rendering/ResourceHandle.h>
 
 // Opaque, typed, generational backend handles (never raw GL object names).
-// Data pointers in update payloads must remain valid until SubmitCommandQueue
-// returns.
+// Data pointers in uniform/update payloads must remain valid until
+// SubmitCommandQueue returns. Renderer copies matrix values into retained
+// frame storage before enqueueing them.
 
 enum class CommandType
 {
@@ -30,6 +31,7 @@ enum class CommandType
   // Resource updates (same-frame pointer validity)
   UpdateTexture,
   UpdateBuffer,
+  UpdateIndexBuffer,
 
   // Clear
   ClearScreen,
@@ -132,7 +134,7 @@ struct CmdUniformVec4
 struct CmdUniformMat4
 {
   char name[32];
-  float m[16];
+  const float* value;
 };
 
 struct CmdDraw
@@ -206,5 +208,9 @@ struct RenderCommand
     CmdDrawInstanced drawInstanced;
     CmdUpdateTexture updateTexture;
     CmdUpdateBuffer updateBuffer;
+    CmdUpdateBuffer updateIndexBuffer;
   };
+  // Append fields to preserve existing positional aggregate initialization.
+  // ClearDepthBuffer, ClearScreen and ClearAll default to the far depth.
+  float clearDepthValue = 1.0f;
 };

@@ -31,6 +31,7 @@ public:
   void close();
   bool isOpen() const { return m_dialog.isOpen(); }
   void tick(float deltaSeconds);
+  void setReducedMotion(bool enabled) { m_dialog.setReducedMotion(enabled); }
   ExitConfirmAction update(InputManager* inputManager);
   GameVisual& getVisual() { return m_dialog.getVisual(); }
 

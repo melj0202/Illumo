@@ -80,7 +80,7 @@ RunIllumoApplication(int argc,
     }
     illumo.addModule(std::move(requiredModule), ModuleRequirement::Required);
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-    illumo.addModule(std::make_unique<DebugModule>(),
+    illumo.addModule(std::make_unique<DebugModule>(&illumo.frameProfiler()),
                      ModuleRequirement::Optional);
 #endif
     if (!illumo.startModules()) {
@@ -93,7 +93,8 @@ RunIllumoApplication(int argc,
     FramePacer framePacer;
     std::chrono::steady_clock::time_point lastTime =
       std::chrono::steady_clock::now();
-    while (!illumo.shouldClose()) {
+    while (!illumo.processCloseRequest()) {
+      illumo.frameProfiler().beginFrame();
       FrameMark;
       const std::chrono::steady_clock::time_point currentTime =
         std::chrono::steady_clock::now();
@@ -112,6 +113,7 @@ RunIllumoApplication(int argc,
 
       {
         ZoneScopedN("Frame.Pacing");
+        illumo.frameProfiler().mark(FramePhase::Pacing);
         const long targetFps = getTargetFps(&illumo.environment());
         const bool vsyncEnabled = isVsyncRequested(&illumo.environment());
         const int refreshRate = illumo.context().window != nullptr
@@ -119,6 +121,7 @@ RunIllumoApplication(int argc,
                                   : 60;
         framePacer.pace(targetFps, vsyncEnabled, refreshRate);
       }
+      illumo.frameProfiler().endFrame();
     }
 
     illumo.shutdown();

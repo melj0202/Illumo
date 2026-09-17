@@ -11,6 +11,8 @@
 void
 registerRuleSetTests(IllumoTestRegistry& registry);
 void
+registerRuleCatalogLoaderTests(IllumoTestRegistry& registry);
+void
 registerCellContextTests(IllumoTestRegistry& registry);
 void
 registerCanvasDomainTests(IllumoTestRegistry& registry);
@@ -42,6 +44,7 @@ createRegistry()
 {
   IllumoTestRegistry registry;
   registerRuleSetTests(registry);
+  registerRuleCatalogLoaderTests(registry);
   registerCellContextTests(registry);
   registerCanvasDomainTests(registry);
   registerDomainBoundaryTests(registry);

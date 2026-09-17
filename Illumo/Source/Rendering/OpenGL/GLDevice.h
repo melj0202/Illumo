@@ -58,21 +58,21 @@ class GLDevice
 {
 private:
   PipelineState _currentGLState;
-  GLuint _activeProgram = 0;
+  GLShaderProgram* _activeProgram = nullptr;
+  std::string m_frameError;
+  void reportFrameError(const char* message);
 
   // Bind-state tracker (P4): skip redundant GL binds within a submit.
   GLuint _boundProgram = 0;
   GLuint _boundVao = 0;
   GLuint _boundTexture[8] = {};
   GLuint _boundFbo = 0;
+  bool _boundFboKnown = false;
   FramebufferHandle _boundFboHandle{};
   int _viewportX = -1;
   int _viewportY = -1;
   int _viewportW = -1;
   int _viewportH = -1;
-
-  // Cache: key is "progId:name"
-  std::unordered_map<std::string, GLint> _uniformLocationCache;
 
   GLenum mapBlendFactor(BlendFactor factor)
   {
@@ -136,20 +136,10 @@ private:
 
   GLint getUniformLocation(const char* name)
   {
-    if (_activeProgram == 0 || name == nullptr) {
+    if (_activeProgram == nullptr || name == nullptr) {
       return -1;
     }
-    std::string key = std::to_string(_activeProgram);
-    key.push_back(':');
-    key.append(name);
-    std::unordered_map<std::string, GLint>::iterator it =
-      _uniformLocationCache.find(key);
-    if (it != _uniformLocationCache.end()) {
-      return it->second;
-    }
-    GLint loc = glGetUniformLocation(_activeProgram, name);
-    _uniformLocationCache[key] = loc;
-    return loc;
+    return _activeProgram->GetUniformLocation(name);
   }
 
   GLMesh* resolveMesh(const GLResourceTables& tables, MeshHandle handle) const
@@ -213,6 +203,14 @@ private:
   }
 
 public:
+  GLDevice()
+  {
+    // A fresh OpenGL context has depth testing disabled, unlike PipelineState.
+    // The first requested depth-enabled draw must actually enable it.
+    _currentGLState.depthTestEnabled = false;
+  }
+  void resetFrameError() { m_frameError.clear(); }
+  const std::string& frameError() const { return m_frameError; }
   void ApplyPipelineState(const PipelineState& pipelineState);
   void ExecuteCommandQueue(CommandQueue& commandQueue,
                            const GLResourceTables& tables);

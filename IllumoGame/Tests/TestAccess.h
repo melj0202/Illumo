@@ -6,6 +6,47 @@
 class CellGameModuleTestAccess
 {
 public:
+  static bool isPaintPaletteExpanded(const CellGameModule& module)
+  {
+    return module.m_paintPaletteExpanded;
+  }
+  static float getPaintPaletteReveal(const CellGameModule& module)
+  {
+    return module.m_paintPaletteReveal;
+  }
+  static unsigned char getPaintBrush(const CellGameModule& module)
+  {
+    return module.m_paintBrush;
+  }
+  static GameVisual& getPaintPaletteVisual(CellGameModule& module)
+  {
+    return module.m_paintPaletteVisual;
+  }
+  static std::uint64_t getSimulationGeneration(const CellGameModule& module)
+  {
+    return module.simulationGeneration;
+  }
+
+  static bool isSimulationRetryPending(const CellGameModule& module)
+  {
+    return module.simulationRetryPending;
+  }
+
+  static CellClipboard& getClipboard(CellGameModule& module)
+  {
+    return module.clipboard;
+  }
+
+  static GameVisual& getSelectionVisual(CellGameModule& module)
+  {
+    return module.selectionVisual;
+  }
+
+  static GameVisual& getEditHintsVisual(CellGameModule& module)
+  {
+    return module.editHintsVisual;
+  }
+
   static CellContext* getCellContext(CellGameModule& module)
   {
     return module.cellContext;
@@ -63,17 +104,22 @@ public:
 
   static unsigned char getWireworldBrush(const CellGameModule& module)
   {
-    return module.wireworldBrush;
+    return module.m_paintBrush;
   }
 
   static void setWireworldBrush(CellGameModule& module, unsigned char state)
   {
-    module.wireworldBrush = state;
+    module.m_paintBrush = state;
   }
 
   static ConfigurationMenu* getConfigurationMenu(CellGameModule& module)
   {
     return module.configurationMenu.get();
+  }
+
+  static RulesetWorkshopMenu* getRulesetWorkshopMenu(CellGameModule& module)
+  {
+    return module.rulesetWorkshopMenu.get();
   }
 
   static ExitConfirmDialog* getExitConfirmDialog(CellGameModule& module)
@@ -116,6 +162,15 @@ public:
   static GameVisual* getInspectorVisual(CellGameModule& module)
   {
     return &module.inspectorVisual;
+  }
+
+  static GameVisual& getCanvasEntranceVisual(CellGameModule& module)
+  {
+    return module.canvasEntranceVisual;
+  }
+  static void advanceCanvasEntrance(CellGameModule& module, double dt)
+  {
+    module.advanceCanvasEntrance(dt);
   }
 
   static GameVisual* getHamburgerVisual(CellGameModule& module)

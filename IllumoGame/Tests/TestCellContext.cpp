@@ -1,7 +1,9 @@
 // CellContext mode string / ruleset factory tests (headless).
 
 #include "Game/CellContext.h"
+#include "Game/RuleCatalogLoader.h"
 #include "Rulesets/RuleSet.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include "TestHarness.h"
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -40,7 +42,7 @@ testIsKnownModeString()
 static void
 testSetRuleSetAndTags()
 {
-  testSection("CellContext: setRuleSet creates rules + updates ModeString");
+  testSection("CellContext: explicit family/ruleset pair and aliases");
   NullRenderWindow window(640, 480);
   EnvVars env;
   env.setVar("CanvasX", 8);
@@ -54,14 +56,24 @@ testSetRuleSetAndTags()
 
   CellContext ctx("game_of_life", &env, &window, &camera, &renderer);
   testTrue(g, ctx.getModeString() == "GAME_OF_LIFE", "start mode normalized");
+  testTrue(g,
+           ctx.getFamilyString() == "LIFE_LIKE_BINARY",
+           "initial family is derived from the ruleset");
   testTrue(g, ctx.getRuleSet() != nullptr, "ruleset allocated");
   testTrue(g, ctx.getCanvas() != nullptr, "canvas allocated");
   testTrue(
     g, env.getVar("ModeString").value == "GAME_OF_LIFE", "env ModeString set");
+  testTrue(g,
+           env.getVar("RuleSetString").value == "GAME_OF_LIFE" &&
+             env.getVar("FamilyString").value == "LIFE_LIKE_BINARY",
+           "explicit family and ruleset settings are published");
 
   const bool changed = ctx.setRuleSet("SEEDS");
   testTrue(g, changed, "switch to SEEDS returns true");
   testTrue(g, ctx.getModeString() == "SEEDS", "mode is SEEDS");
+  testTrue(g,
+           ctx.getFamilyString() == "LIFE_LIKE_BINARY",
+           "ruleset switch keeps the compatible family");
   testTrue(g,
            ctx.getRuleSet()->getRuleTag() != "BASE_CLASS" ||
              ctx.getModeString() == "SEEDS",
@@ -69,6 +81,11 @@ testSetRuleSetAndTags()
 
   const bool same = ctx.setRuleSet("seeds");
   testTrue(g, !same, "re-set same mode returns false");
+  testTrue(g,
+           !ctx.setRuleSet("WIREWORLD_FAMILY", "SEEDS") &&
+             ctx.getRuleSetString() == "SEEDS" &&
+             ctx.getFamilyString() == "LIFE_LIKE_BINARY",
+           "mismatched family/ruleset pair is rejected transactionally");
 }
 
 static void
@@ -118,6 +135,7 @@ static int
 runCellContextCase(void (*testFunction)())
 {
   g.failures = 0;
+  RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
   testFunction();
   return g.failures;
 }

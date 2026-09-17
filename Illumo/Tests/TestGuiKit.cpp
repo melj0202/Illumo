@@ -1,6 +1,7 @@
 #include <Illumo/Gui/GridAtlas.h>
 #include <Illumo/Gui/GuiDialog.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -12,6 +13,7 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <cmath>
+#include <limits>
 
 static TestCounters g;
 
@@ -196,6 +198,7 @@ testGuiDialogModalFlow()
   testSection("GuiDialog: modal flow, shortcuts, and animation");
   NullRenderWindow window(1280, 720);
   EnvVars env;
+  env.setVar("uiScale", 1);
   env.setVar("WinX", 1280);
   env.setVar("WinY", 720);
   Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
@@ -252,15 +255,258 @@ testGuiDialogModalFlow()
 
   // Click hit testing
   dialog.updateLayout();
-  const float clickBtn0X = dialog.panelWidth() * 0.4f;
-  const float clickBtnY = 720.0f * 0.5f + 40.0f;
-  const int clickedAction = dialog.clickAt(clickBtn0X, clickBtnY);
+  testEqInt(g,
+            dialog.clickAt(574.0f, 408.0f),
+            1,
+            "clicking the rendered left button activates Cancel");
+  testEqInt(g,
+            dialog.clickAt(706.0f, 408.0f),
+            2,
+            "clicking the rendered right button activates Confirm");
+  testEqInt(g,
+            dialog.clickAt(100.0f, 100.0f),
+            0,
+            "clicking outside the panel leaves it open");
+
+  env.setVar("uiScale", 0.5);
+  dialog.rebuildVisual();
+  const ShapePrimitive* backdrop = dialog.getVisual().getShape(0);
   testTrue(g,
-           clickedAction >= 0 && clickedAction <= 2,
-           "clickAt returns valid action");
+           backdrop != nullptr && backdrop->rect.w == 2560.0f &&
+             backdrop->rect.h == 1440.0f,
+           "fractional UI scale keeps the default backdrop full-screen");
+  testEqInt(g,
+            dialog.clickAt(1214.0f, 768.0f),
+            1,
+            "fractional UI scale preserves default action geometry");
 
   dialog.close();
   testTrue(g, !dialog.isOpen(), "Dialog closed");
+}
+
+static void
+testGuiMenuShellClocksAndLayout()
+{
+  testSection("GuiMenuShell: shared clocks, panel fit, and pointer edges");
+
+  testTrue(g,
+           GuiEasing::outCubic(0.0f) == 0.0f &&
+             GuiEasing::outCubic(1.0f) == 1.0f,
+           "outCubic pins both ends exactly");
+  testTrue(g,
+           GuiEasing::outCubic(0.5f) > 0.5f,
+           "outCubic decelerates toward the target");
+  testTrue(g,
+           GuiEasing::outCubic(-1.0f) == 0.0f &&
+             GuiEasing::outCubic(2.0f) == 1.0f,
+           "outCubic clamps out-of-range progress");
+  testTrue(g,
+           GuiEasing::approach(0.0f, 1.0f, 18.0f, 0.0f) == 0.0f,
+           "approach ignores a zero delta");
+  const float approached = GuiEasing::approach(0.0f, 1.0f, 18.0f, 0.016f);
+  testTrue(g,
+           approached > 0.0f && approached < 1.0f,
+           "approach moves partway toward the target");
+
+  testTrue(g,
+           GuiEasing::approachLinear(0.0f, 1.0f, 18.0f, 0.0f, 0.001f) == 0.0f,
+           "approachLinear ignores a zero delta");
+  const float slid = GuiEasing::approachLinear(0.0f, 1.0f, 18.0f, 0.016f, 0.0f);
+  testTrue(g, slid > 0.0f && slid < 1.0f, "approachLinear slides partway");
+  testTrue(g,
+           GuiEasing::approachLinear(0.0f, 1.0f, 18.0f, 1.0f, 0.0f) == 1.0f,
+           "approachLinear clamps its blend at one full step");
+  testTrue(g,
+           GuiEasing::approachLinear(0.9999f, 1.0f, 18.0f, 0.016f, 0.001f) ==
+             1.0f,
+           "approachLinear snaps once inside the epsilon");
+  testTrue(g,
+           GuiEasing::approachLinear(0.9999f, 1.0f, 18.0f, 0.016f, 0.0f) !=
+             1.0f,
+           "a zero epsilon never snaps");
+
+  GuiMenuAnimator animator;
+  animator.restart();
+  testTrue(g, animator.openProgress() == 0.0f, "restart rewinds the reveal");
+  animator.tick(std::numeric_limits<float>::quiet_NaN());
+  animator.tick(-1.0f);
+  testTrue(g,
+           animator.openProgress() == 0.0f,
+           "invalid frame deltas preserve animation state");
+  animator.tick(0.12f);
+  testTrue(g,
+           animator.openProgress() > 0.0f && animator.openProgress() < 1.0f,
+           "the reveal advances incrementally");
+  testTrue(g,
+           animator.rowReveal(4, 0) < animator.rowReveal(0, 0),
+           "later rows enter behind earlier ones");
+  testTrue(g,
+           animator.rowReveal(4, 4) == animator.rowReveal(0, 0),
+           "the first visible row carries no stagger");
+  animator.tick(5.0f);
+  testTrue(g, animator.openProgress() == 1.0f, "the reveal clamps at one");
+  testTrue(g,
+           animator.panelReveal() == 1.0f && animator.panelOffsetY() == 0.0f,
+           "a settled panel sits at its resting position");
+
+  animator.beginSelectionTravel(0.0f);
+  testTrue(g,
+           animator.selectionPosition(1.0f) == 0.0f,
+           "selection travel starts at the row it leaves");
+  animator.tick(0.07f);
+  const float midway = animator.selectionPosition(1.0f);
+  testTrue(
+    g, midway > 0.0f && midway < 1.0f, "the highlight glides between rows");
+  animator.settleSelection();
+  testTrue(g,
+           animator.selectionPosition(1.0f) == 1.0f,
+           "settling snaps the highlight to its row");
+
+  animator.triggerValuePulse();
+  testTrue(g, animator.valuePulse() == 1.0f, "a value pulse starts at full");
+  animator.tick(1.0f);
+  testTrue(g, animator.valuePulse() == 0.0f, "the value pulse decays to zero");
+
+  animator.resetCaret();
+  testTrue(
+    g, animator.caretVisible(), "the caret shows right after a keystroke");
+  animator.tick(0.8f);
+  testTrue(
+    g, !animator.caretVisible(), "the caret blinks off later in the period");
+
+  GuiMenuAnimator still;
+  still.setReducedMotion(true);
+  still.restart();
+  still.beginSelectionTravel(0.0f);
+  still.triggerValuePulse();
+  still.tick(0.01f);
+  testTrue(g,
+           still.openProgress() == 1.0f && still.panelOffsetY() == 0.0f &&
+             still.selectionPosition(3.0f) == 3.0f &&
+             still.valuePulse() == 0.0f && still.rowReveal(9, 0) == 1.0f &&
+             still.ambientPhase() == 0.0f && still.caretVisible(),
+           "reduced motion settles every clock immediately");
+
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("uiScale", 1);
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  GameVisual visual(128u);
+
+  const GuiPanelFit fit = GuiPanelLayout::fit(&window, &renderer, &visual);
+  testTrue(g,
+           fit.layoutScale == 1.0f && fit.virtualWidth == 1280.0f &&
+             fit.virtualHeight == 720.0f,
+           "a roomy window lays out at its own pixel size");
+  const GuiPanelFit missing = GuiPanelLayout::fit(nullptr, nullptr, nullptr);
+  testTrue(g,
+           missing.virtualWidth == 1280.0f && missing.virtualHeight == 720.0f,
+           "a missing window falls back to the default design size");
+
+  NullRenderWindow small(320, 240);
+  const GuiPanelFit shrunk = GuiPanelLayout::fit(&small, &renderer, &visual);
+  testTrue(g,
+           shrunk.layoutScale == 0.5f && shrunk.virtualWidth == 640.0f &&
+             shrunk.virtualHeight == 480.0f,
+           "a window below the design size scales down uniformly");
+
+  const GuiPanelFit docked = GuiPanelLayout::viewport(&small, &renderer);
+  testTrue(g,
+           docked.layoutScale == 1.0f && docked.virtualWidth == 320.0f &&
+             docked.virtualHeight == 240.0f,
+           "viewport anchors to the real window with no design-size floor");
+  const GuiPanelFit dockedMissing = GuiPanelLayout::viewport(nullptr, nullptr);
+  testTrue(g,
+           dockedMissing.layoutScale == 1.0f &&
+             dockedMissing.virtualWidth == 1280.0f &&
+             dockedMissing.virtualHeight == 720.0f,
+           "viewport falls back to the default window size");
+
+  testEqInt(g,
+            GuiPanelLayout::visibleRowCount(340.0f, 18),
+            10,
+            "the body area reports how many rows fit");
+  testEqInt(g,
+            GuiPanelLayout::visibleRowCount(0.0f, 18),
+            1,
+            "a collapsed body still shows one row");
+  testEqInt(g,
+            GuiPanelLayout::clampFirstVisibleRow(40, 18, 10),
+            8,
+            "the scroll offset stops at the last full page");
+  testEqInt(g,
+            GuiPanelLayout::clampFirstVisibleRow(3, 4, 10),
+            0,
+            "a list shorter than its window never scrolls");
+  testEqInt(g,
+            GuiPanelLayout::scrollToRow(5, 2, 4),
+            2,
+            "scrolling up reveals the selected row");
+  testEqInt(g,
+            GuiPanelLayout::scrollToRow(0, 6, 4),
+            3,
+            "scrolling down keeps the selected row last");
+  testEqInt(g,
+            GuiPanelLayout::scrollToRow(2, 3, 4),
+            2,
+            "an already visible row does not scroll");
+
+  InputManager input(nullptr);
+  bool scrolled = true;
+  testEqInt(g,
+            GuiPanelLayout::applyWheelScroll(&input, 4, 18, 10, &scrolled),
+            4,
+            "an idle wheel leaves the scroll offset alone");
+  testTrue(g, !scrolled, "an idle wheel reports no scroll");
+  double* wheel = input.getMouseScrollOffset();
+  testTrue(g, wheel != nullptr, "the input manager exposes a wheel offset");
+  if (wheel != nullptr) {
+    *wheel = 3.0;
+    testEqInt(g,
+              GuiPanelLayout::applyWheelScroll(&input, 4, 18, 10, &scrolled),
+              1,
+              "a wheel up scrolls back by whole rows");
+    testTrue(g, scrolled && *wheel == 0.0, "the wheel delta is consumed once");
+    *wheel = -2.0;
+    testEqInt(g,
+              GuiPanelLayout::applyWheelScroll(&input, 4, 18, 10, &scrolled),
+              6,
+              "a wheel down scrolls forward by whole rows");
+  }
+
+  GuiPointerTracker pointer;
+  pointer.reset(true);
+  pointer.sample(&window, &input, 1.0f);
+  testTrue(g,
+           !pointer.clicked() && !pointer.pressed(),
+           "a released button after opening is not a click");
+  testTrue(g,
+           pointer.released(),
+           "letting go of the opening press reports a release edge");
+  pointer.sample(&window, &input, 1.0f);
+  testTrue(g, !pointer.moved(), "a stationary pointer reports no movement");
+  testTrue(g,
+           !pointer.released(),
+           "a button that stays up reports no further release");
+
+  pointer.reset(true);
+  pointer.sample(&window, nullptr, 1.0f);
+  testTrue(g,
+           pointer.pressed() && !pointer.clicked() && !pointer.released(),
+           "a frame without an input device invents no press edge");
+  pointer.sample(&window, &input, 2.0f);
+  testTrue(g,
+           pointer.moved() || pointer.x() == 0.0f,
+           "a changed layout scale moves the pointer in virtual space");
+  pointer.forgetPosition();
+  testTrue(g,
+           pointer.x() == -1.0f && pointer.y() == -1.0f,
+           "closing an overlay forgets the last pointer position");
 }
 
 static int
@@ -282,4 +528,6 @@ registerGuiKitTests(IllumoTestRegistry& registry)
                []() { return runGuiKitCase(testGridAtlasCoordinates); });
   registry.add("Illumo.GuiKit.Dialog",
                []() { return runGuiKitCase(testGuiDialogModalFlow); });
+  registry.add("Illumo.GuiKit.MenuShell",
+               []() { return runGuiKitCase(testGuiMenuShellClocksAndLayout); });
 }

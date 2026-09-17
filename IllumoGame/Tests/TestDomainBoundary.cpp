@@ -2,7 +2,7 @@
 
 #include "Game/Canvas.h"
 #include "Game/CellGrid.h"
-#include "Rulesets/GameOfLifeRuleSet.h"
+#include "Rulesets/LifeLikeRuleSet.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -40,7 +40,7 @@ testGameOfLifeGenerationOnCellGrid()
   grid.setCanvasPixel(2, 2, 0);
   grid.setCanvasPixel(2, 3, 0);
 
-  GameOfLifeRuleSet rules(&grid);
+  LifeLikeRuleSet rules(&grid, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   rules.calcGeneration(0, 0, 5, 5);
 
   // After one step the blinker is horizontal through row 2.
@@ -100,7 +100,8 @@ testCanvasDomainOnlyConstruction()
   testTrue(g, canvas.setCanvasPixel(1, 1, 0), "domain write");
   testEqUChar(g, canvas.getCanvasPixel(1, 1), 0, "domain read");
 
-  GameOfLifeRuleSet rules(&canvas);
+  LifeLikeRuleSet rules(
+    &canvas, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   // Still life block.
   canvas.setCanvasPixel(1, 1, 0);
   canvas.setCanvasPixel(1, 2, 0);

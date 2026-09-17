@@ -2,7 +2,8 @@
 \label{sec:rendering-current}
 
 \begin{statusbox}
-\textbf{The reusable 2D renderer foundation plus a narrow debug-3D path is shipped inside Illumo.} Live
+\textbf{Illumo ships world meshes, painter-correct 2D composition, cubemaps,
+and explicit offscreen passes.} Live
 frame path is acquire/enroll + tokens + submit via
 \symbolref{Renderer}/\symbolref{IBackend}.
 Drawables emit tokens through \texttt{AppendCommands}; GL draw submission is
@@ -25,9 +26,9 @@ No second real GPU API.
         \texttt{BeginFrame} $\rightarrow$ \texttt{RenderScene} $\rightarrow$
         \texttt{EndFrame} (swap).
   \item \symbolref{Renderer::RenderScene}:
-        collect visible World shadow casters; when present, fit and render one
-        shared depth pass; then clear + viewport tokens and walk layers
-        World $\rightarrow$ UI $\rightarrow$ Debug; each drawable
+        initial screen clear + viewport tokens; walk layers
+        World $\rightarrow$ UI $\rightarrow$ Debug, using each layer's effective
+        custom passes or ordinary screen rendering; each drawable
         \texttt{AppendCommands}; if a drawable returns false, legacy immediate
         \texttt{Draw()} still runs (hybrid fallback; production drawables return true).
         It captures window dimensions and the primary camera MVP once for that
@@ -52,13 +53,35 @@ deterministic hierarchy pre-order, the graph supplies the resolved world
 matrix and the attachment appends ordinary backend-neutral tokens through
 \symbolref{Renderer}. The graph owns neither the attachment nor GPU resources.
 This keeps persistent world organization separate from per-frame extraction
-and backend execution. The current IllumoGame cellular-automata path does not
-instantiate a graph.
+and backend execution. IllEd uses the graph for document geometry. IllumoGame's
+opt-in \texttt{render3dTest} diagnostic attaches world meshes; its CA storage
+and product UI remain separate from the graph.
 
 \subsection{Layers, styles, and drawables (D-R14, D-R18)}
+The initial clear explicitly selects the screen framebuffer and full-window
+viewport. Each ordinary layer reestablishes that target and viewport before
+its drawables, including after an offscreen custom pass. The OpenGL binding
+cache starts unknown on each submission, so the first screen bind is issued
+even if the preceding submission left an offscreen framebuffer active.
+Pass color and depth clear flags are independent. Color-only passes emit a
+color-buffer clear; depth clears carry the requested value. Combined pass
+clears emit both commands. Clear tokens default to depth one, so a later
+default clear does not inherit a custom value from a previous pass.
+
+Scene stores host default passes separately from application overrides.
+Nonempty application overrides take precedence, whether installed
+in module Start, Update, or DispatchDrawables. The host updates only defaults
+through \texttt{SetDefaultLayerPasses}, so motion-blur toggles and parameter
+changes cannot erase application passes. An empty override,
+\texttt{ClearLayerPasses}, or \texttt{ResetDefaultPasses} restores the current
+host fallback; without one, rendering uses the ordinary screen draw.
+\texttt{passesIn} and \texttt{hasCustomPasses} describe the effective sequence.
+Required-module transitions reset all application overrides before destroying
+retired modules and after rejected startup, detaching borrowed callbacks while
+preserving defaults. Optional modules reinstall their overrides after a transition.
 \begin{itemize}
-  \item \textbf{Layer} --- composition bucket / draw order on the default FB
-        (not a multi-target GPU pass).
+  \item \textbf{Layer} --- ordered composition bucket, rendered to the screen
+        by default or through its effective custom pass sequence.
   \item \textbf{RenderStyle} --- Renderer-owned generational registry: shader handle +
         \texttt{PipelineState} defaults (\texttt{Canvas}, \texttt{UiText},
         \texttt{Console}, \texttt{Shape}, \texttt{Sprite}). Canonical Shape/Sprite
@@ -79,9 +102,14 @@ instantiate a graph.
         normalized pivots, atlas regions/flips, and integer draw order build one
         stable cross-type stream. Only adjacent compatible items batch, so
         transparent painter order is never changed by a global texture sort.
+        Pixel-space rebuilds conservatively reject quads outside the logical
+        viewport. An optional top-left logical-pixel clip rejects fully
+        excluded quads before upload and uses nested, intersected scissor
+        tokens for partial content; popping the clip restores any outer
+        scissor (D-R23). World-space behavior is unchanged.
         Dynamic buffers reserve 1,024 quads, double as needed, and stop at a
         configurable 65,536 default ceiling.
-  \item \symbolref{MeshVisual} (D-R21) is the world mesh host and
+  \item \symbolref{MeshVisual} (D-R21/D-R24) is the world mesh host and
         \symbolref{ISceneRenderAttachment}: colored lines/triangles, textured
         quads (sprites), optional camera-facing billboards, optional
         directional lighting with participation in a scene-level depth-only
@@ -92,28 +120,54 @@ instantiate a graph.
         and motion-blur uniforms from CPU-side drawable state; products
         persist those values through EnvVars rather than having
         \symbolref{MeshVisual} read configuration.
-        Directional shadow ownership is scene-level (D-R22): visible direct
-        meshes and SceneGraph attachments contribute transformed caster bounds
-        and depth tokens; Renderer reuses one framebuffer, fits one shared
-        light-space matrix to the combined bounds, clears once, and exposes the
-        same depth texture to every receiver. MeshVisual owns no shadow FBO.
-        Compose complex objects as child scene nodes, each with
+        One host can contain multiple visual items. Use child scene nodes for
+        independent transforms and subtree state; each node borrows at most
         one attachment. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
-        meshes upload dirty vertices through \texttt{UpdateBuffer}; capacity
-        growth replaces the backing allocation.
+        procedural meshes upload dirty vertices through \texttt{UpdateBuffer};
+        capacity growth replaces the backing allocation. Immutable imported
+        meshes instead borrow one reference-counted \texttt{MeshHandle} from
+        \symbolref{AssetManager}; multiple visuals reuse the upload while
+        retaining independent transform, tint, lighting, and motion state.
 \end{itemize}
 
-\subsection{Managed texture and shader assets (D-R17)}
+\subsection{Managed assets (D-R17/D-R24)}
+Shared fonts cache one atlas handle per live renderer ownership identity,
+not per raw renderer address. The identity is weak in the font cache; expired
+entries are pruned and explicitly retired texture handles are reenrolled.
+Alternating live renderers reuses their separate enrollments. Renderer teardown
+invalidates the identity before backend teardown; GPU ownership stays with the
+backend, and a font never dereferences a retired renderer.
+
 \symbolref{AssetManager} caches canonical file paths plus loading options and
 returns stable typed handles. Duplicate acquisition increments a reference
 count; the final release destroys the backend resource. Initial pending or
-failed requests retain a checkerboard texture or a fallback shader that follows
+failed 2D texture/shader requests retain a checkerboard or fallback shader that follows
 the documented custom-2D binding contract. One owned worker performs file reads
 and stb decoding; \texttt{pump} applies GPU
 replacement on the render thread before frame submission. Failed reloads keep
 the last good object and record an error. Debug builds poll timestamps every
 500\,ms and coalesce requests; explicit reload is available in all builds.
 Shutdown cancels obsolete results and joins the worker before backend teardown.
+
+Static mesh acquisition is synchronous and main-thread affine. The
+\symbolref{MeshLoader} converts a file to CPU \texttt{MeshData};
+\symbolref{AssetManager} canonicalizes the file path plus geometry-affecting
+options, enrolls one immutable backend mesh, and returns its typed handle.
+Duplicate acquisition increments a reference count and final release destroys
+the backend resource. In-memory mesh data can be enrolled once and explicitly
+retained for multiple consumers. Managed mesh metadata supplies the immutable
+vertex/index counts and bounds needed by drawables. Mesh hot reload, materials,
+and automatic instance aggregation remain outside this milestone.
+
+Cubemaps retain their source kind and all canonical face paths (or the cross
+path). Initial acquisition remains synchronous; reload decoding uses the same
+CPU job path and publishes all six RGBA faces through cubemap replacement.
+Initial success has revision one. Explicit path reload and timestamp polling
+observe every face. Decode timestamps are captured before reading, so a later
+edit remains observable on the next poll. Missing/mismatched faces or rejected
+replacement keep the prior ready resource and revision. Cross extraction and
+orientation are shared by initial load and reload; texture kinds cannot change
+during replacement.
 
 \subsection{CanvasView presentation (bounded RGB fade + dirty rects)}
 \label{sec:canvas-rgb-fade}
@@ -164,17 +218,40 @@ with a warning and safe no-op.
 
 \symbolref{CommandQueue}: vector storage reserves 2,048 tokens, grows to a
 configurable 65,536 default safety ceiling, and reports high-water and rejected
-counts. Rejection logs once per reset interval.
+counts. Rejection logs once per reset interval. On the supported 64-bit Windows
+build each token is 72 bytes. Matrix-uniform values are copied into retained
+renderer-owned chunks of 128 matrices and the compact token borrows that stable
+value until synchronous submission returns; the chunks reset after submission
+and are reused by later frames. Matrix side storage uses a matching default
+65,536-value safety ceiling so rejected token storms cannot grow it without
+bound.
 
 \symbolref{RenderCommand}: tagged union (\texttt{CommandType} + POD payload)
 including pipeline, bind, uniforms, \texttt{UpdateTexture}, \texttt{UpdateBuffer},
 clear, draw, and explicit enabled/disabled scissor state (D-R1).
+
+Each \symbolref{GLShaderProgram} owns its uniform-location cache. Cache hits use
+the token's name directly rather than building and hashing a combined
+program-ID/name string, and shader replacement or destruction retires cached
+locations with the owning program.
+
+Renderer maintains a per-frame scissor stack for \texttt{pushClipRect}/
+\texttt{popClipRect}. Nested clips intersect in physical viewport coordinates
+and restore the prior state; low-level \texttt{pushScissor} remains the explicit
+state-token path (D-R23).
 
 \symbolref{GLTexture::UpdateSubImage}: rectangles through 64\,KiB use direct
 \texttt{glTexSubImage2D}. Larger uploads select a signaled slot from a
 three-PBO/\texttt{GLsync} ring without waiting; all-busy and map-failure cases
 fall back to the direct path. Replacement/destruction deletes every fence and
 buffer and retains the OpenGL 3.3 baseline.
+
+Uploads reject invalid bounds, channel counts, row strides, and byte-size
+overflow before any staging or GL call. Uploads bind on texture unit zero,
+matching the device cache, and restore the caller's active unit and unpack
+state. Cubemap file decoding explicitly produces RGBA for every face and cross;
+raw two-channel cubemaps are rejected instead of reinterpreted as RGBA. OBJ
+conversion validates all attribute references before publishing mesh data.
 
 \symbolref{GLDevice}: bind-state tracker (skip redundant program/VAO/texture/
 viewport within a submit); uniform location cache; blend-func-on-enable (D-R5).
@@ -212,10 +289,12 @@ instead of treating thousands of CPU submissions as displayed frames (D-P32).
 \texttt{IllumoTests} owns persistent scene hierarchy plus reusable
 rendering/services cases, while
 \texttt{IllumoGameTests} owns CanvasView, ruleset, CellGameModule, simulation,
-and persistence cases. Both are shared binaries for compile efficiency, but
+and persistence cases. Editor and mesh-viewer cases have their own runners.
+These are shared binaries for compile efficiency, but
 CTest invokes one exact logical case per isolated process (D-T1). No GPU
 context is required. Combined Clang/LLVM \texttt{IllumoCoverage} enforces 85\%
-line coverage over headless-testable first-party production code.
+line coverage over headless-testable first-party production code linked into
+all registered workspace runners.
 
 \subsection{Remaining pain points (non-blocking)}
 \begin{enumerate}
@@ -227,6 +306,24 @@ line coverage over headless-testable first-party production code.
         (window bootstrap, not frame submission).
   \item Windows is the supported live path. Linux and macOS bootstraps are
         known stale against current App APIs and have no native validation.
-  \item Font atlases/UTF-8 layout, tilemaps/particles, general 3D meshes, and offscreen compositing
-        are follow-on features, not hidden scaffolding in the current renderer.
+  \item Font atlases/UTF-8 layout, tilemaps/particles, mesh materials and formats
+        beyond OBJ, and broader offscreen compositing are follow-on features,
+        not hidden scaffolding in the current renderer.
 \end{enumerate}
+
+
+\subsection{Standalone frame capture (2026-09-11)}
+\texttt{FrameCapture} creates a hidden, unpaced OpenGL context for one synchronous
+producer callback. No application host, input, simulation, audio or persistent
+configuration starts. The producer owns its content through normal token
+submission and destroys renderer-bound objects before returning. The renderer
+reads top-down RGBA8 pixels before swap and tears down before the context.
+\texttt{IllumoCapture} supplies equivalent direct and retained-graph fixtures,
+explicit camera/state, optional OBJ input, PNG output and JSON diagnostics.
+Strict capture rejects immediate fallback, invalid resources and queue overflow.
+Existing applications retain normal scheduling and visible-window defaults.
+See \texttt{docs/frame-capture.md} for inputs, publication and limitations.
+
+Current 3D facilities include CPU OBJ import, directional lighting,
+per-drawable self-shadowing and post-processing. These do not yet implement the
+charter's scene-wide lighting, registered game objects or physics integration.

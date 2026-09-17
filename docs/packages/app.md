@@ -16,5 +16,6 @@ Illumo owns process-level system behavior:
 
 Each in-tree product implements that definition: IllumoGame in
 `IllumoGame/Source/Game/IllumoGameApplication.cpp`, IllEd in
-`IllEd/Source/IllEdApplication.cpp`. Both contain product policy only — no
+`IllEd/Source/IllEdApplication.cpp`, and IllMeshViewer in
+`IllMeshViewer/Source/IllMeshViewerApplication.cpp`. These contain product policy only — no
 process loop, logger lifetime, platform SDK code, or system parser.

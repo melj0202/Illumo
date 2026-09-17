@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Engine/FrameProfiler.h>
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/IllumoContext.h>
 
@@ -48,6 +49,7 @@ public:
   EnvVars& environment();
   const EnvVars& environment() const;
   const std::string& applicationName() const;
+  FrameProfiler& frameProfiler() { return m_frameProfiler; }
 
   bool initialize();
   void addModule(std::unique_ptr<IModule> module,
@@ -63,6 +65,7 @@ public:
   IllumoContext& context();
   const IllumoContext& context() const;
   bool shouldClose() const;
+  bool processCloseRequest();
 
 private:
   friend class IllumoTestAccess;
@@ -90,6 +93,7 @@ private:
   void configureScenePipeline();
   void releaseServices();
 
+  FrameProfiler m_frameProfiler;
   std::string m_applicationName;
   WindowFactory m_windowFactory;
   BackendFactory m_backendFactory;
@@ -107,6 +111,7 @@ private:
   std::unique_ptr<IModule> m_pendingModuleTransition;
   bool m_initialized{ false };
   bool m_modulesStarted{ false };
+  bool m_terminalCloseRequested{ false };
   bool m_motionBlurPipelineConfigured{ false };
   float m_configuredBlurAmount{ 0.0f };
   float m_configuredBlurMax{ 0.0f };

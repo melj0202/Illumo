@@ -20,9 +20,9 @@ retained widget toolkit or a second renderer.
   objects through `MeshVisual` (mesh + style + optional texture, optional
   billboard) on a `SceneGraph` node or as one World drawable. Both hosts emit
   the `WorldLook` `uMVP` contract; do not add an immediate-mode side channel.
-- `MeshVisual` contributes transformed triangle bounds and depth draws to the
-  Renderer-owned scene shadow pass. It may retain per-receiver filtering and
-  bias values, but must not own a shadow framebuffer or run a private pass.
+- A `MeshVisual` may borrow one immutable mesh-asset handle managed by
+  `AssetManager`; it must not destroy that handle. Keep procedural dynamic
+  batches visual-owned and preserve their reuse behavior.
 - Batch compatible geometry into bounded reusable storage and emit one upload
   and draw per batch where the existing contract allows it. Preserve order and
   clipping; do not trade correctness for fewer commands.

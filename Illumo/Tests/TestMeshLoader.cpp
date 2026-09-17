@@ -116,6 +116,33 @@ testMeshDataUtilities()
 }
 
 static void
+testMeshLoaderAttributeBounds()
+{
+  testSection(
+    "MeshLoader: reject invalid attribute references transactionally");
+  const std::string vertices = "v 0 0 0\nv 1 0 0\nv 0 1 0\n";
+  const std::string invalid[] = { "f 1 2 4\n",
+                                  "vn 0 0 1\nf 1//2 2//2 3//2\n",
+                                  "f 1//1 2//1 3//1\n",
+                                  "vt 0 0\nf 1/2 2/2 3/2\n",
+                                  "f 1/1 2/1 3/1\n",
+                                  "f 1 2 2147483647\n",
+                                  "o valid\nf 1 2 3\no invalid\nf 1 2 4\n" };
+  for (const std::string& suffix : invalid) {
+    const MeshLoadResult result = MeshLoader::loadFromMemory(vertices + suffix);
+    testTrue(
+      g, !result.success && !result.error.empty(), "invalid reference fails");
+    testTrue(g,
+             result.mesh.vertices.empty() && result.mesh.indices.empty() &&
+               result.mesh.submeshes.empty() && result.mesh.materials.empty(),
+             "rejected mesh contains no partially converted output");
+  }
+  const MeshLoadResult valid =
+    MeshLoader::loadFromMemory(vertices + "f -3 -2 -1\n");
+  testTrue(g, valid.success, "valid relative OBJ references remain supported");
+}
+
+static void
 testMeshLoaderErrorHandling()
 {
   testSection("MeshLoader: error handling on empty or invalid input");
@@ -247,6 +274,9 @@ registerMeshLoaderTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.MeshLoader.MeshDataUtilities",
                []() { return runMeshLoaderCase(testMeshDataUtilities); });
+  registry.add("Illumo.MeshLoader.AttributeBounds", []() {
+    return runMeshLoaderCase(testMeshLoaderAttributeBounds);
+  });
   registry.add("Illumo.MeshLoader.ErrorHandling",
                []() { return runMeshLoaderCase(testMeshLoaderErrorHandling); });
   registry.add("Illumo.MeshLoader.BackendSwapping", []() {

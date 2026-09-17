@@ -35,7 +35,7 @@ public:
     rejectionLoggedThisFrame = false;
   }
 
-  bool Submit(RenderCommand command)
+  bool Submit(const RenderCommand& command)
   {
     if (commandQueue.size() < maxCommands) {
       if (commandQueue.size() == commandQueue.capacity()) {

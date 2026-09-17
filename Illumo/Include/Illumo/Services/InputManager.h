@@ -111,12 +111,15 @@ private:
   std::unordered_map<KeyCode, InputAction> inputStatesCurrent;
   std::unordered_map<KeyCode, InputAction> inputStatesPrevious;
   InputContext inputContexts[NUM_INPUT_CONTEXTS];
+  std::array<long, NUM_INPUT_CONTEXTS> contextIds;
+  InputContext neutralContext;
   InputContext* activeInputContext;
   std::queue<unsigned int> charQueue;
   std::queue<KeyPressEvent> keyQueue;
 
-  long numInputContexts;
+  long nextContextId = 0;
   int m_modifierFlags;
+  std::array<bool, static_cast<size_t>(KeyCode::F12) + 1> m_suppressedKeys{};
 
   KeyCode TranslateKeyCodeToGLFW(int glfwKey);
 
@@ -127,6 +130,10 @@ private:
 public:
   InputManager(GLFWwindow* window);
   ~InputManager();
+  InputManager(const InputManager&) = delete;
+  InputManager& operator=(const InputManager&) = delete;
+  InputManager(InputManager&&) = delete;
+  InputManager& operator=(InputManager&&) = delete;
 
   std::queue<unsigned int>& getCharQueue() { return charQueue; }
   std::queue<KeyPressEvent>& getKeyQueue() { return keyQueue; }
@@ -135,6 +142,12 @@ public:
   void clearKeyQueue();
 
   void update();
+
+  // Overlay capture masks keyboard polling until the next update. Queue
+  // ownership remains with the caller; mouse and modifier polling are
+  // unchanged.
+  void suppressKeyForFrame(KeyCode key);
+  bool isKeySuppressed(KeyCode key) const;
 
   InputAction GetInputAction(KeyCode keyCode);
 
@@ -152,7 +165,11 @@ public:
 
   bool isMouseButtonReleased(KeyCode mouseButton);
 
-  void setActiveInputContext(long inputContext);
+  // IDs are manager-local and never reused. Invalid selection leaves the
+  // current context unchanged; retiring the active context selects neutral
+  // input.
+  bool setActiveInputContext(long inputContext);
+  bool unregisterInputContext(long inputContext);
 
   InputContext* getActiveInputContext() { return activeInputContext; }
 

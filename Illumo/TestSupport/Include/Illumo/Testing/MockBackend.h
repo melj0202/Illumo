@@ -2,7 +2,10 @@
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
+#include <array>
 #include <cstdint>
+#include <cstring>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -21,9 +24,11 @@ public:
       ShaderPaths,
       ShaderSources,
       TextureData,
+      CubemapData,
       ReplaceMesh,
       ReplaceShader,
       ReplaceTexture,
+      ReplaceCubemap,
       DestroyMesh,
       DestroyShader,
       DestroyTexture
@@ -49,6 +54,7 @@ private:
   // Clear).
   std::vector<RenderCommand> lastNonEmptySubmitted;
   std::vector<std::vector<RenderCommand>> submittedFrames;
+  std::deque<std::array<float, 16>> submittedUniformMatrices;
   std::vector<CreateRecord> creates;
   int beginFrameCount = 0;
   int endFrameCount = 0;
@@ -68,6 +74,7 @@ private:
   std::unordered_map<uint32_t, uint32_t> liveTextures;
   std::unordered_map<uint32_t, uint32_t> liveFramebuffers;
   std::unordered_map<uint32_t, TextureInfo> textureInfos;
+  std::unordered_map<uint32_t, bool> cubemapKinds;
 
   bool isCommandResourceValid(const RenderCommand& command) const
   {
@@ -83,6 +90,8 @@ private:
         return IsTextureValid(command.bindTexture.handle);
       case CommandType::UpdateBuffer:
         return IsMeshValid(command.updateBuffer.handle);
+      case CommandType::UpdateIndexBuffer:
+        return IsMeshValid(command.updateIndexBuffer.handle);
       case CommandType::UpdateTexture:
         return IsTextureValid(command.updateTexture.handle);
       default:
@@ -105,11 +114,15 @@ public:
   {
     commandQueue.Reset();
     lastSubmitted.clear();
+    lastNonEmptySubmitted.clear();
+    submittedFrames.clear();
+    submittedUniformMatrices.clear();
     creates.clear();
     liveMeshes.clear();
     liveShaders.clear();
     liveTextures.clear();
     textureInfos.clear();
+    cubemapKinds.clear();
     meshHandles.clear();
     shaderHandles.clear();
     textureHandles.clear();
@@ -127,7 +140,17 @@ public:
     for (size_t i = 0; i < n; ++i) {
       const RenderCommand& command = commandQueue.GetCommand(i);
       if (isCommandResourceValid(command)) {
-        lastSubmitted.push_back(command);
+        RenderCommand snapshot = command;
+        if (snapshot.commandType == CommandType::SetUniformMat4 &&
+            snapshot.uniformMat4.value != nullptr) {
+          submittedUniformMatrices.emplace_back();
+          std::array<float, 16>& retained = submittedUniformMatrices.back();
+          std::memcpy(retained.data(),
+                      snapshot.uniformMat4.value,
+                      retained.size() * sizeof(float));
+          snapshot.uniformMat4.value = retained.data();
+        }
+        lastSubmitted.push_back(snapshot);
       } else {
         rejectedStaleCommands++;
       }
@@ -332,6 +355,33 @@ public:
     return handle;
   }
 
+  TextureHandle CreateCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3) override
+  {
+    (void)facesData;
+    TextureHandle handle = textureHandles.allocate();
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::CubemapData;
+    cubemapKinds[handle.slot] = true;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    rec.width = width;
+    rec.height = height;
+    rec.channels = channels;
+    rec.filter = TextureFilter::Linear;
+    creates.push_back(rec);
+    liveTextures[handle.slot] = handle.generation;
+    TextureInfo info;
+    info.width = width;
+    info.height = height;
+    info.channels = channels;
+    textureInfos[handle.slot] = info;
+    return handle;
+  }
+
   bool ReplaceTexture(TextureHandle handle,
                       const unsigned char* data,
                       int width,
@@ -340,7 +390,8 @@ public:
                       const TextureOptions& options) override
   {
     (void)data;
-    if (!IsTextureValid(handle) || rejectNextTextureReplacement) {
+    if (!IsTextureValid(handle) || cubemapKinds.contains(handle.slot) ||
+        rejectNextTextureReplacement) {
       rejectNextTextureReplacement = false;
       return false;
     }
@@ -352,6 +403,41 @@ public:
     rec.height = height;
     rec.channels = channels;
     rec.filter = options.filter;
+    creates.push_back(rec);
+    TextureInfo info;
+    info.width = width;
+    info.height = height;
+    info.channels = channels;
+    textureInfos[handle.slot] = info;
+    return true;
+  }
+
+  bool ReplaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels) override
+  {
+    if (!IsTextureValid(handle) || !cubemapKinds.contains(handle.slot) ||
+        width <= 0 || width != height ||
+        (channels != 1 && channels != 3 && channels != 4) ||
+        rejectNextTextureReplacement) {
+      rejectNextTextureReplacement = false;
+      return false;
+    }
+    for (const unsigned char* face : faces) {
+      if (face == nullptr) {
+        return false;
+      }
+    }
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::ReplaceCubemap;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    rec.width = width;
+    rec.height = height;
+    rec.channels = channels;
+    rec.filter = TextureFilter::Linear;
     creates.push_back(rec);
     TextureInfo info;
     info.width = width;
@@ -373,6 +459,7 @@ public:
     creates.push_back(rec);
     liveTextures.erase(handle.slot);
     textureInfos.erase(handle.slot);
+    cubemapKinds.erase(handle.slot);
     return textureHandles.release(handle);
   }
 
@@ -593,6 +680,7 @@ public:
     lastSubmitted.clear();
     lastNonEmptySubmitted.clear();
     submittedFrames.clear();
+    submittedUniformMatrices.clear();
     commandQueue.Reset();
     creates.clear();
     rejectedStaleCommands = 0;

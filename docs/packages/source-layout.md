@@ -1,8 +1,8 @@
 # Source layout
 
-The repository root is the canonical CMake workspace. `IllumoGame` and `IllEd`
-depend on the static `Illumo` library; the library has no Game, Rulesets, or
-editor-document dependency.
+The repository root is the canonical CMake workspace. `IllumoGame`, `IllEd`,
+and `IllMeshViewer` depend on the static `Illumo` library; the library has no
+dependency on these products or their domain code.
 
 | Path | Role |
 |---|---|
@@ -21,7 +21,10 @@ editor-document dependency.
 | `IllEd/Source/` | World-editor module factory, document model, `.ilsc` codec, toolbar |
 | `IllEd/Assets/` | Editor UI atlas and other product runtime files |
 | `IllEd/Tests/` | `IllEd.*` product cases |
+| `IllMeshViewer/Source/` | Mesh-viewer module factory, camera, configuration, input, and UI |
+| `IllMeshViewer/Tests/` | `IllMeshViewer.*` product cases |
 
 `Illumo/Shader`, `Illumo/Assets`, notices, dependencies, and licenses remain
-library-owned. `IllumoGame/envvars.json` and `IllEd/envvars.json` are
-product-owned. Historical material under `archive/` is not built.
+library-owned. `IllumoGame/envvars.json`, `IllEd/envvars.json`, and
+`IllMeshViewer/envvars.json` are product-owned. Historical material under
+`archive/` is not built.

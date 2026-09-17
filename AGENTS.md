@@ -33,6 +33,8 @@ editing. Route detail to these canonical sources:
 
 - repository use and exact common commands: `README.md`;
 - current architecture and decision catalog: `docs/architecture-consensus.md`;
+- intended charter direction and current boundary: `docs/charter-direction.md`;
+- independent capture API and CLI: `docs/frame-capture.md`;
 - persistent scene hierarchy contract: `docs/scene-graph-v1-design.md`;
 - long-form design book and chart-only map: `docs/latex/illumo.tex` and
   `docs/latex/architecture-map.tex`;
@@ -95,11 +97,16 @@ submission returns.
 Backend resources use non-convertible slot+generation `MeshHandle`,
 `ShaderHandle`, and `TextureHandle` values; renderer styles use the same model.
 Backends allocate handles and validate replacement, destruction, queries, and
-command submission. `AssetManager` caches file textures/shaders by canonical
-path+options, owns one CPU file/decode worker, and performs GPU replacement only
-from render-thread `pump`. Debug builds poll timestamps every 500 ms; explicit
-reload remains available in all builds. The Debug renderer demo acquires both
-its atlas and contract-compatible sprite shader through this managed path.
+command submission. `AssetManager` caches file textures, shaders, and immutable
+static meshes by canonical path+options. Texture/shader file work uses one CPU
+decode worker and performs GPU replacement only from render-thread `pump`;
+mesh decode and enrollment are synchronous and main-thread affine. Debug builds
+poll texture/shader timestamps every 500 ms; explicit reload remains available
+for those resource types in all builds. `MeshVisual` borrows managed mesh
+handles while the acquiring owner retains their `AssetManager` references;
+procedural dynamic geometry remains visual-owned. The Debug renderer demo
+acquires both its atlas and contract-compatible sprite shader through this
+managed path.
 
 `GameVisual` is the reusable painter-correct 2D host. One stable ordered stream
 spans shapes, sprites, and text; only adjacent compatible items batch. Parent and
@@ -110,9 +117,12 @@ Product UI is primitive-composed rather than a separate widget system.
 `CommandLine` and the Release-visible `ConfigurationMenu` build their panels
 from `GameVisual` fills, outlines, lines, and text; `GLString` may add cached
 panel chrome; FPS and `SplashText` use that decorated-label path. `UiTheme` is
-shared value-only styling. Preserve the
-existing drawable owners and Scene layers; do not introduce a retained UI tree
-for this surface.
+shared value-only styling, and `Illumo/Gui` is the single home for reusable UI
+behavior: `GuiKit` drawing helpers, `GuiDialog` modals, and `GuiMenuShell`
+overlay easing, animation clocks, virtual-space fitting, row windows, and
+pointer edges. A new screen composes those rather than restating them.
+Preserve the existing drawable owners and Scene layers; do not introduce a
+retained UI tree for this surface.
 
 Canvas truth (verify here before trusting older notes):
 
@@ -195,13 +205,16 @@ Canvas truth (verify here before trusting older notes):
 
 Ruleset truth:
 
-- Active: Game of Life, Seeds, Brian's Brain, Highlife, Day & Night, Life
-  Without Death, Wireworld, Rule 90, and Rule 184.
+- Active catalogs include Life-like, Generations, Wireworld, elementary 1D,
+  cyclic/CCA, colorized Life, Larger-than-Life, Hodgepodge chemistry,
+  directional Turmites, HPP lattice gas, and five-species dominance rules.
 - Binary rules encode `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, conductor `3`.
 - Rule 90 and Rule 184 are elementary 1D space-time diagrams: source row is the
   maximum counted Y, destination is Y+1, older rows stay history.
-- `RuleSet` transitions (`nextState`) build a cached 256x9 table and palette
+- Count-based `RuleSet` transitions (`nextState`) build a cached 256x9 table;
+  full-state histograms, extended counts, and north/east/south/west directional
+  neighborhoods use isolated contracts. Palette
   evaluation (`evalCell`) supplies colors. Production hot loops index the table
   instead of making virtual transition calls and use separate stored/counting masks,
   retained chunk-local candidate scratch, and a generation-stamped flat address

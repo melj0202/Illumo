@@ -536,16 +536,29 @@ TextureHandle
 Font::getTextureHandle(Renderer* renderer)
 {
   if (renderer == nullptr) {
-    return textureHandle;
+    return lastRendererLifetime.expired() ? TextureHandle{} : textureHandle;
   }
-  if (enrolledRenderer != renderer || !textureHandle.isValid()) {
+  for (std::map<std::weak_ptr<const void>,
+                TextureHandle,
+                std::owner_less<std::weak_ptr<const void>>>::iterator it =
+         rendererTextures.begin();
+       it != rendererTextures.end();) {
+    if (it->first.expired()) {
+      it = rendererTextures.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  lastRendererLifetime = renderer->getLifetimeIdentity();
+  TextureHandle& cached = rendererTextures[lastRendererLifetime];
+  if (!cached.isValid() || !renderer->getBackend()->IsTextureValid(cached)) {
     TextureOptions options;
     options.filter = TextureFilter::Linear;
     options.wrapX = TextureWrap::ClampToEdge;
     options.wrapY = TextureWrap::ClampToEdge;
-    textureHandle = renderer->enrollTexture(
+    cached = renderer->enrollTexture(
       atlasPixels.data(), atlasWidth, atlasHeight, 4, options);
-    enrolledRenderer = renderer;
   }
+  textureHandle = cached;
   return textureHandle;
 }

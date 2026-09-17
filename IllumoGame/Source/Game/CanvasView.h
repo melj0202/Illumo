@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Game/CanvasCoordinatePolicy.h"
 #include "Game/SparseCellGrid.h"
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Drawable.h>
@@ -67,6 +68,9 @@ public:
            grid->setCell(address, state);
   }
   void syncVisibleRegion();
+  // Reserve a bottom UI band in window pixels without moving world coordinates.
+  void setBottomInsetPixels(int pixels);
+  int getBottomInsetPixels() const { return bottomInsetPixels; }
   void rebuildTargetsFromGrid();
   void rebuildPalette(const RuleSet* rules);
   void rebuildDefaultPalette();
@@ -95,6 +99,10 @@ public:
   {
     return cacheRefillMetric;
   }
+  const RollingMetric& getCacheScrollMetric() const
+  {
+    return cacheScrollMetric;
+  }
   const RollingMetric& getUploadByteMetric() const { return uploadByteMetric; }
   const RollingMetric& getUploadRectMetric() const { return uploadRectMetric; }
   std::size_t getLastSnapVisitCountForTesting() const
@@ -109,7 +117,8 @@ public:
 
 private:
   static const int kPaletteSize = 256;
-  static constexpr float kCellSize = 16.0f;
+  static constexpr float kCellSize =
+    static_cast<float>(CanvasCoordinatePolicy::kCellSize);
   static const int kOverviewPixelsPerTexel = 4;
   static const int kCachePaddingChunks = 2;
   static const int kDirtyTileDim = 16;
@@ -125,6 +134,7 @@ private:
   };
 
   int baseViewWidth;
+  int bottomInsetPixels = 0;
   int baseViewHeight;
   int textureWidth;
   int textureHeight;
@@ -159,6 +169,7 @@ private:
   std::size_t lastUploadRectCount;
   std::size_t cacheRefillCount;
   RollingMetric cacheRefillMetric;
+  RollingMetric cacheScrollMetric;
   RollingMetric uploadByteMetric;
   RollingMetric uploadRectMetric;
   float fadeSpeed;
@@ -179,6 +190,9 @@ private:
   int quadCellHeight;
   int quadActiveWidth;
   int quadActiveHeight;
+  std::int64_t quadWorldChunkWidth;
+  std::int64_t quadWorldChunkHeight;
+  float quadBoundaryZoom;
   std::uint64_t lastGridRevision;
   bool regionReady;
   bool paletteDirty;
@@ -214,15 +228,22 @@ private:
                             int maximumX,
                             int minimumY,
                             int maximumY);
+  void sampleSparseCacheRectangle(int minimumX,
+                                  int maximumX,
+                                  int minimumY,
+                                  int maximumY);
   void sampleExposedCacheStrips(int deltaTexelsX, int deltaTexelsY);
   void sampleGrid(bool snap);
   bool sampleChangedChunks(std::uint64_t previousRevision);
   void sampleCacheTexel(int x, int y, bool snap);
   void markChangedCacheChunk(const ChunkAddress& address);
+  void markChangedCacheCells(const ChunkAddress& address,
+                             const SparseChunkMask& changed);
   void clearChangedSampleTexels();
   bool shouldSnapSample() const;
   bool tooManyChangedSampleTexels() const;
   void resampleMarkedCacheTexels(bool snap);
+  void resampleMarkedOverviewTexels(bool snap);
   void applySampledTargets(bool snap);
   void applySnappedSampledTargets();
   void clearFadingTexels();
