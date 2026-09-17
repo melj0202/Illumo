@@ -2,6 +2,7 @@
 
 #include "EditorUiAtlas.h"
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
@@ -365,11 +366,8 @@ EditorModule::uiBlocksWorld(float screenX, float screenY) const
     return true;
   }
   if (ic != nullptr && ic->window != nullptr) {
-    const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-    const float scale =
-      ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
     const float virtualHeight =
-      static_cast<float>(dimensions[1]) / (scale > 0.0f ? scale : 1.0f);
+      GuiPanelLayout::viewport(ic->window, ic->renderer).virtualHeight;
     const float statusHeight = m_toolbar ? m_toolbar->statusHeight()
                                          : EditorToolbar::kDefaultStatusHeight;
     if (screenY >= virtualHeight - statusHeight) {
@@ -962,12 +960,10 @@ EditorModule::updateSelection(double dt)
   }
 
   const std::array<double, 2> mouse = ic->window->getMouseCoords();
-  const float scale =
-    ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
-  const float uiX =
-    static_cast<float>(mouse[0]) / (scale > 0.0f ? scale : 1.0f);
-  const float uiY =
-    static_cast<float>(mouse[1]) / (scale > 0.0f ? scale : 1.0f);
+  const float uiScale =
+    GuiPanelLayout::viewport(ic->window, ic->renderer).layoutScale;
+  const float uiX = static_cast<float>(mouse[0]) / uiScale;
+  const float uiY = static_cast<float>(mouse[1]) / uiScale;
   const float mouseScreenX = static_cast<float>(mouse[0]);
   const float mouseScreenY = static_cast<float>(mouse[1]);
   const bool left = ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);

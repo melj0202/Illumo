@@ -59,7 +59,7 @@ under `docs/`. Start with:
 `IBackend`) with typed generational handles, a persistent handle-based scene
 hierarchy, painter-correct primitives, dynamic quad buffers,
 primitive-composed themed UI, cubemaps, offscreen passes, and managed
-texture/cubemap/shader assets. The
+texture/cubemap/shader/static-mesh assets. The
 retained `SceneGraph` is extracted as one drawable into the existing per-frame
 render list; it does not replace CSim's sparse domain. `SparseCellGrid` uses
 published dual-grid simulation,
@@ -588,7 +588,7 @@ The engine host handles common shortcuts across applications:
 
 - **F11**: Toggle fullscreen mode.
 - **F3**: Toggle the FPS overlay (`showFPS`).
-- **F5**: Reload all managed asset resources (textures and shaders).
+- **F5**: Reload all reloadable managed resources (textures and shaders).
 
 Global shortcuts yield while typing in the developer console (`~` / Grave).
 

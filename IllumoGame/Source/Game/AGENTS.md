@@ -88,6 +88,12 @@ dependencies.
   schema changes that invalidate live cells. Both menus honor
   `reducedUiMotion`; F2 wheel input scrolls visible rows without moving
   keyboard selection.
+- Menu screens take their motion, fitted virtual space, row windows, and
+  pointer edges from `Illumo/Gui/GuiMenuShell` (`GuiEasing`,
+  `GuiMenuAnimator`, `GuiPanelLayout`, `GuiPointerTracker`). Do not restate
+  easing curves, animation timings, UI-scale fitting, scroll clamping, or
+  press-edge bookkeeping in a screen; add a new one by composing the shell and
+  supplying only that screen's rows, layout constants, and drawing.
 - Editor patterns (RLE/plaintext/stamps/clipboard) are a side path. World saves
   stay sparse; version 4 records family and ruleset IDs, version 3 derives family
   from its rule ID, and version 2/dense legacy readers remain compatible. Finite

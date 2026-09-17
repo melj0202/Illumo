@@ -1,4 +1,5 @@
 #include <Illumo/Gui/GuiDialog.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/InputManager.h>
@@ -146,7 +147,7 @@ float
 GuiDialog::panelOffsetY() const
 {
   const float t = animationProgress();
-  const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
+  const float ease = GuiEasing::outCubic(t);
   return (1.0f - ease) * 16.0f;
 }
 
@@ -161,7 +162,7 @@ GuiDialog::selectionPosition() const
       ? 1.0f
       : std::clamp(
           m_selectionAnimElapsed / kSelectionAnimationSeconds, 0.0f, 1.0f);
-  const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
+  const float ease = GuiEasing::outCubic(t);
   return m_selectionFromButton +
          (static_cast<float>(m_selectedButton) - m_selectionFromButton) * ease;
 }
@@ -402,7 +403,7 @@ GuiDialog::rebuildVisual()
   const float buttonFontSize = m_fontSize;
 
   const float t = animationProgress();
-  const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
+  const float ease = GuiEasing::outCubic(t);
   const float slideY = (1.0f - ease) * 16.0f;
   const unsigned char bgAlpha = static_cast<unsigned char>(190.0f * ease);
 

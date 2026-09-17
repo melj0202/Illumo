@@ -17,33 +17,6 @@
 #include <sstream>
 #include <vector>
 
-static float
-caretOriginAfterText(const std::string& text, float textX, float fontSize)
-{
-  std::shared_ptr<Font> font = Font::getDefaultFont();
-  if (font == nullptr) {
-    return textX + GuiKit::estimateTextWidth(text, fontSize);
-  }
-  const FontMetrics& metrics = font->getMetrics();
-  const float scale =
-    metrics.pixelSize > 0.0f ? fontSize / metrics.pixelSize : 1.0f;
-  float inkRight = textX;
-  if (!text.empty()) {
-    const TextBounds bounds = font->measureText(text, fontSize);
-    const GlyphInfo* lastGlyph =
-      font->getGlyph(static_cast<unsigned char>(text.back()));
-    inkRight += bounds.width;
-    if (lastGlyph != nullptr) {
-      inkRight +=
-        (lastGlyph->bearingX + lastGlyph->width - lastGlyph->advanceX) * scale;
-    }
-  }
-  const GlyphInfo* caretGlyph = font->getGlyph('|');
-  const float caretBearing =
-    caretGlyph == nullptr ? 0.0f : caretGlyph->bearingX * scale;
-  return inkRight + 1.0f - caretBearing;
-}
-
 static bool
 parseTopologyText(const std::string& text, std::int64_t* value)
 {
@@ -126,13 +99,8 @@ ConfigurationMenu::ConfigurationMenu(IRenderWindow* targetWindow,
   , renderer(targetRenderer)
   , visual(4096u)
   , openState(false)
-  , mouseWasDown(false)
   , replaceFieldOnType(true)
   , selectedRow(0)
-  , animationElapsed(0.0f)
-  , selectionFromRow(0.0f)
-  , selectionAnimationElapsed(kSelectionAnimationSeconds)
-  , valuePulseElapsed(kValuePulseSeconds)
   , panelX(0.0f)
   , panelY(0.0f)
   , panelWidth(620.0f)
@@ -207,19 +175,13 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
   showInspector = current.showInspector;
   reducedUiMotion = current.reducedUiMotion;
   firstVisibleRow = 0;
-  ambientPhase = 0.0f;
-  caretBlinkElapsed = 0.0f;
-  previousMouseX = -1.0f;
-  previousMouseY = -1.0f;
   errorMessage.clear();
   selectedRow = 0;
-  selectionFromRow = 0.0f;
-  selectionAnimationElapsed = kSelectionAnimationSeconds;
-  valuePulseElapsed = kValuePulseSeconds;
   replaceFieldOnType = true;
+  animator.setReducedMotion(reducedUiMotion);
+  animator.restart();
   // Ignore a held click that opened the modal until its first release.
-  mouseWasDown = true;
-  animationElapsed = reducedUiMotion ? kOpenAnimationSeconds : 0.0f;
+  pointer.reset(true);
   openState = true;
   setVisible(true);
   updateLayout();
@@ -228,90 +190,28 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
 void
 ConfigurationMenu::tick(float deltaSeconds)
 {
-  if (!openState || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0f) {
+  if (!openState) {
     return;
   }
-  ambientPhase =
-    reducedUiMotion
-      ? 0.0f
-      : std::fmod(ambientPhase + std::min(deltaSeconds, 0.1f), 12.0f);
-  caretBlinkElapsed =
-    reducedUiMotion
-      ? 0.0f
-      : std::fmod(caretBlinkElapsed + deltaSeconds, kCaretBlinkPeriodSeconds);
-  if (reducedUiMotion) {
-    animationElapsed = kOpenAnimationSeconds;
-    selectionAnimationElapsed = kSelectionAnimationSeconds;
-    valuePulseElapsed = kValuePulseSeconds;
-    return;
-  }
-  animationElapsed =
-    std::min(kOpenAnimationSeconds, animationElapsed + deltaSeconds);
-  selectionAnimationElapsed = std::min(
-    kSelectionAnimationSeconds, selectionAnimationElapsed + deltaSeconds);
-  valuePulseElapsed =
-    std::min(kValuePulseSeconds, valuePulseElapsed + deltaSeconds);
-}
-
-float
-ConfigurationMenu::animationProgress() const
-{
-  if (reducedUiMotion) {
-    return 1.0f;
-  }
-  return std::clamp(animationElapsed / kOpenAnimationSeconds, 0.0f, 1.0f);
+  animator.tick(deltaSeconds);
 }
 
 float
 ConfigurationMenu::getAnimationProgressForTesting() const
 {
-  return animationProgress();
-}
-
-static float
-easeOutCubic(float progress)
-{
-  const float remaining = 1.0f - std::clamp(progress, 0.0f, 1.0f);
-  return 1.0f - remaining * remaining * remaining;
-}
-
-float
-ConfigurationMenu::panelReveal() const
-{
-  if (reducedUiMotion) {
-    return 1.0f;
-  }
-  return easeOutCubic(std::clamp(animationElapsed / 0.24f, 0.0f, 1.0f));
-}
-
-float
-ConfigurationMenu::panelOffsetY() const
-{
-  return (1.0f - panelReveal()) * 18.0f;
+  return animator.openProgress();
 }
 
 float
 ConfigurationMenu::rowReveal(int row) const
 {
-  if (reducedUiMotion) {
-    return 1.0f;
-  }
-  const float delay =
-    static_cast<float>(std::max(0, row - firstVisibleRow)) * 0.012f;
-  return easeOutCubic(
-    std::clamp((animationElapsed - delay) / 0.22f, 0.0f, 1.0f));
+  return animator.rowReveal(row, firstVisibleRow);
 }
 
 float
 ConfigurationMenu::selectionRowPosition() const
 {
-  if (reducedUiMotion) {
-    return static_cast<float>(selectedRow);
-  }
-  const float progress = easeOutCubic(std::clamp(
-    selectionAnimationElapsed / kSelectionAnimationSeconds, 0.0f, 1.0f));
-  return selectionFromRow +
-         (static_cast<float>(selectedRow) - selectionFromRow) * progress;
+  return animator.selectionPosition(static_cast<float>(selectedRow));
 }
 
 float
@@ -321,33 +221,16 @@ ConfigurationMenu::getSelectionPositionForTesting() const
 }
 
 float
-ConfigurationMenu::valuePulse() const
-{
-  if (reducedUiMotion) {
-    return 0.0f;
-  }
-  const float progress =
-    std::clamp(valuePulseElapsed / kValuePulseSeconds, 0.0f, 1.0f);
-  return 1.0f - progress;
-}
-
-float
 ConfigurationMenu::getValuePulseForTesting() const
 {
-  return valuePulse();
-}
-
-void
-ConfigurationMenu::triggerValuePulse()
-{
-  valuePulseElapsed = 0.0f;
+  return animator.valuePulse();
 }
 
 void
 ConfigurationMenu::close()
 {
   openState = false;
-  mouseWasDown = false;
+  pointer.reset(false);
   setVisible(false);
 }
 
@@ -360,26 +243,10 @@ ConfigurationMenu::setError(const std::string& message)
 void
 ConfigurationMenu::updateLayout()
 {
-  int width = 1280;
-  int height = 720;
-  if (window != nullptr) {
-    const std::array<int, 2> dimensions = window->getWindowDimensions();
-    width = std::max(1, dimensions[0]);
-    height = std::max(1, dimensions[1]);
-  }
-  const float scale = renderer != nullptr ? renderer->getUiScale() : 1.0f;
   // Fit oversized UI preferences uniformly; hit testing uses the same scale.
-  layoutScale =
-    std::min(std::max(1.0f, scale),
-             std::max(0.25f,
-                      std::min(static_cast<float>(width) / 640.0f,
-                               static_cast<float>(height) / 480.0f)));
-  Transform2D fit;
-  fit.scaleX = layoutScale / std::max(1.0f, scale);
-  fit.scaleY = fit.scaleX;
-  visual.setTransform(fit);
-  const float virtualWidth = static_cast<float>(width) / layoutScale;
-  const float virtualHeight = static_cast<float>(height) / layoutScale;
+  panelFit = GuiPanelLayout::fit(window, renderer, &visual);
+  const float virtualWidth = panelFit.virtualWidth;
+  const float virtualHeight = panelFit.virtualHeight;
   panelWidth = std::min(720.0f, std::max(200.0f, virtualWidth - 32.0f));
   if (panelWidth > virtualWidth) {
     panelWidth = virtualWidth;
@@ -399,10 +266,10 @@ ConfigurationMenu::updateLayout()
                                : std::clamp(panelHeight * 0.10f, 28.0f, 52.0f);
   firstRowY = panelY + headerHeight;
   const float availableRowsH = panelHeight - headerHeight - footerHeight;
-  visibleRows =
-    std::clamp(static_cast<int>(availableRowsH / 34.0f), 1, kRowCount);
+  visibleRows = GuiPanelLayout::visibleRowCount(availableRowsH, kRowCount);
   rowHeight = availableRowsH / static_cast<float>(visibleRows);
-  firstVisibleRow = std::clamp(firstVisibleRow, 0, kRowCount - visibleRows);
+  firstVisibleRow = GuiPanelLayout::clampFirstVisibleRow(
+    firstVisibleRow, kRowCount, visibleRows);
 }
 
 void
@@ -410,17 +277,12 @@ ConfigurationMenu::selectRow(int row)
 {
   const int nextRow = std::clamp(row, 0, kRowCount - 1);
   if (nextRow != selectedRow) {
-    selectionFromRow = selectionRowPosition();
+    animator.beginSelectionTravel(selectionRowPosition());
     selectedRow = nextRow;
-    selectionAnimationElapsed = 0.0f;
-    caretBlinkElapsed = 0.0f;
+    animator.resetCaret();
   }
-  if (selectedRow < firstVisibleRow) {
-    firstVisibleRow = selectedRow;
-  }
-  if (selectedRow >= firstVisibleRow + visibleRows) {
-    firstVisibleRow = selectedRow - visibleRows + 1;
-  }
+  firstVisibleRow =
+    GuiPanelLayout::scrollToRow(firstVisibleRow, selectedRow, visibleRows);
   replaceFieldOnType = true;
   errorMessage.clear();
 }
@@ -470,8 +332,8 @@ ConfigurationMenu::addCharacter(unsigned int codepoint)
     replaceFieldOnType = false;
   }
   field->push_back(character);
-  caretBlinkElapsed = 0.0f;
-  triggerValuePulse();
+  animator.resetCaret();
+  animator.triggerValuePulse();
   errorMessage.clear();
 }
 
@@ -488,8 +350,8 @@ ConfigurationMenu::eraseCharacter()
   } else if (!field->empty()) {
     field->pop_back();
   }
-  caretBlinkElapsed = 0.0f;
-  triggerValuePulse();
+  animator.resetCaret();
+  animator.triggerValuePulse();
   errorMessage.clear();
 }
 
@@ -567,6 +429,8 @@ ConfigurationMenu::cycleSelected(int direction)
     changed = true;
   } else if (selectedRow == kReducedMotionRow) {
     reducedUiMotion = !reducedUiMotion;
+    // The draft value also governs this overlay's own motion immediately.
+    animator.setReducedMotion(reducedUiMotion);
     changed = true;
   } else if (selectedRow == kEditHintsRow) {
     editHints = !editHints;
@@ -611,7 +475,7 @@ ConfigurationMenu::cycleSelected(int direction)
     changed = true;
   }
   if (changed) {
-    triggerValuePulse();
+    animator.triggerValuePulse();
   }
   replaceFieldOnType = true;
   errorMessage.clear();
@@ -690,30 +554,15 @@ ConfigurationMenu::update(InputManager* inputManager)
     addCharacter(codepoint);
   }
 
-  double* scroll = inputManager->getMouseScrollOffset();
-  const bool wheelScrolled =
-    scroll != nullptr && std::isfinite(*scroll) && *scroll != 0.0;
-  if (wheelScrolled) {
-    const int rows = static_cast<int>(
-      std::ceil(std::min(std::abs(*scroll), static_cast<double>(kRowCount))));
-    firstVisibleRow =
-      std::clamp(firstVisibleRow + (*scroll > 0.0 ? -rows : rows),
-                 0,
-                 kRowCount - visibleRows);
-    *scroll = 0.0;
-  }
+  bool wheelScrolled = false;
+  firstVisibleRow = GuiPanelLayout::applyWheelScroll(
+    inputManager, firstVisibleRow, kRowCount, visibleRows, &wheelScrolled);
   updateLayout();
-  const bool mouseDown = inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
-  const std::array<double, 2> mouse = window != nullptr
-                                        ? window->getMouseCoords()
-                                        : inputManager->getMousePosition();
-  const float mouseX = static_cast<float>(mouse[0]) / layoutScale;
-  const float mouseY = static_cast<float>(mouse[1]) / layoutScale;
-  const bool moved = mouseX != previousMouseX || mouseY != previousMouseY;
-  previousMouseX = mouseX;
-  previousMouseY = mouseY;
-  const float animatedFirstRowY = firstRowY + panelOffsetY();
-  if (((moved && !wheelScrolled) || (mouseDown && !mouseWasDown)) &&
+  pointer.sample(window, inputManager, panelFit.layoutScale);
+  const float mouseX = pointer.x();
+  const float mouseY = pointer.y();
+  const float animatedFirstRowY = firstRowY + animator.panelOffsetY();
+  if (((pointer.moved() && !wheelScrolled) || pointer.clicked()) &&
       mouseX >= panelX + 20.0f && mouseX <= panelX + panelWidth - 20.0f &&
       mouseY >= animatedFirstRowY &&
       mouseY <
@@ -723,7 +572,7 @@ ConfigurationMenu::update(InputManager* inputManager)
     if (row != selectedRow) {
       selectRow(row);
     }
-    if (mouseDown && !mouseWasDown) {
+    if (pointer.clicked()) {
       if (row < kApplyRow && mouseX < panelX + panelWidth * 0.54f) {
         cycleSelected(-1);
       } else {
@@ -731,7 +580,6 @@ ConfigurationMenu::update(InputManager* inputManager)
       }
     }
   }
-  mouseWasDown = mouseDown;
   return action;
 }
 
@@ -807,24 +655,14 @@ ConfigurationMenu::rebuildVisual()
 {
   updateLayout();
   visual.clearPrimitives();
-  int width = 1280;
-  int height = 720;
-  if (window != nullptr) {
-    const std::array<int, 2> dimensions = window->getWindowDimensions();
-    width = std::max(1, dimensions[0]);
-    height = std::max(1, dimensions[1]);
-  }
+  const float virtualWidth = panelFit.virtualWidth;
+  const float virtualHeight = panelFit.virtualHeight;
 
-  const float virtualWidth = static_cast<float>(width) / layoutScale;
-  const float virtualHeight = static_cast<float>(height) / layoutScale;
-
-  const float reveal = panelReveal();
-  const float animatedPanelY = panelY + panelOffsetY();
-  const float animatedFirstRowY = firstRowY + panelOffsetY();
-  const unsigned char backdropOpacity = static_cast<unsigned char>(std::round(
-    (reducedUiMotion ? 1.0f
-                     : std::clamp(animationElapsed / 0.18f, 0.0f, 1.0f)) *
-    255.0f));
+  const float reveal = animator.panelReveal();
+  const float animatedPanelY = panelY + animator.panelOffsetY();
+  const float animatedFirstRowY = firstRowY + animator.panelOffsetY();
+  const unsigned char backdropOpacity =
+    static_cast<unsigned char>(std::round(animator.openReveal(0.18f) * 255.0f));
   const unsigned char panelOpacity =
     static_cast<unsigned char>(std::round(reveal * 255.0f));
 
@@ -837,7 +675,7 @@ ConfigurationMenu::rebuildVisual()
   GuiKit::drawRoundedPanel(
     visual, panelX, animatedPanelY, panelWidth, panelHeight, panelOpacity);
   const float breathe =
-    reducedUiMotion ? 0.5f : 0.5f + 0.5f * std::sin(ambientPhase * 1.04719755f);
+    0.5f + 0.5f * std::sin(animator.ambientPhase() * 1.04719755f);
   GuiKit::drawRoundedRect(
     visual,
     panelX + 20.0f,
@@ -1058,7 +896,7 @@ ConfigurationMenu::rebuildVisual()
         rowHeight - 10.0f,
         6.0f,
         UiTheme::applyOpacity(UiTheme::panelInset(), rowOpacity));
-      if (selected && valuePulse() > 0.0f) {
+      if (selected && animator.valuePulse() > 0.0f) {
         GuiKit::drawRoundedRect(
           visual,
           valueColumnX - 12.0f,
@@ -1066,9 +904,9 @@ ConfigurationMenu::rebuildVisual()
           fieldWidth,
           rowHeight - 10.0f,
           6.0f,
-          UiTheme::applyOpacity(
-            UiTheme::accentCool(),
-            static_cast<unsigned char>(valuePulse() * rowOpacity * 0.3f)));
+          UiTheme::applyOpacity(UiTheme::accentCool(),
+                                static_cast<unsigned char>(
+                                  animator.valuePulse() * rowOpacity * 0.3f)));
       }
       const bool toggleRow = row == kVsyncRow || row == kFullscreenRow ||
                              row == kInspectorRow || row == kReducedMotionRow ||
@@ -1119,12 +957,11 @@ ConfigurationMenu::rebuildVisual()
                                          : selected ? UiTheme::accentCool()
                                                     : UiTheme::textPrimary(),
                                          rowOpacity));
-    const bool caretVisible =
-      reducedUiMotion || caretBlinkElapsed < kCaretBlinkPeriodSeconds * 0.55f;
+    const bool caretVisible = animator.caretVisible();
     if (selected && textField && caretVisible) {
-      const float caretX =
-        std::min(caretOriginAfterText(values[row], valueColumnX, rowFontSize),
-                 panelX + panelWidth - 31.0f);
+      const float caretX = std::min(
+        GuiKit::caretOriginAfterText(values[row], valueColumnX, rowFontSize),
+        panelX + panelWidth - 31.0f);
       visual.addText("|",
                      caretX,
                      textY,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Gui/GuiTypes.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -80,8 +81,8 @@ private:
   Renderer* m_renderer;
   GameVisual m_visual;
 
+  GuiPointerTracker m_pointer;
   float m_fontSize;
-  bool m_mouseWasDown;
   bool m_consumedPress;
 
   MeshMetadata m_metadata;

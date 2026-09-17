@@ -97,11 +97,16 @@ submission returns.
 Backend resources use non-convertible slot+generation `MeshHandle`,
 `ShaderHandle`, and `TextureHandle` values; renderer styles use the same model.
 Backends allocate handles and validate replacement, destruction, queries, and
-command submission. `AssetManager` caches file textures/shaders by canonical
-path+options, owns one CPU file/decode worker, and performs GPU replacement only
-from render-thread `pump`. Debug builds poll timestamps every 500 ms; explicit
-reload remains available in all builds. The Debug renderer demo acquires both
-its atlas and contract-compatible sprite shader through this managed path.
+command submission. `AssetManager` caches file textures, shaders, and immutable
+static meshes by canonical path+options. Texture/shader file work uses one CPU
+decode worker and performs GPU replacement only from render-thread `pump`;
+mesh decode and enrollment are synchronous and main-thread affine. Debug builds
+poll texture/shader timestamps every 500 ms; explicit reload remains available
+for those resource types in all builds. `MeshVisual` borrows managed mesh
+handles while the acquiring owner retains their `AssetManager` references;
+procedural dynamic geometry remains visual-owned. The Debug renderer demo
+acquires both its atlas and contract-compatible sprite shader through this
+managed path.
 
 `GameVisual` is the reusable painter-correct 2D host. One stable ordered stream
 spans shapes, sprites, and text; only adjacent compatible items batch. Parent and
@@ -112,9 +117,12 @@ Product UI is primitive-composed rather than a separate widget system.
 `CommandLine` and the Release-visible `ConfigurationMenu` build their panels
 from `GameVisual` fills, outlines, lines, and text; `GLString` may add cached
 panel chrome; FPS and `SplashText` use that decorated-label path. `UiTheme` is
-shared value-only styling. Preserve the
-existing drawable owners and Scene layers; do not introduce a retained UI tree
-for this surface.
+shared value-only styling, and `Illumo/Gui` is the single home for reusable UI
+behavior: `GuiKit` drawing helpers, `GuiDialog` modals, and `GuiMenuShell`
+overlay easing, animation clocks, virtual-space fitting, row windows, and
+pointer edges. A new screen composes those rather than restating them.
+Preserve the existing drawable owners and Scene layers; do not introduce a
+retained UI tree for this surface.
 
 Canvas truth (verify here before trusting older notes):
 

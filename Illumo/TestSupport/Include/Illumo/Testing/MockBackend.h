@@ -2,7 +2,10 @@
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
+#include <array>
 #include <cstdint>
+#include <cstring>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -51,6 +54,7 @@ private:
   // Clear).
   std::vector<RenderCommand> lastNonEmptySubmitted;
   std::vector<std::vector<RenderCommand>> submittedFrames;
+  std::deque<std::array<float, 16>> submittedUniformMatrices;
   std::vector<CreateRecord> creates;
   int beginFrameCount = 0;
   int endFrameCount = 0;
@@ -110,6 +114,9 @@ public:
   {
     commandQueue.Reset();
     lastSubmitted.clear();
+    lastNonEmptySubmitted.clear();
+    submittedFrames.clear();
+    submittedUniformMatrices.clear();
     creates.clear();
     liveMeshes.clear();
     liveShaders.clear();
@@ -133,7 +140,17 @@ public:
     for (size_t i = 0; i < n; ++i) {
       const RenderCommand& command = commandQueue.GetCommand(i);
       if (isCommandResourceValid(command)) {
-        lastSubmitted.push_back(command);
+        RenderCommand snapshot = command;
+        if (snapshot.commandType == CommandType::SetUniformMat4 &&
+            snapshot.uniformMat4.value != nullptr) {
+          submittedUniformMatrices.emplace_back();
+          std::array<float, 16>& retained = submittedUniformMatrices.back();
+          std::memcpy(retained.data(),
+                      snapshot.uniformMat4.value,
+                      retained.size() * sizeof(float));
+          snapshot.uniformMat4.value = retained.data();
+        }
+        lastSubmitted.push_back(snapshot);
       } else {
         rejectedStaleCommands++;
       }
@@ -663,6 +680,7 @@ public:
     lastSubmitted.clear();
     lastNonEmptySubmitted.clear();
     submittedFrames.clear();
+    submittedUniformMatrices.clear();
     commandQueue.Reset();
     creates.clear();
     rejectedStaleCommands = 0;

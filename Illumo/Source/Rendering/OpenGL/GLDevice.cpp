@@ -84,7 +84,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
   _viewportY = -1;
   _viewportW = -1;
   _viewportH = -1;
-  _activeProgram = 0;
+  _activeProgram = nullptr;
 
   for (size_t i = 0; i < commandQueue.GetCommandCount(); ++i) {
     RenderCommand& cmd = commandQueue.GetCommand(i);
@@ -157,7 +157,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
           reportFrameError("SetShader: unknown shader handle");
           glUseProgram(0);
           _boundProgram = 0;
-          _activeProgram = 0;
+          _activeProgram = nullptr;
           break;
         }
         GLuint id = static_cast<GLuint>(program->GetID());
@@ -165,7 +165,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
           glUseProgram(id);
           _boundProgram = id;
         }
-        _activeProgram = id;
+        _activeProgram = program;
         break;
       }
 
@@ -250,8 +250,10 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
 
       case CommandType::SetUniformMat4: {
         GLint loc = getUniformLocation(cmd.uniformMat4.name);
-        if (loc >= 0) {
-          glUniformMatrix4fv(loc, 1, GL_FALSE, cmd.uniformMat4.m);
+        if (loc >= 0 && cmd.uniformMat4.value != nullptr) {
+          glUniformMatrix4fv(loc, 1, GL_FALSE, cmd.uniformMat4.value);
+        } else if (cmd.uniformMat4.value == nullptr) {
+          reportFrameError("SetUniformMat4: null matrix value");
         }
         break;
       }

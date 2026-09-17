@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/ResourceHandle.h>
@@ -99,8 +100,8 @@ private:
   GameVisual m_visual;
   TextureHandle m_atlas{};
   std::vector<Menu> m_menus;
+  GuiPointerTracker m_pointer;
   int m_openMenu;
-  bool m_mouseWasDown;
   bool m_consumedPress;
   std::string m_status;
   float m_barWidth;

@@ -57,7 +57,14 @@ are ignored. Native dialogs use description `Illumo Scene` and pattern
 
 A screen-space File / Edit / Create / View menu bar, a right-hand tool
 sidebar (mode, primitive tools, scene inspector), and a status line, composed
-with `GameVisual`. Tool chrome samples `Assets/IllEd/editor-ui-atlas.jpg`
+with `GameVisual`. `EditorToolbar`, `EditorSidebar`, and
+`EditorSceneGraphView` take their shared behavior from
+`Illumo/Gui/GuiMenuShell`: `GuiPanelLayout::viewport` resolves the window into
+UI-scale units for docked anchoring, `GuiPointerTracker` supplies virtual-space
+pointer position with press and release edges, and `GuiEasing` supplies the
+dropdown/toast curve and the collapse and mode slides. Docked panels anchor to
+the real viewport, so they use `viewport` rather than the centered-panel
+`GuiPanelLayout::fit`. Tool chrome samples `Assets/IllEd/editor-ui-atlas.jpg`
 as a 6x6 sprite atlas through the token path. The document stores a 2D or 3D world mode used for
 presentation and picking. `EditorAttachment` uses `MeshVisual` for document
 geometry in both world modes; `GameVisual` composes screen UI. Editor grid and

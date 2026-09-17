@@ -23,18 +23,21 @@ are private. `MockBackend` is exposed only by `Illumo::TestSupport`.
 Borrowed `ISceneRenderAttachment` implementations receive a resolved world
 transform and append backend-neutral tokens; `MeshVisual` is the world
 mesh/sprite adapter, including optional lighting, shadow mapping, and
-previous-MVP motion blur. Typed slot+generation resource handles, the bounded
-command queue, managed `AssetManager`, painter-correct `GameVisual` overlay
-composition, `WorldLook` `uMVP` contract, transforms, sprites/animation, text,
-and primitive-composed UI retain their existing behavior.
+previous-MVP motion blur. Immutable model geometry is reference-counted by
+`AssetManager`; visuals keep only a non-owning `MeshHandle`, draw metadata, and
+per-instance transform/tint state. Typed slot+generation resource handles, the
+bounded command queue, painter-correct `GameVisual` overlay composition,
+`WorldLook` `uMVP` contract, transforms, sprites/animation, text, and
+primitive-composed UI retain their existing behavior.
 
 `Renderer` captures window dimensions and the primary camera MVP once for each
 `RenderScene` extraction. `GameVisual` consumes that transient frame context
 when it shares the renderer's window and camera, while overlay draws push a
 screen ortho as `uMVP`. `CanvasView` reuses upload-rectangle scratch storage and
-`MeshVisual` keeps dynamic mesh handles, updating dirty vertex ranges instead of
-recreating meshes. The product `Camera` is orthographic by default and can
-switch to perspective look-at without a private view-projection helper.
+`MeshVisual` keeps dynamic handles for procedural geometry, updating dirty
+vertex ranges instead of recreating meshes, while managed model handles emit no
+per-instance buffer upload. The product `Camera` is orthographic by default and
+can switch to perspective look-at without a private view-projection helper.
 
 The Debug renderer demo proves assets, sprites, transforms, animation, and
 reload through the same library path consumed by IllumoGame. D-E6 supersedes
@@ -59,6 +62,13 @@ screen binding cannot be skipped based on a stale zero value.
 Pass color and depth clears are independent. Depth-clear tokens carry the
 requested value; no-argument depth clears and combined screen clears default
 to depth one instead of inheriting a previous pass's custom value.
+
+On the supported 64-bit Windows build, `RenderCommand` is 72 bytes. Matrix
+uniform values are copied into retained renderer-owned chunks and referenced by
+compact tokens until synchronous submission returns, with a matching
+65,536-value safety ceiling. OpenGL uniform-location caches belong to each
+`GLShaderProgram`; cache hits avoid combined program-ID/name string construction
+and cached locations cannot outlive shader replacement or destruction.
 
 Font atlas caches use a weak renderer lifetime identity instead of its address.
 Each live renderer retains a separate enrollment; expired entries are pruned

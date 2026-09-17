@@ -3,6 +3,7 @@
 #include "Rulesets/RuleSetRegistry.h"
 #include "SparseCellGrid.h"
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/InputManager.h>
@@ -40,16 +41,13 @@ NewSimulationMenu::open(const NewSimulationConfiguration& initial,
     draft.worldChunkWidth = 32;
     draft.worldChunkHeight = 24;
   }
-  reduced = reducedMotion;
-  elapsed = 0;
+  animator.setReducedMotion(reducedMotion);
+  animator.restart();
   selected = 0;
-  ambientPhase = 0;
-  valuePulse = 0;
   focus.fill(0);
   focus[0] = 1;
-  mouseWasDown = true;
-  previousX = -1;
-  previousY = -1;
+  // Ignore the held click that opened the menu until its first release.
+  pointer.reset(true);
   openState = true;
   rebuild();
 }
@@ -70,14 +68,13 @@ NewSimulationMenu::tick(float dt)
 {
   if (std::isfinite(dt)) {
     const float step = std::clamp(dt, 0.0f, 0.1f);
-    elapsed = std::min(0.35f, elapsed + step);
-    ambientPhase = reduced ? 0 : std::fmod(ambientPhase + step, 12.0f);
-    valuePulse = reduced ? 0 : std::max(0.0f, valuePulse - step * 4);
+    animator.tick(step);
     for (int row = 0; row < kRowCount; ++row) {
       const float target = row == selected ? 1.0f : 0.0f;
-      focus[static_cast<std::size_t>(row)] +=
-        (target - focus[static_cast<std::size_t>(row)]) *
-        (reduced ? 1.0f : 1 - std::exp(-18 * step));
+      const std::size_t index = static_cast<std::size_t>(row);
+      focus[index] = animator.reducedMotion()
+                       ? target
+                       : GuiEasing::approach(focus[index], target, 18.0f, step);
     }
   }
   rebuild();
@@ -94,7 +91,7 @@ NewSimulationMenu::select(int direction)
 void
 NewSimulationMenu::change(int direction)
 {
-  valuePulse = reduced ? 0.0f : 1.0f;
+  animator.triggerValuePulse();
   if (selected == 0) {
     const std::vector<std::string> families =
       CellContext::GetKnownFamilyStrings();
@@ -201,18 +198,17 @@ NewSimulationMenu::update(InputManager* input)
   if (wheel != nullptr)
     *wheel = 0;
   rebuild();
-  const std::array<double, 2> mouse = window->getMouseCoords();
-  const float mx = static_cast<float>(mouse[0]) / scale;
-  const float my = static_cast<float>(mouse[1]) / scale;
-  const bool down = input->isMouseButtonPressed(KeyCode::MouseLeft);
+  pointer.sample(window, input, panelFit.layoutScale);
+  const float mx = pointer.x();
+  const float my = pointer.y();
   if (result == NewSimulationAction::None &&
-      ((mx != previousX || my != previousY) || (down && !mouseWasDown)) &&
-      mx >= x + 24 && mx < x + width - 24 && my >= y + 110 &&
+      (pointer.moved() || pointer.clicked()) && mx >= x + 24 &&
+      mx < x + width - 24 && my >= y + 110 &&
       my < y + 110 + rowHeight * kRowCount) {
     const int row = static_cast<int>((my - y - 110) / rowHeight);
     if (finite || (row != 3 && row != 4)) {
       selected = row;
-      if (down && !mouseWasDown) {
+      if (pointer.clicked()) {
         if (selected < 6 && mx < x + width * 0.55f)
           change(-1);
         else
@@ -220,9 +216,6 @@ NewSimulationMenu::update(InputManager* input)
       }
     }
   }
-  previousX = mx;
-  previousY = my;
-  mouseWasDown = down;
   rebuild();
   return result;
 }
@@ -230,25 +223,13 @@ NewSimulationMenu::update(InputManager* input)
 void
 NewSimulationMenu::rebuild()
 {
-  const std::array<int, 2> dimensions = window->getWindowDimensions();
-  const float preferred = std::max(1.0f, renderer->getUiScale());
-  scale = std::min(preferred,
-                   std::max(0.01f,
-                            std::min(static_cast<float>(dimensions[0]) / 640,
-                                     static_cast<float>(dimensions[1]) / 480)));
-  Transform2D fit;
-  fit.scaleX = scale / preferred;
-  fit.scaleY = fit.scaleX;
-  visual.setTransform(fit);
-  const float screenWidth = static_cast<float>(dimensions[0]) / scale;
-  const float screenHeight = static_cast<float>(dimensions[1]) / scale;
+  panelFit = GuiPanelLayout::fit(window, renderer, &visual);
+  const float screenWidth = panelFit.virtualWidth;
+  const float screenHeight = panelFit.virtualHeight;
   width = std::min(720.0f, screenWidth - 32);
   const float height = std::min(610.0f, screenHeight - 24);
-  const float progress =
-    reduced ? 1.0f : std::clamp(elapsed / 0.35f, 0.0f, 1.0f);
-  const float reveal = 1 - std::pow(1 - progress, 3.0f);
   x = (screenWidth - width) / 2;
-  y = (screenHeight - height) / 2 + 16 * (1 - reveal);
+  y = (screenHeight - height) / 2 + animator.panelOffsetY();
   rowHeight = (height - 164) / static_cast<float>(kRowCount);
   visual.clearPrimitives();
   GuiKit::drawBackdrop(visual, screenWidth, screenHeight, 160);
@@ -264,7 +245,7 @@ NewSimulationMenu::rebuild()
   for (int cy = 0; cy < 6; ++cy) {
     for (int cx = 0; cx < 6; ++cx) {
       const float wave =
-        0.5f + 0.5f * std::sin(ambientPhase * 1.5f +
+        0.5f + 0.5f * std::sin(animator.ambientPhase() * 1.5f +
                                static_cast<float>(cx - cy) * 0.8f);
       const bool live = (cx + cy * 3) % 5 < 2;
       const float size = live ? 7 + wave : 7;
@@ -336,8 +317,7 @@ NewSimulationMenu::rebuild()
   for (int row = 0; row < kRowCount; ++row) {
     const bool disabled = !finite && (row == 3 || row == 4);
     const float ry = y + 110 + static_cast<float>(row) * rowHeight;
-    const float emphasis = reduced ? (row == selected ? 1.0f : 0.0f)
-                                   : focus[static_cast<std::size_t>(row)];
+    const float emphasis = focus[static_cast<std::size_t>(row)];
     const float lift = emphasis * 2;
     GuiKit::drawRoundedRect(visual,
                             x + 24,
@@ -398,7 +378,7 @@ NewSimulationMenu::rebuild()
                      ry + (rowHeight - 18) / 2 - lift,
                      12,
                      UiTheme::accentCool());
-      if (row == selected && valuePulse > 0) {
+      if (row == selected && animator.valuePulse() > 0.0f) {
         GuiKit::drawRoundedRect(
           visual,
           x + width * 0.45f,
@@ -406,8 +386,9 @@ NewSimulationMenu::rebuild()
           width * 0.55f - 37,
           rowHeight - 15,
           7,
-          UiTheme::applyOpacity(UiTheme::accentCool(),
-                                static_cast<unsigned char>(valuePulse * 45)));
+          UiTheme::applyOpacity(
+            UiTheme::accentCool(),
+            static_cast<unsigned char>(animator.valuePulse() * 45.0f)));
       }
     }
     const ColorRgba color = disabled ? UiTheme::textMuted()

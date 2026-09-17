@@ -1,3 +1,4 @@
+#include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -532,6 +533,26 @@ MeshVisual::addMesh(const MeshData& mesh, ColorRgba tint)
   geometryDirty = true;
 }
 
+void
+MeshVisual::setMeshAsset(const MeshAssetInfo& asset, ColorRgba tint)
+{
+  if (!asset.isValid()) {
+    clearMeshAsset();
+    return;
+  }
+  meshAssetHandle = asset.handle;
+  meshAssetIndexCount = asset.indexCount;
+  meshAssetTint = tint;
+}
+
+void
+MeshVisual::clearMeshAsset()
+{
+  meshAssetHandle = MeshHandle{};
+  meshAssetIndexCount = 0;
+  meshAssetTint = ColorRgba{ 255, 255, 255, 255 };
+}
+
 bool
 MeshVisual::AppendCommands(Renderer* value)
 {
@@ -705,11 +726,16 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   const bool hasTriangles =
     !triangleVertices.empty() && !triangleIndices.empty();
   const bool hasSprites = !sprites.empty();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
   if (hasLines && !lineStyleHandle.isValid()) {
     return false;
   }
   if (hasTriangles && !triangleStyleHandle.isValid() &&
       !litMeshStyleHandle.isValid()) {
+    return false;
+  }
+  if (hasMeshAsset && !litMeshStyleHandle.isValid()) {
     return false;
   }
   if (hasSprites && !spriteStyleHandle.isValid()) {
@@ -794,8 +820,8 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   // Pass 1: Directional Shadow Depth Pass (when lighting and shadow depth are
   // valid)
   bool shadowMapBound = false;
-  if (lightingEnabled && shadowsEnabled && hasTriangles &&
-      triangleMeshHandle.isValid() && shadowDepthStyleHandle.isValid()) {
+  if (lightingEnabled && shadowsEnabled && (hasTriangles || hasMeshAsset) &&
+      shadowDepthStyleHandle.isValid()) {
     ensureShadowResources(value);
     if (shadowFboHandle.isValid()) {
       value->pushFramebuffer(shadowFboHandle);
@@ -807,9 +833,16 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
 
       const glm::mat4 lightMvp = lightSpaceMatrix * coloredWorld;
       value->bindStyle(shadowDepthStyleHandle);
-      value->pushSetMesh(triangleMeshHandle);
       value->pushUniformMat4(WorldLook::kMvpUniform, glm::value_ptr(lightMvp));
-      value->pushDrawIndexed(static_cast<unsigned int>(triangleIndices.size()));
+      if (hasTriangles && triangleMeshHandle.isValid()) {
+        value->pushSetMesh(triangleMeshHandle);
+        value->pushDrawIndexed(
+          static_cast<unsigned int>(triangleDrawVertices.size()));
+      }
+      if (hasMeshAsset) {
+        value->pushSetMesh(meshAssetHandle);
+        value->pushDrawIndexed(meshAssetIndexCount);
+      }
 
       // Restore pass framebuffer & viewport
       value->pushFramebuffer(value->getCurrentPassFramebuffer());
@@ -871,6 +904,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
       value->pushUniformFloat(WorldLook::kMotionBlurAmountUniform,
                               motionBlurAmount);
       value->pushUniformFloat(WorldLook::kMotionBlurMaxUniform, motionBlurMax);
+      value->pushUniformVec4(WorldLook::kTintUniform, 1.0f, 1.0f, 1.0f, 1.0f);
 
       if (shadowMapBound) {
         value->pushSetTexture(shadowDepthTextureHandle,
@@ -891,6 +925,57 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
                             motionBlurEnabled ? 1 : 0);
       value->pushDrawIndexed(static_cast<unsigned int>(triangleIndices.size()));
     }
+  }
+  if (hasMeshAsset) {
+    if (!value->bindStyle(litMeshStyleHandle)) {
+      return false;
+    }
+    value->pushSetMesh(meshAssetHandle);
+    value->pushUniformMat4(WorldLook::kMvpUniform, coloredMvpPtr);
+    value->pushUniformMat4(WorldLook::kModelUniform,
+                           glm::value_ptr(coloredWorld));
+    value->pushUniformMat4(WorldLook::kLightSpaceMatrixUniform,
+                           glm::value_ptr(lightSpaceMatrix));
+    value->pushUniformVec3(WorldLook::kLightDirUniform,
+                           lightDirection.x,
+                           lightDirection.y,
+                           lightDirection.z);
+    value->pushUniformVec3(WorldLook::kLightColorUniform,
+                           lightingEnabled ? lightColor.x : 0.0f,
+                           lightingEnabled ? lightColor.y : 0.0f,
+                           lightingEnabled ? lightColor.z : 0.0f);
+    value->pushUniformVec3(WorldLook::kAmbientColorUniform,
+                           lightingEnabled ? ambientColor.x : 1.0f,
+                           lightingEnabled ? ambientColor.y : 1.0f,
+                           lightingEnabled ? ambientColor.z : 1.0f);
+    value->pushUniformInt(WorldLook::kShadowsEnabledUniform,
+                          lightingEnabled && shadowMapBound ? 1 : 0);
+    value->pushUniformFloat(WorldLook::kShadowBiasUniform, shadowBias);
+    value->pushUniformFloat(WorldLook::kShadowSlopeScaleUniform,
+                            shadowSlopeScale);
+    value->pushUniformFloat(WorldLook::kShadowNormalOffsetUniform,
+                            shadowNormalOffset);
+    value->pushUniformInt(WorldLook::kShadowPcfUniform,
+                          shadowPcfEnabled ? 1 : 0);
+    value->pushUniformMat4(WorldLook::kPrevMvpUniform,
+                           glm::value_ptr(previousMvp));
+    value->pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
+                          motionBlurEnabled ? 1 : 0);
+    value->pushUniformFloat(WorldLook::kMotionBlurAmountUniform,
+                            motionBlurAmount);
+    value->pushUniformFloat(WorldLook::kMotionBlurMaxUniform, motionBlurMax);
+    value->pushUniformVec4(WorldLook::kTintUniform,
+                           static_cast<float>(meshAssetTint.r) / 255.0f,
+                           static_cast<float>(meshAssetTint.g) / 255.0f,
+                           static_cast<float>(meshAssetTint.b) / 255.0f,
+                           static_cast<float>(meshAssetTint.a) / 255.0f);
+    if (lightingEnabled && shadowMapBound) {
+      value->pushSetTexture(shadowDepthTextureHandle,
+                            WorldLook::kShadowTextureUnit);
+      value->pushUniformInt(WorldLook::kShadowMapUniform,
+                            WorldLook::kShadowTextureUnit);
+    }
+    value->pushDrawIndexed(meshAssetIndexCount);
   }
   if (hasSprites && spriteMeshHandle.isValid()) {
     if (!value->bindStyle(spriteStyleHandle)) {

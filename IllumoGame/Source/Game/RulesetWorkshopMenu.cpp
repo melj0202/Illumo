@@ -14,40 +14,6 @@
 
 namespace {
 
-float
-caretOriginAfterText(const std::string& text, float textX, float fontSize)
-{
-  std::shared_ptr<Font> font = Font::getDefaultFont();
-  if (font == nullptr) {
-    return textX + GuiKit::estimateTextWidth(text, fontSize);
-  }
-  const FontMetrics& metrics = font->getMetrics();
-  const float scale =
-    metrics.pixelSize > 0.0f ? fontSize / metrics.pixelSize : 1.0f;
-  float inkRight = textX;
-  if (!text.empty()) {
-    const TextBounds bounds = font->measureText(text, fontSize);
-    const GlyphInfo* lastGlyph =
-      font->getGlyph(static_cast<unsigned char>(text.back()));
-    inkRight += bounds.width;
-    if (lastGlyph != nullptr) {
-      inkRight +=
-        (lastGlyph->bearingX + lastGlyph->width - lastGlyph->advanceX) * scale;
-    }
-  }
-  const GlyphInfo* caretGlyph = font->getGlyph('|');
-  const float caretBearing =
-    caretGlyph == nullptr ? 0.0f : caretGlyph->bearingX * scale;
-  return inkRight + 1.0f - caretBearing;
-}
-
-float
-easeOutCubic(float progress)
-{
-  const float remaining = 1.0f - std::clamp(progress, 0.0f, 1.0f);
-  return 1.0f - remaining * remaining * remaining;
-}
-
 ColorRgba
 stateColor(const RuleFamilyDefinition& definition, unsigned char state)
 {
@@ -263,16 +229,10 @@ RulesetWorkshopMenu::open(const RuleFamilyDefinition& currentFamily,
   previewNeighborhood = 2u;
   previewState = 0u;
   paletteState = 0u;
-  reducedMotion = useReducedMotion;
-  animationElapsed = reducedMotion ? kOpenAnimationSeconds : 0.0f;
-  selectionFromRow = 0.0f;
-  selectionAnimationElapsed = kSelectionAnimationSeconds;
-  valuePulseElapsed = kValuePulseSeconds;
-  ambientPhase = 0.0f;
-  caretBlinkElapsed = 0.0f;
-  mouseWasDown = true;
-  previousMouseX = -1.0f;
-  previousMouseY = -1.0f;
+  animator.setReducedMotion(useReducedMotion);
+  animator.restart();
+  // Ignore the held click that opened the workshop until its first release.
+  pointer.reset(true);
   errorMessage.clear();
   previewDirty = true;
   openState = true;
@@ -325,92 +285,40 @@ RulesetWorkshopMenu::close()
   openState = false;
   setVisible(false);
   visual.clearPrimitives();
-  previousMouseX = -1.0f;
-  previousMouseY = -1.0f;
+  pointer.forgetPosition();
   errorMessage.clear();
 }
 
 void
 RulesetWorkshopMenu::tick(float deltaSeconds)
 {
-  if (!openState || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0f) {
+  if (!openState) {
     return;
   }
-  if (reducedMotion) {
-    animationElapsed = kOpenAnimationSeconds;
-    selectionAnimationElapsed = kSelectionAnimationSeconds;
-    valuePulseElapsed = kValuePulseSeconds;
-    ambientPhase = 0.0f;
-    caretBlinkElapsed = 0.0f;
-    return;
-  }
-  animationElapsed =
-    std::min(kOpenAnimationSeconds, animationElapsed + deltaSeconds);
-  selectionAnimationElapsed = std::min(
-    kSelectionAnimationSeconds, selectionAnimationElapsed + deltaSeconds);
-  valuePulseElapsed =
-    std::min(kValuePulseSeconds, valuePulseElapsed + deltaSeconds);
-  ambientPhase = std::fmod(ambientPhase + std::min(deltaSeconds, 0.1f), 12.0f);
-  caretBlinkElapsed =
-    std::fmod(caretBlinkElapsed + deltaSeconds, kCaretBlinkPeriodSeconds);
-}
-
-float
-RulesetWorkshopMenu::animationProgress() const
-{
-  if (reducedMotion) {
-    return 1.0f;
-  }
-  return std::clamp(animationElapsed / kOpenAnimationSeconds, 0.0f, 1.0f);
+  animator.tick(deltaSeconds);
 }
 
 float
 RulesetWorkshopMenu::getAnimationProgressForTesting() const
 {
-  return animationProgress();
-}
-
-float
-RulesetWorkshopMenu::panelReveal() const
-{
-  if (reducedMotion) {
-    return 1.0f;
-  }
-  return easeOutCubic(std::clamp(animationElapsed / 0.24f, 0.0f, 1.0f));
-}
-
-float
-RulesetWorkshopMenu::panelOffsetY() const
-{
-  return (1.0f - panelReveal()) * 18.0f;
+  return animator.openProgress();
 }
 
 float
 RulesetWorkshopMenu::rowReveal(int row) const
 {
-  if (reducedMotion) {
-    return 1.0f;
-  }
-  const float delay =
-    static_cast<float>(std::max(0, row - firstVisibleRow)) * 0.012f;
-  return easeOutCubic(
-    std::clamp((animationElapsed - delay) / 0.22f, 0.0f, 1.0f));
+  return animator.rowReveal(row, firstVisibleRow);
 }
 
 float
 RulesetWorkshopMenu::selectionRowPosition() const
 {
+  // Footer actions park the highlight just past the last body row.
   const int selectedBodyRow = bodyIndexForRow(selectedRow);
   if (selectedBodyRow < 0) {
     return static_cast<float>(bodyRowCount);
   }
-  if (reducedMotion) {
-    return static_cast<float>(selectedBodyRow);
-  }
-  const float progress = easeOutCubic(std::clamp(
-    selectionAnimationElapsed / kSelectionAnimationSeconds, 0.0f, 1.0f));
-  return selectionFromRow +
-         (static_cast<float>(selectedBodyRow) - selectionFromRow) * progress;
+  return animator.selectionPosition(static_cast<float>(selectedBodyRow));
 }
 
 float
@@ -446,53 +354,17 @@ RulesetWorkshopMenu::getSelectedControlForTesting() const
 }
 
 float
-RulesetWorkshopMenu::valuePulse() const
-{
-  if (reducedMotion) {
-    return 0.0f;
-  }
-  const float progress =
-    std::clamp(valuePulseElapsed / kValuePulseSeconds, 0.0f, 1.0f);
-  return 1.0f - progress;
-}
-
-float
 RulesetWorkshopMenu::getValuePulseForTesting() const
 {
-  return valuePulse();
-}
-
-void
-RulesetWorkshopMenu::triggerValuePulse()
-{
-  valuePulseElapsed = 0.0f;
+  return animator.valuePulse();
 }
 
 void
 RulesetWorkshopMenu::updateLayout()
 {
-  int width = 1280;
-  int height = 720;
-  if (window != nullptr) {
-    const std::array<int, 2> dimensions = window->getWindowDimensions();
-    width = std::max(1, dimensions[0]);
-    height = std::max(1, dimensions[1]);
-  }
-  const float preferredScale =
-    renderer != nullptr ? std::max(1.0f, renderer->getUiScale()) : 1.0f;
-  layoutScale =
-    std::min(preferredScale,
-             std::max(0.25f,
-                      std::min(static_cast<float>(width) / 640.0f,
-                               static_cast<float>(height) / 480.0f)));
-  const float fitScale = layoutScale / preferredScale;
-  Transform2D transform;
-  transform.scaleX = fitScale;
-  transform.scaleY = fitScale;
-  visual.setTransform(transform);
-
-  const float virtualWidth = static_cast<float>(width) / layoutScale;
-  const float virtualHeight = static_cast<float>(height) / layoutScale;
+  panelFit = GuiPanelLayout::fit(window, renderer, &visual);
+  const float virtualWidth = panelFit.virtualWidth;
+  const float virtualHeight = panelFit.virtualHeight;
   panelWidth = std::min(820.0f, std::max(200.0f, virtualWidth - 24.0f));
   panelHeight = std::min(700.0f, std::max(160.0f, virtualHeight - 20.0f));
   panelWidth = std::min(panelWidth, virtualWidth);
@@ -509,12 +381,11 @@ RulesetWorkshopMenu::updateLayout()
   firstRowY = panelY + headerHeight;
   const float availableRowsHeight =
     std::max(1.0f, panelHeight - headerHeight - footerHeight - 4.0f);
-  visibleRows = std::clamp(static_cast<int>(availableRowsHeight / 34.0f),
-                           1,
-                           std::max(1, bodyRowCount));
+  visibleRows = GuiPanelLayout::visibleRowCount(availableRowsHeight,
+                                                std::max(1, bodyRowCount));
   rowHeight = availableRowsHeight / static_cast<float>(visibleRows);
-  firstVisibleRow =
-    std::clamp(firstVisibleRow, 0, std::max(0, bodyRowCount - visibleRows));
+  firstVisibleRow = GuiPanelLayout::clampFirstVisibleRow(
+    firstVisibleRow, bodyRowCount, visibleRows);
 }
 
 void
@@ -531,21 +402,17 @@ RulesetWorkshopMenu::selectRow(int row)
   const int nextBody = bodyIndexForRow(row);
   if (row != selectedRow) {
     if (previousBody >= 0 && nextBody >= 0) {
-      selectionFromRow = selectionRowPosition();
-      selectionAnimationElapsed = 0.0f;
+      animator.beginSelectionTravel(selectionRowPosition());
     } else {
-      selectionAnimationElapsed = kSelectionAnimationSeconds;
+      // Travel between the body list and the footer bar is not a glide.
+      animator.settleSelection();
     }
     selectedRow = row;
-    caretBlinkElapsed = 0.0f;
+    animator.resetCaret();
   }
   if (nextBody >= 0) {
-    if (nextBody < firstVisibleRow) {
-      firstVisibleRow = nextBody;
-    }
-    if (nextBody >= firstVisibleRow + visibleRows) {
-      firstVisibleRow = nextBody - visibleRows + 1;
-    }
+    firstVisibleRow =
+      GuiPanelLayout::scrollToRow(firstVisibleRow, nextBody, visibleRows);
   }
   errorMessage.clear();
 }
@@ -770,8 +637,8 @@ RulesetWorkshopMenu::update(InputManager* input)
         familyChanged = familyChanged || control == Control::FamilyName ||
                         control == Control::StateName;
         previewDirty = true;
-        caretBlinkElapsed = 0.0f;
-        triggerValuePulse();
+        animator.resetCaret();
+        animator.triggerValuePulse();
       }
     }
     if (action != RulesetWorkshopAction::None) {
@@ -798,8 +665,8 @@ RulesetWorkshopMenu::update(InputManager* input)
         familyChanged = familyChanged || control == Control::FamilyName ||
                         control == Control::StateName;
         previewDirty = true;
-        caretBlinkElapsed = 0.0f;
-        triggerValuePulse();
+        animator.resetCaret();
+        animator.triggerValuePulse();
       }
     }
   } else {
@@ -808,30 +675,17 @@ RulesetWorkshopMenu::update(InputManager* input)
     }
   }
 
-  double* scroll = input->getMouseScrollOffset();
-  const bool wheelScrolled =
-    scroll != nullptr && std::isfinite(*scroll) && *scroll != 0.0;
-  if (wheelScrolled) {
-    const int rowsToScroll = static_cast<int>(std::ceil(std::min(
-      std::abs(*scroll), static_cast<double>(std::max(1, bodyRowCount)))));
-    firstVisibleRow = std::clamp(
-      firstVisibleRow + (*scroll > 0.0 ? -rowsToScroll : rowsToScroll),
-      0,
-      std::max(0, bodyRowCount - visibleRows));
-    *scroll = 0.0;
-  }
+  bool wheelScrolled = false;
+  firstVisibleRow = GuiPanelLayout::applyWheelScroll(
+    input, firstVisibleRow, bodyRowCount, visibleRows, &wheelScrolled);
 
   updateLayout();
-  const std::array<double, 2> mouse =
-    window != nullptr ? window->getMouseCoords() : input->getMousePosition();
-  const float mouseX = static_cast<float>(mouse[0]) / layoutScale;
-  const float mouseY = static_cast<float>(mouse[1]) / layoutScale;
-  const bool mouseMoved = mouseX != previousMouseX || mouseY != previousMouseY;
-  previousMouseX = mouseX;
-  previousMouseY = mouseY;
-  const bool down = input->isMouseButtonPressed(KeyCode::MouseLeft);
-  const bool clicked = down && !mouseWasDown;
-  const float animatedPanelY = panelY + panelOffsetY();
+  pointer.sample(window, input, panelFit.layoutScale);
+  const float mouseX = pointer.x();
+  const float mouseY = pointer.y();
+  const bool mouseMoved = pointer.moved();
+  const bool clicked = pointer.clicked();
+  const float animatedPanelY = panelY + animator.panelOffsetY();
   const float footerY = animatedPanelY + panelHeight - footerHeight;
   const float buttonY = footerY + (footerHeight >= 65.0f ? 34.0f : 10.0f);
   const float buttonHeight = footerHeight >= 65.0f ? 34.0f : 27.0f;
@@ -884,7 +738,7 @@ RulesetWorkshopMenu::update(InputManager* input)
             const unsigned int count = static_cast<unsigned int>(std::clamp(
               static_cast<int>((mouseX - chipX) / (chipWidth + gap)), 0, 8));
             if (toggleNeighborCount(control, count)) {
-              triggerValuePulse();
+              animator.triggerValuePulse();
             }
           }
         } else if (control == Control::Import || control == Control::Export) {
@@ -906,7 +760,6 @@ RulesetWorkshopMenu::update(InputManager* input)
       }
     }
   }
-  mouseWasDown = down;
   rebuildVisual();
   return action;
 }
@@ -914,7 +767,7 @@ RulesetWorkshopMenu::update(InputManager* input)
 int
 RulesetWorkshopMenu::bodyRowForPoint(float x, float y) const
 {
-  const float rowAreaTop = firstRowY + panelOffsetY();
+  const float rowAreaTop = firstRowY + animator.panelOffsetY();
   const float rowAreaHeight = rowHeight * static_cast<float>(visibleRows);
   if (!GuiKit::isPointInRect(
         x, y, panelX + 20.0f, rowAreaTop, panelWidth - 40.0f, rowAreaHeight)) {
@@ -969,7 +822,7 @@ RulesetWorkshopMenu::activateControl(Control control)
   }
   if (control == Control::BirthCounts || control == Control::SurvivalCounts) {
     toggleNeighborCount(control, neighborCount);
-    triggerValuePulse();
+    animator.triggerValuePulse();
     rebuildVisual();
     return RulesetWorkshopAction::None;
   }
@@ -1118,7 +971,7 @@ RulesetWorkshopMenu::changeControl(Control control, int direction)
     if (control == Control::BirthCounts || control == Control::SurvivalCounts) {
       previewDirty = true;
     }
-    triggerValuePulse();
+    animator.triggerValuePulse();
   }
   return changed;
 }
@@ -1476,25 +1329,17 @@ RulesetWorkshopMenu::rebuildVisual()
     return;
   }
   refreshPreview();
-  int width = 1280;
-  int height = 720;
-  if (window != nullptr) {
-    const std::array<int, 2> dimensions = window->getWindowDimensions();
-    width = std::max(1, dimensions[0]);
-    height = std::max(1, dimensions[1]);
-  }
-  const float virtualWidth = static_cast<float>(width) / layoutScale;
-  const float virtualHeight = static_cast<float>(height) / layoutScale;
-  const float reveal = panelReveal();
-  const float animatedPanelY = panelY + panelOffsetY();
-  const float animatedFirstRowY = firstRowY + panelOffsetY();
-  const unsigned char backdropOpacity = static_cast<unsigned char>(std::round(
-    (reducedMotion ? 1.0f : std::clamp(animationElapsed / 0.18f, 0.0f, 1.0f)) *
-    255.0f));
+  const float virtualWidth = panelFit.virtualWidth;
+  const float virtualHeight = panelFit.virtualHeight;
+  const float reveal = animator.panelReveal();
+  const float animatedPanelY = panelY + animator.panelOffsetY();
+  const float animatedFirstRowY = firstRowY + animator.panelOffsetY();
+  const unsigned char backdropOpacity =
+    static_cast<unsigned char>(std::round(animator.openReveal(0.18f) * 255.0f));
   const unsigned char panelOpacity =
     static_cast<unsigned char>(std::round(reveal * 255.0f));
   const float breathe =
-    reducedMotion ? 0.5f : 0.5f + 0.5f * std::sin(ambientPhase * 1.04719755f);
+    0.5f + 0.5f * std::sin(animator.ambientPhase() * 1.04719755f);
 
   visual.addFilledRect(
     0.0f,
@@ -1687,7 +1532,7 @@ RulesetWorkshopMenu::rebuildVisual()
         selected ? UiTheme::accentCool() : UiTheme::panelBorder(),
         static_cast<unsigned char>(
           selected ? rowOpacity * (0.62f + 0.18f * breathe) : rowOpacity)));
-    if (selected && valuePulse() > 0.0f) {
+    if (selected && animator.valuePulse() > 0.0f) {
       GuiKit::drawRoundedRect(
         visual,
         panelX + 21.0f,
@@ -1695,9 +1540,9 @@ RulesetWorkshopMenu::rebuildVisual()
         panelWidth - 42.0f,
         rowHeight - 7.0f,
         7.0f,
-        UiTheme::applyOpacity(
-          UiTheme::accentCool(),
-          static_cast<unsigned char>(rowOpacity * valuePulse() * 0.16f)));
+        UiTheme::applyOpacity(UiTheme::accentCool(),
+                              static_cast<unsigned char>(
+                                rowOpacity * animator.valuePulse() * 0.16f)));
     }
     visual.addText(row.label,
                    panelX + 34.0f,
@@ -1768,12 +1613,11 @@ RulesetWorkshopMenu::rebuildVisual()
                      UiTheme::applyOpacity(placeholder ? UiTheme::textMuted()
                                                        : UiTheme::textPrimary(),
                                            rowOpacity));
-      const bool caretVisible =
-        reducedMotion || caretBlinkElapsed < kCaretBlinkPeriodSeconds * 0.55f;
-      if (selected && caretVisible) {
-        const float caretX = std::min(
-          caretOriginAfterText(displayValue, valueLeft + 8.0f, fieldFont),
-          valueRight - 44.0f);
+      if (selected && animator.caretVisible()) {
+        const float caretX =
+          std::min(GuiKit::caretOriginAfterText(
+                     displayValue, valueLeft + 8.0f, fieldFont),
+                   valueRight - 44.0f);
         visual.addText(
           "|",
           caretX,

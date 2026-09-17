@@ -21,6 +21,7 @@ uniform float uShadowSlopeScale;
 uniform float uShadowNormalOffset;
 uniform int uShadowPcf;
 uniform int uMotionBlurEnabled;
+uniform vec4 uTint;
 
 float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
 {
@@ -79,7 +80,7 @@ void main()
     float shadow = calculateShadow(vFragPos, norm, lightDir);
 
     vec3 lighting = ambient + (1.0 - shadow) * diffuse;
-    vec4 baseColor = vColor;
+    vec4 baseColor = vColor * uTint;
     FragColor = vec4(lighting * baseColor.rgb, baseColor.a);
 
     if (uMotionBlurEnabled != 0) {

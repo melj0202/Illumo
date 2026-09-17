@@ -13,6 +13,7 @@
 
 class Camera;
 class Renderer;
+struct MeshAssetInfo;
 
 enum class MeshFacing : unsigned char
 {
@@ -107,6 +108,12 @@ public:
                        int segments = 24);
   void addMesh(const MeshData& mesh,
                ColorRgba tint = ColorRgba{ 255, 255, 255, 255 });
+  // Non-owning managed binding. The acquiring owner must keep the matching
+  // AssetManager reference alive until this binding is cleared or unused.
+  void setMeshAsset(const MeshAssetInfo& asset,
+                    ColorRgba tint = ColorRgba{ 255, 255, 255, 255 });
+  void clearMeshAsset();
+  MeshHandle getMeshAssetHandle() const { return meshAssetHandle; }
 
   size_t spriteCount() const { return sprites.size(); }
 
@@ -179,6 +186,9 @@ private:
   MeshHandle lineMeshHandle{};
   MeshHandle triangleMeshHandle{};
   MeshHandle spriteMeshHandle{};
+  MeshHandle meshAssetHandle{};
+  unsigned int meshAssetIndexCount = 0;
+  ColorRgba meshAssetTint{ 255, 255, 255, 255 };
   RenderStyleHandle lineStyleHandle{};
   RenderStyleHandle triangleStyleHandle{};
   RenderStyleHandle spriteStyleHandle{};

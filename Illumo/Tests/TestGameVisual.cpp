@@ -196,7 +196,7 @@ testGameVisualShapesEmitTokens()
       foundOverlayMvp = true;
       overlayMatchesScreen = true;
       for (int e = 0; e < 16; ++e) {
-        if (std::abs(command.uniformMat4.m[e] - expectedPtr[e]) > 0.0001f) {
+        if (std::abs(command.uniformMat4.value[e] - expectedPtr[e]) > 0.0001f) {
           overlayMatchesScreen = false;
         }
       }
