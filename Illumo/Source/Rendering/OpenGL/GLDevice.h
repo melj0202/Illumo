@@ -58,7 +58,7 @@ class GLDevice
 {
 private:
   PipelineState _currentGLState;
-  GLuint _activeProgram = 0;
+  GLShaderProgram* _activeProgram = nullptr;
   std::string m_frameError;
   void reportFrameError(const char* message);
 
@@ -73,9 +73,6 @@ private:
   int _viewportY = -1;
   int _viewportW = -1;
   int _viewportH = -1;
-
-  // Cache: key is "progId:name"
-  std::unordered_map<std::string, GLint> _uniformLocationCache;
 
   GLenum mapBlendFactor(BlendFactor factor)
   {
@@ -139,20 +136,10 @@ private:
 
   GLint getUniformLocation(const char* name)
   {
-    if (_activeProgram == 0 || name == nullptr) {
+    if (_activeProgram == nullptr || name == nullptr) {
       return -1;
     }
-    std::string key = std::to_string(_activeProgram);
-    key.push_back(':');
-    key.append(name);
-    std::unordered_map<std::string, GLint>::iterator it =
-      _uniformLocationCache.find(key);
-    if (it != _uniformLocationCache.end()) {
-      return it->second;
-    }
-    GLint loc = glGetUniformLocation(_activeProgram, name);
-    _uniformLocationCache[key] = loc;
-    return loc;
+    return _activeProgram->GetUniformLocation(name);
   }
 
   GLMesh* resolveMesh(const GLResourceTables& tables, MeshHandle handle) const

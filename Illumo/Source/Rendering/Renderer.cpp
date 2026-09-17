@@ -74,6 +74,35 @@ Renderer::endFrameContext()
   frameContext.uiScale = 1.0f;
 }
 
+const float*
+Renderer::retainUniformMatrix(const float* value)
+{
+  if (value == nullptr) {
+    return nullptr;
+  }
+  if (uniformMatrixCount >= MAX_UNIFORM_MATRICES) {
+    return nullptr;
+  }
+
+  const size_t chunkIndex = uniformMatrixCount / UNIFORM_MATRICES_PER_CHUNK;
+  const size_t matrixIndex = uniformMatrixCount % UNIFORM_MATRICES_PER_CHUNK;
+  if (chunkIndex == uniformMatrixChunks.size()) {
+    uniformMatrixChunks.push_back(std::make_unique<UniformMatrixChunk>());
+  }
+
+  UniformMatrix& retained = (*uniformMatrixChunks[chunkIndex])[matrixIndex];
+  std::memcpy(retained.data(), value, retained.size() * sizeof(float));
+  uniformMatrixCount += 1;
+  return retained.data();
+}
+
+void
+Renderer::clearCommandQueue()
+{
+  _backend->ClearCommandQueue();
+  uniformMatrixCount = 0;
+}
+
 Renderer::Renderer(IRenderWindow* window,
                    EnvVars* envVars,
                    Camera* cam,
@@ -292,7 +321,7 @@ Renderer::BeginFrame()
 {
   m_frameError.clear();
   _backend->BeginFrame();
-  _backend->ClearCommandQueue();
+  clearCommandQueue();
   _currentPassFbo = FramebufferHandle{};
   const std::array<int, 2> dims =
     _window ? _window->getWindowDimensions() : std::array<int, 2>{ 0, 0 };
@@ -479,12 +508,19 @@ Renderer::pushUniformVec4(const char* name, float x, float y, float z, float w)
 void
 Renderer::pushUniformMat4(const char* name, const float* m16)
 {
+  if (m16 == nullptr) {
+    reportFrameError("SetUniformMat4: null matrix value");
+    return;
+  }
+  const float* retained = retainUniformMatrix(m16);
+  if (retained == nullptr) {
+    reportFrameError("SetUniformMat4: retained matrix ceiling reached");
+    return;
+  }
   RenderCommand cmd;
   cmd.commandType = CommandType::SetUniformMat4;
   copyUniformName(cmd.uniformMat4.name, sizeof(cmd.uniformMat4.name), name);
-  if (m16) {
-    std::memcpy(cmd.uniformMat4.m, m16, 16 * sizeof(float));
-  }
+  cmd.uniformMat4.value = retained;
   _backend->PushToCommandQueue(cmd);
 }
 
@@ -845,7 +881,7 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
 
   // Submit clear + token drawables before any immediate overlays.
   _backend->SubmitCommandQueue();
-  _backend->ClearCommandQueue();
+  clearCommandQueue();
 
   for (size_t i = 0; i < immediateCount; ++i) {
     immediateList[i]->Draw();
@@ -891,7 +927,7 @@ Renderer::RenderProofQuad()
 {
   ensureProofResources();
 
-  _backend->ClearCommandQueue();
+  clearCommandQueue();
 
   std::array<int, 2> dims = _window->getWindowDimensions();
   pushViewport(0, 0, dims[0], dims[1]);
@@ -917,5 +953,5 @@ Renderer::RenderProofQuad()
   pushDrawIndexed(6, 0);
 
   _backend->SubmitCommandQueue();
-  _backend->ClearCommandQueue();
+  clearCommandQueue();
 }

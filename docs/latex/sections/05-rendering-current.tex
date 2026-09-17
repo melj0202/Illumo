@@ -204,11 +204,22 @@ with a warning and safe no-op.
 
 \symbolref{CommandQueue}: vector storage reserves 2,048 tokens, grows to a
 configurable 65,536 default safety ceiling, and reports high-water and rejected
-counts. Rejection logs once per reset interval.
+counts. Rejection logs once per reset interval. On the supported 64-bit Windows
+build each token is 72 bytes. Matrix-uniform values are copied into retained
+renderer-owned chunks of 128 matrices and the compact token borrows that stable
+value until synchronous submission returns; the chunks reset after submission
+and are reused by later frames. Matrix side storage uses a matching default
+65,536-value safety ceiling so rejected token storms cannot grow it without
+bound.
 
 \symbolref{RenderCommand}: tagged union (\texttt{CommandType} + POD payload)
 including pipeline, bind, uniforms, \texttt{UpdateTexture}, \texttt{UpdateBuffer},
 clear, draw, and explicit enabled/disabled scissor state (D-R1).
+
+Each \symbolref{GLShaderProgram} owns its uniform-location cache. Cache hits use
+the token's name directly rather than building and hashing a combined
+program-ID/name string, and shader replacement or destruction retires cached
+locations with the owning program.
 
 Renderer maintains a per-frame scissor stack for \texttt{pushClipRect}/
 \texttt{popClipRect}. Nested clips intersect in physical viewport coordinates

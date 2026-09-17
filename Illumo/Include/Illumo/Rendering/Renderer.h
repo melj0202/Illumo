@@ -87,12 +87,21 @@ private:
   // start of RenderScene and again after submission so token payload pointers
   // that live only for the frame never outlive the submit window by design.
   ArenaAlloc frameArena{ 8 * 1024 };
+  static constexpr size_t UNIFORM_MATRICES_PER_CHUNK = 128;
+  static constexpr size_t MAX_UNIFORM_MATRICES = 65536;
+  using UniformMatrix = std::array<float, 16>;
+  using UniformMatrixChunk =
+    std::array<UniformMatrix, UNIFORM_MATRICES_PER_CHUNK>;
+  std::vector<std::unique_ptr<UniformMatrixChunk>> uniformMatrixChunks;
+  size_t uniformMatrixCount = 0;
   FrameContext frameContext;
   bool m_strictSubmission = false;
   std::string m_frameError;
 
   void beginFrameContext(Camera* camera);
   void endFrameContext();
+  const float* retainUniformMatrix(const float* value);
+  void clearCommandQueue();
 
 public:
   // Composition-root path: ownership transferred via unique_ptr (D-R11).

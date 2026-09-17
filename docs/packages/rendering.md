@@ -60,6 +60,13 @@ Pass color and depth clears are independent. Depth-clear tokens carry the
 requested value; no-argument depth clears and combined screen clears default
 to depth one instead of inheriting a previous pass's custom value.
 
+On the supported 64-bit Windows build, `RenderCommand` is 72 bytes. Matrix
+uniform values are copied into retained renderer-owned chunks and referenced by
+compact tokens until synchronous submission returns, with a matching
+65,536-value safety ceiling. OpenGL uniform-location caches belong to each
+`GLShaderProgram`; cache hits avoid combined program-ID/name string construction
+and cached locations cannot outlive shader replacement or destruction.
+
 Font atlas caches use a weak renderer lifetime identity instead of its address.
 Each live renderer retains a separate enrollment; expired entries are pruned
 and retired texture handles are reenrolled. Fonts do not own renderer or GPU

@@ -502,7 +502,7 @@ IBackend::SubmitCommandQueue
 | **AssetManager** | Canonical-path texture/cubemap/shader cache with reference counts, stable per-request fallback resources (the shader fallback follows the custom 2D binding contract), synchronous or one-worker CPU loading, cubemap cross/strip extraction (`acquireCubemapFromCross`), include-dependency tracking for automatic hot reload, render-thread `pump`, explicit reload, and Debug timestamp polling. The Debug demo manages both its atlas and sprite shader through this path. |
 | **ShaderPreprocessor** | Backend-neutral GLSL preprocessor: resolves `#include` directives against virtual in-memory module registry (`<illumo/...>`) and disk paths, injects compile-time `#define` macros, enforces `#pragma once` & recursion guards, preserves `#version` at line 1, emits `#line` markers, and discovers transitive include dependencies. |
 | **Composition (`Illumo::initialize`)** | Calls fallible window/backend factories, initializes the backend exactly once, transfers `unique_ptr<IBackend>` to Renderer, and calls `ensureBuiltinStyles()`. |
-| **GLBackend / GLDevice** | Real OpenGL under `Rendering/OpenGL/`: handle registries, execute tokens, PBO texture updates, bind-state tracking, blend-func-on-enable (D-R5). |
+| **GLBackend / GLDevice** | Real OpenGL under `Rendering/OpenGL/`: handle registries, execute tokens, PBO texture updates, bind-state tracking, blend-func-on-enable (D-R5). Each `GLShaderProgram` owns its uniform-location cache, so cache hits do not construct combined program/name strings and replacement or destruction retires cached locations with the program. |
 | **MockBackend** | Exposed only by `Illumo::TestSupport`: records creates + command order for headless tests. |
 
 **Layers vs passes:** layers are ordered composition buckets. Ordinary layers
@@ -517,8 +517,13 @@ growth replaces its texture through the same validated handle and destruction
 releases the GL texture, PBOs, and fences before recycling that handle.
 **Per frame:** growable `CommandQueue` reserves 2,048 tokens and grows to a
 configurable 65,536 default ceiling while tracking high-water and rejected
-counts. `RenderCommand` remains a tagged union (bind, uniform, update
-texture/buffer, draw, clear, viewport, scissor state, pipeline).
+counts. `RenderCommand` remains a 72-byte tagged union on the supported 64-bit
+Windows build (bind, uniform, update texture/buffer, draw, clear, viewport,
+scissor state, pipeline). Matrix-uniform tokens borrow renderer-owned values
+copied into retained 128-matrix chunks; those chunks reset only after command
+submission, remain allocated for reuse, and use a matching default
+65,536-value safety ceiling so rejected token storms cannot grow side storage
+without bound.
 `Renderer::pushClipRect`/`popClipRect` retain a per-frame scissor stack, so
 primitive clips intersect and restore an existing product-owned scissor rather
 than disabling it. Low-level `pushScissor` remains available for explicit

@@ -116,9 +116,11 @@ emitProofLikeFrame(MockBackend& backend,
   std::memset(mat.uniformMat4.name, 0, sizeof(mat.uniformMat4.name));
   std::memcpy(mat.uniformMat4.name, "uMVP", 4);
   // identity
+  float matValue[16];
   for (int i = 0; i < 16; ++i) {
-    mat.uniformMat4.m[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+    matValue[i] = (i % 5 == 0) ? 1.0f : 0.0f;
   }
+  mat.uniformMat4.value = matValue;
   backend.PushToCommandQueue(mat);
 
   RenderCommand samp;

@@ -97,6 +97,7 @@ main()
                                                  {} };
   static_assert(legacyPipelineCommand.clearDepthValue == 1.0f);
   static_assert(std::is_trivially_copyable_v<RenderCommand>);
+  static_assert(sizeof(RenderCommand) <= 72);
   static_assert(!std::is_copy_constructible_v<InputManager>);
   static_assert(!std::is_copy_assignable_v<InputManager>);
   static_assert(!std::is_move_constructible_v<InputManager>);

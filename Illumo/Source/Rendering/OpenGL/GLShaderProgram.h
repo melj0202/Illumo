@@ -4,9 +4,12 @@
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Services/Logger.h>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 class GLShaderProgram : public IShaderProgram
@@ -33,8 +36,28 @@ public:
   unsigned long GetID() const override { return _programID; }
   bool isValid() const override { return _valid && _programID != 0; }
 
+  GLint GetUniformLocation(const char* name)
+  {
+    if (!isValid() || name == nullptr) {
+      return -1;
+    }
+    const std::string_view nameView(name);
+    std::unordered_map<std::string,
+                       GLint,
+                       TransparentStringHash,
+                       std::equal_to<>>::const_iterator it =
+      _uniformLocations.find(nameView);
+    if (it != _uniformLocations.end()) {
+      return it->second;
+    }
+    const GLint location = glGetUniformLocation(_programID, name);
+    _uniformLocations.emplace(nameView, location);
+    return location;
+  }
+
   void Destroy() override
   {
+    _uniformLocations.clear();
     if (_programID != 0) {
       glDeleteProgram(_programID);
       _programID = 0;
@@ -43,7 +66,19 @@ public:
   }
 
 private:
+  struct TransparentStringHash
+  {
+    using is_transparent = void;
+
+    size_t operator()(std::string_view value) const noexcept
+    {
+      return std::hash<std::string_view>{}(value);
+    }
+  };
+
   bool _valid = false;
+  std::unordered_map<std::string, GLint, TransparentStringHash, std::equal_to<>>
+    _uniformLocations;
 
   void CompileAndLink(const ShaderSources& sources) override
   {

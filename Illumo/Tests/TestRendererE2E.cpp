@@ -1147,6 +1147,46 @@ testCubemapReplacement()
           "slot reuse does not retain cubemap kind");
 }
 
+static void
+testUniformMatrixRetention()
+{
+  E2ENullRenderWindow window(128, 128);
+  MockBackend backend;
+  backend.Initialize();
+  Camera camera;
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+
+  renderer.BeginFrame();
+  constexpr size_t matrixCount = 257;
+  for (size_t matrix = 0; matrix < matrixCount; ++matrix) {
+    float value[16];
+    for (size_t element = 0; element < 16; ++element) {
+      value[element] = static_cast<float>(matrix * 100 + element);
+    }
+    renderer.pushUniformMat4("uMVP", value);
+  }
+  renderer.EndFrame();
+
+  e2eEqSize(backend.getLastNonEmptySubmittedCount(),
+            matrixCount,
+            "matrix tokens survive retained-storage chunk growth");
+  bool valuesMatch = true;
+  for (size_t matrix = 0; matrix < matrixCount; ++matrix) {
+    const RenderCommand& command = backend.getLastNonEmptySubmitted(matrix);
+    valuesMatch =
+      valuesMatch && command.commandType == CommandType::SetUniformMat4 &&
+      command.uniformMat4.value != nullptr &&
+      command.uniformMat4.value[0] == static_cast<float>(matrix * 100) &&
+      command.uniformMat4.value[15] == static_cast<float>(matrix * 100 + 15);
+  }
+  e2eTrue(valuesMatch, "retained matrix values match submitted tokens");
+
+  renderer.BeginFrame();
+  renderer.pushUniformMat4("uMVP", nullptr);
+  renderer.EndFrame();
+  e2eTrue(!renderer.frameError().empty(), "null matrix reports a frame error");
+}
+
 void
 registerRendererE2ETests(IllumoTestRegistry& registry)
 {
@@ -1188,6 +1228,8 @@ registerRendererE2ETests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Renderer.SkyboxVisual",
                []() { return runRendererE2ECase(testRendererSkyboxVisual); });
+  registry.add("Illumo.Renderer.UniformMatrixRetention",
+               []() { return runRendererE2ECase(testUniformMatrixRetention); });
   registry.add("Illumo.AssetManager.CubemapLoading", []() {
     return runRendererE2ECase(testAssetManagerCubemapFromCross);
   });

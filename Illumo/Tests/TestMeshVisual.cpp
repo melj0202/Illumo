@@ -251,7 +251,7 @@ testMeshVisualBillboard()
   testTrue(g, worldMvpCmd != nullptr, "world-aligned sprite submits uMVP");
   float worldMvp[16] = {};
   if (worldMvpCmd != nullptr) {
-    std::memcpy(worldMvp, worldMvpCmd->uniformMat4.m, sizeof(worldMvp));
+    std::memcpy(worldMvp, worldMvpCmd->uniformMat4.value, sizeof(worldMvp));
   }
 
   mock.resetCounters();
@@ -266,7 +266,7 @@ testMeshVisualBillboard()
   float billboardMvp[16] = {};
   if (billboardMvpCmd != nullptr) {
     std::memcpy(
-      billboardMvp, billboardMvpCmd->uniformMat4.m, sizeof(billboardMvp));
+      billboardMvp, billboardMvpCmd->uniformMat4.value, sizeof(billboardMvp));
   }
 
   const float aspect = 640.0f / 480.0f;
@@ -342,7 +342,7 @@ testMeshVisualSceneAttachment()
   const glm::mat4 expected = camera.GetMVPMatrix(aspect) * translation;
   testTrue(g, mvp != nullptr, "attachment submits uMVP");
   testTrue(g,
-           mvp != nullptr && matricesNear(mvp->uniformMat4.m, expected),
+           mvp != nullptr && matricesNear(mvp->uniformMat4.value, expected),
            "uMVP equals camera MVP times node world");
   testTrue(
     g, !submittedUsePixelsOne(mock), "attachment does not use pixel mode");
@@ -732,11 +732,11 @@ testMeshVisualMotionBlurUniformsFromSetters()
   bool haveFirstMvp = false;
   if (firstMvp != nullptr && firstPrev != nullptr) {
     std::memcpy(glm::value_ptr(firstMvpMatrix),
-                firstMvp->uniformMat4.m,
+                firstMvp->uniformMat4.value,
                 16 * sizeof(float));
     haveFirstMvp = true;
     testTrue(g,
-             matricesNear(firstPrev->uniformMat4.m, firstMvpMatrix),
+             matricesNear(firstPrev->uniformMat4.value, firstMvpMatrix),
              "first frame previous MVP matches current MVP");
   }
 
@@ -776,15 +776,16 @@ testMeshVisualMotionBlurUniformsFromSetters()
            "moved frame emits current and previous MVP");
   if (haveFirstMvp && secondPrev != nullptr) {
     testTrue(g,
-             matricesNear(secondPrev->uniformMat4.m, firstMvpMatrix),
+             matricesNear(secondPrev->uniformMat4.value, firstMvpMatrix),
              "second frame previous MVP matches the prior current MVP");
   }
   if (secondMvp != nullptr && secondPrev != nullptr) {
     glm::mat4 current(1.0f);
-    std::memcpy(
-      glm::value_ptr(current), secondMvp->uniformMat4.m, 16 * sizeof(float));
+    std::memcpy(glm::value_ptr(current),
+                secondMvp->uniformMat4.value,
+                16 * sizeof(float));
     testTrue(g,
-             !matricesNear(secondPrev->uniformMat4.m, current),
+             !matricesNear(secondPrev->uniformMat4.value, current),
              "moved frame current MVP differs from previous MVP");
   }
 
