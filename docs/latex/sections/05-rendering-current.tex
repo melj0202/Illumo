@@ -109,7 +109,7 @@ preserving defaults. Optional modules reinstall their overrides after a transiti
         scissor (D-R23). World-space behavior is unchanged.
         Dynamic buffers reserve 1,024 quads, double as needed, and stop at a
         configurable 65,536 default ceiling.
-  \item \symbolref{MeshVisual} (D-R21) is the world mesh host and
+  \item \symbolref{MeshVisual} (D-R21/D-R24) is the world mesh host and
         \symbolref{ISceneRenderAttachment}: colored lines/triangles, textured
         quads (sprites), optional camera-facing billboards, optional
         directional lighting with a depth-only shadow pass, and optional
@@ -122,11 +122,14 @@ preserving defaults. Optional modules reinstall their overrides after a transiti
         One host can contain multiple visual items. Use child scene nodes for
         independent transforms and subtree state; each node borrows at most
         one attachment. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
-        meshes upload dirty vertices through \texttt{UpdateBuffer}; capacity
-        growth replaces the backing allocation.
+        procedural meshes upload dirty vertices through \texttt{UpdateBuffer};
+        capacity growth replaces the backing allocation. Immutable imported
+        meshes instead borrow one reference-counted \texttt{MeshHandle} from
+        \symbolref{AssetManager}; multiple visuals reuse the upload while
+        retaining independent transform, tint, lighting, and motion state.
 \end{itemize}
 
-\subsection{Managed texture and shader assets (D-R17)}
+\subsection{Managed assets (D-R17/D-R24)}
 Shared fonts cache one atlas handle per live renderer ownership identity,
 not per raw renderer address. The identity is weak in the font cache; expired
 entries are pruned and explicitly retired texture handles are reenrolled.
@@ -144,6 +147,16 @@ replacement on the render thread before frame submission. Failed reloads keep
 the last good object and record an error. Debug builds poll timestamps every
 500\,ms and coalesce requests; explicit reload is available in all builds.
 Shutdown cancels obsolete results and joins the worker before backend teardown.
+
+Static mesh acquisition is synchronous and main-thread affine. The
+\symbolref{MeshLoader} converts a file to CPU \texttt{MeshData};
+\symbolref{AssetManager} canonicalizes the file path plus geometry-affecting
+options, enrolls one immutable backend mesh, and returns its typed handle.
+Duplicate acquisition increments a reference count and final release destroys
+the backend resource. In-memory mesh data can be enrolled once and explicitly
+retained for multiple consumers. Managed mesh metadata supplies the immutable
+vertex/index counts and bounds needed by drawables. Mesh hot reload, materials,
+and automatic instance aggregation remain outside this milestone.
 
 Cubemaps retain their source kind and all canonical face paths (or the cross
 path). Initial acquisition remains synchronous; reload decoding uses the same
@@ -292,8 +305,9 @@ all registered workspace runners.
         (window bootstrap, not frame submission).
   \item Windows is the supported live path. Linux and macOS bootstraps are
         known stale against current App APIs and have no native validation.
-  \item Font atlases/UTF-8 layout, tilemaps/particles, general 3D meshes, and offscreen compositing
-        are follow-on features, not hidden scaffolding in the current renderer.
+  \item Font atlases/UTF-8 layout, tilemaps/particles, mesh materials and formats
+        beyond OBJ, and broader offscreen compositing are follow-on features,
+        not hidden scaffolding in the current renderer.
 \end{enumerate}
 
 

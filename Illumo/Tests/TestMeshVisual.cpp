@@ -1,3 +1,4 @@
+#include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -154,6 +155,99 @@ testMeshVisualDynamicMeshReuse()
              mock.countNonEmptyOfType(CommandType::UpdateBuffer),
              1u,
              "expanded geometry updates the retained buffer");
+}
+
+static void
+testMeshVisualSharedMeshAsset()
+{
+  testSection("MeshVisual: instances share one managed mesh upload");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  AssetManager assets(&renderer, false);
+
+  MeshData mesh;
+  MeshVertex a;
+  a.position = glm::vec3(0.0f, 0.0f, 0.0f);
+  MeshVertex b;
+  b.position = glm::vec3(1.0f, 0.0f, 0.0f);
+  MeshVertex c;
+  c.position = glm::vec3(0.0f, 1.0f, 0.0f);
+  mesh.vertices = { a, b, c };
+  mesh.indices = { 0, 1, 2 };
+  const MeshHandle handle = assets.acquireMesh(mesh);
+  const MeshAssetInfo info = assets.getMeshInfo(handle);
+  testTrue(g, info.isValid(), "mesh asset enrollment succeeds");
+
+  {
+    MeshVisual first;
+    first.prepare(&renderer);
+    first.setShadowsEnabled(false);
+    first.setLightingEnabled(false);
+    first.setMeshAsset(info, ColorRgba{ 255, 128, 64, 255 });
+
+    MeshVisual second;
+    second.prepare(&renderer);
+    second.setShadowsEnabled(false);
+    second.setLightingEnabled(false);
+    second.setModelMatrix(
+      glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)));
+    second.setMeshAsset(info, ColorRgba{ 64, 128, 255, 255 });
+
+    mock.resetCounters();
+    renderer.BeginFrame();
+    testTrue(g, first.AppendCommands(&renderer), "first instance emits tokens");
+    testTrue(
+      g, second.AppendCommands(&renderer), "second instance emits tokens");
+    renderer.EndFrame();
+
+    const RenderCommand* firstMesh =
+      findSubmittedCommand(mock, CommandType::SetMesh, 0);
+    const RenderCommand* secondMesh =
+      findSubmittedCommand(mock, CommandType::SetMesh, 1);
+    testTrue(g,
+             firstMesh != nullptr && secondMesh != nullptr &&
+               firstMesh->bindMesh.handle == handle &&
+               secondMesh->bindMesh.handle == handle,
+             "both instances bind the same managed mesh handle");
+    testEqSize(g,
+               mock.getCreateCount(),
+               0u,
+               "drawing instances performs no additional mesh enrollment");
+    testEqSize(g,
+               mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+               0u,
+               "immutable managed mesh skips per-instance buffer uploads");
+
+    const RenderCommand* firstMvp =
+      findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
+    const RenderCommand* secondMvp =
+      findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 1);
+    testTrue(g,
+             firstMvp != nullptr && secondMvp != nullptr,
+             "both instances emit their own transform");
+    if (firstMvp != nullptr && secondMvp != nullptr) {
+      glm::mat4 firstMatrix(1.0f);
+      std::memcpy(glm::value_ptr(firstMatrix),
+                  firstMvp->uniformMat4.m,
+                  16 * sizeof(float));
+      testTrue(g,
+               !matricesNear(secondMvp->uniformMat4.m, firstMatrix),
+               "shared geometry keeps per-instance transforms distinct");
+    }
+  }
+
+  testTrue(g,
+           mock.IsMeshValid(handle),
+           "destroying visuals does not destroy manager-owned mesh");
+  testTrue(g, assets.releaseMesh(handle), "asset owner releases shared mesh");
+  testTrue(
+    g, !mock.IsMeshValid(handle), "final asset release destroys shared mesh");
 }
 
 static void
@@ -811,6 +905,9 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
 {
   registry.add("Illumo.MeshVisual.DynamicMeshReuse", []() {
     return runMeshVisualCase(testMeshVisualDynamicMeshReuse);
+  });
+  registry.add("Illumo.MeshVisual.SharedMeshAsset", []() {
+    return runMeshVisualCase(testMeshVisualSharedMeshAsset);
   });
   registry.add("Illumo.MeshVisual.SpriteAndCube",
                []() { return runMeshVisualCase(testMeshVisualSpriteAndCube); });

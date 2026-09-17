@@ -74,6 +74,7 @@ private:
   std::string m_initialMeshPath;
   std::string m_meshPath;
   MeshData m_meshData;
+  MeshHandle m_meshAsset{};
 
   MeshViewerCamera m_camera;
   std::unique_ptr<MeshVisual> m_meshVisual;

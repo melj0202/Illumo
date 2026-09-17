@@ -428,9 +428,11 @@ At the start of `RenderScene`, `Renderer` captures the active window dimensions
 and primary camera MVP once for that extraction. Matching `GameVisual` instances
 consume those frame values instead of querying the window and recomputing the
 same matrix independently; direct token emitters retain their local fallback.
-`CanvasView` retains upload-rectangle scratch storage, `MeshVisual` retains
-dynamic mesh handles and uploads only dirty geometry, and `SceneGraph` retains
-its traversal stack. These caches do not retain or replay command queues.
+`CanvasView` retains upload-rectangle scratch storage. `MeshVisual` retains
+dynamic handles for procedural geometry and uploads only dirty ranges; immutable
+model geometry is reference-counted once by `AssetManager`, while each visual
+keeps a non-owning mesh handle and per-instance state. `SceneGraph` retains its
+traversal stack. These caches do not retain or replay command queues.
 
 `RenderWindow` defaults to swap interval one. The persisted `vsync` environment
 value can select synchronized or uncapped presentation and is reapplied only
@@ -456,8 +458,9 @@ enabled and visible nodes in hierarchy pre-order and supplies each attachment
 with the resolved world transform. It owns no attachment or backend resource.
 `MeshVisual` is the world mesh/sprite attachment: it composes the graph world
 matrix with local transforms and optional camera-facing billboards, then emits
-the canonical `uMVP` look. Overlay chrome stays on `GameVisual` with a screen
-ortho matrix (D-R21).
+the canonical `uMVP` look. Multiple attachments can bind the same managed mesh
+handle while retaining independent transforms and tint (D-R24). Overlay chrome
+stays on `GameVisual` with a screen ortho matrix (D-R21).
 
 V1 deliberately has no ECS components, update callbacks, serialization,
 prefabs, bounds/culling structure, physics, scripting, or retained UI. The
@@ -493,13 +496,13 @@ IBackend::SubmitCommandQueue
 | **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, Sprite, and Skybox are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world; Skybox positions at the far plane with translation-stripped view-projection. |
 | **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. Read-only pending position/zoom access lets products validate interpolated navigation targets. CA navigation and sparse camera metadata reserve a `2^32`-cell endpoint margin: finite world axes satisfy `abs(axis) <= 16 * (2^63 - 2^32)`. This protects view arithmetic without restricting sparse storage. |
 | **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Pixel-space rebuilds conservatively reject quads outside the logical viewport. An optional top-left logical-pixel clip rejects wholly excluded quads before upload and brackets partial content with a nested, intersected scissor that restores any outer clip (D-R23). Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
-| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, and motion blur are CPU-side drawable state emitted as `WorldLook` uniforms; products persist them through EnvVars. A node borrows at most one attachment; one MeshVisual can contain multiple items. Use child nodes for independent transforms and subtree state. Replaces the former `DebugDraw3D` diagnostic host (D-R21). |
+| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, managed immutable mesh handles, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, tint, and motion blur are per-instance CPU state emitted as `WorldLook` uniforms. A node borrows at most one attachment; several visuals/nodes may bind the same managed mesh without another upload. Procedural batches remain visual-owned dynamic buffers (D-R21/D-R24). |
 | **SkyboxVisual** | World cubemap host and `ISceneRenderAttachment`: unit cube geometry rendered with `RenderStyleId::Skybox` at the far depth plane (`xyww`), translation-stripped view matrix `projection * mat4(mat3(view))`, seamless cubemap sampling (`IBackend::CreateCubemap`, `AssetManager::acquireCubemapFromCross`), and optional tint color. Consumed by 3D viewers (e.g. `IllMeshViewer`). |
 | **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, `GuiMenuShell`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, shared overlay behavior, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `GuiMenuShell` holds the behavior every overlay repeats: `GuiEasing` curves and approach helpers, `GuiMenuAnimator` reveal/selection/value-pulse/ambient/caret clocks with reduced motion, `GuiPanelLayout` virtual-resolution fitting (`fit` for centered panels, `viewport` for docked bars) plus row-window arithmetic, and `GuiPointerTracker` virtual-space pointer sampling with press and release edges. `CommandLine`, `GLString`, `ExitConfirmDialog`, `EditorConfirmDialog`, the IllumoGame menus, the IllEd toolbar/sidebar/scene-graph panels, and `MeshViewerUi` compose these primitives without introducing a retained widget hierarchy. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
 | **Renderer** | Backend-neutral: owns style table; frame setup; walk layers; submit. Depends only on `IBackend*` (D-R11). |
 | **IBackend** | Allocates typed slot+generation handles; validates create/replace/destroy/query operations; queues and submits. GPU objects live in backend registries. Supports 2D textures and 6-face cubemaps (`CreateCubemap`, optional `ReplaceCubemap`) with seamless filtering and clamp-to-edge wrap. Replacement preserves texture kind and publishes a complete resource before retiring the previous one. |
-| **AssetManager** | Canonical-path texture/cubemap/shader cache with reference counts, stable per-request fallback resources (the shader fallback follows the custom 2D binding contract), synchronous or one-worker CPU loading, cubemap cross/strip extraction (`acquireCubemapFromCross`), include-dependency tracking for automatic hot reload, render-thread `pump`, explicit reload, and Debug timestamp polling. The Debug demo manages both its atlas and sprite shader through this path. |
+| **AssetManager** | Canonical-path texture/cubemap/shader/static-mesh cache with reference counts and stable typed handles. Texture/shader assets retain fallback resources, synchronous or one-worker CPU loading, cubemap extraction, dependency tracking, render-thread `pump`, explicit reload, and Debug polling. Static meshes synchronously decode through `MeshLoader`, enroll one immutable backend mesh per canonical path/options key, expose immutable draw metadata, and are destroyed on final release; mesh hot reload remains deferred (D-R17/D-R24). |
 | **ShaderPreprocessor** | Backend-neutral GLSL preprocessor: resolves `#include` directives against virtual in-memory module registry (`<illumo/...>`) and disk paths, injects compile-time `#define` macros, enforces `#pragma once` & recursion guards, preserves `#version` at line 1, emits `#line` markers, and discovers transitive include dependencies. |
 | **Composition (`Illumo::initialize`)** | Calls fallible window/backend factories, initializes the backend exactly once, transfers `unique_ptr<IBackend>` to Renderer, and calls `ensureBuiltinStyles()`. |
 | **GLBackend / GLDevice** | Real OpenGL under `Rendering/OpenGL/`: handle registries, execute tokens, PBO texture updates, bind-state tracking, blend-func-on-enable (D-R5). Each `GLShaderProgram` owns its uniform-location cache, so cache hits do not construct combined program/name strings and replacement or destruction retires cached locations with the program. |
@@ -512,9 +515,11 @@ precedence over host defaults. This explicit pass mechanism is not a render grap
 
 **Acquire/enroll (rare):** backend `Create*` returns non-convertible
 `MeshHandle`, `ShaderHandle`, or `TextureHandle` values with slot+generation;
-managed file textures/shaders normally come from `AssetManager`. Canvas cache
-growth replaces its texture through the same validated handle and destruction
-releases the GL texture, PBOs, and fences before recycling that handle.
+managed file textures, shaders, and immutable model meshes normally come from
+`AssetManager`. `MeshVisual` borrows a managed handle; the acquiring owner
+retains/releases it. Canvas cache growth replaces its texture through the same
+validated handle and destruction releases the GL texture, PBOs, and fences
+before recycling that handle.
 **Per frame:** growable `CommandQueue` reserves 2,048 tokens and grows to a
 configurable 65,536 default ceiling while tracking high-water and rejected
 counts. `RenderCommand` remains a 72-byte tagged union on the supported 64-bit
@@ -1154,6 +1159,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. |
 | **D-R21** | One world look (`uMVP`). Sprites are textured quads; 2D vs 3D is the camera projection. `MeshVisual` is the world object host; `GameVisual` remains overlay/painter composition. |
 | **D-R23** | Pixel-space `GameVisual` geometry culls wholly excluded quads against the logical viewport or an optional clip before upload. Partial clips use nested, intersected scissor tokens that restore the prior state. World-space and SceneGraph culling remain unchanged. |
+| **D-R24** | `AssetManager` reference-counts immutable static meshes and canonical file/options cache entries. `MeshVisual` borrows the managed `MeshHandle` and draw metadata, retaining only per-instance transform/tint/lighting state; procedural geometry remains visual-owned and dynamic. Automatic instancing remains a measured follow-up. |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
 | **D-C2** | `CellGrid` domain + `Canvas` presentation; rulesets depend only on `CellGrid`. |
@@ -1162,7 +1168,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-C5** | At far zoom, `CanvasView` uses a revision-gated density overview capped at roughly four screen pixels per texel; this visual budget does not cap sparse simulation chunks. |
 | **D-C6** | Keep `0 x 0` as the infinite sparse world; positive chunk dimensions select a finite torus. Configure it through the Release F1 overlay, reset on topology change, and persist it in sparse saves (introduced in v3; current v4 via D-GC4). |
 
-`MeshVisual` is the world mesh host and scene-graph attachment (D-R21). It
+`MeshVisual` is the world mesh host and scene-graph attachment (D-R21/D-R24). It
 tessellates colored lines/triangles and textured quads, clones Shape/Sprite
 styles with depth-tested pipelines, and emits `uMVP = cameraVP * nodeWorld *
 local` (billboard replaces local rotation with camera axes). Lit triangle
@@ -1175,8 +1181,12 @@ object and camera motion smear the silhouette. Shadow map size, ortho radius,
 light distance, bias, slope scale, normal offset, PCF, and motion-blur amount
 are the same CPU-side state. MeshVisual does not read EnvVars; IllMeshViewer
 persists those values and calls the setters. It does not own a camera, model
-loader, or material system. Overlay chrome stays on `GameVisual` with a
-screen ortho `uMVP` so HUD does not pan with the world camera.
+loader, or material system. For imported/static geometry it stores a non-owning
+managed `MeshHandle`, immutable index count, and per-instance tint; the
+acquiring owner controls the `AssetManager` reference. This lets multiple nodes
+reuse one upload without introducing automatic instance aggregation. Overlay
+chrome stays on `GameVisual` with a screen ortho `uMVP` so HUD does not pan with
+the world camera.
 
 IllumoGame's persisted `render3dTest=1` flag replaces `CanvasView` with a
 `SceneGraph` of `MeshVisual` attachments and switches the product `Camera` to
@@ -1341,7 +1351,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 | IllumoContext growth | Frozen; third module = explicit deps |
 | Additional rule families | Add only when current Moore/elementary data forms cannot express a needed rule |
 | GPU/SYCL acceleration | Optional after bounded CPU parallel benchmark / product need; CPU sparse stepping is the production baseline |
-| File asset formats | AssetManager manages textures/shaders. MeshLoader imports OBJ on the CPU behind a replaceable loader; MeshVisual consumes mesh data and procedural geometry. Game-object persistence remains separate future work. |
+| File asset formats | `MeshLoader` imports OBJ to CPU `MeshData` behind a replaceable loader. `AssetManager` synchronously caches/enrolls immutable mesh resources by canonical path plus geometry options, while `MeshVisual` borrows handles; material binding, mesh hot reload, and game-object persistence remain future work. |
 
 ---
 
@@ -1414,7 +1424,7 @@ Most design questions from the LaTeX open list are **resolved** (see §6). Still
 
 | Topic | Working answer |
 |-------|----------------|
-| Resource ownership long-term | Typed generational handles validate explicit replace/destroy operations; `AssetManager` adds reference-counted file assets, and the resizeable canvas explicitly replaces/releases its texture and PBO ring. |
+| Resource ownership long-term | Typed generational handles validate explicit replace/destroy operations; `AssetManager` reference-counts textures, shaders, cubemaps, and immutable model meshes, while the resizeable canvas explicitly replaces/releases its texture and PBO ring. |
 | Linux/macOS parity | The selected bootstraps use the shared application entry contract, but native configure/build/test/smoke evidence is absent; keep them unsupported until that validation succeeds. |
 | Tracy CI policy | Debug-oriented; no strict CI policy yet. |
 | When to introduce SYCL / GPU simulation | Only after a current benchmark and explicit product or learning goal justify a second compute path. Sparse chunks and bounded CPU workers are already live. |
