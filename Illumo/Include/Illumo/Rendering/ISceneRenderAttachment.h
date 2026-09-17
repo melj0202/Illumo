@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Foundation/AxisAlignedBounds3.h>
 #include <Illumo/Foundation/MathTypes.h>
 
 class Renderer;
@@ -12,6 +13,14 @@ class ISceneRenderAttachment
 {
 public:
   virtual ~ISceneRenderAttachment() = default;
+
+  // Returns conservative bounds in node-local space. Attachments without a
+  // reliable finite bound remain unbounded and are never culled.
+  virtual bool getSceneLocalBounds(AxisAlignedBounds3* bounds) const
+  {
+    (void)bounds;
+    return false;
+  }
 
   virtual void appendSceneCommands(Renderer* renderer,
                                    const Matrix4& worldTransform) = 0;

@@ -300,7 +300,7 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **Module lifecycle** | `Start` / `Update` / `DispatchDrawables` / `Exit` is clear. |
 | **Render split** | Enroll once; emit tokens per frame; backend executes (D-R1–D-R8, D-R10). |
 | **Rulesets** | Strategy hierarchy; pure `nextState` + `evalCell`; double-buffered generation (D-P3). |
-| **Scene model** | Persistent handle-based `SceneGraph` for world organization (D-E8), extracted as one drawable into the unchanged per-frame rendering list (D-E4). |
+| **Scene model** | Persistent handle-based `SceneGraph` for world organization (D-E8), with attachment-authoritative bounds and linear camera/shadow culling (D-E11), extracted as one drawable into the unchanged per-frame rendering list (D-E4). |
 | **Tests** | Independent `IllumoTests`, `IllumoGameTests`, `IllEdTests`, and `IllMeshViewerTests` runners, plus consumer-header smoke, exact process-isolated cases, `IllumoWorkspace` aggregation, combined Clang/LLVM coverage (D-T1), and compile-time `clang-tidy` (D-T3). Coverage dependencies and binary inputs derive from the registered runners, including generated applications and optional editor runners. |
 | **Debt hygiene** | Dead experiments under `archive/` rather than half-live. |
 
@@ -421,7 +421,7 @@ flags plus game-provided canvas/help descriptors before host initialization.
 call `std::exit`.
 
 Typical combined draw order: an optional Renderer-owned directional-shadow
-depth pass over visible World casters, then configured World color passes,
+depth pass over camera-relevant World casters, then configured World color passes,
 followed by UI splash + console + editor cursor + selection outline + optional
 inspector HUD, then Debug FPS (Debug builds via DebugModule).
 
@@ -442,7 +442,7 @@ overlay labels synchronized swap-completion cadence as `Paced FPS` and reports
 main-loop submissions separately; uncapped mode reports paced FPS as off rather
 than presenting CPU submissions as monitor output (D-P32).
 
-#### 5.4.1 Persistent scene hierarchy (D-E8)
+#### 5.4.1 Persistent scene hierarchy (D-E8/D-E11)
 
 `SceneGraph` is an additive, main-thread-affine persistent world hierarchy.
 It exposes graph-ID-plus-slot-plus-generation `SceneNodeHandle` values and owns
@@ -451,7 +451,7 @@ world transforms, local enabled/visible state, and at most one borrowed
 `ISceneRenderAttachment`. Reparenting rejects cycles; destruction invalidates
 the complete subtree; dirty propagation and traversal are iterative. Its
 render-traversal stack is retained and grows only with graph size; no cached
-structural render list or culling structure is part of v1.
+structural render list, subtree bounds, or spatial index is part of v1.
 
 The graph derives from `DrawableBase` and is normally contributed as one World
 drawable to the per-frame `Rendering::Scene`. During token extraction it walks
@@ -463,8 +463,17 @@ the canonical `uMVP` look. Multiple attachments can bind the same managed mesh
 handle while retaining independent transforms and tint (D-R24). Overlay chrome
 stays on `GameVisual` with a screen ortho matrix (D-R21).
 
+An attachment may optionally return finite ordered local `AxisAlignedBounds3`.
+`SceneGraph::getWorldBounds` transforms that box on demand, and color traversal
+rejects only boxes wholly outside a valid active camera frustum. Unknown bounds,
+malformed matrices, and invalid frusta fail open. The traversal remains O(n),
+preserves survivor order, and continues into children when a parent attachment
+is culled. `MeshVisual` derives conservative bounds immediately from procedural
+lines and triangles, managed mesh assets, and sprites; billboard sprites use a
+view-independent enclosure.
+
 V1 deliberately has no ECS components, update callbacks, serialization,
-prefabs, bounds/culling structure, physics, scripting, or retained UI. The
+prefabs, spatial index, physics, scripting, or retained UI. The
 IllumoGame sparse domain and product UI remain separate from the graph; its
 opt-in `render3dTest` diagnostic attaches world meshes. IllEd uses the graph
 for document geometry. The
@@ -497,7 +506,7 @@ IBackend::SubmitCommandQueue
 | **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, Sprite, and Skybox are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world; Skybox positions at the far plane with translation-stripped view-projection. |
 | **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. Read-only pending position/zoom access lets products validate interpolated navigation targets. CA navigation and sparse camera metadata reserve a `2^32`-cell endpoint margin: finite world axes satisfy `abs(axis) <= 16 * (2^63 - 2^32)`. This protects view arithmetic without restricting sparse storage. |
 | **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Pixel-space rebuilds conservatively reject quads outside the logical viewport. An optional top-left logical-pixel clip rejects wholly excluded quads before upload and brackets partial content with a nested, intersected scissor that restores any outer clip (D-R23). Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
-| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, managed immutable mesh handles, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, tint, and motion blur are per-instance CPU state emitted as `WorldLook` uniforms. A node borrows at most one attachment; several visuals/nodes may bind the same managed mesh without another upload. Procedural batches remain visual-owned dynamic buffers (D-R21/D-R24). |
+| **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, managed immutable mesh handles, conservative attachment bounds, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, tint, caster distance, and motion blur are per-instance CPU state emitted as `WorldLook` uniforms. A node borrows at most one attachment; several visuals/nodes may bind the same managed mesh without another upload. Procedural batches remain visual-owned dynamic buffers (D-R21/D-R24/D-E11). |
 | **SkyboxVisual** | World cubemap host and `ISceneRenderAttachment`: unit cube geometry rendered with `RenderStyleId::Skybox` at the far depth plane (`xyww`), translation-stripped view matrix `projection * mat4(mat3(view))`, seamless cubemap sampling (`IBackend::CreateCubemap`, `AssetManager::acquireCubemapFromCross`), and optional tint color. Consumed by 3D viewers (e.g. `IllMeshViewer`). |
 | **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, `GuiMenuShell`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, shared overlay behavior, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `GuiMenuShell` holds the behavior every overlay repeats: `GuiEasing` curves and approach helpers, `GuiMenuAnimator` reveal/selection/value-pulse/ambient/caret clocks with reduced motion, `GuiPanelLayout` virtual-resolution fitting (`fit` for centered panels, `viewport` for docked bars) plus row-window arithmetic, and `GuiPointerTracker` virtual-space pointer sampling with press and release edges. `CommandLine`, `GLString`, `ExitConfirmDialog`, `EditorConfirmDialog`, the IllumoGame menus, the IllEd toolbar/sidebar/scene-graph panels, and `MeshViewerUi` compose these primitives without introducing a retained widget hierarchy. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
@@ -1162,7 +1171,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R19** | Superseded by D-E6: the sibling IllumoGame consumer establishes the explicit library boundary. Future downstream repositories still require install/package validation. |
 | **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. |
 | **D-R21** | One world look (`uMVP`). Sprites are textured quads; 2D vs 3D is the camera projection. `MeshVisual` is the world object host; `GameVisual` remains overlay/painter composition. |
-| **D-R23** | Pixel-space `GameVisual` geometry culls wholly excluded quads against the logical viewport or an optional clip before upload. Partial clips use nested, intersected scissor tokens that restore the prior state. World-space and SceneGraph culling remain unchanged. |
+| **D-R23** | Pixel-space `GameVisual` geometry culls wholly excluded quads against the logical viewport or an optional clip before upload. Partial clips use nested, intersected scissor tokens that restore the prior state. D-E11 separately governs world-space `MeshVisual` and SceneGraph bounds. |
 | **D-R24** | `AssetManager` reference-counts immutable static meshes and canonical file/options cache entries. `MeshVisual` borrows the managed `MeshHandle` and draw metadata, retaining only per-instance transform/tint/lighting state; procedural geometry remains visual-owned and dynamic. Automatic instancing remains a measured follow-up. |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
@@ -1179,12 +1188,16 @@ local` (billboard replaces local rotation with camera axes). Lit triangle
 meshes also emit `uLightDir`, `uLightColor`, `uAmbientColor`,
 `uLightSpaceMatrix`, `uShadowMap`, and shadow filter uniforms from drawable
 lighting state. Before color rendering, direct MeshVisual drawables and visible
-SceneGraph attachments contribute transformed triangle bounds to Renderer;
-Renderer fits one directional light-space matrix to the combined bounds,
-clears one shared depth map, and traverses every caster. All receivers sample
-that same map, so separate objects cast onto one another. The first visible
-caster deterministically selects light direction; maximum requested map size,
-minimum radius, and light distance cover the participating set. Per-receiver
+SceneGraph attachments contribute retained caster descriptors to Renderer.
+The first camera-visible caster deterministically selects light direction. The
+camera frustum is reconstructed from inverse MVP and conservatively extruded
+toward that light by `shadowCasterDistance` (100 world units by default).
+Only intersecting caster bounds participate in the shared light fit and depth
+pass; a second fitted-light-frustum test rejects provably irrelevant depth
+emission. Invalid camera reconstruction falls back to all casters. All
+receivers sample the same map, so separate objects cast onto one another.
+Maximum requested map size, minimum radius, and light distance cover the
+participating set. Per-receiver
 bias, slope scale, normal offset, and PCF remain drawable state. Lit meshes
 retain the previous `uMVP` and emit `uPrevMVP`,
 `uMotionBlurEnabled`, `uMotionBlurAmount`, and `uMotionBlurMax`; the lit
@@ -1257,6 +1270,7 @@ disabled.
 | **D-E8** | Illumo owns an additive persistent `SceneGraph` with generational graph-local handles, deterministic hierarchy/transform state, and borrowed token render attachments. |
 | **D-E9** | Debug `DebugModule` is a global overlay: optional modules update before the required product module and dispatch after it. Product input yields while the console is open. |
 | **D-E10** | `.ilsc` v1 is the editor-owned UTF-8 JSON scene interchange; SceneGraph does not serialize itself. |
+| **D-E11** | Attachments may report conservative local AABBs; SceneGraph exposes world bounds and linearly camera-culls color extraction. Renderer retains and filters directional-shadow casters against a camera-frustum extrusion, failing open on invalid data. No spatial index or subtree cache is introduced. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |
@@ -1391,7 +1405,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 
 10. Font atlases, UTF-8 text layout, and nine-slice UI. General pixel
     viewport/rect clipping is complete in D-R23; text shaping remains future work.
-11. Chunked tilemaps, world-space sprite culling, and particle emitters.
+11. Chunked tilemaps, high-volume particle culling, and particle emitters.
 12. Multiple cameras, offscreen targets, compositing, and post-processing.
 13. Keep the established Illumo public boundary narrow; add install/export or
     shared-library ABI work only for a real distribution requirement.
@@ -1402,7 +1416,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 ### Explicitly deferred (engine PDF + consensus)
 
 - SceneGraph ECS components, serialization, update callbacks, retained UI,
-  culling/spatial acceleration, and cached structural queries
+  spatial indices, subtree-bound caches, and cached structural queries
 - Render graphs, multi-backend, global transparent texture sorting
 - Multithreaded command generation  
 

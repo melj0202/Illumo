@@ -1,5 +1,6 @@
 #include <Illumo/Scene/SceneGraph.h>
 
+#include <Illumo/Rendering/Renderer.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -251,7 +252,24 @@ struct SceneGraph::Impl
       }
 
       if (slot.renderAttachment != nullptr) {
-        if (pass == SceneAttachmentPass::CollectShadow) {
+        bool attachmentVisible = true;
+        AxisAlignedBounds3 localBounds;
+        AxisAlignedBounds3 worldBounds;
+        if (renderer != nullptr &&
+            slot.renderAttachment->getSceneLocalBounds(&localBounds) &&
+            localBounds.isValid() &&
+            localBounds.transformed(slot.worldTransform, &worldBounds)) {
+          if (pass == SceneAttachmentPass::Color) {
+            attachmentVisible = renderer->isWorldBoundsVisible(worldBounds);
+          } else if (pass == SceneAttachmentPass::ShadowDepth) {
+            attachmentVisible = renderer->isShadowCasterRelevant(worldBounds);
+          }
+        }
+
+        if (!attachmentVisible) {
+          // Attachment visibility never suppresses independently transformed
+          // children; they remain on the traversal stack below.
+        } else if (pass == SceneAttachmentPass::CollectShadow) {
           slot.renderAttachment->collectSceneShadowCasters(renderer,
                                                            slot.worldTransform);
         } else if (pass == SceneAttachmentPass::ShadowDepth) {
@@ -529,6 +547,27 @@ SceneGraph::getWorldTransform(SceneNodeHandle node, Matrix4* transform)
   m_impl->updateWorldTransforms();
   *transform = m_impl->slots[node.slot].worldTransform;
   return true;
+}
+
+bool
+SceneGraph::getWorldBounds(SceneNodeHandle node, AxisAlignedBounds3* bounds)
+{
+  if (!m_impl->isCurrent(node) || bounds == nullptr) {
+    return false;
+  }
+
+  Impl::NodeSlot& slot = m_impl->slots[node.slot];
+  if (slot.renderAttachment == nullptr) {
+    return false;
+  }
+
+  m_impl->updateWorldTransforms();
+  AxisAlignedBounds3 localBounds;
+  if (!slot.renderAttachment->getSceneLocalBounds(&localBounds) ||
+      !localBounds.isValid()) {
+    return false;
+  }
+  return localBounds.transformed(slot.worldTransform, bounds);
 }
 
 void

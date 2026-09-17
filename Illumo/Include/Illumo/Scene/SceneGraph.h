@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Foundation/AxisAlignedBounds3.h>
 #include <Illumo/Foundation/MathTypes.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/ISceneRenderAttachment.h>
@@ -42,6 +43,7 @@ public:
   bool setLocalTransform(SceneNodeHandle node, const Transform3D& transform);
   bool getLocalTransform(SceneNodeHandle node, Matrix4* transform) const;
   bool getWorldTransform(SceneNodeHandle node, Matrix4* transform);
+  bool getWorldBounds(SceneNodeHandle node, AxisAlignedBounds3* bounds);
   void updateWorldTransforms();
 
   bool setEnabled(SceneNodeHandle node, bool enabled);

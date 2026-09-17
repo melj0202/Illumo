@@ -23,6 +23,11 @@ retained widget toolkit or a second renderer.
 - A `MeshVisual` may borrow one immutable mesh-asset handle managed by
   `AssetManager`; it must not destroy that handle. Keep procedural dynamic
   batches visual-owned and preserve their reuse behavior.
+- `MeshVisual` bounds cover every current geometry source immediately after
+  mutation, before GPU preparation. Bounds must remain conservative under the
+  local model matrix; billboard sprites use a view-independent enclosure and
+  unreliable data fails open. Preserve frame-serial motion history so a
+  culled visual re-enters with its current MVP as its previous MVP.
 - Batch compatible geometry into bounded reusable storage and emit one upload
   and draw per batch where the existing contract allows it. Preserve order and
   clipping; do not trade correctness for fewer commands.

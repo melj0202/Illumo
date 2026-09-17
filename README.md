@@ -553,6 +553,9 @@ CPU submissions so an uncapped submission rate is not presented as display FPS.
 Set `"render3dTest": "1"` in `envvars.json` to replace the cellular canvas
 with an opt-in 3D diagnostic scene: a `SceneGraph` of `MeshVisual` attachments
 (axes/grid plus orbiting cubes) drawn through the product camera in perspective.
+Bounded attachments are conservatively camera-culled during the graph's linear
+traversal, and directional shadows retain offscreen casters only within each
+visual's configured caster horizon (100 world units by default).
 It is a rendering smoke path, not a model or lighting feature; set it back to
 `0` to restore the normal orthographic canvas.
 

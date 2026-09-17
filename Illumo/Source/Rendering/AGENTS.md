@@ -28,10 +28,17 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
   claim a dropped frame was complete.
 - `Scene` is a non-owning ordered drawable list rebuilt each frame. It does not
   own drawables and must not become a retained scene graph or ECS.
-- Directional shadows are one Renderer-owned pass over visible World casters
-  before color rendering. Drawables and SceneGraph attachments only contribute
-  bounds and depth tokens; they must not allocate private per-object shadow
-  maps or clear depth once per object.
+- Directional shadows are one Renderer-owned pass before color rendering. The
+  first camera-visible World caster selects the light; the Renderer retains
+  caster descriptors, extrudes the camera frustum toward that light by the
+  configured caster distance, fits the shared map to intersecting bounds, and
+  rejects depth emission outside the relevant volume or fitted light frustum.
+  Invalid camera reconstruction fails open to all casters. Drawables and
+  SceneGraph attachments must not allocate private per-object shadow maps or
+  clear depth once per object.
+- Camera and shadow bounds tests are Renderer-owned and conservative. Invalid
+  frusta, matrices, or bounds disable the corresponding rejection rather than
+  risking missing geometry.
 - The separate `SceneGraph` may enter `Scene` as one drawable. Its borrowed
   `ISceneRenderAttachment` values receive resolved world transforms and emit
   tokens only; do not make Rendering own graph nodes or graph lifetime.

@@ -37,7 +37,7 @@ No second real GPU API.
         \symbolref{GLDevice::ExecuteCommandQueue} resolves handles and issues GL.
 \end{enumerate}
 
-\subsection{Persistent scene extraction (D-E8)}
+\subsection{Persistent scene extraction (D-E8/D-E11)}
 The per-frame \symbolref{Scene} remains a non-owning layered drawable list.
 The separate \symbolref{SceneGraph} owns persistent hierarchy nodes and may be
 added to that list as one World drawable. Consumers hold graph-local
@@ -46,12 +46,16 @@ Dirty local transforms are resolved into cached parent-composed world matrices
 with iterative traversal. Enabled and visible subtree state suppresses render
 extraction without destroying persistent nodes. The render traversal uses
 retained private scratch that grows with node count; v1 does not cache a
-flattened render list.
+flattened render list, subtree bounds, or a spatial index.
 
 Each node may borrow one \symbolref{ISceneRenderAttachment}. During
 deterministic hierarchy pre-order, the graph supplies the resolved world
 matrix and the attachment appends ordinary backend-neutral tokens through
 \symbolref{Renderer}. The graph owns neither the attachment nor GPU resources.
+An attachment may report finite local \symbolref{AxisAlignedBounds3}; the graph
+transforms them on demand and rejects only attachments wholly outside a valid
+camera frustum. Unknown bounds and malformed transforms fail open, survivor
+order is stable, and culling a parent attachment never prunes its children.
 This keeps persistent world organization separate from per-frame extraction
 and backend execution. IllEd uses the graph for document geometry. IllumoGame's
 opt-in \texttt{render3dTest} diagnostic attaches world meshes; its CA storage
@@ -114,7 +118,8 @@ preserving defaults. Optional modules reinstall their overrides after a transiti
         quads (sprites), optional camera-facing billboards, optional
         directional lighting with participation in a scene-level depth-only
         shadow pass, and optional object motion blur from the previous clip
-        pose. It clones
+        pose. Bounds cover every geometry source immediately after mutation;
+        camera-facing sprites use a view-independent enclosing volume. It clones
         Shape/Sprite styles with depth-tested pipelines and emits
         \texttt{uMVP}. Lit meshes also emit \texttt{WorldLook} light, shadow,
         and motion-blur uniforms from CPU-side drawable state; products
@@ -128,6 +133,11 @@ preserving defaults. Optional modules reinstall their overrides after a transiti
         meshes instead borrow one reference-counted \texttt{MeshHandle} from
         \symbolref{AssetManager}; multiple visuals reuse the upload while
         retaining independent transform, tint, lighting, and motion state.
+        The Renderer retains caster descriptors, chooses light settings from
+        the first camera-visible caster, and filters them against a conservative
+        camera-frustum extrusion toward the light. Invalid reconstruction falls
+        back to all casters. A monotonically increasing frame serial resets
+        previous-MVP history when a culled visual re-enters.
 \end{itemize}
 
 \subsection{Managed assets (D-R17/D-R24)}

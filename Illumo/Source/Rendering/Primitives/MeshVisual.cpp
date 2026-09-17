@@ -11,6 +11,28 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <limits>
 
+static bool
+includeBoundsPoint(const glm::vec3& point,
+                   glm::vec3* minimum,
+                   glm::vec3* maximum,
+                   bool* valid)
+{
+  if (minimum == nullptr || maximum == nullptr || valid == nullptr ||
+      !std::isfinite(point.x) || !std::isfinite(point.y) ||
+      !std::isfinite(point.z)) {
+    return false;
+  }
+  if (!*valid) {
+    *minimum = point;
+    *maximum = point;
+    *valid = true;
+  } else {
+    *minimum = glm::min(*minimum, point);
+    *maximum = glm::max(*maximum, point);
+  }
+  return true;
+}
+
 MeshVisual::MeshVisual() = default;
 
 MeshVisual::~MeshVisual()
@@ -95,6 +117,13 @@ MeshVisual::setLightDistance(float distance)
 }
 
 void
+MeshVisual::setShadowCasterDistance(float distance)
+{
+  shadowCasterDistance =
+    std::isfinite(distance) ? std::max(distance, 0.0f) : 0.0f;
+}
+
+void
 MeshVisual::setShadowBias(float bias)
 {
   shadowBias = std::max(bias, 0.0f);
@@ -132,6 +161,16 @@ MeshVisual::clearPrimitives()
   triangleVertices.clear();
   triangleIndices.clear();
   sprites.clear();
+  lineBoundsMin = glm::vec3(0.0f);
+  lineBoundsMax = glm::vec3(0.0f);
+  lineBoundsValid = false;
+  triangleBoundsMin = glm::vec3(0.0f);
+  triangleBoundsMax = glm::vec3(0.0f);
+  triangleBoundsValid = false;
+  spriteBoundsMin = glm::vec3(0.0f);
+  spriteBoundsMax = glm::vec3(0.0f);
+  spriteBoundsValid = false;
+  geometryBoundsReliable = true;
   geometryDirty = true;
 }
 
@@ -170,6 +209,14 @@ MeshVisual::addQuad(const glm::vec3& center,
   triangleIndices.push_back(vertexOffset + 0);
   triangleIndices.push_back(vertexOffset + 2);
   triangleIndices.push_back(vertexOffset + 3);
+  for (const glm::vec3& corner : corners) {
+    if (!includeBoundsPoint(corner,
+                            &triangleBoundsMin,
+                            &triangleBoundsMax,
+                            &triangleBoundsValid)) {
+      geometryBoundsReliable = false;
+    }
+  }
   geometryDirty = true;
   return triangleIndices.size() / 6;
 }
@@ -191,6 +238,20 @@ MeshVisual::addSprite(TextureHandle textureHandle,
   item.facing = facing;
   item.region = region;
   sprites.push_back(item);
+  const float radius =
+    0.5f * std::sqrt(item.local.scale.x * item.local.scale.x +
+                     item.local.scale.y * item.local.scale.y);
+  const glm::vec3 extent(radius);
+  if (!includeBoundsPoint(center - extent,
+                          &spriteBoundsMin,
+                          &spriteBoundsMax,
+                          &spriteBoundsValid) ||
+      !includeBoundsPoint(center + extent,
+                          &spriteBoundsMin,
+                          &spriteBoundsMax,
+                          &spriteBoundsValid)) {
+    geometryBoundsReliable = false;
+  }
   geometryDirty = true;
   return sprites.size() - 1;
 }
@@ -326,6 +387,16 @@ MeshVisual::addSolidCube(const glm::vec3& center,
     triangleIndices.push_back(offset + 2);
     triangleIndices.push_back(offset + 3);
   }
+  if (!includeBoundsPoint(center - extent,
+                          &triangleBoundsMin,
+                          &triangleBoundsMax,
+                          &triangleBoundsValid) ||
+      !includeBoundsPoint(center + extent,
+                          &triangleBoundsMin,
+                          &triangleBoundsMax,
+                          &triangleBoundsValid)) {
+    geometryBoundsReliable = false;
+  }
   geometryDirty = true;
 }
 
@@ -380,6 +451,14 @@ MeshVisual::addSolidTriangle(const glm::vec3& a,
   triangleIndices.push_back(vertexOffset + 0);
   triangleIndices.push_back(vertexOffset + 1);
   triangleIndices.push_back(vertexOffset + 2);
+  for (const glm::vec3& point : { a, b, c }) {
+    if (!includeBoundsPoint(point,
+                            &triangleBoundsMin,
+                            &triangleBoundsMax,
+                            &triangleBoundsValid)) {
+      geometryBoundsReliable = false;
+    }
+  }
   geometryDirty = true;
 }
 
@@ -484,6 +563,18 @@ MeshVisual::addSolidEllipse(const glm::vec3& center,
     triangleIndices.push_back(current);
     triangleIndices.push_back(next);
   }
+  const glm::vec3 extent(
+    std::max(radius.x, 0.0f), std::max(radius.y, 0.0f), 0.0f);
+  if (!includeBoundsPoint(center - extent,
+                          &triangleBoundsMin,
+                          &triangleBoundsMax,
+                          &triangleBoundsValid) ||
+      !includeBoundsPoint(center + extent,
+                          &triangleBoundsMin,
+                          &triangleBoundsMax,
+                          &triangleBoundsValid)) {
+    geometryBoundsReliable = false;
+  }
   geometryDirty = true;
 }
 
@@ -526,6 +617,12 @@ MeshVisual::addMesh(const MeshData& mesh, ColorRgba tint)
                                  a,
                                  vertex.texCoords.x,
                                  vertex.texCoords.y });
+    if (!includeBoundsPoint(vertex.position,
+                            &triangleBoundsMin,
+                            &triangleBoundsMax,
+                            &triangleBoundsValid)) {
+      geometryBoundsReliable = false;
+    }
   }
 
   for (size_t i = 0; i < mesh.indices.size(); ++i) {
@@ -595,6 +692,52 @@ MeshVisual::appendSceneCommands(Renderer* value, const Matrix4& worldTransform)
   }
 }
 
+bool
+MeshVisual::getSceneLocalBounds(AxisAlignedBounds3* bounds) const
+{
+  if (bounds == nullptr || !geometryBoundsReliable) {
+    return false;
+  }
+
+  bool boundsValid = false;
+  AxisAlignedBounds3 combined;
+  const bool hasLines = !lineVertices.empty();
+  const bool hasTriangles =
+    !triangleVertices.empty() && !triangleIndices.empty();
+  const bool hasSprites = !sprites.empty();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
+  if ((hasLines && !lineBoundsValid) ||
+      (hasTriangles && !triangleBoundsValid) ||
+      (hasSprites && !spriteBoundsValid) ||
+      (hasMeshAsset && !meshAssetBoundsValid)) {
+    return false;
+  }
+
+  const AxisAlignedBounds3 candidates[] = {
+    AxisAlignedBounds3{ lineBoundsMin, lineBoundsMax },
+    AxisAlignedBounds3{ triangleBoundsMin, triangleBoundsMax },
+    AxisAlignedBounds3{ spriteBoundsMin, spriteBoundsMax },
+    AxisAlignedBounds3{ meshAssetBoundsMin, meshAssetBoundsMax },
+  };
+  const bool present[] = { hasLines, hasTriangles, hasSprites, hasMeshAsset };
+  for (size_t index = 0; index < 4; ++index) {
+    if (!present[index]) {
+      continue;
+    }
+    if (!boundsValid) {
+      combined = candidates[index];
+      boundsValid = true;
+    } else {
+      combined.include(candidates[index]);
+    }
+  }
+  if (!boundsValid) {
+    return false;
+  }
+  return combined.transformed(modelMatrix, bounds);
+}
+
 void
 MeshVisual::collectSceneShadowCasters(Renderer* value,
                                       const Matrix4& worldTransform)
@@ -622,7 +765,49 @@ MeshVisual::addLine(const glm::vec3& start,
     { end.x, end.y, end.z, color.r, color.g, color.b, color.a });
   lineIndices.push_back(firstVertex);
   lineIndices.push_back(firstVertex + 1);
+  if (!includeBoundsPoint(
+        start, &lineBoundsMin, &lineBoundsMax, &lineBoundsValid) ||
+      !includeBoundsPoint(
+        end, &lineBoundsMin, &lineBoundsMax, &lineBoundsValid)) {
+    geometryBoundsReliable = false;
+  }
   geometryDirty = true;
+}
+
+bool
+MeshVisual::getLocalShadowBounds(AxisAlignedBounds3* bounds) const
+{
+  if (bounds == nullptr || !geometryBoundsReliable) {
+    return false;
+  }
+  const bool hasTriangles =
+    !triangleVertices.empty() && !triangleIndices.empty();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
+  if ((hasTriangles && !triangleBoundsValid) ||
+      (hasMeshAsset && !meshAssetBoundsValid) ||
+      (!hasTriangles && !hasMeshAsset)) {
+    return false;
+  }
+  if (hasTriangles) {
+    *bounds = AxisAlignedBounds3{ triangleBoundsMin, triangleBoundsMax };
+  } else {
+    *bounds = AxisAlignedBounds3{ meshAssetBoundsMin, meshAssetBoundsMax };
+  }
+  if (hasTriangles && hasMeshAsset) {
+    bounds->include(
+      AxisAlignedBounds3{ meshAssetBoundsMin, meshAssetBoundsMax });
+  }
+  return bounds->isValid();
+}
+
+bool
+MeshVisual::getWorldShadowBounds(const glm::mat4& nodeWorld,
+                                 AxisAlignedBounds3* bounds) const
+{
+  AxisAlignedBounds3 localBounds;
+  return getLocalShadowBounds(&localBounds) &&
+         localBounds.transformed(nodeWorld * modelMatrix, bounds);
 }
 
 void
@@ -804,47 +989,25 @@ MeshVisual::collectShadowCasterWithWorld(Renderer* value,
     return;
   }
 
-  const bool hasTriangles = triangleBoundsValid &&
-                            triangleMeshHandle.isValid() &&
-                            !triangleIndices.empty();
-  const bool hasMeshAsset = meshAssetBoundsValid && meshAssetHandle.isValid() &&
-                            meshAssetIndexCount > 0;
-  if (!hasTriangles && !hasMeshAsset) {
+  AxisAlignedBounds3 worldBounds;
+  if (!getWorldShadowBounds(nodeWorld, &worldBounds)) {
     return;
   }
 
-  const glm::mat4 world = nodeWorld * modelMatrix;
-  glm::vec3 localMin = hasTriangles ? triangleBoundsMin : meshAssetBoundsMin;
-  glm::vec3 localMax = hasTriangles ? triangleBoundsMax : meshAssetBoundsMax;
-  if (hasMeshAsset && hasTriangles) {
-    localMin = glm::min(localMin, meshAssetBoundsMin);
-    localMax = glm::max(localMax, meshAssetBoundsMax);
-  }
-  glm::vec3 worldMin(std::numeric_limits<float>::max());
-  glm::vec3 worldMax(std::numeric_limits<float>::lowest());
-  for (int x = 0; x < 2; ++x) {
-    for (int y = 0; y < 2; ++y) {
-      for (int z = 0; z < 2; ++z) {
-        const glm::vec3 corner(x == 0 ? localMin.x : localMax.x,
-                               y == 0 ? localMin.y : localMax.y,
-                               z == 0 ? localMin.z : localMax.z);
-        const glm::vec3 worldCorner =
-          glm::vec3(world * glm::vec4(corner, 1.0f));
-        worldMin = glm::min(worldMin, worldCorner);
-        worldMax = glm::max(worldMax, worldCorner);
-      }
-    }
-  }
-
   Renderer::ShadowCasterDesc caster;
-  caster.boundsMin = { worldMin.x, worldMin.y, worldMin.z };
-  caster.boundsMax = { worldMax.x, worldMax.y, worldMax.z };
+  caster.boundsMin = { worldBounds.minimum.x,
+                       worldBounds.minimum.y,
+                       worldBounds.minimum.z };
+  caster.boundsMax = { worldBounds.maximum.x,
+                       worldBounds.maximum.y,
+                       worldBounds.maximum.z };
   caster.lightDirection = { lightDirection.x,
                             lightDirection.y,
                             lightDirection.z };
   caster.mapSize = shadowMapSize;
   caster.minimumRadius = shadowRadius;
   caster.lightDistance = lightDistance;
+  caster.casterDistance = shadowCasterDistance;
   value->registerShadowCaster(caster);
 }
 
@@ -852,8 +1015,16 @@ void
 MeshVisual::appendShadowCommandsWithWorld(Renderer* value,
                                           const glm::mat4& nodeWorld)
 {
-  if (!isVisible() || !lightingEnabled || !shadowsEnabled ||
-      !prepareForCommands(value)) {
+  if (!isVisible() || !lightingEnabled || !shadowsEnabled || value == nullptr) {
+    return;
+  }
+
+  AxisAlignedBounds3 worldBounds;
+  if (getWorldShadowBounds(nodeWorld, &worldBounds) &&
+      !value->isShadowCasterRelevant(worldBounds)) {
+    return;
+  }
+  if (!prepareForCommands(value)) {
     return;
   }
 
@@ -892,6 +1063,13 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   if (!isVisible()) {
     return true;
   }
+  AxisAlignedBounds3 localBounds;
+  AxisAlignedBounds3 worldBounds;
+  if (value != nullptr && getSceneLocalBounds(&localBounds) &&
+      localBounds.transformed(nodeWorld, &worldBounds) &&
+      !value->isWorldBoundsVisible(worldBounds)) {
+    return true;
+  }
   if (!prepareForCommands(value)) {
     return false;
   }
@@ -911,8 +1089,15 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   const glm::mat4 coloredWorld = nodeWorld * modelMatrix;
   const glm::mat4 coloredMvp = viewProjection * coloredWorld;
   const float* coloredMvpPtr = glm::value_ptr(coloredMvp);
+  const Renderer::FrameContext& frame = value->getFrameContext();
+  bool previousMvpUsable = hasPreviousMvp;
+  if (frame.active && frame.frameSerial != 0) {
+    const bool sameFrame = previousFrameSerial == frame.frameSerial;
+    const bool previousFrame = previousFrameSerial + 1 == frame.frameSerial;
+    previousMvpUsable = previousMvpUsable && (sameFrame || previousFrame);
+  }
   const glm::mat4 previousMvp =
-    hasPreviousMvp ? previousColoredMvp : coloredMvp;
+    previousMvpUsable ? previousColoredMvp : coloredMvp;
 
   const Renderer::ShadowFrameContext& shadow = value->getShadowFrameContext();
   const bool shadowMapBound = lightingEnabled && shadowsEnabled &&
@@ -1075,6 +1260,9 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   }
   previousColoredMvp = coloredMvp;
   hasPreviousMvp = true;
+  if (frame.active) {
+    previousFrameSerial = frame.frameSerial;
+  }
   return true;
 }
 

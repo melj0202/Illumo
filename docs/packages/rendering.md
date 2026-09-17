@@ -21,17 +21,20 @@ are private. `MockBackend` is exposed only by `Illumo::TestSupport`.
 `Rendering::Scene` is a non-owning ordered frame list. The separate retained
 `SceneGraph` owns hierarchy nodes and appears in that list as one drawable.
 Borrowed `ISceneRenderAttachment` implementations receive a resolved world
-transform and append backend-neutral tokens; `MeshVisual` is the world
-mesh/sprite adapter, including optional lighting, shadow mapping, and
-previous-MVP motion blur. Immutable model geometry is reference-counted by
+transform, may report conservative local bounds, and append backend-neutral
+tokens. The Renderer camera-culls only valid wholly excluded bounds; unknown
+bounds fail open. `MeshVisual` is the world mesh/sprite adapter, including
+optional lighting, camera-relevant shared shadow mapping, and previous-MVP
+motion blur. Immutable model geometry is reference-counted by
 `AssetManager`; visuals keep only a non-owning `MeshHandle`, draw metadata, and
 per-instance transform/tint state. Typed slot+generation resource handles, the
 bounded command queue, painter-correct `GameVisual` overlay composition,
 `WorldLook` `uMVP` contract, transforms, sprites/animation, text, and
 primitive-composed UI retain their existing behavior.
 
-`Renderer` captures window dimensions and the primary camera MVP once for each
-`RenderScene` extraction. `GameVisual` consumes that transient frame context
+`Renderer` captures window dimensions, the primary camera MVP/frustum, and a
+monotonic serial once for each `RenderScene` extraction. `GameVisual` consumes
+that transient frame context
 when it shares the renderer's window and camera, while overlay draws push a
 screen ortho as `uMVP`. `CanvasView` reuses upload-rectangle scratch storage and
 `MeshVisual` keeps dynamic handles for procedural geometry, updating dirty
@@ -43,8 +46,10 @@ The Debug renderer demo proves assets, sprites, transforms, animation, and
 reload through the same library path consumed by IllumoGame. D-E6 supersedes
 the prior deferred-extraction rule: the public static-library boundary now
 exists. D-E8 adds the deliberately bounded persistent scene hierarchy consumed
-by IllEd geometry and IllumoGame's opt-in `render3dTest` diagnostic. The
-simulator's sparse cell domain and product UI remain separate from that graph.
+by IllEd geometry and IllumoGame's opt-in `render3dTest` diagnostic. D-E11 adds
+on-demand world bounds, linear frustum rejection, and a bounded directional
+shadow-caster horizon without a spatial index or subtree cache. The simulator's
+sparse cell domain and product UI remain separate from that graph.
 
 Cubemap assets preserve their source kind and all six canonical dependencies
 (or one cross path). Initial acquisition remains synchronous. Reloads decode
