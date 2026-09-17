@@ -134,7 +134,7 @@ testTitleRasterResolution()
     bool found = false;
     for (size_t index = 0; index < visual->textCount(); ++index) {
       const TextPrimitive* text = visual->getText(index);
-      if (text->content == "ILLUMO") {
+      if (text->content == "CSIM") {
         found = true;
         testTrue(g,
                  text->font != nullptr && text->font->getMetrics().pixelSize >=

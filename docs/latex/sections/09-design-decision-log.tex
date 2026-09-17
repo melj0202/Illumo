@@ -562,9 +562,9 @@ intentional. Canonical tests are \texttt{IllumoTests}, and new saves use the
 \textbf{Consequences:} Live first-party source and documentation use Illumo;
 generated build trees, vendored material, and archived historical artifacts are
 not implementation sources and are not rewritten by this decision.\\
-\textbf{Status:} Superseded by D-N2 for executable, product-visible, and test
-identity. The Illumo repository/library/host name and the \texttt{.illumo}
-format identity remain valid.
+\textbf{Status:} Superseded by D-N2 and D-N4 for executable, product-visible,
+test, and new-save filename identity. The Illumo repository/library/host name
+and legacy \texttt{.illumo} loading remain valid.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -1632,6 +1632,24 @@ cases remain \texttt{Illumo.*}, product cases become \texttt{IllumoGame.*}, and
 format-facing compatibility terminology remains Illumo where it denotes the
 existing file contract.\\
 \textbf{Supersedes:} D-N1 for product, executable, and test identity.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-N4 --- CSim is the simulator product identity}
+\begin{decisionbox}[title={D-N4 \quad 2026-09-16}]
+\textbf{Decision:} Present the cellular simulator as \textbf{CSim} in its
+window, menus, console, CLI help, native dialogs, and user-facing messages.
+Use \texttt{.csim} for newly named save files. Retain \texttt{IllumoGame} for
+technical executable, CMake target, source-tree, and test identifiers, and
+continue loading existing \texttt{.illumo} files.\\
+\textbf{Why:} CSim is the client application's product name, while Illumo is
+the reusable engine/library and IllumoGame is an implementation identifier.\\
+\textbf{Consequences:} Save commands and dialogs default to \texttt{.csim};
+extensionless loads try \texttt{.csim} before legacy \texttt{.illumo}. Save
+magic, version 4 structure, and version 3/2/dense compatibility remain
+unchanged. Existing files require no migration.\\
+\textbf{Supersedes:} D-N2 for product-visible simulator identity and D-N1/D-N2
+for the canonical new-save extension.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------

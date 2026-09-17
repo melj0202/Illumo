@@ -6,6 +6,7 @@
 #include <Illumo/Platform/AtomicFile.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -33,16 +34,24 @@ IllumoCodec::setError(std::string* error, const std::string& message)
 }
 
 std::string
-IllumoCodec::withIllumoExtension(const std::string& filename)
+IllumoCodec::withCSimExtension(const std::string& filename)
 {
   if (filename.empty()) {
     return filename;
   }
-  if (filename.length() >= 7 &&
-      filename.compare(filename.length() - 7, 7, ".illumo") == 0) {
-    return filename;
+  const std::string extension = ".csim";
+  if (filename.length() >= extension.length()) {
+    std::string ending =
+      filename.substr(filename.length() - extension.length());
+    for (char& character : ending) {
+      character =
+        static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    if (ending == extension) {
+      return filename;
+    }
   }
-  return filename + ".illumo";
+  return filename + extension;
 }
 
 bool
@@ -171,7 +180,7 @@ IllumoCodec::readFile(const std::string& path,
   const char expectedMagicV2[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '2', '\0' };
   char magic[sizeof(expectedMagicV3)] = {};
   if (!file.read(magic, sizeof(magic))) {
-    setError(error, "Invalid or truncated Illumo save header");
+    setError(error, "Invalid or truncated CSim save header");
     return false;
   }
 

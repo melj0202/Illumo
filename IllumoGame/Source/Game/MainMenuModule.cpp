@@ -229,8 +229,9 @@ MainMenuModule::activateSelectedItem()
     }
     case kLoadItem: {
       SaveLoadDialogSpec spec;
-      spec.fileDescription = "Illumo Simulations";
-      spec.extensionPattern = "*.illumo";
+      spec.fileDescription = "CSim Simulations";
+      spec.defaultFilename = "MyCanvas.csim";
+      spec.extensionPattern = "*.CSIM;*.ILLUMO";
       const std::string path = SaveLoad::GetLoadLocation(spec);
       if (!path.empty()) {
         ic->moduleHost->RequestTransition(
@@ -670,7 +671,7 @@ MainMenuModule::rebuildVisual()
     m_titleRasterSize = rasterSize;
   }
   const size_t titleIndex = m_menuVisual.addText(
-    "ILLUMO",
+    "CSIM",
     m_panelX + 28.0f,
     m_panelY + 43.0f,
     titleSize,
@@ -747,7 +748,7 @@ MainMenuModule::rebuildVisual()
     "Create, experiment, and watch patterns evolve",
     "Continue exploring a saved world",
     "Tune simulation, display, and motion",
-    "Close IllumoGame"
+    "Close CSim"
   };
   const float itemX = m_panelX + 28.0f;
   const float stride = m_itemHeight + 8.0f;

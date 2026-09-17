@@ -192,23 +192,6 @@ hasInvalidCellState(const SparseCellGrid& grid, unsigned int stateCount)
   return false;
 }
 
-static std::string
-withIllumoExtension(const std::string& filename)
-{
-  const std::string extension = ".illumo";
-  if (filename.size() >= extension.size()) {
-    std::string ending = filename.substr(filename.size() - extension.size());
-    for (std::size_t i = 0; i < ending.size(); ++i) {
-      ending[i] =
-        static_cast<char>(std::tolower(static_cast<unsigned char>(ending[i])));
-    }
-    if (ending == extension) {
-      return filename;
-    }
-  }
-  return filename + extension;
-}
-
 CellGameModule::CellGameModule(std::string initialSavePath)
   : cellContext(nullptr)
   , currentState(CellState::EDIT)
@@ -875,7 +858,7 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
 
   if (msaaChanged && ic->commandLine != nullptr) {
     ic->commandLine->logWarning(
-      "Note: Restart IllumoGame for Anti-Aliasing (MSAA) changes to take "
+      "Note: Restart CSim for Anti-Aliasing (MSAA) changes to take "
       "effect.");
   }
 
@@ -1035,13 +1018,13 @@ CellGameModule::registerConsoleCommands()
         ic->commandLine->logError("Usage: save <filename>");
         return;
       }
-      const std::string filename = withIllumoExtension(args[0]);
+      const std::string filename = IllumoCodec::withCSimExtension(args[0]);
       if (SaveCellGame(filename)) {
         ic->commandLine->logSuccess("Saved canvas to " + filename);
       }
     },
     "save <filename>",
-    "Save the current canvas; .illumo is added when omitted");
+    "Save the current canvas; .csim is added when omitted");
 
   ic->commandRegistry->RegisterCommand(
     "load",
@@ -1053,7 +1036,11 @@ CellGameModule::registerConsoleCommands()
       std::string filename = args[0];
       std::ifstream exactFile(filename, std::ios::binary);
       if (!exactFile.is_open()) {
-        filename = withIllumoExtension(filename);
+        filename = IllumoCodec::withCSimExtension(filename);
+        std::ifstream csimFile(filename, std::ios::binary);
+        if (!csimFile.is_open()) {
+          filename = args[0] + ".illumo";
+        }
       }
       exactFile.close();
       if (LoadCellGame(filename)) {
@@ -1070,15 +1057,15 @@ CellGameModule::registerConsoleCommands()
         ic->commandLine->logError("Usage: save_dialog");
         return;
       }
-      const SaveLoadDialogSpec dialogSpec{ "IllumoGame File Format",
-                                           "MyCanvas.illumo",
-                                           "*.ILLUMO" };
+      const SaveLoadDialogSpec dialogSpec{ "CSim Simulation",
+                                           "MyCanvas.csim",
+                                           "*.CSIM" };
       const std::string selectedPath = SaveLoad::GetSaveLocation(dialogSpec);
       if (selectedPath.empty()) {
         ic->commandLine->logWarning("Save cancelled");
         return;
       }
-      const std::string filename = withIllumoExtension(selectedPath);
+      const std::string filename = IllumoCodec::withCSimExtension(selectedPath);
       if (SaveCellGame(filename)) {
         ic->commandLine->logSuccess("Saved canvas to " + filename);
       }
@@ -1093,9 +1080,9 @@ CellGameModule::registerConsoleCommands()
         ic->commandLine->logError("Usage: load_dialog");
         return;
       }
-      const SaveLoadDialogSpec dialogSpec{ "IllumoGame File Format",
-                                           "myCanvas.illumo",
-                                           "*.ILLUMO" };
+      const SaveLoadDialogSpec dialogSpec{ "CSim Simulation",
+                                           "myCanvas.csim",
+                                           "*.CSIM;*.ILLUMO" };
       const std::string filename = SaveLoad::GetLoadLocation(dialogSpec);
       if (filename.empty()) {
         ic->commandLine->logWarning("Load cancelled");
@@ -1894,7 +1881,7 @@ CellGameModule::Update(double dt)
     if (action == RulesetWorkshopAction::Cancel) {
       rulesetWorkshopMenu->close();
     } else if (action == RulesetWorkshopAction::Import) {
-      const SaveLoadDialogSpec specification{ "Illumo Rules Catalog",
+      const SaveLoadDialogSpec specification{ "CSim Rules Catalog",
                                               "rulesets.json",
                                               "*.JSON" };
       const std::string filename = SaveLoad::GetLoadLocation(specification);
@@ -1996,7 +1983,7 @@ CellGameModule::Update(double dt)
       }
     } else if (action == RulesetWorkshopAction::Export) {
       const SaveLoadDialogSpec specification{
-        "Illumo Rule Definition",
+        "CSim Rule Definition",
         rulesetWorkshopMenu->getDraft().id + ".json",
         "*.JSON"
       };

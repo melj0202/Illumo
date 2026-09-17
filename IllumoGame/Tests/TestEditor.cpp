@@ -579,11 +579,14 @@ testIllumoCodecDirect()
   testSection("Persistence: IllumoCodec direct file serialization");
   RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
   testTrue(g,
-           IllumoCodec::withIllumoExtension("world") == "world.illumo",
-           "adds .illumo extension");
+           IllumoCodec::withCSimExtension("world") == "world.csim",
+           "adds .csim extension");
   testTrue(g,
-           IllumoCodec::withIllumoExtension("world.illumo") == "world.illumo",
-           "preserves existing .illumo extension");
+           IllumoCodec::withCSimExtension("world.csim") == "world.csim",
+           "preserves existing .csim extension");
+  testTrue(g,
+           IllumoCodec::withCSimExtension("world.CSIM") == "world.CSIM",
+           "matches .csim extension without case sensitivity");
 
   IllumoDocument doc;
   doc.version = IllumoCodec::kVersion;
@@ -598,7 +601,7 @@ testIllumoCodecDirect()
   grid.setCell(CellAddress{ 3, 4 }, 0);
   doc.sourceGrid = &grid;
 
-  const std::string testFile = "direct-codec-test.illumo";
+  const std::string testFile = "direct-codec-test.csim";
   std::string error;
   testTrue(g,
            IllumoCodec::writeFile(testFile, doc, &error),

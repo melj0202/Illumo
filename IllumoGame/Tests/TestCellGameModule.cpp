@@ -1698,13 +1698,21 @@ testConsoleCameraAndFiles()
 
   fixture.execute("save", { "console-save" });
   testTrue(g,
-           std::filesystem::exists("console-save.illumo"),
+           std::filesystem::exists("console-save.csim"),
            "save command adds extension");
   fixture.execute("load", { "console-save" });
   testTrue(
     g,
-    historyContains(fixture.console, "Loaded canvas from console-save.illumo"),
+    historyContains(fixture.console, "Loaded canvas from console-save.csim"),
     "load command falls back to extension");
+  std::filesystem::copy_file("console-save.csim",
+                             "legacy-console-save.illumo",
+                             std::filesystem::copy_options::overwrite_existing);
+  fixture.execute("load", { "legacy-console-save" });
+  testTrue(g,
+           historyContains(fixture.console,
+                           "Loaded canvas from legacy-console-save.illumo"),
+           "load command retains legacy .illumo fallback");
   fixture.execute("save", {});
   fixture.execute("load", {});
   testTrue(g,
@@ -1728,13 +1736,13 @@ testConsoleCameraAndFiles()
   gSaveDialogResult = "dialog-save";
   fixture.execute("save_dialog");
   testTrue(g,
-           std::filesystem::exists("dialog-save.illumo"),
+           std::filesystem::exists("dialog-save.csim"),
            "save dialog path gains extension");
-  gLoadDialogResult = "dialog-save.illumo";
+  gLoadDialogResult = "dialog-save.csim";
   fixture.execute("load_dialog");
   testTrue(
     g,
-    historyContains(fixture.console, "Loaded canvas from dialog-save.illumo"),
+    historyContains(fixture.console, "Loaded canvas from dialog-save.csim"),
     "load dialog uses selected path");
 }
 
@@ -1966,7 +1974,7 @@ testAsyncTransitionDraining()
 {
   testSection("CellGameModule: async state transitions drain safely");
   CellGameFixture fixture(16, 12);
-  const std::string savePath = "async-transition.illumo";
+  const std::string savePath = "async-transition.csim";
 
   fixture.execute("run");
   fixture.module.Update(0.25);

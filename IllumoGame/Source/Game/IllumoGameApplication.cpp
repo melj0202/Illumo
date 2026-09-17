@@ -30,11 +30,10 @@ IllumoApplicationDefinition
 CreateIllumoApplication()
 {
   IllumoApplicationDefinition application;
-  application.applicationName = "IllumoGame";
+  application.applicationName = "CSim";
   application.commandLine.applicationName = application.applicationName;
   application.commandLine.description = "Cell Automata Simulator";
-  application.commandLine.usage =
-    "IllumoGame.exe RULESET [OPTION] ... [FILE] ...";
+  application.commandLine.usage = "CSim.exe RULESET [OPTION] ... [FILE] ...";
   application.commandLine.applicationOptions = {
     { "-cw", "cells", "CanvasX", "Cell canvas width" },
     { "-ch", "cells", "CanvasY", "Cell canvas height" },

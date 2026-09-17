@@ -82,7 +82,7 @@ testCanvasCommandLineOptions()
   testSection("IllumoGameConfig: CA command-line metadata");
   const IllumoApplicationDefinition application = CreateIllumoApplication();
   testTrue(g,
-           application.applicationName == "IllumoGame",
+           application.applicationName == "CSim",
            "game supplies its product identity");
   testTrue(g,
            application.applyDefaults == IllumoGameConfig::ApplyDefaults,
@@ -116,7 +116,7 @@ testInvalidCanvasDimensions()
 {
   testSection("IllumoGameConfig: invalid canvas options use engine validation");
   const IllumoApplicationDefinition application = CreateIllumoApplication();
-  char executable[] = "IllumoGame";
+  char executable[] = "CSim";
   char zero[] = "0";
   char overflow[] = "999999999999999999999999999999999999";
   char cw[] = "-cw";

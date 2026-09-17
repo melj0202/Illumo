@@ -112,7 +112,7 @@ full footer height before it is removed. See [game controls](packages/game.md).
 applications. Illumo owns the generic application runner, platform
 entry/dialogs, BuildInfo, SysCmdLine, host, services, rendering, persistent
 scene hierarchy, assets, and module lifetime. `IllumoGame` owns CA policy and
-`.illumo` persistence. `IllEd` is the SceneGraph world editor that writes
+`.csim` persistence (with legacy `.illumo` loading). `IllEd` is the SceneGraph world editor that writes
 `.ilsc` documents so later Illumo applications can be bootstrapped from
 authored scenes. Production simulator state remains signed-coordinate
 `SparseCellGrid`; `SceneGraph` is the retained world hierarchy consumed by
@@ -733,8 +733,10 @@ resolves the pair into the immutable runtime `RuleSet` view used by Game and
 `SparseCellGrid`. F1, New Simulation, status, console output, and `CellContext`
 carry the family/rule pair. New startup configuration stores both values while
 legacy `ModeString` inputs derive the family from the selected rule.
-Version-4 `.illumo` saves store both IDs; version-3, version-2, and legacy
-dense saves derive the family from their saved rule ID.
+Version-4 `.csim` saves store both IDs; version-3, version-2, and legacy
+dense saves derive the family from their saved rule ID. The loader still
+accepts existing `.illumo` filenames; the extension change does not alter save
+magic or the binary format.
 
 **Active rules**: Game of Life, Seeds, Brian's Brain, Highlife, Day & Night,
 Life Without Death, Wireworld, Rule 90, Rule 184, Star Wars, Nova Trails, two
@@ -1119,9 +1121,10 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-005** | Each CA variant is a `RuleSet` subclass (factory in CellContext; registry later optional). |
 | **D-006** | Modes = `CellState` enum in module (not archived State class hierarchy). |
 | **D-008** | House style: avoid `auto`; no namespaces; no recursion; third-party via PR. |
-| **D-N1** | Historical unified Illumo identity; superseded for product/executable/test identity by D-N2 while retained for the library, repository, host, and `.illumo` format. |
-| **D-N2** | `IllumoGame` is the simulator executable, window, CLI/help/version, console, and product-visible identity. |
+| **D-N1** | Historical unified Illumo identity; superseded for product/executable/test identity by D-N2 and for product-visible identity/new save filenames by D-N4, while retained for the library, repository, host, and legacy `.illumo` loading. |
+| **D-N2** | Historical `IllumoGame` simulator identity; superseded for product-visible branding by D-N4 while retained for technical targets and test namespaces. |
 | **D-N3** | `IllEd` is the in-tree world-editor application identity (`IllEd.exe`, `.ilsc`, `IllEd.*` tests). |
+| **D-N4** | CSim is the simulator's product-visible identity and `.csim` is the canonical save extension; technical `IllumoGame` identifiers and legacy `.illumo` loading remain. |
 | **D-B1** | `DebugModule` is composed by the engine runner only in Debug; Release must neither compile nor register it. Refined by D-E7. |
 | **D-CLI1** | Services own generic console mechanics; `CellGameModule` registers domain commands and help/completion metadata. |
 | **D-UI1** | Console editing and caret placement use measured text geometry; one enlarged batch must fit a full help page. |
@@ -1458,8 +1461,8 @@ Resolved highlights (do not re-open without a new decision ID):
 - CPU color fade → **restored** (RGB display)  
 - Wireworld → implemented  
 - MacroDefs toxicity → D-F1 deferred  
-- Library/repository naming → D-N1 (`Illumo`); product identity → D-N2
-  (`IllumoGame`)
+- Library/repository naming → D-N1 (`Illumo`); simulator product identity and
+  save extension → D-N4 (`CSim`, `.csim`)
 
 ---
 

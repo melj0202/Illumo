@@ -34,7 +34,7 @@ public:
                         const IllumoDocument& document,
                         std::string* error = nullptr);
 
-  static std::string withIllumoExtension(const std::string& filename);
+  static std::string withCSimExtension(const std::string& filename);
 
 private:
   static void setError(std::string* error, const std::string& message);

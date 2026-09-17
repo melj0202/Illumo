@@ -807,7 +807,7 @@ ConfigurationMenu::rebuildVisual()
     "Show input hints at the bottom while editing.",
     "Validate, save, and apply the displayed settings.",
     "Close the menu without changing any settings.",
-    "Leave IllumoGame (confirmation appears during a simulation)."
+    "Leave CSim (confirmation appears during a simulation)."
   };
   const float valueColumnX = panelX + panelWidth * 0.54f;
   const float rowFontSize = panelHeight >= 360.0f
@@ -977,12 +977,11 @@ ConfigurationMenu::rebuildVisual()
     panelHeight >= 400.0f
       ? animatedPanelY + panelHeight - 24.0f
       : animatedPanelY + panelHeight - footerHeight * 0.5f + 2.0f;
-  visual.addText(
-    "* Marked settings require restarting IllumoGame to take effect.",
-    panelX + 28.0f,
-    noteY,
-    noteFontSize,
-    UiTheme::applyOpacity(restartNoteColor, panelOpacity));
+  visual.addText("* Marked settings require restarting CSim to take effect.",
+                 panelX + 28.0f,
+                 noteY,
+                 noteFontSize,
+                 UiTheme::applyOpacity(restartNoteColor, panelOpacity));
   if (!errorMessage.empty()) {
     visual.addText(errorMessage,
                    panelX + 28.0f,
