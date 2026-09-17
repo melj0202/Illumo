@@ -1,4 +1,5 @@
 #pragma once
+#include <Illumo/Foundation/AxisAlignedBounds3.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/RenderCommand.h>
@@ -9,6 +10,7 @@
 #include <Illumo/Services/ArenaAlloc.h>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -32,6 +34,7 @@ public:
                                     0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
                                     0.0f, 0.0f, 0.0f, 1.0f };
     Camera* worldCamera = nullptr;
+    uint64_t frameSerial = 0;
     float uiScale = 1.0f;
     bool active = false;
     bool hasWorldMvp = false;
@@ -45,6 +48,7 @@ public:
     int mapSize = 1024;
     float minimumRadius = 2.5f;
     float lightDistance = 8.0f;
+    float casterDistance = 100.0f;
   };
 
   struct ShadowFrameContext
@@ -115,6 +119,7 @@ private:
   std::vector<std::unique_ptr<UniformMatrixChunk>> uniformMatrixChunks;
   size_t uniformMatrixCount = 0;
   FrameContext frameContext;
+  uint64_t frameSerial = 0;
   bool m_strictSubmission = false;
   std::string m_frameError;
 
@@ -128,12 +133,28 @@ private:
   int requestedShadowMapSize = 0;
   float requestedShadowMinimumRadius = 0.0f;
   float requestedShadowLightDistance = 0.0f;
+  struct BoundsFrustum
+  {
+    std::array<Vector4, 6> planes{};
+    std::array<Vector3, 8> corners{};
+    AxisAlignedBounds3 worldBounds{};
+    bool valid = false;
+  };
+  BoundsFrustum cameraFrustum;
+  BoundsFrustum shadowFrustum;
+  BoundsFrustum shadowCasterFrustum;
+  AxisAlignedBounds3 shadowCasterVolume{};
+  bool shadowCasterVolumeValid = false;
+  std::vector<ShadowCasterDesc> shadowCasters;
   ShadowFrameContext shadowFrameContext;
 
   void beginFrameContext(Camera* camera);
   void endFrameContext();
   void resetShadowFrame();
   bool prepareShadowPass();
+  static bool buildBoundsFrustum(const Matrix4& matrix, BoundsFrustum* frustum);
+  static bool boundsIntersectFrustum(const AxisAlignedBounds3& bounds,
+                                     const BoundsFrustum& frustum);
   void ensureShadowResources(int mapSize);
   void releaseShadowResources();
   const float* retainUniformMatrix(const float* value);
@@ -176,6 +197,8 @@ public:
   float getUiScale() const;
 
   void registerShadowCaster(const ShadowCasterDesc& caster);
+  bool isWorldBoundsVisible(const AxisAlignedBounds3& bounds) const;
+  bool isShadowCasterRelevant(const AxisAlignedBounds3& bounds) const;
 
   // =========================================================================
   // Asset enrollment (not mixed into the per-frame token stream — D-007)

@@ -1690,6 +1690,37 @@ persistence.\\
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-E11 --- Attachment bounds and camera-relevant shadows}
+\begin{decisionbox}[title={D-E11 \quad 2026-09-16}]
+\textbf{Decision:} Add finite ordered \symbolref{AxisAlignedBounds3} and an
+optional local-bounds query to \symbolref{ISceneRenderAttachment}.
+\symbolref{SceneGraph} transforms those bounds on demand, exposes world bounds,
+and rejects only attachments wholly outside the active camera frustum during
+its existing iterative O(n) traversal. Unknown or invalid bounds and matrices
+fail open, survivor order is stable, and a culled parent attachment does not
+prune children.\
+\textbf{Decision:} \symbolref{Renderer} retains directional-shadow caster
+descriptors for the frame. The first camera-visible caster selects the light;
+the reconstructed camera frustum is conservatively extruded toward it by the
+caster's configured horizon (100 world units by default). Only intersecting
+bounds contribute to the fitted shared light projection or emit depth tokens.
+Invalid camera reconstruction preserves the former all-caster behavior.
+\symbolref{MeshVisual} reports immediate conservative bounds for procedural,
+managed-mesh, and sprite geometry; billboard sprites use a view-independent
+enclosure. A frame serial resets previous-MVP history after a culling gap.\
+\textbf{Why:} The graph could express hierarchy but not visibility, while the
+shared shadow fit paid for and expanded around casters that could not affect
+the camera-visible region. Attachment-authoritative bounds reduce token and
+shadow work without changing node storage or ownership.\
+\textbf{Consequences:} Direct \symbolref{MeshVisual} drawables and graph
+attachments share the same Renderer-owned camera and shadow tests. Skyboxes and
+attachments without reliable bounds continue rendering. No BVH, octree,
+subtree-bound cache, persistence change, picking migration, or second shadow
+map is introduced.\
+\textbf{Refines:} D-E8, D-R21, and D-R22.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{D-G1 --- Pattern I/O is a side path, not save v4}
 \begin{decisionbox}[title={D-G1 \quad 2026-08-21}]
 \textbf{Decision:} Editor selection, in-app \texttt{CellPattern} buffers, Golly-style

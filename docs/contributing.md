@@ -49,9 +49,10 @@ reviewed.
   Debug; each product supplies its own required module.
 - The approved `SceneGraph` v1 is the retained world hierarchy. Keep it
   handle-based, backend-neutral, iterative, and separate from the per-frame
-  `Rendering::Scene` list. Do not expand it into an ECS, retained UI tree,
-  persistence format, culling structure, or update framework without a
-  concrete consumer and an authorized design.
+  `Rendering::Scene` list. Its approved linear bounds/culling contract must not
+  grow into an ECS, retained UI tree, persistence format, subtree cache,
+  spatial index, or update framework without a concrete consumer and an
+  authorized design.
 - Do not introduce a render graph, additional graphics backend, or compute
   backend solely for architectural completeness.
 

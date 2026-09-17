@@ -21,6 +21,7 @@ public:
                  Camera* camera,
                  const IlscNode& node,
                  IlscWorldMode worldMode);
+  bool getSceneLocalBounds(AxisAlignedBounds3* bounds) const override;
   void appendSceneCommands(Renderer* renderer,
                            const Matrix4& worldTransform) override;
 

@@ -1,3 +1,4 @@
+#include "EditorAttachment.h"
 #include "EditorModule.h"
 #include "EditorUiAtlas.h"
 #include "TestAccess.h"
@@ -114,6 +115,32 @@ struct EditorFixture
     }
   }
 };
+
+static void
+testEditorAttachmentForwardsBounds()
+{
+  testSection("EditorAttachment: forwards visual bounds");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "editor fixture starts");
+
+  IlscNode node;
+  node.kind = SceneNodeKind::SolidCube;
+  node.primitive.extent = Vector3(2.0f, 3.0f, 4.0f);
+  EditorAttachment attachment;
+  testTrue(g,
+           attachment.configure(
+             &fixture.renderer, &fixture.camera, node, IlscWorldMode::World3D),
+           "bounded editor attachment configures");
+  AxisAlignedBounds3 bounds;
+  testTrue(g,
+           attachment.getSceneLocalBounds(&bounds),
+           "editor attachment forwards MeshVisual bounds");
+  testTrue(g,
+           glm::length(bounds.minimum - Vector3(-2.0f, -3.0f, -4.0f)) <
+               0.0001f &&
+             glm::length(bounds.maximum - Vector3(2.0f, 3.0f, 4.0f)) < 0.0001f,
+           "forwarded bounds cover the configured primitive");
+}
 
 static void
 testCloseConfirmation()
@@ -953,6 +980,11 @@ testTransformGizmoHitAndConstraints()
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Module.AttachmentBounds", []() {
+    g = {};
+    testEditorAttachmentForwardsBounds();
+    return g.failures;
+  });
   registry.add("IllEd.Module.PropertyCommands", []() {
     g = {};
     EditorFixture fixture;

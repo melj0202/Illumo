@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Foundation/AxisAlignedBounds3.h>
 #include <Illumo/Foundation/MathTypes.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/ISceneRenderAttachment.h>
@@ -44,7 +45,7 @@ public:
   // Resolves only this node's dirty dependency chain. Cached reads are O(1);
   // dirty reads are O(depth), independent of unrelated graph nodes.
   bool getWorldTransform(SceneNodeHandle node, Matrix4* transform);
-  // Resolves dirty world transforms for the complete graph.
+  bool getWorldBounds(SceneNodeHandle node, AxisAlignedBounds3* bounds);
   void updateWorldTransforms();
 
   bool setEnabled(SceneNodeHandle node, bool enabled);

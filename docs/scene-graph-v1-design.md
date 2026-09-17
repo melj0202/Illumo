@@ -1,8 +1,9 @@
 # Scene graph v1 design and execution plan
 
-**Status:** Implemented library slice. IllEd is the first product consumer
-via an editor-owned `.ilsc` document (D-E10); the IllumoGame CA path still
-does not store cells in the graph.
+**Status:** Implemented library slice, extended by D-E11 with attachment-owned
+bounds, linear frustum culling, and camera-relevant directional shadows. IllEd
+is the first product consumer via an editor-owned `.ilsc` document (D-E10);
+the IllumoGame CA path still does not store cells in the graph.
 
 **Supersedes:** D-E4 only where it treated every retained scene hierarchy as
 out of scope. The existing per-frame `Scene` drawable list remains intact and
@@ -26,6 +27,8 @@ The end state is measurable when:
 - disabled or invisible subtrees do not emit render attachment commands;
 - render attachments receive their node's resolved world transform in stable
   hierarchy order through the existing renderer token path;
+- bounded attachments wholly outside the camera frustum skip color emission,
+  while unknown or invalid bounds fail open and children remain traversable;
 - the current IllumoGame canvas, UI, renderer, module lifecycle, and frame list
   compile and behave without migration.
 
@@ -66,8 +69,9 @@ simulator's efficient canvas representation.
 
 - No ECS, component registry, serialization, prefabs, editor object model,
   physics, animation system, scripting, networking, or persistence format.
-- No frustum culling, bounds hierarchy, octree/BVH, render graph, offscreen
-  pass, material system, model loader, or new graphics backend.
+- No bounds hierarchy, subtree-bound cache, octree/BVH, render graph, offscreen
+  pass, material system, model loader, or new graphics backend. D-E11 adds only
+  attachment-authoritative bounds queried during the existing O(n) traversal.
 - No change to `IModule`, `IllumoContext`, `RenderCommand`, backend handles,
   CSim simulation storage, `CanvasView`, or UI ownership.
   `Renderer::FrameContext` and `GameVisual` reuse of that context are
@@ -115,6 +119,13 @@ virtual void appendSceneCommands(Renderer* renderer,
                                  const Matrix4& worldTransform) = 0;
 ```
 
+D-E11 adds the optional
+`getSceneLocalBounds(AxisAlignedBounds3*) const` query. Its default returns
+false, so attachments without reliable bounds remain visible. Valid bounds are
+finite and ordered; affine transformation checks all eight corners to produce
+a conservative world AABB. `SceneGraph::getWorldBounds` exposes the same
+on-demand composition without retaining a second cache.
+
 It intentionally has no immediate-mode fallback. Implementations append
 backend-neutral commands and may use the supplied world transform directly or
 compose it with camera state. The attachment must outlive any render traversal
@@ -129,8 +140,20 @@ graph.
 `SceneGraph` owns nodes and derives from `DrawableBase`. Its
 `AppendCommands(Renderer*)` updates dirty world transforms and visits effective
 enabled/visible nodes in deterministic hierarchy pre-order. Each attachment is
-called with the resolved world matrix. `AppendCommands` always handles the
-token path and therefore returns true; a hidden graph emits nothing.
+called with the resolved world matrix when its valid bounds intersect the
+active camera frustum. A culled attachment does not prune its children.
+`AppendCommands` always handles the token path and therefore returns true; a
+hidden graph emits nothing.
+
+`MeshVisual` derives bounds immediately from procedural line, triangle, sprite,
+and managed-mesh sources, then applies its local model matrix. Billboard
+sprites use a view-independent enclosing volume. The Renderer retains caster
+descriptors until the frame's shared shadow pass: the first camera-visible
+caster selects light settings, the camera frustum is conservatively extruded
+toward the light by the configured caster distance, and only intersecting
+casters participate in fitting and depth emission. Invalid camera
+reconstruction falls back to the former all-caster behavior. A Renderer frame
+serial prevents a culled visual from reusing stale previous-MVP history.
 
 The graph exposes creation, subtree destruction, validity, parent/child
 inspection, reparenting, local/world transform access, enabled/visible state,
@@ -195,8 +218,8 @@ pointers and advances its generation.
   not require a general component architecture.
 - **Store `DrawableBase*` directly:** rejected because existing drawables have
   no contract for receiving the graph-resolved world transform.
-- **Add culling/spatial acceleration now:** deferred until a consuming project
-  supplies bounds, camera, and workload requirements.
+- **Add a spatial index or cached subtree bounds:** deferred until measured
+  workloads show the current iterative O(n) traversal is insufficient.
 
 ## Compatibility and migration
 
@@ -253,12 +276,12 @@ is migrated.
 
 ## Open questions and decisions
 
-No question blocks v1. Multiple attachments per node, culling bounds,
+No question blocks v1. Multiple attachments per node, spatial indexing,
 serialization, update callbacks, and renaming the frame list are intentionally
 deferred until a real downstream consumer demonstrates their required
 contracts.
 
-## Validation record
+## D-E8 original validation record
 
 ### Pre-change baseline
 
@@ -305,3 +328,23 @@ dialog behavior. No performance claim is made: v1 retains hierarchy and cached
 transforms, but visible attachments still traverse and emit draw commands each
 frame. A downstream workload should benchmark later culling or extraction
 caching proposals before they are added.
+
+## D-E11 extension validation record
+
+- Focused tests cover bounds math and geometry sources, world queries,
+  orthographic/perspective culling, unknown-bound fail-open behavior, survivor
+  order, child traversal, relevant shadows, invalid-camera fallback,
+  direct/SceneGraph parity, IllEd forwarding, and motion-history re-entry.
+- The complete Release workspace built and the `IllumoWorkspace` label passed
+  426/426 cases.
+- A non-gating 5,000-node Release microbenchmark reduced attachment callbacks
+  and emitted commands from 5,000 to 500. Its measured bounded traversal was
+  750 microseconds versus 598 microseconds unbounded because the callback was
+  deliberately trivial; no traversal-speed claim is made.
+- Direct clang-tidy on the four changed production translation units passed.
+  The aggregate `IllumoTidy` target remains blocked by three existing
+  `modernize-use-nullptr` diagnostics in untouched `GLDevice.cpp`.
+- `docs/build.ps1` produced and visual inspection checked the 83-page book and
+  8-page architecture map, including the rendering section and D-E11 box.
+- Release capture cases passed. A live interactive plane/shadow smoke remains
+  unverified because this run exposed no targetable native application UI.

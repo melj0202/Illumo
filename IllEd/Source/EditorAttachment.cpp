@@ -72,6 +72,12 @@ EditorAttachment::configure(Renderer* renderer,
   return true;
 }
 
+bool
+EditorAttachment::getSceneLocalBounds(AxisAlignedBounds3* bounds) const
+{
+  return m_visual != nullptr && m_visual->getSceneLocalBounds(bounds);
+}
+
 void
 EditorAttachment::appendSceneCommands(Renderer* renderer,
                                       const Matrix4& worldTransform)

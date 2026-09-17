@@ -17,9 +17,10 @@ finite-toroidal canvas. Illumo remains a reusable runtime and rendering
 foundation; application policy stays in the consuming product.
 
 The approved persistent `SceneGraph` v1 is deliberately bounded to handles,
-hierarchy, transforms, subtree state, and token render attachments. Do not
-expand it into an ECS, retained UI tree, serialization system, spatial index,
-or update framework, and do not introduce a render graph, additional graphics
+hierarchy, transforms, subtree state, token render attachments, and
+attachment-authoritative linear bounds/culling. Do not expand it into an ECS,
+retained UI tree, serialization system, spatial index, subtree-bound cache, or
+update framework, and do not introduce a render graph, additional graphics
 backend, compute backend, or broad framework merely for architectural
 completeness. Preserve public behavior and formats by default. A change to
 subsystem boundaries, dependency direction, ownership, lifetime, threading,
@@ -85,8 +86,10 @@ Drawable::AppendCommands(Renderer*)
 `SceneGraph` is a retained, scene-owned node hierarchy with graph-local
 generational handles. It participates in this flow as one drawable in the
 existing per-frame `Rendering::Scene`; borrowed `ISceneRenderAttachment`
-values receive resolved world transforms and append tokens. It is not CSim
-cell storage, an ECS, or a replacement for the frame list.
+values receive resolved world transforms, may report conservative local bounds,
+and append tokens. Unknown bounds fail open during Renderer-owned camera and
+shadow rejection. It is not CSim cell storage, an ECS, or a replacement for
+the frame list.
 
 Production drawables use the token path. Immediate `Draw()` is only the fallback
 for tests or incomplete stubs. Game and rules code must not issue raw OpenGL
@@ -344,10 +347,11 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 - Production drawables append `RenderCommand` tokens to the backend-neutral
   `Renderer`; `IBackend` executes them. Any pointer carried by a command must
   remain valid until synchronous queue submission returns.
-- Directional shadows use one Renderer-owned depth pass over all visible World
-  casters before color rendering. Direct `MeshVisual` drawables and SceneGraph
-  attachments contribute bounds and depth tokens to the same fitted light-space
-  matrix and shared map; per-object shadow framebuffers are forbidden.
+- Directional shadows use one Renderer-owned depth pass over camera-relevant
+  World casters before color rendering. Direct `MeshVisual` drawables and
+  SceneGraph attachments contribute bounds and depth tokens to the same fitted
+  light-space matrix and shared map; invalid camera reconstruction falls back
+  to all casters, and per-object shadow framebuffers are forbidden.
 - `Rendering::Scene` is a non-owning ordered list rebuilt each frame.
   `SceneGraph` separately owns persistent nodes and cached transforms, uses
   graph-ID-plus-slot-plus-generation handles, borrows render attachments, and

@@ -17,6 +17,7 @@
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Foundation/ArrayQueue.h>
+#include <Illumo/Foundation/AxisAlignedBounds3.h>
 #include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Foundation/MacroDefs.h>
 #include <Illumo/Foundation/MathTypes.h>
@@ -125,7 +126,8 @@ main()
   static_assert(std::is_destructible_v<PreprocessOptions>);
   SceneGraph sceneGraph;
   const SceneNodeHandle sceneNode = sceneGraph.createNode();
-  if (!sceneGraph.isNodeValid(sceneNode)) {
+  const AxisAlignedBounds3 bounds{ Vector3(-1.0f), Vector3(1.0f) };
+  if (!sceneGraph.isNodeValid(sceneNode) || !bounds.isValid()) {
     return 1;
   }
   return 0;

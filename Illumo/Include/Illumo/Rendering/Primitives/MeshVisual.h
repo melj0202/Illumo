@@ -8,6 +8,7 @@
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Scene/Transform3D.h>
 #include <cstddef>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <vector>
 
@@ -56,6 +57,8 @@ public:
   float getShadowRadius() const { return shadowRadius; }
   void setLightDistance(float distance);
   float getLightDistance() const { return lightDistance; }
+  void setShadowCasterDistance(float distance);
+  float getShadowCasterDistance() const { return shadowCasterDistance; }
   void setShadowBias(float bias);
   float getShadowBias() const { return shadowBias; }
   void setShadowSlopeScale(float scale);
@@ -123,6 +126,7 @@ public:
   void AppendShadowCommands(Renderer* renderer) override;
   void appendSceneCommands(Renderer* renderer,
                            const Matrix4& worldTransform) override;
+  bool getSceneLocalBounds(AxisAlignedBounds3* bounds) const override;
   void collectSceneShadowCasters(Renderer* renderer,
                                  const Matrix4& worldTransform) override;
   void appendSceneShadowCommands(Renderer* renderer,
@@ -216,17 +220,26 @@ private:
   bool motionBlurEnabled = true;
   bool hasPreviousMvp = false;
   glm::mat4 previousColoredMvp = glm::mat4(1.0f);
+  uint64_t previousFrameSerial = 0;
   float motionBlurAmount = 0.5f;
   float motionBlurMax = 0.2f;
+  glm::vec3 lineBoundsMin = glm::vec3(0.0f);
+  glm::vec3 lineBoundsMax = glm::vec3(0.0f);
+  bool lineBoundsValid = false;
   glm::vec3 triangleBoundsMin = glm::vec3(0.0f);
   glm::vec3 triangleBoundsMax = glm::vec3(0.0f);
   bool triangleBoundsValid = false;
+  glm::vec3 spriteBoundsMin = glm::vec3(0.0f);
+  glm::vec3 spriteBoundsMax = glm::vec3(0.0f);
+  bool spriteBoundsValid = false;
+  bool geometryBoundsReliable = true;
   glm::vec3 lightDirection = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
   glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
   glm::vec3 ambientColor = glm::vec3(0.2f, 0.22f, 0.25f);
   int shadowMapSize = 1024;
   float shadowRadius = 2.5f;
   float lightDistance = 8.0f;
+  float shadowCasterDistance = 100.0f;
   float shadowBias = 0.001f;
   float shadowSlopeScale = 0.004f;
   float shadowNormalOffset = 0.015f;
@@ -238,6 +251,9 @@ private:
   void appendShadowCommandsWithWorld(Renderer* renderer,
                                      const glm::mat4& nodeWorld);
   bool appendCommandsWithWorld(Renderer* renderer, const glm::mat4& nodeWorld);
+  bool getLocalShadowBounds(AxisAlignedBounds3* bounds) const;
+  bool getWorldShadowBounds(const glm::mat4& nodeWorld,
+                            AxisAlignedBounds3* bounds) const;
   void rebuildMeshes();
   bool ensureMeshCapacity(MeshHandle* meshHandle,
                           std::vector<unsigned int>* meshIndices,
