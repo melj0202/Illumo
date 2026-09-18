@@ -1,5 +1,9 @@
 # Illumo Linux port
 
+The dual-platform clone-and-build on-ramp (Windows and Ubuntu) is the root
+[README.md](../../README.md) section **Get the build running**. This file is
+the Linux package list, configure/build failure table, and GUI smoke matrix.
+
 Windows remains the supported, fully verified production path. Linux sources
 and CMake on this branch are repaired so an Ubuntu 24.04 x86_64 host with X11
 or XWayland can configure, compile, and run the in-tree applications. That is
