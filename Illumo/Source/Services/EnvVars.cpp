@@ -9,6 +9,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#elif defined(__linux__)
+#include <unistd.h>
 #endif
 
 std::filesystem::path
@@ -23,6 +25,15 @@ EnvVars::ApplicationConfigPath()
   if (pathLength > 0 &&
       static_cast<size_t>(pathLength) < executablePath.size()) {
     executablePath.resize(pathLength);
+    return std::filesystem::path(executablePath).parent_path() / "envvars.json";
+  }
+#elif defined(__linux__)
+  char executablePath[4096];
+  const ssize_t pathLength =
+    ::readlink("/proc/self/exe", executablePath, sizeof(executablePath) - 1);
+  if (pathLength > 0 &&
+      static_cast<size_t>(pathLength) < sizeof(executablePath) - 1) {
+    executablePath[pathLength] = '\0';
     return std::filesystem::path(executablePath).parent_path() / "envvars.json";
   }
 #endif

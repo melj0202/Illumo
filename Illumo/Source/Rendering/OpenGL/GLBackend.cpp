@@ -36,6 +36,15 @@ GLBackend::Initialize()
   }
   Logger::LogTrace("Glew initialized");
   glEnable(GL_MULTISAMPLE);
+  if (window != nullptr) {
+    GLFWwindow* glfwWindow = window->getWindowInstance();
+    if (glfwWindow != nullptr) {
+      int framebufferWidth = 0;
+      int framebufferHeight = 0;
+      glfwGetFramebufferSize(glfwWindow, &framebufferWidth, &framebufferHeight);
+      glViewport(0, 0, framebufferWidth, framebufferHeight);
+    }
+  }
   const GLubyte* versionGL = glGetString(GL_VERSION);
   std::string versionStr =
     versionGL ? reinterpret_cast<const char*>(versionGL) : "Unknown";

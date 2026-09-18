@@ -13,10 +13,10 @@
 class WireworldRuleSet : public RuleSet
 {
 public:
-  static const unsigned char CELL_HEAD = 0;
-  static const unsigned char CELL_EMPTY = 1;
-  static const unsigned char CELL_TAIL = 2;
-  static const unsigned char CELL_CONDUCTOR = 3;
+  static constexpr unsigned char CELL_HEAD = 0;
+  static constexpr unsigned char CELL_EMPTY = 1;
+  static constexpr unsigned char CELL_TAIL = 2;
+  static constexpr unsigned char CELL_CONDUCTOR = 3;
 
   WireworldRuleSet(CellGrid* targetCanvas)
     : RuleSet(targetCanvas)

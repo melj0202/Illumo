@@ -20,9 +20,11 @@ or persistence parsing.
 
 ## Support status
 
-Windows is the only supported and currently verified platform. Linux and macOS
-are stale scaffolds. Source presence does not establish support; native
-configure, compile, launch, dialog, render, and shutdown evidence is required.
+Windows is the only supported and currently verified platform. Linux sources
+are repaired for Ubuntu 24.04 x86_64 X11/XWayland with gtkmm-3 dialogs; do not
+describe Linux as supported until native configure, compile, launch, dialog,
+render, and shutdown evidence exists on that host. macOS remains a stale
+scaffold. Source presence does not establish support.
 
 ## Documentation and verification
 

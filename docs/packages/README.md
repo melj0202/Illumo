@@ -17,7 +17,7 @@ documentation, not build inputs.
 | `foundation.md` | Dependency-light public utilities |
 | `assets.md` | Illumo runtime files and product configuration staging |
 | `platform.md` | Illumo platform contract and port map |
-| `platform-linux.md` | Linux scaffold status |
+| `platform-linux.md` | Linux port status, packages, build, and smoke |
 | `platform-macos.md` | macOS scaffold status |
 | `tests.md` | Split test ownership and aggregate workflow |
 

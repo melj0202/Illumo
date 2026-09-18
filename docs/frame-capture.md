@@ -14,6 +14,18 @@ build/Release/IllumoCapture.exe --output build/direct.png --mode direct --width 
 build/Release/IllumoCapture.exe --output build/scene.png --mode scene --width 640 --height 480
 ```
 
+On a Linux host, from the staged Ninja tree (destination must not already
+exist):
+
+```bash
+cmake --build build-linux --target IllumoCapture
+./build-linux/Debug/IllumoCapture --output /tmp/illumo-frame.png --mode scene
+```
+
+Hidden-window GLX still needs a real graphics context. Linux capture is part
+of the smoke matrix in `docs/packages/platform-linux.md` and is not a support
+claim until that host produces a PNG.
+
 Both modes use the same colored 3D cube, shaders, camera, state and normal
 `Renderer::RenderScene`. Direct mode uses a drawable in the transient `Scene`
 frame list, without persistent nodes. Scene mode extracts a transformed

@@ -7,17 +7,17 @@ OS entry points and native persistence dialogs are engine-owned under
 | Port | Entry | Status |
 |---|---|---|
 | Windows | `Windows/WinMain.cpp` | Supported; native dialogs in `WinSaveLoad.cpp` |
-| Linux | `Linux/_main.cpp` | Unsupported stale scaffold |
+| Linux | `Linux/_main.cpp` | Source-repaired for Ubuntu 24.04 x86_64 X11/XWayland; not a support claim until native GUI smoke. See [platform-linux.md](platform-linux.md). |
 | macOS | `macOS/Main.cpp` | Unsupported stale scaffold |
 
 Entry code obtains the consumer's `IllumoApplicationDefinition` and calls the
 generic Illumo runner. Dialog implementations accept game-owned labels and
 defaults as data; they do not include Game types or parse save files. Clipboard
 text (`Clipboard::GetText` / `SetText`) follows the same platform split:
-Windows is implemented, Linux/macOS return empty/false scaffolds and are not
-supported clipboard ports. Source
-presence does not establish support: each port requires native build, tests,
-live rendering/input, dialogs, and clean shutdown.
+Windows uses Win32; Linux uses the GTK clipboard after one-shot gtkmm init;
+macOS remains an empty/false scaffold. Source presence does not establish
+support: each port requires native build, tests, live rendering/input, dialogs,
+and clean shutdown.
 
 `AtomicFile::write` synchronously creates an exclusive sibling staging file,
 streams the caller's format, checks write/flush/close, and publishes by replacing
@@ -27,4 +27,6 @@ operation and clear dirty state/report success only after it succeeds. Windows
 uses same-directory `MoveFileExW` with replacement, without cross-volume copy
 fallback ([API contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)).
 This is not a power-loss durability or destination-security-metadata preservation
-guarantee. POSIX rename code is unverified scaffolding.
+guarantee. POSIX `rename` replaces on the same filesystem and fails with `EXDEV`
+across devices; there is no copy fallback. Treat that as the Linux contract,
+proven by `Illumo.Platform.AtomicFile` on the native host.

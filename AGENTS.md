@@ -372,9 +372,12 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 - Ruleset transitions and palettes must remain deterministic. Update factory
   selection, known-mode validation, console help/completion, source lists, and
   focused tests together when ruleset availability changes.
-- Windows is the only supported and currently verified platform. Linux and
-  macOS are stale bootstrap scaffolds and must not be described as supported
-  until they configure, compile, launch, and pass platform smoke tests.
+- Windows is the only supported and currently verified platform. Linux sources
+  and CMake are repaired for Ubuntu 24.04 x86_64 (X11/XWayland, gtkmm-3
+  dialogs) and must not be described as supported until native configure,
+  compile, launch, dialog, render, and shutdown smoke exist on that host.
+  macOS remains a stale bootstrap scaffold. See
+  `docs/packages/platform-linux.md`.
 - Keep generic engine/services independent of game-domain policy. Keep raw
   platform and OpenGL details behind their existing boundaries.
 - Do not add or replace a third-party dependency without user approval and a

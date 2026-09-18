@@ -25,7 +25,7 @@ struct Canvas
 {
 
 public:
-  static const int kPaletteSize = 256;
+  static constexpr int kPaletteSize = 256;
 
   Canvas(int width,
          int height,

@@ -1474,7 +1474,7 @@ Most design questions from the LaTeX open list are **resolved** (see §6). Still
 | Topic | Working answer |
 |-------|----------------|
 | Resource ownership long-term | Typed generational handles validate explicit replace/destroy operations; `AssetManager` reference-counts textures, shaders, cubemaps, and immutable model meshes, while the resizeable canvas explicitly replaces/releases its texture and PBO ring. |
-| Linux/macOS parity | The selected bootstraps use the shared application entry contract, but native configure/build/test/smoke evidence is absent; keep them unsupported until that validation succeeds. |
+| Linux/macOS parity | Linux sources and CMake are repaired for Ubuntu 24.04 x86_64 X11/XWayland with gtkmm-3 dialogs (`docs/packages/platform-linux.md`). Keep Linux unsupported until native configure, compile, launch, dialog, render, and shutdown smoke exist on that host. macOS remains a stale scaffold. |
 | Tracy CI policy | Debug-oriented; no strict CI policy yet. |
 | When to introduce SYCL / GPU simulation | Only after a current benchmark and explicit product or learning goal justify a second compute path. Sparse chunks and bounded CPU workers are already live. |
 

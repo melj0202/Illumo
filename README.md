@@ -72,8 +72,11 @@ camera cache through a world-space `GameVisual` sprite, with active-texel RGB
 fades and tiled multi-rectangle uploads through a non-waiting PBO ring.
 Headless `IllumoTests`, `IllumoGameTests`, `IllEdTests`, and
 `IllMeshViewerTests` use `Illumo::TestSupport` and
-`MockBackend`. Windows is the supported runtime;
-Linux and macOS retain stale source/CMake scaffolding pending native validation.
+`MockBackend`. Windows is the supported runtime. Linux sources and CMake are
+repaired for Ubuntu 24.04 x86_64 (X11/XWayland, GCC 13+/Clang 18, gtkmm-3
+dialogs); follow [docs/packages/platform-linux.md](docs/packages/platform-linux.md)
+to build and run. That is not a support claim until native GUI smoke on that
+host. macOS remains an unverified scaffold.
 
 **Architecture (single source for later sessions):** [`docs/architecture-consensus.md`](docs/architecture-consensus.md) — unified consensus (purpose, history of old plans, current renderer/sim truth, decisions, bugs, debt, work order).
 
@@ -284,7 +287,11 @@ capture client. Run `build/Release/IllumoCapture.exe --output build/frame.png
 --mode scene` to produce a PNG and JSON diagnostics without a game loop. See
 [capture inputs and ownership](docs/frame-capture.md) and
 [charter direction](docs/charter-direction.md). The existing destination must not
-exist. Capture requires a real graphics context; Linux remains unverified.
+exist. Capture requires a real graphics context. On Linux, build `IllumoCapture`
+in the staged tree and run it from that directory; hidden-window GLX is part of
+the smoke matrix in
+[docs/packages/platform-linux.md](docs/packages/platform-linux.md) and is not
+claimed until that host produces a PNG.
 
 ## Creating an application
 
@@ -394,6 +401,50 @@ front end does not expose:
 cmake -S . -B build
 cmake --build build --config Release
 ```
+
+### Linux (Ubuntu 24.04 x86_64)
+
+Windows remains the verified production path. Use a Linux tree only on a real
+Ubuntu 24.04 host with X11 or XWayland, GCC 13+ or Clang 18+, and CMake 3.25+.
+Do not reuse a Windows CMake cache. The full package list, failure table, and
+GUI smoke checklist live in
+[docs/packages/platform-linux.md](docs/packages/platform-linux.md).
+
+```bash
+sudo apt update
+sudo apt install --no-install-recommends \
+  build-essential cmake ninja-build pkg-config python3 \
+  libgl1-mesa-dev mesa-utils \
+  libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+  libxi-dev libxext-dev \
+  libgtkmm-3.0-dev
+
+pkg-config --modversion gtkmm-3.0
+glxinfo -B
+
+cmake -S . -B build-linux -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DILLUMO_BUILD_DOCUMENTATION=OFF \
+  -DILLUMO_ENABLE_CLANG_TIDY=OFF
+cmake --build build-linux --parallel
+ctest --test-dir build-linux -L IllumoWorkspace --output-on-failure
+
+cd build-linux/Debug
+./IllumoGame
+./IllEd
+./IllMeshViewer
+./IllumoCapture --output /tmp/illumo-frame.png --mode scene
+```
+
+Launch from the staged directory so `Shader/`, `Assets/`, and `envvars.json`
+resolve beside the executable. Ninja writes those files under
+`build-linux/Debug/` (or `RelWithDebInfo/`) so they do not collide with CMake's
+source-named binary directories. `envvars.json` is located via `/proc/self/exe`;
+starting the binary from `/tmp` must still use that staged `envvars.json`.
+The default Ninja `ALL` target also runs workspace tests; Debug AddressSanitizer
+makes `Illumo.SceneGraph.Oracle` very slow. RelWithDebInfo is the faster first
+GUI smoke. Native Wayland, aarch64, packaged installs, and process-memory stats
+are not part of this port.
 
 The canonical workspace build produces `Illumo`, `IllumoGameCore`,
 `IllumoGame`, `IllEdCore`, `IllEd`, `IllumoTests`, `IllumoGameTests`,

@@ -116,14 +116,14 @@ public:
   Renderer* renderer;
 
 private:
-  static const int kPaletteSize = 256;
+  static constexpr int kPaletteSize = 256;
   static constexpr float kCellSize =
     static_cast<float>(CanvasCoordinatePolicy::kCellSize);
-  static const int kOverviewPixelsPerTexel = 4;
-  static const int kCachePaddingChunks = 2;
-  static const int kDirtyTileDim = 16;
-  static const std::size_t kMaximumUploadRects = 8u;
-  static const std::size_t kDenseChangedSampleDivisor = 4u;
+  static constexpr int kOverviewPixelsPerTexel = 4;
+  static constexpr int kCachePaddingChunks = 2;
+  static constexpr int kDirtyTileDim = 16;
+  static constexpr std::size_t kMaximumUploadRects = 8u;
+  static constexpr std::size_t kDenseChangedSampleDivisor = 4u;
 
   struct UploadRect
   {

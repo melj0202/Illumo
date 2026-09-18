@@ -65,7 +65,9 @@ measured include cost, collisions, or portability work justifies it.
 dialogs behind the public \symbolref{SaveLoad} contract:
 \begin{itemize}
   \item Windows \pathref{WinMain.cpp}/\pathref{WinSaveLoad.cpp} is supported.
-  \item Linux and macOS sources remain unsupported stale scaffolding.
+  \item Linux sources target Ubuntu 24.04 x86_64 X11/XWayland with gtkmm-3
+        dialogs and clipboard; they are not supported until native smoke.
+        macOS remains unsupported stale scaffolding.
 \end{itemize}
 Platform bootstrap calls \symbolref{CreateIllumoApplication} and then the
 engine-owned \symbolref{RunIllumoApplication}. Each platform implements the
@@ -79,8 +81,9 @@ Product save codecs use \texttt{AtomicFile::write}: exclusively create a sibling
 staging file, encode, check write/flush/close, then replace the destination.
 Reported failures preserve prior bytes and clean only owned staging files.
 Windows replacement uses \texttt{MoveFileExW} without cross-volume copy fallback;
-POSIX rename remains unverified scaffolding. Formats stay product-owned and
-unchanged. This is not a power-loss durability guarantee.
+POSIX \texttt{rename} replaces on the same filesystem and fails with
+\texttt{EXDEV} across devices, with no copy fallback. Formats stay
+product-owned and unchanged. This is not a power-loss durability guarantee.
 
 The IllEd \texttt{.ilsc} parser validates numeric destination ranges before
 narrowing: float fields reject finite doubles outside the finite float range;

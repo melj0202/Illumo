@@ -20,10 +20,10 @@ class Renderer;
 class GameVisual : public DrawableBase
 {
 public:
-  static const unsigned int kInitialQuadCapacity = 1024;
-  static const unsigned int kDefaultMaxQuads = 65536;
+  static constexpr unsigned int kInitialQuadCapacity = 1024;
+  static constexpr unsigned int kDefaultMaxQuads = 65536;
   // Source compatibility for existing capacity checks.
-  static const unsigned int kMaxQuads = kDefaultMaxQuads;
+  static constexpr unsigned int kMaxQuads = kDefaultMaxQuads;
 
   explicit GameVisual(unsigned int maxQuads = kDefaultMaxQuads);
   ~GameVisual() override;

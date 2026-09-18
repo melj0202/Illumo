@@ -27,7 +27,15 @@ if(NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   if(CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
   else()
-    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    # Single-config generators (Ninja/Makefiles) also create source-named
+    # binary dirs such as IllumoGame/. Put executables beside a config folder
+    # so they do not collide with those directories.
+    if(CMAKE_BUILD_TYPE)
+      set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
+        "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
+    else()
+      set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endif()
   endif()
 endif()
 if(NOT DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
@@ -42,6 +50,20 @@ if(NOT DEFINED CMAKE_ARCHIVE_OUTPUT_DIRECTORY)
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
   else()
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+  endif()
+endif()
+
+if(UNIX AND NOT APPLE AND NOT CMAKE_CONFIGURATION_TYPES)
+  # Ninja/Makefiles also create IllumoGame/, IllEd/, and IllMeshViewer/ under
+  # the build root. Executables cannot share those names in the same directory.
+  if(CMAKE_RUNTIME_OUTPUT_DIRECTORY STREQUAL "${CMAKE_BINARY_DIR}" OR
+     CMAKE_RUNTIME_OUTPUT_DIRECTORY STREQUAL "")
+    if(CMAKE_BUILD_TYPE)
+      set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
+        "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
+    else()
+      set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endif()
   endif()
 endif()
 

@@ -63,6 +63,30 @@ operator delete[](void* pointer, size_t) noexcept
   std::free(pointer);
 }
 void*
+operator new(size_t size, const std::nothrow_t&) noexcept
+{
+  try {
+    return ::operator new(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+void*
+operator new[](size_t size, const std::nothrow_t&) noexcept
+{
+  return ::operator new(size, std::nothrow);
+}
+void
+operator delete(void* pointer, const std::nothrow_t&) noexcept
+{
+  ::operator delete(pointer);
+}
+void
+operator delete[](void* pointer, const std::nothrow_t&) noexcept
+{
+  ::operator delete[](pointer);
+}
+void*
 operator new(size_t size, std::align_val_t alignment)
 {
   checkSceneAllocationFailure();

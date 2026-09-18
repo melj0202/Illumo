@@ -42,19 +42,30 @@ elseif(APPLE)
     "-framework CoreVideo")
 elseif(UNIX)
   find_package(PkgConfig REQUIRED)
-  pkg_check_modules(GTK REQUIRED gtkmm-3.0)
+  find_package(Threads REQUIRED)
+  pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtkmm-3.0)
   set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/Linux/_main.cpp)
   list(APPEND ILLUMO_PLATFORM_SOURCES
+    Source/Platform/Linux/LinuxGtk.cpp
     Source/Platform/Linux/LinuxSaveLoad.cpp
     Source/Platform/PosixAtomicFile.cpp
     Source/Platform/Linux/LinuxClipboard.cpp
     Source/Platform/Linux/LinuxTimer.cpp
     Source/Platform/UnsupportedProcessMemoryStats.cpp)
-  list(APPEND ILLUMO_PLATFORM_LIBRARIES ${GTK_LIBRARIES})
+  list(APPEND ILLUMO_PLATFORM_LIBRARIES
+    PkgConfig::GTK Threads::Threads ${CMAKE_DL_LIBS})
 else()
   message(FATAL_ERROR "Illumo has no platform entry implementation")
 endif()
 
+if(UNIX AND NOT APPLE)
+  # gtkmm-3 file dialogs plus GLFW on native Wayland can deadlock. First Linux
+  # host is X11 or XWayland; keep GLFW's Wayland backend off until that is green.
+  set(GLFW_BUILD_WAYLAND OFF CACHE BOOL
+    "Illumo Linux uses X11/XWayland until native Wayland is validated" FORCE)
+  set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
+  set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+endif()
 add_subdirectory("thirdparty/glfw-3.4" SYSTEM)
 add_subdirectory("thirdparty/glm" SYSTEM)
 add_subdirectory("thirdparty/freetype-2.13.3" SYSTEM)
@@ -64,16 +75,22 @@ if(NOT TARGET glew_s)
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glew-2.1.0/src/glew.c")
   target_include_directories(glew_s PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glew-2.1.0/include")
-  target_compile_definitions(glew_s PUBLIC GLEW_STATIC)
-  target_compile_definitions(glew_s PRIVATE GLEW_NO_GLU)
+  target_compile_definitions(glew_s PUBLIC GLEW_STATIC GLEW_NO_GLU)
   if(MSVC)
     target_compile_definitions(glew_s PRIVATE VC_EXTRALEAN)
     target_compile_options(glew_s PRIVATE /GS-)
   endif()
   target_link_libraries(glew_s PUBLIC OpenGL::GL)
-  set_target_properties(glew_s PROPERTIES
-    OUTPUT_NAME "libglew32"
-    FOLDER "thirdparty")
+  if(UNIX AND NOT APPLE)
+    target_link_libraries(glew_s PUBLIC ${CMAKE_DL_LIBS})
+  endif()
+  if(WIN32)
+    set_target_properties(glew_s PROPERTIES
+      OUTPUT_NAME "libglew32"
+      FOLDER "thirdparty")
+  else()
+    set_target_properties(glew_s PROPERTIES FOLDER "thirdparty")
+  endif()
 endif()
 
 add_library(Illumo STATIC
@@ -159,6 +176,11 @@ if(UNIX AND NOT APPLE)
   target_compile_options(Illumo PRIVATE ${GTK_CFLAGS_OTHER})
   target_include_directories(Illumo SYSTEM PRIVATE ${GTK_INCLUDE_DIRS})
   target_link_directories(Illumo PRIVATE ${GTK_LIBRARY_DIRS})
+  # WSL and some VMs lack an invariant TSC; Tracy otherwise aborts test
+  # discovery and GUI startup before any Illumo code runs.
+  target_compile_definitions(Illumo PRIVATE
+    TRACY_TIMER_FALLBACK
+    TRACY_NO_INVARIANT_CHECK)
 endif()
 
 add_library(IllumoPlatformEntry OBJECT ${ILLUMO_PLATFORM_ENTRY_SOURCE})

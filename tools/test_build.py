@@ -367,9 +367,56 @@ class DashboardMouseTests(unittest.TestCase):
         self.assertEqual(len(self.regions), len(build.DASHBOARD_ITEMS))
         for region in self.regions:
             self.assertIn(build.DASHBOARD_ITEMS[region.index][1], lines[region.row - 1])
-            self.assertEqual(len(lines[region.row - 1]), region.right)
+            self.assertEqual(
+                build.dashboard_visible_width(lines[region.row - 1]), region.right
+            )
             if region.previous_x is not None:
                 self.assertIn(lines[region.row - 1][region.previous_x - 1], "<‹")
+
+    def test_rows_fit_narrow_and_wide_terminals(self):
+        for columns in (40, 56, 72, 80, 96, 120):
+            rendered = build.render_dashboard(self.state, columns, ansi=False)
+            for line in rendered.splitlines():
+                self.assertLessEqual(
+                    build.dashboard_visible_width(line),
+                    max(20, columns - 1),
+                    msg=repr(line),
+                )
+            if columns < 60:
+                self.assertNotIn("applications, tests, and optional PDFs", rendered)
+
+    def test_tui_newlines_reset_column(self):
+        self.assertEqual(build.tui_newlines("a\nb"), "a\r\nb")
+        self.assertEqual(build.tui_newlines("a\r\nb"), "a\r\nb")
+
+    def test_posix_escape_sequences_do_not_quit_on_arrows(self):
+        for sequence, expected in (
+            ("[A", "up"),
+            ("[B", "down"),
+            ("[C", "right"),
+            ("[D", "left"),
+            ("OA", "up"),
+            ("OB", "down"),
+            ("OC", "right"),
+            ("OD", "left"),
+            ("[1;5A", "up"),
+            ("", "quit"),
+            ("[I", "unknown"),
+            ("[15~", "unknown"),
+        ):
+            self.assertEqual(
+                build.posix_escape_to_key(sequence, False), expected, sequence
+            )
+        self.assertEqual(build.posix_escape_to_key("", True), "escape")
+        self.assertEqual(build.posix_escape_to_key("[I", True), "escape")
+
+    def test_visible_width_ignores_ansi_and_counts_wide_glyphs(self):
+        self.assertEqual(build.dashboard_visible_width("abc"), 3)
+        self.assertEqual(
+            build.dashboard_visible_width(f"{build.ANSI_REVERSE}abc{build.ANSI_RESET}"),
+            3,
+        )
+        self.assertEqual(build.dashboard_visible_width("字"), 2)
 
     def test_setting_clicks_and_backward_controls(self):
         region = self.regions[0]
@@ -439,7 +486,7 @@ class DashboardMouseTests(unittest.TestCase):
             build.DashboardMouseEvent(6, row, "hover"), "quit",
         ]
         with patch.object(build, "DashboardTerminal", return_value=terminal), \
-             patch.object(build.shutil, "get_terminal_size", return_value=build.os.terminal_size((96, 30))), \
+             patch.object(build, "dashboard_terminal_size", return_value=build.os.terminal_size((96, 30))), \
              patch.object(build.sys.stdin, "isatty", return_value=True), \
              patch.object(build, "execute_dashboard_action") as execute, \
              contextlib.redirect_stdout(io.StringIO()) as output:

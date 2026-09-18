@@ -75,7 +75,7 @@ struct EditorSceneDetail
 class IlscCodec
 {
 public:
-  static const int kVersion = 1;
+  static constexpr int kVersion = 1;
 
   static bool parse(const std::string& text,
                     IlscDocument* document,

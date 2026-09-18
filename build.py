@@ -22,6 +22,7 @@ import tempfile
 import time
 import textwrap
 from typing import Sequence
+import unicodedata
 import xml.etree.ElementTree as ET
 
 
@@ -52,6 +53,9 @@ ANSI_ENTER_SCREEN = "\x1b[?1049h"
 ANSI_LEAVE_SCREEN = "\x1b[?1049l"
 ANSI_HIDE_CURSOR = "\x1b[?25l"
 ANSI_SHOW_CURSOR = "\x1b[?25h"
+ANSI_DISABLE_WRAP = "\x1b[?7l"
+ANSI_ENABLE_WRAP = "\x1b[?7h"
+_ANSI_SEQUENCE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 DASHBOARD_CONFIGURATIONS = ("Release", "Debug", "RelWithDebInfo", "MinSizeRel")
 DASHBOARD_PARALLEL_OPTIONS = (
@@ -386,8 +390,13 @@ class DashboardTerminal:
 
             self.input_fd = sys.stdin.fileno()
             self.original_attributes = termios.tcgetattr(self.input_fd)
-            tty.setraw(self.input_fd)
-        sys.stdout.write(ANSI_ENTER_SCREEN + ANSI_HIDE_CURSOR)
+            # cbreak, not raw: raw clears OPOST so LF does not return to
+            # column 0 and the boxed menu walks off the right edge.
+            tty.setcbreak(self.input_fd)
+            termios.tcflush(self.input_fd, termios.TCIFLUSH)
+        sys.stdout.write(
+            ANSI_ENTER_SCREEN + ANSI_HIDE_CURSOR + ANSI_DISABLE_WRAP
+        )
         sys.stdout.flush()
 
     def leave(self) -> None:
@@ -405,7 +414,9 @@ class DashboardTerminal:
                 self.original_attributes = None
                 self.input_fd = None
         finally:
-            sys.stdout.write(ANSI_RESET + ANSI_SHOW_CURSOR + ANSI_LEAVE_SCREEN)
+            sys.stdout.write(
+                ANSI_RESET + ANSI_ENABLE_WRAP + ANSI_SHOW_CURSOR + ANSI_LEAVE_SCREEN
+            )
             sys.stdout.flush()
 
     def read_event(self, text_mode: bool = False) -> str | DashboardMouseEvent | DashboardTextEvent:
@@ -610,6 +621,63 @@ def enable_virtual_terminal_processing() -> None:
         return
 
 
+def dashboard_terminal_size() -> os.terminal_size:
+    """Prefer a live TTY ioctl. Zero-sized answers fall back instead of
+    rendering a 94-column menu into a narrow Ubuntu/Alacritty window."""
+    for stream in (sys.stdout, sys.stdin, sys.stderr):
+        try:
+            size = os.get_terminal_size(stream.fileno())
+        except (AttributeError, OSError, ValueError):
+            continue
+        if size.columns > 0 and size.lines > 0:
+            return size
+    return shutil.get_terminal_size((80, 24))
+
+
+def dashboard_visible_width(text: str) -> int:
+    """Terminal cells used by text. ANSI is ignored. Wide and ambiguous
+    glyphs count as two cells so a boxed row cannot wrap on Ubuntu."""
+    width = 0
+    for char in _ANSI_SEQUENCE.sub("", text):
+        if unicodedata.combining(char):
+            continue
+        if unicodedata.east_asian_width(char) in ("W", "F"):
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def dashboard_pad(text: str, width: int, align: str = "left") -> str:
+    if width < 1:
+        return ""
+    ellipsis = "..."
+    if dashboard_visible_width(text) > width:
+        trimmed: list[str] = []
+        used = 0
+        limit = width - dashboard_visible_width(ellipsis)
+        if limit < 1:
+            text = ellipsis[:width]
+        else:
+            for char in text:
+                cell = dashboard_visible_width(char)
+                if used + cell > limit:
+                    break
+                trimmed.append(char)
+                used += cell
+            text = "".join(trimmed) + ellipsis
+    pad = max(0, width - dashboard_visible_width(text))
+    if align == "center":
+        left = pad // 2
+        return (" " * left) + text + (" " * (pad - left))
+    return text + (" " * pad)
+
+
+def tui_newlines(text: str) -> str:
+    """Keep each TUI row at column 0 even if the tty is in raw/cbreak."""
+    return text.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
 def dashboard_style(text: str, style: str, ansi: bool) -> str:
     if not ansi or not style:
         return text
@@ -637,14 +705,17 @@ def render_dashboard(
     hit_regions: list[DashboardHitRegion] | None = None,
     mouse_enabled: bool = False,
 ) -> str:
-    width = max(54, min(94, terminal_width - 2))
-    inner_width = width - 2
+    # Never emit a row as wide as the TTY: the cursor wrap-around on the last
+    # column splits labels and descriptions into overlapping columns.
+    usable = max(20, terminal_width - 1)
+    width = min(94, usable)
+    inner_width = max(1, width - 2)
     lines: list[str] = []
     if hit_regions is not None:
         hit_regions.clear()
     encoding = sys.stdout.encoding or "utf-8"
     try:
-        "╭─╮│├┤╰╯▶‹›↑↓←→".encode(encoding)
+        "╭─╮│├┤╰╯>‹›↑↓←→".encode(encoding)
         glyphs = {
             "top_left": "╭",
             "top_right": "╮",
@@ -654,10 +725,10 @@ def render_dashboard(
             "bottom_right": "╯",
             "horizontal": "─",
             "vertical": "│",
-            "marker": "▶",
+            "marker": ">",
             "left": "‹",
             "right": "›",
-            "help": "↑↓ navigate   ←→ change   Enter select   q quit",
+            "help": "Up/Down navigate   Left/Right change   Enter select   q quit",
         }
     except UnicodeEncodeError:
         glyphs = {
@@ -676,17 +747,17 @@ def render_dashboard(
         }
 
     def border(left: str, fill: str, right: str) -> None:
-        lines.append(left + (fill * inner_width) + right)
+        fill_width = dashboard_visible_width(fill) or 1
+        count = max(0, inner_width // fill_width)
+        lines.append(left + dashboard_pad(fill * count, inner_width) + right)
 
     def content(
         value: str = "", style: str = "", align: str = "left"
     ) -> None:
-        if len(value) > inner_width - 2:
-            value = value[: inner_width - 5] + "..."
         if align == "center":
-            padded = value.center(inner_width)
+            padded = dashboard_pad(value, inner_width, "center")
         else:
-            padded = (" " + value).ljust(inner_width)
+            padded = dashboard_pad(" " + value, inner_width)
         lines.append(
             glyphs["vertical"]
             + dashboard_style(padded, style, ansi)
@@ -719,13 +790,15 @@ def render_dashboard(
             last_kind = kind
 
         marker = glyphs["marker"] if index == state.selected else " "
+        prefix = f" {marker} {label}"
         if kind == "setting":
             value = dashboard_value(state, key)
-            available = max(1, inner_width - len(label) - len(value) - 8)
-            raw = (
-                f" {marker} {label}{' ' * available}"
-                f"{glyphs['left']} {value} {glyphs['right']} "
-            )
+            suffix = f"{glyphs['left']} {value} {glyphs['right']} "
+            gap = inner_width - dashboard_visible_width(prefix) - dashboard_visible_width(suffix)
+            if gap < 1:
+                raw = prefix
+            else:
+                raw = prefix + (" " * gap) + suffix
         else:
             if key == "build_app":
                 description = f"focused {state.application} target"
@@ -735,14 +808,15 @@ def render_dashboard(
                 description = f"launch existing {state.application}"
             else:
                 description = DASHBOARD_DESCRIPTIONS[key]
-            if inner_width >= 76:
-                available = max(
-                    1, inner_width - len(label) - len(description) - 7
-                )
-                raw = f" {marker} {label}{' ' * available}{description} "
+            suffix = f"{description} "
+            gap = inner_width - dashboard_visible_width(prefix) - dashboard_visible_width(
+                suffix
+            )
+            if gap >= 2:
+                raw = prefix + (" " * gap) + suffix
             else:
-                raw = f" {marker} {label} "
-        raw = raw[:inner_width].ljust(inner_width)
+                raw = prefix
+        raw = dashboard_pad(raw, inner_width)
         if hit_regions is not None:
             previous_x = raw.rfind(glyphs["left"]) + 2 if kind == "setting" else None
             hit_regions.append(DashboardHitRegion(index, len(lines) + 1, width, previous_x))
@@ -775,6 +849,29 @@ def render_dashboard(
     return "\n".join(lines)
 
 
+def posix_escape_to_key(sequence: str, text_mode: bool) -> str:
+    """Map bytes after ESC. Alternate-screen terminals send OA/OB for arrows
+    instead of [A/[B; unknown CSI must not quit the dashboard."""
+    if not sequence:
+        return "escape" if text_mode else "quit"
+    final = sequence[-1]
+    if final in "ABCD":
+        return {"A": "up", "B": "down", "C": "right", "D": "left"}[final]
+    return "escape" if text_mode else "unknown"
+
+
+def _posix_read_byte(file_descriptor: int, timeout: float | None) -> bytes | None:
+    import select
+
+    if timeout is not None and not select.select([file_descriptor], [], [], timeout)[0]:
+        return None
+    try:
+        data = os.read(file_descriptor, 1)
+    except OSError:
+        return None
+    return data or None
+
+
 def read_dashboard_key(text_mode: bool = False) -> str | DashboardTextEvent:
     if os.name == "nt":
         import msvcrt
@@ -803,23 +900,31 @@ def read_dashboard_key(text_mode: bool = False) -> str | DashboardTextEvent:
             "\x1b": "escape" if text_mode else "quit",
         }.get(character, "unknown")
 
-    character = sys.stdin.read(1)
-    if character == "\x03":
+    file_descriptor = sys.stdin.fileno()
+    first = _posix_read_byte(file_descriptor, 0.25)
+    if first is None:
+        return "resize"
+    code = first[0]
+    if code == 3:
         raise KeyboardInterrupt
-    if text_mode and character.isprintable():
-        return DashboardTextEvent(character)
-    if character == "\x1b":
-        import select
-
-        sequence = ""
-        while len(sequence) < 2 and select.select([sys.stdin], [], [], 0.03)[0]:
-            sequence += sys.stdin.read(1)
-        return {
-            "[A": "up",
-            "[B": "down",
-            "[C": "right",
-            "[D": "left",
-        }.get(sequence, "escape" if text_mode else "quit")
+    if text_mode and 32 <= code < 127:
+        return DashboardTextEvent(chr(code))
+    if code == 27:
+        sequence = b""
+        nxt = _posix_read_byte(file_descriptor, 0.05)
+        if nxt is None:
+            return posix_escape_to_key("", text_mode)
+        sequence += nxt
+        if nxt in (b"[", b"O"):
+            while len(sequence) < 16:
+                nxt = _posix_read_byte(file_descriptor, 0.05)
+                if nxt is None:
+                    break
+                sequence += nxt
+                if 64 <= nxt[0] <= 126:
+                    break
+        return posix_escape_to_key(sequence.decode("latin1"), text_mode)
+    character = chr(code) if 32 <= code < 127 else first.decode("latin1")
     return {
         "\r": "enter",
         "\n": "enter",
@@ -1098,7 +1203,11 @@ def render_dashboard_progress(
 
 def paint_dashboard_progress(progress: DashboardProgress) -> None:
     size = shutil.get_terminal_size((96, 30))
-    sys.stdout.write(ANSI_CLEAR + render_dashboard_progress(progress, size.columns, size.lines))
+    sys.stdout.write(
+        ANSI_CLEAR + tui_newlines(
+            render_dashboard_progress(progress, size.columns, size.lines)
+        )
+    )
     sys.stdout.flush()
 
 
@@ -1785,7 +1894,7 @@ def choose_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
         size = shutil.get_terminal_size((100, 32))
         rendered, regions, page = render_toolbox(title, rows, view, size.columns, size.lines, status)
         if rendered != last:
-            sys.stdout.write(ANSI_CLEAR + rendered)
+            sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
             sys.stdout.flush()
             last = rendered
         event = terminal.read_event(text_mode=view.draft is not None)
@@ -2092,22 +2201,23 @@ def run_dashboard() -> int:
         terminal.enter()
         last_rendered: str | None = None
         while True:
-            terminal_size = shutil.get_terminal_size((96, 30))
+            terminal_size = dashboard_terminal_size()
             regions: list[DashboardHitRegion] = []
             rendered = render_dashboard(
                 state, terminal_size.columns, hit_regions=regions,
                 mouse_enabled=terminal.windows_input is not None,
             )
             # Wrapped or vertically clipped output cannot be hit-tested safely.
-            if terminal_size.columns < 56 or len(rendered.splitlines()) > terminal_size.lines:
+            rendered_rows = len(rendered.splitlines())
+            if terminal_size.columns < 56 or rendered_rows > terminal_size.lines:
                 regions.clear()
             if rendered != last_rendered:
-                sys.stdout.write(ANSI_CLEAR + rendered)
+                sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
                 sys.stdout.flush()
                 last_rendered = rendered
             event = terminal.read_event()
             if isinstance(event, DashboardMouseEvent):
-                if shutil.get_terminal_size((96, 30)) != terminal_size:
+                if dashboard_terminal_size() != terminal_size:
                     continue
                 key = dashboard_mouse_key(state, event, regions)
             else:

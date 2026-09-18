@@ -110,17 +110,14 @@ RenderWindow::initialize()
   }
   Logger::LogTrace("Window centered");
 
-  /* Make the window's context current */
+  /* Make the window's context current. Do not issue GL calls here: GLEW has
+     not loaded function pointers yet, and core-profile GLX can crash. */
   glfwMakeContextCurrent(window);
-  if (samples > 0) {
-    glEnable(GL_MULTISAMPLE);
-  }
   glfwSetWindowUserPointer(window, this);
   glfwSetWindowSizeCallback(window, windowSizeCallback);
   if (!m_captureOnly) {
     glfwSetWindowSizeLimits(window, 640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
   }
-  // Set initial viewport size based on current framebuffer size
   int fbWidth = 0;
   int fbHeight = 0;
   glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
@@ -129,8 +126,7 @@ RenderWindow::initialize()
       "Capture framebuffer size differs from requested dimensions");
     return false;
   }
-  glViewport(0, 0, fbWidth, fbHeight);
-  Logger::LogTrace("Viewport set");
+  Logger::LogTrace("Framebuffer size queried");
 
   syncPresentationMode();
   return true;

@@ -397,7 +397,7 @@ static void
 testEnvVarsApplicationPath()
 {
   testSection("EnvVars: application configuration ignores working directory");
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
   const std::filesystem::path originalDirectory =
     std::filesystem::current_path();
   const std::filesystem::path configPath = EnvVars::ApplicationConfigPath();
@@ -418,7 +418,7 @@ testEnvVarsApplicationPath()
     configPath == changedConfigPath,
     "application configuration path is independent of working directory");
 #else
-  testTrue(g, true, "Windows production path is covered on Windows");
+  testTrue(g, true, "Windows/Linux production path is covered on those hosts");
 #endif
 }
 

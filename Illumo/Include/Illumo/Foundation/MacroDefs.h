@@ -52,7 +52,6 @@ msleep(long msec)
 
   return res;
 }
-
 #endif
 
 #ifndef __ILLUMO_FORCE_INLINE__

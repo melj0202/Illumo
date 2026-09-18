@@ -187,7 +187,7 @@ private:
   // Auto-parallel threshold: grids at or above this cell count may use
   // multiple workers when override is 0. Kept high enough that per-generation
   // thread spawn is amortized (256² is still spawn-bound on typical CPUs).
-  static const int kParallelCellThreshold = 512 * 512;
+  static constexpr int kParallelCellThreshold = 512 * 512;
 
   static int workerOverride;
   mutable TransitionTable transitionTable{};

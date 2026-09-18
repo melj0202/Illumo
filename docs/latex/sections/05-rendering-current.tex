@@ -330,8 +330,9 @@ all registered workspace runners.
         (D-R9).
   \item \pathref{RenderWindow} still uses GLEW for context create / viewport
         (window bootstrap, not frame submission).
-  \item Windows is the supported live path. Linux and macOS bootstraps are
-        known stale against current App APIs and have no native validation.
+  \item Windows is the supported live path. Linux window bootstrap no longer
+        issues GL calls before GLEW; native GUI smoke is still required.
+        macOS remains an unvalidated scaffold.
   \item Font atlases/UTF-8 layout, tilemaps/particles, mesh materials and formats
         beyond OBJ, and broader offscreen compositing are follow-on features,
         not hidden scaffolding in the current renderer.
