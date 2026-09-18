@@ -410,15 +410,12 @@ Do not reuse a Windows CMake cache. The full package list, failure table, and
 GUI smoke checklist live in
 [docs/packages/platform-linux.md](docs/packages/platform-linux.md).
 
-```bash
-sudo apt update
-sudo apt install --no-install-recommends \
-  build-essential cmake ninja-build pkg-config python3 \
-  libgl1-mesa-dev mesa-utils \
-  libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
-  libxi-dev libxext-dev \
-  libgtkmm-3.0-dev
+CMake installs Debian/Ubuntu packages during configure (`tools/install-linux-deps.sh`)
+when `ILLUMO_INSTALL_LINUX_DEPS` is ON. If sudo needs a password, run the
+script once first:
 
+```bash
+bash tools/install-linux-deps.sh --tidy
 pkg-config --modversion gtkmm-3.0
 glxinfo -B
 

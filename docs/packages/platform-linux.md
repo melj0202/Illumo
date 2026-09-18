@@ -49,17 +49,27 @@ Ubuntu 22.04's default GCC 11 and default CMake 3.22 are not sufficient.
 
 ## Packages
 
+Debian/Ubuntu packages are listed in `tools/install-linux-deps.sh` (OpenGL/GLX,
+X11 for GLFW, gtkmm-3, toolchain). CMake runs that script on Linux configure
+when `ILLUMO_INSTALL_LINUX_DEPS` is ON (the default). If you are not root and
+sudo needs a password, run it once in a terminal:
+
 ```bash
-sudo apt update
-sudo apt install --no-install-recommends \
-  build-essential cmake ninja-build pkg-config python3 \
-  libgl1-mesa-dev mesa-utils \
-  libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
-  libxi-dev libxext-dev \
-  libgtkmm-3.0-dev
+bash tools/install-linux-deps.sh --tidy
 ```
 
-Confirm the dialog toolkit and a live GLX display before configuring:
+Or let CMake do it (passwordless sudo or root):
+
+```bash
+cmake -S . -B build-linux -G Ninja \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DILLUMO_BUILD_DOCUMENTATION=OFF
+```
+
+Disable the helper with `-DILLUMO_INSTALL_LINUX_DEPS=OFF` if packages are
+already provided by the image. Non-Debian hosts skip the script.
+
+Confirm the dialog toolkit and a live GLX display before the first GUI run:
 
 ```bash
 pkg-config --modversion gtkmm-3.0
@@ -70,11 +80,8 @@ glxinfo -B
 ```
 
 If `glxinfo` fails, stop. That is a driver/session problem, not an Illumo bug.
-On a desktop Ubuntu 24.04 install `gtkmm-3.0` should report 3.24.x.
-
-Optional: `clang-tidy` if you want the default tidy-on-compile gate. The first
-Linux configure command below turns tidy off so a missing LLVM install is not
-a configure failure.
+On a desktop Ubuntu 24.04 install `gtkmm-3.0` should report 3.24.x. The apt
+helper also installs `clang-tidy` when CMake's tidy gate is on.
 
 ## Configure, build, and test
 

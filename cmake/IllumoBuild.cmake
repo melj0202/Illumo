@@ -6,11 +6,60 @@ option(ILLUMO_ENABLE_COVERAGE
   "Instrument first-party workspace targets for LLVM coverage" OFF)
 option(ILLUMO_ENABLE_CLANG_TIDY
   "Run clang-tidy on first-party C++ during build" ON)
+if(UNIX AND NOT APPLE)
+  option(ILLUMO_INSTALL_LINUX_DEPS
+    "Install Debian/Ubuntu apt packages during configure" ON)
+else()
+  option(ILLUMO_INSTALL_LINUX_DEPS
+    "Install Debian/Ubuntu apt packages during configure" OFF)
+endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 get_filename_component(ILLUMO_WORKSPACE_SOURCE_ROOT
   "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+
+if(ILLUMO_INSTALL_LINUX_DEPS AND UNIX AND NOT APPLE)
+  set(_illumo_linux_deps_script
+    "${ILLUMO_WORKSPACE_SOURCE_ROOT}/tools/install-linux-deps.sh")
+  if(EXISTS "${_illumo_linux_deps_script}")
+    set(_illumo_linux_deps_args)
+    if(ILLUMO_ENABLE_CLANG_TIDY)
+      list(APPEND _illumo_linux_deps_args --tidy)
+    endif()
+    if(ILLUMO_BUILD_DOCUMENTATION)
+      list(APPEND _illumo_linux_deps_args --docs)
+    endif()
+    message(STATUS "Checking Debian/Ubuntu packages for Illumo")
+    execute_process(
+      COMMAND bash "${_illumo_linux_deps_script}" ${_illumo_linux_deps_args}
+      WORKING_DIRECTORY "${ILLUMO_WORKSPACE_SOURCE_ROOT}"
+      RESULT_VARIABLE _illumo_linux_deps_result
+      OUTPUT_VARIABLE _illumo_linux_deps_output
+      ERROR_VARIABLE _illumo_linux_deps_error
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_STRIP_TRAILING_WHITESPACE)
+    if(_illumo_linux_deps_output)
+      message(STATUS "${_illumo_linux_deps_output}")
+    endif()
+    if(_illumo_linux_deps_error)
+      message(STATUS "${_illumo_linux_deps_error}")
+    endif()
+    if(NOT _illumo_linux_deps_result EQUAL 0)
+      message(FATAL_ERROR
+        "Linux apt packages are missing or could not be installed.\n"
+        "From a terminal run:\n"
+        "  bash ${_illumo_linux_deps_script} ${_illumo_linux_deps_args}\n"
+        "Then re-run CMake. Disable with -DILLUMO_INSTALL_LINUX_DEPS=OFF.")
+    endif()
+    unset(_illumo_linux_deps_args)
+    unset(_illumo_linux_deps_result)
+    unset(_illumo_linux_deps_output)
+    unset(_illumo_linux_deps_error)
+  endif()
+  unset(_illumo_linux_deps_script)
+endif()
+
 if(ILLUMO_ENABLE_CLANG_TIDY)
   find_program(ILLUMO_CLANG_TIDY_EXECUTABLE NAMES clang-tidy)
   if(NOT ILLUMO_CLANG_TIDY_EXECUTABLE)

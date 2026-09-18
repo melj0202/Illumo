@@ -14,4 +14,5 @@ restore the process working directory, and never parse product files. POSIX
 
 Do not describe Linux as supported until native CMake, compiler, GLFW,
 OpenGL, GTK dialog, runtime, and shutdown checks pass on a named host. Build
-and smoke steps: `docs/packages/platform-linux.md`.
+and smoke steps: `docs/packages/platform-linux.md`. Debian/Ubuntu configure
+runs `tools/install-linux-deps.sh` unless `ILLUMO_INSTALL_LINUX_DEPS=OFF`.
