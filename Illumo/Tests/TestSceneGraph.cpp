@@ -1,6 +1,7 @@
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Scene/Transform3D.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
@@ -150,6 +151,7 @@ testSceneGraphHandlesAndLifetime()
   testSection("SceneGraph: handles, ownership, and subtree destruction");
 
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle root = graph.createNode();
   const SceneNodeHandle child = graph.createNode(root);
   const SceneNodeHandle otherRoot = graph.createNode();
@@ -170,6 +172,7 @@ testSceneGraphHandlesAndLifetime()
   testTrue(g, graph.getChild(root, 0) == child, "child order resolves");
 
   SceneGraph foreignGraph;
+  SceneGraphDrawable foreignGraphDrawable(foreignGraph);
   const SceneNodeHandle foreign = foreignGraph.createNode();
   testTrue(g, !graph.isNodeValid(foreign), "foreign handle is rejected");
   testTrue(g,
@@ -208,6 +211,7 @@ testSceneGraphHierarchyAndTransforms()
   testSection("SceneGraph: hierarchy, transforms, and cycle rejection");
 
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle root = graph.createNode();
   const SceneNodeHandle child = graph.createNode(root);
   const SceneNodeHandle grandchild = graph.createNode(child);
@@ -272,7 +276,7 @@ testSceneGraphHierarchyAndTransforms()
            !graph.getWorldTransform(SceneNodeHandle{}, &unchanged),
            "null world-transform query fails safely");
   testTrue(g,
-           !graph.getLocalTransform(root, nullptr),
+           !graph.getLocalTransform(root, static_cast<Matrix4*>(nullptr)),
            "null local-transform output fails safely");
 
   const Transform3D trs = Transform3D::fromPosition(Vector3(7.0f, 8.0f, 9.0f));
@@ -285,6 +289,7 @@ testSceneGraphHierarchyAndTransforms()
            "Transform3D local transform propagates to world transform");
 
   SceneGraph branchGraph;
+  SceneGraphDrawable branchGraphDrawable(branchGraph);
   const SceneNodeHandle branchRoot = branchGraph.createNode();
   const SceneNodeHandle leftParent = branchGraph.createNode(branchRoot);
   const SceneNodeHandle leftLeaf = branchGraph.createNode(leftParent);
@@ -336,6 +341,7 @@ testSceneGraphRenderExtraction()
   testSection("SceneGraph: render order and subtree state");
 
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle rootA = graph.createNode();
   const SceneNodeHandle childA = graph.createNode(rootA);
   const SceneNodeHandle grandchildA = graph.createNode(childA);
@@ -363,7 +369,8 @@ testSceneGraphRenderExtraction()
   graph.setRenderAttachment(childB, &attachmentChildB);
   graph.setRenderAttachment(rootB, &attachmentRootB);
 
-  testTrue(g, graph.AppendCommands(nullptr), "graph owns the token path");
+  testTrue(
+    g, graphDrawable.AppendCommands(nullptr), "graph owns the token path");
   const std::vector<int> expectedOrder{ 1, 2, 3, 4, 5 };
   testTrue(
     g, order == expectedOrder, "attachments emit in hierarchy pre-order");
@@ -375,7 +382,7 @@ testSceneGraphRenderExtraction()
   order.clear();
   transforms.clear();
   graph.setVisible(childA, false);
-  graph.AppendCommands(nullptr);
+  graphDrawable.AppendCommands(nullptr);
   const std::vector<int> hiddenOrder{ 1, 4, 5 };
   testTrue(
     g, order == hiddenOrder, "invisible node suppresses its complete subtree");
@@ -384,7 +391,7 @@ testSceneGraphRenderExtraction()
   transforms.clear();
   graph.setVisible(childA, true);
   graph.setEnabled(rootA, false);
-  graph.AppendCommands(nullptr);
+  graphDrawable.AppendCommands(nullptr);
   const std::vector<int> disabledOrder{ 5 };
   testTrue(
     g, order == disabledOrder, "disabled node suppresses its complete subtree");
@@ -392,11 +399,11 @@ testSceneGraphRenderExtraction()
   order.clear();
   transforms.clear();
   graph.setEnabled(rootA, true);
-  graph.setVisible(false);
-  graph.AppendCommands(nullptr);
+  graphDrawable.setVisible(false);
+  graphDrawable.AppendCommands(nullptr);
   testEqSize(g, order.size(), 0u, "hidden graph emits no attachments");
 
-  graph.setVisible(true);
+  graphDrawable.setVisible(true);
   graph.setRenderAttachment(childB, nullptr);
   testTrue(g,
            graph.getRenderAttachment(childB) == nullptr,
@@ -404,10 +411,11 @@ testSceneGraphRenderExtraction()
 
   MutatingSceneAttachment mutatingAttachment(&graph, childB);
   graph.setRenderAttachment(childB, &mutatingAttachment);
-  graph.AppendCommands(nullptr);
-  testTrue(g,
-           !mutatingAttachment.mutationAccepted && graph.isNodeValid(childB),
-           "render callbacks cannot mutate graph storage during traversal");
+  graphDrawable.AppendCommands(nullptr);
+  testTrue(
+    g,
+    mutatingAttachment.mutationAccepted && !graph.isNodeValid(childB),
+    "v2 callback mutation retires the snapshot without walking live storage");
 }
 
 static void
@@ -454,6 +462,7 @@ testSceneGraphBoundsAndCulling()
 
   HeadlessRenderFixture fixture(640, 480);
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle offscreenParent = graph.createNode();
   const SceneNodeHandle onscreenChild = graph.createNode(offscreenParent);
   const SceneNodeHandle unknownRoot = graph.createNode();
@@ -508,13 +517,14 @@ testSceneGraphBoundsAndCulling()
              !graph.getWorldBounds(stale, &childWorldBounds),
            "stale handles cannot query bounds");
   SceneGraph foreignGraph;
+  SceneGraphDrawable foreignGraphDrawable(foreignGraph);
   const SceneNodeHandle foreign = foreignGraph.createNode();
   testTrue(g,
            !graph.getWorldBounds(foreign, &childWorldBounds),
            "foreign handles cannot query bounds");
 
   Scene scene(&fixture.window, &fixture.camera);
-  scene.AddDrawable(&graph, RenderLayerId::World);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
   fixture.renderer.BeginFrame();
   fixture.renderer.RenderScene(&scene, &fixture.camera);
   fixture.renderer.EndFrame();
@@ -527,6 +537,7 @@ testSceneGraphBoundsAndCulling()
   fixture.camera.lookAt(
     Vector3(0.0f, 0.0f, 10.0f), Vector3(0.0f), Vector3(0.0f, 1.0f, 0.0f));
   SceneGraph perspectiveGraph;
+  SceneGraphDrawable perspectiveGraphDrawable(perspectiveGraph);
   const SceneNodeHandle perspectiveVisible = perspectiveGraph.createNode();
   const SceneNodeHandle perspectiveHidden = perspectiveGraph.createNode();
   perspectiveGraph.setLocalTransform(
@@ -540,7 +551,7 @@ testSceneGraphBoundsAndCulling()
   perspectiveGraph.setRenderAttachment(perspectiveVisible, &visibleAttachment);
   perspectiveGraph.setRenderAttachment(perspectiveHidden, &hiddenAttachment);
   Scene perspectiveScene(&fixture.window, &fixture.camera);
-  perspectiveScene.AddDrawable(&perspectiveGraph, RenderLayerId::World);
+  perspectiveScene.AddDrawable(&perspectiveGraphDrawable, RenderLayerId::World);
   fixture.renderer.BeginFrame();
   fixture.renderer.RenderScene(&perspectiveScene, &fixture.camera);
   fixture.renderer.EndFrame();
@@ -558,6 +569,7 @@ runSceneGraphCullingPass(HeadlessRenderFixture* fixture,
                          long long* elapsedMicros)
 {
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   std::vector<CountingSceneAttachment> attachments;
   attachments.reserve(nodeCount);
   for (size_t index = 0; index < nodeCount; ++index) {
@@ -570,7 +582,7 @@ runSceneGraphCullingPass(HeadlessRenderFixture* fixture,
     graph.setRenderAttachment(node, &attachments.back());
   }
   Scene scene(&fixture->window, &fixture->camera);
-  scene.AddDrawable(&graph, RenderLayerId::World);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
   const std::chrono::steady_clock::time_point start =
     std::chrono::steady_clock::now();
   fixture->renderer.BeginFrame();

@@ -1,36 +1,58 @@
 # Illumo Scene
 
-`SceneGraph` is Illumo's persistent, product-agnostic world hierarchy. It owns
-node storage and exposes graph-ID-plus-slot-plus-generation
-`SceneNodeHandle` values rather than node pointers.
+`SceneGraph` owns persistent nodes in parallel slot arrays and exposes only
+`SceneNodeHandle` identities (graph ID, slot, generation). Intrusive ordered
+parent/child/sibling links are authoritative. A structural revision lazily
+compiles preorder, parent indices, subtree ranges, and depths. Local TRS edits
+set one dirty bit and lower a watermark; one forward pass resolves affected
+world transforms. Authoritative world queries walk only ancestors and do not
+consume dirty state. Matrix setters explicitly decompose to TRS; shear and
+projective input are lossy.
 
-Each node has one parent, ordered children, a local transform, a cached world
-transform, local enabled/visible flags, and at most one borrowed
-`ISceneRenderAttachment`. Reparenting rejects cycles, subtree destruction
-invalidates every affected handle, and root/sibling insertion order defines
-deterministic iterative traversal.
+Nodes carry nonunique interned names, an opaque uint64 payload, enabled/visible
+state, and an ordered list of borrowed attachments. Names return the first
+preorder match. A 4,096-entry sequence journal lets consumers update bindings;
+an expired cursor signals a full resynchronization. No node addresses, file
+format, component system, or application update callbacks enter this API.
 
-The graph is also one token-path `DrawableBase`. When it is placed in the World
-layer of the per-frame `Rendering::Scene`, it resolves dirty transforms and
-calls visible, enabled attachments in hierarchy pre-order. Attachments receive
-the node world matrix and append commands through `Renderer`; the graph owns
-neither attachments nor backend resources. An attachment may optionally report
-finite local `AxisAlignedBounds3`. The graph exposes the corresponding world
-bounds and skips color emission only when a valid bound is wholly outside the
-active camera frustum. Unknown or malformed bounds fail open, and a culled
-parent attachment never prunes child traversal.
+Nonzero attachment bounds revisions cache local AABBs; zero means uncacheable.
+World boxes transform each attachment before union, and a backward pass refits
+subtree boxes. Unknown/invalid bounds fail open during rendering. Hidden
+subtrees skip their compiled range. Camera-missed bounded subtrees skip camera
+tests but retain snapshot entries for potentially relevant off-camera shadows.
+`raycast`, ordered ray candidates, and `queryBounds` use a lazy binned-SAH BVH;
+failed builds use the equivalent linear path. Warm queries still poll attachment
+revisions in O(n); the index accelerates intersection work, not that polling.
 
-One attachment can emit multiple visual items; child nodes provide independent
-transforms and subtree state. Its iterative render stack is retained private
-scratch that grows with the graph; v1 does not cache a flattened render list or
-subtree bounds.
+`SceneGraph` no longer derives from `DrawableBase`. `SceneGraphDrawable` borrows
+it and publishes one `SceneSnapshotView` per renderer frame, keyed by renderer
+lifetime and frame serial. Collection, depth, and color consume immutable world
+matrices, bounds, handles, and borrowed attachment pointers. The graph retains
+two reusable snapshot buffers. Views expire on slot reuse, graph teardown, or
+attachment invalidation/destruction. The adapter checks validity before every
+callback and reports an expired frame rather than calling retired content.
+Ordinary transform/state edits after extraction affect the next snapshot.
 
-V1 is main-thread affine and deliberately excludes ECS components, update
-callbacks, serialization, prefabs, spatial indices, physics, scripting, and
-retained UI. IllEd is the first product consumer: it rebuilds a graph from an
-editor-owned `.ilsc` document (D-E10) and never asks SceneGraph to serialize
-itself. IllumoGame never uses the graph for CA cell storage. Its opt-in
-`render3dTest` diagnostic separately attaches world `MeshVisual` hosts to scene
-nodes. The complete contract and rollout boundary are in
-`../scene-graph-v1-design.md`; formal decisions D-E8, D-E10, D-E11, and D-R21
-record the hierarchy, interchange file, bounded extraction, and world look.
+The Renderer fits the shared directional light after caster collection, so
+shadow relevance is computed from snapshot bounds in the depth pass. This is
+an intentional adjustment to the original proposal's early shadow flag; it
+preserves the established shared-shadow policy and off-camera casters. Owners
+must detach or invalidate snapshots before changing/freeing borrowed content,
+and emitted token payloads must still outlive synchronous submission. Mutation
+is rejected inside extraction/bounds callbacks. All scene work stays on the
+main thread. The `sceneSnapshotExtraction` environment value defaults to on;
+zero temporarily selects guarded direct traversal for containment.
+
+IllEd's `EditorDocument` owns the runtime graph and is its edit gateway. Stable
+file IDs become graph names; recipe indices use user data. Render bindings
+persist across transform/recolor edits, journal overflow resynchronizes bindings,
+and serialization exports hierarchy order from the graph. Picking keeps the
+editor's exact transformed local-box narrow phase after graph broad-phase
+queries. `.ilsc` remains version 1. IllumoGame's diagnostic scene and capture
+fixtures use the same adapter; CA storage and primitive-composed UI stay
+separate. Generic `WorkerPool` is available without importing CA policy; scene
+parallelism and a separate culling index remain measurement-gated.
+
+See `../scene-graph-v2-design.md`, `../scene-graph-v2-plan.md`, and decisions
+D-E12/D-R25 for implementation, benchmark gates, and verification. The v1
+design remains historical context for D-E8/D-E11.

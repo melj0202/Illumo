@@ -37,29 +37,45 @@ No second real GPU API.
         \symbolref{GLDevice::ExecuteCommandQueue} resolves handles and issues GL.
 \end{enumerate}
 
-\subsection{Persistent scene extraction (D-E8/D-E11)}
-The per-frame \symbolref{Scene} remains a non-owning layered drawable list.
-The separate \symbolref{SceneGraph} owns persistent hierarchy nodes and may be
-added to that list as one World drawable. Consumers hold graph-local
-generational \symbolref{SceneNodeHandle} values rather than node pointers.
-Dirty local transforms are resolved into cached parent-composed world matrices
-with iterative traversal. Enabled and visible subtree state suppresses render
-extraction without destroying persistent nodes. The render traversal uses
-retained private scratch that grows with node count; v1 does not cache a
-flattened render list, subtree bounds, or a spatial index.
+\subsection{Compiled scene extraction (D-E12/D-R25)}
+The per-frame \symbolref{Scene} stays a non-owning drawable list.
+\symbolref{SceneGraph} owns persistent SoA slots and intrusive hierarchy links,
+with graph-local generational handles. Structural edits lazily compile a
+preorder, parent indices, and subtree ranges. Local TRS edits set one dirty bit
+and lower a watermark; one forward pass resolves affected world transforms.
+World queries walk ancestors without consuming compiled dirtiness. Matrix
+input decomposes to TRS; shear and projective matrices are lossy.
 
-Each node may borrow one \symbolref{ISceneRenderAttachment}. During
-deterministic hierarchy pre-order, the graph supplies the resolved world
-matrix and the attachment appends ordinary backend-neutral tokens through
-\symbolref{Renderer}. The graph owns neither the attachment nor GPU resources.
-An attachment may report finite local \symbolref{AxisAlignedBounds3}; the graph
-transforms them on demand and rejects only attachments wholly outside a valid
-camera frustum. Unknown bounds and malformed transforms fail open, survivor
-order is stable, and culling a parent attachment never prunes its children.
-This keeps persistent world organization separate from per-frame extraction
-and backend execution. IllEd uses the graph for document geometry. IllumoGame's
-opt-in \texttt{render3dTest} diagnostic attaches world meshes; its CA storage
-and product UI remain separate from the graph.
+Nodes hold interned nonunique names, opaque 64-bit payloads, and ordered borrowed
+attachments. Bounds cache by nonzero attachment revision; zero requests polling.
+World boxes transform each attachment before union, and backward refit computes
+subtree boxes. Unknown bounds fail open. A lazy binned-SAH query index has a
+linear correctness fallback; warm queries still poll revisions in linear time.
+The 4,096-entry change journal reports overflow explicitly.
+
+\texttt{SceneGraphDrawable}, not the graph, derives from
+\symbolref{DrawableBase}. It obtains one immutable snapshot per renderer frame
+and consumes its matrices, bounds, and attachment pointers for collection,
+depth, and color. Two graph-owned buffers are reused; ring reuse, attachment
+invalidation, destruction, and graph teardown expire views. The adapter checks
+the view before each callback. Owners invalidate before changing or retiring
+borrowed content and preserve emitted token payloads until submission returns.
+Mutation during extraction is rejected. All callbacks remain main-thread affine.
+
+The shared shadow fit follows caster collection. Camera-missed subtrees skip
+camera tests but retain potential off-camera casters, and depth relevance uses
+snapshot bounds after fitting. This resolves the proposal's early-shadow-flag
+assumption without changing the renderer's shadow policy. The temporary
+\texttt{sceneSnapshotExtraction=0} switch selects guarded direct traversal.
+
+IllEd's document is the mutation gateway to its authoritative runtime graph;
+serialization recipes and exact local-box picking remain editor policy.
+Transforms and recolors preserve graph handles and visual objects. Journal
+overflow resynchronizes bindings without rebuilding nodes. \texttt{.ilsc} v1
+is unchanged. The simulator diagnostic and capture fixtures use the adapter;
+CA storage and UI remain separate. See
+\pathref{docs/scene-graph-v2-design.md} and
+\pathref{docs/scene-graph-v2-plan.md} for evidence and gated follow-ups.
 
 \subsection{Layers, styles, and drawables (D-R14, D-R18)}
 The initial clear explicitly selects the screen framebuffer and full-window
@@ -126,8 +142,8 @@ preserving defaults. Optional modules reinstall their overrides after a transiti
         persist those values through EnvVars rather than having
         \symbolref{MeshVisual} read configuration.
         One host can contain multiple visual items. Use child scene nodes for
-        independent transforms and subtree state; each node borrows at most
-        one attachment. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
+        independent transforms and subtree state; each node may borrow an ordered
+        list of attachments. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
         procedural meshes upload dirty vertices through \texttt{UpdateBuffer};
         capacity growth replaces the backing allocation. Immutable imported
         meshes instead borrow one reference-counted \texttt{MeshHandle} from

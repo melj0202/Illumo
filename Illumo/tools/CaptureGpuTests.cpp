@@ -3,14 +3,74 @@
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
+#include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+
+static FrameCaptureResult
+captureSceneShadows(bool graphPath, bool shadows)
+{
+  FrameCaptureOptions options;
+  options.width = 256;
+  options.height = 192;
+  return FrameCapture::render(
+    options,
+    [graphPath,
+     shadows](Renderer& renderer, Camera& camera, std::string& error) {
+      MeshVisual floor, cube;
+      floor.setLightingEnabled(true);
+      floor.setShadowsEnabled(shadows);
+      cube.setLightingEnabled(true);
+      cube.setShadowsEnabled(shadows);
+      floor.addSolidCube(Vector3(0, -1, 0),
+                         Vector3(4, 0.1f, 4),
+                         ColorRgba{ 180, 180, 180, 255 });
+      cube.addSolidCube(
+        Vector3(0, 0, 0), Vector3(0.6f), ColorRgba{ 210, 110, 65, 255 });
+      SceneGraph graph;
+      SceneGraphDrawable drawable(graph);
+      Scene scene(renderer.getWindow(), &camera);
+      if (graphPath) {
+        graph.addAttachment(graph.createNode(), &floor);
+        graph.addAttachment(graph.createNode(), &cube);
+        scene.AddDrawable(&drawable);
+      } else {
+        scene.AddDrawable(&floor);
+        scene.AddDrawable(&cube);
+      }
+      class ShadowProbe : public DrawableBase
+      {
+      public:
+        bool active = false;
+        void Draw() override {}
+        bool AppendCommands(Renderer* value) override
+        {
+          active = value->getShadowFrameContext().active;
+          return true;
+        }
+      } probe;
+      scene.AddDrawable(&probe);
+      renderer.RenderScene(&scene, &camera);
+      if (shadows && !probe.active) {
+        error = "Scene shadow pass did not activate";
+        return false;
+      }
+      renderer.SubmitOnly();
+      if (graphPath && graph.getStatistics().extractions != 1) {
+        error = "Shadow frame extracted the graph more than once";
+        return false;
+      }
+      return true;
+    });
+}
 
 static bool
 testTextureUploads(Renderer& renderer, Camera&, std::string& error)
@@ -261,6 +321,22 @@ main(int argc, char** argv)
   options.width = 32;
   options.height = 32;
   int failures = 0;
+  const FrameCaptureResult directShadows = captureSceneShadows(false, true);
+  const FrameCaptureResult sceneShadows = captureSceneShadows(true, true);
+  const FrameCaptureResult unshadowed = captureSceneShadows(true, false);
+  if (!directShadows.success() || !sceneShadows.success() ||
+      !unshadowed.success() ||
+      directShadows.image.pixels != sceneShadows.image.pixels ||
+      sceneShadows.image.pixels == unshadowed.image.pixels) {
+    std::cerr << "Scene snapshot shadow pixel parity failed: "
+              << directShadows.error << "; " << sceneShadows.error << "; "
+              << unshadowed.error << '\n';
+    ++failures;
+  } else {
+    std::cout << "Scene snapshot/direct shadow pixels identical; shadows "
+                 "change pixels\n";
+  }
+
   for (int view = 0; view < 2; ++view) {
     const FrameCaptureResult chart =
       captureProfiler(view == 0 ? 800 : 320, view == 0 ? 600 : 240, view != 0);

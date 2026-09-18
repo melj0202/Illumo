@@ -38,6 +38,7 @@ public:
     float uiScale = 1.0f;
     bool active = false;
     bool hasWorldMvp = false;
+    bool sceneSnapshotExtraction = true;
   };
 
   struct ShadowCasterDesc

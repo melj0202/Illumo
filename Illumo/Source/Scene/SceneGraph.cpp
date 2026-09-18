@@ -1,700 +1,849 @@
-#include <Illumo/Scene/SceneGraph.h>
+#include "SceneGraphInternal.h"
 
-#include <Illumo/Rendering/Renderer.h>
 #include <algorithm>
 #include <atomic>
-#include <cstdint>
-#include <limits>
-#include <utility>
-#include <vector>
+#include <new>
 
 static std::atomic<uint64_t> g_nextSceneGraphId{ 1 };
 
-enum class SceneAttachmentPass
-{
-  CollectShadow,
-  ShadowDepth,
-  Color
-};
-
 static uint64_t
-allocateSceneGraphId()
+allocateGraphId()
 {
-  uint64_t graphId = g_nextSceneGraphId.fetch_add(1);
-  while (graphId == 0) {
-    graphId = g_nextSceneGraphId.fetch_add(1);
+  uint64_t id = g_nextSceneGraphId.fetch_add(1);
+  while (id == 0) {
+    id = g_nextSceneGraphId.fetch_add(1);
   }
-  return graphId;
+  return id;
 }
 
-struct SceneGraph::Impl
+bool
+SceneGraph::Impl::current(SceneNodeHandle node) const
 {
-  struct NodeSlot
-  {
-    uint32_t generation = 1;
-    bool alive = false;
-    SceneNodeHandle parent{};
-    std::vector<SceneNodeHandle> children;
-    Matrix4 localTransform = Matrix4(1.0f);
-    Matrix4 worldTransform = Matrix4(1.0f);
-    bool transformDirty = true;
-    bool enabled = true;
-    bool visible = true;
-    ISceneRenderAttachment* renderAttachment = nullptr;
-  };
-
-  struct TransformVisit
-  {
-    SceneNodeHandle node{};
-    bool ancestorDirty = false;
-  };
-
-  struct RenderVisit
-  {
-    SceneNodeHandle node{};
-    bool ancestorDirty = false;
-    bool ancestorsEnabled = true;
-    bool ancestorsVisible = true;
-  };
-
-  struct RenderTraversalGuard
-  {
-    explicit RenderTraversalGuard(bool* activeFlag)
-      : active(activeFlag)
-    {
-      *active = true;
-    }
-
-    ~RenderTraversalGuard() { *active = false; }
-
-    RenderTraversalGuard(const RenderTraversalGuard&) = delete;
-    RenderTraversalGuard& operator=(const RenderTraversalGuard&) = delete;
-
-    bool* active;
-  };
-
-  uint64_t graphId = allocateSceneGraphId();
-  std::vector<NodeSlot> slots{ NodeSlot{} };
-  std::vector<uint32_t> freeSlots;
-  std::vector<SceneNodeHandle> roots;
-  std::vector<SceneNodeHandle> worldTransformPathScratch;
-  std::vector<RenderVisit> renderTraversalScratch;
-  size_t nodeCount = 0;
-  bool renderTraversalActive = false;
-
-  SceneNodeHandle makeHandle(uint32_t slot) const
-  {
-    return SceneNodeHandle{ graphId, slot, slots[slot].generation };
+  return node.isValid() && node.graphId == graphId &&
+         node.slot < flags.size() && (flags[node.slot] & kAlive) != 0 &&
+         generation[node.slot] == node.generation;
+}
+SceneNodeHandle
+SceneGraph::Impl::handle(uint32_t slot) const
+{
+  return slot == 0 ? SceneNodeHandle{}
+                   : SceneNodeHandle{ graphId, slot, generation[slot] };
+}
+uint32_t
+SceneGraph::Impl::nextSlot(uint32_t slot) const
+{
+  if (firstChild[slot] != 0) {
+    return firstChild[slot];
   }
-
-  bool isCurrent(SceneNodeHandle node) const
-  {
-    return node.isValid() && node.graphId == graphId &&
-           node.slot < slots.size() && slots[node.slot].alive &&
-           slots[node.slot].generation == node.generation;
+  while (slot != 0 && nextSibling[slot] == 0) {
+    slot = parent[slot];
   }
-
-  bool isAcceptedParent(SceneNodeHandle parent) const
-  {
-    return parent.isNull() || isCurrent(parent);
+  return nextSibling[slot];
+}
+void
+SceneGraph::Impl::appendChild(uint32_t slot, uint32_t parentSlot)
+{
+  parent[slot] = parentSlot;
+  previousSibling[slot] = lastChild[parentSlot];
+  nextSibling[slot] = 0;
+  if (lastChild[parentSlot] != 0) {
+    nextSibling[lastChild[parentSlot]] = slot;
+  } else {
+    firstChild[parentSlot] = slot;
   }
-
-  static void eraseHandle(std::vector<SceneNodeHandle>* handles,
-                          SceneNodeHandle handle)
-  {
-    if (handles == nullptr) {
-      return;
-    }
-    const std::vector<SceneNodeHandle>::iterator found =
-      std::find(handles->begin(), handles->end(), handle);
-    if (found != handles->end()) {
-      handles->erase(found);
-    }
+  lastChild[parentSlot] = slot;
+  ++childCount[parentSlot];
+}
+void
+SceneGraph::Impl::detach(uint32_t slot)
+{
+  const uint32_t p = parent[slot];
+  const uint32_t before = previousSibling[slot];
+  const uint32_t after = nextSibling[slot];
+  if (before != 0) {
+    nextSibling[before] = after;
+  } else {
+    firstChild[p] = after;
   }
-
-  void markSubtreeDirty(SceneNodeHandle root)
-  {
-    if (!isCurrent(root)) {
-      return;
-    }
-
-    std::vector<SceneNodeHandle> pending;
-    pending.push_back(root);
-    while (!pending.empty()) {
-      const SceneNodeHandle current = pending.back();
-      pending.pop_back();
-      if (!isCurrent(current)) {
-        continue;
-      }
-
-      NodeSlot& slot = slots[current.slot];
-      slot.transformDirty = true;
-      for (std::vector<SceneNodeHandle>::const_reverse_iterator child =
-             slot.children.rbegin();
-           child != slot.children.rend();
-           ++child) {
-        pending.push_back(*child);
-      }
-    }
+  if (after != 0) {
+    previousSibling[after] = before;
+  } else {
+    lastChild[p] = before;
   }
-
-  void detachFromParent(SceneNodeHandle node)
-  {
-    NodeSlot& slot = slots[node.slot];
-    if (isCurrent(slot.parent)) {
-      eraseHandle(&slots[slot.parent.slot].children, node);
+  --childCount[p];
+}
+void
+SceneGraph::Impl::record(SceneChangeKind kind, uint32_t slot)
+{
+  ++sequence;
+  journal[(sequence - 1) % kJournalCapacity] =
+    SceneChange{ sequence, kind, handle(slot) };
+}
+void
+SceneGraph::Impl::structuralChange()
+{
+  ++structuralRevision;
+  ++contentRevision;
+  lowestDirtyIndex = 0;
+  stateDirty = true;
+  boundsDirty = true;
+}
+void
+SceneGraph::Impl::dirty(uint32_t slot)
+{
+  flags[slot] |= kDirty;
+  if (compiledRevision == structuralRevision) {
+    lowestDirtyIndex =
+      std::min(lowestDirtyIndex, static_cast<size_t>(slotToIndex[slot]));
+  } else {
+    lowestDirtyIndex = 0;
+  }
+  ++contentRevision;
+  boundsDirty = true;
+}
+uint32_t
+SceneGraph::Impl::intern(std::string_view name)
+{
+  if (name.empty()) {
+    return 0;
+  }
+  const std::string value(name);
+  const Impl::NameMap::const_iterator found = nameIds.find(value);
+  if (found != nameIds.end()) {
+    return found->second;
+  }
+  const uint32_t id = static_cast<uint32_t>(names.size());
+  if (nameFirst.capacity() <= names.size()) {
+    nameFirst.reserve(std::max<size_t>(16, names.size() * 2));
+  }
+  names.push_back(value);
+  try {
+    nameIds.emplace(names.back(), id);
+  } catch (...) {
+    names.pop_back();
+    throw;
+  }
+  nameFirst.push_back(0);
+  return id;
+}
+void
+SceneGraph::Impl::assignName(uint32_t slot, uint32_t name)
+{
+  const uint32_t old = nameId[slot];
+  if (old != 0) {
+    if (namePrevious[slot] != 0) {
+      nameNext[namePrevious[slot]] = nameNext[slot];
     } else {
-      eraseHandle(&roots, node);
+      nameFirst[old] = nameNext[slot];
+    }
+    if (nameNext[slot] != 0) {
+      namePrevious[nameNext[slot]] = namePrevious[slot];
     }
   }
-
-  void releaseSlot(uint32_t slotIndex)
-  {
-    NodeSlot& slot = slots[slotIndex];
-    slot.alive = false;
-    slot.parent = SceneNodeHandle{};
-    slot.children.clear();
-    slot.localTransform = Matrix4(1.0f);
-    slot.worldTransform = Matrix4(1.0f);
-    slot.transformDirty = true;
-    slot.enabled = true;
-    slot.visible = true;
-    slot.renderAttachment = nullptr;
-
-    uint32_t nextGeneration = slot.generation + 1;
-    if (nextGeneration == 0) {
-      nextGeneration = 1;
+  nameId[slot] = name;
+  namePrevious[slot] = 0;
+  nameNext[slot] = 0;
+  if (name != 0) {
+    nameNext[slot] = nameFirst[name];
+    if (nameFirst[name] != 0) {
+      namePrevious[nameFirst[name]] = slot;
     }
-    slot.generation = nextGeneration;
-    freeSlots.push_back(slotIndex);
+    nameFirst[name] = slot;
   }
-
-  void updateWorldTransforms()
-  {
-    std::vector<TransformVisit> pending;
-    for (std::vector<SceneNodeHandle>::const_reverse_iterator root =
-           roots.rbegin();
-         root != roots.rend();
-         ++root) {
-      pending.push_back(TransformVisit{ *root, false });
-    }
-
-    while (!pending.empty()) {
-      const TransformVisit visit = pending.back();
-      pending.pop_back();
-      if (!isCurrent(visit.node)) {
-        continue;
-      }
-
-      NodeSlot& slot = slots[visit.node.slot];
-      const bool recompute = visit.ancestorDirty || slot.transformDirty;
-      if (recompute) {
-        if (isCurrent(slot.parent)) {
-          slot.worldTransform =
-            slots[slot.parent.slot].worldTransform * slot.localTransform;
-        } else {
-          slot.worldTransform = slot.localTransform;
-        }
-        slot.transformDirty = false;
-      }
-
-      for (std::vector<SceneNodeHandle>::const_reverse_iterator child =
-             slot.children.rbegin();
-           child != slot.children.rend();
-           ++child) {
-        pending.push_back(TransformVisit{ *child, recompute });
-      }
-    }
+}
+uint32_t
+SceneGraph::Impl::allocateSlot()
+{
+  if (!freeSlots.empty()) {
+    const uint32_t slot = freeSlots.back();
+    freeSlots.pop_back();
+    return slot;
   }
-
-  void updateWorldTransform(SceneNodeHandle node)
-  {
-    std::vector<SceneNodeHandle>& path = worldTransformPathScratch;
-    path.clear();
-
-    SceneNodeHandle current = node;
-    while (isCurrent(current) && slots[current.slot].transformDirty) {
-      path.push_back(current);
-      current = slots[current.slot].parent;
-    }
-
-    for (std::vector<SceneNodeHandle>::const_reverse_iterator currentNode =
-           path.rbegin();
-         currentNode != path.rend();
-         ++currentNode) {
-      NodeSlot& slot = slots[currentNode->slot];
-      if (isCurrent(slot.parent)) {
-        slot.worldTransform =
-          slots[slot.parent.slot].worldTransform * slot.localTransform;
-      } else {
-        slot.worldTransform = slot.localTransform;
-      }
-      slot.transformDirty = false;
-    }
+  const size_t size = flags.size();
+  if (size >= kNoIndex) {
+    return 0;
   }
-
-  void visitRenderAttachments(Renderer* renderer, SceneAttachmentPass pass)
-  {
-    if (renderTraversalActive) {
-      return;
-    }
-
-    RenderTraversalGuard traversalGuard(&renderTraversalActive);
-
-    std::vector<RenderVisit>& pending = renderTraversalScratch;
-    pending.clear();
-    if (pending.capacity() < nodeCount) {
-      pending.reserve(nodeCount);
-    }
-    for (std::vector<SceneNodeHandle>::const_reverse_iterator root =
-           roots.rbegin();
-         root != roots.rend();
-         ++root) {
-      pending.push_back(RenderVisit{ *root, false, true, true });
-    }
-
-    while (!pending.empty()) {
-      const RenderVisit visit = pending.back();
-      pending.pop_back();
-      if (!isCurrent(visit.node)) {
-        continue;
-      }
-
-      NodeSlot& slot = slots[visit.node.slot];
-      const bool recompute = visit.ancestorDirty || slot.transformDirty;
-      if (recompute) {
-        if (isCurrent(slot.parent)) {
-          slot.worldTransform =
-            slots[slot.parent.slot].worldTransform * slot.localTransform;
-        } else {
-          slot.worldTransform = slot.localTransform;
-        }
-        slot.transformDirty = false;
-      }
-
-      const bool enabled = visit.ancestorsEnabled && slot.enabled;
-      const bool nodeVisible = visit.ancestorsVisible && slot.visible;
-      if (!enabled || !nodeVisible) {
-        continue;
-      }
-
-      if (slot.renderAttachment != nullptr) {
-        bool attachmentVisible = true;
-        AxisAlignedBounds3 localBounds;
-        AxisAlignedBounds3 worldBounds;
-        if (renderer != nullptr &&
-            slot.renderAttachment->getSceneLocalBounds(&localBounds) &&
-            localBounds.isValid() &&
-            localBounds.transformed(slot.worldTransform, &worldBounds)) {
-          if (pass == SceneAttachmentPass::Color) {
-            attachmentVisible = renderer->isWorldBoundsVisible(worldBounds);
-          } else if (pass == SceneAttachmentPass::ShadowDepth) {
-            attachmentVisible = renderer->isShadowCasterRelevant(worldBounds);
-          }
-        }
-
-        if (!attachmentVisible) {
-          // Attachment visibility never suppresses independently transformed
-          // children; they remain on the traversal stack below.
-        } else if (pass == SceneAttachmentPass::CollectShadow) {
-          slot.renderAttachment->collectSceneShadowCasters(renderer,
-                                                           slot.worldTransform);
-        } else if (pass == SceneAttachmentPass::ShadowDepth) {
-          slot.renderAttachment->appendSceneShadowCommands(renderer,
-                                                           slot.worldTransform);
-        } else {
-          slot.renderAttachment->appendSceneCommands(renderer,
-                                                     slot.worldTransform);
-        }
-      }
-      for (std::vector<SceneNodeHandle>::const_reverse_iterator child =
-             slot.children.rbegin();
-           child != slot.children.rend();
-           ++child) {
-        pending.push_back(
-          RenderVisit{ *child, recompute, enabled, nodeVisible });
-      }
-    }
+  // Reserve every array before resizing any: allocation failure leaves the
+  // authoritative parallel-array lengths and live hierarchy unchanged.
+  const size_t capacity = std::max(size + 1, size * 2);
+  if (flags.capacity() < size + 1) {
+    generation.reserve(capacity);
+    parent.reserve(capacity);
+    firstChild.reserve(capacity);
+    lastChild.reserve(capacity);
+    nextSibling.reserve(capacity);
+    previousSibling.reserve(capacity);
+    childCount.reserve(capacity);
+    local.reserve(capacity);
+    nameId.reserve(capacity);
+    nameNext.reserve(capacity);
+    namePrevious.reserve(capacity);
+    userData.reserve(capacity);
+    attachmentFirst.reserve(capacity);
+    attachmentLast.reserve(capacity);
+    attachmentCount.reserve(capacity);
+    freeSlots.reserve(capacity);
+    pathScratch.reserve(capacity);
+    destroyScratch.reserve(capacity);
+    flags.reserve(capacity);
   }
-};
+  generation.push_back(1);
+  parent.push_back(0);
+  firstChild.push_back(0);
+  lastChild.push_back(0);
+  nextSibling.push_back(0);
+  previousSibling.push_back(0);
+  childCount.push_back(0);
+  local.emplace_back();
+  nameId.push_back(0);
+  nameNext.push_back(0);
+  namePrevious.push_back(0);
+  userData.push_back(0);
+  attachmentFirst.push_back(0);
+  attachmentLast.push_back(0);
+  attachmentCount.push_back(0);
+  flags.push_back(0);
+  return static_cast<uint32_t>(size);
+}
+SceneGraph::Impl::Attachment&
+SceneGraph::Impl::attachment(uint32_t index)
+{
+  return attachmentChunks[index / kAttachmentChunkSize]
+                         [index % kAttachmentChunkSize];
+}
+const SceneGraph::Impl::Attachment&
+SceneGraph::Impl::attachment(uint32_t index) const
+{
+  return attachmentChunks[index / kAttachmentChunkSize]
+                         [index % kAttachmentChunkSize];
+}
+uint32_t
+SceneGraph::Impl::allocateAttachment(ISceneRenderAttachment* pointer)
+{
+  uint32_t index = freeAttachment;
+  if (index != 0) {
+    freeAttachment = attachment(index).next;
+  } else {
+    index = attachmentSlots;
+    if (index == kNoIndex) {
+      return 0;
+    }
+    if (index / kAttachmentChunkSize >= attachmentChunks.size()) {
+      attachmentChunks.emplace_back();
+    }
+    ++attachmentSlots;
+  }
+  attachment(index) = Attachment{};
+  attachment(index).pointer = pointer;
+  return index;
+}
+void
+SceneGraph::Impl::releaseAttachments(uint32_t slot)
+{
+  uint32_t index = attachmentFirst[slot];
+  while (index != 0) {
+    Attachment& entry = attachment(index);
+    const uint32_t next = entry.next;
+    entry = Attachment{};
+    entry.next = freeAttachment;
+    freeAttachment = index;
+    index = next;
+  }
+  attachmentFirst[slot] = attachmentLast[slot] = attachmentCount[slot] = 0;
+}
+void
+SceneGraph::Impl::releaseSlot(uint32_t slot)
+{
+  record(SceneChangeKind::Destroyed, slot);
+  releaseAttachments(slot);
+  flags[slot] = 0;
+  parent[slot] = firstChild[slot] = lastChild[slot] = 0;
+  nextSibling[slot] = previousSibling[slot] = childCount[slot] = 0;
+  local[slot] = Transform3D{};
+  assignName(slot, 0);
+  userData[slot] = 0;
+  ++generation[slot];
+  if (generation[slot] == 0) {
+    ++generation[slot];
+  }
+  freeSlots.push_back(slot);
+  --nodeCount;
+}
 
 SceneGraph::SceneGraph()
-  : m_impl(std::make_unique<Impl>())
+  : m_impl(std::make_unique<Impl>(allocateGraphId()))
 {
 }
-
-SceneGraph::~SceneGraph() = default;
-
+SceneGraph::~SceneGraph()
+{
+  m_impl->lifetime->alive = false;
+}
 SceneNodeHandle
 SceneGraph::createNode(SceneNodeHandle parent)
 {
-  if (m_impl->renderTraversalActive) {
-    return SceneNodeHandle{};
-  }
-  if (!m_impl->isAcceptedParent(parent)) {
-    return SceneNodeHandle{};
-  }
-
-  uint32_t slotIndex = 0;
-  if (!m_impl->freeSlots.empty()) {
-    slotIndex = m_impl->freeSlots.back();
-    m_impl->freeSlots.pop_back();
-  } else {
-    if (m_impl->slots.size() >=
-        static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-      return SceneNodeHandle{};
-    }
-    slotIndex = static_cast<uint32_t>(m_impl->slots.size());
-    m_impl->slots.push_back(Impl::NodeSlot{});
-  }
-
-  Impl::NodeSlot& slot = m_impl->slots[slotIndex];
-  slot.alive = true;
-  slot.parent = parent;
-  slot.children.clear();
-  slot.localTransform = Matrix4(1.0f);
-  slot.worldTransform = Matrix4(1.0f);
-  slot.transformDirty = true;
-  slot.enabled = true;
-  slot.visible = true;
-  slot.renderAttachment = nullptr;
-
-  const SceneNodeHandle node = m_impl->makeHandle(slotIndex);
-  if (m_impl->isCurrent(parent)) {
-    m_impl->slots[parent.slot].children.push_back(node);
-  } else {
-    m_impl->roots.push_back(node);
-  }
-  m_impl->nodeCount += 1;
-  return node;
+  SceneNodeDesc description;
+  description.parent = parent;
+  return createNode(description);
 }
-
+SceneNodeHandle
+SceneGraph::createNode(const SceneNodeDesc& description)
+{
+  if (m_impl->extractionActive ||
+      (!description.parent.isNull() && !m_impl->current(description.parent))) {
+    return {};
+  }
+  const uint32_t name = m_impl->intern(description.name);
+  const uint32_t slot = m_impl->allocateSlot();
+  if (slot == 0) {
+    return {};
+  }
+  m_impl->flags[slot] = Impl::kAlive | Impl::kDirty |
+                        (description.enabled ? Impl::kEnabled : 0u) |
+                        (description.visible ? Impl::kVisible : 0u);
+  m_impl->local[slot] = description.transform;
+  m_impl->assignName(slot, name);
+  m_impl->userData[slot] = description.userData;
+  m_impl->appendChild(slot, description.parent.slot);
+  ++m_impl->nodeCount;
+  m_impl->structuralChange();
+  m_impl->record(SceneChangeKind::Created, slot);
+  return m_impl->handle(slot);
+}
 bool
 SceneGraph::destroyNode(SceneNodeHandle node)
 {
-  if (m_impl->renderTraversalActive) {
+  if (m_impl->extractionActive || !m_impl->current(node)) {
     return false;
   }
-  if (!m_impl->isCurrent(node)) {
-    return false;
-  }
-
-  m_impl->detachFromParent(node);
-
-  std::vector<SceneNodeHandle> pending;
-  std::vector<SceneNodeHandle> subtree;
-  pending.push_back(node);
-  while (!pending.empty()) {
-    const SceneNodeHandle current = pending.back();
-    pending.pop_back();
-    if (!m_impl->isCurrent(current)) {
+  std::vector<uint32_t>& subtree = m_impl->destroyScratch;
+  subtree.clear();
+  uint32_t current = node.slot;
+  // Retained scratch is reserved with slot storage. Collect before unlinking;
+  // reverse release preserves the v1 parent-first slot reuse contract.
+  for (;;) {
+    subtree.push_back(current);
+    if (m_impl->firstChild[current] != 0) {
+      current = m_impl->firstChild[current];
       continue;
     }
-
-    subtree.push_back(current);
-    const Impl::NodeSlot& slot = m_impl->slots[current.slot];
-    for (std::vector<SceneNodeHandle>::const_reverse_iterator child =
-           slot.children.rbegin();
-         child != slot.children.rend();
-         ++child) {
-      pending.push_back(*child);
+    while (current != node.slot && m_impl->nextSibling[current] == 0) {
+      current = m_impl->parent[current];
     }
+    if (current == node.slot) {
+      break;
+    }
+    current = m_impl->nextSibling[current];
   }
-
-  for (std::vector<SceneNodeHandle>::const_reverse_iterator current =
-         subtree.rbegin();
-       current != subtree.rend();
-       ++current) {
-    m_impl->releaseSlot(current->slot);
+  m_impl->detach(node.slot);
+  invalidateSnapshots();
+  for (size_t i = subtree.size(); i-- > 0;) {
+    m_impl->releaseSlot(subtree[i]);
   }
-  m_impl->nodeCount -= subtree.size();
+  m_impl->structuralChange();
   return true;
 }
-
 void
 SceneGraph::clear()
 {
-  if (m_impl->renderTraversalActive) {
+  if (m_impl->extractionActive) {
     return;
   }
-  m_impl->roots.clear();
+  invalidateSnapshots();
   m_impl->freeSlots.clear();
-  for (uint32_t slotIndex = 1; slotIndex < m_impl->slots.size(); ++slotIndex) {
-    Impl::NodeSlot& slot = m_impl->slots[slotIndex];
-    if (slot.alive) {
-      uint32_t nextGeneration = slot.generation + 1;
-      if (nextGeneration == 0) {
-        nextGeneration = 1;
-      }
-      slot.generation = nextGeneration;
+  for (uint32_t slot = 1; slot < m_impl->flags.size(); ++slot) {
+    if ((m_impl->flags[slot] & Impl::kAlive) != 0) {
+      m_impl->releaseSlot(slot);
+    } else {
+      m_impl->freeSlots.push_back(slot);
     }
-    slot.alive = false;
-    slot.parent = SceneNodeHandle{};
-    slot.children.clear();
-    slot.localTransform = Matrix4(1.0f);
-    slot.worldTransform = Matrix4(1.0f);
-    slot.transformDirty = true;
-    slot.enabled = true;
-    slot.visible = true;
-    slot.renderAttachment = nullptr;
-    m_impl->freeSlots.push_back(slotIndex);
   }
-  m_impl->nodeCount = 0;
+  m_impl->firstChild[0] = m_impl->lastChild[0] = m_impl->childCount[0] = 0;
+  m_impl->structuralChange();
 }
-
 bool
 SceneGraph::isNodeValid(SceneNodeHandle node) const
 {
-  return m_impl->isCurrent(node);
+  return m_impl->current(node);
 }
-
 size_t
 SceneGraph::getNodeCount() const
 {
   return m_impl->nodeCount;
 }
-
 size_t
 SceneGraph::getRootCount() const
 {
-  return m_impl->roots.size();
+  return m_impl->childCount[0];
 }
-
 SceneNodeHandle
 SceneGraph::getRoot(size_t index) const
 {
-  if (index >= m_impl->roots.size()) {
-    return SceneNodeHandle{};
+  uint32_t slot = m_impl->firstChild[0];
+  while (slot != 0 && index-- != 0) {
+    slot = m_impl->nextSibling[slot];
   }
-  return m_impl->roots[index];
+  return m_impl->handle(slot);
 }
-
 SceneNodeHandle
 SceneGraph::getParent(SceneNodeHandle node) const
 {
-  if (!m_impl->isCurrent(node)) {
-    return SceneNodeHandle{};
-  }
-  return m_impl->slots[node.slot].parent;
+  return m_impl->current(node) ? m_impl->handle(m_impl->parent[node.slot])
+                               : SceneNodeHandle{};
 }
-
 size_t
 SceneGraph::getChildCount(SceneNodeHandle node) const
 {
-  if (!m_impl->isCurrent(node)) {
-    return 0;
-  }
-  return m_impl->slots[node.slot].children.size();
+  return m_impl->current(node) ? m_impl->childCount[node.slot] : 0;
 }
-
+SceneNodeHandle
+SceneGraph::getNextSibling(SceneNodeHandle node) const
+{
+  return m_impl->current(node) ? m_impl->handle(m_impl->nextSibling[node.slot])
+                               : SceneNodeHandle{};
+}
 SceneNodeHandle
 SceneGraph::getChild(SceneNodeHandle node, size_t index) const
 {
-  if (!m_impl->isCurrent(node) ||
-      index >= m_impl->slots[node.slot].children.size()) {
-    return SceneNodeHandle{};
+  if (!m_impl->current(node)) {
+    return {};
   }
-  return m_impl->slots[node.slot].children[index];
+  uint32_t slot = m_impl->firstChild[node.slot];
+  while (slot != 0 && index-- != 0) {
+    slot = m_impl->nextSibling[slot];
+  }
+  return m_impl->handle(slot);
 }
-
+bool
+SceneGraph::canSetParent(SceneNodeHandle node, SceneNodeHandle parent) const
+{
+  if (!m_impl->current(node) ||
+      (!parent.isNull() && !m_impl->current(parent))) {
+    return false;
+  }
+  for (uint32_t ancestor = parent.slot; ancestor != 0;
+       ancestor = m_impl->parent[ancestor]) {
+    if (ancestor == node.slot) {
+      return false;
+    }
+  }
+  return true;
+}
 bool
 SceneGraph::setParent(SceneNodeHandle node, SceneNodeHandle parent)
 {
-  if (m_impl->renderTraversalActive) {
+  if (m_impl->extractionActive || !canSetParent(node, parent)) {
     return false;
   }
-  if (!m_impl->isCurrent(node) || !m_impl->isAcceptedParent(parent)) {
-    return false;
-  }
-  if (node == parent) {
-    return false;
-  }
-
-  SceneNodeHandle ancestor = parent;
-  while (m_impl->isCurrent(ancestor)) {
-    if (ancestor == node) {
-      return false;
-    }
-    ancestor = m_impl->slots[ancestor.slot].parent;
-  }
-
-  Impl::NodeSlot& slot = m_impl->slots[node.slot];
-  if (slot.parent == parent) {
+  if (m_impl->parent[node.slot] == parent.slot) {
     return true;
   }
-
-  m_impl->detachFromParent(node);
-  slot.parent = parent;
-  if (m_impl->isCurrent(parent)) {
-    m_impl->slots[parent.slot].children.push_back(node);
-  } else {
-    m_impl->roots.push_back(node);
-  }
-  m_impl->markSubtreeDirty(node);
+  m_impl->detach(node.slot);
+  m_impl->appendChild(node.slot, parent.slot);
+  m_impl->structuralChange();
+  m_impl->record(SceneChangeKind::Reparented, node.slot);
   return true;
 }
-
 bool
 SceneGraph::setLocalTransform(SceneNodeHandle node, const Matrix4& transform)
 {
-  if (m_impl->renderTraversalActive) {
-    return false;
-  }
-  if (!m_impl->isCurrent(node)) {
-    return false;
-  }
-  m_impl->slots[node.slot].localTransform = transform;
-  m_impl->markSubtreeDirty(node);
-  return true;
+  return setLocalTransform(node, Transform3D::fromMatrix(transform));
 }
-
 bool
 SceneGraph::setLocalTransform(SceneNodeHandle node,
                               const Transform3D& transform)
 {
-  return setLocalTransform(node, transform.toMatrix());
+  if (m_impl->extractionActive || !m_impl->current(node)) {
+    return false;
+  }
+  m_impl->local[node.slot] = transform;
+  m_impl->dirty(node.slot);
+  m_impl->record(SceneChangeKind::Transform, node.slot);
+  return true;
 }
-
+bool
+SceneGraph::setLocalTransforms(const SceneNodeHandle* nodes,
+                               const Transform3D* transforms,
+                               size_t count)
+{
+  if (m_impl->extractionActive ||
+      (count != 0 && (nodes == nullptr || transforms == nullptr))) {
+    return false;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if (!m_impl->current(nodes[i])) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < count; ++i) {
+    setLocalTransform(nodes[i], transforms[i]);
+  }
+  return true;
+}
 bool
 SceneGraph::getLocalTransform(SceneNodeHandle node, Matrix4* transform) const
 {
-  if (!m_impl->isCurrent(node) || transform == nullptr) {
+  if (!m_impl->current(node) || transform == nullptr) {
     return false;
   }
-  *transform = m_impl->slots[node.slot].localTransform;
+  *transform = m_impl->local[node.slot].toMatrix();
   return true;
 }
-
 bool
-SceneGraph::getWorldTransform(SceneNodeHandle node, Matrix4* transform)
+SceneGraph::getLocalTransform(SceneNodeHandle node,
+                              Transform3D* transform) const
 {
-  if (!m_impl->isCurrent(node) || transform == nullptr) {
+  if (!m_impl->current(node) || transform == nullptr) {
     return false;
   }
-  m_impl->updateWorldTransform(node);
-  *transform = m_impl->slots[node.slot].worldTransform;
+  *transform = m_impl->local[node.slot];
   return true;
 }
-
 bool
-SceneGraph::getWorldBounds(SceneNodeHandle node, AxisAlignedBounds3* bounds)
+SceneGraph::getWorldTransform(SceneNodeHandle node, Matrix4* transform) const
 {
-  if (!m_impl->isCurrent(node) || bounds == nullptr) {
-    return false;
-  }
-
-  Impl::NodeSlot& slot = m_impl->slots[node.slot];
-  if (slot.renderAttachment == nullptr) {
-    return false;
-  }
-
-  m_impl->updateWorldTransforms();
-  AxisAlignedBounds3 localBounds;
-  if (!slot.renderAttachment->getSceneLocalBounds(&localBounds) ||
-      !localBounds.isValid()) {
-    return false;
-  }
-  return localBounds.transformed(slot.worldTransform, bounds);
+  return m_impl->current(node) && transform != nullptr &&
+         m_impl->worldTransform(node.slot, transform);
 }
-
+bool
+SceneGraph::getWorldBounds(SceneNodeHandle node,
+                           AxisAlignedBounds3* bounds) const
+{
+  if (!m_impl->current(node) || bounds == nullptr || m_impl->extractionActive) {
+    return false;
+  }
+  // Bounds callbacks may attempt mutations too. Guard every callback boundary.
+  struct Guard
+  {
+    bool& active;
+    explicit Guard(bool& value)
+      : active(value)
+    {
+      active = true;
+    }
+    ~Guard() { active = false; }
+  };
+  Guard guard(m_impl->extractionActive);
+  Matrix4 world(1.0f);
+  return m_impl->worldTransform(node.slot, &world) &&
+         m_impl->boundsAtWorld(node.slot, world, bounds, true);
+}
 void
 SceneGraph::updateWorldTransforms()
 {
-  m_impl->updateWorldTransforms();
+  if (!m_impl->extractionActive) {
+    m_impl->resolve(false);
+  }
 }
-
 bool
 SceneGraph::setEnabled(SceneNodeHandle node, bool enabled)
 {
-  if (m_impl->renderTraversalActive) {
+  if (m_impl->extractionActive || !m_impl->current(node)) {
     return false;
   }
-  if (!m_impl->isCurrent(node)) {
-    return false;
+  if (enabled) {
+    m_impl->flags[node.slot] |= Impl::kEnabled;
+  } else {
+    m_impl->flags[node.slot] &= ~Impl::kEnabled;
   }
-  m_impl->slots[node.slot].enabled = enabled;
+  m_impl->stateDirty = true;
+  ++m_impl->contentRevision;
+  m_impl->record(SceneChangeKind::State, node.slot);
   return true;
 }
-
 bool
 SceneGraph::getEnabled(SceneNodeHandle node, bool* enabled) const
 {
-  if (!m_impl->isCurrent(node) || enabled == nullptr) {
+  if (!m_impl->current(node) || enabled == nullptr) {
     return false;
   }
-  *enabled = m_impl->slots[node.slot].enabled;
+  *enabled = (m_impl->flags[node.slot] & Impl::kEnabled) != 0;
   return true;
 }
-
 bool
-SceneGraph::setVisible(SceneNodeHandle node, bool nodeVisible)
+SceneGraph::setVisible(SceneNodeHandle node, bool visible)
 {
-  if (m_impl->renderTraversalActive) {
+  if (m_impl->extractionActive || !m_impl->current(node)) {
     return false;
   }
-  if (!m_impl->isCurrent(node)) {
-    return false;
+  if (visible) {
+    m_impl->flags[node.slot] |= Impl::kVisible;
+  } else {
+    m_impl->flags[node.slot] &= ~Impl::kVisible;
   }
-  m_impl->slots[node.slot].visible = nodeVisible;
+  m_impl->stateDirty = true;
+  ++m_impl->contentRevision;
+  m_impl->record(SceneChangeKind::State, node.slot);
   return true;
 }
-
 bool
-SceneGraph::getVisible(SceneNodeHandle node, bool* nodeVisible) const
+SceneGraph::getVisible(SceneNodeHandle node, bool* visible) const
 {
-  if (!m_impl->isCurrent(node) || nodeVisible == nullptr) {
+  if (!m_impl->current(node) || visible == nullptr) {
     return false;
   }
-  *nodeVisible = m_impl->slots[node.slot].visible;
+  *visible = (m_impl->flags[node.slot] & Impl::kVisible) != 0;
   return true;
 }
-
+bool
+SceneGraph::isEffectivelyVisible(SceneNodeHandle node) const
+{
+  if (!m_impl->current(node)) {
+    return false;
+  }
+  for (uint32_t slot = node.slot; slot != 0; slot = m_impl->parent[slot]) {
+    if ((m_impl->flags[slot] & (Impl::kEnabled | Impl::kVisible)) !=
+        (Impl::kEnabled | Impl::kVisible)) {
+      return false;
+    }
+  }
+  return true;
+}
+bool
+SceneGraph::setName(SceneNodeHandle node, std::string_view name)
+{
+  if (m_impl->extractionActive || !m_impl->current(node)) {
+    return false;
+  }
+  m_impl->assignName(node.slot, m_impl->intern(name));
+  m_impl->record(SceneChangeKind::Name, node.slot);
+  return true;
+}
+std::string_view
+SceneGraph::getName(SceneNodeHandle node) const
+{
+  return m_impl->current(node)
+           ? std::string_view(m_impl->names[m_impl->nameId[node.slot]])
+           : std::string_view{};
+}
+SceneNodeHandle
+SceneGraph::findByName(std::string_view name) const
+{
+  if (!name.empty()) {
+    const Impl::NameMap::const_iterator found = m_impl->nameIds.find(name);
+    if (found == m_impl->nameIds.end()) {
+      return {};
+    }
+    const uint32_t slot = m_impl->nameFirst[found->second];
+    if (slot == 0 || m_impl->nameNext[slot] == 0) {
+      return m_impl->handle(slot);
+    }
+  }
+  for (uint32_t slot = m_impl->firstChild[0]; slot != 0;
+       slot = m_impl->nextSlot(slot)) {
+    if (m_impl->names[m_impl->nameId[slot]] == name) {
+      return m_impl->handle(slot);
+    }
+  }
+  return {};
+}
+bool
+SceneGraph::setUserData(SceneNodeHandle node, uint64_t data)
+{
+  if (m_impl->extractionActive || !m_impl->current(node)) {
+    return false;
+  }
+  m_impl->userData[node.slot] = data;
+  m_impl->record(SceneChangeKind::UserData, node.slot);
+  return true;
+}
+bool
+SceneGraph::getUserData(SceneNodeHandle node, uint64_t* data) const
+{
+  if (!m_impl->current(node) || data == nullptr) {
+    return false;
+  }
+  *data = m_impl->userData[node.slot];
+  return true;
+}
+SceneNodeHandle
+SceneGraph::firstNode() const
+{
+  return m_impl->handle(m_impl->firstChild[0]);
+}
+SceneNodeHandle
+SceneGraph::nextNode(SceneNodeHandle node) const
+{
+  return m_impl->current(node) ? m_impl->handle(m_impl->nextSlot(node.slot))
+                               : SceneNodeHandle{};
+}
+bool
+SceneGraph::addAttachment(SceneNodeHandle node, ISceneRenderAttachment* pointer)
+{
+  if (m_impl->extractionActive || !m_impl->current(node) ||
+      pointer == nullptr) {
+    return false;
+  }
+  for (uint32_t i = m_impl->attachmentFirst[node.slot]; i != 0;
+       i = m_impl->attachment(i).next) {
+    if (m_impl->attachment(i).pointer == pointer) {
+      return false;
+    }
+  }
+  const uint32_t index = m_impl->allocateAttachment(pointer);
+  if (index == 0) {
+    return false;
+  }
+  const uint32_t last = m_impl->attachmentLast[node.slot];
+  if (last != 0) {
+    m_impl->attachment(last).next = index;
+  } else {
+    m_impl->attachmentFirst[node.slot] = index;
+  }
+  m_impl->attachment(index).previous = last;
+  m_impl->attachment(index).owner = node.slot;
+  m_impl->attachmentLast[node.slot] = index;
+  ++m_impl->attachmentCount[node.slot];
+  m_impl->boundsDirty = true;
+  m_impl->flags[node.slot] |= Impl::kBoundsDirty;
+  ++m_impl->contentRevision;
+  m_impl->record(SceneChangeKind::Attachments, node.slot);
+  return true;
+}
+bool
+SceneGraph::removeAttachment(SceneNodeHandle node,
+                             ISceneRenderAttachment* pointer)
+{
+  if (m_impl->extractionActive || !m_impl->current(node) ||
+      pointer == nullptr) {
+    return false;
+  }
+  for (uint32_t i = m_impl->attachmentFirst[node.slot]; i != 0;
+       i = m_impl->attachment(i).next) {
+    Impl::Attachment& entry = m_impl->attachment(i);
+    if (entry.pointer != pointer) {
+      continue;
+    }
+    if (entry.previous != 0) {
+      m_impl->attachment(entry.previous).next = entry.next;
+    } else {
+      m_impl->attachmentFirst[node.slot] = entry.next;
+    }
+    if (entry.next != 0) {
+      m_impl->attachment(entry.next).previous = entry.previous;
+    } else {
+      m_impl->attachmentLast[node.slot] = entry.previous;
+    }
+    entry = Impl::Attachment{};
+    entry.next = m_impl->freeAttachment;
+    m_impl->freeAttachment = i;
+    --m_impl->attachmentCount[node.slot];
+    invalidateSnapshots();
+    m_impl->boundsDirty = true;
+    m_impl->flags[node.slot] |= Impl::kBoundsDirty;
+    ++m_impl->contentRevision;
+    m_impl->record(SceneChangeKind::Attachments, node.slot);
+    return true;
+  }
+  return false;
+}
+size_t
+SceneGraph::getAttachmentCount(SceneNodeHandle node) const
+{
+  return m_impl->current(node) ? m_impl->attachmentCount[node.slot] : 0;
+}
+ISceneRenderAttachment*
+SceneGraph::getAttachment(SceneNodeHandle node, size_t index) const
+{
+  if (!m_impl->current(node)) {
+    return nullptr;
+  }
+  uint32_t i = m_impl->attachmentFirst[node.slot];
+  while (i != 0 && index-- != 0) {
+    i = m_impl->attachment(i).next;
+  }
+  return i == 0 ? nullptr : m_impl->attachment(i).pointer;
+}
 bool
 SceneGraph::setRenderAttachment(SceneNodeHandle node,
-                                ISceneRenderAttachment* attachment)
+                                ISceneRenderAttachment* pointer)
 {
-  if (m_impl->renderTraversalActive) {
+  if (m_impl->extractionActive || !m_impl->current(node)) {
     return false;
   }
-  if (!m_impl->isCurrent(node)) {
-    return false;
+  if (m_impl->attachmentCount[node.slot] == 1 &&
+      getAttachment(node, 0) == pointer) {
+    return true;
   }
-  m_impl->slots[node.slot].renderAttachment = attachment;
+  // Allocate before dropping the old range, preserving it on allocation
+  // failure.
+  uint32_t replacement = 0;
+  if (pointer != nullptr) {
+    replacement = m_impl->allocateAttachment(pointer);
+    if (replacement == 0) {
+      return false;
+    }
+  }
+  m_impl->releaseAttachments(node.slot);
+  invalidateSnapshots();
+  m_impl->attachmentFirst[node.slot] = m_impl->attachmentLast[node.slot] =
+    replacement;
+  m_impl->attachmentCount[node.slot] = replacement != 0 ? 1u : 0u;
+  if (replacement != 0) {
+    m_impl->attachment(replacement).owner = node.slot;
+  }
+  m_impl->boundsDirty = true;
+  m_impl->flags[node.slot] |= Impl::kBoundsDirty;
+  ++m_impl->contentRevision;
+  m_impl->record(SceneChangeKind::Attachments, node.slot);
   return true;
 }
-
 ISceneRenderAttachment*
 SceneGraph::getRenderAttachment(SceneNodeHandle node) const
 {
-  if (!m_impl->isCurrent(node)) {
-    return nullptr;
-  }
-  return m_impl->slots[node.slot].renderAttachment;
+  return getAttachment(node, 0);
 }
-
-bool
-SceneGraph::AppendCommands(Renderer* renderer)
+uint64_t
+SceneGraph::getStructuralRevision() const
 {
-  if (!isVisible()) {
-    return true;
+  return m_impl->structuralRevision;
+}
+uint64_t
+SceneGraph::getChangeSequence() const
+{
+  return m_impl->sequence;
+}
+bool
+SceneGraph::readChanges(uint64_t after, std::vector<SceneChange>* changes) const
+{
+  if (changes == nullptr) {
+    return false;
   }
-  m_impl->visitRenderAttachments(renderer, SceneAttachmentPass::Color);
+  changes->clear();
+  if (after > m_impl->sequence ||
+      m_impl->sequence - after > Impl::kJournalCapacity) {
+    return false;
+  }
+  for (uint64_t i = after; i < m_impl->sequence; ++i) {
+    changes->push_back(m_impl->journal[i % Impl::kJournalCapacity]);
+  }
   return true;
 }
-
-void
-SceneGraph::CollectShadowCasters(Renderer* renderer)
+SceneGraphStatistics
+SceneGraph::getStatistics() const
 {
-  if (isVisible()) {
-    m_impl->visitRenderAttachments(renderer,
-                                   SceneAttachmentPass::CollectShadow);
+  return m_impl->statistics;
+}
+void
+SceneGraph::invalidateSnapshots()
+{
+  if (!m_impl->extractionActive) {
+    ++m_impl->lifetime->epoch;
   }
 }
-
-void
-SceneGraph::AppendShadowCommands(Renderer* renderer)
+bool
+SceneGraph::notifyAttachmentChanged(SceneNodeHandle node)
 {
-  if (isVisible()) {
-    m_impl->visitRenderAttachments(renderer, SceneAttachmentPass::ShadowDepth);
+  if (m_impl->extractionActive || !m_impl->current(node)) {
+    return false;
   }
+  for (uint32_t index = m_impl->attachmentFirst[node.slot]; index != 0;
+       index = m_impl->attachment(index).next) {
+    m_impl->attachment(index).cached = false;
+  }
+  m_impl->boundsDirty = true;
+  m_impl->flags[node.slot] |= Impl::kBoundsDirty;
+  ++m_impl->contentRevision;
+  invalidateSnapshots();
+  m_impl->record(SceneChangeKind::Attachments, node.slot);
+  return true;
 }

@@ -79,6 +79,11 @@ endif()
 add_library(Illumo STATIC
   Source/Foundation/MacroDefs.cpp
   Source/Scene/SceneGraph.cpp
+  Source/Scene/SceneGraphCompile.cpp
+  Source/Scene/SceneGraphDrawable.cpp
+  Source/Scene/SceneGraphQueries.cpp
+  Source/Scene/SceneQueryIndex.cpp
+  Source/Services/WorkerPool.cpp
   Source/Services/CommandLine.cpp
   Source/Services/CommandLineCore.cpp
   Source/Platform/AtomicFile.cpp
@@ -184,6 +189,10 @@ if(BUILD_TESTING)
     Tests/TestTextureUploadPolicy.cpp
     Tests/TestSysCmdLine.cpp
     Tests/TestSceneGraph.cpp
+    Tests/TestSceneGraphOracle.cpp
+    Tests/TestSceneGraphV2.cpp
+    Tests/TestSceneAllocations.cpp
+    Tests/TestSceneBenchmarks.cpp
     Tests/TestShaderPreprocessor.cpp
     Tests/TestGuiKit.cpp
     Tests/TestFont.cpp

@@ -1,48 +1,43 @@
 # Scene subsystem guidance
 
-This file specializes the repository `AGENTS.md` for
-`Illumo/Source/Scene/`.
+This file specializes the repository `AGENTS.md` for `Illumo/Source/Scene/`.
 
-## Scope and ownership
+## Ownership and invariants
 
-Scene owns Illumo's persistent product-agnostic node hierarchy. `SceneGraph`
-owns node slots, hierarchy links, cached transforms, and node lifetime.
-Consumers keep ownership of borrowed `ISceneRenderAttachment` values and must
-keep them alive while reachable by render traversal.
-
-## Required invariants
-
+- `SceneGraph` owns SoA slots, intrusive hierarchy, authoritative TRS, compiled
+  preorder/bounds/query caches, interned names, a bounded journal, and two
+  snapshot buffers. It is not a drawable, ECS, serializer, or update framework.
 - Expose graph-ID-plus-slot-plus-generation handles, never node addresses.
-- Reserve slot and generation zero as invalid; advance a generation before a
-  released slot can be reused.
-- Reject foreign, stale, and cyclic relationships without partial mutation.
-- Preserve deterministic root and sibling insertion order. Reparenting appends
-  to the destination order; destruction removes the complete subtree.
-- Keep transform propagation, traversal, dirty marking, and destruction
-  iterative. Repository policy forbids recursion.
-- Local enabled or visible state suppresses the complete subtree during render
-  extraction.
-- Emit only backend-neutral renderer tokens through
-  `ISceneRenderAttachment`; Scene must not import OpenGL or game-domain types.
-- Forward collection, shared shadow-depth, and color extraction through the
-  same enabled/visible transform traversal so SceneGraph attachments participate
-  in the Renderer-owned scene shadow pass without transferring ownership.
-- Treat attachment-provided finite local bounds as authoritative and query
-  them on demand. Transform them conservatively for world queries and color or
-  shadow rejection; unknown, invalid, or malformed bounds fail open. Culling
-  an attachment must never suppress traversal of its children.
-- Reject node, hierarchy, state, and attachment mutation while render
-  attachments are being visited; callbacks must not invalidate traversal
-  storage.
-- Keep v1 main-thread affine. Thread-safe mutation requires a separately
-  authorized synchronization and lifetime design.
-- Do not add ECS storage, serialization, update callbacks, retained UI,
-  subtree-bound caches, spatial indices, or attachment ownership without a
-  concrete consumer and an approved architecture extension.
+  Zero is invalid; destruction invalidates every descendant before reuse.
+- Reject stale, foreign, and cyclic relationships without partial mutation.
+  Preserve root/sibling insertion order; reparenting appends to its destination.
+- Keep all graph walks iterative. Transform setters mark one slot and lower a
+  watermark; getters must not consume dirtiness required by compiled updates.
+- Names need not be unique; lookup returns first preorder match. Payloads are
+  opaque uint64 values. Multiple attachments preserve insertion order.
+- Borrow attachments. Their owner detaches/invalidateSnapshots before changing
+  or retiring content and keeps emitted token payloads alive until submission.
+- Nonzero bounds revisions cache local bounds; zero requests every-extraction
+  polling. Transform each attachment box before unioning node/subtree boxes.
+  Unknown/invalid bounds fail open during rendering. Geometry queries exclude
+  unknown bounds and preserve preorder ties.
+- Derived compilation or BVH allocation failure falls back to authoritative
+  traversal or linear queries. A cache failure must not change results.
+- Reject mutation during extraction/bounds callbacks. Ordinary edits after
+  publication leave snapshot values unchanged; attachment changes, destruction,
+  clear, and ring-slot reuse expire affected views. Validate before each callback.
+- SceneGraphDrawable alone bridges snapshots to DrawableBase. Keep graph state
+  separate from token/backend execution. No OpenGL or product-domain imports.
+- Shared shadow fitting occurs after collection, so camera rejection cannot
+  discard potential off-camera casters. Test fitted shadow relevance against
+  snapshot values during depth emission.
+- Mutation, extraction, queries, and callbacks remain main-thread affine.
+  Parallel stages are measurement-gated; they may not call virtual attachments,
+  mutate structure, or change deterministic emission order.
 
 ## Documentation and verification
 
-The contract is recorded in `docs/scene-graph-v1-design.md`, formal decisions
-D-E8/D-E11, `docs/architecture-consensus.md`, and `docs/packages/scene.md`. Changes
-must exercise handle lifetime, cycles, hierarchy order, transform propagation,
-subtree state, destruction, and token extraction.
+See `docs/scene-graph-v2-design.md`, `docs/scene-graph-v2-plan.md`, D-E12/D-R25,
+`docs/architecture-consensus.md`, and `docs/packages/scene.md`. Preserve the
+v1 emission golden; verify independent oracle matrices/bounds/order, indexed
+query parity, snapshot expiration, allocation failures, and consumer behavior.

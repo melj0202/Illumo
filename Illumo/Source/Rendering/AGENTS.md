@@ -39,9 +39,11 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
 - Camera and shadow bounds tests are Renderer-owned and conservative. Invalid
   frusta, matrices, or bounds disable the corresponding rejection rather than
   risking missing geometry.
-- The separate `SceneGraph` may enter `Scene` as one drawable. Its borrowed
-  `ISceneRenderAttachment` values receive resolved world transforms and emit
-  tokens only; do not make Rendering own graph nodes or graph lifetime.
+- `SceneGraphDrawable` enters `Scene` and consumes an immutable scene snapshot
+  once per renderer frame. The graph owns its buffers; Rendering never owns
+  graph nodes. Attachments receive snapshot transforms and emit tokens only.
+  The shared shadow fit follows collection; depth relevance therefore uses
+  snapshot bounds after fitting. Validate snapshot lifetime before callbacks.
 - Resource handles are backend-neutral identifiers. The owning backend
   registry controls concrete resource lifetime; enrollment is rare and
   per-frame work emits commands rather than recreating resources.

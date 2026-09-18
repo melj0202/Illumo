@@ -7,6 +7,7 @@
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cmath>
@@ -329,6 +330,7 @@ main(int argc, char** argv)
         }
         Scene frame(renderer.getWindow(), &camera);
         SceneGraph graph;
+        SceneGraphDrawable graphDrawable(graph);
         if (mode == "scene") {
           const SceneNodeHandle node = graph.createNode();
           if (!graph.setLocalTransform(node, transform) ||
@@ -336,7 +338,7 @@ main(int argc, char** argv)
             error = "Unable to assemble scene fixture";
             return false;
           }
-          frame.AddDrawable(&graph);
+          frame.AddDrawable(&graphDrawable);
         } else {
           fixture.setDirectTransform(transform.toMatrix());
           frame.AddDrawable(&fixture);

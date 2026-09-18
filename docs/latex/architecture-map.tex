@@ -825,7 +825,7 @@
     \textbf{\rmfamily Observed dependency direction (production)}\\[3pt]
     Illumo Platform $\rightarrow$ product definition $\rightarrow$ Application runner $\rightarrow$ Illumo host $\rightarrow$ IModule (required product / optional Debug) $\cdot$
     CellGame $\rightarrow$ CellContext $\rightarrow$ SparseCellGrid + CanvasView + RuleSet $\rightarrow$ Renderer tokens\\
-    SceneGraph $\rightarrow$ borrowed render attachments $\rightarrow$ Renderer tokens $\cdot$
+    SceneGraph $\rightarrow$ snapshot $\rightarrow$ SceneGraphDrawable $\rightarrow$ Renderer tokens $\cdot$
     Debug $\rightarrow$ CommandLine + GLString $\cdot$
     Renderer $\rightarrow$ IBackend $\rightarrow$ GL* $\cdot$
     split Tests $\rightarrow$ Illumo::TestSupport/MockBackend $\cdot$

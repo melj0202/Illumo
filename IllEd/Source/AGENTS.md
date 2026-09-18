@@ -14,9 +14,17 @@ cellular-automata product.
 
 - Depend only on `Illumo::Illumo`. Do not link Game, Rulesets, or
   `IllumoGameCore`.
-- Do not put names, components, or file I/O on `SceneGraph`. The editor
-  document owns stable string ids, display names, and attachment recipes;
-  the graph is a runtime view.
+- `EditorDocument` owns the runtime graph and is the mutation gateway. Graph
+  hierarchy/TRS/state are authoritative; document recipes retain stable file
+  IDs, display names, and geometry for `.ilsc`. Never maintain a second cycle
+  validator or world-transform composer. Serialize in graph order.
+- Bind stable document IDs to graph names and recipe indices to opaque user
+  data. Product identity policy and file I/O stay in IllEd.
+- EditorModule consumes the change journal to update persistent render bindings.
+  Overflow resynchronizes bindings without rebuilding nodes. Detach/invalidate
+  snapshots before reconfiguring or deleting a borrowed visual.
+- Graph AABB queries supply picking candidates; editor-owned exact local-box
+  tests retain rotation, singular-transform, and selection-order policy.
 - Write UTF-8 JSON `.ilsc` version 1 with 2D/3D primitive kinds and
   `world_mode`. Do not write `.illumo` or serialize `SceneNodeHandle` values.
 - Keep UI primitive-composed through `GameVisual`. No retained widget tree.
