@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
@@ -645,6 +646,7 @@ testMeshVisualSceneAttachment()
     glm::vec3(0.0f), glm::vec3(0.25f), ColorRgba{ 255, 255, 255, 255 });
 
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle node = graph.createNode();
   Matrix4 translation =
     glm::translate(Matrix4(1.0f), Vector3(2.0f, 0.0f, 0.0f));
@@ -656,7 +658,7 @@ testMeshVisualSceneAttachment()
            "MeshVisual attaches to the node");
 
   Scene scene(&window, &camera);
-  scene.AddDrawable(&graph, RenderLayerId::World);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
   mock.resetCounters();
   renderer.BeginFrame();
   renderer.RenderScene(&scene, &camera);
@@ -786,6 +788,7 @@ testMeshVisualSceneShadowPassCoversVisibleSet()
     glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 160, 180, 220, 255 });
 
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle attachedNode = graph.createNode();
   graph.setLocalTransform(
     attachedNode, glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, 0.0f, 0.0f)));
@@ -793,7 +796,7 @@ testMeshVisualSceneShadowPassCoversVisibleSet()
 
   Scene scene(&window, &camera);
   scene.AddDrawable(&directVisual, RenderLayerId::World);
-  scene.AddDrawable(&graph, RenderLayerId::World);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
 
   mock.resetCounters();
   renderer.BeginFrame();
@@ -1033,6 +1036,7 @@ testMeshVisualRelevantCasterVolume()
   relevantCaster.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{});
   relevantCaster.setLightDirection(glm::vec3(0.0f, 1.0f, 0.0f));
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle relevantNode = graph.createNode();
   graph.setLocalTransform(
     relevantNode,
@@ -1042,7 +1046,7 @@ testMeshVisualRelevantCasterVolume()
   Scene scene(&window, &camera);
   scene.AddDrawable(&distantCaster, RenderLayerId::World);
   scene.AddDrawable(&receiver, RenderLayerId::World);
-  scene.AddDrawable(&graph, RenderLayerId::World);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
   renderer.BeginFrame();
   renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();

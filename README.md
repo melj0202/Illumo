@@ -50,7 +50,8 @@ under `docs/`. Start with:
 
 - `docs/README.md` — documentation map and PDF build commands
 - `docs/architecture-consensus.md` — canonical current architecture
-- `docs/scene-graph-v1-design.md` — retained scene hierarchy contract and scope
+- `docs/scene-graph-v2-design.md` — compiled scene/snapshot contract
+- `docs/scene-graph-v2-plan.md` — implementation and validation record
 - `docs/latex/illumo.tex` — the canonical prose-book entrypoint
 - `docs/latex/architecture-map.tex` — the current chart-only entrypoint
 - `docs/output/*.pdf` — generated locally; never sources of truth
@@ -60,8 +61,8 @@ under `docs/`. Start with:
 hierarchy, painter-correct primitives, dynamic quad buffers,
 primitive-composed themed UI, cubemaps, offscreen passes, and managed
 texture/cubemap/shader/static-mesh assets. The
-retained `SceneGraph` is extracted as one drawable into the existing per-frame
-render list; it does not replace CSim's sparse domain. `SparseCellGrid` uses
+retained `SceneGraph` publishes immutable snapshots through `SceneGraphDrawable`
+into the existing per-frame render list; it does not replace CSim's sparse domain. `SparseCellGrid` uses
 published dual-grid simulation,
 exact retained candidate topology, direct-source parallel preparation and
 evaluation, recycled transactional chunk nodes, adaptive frontier stepping,

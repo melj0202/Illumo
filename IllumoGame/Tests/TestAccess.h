@@ -147,6 +147,11 @@ public:
     return &module.render3dSceneGraph;
   }
 
+  static DrawableBase* getRender3dSceneDrawable(CellGameModule& module)
+  {
+    return &module.render3dSceneDrawable;
+  }
+
   static SimulatorConfiguration currentConfiguration(
     const CellGameModule& module)
   {

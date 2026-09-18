@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IlscCodec.h"
+#include <Illumo/Scene/SceneGraph.h>
 #include <cstddef>
 #include <string>
 
@@ -8,7 +9,7 @@ class EditorDocument
 {
 public:
   EditorDocument();
-  ~EditorDocument() = default;
+  ~EditorDocument();
 
   EditorDocument(const EditorDocument&) = delete;
   EditorDocument& operator=(const EditorDocument&) = delete;
@@ -33,7 +34,11 @@ public:
   size_t nodeCount() const { return m_document.nodes.size(); }
   const IlscNode* nodeAt(size_t index) const;
   const IlscNode* findNode(const std::string& id) const;
-  IlscNode* findNode(const std::string& id);
+  SceneGraph& graph() { return m_graph; }
+  const SceneGraph& graph() const { return m_graph; }
+  SceneNodeHandle nodeHandle(const std::string& id) const;
+  bool setEnabled(const std::string& id, bool enabled);
+  bool setVisible(const std::string& id, bool visible);
 
   std::string createNode(SceneNodeKind kind, const std::string& parentId);
   bool destroySubtree(const std::string& id);
@@ -54,6 +59,10 @@ public:
   EditorSceneDetail sceneDetail(const std::string& selectedId) const;
 
 private:
+  struct RuntimeNode;
+  SceneGraph m_graph;
+  std::vector<std::unique_ptr<RuntimeNode>> m_runtime;
+  mutable std::vector<SceneRayHit> m_pickCandidates;
   IlscDocument m_document;
   std::string m_path;
   bool m_dirty;
@@ -61,8 +70,8 @@ private:
 
   std::string allocateId();
   size_t indexOf(const std::string& id) const;
-  bool wouldCreateCycle(const std::string& id,
-                        const std::string& parentId) const;
-  bool isDescendant(const std::string& ancestorId,
-                    const std::string& nodeId) const;
+  IlscNode* mutableNode(const std::string& id);
+  void rebuildRuntime();
+  void updateProxy(size_t index);
+  IlscDocument serializationDocument() const;
 };

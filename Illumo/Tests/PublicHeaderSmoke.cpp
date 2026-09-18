@@ -68,6 +68,7 @@
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Scene/SceneNodeHandle.h>
 #include <Illumo/Scene/Transform3D.h>
 #include <Illumo/Services/ArenaAlloc.h>
@@ -86,6 +87,7 @@
 #include <Illumo/Services/MallocAlloc.h>
 #include <Illumo/Services/PoolAlloc.h>
 #include <Illumo/Services/SysCmdLine.h>
+#include <Illumo/Services/WorkerPool.h>
 
 #include <type_traits>
 
@@ -126,6 +128,51 @@ main()
   static_assert(std::is_destructible_v<PreprocessOptions>);
   SceneGraph sceneGraph;
   const SceneNodeHandle sceneNode = sceneGraph.createNode();
+  static_assert(!std::is_base_of_v<DrawableBase, SceneGraph>);
+  static_assert(std::is_base_of_v<DrawableBase, SceneGraphDrawable>);
+  SceneGraphDrawable graphDrawable(sceneGraph);
+  SceneNodeDesc description;
+  description.name = "public";
+  description.parent = sceneNode;
+  const SceneNodeHandle child = sceneGraph.createNode(description);
+  Transform3D transform;
+  sceneGraph.getLocalTransform(child, &transform);
+  sceneGraph.setLocalTransforms(&child, &transform, 1);
+  sceneGraph.setName(child, "renamed");
+  sceneGraph.findByName("renamed");
+  sceneGraph.getName(child);
+  sceneGraph.setUserData(child, 5);
+  uint64_t payload = 0;
+  sceneGraph.getUserData(child, &payload);
+  sceneGraph.getNextSibling(child);
+  sceneGraph.firstNode();
+  sceneGraph.nextNode(sceneNode);
+  sceneGraph.getAttachmentCount(child);
+  sceneGraph.getAttachment(child, 0);
+  sceneGraph.addAttachment(child, nullptr);
+  sceneGraph.removeAttachment(child, nullptr);
+  sceneGraph.notifyAttachmentChanged(child);
+  sceneGraph.canSetParent(child, sceneNode);
+  sceneGraph.isEffectivelyVisible(child);
+  SceneRayHit hit;
+  sceneGraph.raycast(Vector3(0), Vector3(0, 0, 1), &hit);
+  std::vector<SceneRayHit> candidates;
+  sceneGraph.raycastCandidates(Vector3(0), Vector3(0, 0, 1), &candidates);
+  std::vector<SceneNodeHandle> overlaps;
+  sceneGraph.queryBounds(AxisAlignedBounds3{}, &overlaps);
+  std::vector<SceneChange> changes;
+  sceneGraph.readChanges(sceneGraph.getChangeSequence(), &changes);
+  sceneGraph.getStructuralRevision();
+  sceneGraph.getStatistics();
+  const SceneSnapshotView snapshot = sceneGraph.extract(nullptr);
+  snapshot.get();
+  sceneGraph.invalidateSnapshots();
+  WorkerPool workers;
+  workers.start(0);
+  workers.getWorkerCount();
+  workers.submitRange(0, 1, [](void*, size_t, size_t) noexcept {}, nullptr);
+  workers.join();
+  workers.stop();
   const AxisAlignedBounds3 bounds{ Vector3(-1.0f), Vector3(1.0f) };
   if (!sceneGraph.isNodeValid(sceneNode) || !bounds.isValid()) {
     return 1;

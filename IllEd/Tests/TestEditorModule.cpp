@@ -12,10 +12,14 @@
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <string>
+#include <unordered_map>
 
 static TestCounters g;
 
@@ -980,6 +984,208 @@ testTransformGizmoHitAndConstraints()
 void
 registerEditorModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add(
+    "IllEd.SceneGraph.Bench.EditLatency",
+    []() {
+      g = {};
+      EditorFixture fixture;
+      EditorDocument& document =
+        EditorModuleTestAccess::document(fixture.module);
+      std::string selected;
+      const size_t count = 2000;
+      for (size_t i = 0; i < count; ++i) {
+        const size_t row = i / 50;
+        selected = document.createNode(SceneNodeKind::SolidCube, {});
+        document.setTransform(
+          selected,
+          Transform3D::fromPosition(Vector3(
+            static_cast<float>(i % 50) * 2, static_cast<float>(row) * 2, 0)));
+      }
+      std::string error;
+      document.saveToFile("scene-v2-benchmark.ilsc", &error);
+      document.loadFromFile("scene-v2-benchmark.ilsc", &error);
+      EditorModuleTestAccess::setSelectedId(fixture.module, selected);
+      EditorModuleTestAccess::rebuildGraph(fixture.module);
+      const size_t repeats = 30;
+      const std::chrono::steady_clock::time_point start =
+        std::chrono::steady_clock::now();
+      for (size_t i = 0; i < repeats; ++i) {
+        EditorModuleTestAccess::handleCommand(fixture.module,
+                                              EditorCommand::CycleColor);
+      }
+      const double edit = std::chrono::duration<double, std::micro>(
+                            std::chrono::steady_clock::now() - start)
+                            .count() /
+                          repeats;
+      std::string picked;
+      const std::chrono::steady_clock::time_point queryStart =
+        std::chrono::steady_clock::now();
+      for (size_t i = 0; i < repeats; ++i) {
+        document.pickRay(Vector3(static_cast<float>(i) * 2, 0, -10),
+                         Vector3(0, 0, 1),
+                         &picked);
+      }
+      const double pick = std::chrono::duration<double, std::micro>(
+                            std::chrono::steady_clock::now() - queryStart)
+                            .count() /
+                          repeats;
+      std::printf("IllEdBench cubes=%zu recolor_us=%.3f ray_us=%.3f "
+                  "source=scene-v2-benchmark.ilsc\n",
+                  count,
+                  edit,
+                  pick);
+      // Favorable planar-grid prototype over codec-loaded .ilsc content. Exact
+      // world-box hits agree with graph queries; revision polling is excluded.
+      std::vector<AxisAlignedBounds3> boxes;
+      std::vector<SceneNodeHandle> handles;
+      std::unordered_map<uint64_t, std::vector<size_t>> grid;
+      const std::function<uint64_t(int, int)> key = [](int x, int y) {
+        return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
+               static_cast<uint32_t>(y);
+      };
+      const std::chrono::steady_clock::time_point gridStart =
+        std::chrono::steady_clock::now();
+      for (SceneNodeHandle node = document.graph().firstNode(); !node.isNull();
+           node = document.graph().nextNode(node)) {
+        AxisAlignedBounds3 box;
+        if (!document.graph().getWorldBounds(node, &box)) {
+          continue;
+        }
+        const size_t index = boxes.size();
+        boxes.push_back(box);
+        handles.push_back(node);
+        for (int x = static_cast<int>(std::floor(box.minimum.x / 4));
+             x <= static_cast<int>(std::floor(box.maximum.x / 4));
+             ++x) {
+          for (int y = static_cast<int>(std::floor(box.minimum.y / 4));
+               y <= static_cast<int>(std::floor(box.maximum.y / 4));
+               ++y) {
+            grid[key(x, y)].push_back(index);
+          }
+        }
+      }
+      const double gridBuild = std::chrono::duration<double, std::micro>(
+                                 std::chrono::steady_clock::now() - gridStart)
+                                 .count();
+      double gridTime = 0, bvhTime = 0;
+      for (size_t i = 0; i < repeats; ++i) {
+        const float x = static_cast<float>(i) * 2;
+        const std::chrono::steady_clock::time_point query =
+          std::chrono::steady_clock::now();
+        const std::unordered_map<uint64_t, std::vector<size_t>>::const_iterator
+          bucket = grid.find(key(static_cast<int>(std::floor(x / 4)), 0));
+        float nearest = std::numeric_limits<float>::infinity();
+        SceneNodeHandle best;
+        if (bucket != grid.end()) {
+          for (size_t candidate : bucket->second) {
+            const AxisAlignedBounds3& box = boxes[candidate];
+            if (x >= box.minimum.x && x <= box.maximum.x &&
+                0 >= box.minimum.y && 0 <= box.maximum.y &&
+                box.maximum.z >= -10) {
+              const float distance = std::max(0.0f, box.minimum.z + 10);
+              if (distance < nearest) {
+                nearest = distance;
+                best = handles[candidate];
+              }
+            }
+          }
+        }
+        gridTime += std::chrono::duration<double, std::micro>(
+                      std::chrono::steady_clock::now() - query)
+                      .count();
+        SceneRayHit hit;
+        const std::chrono::steady_clock::time_point bvhStart =
+          std::chrono::steady_clock::now();
+        const bool found =
+          document.graph().raycast(Vector3(x, 0, -10), Vector3(0, 0, 1), &hit);
+        bvhTime += std::chrono::duration<double, std::micro>(
+                     std::chrono::steady_clock::now() - bvhStart)
+                     .count();
+        if (!found || hit.node != best || hit.distance != nearest) {
+          ++g.failures;
+        }
+      }
+      const uint64_t sequence = document.graph().getChangeSequence();
+      for (size_t i = 0; i < 1000; ++i) {
+        document.translate(selected, Vector3(0.001f, 0, 0));
+      }
+      std::vector<SceneChange> changes;
+      const bool retained = document.graph().readChanges(sequence, &changes);
+      std::printf(
+        "IllEdGrid source=scene-v2-benchmark.ilsc build_us=%.3f "
+        "vertical_ray_us=%.3f graph_bvh_us=%.3f journal_drag_records=%zu "
+        "retained=%d transform_static_fraction=%.6f\n",
+        gridBuild,
+        gridTime / repeats,
+        bvhTime / repeats,
+        changes.size(),
+        retained ? 1 : 0,
+        1.0 - 1.0 / count);
+      testTrue(g,
+               retained && changes.size() == 1000,
+               "1000 unconsumed drag updates fit the journal");
+      return g.failures;
+    },
+    120);
+  registry.add("IllEd.Module.IncrementalGraph", []() {
+    g = {};
+    EditorFixture fixture;
+    EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+    EditorModuleTestAccess::createNode(fixture.module,
+                                       SceneNodeKind::SolidCube);
+    const std::string id = EditorModuleTestAccess::selectedId(fixture.module);
+    SceneGraph& graph = document.graph();
+    const SceneNodeHandle retained = document.nodeHandle(id);
+    ISceneRenderAttachment* visual = graph.getAttachment(retained, 1);
+    testTrue(
+      g,
+      visual != nullptr,
+      "geometry has a persistent render attachment beside its picking proxy");
+    const uint64_t structure = graph.getStructuralRevision();
+    const SceneSnapshotView snapshot = graph.extract(nullptr);
+    EditorModuleTestAccess::handleCommand(fixture.module,
+                                          EditorCommand::CycleColor);
+    EditorModuleTestAccess::handleCommand(fixture.module,
+                                          EditorCommand::NudgeExtent);
+    testTrue(g,
+             document.nodeHandle(id) == retained &&
+               graph.getAttachment(retained, 1) == visual &&
+               graph.getStructuralRevision() == structure,
+             "recolor and extent edits preserve node and visual identities");
+    testTrue(
+      g, !snapshot.get(), "visual reconfiguration retires old snapshots");
+    document.translate(id, Vector3(1, 2, 3));
+    EditorModuleTestAccess::rebuildGraph(fixture.module);
+    Matrix4 world(1.0f);
+    graph.getWorldTransform(retained, &world);
+    testTrue(g,
+             graph.getAttachment(retained, 1) == visual &&
+               world[3][1] == document.findNode(id)->transform.position.y,
+             "translation synchronizes without rebuild");
+    for (size_t i = 0; i < 4200; ++i) {
+      document.setColor(id, ColorRgba{ 80, 90, 100, 255 });
+    }
+    EditorModuleTestAccess::rebuildGraph(fixture.module);
+    testTrue(g,
+             document.nodeHandle(id) == retained &&
+               graph.getAttachment(retained, 1) == visual,
+             "journal overflow resync preserves graph and visual identity");
+    fixture.module.Exit();
+    testTrue(g,
+             document.nodeHandle(id) == retained &&
+               graph.getAttachmentCount(retained) == 1,
+             "stop preserves document nodes and retires render bindings");
+    testTrue(g,
+             fixture.module.Start(&fixture.context) &&
+               document.nodeHandle(id) == retained &&
+               graph.getAttachmentCount(retained) == 2,
+             "restart reconstructs only render bindings");
+    EditorModuleTestAccess::deleteSelection(fixture.module);
+    testTrue(g,
+             !graph.isNodeValid(retained),
+             "deletion invalidates the original generational handle");
+    return g.failures;
+  });
   registry.add("IllEd.Module.AttachmentBounds", []() {
     g = {};
     testEditorAttachmentForwardsBounds();

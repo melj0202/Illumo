@@ -121,74 +121,37 @@ void
 EditorSceneGraphView::rebuildTreeRows(const EditorDocument* document)
 {
   m_rows.clear();
-  if (document == nullptr || document->nodeCount() == 0) {
+  if (document == nullptr) {
     return;
   }
-
-  const size_t count = document->nodeCount();
-
-  // Build adjacency map: parentId -> vector of node indices
-  std::unordered_map<std::string, std::vector<size_t>> childrenMap;
-  std::vector<size_t> rootIndices;
-
-  for (size_t i = 0; i < count; ++i) {
-    const IlscNode* node = document->nodeAt(i);
+  const SceneGraph& graph = document->graph();
+  float currentY = m_treeStartY;
+  std::vector<SceneNodeHandle> ancestors;
+  for (SceneNodeHandle handle = graph.firstNode(); !handle.isNull();
+       handle = graph.nextNode(handle)) {
+    uint64_t index = 0;
+    if (!graph.getUserData(handle, &index)) {
+      continue;
+    }
+    const IlscNode* node = document->nodeAt(static_cast<size_t>(index));
     if (node == nullptr) {
       continue;
     }
-    if (node->parentId.empty() ||
-        document->findNode(node->parentId) == nullptr) {
-      rootIndices.push_back(i);
-    } else {
-      childrenMap[node->parentId].push_back(i);
+    const SceneNodeHandle parent = graph.getParent(handle);
+    while (!ancestors.empty() && ancestors.back() != parent) {
+      ancestors.pop_back();
     }
-  }
-
-  // Iterative DFS traversal to produce flat pre-order tree rows with depth
-  struct StackEntry
-  {
-    size_t nodeIndex = 0;
-    int depth = 0;
-    bool isLastChild = false;
-  };
-
-  std::vector<StackEntry> stack;
-  // Push roots in reverse order so first root is popped first
-  for (size_t i = rootIndices.size(); i > 0; --i) {
-    stack.push_back({ rootIndices[i - 1], 0, (i == rootIndices.size()) });
-  }
-
-  std::unordered_set<std::string> visited;
-  float currentY = m_treeStartY;
-
-  while (!stack.empty()) {
-    const StackEntry entry = stack.back();
-    stack.pop_back();
-
-    const IlscNode* node = document->nodeAt(entry.nodeIndex);
-    if (node == nullptr || visited.find(node->id) != visited.end()) {
-      continue;
-    }
-    visited.insert(node->id);
-
+    const int depth = static_cast<int>(ancestors.size());
+    ancestors.push_back(handle);
     TreeRow row;
     row.id = node->id;
     row.name = node->name.empty() ? ("Node #" + node->id) : node->name;
     row.kind = node->kind;
-    row.depth = entry.depth;
+    row.depth = depth;
     row.y = currentY;
-    row.isLastChild = entry.isLastChild;
+    row.isLastChild = graph.getNextSibling(handle).isNull();
     m_rows.push_back(row);
     currentY += m_rowHeight;
-
-    const auto it = childrenMap.find(node->id);
-    if (it != childrenMap.end()) {
-      const std::vector<size_t>& childList = it->second;
-      for (size_t c = childList.size(); c > 0; --c) {
-        stack.push_back(
-          { childList[c - 1], entry.depth + 1, (c == childList.size()) });
-      }
-    }
   }
 }
 

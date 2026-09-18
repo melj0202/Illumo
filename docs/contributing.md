@@ -47,12 +47,12 @@ reviewed.
 - Production rendering uses `RenderCommand` tokens through `IBackend`.
 - Keep `DebugModule` out of Release compilation and register it as optional in
   Debug; each product supplies its own required module.
-- The approved `SceneGraph` v1 is the retained world hierarchy. Keep it
-  handle-based, backend-neutral, iterative, and separate from the per-frame
-  `Rendering::Scene` list. Its approved linear bounds/culling contract must not
-  grow into an ECS, retained UI tree, persistence format, subtree cache,
-  spatial index, or update framework without a concrete consumer and an
-  authorized design.
+- The approved `SceneGraph` v2 owns retained SoA hierarchy, compiled transforms
+  and bounds, identity/journal state, and a derived query index. Its separate
+  drawable consumes immutable snapshots in the frame list. Keep graph state,
+  borrowed attachment lifetime, editor policy, and token/backend execution
+  separate. ECS components, retained UI, persistence formats, update callbacks,
+  and render-thread payload recording remain outside this boundary.
 - Do not introduce a render graph, additional graphics backend, or compute
   backend solely for architectural completeness.
 

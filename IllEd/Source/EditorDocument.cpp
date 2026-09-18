@@ -3,8 +3,86 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <unordered_set>
+#include <unordered_map>
 #include <utility>
+
+struct EditorDocument::RuntimeNode : ISceneRenderAttachment
+{
+  SceneNodeHandle handle;
+  AxisAlignedBounds3 bounds;
+  uint64_t revision = 1;
+  bool getSceneLocalBounds(AxisAlignedBounds3* output) const override
+  {
+    *output = bounds;
+    return bounds.isValid();
+  }
+  uint64_t getSceneBoundsRevision() const override { return revision; }
+  void appendSceneCommands(Renderer*, const Matrix4&) override {}
+};
+
+EditorDocument::~EditorDocument()
+{
+  m_graph.clear();
+}
+
+SceneNodeHandle
+EditorDocument::nodeHandle(const std::string& id) const
+{
+  return id.empty() ? SceneNodeHandle{} : m_graph.findByName(id);
+}
+
+void
+EditorDocument::updateProxy(size_t index)
+{
+  const IlscNode& node = m_document.nodes[index];
+  Vector3 half(0.2f);
+  if (IlscCodec::kindHasGeometry(node.kind)) {
+    half = node.primitive.extent;
+    if (node.kind == SceneNodeKind::WireSphere) {
+      half = Vector3(std::max(half.x, std::max(half.y, half.z)));
+    } else if (node.kind == SceneNodeKind::FilledEllipse) {
+      half = Vector3(half.x);
+    } else if (node.kind == SceneNodeKind::FilledRect) {
+      half.z = 0.02f;
+    }
+  }
+  m_runtime[index]->bounds = AxisAlignedBounds3{ -half, half };
+  ++m_runtime[index]->revision;
+}
+
+void
+EditorDocument::rebuildRuntime()
+{
+  m_graph.clear();
+  m_runtime.clear();
+  m_runtime.reserve(m_document.nodes.size());
+  // Resolve ids in two linear passes. This temporary map is discarded after
+  // loading; graph names/userData own live runtime identity.
+  std::unordered_map<std::string, size_t> indices;
+  indices.reserve(m_document.nodes.size());
+  for (size_t i = 0; i < m_document.nodes.size(); ++i) {
+    const IlscNode& node = m_document.nodes[i];
+    std::unique_ptr<RuntimeNode> runtime = std::make_unique<RuntimeNode>();
+    SceneNodeDesc description;
+    description.name = node.id;
+    description.transform = node.transform;
+    description.userData = i;
+    description.enabled = node.enabled;
+    description.visible = node.visible;
+    runtime->handle = m_graph.createNode(description);
+    m_runtime.push_back(std::move(runtime));
+    updateProxy(i);
+    m_graph.addAttachment(m_runtime[i]->handle, m_runtime[i].get());
+    indices.emplace(node.id, i);
+  }
+  for (size_t i = 0; i < m_document.nodes.size(); ++i) {
+    const std::string& parent = m_document.nodes[i].parentId;
+    if (!parent.empty()) {
+      m_graph.setParent(m_runtime[i]->handle,
+                        m_runtime[indices.at(parent)]->handle);
+    }
+  }
+}
 
 EditorDocument::EditorDocument()
   : m_dirty(false)
@@ -16,6 +94,8 @@ EditorDocument::EditorDocument()
 void
 EditorDocument::clear()
 {
+  m_graph.clear();
+  m_runtime.clear();
   m_document = IlscDocument{};
   m_document.camera.zoom = 32.0f;
   m_path.clear();
@@ -37,6 +117,9 @@ EditorDocument::setWorldMode(IlscWorldMode mode)
     return;
   }
   m_document.worldMode = mode;
+  for (const std::unique_ptr<RuntimeNode>& runtime : m_runtime) {
+    m_graph.notifyAttachmentChanged(runtime->handle);
+  }
   m_dirty = true;
 }
 
@@ -60,7 +143,7 @@ EditorDocument::findNode(const std::string& id) const
 }
 
 IlscNode*
-EditorDocument::findNode(const std::string& id)
+EditorDocument::mutableNode(const std::string& id)
 {
   const size_t index = indexOf(id);
   if (index >= m_document.nodes.size()) {
@@ -72,12 +155,11 @@ EditorDocument::findNode(const std::string& id)
 size_t
 EditorDocument::indexOf(const std::string& id) const
 {
-  for (size_t i = 0; i < m_document.nodes.size(); ++i) {
-    if (m_document.nodes[i].id == id) {
-      return i;
-    }
-  }
-  return m_document.nodes.size();
+  uint64_t index = 0;
+  const SceneNodeHandle handle = nodeHandle(id);
+  return m_graph.getUserData(handle, &index) && index < m_document.nodes.size()
+           ? static_cast<size_t>(index)
+           : m_document.nodes.size();
 }
 
 std::string
@@ -103,6 +185,7 @@ EditorDocument::loadFromText(const std::string& text, std::string* error)
     return false;
   }
   m_document = std::move(loaded);
+  rebuildRuntime();
   m_nextId = 1;
   m_dirty = false;
   return true;
@@ -116,6 +199,7 @@ EditorDocument::loadFromFile(const std::string& path, std::string* error)
     return false;
   }
   m_document = std::move(loaded);
+  rebuildRuntime();
   m_path = path;
   m_nextId = 1;
   m_dirty = false;
@@ -126,7 +210,7 @@ bool
 EditorDocument::saveToFile(const std::string& path, std::string* error)
 {
   const std::string resolved = IlscCodec::withIlscExtension(path);
-  if (!IlscCodec::writeFile(resolved, m_document, error)) {
+  if (!IlscCodec::writeFile(resolved, serializationDocument(), error)) {
     return false;
   }
   m_path = resolved;
@@ -137,43 +221,26 @@ EditorDocument::saveToFile(const std::string& path, std::string* error)
 std::string
 EditorDocument::encode() const
 {
-  return IlscCodec::encode(m_document);
+  return IlscCodec::encode(serializationDocument());
 }
 
-bool
-EditorDocument::wouldCreateCycle(const std::string& id,
-                                 const std::string& parentId) const
+IlscDocument
+EditorDocument::serializationDocument() const
 {
-  if (parentId.empty()) {
-    return false;
-  }
-  if (id == parentId) {
-    return true;
-  }
-  return isDescendant(id, parentId);
-}
-
-bool
-EditorDocument::isDescendant(const std::string& ancestorId,
-                             const std::string& nodeId) const
-{
-  std::string current = nodeId;
-  std::unordered_set<std::string> seen;
-  while (!current.empty()) {
-    if (seen.find(current) != seen.end()) {
-      return true;
+  IlscDocument serialized;
+  serialized.version = m_document.version;
+  serialized.worldMode = m_document.worldMode;
+  serialized.camera = m_document.camera;
+  serialized.nodes.reserve(m_document.nodes.size());
+  for (SceneNodeHandle handle = m_graph.firstNode(); !handle.isNull();
+       handle = m_graph.nextNode(handle)) {
+    uint64_t index = 0;
+    if (m_graph.getUserData(handle, &index) &&
+        index < m_document.nodes.size()) {
+      serialized.nodes.push_back(m_document.nodes[static_cast<size_t>(index)]);
     }
-    if (current == ancestorId) {
-      return true;
-    }
-    seen.insert(current);
-    const IlscNode* node = findNode(current);
-    if (node == nullptr) {
-      return false;
-    }
-    current = node->parentId;
   }
-  return false;
+  return serialized;
 }
 
 std::string
@@ -205,7 +272,24 @@ EditorDocument::createNode(SceneNodeKind kind, const std::string& parentId)
   } else {
     node.name = "Empty";
   }
+  const size_t index = m_document.nodes.size();
+  std::unique_ptr<RuntimeNode> runtime = std::make_unique<RuntimeNode>();
+  if (m_runtime.capacity() <= index) {
+    m_runtime.reserve(std::max<size_t>(16, index * 2));
+  }
+  if (m_document.nodes.capacity() <= index) {
+    m_document.nodes.reserve(std::max<size_t>(16, index * 2));
+  }
+  SceneNodeDesc description;
+  description.parent = nodeHandle(parentId);
+  description.name = node.id;
+  description.transform = node.transform;
+  description.userData = index;
+  runtime->handle = m_graph.createNode(description);
   m_document.nodes.push_back(node);
+  m_runtime.push_back(std::move(runtime));
+  updateProxy(index);
+  m_graph.addAttachment(m_runtime[index]->handle, m_runtime[index].get());
   m_dirty = true;
   return node.id;
 }
@@ -213,33 +297,23 @@ EditorDocument::createNode(SceneNodeKind kind, const std::string& parentId)
 bool
 EditorDocument::destroySubtree(const std::string& id)
 {
-  if (findNode(id) == nullptr) {
+  if (!m_graph.destroyNode(nodeHandle(id))) {
     return false;
   }
-  std::unordered_set<std::string> doomed;
-  doomed.insert(id);
-  bool progressed = true;
-  while (progressed) {
-    progressed = false;
-    for (const IlscNode& node : m_document.nodes) {
-      if (doomed.find(node.id) != doomed.end()) {
-        continue;
-      }
-      if (!node.parentId.empty() &&
-          doomed.find(node.parentId) != doomed.end()) {
-        doomed.insert(node.id);
-        progressed = true;
-      }
+  size_t kept = 0;
+  for (size_t i = 0; i < m_runtime.size(); ++i) {
+    if (!m_graph.isNodeValid(m_runtime[i]->handle)) {
+      continue;
     }
-  }
-  std::vector<IlscNode> kept;
-  kept.reserve(m_document.nodes.size());
-  for (const IlscNode& node : m_document.nodes) {
-    if (doomed.find(node.id) == doomed.end()) {
-      kept.push_back(node);
+    if (kept != i) {
+      m_document.nodes[kept] = std::move(m_document.nodes[i]);
+      m_runtime[kept] = std::move(m_runtime[i]);
     }
+    m_graph.setUserData(m_runtime[kept]->handle, kept);
+    ++kept;
   }
-  m_document.nodes = std::move(kept);
+  m_document.nodes.resize(kept);
+  m_runtime.resize(kept);
   m_dirty = true;
   return true;
 }
@@ -255,10 +329,7 @@ EditorDocument::canSetParent(const std::string& id,
   if (!parentId.empty() && findNode(parentId) == nullptr) {
     return false;
   }
-  if (wouldCreateCycle(id, parentId)) {
-    return false;
-  }
-  return true;
+  return m_graph.canSetParent(nodeHandle(id), nodeHandle(parentId));
 }
 
 bool
@@ -267,8 +338,11 @@ EditorDocument::setParent(const std::string& id, const std::string& parentId)
   if (!canSetParent(id, parentId)) {
     return false;
   }
-  IlscNode* node = findNode(id);
+  IlscNode* node = mutableNode(id);
   if (node == nullptr) {
+    return false;
+  }
+  if (!m_graph.setParent(nodeHandle(id), nodeHandle(parentId))) {
     return false;
   }
   node->parentId = parentId;
@@ -280,8 +354,11 @@ bool
 EditorDocument::setTransform(const std::string& id,
                              const Transform3D& transform)
 {
-  IlscNode* node = findNode(id);
+  IlscNode* node = mutableNode(id);
   if (node == nullptr) {
+    return false;
+  }
+  if (!m_graph.setLocalTransform(nodeHandle(id), transform)) {
     return false;
   }
   node->transform = transform;
@@ -292,7 +369,7 @@ EditorDocument::setTransform(const std::string& id,
 bool
 EditorDocument::setName(const std::string& id, const std::string& name)
 {
-  IlscNode* node = findNode(id);
+  IlscNode* node = mutableNode(id);
   if (node == nullptr || name.empty()) {
     return false;
   }
@@ -304,7 +381,7 @@ EditorDocument::setName(const std::string& id, const std::string& name)
 bool
 EditorDocument::setExtent(const std::string& id, const Vector3& extent)
 {
-  IlscNode* node = findNode(id);
+  IlscNode* node = mutableNode(id);
   if (node == nullptr || !IlscCodec::kindHasGeometry(node->kind)) {
     return false;
   }
@@ -312,6 +389,8 @@ EditorDocument::setExtent(const std::string& id, const Vector3& extent)
     return false;
   }
   node->primitive.extent = extent;
+  updateProxy(indexOf(id));
+  m_graph.notifyAttachmentChanged(nodeHandle(id));
   m_dirty = true;
   return true;
 }
@@ -319,11 +398,12 @@ EditorDocument::setExtent(const std::string& id, const Vector3& extent)
 bool
 EditorDocument::setColor(const std::string& id, ColorRgba color)
 {
-  IlscNode* node = findNode(id);
+  IlscNode* node = mutableNode(id);
   if (node == nullptr || !IlscCodec::kindHasGeometry(node->kind)) {
     return false;
   }
   node->primitive.color = color;
+  m_graph.notifyAttachmentChanged(nodeHandle(id));
   m_dirty = true;
   return true;
 }
@@ -341,7 +421,7 @@ EditorDocument::translate(const std::string& id, float dx, float dy)
 bool
 EditorDocument::translate(const std::string& id, const Vector3& deltaWorld)
 {
-  IlscNode* node = findNode(id);
+  IlscNode* node = mutableNode(id);
   if (node == nullptr) {
     return false;
   }
@@ -353,6 +433,7 @@ EditorDocument::translate(const std::string& id, const Vector3& deltaWorld)
   } else {
     node->transform.position += deltaWorld;
   }
+  m_graph.setLocalTransform(nodeHandle(id), node->transform);
   m_dirty = true;
   return true;
 }
@@ -369,26 +450,9 @@ EditorDocument::makeEditPlaneTransform(float planeX, float planeY) const
 Matrix4
 EditorDocument::worldMatrix(const std::string& id) const
 {
-  const IlscNode* node = findNode(id);
-  if (node == nullptr) {
-    return Matrix4(1.0f);
-  }
-  std::vector<const IlscNode*> chain;
-  const IlscNode* current = node;
-  std::unordered_set<std::string> visited;
-  while (current != nullptr && visited.find(current->id) == visited.end()) {
-    chain.push_back(current);
-    visited.insert(current->id);
-    if (current->parentId.empty()) {
-      break;
-    }
-    current = findNode(current->parentId);
-  }
-  Matrix4 worldMat = Matrix4(1.0f);
-  for (size_t i = chain.size(); i > 0; --i) {
-    worldMat = worldMat * chain[i - 1]->transform.toMatrix();
-  }
-  return worldMat;
+  Matrix4 world(1.0f);
+  m_graph.getWorldTransform(nodeHandle(id), &world);
+  return world;
 }
 
 bool
@@ -443,28 +507,24 @@ EditorDocument::pickRay(const Vector3& origin,
     return false;
   }
   double nearest = std::numeric_limits<double>::infinity();
-  for (size_t index = m_document.nodes.size(); index > 0; --index) {
-    const IlscNode& node = m_document.nodes[index - 1];
-    const IlscNode* ancestor = &node;
-    bool eligible = true;
-    size_t remaining = m_document.nodes.size();
-    while (ancestor != nullptr) {
-      if (remaining == 0 || !ancestor->enabled || !ancestor->visible) {
-        eligible = false;
-        break;
-      }
-      --remaining;
-      if (ancestor->parentId.empty()) {
-        break;
-      }
-      ancestor = findNode(ancestor->parentId);
-      if (ancestor == nullptr) {
-        eligible = false;
-      }
-    }
-    if (!eligible) {
+  m_graph.raycastCandidates(origin, direction, &m_pickCandidates);
+  // Preserve reverse-document tie order after the graph's broad phase. The
+  // exact transformed local-box test remains editor policy.
+  std::sort(m_pickCandidates.begin(),
+            m_pickCandidates.end(),
+            [this](const SceneRayHit& a, const SceneRayHit& b) {
+              uint64_t ai = 0, bi = 0;
+              m_graph.getUserData(a.node, &ai);
+              m_graph.getUserData(b.node, &bi);
+              return ai > bi;
+            });
+  for (const SceneRayHit& candidate : m_pickCandidates) {
+    uint64_t index = 0;
+    if (!m_graph.getUserData(candidate.node, &index) ||
+        index >= m_document.nodes.size()) {
       continue;
     }
+    const IlscNode& node = m_document.nodes[static_cast<size_t>(index)];
     const glm::dmat4 world(worldMatrix(node.id));
     const double determinant = glm::determinant(world);
     if (!std::isfinite(determinant) || determinant == 0.0) {
@@ -541,4 +601,26 @@ EditorDocument::sceneDetail(const std::string& selectedId) const
   detail.extent = node->primitive.extent;
   detail.color = node->primitive.color;
   return detail;
+}
+bool
+EditorDocument::setEnabled(const std::string& id, bool enabled)
+{
+  IlscNode* node = mutableNode(id);
+  if (node == nullptr || !m_graph.setEnabled(nodeHandle(id), enabled)) {
+    return false;
+  }
+  node->enabled = enabled;
+  m_dirty = true;
+  return true;
+}
+bool
+EditorDocument::setVisible(const std::string& id, bool visible)
+{
+  IlscNode* node = mutableNode(id);
+  if (node == nullptr || !m_graph.setVisible(nodeHandle(id), visible)) {
+    return false;
+  }
+  node->visible = visible;
+  m_dirty = true;
+  return true;
 }

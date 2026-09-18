@@ -17,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <glm/gtc/matrix_inverse.hpp>
+#include <limits>
 #include <utility>
 
 static bool
@@ -94,7 +95,7 @@ EditorModule::Start(IllumoContext* context)
   ic->camera->SetPositionPrecise(m_document.camera().x, m_document.camera().y);
   ic->camera->SetZoom(m_document.camera().zoom);
 
-  rebuildGraph();
+  syncGraph();
   updateStatus();
   return true;
 }
@@ -106,15 +107,24 @@ EditorModule::Exit()
     ic->assetManager->releaseTexture(m_atlas);
     m_atlas = TextureHandle{};
   }
-  m_handles.clear();
+  // The document owns nodes and its picking proxies. Release only the module's
+  // render bindings so a stopped module can restart with the same document.
+  m_graph.invalidateSnapshots();
+  for (size_t i = 0; i < m_attachmentHandles.size(); ++i) {
+    if (m_attachments[i]) {
+      m_graph.removeAttachment(m_attachmentHandles[i], m_attachments[i].get());
+    }
+  }
+  m_attachmentHandles.clear();
   m_attachments.clear();
+  m_graphCursor = std::numeric_limits<uint64_t>::max();
+  m_gridBuilt = false;
   m_selectionOverlay.reset();
   m_grid.reset();
   m_confirm.reset();
   m_sidebar.reset();
   m_sceneGraphView.reset();
   m_toolbar.reset();
-  m_graph.clear();
 }
 
 glm::mat4
@@ -162,62 +172,96 @@ EditorModule::applyWorldCamera()
 }
 
 bool
-EditorModule::rebuildGraph()
+EditorModule::syncAttachment(SceneNodeHandle handle)
 {
-  m_graph.clear();
-  m_attachments.clear();
-  m_handles.clear();
-  const size_t count = m_document.nodeCount();
-  std::vector<char> created(count, 0);
-  size_t remaining = count;
-  while (remaining > 0) {
-    size_t progressed = 0;
-    for (size_t i = 0; i < count; ++i) {
-      if (created[i] != 0) {
-        continue;
-      }
-      const IlscNode* node = m_document.nodeAt(i);
-      if (node == nullptr) {
-        continue;
-      }
-      SceneNodeHandle parentHandle;
-      if (!node->parentId.empty()) {
-        const std::unordered_map<std::string, SceneNodeHandle>::const_iterator
-          parentFound = m_handles.find(node->parentId);
-        if (parentFound == m_handles.end()) {
-          continue;
-        }
-        parentHandle = parentFound->second;
-      }
-      const SceneNodeHandle handle = m_graph.createNode(parentHandle);
-      if (!handle.isValid()) {
-        return false;
-      }
-      m_graph.setLocalTransform(handle, node->transform);
-      m_graph.setEnabled(handle, node->enabled);
-      m_graph.setVisible(handle, node->visible);
-      if (IlscCodec::kindHasGeometry(node->kind) && ic != nullptr &&
-          ic->renderer != nullptr) {
-        std::unique_ptr<EditorAttachment> attachment =
-          std::make_unique<EditorAttachment>();
-        attachment->configure(
-          ic->renderer, ic->camera, *node, m_document.worldMode());
-        m_graph.setRenderAttachment(handle, attachment.get());
-        m_attachments.push_back(std::move(attachment));
-      }
-      m_handles[node->id] = handle;
-      created[i] = 1;
-      ++progressed;
-      --remaining;
+  if (!m_graph.isNodeValid(handle)) {
+    if (handle.slot < m_attachmentHandles.size() &&
+        m_attachmentHandles[handle.slot] == handle) {
+      m_attachments[handle.slot].reset();
+      m_attachmentHandles[handle.slot] = {};
     }
-    if (progressed == 0) {
-      return false;
+    return true;
+  }
+  uint64_t index = 0;
+  if (!m_graph.getUserData(handle, &index)) {
+    return false;
+  }
+  const IlscNode* node = m_document.nodeAt(static_cast<size_t>(index));
+  if (node == nullptr || ic == nullptr || ic->renderer == nullptr) {
+    return true;
+  }
+  if (handle.slot >= m_attachments.size()) {
+    m_attachments.resize(static_cast<size_t>(handle.slot) + 1);
+    m_attachmentHandles.resize(static_cast<size_t>(handle.slot) + 1);
+  }
+  if (m_attachmentHandles[handle.slot] != handle) {
+    // A destroyed slot may already have been reused; its old snapshots were
+    // invalidated by destruction before the old visual is released here.
+    m_attachments[handle.slot].reset();
+    m_attachmentHandles[handle.slot] = handle;
+  }
+  if (!IlscCodec::kindHasGeometry(node->kind)) {
+    return true;
+  }
+  m_graph.invalidateSnapshots();
+  if (!m_attachments[handle.slot]) {
+    m_attachments[handle.slot] = std::make_unique<EditorAttachment>();
+    m_graph.addAttachment(handle, m_attachments[handle.slot].get());
+  }
+  const bool configured = m_attachments[handle.slot]->configure(
+    ic->renderer, ic->camera, *node, m_document.worldMode());
+  m_graph.notifyAttachmentChanged(handle);
+  return configured;
+}
+
+bool
+EditorModule::syncGraph()
+{
+  bool result = true;
+  if (!m_graph.readChanges(m_graphCursor, &m_graphChanges)) {
+    // Journal overflow resynchronizes bindings, preserving graph handles and
+    // existing visual objects. It never clears or reconstructs the hierarchy.
+    for (size_t i = 0; i < m_attachmentHandles.size(); ++i) {
+      if (!m_graph.isNodeValid(m_attachmentHandles[i])) {
+        m_attachments[i].reset();
+        m_attachmentHandles[i] = {};
+      }
+    }
+    for (SceneNodeHandle node = m_graph.firstNode(); !node.isNull();
+         node = m_graph.nextNode(node)) {
+      result = syncAttachment(node) && result;
+    }
+  } else {
+    m_changedBindings.clear();
+    for (const SceneChange& change : m_graphChanges) {
+      if (change.kind == SceneChangeKind::Created ||
+          change.kind == SceneChangeKind::Destroyed ||
+          change.kind == SceneChangeKind::Attachments) {
+        m_changedBindings.push_back(change.node);
+      }
+    }
+    std::sort(m_changedBindings.begin(),
+              m_changedBindings.end(),
+              [](SceneNodeHandle a, SceneNodeHandle b) {
+                return a.slot != b.slot ? a.slot < b.slot
+                                        : a.generation < b.generation;
+              });
+    m_changedBindings.erase(
+      std::unique(m_changedBindings.begin(), m_changedBindings.end()),
+      m_changedBindings.end());
+    for (SceneNodeHandle node : m_changedBindings) {
+      result = syncAttachment(node) && result;
     }
   }
+  m_graphCursor = m_graph.getChangeSequence();
   applyWorldCamera();
-  rebuildGrid();
+  if (!m_gridBuilt || m_gridMode != m_document.worldMode()) {
+    rebuildGrid();
+    m_gridBuilt = true;
+    m_gridMode = m_document.worldMode();
+  }
   rebuildSelectionOverlay();
-  return true;
+  return result;
 }
 
 void
@@ -435,7 +479,7 @@ EditorModule::openDocument()
     m_toolbar->showToast("Opened scene: " + path,
                          ColorRgba{ 66, 214, 210, 255 });
   }
-  rebuildGraph();
+  syncGraph();
   updateStatus();
   return true;
 }
@@ -453,7 +497,7 @@ EditorModule::newDocument()
   if (m_toolbar) {
     m_toolbar->showToast("Created new scene", ColorRgba{ 66, 214, 210, 255 });
   }
-  rebuildGraph();
+  syncGraph();
   updateStatus();
 }
 
@@ -483,7 +527,7 @@ EditorModule::createNode(SceneNodeKind kind)
     m_toolbar->showToast("Created " + (node ? node->name : "node"),
                          ColorRgba{ 60, 220, 120, 255 });
   }
-  rebuildGraph();
+  syncGraph();
   updateStatus();
 }
 
@@ -499,7 +543,7 @@ EditorModule::deleteSelection()
     m_toolbar->showToast("Deleted selected node",
                          ColorRgba{ 245, 100, 110, 255 });
   }
-  rebuildGraph();
+  syncGraph();
   updateStatus();
 }
 
@@ -514,7 +558,7 @@ EditorModule::unparentSelection()
       m_toolbar->showToast("Unparented node to root",
                            ColorRgba{ 66, 214, 210, 255 });
     }
-    rebuildGraph();
+    syncGraph();
     updateStatus();
   }
 }
@@ -610,14 +654,14 @@ EditorModule::handleCommand(EditorCommand command)
       m_toolbar->showToast("Mode: 2D Orthographic (XY)",
                            ColorRgba{ 60, 220, 120, 255 });
     }
-    rebuildGraph();
+    syncGraph();
   } else if (command == EditorCommand::SetMode3D) {
     m_document.setWorldMode(IlscWorldMode::World3D);
     if (m_toolbar) {
       m_toolbar->showToast("Mode: 3D Perspective (XZ)",
                            ColorRgba{ 70, 160, 255, 255 });
     }
-    rebuildGraph();
+    syncGraph();
   } else if (command == EditorCommand::NudgeExtent) {
     nudgeSelectedExtent();
   } else if (command == EditorCommand::CycleColor) {
@@ -989,15 +1033,6 @@ EditorModule::updateSelection(double dt)
 
         if (glm::length(delta) > 0.00001f) {
           m_document.translate(m_selectedId, delta);
-          const IlscNode* node = m_document.findNode(m_selectedId);
-          if (node != nullptr) {
-            const std::unordered_map<std::string,
-                                     SceneNodeHandle>::const_iterator found =
-              m_handles.find(m_selectedId);
-            if (found != m_handles.end()) {
-              m_graph.setLocalTransform(found->second, node->transform);
-            }
-          }
         }
       }
     }
@@ -1165,7 +1200,7 @@ EditorModule::Update(double dt)
       if (m_sceneGraphView) {
         if (m_sceneGraphView->update(
               ic->inputManager, &m_document, &m_selectedId, dtF)) {
-          rebuildGraph();
+          syncGraph();
         }
       }
       if (m_sidebar) {
@@ -1245,7 +1280,7 @@ EditorModule::DispatchDrawables(Scene* scene)
   if (m_grid) {
     scene->AddDrawable(m_grid.get(), RenderLayerId::World);
   }
-  scene->AddDrawable(&m_graph, RenderLayerId::World);
+  scene->AddDrawable(&m_graphDrawable, RenderLayerId::World);
   if (m_selectionOverlay) {
     scene->AddDrawable(m_selectionOverlay.get(), RenderLayerId::World);
   }
@@ -1320,7 +1355,7 @@ EditorModule::applyActiveToolAt(float worldX, float worldY)
     m_toolbar->showToast("Created " + (created ? created->name : "node"),
                          ColorRgba{ 60, 220, 120, 255 });
   }
-  rebuildGraph();
+  syncGraph();
   m_activeTool = EditorCommand::SelectTool;
   if (m_sidebar) {
     m_sidebar->setActiveTool(m_activeTool);
@@ -1342,7 +1377,7 @@ EditorModule::nudgeSelectedExtent()
     if (m_toolbar) {
       m_toolbar->showToast("Nudged node size", ColorRgba{ 66, 214, 210, 255 });
     }
-    rebuildGraph();
+    syncGraph();
   }
 }
 
@@ -1368,7 +1403,7 @@ EditorModule::cycleSelectedColor()
     if (m_toolbar) {
       m_toolbar->showToast("Updated node color", next);
     }
-    rebuildGraph();
+    syncGraph();
   }
 }
 

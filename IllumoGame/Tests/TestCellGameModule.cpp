@@ -386,10 +386,11 @@ testRender3dTestFlag()
              3u,
              "SceneGraph holds root, orbit, and child nodes");
   if (render3dGraph != nullptr) {
-    testTrue(g,
-             fixture.scene.drawablesIn(RenderLayerId::World)[0] ==
-               render3dGraph,
-             "diagnostic scene registers SceneGraph in World layer");
+    testTrue(
+      g,
+      fixture.scene.drawablesIn(RenderLayerId::World)[0] ==
+        CellGameModuleTestAccess::getRender3dSceneDrawable(fixture.module),
+      "diagnostic scene registers SceneGraph in World layer");
     const SceneNodeHandle root = render3dGraph->getRoot(0);
     testTrue(g,
              render3dGraph->getRenderAttachment(root) == staticScene,

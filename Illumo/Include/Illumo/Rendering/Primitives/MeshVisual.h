@@ -127,6 +127,7 @@ public:
   void appendSceneCommands(Renderer* renderer,
                            const Matrix4& worldTransform) override;
   bool getSceneLocalBounds(AxisAlignedBounds3* bounds) const override;
+  uint64_t getSceneBoundsRevision() const override { return boundsRevision; }
   void collectSceneShadowCasters(Renderer* renderer,
                                  const Matrix4& worldTransform) override;
   void appendSceneShadowCommands(Renderer* renderer,
@@ -211,6 +212,7 @@ private:
   size_t triangleIndexCapacity = 0;
   size_t spriteMeshCapacity = 0;
   bool geometryDirty = true;
+  uint64_t boundsRevision = 1;
   bool lineUploadPending = false;
   bool triangleUploadPending = false;
   bool spriteUploadPending = false;
@@ -250,7 +252,9 @@ private:
                                     const glm::mat4& nodeWorld);
   void appendShadowCommandsWithWorld(Renderer* renderer,
                                      const glm::mat4& nodeWorld);
-  bool appendCommandsWithWorld(Renderer* renderer, const glm::mat4& nodeWorld);
+  bool appendCommandsWithWorld(Renderer* renderer,
+                               const glm::mat4& nodeWorld,
+                               bool cameraCull = true);
   bool getLocalShadowBounds(AxisAlignedBounds3* bounds) const;
   bool getWorldShadowBounds(const glm::mat4& nodeWorld,
                             AxisAlignedBounds3* bounds) const;

@@ -16,16 +16,15 @@ Windows, GLFW, OpenGL, and — for the simulator — the sparse infinite or
 finite-toroidal canvas. Illumo remains a reusable runtime and rendering
 foundation; application policy stays in the consuming product.
 
-The approved persistent `SceneGraph` v1 is deliberately bounded to handles,
-hierarchy, transforms, subtree state, token render attachments, and
-attachment-authoritative linear bounds/culling. Do not expand it into an ECS,
-retained UI tree, serialization system, spatial index, subtree-bound cache, or
-update framework, and do not introduce a render graph, additional graphics
-backend, compute backend, or broad framework merely for architectural
-completeness. Preserve public behavior and formats by default. A change to
-subsystem boundaries, dependency direction, ownership, lifetime, threading,
-persistence, or public contracts requires explicit authorization and a design
-appropriate to its blast radius.
+The approved `SceneGraph` v2 uses graph-local handles, intrusive hierarchy,
+TRS state, a compiled preorder, revision-cached bounds, ordered borrowed
+attachments, identity/payload metadata, and handle-based queries. Its derived
+BVH accelerates queries; `SceneGraphDrawable` consumes graph-owned snapshots.
+Keep this boundary separate from ECS components, retained UI, serialization,
+update callbacks, render graphs, and backend execution. Scene mutation,
+extraction, and attachment emission remain main-thread affine. Parallel scene
+stages and culling tiers remain measurement-gated; moving the OpenGL context
+or recording attachment payloads requires a separate accepted design.
 
 ## Sources of truth
 
@@ -36,7 +35,8 @@ editing. Route detail to these canonical sources:
 - current architecture and decision catalog: `docs/architecture-consensus.md`;
 - intended charter direction and current boundary: `docs/charter-direction.md`;
 - independent capture API and CLI: `docs/frame-capture.md`;
-- persistent scene hierarchy contract: `docs/scene-graph-v1-design.md`;
+- persistent scene hierarchy contract: `docs/scene-graph-v2-design.md`;
+- scene implementation and verification record: `docs/scene-graph-v2-plan.md`;
 - long-form design book and chart-only map: `docs/latex/illumo.tex` and
   `docs/latex/architecture-map.tex`;
 - formal decisions: `docs/latex/sections/09-design-decision-log.tex`;
@@ -83,13 +83,14 @@ Drawable::AppendCommands(Renderer*)
   -> GLBackend/GLDevice or MockBackend
 ```
 
-`SceneGraph` is a retained, scene-owned node hierarchy with graph-local
-generational handles. It participates in this flow as one drawable in the
-existing per-frame `Rendering::Scene`; borrowed `ISceneRenderAttachment`
-values receive resolved world transforms, may report conservative local bounds,
-and append tokens. Unknown bounds fail open during Renderer-owned camera and
-shadow rejection. It is not CSim cell storage, an ECS, or a replacement for
-the frame list.
+`SceneGraph` owns persistent nodes, compiled transforms/bounds, and two reusable
+snapshot buffers. `SceneGraphDrawable` enters the existing per-frame `Scene`
+as one drawable and uses one immutable view for collection, depth, and color.
+Attachments remain borrowed; detach or invalidate snapshots before retiring
+or changing their content. Already emitted token payloads must outlive
+synchronous submission. Unknown bounds fail open. Renderer fits shadows after
+caster collection, so shadow relevance is tested from snapshot values in the
+depth pass. CA storage and UI remain separate from the scene subsystem.
 
 Production drawables use the token path. Immediate `Draw()` is only the fallback
 for tests or incomplete stubs. Game and rules code must not issue raw OpenGL
@@ -352,11 +353,14 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   SceneGraph attachments contribute bounds and depth tokens to the same fitted
   light-space matrix and shared map; invalid camera reconstruction falls back
   to all casters, and per-object shadow framebuffers are forbidden.
-- `Rendering::Scene` is a non-owning ordered list rebuilt each frame.
-  `SceneGraph` separately owns persistent nodes and cached transforms, uses
-  graph-ID-plus-slot-plus-generation handles, borrows render attachments, and
-  emits through the token path as one frame-list drawable. It is not an ECS.
-  Rendering resource handles remain backend-neutral and registry-owned.
+- `Rendering::Scene` is a non-owning list rebuilt each frame. `SceneGraph`
+  separately owns persistent SoA state and derived preorder/bounds/query caches.
+  `SceneGraphDrawable` emits ordered snapshot attachments through the token
+  path. Handles remain graph-ID-plus-slot-plus-generation; no node addresses,
+  attachment ownership, ECS storage, or scene serialization cross this seam.
+- Snapshot views expire when their ring slot is republished, on graph teardown,
+  or when attachment content/lifetime is invalidated. Validate before every
+  callback; an expired view must never call a stale attachment.
 - `SparseCellGrid` is the production domain: signed 64-bit coordinates,
   non-background 16x16 sparse chunks, and configurable infinite non-toroidal
   or finite toroidal evolution.

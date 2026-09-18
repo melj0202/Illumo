@@ -55,3 +55,9 @@ manager-local long IDs. Registration returns -1 when full or ID space is
 exhausted. Invalid activation preserves selection; unregistering the active ID
 selects neutral input. Unknown actions are inactive. Modules must unregister
 on Exit; rejected startup must not retain a registration.
+
+`WorkerPool` provides a generic owner-thread range dispatcher with explicit
+start/stop, one outstanding submission, caller participation in join, and
+allocation-free dispatch. Callbacks are noexcept and operate on disjoint
+caller-owned ranges; context outlives join, and stop drains and joins workers.
+The CA-specific SparseWorkerPool remains separate pending measured migration.

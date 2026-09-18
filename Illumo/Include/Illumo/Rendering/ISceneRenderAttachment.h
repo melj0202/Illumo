@@ -2,6 +2,7 @@
 
 #include <Illumo/Foundation/AxisAlignedBounds3.h>
 #include <Illumo/Foundation/MathTypes.h>
+#include <cstdint>
 
 class Renderer;
 
@@ -13,6 +14,10 @@ class ISceneRenderAttachment
 {
 public:
   virtual ~ISceneRenderAttachment() = default;
+
+  // Zero is uncacheable. Nonzero revisions change whenever bounds or validity
+  // change. Calls stay on the owner thread.
+  virtual uint64_t getSceneBoundsRevision() const { return 0; }
 
   // Returns conservative bounds in node-local space. Attachments without a
   // reliable finite bound remain unbounded and are never culled.

@@ -1721,6 +1721,25 @@ map is introduced.\
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-E12 --- Compiled SceneGraph v2}
+\begin{decisionbox}[title={D-E12 \quad 2026-09-17}]
+\textbf{Decision:} Replace v1 node storage with authoritative SoA/TRS state,
+intrusive ordered links, lazy compiled preorder, dirty watermark propagation,
+revision-cached attachment and subtree bounds, and a derived binned-SAH query
+index. Expose interned names, opaque payloads, ordered borrowed attachments,
+handle queries, and an overflow-signaled 4,096-entry change journal. IllEd edits
+this graph incrementally while retaining its file recipes and exact picking.\\
+\textbf{Rationale:} Constant-time transform invalidation, stable identity,
+allocation-free warmed frames, and bounded consumer updates resolve measured
+v1 costs without introducing components, scene serialization, or backend policy.\\
+\textbf{Consequences:} World getters remain ancestor walks; cache allocation
+failure uses authoritative/linear fallbacks. Matrix setters now explicitly
+lose shear through TRS decomposition. Warm indexed queries still poll bounds
+revisions linearly. Generic WorkerPool remains separate from CA worker policy;
+parallel scene stages remain measurement-gated. Supersedes the internal storage
+and linear-only restrictions of D-E8/D-E11. See the v2 plan for validation.
+\end{decisionbox}
+
 \subsection*{D-G1 --- Pattern I/O is a side path, not save v4}
 \begin{decisionbox}[title={D-G1 \quad 2026-08-21}]
 \textbf{Decision:} Editor selection, in-app \texttt{CellPattern} buffers, Golly-style
@@ -1942,6 +1961,23 @@ world-mesh host.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-R25 --- Immutable scene snapshot boundary}
+\begin{decisionbox}[title={D-R25 \quad 2026-09-17}]
+\textbf{Decision:} SceneGraphDrawable consumes one graph-owned immutable view
+per renderer frame for collection, depth, and color. Two retained buffers carry
+ordered matrices, bounds, node handles, and borrowed attachment pointers.
+Validate view lifetime before every callback; stale views report frame errors.
+Renderer/token/backend contracts and main-thread execution remain unchanged.\\
+\textbf{Rationale:} Rendering no longer traverses mutable hierarchy three times.
+Explicit invalidation separates graph mutation from borrowed-content lifetime.\\
+\textbf{Consequences:} Ordinary edits affect the next snapshot; attachment
+changes, destruction, ring reuse, and teardown retire views. Already emitted
+payloads still outlive submission. Shared light fitting follows collection,
+so shadow relevance uses snapshot bounds in the depth pass; off-camera casters
+remain present. A one-release sceneSnapshotExtraction switch retains direct
+traversal. Recorded payloads and GL-context migration require a separate decision.
+\end{decisionbox}
+
 \subsection*{D-CAP1 --- Bounded standalone rendering and charter baseline}
 \begin{decisionbox}[title={D-CAP1 \quad 2026-09-11}]
 \textbf{Decision:} Reuse the token renderer for direct and SceneGraph frame capture

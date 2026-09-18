@@ -55,6 +55,7 @@ void
 MeshVisual::setModelMatrix(const glm::mat4& value)
 {
   modelMatrix = value;
+  ++boundsRevision;
 }
 
 void
@@ -172,6 +173,7 @@ MeshVisual::clearPrimitives()
   spriteBoundsValid = false;
   geometryBoundsReliable = true;
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 size_t
@@ -218,6 +220,7 @@ MeshVisual::addQuad(const glm::vec3& center,
     }
   }
   geometryDirty = true;
+  ++boundsRevision;
   return triangleIndices.size() / 6;
 }
 
@@ -253,6 +256,7 @@ MeshVisual::addSprite(TextureHandle textureHandle,
     geometryBoundsReliable = false;
   }
   geometryDirty = true;
+  ++boundsRevision;
   return sprites.size() - 1;
 }
 
@@ -398,6 +402,7 @@ MeshVisual::addSolidCube(const glm::vec3& center,
     geometryBoundsReliable = false;
   }
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 void
@@ -460,6 +465,7 @@ MeshVisual::addSolidTriangle(const glm::vec3& a,
     }
   }
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 void
@@ -576,6 +582,7 @@ MeshVisual::addSolidEllipse(const glm::vec3& center,
     geometryBoundsReliable = false;
   }
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 void
@@ -629,6 +636,7 @@ MeshVisual::addMesh(const MeshData& mesh, ColorRgba tint)
     triangleIndices.push_back(vertexOffset + mesh.indices[i]);
   }
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 void
@@ -644,6 +652,7 @@ MeshVisual::setMeshAsset(const MeshAssetInfo& asset, ColorRgba tint)
   meshAssetBoundsMin = asset.minBounds;
   meshAssetBoundsMax = asset.maxBounds;
   meshAssetBoundsValid = true;
+  ++boundsRevision;
   for (int axis = 0; axis < 3; ++axis) {
     if (!std::isfinite(meshAssetBoundsMin[axis]) ||
         !std::isfinite(meshAssetBoundsMax[axis]) ||
@@ -663,6 +672,7 @@ MeshVisual::clearMeshAsset()
   meshAssetBoundsMin = glm::vec3(0.0f);
   meshAssetBoundsMax = glm::vec3(0.0f);
   meshAssetBoundsValid = false;
+  ++boundsRevision;
 }
 
 bool
@@ -686,7 +696,8 @@ MeshVisual::AppendShadowCommands(Renderer* value)
 void
 MeshVisual::appendSceneCommands(Renderer* value, const Matrix4& worldTransform)
 {
-  if (!appendCommandsWithWorld(value, worldTransform) && value != nullptr) {
+  if (!appendCommandsWithWorld(value, worldTransform, false) &&
+      value != nullptr) {
     value->reportFrameError(
       "MeshVisual scene attachment could not emit its resources");
   }
@@ -772,6 +783,7 @@ MeshVisual::addLine(const glm::vec3& start,
     geometryBoundsReliable = false;
   }
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 bool
@@ -1058,14 +1070,18 @@ MeshVisual::appendShadowCommandsWithWorld(Renderer* value,
 }
 
 bool
-MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
+MeshVisual::appendCommandsWithWorld(Renderer* value,
+                                    const glm::mat4& nodeWorld,
+                                    bool cameraCull)
 {
   if (!isVisible()) {
     return true;
   }
   AxisAlignedBounds3 localBounds;
   AxisAlignedBounds3 worldBounds;
-  if (value != nullptr && getSceneLocalBounds(&localBounds) &&
+  // SceneGraphDrawable already accepted the snapshot bounds. Direct
+  // drawables still own their camera test.
+  if (cameraCull && value != nullptr && getSceneLocalBounds(&localBounds) &&
       localBounds.transformed(nodeWorld, &worldBounds) &&
       !value->isWorldBoundsVisible(worldBounds)) {
     return true;

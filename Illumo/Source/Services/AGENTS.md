@@ -18,7 +18,12 @@ Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
 
 ## Ownership, lifetime, and concurrency
 
-- Service objects are Engine-owned. Logger sinks, command callbacks, input
+- `WorkerPool` is an owner-controlled generic range dispatcher. Start/stop,
+  submission, and join run on one owner thread; callbacks operate on disjoint
+  caller-owned ranges, do not throw or recursively submit, and their context
+  outlives join. Stop drains work and joins every worker. Keep CA-specific
+  worker policy in IllumoGame; do not import its grid into Services.
+- Long-lived application service objects are Engine-owned. Logger sinks, command callbacks, input
   contexts, and non-owning pointers must be detached before their targets die.
 - Input callbacks enqueue events; consumers drain them on the main thread.
   Overlay keyboard capture must cover both queued events and polling:

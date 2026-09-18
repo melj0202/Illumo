@@ -48,3 +48,8 @@ space, token ordering, batch bounds, and payload values with MockBackend. Use a
 live visual smoke for layout, clipping, blending, text, and resize behavior.
 
 Update this file only for durable primitive-composition rules.
+
+Scene-bound geometry/model mutations must advance the attachment bounds
+revision. Scene emission relies on the graph's camera acceptance; direct
+MeshVisual drawables retain their own camera test. Owners invalidate snapshots
+before changing borrowed content used by already extracted items.

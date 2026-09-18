@@ -33,6 +33,14 @@ registerSysCmdLineTests(IllumoTestRegistry& registry);
 void
 registerSceneGraphTests(IllumoTestRegistry& registry);
 void
+registerSceneGraphOracleTests(IllumoTestRegistry& registry);
+void
+registerSceneGraphV2Tests(IllumoTestRegistry& registry);
+void
+registerSceneAllocationTests(IllumoTestRegistry& registry);
+void
+registerSceneBenchmarks(IllumoTestRegistry& registry);
+void
 registerGuiKitTests(IllumoTestRegistry& registry);
 void
 registerMeshLoaderTests(IllumoTestRegistry& registry);
@@ -64,6 +72,10 @@ createRegistry()
   registerTextureUploadPolicyTests(registry);
   registerSysCmdLineTests(registry);
   registerSceneGraphTests(registry);
+  registerSceneGraphOracleTests(registry);
+  registerSceneGraphV2Tests(registry);
+  registerSceneAllocationTests(registry);
+  registerSceneBenchmarks(registry);
   registerGuiKitTests(registry);
   registerShaderPreprocessorTests(registry);
   registerFontTests(registry);

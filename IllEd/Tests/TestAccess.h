@@ -30,10 +30,7 @@ public:
     module.m_selectedId = id;
   }
 
-  static bool rebuildGraph(EditorModule& module)
-  {
-    return module.rebuildGraph();
-  }
+  static bool rebuildGraph(EditorModule& module) { return module.syncGraph(); }
 
   static void createNode(EditorModule& module, SceneNodeKind kind)
   {

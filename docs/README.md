@@ -13,7 +13,9 @@ intentional operational-guidance exceptions established by D-DOC2.
 docs/
   README.md                    This index and PDF build instructions
   architecture-consensus.md   Canonical current architecture and work order
-  scene-graph-v1-design.md     Persistent hierarchy contract and rollout plan
+  scene-graph-v2-design.md     Compiled hierarchy and snapshot contract
+  scene-graph-v2-plan.md       Implementation and verification record
+  scene-graph-v1-design.md     Historical persistent hierarchy rationale
   current-issues.md            Reproducible product/correctness punch list
   contributing.md              Project coding and dependency rules
   packages/                    Focused maps of the source packages
@@ -41,7 +43,7 @@ records this implementation and its validation.
 
 1. Read `architecture-consensus.md` for current code truth, locked decisions,
    known issues, and work order.
-2. Read `scene-graph-v1-design.md` when changing persistent scene ownership,
+2. Read `scene-graph-v2-design.md` when changing persistent scene ownership,
    hierarchy, transforms, or render attachment extraction.
 3. Read `sessions/` when the rationale or exact verification history matters.
 4. Read the LaTeX book for the long-form architecture and complete decision

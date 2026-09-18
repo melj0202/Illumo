@@ -5,6 +5,7 @@
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
 #include <Illumo/Engine/Illumo.h>
+#include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <filesystem>
@@ -18,6 +19,62 @@ requireCloseCheck(bool condition, const char* message)
   if (!condition) {
     throw std::runtime_error(message);
   }
+}
+
+static void
+runNativeSceneEdits(Illumo& host, EditorModule& editor)
+{
+  EditorDocument& document = EditorModuleTestAccess::document(editor);
+  EditorModuleTestAccess::handleCommand(editor, EditorCommand::SetMode3D);
+  std::string parent;
+  for (size_t i = 0; i < 64; ++i) {
+    parent = document.createNode(SceneNodeKind::Empty, parent);
+  }
+  const std::string child =
+    document.createNode(SceneNodeKind::SolidCube, parent);
+  const SceneNodeHandle handle = document.nodeHandle(child);
+  EditorModuleTestAccess::setSelectedId(editor, child);
+  requireCloseCheck(EditorModuleTestAccess::rebuildGraph(editor),
+                    "deep scene binds");
+  ISceneRenderAttachment* retained = document.graph().getAttachment(handle, 1);
+  for (size_t step = 0; step < 6; ++step) {
+    if (step == 1) {
+      document.translate(child, Vector3(0.5f, 0.5f, 0));
+    }
+    if (step == 2) {
+      EditorModuleTestAccess::handleCommand(editor, EditorCommand::CycleColor);
+    }
+    if (step == 3) {
+      document.setParent(child, {});
+    }
+    if (step == 4) {
+      document.setParent(child, parent);
+    }
+    requireCloseCheck(EditorModuleTestAccess::rebuildGraph(editor),
+                      "scene edit synchronizes");
+    const uint64_t extracted = document.graph().getStatistics().extractions;
+    host.render();
+    requireCloseCheck(host.context().renderer->frameError().empty(),
+                      "native edit frame submits");
+    requireCloseCheck(document.nodeHandle(child) == handle &&
+                        document.graph().getAttachment(handle, 1) == retained,
+                      "native edits retain graph and visual identities");
+    requireCloseCheck(document.graph().getStatistics().extractions ==
+                        extracted + 1,
+                      "native frame extracts one snapshot");
+  }
+  requireCloseCheck(document.destroySubtree(parent),
+                    "native deep subtree deletes");
+  requireCloseCheck(EditorModuleTestAccess::rebuildGraph(editor),
+                    "deleted bindings retire");
+  host.render();
+  requireCloseCheck(!document.graph().isNodeValid(handle) &&
+                      host.context().renderer->frameError().empty(),
+                    "native deletion leaves no stale callback");
+  document.clear();
+  EditorModuleTestAccess::setSelectedId(editor, {});
+  requireCloseCheck(EditorModuleTestAccess::rebuildGraph(editor),
+                    "clear resynchronizes native bindings");
 }
 
 static void
@@ -36,6 +93,7 @@ runNativeCloseCase(bool discard, const std::filesystem::path& scratch)
   requireCloseCheck(host.startModules(), "editor initialization");
   HWND window = glfwGetWin32Window(host.context().window->getWindowInstance());
   ShowWindow(window, SW_HIDE);
+  runNativeSceneEdits(host, *editor);
   EditorDocument& document = EditorModuleTestAccess::document(*editor);
   EditorModuleTestAccess::createNode(*editor, SceneNodeKind::SolidCube);
 
@@ -101,8 +159,8 @@ main()
   try {
     runNativeCloseCase(false, scratch);
     runNativeCloseCase(true, scratch);
-    std::cout
-      << "Native close, cancel, failed save, save, and discard passed\n";
+    std::cout << "Native scene edits, close, cancel, failed save, save, and "
+                 "discard passed\n";
   } catch (const std::exception& exception) {
     std::cerr << exception.what() << '\n';
     result = 1;

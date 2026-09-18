@@ -11,6 +11,7 @@
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Scene/SceneNodeHandle.h>
 #include <memory>
 #include <string>
@@ -57,7 +58,8 @@ public:
 
 private:
   EditorDocument m_document;
-  SceneGraph m_graph;
+  SceneGraph& m_graph = m_document.graph();
+  SceneGraphDrawable m_graphDrawable{ m_graph };
   std::unique_ptr<EditorToolbar> m_toolbar;
   std::unique_ptr<EditorSceneGraphView> m_sceneGraphView;
   std::unique_ptr<EditorSidebar> m_sidebar;
@@ -66,8 +68,13 @@ private:
   std::unique_ptr<MeshVisual> m_grid;
   std::unique_ptr<MeshVisual> m_selectionOverlay;
   std::vector<std::unique_ptr<EditorAttachment>> m_attachments;
+  std::vector<SceneNodeHandle> m_attachmentHandles;
+  std::vector<SceneChange> m_graphChanges;
+  std::vector<SceneNodeHandle> m_changedBindings;
+  uint64_t m_graphCursor = 0;
+  bool m_gridBuilt = false;
+  IlscWorldMode m_gridMode = IlscWorldMode::World2D;
   EditorCommand m_activeTool;
-  std::unordered_map<std::string, SceneNodeHandle> m_handles;
   std::string m_selectedId;
   std::string m_initialScenePath;
   bool m_dragging;
@@ -87,7 +94,8 @@ private:
 
   void syncFontSize();
   void applyFontSize(float size);
-  bool rebuildGraph();
+  bool syncGraph();
+  bool syncAttachment(SceneNodeHandle node);
   void applyWorldCamera();
   void handleCommand(EditorCommand command);
   void requestAction(EditorPendingAction action);

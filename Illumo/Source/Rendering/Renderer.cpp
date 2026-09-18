@@ -137,7 +137,11 @@ Renderer::beginFrameContext(Camera* camera)
 
   frameContext.windowDimensions = _window->getWindowDimensions();
   frameContext.uiScale = 1.0f;
+  frameContext.sceneSnapshotExtraction = true;
   if (envVars != nullptr) {
+    const EnvVar& snapshotVar = envVars->getVar("sceneSnapshotExtraction");
+    frameContext.sceneSnapshotExtraction =
+      snapshotVar.value.empty() || snapshotVar.valueAsDouble != 0.0;
     const EnvVar& scaleVar = envVars->getVar("uiScale");
     if (!scaleVar.value.empty() && scaleVar.valueAsDouble > 0.0) {
       frameContext.uiScale = static_cast<float>(scaleVar.valueAsDouble);

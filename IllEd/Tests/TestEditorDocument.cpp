@@ -155,6 +155,39 @@ test3DTranslateWithParent()
 void
 registerEditorDocumentTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Document.GraphOrderRoundTrip", []() {
+    g = {};
+    EditorDocument document;
+    const std::string a = document.createNode(SceneNodeKind::Empty, {});
+    const std::string b = document.createNode(SceneNodeKind::Empty, {});
+    const std::string c = document.createNode(SceneNodeKind::Empty, {});
+    const SceneNodeHandle retained = document.nodeHandle(b);
+    document.setParent(a, b);
+    document.setParent(a, {});
+    testTrue(g,
+             document.graph().getName(document.graph().getRoot(0)) == b &&
+               document.graph().getName(document.graph().getRoot(2)) == a,
+             "reparent appends to destination order");
+    document.setTransform(b, Transform3D::fromPosition(Vector3(2, 3, 4)));
+    testTrue(g,
+             document.nodeHandle(b) == retained,
+             "transform edit retains graph identity");
+    const std::string encoded = document.encode();
+    testTrue(
+      g, document.loadFromText(encoded, nullptr), "ordered document reloads");
+    testTrue(g,
+             document.graph().getName(document.graph().getRoot(0)) == b &&
+               document.graph().getName(document.graph().getRoot(1)) == c &&
+               document.graph().getName(document.graph().getRoot(2)) == a,
+             "root order survives serialization");
+    document.destroySubtree(c);
+    testTrue(g,
+             document.findNode(a) != nullptr &&
+               document.findNode(b) != nullptr &&
+               document.findNode(c) == nullptr,
+             "compaction refreshes graph payload indices");
+    return g.failures;
+  });
   registry.add("IllEd.Document.ImportedIdAllocation", []() {
     g = {};
     IlscDocument imported;
@@ -211,13 +244,16 @@ registerEditorDocumentTests(IllumoTestRegistry& registry)
              document.pickRay(Vector3(0, 5, 10), Vector3(0, 0, -1), &hit),
              "elevated ray hits");
     testEqStr(g, hit, nearId, "nearest beats later document entry");
-    document.findNode(farId)->transform.scale = Vector3(20, 3, 4);
+    Transform3D farTransform = document.findNode(farId)->transform;
+    farTransform.scale = Vector3(20, 3, 4);
+    document.setTransform(farId, farTransform);
     testTrue(g,
              document.pickRay(Vector3(0, 5, 10), Vector3(0, 0, -1), &hit),
              "scaled overlap hits");
     testEqStr(
       g, hit, nearId, "world distance wins over shorter local ray distance");
-    document.findNode(farId)->transform.scale = Vector3(1);
+    farTransform.scale = Vector3(1);
+    document.setTransform(farId, farTransform);
     Transform3D rotated = Transform3D::fromEuler(0, 0, glm::radians(90.0f));
     rotated.position = Vector3(0, 5, 4);
     document.setTransform(nearId, rotated);
@@ -240,17 +276,19 @@ registerEditorDocumentTests(IllumoTestRegistry& registry)
              document.pickRay(Vector3(4, 5, 10), Vector3(0, 0, -2), &hit),
              "parent scaled reflected bound hits");
     testEqStr(g, hit, child, "child selected through parent transform");
-    document.findNode(parent)->visible = false;
+    document.setVisible(parent, false);
     testTrue(g,
              !document.pickRay(Vector3(4, 5, 10), Vector3(0, 0, -1), &hit),
              "hidden ancestor excludes child");
-    document.findNode(parent)->visible = true;
-    document.findNode(parent)->enabled = false;
+    document.setVisible(parent, true);
+    document.setEnabled(parent, false);
     testTrue(g,
              !document.pickRay(Vector3(4, 5, 10), Vector3(0, 0, -1), &hit),
              "disabled ancestor excludes child");
-    document.findNode(parent)->enabled = true;
-    document.findNode(child)->transform.scale = Vector3(0);
+    document.setEnabled(parent, true);
+    Transform3D childTransform = document.findNode(child)->transform;
+    childTransform.scale = Vector3(0);
+    document.setTransform(child, childTransform);
     testTrue(g,
              !document.pickRay(Vector3(4, 5, 10), Vector3(0, 0, -1), &hit),
              "singular bound skipped");

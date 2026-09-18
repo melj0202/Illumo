@@ -19,14 +19,19 @@ EditorAttachment::configure(Renderer* renderer,
 {
   (void)camera;
   m_kind = node.kind;
-  m_visual.reset();
+  ++m_boundsRevision;
+  if (m_visual) {
+    m_visual->clearPrimitives();
+  }
   if (renderer == nullptr || !IlscCodec::kindHasGeometry(node.kind)) {
     return false;
   }
   const Vector3 extent = node.primitive.extent;
   const ColorRgba color = node.primitive.color;
-  m_visual = std::make_unique<MeshVisual>();
-  m_visual->prepare(renderer);
+  if (!m_visual) {
+    m_visual = std::make_unique<MeshVisual>();
+    m_visual->prepare(renderer);
+  }
 
   const bool use3d =
     worldMode == IlscWorldMode::World3D || IlscCodec::kindIs3D(node.kind);

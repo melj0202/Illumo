@@ -15,6 +15,7 @@
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -129,6 +130,7 @@ private:
   std::unique_ptr<RulesetWorkshopMenu> rulesetWorkshopMenu;
   std::unique_ptr<ExitConfirmDialog> exitConfirmDialog;
   SceneGraph render3dSceneGraph;
+  SceneGraphDrawable render3dSceneDrawable{ render3dSceneGraph };
   SceneNodeHandle render3dRootNode;
   SceneNodeHandle render3dOrbitNode;
   SceneNodeHandle render3dChildNode;

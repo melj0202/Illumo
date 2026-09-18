@@ -3760,7 +3760,7 @@ CellGameModule::DispatchDrawables(Scene* scene)
     ensureRender3dTestDrawables();
     applyRender3dTestCamera();
     updateRender3dTestMatrices();
-    scene->AddDrawable(&render3dSceneGraph, RenderLayerId::World);
+    scene->AddDrawable(&render3dSceneDrawable, RenderLayerId::World);
   } else {
     restoreRender3dTestCamera();
     scene->AddDrawable(this->cellContext->getCanvasView(),
