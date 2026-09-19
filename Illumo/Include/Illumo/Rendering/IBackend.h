@@ -45,6 +45,10 @@ public:
   virtual void SubmitCommandQueue() = 0;
   virtual void PushToCommandQueue(RenderCommand command) = 0;
   virtual void ClearCommandQueue() = 0;
+  // Cumulative metrics survive intermediate pass queue resets.
+  virtual size_t rejectedCommandCount() const { return 0; }
+  virtual size_t commandHighWaterMark() const { return 0; }
+  virtual std::string submissionError() const { return {}; }
   virtual int getFPS() const = 0;
   // Synchronous default-backbuffer capture, after submission and before swap.
   // Failure must include frame rejection/resource errors even after queue

@@ -22,11 +22,6 @@
 #include <unistd.h>
 #endif
 
-#ifdef __APPLE__
-#include <stdlib.h>
-#include <unistd.h>
-#endif // __APPLE__
-
 // int msleep(long msec);
 
 #ifdef __linux__
@@ -67,8 +62,6 @@ msleep(long msec)
 #ifndef __SLEEP
 #if defined(_WIN32)
 #define __SLEEP(n) Sleep(static_cast<DWORD>(n))
-#elif defined(__APPLE__)
-#define __SLEEP(n) sleep(static_cast<unsigned int>(n))
 #else
 
 /* TODO: Move this to an appropriate source file*/
@@ -81,7 +74,7 @@ msleep(long msec)
 #ifndef __STRLEN
 #if defined(_WIN32) || defined(_WIN64)
 #define __STRLEN std::strlen
-#elif defined(__linux__) || defined(__APPLE__)
+#elif defined(__linux__)
 #define __STRLEN strlen
 #endif
 #endif
@@ -93,10 +86,10 @@ msleep(long msec)
 
 #ifndef __SWAP
 #define __SWAP(x, y) _generic_swap(p_x, p_y)
-  template<typename T>
+template<typename T>
 
-  constexpr T
-  _generic_swap(T& x, T& y)
+constexpr T
+_generic_swap(T& x, T& y)
 {
   T temp = x;
   x = y;

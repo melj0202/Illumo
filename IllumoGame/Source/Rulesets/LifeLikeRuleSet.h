@@ -7,8 +7,7 @@
 class LifeLikeRuleSet : public RuleSet
 {
 public:
-  LifeLikeRuleSet(CellGrid* targetCanvas = nullptr,
-                  std::string tag = "GAME_OF_LIFE",
+  LifeLikeRuleSet(std::string tag = "GAME_OF_LIFE",
                   unsigned int birthMask = (1u << 3),
                   unsigned int surviveMask = (1u << 2) | (1u << 3),
                   std::array<unsigned char, 3> aliveColor = { 0, 0, 0 },

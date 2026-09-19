@@ -18,8 +18,8 @@ public:
   static constexpr unsigned char CELL_TAIL = 2;
   static constexpr unsigned char CELL_CONDUCTOR = 3;
 
-  WireworldRuleSet(CellGrid* targetCanvas)
-    : RuleSet(targetCanvas)
+  WireworldRuleSet()
+    : RuleSet()
   {
   }
   ~WireworldRuleSet() override = default;

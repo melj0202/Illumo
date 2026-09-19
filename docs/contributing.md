@@ -46,7 +46,7 @@ reviewed.
 - Game and rules code do not issue raw OpenGL calls.
 - Production rendering uses `RenderCommand` tokens through `IBackend`.
 - Keep `DebugModule` out of Release compilation and register it as optional in
-  Debug; each product supplies its own required module.
+  Debug and RelWithDebInfo; each product supplies its own required module.
 - The approved `SceneGraph` v2 owns retained SoA hierarchy, compiled transforms
   and bounds, identity/journal state, and a derived query index. Its separate
   drawable consumes immutable snapshots in the frame list. Keep graph state,

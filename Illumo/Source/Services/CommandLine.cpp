@@ -60,6 +60,8 @@ parseLongStrict(const std::string& text, long* value)
 
 static constexpr float kConsoleFontSize = 14.0f;
 static constexpr float kConsoleLineSpacing = 20.0f;
+static constexpr const char* kConsoleModeCommand = "console_mode";
+static constexpr const char* kConsoleSizeCommand = "console_size";
 
 static float
 measureFontTextRange(const char* text, std::size_t length)
@@ -206,7 +208,7 @@ CommandLine::CommandLine(IEnvVars* vars,
 
   if (commandRegistry) {
     commandRegistry->RegisterCommand(
-      "console_mode",
+      kConsoleModeCommand,
       [this](const std::vector<std::string>& args) {
         if (args.empty()) {
           logNormal("Console mode: " +
@@ -230,7 +232,7 @@ CommandLine::CommandLine(IEnvVars* vars,
       { "floating", "mounted", "toggle" });
 
     commandRegistry->RegisterCommand(
-      "console_size",
+      kConsoleSizeCommand,
       [this](const std::vector<std::string>& args) {
         if (args.empty()) {
           if (floatingW > 0.0f && floatingH > 0.0f) {
@@ -265,6 +267,21 @@ CommandLine::CommandLine(IEnvVars* vars,
   }
 
   enrollGpuResources();
+}
+
+CommandLine::~CommandLine()
+{
+  unregisterConsoleCommands();
+}
+
+void
+CommandLine::unregisterConsoleCommands()
+{
+  if (commandRegistry == nullptr) {
+    return;
+  }
+  commandRegistry->UnregisterCommand(kConsoleModeCommand);
+  commandRegistry->UnregisterCommand(kConsoleSizeCommand);
 }
 
 void
@@ -913,8 +930,6 @@ CommandLine::HandleMouseRelease()
   isDraggingWindow = false;
   isResizingWindow = false;
 }
-
-
 
 void
 CommandLine::DrawImpl()

@@ -3,12 +3,11 @@
 #include <utility>
 
 Elementary1DRuleSet::Elementary1DRuleSet(
-  CellGrid* targetCanvas,
   std::string tag,
   unsigned int ruleNumber,
   std::array<unsigned char, 3> aliveColor,
   std::array<unsigned char, 3> deadColor)
-  : RuleSet(targetCanvas)
+  : RuleSet()
   , ruleTag(std::move(tag))
   , ruleNumber(ruleNumber & 0xFFu)
   , aliveColor(aliveColor)

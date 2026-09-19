@@ -178,6 +178,19 @@ testBoundsAndSnapshotLifetime()
   testTrue(
     g, !destroyed.get(), "graph destruction safely retires external views");
 
+  SceneGraph appendGraph;
+  const SceneNodeHandle appendNode = appendGraph.createNode();
+  appendGraph.addAttachment(appendNode, &a);
+  const SceneSnapshotView beforeAppend = appendGraph.extract(nullptr);
+  appendGraph.addAttachment(appendNode, &b);
+  testTrue(g,
+           beforeAppend.get() && beforeAppend.get()->items.size() == 1,
+           "attachment addition preserves previously captured items");
+  const SceneSnapshotView afterAppend = appendGraph.extract(nullptr);
+  testTrue(g,
+           afterAppend.get() && afterAppend.get()->items.size() == 2,
+           "next extraction includes appended attachment");
+
   HeadlessRenderFixture fixture(640, 480);
   SceneGraph callbackGraph;
   SceneGraphDrawable drawable(callbackGraph);

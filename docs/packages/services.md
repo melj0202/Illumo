@@ -22,6 +22,10 @@ stderr without relying on logger startup/shutdown lifetime.
 detaches one batch; callback-enqueued work waits for the next top-level
 `ExecuteQueue()`, and nested dispatch is ignored. Unregistering or replacing a
 registration cancels its unstarted callbacks, including detached ones.
+`CommandLine` registers `console_mode` and `console_size` with callbacks that
+capture the console instance and unregisters both names on destruction so those
+callbacks cannot outlive it. Engine shutdown destroys `CommandLine` before
+`CommandRegistry`.
 `ClearQueue()` cancels pending work and the current batch remainder without
 destroying the active callback. Exceptions propagate, discard the remaining
 detached batch, and leave newly queued work available to the next dispatch.
@@ -30,8 +34,8 @@ scroll storage belong to that instance.
 
 Illumo owns `SysCmdLine` parser mechanics, window flags, help/version dispatch,
 and exit results. Its public parser configuration accepts CA option/help data
-without introducing Game types. Illumo also owns the public `SaveLoad` dialog
-contract; concrete native implementations live in Platform.
+without introducing Game types. Platform owns the public `<Illumo/Platform/SaveLoad.h>` dialog
+contract and its native implementations.
 
 IllumoGame owns CA defaults and `envvars.json`, TPS, speed, fade, ruleset,
 canvas, simulation, camera, persistence commands, canvas CLI descriptors, and
@@ -61,3 +65,17 @@ start/stop, one outstanding submission, caller participation in join, and
 allocation-free dispatch. Callbacks are noexcept and operate on disjoint
 caller-owned ranges; context outlives join, and stop drains and joins workers.
 The CA-specific SparseWorkerPool remains separate pending measured migration.
+
+Input callbacks retain at most 256 characters and 256 key events, preserving the
+oldest pending events and counting dropped new events. Release queries use the
+current frame edge, including mouse buttons; idle keys remain None. Public and
+execution argument parsing share one grammar: ordinary backslashes are literal,
+Windows drive/UNC paths preserve separators, unquoted non-path tokens can escape
+spaces or punctuation, and doubled matching quotes encode quotes inside a quoted
+argument. Quoted paths may end with a separator. Empty quoted arguments survive.
+
+Logger retains its process-wide facade with unique ownership and explicit runner
+shutdown. Its default file is `log.txt` beside the executable; tests may supply an
+explicit filesystem path. File-open failure is reported rather than returning
+successful initialization. CLI default usage appends `.exe` only on Windows;
+unknown options retain the existing compatibility behavior.

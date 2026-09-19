@@ -1,3 +1,4 @@
+#include "DenseRuleEvaluator.h"
 // Headless cellular-automaton rules tests (no OpenGL window).
 
 #include "Game/RuleCatalogLoader.h"
@@ -19,7 +20,7 @@ class CountingRuleSet : public RuleSet
 {
 public:
   CountingRuleSet()
-    : RuleSet(nullptr)
+    : RuleSet()
   {
   }
 
@@ -45,8 +46,9 @@ testGameOfLifeBlockStillLife()
   f.setAlive(3, 4);
   f.setAlive(4, 4);
 
-  LifeLikeRuleSet rules(f.canvas);
-  rules.calcGeneration(0, 0, 8, 8);
+  LifeLikeRuleSet rules{};
+  DenseRuleEvaluator rulesDense(f.canvas, rules);
+  rulesDense.calcGeneration(0, 0, 8, 8);
 
   testTrue(g,
            f.isAlive(3, 3) && f.isAlive(4, 3) && f.isAlive(3, 4) &&
@@ -67,8 +69,9 @@ testGameOfLifeBlinker()
   f.setAlive(4, 4);
   f.setAlive(5, 4);
 
-  LifeLikeRuleSet rules(f.canvas);
-  rules.calcGeneration(0, 0, 8, 8);
+  LifeLikeRuleSet rules{};
+  DenseRuleEvaluator rulesDense(f.canvas, rules);
+  rulesDense.calcGeneration(0, 0, 8, 8);
 
   // Expect vertical
   testTrue(g,
@@ -77,7 +80,7 @@ testGameOfLifeBlinker()
   testTrue(
     g, !f.isAlive(3, 4) && !f.isAlive(5, 4), "horizontal ends of blinker die");
 
-  rules.calcGeneration(0, 0, 8, 8);
+  rulesDense.calcGeneration(0, 0, 8, 8);
   testTrue(g,
            f.isAlive(3, 4) && f.isAlive(4, 4) && f.isAlive(5, 4),
            "blinker returns to horizontal after 2 gens");
@@ -91,8 +94,9 @@ testGameOfLifeEmptyStaysEmpty()
   testSection("GoL: empty grid stays empty");
   HeadlessCanvasFixture f(6, 6);
   f.clearDead();
-  LifeLikeRuleSet rules(f.canvas);
-  rules.calcGeneration(0, 0, 6, 6);
+  LifeLikeRuleSet rules{};
+  DenseRuleEvaluator rulesDense(f.canvas, rules);
+  rulesDense.calcGeneration(0, 0, 6, 6);
   int alive = 0;
   for (int y = 0; y < 6; ++y) {
     for (int x = 0; x < 6; ++x) {
@@ -108,8 +112,7 @@ static void
 testGameOfLifeEvalCellColors()
 {
   testSection("GoL: evalCell colors");
-  HeadlessCanvasFixture f(4, 4);
-  LifeLikeRuleSet rules(f.canvas);
+  LifeLikeRuleSet rules{};
   unsigned char rgb[3] = { 1, 2, 3 };
   rules.evalCell(HeadlessCanvasFixture::Dead, rgb);
   testTrue(g, rgb[0] == 255 && rgb[1] == 255 && rgb[2] == 255, "dead is white");
@@ -127,8 +130,9 @@ testSeedsBirthOnly()
   f.setAlive(3, 3);
   f.setAlive(4, 3);
 
-  LifeLikeRuleSet rules(f.canvas, "SEEDS", 1u << 2, 0u);
-  rules.calcGeneration(0, 0, 8, 8);
+  LifeLikeRuleSet rules("SEEDS", 1u << 2, 0u);
+  DenseRuleEvaluator rulesDense(f.canvas, rules);
+  rulesDense.calcGeneration(0, 0, 8, 8);
 
   // Original cells should die (Seeds has no survival)
   testTrue(g, !f.isAlive(3, 3) && !f.isAlive(4, 3), "seeds parents die");
@@ -148,12 +152,13 @@ testBriansBrainAliveBecomesDying()
   f.clearDead();
   f.setAlive(2, 2);
 
-  BriansBrainRuleSet rules(f.canvas);
-  rules.calcGeneration(0, 0, 6, 6);
+  BriansBrainRuleSet rules{};
+  DenseRuleEvaluator rulesDense(f.canvas, rules);
+  rulesDense.calcGeneration(0, 0, 6, 6);
   // Isolated alive becomes dying (2)
   testEqUChar(g, f.at(2, 2), 2, "alive becomes dying");
 
-  rules.calcGeneration(0, 0, 6, 6);
+  rulesDense.calcGeneration(0, 0, 6, 6);
   testEqUChar(g, f.at(2, 2), HeadlessCanvasFixture::Dead, "dying becomes dead");
 }
 
@@ -161,9 +166,8 @@ static void
 testHighlifeRuleTag()
 {
   testSection("Highlife: rule tag");
-  HeadlessCanvasFixture f(4, 4);
   LifeLikeRuleSet rules(
-    f.canvas, "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
+    "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
   testTrue(g, rules.getRuleTag() == "HIGHLIFE", "Highlife rule tag");
 }
 
@@ -176,16 +180,17 @@ testWireworldHeadTailConductorCycle()
   // Isolated head on empty background (no conductors).
   f.canvas->setCanvasPixel(3, 3, WireworldRuleSet::CELL_HEAD);
 
-  WireworldRuleSet rules(f.canvas);
-  rules.calcGeneration(0, 0, 8, 8);
+  WireworldRuleSet rules{};
+  DenseRuleEvaluator rulesDense(f.canvas, rules);
+  rulesDense.calcGeneration(0, 0, 8, 8);
   testEqUChar(g, f.at(3, 3), WireworldRuleSet::CELL_TAIL, "head becomes tail");
 
-  rules.calcGeneration(0, 0, 8, 8);
+  rulesDense.calcGeneration(0, 0, 8, 8);
   testEqUChar(
     g, f.at(3, 3), WireworldRuleSet::CELL_CONDUCTOR, "tail becomes conductor");
 
   // Isolated conductor stays conductor (0 head neighbors).
-  rules.calcGeneration(0, 0, 8, 8);
+  rulesDense.calcGeneration(0, 0, 8, 8);
   testEqUChar(g,
               f.at(3, 3),
               WireworldRuleSet::CELL_CONDUCTOR,
@@ -207,8 +212,9 @@ testWireworldElectronOnWire()
   // neighbor.
   f.canvas->setCanvasPixel(1, 2, WireworldRuleSet::CELL_HEAD);
 
-  WireworldRuleSet rules(f.canvas);
-  rules.calcGeneration(0, 0, 10, 6);
+  WireworldRuleSet rules{};
+  DenseRuleEvaluator rulesDense(f.canvas, rules);
+  rulesDense.calcGeneration(0, 0, 10, 6);
 
   // Old head → tail; (2,2) had one head neighbor → becomes head.
   testEqUChar(g, f.at(1, 2), WireworldRuleSet::CELL_TAIL, "old head is tail");
@@ -219,7 +225,7 @@ testWireworldElectronOnWire()
               WireworldRuleSet::CELL_CONDUCTOR,
               "farther wire still copper");
 
-  rules.calcGeneration(0, 0, 10, 6);
+  rulesDense.calcGeneration(0, 0, 10, 6);
   testEqUChar(
     g, f.at(1, 2), WireworldRuleSet::CELL_CONDUCTOR, "tail becomes copper");
   testEqUChar(
@@ -233,8 +239,9 @@ testWireworldEmptyStaysEmpty()
   testSection("Wireworld: empty stays empty");
   HeadlessCanvasFixture f(5, 5);
   f.clearDead();
-  WireworldRuleSet rules(f.canvas);
-  rules.calcGeneration(0, 0, 5, 5);
+  WireworldRuleSet rules{};
+  DenseRuleEvaluator rulesDense(f.canvas, rules);
+  rulesDense.calcGeneration(0, 0, 5, 5);
   int nonEmpty = 0;
   for (int y = 0; y < 5; ++y) {
     for (int x = 0; x < 5; ++x) {
@@ -250,8 +257,7 @@ static void
 testWireworldEvalCellColors()
 {
   testSection("Wireworld: evalCell colors");
-  HeadlessCanvasFixture f(2, 2);
-  WireworldRuleSet rules(f.canvas);
+  WireworldRuleSet rules{};
   unsigned char rgb[3] = { 0, 0, 0 };
   rules.evalCell(WireworldRuleSet::CELL_EMPTY, rgb);
   testTrue(
@@ -269,9 +275,7 @@ static void
 testDayAndNightTruthTable()
 {
   testSection("Day & Night: B3678/S34678 truth table and colors");
-  HeadlessCanvasFixture f(2, 2);
-  LifeLikeRuleSet rules(f.canvas,
-                        "DAY_AND_NIGHT",
+  LifeLikeRuleSet rules("DAY_AND_NIGHT",
                         (1u << 3) | (1u << 6) | (1u << 7) | (1u << 8),
                         (1u << 3) | (1u << 4) | (1u << 6) | (1u << 7) |
                           (1u << 8));
@@ -309,9 +313,8 @@ static void
 testHighlifeTruthTable()
 {
   testSection("Highlife: B36/S23 truth table and colors");
-  HeadlessCanvasFixture f(2, 2);
   LifeLikeRuleSet rules(
-    f.canvas, "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
+    "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
   bool deadTransitionsMatch = true;
   bool aliveTransitionsMatch = true;
   for (unsigned char neighbors = 0; neighbors <= 8; ++neighbors) {
@@ -343,9 +346,7 @@ static void
 testLifeWithoutDeathTruthTable()
 {
   testSection("Life Without Death: B3/Sall truth table and colors");
-  HeadlessCanvasFixture f(2, 2);
-  LifeLikeRuleSet rules(
-    f.canvas, "LIFE_WITHOUT_DEATH", 1u << 3, (1u << 9) - 1u);
+  LifeLikeRuleSet rules("LIFE_WITHOUT_DEATH", 1u << 3, (1u << 9) - 1u);
   bool deadTransitionsMatch = true;
   bool aliveTransitionsMatch = true;
   for (unsigned char neighbors = 0; neighbors <= 8; ++neighbors) {
@@ -377,8 +378,7 @@ static void
 testSeedsTruthTableAndColors()
 {
   testSection("Seeds: B2/Snone truth table and colors");
-  HeadlessCanvasFixture f(2, 2);
-  LifeLikeRuleSet rules(f.canvas, "SEEDS", 1u << 2, 0u);
+  LifeLikeRuleSet rules("SEEDS", 1u << 2, 0u);
   bool transitionsMatch = true;
   for (unsigned char neighbors = 0; neighbors <= 8; ++neighbors) {
     const unsigned char birth = neighbors == 2 ? HeadlessCanvasFixture::Alive
@@ -403,8 +403,7 @@ static void
 testBriansBrainStateMachineAndColors()
 {
   testSection("Brian's Brain: state machine and colors");
-  HeadlessCanvasFixture f(2, 2);
-  BriansBrainRuleSet rules(f.canvas);
+  BriansBrainRuleSet rules{};
   testEqUChar(
     g, rules.nextState(1, 2), 0, "dead with two neighbors becomes alive");
   testEqUChar(
@@ -429,8 +428,7 @@ static void
 testWireworldConductorNeighborCounts()
 {
   testSection("Wireworld: conductor births with one or two heads only");
-  HeadlessCanvasFixture f(2, 2);
-  WireworldRuleSet rules(f.canvas);
+  WireworldRuleSet rules{};
   testEqUChar(g,
               rules.nextState(WireworldRuleSet::CELL_CONDUCTOR, 0),
               WireworldRuleSet::CELL_CONDUCTOR,
@@ -468,21 +466,20 @@ testTransitionTableCacheAndEquivalence()
             static_cast<int>(expectedCalls),
             "subsequent access performs no transition calls");
 
-  LifeLikeRuleSet gameOfLife(nullptr);
-  LifeLikeRuleSet seeds(nullptr, "SEEDS", 1u << 2, 0u);
-  BriansBrainRuleSet briansBrain(nullptr);
+  LifeLikeRuleSet gameOfLife{};
+  LifeLikeRuleSet seeds("SEEDS", 1u << 2, 0u);
+  BriansBrainRuleSet briansBrain{};
   LifeLikeRuleSet highlife(
-    nullptr, "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
-  LifeLikeRuleSet dayAndNight(nullptr,
-                              "DAY_AND_NIGHT",
+    "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
+  LifeLikeRuleSet dayAndNight("DAY_AND_NIGHT",
                               (1u << 3) | (1u << 6) | (1u << 7) | (1u << 8),
                               (1u << 3) | (1u << 4) | (1u << 6) | (1u << 7) |
                                 (1u << 8));
   LifeLikeRuleSet lifeWithoutDeath(
-    nullptr, "LIFE_WITHOUT_DEATH", 1u << 3, (1u << 9) - 1u);
-  WireworldRuleSet wireworld(nullptr);
-  Elementary1DRuleSet rule90(nullptr, "RULE_90", 90u);
-  Elementary1DRuleSet rule184(nullptr, "RULE_184", 184u);
+    "LIFE_WITHOUT_DEATH", 1u << 3, (1u << 9) - 1u);
+  WireworldRuleSet wireworld{};
+  Elementary1DRuleSet rule90("RULE_90", 90u);
+  Elementary1DRuleSet rule184("RULE_184", 184u);
   const RuleSet* rules[] = { &gameOfLife, &seeds,       &briansBrain,
                              &highlife,   &dayAndNight, &lifeWithoutDeath,
                              &wireworld,  &rule90,      &rule184 };
@@ -513,7 +510,7 @@ static void
 testElementarySpaceTime()
 {
   testSection("Rules: Rule 90/184 serial space-time path");
-  Elementary1DRuleSet rule90(nullptr, "RULE_90", 90u);
+  Elementary1DRuleSet rule90("RULE_90", 90u);
   testTrue(g,
            rule90.getNeighborhoodKind() ==
              RuleSet::NeighborhoodKind::Elementary1D,
@@ -530,7 +527,59 @@ testElementarySpaceTime()
   testEqUChar(g, grid.getCell(CellAddress{ 1, 1 }), 0, "right child");
   testEqUChar(g, grid.getCell(CellAddress{ 0, 1 }), 1, "center child empty");
 
-  Elementary1DRuleSet rule184(nullptr, "RULE_184", 184u);
+  Elementary1DRuleSet rule184("RULE_184", 184u);
+  for (const RuleSet* rule : { static_cast<const RuleSet*>(&rule90),
+                               static_cast<const RuleSet*>(&rule184) }) {
+    CellGrid dense(16, 16);
+    dense.clearCells();
+    SparseCellGrid reference(1, 1);
+    dense.setCanvasPixel(0, 15, 0);
+    dense.setCanvasPixel(5, 0, 0);
+    reference.setCell(CellAddress{ 0, 15 }, 0);
+    reference.setCell(CellAddress{ 5, 0 }, 0);
+    DenseRuleEvaluator evaluator(&dense, *rule);
+    evaluator.calcGeneration(0, 0, 16, 16);
+    testTrue(
+      g, reference.advance(*rule), "finite elementary reference advances");
+    bool identical = true;
+    for (int y = 0; y < 16; ++y) {
+      for (int x = 0; x < 16; ++x) {
+        identical = identical && dense.getCanvasPixel(x, y) ==
+                                   reference.getCell(CellAddress{ x, y });
+      }
+    }
+    testTrue(g,
+             identical,
+             "dense elementary matches sparse wrap and retained history");
+    dense.clearCells();
+    evaluator.calcGeneration(0, 0, 16, 16);
+    testEqUChar(
+      g, dense.getCanvasPixel(0, 0), 1, "empty elementary world stays empty");
+  }
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "shipped elementary catalog loads");
+  const std::unique_ptr<RuleSet> compiled90 = registry.createRuleSet("RULE_90");
+  if (compiled90) {
+    CellGrid legacy(8, 8), compiled(8, 8);
+    legacy.clearCells();
+    compiled.clearCells();
+    legacy.setCanvasPixel(4, 0, 0);
+    compiled.setCanvasPixel(4, 0, 0);
+    DenseRuleEvaluator(&legacy, rule90).calcGeneration(0, 0, 8, 8);
+    DenseRuleEvaluator(&compiled, *compiled90).calcGeneration(0, 0, 8, 8);
+    testTrue(g,
+             std::memcmp(legacy.lifeCanvas, compiled.lifeCanvas, 64) == 0,
+             "data-backed dense elementary agrees with reference rule");
+    testEqUChar(
+      g, compiled.getCanvasPixel(3, 1), 0, "dense Rule 90 left child");
+    testEqUChar(
+      g, compiled.getCanvasPixel(5, 1), 0, "dense Rule 90 right child");
+    testEqUChar(g, compiled.getCanvasPixel(4, 0), 0, "dense history retained");
+  } else {
+    testTrue(g, false, "compiled Rule 90 is available");
+  }
   SparseCellGrid traffic;
   traffic.setCell(CellAddress{ 0, 0 }, 0);
   traffic.setCell(CellAddress{ 1, 0 }, 1);
@@ -776,7 +825,7 @@ testRuleSetRegistryValidation()
       !RuleSetRegistry::parseLifeLikeRuleString(malformed, birth, survive),
       "malformed rule grammar rejected");
   }
-  LifeLikeRuleSet rule(nullptr, "BOUNDS", 1u << 3, (1u << 2) | (1u << 3));
+  LifeLikeRuleSet rule("BOUNDS", 1u << 3, (1u << 2) | (1u << 3));
   for (int count = 9; count <= 255; ++count) {
     testTrue(g,
              rule.nextState(0, static_cast<unsigned char>(count)) == 1 &&
@@ -803,24 +852,22 @@ testDataCatalogParity()
            "typed families map to stable schema names without legacy aliases");
   std::vector<std::unique_ptr<RuleSet>> legacyRules;
   legacyRules.push_back(std::make_unique<LifeLikeRuleSet>(
-    nullptr, "GAME_OF_LIFE", 1u << 3u, (1u << 2u) | (1u << 3u)));
-  legacyRules.push_back(std::make_unique<BriansBrainRuleSet>(nullptr));
+    "GAME_OF_LIFE", 1u << 3u, (1u << 2u) | (1u << 3u)));
+  legacyRules.push_back(std::make_unique<BriansBrainRuleSet>());
   legacyRules.push_back(std::make_unique<LifeLikeRuleSet>(
-    nullptr,
     "DAY_AND_NIGHT",
     (1u << 3u) | (1u << 6u) | (1u << 7u) | (1u << 8u),
     (1u << 3u) | (1u << 4u) | (1u << 6u) | (1u << 7u) | (1u << 8u)));
   legacyRules.push_back(std::make_unique<LifeLikeRuleSet>(
-    nullptr, "HIGHLIFE", (1u << 3u) | (1u << 6u), (1u << 2u) | (1u << 3u)));
-  legacyRules.push_back(std::make_unique<LifeLikeRuleSet>(
-    nullptr, "LIFE_WITHOUT_DEATH", 1u << 3u, 0x1FFu));
+    "HIGHLIFE", (1u << 3u) | (1u << 6u), (1u << 2u) | (1u << 3u)));
   legacyRules.push_back(
-    std::make_unique<LifeLikeRuleSet>(nullptr, "SEEDS", 1u << 2u, 0u));
-  legacyRules.push_back(std::make_unique<WireworldRuleSet>(nullptr));
+    std::make_unique<LifeLikeRuleSet>("LIFE_WITHOUT_DEATH", 1u << 3u, 0x1FFu));
   legacyRules.push_back(
-    std::make_unique<Elementary1DRuleSet>(nullptr, "RULE_90", 90u));
+    std::make_unique<LifeLikeRuleSet>("SEEDS", 1u << 2u, 0u));
+  legacyRules.push_back(std::make_unique<WireworldRuleSet>());
+  legacyRules.push_back(std::make_unique<Elementary1DRuleSet>("RULE_90", 90u));
   legacyRules.push_back(
-    std::make_unique<Elementary1DRuleSet>(nullptr, "RULE_184", 184u));
+    std::make_unique<Elementary1DRuleSet>("RULE_184", 184u));
   const std::vector<std::string> ids = registry.getKnownRules();
   testTrue(g,
            ids.size() >= legacyRules.size(),
@@ -1127,10 +1174,9 @@ testCyclicMultistateFamilies()
     HeadlessCanvasFixture dense(5, 5);
     dense.canvas->setCanvasPixel(2, 2, 4u);
     dense.canvas->setCanvasPixel(3, 2, 5u);
-    std::unique_ptr<RuleSet> denseRush =
-      registry.createRuleSet("PRISM_RUSH", dense.canvas);
+    std::unique_ptr<RuleSet> denseRush = registry.createRuleSet("PRISM_RUSH");
     if (denseRush != nullptr) {
-      denseRush->calcGeneration(0, 0, 5, 5);
+      DenseRuleEvaluator(dense.canvas, *denseRush).calcGeneration(0, 0, 5, 5);
     }
     testEqUChar(g,
                 dense.at(2, 2),
@@ -1317,10 +1363,9 @@ testResearchedInteractionFamilies()
     dense.canvas->setCanvasPixel(2, 2, 0u);
     dense.canvas->setCanvasPixel(3, 2, 2u);
     dense.canvas->setCanvasPixel(4, 2, 3u);
-    std::unique_ptr<RuleSet> denseQuad =
-      registry.createRuleSet("QUADLIFE", dense.canvas);
+    std::unique_ptr<RuleSet> denseQuad = registry.createRuleSet("QUADLIFE");
     if (denseQuad != nullptr) {
-      denseQuad->calcGeneration(0, 0, 7, 7);
+      DenseRuleEvaluator(dense.canvas, *denseQuad).calcGeneration(0, 0, 7, 7);
     }
     testEqUChar(g,
                 dense.at(3, 3),
@@ -1564,9 +1609,9 @@ testDirectionalAndChemicalFamilies()
     HeadlessCanvasFixture dense(5, 5);
     dense.canvas->setCanvasPixel(2, 2, 2u);
     std::unique_ptr<RuleSet> denseAnt =
-      registry.createRuleSet("LANGTON_ANT_RL", dense.canvas);
+      registry.createRuleSet("LANGTON_ANT_RL");
     if (denseAnt != nullptr) {
-      denseAnt->calcGeneration(0, 0, 5, 5);
+      DenseRuleEvaluator(dense.canvas, *denseAnt).calcGeneration(0, 0, 5, 5);
     }
     testEqUChar(
       g, dense.at(2, 2), 0u, "dense Turmite writes its departed tape cell");
@@ -1612,10 +1657,9 @@ testDirectionalAndChemicalFamilies()
 
     HeadlessCanvasFixture dense(5, 5);
     dense.canvas->setCanvasPixel(2, 2, 5u);
-    std::unique_ptr<RuleSet> denseGas =
-      registry.createRuleSet("HPP_GAS", dense.canvas);
+    std::unique_ptr<RuleSet> denseGas = registry.createRuleSet("HPP_GAS");
     if (denseGas != nullptr) {
-      denseGas->calcGeneration(0, 0, 5, 5);
+      DenseRuleEvaluator(dense.canvas, *denseGas).calcGeneration(0, 0, 5, 5);
     }
     testEqUChar(g,
                 dense.at(3, 2),

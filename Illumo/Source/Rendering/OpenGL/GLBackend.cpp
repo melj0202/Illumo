@@ -254,6 +254,10 @@ GLBackend::CreateMesh(const void* vertices,
   entry.generation = handle.generation;
   entry.resource = std::make_unique<GLMesh>(
     vertices, vertexSize, indices, indexSize, layout, dynamic);
+  if (!entry.resource->isValid()) {
+    meshHandles.release(handle);
+    return {};
+  }
   _vaoRegistryLookup[handle.slot] = std::move(entry);
   return handle;
 }
@@ -276,6 +280,9 @@ GLBackend::ReplaceMesh(MeshHandle handle,
   }
   std::unique_ptr<GLMesh> replacement = std::make_unique<GLMesh>(
     vertices, vertexSize, indices, indexSize, layout, dynamic);
+  if (!replacement->isValid()) {
+    return false;
+  }
   if (it->second.resource) {
     it->second.resource->Destroy();
   }
@@ -415,6 +422,10 @@ GLBackend::CreateTexture(const unsigned char* data,
   entry.generation = handle.generation;
   entry.resource =
     std::make_unique<GLTexture>(data, width, height, channels, options);
+  if (entry.resource->getID() == 0) {
+    textureHandles.release(handle);
+    return {};
+  }
   _textureRegistryLookup[handle.slot] = std::move(entry);
   return handle;
 }
@@ -469,6 +480,9 @@ GLBackend::ReplaceTexture(TextureHandle handle,
   }
   std::unique_ptr<GLTexture> replacement =
     std::make_unique<GLTexture>(data, width, height, channels, options);
+  if (replacement->getID() == 0) {
+    return false;
+  }
   if (it->second.resource) {
     it->second.resource->Destroy();
   }

@@ -41,6 +41,13 @@ file. Repair or remove the file and successfully reload to restore persistence.
 A missing file permits first-run creation. Failure diagnostics do not depend
 on logger lifetime.
 
+Input callbacks retain at most 256 pending characters and 256 key events, counting
+dropped new events. Release polling reports frame edges. Console execution and
+public parsing preserve drive and UNC paths, quoted trailing separators, and
+empty arguments. Console-owned command callbacks retire before destruction.
+Logger retains a unique process instance with explicit runner shutdown and an
+executable-adjacent default file; tests can select an explicit path.
+
 \subsection{IllumoGame policy}
 IllumoGame owns \pathref{IllumoGame/envvars.json}, CA defaults (canvas,
 topology, ruleset, TPS, speed, and fade), CA option/help descriptors, and its
@@ -65,9 +72,9 @@ measured include cost, collisions, or portability work justifies it.
 dialogs behind the public \symbolref{SaveLoad} contract:
 \begin{itemize}
   \item Windows \pathref{WinMain.cpp}/\pathref{WinSaveLoad.cpp} is supported.
-  \item Linux sources target Ubuntu 24.04 x86_64 X11/XWayland with gtkmm-3
+  \item Linux sources target Ubuntu 24.04 x86\_64 X11/XWayland with gtkmm-3
         dialogs and clipboard; they are not supported until native smoke.
-        macOS remains unsupported stale scaffolding.
+        macOS is not targeted; its scaffold has been removed.
 \end{itemize}
 Platform bootstrap calls \symbolref{CreateIllumoApplication} and then the
 engine-owned \symbolref{RunIllumoApplication}. Each platform implements the
@@ -76,6 +83,11 @@ and filename defaults through \symbolref{SaveLoadDialogSpec}. Source presence
 and CMake selection do not establish support: a port still requires native
 configure, build, launch, tests, rendering/input, dialogs, and shutdown
 validation.
+
+SaveLoad strings and returned paths use UTF-8. Windows adapts them to wide common
+dialogs with a 32,768-character path buffer. Codecs convert UTF-8 paths explicitly
+and contain encoding failures. CMake rejects Apple targets because no macOS
+platform implementation is retained.
 
 Product save codecs use \texttt{AtomicFile::write}: exclusively create a sibling
 staging file, encode, check write/flush/close, then replace the destination.

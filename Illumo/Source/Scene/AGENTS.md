@@ -24,8 +24,10 @@ This file specializes the repository `AGENTS.md` for `Illumo/Source/Scene/`.
 - Derived compilation or BVH allocation failure falls back to authoritative
   traversal or linear queries. A cache failure must not change results.
 - Reject mutation during extraction/bounds callbacks. Ordinary edits after
-  publication leave snapshot values unchanged; attachment changes, destruction,
-  clear, and ring-slot reuse expire affected views. Validate before each callback.
+  publication leave snapshot values unchanged. Adding an attachment affects the
+  next extraction without retiring existing captured items. Attachment removal,
+  replacement, explicit content invalidation, destruction, clear, and ring-slot
+  reuse expire affected views. Validate before each callback.
 - SceneGraphDrawable alone bridges snapshots to DrawableBase. Keep graph state
   separate from token/backend execution. No OpenGL or product-domain imports.
 - Shared shadow fitting occurs after collection, so camera rejection cannot

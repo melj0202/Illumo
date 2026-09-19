@@ -2,7 +2,6 @@
 
 // Pure input service: no Game includes (D-E2).
 
-#include <Illumo/Foundation/ArrayQueue.h>
 #include <Illumo/Services/InputContext.h>
 #include <Illumo/Services/KeyCode.h>
 
@@ -116,6 +115,8 @@ private:
   InputContext* activeInputContext;
   std::queue<unsigned int> charQueue;
   std::queue<KeyPressEvent> keyQueue;
+  size_t m_droppedCharEvents = 0;
+  size_t m_droppedKeyEvents = 0;
 
   long nextContextId = 0;
   int m_modifierFlags;
@@ -137,6 +138,8 @@ public:
 
   std::queue<unsigned int>& getCharQueue() { return charQueue; }
   std::queue<KeyPressEvent>& getKeyQueue() { return keyQueue; }
+  size_t droppedCharEvents() const { return m_droppedCharEvents; }
+  size_t droppedKeyEvents() const { return m_droppedKeyEvents; }
 
   void clearCharQueue();
   void clearKeyQueue();

@@ -2,13 +2,12 @@
 #include <cstring>
 #include <utility>
 
-LifeLikeRuleSet::LifeLikeRuleSet(CellGrid* targetCanvas,
-                                 std::string tag,
+LifeLikeRuleSet::LifeLikeRuleSet(std::string tag,
                                  unsigned int birthMask,
                                  unsigned int surviveMask,
                                  std::array<unsigned char, 3> aliveColor,
                                  std::array<unsigned char, 3> deadColor)
-  : RuleSet(targetCanvas)
+  : RuleSet()
   , ruleTag(std::move(tag))
   , birthMask(birthMask)
   , surviveMask(surviveMask)

@@ -29,7 +29,7 @@ class IdentityRuleSet : public RuleSet
 {
 public:
   IdentityRuleSet()
-    : RuleSet(nullptr)
+    : RuleSet()
   {
   }
 };
@@ -101,7 +101,7 @@ static void
 testSparseSimulationBoundaries()
 {
   testSection("SparseCellGrid: serial halo stepping");
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid grid;
   grid.setCell(CellAddress{ 15, 0 }, 0);
   grid.setCell(CellAddress{ 15, 1 }, 0);
@@ -167,7 +167,7 @@ static void
 testSparseRevisionAndBoundedVisit()
 {
   testSection("SparseCellGrid: revisions and bounded chunk visits");
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid grid;
   const std::uint64_t emptyRevision = grid.getRevision();
   testTrue(g, grid.advance(rules), "empty generation advances");
@@ -244,7 +244,7 @@ static void
 testElementaryTransactions()
 {
   testSection("Sparse elementary generation: failure rollback and publication");
-  Elementary1DRuleSet rule(nullptr, "RULE_90", 90u);
+  Elementary1DRuleSet rule("RULE_90", 90u);
   SparseCellGrid grid;
   grid.setCell(CellAddress{ 0, 0 }, 0);
   SparseCellGrid prior;
@@ -326,7 +326,7 @@ testElementaryTransactions()
       torus.getCell(CellAddress{ 8, 15 }) == 0,
     "finite retry replaces destination row while preserving source history");
 
-  LifeLikeRuleSet life(nullptr, "LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  LifeLikeRuleSet life("LIFE", 1u << 3, (1u << 2) | (1u << 3));
   SparseCellGrid evolving;
   evolving.setCell(CellAddress{ 8, 0 }, 0);
   SparseCellGrid cached;
@@ -355,7 +355,7 @@ static void
 testElementaryHistoryBench()
 {
   testSection("Sparse elementary history latency");
-  Elementary1DRuleSet rule(nullptr, "RULE_90", 90u);
+  Elementary1DRuleSet rule("RULE_90", 90u);
   for (const int historyRows : { 0, 1024 }) {
     SparseCellGrid source;
     for (int y = -historyRows; y < 0; ++y) {
@@ -422,7 +422,7 @@ static void
 testSparseParallelDeterminism()
 {
   testSection("SparseCellGrid: serial and parallel target stepping");
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid serial;
   SparseCellGrid parallel;
   seedSparseRandom(&serial, 160, 17u);
@@ -512,7 +512,7 @@ static void
 testSparseCellCandidates()
 {
   testSection("SparseCellGrid: adaptive cell candidates");
-  LifeLikeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid candidates;
   SparseCellGrid fullChunks;
   seedWideBlinkers(&candidates, 96);
@@ -545,7 +545,7 @@ testSparseCellCandidates()
                              fullChunks.collectChunkRecords()),
            "cell candidates remain byte-identical to full chunks");
 
-  WireworldRuleSet wireworld(nullptr);
+  WireworldRuleSet wireworld{};
   SparseCellGrid dense;
   SparseCellGrid denseReference;
   bool denseAssigned = true;
@@ -612,7 +612,7 @@ static void
 testSparsePerTargetAdaptiveEvaluation()
 {
   testSection("SparseCellGrid: per-target adaptive evaluation");
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid adaptive;
   SparseCellGrid fullChunks;
   seedMixedTargetWorld(&adaptive);
@@ -648,7 +648,7 @@ static void
 testSparseCandidateParallelDeterminism()
 {
   testSection("SparseCellGrid: coarse parallel candidate evaluation");
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid serial;
   SparseCellGrid parallel;
   const int colonyCount = 512;
@@ -713,7 +713,7 @@ static void
 testSparseCandidatePreparation()
 {
   testSection("SparseCellGrid: parallel candidate preparation");
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid serial;
   SparseCellGrid parallel;
   SparseCellGrid fullChunks;
@@ -782,7 +782,7 @@ static void
 testSparseChangedFrontier()
 {
   testSection("SparseCellGrid: retained changed-region frontier");
-  LifeLikeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid stable;
   stable.setCell(CellAddress{ 3, 3 }, 0);
   stable.setCell(CellAddress{ 4, 3 }, 0);
@@ -852,7 +852,7 @@ testSparseChangedFrontier()
   ruleChange.setCell(CellAddress{ 0, 1 }, 0);
   ruleChange.setCell(CellAddress{ 1, 1 }, 0);
   testTrue(g, ruleChange.advance(life), "life block settles");
-  LifeLikeRuleSet seeds(nullptr, "SEEDS", 1u << 2, 0u);
+  LifeLikeRuleSet seeds("SEEDS", 1u << 2, 0u);
   const std::uint64_t lifeRevision = ruleChange.getRevision();
   testTrue(g, ruleChange.advance(seeds), "ruleset change advances");
   testTrue(g,
@@ -893,7 +893,7 @@ static void
 testSparseAdaptiveFrontierCost()
 {
   testSection("SparseCellGrid: adaptive frontier cost and candidates");
-  LifeLikeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid optimized;
   SparseCellGrid reference;
   seedAdaptiveFrontierWorld(&optimized, 1024, 8);
@@ -952,7 +952,7 @@ static void
 testSparseDenseLocalIdentity()
 {
   testSection("SparseCellGrid: dense local serial/worker/path identity");
-  LifeLikeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid serial;
   SparseCellGrid parallel;
   SparseCellGrid complete;
@@ -987,7 +987,7 @@ static void
 testSparseFrontierTrackingSurvivesLargeBurst()
 {
   testSection("SparseCellGrid: changed-chunk tracking survives 4096 burst");
-  LifeLikeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   const int burstCount = 4200;
   SparseCellGrid burst;
   seedWideBlinkers(&burst, burstCount);
@@ -1021,7 +1021,7 @@ static void
 testSparsePreciseActivityMasks()
 {
   testSection("SparseCellGrid: cell-precise activity gating");
-  LifeLikeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
 
   SparseCellGrid interior;
   seedStableBlocksAndBlinker(&interior, 128);
@@ -1066,7 +1066,7 @@ testSparsePreciseActivityMasks()
              boundaryStats.frontierTargetCount <= 2u,
            "edge changes enroll only the touching neighbor chunk");
 
-  WireworldRuleSet wireworld(nullptr);
+  WireworldRuleSet wireworld{};
   SparseCellGrid conductors;
   SparseChunkRecord conductor;
   conductor.cells.fill(WireworldRuleSet::CELL_CONDUCTOR);
@@ -1088,7 +1088,7 @@ static void
 testSparseChunkMemoization()
 {
   testSection("SparseCellGrid: exact on-demand chunk memoization");
-  LifeLikeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid cached;
   SparseCellGrid reference;
   seedRepeatedDenseChunks(&cached, 128);
@@ -1116,7 +1116,7 @@ testSparseChunkMemoization()
              "memoized output is byte-identical to uncached output");
   }
 
-  LifeLikeRuleSet seeds(nullptr, "SEEDS", 1u << 2, 0u);
+  LifeLikeRuleSet seeds("SEEDS", 1u << 2, 0u);
   SparseCellGrid::setChunkMemoOverrideForTesting(1);
   testTrue(g, cached.advance(seeds), "memoized ruleset switch advances");
   SparseCellGrid::setChunkMemoOverrideForTesting(-1);
@@ -1157,9 +1157,9 @@ static void
 testSparseMemoRuleSemantics()
 {
   testSection("SparseCellGrid: warm memo invalidation by transition semantics");
-  LifeLikeRuleSet life(nullptr);
-  LifeLikeRuleSet seeds(nullptr, "SEEDS", 1u << 2, 0u);
-  LifeLikeRuleSet sameTagSeeds(nullptr, "GAME_OF_LIFE", 1u << 2, 0u);
+  LifeLikeRuleSet life{};
+  LifeLikeRuleSet seeds("SEEDS", 1u << 2, 0u);
+  LifeLikeRuleSet sameTagSeeds("GAME_OF_LIFE", 1u << 2, 0u);
   const RuleSet* replacements[] = { &seeds, &sameTagSeeds };
   SparseCellGrid::setCellCandidateOverrideForTesting(-1);
   SparseCellGrid::setWorkerOverrideForTesting(1);
@@ -1306,7 +1306,7 @@ testSparseCachedStatistics()
              0u,
              "clear resets counted cache");
 
-  LifeLikeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid complete;
   complete.setCell(CellAddress{ 0, 0 }, 0);
   SparseCellGrid::setCellCandidateOverrideForTesting(-1);
@@ -1342,7 +1342,7 @@ testSparseCandidateScratchReuse()
 {
   testSection("SparseCellGrid: retained candidate scratch storage");
   const int colonyCount = 64;
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid grid;
   seedWideBlinkers(&grid, colonyCount);
 
@@ -1411,7 +1411,7 @@ static void
 testSparseCandidateFlatIndex()
 {
   testSection("SparseCellGrid: flat candidate index generations");
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid candidates;
   SparseCellGrid fullChunks;
   seedWideBlinkers(&candidates, 128);
@@ -1456,7 +1456,7 @@ static void
 testSparseCompleteHaloScratchReuse()
 {
   testSection("SparseCellGrid: retained complete-halo scratch storage");
-  WireworldRuleSet rules(nullptr);
+  WireworldRuleSet rules{};
   SparseCellGrid grid;
   bool assigned = true;
   for (int chunkY = 0; chunkY < 9; ++chunkY) {
@@ -1526,7 +1526,7 @@ static void
 testSparseChunkNodeReuse()
 {
   testSection("SparseCellGrid: retained generation chunk nodes");
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid candidates;
   candidates.setCell(CellAddress{ 4, 3 }, 0);
   candidates.setCell(CellAddress{ 4, 4 }, 0);
@@ -1608,19 +1608,18 @@ static void
 testSparseCellCandidateRuleEquivalence()
 {
   testSection("SparseCellGrid: candidate rule equivalence");
-  LifeLikeRuleSet life(nullptr);
-  LifeLikeRuleSet seeds(nullptr, "SEEDS", 1u << 2, 0u);
-  BriansBrainRuleSet brains(nullptr);
+  LifeLikeRuleSet life{};
+  LifeLikeRuleSet seeds("SEEDS", 1u << 2, 0u);
+  BriansBrainRuleSet brains{};
   LifeLikeRuleSet highlife(
-    nullptr, "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
-  LifeLikeRuleSet dayAndNight(nullptr,
-                              "DAY_AND_NIGHT",
+    "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
+  LifeLikeRuleSet dayAndNight("DAY_AND_NIGHT",
                               (1u << 3) | (1u << 6) | (1u << 7) | (1u << 8),
                               (1u << 3) | (1u << 4) | (1u << 6) | (1u << 7) |
                                 (1u << 8));
   LifeLikeRuleSet lifeWithoutDeath(
-    nullptr, "LIFE_WITHOUT_DEATH", 1u << 3, (1u << 9) - 1u);
-  WireworldRuleSet wireworld(nullptr);
+    "LIFE_WITHOUT_DEATH", 1u << 3, (1u << 9) - 1u);
+  WireworldRuleSet wireworld{};
   RuleSet* ruleSets[] = { &life,     &seeds,       &brains,
                           &highlife, &dayAndNight, &lifeWithoutDeath,
                           &wireworld };
@@ -1662,7 +1661,7 @@ static void
 testMultiStateTransitions()
 {
   testSection("SparseCellGrid: multi-state transitions");
-  WireworldRuleSet rules(nullptr);
+  WireworldRuleSet rules{};
   SparseCellGrid grid;
   grid.setCell(CellAddress{ 0, 0 }, WireworldRuleSet::CELL_HEAD);
   grid.setCell(CellAddress{ 1, 0 }, WireworldRuleSet::CELL_TAIL);
@@ -1681,7 +1680,7 @@ testMultiStateTransitions()
               WireworldRuleSet::CELL_CONDUCTOR,
               "conductor preserves state");
 
-  BriansBrainRuleSet brainRules(nullptr);
+  BriansBrainRuleSet brainRules{};
   SparseCellGrid brain;
   brain.setCell(CellAddress{ 0, 0 }, 0);
   brain.setCell(CellAddress{ 1, 0 }, 2);
@@ -2000,7 +1999,7 @@ testIncrementalPresentationWork()
              SparseCellGrid::kChunkCellCount,
              "single-cell removal recomputes its cached chunk");
 
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   testTrue(g, grid.advance(rules), "presentation source generation advances");
   view.rebuildTargetsFromGrid();
   testEqSize(g,
@@ -2036,7 +2035,7 @@ testDenseVisibleChangesUseCompleteSample()
   CanvasView view(80, 60, &grid, &window, &camera, nullptr);
   view.setFadeSpeed(0.0f);
   view.rebuildTargetsFromGrid();
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   testTrue(g, grid.advance(rules), "dense block advances one generation");
   view.rebuildTargetsFromGrid();
   const std::size_t fullViewTexels =
@@ -2085,7 +2084,7 @@ testSparseOverviewPublicationStaysIncremental()
   view.setFadeSpeed(0.0f);
   view.rebuildTargetsFromGrid();
 
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid next;
   testTrue(g,
            next.advanceFrom(published, rules),
@@ -2439,7 +2438,7 @@ testCameraCacheScrollMatchesRefill()
   env.setVar("WinY", 720);
   SparseCellGrid grid;
   seedScrollPattern(&grid);
-  WireworldRuleSet wireworld(nullptr);
+  WireworldRuleSet wireworld{};
 
   const float zooms[] = { 1.0f, 0.16f, 0.1f };
   const double cellWorld = 16.0;
@@ -2563,7 +2562,7 @@ testAsyncSimulationLifecycle()
   published.setCell(CellAddress{ -1, 0 }, 0);
   published.setCell(CellAddress{ 0, 0 }, 0);
   published.setCell(CellAddress{ 1, 0 }, 0);
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid expected;
   expected.copyStateFrom(published);
   testTrue(g, expected.advance(rules), "reference generation succeeds");
@@ -2623,7 +2622,7 @@ testAsyncSimulationPublication()
   seedStableBlocksAndBlinker(&published, 96);
   SparseCellGrid expected;
   expected.copyStateFrom(published);
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   expected.advance(rules);
 
   SparseCellGrid working;
@@ -2905,7 +2904,7 @@ reportDenseSoupPresentation(const char* name,
   CanvasView view(80, 60, &grid, &window, &camera, &renderer);
   view.setFadeSpeed(fadeSpeed);
   view.rebuildTargetsFromGrid();
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
 
   const int warmupFrames = 4;
   const int measuredFrames = 12;
@@ -3169,7 +3168,7 @@ testPresentationFrameLatencyBench()
   forcedFullPublication.setFadeSpeed(0.0f);
   incrementalPublication.rebuildTargetsFromGrid();
   forcedFullPublication.rebuildTargetsFromGrid();
-  LifeLikeRuleSet publicationRules(nullptr);
+  LifeLikeRuleSet publicationRules{};
   RollingMetric incrementalPublicationMetric;
   RollingMetric forcedFullPublicationMetric;
   const std::size_t incrementalRefillsBefore =

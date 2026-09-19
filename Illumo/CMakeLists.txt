@@ -14,6 +14,10 @@ set(ILLUMO_LIBRARY_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
   CACHE INTERNAL "Illumo library source directory")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoRuntime.cmake")
 
+if(APPLE)
+  message(FATAL_ERROR "Illumo has no macOS port; its scaffold has been removed")
+endif()
+
 find_package(OpenGL REQUIRED)
 
 set(ILLUMO_PLATFORM_ENTRY_SOURCE)
@@ -28,18 +32,6 @@ if(WIN32)
     Source/Platform/Windows/WinTimer.cpp
     Source/Platform/Windows/WinProcessMemoryStats.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm)
-elseif(APPLE)
-  enable_language(OBJCXX)
-  set(ILLUMO_PLATFORM_ENTRY_SOURCE Source/Platform/macOS/Main.cpp)
-  list(APPEND ILLUMO_PLATFORM_SOURCES
-    Source/Platform/macOS/MacSaveLoad.mm
-    Source/Platform/PosixAtomicFile.cpp
-    Source/Platform/macOS/MacClipboard.cpp
-    Source/Platform/macOS/MacTimer.cpp
-    Source/Platform/UnsupportedProcessMemoryStats.cpp)
-  list(APPEND ILLUMO_PLATFORM_LIBRARIES
-    "-framework Cocoa" "-framework OpenGL" "-framework IOKit"
-    "-framework CoreVideo")
 elseif(UNIX)
   find_package(PkgConfig REQUIRED)
   find_package(Threads REQUIRED)

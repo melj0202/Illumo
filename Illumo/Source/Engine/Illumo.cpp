@@ -204,6 +204,19 @@ void
 Illumo::addModule(std::unique_ptr<IModule> module,
                   ModuleRequirement requirement)
 {
+  if (m_modulesStarted || module == nullptr) {
+    Logger::LogError(
+      "Module registration rejected after startup or with no module");
+    return;
+  }
+  if (requirement == ModuleRequirement::Required) {
+    for (const RegisteredModule& existing : m_modules) {
+      if (existing.requirement == ModuleRequirement::Required) {
+        Logger::LogError("Only one required product module may be registered");
+        return;
+      }
+    }
+  }
   RegisteredModule registration;
   registration.module = std::move(module);
   registration.requirement = requirement;
@@ -264,6 +277,11 @@ Illumo::startModules()
 void
 Illumo::RequestTransition(std::unique_ptr<IModule> nextModule)
 {
+  if (nextModule == nullptr || m_pendingModuleTransition != nullptr) {
+    Logger::LogWarning("Module transition rejected: empty request or "
+                       "transition already pending");
+    return;
+  }
   m_pendingModuleTransition = std::move(nextModule);
 }
 
@@ -309,6 +327,7 @@ Illumo::applyPendingModuleTransition()
   }
 
   bool accepted = false;
+  bool startThrew = false;
   try {
     accepted = nextModule && nextModule->Start(&m_context);
   } catch (const std::exception& exception) {
@@ -316,16 +335,18 @@ Illumo::applyPendingModuleTransition()
       std::string("A transitioned module threw during startup: ") +
       exception.what());
     accepted = false;
+    startThrew = true;
   } catch (...) {
     Logger::LogError("A transitioned module threw an unknown startup error");
     accepted = false;
+    startThrew = true;
   }
 
   if (!accepted) {
     Logger::LogError(
       "A transitioned required module failed to start; closing application");
     m_terminalCloseRequested = true;
-    if (nextModule) {
+    if (nextModule && startThrew) {
       try {
         nextModule->Exit();
       } catch (...) {

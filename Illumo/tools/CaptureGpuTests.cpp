@@ -502,6 +502,59 @@ main(int argc, char** argv)
     std::cerr << "Cubemap upload checks: " << cubes.error << '\n';
     ++failures;
   }
+  const FrameCaptureResult allocation = FrameCapture::render(
+    options, [](Renderer& renderer, Camera&, std::string& error) {
+      IBackend* backend = renderer.getBackend();
+      const unsigned char pixels[4] = { 255, 255, 255, 255 };
+      const TextureHandle texture =
+        backend->CreateTexture(pixels, 1, 1, 4, TextureOptions{});
+      GLint maximum = 0;
+      glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximum);
+      const TextureHandle oversized =
+        backend->CreateTexture(pixels, maximum + 1, 1, 4, TextureOptions{});
+      const TextureHandle invalidChannels =
+        backend->CreateTexture(pixels, 1, 1, 2, TextureOptions{});
+      const bool replaced =
+        backend->ReplaceTexture(texture, pixels, 1, 1, 2, TextureOptions{});
+      const MeshHandle mesh = renderer.enrollDynamicMesh(
+        16, nullptr, 0, MeshVertexLayout::Pos3Color4U8);
+      const MeshHandle empty = backend->CreateMesh(
+        nullptr, 0, nullptr, 0, MeshVertexLayout::Pos3Color4U8, true);
+      const bool replacedMesh = backend->ReplaceMesh(
+        mesh, nullptr, 0, nullptr, 0, MeshVertexLayout::Pos3Color4U8, true);
+      const bool valid = texture.isValid() && !oversized.isValid() &&
+                         !invalidChannels.isValid() && !replaced &&
+                         backend->IsTextureValid(texture) && mesh.isValid() &&
+                         !empty.isValid() && !replacedMesh &&
+                         backend->IsMeshValid(mesh);
+      if (mesh.isValid())
+        backend->DestroyMesh(mesh);
+      if (texture.isValid())
+        backend->DestroyTexture(texture);
+      if (!valid)
+        error =
+          "Invalid allocation published a handle or replaced a good resource";
+      return valid;
+    });
+  if (!allocation.success()) {
+    std::cerr << "Allocation validation checks: " << allocation.error << '\n';
+    ++failures;
+  }
+  const FrameCaptureResult vertexBounds = FrameCapture::render(
+    options, [](Renderer& renderer, Camera&, std::string&) {
+      const MeshHandle mesh = renderer.enrollDynamicMesh(
+        16, nullptr, 0, MeshVertexLayout::Pos3Color4U8);
+      const std::array<unsigned char, 17> bytes{};
+      renderer.pushUpdateBuffer(mesh, 0, 17, bytes.data());
+      renderer.SubmitOnly();
+      renderer.destroyMesh(mesh);
+      return true;
+    });
+  if (vertexBounds.success() ||
+      vertexBounds.error.find("vertex capacity") == std::string::npos) {
+    std::cerr << "Vertex bounds checks: " << vertexBounds.error << '\n';
+    ++failures;
+  }
   const FrameCaptureResult overflow = FrameCapture::render(
     options, [](Renderer& renderer, Camera&, std::string&) {
       for (int i = 0; i < 65537; ++i) {

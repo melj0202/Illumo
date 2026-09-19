@@ -172,8 +172,7 @@ static void
 testGameOfLifeAcrossToroidalSeams()
 {
   testSection("SparseCellGrid: Game of Life across toroidal seams");
-  LifeLikeRuleSet rules(
-    nullptr, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  LifeLikeRuleSet rules("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
 
   SparseCellGrid horizontal(2, 2);
   horizontal.setCell(CellAddress{ 15, 0 }, 0);
@@ -223,7 +222,7 @@ static void
 testWireworldAndDirectPublicationAcrossSeam()
 {
   testSection("SparseCellGrid: multi-state and dual-grid toroidal stepping");
-  WireworldRuleSet wireworld(nullptr);
+  WireworldRuleSet wireworld{};
   SparseCellGrid wire(2, 2);
   wire.setCell(CellAddress{ 15, 0 }, WireworldRuleSet::CELL_HEAD);
   wire.setCell(CellAddress{ -16, 0 }, WireworldRuleSet::CELL_CONDUCTOR);
@@ -237,7 +236,7 @@ testWireworldAndDirectPublicationAcrossSeam()
               WireworldRuleSet::CELL_TAIL,
               "wrapped head advances to tail");
 
-  LifeLikeRuleSet life(nullptr, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  LifeLikeRuleSet life("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   SparseCellGrid source(2, 2);
   source.setCell(CellAddress{ 15, 0 }, 0);
   source.setCell(CellAddress{ -16, 0 }, 0);
@@ -264,8 +263,7 @@ static void
 testFiniteSparseMicroBench()
 {
   testSection("SparseCellGrid: finite versus infinite sparse micro-benchmark");
-  LifeLikeRuleSet rules(
-    nullptr, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  LifeLikeRuleSet rules("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   SparseCellGrid finite(64, 64);
   SparseCellGrid infinite;
   for (int blockY = 0; blockY < 8; ++blockY) {

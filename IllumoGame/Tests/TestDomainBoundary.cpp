@@ -1,3 +1,4 @@
+#include "DenseRuleEvaluator.h"
 // Domain boundary tests: CellGrid + RuleSet without Renderer/window/camera.
 
 #include "Game/Canvas.h"
@@ -40,8 +41,9 @@ testGameOfLifeGenerationOnCellGrid()
   grid.setCanvasPixel(2, 2, 0);
   grid.setCanvasPixel(2, 3, 0);
 
-  LifeLikeRuleSet rules(&grid, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
-  rules.calcGeneration(0, 0, 5, 5);
+  LifeLikeRuleSet rules("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  DenseRuleEvaluator rulesDense(&grid, rules);
+  rulesDense.calcGeneration(0, 0, 5, 5);
 
   // After one step the blinker is horizontal through row 2.
   testEqUChar(g, grid.getCanvasPixel(1, 2), 0, "blinker left alive");
@@ -50,7 +52,7 @@ testGameOfLifeGenerationOnCellGrid()
   testEqUChar(g, grid.getCanvasPixel(2, 1), 1, "old top dead");
   testEqUChar(g, grid.getCanvasPixel(2, 3), 1, "old bottom dead");
 
-  rules.calcGeneration(0, 0, 5, 5);
+  rulesDense.calcGeneration(0, 0, 5, 5);
   testEqUChar(g, grid.getCanvasPixel(2, 1), 0, "blinker returns vertical top");
   testEqUChar(g, grid.getCanvasPixel(2, 2), 0, "blinker vertical mid");
   testEqUChar(g, grid.getCanvasPixel(2, 3), 0, "blinker vertical bottom");
@@ -71,8 +73,9 @@ testWireworldElectronOnCellGrid()
   }
   grid.setCanvasPixel(0, y, WireworldRuleSet::CELL_HEAD);
 
-  WireworldRuleSet rules(&grid);
-  rules.calcGeneration(0, 0, 8, 3);
+  WireworldRuleSet rules{};
+  DenseRuleEvaluator rulesDense(&grid, rules);
+  rulesDense.calcGeneration(0, 0, 8, 3);
 
   testEqUChar(g,
               grid.getCanvasPixel(0, y),
@@ -100,14 +103,14 @@ testCanvasDomainOnlyConstruction()
   testTrue(g, canvas.setCanvasPixel(1, 1, 0), "domain write");
   testEqUChar(g, canvas.getCanvasPixel(1, 1), 0, "domain read");
 
-  LifeLikeRuleSet rules(
-    &canvas, "GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  LifeLikeRuleSet rules("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  DenseRuleEvaluator rulesDense(&canvas, rules);
   // Still life block.
   canvas.setCanvasPixel(1, 1, 0);
   canvas.setCanvasPixel(1, 2, 0);
   canvas.setCanvasPixel(2, 1, 0);
   canvas.setCanvasPixel(2, 2, 0);
-  rules.calcGeneration(0, 0, 4, 4);
+  rulesDense.calcGeneration(0, 0, 4, 4);
   testEqUChar(g, canvas.getCanvasPixel(1, 1), 0, "block stable");
   testEqUChar(g, canvas.getCanvasPixel(2, 2), 0, "block stable corner");
 }

@@ -1,3 +1,4 @@
+#include "DenseRuleEvaluator.h"
 // Simulation performance and generation-path correctness tests.
 
 #include "Game/Canvas.h"
@@ -81,13 +82,13 @@ testDoubleBufferAndStillLife()
   canvas.onTargetsRebuilt();
   testTrue(g, !canvas.isCellsDirty(), "targets rebuilt clears life dirty");
 
-  LifeLikeRuleSet rules(&canvas);
-  RuleSet::setWorkerOverride(1);
-  rules.calcGeneration(0, 0, 8, 8);
+  LifeLikeRuleSet rules{};
+  DenseRuleEvaluator rulesDense(&canvas, rules);
+  rulesDense.setWorkerOverride(1);
+  rulesDense.calcGeneration(0, 0, 8, 8);
   testTrue(g, !canvas.isCellsDirty(), "still life leaves cells clean");
   testEqUChar(g, canvas.getCanvasPixel(3, 3), 0, "block stable TL");
   testEqUChar(g, canvas.getCanvasPixel(4, 4), 0, "block stable BR");
-  RuleSet::setWorkerOverride(0);
 }
 
 static void
@@ -102,9 +103,10 @@ testDirtyAabbTightness()
   canvas.setCanvasPixel(8, 9, 0);
   canvas.onTargetsRebuilt();
 
-  LifeLikeRuleSet rules(&canvas);
-  RuleSet::setWorkerOverride(1);
-  rules.calcGeneration(0, 0, 16, 16);
+  LifeLikeRuleSet rules{};
+  DenseRuleEvaluator rulesDense(&canvas, rules);
+  rulesDense.setWorkerOverride(1);
+  rulesDense.calcGeneration(0, 0, 16, 16);
   testTrue(g, canvas.isCellsDirty(), "blinker step dirties");
   testTrue(g, canvas.hasCellsDirtyRegion(), "dirty region valid");
   const DirtyRect& r = canvas.getCellsDirtyRegion();
@@ -113,7 +115,6 @@ testDirtyAabbTightness()
   testTrue(g, r.minX >= 6 && r.maxX <= 10, "dirty X bounded near blinker");
   testTrue(g, r.minY >= 6 && r.maxY <= 10, "dirty Y bounded near blinker");
   testTrue(g, r.width() * r.height() < 16 * 16, "dirty smaller than full grid");
-  RuleSet::setWorkerOverride(0);
 }
 
 static void
@@ -127,9 +128,10 @@ testToroidalEdge()
   grid.setCanvasPixel(1, 2, 0);
   grid.setCanvasPixel(4, 2, 0);
 
-  LifeLikeRuleSet rules(&grid);
-  RuleSet::setWorkerOverride(1);
-  rules.calcGeneration(0, 0, 5, 5);
+  LifeLikeRuleSet rules{};
+  DenseRuleEvaluator rulesDense(&grid, rules);
+  rulesDense.setWorkerOverride(1);
+  rulesDense.calcGeneration(0, 0, 5, 5);
   // Neighbors of (0,1)/(0,3) etc. — just ensure we did not crash and grid is
   // still readable; a vertical neighbor of the wrap trio should see 3.
   // Cell (0,1): neighbors include (0,2)(1,2)(4,2) along bottom of its Moore set
@@ -144,7 +146,6 @@ testToroidalEdge()
     }
   }
   testTrue(g, alive > 0, "toroidal generation produced live cells");
-  RuleSet::setWorkerOverride(0);
 }
 
 static void
@@ -159,19 +160,21 @@ testSerialParallelIdentical()
   seedRandom(serialGrid, 42u);
   const std::vector<unsigned char> start = snapshot(serialGrid);
 
-  LifeLikeRuleSet serialRules(&serialGrid);
-  RuleSet::setWorkerOverride(1);
+  LifeLikeRuleSet serialRules{};
+  DenseRuleEvaluator serialRulesDense(&serialGrid, serialRules);
+  serialRulesDense.setWorkerOverride(1);
   for (int i = 0; i < gens; ++i) {
-    serialRules.calcGeneration(0, 0, w, h);
+    serialRulesDense.calcGeneration(0, 0, w, h);
   }
   const std::vector<unsigned char> serialResult = snapshot(serialGrid);
 
   CellGrid parallelGrid(w, h);
   std::memcpy(parallelGrid.lifeCanvas, start.data(), start.size());
-  LifeLikeRuleSet parallelRules(&parallelGrid);
-  RuleSet::setWorkerOverride(4);
+  LifeLikeRuleSet parallelRules{};
+  DenseRuleEvaluator parallelRulesDense(&parallelGrid, parallelRules);
+  parallelRulesDense.setWorkerOverride(4);
   for (int i = 0; i < gens; ++i) {
-    parallelRules.calcGeneration(0, 0, w, h);
+    parallelRulesDense.calcGeneration(0, 0, w, h);
   }
   const std::vector<unsigned char> parallelResult = snapshot(parallelGrid);
 
@@ -181,7 +184,6 @@ testSerialParallelIdentical()
                          parallelResult.data(),
                          serialResult.size()) == 0,
            "serial == parallel after N gens");
-  RuleSet::setWorkerOverride(0);
 }
 
 static double
@@ -189,19 +191,19 @@ benchGensPerSecond(int width, int height, int generations, unsigned seed)
 {
   CellGrid grid(width, height);
   seedRandom(grid, seed);
-  LifeLikeRuleSet rules(&grid);
-  RuleSet::setWorkerOverride(1);
+  LifeLikeRuleSet rules{};
+  DenseRuleEvaluator rulesDense(&grid, rules);
+  rulesDense.setWorkerOverride(1);
 
   // Warmup
-  rules.calcGeneration(0, 0, width, height);
+  rulesDense.calcGeneration(0, 0, width, height);
 
   const auto t0 = std::chrono::steady_clock::now();
   for (int i = 0; i < generations; ++i) {
-    rules.calcGeneration(0, 0, width, height);
+    rulesDense.calcGeneration(0, 0, width, height);
   }
   const auto t1 = std::chrono::steady_clock::now();
   const double seconds = std::chrono::duration<double>(t1 - t0).count();
-  RuleSet::setWorkerOverride(0);
   if (seconds <= 0.0) {
     return 0.0;
   }
@@ -296,7 +298,7 @@ benchSparseGensPerSecond(int chunksPerSide,
 {
   SparseCellGrid grid;
   seedSparseBenchmark(&grid, chunksPerSide, 101u);
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid::setWorkerOverrideForTesting(workers);
   SparseCellGrid::setCellCandidateOverrideForTesting(-1);
   SparseCellGrid::setChunkMemoOverrideForTesting(memoMode);
@@ -332,7 +334,7 @@ benchSparseWideGensPerSecond(int colonyCount,
 {
   SparseCellGrid grid;
   seedSparseWideBlinkers(&grid, colonyCount);
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid::setWorkerOverrideForTesting(workers);
   SparseCellGrid::setCellCandidateOverrideForTesting(candidateMode);
   SparseCellGrid::setChunkNodeReuseOverrideForTesting(reuseChunkNodes);
@@ -369,7 +371,7 @@ benchSparseFrontierGensPerSecond(int blockCount,
 {
   SparseCellGrid grid;
   seedSparseStableBlocksAndBlinker(&grid, blockCount);
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid::setWorkerOverrideForTesting(1);
   SparseCellGrid::setCellCandidateOverrideForTesting(candidateMode);
 
@@ -426,7 +428,7 @@ benchRepeatedDenseGensPerSecond(int chunkCount,
 {
   SparseCellGrid grid;
   seedRepeatedDenseChunks(&grid, chunkCount);
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid::setWorkerOverrideForTesting(4);
   SparseCellGrid::setCellCandidateOverrideForTesting(-1);
   SparseCellGrid::setChunkMemoOverrideForTesting(memoMode);
@@ -465,7 +467,7 @@ benchWireworldConductorsGensPerSecond(int chunksPerSide,
       grid.assignChunk(record);
     }
   }
-  WireworldRuleSet rules(nullptr);
+  WireworldRuleSet rules{};
   SparseCellGrid::setWorkerOverrideForTesting(1);
   SparseCellGrid::setCellCandidateOverrideForTesting(candidateMode);
 
@@ -511,28 +513,28 @@ testMicroBenchReport()
     const int dim = 512;
     CellGrid grid(dim, dim);
     seedRandom(grid, 11u);
-    LifeLikeRuleSet rules(&grid);
+    LifeLikeRuleSet rules{};
+    DenseRuleEvaluator rulesDense(&grid, rules);
     const int gens = 12;
 
-    RuleSet::setWorkerOverride(1);
-    rules.calcGeneration(0, 0, dim, dim);
+    rulesDense.setWorkerOverride(1);
+    rulesDense.calcGeneration(0, 0, dim, dim);
     auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < gens; ++i) {
-      rules.calcGeneration(0, 0, dim, dim);
+      rulesDense.calcGeneration(0, 0, dim, dim);
     }
     auto t1 = std::chrono::steady_clock::now();
     const double serialSec = std::chrono::duration<double>(t1 - t0).count();
 
     seedRandom(grid, 11u);
-    RuleSet::setWorkerOverride(4);
-    rules.calcGeneration(0, 0, dim, dim);
+    rulesDense.setWorkerOverride(4);
+    rulesDense.calcGeneration(0, 0, dim, dim);
     t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < gens; ++i) {
-      rules.calcGeneration(0, 0, dim, dim);
+      rulesDense.calcGeneration(0, 0, dim, dim);
     }
     t1 = std::chrono::steady_clock::now();
     const double parallelSec = std::chrono::duration<double>(t1 - t0).count();
-    RuleSet::setWorkerOverride(0);
 
     const double serialGps =
       serialSec > 0.0 ? static_cast<double>(gens) / serialSec : 0.0;
@@ -557,10 +559,11 @@ testMicroBenchReport()
   {
     CellGrid grid(80, 60);
     seedGlider(grid, 10, 10);
-    LifeLikeRuleSet rules(&grid);
-    RuleSet::setWorkerOverride(1);
+    LifeLikeRuleSet rules{};
+    DenseRuleEvaluator rulesDense(&grid, rules);
+    rulesDense.setWorkerOverride(1);
     for (int i = 0; i < 4; ++i) {
-      rules.calcGeneration(0, 0, 80, 60);
+      rulesDense.calcGeneration(0, 0, 80, 60);
     }
     int alive = 0;
     for (int y = 0; y < 60; ++y) {
@@ -571,7 +574,6 @@ testMicroBenchReport()
       }
     }
     testEqInt(g, alive, 5, "glider still has 5 live cells after 4 gens");
-    RuleSet::setWorkerOverride(0);
   }
 }
 
@@ -801,7 +803,7 @@ testSparseMicroBenchReport()
     const int denseGenerations = 12;
     SparseCellGrid grid;
     seedSparseBenchmark(&grid, denseChunksPerSide, 303u);
-    LifeLikeRuleSet rules(nullptr);
+    LifeLikeRuleSet rules{};
     SparseCellGrid::setWorkerOverrideForTesting(4);
     SparseCellGrid::setCellCandidateOverrideForTesting(0);
     grid.advance(rules);
@@ -861,7 +863,7 @@ testSparseMicroBenchReport()
     SparseCellGrid asyncPublished;
     SparseCellGrid asyncWorking;
     seedSparseBenchmark(&asyncPublished, denseChunksPerSide, 303u);
-    LifeLikeRuleSet asyncRules(nullptr);
+    LifeLikeRuleSet asyncRules{};
     SimulationRunner runner;
     SparseGenerationDelta mirrorDelta;
     bool mirrorDeltaValid = false;
@@ -1075,7 +1077,7 @@ static void
 testFrameLatencyBenchReport()
 {
   testSection("Sim: warmed frame-latency report (informational)");
-  LifeLikeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid::setWorkerOverrideForTesting(0);
   SparseCellGrid::setCellCandidateOverrideForTesting(0);
 
@@ -1108,13 +1110,11 @@ static int
 runSimCase(void (*testFunction)())
 {
   g.failures = 0;
-  RuleSet::setWorkerOverride(0);
   SparseCellGrid::setWorkerOverrideForTesting(0);
   SparseCellGrid::setCellCandidateOverrideForTesting(0);
   SparseCellGrid::setChunkNodeReuseOverrideForTesting(true);
   SparseCellGrid::setChunkMemoOverrideForTesting(0);
   testFunction();
-  RuleSet::setWorkerOverride(0);
   SparseCellGrid::setWorkerOverrideForTesting(0);
   SparseCellGrid::setCellCandidateOverrideForTesting(0);
   SparseCellGrid::setChunkNodeReuseOverrideForTesting(true);

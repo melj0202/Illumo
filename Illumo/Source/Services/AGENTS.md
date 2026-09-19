@@ -6,14 +6,13 @@ This file specializes the repository `AGENTS.md` for
 ## Scope and boundaries
 
 Services provides input collection, console editing and command dispatch,
-logging, environment persistence, command-line parsing, allocator utilities,
-and the platform save/load declarations. Services must remain reusable by
+logging, environment persistence, command-line parsing, and allocator utilities. Services must remain reusable by
 Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
 
 - General console commands belong in `CommandLine`; domain commands are
   registered by their owning module through `CommandRegistry`.
-- Native dialogs and filesystem UI belong in `Platform/`; Services owns only
-  the cross-platform declaration and orchestration contract.
+- Native dialogs, filesystem UI, and the public `SaveLoad` contract belong in
+  `Platform/`; product modules own persistence orchestration.
 - Use backend-neutral Rendering types for console drawables.
 
 ## Ownership, lifetime, and concurrency

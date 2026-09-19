@@ -468,46 +468,36 @@ assumed away.
 
 ### 5.7 Extraction snapshot and the renderer seam
 
-Extraction runs **once** per frame and produces:
+Extraction publishes once per renderer frame into two graph-owned reusable
+snapshot buffers. The current public records are:
 
 ```cpp
-struct SceneRenderItem
-{
+struct SceneRenderItem {
   Matrix4 worldTransform;
   AxisAlignedBounds3 worldBounds;
   ISceneRenderAttachment* attachment;
-  uint32_t nodeIndex;
-  uint32_t flags;   // boundsValid, cameraVisible, shadowRelevant
+  SceneNodeHandle node;
+  bool boundsValid;
+  bool cameraVisible;
 };
-
-struct SceneSnapshot
-{
-  uint64_t graphId;
-  uint64_t frameSerial;
-  uint32_t structuralRevision;
-  std::vector<SceneRenderItem> items;   // compiled pre-order, culled
+struct SceneSnapshot {
+  uint64_t graphId, frameSerial, structuralRevision, publication;
+  std::vector<SceneRenderItem> items;
 };
 ```
 
-The graph owns a ring of two or three snapshot buffers and reuses their
-capacity, so steady state allocates nothing (E4). `SceneGraphDrawable` — a new
-small `DrawableBase` that holds a snapshot reference — implements
-`CollectShadowCasters`, `AppendShadowCommands`, and `AppendCommands` by
-iterating the *same* snapshot with different flag masks. Three traversals
-collapse to one (E3), and the two culling evaluations collapse to one, with
-camera and shadow relevance recorded as flags during the single pass.
+Items retain compiled preorder and include camera-invisible potential shadow
+casters. SceneGraphDrawable borrows the graph and validates one view for
+collection, depth and color. Color uses cameraVisible; depth evaluates snapshot
+bounds against the Renderer-owned fitted light volume after caster collection.
+Shadow relevance is not an extraction-time flag. Snapshot buffer capacity is
+reused; memory depends on actual record size and retained item capacity in both
+buffers rather than a culled-only or triple-buffer estimate.
 
-Splitting `SceneGraph` from `DrawableBase` is a deliberate correction. In v1 a
-graph *is* a drawable, which conflates world state with a frame-list entry and
-is why mutation must be rejected during rendering. In v2 the graph produces
-snapshots and the adapter renders them, so the `renderTraversalActive` guard
-narrows to the extraction call itself and the renderer never touches graph
-storage (E9).
-
-Snapshot memory is the cost to state plainly: at 100k items, roughly
-64 + 24 + 8 + 8 bytes each is about 10.4 MB per buffer, so a triple ring is
-~31 MB. A two-buffer ring and culled-only items keep this well under that in
-practice, but the number belongs in the decision record.
+The extraction guard also protects direct emission, bounds polling and queries.
+Ordinary transform/hierarchy changes and attachment additions preserve captured
+values; removal, replacement, explicit content invalidation, graph destruction
+and ring-slot reuse expire views. Check validity before every attachment callback.
 
 ### 5.8 Parallelism, and what it actually requires
 

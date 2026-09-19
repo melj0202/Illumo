@@ -27,6 +27,11 @@ public:
               IRenderWindow* win,
               Renderer* renderer = nullptr,
               const std::string& applicationName = "Illumo");
+  ~CommandLine() override;
+  CommandLine(const CommandLine&) = delete;
+  CommandLine& operator=(const CommandLine&) = delete;
+  CommandLine(CommandLine&&) = delete;
+  CommandLine& operator=(CommandLine&&) = delete;
 
   void Toggle();
   void ScrollUp();
@@ -145,6 +150,7 @@ private:
   static const unsigned int kUiVertCap = kUiQuadCap * 4;
 
   void enrollGpuResources();
+  void unregisterConsoleCommands();
   void rebuildWrapCache(float width) const;
   void ensureWrapCache(float width) const;
   PanelLayout computePanelLayout(bool useSmoothedPanel) const;

@@ -24,10 +24,7 @@ DebugModule::DebugModule(FrameProfiler* profiler)
 {
 }
 
-DebugModule::~DebugModule()
-{
-  Exit();
-}
+DebugModule::~DebugModule() = default;
 
 bool
 DebugModule::Start(IllumoContext* context)

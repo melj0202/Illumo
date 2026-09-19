@@ -4,6 +4,8 @@
 #include "Rulesets/RuleSet.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Platform/AtomicFile.h>
+#include <filesystem>
+#include <system_error>
 
 #include <algorithm>
 #include <cctype>
@@ -58,7 +60,7 @@ bool
 IllumoCodec::writeFile(const std::string& path,
                        const IllumoDocument& document,
                        std::string* error)
-{
+try {
   if (path.empty()) {
     setError(error, "Save path is empty");
     return false;
@@ -105,7 +107,7 @@ IllumoCodec::writeFile(const std::string& path,
   }
 
   return AtomicFile::write(
-    path,
+    std::filesystem::path(std::u8string(path.begin(), path.end())),
     [&document, &records](std::ostream& file, std::string*) {
       const char magic[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '4', '\0' };
       const std::uint32_t version = 4;
@@ -153,13 +155,16 @@ IllumoCodec::writeFile(const std::string& path,
       return file.good();
     },
     error);
+} catch (const std::system_error&) {
+  setError(error, "Invalid or inaccessible UTF-8 file path");
+  return false;
 }
 
 bool
 IllumoCodec::readFile(const std::string& path,
                       IllumoDocument* document,
                       std::string* error)
-{
+try {
   if (document == nullptr) {
     setError(error, "Document pointer is null");
     return false;
@@ -169,7 +174,9 @@ IllumoCodec::readFile(const std::string& path,
     return false;
   }
 
-  std::ifstream file(path, std::ios::binary);
+  std::ifstream file(
+    std::filesystem::path(std::u8string(path.begin(), path.end())),
+    std::ios::binary);
   if (!file.is_open()) {
     setError(error, "Failed to open for loading: " + path);
     return false;
@@ -377,4 +384,7 @@ IllumoCodec::readFile(const std::string& path,
   document->worldChunkHeight = loadedWorldChunkHeight;
   document->grid = std::move(loadedGrid);
   return true;
+} catch (const std::system_error&) {
+  setError(error, "Invalid or inaccessible UTF-8 file path");
+  return false;
 }

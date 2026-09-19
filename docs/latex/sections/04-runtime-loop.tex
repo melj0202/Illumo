@@ -21,7 +21,7 @@ FPS and memory visibility remain independent. See
 \subsection{Illumo application runtime}
 \pathref{Illumo/Source/Engine/Application.cpp} owns logger lifetime, argument
 parsing mechanics, module registration, the frame loop, and the explicit
-process exit code. IllumoGame supplies only declarative game metadata and
+process exit code. IllumoGame, IllEd, and IllMeshViewer supply declarative product metadata and
 callbacks through \symbolref{IllumoApplicationDefinition}:
 \begin{lstlisting}
 int RunIllumoApplication(int argc, char** argv,
@@ -34,7 +34,7 @@ int RunIllumoApplication(int argc, char** argv,
     return /* requested exit code */;
   if (!illumo.initialize()) return 1;
   illumo.addModule(application.createRequiredModule(&illumo.environment()), Required);
-  illumo.addModule(make_unique<DebugModule>(), Optional); // Debug only
+  illumo.addModule(make_unique<DebugModule>(), Optional); // Debug / RelWithDebInfo
   if (!illumo.startModules()) return 1;
   while (!illumo.shouldClose()) {
     illumo.update(/* steady_clock delta */);
@@ -44,7 +44,7 @@ int RunIllumoApplication(int argc, char** argv,
   return 0;
 }
 \end{lstlisting}
-The engine-owned platform entry obtains the game definition from
+The engine-owned platform entry obtains the product definition from
 \symbolref{CreateIllumoApplication} and invokes this runner. No loop decision
 depends directly on GLFW. Help/version and validation may return before
 graphics initialization.
@@ -61,10 +61,10 @@ initial required module (\symbolref{MainMenuModule} by default, or
 \symbolref{Renderer}, \symbolref{AssetManager}, \symbolref{CommandRegistry},
 \symbolref{CommandLine}, \symbolref{InputManager}, \symbolref{Scene}) and its
 registered modules. \symbolref{IllumoConfig} carries only the application name,
-configuration-file path, and injectable factories.
+configuration-file path. Test-only access injects the host's private window and backend factories.
 
-Construction loads generic host defaults. The runner then invokes IllumoGame's
-CA-default callback and feeds its option descriptors to engine-owned
+Construction loads generic host defaults. The runner then invokes the product's
+defaults callback and feeds its option descriptors to engine-owned
 \symbolref{SysCmdLine} before fallible initialization. The window and backend
 factories report failure; Illumo owns exactly one backend initialization attempt
 and transfers the resulting \texttt{std::unique\_ptr<IBackend>} to the renderer.
@@ -110,8 +110,8 @@ startup. Exceptions from Start or Exit are contained, logged, and do not stop
 remaining rollback attempts. At runtime, the active required module can request
 transition to another module via \symbolref{IModuleHost::RequestTransition}, which
 exits the current module, purges input event queues, clears scene drawables, and
-starts the incoming module. The engine runner registers the game-supplied initial
-module as required and engine-owned Debug-build \symbolref{DebugModule} as optional.
+starts the incoming module. The engine runner registers the product-supplied initial
+module as required and engine-owned Debug/RelWithDebInfo \symbolref{DebugModule} as optional.
 Optional overlays update before the required product module so console input is
 global, then dispatch after it so console, FPS, and renderer-demo drawables sit
 on top. Unconsumed key and character events are discarded at the end of each
@@ -189,3 +189,8 @@ manager-local IDs. Invalid activation preserves selection; active retirement
 selects neutral input. CellGameModule releases its registration on Exit and
 rejects exhausted startup before allocating domain state. Repeated module entry
 must not consume permanent input slots.
+
+Registration accepts at most one required module and closes when startup completes.
+The first pending non-null transition is retained; later requests log rejection.
+Destructors do not invoke module lifecycle callbacks. Dense compatibility tests
+are independent of this product-neutral runtime.

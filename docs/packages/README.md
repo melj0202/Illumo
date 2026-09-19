@@ -18,7 +18,6 @@ documentation, not build inputs.
 | `assets.md` | Illumo runtime files and product configuration staging |
 | `platform.md` | Illumo platform contract and port map |
 | `platform-linux.md` | Linux port status, packages, build, and smoke |
-| `platform-macos.md` | macOS scaffold status |
 | `tests.md` | Split test ownership and aggregate workflow |
 
 The canonical architecture remains `../architecture-consensus.md`. Operational

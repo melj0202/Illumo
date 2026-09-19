@@ -1104,8 +1104,7 @@ RulesetWorkshopMenu::refreshPreview()
     previewText = "invalid draft";
     return;
   }
-  std::unique_ptr<RuleSet> rule =
-    previewRegistry.createRuleSet(draft.id, nullptr);
+  std::unique_ptr<RuleSet> rule = previewRegistry.createRuleSet(draft.id);
   if (rule == nullptr) {
     previewText = "preview unavailable";
     return;

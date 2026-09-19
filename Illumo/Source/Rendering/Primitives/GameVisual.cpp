@@ -78,7 +78,7 @@ GameVisual::GameVisual(unsigned int maxQuads)
 
 GameVisual::~GameVisual()
 {
-  if (renderer != nullptr) {
+  if (renderer != nullptr && !rendererLifetime.expired()) {
     if (shapeMeshHandle.isValid()) {
       renderer->destroyMesh(shapeMeshHandle);
     }
@@ -92,7 +92,15 @@ GameVisual::~GameVisual()
 void
 GameVisual::setRenderer(Renderer* value)
 {
+  if (renderer != nullptr &&
+      (renderer != value || rendererLifetime.expired())) {
+    Logger::LogError("GameVisual cannot change its resource-owning renderer");
+    return;
+  }
   renderer = value;
+  if (renderer != nullptr) {
+    rendererLifetime = renderer->getLifetimeIdentity();
+  }
   if (!gpuReady && renderer != nullptr) {
     enrollGpuResources();
   }
@@ -149,10 +157,7 @@ GameVisual::clearPixelClipRect()
 void
 GameVisual::prepare(Renderer* value)
 {
-  if (value != nullptr) {
-    renderer = value;
-  }
-  enrollGpuResources();
+  setRenderer(value);
 }
 
 void
@@ -430,6 +435,16 @@ GameVisual::enrollGpuResources()
                                 indices.size() * sizeof(unsigned int),
                                 MeshVertexLayout::Pos3Color4U8Uv2);
   gpuReady = shapeMeshHandle.isValid() && spriteMeshHandle.isValid();
+  if (!gpuReady) {
+    if (shapeMeshHandle.isValid()) {
+      renderer->destroyMesh(shapeMeshHandle);
+    }
+    if (spriteMeshHandle.isValid()) {
+      renderer->destroyMesh(spriteMeshHandle);
+    }
+    shapeMeshHandle = {};
+    spriteMeshHandle = {};
+  }
   gpuQuadCapacity = gpuReady ? quadCapacity : 0;
   geometryDirty = true;
 }
@@ -441,6 +456,7 @@ GameVisual::ensureCpuCapacity(unsigned int required)
     return true;
   }
   if (required > maxQuadCount) {
+    geometryTruncated = true;
     if (!capacityWarningLogged) {
       capacityWarningLogged = true;
       Logger::LogWarning("GameVisual reached its configured quad safety limit");
@@ -892,6 +908,7 @@ GameVisual::appendBatch(BatchKind kind,
 void
 GameVisual::rebuildGeometry(const Rect2* cullRect)
 {
+  geometryTruncated = false;
   shapeQuadCount = 0;
   spriteQuadCount = 0;
   drawBatches.clear();
@@ -1043,11 +1060,17 @@ GameVisual::AppendCommands(Renderer* value)
   if (value == nullptr) {
     return false;
   }
-  if (!gpuReady) {
-    renderer = value;
-    enrollGpuResources();
+  if (renderer != nullptr &&
+      (renderer != value || rendererLifetime.expired())) {
+    value->reportFrameError(
+      "GameVisual used with a foreign or expired renderer");
+    return false;
   }
   if (!gpuReady) {
+    setRenderer(value);
+  }
+  if (!gpuReady) {
+    value->reportFrameError("GameVisual mesh enrollment failed");
     return false;
   }
   const Renderer::FrameContext& frameContext = value->getFrameContext();
@@ -1085,27 +1108,30 @@ GameVisual::AppendCommands(Renderer* value)
     rebuildGeometry(cullRect);
   }
   if (!ensureGpuCapacity()) {
+    value->reportFrameError("GameVisual mesh capacity update failed");
     return false;
+  }
+  if (geometryTruncated) {
+    value->reportFrameError(
+      "GameVisual geometry exceeded its quad safety limit");
   }
   if (drawBatches.empty()) {
     return true;
   }
 
   if (shapeUploadPending) {
-    value->pushUpdateBuffer(
+    shapeUploadPending = !value->pushUpdateBuffer(
       shapeMeshHandle,
       0,
       static_cast<unsigned int>(shapeQuadCount * 4 * sizeof(ShapeVertex)),
       shapeVerts.data());
-    shapeUploadPending = false;
   }
   if (spriteUploadPending) {
-    value->pushUpdateBuffer(
+    spriteUploadPending = !value->pushUpdateBuffer(
       spriteMeshHandle,
       0,
       static_cast<unsigned int>(spriteQuadCount * 4 * sizeof(SpriteVertex)),
       spriteVerts.data());
-    spriteUploadPending = false;
   }
 
   float mvp[16] = {

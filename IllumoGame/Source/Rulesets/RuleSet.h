@@ -5,15 +5,9 @@
 #include <cstdint>
 #include <string>
 
-class CellGrid;
-
 constexpr auto MAX_RULETAG_SIZE = 128;
 
-// Base cellular-automaton ruleset.
-// Generation is double-buffered on CellGrid: neighbors are read from the
-// front lifeCanvas, next states are written to lifeCanvasBack, then buffers
-// are swapped (D-P5). Operates only on CellGrid domain storage — no
-// Renderer / OpenGL.
+// Pure transition and palette contract, independent of storage and scheduling.
 class RuleSet
 {
 public:
@@ -41,23 +35,13 @@ public:
     Circular
   };
 
-  CellGrid* canvas;
-
-  RuleSet(CellGrid* targetCanvas);
+  RuleSet() = default;
 
 protected:
-  RuleSet(CellGrid* targetCanvas,
-          const TransitionTable& precompiledTransitions);
+  explicit RuleSet(const TransitionTable& precompiledTransitions);
 
 public:
   virtual ~RuleSet() = default;
-
-  // Advance one generation over the full canvas (rect args kept for API
-  // compatibility; toroidal full-grid is always evaluated).
-  void calcGeneration(const int& x_start,
-                      const int& y_start,
-                      const int& x_end,
-                      const int& y_end) const;
 
   // Map logical cell value → RGB display color.
   virtual void evalCell(const unsigned char& target,
@@ -82,12 +66,6 @@ public:
   {
     return state < getStateCount();
   }
-
-  // Worker count for calcGeneration: 0 = auto (size threshold + HW), 1 =
-  // force serial, N = force up to N workers. Used by tests and optional
-  // parallel path (D-P7).
-  static void setWorkerOverride(int workers);
-  static int getWorkerOverride();
 
   // Pure transition: old cell + Moore neighbor count of *alive* (value==0)
   // cells. Does not write the canvas. Public so sparse / alternate domains can
@@ -170,42 +148,8 @@ protected:
     transitionRevision += 1u;
   }
 
-  // Toroidal Moore count of cells with value 0 (project "alive" encoding).
-  static int countAliveNeighbors(const unsigned char* grid,
-                                 int w,
-                                 int h,
-                                 int x,
-                                 int y);
-
-  // Interior Moore count (no wrap). Requires 0 < x < w-1 and 0 < y < h-1.
-  static int countAliveNeighborsInterior(const unsigned char* grid,
-                                         int w,
-                                         int x,
-                                         int y);
-
 private:
-  // Auto-parallel threshold: grids at or above this cell count may use
-  // multiple workers when override is 0. Kept high enough that per-generation
-  // thread spawn is amortized (256² is still spawn-bound on typical CPUs).
-  static constexpr int kParallelCellThreshold = 512 * 512;
-
-  static int workerOverride;
   mutable TransitionTable transitionTable{};
   mutable bool transitionTableReady = false;
   mutable std::uint64_t transitionRevision = 0u;
-
-  void evalRows(const unsigned char* src,
-                unsigned char* dst,
-                const unsigned char* transitions,
-                int width,
-                int height,
-                int yBegin,
-                int yEnd,
-                int* outMinX,
-                int* outMinY,
-                int* outMaxX,
-                int* outMaxY,
-                bool* outAnyChange) const;
-
-  int resolveWorkerCount(int width, int height) const;
 };

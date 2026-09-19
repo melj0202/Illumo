@@ -2,6 +2,8 @@
 
 #include <string>
 
+// Specification strings and returned filesystem paths use UTF-8.
+// Cancellation or failure returns an empty path.
 struct SaveLoadDialogSpec
 {
   std::string fileDescription{ "Illumo File Format" };

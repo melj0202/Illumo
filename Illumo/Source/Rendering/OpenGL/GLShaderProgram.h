@@ -33,7 +33,7 @@ public:
     // Do nothing. asset destruction should be explicit
   }
 
-  unsigned long GetID() const override { return _programID; }
+  unsigned long GetID() const { return _programID; }
   bool isValid() const override { return _valid && _programID != 0; }
 
   GLint GetUniformLocation(const char* name)
@@ -66,6 +66,9 @@ public:
   }
 
 private:
+  unsigned int _programID;
+  unsigned int _vertexShadeID;
+  unsigned int _fragmentShaderID;
   struct TransparentStringHash
   {
     using is_transparent = void;

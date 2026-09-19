@@ -436,176 +436,65 @@ bool
 CommandLineCore::parseArgsInto(const std::string& text,
                                std::vector<std::string>& outArgs) const
 {
-  outArgs.clear();
-  std::string currentArg;
-  char quote = '\0';
-  bool escaping = false;
-  bool tokenStarted = false;
-  bool arenaOk = true;
-
-  auto flushToken = [&]() {
-    if (!tokenStarted && currentArg.empty()) {
-      return;
-    }
-    char* staged = parseArena.AllocateCString(currentArg);
-    if (staged != nullptr) {
-      outArgs.push_back(std::string(staged));
-    } else {
-      arenaOk = false;
-      outArgs.push_back(currentArg);
-    }
-    currentArg.clear();
-    tokenStarted = false;
-  };
-
-  for (char character : text) {
-    if (escaping) {
-      currentArg += character;
-      escaping = false;
-      tokenStarted = true;
-      continue;
-    }
-    if (character == '\\') {
-      escaping = true;
-      tokenStarted = true;
-      continue;
-    }
-    if (quote != '\0') {
-      if (character == quote) {
-        quote = '\0';
-      } else {
-        currentArg += character;
-      }
-      tokenStarted = true;
-      continue;
-    }
-    if (character == '\'' || character == '"') {
-      quote = character;
-      tokenStarted = true;
-      continue;
-    }
-    if (character == ' ' || character == '\t') {
-      flushToken();
-      continue;
-    }
-    currentArg += character;
-    tokenStarted = true;
-  }
-  flushToken();
-  return arenaOk;
+  outArgs = ParseCommandArgs(text, " \t");
+  return true;
 }
 
 bool
 CommandLineCore::splitChainInto(const std::string& text,
                                 std::vector<std::string>& outCommands) const
 {
-  outCommands.clear();
-  std::string currentCmd;
-  char quote = '\0';
-  bool escaping = false;
-  bool arenaOk = true;
-
-  auto flushCommand = [&]() {
-    std::size_t firstNonSpace = currentCmd.find_first_not_of(" \t\r\n");
-    if (firstNonSpace == std::string::npos) {
-      currentCmd.clear();
-      return;
-    }
-    char* staged = parseArena.AllocateCString(currentCmd);
-    if (staged != nullptr) {
-      outCommands.push_back(std::string(staged));
-    } else {
-      arenaOk = false;
-      outCommands.push_back(currentCmd);
-    }
-    currentCmd.clear();
-  };
-
-  for (std::size_t i = 0; i < text.size(); ++i) {
-    char character = text[i];
-    if (escaping) {
-      currentCmd += character;
-      escaping = false;
-      continue;
-    }
-    if (character == '\\') {
-      escaping = true;
-      currentCmd += character;
-      continue;
-    }
-    if (quote != '\0') {
-      if (character == quote) {
-        quote = '\0';
-      }
-      currentCmd += character;
-      continue;
-    }
-    if (character == '\'' || character == '"') {
-      quote = character;
-      currentCmd += character;
-      continue;
-    }
-    if (character == ';') {
-      flushCommand();
-      continue;
-    }
-    currentCmd += character;
-  }
-  flushCommand();
-  return arenaOk;
+  outCommands = SplitCommandChain(text);
+  return true;
 }
 
 std::vector<std::string>
 CommandLineCore::ParseCommandArgs(const std::string& text,
                                   const std::string& delim) const
 {
-  (void)delim;
   std::vector<std::string> args;
   std::string currentArg;
   char quote = '\0';
-  bool escaping = false;
   bool tokenStarted = false;
-
-  for (char character : text) {
-    if (escaping) {
-      currentArg += character;
-      escaping = false;
-      tokenStarted = true;
-      continue;
-    }
-    if (character == '\\') {
-      escaping = true;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    const char character = text[i];
+    // Backslashes are path separators unless escaping console punctuation.
+    // Inside quotes, doubled matching quotes encode a literal quote so a
+    // trailing Windows separator never consumes the closing quote.
+    const bool windowsPath = (currentArg.size() > 1 && currentArg[1] == ':') ||
+                             currentArg.starts_with("\\\\");
+    if (character == '\\' && quote == '\0' && !windowsPath &&
+        i + 1 < text.size() &&
+        (delim.find(text[i + 1]) != std::string::npos || text[i + 1] == ';' ||
+         text[i + 1] == '\'' || text[i + 1] == '"')) {
+      currentArg += text[++i];
       tokenStarted = true;
       continue;
     }
     if (quote != '\0') {
       if (character == quote) {
-        quote = '\0';
+        if (i + 1 < text.size() && text[i + 1] == quote) {
+          currentArg += text[++i];
+        } else {
+          quote = '\0';
+        }
       } else {
         currentArg += character;
       }
       tokenStarted = true;
-      continue;
-    }
-    if (character == '\'' || character == '"') {
+    } else if (character == '\'' || character == '"') {
       quote = character;
       tokenStarted = true;
-      continue;
-    }
-    if (delim.find(character) != std::string::npos) {
+    } else if (delim.find(character) != std::string::npos) {
       if (tokenStarted) {
         args.push_back(currentArg);
         currentArg.clear();
         tokenStarted = false;
       }
-      continue;
+    } else {
+      currentArg += character;
+      tokenStarted = true;
     }
-    currentArg += character;
-    tokenStarted = true;
-  }
-
-  if (escaping) {
-    currentArg += '\\';
   }
   if (tokenStarted) {
     args.push_back(currentArg);
@@ -618,46 +507,50 @@ CommandLineCore::SplitCommandChain(const std::string& text) const
 {
   std::vector<std::string> commands;
   std::string currentCmd;
+  std::string token;
   char quote = '\0';
-  bool escaping = false;
-
   for (std::size_t i = 0; i < text.size(); ++i) {
-    char character = text[i];
-    if (escaping) {
+    const char character = text[i];
+    const bool windowsPath =
+      (token.size() > 1 && token[1] == ':') || token.starts_with("\\\\");
+    if (character == '\\' && quote == '\0' && !windowsPath &&
+        i + 1 < text.size() &&
+        (text[i + 1] == ';' || text[i + 1] == '\'' || text[i + 1] == '"' ||
+         text[i + 1] == ' ' || text[i + 1] == '\t')) {
       currentCmd += character;
-      escaping = false;
-      continue;
-    }
-    if (character == '\\') {
-      escaping = true;
-      currentCmd += character;
+      currentCmd += text[++i];
+      token += text[i];
       continue;
     }
     if (quote != '\0') {
       if (character == quote) {
+        if (i + 1 < text.size() && text[i + 1] == quote) {
+          currentCmd += character;
+          currentCmd += text[++i];
+          token += character;
+          continue;
+        }
         quote = '\0';
+      } else {
+        token += character;
       }
-      currentCmd += character;
-      continue;
-    }
-    if (character == '\'' || character == '"') {
+    } else if (character == '\'' || character == '"') {
       quote = character;
-      currentCmd += character;
-      continue;
-    }
-    if (character == ';') {
-      std::size_t firstNonSpace = currentCmd.find_first_not_of(" \t\r\n");
-      if (firstNonSpace != std::string::npos) {
+    } else if (character == ';') {
+      if (currentCmd.find_first_not_of(" \t\r\n") != std::string::npos) {
         commands.push_back(currentCmd);
       }
       currentCmd.clear();
+      token.clear();
       continue;
+    } else if (character == ' ' || character == '\t') {
+      token.clear();
+    } else {
+      token += character;
     }
     currentCmd += character;
   }
-
-  std::size_t firstNonSpace = currentCmd.find_first_not_of(" \t\r\n");
-  if (firstNonSpace != std::string::npos) {
+  if (currentCmd.find_first_not_of(" \t\r\n") != std::string::npos) {
     commands.push_back(currentCmd);
   }
   return commands;

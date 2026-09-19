@@ -1496,6 +1496,41 @@ testCommandLineFloatingModeAndDragging()
             "console_mode toggled to floating");
 }
 
+static void
+testCommandLineUnregistersConsoleCommands()
+{
+  testSection("CommandLine: this-capturing commands unregister on destruction");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  Camera camera(glm::vec2(1.0f, 1.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  CommandRegistry registry;
+  {
+    CommandLine console(&env, &registry, &window, &renderer);
+    testTrue(g,
+             registry.HasCommand("console_mode"),
+             "console_mode is registered while CommandLine is alive");
+    testTrue(g,
+             registry.HasCommand("console_size"),
+             "console_size is registered while CommandLine is alive");
+    testTrue(g,
+             registry.QueueCommand("console_mode", { "toggle" }),
+             "console_mode queues while CommandLine is alive");
+    testTrue(g,
+             registry.QueueCommand("console_size", { "reset" }),
+             "console_size queues while CommandLine is alive");
+  }
+  testTrue(g,
+           !registry.HasCommand("console_mode"),
+           "console_mode is unregistered after CommandLine destruction");
+  testTrue(g,
+           !registry.HasCommand("console_size"),
+           "console_size is unregistered after CommandLine destruction");
+  registry.ExecuteQueue();
+}
+
 void
 registerUITokenTests(IllumoTestRegistry& registry)
 {
@@ -1568,5 +1603,8 @@ registerUITokenTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.CommandLine.FloatingMode", []() {
     return runUITokenCase(testCommandLineFloatingModeAndDragging);
+  });
+  registry.add("Illumo.CommandLine.UnregistersConsoleCommands", []() {
+    return runUITokenCase(testCommandLineUnregistersConsoleCommands);
   });
 }

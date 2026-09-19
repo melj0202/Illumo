@@ -31,7 +31,7 @@ separation, synchronous token submission and existing scene hierarchy are reused
 - Scene-wide lighting/shadows, local/spot lights and visible beams with readable
   fallbacks. Current MeshVisual shadows are per-drawable self-shadowing.
 - Platform-supported backend selection/capability outcomes and native Linux
-  validation alongside Windows. macOS remains optional later work.
+  validation alongside Windows. macOS is not a current target; its scaffold has been removed.
 - An agreed reference GPU, resolution, representative sequence and frame-time
   acceptance method for the 60 FPS target. No current capture timing proves it.
 

@@ -649,6 +649,25 @@ testIllumoCodecDirect()
              loaded.grid->getCell(CellAddress{ 8, 9 }) == 0,
            "replacement remains sparse version 4 compatible");
   std::filesystem::remove(testFile);
+  const std::u8string unicodeName = u8"codec-\u4e16\u754c-\u00e9.csim";
+  const std::string unicodePath(unicodeName.begin(), unicodeName.end());
+  testTrue(g,
+           IllumoCodec::writeFile(unicodePath, doc, &error),
+           "UTF-8 sparse save filename writes");
+  testTrue(g,
+           IllumoCodec::readFile(unicodePath, &loaded, &error) && loaded.grid &&
+             loaded.grid->getCell(CellAddress{ 8, 9 }) == 0,
+           "UTF-8 sparse save filename round trips");
+  std::filesystem::remove(std::filesystem::path(unicodeName));
+#ifdef _WIN32
+  const std::string invalidPath(1, static_cast<char>(0xff));
+  testTrue(g,
+           !IllumoCodec::writeFile(invalidPath, doc, &error),
+           "invalid UTF-8 save path fails without throwing");
+  testTrue(g,
+           !IllumoCodec::readFile(invalidPath, &loaded, &error),
+           "invalid UTF-8 load path fails without throwing");
+#endif
 }
 
 static void

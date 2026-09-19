@@ -2224,3 +2224,21 @@ gizmo drag state, which is world input rather than panel chrome.
 \textbf{Supersedes:} D-0YY (optional)
 \end{decisionbox}
 \end{lstlisting}
+
+\subsection*{D-AUD1 --- Report contract corrections (2026-09-19)}
+D-R14 is refined by D-R22/D-RP1: ordered layers coexist with the shared shadow
+pass and configured offscreen/post passes. D-B1 includes Debug and RelWithDebInfo;
+Release excludes DebugModule. Native GPU identifiers are private GL implementation
+state; supported consumers use generational handles. D-C3's storage-independent
+rules boundary is completed by moving dense evaluation and reference adapters
+into test-only sources. No persistence format changes accompany these corrections.
+Renderer-bound primitives reject foreign lifetimes; rejected tokens or truncated
+geometry prevent frame presentation. See the report remediation plan for tests.
+
+\subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
+macOS is not a current product target. Remove the first-party Apple platform
+files, Cocoa framework/source selection, and dedicated scaffold package map.
+CMake rejects Apple targets explicitly. Windows remains supported; Linux keeps
+its existing source-repaired, native-validation-pending status. Vendored
+dependency portability code and historical design records retain their provenance.
+A future macOS port requires a new scope and native validation.

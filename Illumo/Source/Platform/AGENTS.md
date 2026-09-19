@@ -23,8 +23,9 @@ or persistence parsing.
 Windows is the only supported and currently verified platform. Linux sources
 are repaired for Ubuntu 24.04 x86_64 X11/XWayland with gtkmm-3 dialogs; do not
 describe Linux as supported until native configure, compile, launch, dialog,
-render, and shutdown evidence exists on that host. macOS remains a stale
-scaffold. Source presence does not establish support.
+render, and shutdown evidence exists on that host. macOS is not targeted; no
+platform scaffold is retained and CMake rejects Apple targets. Source presence
+does not establish support.
 
 ## Documentation and verification
 

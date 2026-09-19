@@ -594,7 +594,9 @@ testLoggerLevelsAndSinks()
   CommandRegistry registry;
   CommandLine console(&env, &registry, &window, &renderer);
 
-  testTrue(g, Logger::initLogger(&env, &console), "logger initializes");
+  testTrue(g,
+           Logger::initLogger(&env, &console, "log.txt"),
+           "logger initializes at explicit test path");
   testTrue(g, Logger::initLogger(), "second initialization is harmless");
   testTrue(g,
            Logger::getCommandLine() == &console,
@@ -719,8 +721,52 @@ testCommandLineCoreHeadless()
   testEqInt(g, static_cast<int>(args.size()), 3, "parsed 3 quoted args");
   testTrue(g, args[1] == "bar baz", "quoted arg preserved");
 
+  std::vector<std::string> received;
+  registry.RegisterCommand(
+    "pathprobe",
+    [&received](const std::vector<std::string>& values) { received = values; });
+  const std::string pathCommand =
+    R"(pathprobe C:\Users\file "C:\two words\" \\server\share\ "" escaped\ value)";
+  core.ExecuteSingleCommand(pathCommand);
+  registry.ExecuteQueue();
+  testEqSize(g, received.size(), 5, "execution preserves all path arguments");
+  if (received.size() == 5) {
+    testTrue(
+      g, received[0] == R"(C:\Users\file)", "unquoted Windows path survives");
+    testTrue(g,
+             received[1] == "C:\\two words\\",
+             "quoted trailing separator survives");
+    testTrue(g,
+             received[2] == "\\\\server\\share\\",
+             "UNC prefix and trailing separator survive");
+    testTrue(g, received[3].empty(), "empty quoted argument survives");
+    testTrue(g, received[4] == "escaped value", "escaped separator survives");
+  }
+  const std::vector<std::string> parsedPaths =
+    core.ParseCommandArgs(pathCommand, " \t");
+  testTrue(
+    g,
+    parsedPaths.size() == received.size() + 1 &&
+      std::equal(received.begin(), received.end(), parsedPaths.begin() + 1),
+    "public parsing and command execution use the same grammar");
+
   std::vector<std::string> chains = core.SplitCommandChain("cmd1; cmd2; cmd3");
   testEqInt(g, static_cast<int>(chains.size()), 3, "split 3 chained commands");
+  for (const char* path : { "C:\\", "\\\\server\\share\\" }) {
+    const std::string command =
+      std::string("pathprobe ") + path + "; set chain_result yes";
+    for (char character : command) {
+      core.AddCharacter(static_cast<unsigned int>(character));
+    }
+    core.ExecuteCommand();
+    registry.ExecuteQueue();
+    testTrue(g,
+             received == std::vector<std::string>{ path },
+             "Windows path separator does not swallow command-chain separator");
+    testTrue(g,
+             env.getVar("chain_result").value == "yes",
+             "command after Windows path executes");
+  }
 
   // Deep/recursive alias depth limit
   core.SetAlias("loopA", "loopB");

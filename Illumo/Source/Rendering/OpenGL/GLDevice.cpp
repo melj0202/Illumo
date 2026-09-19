@@ -365,7 +365,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       }
 
       case CommandType::Draw: {
-        if (_activeProgram == 0 || _boundVao == 0) {
+        if (_activeProgram == nullptr || _boundVao == 0) {
           reportFrameError("Draw: missing valid shader or mesh; ignored");
           break;
         }
@@ -377,7 +377,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       }
 
       case CommandType::DrawIndexed: {
-        if (_activeProgram == 0 || _boundVao == 0) {
+        if (_activeProgram == nullptr || _boundVao == 0) {
           reportFrameError(
             "DrawIndexed: missing valid shader or mesh; ignored");
           break;
@@ -394,7 +394,7 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
       }
 
       case CommandType::DrawInstanced: {
-        if (_activeProgram == 0 || _boundVao == 0) {
+        if (_activeProgram == nullptr || _boundVao == 0) {
           reportFrameError(
             "DrawInstanced: missing valid shader or mesh; ignored");
           break;
@@ -414,9 +414,12 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
           reportFrameError("UpdateBuffer: invalid handle or null data");
           break;
         }
-        mesh->UpdateVertexData(cmd.updateBuffer.data,
-                               cmd.updateBuffer.sizeBytes,
-                               cmd.updateBuffer.offsetBytes);
+        if (!mesh->UpdateVertexData(cmd.updateBuffer.data,
+                                    cmd.updateBuffer.sizeBytes,
+                                    cmd.updateBuffer.offsetBytes)) {
+          reportFrameError(
+            "UpdateBuffer: range exceeds enrolled vertex capacity");
+        }
         break;
       }
 

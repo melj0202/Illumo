@@ -412,7 +412,35 @@ testInputManagerHeadlessLifecycle()
   testEqSize(g, input.getCharQueue().size(), 0, "character queue clears");
   testEqSize(g, input.getKeyQueue().size(), 0, "key queue clears");
 
+  for (int i = 0; i < MAX_INPUT_EVENTS + 7; ++i) {
+    InputManager::characterCallback(nullptr, static_cast<unsigned int>('x'));
+    InputManager::normalKeyCallback(nullptr, GLFW_KEY_A, 0, GLFW_PRESS, 0);
+  }
+  testEqSize(g,
+             input.getCharQueue().size(),
+             MAX_INPUT_EVENTS,
+             "character callbacks are bounded");
+  testEqSize(g,
+             input.getKeyQueue().size(),
+             MAX_INPUT_EVENTS,
+             "key callbacks are bounded");
+  testEqSize(
+    g, input.droppedCharEvents(), 7, "character overflow is observable");
+  testEqSize(g, input.droppedKeyEvents(), 7, "key overflow is observable");
+  InputManagerTestAccess::setAction(input, KeyCode::A, InputAction::Release);
+  testTrue(g, input.isKeyReleased(KeyCode::A), "release query uses frame edge");
+  input.suppressKeyForFrame(KeyCode::A);
+  testTrue(
+    g, !input.isKeyReleased(KeyCode::A), "suppression masks release edge");
+  InputManagerTestAccess::setAction(
+    input, KeyCode::MouseLeft, InputAction::Release);
+  testTrue(g,
+           input.isMouseButtonReleased(KeyCode::MouseLeft),
+           "mouse release uses frame edge");
+
   input.update();
+  testTrue(
+    g, !input.isKeyReleased(KeyCode::A), "release edge clears on next update");
   testTrue(
     g, *input.getMouseScrollOffset() == 0.0, "update resets scroll offset");
   testTrue(g,

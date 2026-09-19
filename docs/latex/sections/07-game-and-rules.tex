@@ -151,10 +151,15 @@ commands remain available independently of mode. Paint strokes belong to
 the module and stop across mode changes and modal input interruptions.
 The versioned JSON catalog describes every shipped transition and palette.
 Schema v3 supports \texttt{life\_like}, \texttt{generations},
-\texttt{moore\_table}, \texttt{cyclic}, and \texttt{elementary\_1d}; schema-v1
-arrays remain readable. These compile to the common \texttt{DataRuleSet} and
-cached 256-by-9 table, except cyclic rules use a full neighbor-state histogram
-and elementary 1D rules retain their dedicated history path.
+\texttt{moore\_table}, \texttt{cyclic}, \texttt{species\_life},
+\texttt{larger\_than\_life}, \texttt{hodgepodge}, \texttt{turmite},
+\texttt{lattice\_gas}, \texttt{dominance}, and \texttt{elementary\_1d}.
+Legacy schema-v1/v2 catalogs remain readable. These compile to DataRuleSet;
+count-based Moore rules use the cached 256-by-9 table, while full-state
+histogram, extended-range, directional, and elementary history rules use their
+respective neighborhood contracts. Production RuleSet has no dense-grid pointer
+or worker policy. Dense generation and reference implementations live in the
+test-only compatibility evaluator, including toroidal Elementary 1D advancement.
 Stable IDs continue to match saved worlds. Rule 90 and Rule 184 are elementary
 1D space-time diagrams (D-G2). Catalog registration rejects B0 and odd
 elementary rules: the current sparse representation requires a stable

@@ -4,8 +4,8 @@
 class BriansBrainRuleSet : public RuleSet
 {
 public:
-  BriansBrainRuleSet(CellGrid* targetCanvas)
-    : RuleSet(targetCanvas)
+  BriansBrainRuleSet()
+    : RuleSet()
   {
   }
   ~BriansBrainRuleSet() override = default;

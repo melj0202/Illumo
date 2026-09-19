@@ -123,6 +123,8 @@ private:
   uint64_t frameSerial = 0;
   bool m_strictSubmission = false;
   std::string m_frameError;
+  size_t m_frameRejectedBaseline = 0;
+  bool checkCommandRejections();
 
   FramebufferHandle shadowFramebuffer{};
   TextureHandle shadowDepthTexture{};
@@ -340,7 +342,7 @@ public:
   // use the backend viewport's bottom-left pixel convention.
   void pushClipRect(int x, int y, int width, int height);
   void popClipRect();
-  void pushUpdateTexture(TextureHandle handle,
+  bool pushUpdateTexture(TextureHandle handle,
                          int x,
                          int y,
                          int width,
@@ -348,11 +350,11 @@ public:
                          int channels,
                          const void* data,
                          int srcRowStride = 0);
-  void pushUpdateBuffer(MeshHandle meshHandle,
+  bool pushUpdateBuffer(MeshHandle meshHandle,
                         unsigned int offsetBytes,
                         unsigned int sizeBytes,
                         const void* data);
-  void pushUpdateIndexBuffer(MeshHandle meshHandle,
+  bool pushUpdateIndexBuffer(MeshHandle meshHandle,
                              unsigned int offsetBytes,
                              unsigned int sizeBytes,
                              const void* data);

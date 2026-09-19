@@ -92,8 +92,13 @@ printHelp(const SysCmdLineConfig& config)
   printIdentity(config);
   const std::string applicationName =
     config.applicationName.empty() ? "Illumo" : config.applicationName;
+#ifdef _WIN32
+  const std::string executableName = applicationName + ".exe";
+#else
+  const std::string executableName = applicationName;
+#endif
   std::cout << "Usage: "
-            << (config.usage.empty() ? applicationName + ".exe [OPTION] ..."
+            << (config.usage.empty() ? executableName + " [OPTION] ..."
                                      : config.usage)
             << "\n\nOptions:\n";
   for (const SysCmdLineOption& option : g_windowOptions) {

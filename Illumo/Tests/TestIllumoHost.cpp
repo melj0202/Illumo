@@ -280,6 +280,8 @@ testCloseNegotiation()
   overlay.allowClose = false;
   host.RequestTransition(std::make_unique<ProbeModule>(&replacement, false));
   host.update(0.01);
+  testEqInt(
+    g, replacement.exits, 0, "false transition startup receives no Exit");
   testTrue(g,
            host.processCloseRequest(),
            "required transition failure is terminal despite veto");
@@ -562,6 +564,9 @@ testModuleTransitionSuccess()
   int windowDestructions = 0;
   ModuleProbe initialPrimary;
   ModuleProbe nextPrimary;
+  ModuleProbe rejectedPrimary;
+  ModuleProbe lateRegistration;
+  ModuleProbe competingTransition;
   ModuleProbe optionalOverlay;
   {
     Illumo host(headlessConfig(path));
@@ -573,9 +578,20 @@ testModuleTransitionSuccess()
 
     host.addModule(std::make_unique<ProbeModule>(&initialPrimary, true),
                    ModuleRequirement::Required);
+    host.addModule(std::make_unique<ProbeModule>(&rejectedPrimary, true),
+                   ModuleRequirement::Required);
+    testEqInt(g,
+              rejectedPrimary.destructions,
+              1,
+              "second required module rejected before startup");
     host.addModule(std::make_unique<ProbeModule>(&optionalOverlay, true),
                    ModuleRequirement::Optional);
     testTrue(g, host.startModules(), "modules start");
+    host.addModule(std::make_unique<ProbeModule>(&lateRegistration, true));
+    testEqInt(g,
+              lateRegistration.destructions,
+              1,
+              "late registration rejected explicitly");
 
     host.update(0.016);
     host.render();
@@ -586,6 +602,14 @@ testModuleTransitionSuccess()
     host.context().moduleHost->RequestTransition(
       std::make_unique<ProbeModule>(&nextPrimary, true));
     testTrue(g, host.HasPendingTransition(), "pending transition reported");
+    host.RequestTransition(
+      std::make_unique<ProbeModule>(&competingTransition, true));
+    host.RequestTransition(nullptr);
+    testEqInt(
+      g,
+      competingTransition.destructions,
+      1,
+      "competing request rejected without replacing accepted transition");
 
     // Frame update triggers transition
     host.update(0.016);

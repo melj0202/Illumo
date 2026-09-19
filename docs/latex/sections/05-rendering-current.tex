@@ -332,7 +332,7 @@ all registered workspace runners.
         (window bootstrap, not frame submission).
   \item Windows is the supported live path. Linux window bootstrap no longer
         issues GL calls before GLEW; native GUI smoke is still required.
-        macOS remains an unvalidated scaffold.
+        macOS is not targeted and has no retained scaffold.
   \item Font atlases/UTF-8 layout, tilemaps/particles, mesh materials and formats
         beyond OBJ, and broader offscreen compositing are follow-on features,
         not hidden scaffolding in the current renderer.
@@ -354,3 +354,10 @@ See \texttt{docs/frame-capture.md} for inputs, publication and limitations.
 Current 3D facilities include CPU OBJ import, directional lighting,
 per-drawable self-shadowing and post-processing. These do not yet implement the
 charter's scene-wide lighting, registered game objects or physics integration.
+
+Renderer-bound GameVisual resources retain one renderer lifetime. Foreign use,
+truncated geometry, and queue rejection report incomplete frames and suppress
+presentation. Rejected retained uploads retry on a subsequent frame. Backend
+queue totals survive pass resets; native GPU names live only in private GL types.
+Mesh and texture enrollment validates actual storage before publishing a handle;
+failed replacements preserve old resources and oversized vertex writes fail early.

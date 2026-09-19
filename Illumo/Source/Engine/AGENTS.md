@@ -27,8 +27,9 @@ Engine must remain independent of Game and Rulesets.
 - Populate and freeze `IllumoContext` during initialization. Do not grow the
   context casually; prefer explicit constructor dependencies when a genuinely
   different consumer appears.
-- `IModule::Start` is a fallible `bool` contract. Remove a failed module before
-  any `Update`, `DispatchDrawables`, or `Exit` call.
+- `IModule::Start` is a fallible `bool` contract. A false return rejects the
+  module without `Update`, `DispatchDrawables`, or `Exit`. If Start throws,
+  attempt Exit once to release partial startup state, then discard the module.
 - For accepted modules, call `Start`, repeated `Update` and
   `DispatchDrawables`, and one `Exit` in a deterministic order.
 - Optional overlay modules (`DebugModule`) `Update` before the required

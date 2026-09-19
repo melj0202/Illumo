@@ -28,11 +28,5 @@ public:
   virtual void CompileAndLink(const ShaderSources& sources) = 0;
   virtual void CompileAndLink(const ShaderPaths& paths) = 0;
   virtual void Destroy() = 0;
-  virtual unsigned long GetID() const = 0;
   virtual bool isValid() const = 0;
-
-protected:
-  unsigned int _programID;
-  unsigned int _vertexShadeID;
-  unsigned int _fragmentShaderID;
 };

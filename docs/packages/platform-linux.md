@@ -10,7 +10,7 @@ or XWayland can configure, compile, and run the in-tree applications. That is
 not a support claim until the named host has completed native launch, dialog,
 input, persistence, and shutdown smoke.
 
-macOS is unchanged and remains an unverified scaffold.
+macOS is not targeted; its scaffold has been removed.
 
 ## What this port covers
 
@@ -243,4 +243,4 @@ in a nested session, say so rather than calling the port done.
 - HiDPI cursor mapping
 - Packaged tarball / `.deb`
 - aarch64
-- macOS (separate port)
+- macOS (not targeted; no scaffold retained)

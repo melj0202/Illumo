@@ -8,14 +8,14 @@ OS entry points and native persistence dialogs are engine-owned under
 |---|---|---|
 | Windows | `Windows/WinMain.cpp` | Supported; native dialogs in `WinSaveLoad.cpp` |
 | Linux | `Linux/_main.cpp` | Source-repaired for Ubuntu 24.04 x86_64 X11/XWayland; not a support claim until native GUI smoke. See [platform-linux.md](platform-linux.md). |
-| macOS | `macOS/Main.cpp` | Unsupported stale scaffold |
 
 Entry code obtains the consumer's `IllumoApplicationDefinition` and calls the
 generic Illumo runner. Dialog implementations accept game-owned labels and
 defaults as data; they do not include Game types or parse save files. Clipboard
 text (`Clipboard::GetText` / `SetText`) follows the same platform split:
-Windows uses Win32; Linux uses the GTK clipboard after one-shot gtkmm init;
-macOS remains an empty/false scaffold. Source presence does not establish
+Windows uses Win32; Linux uses the GTK clipboard after one-shot gtkmm init.
+macOS is not targeted; its scaffold has been removed and CMake rejects Apple
+targets. Source presence does not establish
 support: each port requires native build, tests, live rendering/input, dialogs,
 and clean shutdown.
 
@@ -30,3 +30,9 @@ This is not a power-loss durability or destination-security-metadata preservatio
 guarantee. POSIX `rename` replaces on the same filesystem and fails with `EXDEV`
 across devices; there is no copy fallback. Treat that as the Linux contract,
 proven by `Illumo.Platform.AtomicFile` on the native host.
+
+SaveLoad specification strings and returned paths are UTF-8. Windows uses wide
+common-dialog APIs and a 32,768-character filename buffer; invalid specification
+encoding is rejected and cancellation remains an empty result. Product codecs
+construct filesystem paths from UTF-8 and contain conversion failures. A wide
+API and large buffer do not certify every native-dialog long-path scenario.

@@ -156,7 +156,7 @@ current or credible downstream consumers, not a fantasy feature checklist.
 - Full ECS / archetypes / cached structural queries  
 - `SceneGraph` as the primary sparse-cell storage or retained product-UI path
 - Second real graphics API (Vulkan/Metal) as a near-term deliverable  
-- Perfect Linux/macOS parity before Windows remains solid  
+- Linux parity before Windows remains solid; macOS is not targeted
 - SYCL or a second compute backend before the sparse product path is correct and documented  
 - Aggressive batching/instancing/render graphs without profiling evidence  
 
@@ -387,18 +387,18 @@ remains inactive. Startup and rollback exceptions are contained and logged
 
 ```
 Illumo Platform::main
-  → CreateIllumoApplication()         // IllumoGame declarative definition
+  → CreateIllumoApplication()         // consuming product definition
   → RunIllumoApplication(argc, argv)  // engine logger/CLI/loop ownership
-  → Illumo(IllumoConfig{"IllumoGame", config path})
-  → application.applyDefaults()       // IllumoGame CA defaults
-  → SysCmdLine::ParseCommandLine      // engine parser + CA option metadata
+  → Illumo(IllumoConfig{application name, config path})
+  → application.applyDefaults()       // product defaults
+  → SysCmdLine::ParseCommandLine      // engine parser + product option metadata
   → Illumo::initialize()              // fallible window/backend factories
        backend = CreateOpenGLBackend(window)
        backend->Initialize()          // exactly once, owned by Illumo
        renderer = Renderer(..., unique_ptr<IBackend>)
-  → application.createRequiredModule(&environment) → MainMenuModule / CellGameModule
+  → application.createRequiredModule(&environment) → product module
   → addModule(required module, Required)
-  → addModule(DebugModule, Optional)  // engine-owned Debug builds
+  → addModule(DebugModule, Optional)  // Debug / RelWithDebInfo
   → startModules()                    // rollback on required failure
   loop:
     update(dt)   // applyPendingModuleTransition → InputManager → Camera
@@ -417,15 +417,15 @@ There is **no** env-gated alternate product frame path. `Renderer::RenderProofQu
 remains for headless token e2e tests only.
 
 Illumo construction loads only generic host defaults. The engine runner invokes
-IllumoGame's CA defaults callback, then its own parser consumes standard window
-flags plus game-provided canvas/help descriptors before host initialization.
+the product defaults callback, then its own parser consumes standard window
+flags plus product-provided option/help descriptors before host initialization.
 `--help` and `--version` return explicit process results; library code does not
 call `std::exit`.
 
 Typical combined draw order: an optional Renderer-owned directional-shadow
 depth pass over camera-relevant World casters, then configured World color passes,
 followed by UI splash + console + editor cursor + selection outline + optional
-inspector HUD, then Debug FPS (Debug builds via DebugModule).
+inspector HUD, then Debug FPS (Debug/RelWithDebInfo via DebugModule).
 
 At the start of `RenderScene`, `Renderer` captures the active window dimensions
 and primary camera MVP once for that extraction. Matching `GameVisual` instances
@@ -1060,7 +1060,7 @@ Callbacks should record events/state, not own game policy long-term (CA design P
 
 ### 5.10 Developer console
 
-The Debug-only console is a global overlay on the main menu, settings, confirm
+The Debug/RelWithDebInfo console is a global overlay on the main menu, settings, confirm
 dialogs, and cell canvas. It separates general tooling from product behavior:
 
 - `CommandLine` owns help, environment-variable inspection/editing, validated
@@ -1089,7 +1089,7 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
 - Multi-command chaining splits on `;` (preserving quotes and escape sequences).
 - Alias macro management (`alias`, `unalias`) expands user-defined command shortcuts (with recursion capped at depth 8) and integrates aliases into auto-completion.
 - Inline ghost-text auto-suggestions display faint completion candidates after the caret; pressing Right-Arrow or Tab accepts the ghost text.
-- Window mode supports switching between top-mounted and floating modes (via `console_mode [floating|mounted|toggle]` or double-clicking the console title bar). In floating mode, title-bar dragging repositions the window across the screen, and dragging the bottom-right corner grip handle (or running `console_size <W> <H> | reset`) dynamically resizes the console window with real-time UI bounds clipping (D-UI3).
+- Window mode supports switching between top-mounted and floating modes (via `console_mode [floating|mounted|toggle]` or double-clicking the console title bar). In floating mode, title-bar dragging repositions the window across the screen, and dragging the bottom-right corner grip handle (or running `console_size <W> <H> | reset`) dynamically resizes the console window with real-time UI bounds clipping (D-UI3). Those two commands capture the live `CommandLine` and are unregistered when it is destroyed.
 - Dynamic parameter syntax hints dynamically render usage instructions in the status bar while typing known commands.
 - Utility commands include `repeat <N> <command>`, `history [filter|clear]`, and the `sysinfo` telemetry dashboard. The simulation-provided `status` command reports simulation, canvas, ruleset, and camera state.
 - Console chrome uses a single heap-backed batch with capacity for 8,000 UI
@@ -1130,7 +1130,7 @@ outside this diagnostic's scope.
 - Semantic window ops (`shouldClose`, poll, swap, title, dimensions) justify thin wrappers even if one-liners — they hide GLFW types from the main loop.  
 - OpenGL calls stay under `Rendering/OpenGL/` (+ window bootstrap).  
 - Interfaces only where multiple implementations or third-party volatility are real (`IBackend`, `IRenderWindow`).  
-- macOS Metal myths: GLFW can create a no-client-API window and expose native handles; do not invent a Cocoa window path “because Metal.”
+- macOS is not a current target; no Cocoa or other Apple platform scaffold is retained.
 - Fullscreen transitions preserve the windowed position and dimensions, enter
   the primary monitor at its current video mode, and restore the saved windowed
   bounds on exit.
@@ -1155,7 +1155,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-N2** | Historical `IllumoGame` simulator identity; superseded for product-visible branding by D-N4 while retained for technical targets and test namespaces. |
 | **D-N3** | `IllEd` is the in-tree world-editor application identity (`IllEd.exe`, `.ilsc`, `IllEd.*` tests). |
 | **D-N4** | CSim is the simulator's product-visible identity and `.csim` is the canonical save extension; technical `IllumoGame` identifiers and legacy `.illumo` loading remain. |
-| **D-B1** | `DebugModule` is composed by the engine runner only in Debug; Release must neither compile nor register it. Refined by D-E7. |
+| **D-B1** | `DebugModule` is composed by the engine runner in Debug and RelWithDebInfo; Release must neither compile nor register it. Refined by D-E7. |
 | **D-CLI1** | Services own generic console mechanics; `CellGameModule` registers domain commands and help/completion metadata. |
 | **D-UI1** | Console editing and caret placement use measured text geometry; one enlarged batch must fit a full help page. |
 | **D-UI2** | Console history wraps and scrolls by visual lines using shared mounted/floating layout metrics. |
@@ -1184,7 +1184,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R11** | `Illumo::initialize` constructs through `CreateOpenGLBackend`, owns the one fallible backend `Initialize` call, and transfers ownership; `Renderer` never includes OpenGL types. |
 | **D-R12** | Historical fixed-queue policy; superseded by bounded vector growth in D-R16. |
 | **D-R13** | Single production frame path in `Illumo::render`; `RenderProofQuad` is test-only. |
-| **D-R14** | Scene layers (World/UI/Debug) + Renderer-owned built-in `RenderStyle` table. One main pass; layers ≠ GPU render passes. |
+| **D-R14** | Scene layers (World/UI/Debug) + Renderer-owned built-in `RenderStyle` table. Layers group ordered drawables; D-R22 adds the shared shadow depth pass and D-RP1 permits configured per-layer offscreen/post passes. |
 | **D-R15** | Render primitives (`Shape`/`Sprite`/`Text`) composed on a `GameVisual` host; product drawables embed/compose via GameVisual. |
 | **D-R16** | Typed slot+generation resource/style handles; validated replace/destroy/query; stale operations log and no-op. CommandQueue reserves 2,048, grows, and rejects only at a configurable 65,536 default ceiling. |
 | **D-R17** | AssetManager owns canonical-path texture/shader caching, references, one CPU worker, stable fallbacks, render-thread pump/replacement, explicit reload, and Debug 500 ms timestamp polling. |
@@ -1474,7 +1474,7 @@ Most design questions from the LaTeX open list are **resolved** (see §6). Still
 | Topic | Working answer |
 |-------|----------------|
 | Resource ownership long-term | Typed generational handles validate explicit replace/destroy operations; `AssetManager` reference-counts textures, shaders, cubemaps, and immutable model meshes, while the resizeable canvas explicitly replaces/releases its texture and PBO ring. |
-| Linux/macOS parity | Linux sources and CMake are repaired for Ubuntu 24.04 x86_64 X11/XWayland with gtkmm-3 dialogs (`docs/packages/platform-linux.md`). Keep Linux unsupported until native configure, compile, launch, dialog, render, and shutdown smoke exist on that host. macOS remains a stale scaffold. |
+| Linux validation | Linux sources and CMake are repaired for Ubuntu 24.04 x86_64 X11/XWayland with gtkmm-3 dialogs (`docs/packages/platform-linux.md`). Keep Linux unsupported until native configure, compile, launch, dialog, render, and shutdown smoke exist on that host. macOS is not targeted and its scaffold has been removed. |
 | Tracy CI policy | Debug-oriented; no strict CI policy yet. |
 | When to introduce SYCL / GPU simulation | Only after a current benchmark and explicit product or learning goal justify a second compute path. Sparse chunks and bounded CPU workers are already live. |
 
@@ -1551,6 +1551,31 @@ Resolved highlights (do not re-open without a new decision ID):
 - Do not document R8-only presentation as current without verifying
   `CanvasView.cpp`, `RendererStyles.cpp`, and the active style binding.
 - Do not expand IllumoContext casually for a third module.  
+
+---
+
+### 2026-09-19 report corrections
+
+See [the finding ledger](report-remediation-plan.md) for verification. The host
+accepts at most one required module before startup; deferred transitions retain
+the first non-null request and log competing requests. Input callback queues are
+bounded and release polling uses frame edges. Console parsing preserves Windows
+paths on execution and callbacks detach before console destruction. Logger's
+unique process instance defaults to an executable-adjacent file.
+
+GameVisual resources remain bound to their first renderer lifetime; foreign
+emission fails explicitly. Geometry truncation and command rejection mark the
+frame incomplete and prevent presentation. Backend queue rejection/high-water
+metrics survive pass resets. Failed GPU mesh/texture enrollment does not publish
+handles; failed replacement preserves prior resources and oversized vertex
+updates fail before a GL write. Native GPU names live only in private GL types.
+
+RuleSet and its data factory are storage-independent. Dense CellGrid/Canvas,
+legacy reference rules, and DenseRuleEvaluator compile only into tests. The
+fixture evaluator owns its worker setting and includes Elementary 1D history
+advancement over toroidal dense storage. Windows pickers use wide APIs and return
+UTF-8; product codecs explicitly convert UTF-8 filesystem paths. The subsequent
+macOS removal decision retires that scaffold rather than maintaining a port.
 
 ---
 

@@ -1648,7 +1648,7 @@ RuleSetRegistry::serializeRulePackage(const RuleFamilyDefinition& family,
 }
 
 std::unique_ptr<RuleSet>
-RuleSetRegistry::createRuleSet(const std::string& id, CellGrid* canvas) const
+RuleSetRegistry::createRuleSet(const std::string& id) const
 {
   const RuleSetDefinition* definition = getRuleSetDefinition(id);
   const RuleFamilyDefinition* family =
@@ -1656,5 +1656,5 @@ RuleSetRegistry::createRuleSet(const std::string& id, CellGrid* canvas) const
   if (definition == nullptr || family == nullptr) {
     return nullptr;
   }
-  return std::make_unique<DataRuleSet>(*definition, *family, canvas);
+  return std::make_unique<DataRuleSet>(*definition, *family);
 }

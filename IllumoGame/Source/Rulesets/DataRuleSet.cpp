@@ -53,9 +53,8 @@ collideHpp(unsigned int mask)
 } // namespace
 
 DataRuleSet::DataRuleSet(const RuleSetDefinition& sourceDefinition,
-                         const RuleFamilyDefinition& sourceFamily,
-                         CellGrid* canvas)
-  : RuleSet(canvas, sourceDefinition.transitionTable)
+                         const RuleFamilyDefinition& sourceFamily)
+  : RuleSet(sourceDefinition.transitionTable)
   , definition(sourceDefinition)
   , family(sourceFamily)
 {

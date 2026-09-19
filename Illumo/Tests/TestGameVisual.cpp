@@ -672,6 +672,10 @@ testGameVisualDynamicCapacity()
   mock.resetCounters();
   capped.AppendCommands(&renderer);
   renderer.EndFrame();
+  testTrue(g,
+           !renderer.frameError().empty(),
+           "truncated geometry marks frame incomplete");
+  testEqInt(g, mock.getEndFrameCount(), 0, "truncated frame is not presented");
   const RenderCommand* draw =
     findSubmittedCommand(mock, CommandType::DrawIndexed, 0);
   testTrue(g, draw != nullptr, "capped visual still draws accepted quads");
@@ -681,6 +685,83 @@ testGameVisualDynamicCapacity()
               1024 * 6,
               "safety limit rejects geometry beyond configured maximum");
   }
+  renderer.BeginFrame();
+  capped.AppendCommands(&renderer);
+  testTrue(g,
+           !renderer.frameError().empty(),
+           "cached truncation remains observable next frame");
+}
+
+static void
+testGameVisualRendererOwnership()
+{
+  HeadlessRenderFixture first(640, 480);
+  HeadlessRenderFixture second(640, 480);
+  GameVisual visual;
+  visual.prepare(&first.renderer);
+  visual.addFilledRect(0, 0, 16, 16, ColorRgba{});
+  visual.setRenderer(&second.renderer);
+  testTrue(
+    g, !visual.AppendCommands(&second.renderer), "foreign renderer rejected");
+  testTrue(g,
+           !second.renderer.frameError().empty(),
+           "foreign renderer reports failure");
+  testTrue(g,
+           visual.AppendCommands(&first.renderer),
+           "original renderer retains ownership");
+  GameVisual orphan;
+  {
+    HeadlessRenderFixture temporary(640, 480);
+    orphan.prepare(&temporary.renderer);
+  }
+  testTrue(g,
+           !orphan.AppendCommands(&first.renderer),
+           "expired renderer lifetime rejected safely");
+}
+
+static void
+testRendererQueueOverflowStatus()
+{
+  HeadlessRenderFixture fixture(640, 480);
+  fixture.renderer.BeginFrame();
+  for (int i = 0; i < 65537; ++i) {
+    fixture.renderer.pushClearColor(0, 0, 0, 1);
+  }
+  fixture.renderer.SubmitOnly();
+  fixture.renderer.getBackend()->ClearCommandQueue();
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           !fixture.renderer.frameError().empty(),
+           "queue reset retains frame failure");
+  testTrue(g,
+           fixture.renderer.getBackend()->rejectedCommandCount() > 0,
+           "backend exposes rejection total");
+  testEqInt(
+    g, fixture.mock.getEndFrameCount(), 0, "overflow frame is not presented");
+  fixture.renderer.BeginFrame();
+  fixture.renderer.pushClearColor(0, 0, 0, 1);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           fixture.renderer.frameError().empty(),
+           "next healthy frame resets failure");
+  testEqInt(g, fixture.mock.getEndFrameCount(), 1, "healthy frame presents");
+  GameVisual dirty;
+  dirty.prepare(&fixture.renderer);
+  dirty.addFilledRect(0, 0, 16, 16, ColorRgba{});
+  fixture.renderer.BeginFrame();
+  for (int i = 0; i < 65536; ++i) {
+    fixture.renderer.pushClearColor(0, 0, 0, 1);
+  }
+  dirty.AppendCommands(&fixture.renderer);
+  fixture.renderer.EndFrame();
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  dirty.AppendCommands(&fixture.renderer);
+  fixture.renderer.EndFrame();
+  testEqSize(g,
+             fixture.mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1,
+             "rejected geometry upload retries on the next healthy frame");
 }
 
 static void
@@ -838,6 +919,12 @@ runGameVisualCase(void (*testFunction)())
 void
 registerGameVisualTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.GameVisual.RendererOwnership", []() {
+    return runGameVisualCase(testGameVisualRendererOwnership);
+  });
+  registry.add("Illumo.Renderer.QueueOverflowStatus", []() {
+    return runGameVisualCase(testRendererQueueOverflowStatus);
+  });
   registry.add("Illumo.Renderer.FrameContext",
                []() { return runGameVisualCase(testRendererFrameContext); });
   registry.add("Illumo.GameVisual.Shapes", []() {

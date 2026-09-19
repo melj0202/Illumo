@@ -8,6 +8,7 @@
 #include <Illumo/Rendering/RenderLayerId.h>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,10 @@ public:
 
   explicit GameVisual(unsigned int maxQuads = kDefaultMaxQuads);
   ~GameVisual() override;
+  GameVisual(const GameVisual&) = delete;
+  GameVisual& operator=(const GameVisual&) = delete;
+  GameVisual(GameVisual&&) = delete;
+  GameVisual& operator=(GameVisual&&) = delete;
 
   void setRenderer(Renderer* renderer);
   void setWindow(IRenderWindow* window);
@@ -158,6 +163,7 @@ private:
   };
 
   Renderer* renderer = nullptr;
+  std::weak_ptr<const void> rendererLifetime;
   IRenderWindow* window = nullptr;
   Camera* camera = nullptr;
   PrimitiveSpace space = PrimitiveSpace::Pixels;
@@ -181,6 +187,7 @@ private:
   bool shapeUploadPending = false;
   bool spriteUploadPending = false;
   bool capacityWarningLogged = false;
+  bool geometryTruncated = false;
 
   std::vector<ShapeVertex> shapeVerts;
   std::vector<SpriteVertex> spriteVerts;

@@ -127,7 +127,9 @@ testFileRoundTrip()
   node.kind = SceneNodeKind::SolidCube;
   document.nodes.push_back(node);
   const std::filesystem::path path =
-    std::filesystem::temp_directory_path() / "codec-roundtrip.ilsc";
+    std::filesystem::temp_directory_path() / u8"codec-\u4e16\u754c-\u00e9.ilsc";
+  const std::u8string encodedPath = path.u8string();
+  const std::string utf8Path(encodedPath.begin(), encodedPath.end());
   struct TempFileGuard
   {
     std::filesystem::path file;
@@ -140,22 +142,30 @@ testFileRoundTrip()
   std::error_code fsError;
   std::filesystem::remove(path, fsError);
   std::string error;
-  testTrue(g,
-           IlscCodec::writeFile(path.string(), document, &error),
-           "writes scene file");
+  testTrue(
+    g, IlscCodec::writeFile(utf8Path, document, &error), "writes scene file");
   IlscDocument loaded;
   testTrue(
-    g, IlscCodec::readFile(path.string(), &loaded, &error), "reads scene file");
+    g, IlscCodec::readFile(utf8Path, &loaded, &error), "reads scene file");
   testEqSize(g, loaded.nodes.size(), 1u, "loaded one node");
   testEqStr(g, loaded.nodes[0].name, "Solo", "name round trips");
   document.nodes[0].name = "Replacement";
   testTrue(g,
-           IlscCodec::writeFile(path.string(), document, &error),
+           IlscCodec::writeFile(utf8Path, document, &error),
            "replaces existing scene after finalization");
   testTrue(g,
-           IlscCodec::readFile(path.string(), &loaded, &error) &&
+           IlscCodec::readFile(utf8Path, &loaded, &error) &&
              loaded.nodes[0].name == "Replacement",
            "replacement stays format compatible");
+#ifdef _WIN32
+  const std::string invalidPath(1, static_cast<char>(0xff));
+  testTrue(g,
+           !IlscCodec::writeFile(invalidPath, document, &error),
+           "invalid UTF-8 save path is contained");
+  testTrue(g,
+           !IlscCodec::readFile(invalidPath, &loaded, &error),
+           "invalid UTF-8 load path is contained");
+#endif
 }
 
 void

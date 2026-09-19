@@ -960,33 +960,31 @@ MeshVisual::prepareForCommands(Renderer* value)
   }
 
   if (lineUploadPending && lineMeshHandle.isValid()) {
-    value->pushUpdateBuffer(
+    lineUploadPending = !value->pushUpdateBuffer(
       lineMeshHandle,
       0,
       static_cast<unsigned int>(lineDrawVertices.size() * sizeof(ColorVertex)),
       lineDrawVertices.data());
-    lineUploadPending = false;
   }
   if (triangleUploadPending && triangleMeshHandle.isValid()) {
-    value->pushUpdateBuffer(
+    const bool verticesAccepted = value->pushUpdateBuffer(
       triangleMeshHandle,
       0,
       static_cast<unsigned int>(triangleVertices.size() * sizeof(LitVertex)),
       triangleVertices.data());
-    value->pushUpdateIndexBuffer(
+    const bool indicesAccepted = value->pushUpdateIndexBuffer(
       triangleMeshHandle,
       0,
       static_cast<unsigned int>(triangleIndices.size() * sizeof(unsigned int)),
       triangleIndices.data());
-    triangleUploadPending = false;
+    triangleUploadPending = !verticesAccepted || !indicesAccepted;
   }
   if (spriteUploadPending && spriteMeshHandle.isValid()) {
-    value->pushUpdateBuffer(
+    spriteUploadPending = !value->pushUpdateBuffer(
       spriteMeshHandle,
       0,
       static_cast<unsigned int>(spriteVertices.size() * sizeof(SpriteVertex)),
       spriteVertices.data());
-    spriteUploadPending = false;
   }
 
   return true;

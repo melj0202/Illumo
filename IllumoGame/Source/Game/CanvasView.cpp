@@ -1673,8 +1673,9 @@ CanvasView::AppendCommands(Renderer* activeRenderer)
     buildUploadRects();
     lastUploadByteCount = 0u;
     lastUploadRectCount = uploadRectScratch.size();
+    bool accepted = true;
     for (const UploadRect& rectangle : uploadRectScratch) {
-      activeRenderer->pushUpdateTexture(
+      const bool rectangleAccepted = activeRenderer->pushUpdateTexture(
         displayTextureHandle,
         rectangle.x,
         rectangle.y,
@@ -1686,13 +1687,16 @@ CanvasView::AppendCommands(Renderer* activeRenderer)
                      static_cast<std::size_t>(rectangle.x)) *
                       3u,
         textureWidth);
+      accepted = accepted && rectangleAccepted;
       lastUploadByteCount += static_cast<std::size_t>(rectangle.width) *
                              static_cast<std::size_t>(rectangle.height) * 3u;
     }
     uploadByteMetric.add(static_cast<double>(lastUploadByteCount));
     uploadRectMetric.add(static_cast<double>(lastUploadRectCount));
-    textureUploadPending = false;
-    resetUploadBounds();
+    textureUploadPending = !accepted;
+    if (accepted) {
+      resetUploadBounds();
+    }
   }
   visual.setRenderer(activeRenderer);
   visual.setVisible(isVisible());

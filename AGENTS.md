@@ -202,8 +202,9 @@ Canvas truth (verify here before trusting older notes):
   `RenderWindow` defaults to monitor-synchronized swapping; persisted `vsync=0`
   remains the explicit uncapped profiling mode. Debug FPS output separates
   paced swap completions from CPU submissions.
-- Persistence always writes sparse version 3 with topology and reads versions
-  3 and 2 plus the prior dense format. Older formats select infinite topology.
+- Persistence always writes sparse version 4 with family/ruleset identity and
+  topology, and reads versions 4, 3, and 2 plus the prior dense format.
+  Version 2 and legacy dense files select infinite topology.
   Legacy `CellGrid`/`Canvas` remain compatibility fixtures,
   not a second production runtime path.
 
@@ -366,8 +367,8 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   or finite toroidal evolution.
   `CanvasView` is a bounded world-space presentation. Legacy `CellGrid` and
   `Canvas` remain compatibility fixtures, not a second production path.
-- Save writes preserve sparse format version 3 and loads remain compatible
-  with versions 3 and 2 plus the legacy dense format unless migration is
+- Save writes preserve sparse format version 4 and loads remain compatible
+  with versions 4, 3, and 2 plus the legacy dense format unless migration is
   explicitly authorized.
 - Ruleset transitions and palettes must remain deterministic. Update factory
   selection, known-mode validation, console help/completion, source lists, and
@@ -376,7 +377,7 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   and CMake are repaired for Ubuntu 24.04 x86_64 (X11/XWayland, gtkmm-3
   dialogs) and must not be described as supported until native configure,
   compile, launch, dialog, render, and shutdown smoke exist on that host.
-  macOS remains a stale bootstrap scaffold. See
+  macOS is not targeted; its platform scaffold has been removed. See
   `docs/packages/platform-linux.md`.
 - Keep generic engine/services independent of game-domain policy. Keep raw
   platform and OpenGL details behind their existing boundaries.
@@ -427,7 +428,7 @@ Subsystem rules live in:
 - `Illumo/Source/Engine/AGENTS.md`, `Illumo/Source/Foundation/AGENTS.md`, and
   `Illumo/Source/Scene/AGENTS.md`, `Illumo/Source/Gui/AGENTS.md`, and
   `Illumo/Source/Platform/AGENTS.md` plus
-  its Windows, Linux, and macOS child guidance;
+  its Windows and Linux child guidance;
 - `IllumoGame/Source/Game/AGENTS.md` and
   `IllumoGame/Source/Rulesets/AGENTS.md`;
 - `IllEd/Source/AGENTS.md` and `IllEd/Tests/AGENTS.md`;

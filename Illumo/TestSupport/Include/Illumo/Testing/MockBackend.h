@@ -168,6 +168,14 @@ public:
   }
 
   void ClearCommandQueue() override { commandQueue.Reset(); }
+  size_t rejectedCommandCount() const override
+  {
+    return commandQueue.GetTotalRejected();
+  }
+  size_t commandHighWaterMark() const override
+  {
+    return commandQueue.GetHighWaterMark();
+  }
 
   int getFPS() const override { return fps; }
 

@@ -404,7 +404,8 @@ InputManager::update()
     }
 
     else if (inputStatesCurrent[keyCode] == InputAction::Release &&
-             inputStatesPrevious[keyCode] == InputAction::Release) {
+             inputStatesPrevious[keyCode] != InputAction::Press &&
+             inputStatesPrevious[keyCode] != InputAction::Hold) {
       inputStatesCurrent[keyCode] = InputAction::None;
     }
 
@@ -471,12 +472,10 @@ InputManager::isKeyReleased(KeyCode key)
   if (isKeySuppressed(key)) {
     return false;
   }
-  if (window == nullptr) {
-    return false;
-  }
-  int glfwInputAction = glfwGetKey(window, TranslateKeyCodeFromGLFW(key));
-
-  return TranslateInputActionGLFW(glfwInputAction) == InputAction::Release;
+  const std::unordered_map<KeyCode, InputAction>::const_iterator state =
+    inputStatesCurrent.find(key);
+  return state != inputStatesCurrent.end() &&
+         state->second == InputAction::Release;
 }
 
 bool
@@ -529,13 +528,7 @@ InputManager::isAltPressed() const
 bool
 InputManager::isMouseButtonReleased(KeyCode mouseButton)
 {
-  if (window == nullptr) {
-    return false;
-  }
-  int glfwInputAction =
-    glfwGetMouseButton(window, TranslateKeyCodeFromGLFW(mouseButton));
-
-  return TranslateInputActionGLFW(glfwInputAction) == InputAction::Release;
+  return isKeyReleased(mouseButton);
 }
 
 bool
@@ -616,6 +609,10 @@ void
 InputManager::characterCallback(GLFWwindow* /*window*/, unsigned int codepoint)
 {
   if (s_Instance) {
+    if (s_Instance->charQueue.size() >= MAX_INPUT_EVENTS) {
+      ++s_Instance->m_droppedCharEvents;
+      return;
+    }
     s_Instance->charQueue.push(codepoint);
   }
 }
@@ -641,6 +638,10 @@ InputManager::normalKeyCallback(GLFWwindow* /*window*/,
     KeyCode localKey = s_Instance->TranslateKeyCodeToGLFW(key);
     InputAction localAction = s_Instance->TranslateInputActionGLFW(action);
     s_Instance->m_modifierFlags = mods;
+    if (s_Instance->keyQueue.size() >= MAX_INPUT_EVENTS) {
+      ++s_Instance->m_droppedKeyEvents;
+      return;
+    }
     s_Instance->keyQueue.push({ localKey, localAction, mods });
   }
 }

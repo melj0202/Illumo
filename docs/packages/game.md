@@ -445,3 +445,13 @@ vertical slide and chevron, and animated hover/selection emphasis. Reduced UI
 motion snaps transitions. Drawing and hit testing share the fitted UI scale. Palette
 gestures capture input through mouse release, preventing paint-through and
 camera zoom; settings, confirmation dialogs, and the console take precedence.
+
+### Dense compatibility boundary
+
+RuleSet carries transitions and palette metadata only; it neither stores a
+CellGrid pointer nor schedules dense workers. RuleSetRegistry takes a rule ID.
+Tests/DenseRuleEvaluator borrows a grid and const rule, with an instance-local
+worker override. CellGrid, Canvas, and legacy C++ rule implementations compile
+only into IllumoGameTests. Elementary dense advancement preserves history, uses
+the greatest active row and its X extent plus one, and wraps on both axes; it
+preserves destination cells outside that extent, matching finite sparse behavior.

@@ -41,8 +41,17 @@ public:
   void SubmitCommandQueue() override;
   void PushToCommandQueue(RenderCommand command) override;
   void ClearCommandQueue() override;
+  size_t rejectedCommandCount() const override
+  {
+    return commandQueue->GetTotalRejected();
+  }
+  size_t commandHighWaterMark() const override
+  {
+    return commandQueue->GetHighWaterMark();
+  }
   int getFPS() const override { return fps; }
   FrameReadback readBackbuffer(int width, int height) override;
+  std::string submissionError() const override { return device->frameError(); }
 
   MeshHandle CreateMesh(const void* vertices,
                         size_t vertexSize,

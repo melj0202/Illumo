@@ -427,14 +427,12 @@
   \draw[nonown] (log.east) -- (11.0,-6.9) -- (11.0,-2.1) -- (env.east);
   \draw[nonown] (log.east) -- ++(0.35,0) |- (cline.south);
 
-  % Even 2.6cm boxes under services; msl R≤15.8 so util L≥16.5 stays clear
+  % Native dialog implementations below the shared contract
   \node[box, pkgfill=pkgPlatform, minimum width=2.6cm] (wsl) at (9.2,-8.25) {WinSaveLoad};
   \node[stub, minimum width=2.6cm] (lsl) at (12.5,-8.25) {LinuxSaveLoad};
-  \node[stub, minimum width=2.6cm] (msl) at (15.5,-8.25) {MacSaveLoad};
   \draw[impl] (wsl.north) -- ++(0,0.35) -| (sl.south west);
   % stubs side-by-side under SaveLoad — short verticals only (no through-peer edges)
   \draw[impl, densely dotted] (lsl.north) -- ++(0,0.35) -| (sl.south);
-  \draw[impl, densely dotted] (msl.north) -- ++(0,0.35) -| (sl.south east);
 
   % Col C
   \node[iface, minimum width=3.5cm] (irw) at (18.8,-1.0) {IRenderWindow};
@@ -747,7 +745,7 @@
     \textbf{\rmfamily Illumo Platform}\\[3pt]
     main $\rightarrow$ Application runner\\
     WinSaveLoad \textbf{L}\\
-    Linux/macOS ports \textbf{S}};
+    Linux port \textbf{S}};
   \node[card, pkgfill=pkgApp, minimum width=5.9cm, minimum height=2.9cm] at (9.45,-1.5) {%
     \textbf{\rmfamily Illumo Application}\\[3pt]
     RunIllumoApplication · SysCmdLine \textbf{L}\\

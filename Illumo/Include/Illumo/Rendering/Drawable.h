@@ -11,7 +11,7 @@ class Renderer;
 // Composed shapes/sprites use GameVisual (D-R15) rather than one Drawable each.
 //
 // Production pure-token drawables (always AppendCommands → true when visible):
-//   Canvas, CommandLine, GLString, SplashText
+//   CanvasView, GameVisual, CommandLine, GLString, SplashText
 // Hybrid immediate fallback exists for tests / future stubs only (D-R10).
 // CRTP Draw→DrawImpl is leftover for the immediate path; not on the hot token
 // path.

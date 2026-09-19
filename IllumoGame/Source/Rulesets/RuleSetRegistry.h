@@ -134,8 +134,7 @@ public:
   static std::string serializeRulePackage(const RuleFamilyDefinition& family,
                                           const RuleSetDefinition& definition);
 
-  std::unique_ptr<RuleSet> createRuleSet(const std::string& id,
-                                         CellGrid* canvas = nullptr) const;
+  std::unique_ptr<RuleSet> createRuleSet(const std::string& id) const;
 
 private:
   std::vector<RuleFamilyDefinition> families;

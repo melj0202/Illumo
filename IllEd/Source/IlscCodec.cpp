@@ -1,5 +1,7 @@
 #include "IlscCodec.h"
 #include <Illumo/Platform/AtomicFile.h>
+#include <filesystem>
+#include <system_error>
 
 #include <cctype>
 #include <cmath>
@@ -565,12 +567,13 @@ bool
 IlscCodec::readFile(const std::string& path,
                     IlscDocument* document,
                     std::string* error)
-{
+try {
   if (path.empty()) {
     setError(error, "Scene path is empty");
     return false;
   }
-  std::ifstream file(path);
+  std::ifstream file(
+    std::filesystem::path(std::u8string(path.begin(), path.end())));
   if (!file.is_open()) {
     setError(error, "Failed to open scene file");
     return false;
@@ -582,22 +585,28 @@ IlscCodec::readFile(const std::string& path,
     return false;
   }
   return parse(buffer.str(), document, error);
+} catch (const std::system_error&) {
+  setError(error, "Invalid or inaccessible UTF-8 file path");
+  return false;
 }
 
 bool
 IlscCodec::writeFile(const std::string& path,
                      const IlscDocument& document,
                      std::string* error)
-{
+try {
   if (path.empty()) {
     setError(error, "Scene path is empty");
     return false;
   }
   return AtomicFile::write(
-    path,
+    std::filesystem::path(std::u8string(path.begin(), path.end())),
     [&document](std::ostream& file, std::string*) {
       file << encode(document);
       return file.good();
     },
     error);
+} catch (const std::system_error&) {
+  setError(error, "Invalid or inaccessible UTF-8 file path");
+  return false;
 }

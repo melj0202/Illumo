@@ -1,10 +1,11 @@
 #include <Illumo/Foundation/MacroDefs.h>
 #include <Illumo/Services/CommandLine.h>
+#include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <iostream>
 
-Logger* Logger::instance = nullptr;
+std::unique_ptr<Logger> Logger::instance;
 
 long
 Logger::getSafeLogLevel()
@@ -15,11 +16,20 @@ Logger::getSafeLogLevel()
   return 2; // safe default level: Error and Warning
 }
 
-Logger::Logger(IEnvVars* ev, CommandLine* cl)
+Logger::Logger(IEnvVars* ev,
+               CommandLine* cl,
+               const std::filesystem::path& filePath)
   : envVars(ev)
   , commandLine(cl)
 {
-  logFileStream.open("log.txt", std::ios::app);
+  logFileStream.open(filePath.empty()
+                       ? EnvVars::ApplicationConfigPath().parent_path() /
+                           "log.txt"
+                       : filePath,
+                     std::ios::app);
+  if (!logFileStream.is_open()) {
+    std::fputs("Logger: could not open log file\n", stderr);
+  }
   // Log date and time
   logFileStream << "\n"
                 << "========================" << '\n'
@@ -35,12 +45,14 @@ Logger::~Logger()
 }
 
 bool
-Logger::initLogger(IEnvVars* ev, CommandLine* cl)
+Logger::initLogger(IEnvVars* ev,
+                   CommandLine* cl,
+                   const std::filesystem::path& filePath)
 {
   if (!instance) {
-    instance = new Logger(ev, cl);
+    instance = std::make_unique<Logger>(ev, cl, filePath);
   }
-  return true;
+  return instance->logFileStream.is_open();
 }
 
 void
@@ -55,8 +67,7 @@ Logger::setContext(IEnvVars* ev, CommandLine* cl)
 void
 Logger::shutdownLogger()
 {
-  delete instance;
-  instance = nullptr;
+  instance.reset();
 }
 
 void

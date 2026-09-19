@@ -19,9 +19,9 @@ native dialog implementation, logging lifetime, system parser, or frame loop.
 IllumoGame supports multiple rule sets (Game of Life, Brian's Brain,
 Wireworld, \ldots), camera navigation, edit/run modes, save/load, and a compact
 in-app command/debug surface. Rendering is OpenGL via GLFW/GLEW on the supported
-Windows path. Linux sources are repaired for Ubuntu 24.04 x86_64
+Windows path. Linux sources are repaired for Ubuntu 24.04 x86\_64
 X11/XWayland; they are not promoted to supported until native smoke exists.
-macOS retains unsupported scaffolding.
+macOS is not targeted; no platform scaffold is retained.
 
 \begin{inferencebox}
 Illumo is intended to be a reusable runtime and rendering foundation for
@@ -66,5 +66,5 @@ module and engine-owned optional Debug module $\rightarrow$ \texttt{std::chrono}
   \item No SceneGraph serialization, retained UI, culling hierarchy, or update
         framework until a concrete consumer defines those contracts.
   \item No multiplayer or networking.
-  \item No claim that Linux or macOS is supported until native validation exists.
+  \item No Linux support claim until native validation exists; macOS is not targeted.
 \end{itemize}

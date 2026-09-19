@@ -1,6 +1,6 @@
 #include "CellContext.h"
-#include "Rulesets/AllSets.h"
 #include "Rulesets/RuleSet.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -165,7 +165,7 @@ CellContext::setRuleSetInternal(std::string familyString,
   }
 
   std::unique_ptr<RuleSet> newRuleSet =
-    RuleSetRegistry::instance().createRuleSet(ruleSetString, nullptr);
+    RuleSetRegistry::instance().createRuleSet(ruleSetString);
   if (!newRuleSet) {
     Logger::LogError("Failed to compile ruleset: " + ruleSetString);
     return false;

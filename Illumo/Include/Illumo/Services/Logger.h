@@ -1,6 +1,8 @@
 #pragma once
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 
 /*
@@ -23,7 +25,9 @@ class CommandLine;
 class Logger
 {
 public:
-  Logger(IEnvVars* ev, CommandLine* cl);
+  Logger(IEnvVars* ev,
+         CommandLine* cl,
+         const std::filesystem::path& filePath = {});
   ~Logger();
 
   void operator=(const Logger&) = delete;
@@ -62,7 +66,9 @@ public:
   static void LogWWarning(const wchar_t* /*message*/) {};
   static void LogWInfo(const wchar_t* /*message*/) {};
   static void LogW(const wchar_t* /*message*/) {};
-  static bool initLogger(IEnvVars* ev = nullptr, CommandLine* cl = nullptr);
+  static bool initLogger(IEnvVars* ev = nullptr,
+                         CommandLine* cl = nullptr,
+                         const std::filesystem::path& filePath = {});
   static void setContext(IEnvVars* ev, CommandLine* cl);
   static void shutdownLogger();
   // Console tools can reserve stdout for machine-readable results.
@@ -77,7 +83,7 @@ public:
 private:
   static inline bool consoleToStderr = false;
   static long getSafeLogLevel();
-  static Logger* instance;
+  static std::unique_ptr<Logger> instance;
   IEnvVars* envVars;
   CommandLine* commandLine;
 };

@@ -46,14 +46,8 @@ public:
   {
     return static_cast<unsigned int>(_indexData.size());
   }
-  unsigned int getVAOID() const { return _vaoID; }
-  unsigned int getVBOID() const { return _vboID; }
-  unsigned int getEBOID() const { return _eboID; }
 
 protected:
   std::vector<float> _vertexData;
   std::vector<unsigned int> _indexData;
-  unsigned int _vaoID = 0;
-  unsigned int _vboID = 0;
-  unsigned int _eboID = 0;
 };

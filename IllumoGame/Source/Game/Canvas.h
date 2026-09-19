@@ -13,7 +13,8 @@ class IRenderWindow;
 class Renderer;
 class RuleSet;
 
-// Presentation + GPU adapter over CellGrid domain storage (D-C2).
+// Dense compatibility-test presentation adapter (historical D-C2).
+// Production uses SparseCellGrid and CanvasView (D-C3).
 // Domain: inherited CellGrid (lifeCanvas, dirty tracking).
 // View: CPU palette → targetRgb; displayRgb eases toward targets; RGB texture.
 // GPU: world-space sprite on embedded GameVisual + display texture
@@ -48,8 +49,7 @@ public:
   void DrawImpl();
   bool AppendCommands(Renderer* renderer) override;
 
-  // Scene-friendly host (world-space display sprite). Prefer adding this to
-  // Scene when composing; Canvas::AppendCommands still forwards for tests.
+  // World-space display sprite exposed for compatibility token tests.
   GameVisual& getVisual() { return visual; }
   const GameVisual& getVisual() const { return visual; }
 

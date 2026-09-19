@@ -10,8 +10,7 @@ class DataRuleSet : public RuleSet
 {
 public:
   DataRuleSet(const RuleSetDefinition& definition,
-              const RuleFamilyDefinition& family,
-              CellGrid* canvas);
+              const RuleFamilyDefinition& family);
   ~DataRuleSet() override = default;
 
   std::string getRuleTag() const override { return definition.id; }

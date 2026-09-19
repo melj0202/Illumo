@@ -37,7 +37,7 @@ Architecture, decisions, and current-state truth:
 |---|---|
 | Windows, GLFW, OpenGL, MSVC | Supported, verified production path |
 | Linux, Ubuntu 24.04 x86_64, X11/XWayland, GCC 13+ or Clang 18, gtkmm-3 | Sources and CMake repaired so the in-tree apps can configure, compile, and run. That is **not a support claim** until native GUI smoke on that host. See [docs/packages/platform-linux.md](docs/packages/platform-linux.md) |
-| macOS | Unverified scaffold. See [docs/packages/platform-macos.md](docs/packages/platform-macos.md) |
+| macOS | Not targeted; no port sources are retained |
 
 The stack is C++23, CMake 3.25 or newer, and vendored GLFW, GLEW, GLM, and
 FreeType. GLFW, GLEW, and OpenGL stay behind Illumo; game and rules code do

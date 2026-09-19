@@ -7,8 +7,7 @@
 class Elementary1DRuleSet : public RuleSet
 {
 public:
-  Elementary1DRuleSet(CellGrid* targetCanvas,
-                      std::string tag,
+  Elementary1DRuleSet(std::string tag,
                       unsigned int ruleNumber,
                       std::array<unsigned char, 3> aliveColor = { 0, 0, 0 },
                       std::array<unsigned char, 3> deadColor = { 255,

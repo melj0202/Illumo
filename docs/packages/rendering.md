@@ -80,3 +80,14 @@ Each live renderer retains a separate enrollment; expired entries are pruned
 and retired texture handles are reenrolled. Fonts do not own renderer or GPU
 lifetimes. Renderer destruction invalidates its identity before backend
 teardown, so shared fonts safely survive successive renderer lifetimes.
+
+GameVisual binds its resources to one renderer lifetime; setters reject a foreign
+renderer and emission reports a frame error. Partial enrollment rolls back both
+mesh handles. Truncated geometry is reported on every affected frame, including
+cached geometry. Queue rejection counts and high-water metrics are backend-visible
+and survive intermediate pass resets. Renderer retains incomplete-frame status
+until BeginFrame and does not present failed frames. Accepted token prefixes may
+execute; rejected mesh/texture uploads remain pending for a healthy-frame retry.
+Native GPU object names are private GL state, absent from the public resource
+interfaces. Consumers use MeshHandle/TextureHandle/ShaderHandle. Failed allocation
+or replacement never publishes an unusable resource or retires the old one.

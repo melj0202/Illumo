@@ -328,12 +328,12 @@ the user. Public-header smoke exercises every new entry point.
 
 ## Phase 4 — snapshot extraction (D-R25)
 
-1. `SceneSnapshot` / `SceneRenderItem` types; a two-or-three buffer ring owned
+1. `SceneSnapshot` / `SceneRenderItem` types; a two-buffer ring owned
    by the graph, reusing capacity.
-2. Single extraction pass computing camera visibility and shadow relevance as
-   flags in one go, instead of two separate culling evaluations.
+2. Single extraction pass captures transforms, bounds, handles and camera
+   visibility. Preserve off-camera items for shadow fitting and depth emission.
 3. `SceneGraphDrawable::CollectShadowCasters` / `AppendShadowCommands` /
-   `AppendCommands` iterate the same snapshot with different flag masks.
+   `AppendCommands` iterate the same snapshot; depth tests fitted shadow relevance after collection.
 4. Narrow the `renderTraversalActive` guard to the extraction call.
 5. Attachment-detach semantics: detaching invalidates outstanding snapshots.
 

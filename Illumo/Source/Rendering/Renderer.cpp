@@ -462,6 +462,7 @@ Renderer::retainUniformMatrix(const float* value)
 void
 Renderer::clearCommandQueue()
 {
+  checkCommandRejections();
   _backend->ClearCommandQueue();
   uniformMatrixCount = 0;
 }
@@ -683,6 +684,7 @@ void
 Renderer::BeginFrame()
 {
   m_frameError.clear();
+  m_frameRejectedBaseline = _backend->rejectedCommandCount();
   _backend->BeginFrame();
   clearCommandQueue();
   _currentPassFbo = FramebufferHandle{};
@@ -702,17 +704,34 @@ Renderer::EndFrame()
 void
 Renderer::EndFrame(std::chrono::steady_clock::time_point* presentationStart)
 {
-  _backend->SubmitCommandQueue();
+  SubmitOnly();
   if (presentationStart != nullptr) {
     *presentationStart = std::chrono::steady_clock::now();
   }
-  _backend->EndFrame();
+  if (m_frameError.empty()) {
+    _backend->EndFrame();
+  }
 }
 
 void
 Renderer::SubmitOnly()
 {
+  checkCommandRejections();
   _backend->SubmitCommandQueue();
+  const std::string error = _backend->submissionError();
+  if (!error.empty()) {
+    reportFrameError(error);
+  }
+}
+
+bool
+Renderer::checkCommandRejections()
+{
+  if (_backend->rejectedCommandCount() != m_frameRejectedBaseline) {
+    reportFrameError(
+      "Command queue safety ceiling exceeded; frame is incomplete");
+  }
+  return m_frameError.empty();
 }
 
 void
@@ -957,7 +976,7 @@ Renderer::popClipRect()
     previous.enabled, previous.x, previous.y, previous.width, previous.height);
 }
 
-void
+bool
 Renderer::pushUpdateTexture(TextureHandle handle,
                             int x,
                             int y,
@@ -977,10 +996,14 @@ Renderer::pushUpdateTexture(TextureHandle handle,
   cmd.updateTexture.channels = channels;
   cmd.updateTexture.srcRowStride = srcRowStride;
   cmd.updateTexture.data = data;
+  const size_t before = _backend->rejectedCommandCount();
   _backend->PushToCommandQueue(cmd);
+  const bool accepted = _backend->rejectedCommandCount() == before;
+  checkCommandRejections();
+  return accepted;
 }
 
-void
+bool
 Renderer::pushUpdateBuffer(MeshHandle meshHandle,
                            unsigned int offsetBytes,
                            unsigned int sizeBytes,
@@ -992,10 +1015,14 @@ Renderer::pushUpdateBuffer(MeshHandle meshHandle,
   cmd.updateBuffer.offsetBytes = offsetBytes;
   cmd.updateBuffer.sizeBytes = sizeBytes;
   cmd.updateBuffer.data = data;
+  const size_t before = _backend->rejectedCommandCount();
   _backend->PushToCommandQueue(cmd);
+  const bool accepted = _backend->rejectedCommandCount() == before;
+  checkCommandRejections();
+  return accepted;
 }
 
-void
+bool
 Renderer::pushUpdateIndexBuffer(MeshHandle meshHandle,
                                 unsigned int offsetBytes,
                                 unsigned int sizeBytes,
@@ -1007,7 +1034,11 @@ Renderer::pushUpdateIndexBuffer(MeshHandle meshHandle,
   cmd.updateIndexBuffer.offsetBytes = offsetBytes;
   cmd.updateIndexBuffer.sizeBytes = sizeBytes;
   cmd.updateIndexBuffer.data = data;
+  const size_t before = _backend->rejectedCommandCount();
   _backend->PushToCommandQueue(cmd);
+  const bool accepted = _backend->rejectedCommandCount() == before;
+  checkCommandRejections();
+  return accepted;
 }
 
 PooledRenderTarget
@@ -1294,7 +1325,7 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
   }
 
   // Submit clear + token drawables before any immediate overlays.
-  _backend->SubmitCommandQueue();
+  SubmitOnly();
   clearCommandQueue();
 
   for (size_t i = 0; i < immediateCount; ++i) {
@@ -1366,6 +1397,6 @@ Renderer::RenderProofQuad()
   pushUniformInt("ourTexture", 0);
   pushDrawIndexed(6, 0);
 
-  _backend->SubmitCommandQueue();
+  SubmitOnly();
   clearCommandQueue();
 }

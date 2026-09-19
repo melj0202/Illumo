@@ -2,11 +2,16 @@
 #include <GL/glew.h>
 #include <Illumo/Rendering/IMesh.h>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 class GLMesh : public IMesh
 {
 public:
+  unsigned int getVAOID() const { return _vaoID; }
+  unsigned int getVBOID() const { return _vboID; }
+  unsigned int getEBOID() const { return _eboID; }
+
   static const unsigned int kCanvasFloatsPerVertex = 8;
   static const unsigned int kCanvasStrideBytes =
     kCanvasFloatsPerVertex * sizeof(float);
@@ -97,24 +102,32 @@ public:
                 _vboCapacityBytes);
   }
 
-  ~GLMesh() = default;
+  ~GLMesh() override { Destroy(); }
+  GLMesh(const GLMesh&) = delete;
+  GLMesh& operator=(const GLMesh&) = delete;
+  GLMesh(GLMesh&&) = delete;
+  GLMesh& operator=(GLMesh&&) = delete;
+  bool isValid() const { return _vaoID != 0 && _vboID != 0; }
 
   void Bind() const { glBindVertexArray(_vaoID); }
 
   void Unbind() const { glBindVertexArray(0); }
 
-  void UpdateVertexData(const void* data,
+  bool UpdateVertexData(const void* data,
                         size_t sizeBytes,
                         size_t offsetBytes = 0) const
   {
-    if (!data || sizeBytes == 0) {
-      return;
+    if (!data || sizeBytes == 0 || !isValid() ||
+        offsetBytes > _vboCapacityBytes ||
+        sizeBytes > _vboCapacityBytes - offsetBytes) {
+      return false;
     }
     glBindBuffer(GL_ARRAY_BUFFER, _vboID);
     glBufferSubData(GL_ARRAY_BUFFER,
                     static_cast<GLintptr>(offsetBytes),
                     static_cast<GLsizeiptr>(sizeBytes),
                     data);
+    return true;
   }
 
   bool UpdateIndexData(const void* data,
@@ -160,6 +173,9 @@ public:
   }
 
 private:
+  unsigned int _vaoID = 0;
+  unsigned int _vboID = 0;
+  unsigned int _eboID = 0;
   unsigned int _uploadedIndexCount;
   bool _hasIndexBuffer;
   MeshVertexLayout _layout;
@@ -304,6 +320,13 @@ private:
 
   void uploadToGpu(const void* vertices, size_t vertexSize)
   {
+    if (vertexSize == 0 || (!vertices && !_dynamic) ||
+        vertexSize >
+          static_cast<size_t>(std::numeric_limits<GLsizeiptr>::max()) ||
+        _eboCapacityBytes >
+          static_cast<size_t>(std::numeric_limits<GLsizeiptr>::max())) {
+      return;
+    }
     glGenVertexArrays(1, &_vaoID);
     glGenBuffers(1, &_vboID);
     glBindVertexArray(_vaoID);
@@ -327,6 +350,11 @@ private:
       _vboCapacityBytes = _vertexData.size() * sizeof(float);
     }
 
+    GLint64 vertexCapacity = 0;
+    glGetBufferParameteri64v(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &vertexCapacity);
+    bool storageValid =
+      _vaoID != 0 && _vboID != 0 &&
+      vertexCapacity == static_cast<GLint64>(_vboCapacityBytes);
     if (_eboCapacityBytes > 0) {
       glGenBuffers(1, &_eboID);
       glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _eboID);
@@ -337,6 +365,11 @@ private:
       _uploadedIndexCount =
         static_cast<unsigned int>(_eboCapacityBytes / sizeof(unsigned int));
       _hasIndexBuffer = true;
+      GLint64 indexCapacity = 0;
+      glGetBufferParameteri64v(
+        GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &indexCapacity);
+      storageValid = storageValid && _eboID != 0 &&
+                     indexCapacity == static_cast<GLint64>(_eboCapacityBytes);
     }
 
     setupAttributes();
@@ -344,5 +377,8 @@ private:
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    if (!storageValid) {
+      Destroy();
+    }
   }
 };

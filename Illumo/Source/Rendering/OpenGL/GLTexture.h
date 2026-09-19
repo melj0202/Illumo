@@ -55,7 +55,7 @@ public:
     , m_pboIndex(0)
     , m_pboBytes(0)
   {
-    UploadToGPU(data, width, height, m_channels, options);
+    UploadToGPU(data, width, height, channels, options);
   }
 
   GLTexture(const std::array<const unsigned char*, 6>& facesData,
@@ -196,7 +196,7 @@ public:
     glBindTexture(m_target, m_id);
   }
 
-  unsigned int getID() const override { return m_id; }
+  unsigned int getID() const { return m_id; }
   std::array<int, 2> getSize() const override { return m_size; }
   int getChannels() const override { return m_channels; }
   bool isCubemap() const override { return m_target == GL_TEXTURE_CUBE_MAP; }
@@ -525,6 +525,15 @@ private:
                    int channels,
                    const TextureOptions& options)
   {
+    GLint maximumSize = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximumSize);
+    if (width <= 0 || height <= 0 || width > maximumSize ||
+        height > maximumSize ||
+        (channels != 1 && channels != 3 && channels != 4)) {
+      return;
+    }
+    UploadState state;
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     glGenTextures(1, &m_id);
     glBindTexture(GL_TEXTURE_2D, m_id);
 
@@ -540,6 +549,16 @@ private:
                  format,
                  GL_UNSIGNED_BYTE,
                  data);
+    GLint allocatedWidth = 0;
+    GLint allocatedHeight = 0;
+    glGetTexLevelParameteriv(
+      GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &allocatedWidth);
+    glGetTexLevelParameteriv(
+      GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &allocatedHeight);
+    if (m_id == 0 || allocatedWidth != width || allocatedHeight != height) {
+      Destroy();
+      return;
+    }
 
     const GLint magnificationFilter =
       (options.filter == TextureFilter::Linear) ? GL_LINEAR : GL_NEAREST;

@@ -2,12 +2,10 @@ cmake_minimum_required(VERSION 3.25)
 
 add_library(IllumoGameCore STATIC
   Source/Game/BuiltinPatterns.cpp
-  Source/Game/Canvas.cpp
   Source/Game/CanvasView.cpp
   Source/Game/CellClipboard.cpp
   Source/Game/CellContext.cpp
   Source/Game/CellGameModule.cpp
-  Source/Game/CellGrid.cpp
   Source/Game/CellPattern.cpp
   Source/Game/ConfigurationMenu.cpp
   Source/Game/Cursor.cpp
@@ -23,13 +21,9 @@ add_library(IllumoGameCore STATIC
   Source/Game/SimulationRunner.cpp
   Source/Game/SparseCellGrid.cpp
   Source/Game/SparseWorkerPool.cpp
-  Source/Rulesets/BriansBrainRuleSet.cpp
   Source/Rulesets/DataRuleSet.cpp
-  Source/Rulesets/Elementary1DRuleSet.cpp
-  Source/Rulesets/LifeLikeRuleSet.cpp
   Source/Rulesets/RuleSet.cpp
   Source/Rulesets/RuleSetRegistry.cpp
-  Source/Rulesets/WireworldRuleSet.cpp
 )
 target_include_directories(IllumoGameCore PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
@@ -53,6 +47,13 @@ illumo_stage_msvc_asan(IllumoGame)
 
 if(BUILD_TESTING)
   add_executable(IllumoGameTests
+    Tests/DenseRuleEvaluator.cpp
+    Source/Game/Canvas.cpp
+    Source/Game/CellGrid.cpp
+    Source/Rulesets/BriansBrainRuleSet.cpp
+    Source/Rulesets/Elementary1DRuleSet.cpp
+    Source/Rulesets/LifeLikeRuleSet.cpp
+    Source/Rulesets/WireworldRuleSet.cpp
     Tests/TestMain.cpp
     Tests/TestRuleSets.cpp
     Tests/TestRuleCatalogLoader.cpp
