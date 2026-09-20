@@ -17,6 +17,7 @@ struct GLFWwindow;
 class InputManager
 {
   friend class InputManagerTestAccess;
+  friend class GuestInputProvider;
 
 public:
   struct KeyPressEvent
@@ -120,6 +121,7 @@ private:
 
   long nextContextId = 0;
   int m_modifierFlags;
+  std::array<double, 2> m_snapshotMouse{};
   std::array<bool, static_cast<size_t>(KeyCode::F12) + 1> m_suppressedKeys{};
 
   KeyCode TranslateKeyCodeToGLFW(int glfwKey);
@@ -153,6 +155,18 @@ public:
   bool isKeySuppressed(KeyCode key) const;
 
   InputAction GetInputAction(KeyCode keyCode);
+  // Published frame state includes Press-to-Hold transitions and overlay masks.
+  // GetInputAction is the raw platform poll used while constructing that state.
+  InputAction frameAction(KeyCode key) const
+  {
+    if (isKeySuppressed(key)) {
+      return InputAction::None;
+    }
+    const std::unordered_map<KeyCode, InputAction>::const_iterator found =
+      inputStatesCurrent.find(key);
+    return found == inputStatesCurrent.end() ? InputAction::None
+                                             : found->second;
+  }
 
   bool isKeyPressed(KeyCode key);
 

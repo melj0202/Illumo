@@ -1,0 +1,962 @@
+#include <Illumo/Rendering/Font.h>
+#include <Illumo/Rendering/FrameCapture.h>
+#include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Services/CommandRegistry.h>
+#include <Illumo/Services/EnvVars.h>
+#include <Illumo/Testing/MockBackend.h>
+#include <Illumo/Testing/TestAccess.h>
+#include <Illumo/Testing/TestHarness.h>
+#include <Illumo/Testing/TestHelpers.h>
+#include <Illumo/Wasm/WasmFileServices.h>
+#include <Illumo/Wasm/WasmFrameRenderer.h>
+#include <Illumo/Wasm/WasmGameModule.h>
+#include <Illumo/Wasm/WasmGameServices.h>
+#include <IllumoGuest/Clipboard.h>
+#include <IllumoGuest/Console.h>
+#include <IllumoGuest/Dialog.h>
+#include <IllumoGuest/Display.h>
+#include <IllumoGuest/Input.h>
+#include <chrono>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <thread>
+
+class MemoryClipboard final : public WasmHostClipboard
+{
+public:
+  std::string text;
+  std::string getText() override { return text; }
+  bool setText(const std::string& value) override
+  {
+    text = value;
+    return true;
+  }
+};
+
+class MemoryDialogs final : public WasmHostDialogs
+{
+public:
+  std::string path;
+  unsigned int calls = 0;
+  std::string pick(bool,
+                   const std::string&,
+                   const std::string&,
+                   const std::string&) override
+  {
+    ++calls;
+    return path;
+  }
+};
+
+class ThrowingBackend : public MockBackend
+{
+public:
+  int replacementsBeforeThrow = -1;
+  bool throwTexture = false;
+  bool sawModColor = false;
+  std::size_t observedDraws = 0;
+  std::vector<std::size_t> writesAfterDraws;
+  void PushToCommandQueue(RenderCommand command) override
+  {
+    if (command.commandType == CommandType::DrawIndexed) {
+      ++observedDraws;
+    } else if (command.commandType == CommandType::UpdateTexture) {
+      writesAfterDraws.push_back(observedDraws);
+    }
+    if (command.commandType == CommandType::UpdateBuffer &&
+        command.updateBuffer.data != nullptr) {
+      const std::byte* bytes =
+        static_cast<const std::byte*>(command.updateBuffer.data);
+      for (std::size_t offset = 12;
+           offset + 4 <= command.updateBuffer.sizeBytes;
+           offset += 16) {
+        std::uint32_t color = 0;
+        std::memcpy(&color, bytes + offset, sizeof(color));
+        sawModColor = sawModColor || color == 0xffff77bb;
+      }
+    }
+    MockBackend::PushToCommandQueue(command);
+  }
+  bool ReplaceMesh(MeshHandle handle,
+                   const void* vertices,
+                   std::size_t vertexBytes,
+                   const void* indices,
+                   std::size_t indexBytes,
+                   MeshVertexLayout layout,
+                   bool dynamic) override
+  {
+    if (replacementsBeforeThrow == 0) {
+      throw std::runtime_error("Injected mesh failure");
+    }
+    if (replacementsBeforeThrow > 0) {
+      --replacementsBeforeThrow;
+    }
+    return MockBackend::ReplaceMesh(
+      handle, vertices, vertexBytes, indices, indexBytes, layout, dynamic);
+  }
+  TextureHandle CreateTexture(const unsigned char* data,
+                              int width,
+                              int height,
+                              int channels,
+                              const TextureOptions& options) override
+  {
+    if (throwTexture) {
+      throw std::runtime_error("Injected texture failure");
+    }
+    return MockBackend::CreateTexture(data, width, height, channels, options);
+  }
+};
+
+static GuestFrame
+makeFrame()
+{
+  GuestFrame frame;
+  frame.width = 640;
+  frame.height = 480;
+  GuestBatch batch;
+  batch.vertices = { { { 0, 0, 0 }, 0xff0000ff, { 0, 0 } },
+                     { { 50, 0, 0 }, 0xff00ff00, { 1, 0 } },
+                     { { 0, 50, 0 }, 0xffff0000, { 0, 1 } } };
+  batch.indices = { 0, 1, 2 };
+  batch.clipped = true;
+  batch.clip = { 5, 10, 100, 200 };
+  frame.batches.push_back(std::move(batch));
+  return frame;
+}
+
+static bool
+run(const std::string& name)
+{
+  TestCounters counters;
+  GuestFrame frame = makeFrame();
+  GuestWireWriter wire;
+  frame.write(wire);
+  if (name == "FrameValidation") {
+    GuestFrame accepted;
+    testTrue(counters,
+             GuestFrame::read(wire.data(), accepted),
+             "Valid geometry packet");
+    bool rejected = true;
+    for (std::size_t size = 0; size < wire.data().size(); ++size) {
+      if (GuestFrame::read(std::span(wire.data()).first(size), accepted)) {
+        rejected = false;
+      }
+    }
+    testTrue(counters,
+             rejected && accepted.batches.size() == 1,
+             "All truncations rejected transactionally");
+    frame.batches[0].indices[2] = UINT32_MAX;
+    wire.clear();
+    frame.write(wire);
+    testTrue(counters,
+             !GuestFrame::read(wire.data(), accepted),
+             "Out-of-range index rejected");
+    frame.batches[0].indices[2] = 2;
+    frame.batches[0].mvp[5] = std::numeric_limits<float>::quiet_NaN();
+    wire.clear();
+    frame.write(wire);
+    testTrue(counters,
+             !GuestFrame::read(wire.data(), accepted),
+             "Non-finite matrix rejected");
+    frame = makeFrame();
+    wire.clear();
+    frame.write(wire);
+    GuestFrameLimits tiny;
+    tiny.vertices = 2;
+    testTrue(counters,
+             !GuestFrame::read(wire.data(), accepted, tiny),
+             "Aggregate vertex quota enforced");
+    std::vector<std::byte> mutation = wire.data();
+    for (std::size_t index = 16; index < 20; ++index) {
+      mutation[index] = std::byte{ 255 };
+    }
+    testTrue(counters,
+             !GuestFrame::read(mutation, accepted),
+             "Forged count rejected before allocation");
+    // Deterministic byte mutations exercise decoder ranges under ASan.
+    for (std::size_t index = 0; index < wire.data().size(); ++index) {
+      mutation = wire.data();
+      mutation[index] ^= std::byte{ 255 };
+      GuestFrame ignored;
+      GuestFrame::read(mutation, ignored);
+    }
+    return counters.failures == 0;
+  }
+  if (name != "FrameRendering" && name != "FrameFailures" &&
+      name != "GameHost" && name != "ModIsolation" &&
+      name != "RenderServices" && name != "GuestPresentation" &&
+      name != "GameJobs" && name != "SdkContract" && name != "GameFiles" &&
+      name != "DisplayServices" && name != "ClipboardServices" &&
+      name != "ConsoleServices" && name != "DialogServices") {
+    return false;
+  }
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0, 0), 1, &env);
+  ThrowingBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  if (name == "DisplayServices") {
+    WasmFrameRenderer bridge(renderer, 322);
+    WasmGameServices denied(
+      bridge, 0, ILLUMO_ENGINE_ASSETS, {}, {}, &window, &env);
+    WasmGameServices permitted(
+      bridge,
+      static_cast<std::uint32_t>(GuestCapability::Display),
+      ILLUMO_ENGINE_ASSETS,
+      {},
+      {},
+      &window,
+      &env);
+    GuestServices requests;
+    GuestWireWriter payload;
+    GuestDisplayRequest{ true, { false, false, 120, 2 } }.write(payload);
+    requests.records.push_back({ 1,
+                                 GuestService::Display,
+                                 GuestServiceStatus::Request,
+                                 payload.take() });
+    GuestWireWriter displayBatch;
+    requests.write(displayBatch);
+    std::vector<std::byte> completion;
+    GuestServices result;
+    const std::string initialFps = env.getVar("fps").value;
+    testTrue(counters,
+             denied.process(displayBatch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.size() == 1 &&
+               result.records.front().status == GuestServiceStatus::Rejected &&
+               env.getVar("fps").value == initialFps,
+             "Display capability denial has no side effect");
+    testTrue(counters,
+             permitted.process(displayBatch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.size() == 1 &&
+               result.records.front().status == GuestServiceStatus::Complete &&
+               env.getVar("fps").valueAsLong == 120 &&
+               !env.getVar("vsync").valueAsBool,
+             "Absolute display settings reach host configuration");
+    requests.records.front().request = 2;
+    GuestWireWriter changed;
+    GuestDisplayRequest{ true, { false, true, 60, 1 } }.write(changed);
+    requests.records.front().payload = changed.take();
+    requests.records.push_back(
+      { 3, GuestService::Display, GuestServiceStatus::Request, {} });
+    displayBatch.clear();
+    requests.write(displayBatch);
+    testTrue(counters,
+             !permitted.process(displayBatch.data(), completion) &&
+               env.getVar("fps").valueAsLong == 120,
+             "Malformed display batch rejects before mutations");
+    requests.records.pop_back();
+    requests.records.push_back(requests.records.front());
+    requests.records.back().request = 3;
+    displayBatch.clear();
+    requests.write(displayBatch);
+    testTrue(counters,
+             permitted.process(displayBatch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.size() == 1,
+             "At most one display operation executes per frame");
+    displayBatch.clear();
+    GuestServices{}.write(displayBatch);
+    testTrue(counters,
+             permitted.process(displayBatch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.size() == 1 &&
+               result.records.front().request == 3,
+             "Queued display request completes on later frame");
+    return counters.failures == 0;
+  }
+  if (name == "ClipboardServices") {
+    MemoryClipboard clipboard;
+    clipboard.text = "prior";
+    WasmFrameRenderer bridge(renderer, 323);
+    WasmGameServices denied(bridge,
+                            0,
+                            ILLUMO_ENGINE_ASSETS,
+                            {},
+                            {},
+                            &window,
+                            &env,
+                            nullptr,
+                            nullptr,
+                            &clipboard);
+    WasmGameServices permitted(
+      bridge,
+      static_cast<std::uint32_t>(GuestCapability::Clipboard),
+      ILLUMO_ENGINE_ASSETS,
+      {},
+      {},
+      &window,
+      &env,
+      nullptr,
+      nullptr,
+      &clipboard);
+    GuestServices requests;
+    GuestWireWriter payload;
+    GuestClipboardRequest{ true, "copied" }.write(payload);
+    requests.records.push_back({ 1,
+                                 GuestService::Clipboard,
+                                 GuestServiceStatus::Request,
+                                 payload.take() });
+    GuestWireWriter batch;
+    requests.write(batch);
+    std::vector<std::byte> completion;
+    GuestServices result;
+    testTrue(counters,
+             denied.process(batch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.size() == 1 &&
+               result.records.front().status == GuestServiceStatus::Rejected &&
+               clipboard.text == "prior",
+             "Clipboard capability denial has no side effect");
+    testTrue(counters,
+             permitted.process(batch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.size() == 1 &&
+               result.records.front().status == GuestServiceStatus::Complete &&
+               clipboard.text == "copied",
+             "Clipboard set reaches the host store");
+    GuestClipboardRequest actual;
+    testTrue(
+      counters,
+      GuestClipboardRequest::read(result.records.front().payload, actual) &&
+        !actual.set && actual.text == "copied",
+      "Clipboard completion returns copied text");
+    requests.records.front().request = 2;
+    GuestWireWriter changed;
+    GuestClipboardRequest{ true, "later" }.write(changed);
+    requests.records.front().payload = changed.take();
+    requests.records.push_back(
+      { 3, GuestService::Clipboard, GuestServiceStatus::Request, {} });
+    batch.clear();
+    requests.write(batch);
+    testTrue(counters,
+             !permitted.process(batch.data(), completion) &&
+               clipboard.text == "copied",
+             "Malformed clipboard batch rejects before mutations");
+    return counters.failures == 0;
+  }
+  if (name == "ConsoleServices") {
+    CommandRegistry registry;
+    WasmFrameRenderer bridge(renderer, 324);
+    WasmGameServices denied(
+      bridge, 0, ILLUMO_ENGINE_ASSETS, {}, {}, &window, &env, &registry);
+    WasmGameServices permitted(
+      bridge,
+      static_cast<std::uint32_t>(GuestCapability::Console),
+      ILLUMO_ENGINE_ASSETS,
+      {},
+      {},
+      &window,
+      &env,
+      &registry);
+    GuestConsoleRequest add;
+    add.action = GuestConsoleAction::Register;
+    add.name = "ruleset";
+    add.usage = "ruleset [name]";
+    add.description = "Show or change the ruleset";
+    GuestServices requests;
+    GuestWireWriter payload;
+    add.write(payload);
+    requests.records.push_back({ 1,
+                                 GuestService::Console,
+                                 GuestServiceStatus::Request,
+                                 payload.take() });
+    GuestWireWriter batch;
+    requests.write(batch);
+    std::vector<std::byte> completion;
+    GuestServices result;
+    testTrue(counters,
+             denied.process(batch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.size() == 1 &&
+               result.records.front().status == GuestServiceStatus::Rejected &&
+               !registry.HasCommand("ruleset"),
+             "Console capability denial does not register commands");
+    GuestConsoleRequest listen;
+    listen.action = GuestConsoleAction::Listen;
+    payload.clear();
+    listen.write(payload);
+    requests.records.push_back({ 2,
+                                 GuestService::Console,
+                                 GuestServiceStatus::Request,
+                                 payload.take() });
+    batch.clear();
+    requests.write(batch);
+    testTrue(counters,
+             permitted.process(batch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.size() == 1 &&
+               result.records.front().status == GuestServiceStatus::Complete &&
+               registry.HasCommand("ruleset"),
+             "Guest command metadata is registered natively");
+    testTrue(counters,
+             registry.QueueCommand("ruleset", { "WIREWORLD" }) &&
+               (registry.ExecuteQueue(), true),
+             "Native console trampoline queues a guest invocation");
+    batch.clear();
+    GuestServices{}.write(batch);
+    testTrue(counters,
+             permitted.process(batch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.size() == 1 &&
+               result.records.front().request == 2,
+             "Standing listen completes with the native invocation");
+    GuestConsoleRequest invocation;
+    testTrue(
+      counters,
+      GuestConsoleRequest::read(result.records.front().payload, invocation) &&
+        invocation.name == "ruleset" && invocation.arguments.size() == 1 &&
+        invocation.arguments.front() == "WIREWORLD",
+      "Invocation payload carries command name and arguments");
+    permitted.cancel();
+    testTrue(counters,
+             !registry.HasCommand("ruleset"),
+             "Retired guest unregisters native command trampolines");
+    return counters.failures == 0;
+  }
+  if (name == "DialogServices") {
+    const std::filesystem::path root = std::filesystem::absolute(
+      "dialog-service-" +
+      std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()));
+    if (!std::filesystem::create_directory(root)) {
+      return false;
+    }
+    std::filesystem::create_directory(root / "package");
+    std::filesystem::create_directory(root / "storage");
+    const std::filesystem::path selected = root / "world.csim";
+    std::ofstream(selected, std::ios::binary) << "grid";
+    MemoryDialogs dialogs;
+    dialogs.path = selected.string();
+    std::unique_ptr<WasmFileServices> selectedFiles =
+      std::make_unique<WasmFileServices>(
+        325,
+        static_cast<std::uint32_t>(GuestCapability::Assets) |
+          static_cast<std::uint32_t>(GuestCapability::Storage) |
+          static_cast<std::uint32_t>(GuestCapability::SelectedFiles),
+        root / "package",
+        root / "storage");
+    WasmFrameRenderer bridge(renderer, 325);
+    WasmGameServices denied(bridge,
+                            0,
+                            ILLUMO_ENGINE_ASSETS,
+                            {},
+                            {},
+                            &window,
+                            &env,
+                            nullptr,
+                            nullptr,
+                            nullptr,
+                            &dialogs);
+    WasmGameServices permitted(
+      bridge,
+      static_cast<std::uint32_t>(GuestCapability::SelectedFiles),
+      ILLUMO_ENGINE_ASSETS,
+      {},
+      std::move(selectedFiles),
+      &window,
+      &env,
+      nullptr,
+      nullptr,
+      nullptr,
+      &dialogs);
+    GuestDialogRequest load;
+    load.description = "CSim Simulation";
+    load.defaultName = "MyCanvas.illumo";
+    load.pattern = "*.ILLUMO";
+    GuestServices requests;
+    GuestWireWriter payload;
+    load.write(payload);
+    requests.records.push_back(
+      { 1, GuestService::Dialog, GuestServiceStatus::Request, payload.take() });
+    GuestWireWriter batch;
+    requests.write(batch);
+    std::vector<std::byte> completion;
+    GuestServices result;
+    testTrue(counters,
+             denied.process(batch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.front().status == GuestServiceStatus::Rejected &&
+               dialogs.calls == 0,
+             "Dialog capability denial does not open a picker");
+    testTrue(counters,
+             permitted.process(batch.data(), completion) &&
+               GuestServices::read(completion, result, false) &&
+               result.records.front().status == GuestServiceStatus::Complete &&
+               dialogs.calls == 1,
+             "Load dialog grants a selected file name");
+    GuestDialogResult granted;
+    testTrue(counters,
+             GuestDialogResult::read(result.records.front().payload, granted) &&
+               granted.outcome == GuestFileOutcome::Success &&
+               !granted.writing && granted.name == "sel-1",
+             "Dialog completion hides the host path");
+    dialogs.path.clear();
+    requests.records.front().request = 2;
+    payload.clear();
+    load.write(payload);
+    requests.records.front().payload = payload.take();
+    batch.clear();
+    requests.write(batch);
+    testTrue(
+      counters,
+      permitted.process(batch.data(), completion) &&
+        GuestServices::read(completion, result, false) &&
+        GuestDialogResult::read(result.records.front().payload, granted) &&
+        granted.outcome == GuestFileOutcome::Cancelled,
+      "Empty picker result is a cancellation");
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    return counters.failures == 0;
+  }
+  if (name == "RenderServices") {
+    WasmFrameRenderer bridge(renderer, 321);
+    WasmRenderServices services(
+      bridge,
+      static_cast<std::uint32_t>(GuestCapability::Render) |
+        static_cast<std::uint32_t>(GuestCapability::Assets),
+      ILLUMO_ENGINE_ASSETS);
+    GuestServiceQueue queue;
+    GuestTextureRequest texture;
+    texture.width = 1;
+    texture.height = 1;
+    texture.channels = 4;
+    texture.pixels.assign(4, std::byte{ 255 });
+    GuestWireWriter payload;
+    texture.write(payload);
+    const std::uint64_t textureRequest =
+      queue.enqueue(GuestService::CreateTexture, payload.take());
+    GuestFontRequest font;
+    payload.clear();
+    font.write(payload);
+    const std::uint64_t fontRequest =
+      queue.enqueue(GuestService::LoadFont, payload.take());
+    GuestWireWriter empty;
+    GuestServices{}.write(empty);
+    std::vector<std::byte> requests, completions;
+    testTrue(counters,
+             queue.exchange(empty.data(), requests) &&
+               services.process(requests, completions),
+             "Resource request round trip");
+    testTrue(counters,
+             queue.exchange(completions, requests),
+             "Deferred completions delivered");
+    GuestServiceRecord completed;
+    testTrue(counters,
+             queue.take(textureRequest, completed) &&
+               completed.status == GuestServiceStatus::Complete,
+             "Texture request completes");
+    GuestWireReader created(completed.payload);
+    const GuestResourceId id = GuestResourceId::read(created);
+    testTrue(counters,
+             created.finished() && id.owner == 321,
+             "Texture authority scoped to caller");
+    testTrue(counters,
+             queue.take(fontRequest, completed) &&
+               completed.status == GuestServiceStatus::Complete,
+             "Engine font request completes");
+    GuestFont received;
+    testTrue(counters,
+             GuestFont::read(completed.payload, received) &&
+               received.atlas.owner == 321 && received.glyphs.size() == 95,
+             "Copied immutable glyph metrics and scoped atlas");
+    Font native;
+    testTrue(counters,
+             native.loadFile("Assets/Fonts/Space_Mono/SpaceMono-Bold.ttf", 32),
+             "Reference font available");
+    float advance = 0;
+    for (char character : std::string("CSim palette")) {
+      for (const GuestGlyph& glyph : received.glyphs) {
+        if (glyph.codepoint == static_cast<unsigned char>(character)) {
+          advance += glyph.values[8];
+        }
+      }
+    }
+    testTrue(counters,
+             advance == native.measureText("CSim palette", 32).width,
+             "Transferred metrics preserve native layout width");
+    GuestServices malformed;
+    payload.clear();
+    texture.write(payload);
+    malformed.records.push_back({ 3,
+                                  GuestService::CreateTexture,
+                                  GuestServiceStatus::Request,
+                                  payload.take() });
+    malformed.records.push_back(
+      { 4, GuestService::CreateTexture, GuestServiceStatus::Request, {} });
+    payload.clear();
+    malformed.write(payload);
+    const std::size_t creates = mock.getCreateCount();
+    testTrue(counters,
+             !services.process(payload.data(), completions) &&
+               mock.getCreateCount() == creates,
+             "Entire batch validated before mutation");
+    GuestServices denied;
+    payload.clear();
+    GuestFontRequest{ "../../private.ttf", 32 }.write(payload);
+    denied.records.push_back({ 3,
+                               GuestService::LoadFont,
+                               GuestServiceStatus::Request,
+                               payload.take() });
+    payload.clear();
+    denied.write(payload);
+    GuestServices deniedResult;
+    testTrue(counters,
+             services.process(payload.data(), completions) &&
+               GuestServices::read(completions, deniedResult, false) &&
+               deniedResult.records[0].status == GuestServiceStatus::Rejected,
+             "Font request cannot escape the engine font catalog");
+    testTrue(counters,
+             !services.process(payload.data(), completions),
+             "Resource request replay rejected");
+    return counters.failures == 0;
+  }
+  if (name == "GameHost" || name == "ModIsolation" ||
+      name == "GuestPresentation" || name == "GameJobs" ||
+      name == "SdkContract" || name == "GameFiles") {
+    std::ifstream binary(name == "GuestPresentation" ? ILLUMO_PRESENTATION_GUEST
+                         : name == "GameJobs"        ? ILLUMO_JOB_CONTROL_GUEST
+                         : name == "SdkContract"     ? ILLUMO_SDK_CONTRACT_GUEST
+                         : name == "GameFiles"       ? ILLUMO_FILE_CONTROL_GUEST
+                                                     : ILLUMO_PADDLE_GUEST,
+                         std::ios::binary);
+    const std::vector<char> characters{ std::istreambuf_iterator<char>(binary),
+                                        {} };
+    std::vector<std::byte> module(characters.size());
+    std::memcpy(module.data(), characters.data(), characters.size());
+    InputManager input(nullptr);
+    InputManagerTestAccess::setAction(input, KeyCode::F1, InputAction::Hold);
+    testTrue(counters,
+             input.frameAction(KeyCode::F1) == InputAction::Hold,
+             "Snapshot observes published hold state, not raw platform Press");
+    input.suppressKeyForFrame(KeyCode::F1);
+    testTrue(counters,
+             input.frameAction(KeyCode::F1) == InputAction::None,
+             "Snapshot preserves optional-overlay keyboard suppression");
+    IllumoContext context;
+    context.renderer = &renderer;
+    context.window = &window;
+    context.inputManager = &input;
+    context.envVars = &env;
+    env.setVar("fullscreen", false);
+    if (name == "ModIsolation") {
+      for (const char* modPath :
+           { ILLUMO_PALETTE_MOD, ILLUMO_FAULTY_MOD, ILLUMO_PADDLE_GUEST }) {
+        std::ifstream modBinary(modPath, std::ios::binary);
+        const std::vector<char> modCharacters{
+          std::istreambuf_iterator<char>(modBinary), {}
+        };
+        std::vector<std::byte> mod(modCharacters.size());
+        std::memcpy(mod.data(), modCharacters.data(), modCharacters.size());
+        WasmGameModule modded(module, {}, {}, std::move(mod));
+        testTrue(counters,
+                 modded.Start(&context),
+                 "Optional mod cannot prevent base game startup");
+        modded.Update(1.0 / 60.0);
+        Scene modScene(&window, &camera);
+        modded.DispatchDrawables(&modScene);
+        mock.sawModColor = false;
+        renderer.BeginFrame();
+        renderer.RenderScene(&modScene, &camera);
+        renderer.EndFrame();
+        const bool valid = std::string(modPath) == ILLUMO_PALETTE_MOD;
+        testTrue(counters,
+                 modded.hasActiveMod() == valid &&
+                   modded.modError().empty() == valid,
+                 "Faulted or wrong-role mod revoked independently");
+        testTrue(
+          counters,
+          mock.sawModColor == valid,
+          "Separate mod message changes guest-generated paddle geometry");
+        testTrue(counters,
+                 modded.error().empty() && modded.OnCloseRequested(),
+                 "Base game continues after optional mod failure");
+        modded.Exit();
+      }
+      return counters.failures == 0;
+    }
+    std::vector<std::byte> worker;
+    if (name == "GameJobs") {
+      std::ifstream workerFile(ILLUMO_JOB_WORKER_GUEST, std::ios::binary);
+      const std::vector<char> content{
+        std::istreambuf_iterator<char>(workerFile), {}
+      };
+      worker.resize(content.size());
+      std::memcpy(worker.data(), content.data(), content.size());
+    }
+    WasmFileRoots files;
+    std::filesystem::path fileTestRoot;
+    if (name == "GameFiles") {
+      fileTestRoot = std::filesystem::absolute(
+        "../Testing/WasmFiles/game-" +
+        std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+      if (!std::filesystem::create_directory(fileTestRoot)) {
+        return false;
+      }
+      files = { fileTestRoot / "package", fileTestRoot / "storage" };
+      std::filesystem::create_directory(files.package);
+      std::filesystem::create_directory(files.storage);
+      std::ofstream(files.package / "asset.txt", std::ios::binary) << "abc";
+    }
+    WasmGameModule game(
+      std::move(module), {}, {}, {}, std::move(worker), files);
+    testTrue(counters,
+             game.Start(&context),
+             "Generic host starts actual independent WASM game");
+    std::printf("%s\n", game.error().c_str());
+    for (int tick = 0; tick < 10; ++tick) {
+      game.Update(1.0 / 60.0);
+    }
+    if (name == "GameJobs" || name == "GameFiles") {
+      const std::chrono::steady_clock::time_point deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (!game.OnCloseRequested() && game.error().empty() &&
+             std::chrono::steady_clock::now() < deadline) {
+        game.Update(1.0 / 60.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    }
+    Scene scene(&window, &camera);
+    game.DispatchDrawables(&scene);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+    testEqSize(counters,
+               mock.countNonEmptyOfType(CommandType::DrawIndexed),
+               name == "GuestPresentation" ? 4 : 1,
+               "Guest-owned game geometry reaches native token backend");
+    testTrue(counters,
+             game.error().empty() && renderer.frameError().empty() &&
+               game.OnCloseRequested(),
+             "Guest update/render/close lifecycle succeeds");
+    game.Exit();
+    if (!fileTestRoot.empty()) {
+      std::printf("%s\n", game.error().c_str());
+      std::error_code fileError;
+      testTrue(counters,
+               std::filesystem::file_size(files.storage / "roundtrip.csim",
+                                          fileError) == 64u * 1024u * 9u + 7u &&
+                 !fileError,
+               "Actual guest streams a multi-block atomic save");
+      std::filesystem::remove_all(fileTestRoot);
+    }
+    WasmGameModule missing({});
+    testTrue(counters,
+             !missing.Start(&context),
+             "Missing guest fails without native fallback");
+    return counters.failures == 0;
+  }
+  WasmFrameRenderer bridge(renderer, 123);
+  const std::array<std::byte, 4> pixel{
+    std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 }
+  };
+  const GuestResourceId texture = bridge.createTexture(pixel, 1, 1, 4, false);
+  testTrue(
+    counters, texture.owner == 123, "Texture acquired in the guest table");
+  GuestBatch sprite = frame.batches[0];
+  sprite.style = GuestBatchStyle::Sprite;
+  sprite.texture = texture;
+  frame.batches.push_back(sprite);
+  frame.batches.push_back(frame.batches[0]);
+  frame.textureWrites.push_back(
+    { texture,
+      0,
+      0,
+      1,
+      1,
+      4,
+      { std::byte{ 1 }, std::byte{ 2 }, std::byte{ 3 }, std::byte{ 255 } },
+      2 });
+  wire.clear();
+  frame.write(wire);
+  std::vector<std::byte> transferred = wire.take();
+  testTrue(
+    counters, bridge.accept(transferred), "Complete painter stream accepted");
+  const std::size_t enrolled = mock.getCreateCount();
+  testTrue(counters,
+           bridge.accept(transferred) && mock.getCreateCount() == enrolled,
+           "Dynamic meshes reused");
+  GuestFrame invalidWrite = frame;
+  invalidWrite.textureWrites[0].x = 1;
+  GuestWireWriter invalidWire;
+  invalidWrite.write(invalidWire);
+  testTrue(counters,
+           !bridge.accept(invalidWire.data()),
+           "Texture writes must stay inside the owned resource");
+  if (name == "FrameFailures") {
+    frame.batches[0].style = GuestBatchStyle::Sprite;
+    frame.batches[0].texture = texture;
+    frame.batches[1].style = GuestBatchStyle::Canvas;
+    wire.clear();
+    frame.write(wire);
+    mock.replacementsBeforeThrow = 1;
+    testTrue(
+      counters,
+      !bridge.accept(wire.data()),
+      "Allocation exception contained after a successful layout replacement");
+    Scene scene(&window, &camera);
+    bridge.dispatch(scene);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+    testEqSize(counters,
+               mock.countNonEmptyOfType(CommandType::DrawIndexed),
+               0,
+               "Failed mutation cannot reuse incompatible old-frame payloads");
+    mock.throwTexture = true;
+    testTrue(counters,
+             bridge.createTexture(pixel, 1, 1, 4, false).owner == 0 &&
+               !bridge.error().empty(),
+             "Texture allocation exception contained");
+    return counters.failures == 0;
+  }
+  std::fill(transferred.begin(), transferred.end(), std::byte{ 0 });
+  testTrue(counters,
+           bridge.releaseTexture(texture),
+           "Guest releases texture authority");
+  bridge.retire();
+  Scene scene(&window, &camera);
+  bridge.dispatch(scene);
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+  testEqSize(counters,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             3,
+             "Copied frame survives source destruction and retirement");
+  testEqSize(counters,
+             mock.getRejectedStaleCommandCount(),
+             0,
+             "Accepted texture lease survives revocation");
+  testEqSize(counters,
+             mock.countNonEmptyOfType(CommandType::UpdateTexture),
+             1,
+             "Copied texture write survives source destruction and revocation");
+  testTrue(
+    counters,
+    mock.writesAfterDraws == std::vector<std::size_t>{ 2 },
+    "Texture writes retain their position between painter-ordered draws");
+  testTrue(counters,
+           renderer.frameError().empty(),
+           "Native submission accepts validated frame");
+  testTrue(counters,
+           !bridge.accept(wire.data()),
+           "Retired owner cannot publish another frame");
+  return counters.failures == 0;
+}
+
+int
+main(int argc, char** argv)
+{
+  if (argc == 3 && (std::string(argv[1]) == "--capture" ||
+                    std::string(argv[1]) == "--capture-ui")) {
+    const bool ui = std::string(argv[1]) == "--capture-ui";
+    FrameCaptureOptions options;
+    options.width = 960;
+    options.height = 640;
+    const FrameCaptureResult capture = FrameCapture::render(
+      options,
+      [&options, ui](Renderer& renderer, Camera& camera, std::string& error) {
+        std::ifstream binary(ui ? ILLUMO_PRESENTATION_GUEST
+                                : ILLUMO_PADDLE_GUEST,
+                             std::ios::binary);
+        const std::vector<char> contents{
+          std::istreambuf_iterator<char>(binary), {}
+        };
+        const std::span<const std::byte> bytes =
+          std::as_bytes(std::span(contents));
+        WasmGuest guest;
+        std::vector<std::byte> response;
+        if (!guest.start(bytes,
+                         GuestRole::Game,
+                         static_cast<std::uint32_t>(GuestCapability::Render) |
+                           static_cast<std::uint32_t>(GuestCapability::Assets),
+                         {},
+                         response)) {
+          error = guest.error();
+          return false;
+        }
+        GuestInput input;
+        input.width = options.width;
+        input.height = options.height;
+        input.elapsed = 1.0 / 60.0;
+        GuestWireWriter request;
+        input.write(request);
+        WasmFrameRenderer bridge(renderer, guest.session());
+        WasmRenderServices services(
+          bridge, guest.capabilities(), ILLUMO_ENGINE_ASSETS);
+        GuestWireWriter empty;
+        GuestServices{}.write(empty);
+        std::vector<std::byte> completions = empty.take();
+        for (int tick = 0; tick < 40; ++tick) {
+          if (!guest.invoke(GuestCall::Services, completions, response) ||
+              !services.process(response, completions)) {
+            error = guest.error() + services.error();
+            return false;
+          }
+          if (!guest.invoke(GuestCall::Update, request.data(), response)) {
+            error = guest.error();
+            return false;
+          }
+          if (!guest.invoke(GuestCall::Frame, {}, response) ||
+              !bridge.accept(response)) {
+            error = guest.error() + bridge.error();
+            return false;
+          }
+        }
+        if (!guest.invoke(GuestCall::Frame, {}, response)) {
+          error = guest.error();
+          return false;
+        }
+        if (!bridge.accept(response)) {
+          error = bridge.error();
+          return false;
+        }
+        guest
+          .shutdown(); // Accepted CPU bytes remain valid after store teardown.
+        Scene scene(renderer.getWindow(), &camera);
+        bridge.dispatch(scene);
+        renderer.RenderScene(&scene, &camera);
+        renderer.SubmitOnly();
+        error = renderer.frameError();
+        return error.empty();
+      });
+    std::string error;
+    if (!capture.success() ||
+        !FrameCapture::savePng(argv[2], capture.image, &error)) {
+      std::fprintf(stderr, "%s: %s\n", capture.error.c_str(), error.c_str());
+      return 1;
+    }
+    return 0;
+  }
+  if (argc == 2 && std::string(argv[1]) == "--list") {
+    std::puts("Illumo.Wasm.FrameValidation\nIllumo.Wasm.FrameRendering\nIllumo."
+              "Wasm.FrameFailures\nIllumo.Wasm.GameHost\nIllumo.Wasm."
+              "ModIsolation\nIllumo.Wasm.RenderServices\nIllumo.Wasm."
+              "GuestPresentation\nIllumo.Wasm.GameJobs\nIllumo.Wasm."
+              "SdkContract\nIllumo.Wasm.GameFiles\nIllumo.Wasm."
+              "DisplayServices\nIllumo.Wasm.ClipboardServices\nIllumo.Wasm."
+              "ConsoleServices\nIllumo.Wasm.DialogServices");
+    return 0;
+  }
+  if (argc != 3 || std::string(argv[1]) != "--run") {
+    return 2;
+  }
+  const std::string name(argv[2]);
+  if (!name.starts_with("Illumo.Wasm.")) {
+    return 2;
+  }
+  return run(name.substr(12)) ? 0 : 1;
+}

@@ -5,7 +5,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/RenderLayerId.h>
 #include <Illumo/Rendering/Scene.h>
-#include <Illumo/Services/EnvVars.h>
+#include <Illumo/Services/IEnvVars.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -468,7 +468,7 @@ Renderer::clearCommandQueue()
 }
 
 Renderer::Renderer(IRenderWindow* window,
-                   EnvVars* envVars,
+                   IEnvVars* envVars,
                    Camera* cam,
                    std::unique_ptr<IBackend> backend)
   : _ownedBackend(std::move(backend))
@@ -482,7 +482,7 @@ Renderer::Renderer(IRenderWindow* window,
 }
 
 Renderer::Renderer(IRenderWindow* window,
-                   EnvVars* envVars,
+                   IEnvVars* envVars,
                    Camera* cam,
                    IBackend* backend,
                    bool takeOwnership)

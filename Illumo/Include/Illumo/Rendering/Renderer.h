@@ -18,7 +18,7 @@
 
 class Camera;
 class IRenderWindow;
-class EnvVars;
+class IEnvVars;
 class Scene;
 
 class Renderer
@@ -71,7 +71,7 @@ private:
   IBackend* _backend;
   IRenderWindow* _window;
   Camera* _camera;
-  EnvVars* envVars;
+  IEnvVars* envVars;
   Scene* currentScene;
   struct RenderStyleEntry
   {
@@ -166,7 +166,7 @@ private:
 public:
   // Composition-root path: ownership transferred via unique_ptr (D-R11).
   Renderer(IRenderWindow* window,
-           EnvVars* envVars,
+           IEnvVars* envVars,
            Camera* cam,
            std::unique_ptr<IBackend> backend);
 
@@ -174,7 +174,7 @@ public:
   // takeOwnership=true; tests inject stack MockBackend with
   // takeOwnership=false.
   Renderer(IRenderWindow* window,
-           EnvVars* envVars,
+           IEnvVars* envVars,
            Camera* cam,
            IBackend* backend,
            bool takeOwnership);

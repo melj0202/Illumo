@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Illumo/Services/EnvVars.h>
+#include <Illumo/Services/IEnvVars.h>
 
 #include <string>
 
@@ -14,7 +14,7 @@ enum class BackendDef
 };
 
 inline BackendDef
-StringToToken(EnvVars* vars)
+StringToToken(IEnvVars* vars)
 {
   std::string token = vars->getVar("GraphicsAPI").value;
   if (token == "OPENGL") {

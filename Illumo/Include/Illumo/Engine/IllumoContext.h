@@ -22,7 +22,7 @@ struct IllumoContext
   InputManager* inputManager{ nullptr };
   Renderer* renderer{ nullptr };
   AssetManager* assetManager{ nullptr };
-  EnvVars* envVars{ nullptr };
+  IEnvVars* envVars{ nullptr };
   Camera* camera{ nullptr };
   CommandRegistry* commandRegistry{ nullptr };
   IModuleHost* moduleHost{ nullptr };

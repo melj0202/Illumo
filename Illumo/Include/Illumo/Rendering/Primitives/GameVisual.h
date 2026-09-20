@@ -184,6 +184,7 @@ private:
   MeshHandle spriteMeshHandle{};
   bool gpuReady = false;
   bool geometryDirty = true;
+  bool pendingFontGeometry = false;
   bool shapeUploadPending = false;
   bool spriteUploadPending = false;
   bool capacityWarningLogged = false;

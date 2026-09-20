@@ -1,0 +1,513 @@
+#include <Illumo/Platform/Clipboard.h>
+#include <Illumo/Platform/SaveLoad.h>
+#include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Services/CommandLine.h>
+#include <Illumo/Services/CommandRegistry.h>
+#include <Illumo/Services/IEnvVars.h>
+#include <Illumo/Services/Logger.h>
+#include <Illumo/Wasm/WasmGameServices.h>
+#include <IllumoGuest/Clipboard.h>
+#include <IllumoGuest/Console.h>
+#include <IllumoGuest/Dialog.h>
+#include <IllumoGuest/Display.h>
+#include <IllumoGuest/FileProtocol.h>
+#include <IllumoGuest/Protocol.h>
+#include <algorithm>
+
+namespace {
+class OsClipboard final : public WasmHostClipboard
+{
+public:
+  std::string getText() override { return Clipboard::GetText(); }
+  bool setText(const std::string& text) override
+  {
+    return Clipboard::SetText(text);
+  }
+};
+
+class OsDialogs final : public WasmHostDialogs
+{
+public:
+  std::string pick(bool save,
+                   const std::string& description,
+                   const std::string& defaultName,
+                   const std::string& pattern) override
+  {
+    const SaveLoadDialogSpec specification{ description, defaultName, pattern };
+    return save ? SaveLoad::GetSaveLocation(specification)
+                : SaveLoad::GetLoadLocation(specification);
+  }
+};
+
+bool
+hasGrant(std::uint32_t grants, GuestCapability capability)
+{
+  return (grants & static_cast<std::uint32_t>(capability)) != 0;
+}
+} // namespace
+
+WasmGameServices::WasmGameServices(WasmFrameRenderer& frames,
+                                   std::uint32_t grants,
+                                   std::filesystem::path engineAssets,
+                                   std::vector<std::byte> workerModule,
+                                   std::unique_ptr<WasmFileServices> files,
+                                   IRenderWindow* window,
+                                   IEnvVars* environment,
+                                   CommandRegistry* commands,
+                                   CommandLine* console,
+                                   WasmHostClipboard* clipboard,
+                                   WasmHostDialogs* dialogs)
+  : m_render(frames, grants, std::move(engineAssets))
+  , m_files(std::move(files))
+  , m_window(window)
+  , m_environment(environment)
+  , m_commands(commands)
+  , m_console(console)
+  , m_clipboard(clipboard)
+  , m_dialogs(dialogs)
+  , m_grants(grants)
+  , m_module(std::move(workerModule))
+{
+  if (m_clipboard == nullptr) {
+    m_ownedClipboard = std::make_unique<OsClipboard>();
+    m_clipboard = m_ownedClipboard.get();
+  }
+  if (m_dialogs == nullptr) {
+    m_ownedDialogs = std::make_unique<OsDialogs>();
+    m_dialogs = m_ownedDialogs.get();
+  }
+}
+WasmGameServices::~WasmGameServices()
+{
+  cancel();
+}
+void
+WasmGameServices::unregisterCommands()
+{
+  if (m_commands == nullptr) {
+    return;
+  }
+  for (const std::string& name : m_registered) {
+    m_commands->UnregisterCommand(name);
+  }
+  m_registered.clear();
+}
+void
+WasmGameServices::cancel()
+{
+  m_cancelled = true;
+  m_displayRequests.clear();
+  m_clipboardRequests.clear();
+  m_dialogRequests.clear();
+  m_consoleRequests.clear();
+  m_listenRequests.clear();
+  m_invocations.clear();
+  unregisterCommands();
+  if (m_files) {
+    m_files->cancel();
+  }
+  if (m_worker) {
+    m_worker->requestStop();
+  }
+  m_job = {};
+  m_hostJob = 0;
+}
+bool
+WasmGameServices::completeDisplay(GuestServices& results)
+{
+  if (m_displayRequests.empty()) {
+    return true;
+  }
+  const GuestServiceRecord& record = m_displayRequests.front();
+  GuestServiceRecord response{
+    record.request, GuestService::Display, GuestServiceStatus::Rejected, {}
+  };
+  if (m_window != nullptr && m_environment != nullptr &&
+      hasGrant(m_grants, GuestCapability::Display)) {
+    GuestDisplayRequest request;
+    GuestDisplayRequest::read(record.payload, request);
+    if (request.apply) {
+      if (m_environment->getVar("fullscreen").valueAsBool !=
+          request.state.fullscreen) {
+        m_window->toggleFullscreen();
+      }
+      m_environment->setVar("vsync", request.state.vsync);
+      m_environment->setVar("fps", request.state.fps);
+      m_environment->setVar("uiScale", request.state.uiScale);
+    }
+    const EnvVar& fps = m_environment->getVar("fps");
+    const EnvVar& scale = m_environment->getVar("uiScale");
+    const EnvVar& vsync = m_environment->getVar("vsync");
+    GuestDisplayState actual{
+      m_environment->getVar("fullscreen").valueAsBool,
+      vsync.value.empty() || vsync.valueAsBool,
+      static_cast<std::uint32_t>(
+        std::clamp(fps.value.empty() ? 60L : fps.valueAsLong, 0L, 1000L)),
+      static_cast<std::uint32_t>(
+        std::clamp(scale.value.empty() ? 1L : scale.valueAsLong, 1L, 4L))
+    };
+    GuestWireWriter payload;
+    actual.write(payload);
+    response.status = GuestServiceStatus::Complete;
+    response.payload = payload.take();
+  }
+  results.records.push_back(std::move(response));
+  m_displayRequests.pop_front();
+  return true;
+}
+bool
+WasmGameServices::completeClipboard(GuestServices& results)
+{
+  if (m_clipboardRequests.empty()) {
+    return true;
+  }
+  const GuestServiceRecord& record = m_clipboardRequests.front();
+  GuestServiceRecord response{
+    record.request, GuestService::Clipboard, GuestServiceStatus::Rejected, {}
+  };
+  if (m_clipboard != nullptr &&
+      hasGrant(m_grants, GuestCapability::Clipboard)) {
+    GuestClipboardRequest request;
+    GuestClipboardRequest::read(record.payload, request);
+    bool accepted = true;
+    if (request.set) {
+      accepted = m_clipboard->setText(request.text);
+    }
+    std::string text;
+    if (accepted) {
+      text = m_clipboard->getText();
+      accepted =
+        text.size() <= GuestClipboardRequest::MaximumBytes && guestUtf8(text);
+    }
+    if (accepted) {
+      GuestWireWriter payload;
+      GuestClipboardRequest{ false, std::move(text) }.write(payload);
+      response.status = GuestServiceStatus::Complete;
+      response.payload = payload.take();
+    }
+  }
+  results.records.push_back(std::move(response));
+  m_clipboardRequests.pop_front();
+  return true;
+}
+bool
+WasmGameServices::completeDialog(GuestServices& results)
+{
+  if (m_dialogRequests.empty()) {
+    return true;
+  }
+  const GuestServiceRecord& record = m_dialogRequests.front();
+  GuestServiceRecord response{
+    record.request, GuestService::Dialog, GuestServiceStatus::Rejected, {}
+  };
+  if (m_files && m_dialogs != nullptr &&
+      hasGrant(m_grants, GuestCapability::SelectedFiles)) {
+    GuestDialogRequest request;
+    GuestDialogRequest::read(record.payload, request);
+    const std::string path = m_dialogs->pick(
+      request.save, request.description, request.defaultName, request.pattern);
+    GuestDialogResult result;
+    if (path.empty()) {
+      result.outcome = GuestFileOutcome::Cancelled;
+    } else {
+      std::uint64_t size = 0;
+      if (m_files->grantSelected(path, request.save, result.name, size)) {
+        result.outcome = GuestFileOutcome::Success;
+        result.writing = request.save;
+        result.size = size;
+      } else {
+        result.outcome = GuestFileOutcome::IoError;
+      }
+    }
+    GuestWireWriter payload;
+    result.write(payload);
+    response.status = GuestServiceStatus::Complete;
+    response.payload = payload.take();
+  }
+  results.records.push_back(std::move(response));
+  m_dialogRequests.pop_front();
+  return true;
+}
+bool
+WasmGameServices::completeConsole(GuestServices& results)
+{
+  while (!m_consoleRequests.empty()) {
+    GuestServiceRecord record = m_consoleRequests.front();
+    m_consoleRequests.pop_front();
+    GuestServiceRecord response{
+      record.request, GuestService::Console, GuestServiceStatus::Rejected, {}
+    };
+    GuestConsoleRequest request;
+    GuestConsoleRequest::read(record.payload, request);
+    if (!hasGrant(m_grants, GuestCapability::Console)) {
+      results.records.push_back(std::move(response));
+      continue;
+    }
+    if (request.action == GuestConsoleAction::Listen) {
+      m_listenRequests.push_back(std::move(record));
+      continue;
+    }
+    if (request.action == GuestConsoleAction::Log) {
+      const std::string text = request.text;
+      if (m_console != nullptr) {
+        if (request.level == 1) {
+          m_console->logError(text);
+        } else if (request.level == 2) {
+          m_console->logWarning(text);
+        } else if (request.level == 4) {
+          m_console->logTrace(text);
+        } else {
+          m_console->logNormal(text);
+        }
+      } else if (request.level == 1) {
+        Logger::LogError(text.c_str());
+      } else if (request.level == 2) {
+        Logger::LogWarning(text.c_str());
+      } else {
+        Logger::LogInfo(text.c_str());
+      }
+      response.status = GuestServiceStatus::Complete;
+    } else if (m_commands == nullptr) {
+      results.records.push_back(std::move(response));
+      continue;
+    } else if (request.action == GuestConsoleAction::Unregister) {
+      m_commands->UnregisterCommand(request.name);
+      std::vector<std::string>::iterator found =
+        std::find(m_registered.begin(), m_registered.end(), request.name);
+      if (found != m_registered.end()) {
+        m_registered.erase(found);
+      }
+      response.status = GuestServiceStatus::Complete;
+    } else {
+      const std::string commandName = request.name;
+      m_commands->RegisterCommand(
+        commandName,
+        [this, commandName](const std::vector<std::string>& arguments) {
+          if (!m_cancelled && m_invocations.size() < 32) {
+            m_invocations.push_back({ commandName, arguments });
+          }
+        },
+        request.usage,
+        request.description,
+        request.completions);
+      if (std::find(m_registered.begin(), m_registered.end(), commandName) ==
+          m_registered.end()) {
+        m_registered.push_back(commandName);
+      }
+      response.status = GuestServiceStatus::Complete;
+    }
+    results.records.push_back(std::move(response));
+  }
+  if (!m_listenRequests.empty() && !m_invocations.empty()) {
+    const GuestServiceRecord& listen = m_listenRequests.front();
+    GuestConsoleRequest invocation;
+    invocation.action = GuestConsoleAction::Listen;
+    invocation.name = m_invocations.front().name;
+    invocation.arguments = m_invocations.front().arguments;
+    GuestWireWriter payload;
+    invocation.write(payload);
+    results.records.push_back({ listen.request,
+                                GuestService::Console,
+                                GuestServiceStatus::Complete,
+                                payload.take() });
+    m_listenRequests.pop_front();
+    m_invocations.pop_front();
+  }
+  return true;
+}
+bool
+WasmGameServices::process(std::span<const std::byte> requests,
+                          std::vector<std::byte>& completions)
+try {
+  completions.clear();
+  m_error.clear();
+  GuestServices incoming;
+  if (m_cancelled || !GuestServices::read(requests, incoming, true)) {
+    m_error = "Invalid or retired service session";
+    return false;
+  }
+  std::uint64_t last = m_lastRequest;
+  if (incoming.records.size() + m_render.pendingRequests() +
+        m_displayRequests.size() + m_clipboardRequests.size() +
+        m_dialogRequests.size() + m_consoleRequests.size() +
+        m_listenRequests.size() + (m_files ? m_files->pendingRequests() : 0u) +
+        (m_job.request != 0 ? 1u : 0u) >
+      GuestServices::MaximumRecords) {
+    m_error = "Too many outstanding service requests";
+    return false;
+  }
+  GuestServices rendering;
+  GuestServices files;
+  unsigned int listens = 0;
+  for (const GuestServiceRecord& record : incoming.records) {
+    if (record.request <= last) {
+      m_error = "Replayed service request";
+      return false;
+    }
+    last = record.request;
+    if (record.operation == GuestService::Display) {
+      GuestDisplayRequest request;
+      if (!GuestDisplayRequest::read(record.payload, request)) {
+        m_error = "Invalid display request";
+        return false;
+      }
+    } else if (record.operation == GuestService::Clipboard) {
+      GuestClipboardRequest request;
+      if (!GuestClipboardRequest::read(record.payload, request)) {
+        m_error = "Invalid clipboard request";
+        return false;
+      }
+    } else if (record.operation == GuestService::Dialog) {
+      GuestDialogRequest request;
+      if (!GuestDialogRequest::read(record.payload, request)) {
+        m_error = "Invalid dialog request";
+        return false;
+      }
+    } else if (record.operation == GuestService::Console) {
+      GuestConsoleRequest request;
+      if (!GuestConsoleRequest::read(record.payload, request)) {
+        m_error = "Invalid console request";
+        return false;
+      }
+      if (request.action == GuestConsoleAction::Listen) {
+        ++listens;
+      }
+    } else if (record.operation == GuestService::File) {
+      GuestFileRequest request;
+      if (!GuestFileRequest::read(record.payload, request)) {
+        m_error = "Invalid file request";
+        return false;
+      }
+      files.records.push_back(record);
+    } else if (record.operation != GuestService::Job) {
+      rendering.records.push_back(record);
+    } else if (record.payload.empty() ||
+               record.payload.size() > GuestServices::MaximumJobBytes) {
+      m_error = "Invalid compute request size";
+      return false;
+    }
+  }
+  if (listens + m_listenRequests.size() > 1) {
+    m_error = "At most one console listen may be outstanding";
+    return false;
+  }
+  GuestWireWriter renderRequests;
+  rendering.write(renderRequests);
+  std::vector<std::byte> renderResponses;
+  if (!m_render.process(renderRequests.data(), renderResponses)) {
+    m_error = m_render.error();
+    return false;
+  }
+  GuestServices results;
+  if (!GuestServices::read(renderResponses, results, false)) {
+    m_error = "Invalid host resource completion";
+    return false;
+  }
+  for (const GuestServiceRecord& record : incoming.records) {
+    if (record.operation == GuestService::Display) {
+      m_displayRequests.push_back(record);
+    } else if (record.operation == GuestService::Clipboard) {
+      m_clipboardRequests.push_back(record);
+    } else if (record.operation == GuestService::Dialog) {
+      m_dialogRequests.push_back(record);
+    } else if (record.operation == GuestService::Console) {
+      m_consoleRequests.push_back(record);
+    }
+  }
+  completeDisplay(results);
+  completeClipboard(results);
+  completeDialog(results);
+  completeConsole(results);
+  // Poll before accepting another operation. Never block the control frame on
+  // worker compilation, execution or a game-defined synchronization barrier.
+  if (m_worker && m_job.request != 0) {
+    WasmJobResult result;
+    if (m_worker->poll(result)) {
+      const bool accepted =
+        result.error.empty() && m_hostJob != 0 &&
+        result.requestId == m_hostJob &&
+        result.bytes.size() <= GuestServices::MaximumJobBytes;
+      results.records.push_back(
+        { m_job.request,
+          GuestService::Job,
+          accepted ? GuestServiceStatus::Complete
+                   : GuestServiceStatus::Rejected,
+          accepted ? std::move(result.bytes) : std::vector<std::byte>{} });
+      m_job = {};
+      m_hostJob = 0;
+    }
+  }
+  for (GuestServiceRecord& record : incoming.records) {
+    if (record.operation != GuestService::Job) {
+      continue;
+    }
+    if ((m_grants & static_cast<std::uint32_t>(GuestCapability::Jobs)) == 0 ||
+        m_module.empty() || m_job.request != 0 ||
+        (m_worker && m_worker->status() == WasmWorkerStatus::Failed)) {
+      results.records.push_back(
+        { record.request, record.operation, GuestServiceStatus::Rejected, {} });
+      continue;
+    }
+    if (!m_worker) {
+      WasmLimits limits;
+      limits.memoryBytes = 512ull * 1024ull * 1024ull;
+      limits.fuelPerCall = 1000000000;
+      limits.deadlineMilliseconds = 10000;
+      m_worker = std::make_unique<WasmWorker>(
+        m_module,
+        limits,
+        static_cast<std::uint32_t>(GuestServices::MaximumJobBytes));
+    }
+    m_job = std::move(record);
+  }
+  if (m_worker && m_job.request != 0 && m_hostJob == 0 &&
+      m_worker->status() == WasmWorkerStatus::Idle) {
+    if (!m_worker->submit(m_job.payload, m_hostJob)) {
+      m_error = "Worker rejected its accepted request";
+      return false;
+    }
+    m_job.payload.clear();
+  }
+  if (!files.records.empty()) {
+    if (m_files) {
+      if (!m_files->submit(files)) {
+        m_error = m_files->error();
+        return false;
+      }
+    } else {
+      for (const GuestServiceRecord& request : files.records) {
+        results.records.push_back({ request.request,
+                                    GuestService::File,
+                                    GuestServiceStatus::Rejected,
+                                    {} });
+      }
+    }
+  }
+  if (m_files) {
+    GuestWireWriter measured;
+    results.write(measured);
+    if (measured.data().size() > GuestServices::MaximumBytes) {
+      m_error = "Completion budget exceeded";
+      return false;
+    }
+    GuestServices ready =
+      m_files->poll(GuestServices::MaximumBytes - measured.data().size());
+    for (GuestServiceRecord& result : ready.records) {
+      results.records.push_back(std::move(result));
+    }
+  }
+  GuestWireWriter response;
+  results.write(response);
+  if (results.records.size() > GuestServices::MaximumRecords ||
+      response.data().size() > GuestServices::MaximumBytes) {
+    m_error = "Service completion budget exceeded";
+    return false;
+  }
+  completions = response.take();
+  m_lastRequest = last;
+  return true;
+} catch (const std::exception& exception) {
+  m_error = exception.what();
+  completions.clear();
+  return false;
+}

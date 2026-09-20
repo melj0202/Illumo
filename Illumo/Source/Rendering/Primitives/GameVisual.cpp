@@ -908,6 +908,7 @@ GameVisual::appendBatch(BatchKind kind,
 void
 GameVisual::rebuildGeometry(const Rect2* cullRect)
 {
+  pendingFontGeometry = false;
   geometryTruncated = false;
   shapeQuadCount = 0;
   spriteQuadCount = 0;
@@ -959,6 +960,10 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
         text.font ? text.font : Font::getDefaultFont();
       TextureHandle fontTex =
         font ? font->getTextureHandle(renderer) : TextureHandle{};
+      if (!font || !font->isValid()) {
+        pendingFontGeometry = true;
+        continue;
+      }
       const unsigned int first = spriteQuadCount;
       if (!pushTextRun(text, hostBounds)) {
         break;
@@ -1104,7 +1109,7 @@ GameVisual::AppendCommands(Renderer* value)
   const bool cullChanged =
     (cullRect != nullptr) != geometryCullEnabled ||
     (cullRect != nullptr && !sameRect(geometryCullRect, *cullRect));
-  if (geometryDirty || cullChanged) {
+  if (geometryDirty || cullChanged || pendingFontGeometry) {
     rebuildGeometry(cullRect);
   }
   if (!ensureGpuCapacity()) {

@@ -1444,6 +1444,10 @@ SparseCellGrid::buildCandidatePreparationRanges(unsigned int workerCount)
 unsigned int
 SparseCellGrid::resolveWorkerCount(std::size_t targetCount) const
 {
+#ifdef ILLUMO_SERIAL_GUEST
+  (void)targetCount;
+  return 1u;
+#else
   if (targetCount == 0u) {
     return 1u;
   }
@@ -1464,6 +1468,7 @@ SparseCellGrid::resolveWorkerCount(std::size_t targetCount) const
   }
   workerCount = std::min(workerCount, kMaxParallelWorkers);
   return std::min(workerCount, static_cast<unsigned int>(targetCount));
+#endif
 }
 
 unsigned int
@@ -1471,6 +1476,11 @@ SparseCellGrid::resolveCandidatePreparationWorkerCount(
   std::size_t targetCount,
   std::size_t estimatedWork) const
 {
+#ifdef ILLUMO_SERIAL_GUEST
+  (void)targetCount;
+  (void)estimatedWork;
+  return 1u;
+#else
   if (targetCount == 0u) {
     return 1u;
   }
@@ -1489,12 +1499,17 @@ SparseCellGrid::resolveCandidatePreparationWorkerCount(
   }
   workerCount = std::min(workerCount, kMaxCandidateWorkers);
   return std::min(workerCount, static_cast<unsigned int>(targetCount));
+#endif
 }
 
 unsigned int
 SparseCellGrid::resolveCandidateWorkerCount(
   std::size_t candidateCellCount) const
 {
+#ifdef ILLUMO_SERIAL_GUEST
+  (void)candidateCellCount;
+  return 1u;
+#else
   if (m_candidateWorkRanges.empty()) {
     return 1u;
   }
@@ -1514,6 +1529,7 @@ SparseCellGrid::resolveCandidateWorkerCount(
   workerCount = std::min(workerCount, kMaxCandidateWorkers);
   return std::min(workerCount,
                   static_cast<unsigned int>(m_candidateWorkRanges.size()));
+#endif
 }
 
 void

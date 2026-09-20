@@ -66,6 +66,8 @@ public:
     float pixelSize = kDefaultPixelSize);
 
   static std::shared_ptr<Font> getDefaultFont();
+  static std::shared_ptr<Font> createFallback(
+    float pixelSize = kDefaultPixelSize);
   static void setDefaultFont(std::shared_ptr<Font> font);
   static void clearCache();
 
@@ -97,6 +99,7 @@ public:
   const std::string& getPath() const { return sourcePath; }
 
 private:
+  friend class GuestFontProvider;
   std::string sourcePath;
   FontMetrics metrics;
   std::unordered_map<char32_t, GlyphInfo> glyphs;

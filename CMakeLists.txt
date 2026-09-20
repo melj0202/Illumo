@@ -23,6 +23,8 @@ if(BUILD_TESTING)
   )
 endif()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoWasm.cmake")
+
 if(ILLUMO_ENABLE_COVERAGE)
   illumo_add_workspace_coverage()
 endif()

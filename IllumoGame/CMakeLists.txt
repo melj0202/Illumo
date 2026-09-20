@@ -11,6 +11,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/Cursor.cpp
   Source/Game/ExitConfirmDialog.cpp
   Source/Game/IllumoCodec.cpp
+  Source/Game/IllumoCodecStreams.cpp
   Source/Game/IllumoGameApplication.cpp
   Source/Game/IllumoGameConfig.cpp
   Source/Game/MainMenuModule.cpp

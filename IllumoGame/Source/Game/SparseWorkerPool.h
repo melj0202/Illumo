@@ -2,11 +2,13 @@
 
 #include "SparseCellGrid.h"
 
+#ifndef ILLUMO_SERIAL_GUEST
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <mutex>
 #include <thread>
+#endif
 #include <vector>
 
 class SparseWorkerPool
@@ -39,6 +41,7 @@ public:
     unsigned int workerCount);
 
 private:
+#ifndef ILLUMO_SERIAL_GUEST
   void ensureWorkerCount(unsigned int requiredCount);
   bool claimWorkerSlot();
   void executeAvailableWork(unsigned int memoShardIndex);
@@ -66,4 +69,5 @@ private:
   unsigned int requiredWorkers = 0u;
   unsigned int completedWorkers = 0u;
   bool stopping = false;
+#endif
 };

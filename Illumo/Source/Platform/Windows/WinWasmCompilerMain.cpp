@@ -1,0 +1,63 @@
+#include "../../Wasm/WasmEngineConfig.h"
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <windows.h>
+
+// This helper compiles but never instantiates untrusted WASM. The parent
+// assigns it to a memory-limited, single-process job before resuming its
+// initial thread.
+int
+main(int argc, char** argv)
+try {
+  if (argc != 2) {
+    return 2;
+  }
+  constexpr std::size_t kCapacity = 256u * 1024u * 1024u;
+  constexpr std::size_t kHeaderBytes = 16u;
+  const HANDLE mapping = reinterpret_cast<HANDLE>(std::stoull(argv[1]));
+  std::uint8_t* shared = static_cast<std::uint8_t*>(
+    MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity));
+  if (shared == nullptr) {
+    return 2;
+  }
+  std::uint64_t inputSize = 0;
+  std::memcpy(&inputSize, shared, sizeof(inputSize));
+  if (inputSize == 0 || inputSize > kCapacity - kHeaderBytes) {
+    UnmapViewOfFile(shared);
+    return 2;
+  }
+  wasm_engine_t* engine = createWasmEngine();
+  if (engine == nullptr) {
+    UnmapViewOfFile(shared);
+    return 2;
+  }
+  wasmtime_module_t* module = nullptr;
+  wasmtime_error_t* error =
+    wasmtime_module_new(engine, shared + kHeaderBytes, inputSize, &module);
+  wasm_byte_vec_t serialized{};
+  if (error == nullptr) {
+    error = wasmtime_module_serialize(module, &serialized);
+  }
+  bool succeeded = false;
+  if (error == nullptr && serialized.size <= kCapacity - kHeaderBytes) {
+    const std::uint64_t outputSize = serialized.size;
+    std::memcpy(shared + kHeaderBytes, serialized.data, serialized.size);
+    std::memcpy(shared + sizeof(inputSize), &outputSize, sizeof(outputSize));
+    succeeded = true;
+  }
+  if (error != nullptr) {
+    wasmtime_error_delete(error);
+  }
+  wasm_byte_vec_delete(&serialized);
+  if (module != nullptr) {
+    wasmtime_module_delete(module);
+  }
+  wasm_engine_delete(engine);
+  UnmapViewOfFile(shared);
+  return succeeded ? 0 : 1;
+} catch (...) {
+  return 2;
+}

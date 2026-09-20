@@ -98,13 +98,16 @@ add_library(Illumo STATIC
   Source/Platform/AtomicFile.cpp
   Source/Services/DebugAlloc.cpp
   Source/Services/EnvVars.cpp
+  Source/Services/EnvVarsValues.cpp
   Source/Services/InputManager.cpp
+  Source/Services/InputManagerState.cpp
   Source/Services/Logger.cpp
   Source/Services/PoolAlloc.cpp
   Source/Services/SysCmdLine.cpp
   Source/Rendering/AssetManager.cpp
   Source/Rendering/Camera.cpp
   Source/Rendering/Font.cpp
+  Source/Rendering/FontLayout.cpp
   Source/Rendering/FrameCapture.cpp
   Source/Rendering/FrameCaptureImage.cpp
   Source/Rendering/GLString.cpp
