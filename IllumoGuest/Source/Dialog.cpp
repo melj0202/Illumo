@@ -6,9 +6,14 @@ GuestDialog::apply(bool save,
                    std::string defaultName,
                    std::string pattern)
 {
-  GuestDialogRequest request{
-    save, std::move(description), std::move(defaultName), std::move(pattern)
-  };
+  GuestDialogRequest request;
+  request.save = save;
+  request.edit = m_edit;
+  request.description = std::move(description);
+  request.defaultName = std::move(defaultName);
+  request.pattern = std::move(pattern);
+  // An edit request is one-shot; load() and save() are plain requests.
+  m_edit = false;
   GuestWireWriter bytes;
   request.write(bytes);
   GuestDialogRequest checked;

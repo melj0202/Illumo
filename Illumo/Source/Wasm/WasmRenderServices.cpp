@@ -80,6 +80,19 @@ try {
       const std::uint32_t level = reader.u32();
       reader.text(4096);
       valid = reader.finished() && level >= 1 && level <= 4;
+    } else if (record.operation == GuestService::CreateMesh) {
+      GuestMeshRequest mesh;
+      valid = GuestMeshRequest::read(record.payload, mesh);
+    } else if (record.operation == GuestService::WriteMesh) {
+      GuestMeshWrite write;
+      valid = GuestMeshWrite::read(record.payload, write);
+    } else if (record.operation == GuestService::ReleaseMesh) {
+      GuestWireReader reader(record.payload);
+      const GuestResourceId id = GuestResourceId::read(reader);
+      valid = reader.finished() && id.kind == GuestResourceKind::Mesh;
+    } else if (record.operation == GuestService::CreateCubemap) {
+      GuestCubemapRequest cubemap;
+      valid = GuestCubemapRequest::read(record.payload, cubemap);
     }
     if (!valid) {
       m_error = "Malformed service payload";
@@ -141,6 +154,34 @@ try {
     } else if (record.operation == GuestService::ReleaseTexture) {
       GuestWireReader reader(record.payload);
       if (m_frames.releaseTexture(GuestResourceId::read(reader))) {
+        result.status = GuestServiceStatus::Complete;
+      }
+    } else if (record.operation == GuestService::CreateMesh) {
+      GuestMeshRequest request;
+      GuestMeshRequest::read(record.payload, request);
+      const GuestResourceId id = m_frames.createMesh(request);
+      if (id.owner != 0) {
+        id.write(payload);
+        result.status = GuestServiceStatus::Complete;
+      }
+    } else if (record.operation == GuestService::WriteMesh) {
+      GuestMeshWrite write;
+      GuestMeshWrite::read(record.payload, write);
+      if (m_frames.writeMesh(write)) {
+        result.status = GuestServiceStatus::Complete;
+      }
+    } else if (record.operation == GuestService::ReleaseMesh) {
+      GuestWireReader reader(record.payload);
+      if (m_frames.releaseMesh(GuestResourceId::read(reader))) {
+        result.status = GuestServiceStatus::Complete;
+      }
+    } else if (record.operation == GuestService::CreateCubemap) {
+      GuestCubemapRequest request;
+      GuestCubemapRequest::read(record.payload, request);
+      const GuestResourceId id =
+        m_frames.createCubemap(request.faces, request.size);
+      if (id.owner != 0) {
+        id.write(payload);
         result.status = GuestServiceStatus::Complete;
       }
     } else if (record.operation == GuestService::LoadFont) {

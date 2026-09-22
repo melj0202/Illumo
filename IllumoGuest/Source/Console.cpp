@@ -62,22 +62,24 @@ GuestConsole::enqueue(GuestConsoleRequest request)
   if (request.action == GuestConsoleAction::Listen) {
     m_listen = id;
   } else {
-    m_request = id;
+    m_requests.push_back(id);
   }
   return true;
 }
 void
 GuestConsole::pump()
 {
-  if (m_request != 0) {
+  for (std::deque<std::uint64_t>::iterator it = m_requests.begin();
+       it != m_requests.end();) {
     GuestServiceRecord result;
-    if (!m_services.take(m_request, result)) {
-      return;
+    if (!m_services.take(*it, result)) {
+      ++it;
+      continue;
     }
-    m_request = 0;
     if (result.status != GuestServiceStatus::Complete) {
       m_error = "Console request was rejected";
     }
+    it = m_requests.erase(it);
   }
   if (m_listen != 0) {
     GuestServiceRecord result;
@@ -98,7 +100,7 @@ GuestConsole::pump()
       }
     }
   }
-  while (m_request == 0 && !m_outgoing.empty()) {
+  while (m_requests.size() < MaximumInFlight && !m_outgoing.empty()) {
     GuestConsoleRequest request = m_outgoing.front();
     if (!enqueue(std::move(request))) {
       break;

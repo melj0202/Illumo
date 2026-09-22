@@ -176,6 +176,66 @@ reuse a trapped mutable instance as if its last operation were transactional.
   guest retirement. CSim still has to adopt these services in a runnable
   control guest; the shipping executable remains native.
 
+2026-09-22, CSim control guest first slice:
+
+- Ownership invariant: Illumo is the loop, resources, ABI and generic services;
+  CSim is the WASM program. `CSimControlGuest.wasm` (descriptor `csim.control`,
+  role Game) is a new `GuestApplication` reactor in
+  `IllumoGuest/Examples/CSim/Control.cpp`, linked only against
+  `CSimGuestDomain` and `IllumoGuestRendering`. It does not link
+  `CSimGuestControlCompile` or any `IModule` source, and `Illumo/Source/Wasm`
+  gained no Game or Rulesets include. `IllumoGame.exe` remains a native
+  behavior reference only; the player never falls back to it.
+- `IllumoWasmPlayer` now accepts `--package`/`--storage` directories, turning
+  them into `WasmFileRoots` and file grants. A named root that does not exist
+  refuses startup. Optional `--memory-mib`, `--fuel` and `--deadline-ms` pass
+  explicit per-launch `WasmLimits`; the generic defaults are unchanged. This
+  also fixed a pre-existing defect: module options were declared with a
+  non-path value name, so `SysCmdLine` rejected every `--game <file>`.
+- The guest reads packaged `families.json`/`rulesets.json` and optional
+  storage overlays through `GuestFiles` (`CSimCatalogBootstrap`). It seeds
+  the 4 x 4 chunk DomainParity torus with `GAME_OF_LIFE` and presents it
+  through `CanvasView`, `GameVisual` and `GuestRecordingBackend` as 2D IRF1
+  World/Ui batches. Space toggles running and N steps; console-open input is
+  ignored. Generations publish by swapping owning pointers: serial kernels
+  fill a private working grid, and worker replies restore a private
+  replacement after epoch/revision validation. The published grid is never
+  advanced in place.
+- Compute uses one outstanding `CSW1` job through `GuestService::Job` when the
+  host grants a worker. Without a grant, or after worker retirement, it falls
+  back to serial kernels from the last published world. A world larger than
+  the 15 MiB job budget also stays serial. Worker synchronization uses the
+  packaged catalog pair, so a present user overlay selects serial compute.
+- SDK fix: `GuestRecordingBackend::setLayer` now tags commands when they are
+  pushed. Previously the layer at submission applied to the whole frame, so
+  one frame could not carry both World and Ui batches.
+  `hasPendingTextures()` lets products defer texture growth, because a
+  replacement is refused while an acquisition is pending.
+- New `IllumoGame.Wasm.ControlSmoke` runs the real guest through
+  `WasmGameModule` with temporary package/storage roots, in serial mode and
+  in worker-required mode. The guest's startup record requests four
+  generations and a save. The test decodes that v4 save natively and matches
+  the native reference hash, which differs from generation 0. It also
+  verifies that the canvas texture is drawn and that startup without file
+  roots fails visibly.
+- Measured limits (Windows x64 Release, default world): 1e7 fuel is
+  exhausted by the catalog bootstrap update, 3e7 passes, and 8 MiB of memory
+  passes. The smoke test uses 256 MiB, 3e8 fuel and 5 s. The manual player
+  run used the same values with `--worker`: it rendered the canvas and HUD
+  and advanced through the worker after Space.
+- All 32 `Illumo.Wasm.*`/`IllumoGame.Wasm.*` Release tests pass. Menus,
+  editing, dialogs, save/load UI, workshop, incremental performance gates,
+  ASan for the new test and shipping cutover remain open (design steps 6-9).
+
+2026-09-22, cutover:
+
+- The first slice above was superseded the same day by the full cutover.
+  IllumoGame now runs entirely as `IllumoGame.wasm` in `IllumoRuntime.exe`,
+  and the native game executable is gone. `CSimControlGuest`,
+  `IllumoGame.Wasm.ControlSmoke` and `CSimGuestControlCompile` were removed in
+  favor of the package and `IllumoGame.Wasm.GamePackage`. Details and evidence
+  are in [wasm-game-cutover-plan.md](wasm-game-cutover-plan.md).
+
 2026-09-19, historical proposal preparation (before approval):
 
 - Read live product build/factory, simulation, rendering, service and lifetime

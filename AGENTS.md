@@ -9,9 +9,14 @@ file as an architecture catalog.
 
 This C++23 workspace contains the product-agnostic `Illumo` static library and
 the in-tree applications that consume it. `IllumoGame` is the
-cellular-automata learning sandbox. `IllEd` is the SceneGraph world editor
+cellular-automata learning sandbox; it ships only as the isolated
+`IllumoGame.wasm` package played by the generic `IllumoRuntime` host (Windows
+x64). `IllEd` is the SceneGraph world editor
 used to bootstrap later Illumo applications (editor versus runtime, in the
-same sense as Unreal Editor versus Unreal). The supported product path is
+same sense as Unreal Editor versus Unreal). Every interactive client program
+is a WASM package in `apps/<name>/` beside that one host: `game`, `illed`
+(`IllEd.wasm`) and `meshviewer` (`IllMeshViewer.wasm`); `IllEdCore` and
+`IllMeshViewerCore` remain only as native test-oracle libraries. The supported product path is
 Windows, GLFW, OpenGL, and — for the simulator — the sparse infinite or
 finite-toroidal canvas. Illumo remains a reusable runtime and rendering
 foundation; application policy stays in the consuming product.
@@ -34,7 +39,10 @@ editing. Route detail to these canonical sources:
 - repository use and exact common commands: `README.md`;
 - current architecture and decision catalog: `docs/architecture-consensus.md`;
 - intended charter direction and current boundary: `docs/charter-direction.md`;
-- independent capture API and CLI: `docs/frame-capture.md`;
+- capture API and runtime `--capture` mode: `docs/frame-capture.md`;
+- WASM runtime design, ABI and cutover: `docs/wasm-game-runtime-design.md`,
+  `docs/wasm-game-runtime-plan.md`, `docs/wasm-game-cutover-plan.md`, and
+  `docs/wasm-apps-cutover-plan.md`;
 - persistent scene hierarchy contract: `docs/scene-graph-v2-design.md`;
 - scene implementation and verification record: `docs/scene-graph-v2-plan.md`;
 - long-form design book and chart-only map: `docs/latex/illumo.tex` and
@@ -258,31 +266,64 @@ Ruleset truth:
 | Headless backend | `Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h` |
 | Input, console, env, logging, system CLI | `Illumo/Source/Services/*` |
 | OS entry and native save/load | `Illumo/Source/Platform/*` |
-| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*` |
+| WASM host, ABI decoders, runtime | `Illumo/Source/Wasm/*`, `Illumo/Include/Illumo/Wasm/*`, `cmake/IllumoWasm.cmake` |
+| Guest SDK, guest-side engine, wire headers | `IllumoGuest/Include/IllumoGuest/*`, `IllumoGuest/Source/*` |
+| IllumoGame package entry and platform adapter | `IllumoGame/Source/Wasm/*`, `IllumoGame/app.json` |
+| IllEd package entry and platform seam | `IllEd/Source/Wasm/EditorApplication.cpp`, `IllEd/Source/IllEdPlatform.h`, `IllEd/app.json` |
+| IllMeshViewer package entry and platform seam | `IllMeshViewer/Source/Wasm/ViewerApplication.cpp`, `IllMeshViewer/Source/MeshViewerPlatform.h`, `IllMeshViewer/app.json` |
+| Runtime command line and capture mode | `Illumo/Source/Wasm/RuntimeApplication.cpp` |
+| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*`, `IllMeshViewer/Tests/*` |
 | Canonical architecture | `docs/architecture-consensus.md` |
 | Formal decisions | `docs/latex/sections/09-design-decision-log.tex` |
 
 ## Build and verification commands
 
-Run from the repository root on Windows.
+Run from the repository root on Windows. The default Windows configure
+builds `IllumoRuntime` and stages every app package (`apps/game`,
+`apps/illed`, `apps/meshviewer`), which requires the pinned toolchain from
+`tools/bootstrap-wasm.ps1` (or `python build.py wasm-tools`) in
+`build-wasm-tools/` (`-DILLUMO_BUILD_WASM_RUNTIME=OFF` builds without them;
+there are then no runnable applications).
 
 ```powershell
+.\tools\bootstrap-wasm.ps1
 cmake -S . -B build
 cmake --build build --config Release
 ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 ```
 
+`build.py` passes `ILLUMO_BUILD_WASM_RUNTIME` explicitly (`--no-wasm` to
+skip), because `option()` keeps a stale cached `OFF`. `python build.py
+doctor` reports the toolchain, an `apps` check, and stale native pre-WASM
+outputs (`IllumoGame.exe`, `IllEd.exe`, `IllMeshViewer.exe`,
+`IllumoCapture.exe`, an old `game/` folder) to delete. `python build.py play
+--app game|illed|meshviewer [-- runtime args]` builds the runtime and runs
+one app (`--no-build` skips building). `python build.py test` builds every
+executable CTest runs; `tools/test_build.py` covers the orchestrator.
+
+Package-level checks drive each real package through the generic host:
+`IllumoGame.Wasm.GamePackage` (menu, setup, edit, step, save/load, 3D mode),
+`IllEd.Wasm.Package` (launch scene, preloaded atlas, keyboard pan, Ctrl+S
+save in place) and `IllMeshViewer.Wasm.Package` (launch mesh as a retained
+host mesh, skybox cubemap). The `Illumo.Wasm.*` cases cover the sandbox, ABI
+decoders and host services; `Illumo.Runtime.Help` and
+`Illumo.Runtime.InvalidCaptureFrame` cover the runtime command line. Real-GPU
+capture is checked with `python tools/verify_capture.py
+build-workspace/Release/IllumoRuntime.exe --output-dir <dir>`.
+
 Focused test work:
 
 ```powershell
-cmake --build build --config Release --target IllumoTests IllumoGameTests IllEdTests
+cmake --build build --config Release --target IllumoTests IllumoGameTests IllEdTests IllMeshViewerTests
 ctest --test-dir build -C Release -N -L IllumoWorkspace
 build/Release/IllumoTests.exe --list
 build/Release/IllumoGameTests.exe --list
 build/Release/IllEdTests.exe --list
+build/Release/IllMeshViewerTests.exe --list
 build/Release/IllumoTests.exe --run <Illumo.exact-name>
 build/Release/IllumoGameTests.exe --run <IllumoGame.exact-name>
 build/Release/IllEdTests.exe --run <IllEd.exact-name>
+build/Release/IllMeshViewerTests.exe --run <IllMeshViewer.exact-name>
 ```
 
 Clang/LLVM coverage:
@@ -333,10 +374,20 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 ## Project-wide invariants
 
 - Illumo owns process entry, platform services, BuildInfo, SysCmdLine, logging
-  lifetime, DebugModule composition, and the frame loop. IllumoGame supplies
-  only CA defaults/CLI metadata and its required game-module factory; IllEd
-  supplies editor defaults/CLI metadata and its required editor-module
-  factory. Illumo must not depend on Game, Rulesets, or IllEd.
+  lifetime, DebugModule composition, and the frame loop. IllEd supplies
+  editor defaults/CLI metadata and its required editor-module factory.
+  Illumo must not depend on Game, Rulesets, or IllEd.
+- IllumoGame executes only inside `IllumoGame.wasm`; IllEd and IllMeshViewer
+  likewise run only as `IllEd.wasm` and `IllMeshViewer.wasm`, reaching files
+  and dialogs through their `IllEdPlatform` / `MeshViewerPlatform` seams.
+  `IllumoRuntime` and `Illumo/Source/Wasm` stay product-agnostic: no Game,
+  Rulesets, IllEd or IllMeshViewer includes, no product-specific imports or
+  opcodes, no native product fallback. The guest composes
+  its own `IllumoContext` (`GuestModuleApplication`); nothing about it crosses
+  the ABI, which carries only copied envelopes, services and frames. Package
+  manifests request budgets; the runtime grants at most its ceilings, and
+  launch options are never persisted. Frame schema changes, new capabilities
+  or new imports require decoder/deny tests with the change.
 - `IllumoContext` is a non-owning pointer bag frozen after engine startup.
   Failed optional modules remain inactive; a failed required module rolls back
   every accepted module and fails startup. Each product supplies one required
@@ -377,6 +428,8 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   and CMake are repaired for Ubuntu 24.04 x86_64 (X11/XWayland, gtkmm-3
   dialogs) and must not be described as supported until native configure,
   compile, launch, dialog, render, and shutdown smoke exist on that host.
+  The WASM runtime is Windows x64 only, so Linux currently builds only the
+  engine libraries and native test suites and has no runnable applications.
   macOS is not targeted; its platform scaffold has been removed. See
   `docs/packages/platform-linux.md`.
 - Keep generic engine/services independent of game-domain policy. Keep raw
@@ -432,6 +485,7 @@ Subsystem rules live in:
 - `IllumoGame/Source/Game/AGENTS.md` and
   `IllumoGame/Source/Rulesets/AGENTS.md`;
 - `IllEd/Source/AGENTS.md` and `IllEd/Tests/AGENTS.md`;
+- `IllMeshViewer/Source/AGENTS.md` and `IllMeshViewer/Tests/AGENTS.md`;
 - `Illumo/Source/Services/AGENTS.md`, `Illumo/Tests/AGENTS.md`, and
   `IllumoGame/Tests/AGENTS.md`;
 - `Illumo/Source/Rendering/AGENTS.md` plus

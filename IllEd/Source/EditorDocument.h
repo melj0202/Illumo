@@ -17,15 +17,38 @@ public:
   EditorDocument& operator=(EditorDocument&&) = delete;
 
   void clear();
+#if !defined(ILLUMO_SERIAL_GUEST)
   bool loadFromFile(const std::string& path, std::string* error);
   bool saveToFile(const std::string& path, std::string* error);
+#endif
   bool loadFromText(const std::string& text, std::string* error);
   std::string encode() const;
 
   bool isDirty() const { return m_dirty; }
   void markDirty() { m_dirty = true; }
+  // The document's saved state now matches `location` (a completed save).
+  void markSaved(const std::string& location, const std::string& label)
+  {
+    setLocation(location, label);
+    m_dirty = false;
+  }
+  // The save-in-place location: a path natively, an opaque grant in WASM.
   const std::string& path() const { return m_path; }
-  void setPath(const std::string& path) { m_path = path; }
+  void setPath(const std::string& path)
+  {
+    m_path = path;
+    m_label.clear();
+  }
+  void setLocation(const std::string& location, const std::string& label)
+  {
+    m_path = location;
+    m_label = label;
+  }
+  // What the UI calls the document: its label, else its location.
+  const std::string& displayName() const
+  {
+    return m_label.empty() ? m_path : m_label;
+  }
   const IlscCameraState& camera() const { return m_document.camera; }
   void setCamera(const IlscCameraState& camera);
   IlscWorldMode worldMode() const { return m_document.worldMode; }
@@ -65,6 +88,7 @@ private:
   mutable std::vector<SceneRayHit> m_pickCandidates;
   IlscDocument m_document;
   std::string m_path;
+  std::string m_label;
   bool m_dirty;
   unsigned int m_nextId;
 

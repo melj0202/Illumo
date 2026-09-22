@@ -41,4 +41,7 @@ public:
   virtual void requestClose() = 0;
   // Custom windows used with modules that defer close must clear their flag.
   virtual void cancelCloseRequest() {}
+  // Hosts that learn the product name after creation (a package runtime)
+  // retitle the window. Windows without a title bar ignore it.
+  virtual void setTitle(const std::string& title) { (void)title; }
 };

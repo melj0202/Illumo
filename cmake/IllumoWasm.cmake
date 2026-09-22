@@ -1,6 +1,15 @@
 include_guard(GLOBAL)
 
-option(ILLUMO_BUILD_WASM_RUNTIME "Build the isolated game runtime migration targets" OFF)
+# IllumoGame exists only as a WASM package hosted by IllumoRuntime. The pinned
+# Wasmtime/WASI SDK pair is Windows x64 only, so other hosts build the engine
+# and tools without a game.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+  set(_illumo_wasm_default ON)
+else()
+  set(_illumo_wasm_default OFF)
+endif()
+option(ILLUMO_BUILD_WASM_RUNTIME
+  "Build IllumoRuntime and the IllumoGame WASM package" ${_illumo_wasm_default})
 if(NOT ILLUMO_BUILD_WASM_RUNTIME)
   return()
 endif()
@@ -15,7 +24,9 @@ foreach(_required "${_wasmtime}/include/wasmtime.h"
     "${_wasmtime}/lib/wasmtime.dll.lib" "${_wasmtime}/lib/wasmtime.dll"
     "${_wasi_sdk}/bin/clang++.exe")
   if(NOT EXISTS "${_required}")
-    message(FATAL_ERROR "Missing ${_required}; run tools/bootstrap-wasm.ps1 explicitly")
+    message(FATAL_ERROR "Missing ${_required}; run tools/bootstrap-wasm.ps1 "
+      "explicitly, or configure with -DILLUMO_BUILD_WASM_RUNTIME=OFF to build "
+      "without IllumoRuntime and the IllumoGame package")
   endif()
 endforeach()
 
@@ -37,8 +48,11 @@ illumo_configure_runtime_target(IllumoWasmRuntime)
 add_executable(IllumoWasmCompiler
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Platform/Windows/WinWasmCompilerMain.cpp")
 target_link_libraries(IllumoWasmCompiler PRIVATE IllumoWasmtime)
-illumo_configure_runtime_target(IllumoWasmCompiler)
-illumo_stage_msvc_asan(IllumoWasmCompiler)
+# No sanitizer: the helper runs no product code, and ASan's allocator would
+# only inflate Wasmtime's compilation inside the job's memory limit (a Debug
+# game package then exceeded it). Its engine settings still follow the build
+# configuration, so artifacts match the host's.
+illumo_configure_cpp_target(IllumoWasmCompiler)
 add_custom_command(TARGET IllumoWasmCompiler POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "$<TARGET_FILE:IllumoWasmtime>" "$<TARGET_FILE_DIR:IllumoWasmCompiler>" VERBATIM)
@@ -68,17 +82,103 @@ ExternalProject_Add(IllumoGuestBuild
     "${_guest_build}/JobControlGuest.wasm"
     "${_guest_build}/FileControlGuest.wasm"
     "${_guest_build}/SdkContractGuest.wasm"
+    "${_guest_build}/IllumoGame.wasm"
+    "${_guest_build}/IllEd.wasm"
+    "${_guest_build}/IllMeshViewer.wasm"
   INSTALL_COMMAND "")
 
-add_executable(IllumoWasmPlayer $<TARGET_OBJECTS:IllumoPlatformEntry>
-  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmPlayerApplication.cpp")
-target_link_libraries(IllumoWasmPlayer PRIVATE IllumoWasmRendering)
-illumo_configure_runtime_target(IllumoWasmPlayer)
-illumo_stage_runtime(IllumoWasmPlayer)
-illumo_stage_msvc_asan(IllumoWasmPlayer)
-add_dependencies(IllumoWasmPlayer IllumoGuestBuild)
+# Generic host executable. It contains no product code; installed applications
+# are staged beside it in apps/<name>/, each described by an app.json manifest.
+add_executable(IllumoRuntime $<TARGET_OBJECTS:IllumoPlatformEntry>
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/RuntimeApplication.cpp")
+target_link_libraries(IllumoRuntime PRIVATE IllumoWasmRendering)
+target_include_directories(IllumoRuntime SYSTEM PRIVATE
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include")
+illumo_configure_runtime_target(IllumoRuntime)
+illumo_stage_runtime(IllumoRuntime)
+illumo_stage_default_file(IllumoRuntime
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/RuntimeEnvVars.json" envvars.json)
+illumo_stage_msvc_asan(IllumoRuntime)
+add_custom_command(TARGET IllumoRuntime POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "$<TARGET_FILE:IllumoWasmtime>" "$<TARGET_FILE_DIR:IllumoRuntime>"
+  VERBATIM)
+
+# Stages one installed application: apps/<name>/ holds its manifest, module
+# and flat data files. ASSETS lists source/destination pairs whose
+# destinations are package-relative paths (package preloads such as
+# Assets/IllEd/editor-ui-atlas.jpg).
+function(illumo_stage_app target name)
+  cmake_parse_arguments(PARSE_ARGV 2 _app "" "MODULE" "FILES;ASSETS")
+  set(_package "$<TARGET_FILE_DIR:IllumoRuntime>/apps/${name}")
+  set(_commands
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_package}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${_guest_build}/${_app_MODULE}" ${_app_FILES} "${_package}")
+  set(_inputs ${_app_FILES})
+  list(LENGTH _app_ASSETS _asset_values)
+  math(EXPR _asset_odd "${_asset_values} % 2")
+  if(_asset_odd)
+    message(FATAL_ERROR "illumo_stage_app ASSETS takes source/destination pairs")
+  endif()
+  while(_app_ASSETS)
+    list(POP_FRONT _app_ASSETS _asset_source _asset_destination)
+    get_filename_component(_asset_directory "${_asset_destination}" DIRECTORY)
+    list(APPEND _commands
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${_package}/${_asset_directory}"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${_asset_source}" "${_package}/${_asset_destination}")
+    list(APPEND _inputs "${_asset_source}")
+  endwhile()
+  add_custom_target(${target} ${_commands}
+    DEPENDS ${_inputs}
+    VERBATIM
+    COMMENT "Staging the ${name} application package")
+  set_target_properties(${target} PROPERTIES FOLDER "staging")
+  add_dependencies(${target} IllumoGuestBuild)
+  add_dependencies(IllumoRuntime ${target})
+endfunction()
+
+# IllumoGame: manifest, product module and packaged catalogs.
+illumo_stage_app(IllumoGamePackage game
+  MODULE IllumoGame.wasm
+  FILES
+    "${CMAKE_SOURCE_DIR}/IllumoGame/app.json"
+    "${CMAKE_SOURCE_DIR}/IllumoGame/families.json"
+    "${CMAKE_SOURCE_DIR}/IllumoGame/rulesets.json"
+    "${CMAKE_SOURCE_DIR}/IllumoGame/envvars.json")
+
+# IllEd: the world editor; its UI atlas is preloaded from the package.
+illumo_stage_app(IllEdPackage illed
+  MODULE IllEd.wasm
+  FILES
+    "${CMAKE_SOURCE_DIR}/IllEd/app.json"
+    "${CMAKE_SOURCE_DIR}/IllEd/envvars.json"
+  ASSETS
+    "${CMAKE_SOURCE_DIR}/IllEd/Assets/editor-ui-atlas.jpg"
+    "Assets/IllEd/editor-ui-atlas.jpg")
+
+# IllMeshViewer: the mesh viewer; its skybox cross is preloaded.
+illumo_stage_app(IllMeshViewerPackage meshviewer
+  MODULE IllMeshViewer.wasm
+  FILES
+    "${CMAKE_SOURCE_DIR}/IllMeshViewer/app.json"
+    "${CMAKE_SOURCE_DIR}/IllMeshViewer/envvars.json"
+  ASSETS
+    "${CMAKE_SOURCE_DIR}/Illumo/Assets/Skybox/skybox-daylight.png"
+    "Assets/Skybox/skybox-daylight.png")
 
 if(BUILD_TESTING)
+  # Runtime command line: help and option rejection finish before any window
+  # opens, so they are headless. tools/verify_capture.py covers real captures.
+  add_test(NAME Illumo.Runtime.Help COMMAND IllumoRuntime --help)
+  add_test(NAME Illumo.Runtime.InvalidCaptureFrame
+    COMMAND IllumoRuntime --capture-frame 0)
+  set_tests_properties(Illumo.Runtime.InvalidCaptureFrame PROPERTIES WILL_FAIL TRUE)
+  set_tests_properties(Illumo.Runtime.Help Illumo.Runtime.InvalidCaptureFrame
+    PROPERTIES LABELS "Illumo;IllumoWorkspace")
+  add_dependencies(IllumoRunTests IllumoRuntime)
+
   add_executable(IllumoWasmFileTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmFiles.cpp")
   target_link_libraries(IllumoWasmFileTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
   illumo_configure_runtime_target(IllumoWasmFileTests)
@@ -102,7 +202,7 @@ if(BUILD_TESTING)
   add_dependencies(IllumoWasmFrameTests IllumoGuestBuild)
   illumo_configure_runtime_target(IllumoWasmFrameTests)
   illumo_stage_msvc_asan(IllumoWasmFrameTests)
-  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices)
+  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices RetainedResources)
     add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmFrameTests --run "Illumo.Wasm.${_case}")
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20 WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmFrameTests>")
   endforeach()
@@ -199,4 +299,78 @@ if(BUILD_TESTING)
   set_tests_properties(IllumoGame.Wasm.SimulationProtocol PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 30)
   set_tests_properties(IllumoGame.Wasm.WorkerParity PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 180)
   add_dependencies(IllumoRunTests IllumoGameWasmWorkerTests)
+
+
+  # The complete product package driven through the generic host.
+  add_executable(IllumoGameWasmPackageTests
+    "${CMAKE_SOURCE_DIR}/IllumoGame/Tests/Wasm/TestGamePackage.cpp")
+  target_link_libraries(IllumoGameWasmPackageTests PRIVATE
+    IllumoGameCore IllumoWasmRendering Illumo::TestSupport)
+  target_compile_definitions(IllumoGameWasmPackageTests PRIVATE
+    "ILLUMO_GAME_GUEST=\"${_guest_build}/IllumoGame.wasm\""
+    "ILLUMO_GAME_DEFAULTS=\"${CMAKE_SOURCE_DIR}/IllumoGame/envvars.json\""
+    "ILLUMO_FAMILIES=\"${CMAKE_SOURCE_DIR}/IllumoGame/families.json\""
+    "ILLUMO_RULES=\"${CMAKE_SOURCE_DIR}/IllumoGame/rulesets.json\"")
+  illumo_configure_runtime_target(IllumoGameWasmPackageTests)
+  illumo_stage_msvc_asan(IllumoGameWasmPackageTests)
+  add_dependencies(IllumoGameWasmPackageTests IllumoGuestBuild)
+  add_custom_command(TARGET IllumoGameWasmPackageTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "$<TARGET_FILE:IllumoWasmtime>" "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>"
+    VERBATIM)
+  add_test(NAME IllumoGame.Wasm.GamePackage
+    COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.GamePackage)
+  set_tests_properties(IllumoGame.Wasm.GamePackage PROPERTIES
+    LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
+  add_dependencies(IllumoRunTests IllumoGameWasmPackageTests)
+
+  # The IllEd package driven through the generic host: launch document,
+  # package-preloaded atlas, keyboard edit and in-place save.
+  add_executable(IllEdWasmPackageTests
+    "${CMAKE_SOURCE_DIR}/IllEd/Tests/Wasm/TestEditorPackage.cpp")
+  target_link_libraries(IllEdWasmPackageTests PRIVATE
+    IllEdCore IllumoWasmRendering Illumo::TestSupport)
+  target_compile_definitions(IllEdWasmPackageTests PRIVATE
+    "ILLUMO_ILLED_GUEST=\"${_guest_build}/IllEd.wasm\""
+    "ILLUMO_ILLED_DEFAULTS=\"${CMAKE_SOURCE_DIR}/IllEd/envvars.json\""
+    "ILLUMO_ILLED_ATLAS=\"${CMAKE_SOURCE_DIR}/IllEd/Assets/editor-ui-atlas.jpg\"")
+  illumo_configure_runtime_target(IllEdWasmPackageTests)
+  illumo_stage_msvc_asan(IllEdWasmPackageTests)
+  add_dependencies(IllEdWasmPackageTests IllumoGuestBuild)
+  add_custom_command(TARGET IllEdWasmPackageTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "$<TARGET_FILE:IllumoWasmtime>" "$<TARGET_FILE_DIR:IllEdWasmPackageTests>"
+    VERBATIM)
+  add_test(NAME IllEd.Wasm.Package
+    COMMAND IllEdWasmPackageTests --run IllEd.Wasm.Package)
+  set_tests_properties(IllEd.Wasm.Package PROPERTIES
+    LABELS "IllEd;IllumoWorkspace" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllEdWasmPackageTests>")
+  add_dependencies(IllumoRunTests IllEdWasmPackageTests)
+
+  # The IllMeshViewer package: launch mesh as a retained host mesh (frame
+  # schema v3) and the package-preloaded skybox as a host cubemap.
+  add_executable(IllMeshViewerWasmPackageTests
+    "${CMAKE_SOURCE_DIR}/IllMeshViewer/Tests/Wasm/TestViewerPackage.cpp")
+  target_link_libraries(IllMeshViewerWasmPackageTests PRIVATE
+    IllumoWasmRendering Illumo::TestSupport)
+  target_compile_definitions(IllMeshViewerWasmPackageTests PRIVATE
+    "ILLUMO_VIEWER_GUEST=\"${_guest_build}/IllMeshViewer.wasm\""
+    "ILLUMO_VIEWER_DEFAULTS=\"${CMAKE_SOURCE_DIR}/IllMeshViewer/envvars.json\""
+    "ILLUMO_VIEWER_SKYBOX=\"${CMAKE_SOURCE_DIR}/Illumo/Assets/Skybox/skybox-daylight.png\"")
+  illumo_configure_runtime_target(IllMeshViewerWasmPackageTests)
+  illumo_stage_msvc_asan(IllMeshViewerWasmPackageTests)
+  add_dependencies(IllMeshViewerWasmPackageTests IllumoGuestBuild)
+  add_custom_command(TARGET IllMeshViewerWasmPackageTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "$<TARGET_FILE:IllumoWasmtime>"
+      "$<TARGET_FILE_DIR:IllMeshViewerWasmPackageTests>"
+    VERBATIM)
+  add_test(NAME IllMeshViewer.Wasm.Package
+    COMMAND IllMeshViewerWasmPackageTests --run IllMeshViewer.Wasm.Package)
+  set_tests_properties(IllMeshViewer.Wasm.Package PROPERTIES
+    LABELS "IllMeshViewer;IllumoWorkspace" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllMeshViewerWasmPackageTests>")
+  add_dependencies(IllumoRunTests IllMeshViewerWasmPackageTests)
 endif()

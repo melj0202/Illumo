@@ -5,6 +5,7 @@
 #include "ConfigurationMenu.h"
 #include "Cursor.h"
 #include "ExitConfirmDialog.h"
+#include "Game/IllumoCodec.h"
 #include "Game/SimulationRunner.h"
 #include "NewSimulationMenu.h"
 #include "RulesetWorkshopMenu.h"
@@ -52,6 +53,13 @@ private:
   void unregisterConsoleCommands();
   bool SaveCellGame(std::string filename);
   bool LoadCellGame(std::string filename);
+  // Platform I/O may complete later; `announce` reports success in the
+  // console. Returns false only for failures known before returning.
+  bool saveCellGameTo(std::string location, bool announce);
+  bool loadCellGameFrom(std::vector<std::string> candidates, bool announce);
+  bool applyLoadedDocument(IllumoDocument& document);
+  void importRuleCatalog(const std::string& location);
+  void exportRuleCatalog(const std::string& location);
   void setRunning(bool running);
   int stepSimulation(int generations);
   void printStatus() const;
@@ -191,4 +199,6 @@ private:
   bool deleteHeld;
   std::string initialSaveFile;
   std::optional<NewSimulationConfiguration> initialCanvas;
+  // Platform completions hold a weak reference and are dropped after Exit.
+  std::shared_ptr<bool> m_lifetime;
 };

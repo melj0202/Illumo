@@ -1,22 +1,35 @@
 #pragma once
 
+#include <Illumo/Rendering/AssetSource.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/MeshLoader.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <array>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
-#include <filesystem>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
+#if !defined(ILLUMO_SERIAL_GUEST)
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#endif
 
 class Renderer;
+
+#if defined(ILLUMO_SERIAL_GUEST)
+// Serial WASM guests have no threads; every load completes on the caller.
+struct AssetQueueMutex
+{
+  void lock() {}
+  void unlock() {}
+};
+#else
+using AssetQueueMutex = std::mutex;
+#endif
 
 enum class AssetLoadMode
 {
@@ -54,12 +67,20 @@ struct MeshAssetInfo
 
 // Cached texture/shader/mesh assets. CPU texture/shader file work may run on
 // one worker; pump() performs their backend mutation on the render thread.
-// Mesh acquisition is synchronous and main-thread affine.
+// Mesh acquisition is synchronous and main-thread affine. Bytes come from an
+// IAssetSource (the filesystem unless another source is supplied); serial
+// guests never start a worker and complete queued loads in pump().
 class AssetManager
 {
 public:
-  explicit AssetManager(Renderer* renderer, bool startWorker = true);
+  explicit AssetManager(Renderer* renderer,
+                        bool startWorker = true,
+                        IAssetSource* source = nullptr);
   ~AssetManager();
+  AssetManager(const AssetManager&) = delete;
+  AssetManager& operator=(const AssetManager&) = delete;
+  AssetManager(AssetManager&&) = delete;
+  AssetManager& operator=(AssetManager&&) = delete;
 
   TextureHandle acquireTexture(const std::string& path,
                                const TextureOptions& options = TextureOptions{},
@@ -122,7 +143,7 @@ private:
   {
     TextureSourceKind sourceKind = TextureSourceKind::Image2D;
     std::array<std::string, 6> sourcePaths;
-    std::array<std::filesystem::file_time_type, 6> sourceWriteTimes{};
+    std::array<std::int64_t, 6> sourceWriteTimes{};
     TextureHandle handle{};
     std::string path;
     std::string cacheKey;
@@ -134,7 +155,7 @@ private:
     unsigned int referenceCount = 1;
     bool reloadPending = false;
     std::string lastError;
-    std::filesystem::file_time_type lastWriteTime{};
+    std::int64_t lastWriteTime = 0;
   };
 
   struct ShaderEntry
@@ -148,11 +169,10 @@ private:
     unsigned int referenceCount = 1;
     bool reloadPending = false;
     std::string lastError;
-    std::filesystem::file_time_type vertexWriteTime{};
-    std::filesystem::file_time_type fragmentWriteTime{};
+    std::int64_t vertexWriteTime = 0;
+    std::int64_t fragmentWriteTime = 0;
     std::vector<std::string> dependencies;
-    std::unordered_map<std::string, std::filesystem::file_time_type>
-      dependencyWriteTimes;
+    std::unordered_map<std::string, std::int64_t> dependencyWriteTimes;
   };
 
   struct MeshEntry
@@ -182,7 +202,7 @@ private:
   {
     TextureSourceKind sourceKind = TextureSourceKind::Image2D;
     std::array<std::vector<unsigned char>, 6> faces;
-    std::array<std::filesystem::file_time_type, 6> sourceWriteTimes{};
+    std::array<std::int64_t, 6> sourceWriteTimes{};
     AssetKind kind = AssetKind::Texture;
     uint32_t slot = 0;
     uint32_t generation = 0;
@@ -206,25 +226,32 @@ private:
   std::unordered_map<std::string, uint32_t> shaderCache;
   std::unordered_map<std::string, uint32_t> meshCache;
 
-  mutable std::mutex queueMutex;
+  // Borrowed; outlives the manager. Null only in guests without a source,
+  // where every load fails visibly.
+  IAssetSource* source;
+  mutable AssetQueueMutex queueMutex;
+#if !defined(ILLUMO_SERIAL_GUEST)
   std::condition_variable queueCondition;
+  std::thread worker;
+#endif
   std::deque<LoadJob> jobs;
   std::deque<LoadResult> results;
-  std::thread worker;
   bool workerEnabled = true;
   bool stopping = false;
   bool hotReloadEnabled = false;
   std::chrono::steady_clock::time_point nextHotReloadPoll;
 
-  static std::string canonicalPath(const std::string& path);
+  std::string canonicalPath(const std::string& path) const;
   static std::string textureKey(const std::string& canonical,
                                 const TextureOptions& options);
-  static std::string shaderKey(const ShaderPaths& paths);
-  static std::string meshKey(const std::string& canonical,
-                             const MeshLoadOptions& options);
-  static std::filesystem::file_time_type writeTime(const std::string& path);
-  static LoadResult executeJob(const LoadJob& job);
-  static void decodeCubemap(const LoadJob& job, LoadResult& result);
+  std::string shaderKey(const ShaderPaths& paths) const;
+  std::string meshKey(const std::string& canonical,
+                      const MeshLoadOptions& options) const;
+  std::int64_t writeTime(const std::string& path) const;
+  static LoadResult executeJob(const LoadJob& job, const IAssetSource* source);
+  static void decodeCubemap(const LoadJob& job,
+                            const IAssetSource& source,
+                            LoadResult& result);
   TextureHandle acquireCubemapSources(TextureSourceKind kind,
                                       const std::array<std::string, 6>& paths,
                                       const std::string& key);

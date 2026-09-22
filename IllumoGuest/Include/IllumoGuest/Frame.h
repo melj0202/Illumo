@@ -8,7 +8,13 @@ enum class GuestBatchStyle : std::uint32_t
 {
   Shape = 1,
   Sprite = 2,
-  Canvas = 3
+  Canvas = 3,
+  // Version 2: world mesh with normals, lit by the host's shared light and
+  // shadow pass. Carries a GuestLighting record.
+  LitMesh = 4,
+  // Version 3: world cube sampled from a cubemap texture with the built-in
+  // skybox style. Carries the tint; mvp is the rotation-only view projection.
+  Skybox = 5
 };
 
 enum class GuestLayer : std::uint32_t
@@ -17,11 +23,37 @@ enum class GuestLayer : std::uint32_t
   Ui = 2
 };
 
+// Version 2. Lines are valid only for Shape batches.
+enum class GuestPrimitive : std::uint32_t
+{
+  Triangles = 1,
+  Lines = 2
+};
+
 struct GuestVertex
 {
   std::array<float, 3> position{};
   std::uint32_t rgba = UINT32_MAX;
   std::array<float, 2> uv{};
+  std::array<float, 3> normal{}; // LitMesh only
+};
+
+// Product-chosen lighting for one LitMesh batch. The host supplies the light
+// space and shadow map from its own shared pass; these values mirror the
+// MeshVisual uniforms that do not depend on that pass.
+struct GuestLighting
+{
+  std::array<float, 16> model{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+  std::array<float, 3> lightDirection{ 0.5f, 1.0f, 0.3f };
+  std::array<float, 3> lightColor{ 1.0f, 1.0f, 1.0f };
+  std::array<float, 3> ambientColor{ 0.2f, 0.2f, 0.2f };
+  std::array<float, 4> tint{ 1.0f, 1.0f, 1.0f, 1.0f };
+  float shadowBias = 0.0f;
+  float shadowSlopeScale = 0.0f;
+  float shadowNormalOffset = 0.0f;
+  bool shadowPcf = false;
+  bool receivesShadow = false;
+  bool castsShadow = false;
 };
 
 struct GuestBatch
@@ -32,8 +64,38 @@ struct GuestBatch
   std::array<float, 16> mvp{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
   bool clipped = false;
   std::array<float, 4> clip{}; // logical top-left x, y, width, height
+  GuestPrimitive primitive = GuestPrimitive::Triangles; // version 2
+  bool depthTest = false;                               // version 2
+  // Version 3: the guest pipeline's alpha blending. Frames of versions 1
+  // and 2 carry none and keep each style's historical default.
+  bool blend = false;
+  bool hasBlend = false; // decoded only; true for version 3
+  // Version 3: draw indexCount indices from firstIndex of a retained host
+  // mesh instead of inline geometry (vertices and indices stay empty).
+  GuestResourceId mesh;
+  std::uint32_t firstIndex = 0;
+  std::uint32_t indexCount = 0;
+  GuestLighting lighting; // LitMesh; Skybox uses its tint only
   std::vector<GuestVertex> vertices;
   std::vector<std::uint32_t> indices;
+
+  bool retained() const { return mesh.owner != 0; }
+  std::uint32_t drawCount() const
+  {
+    return retained() ? indexCount : static_cast<std::uint32_t>(indices.size());
+  }
+};
+
+// Version 2: one registered shadow caster, as the product requested it.
+struct GuestShadowCaster
+{
+  std::array<float, 3> boundsMin{};
+  std::array<float, 3> boundsMax{};
+  std::array<float, 3> lightDirection{ 0.5f, 1.0f, 0.3f };
+  std::uint32_t mapSize = 1024;
+  float minimumRadius = 2.5f;
+  float lightDistance = 8.0f;
+  float casterDistance = 100.0f;
 };
 
 struct GuestFrameLimits
@@ -44,6 +106,7 @@ struct GuestFrameLimits
   std::uint32_t indices = 3000000;
   std::uint32_t textureWrites = 256;
   std::uint32_t uploadBytes = 16u * 1024u * 1024u;
+  std::uint32_t shadowCasters = 256;
 };
 
 struct GuestTextureWrite
@@ -61,45 +124,95 @@ struct GuestTextureWrite
 struct GuestFrame
 {
   static constexpr std::uint32_t Magic = 0x31465249u; // IRF1
+  // Version 1 carries 2D batches only. Version 2 adds the world camera,
+  // primitive/depth flags, lit meshes and shadow casters. Version 3 adds the
+  // blend flag, retained host meshes and the cubemap skybox. The host
+  // accepts all three.
+  static constexpr std::uint32_t Version = 3;
   float width = 1280;
   float height = 720;
+  // World view-projection used for host shadow fitting (version 2).
+  bool hasCamera = false;
+  std::array<float, 16> camera{
+    1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1
+  };
   std::vector<GuestBatch> batches;
   std::vector<GuestTextureWrite> textureWrites;
+  std::vector<GuestShadowCaster> shadowCasters;
+
+  static void writeFloats(GuestWireWriter& output, const float* values, int n)
+  {
+    for (int index = 0; index < n; ++index) {
+      output.f32(values[index]);
+    }
+  }
+  static bool readFloats(GuestWireReader& reader, float* values, int n)
+  {
+    for (int index = 0; index < n; ++index) {
+      values[index] = reader.f32();
+      if (!std::isfinite(values[index])) {
+        return false;
+      }
+    }
+    return reader.valid();
+  }
 
   void write(GuestWireWriter& output) const
   {
-    if (batches.size() > UINT32_MAX) {
+    if (batches.size() > UINT32_MAX || shadowCasters.size() > UINT32_MAX) {
       throw std::length_error("Too many guest batches");
     }
     output.u32(Magic);
-    output.u32(1);
+    output.u32(Version);
     output.f32(width);
     output.f32(height);
+    output.u32(hasCamera ? 1 : 0);
+    writeFloats(output, camera.data(), 16);
     output.u32(static_cast<std::uint32_t>(batches.size()));
     for (const GuestBatch& batch : batches) {
       if (batch.vertices.size() > UINT32_MAX ||
-          batch.indices.size() > UINT32_MAX) {
+          batch.indices.size() > UINT32_MAX ||
+          (batch.retained() &&
+           (!batch.vertices.empty() || !batch.indices.empty()))) {
         throw std::length_error("Guest geometry exceeds ABI range");
       }
       output.u32(static_cast<std::uint32_t>(batch.style));
       output.u32(static_cast<std::uint32_t>(batch.layer));
       batch.texture.write(output);
       output.u32(batch.clipped ? 1 : 0);
-      for (float value : batch.clip) {
-        output.f32(value);
+      writeFloats(output, batch.clip.data(), 4);
+      writeFloats(output, batch.mvp.data(), 16);
+      output.u32(static_cast<std::uint32_t>(batch.primitive));
+      output.u32(batch.depthTest ? 1 : 0);
+      output.u32(batch.blend ? 1 : 0);
+      batch.mesh.write(output);
+      output.u32(batch.firstIndex);
+      const bool lit = batch.style == GuestBatchStyle::LitMesh;
+      if (batch.style == GuestBatchStyle::Skybox) {
+        writeFloats(output, batch.lighting.tint.data(), 4);
       }
-      for (float value : batch.mvp) {
-        output.f32(value);
+      if (lit) {
+        const GuestLighting& lighting = batch.lighting;
+        writeFloats(output, lighting.model.data(), 16);
+        writeFloats(output, lighting.lightDirection.data(), 3);
+        writeFloats(output, lighting.lightColor.data(), 3);
+        writeFloats(output, lighting.ambientColor.data(), 3);
+        writeFloats(output, lighting.tint.data(), 4);
+        output.f32(lighting.shadowBias);
+        output.f32(lighting.shadowSlopeScale);
+        output.f32(lighting.shadowNormalOffset);
+        output.u32((lighting.shadowPcf ? 1u : 0u) |
+                   (lighting.receivesShadow ? 2u : 0u) |
+                   (lighting.castsShadow ? 4u : 0u));
       }
       output.u32(static_cast<std::uint32_t>(batch.vertices.size()));
-      output.u32(static_cast<std::uint32_t>(batch.indices.size()));
+      output.u32(batch.drawCount());
       for (const GuestVertex& vertex : batch.vertices) {
-        for (float value : vertex.position) {
-          output.f32(value);
-        }
+        writeFloats(output, vertex.position.data(), 3);
         output.u32(vertex.rgba);
-        for (float value : vertex.uv) {
-          output.f32(value);
+        writeFloats(output, vertex.uv.data(), 2);
+        if (lit) {
+          writeFloats(output, vertex.normal.data(), 3);
         }
       }
       for (std::uint32_t index : batch.indices) {
@@ -118,6 +231,16 @@ struct GuestFrame
       output.u32(static_cast<std::uint32_t>(write.pixels.size()));
       output.bytes(write.pixels);
     }
+    output.u32(static_cast<std::uint32_t>(shadowCasters.size()));
+    for (const GuestShadowCaster& caster : shadowCasters) {
+      writeFloats(output, caster.boundsMin.data(), 3);
+      writeFloats(output, caster.boundsMax.data(), 3);
+      writeFloats(output, caster.lightDirection.data(), 3);
+      output.u32(caster.mapSize);
+      output.f32(caster.minimumRadius);
+      output.f32(caster.lightDistance);
+      output.f32(caster.casterDistance);
+    }
   }
 
   // Decode transactionally before resource resolution or renderer calls.
@@ -135,12 +258,26 @@ struct GuestFrame
     GuestFrame frame;
     frame.width = reader.f32();
     frame.height = reader.f32();
-    const std::uint32_t count = reader.u32();
-    if (magic != Magic || version != 1 || !reader.valid() ||
+    if (magic != Magic || version < 1 || version > 3 || !reader.valid() ||
         !std::isfinite(frame.width) || !std::isfinite(frame.height) ||
         frame.width < 1 || frame.height < 1 || frame.width > 65536 ||
-        frame.height > 65536 || count > limits.batches ||
-        count > reader.remaining() / 120u) {
+        frame.height > 65536) {
+      return false;
+    }
+    if (version >= 2) {
+      const std::uint32_t hasCamera = reader.u32();
+      if (hasCamera > 1 || !readFloats(reader, frame.camera.data(), 16)) {
+        return false;
+      }
+      frame.hasCamera = hasCamera != 0;
+    }
+    const std::uint32_t count = reader.u32();
+    // Minimum encoded batch: 120 bytes (v1), 128 (v2), 156 (v3).
+    const std::uint32_t minimumBatch = version == 1   ? 120u
+                                       : version == 2 ? 128u
+                                                      : 156u;
+    if (!reader.valid() || count > limits.batches ||
+        count > reader.remaining() / minimumBatch) {
       return false;
     }
     std::uint32_t totalVertices = 0;
@@ -156,14 +293,18 @@ struct GuestFrame
       batch.texture = GuestResourceId::read(reader);
       const std::uint32_t clipped = reader.u32();
       batch.clipped = clipped != 0;
-      if (style < 1 || style > 3 || layer < 1 || layer > 2 || clipped > 1) {
+      const std::uint32_t maximumStyle = version + 2u;
+      if (style < 1 || style > maximumStyle || layer < 1 || layer > 2 ||
+          clipped > 1) {
         return false;
       }
       if (layer < lastLayer) {
         return false;
       }
       lastLayer = layer;
-      if (style == 1) {
+      const bool lit = batch.style == GuestBatchStyle::LitMesh;
+      const bool sky = batch.style == GuestBatchStyle::Skybox;
+      if (style == 1 || lit) {
         if (batch.texture.owner != 0 || batch.texture.slot != 0 ||
             batch.texture.generation != 0) {
           return false;
@@ -173,45 +314,105 @@ struct GuestFrame
                  batch.texture.kind != GuestResourceKind::Texture) {
         return false;
       }
-      for (float& value : batch.clip) {
-        value = reader.f32();
-        if (!std::isfinite(value) || std::abs(value) > 65536) {
-          return false;
-        }
-      }
-      if (batch.clip[2] < 0 || batch.clip[3] < 0) {
+      if (!readFloats(reader, batch.clip.data(), 4)) {
         return false;
       }
-      for (float& value : batch.mvp) {
-        value = reader.f32();
-        if (!std::isfinite(value)) {
+      for (float value : batch.clip) {
+        if (std::abs(value) > 65536) {
           return false;
         }
+      }
+      if (batch.clip[2] < 0 || batch.clip[3] < 0 ||
+          !readFloats(reader, batch.mvp.data(), 16)) {
+        return false;
+      }
+      if (version >= 2) {
+        const std::uint32_t primitive = reader.u32();
+        const std::uint32_t depthTest = reader.u32();
+        if (primitive < 1 || primitive > 2 || depthTest > 1 ||
+            (primitive == 2 && style != 1) ||
+            ((lit || sky) && batch.layer != GuestLayer::World)) {
+          return false;
+        }
+        batch.primitive = static_cast<GuestPrimitive>(primitive);
+        batch.depthTest = depthTest != 0;
+      }
+      if (version >= 3) {
+        const std::uint32_t blend = reader.u32();
+        batch.mesh = GuestResourceId::read(reader);
+        batch.firstIndex = reader.u32();
+        if (!reader.valid() || blend > 1) {
+          return false;
+        }
+        batch.blend = blend != 0;
+        batch.hasBlend = true;
+        if (batch.retained()
+              ? (batch.mesh.kind != GuestResourceKind::Mesh ||
+                 batch.mesh.slot == 0 || batch.mesh.generation == 0 || sky)
+              : (batch.mesh.slot != 0 || batch.mesh.generation != 0 ||
+                 batch.firstIndex != 0)) {
+          return false;
+        }
+      }
+      if (sky && !readFloats(reader, batch.lighting.tint.data(), 4)) {
+        return false;
+      }
+      if (lit) {
+        GuestLighting& lighting = batch.lighting;
+        if (!readFloats(reader, lighting.model.data(), 16) ||
+            !readFloats(reader, lighting.lightDirection.data(), 3) ||
+            !readFloats(reader, lighting.lightColor.data(), 3) ||
+            !readFloats(reader, lighting.ambientColor.data(), 3) ||
+            !readFloats(reader, lighting.tint.data(), 4)) {
+          return false;
+        }
+        lighting.shadowBias = reader.f32();
+        lighting.shadowSlopeScale = reader.f32();
+        lighting.shadowNormalOffset = reader.f32();
+        const std::uint32_t flags = reader.u32();
+        if (!reader.valid() || flags > 7 ||
+            !std::isfinite(lighting.shadowBias) ||
+            !std::isfinite(lighting.shadowSlopeScale) ||
+            !std::isfinite(lighting.shadowNormalOffset)) {
+          return false;
+        }
+        lighting.shadowPcf = (flags & 1u) != 0;
+        lighting.receivesShadow = (flags & 2u) != 0;
+        lighting.castsShadow = (flags & 4u) != 0;
       }
       const std::uint32_t vertices = reader.u32();
       const std::uint32_t indices = reader.u32();
+      const std::uint32_t stride = lit ? 36u : 24u;
+      const std::uint32_t group =
+        batch.primitive == GuestPrimitive::Lines ? 2u : 3u;
+      if (batch.retained()) {
+        // Only the index range travels; the host resolves and bounds it
+        // against the retained mesh.
+        if (!reader.valid() || vertices != 0 || indices == 0 ||
+            indices % group != 0) {
+          return false;
+        }
+        batch.indexCount = indices;
+        frame.batches.push_back(std::move(batch));
+        continue;
+      }
       if (!reader.valid() || vertices == 0 || indices == 0 ||
-          indices % 3 != 0 || vertices > limits.vertices - totalVertices ||
+          indices % group != 0 || vertices > limits.vertices - totalVertices ||
           indices > limits.indices - totalIndices ||
-          vertices > reader.remaining() / 24u) {
+          vertices > reader.remaining() / stride) {
         return false;
       }
       totalVertices += vertices;
       totalIndices += indices;
       batch.vertices.resize(vertices);
       for (GuestVertex& vertex : batch.vertices) {
-        for (float& value : vertex.position) {
-          value = reader.f32();
-          if (!std::isfinite(value)) {
-            return false;
-          }
+        if (!readFloats(reader, vertex.position.data(), 3)) {
+          return false;
         }
         vertex.rgba = reader.u32();
-        for (float& value : vertex.uv) {
-          value = reader.f32();
-          if (!std::isfinite(value)) {
-            return false;
-          }
+        if (!readFloats(reader, vertex.uv.data(), 2) ||
+            (lit && !readFloats(reader, vertex.normal.data(), 3))) {
+          return false;
         }
       }
       if (indices > reader.remaining() / 4u) {
@@ -261,6 +462,37 @@ struct GuestFrame
       const std::span<const std::byte> pixels = reader.bytes(bytes);
       write.pixels.assign(pixels.begin(), pixels.end());
       frame.textureWrites.push_back(std::move(write));
+    }
+    if (version >= 2) {
+      const std::uint32_t casters = reader.u32();
+      if (!reader.valid() || casters > limits.shadowCasters ||
+          casters > reader.remaining() / 52u) {
+        return false;
+      }
+      for (std::uint32_t index = 0; index < casters; ++index) {
+        GuestShadowCaster caster;
+        if (!readFloats(reader, caster.boundsMin.data(), 3) ||
+            !readFloats(reader, caster.boundsMax.data(), 3) ||
+            !readFloats(reader, caster.lightDirection.data(), 3)) {
+          return false;
+        }
+        caster.mapSize = reader.u32();
+        caster.minimumRadius = reader.f32();
+        caster.lightDistance = reader.f32();
+        caster.casterDistance = reader.f32();
+        if (!reader.valid() || caster.mapSize < 64 || caster.mapSize > 8192 ||
+            !std::isfinite(caster.minimumRadius) ||
+            !std::isfinite(caster.lightDistance) ||
+            !std::isfinite(caster.casterDistance)) {
+          return false;
+        }
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+          if (caster.boundsMin[axis] > caster.boundsMax[axis]) {
+            return false;
+          }
+        }
+        frame.shadowCasters.push_back(caster);
+      }
     }
     if (!reader.finished()) {
       return false;

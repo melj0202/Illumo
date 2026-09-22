@@ -12,6 +12,7 @@ import json
 import io
 import os
 from pathlib import Path
+import platform
 import re
 import shlex
 import shutil
@@ -38,7 +39,62 @@ BUILTIN_PROFILES = {
     "release": {"config": "Release", "build_dir": "build-workspace-release"},
 }
 PROFILE_STRINGS = ("config", "build_dir", "generator", "architecture")
-PROFILE_FLAGS = ("tracy", "no_tests", "no_docs", "no_tidy")
+PROFILE_FLAGS = ("tracy", "no_tests", "no_docs", "no_tidy", "no_wasm")
+
+# IllumoGame ships only as a WASM package played by IllumoRuntime. The pinned
+# Wasmtime/WASI SDK pair (cmake/IllumoWasm.cmake) is Windows x64 only.
+WASM_HOST_SUPPORTED = os.name == "nt" and platform.machine().lower() in ("amd64", "x86_64")
+WASM_CMAKE_MODULE = REPOSITORY_ROOT / "cmake" / "IllumoWasm.cmake"
+WASM_BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "tools" / "bootstrap-wasm.ps1"
+DEFAULT_WASM_TOOLS_DIRECTORY = REPOSITORY_ROOT / "build-wasm-tools"
+WASM_RUNTIME_APPLICATION = "IllumoRuntime"
+# Installed applications live in <runtime dir>/apps/<name>/ with app.json.
+APPS_DIRECTORY = "apps"
+DEFAULT_APP = "game"
+APP_LABELS = {"game": "IllumoGame", "illed": "IllEd", "meshviewer": "Mesh Viewer"}
+# Native programs from before the WASM cutover; nothing builds or launches
+# them any more. The pre-apps game package directory is stale too.
+RETIRED_EXECUTABLES = ("IllumoGame", "IllEd", "IllMeshViewer", "IllumoCapture")
+RETIRED_DIRECTORIES = ("game",)
+
+
+@dataclass(frozen=True)
+class AppPackage:
+    name: str
+    module: str
+
+    @property
+    def label(self) -> str:
+        return APP_LABELS.get(self.name, self.name)
+
+
+def installed_apps(root: Path | None = None) -> tuple[AppPackage, ...]:
+    """Applications the runtime build stages, in cmake/IllumoWasm.cmake order."""
+    module_file = (root or REPOSITORY_ROOT) / "cmake" / "IllumoWasm.cmake"
+    try:
+        text = module_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ()
+    apps: list[AppPackage] = []
+    for match in re.finditer(
+        r"illumo_stage_app\(\s*\w+\s+([a-z0-9._-]+)\s+MODULE\s+([A-Za-z0-9._-]+)", text
+    ):
+        apps.append(AppPackage(match[1], match[2]))
+    return tuple(apps)
+
+
+def app_names(root: Path | None = None) -> tuple[str, ...]:
+    names = tuple(app.name for app in installed_apps(root))
+    return names if names else (DEFAULT_APP,)
+
+
+def dashboard_applications(root: Path | None = None) -> tuple[str, ...]:
+    """Installed packages, or native executables in workspaces without any."""
+    packages = tuple(app.name for app in installed_apps(root))
+    if packages:
+        return packages
+    native = discover_workspace_projects(root or REPOSITORY_ROOT).applications
+    return native if native else (DEFAULT_APP,)
 
 ANSI_RESET = "\x1b[0m"
 ANSI_BOLD = "\x1b[1m"
@@ -47,6 +103,7 @@ ANSI_CYAN = "\x1b[38;5;45m"
 ANSI_GREEN = "\x1b[38;5;82m"
 ANSI_YELLOW = "\x1b[38;5;220m"
 ANSI_BLUE = "\x1b[38;5;111m"
+ANSI_RED = "\x1b[38;5;203m"
 ANSI_REVERSE = "\x1b[7m"
 ANSI_CLEAR = "\x1b[2J\x1b[H"
 ANSI_ENTER_SCREEN = "\x1b[?1049h"
@@ -72,11 +129,12 @@ DASHBOARD_ITEMS = (
     ("setting", "Testing", "testing"),
     ("setting", "Documentation", "documentation"),
     ("setting", "Tracy profiling", "tracy"),
+    ("setting", "WASM runtime + apps", "wasm"),
     ("setting", "Parallel build", "parallel"),
+    ("action", "Play", "play"),
     ("action", "Build everything", "build"),
-    ("action", "Build application", "build_app"),
+    ("action", "Build runtime and apps", "build_app"),
     ("action", "Run headless tests", "test"),
-    ("action", "Build and run application", "run"),
     ("action", "Run existing build", "launch"),
     ("action", "Repository statistics", "stats"),
     ("action", "Development Tools", "tools"),
@@ -86,10 +144,10 @@ DASHBOARD_ITEMS = (
     ("action", "Exit", "quit"),
 )
 DASHBOARD_DESCRIPTIONS = {
+    "play": "build, then run the selected app",
     "build": "applications, tests, and optional PDFs",
-    "build_app": "focused target for selected application",
+    "build_app": "IllumoRuntime with every app package",
     "test": "all discovered test runners",
-    "run": "build, then launch selected application",
     "launch": "skip configure and build",
     "stats": "Git state, files, and first-party LOC",
     "file_stats": "first-party source files sorted by LOC",
@@ -156,9 +214,9 @@ class WorkspaceProjects:
     @property
     def primary_application(self) -> str:
         apps = self.applications
-        if "IllumoGame" in apps:
-            return "IllumoGame"
-        return apps[0] if apps else "IllumoGame"
+        if "IllumoRuntime" in apps:
+            return "IllumoRuntime"
+        return apps[0] if apps else "IllumoRuntime"
 
     def resolve_test_target(self, test_name: str) -> str:
         if test_name == PUBLIC_HEADER_SMOKE_TEST:
@@ -224,6 +282,10 @@ def discover_workspace_projects(root: Path = REPOSITORY_ROOT) -> WorkspaceProjec
             cmake_text = cmake_file.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        # WASI guest trees (IllumoGuest) are built by the host tree through
+        # ExternalProject; their .wasm outputs are not launchable applications.
+        if re.search(r'CMAKE_SYSTEM_NAME\s+STREQUAL\s+"WASI"', cmake_text):
+            continue
 
         executables = re.findall(r"add_executable\s*\(\s*([A-Za-z0-9_]+)", cmake_text)
         discover_matches = re.findall(
@@ -256,6 +318,17 @@ def discover_workspace_projects(root: Path = REPOSITORY_ROOT) -> WorkspaceProjec
         for exe in executables:
             if exe not in test_runners and exe not in smoke_targets:
                 applications.append(exe)
+
+        # IllumoGame ships as a WASM package; IllumoRuntime (defined by the
+        # root WASM CMake module) is the executable that plays it.
+        wasm_cmake = root / "cmake" / "IllumoWasm.cmake"
+        if name == "IllumoGame" and wasm_cmake.is_file():
+            try:
+                wasm_text = wasm_cmake.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                wasm_text = ""
+            if re.search(rf"add_executable\s*\(\s*{WASM_RUNTIME_APPLICATION}\b", wasm_text):
+                applications.insert(0, WASM_RUNTIME_APPLICATION)
 
         project_list.append(
             ProjectInfo(
@@ -334,6 +407,7 @@ class DashboardState:
     testing_enabled: bool = True
     documentation_enabled: bool = True
     tracy_enabled: bool = False
+    wasm_enabled: bool = WASM_HOST_SUPPORTED
     parallel_index: int = 0
     status: str = "Ready"
     status_kind: str = "normal"
@@ -344,11 +418,12 @@ class DashboardState:
     profiles_file: Path = DEFAULT_PROFILES_FILE
 
     def __post_init__(self) -> None:
+        # Applications are the runtime's installed packages (game, illed, ...),
+        # or native executables in workspaces that stage no packages.
         if not self.applications:
-            discovered = discover_workspace_projects(REPOSITORY_ROOT).applications
-            self.applications = (
-                discovered if discovered else ("IllumoGame", "IllEd")
-            )
+            self.applications = dashboard_applications()
+        if self.application_index == 0 and DEFAULT_APP in self.applications:
+            self.application_index = self.applications.index(DEFAULT_APP)
 
     @property
     def configuration(self) -> str:
@@ -356,8 +431,12 @@ class DashboardState:
 
     @property
     def application(self) -> str:
-        apps = self.applications if self.applications else ("IllumoGame",)
+        apps = self.applications if self.applications else (DEFAULT_APP,)
         return apps[self.application_index % len(apps)]
+
+    @property
+    def application_label(self) -> str:
+        return APP_LABELS.get(self.application, self.application)
 
     @property
     def parallel_value(self) -> int | None:
@@ -688,16 +767,49 @@ def dashboard_value(state: DashboardState, key: str) -> str:
     if key == "configuration":
         return state.configuration
     if key == "application":
-        return state.application
+        return state.application_label
     if key == "testing":
         return "On" if state.testing_enabled else "Off"
     if key == "documentation":
         return "On" if state.documentation_enabled else "Off"
     if key == "tracy":
         return "On" if state.tracy_enabled else "Off"
+    if key == "wasm":
+        if not WASM_HOST_SUPPORTED:
+            return "Windows x64 only"
+        return "On" if state.wasm_enabled else "Off"
     if key == "parallel":
         return dashboard_parallel_label(state)
     return ""
+
+
+def dashboard_workspace_status(state: DashboardState, ok: str, bad: str) -> tuple[str, str]:
+    """One header line saying whether the selected tree can play its apps."""
+    if not WASM_HOST_SUPPORTED:
+        return "Apps: IllumoRuntime and its packages are Windows x64 only", ANSI_DIM
+    if not state.wasm_enabled:
+        return "Apps: WASM runtime off; no applications will be built", ANSI_DIM
+    settings = dashboard_settings(state)
+    build_directory = resolve_build_directory(Path(settings["build_dir"]))
+    try:
+        missing = missing_wasm_tools(
+            wasm_tools_directory(settings.get("cmake_arg", []), read_cmake_cache(build_directory))
+        )
+        outputs = runtime_outputs(build_directory, settings["config"])
+    except (BuildError, OSError):
+        return "Apps: build tree unreadable", ANSI_YELLOW
+    if missing:
+        return f"{bad} WASM toolchain missing: run 'python build.py wasm-tools'", ANSI_YELLOW
+    stale = f" | {len(outputs.retired)} stale pre-WASM outputs" if outputs.retired else ""
+    staged = [app.name for app in outputs.apps if app.staged]
+    if outputs.runtime is not None and staged and outputs.complete:
+        return (
+            f"{ok} {WASM_RUNTIME_APPLICATION} ready ({settings['config']}): "
+            f"{', '.join(staged)}{stale}",
+            ANSI_GREEN,
+        )
+    return (f"{bad} Apps not built for {settings['config']}: choose Play{stale}",
+            ANSI_YELLOW)
 
 
 def render_dashboard(
@@ -715,8 +827,10 @@ def render_dashboard(
         hit_regions.clear()
     encoding = sys.stdout.encoding or "utf-8"
     try:
-        "╭─╮│├┤╰╯>‹›↑↓←→".encode(encoding)
+        "╭─╮│├┤╰╯>‹›↑↓←→✔✘".encode(encoding)
         glyphs = {
+            "ok": "✔",
+            "bad": "✘",
             "top_left": "╭",
             "top_right": "╮",
             "middle_left": "├",
@@ -732,6 +846,8 @@ def render_dashboard(
         }
     except UnicodeEncodeError:
         glyphs = {
+            "ok": "+",
+            "bad": "x",
             "top_left": "+",
             "top_right": "+",
             "middle_left": "+",
@@ -746,10 +862,18 @@ def render_dashboard(
             "help": "Up/Down navigate   Left/Right change   Enter select   q quit",
         }
 
-    def border(left: str, fill: str, right: str) -> None:
+    def border(left: str, fill: str, right: str, title: str = "") -> None:
         fill_width = dashboard_visible_width(fill) or 1
-        count = max(0, inner_width // fill_width)
-        lines.append(left + dashboard_pad(fill * count, inner_width) + right)
+        # Section titles sit in the rule itself, so the whole console still
+        # fits a default 30-row terminal (taller output disables the mouse).
+        label = f" {title} " if title and dashboard_visible_width(title) + 4 <= inner_width else ""
+        lead = fill if label else ""
+        remaining = inner_width - dashboard_visible_width(lead + label)
+        count = max(0, remaining // fill_width)
+        lines.append(
+            left + lead + dashboard_style(label, ANSI_BOLD + ANSI_BLUE, ansi)
+            + dashboard_pad(fill * count, remaining) + right
+        )
 
     def content(
         value: str = "", style: str = "", align: str = "left"
@@ -771,22 +895,19 @@ def render_dashboard(
         ANSI_DIM,
         "center",
     )
-    border(
-        glyphs["middle_left"],
-        glyphs["horizontal"],
-        glyphs["middle_right"],
+    workspace_status, workspace_style = dashboard_workspace_status(
+        state, glyphs["ok"], glyphs["bad"]
     )
+    content(workspace_status, workspace_style, "center")
     last_kind = None
     for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
         if kind != last_kind:
-            if last_kind is not None:
-                border(
-                    glyphs["middle_left"],
-                    glyphs["horizontal"],
-                    glyphs["middle_right"],
-                )
-            section_title = "Settings" if kind == "setting" else "Actions"
-            content(section_title, ANSI_BOLD + ANSI_BLUE)
+            border(
+                glyphs["middle_left"],
+                glyphs["horizontal"],
+                glyphs["middle_right"],
+                "Settings" if kind == "setting" else "Actions",
+            )
             last_kind = kind
 
         marker = glyphs["marker"] if index == state.selected else " "
@@ -800,12 +921,12 @@ def render_dashboard(
             else:
                 raw = prefix + (" " * gap) + suffix
         else:
-            if key == "build_app":
-                description = f"focused {state.application} target"
-            elif key == "run":
-                description = f"build, then launch {state.application}"
+            if key in ("play", "launch", "build_app") and not state.wasm_enabled:
+                description = "needs the WASM runtime setting"
+            elif key == "play":
+                description = f"build, then run {state.application_label}"
             elif key == "launch":
-                description = f"launch existing {state.application}"
+                description = f"run the built {state.application_label}"
             else:
                 description = DASHBOARD_DESCRIPTIONS[key]
             suffix = f"{description} "
@@ -832,9 +953,16 @@ def render_dashboard(
         glyphs["horizontal"],
         glyphs["middle_right"],
     )
-    content(glyphs["help"], ANSI_DIM)
-    if mouse_enabled:
-        content("Click select | Right-click previous | Wheel navigate", ANSI_DIM)
+    combined_help = (
+        "Up/Down move  Left/Right change  Enter select  q quit | "
+        "Mouse: click, right-click, wheel"
+    )
+    if mouse_enabled and dashboard_visible_width(combined_help) + 1 <= inner_width:
+        content(combined_help, ANSI_DIM)
+    else:
+        content(glyphs["help"], ANSI_DIM)
+        if mouse_enabled:
+            content("Click select | Right-click previous | Wheel navigate", ANSI_DIM)
     status_style = ""
     if state.status_kind == "success":
         status_style = ANSI_GREEN
@@ -945,7 +1073,7 @@ def adjust_dashboard_setting(state: DashboardState, direction: int) -> None:
             state.configuration_index + direction
         ) % len(DASHBOARD_CONFIGURATIONS)
     elif key == "application":
-        apps = state.applications if state.applications else ("IllumoGame",)
+        apps = state.applications if state.applications else (DEFAULT_APP,)
         state.application_index = (state.application_index + direction) % len(apps)
     elif key == "testing":
         state.testing_enabled = not state.testing_enabled
@@ -953,6 +1081,8 @@ def adjust_dashboard_setting(state: DashboardState, direction: int) -> None:
         state.documentation_enabled = not state.documentation_enabled
     elif key == "tracy":
         state.tracy_enabled = not state.tracy_enabled
+    elif key == "wasm" and WASM_HOST_SUPPORTED:
+        state.wasm_enabled = not state.wasm_enabled
     elif key == "parallel":
         state.parallel_index = (state.parallel_index + direction) % len(
             DASHBOARD_PARALLEL_OPTIONS
@@ -962,6 +1092,7 @@ def adjust_dashboard_setting(state: DashboardState, direction: int) -> None:
         "testing": ("no_tests", not state.testing_enabled),
         "documentation": ("no_docs", not state.documentation_enabled),
         "tracy": ("tracy", state.tracy_enabled),
+        "wasm": ("no_wasm", not state.wasm_enabled),
         "parallel": ("parallel", DASHBOARD_PARALLEL_OPTIONS[state.parallel_index][1]),
     }
     if key in mapped:
@@ -979,6 +1110,7 @@ def dashboard_settings(state: DashboardState) -> dict:
         "config": state.configuration, "build_dir": str(DEFAULT_BUILD_DIRECTORY),
         "tracy": state.tracy_enabled, "no_tests": not state.testing_enabled,
         "no_docs": not state.documentation_enabled, "no_tidy": False,
+        "no_wasm": not state.wasm_enabled,
         "parallel": state.parallel_value, "cmake_arg": [],
     }
     settings.update(state.profile_settings)
@@ -995,6 +1127,7 @@ def apply_dashboard_profile(state: DashboardState, name: str | None, settings: d
     state.testing_enabled = not settings.get("no_tests", False)
     state.documentation_enabled = not settings.get("no_docs", False)
     state.tracy_enabled = settings.get("tracy", False)
+    state.wasm_enabled = not settings.get("no_wasm", not WASM_HOST_SUPPORTED)
     state.parallel_index = next((i for i, item in enumerate(DASHBOARD_PARALLEL_OPTIONS)
                                  if item[1] == settings.get("parallel", 0)), 0)
 
@@ -1017,25 +1150,26 @@ def dashboard_action_arguments(
 ) -> list[str]:
     if action == "build":
         return ["build", *dashboard_common_arguments(state)]
+    packaged = state.application in {app.name for app in installed_apps()}
+    if action in ("play", "launch") and not packaged:
+        # A native application in a workspace without runtime packages.
+        return ["run", "--app", state.application, *dashboard_common_arguments(state),
+                *(["--no-build"] if action == "launch" else [])]
+    if action == "play":
+        return ["play", "--app", state.application, *dashboard_common_arguments(state)]
     if action == "build_app":
+        # The runtime target stages every application package.
         return [
             "build",
             *dashboard_common_arguments(state),
             "--target",
-            state.application,
+            WASM_RUNTIME_APPLICATION,
         ]
     if action == "test":
         return ["test", *dashboard_common_arguments(state)]
-    if action == "run":
-        return [
-            "run",
-            "--app",
-            state.application,
-            *dashboard_common_arguments(state),
-        ]
     if action == "launch":
         return [
-            "run",
+            "play",
             "--app",
             state.application,
             *dashboard_common_arguments(state),
@@ -1626,6 +1760,58 @@ def read_test_inventory(settings: dict) -> list[dict]:
         raise BuildError(f"Invalid CTest JSON inventory: {error}") from error
 
 
+def ctest_listing(ctest: str, build_directory: Path, configuration: str) -> list[dict]:
+    """Best-effort workspace test listing; empty when the tree is not ready."""
+    command = [ctest, "--test-dir", str(build_directory), "-C", configuration,
+               "--show-only=json-v1", "-L", "^IllumoWorkspace$"]
+    try:
+        result = subprocess.run(command, cwd=REPOSITORY_ROOT, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=120, check=False)
+        tests = json.loads(result.stdout)["tests"] if result.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return []
+    return [test for test in tests if isinstance(test, dict) and isinstance(test.get("name"), str)]
+
+
+def ctest_executable_target(test: dict, build_directory: Path) -> str | None:
+    """The CMake target behind a test command that runs a built executable."""
+    command = test.get("command")
+    if not isinstance(command, list) or not command or not isinstance(command[0], str):
+        return None
+    executable = Path(command[0])
+    try:
+        executable.resolve().relative_to(build_directory.resolve())
+    except ValueError:
+        return None
+    return executable.stem
+
+
+def build_test_executables(
+    arguments: argparse.Namespace, cmake: str, runner: CommandRunner,
+    workspace: WorkspaceProjects,
+) -> None:
+    """Build discovery and smoke targets, then every other executable CTest runs.
+
+    Discovery only covers the scanned test runners; the WASM runtime and
+    package tests are plain add_test() cases whose executables would
+    otherwise be stale or missing when CTest starts.
+    """
+    built = [*workspace.discovery_targets, *workspace.smoke_targets]
+    for target in built:
+        runner.run(build_command(arguments, cmake, target))
+    if runner.dry_run:
+        return
+    build_directory = resolve_build_directory(arguments.build_dir)
+    built_names = set(built) | {target.removesuffix("Discover") for target in built}
+    extra: list[str] = []
+    for test in ctest_listing(existing_tool("ctest", False), build_directory, arguments.config):
+        target = ctest_executable_target(test, build_directory)
+        if target and target not in built_names and target not in extra:
+            extra.append(target)
+    if extra:
+        runner.run(build_command(arguments, cmake, extra))
+
+
 def matching_tests(inventory: list[dict], search: str, label: str = "All") -> list[dict]:
     return [test for test in inventory if search.casefold() in test["name"].casefold()
             and (label == "All" or label in test.get("properties", {}).get("LABELS", []))]
@@ -1714,9 +1900,7 @@ def run_toolbox_request(arguments: argparse.Namespace) -> None:
     runner = CommandRunner(False)
     if request["build_first"] or request["mode"] == "refresh":
         cmake = configure(parsed, runner)
-        workspace = discover_workspace_projects(REPOSITORY_ROOT)
-        for target in (*workspace.discovery_targets, *workspace.smoke_targets):
-            runner.run(build_command(parsed, cmake, target))
+        build_test_executables(parsed, cmake, runner, discover_workspace_projects(REPOSITORY_ROOT))
     inventory = read_test_inventory(settings)
     if request["mode"] == "refresh":
         print(f"Inventory refreshed: {len(inventory)} tests.", flush=True)
@@ -2098,7 +2282,7 @@ def run_profile_picker(state: DashboardState, terminal: DashboardTerminal) -> No
             rows.append(ToolboxRow(name, f"{name} ({kind})", (
                 f"Config: {effective['config']} | Directory: {effective['build_dir']}",
                 f"Generator: {effective.get('generator', 'CMake default')} | Architecture: {effective.get('architecture', 'default')}",
-                f"Tests: {not effective['no_tests']} | Docs: {not effective['no_docs']} | Tidy: {not effective['no_tidy']} | Tracy: {effective['tracy']}",
+                f"Tests: {not effective['no_tests']} | Docs: {not effective['no_docs']} | Tidy: {not effective['no_tidy']} | Tracy: {effective['tracy']} | WASM: {not effective['no_wasm']}",
                 f"Parallel: {dashboard_parallel_label(preview)} | CMake args: {effective.get('cmake_arg', [])}")))
         action = choose_toolbox("Build profiles", rows, view, terminal, message)
         try:
@@ -2194,8 +2378,7 @@ def run_dashboard() -> int:
         )
         return 2
 
-    workspace = discover_workspace_projects(REPOSITORY_ROOT)
-    state = DashboardState(applications=workspace.applications)
+    state = DashboardState()
     terminal = DashboardTerminal()
     try:
         terminal.enter()
@@ -2866,6 +3049,10 @@ def profile_arguments(settings: dict) -> list[str]:
             result.append(f"{option}={value}")
         elif key in PROFILE_FLAGS and value:
             result.append(option)
+        elif key == "no_wasm" and not WASM_HOST_SUPPORTED:
+            # Only this flag's default depends on the host; keep an explicit
+            # opt-in on hosts where it is off.
+            result.append("--wasm")
         elif key == "parallel" and value is not None:
             result.append(f"{option}={'auto' if value == 0 else value}")
         elif key == "cmake_arg":
@@ -2934,6 +3121,163 @@ def read_cmake_cache(build_directory: Path) -> dict[str, str]:
     return values
 
 
+@dataclass(frozen=True)
+class AppOutput:
+    """One staged application package beside the runtime."""
+
+    name: str
+    module: Path | None = None
+    manifest: Path | None = None
+
+    @property
+    def staged(self) -> bool:
+        return self.module is not None and self.manifest is not None
+
+    @property
+    def label(self) -> str:
+        return APP_LABELS.get(self.name, self.name)
+
+
+@dataclass(frozen=True)
+class RuntimeOutputs:
+    """What a build tree holds for the WASM runtime and its applications."""
+
+    runtime: Path | None = None
+    apps: tuple[AppOutput, ...] = ()
+    retired: tuple[Path, ...] = ()
+
+    def app(self, name: str) -> AppOutput | None:
+        for app in self.apps:
+            if app.name == name:
+                return app
+        return None
+
+    def playable(self, name: str = DEFAULT_APP) -> bool:
+        app = self.app(name)
+        return self.runtime is not None and app is not None and app.staged
+
+    @property
+    def complete(self) -> bool:
+        return self.runtime is not None and bool(self.apps) and all(
+            app.staged for app in self.apps
+        )
+
+    def describe(self) -> str:
+        if self.runtime is None:
+            return "IllumoRuntime is not built"
+        staged = [f"{app.name} ({format_size(app.module.stat().st_size)})"
+                  for app in self.apps if app.staged]
+        missing = [app.name for app in self.apps if not app.staged]
+        text = f"{self.runtime} with {', '.join(staged) if staged else 'no apps'}"
+        return text + (f"; missing {', '.join(missing)}" if missing else "")
+
+
+def format_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def format_duration(seconds: float) -> str:
+    minutes, remainder = divmod(int(round(seconds)), 60)
+    return f"{minutes}m {remainder:02d}s" if minutes else f"{seconds:.1f}s"
+
+
+def runtime_outputs(
+    build_directory: Path, configuration: str,
+    apps: Sequence[AppPackage] | None = None,
+) -> RuntimeOutputs:
+    suffix = ".exe" if os.name == "nt" else ""
+    output_directories = (
+        build_directory / configuration,
+        build_directory,
+    )
+    runtime: Path | None = None
+    for directory in output_directories:
+        candidate = directory / f"{WASM_RUNTIME_APPLICATION}{suffix}"
+        if candidate.is_file():
+            runtime = candidate
+            break
+    staged: list[AppOutput] = []
+    for package in installed_apps() if apps is None else apps:
+        module = manifest = None
+        if runtime is not None:
+            folder = runtime.parent / APPS_DIRECTORY / package.name
+            if (folder / package.module).is_file():
+                module = folder / package.module
+            if (folder / "app.json").is_file():
+                manifest = folder / "app.json"
+        staged.append(AppOutput(package.name, module, manifest))
+    retired: list[Path] = []
+    for name in RETIRED_EXECUTABLES:
+        for directory in (
+            *output_directories,
+            build_directory / name / configuration,
+            build_directory / name,
+        ):
+            candidate = directory / f"{name}{suffix}"
+            if candidate.is_file() and candidate not in retired:
+                retired.append(candidate)
+    for name in RETIRED_DIRECTORIES:
+        for directory in output_directories:
+            candidate = directory / name
+            if candidate.is_dir() and candidate not in retired:
+                retired.append(candidate)
+    return RuntimeOutputs(runtime, tuple(staged), tuple(retired))
+
+
+def retired_output_message(path: Path) -> str:
+    return (
+        f"{path} predates the WASM cutover and is no longer built or updated. "
+        f"Applications now run as packages in {APPS_DIRECTORY}/ inside "
+        f"{WASM_RUNTIME_APPLICATION}; delete it."
+    )
+
+
+def print_build_summary(
+    arguments: argparse.Namespace, title: str, started: float,
+) -> None:
+    """Close a successful build with its outputs, so a missing app is obvious."""
+    if arguments.dry_run:
+        return
+    ansi = sys.stdout.isatty()
+    build_directory = resolve_build_directory(arguments.build_dir)
+    rows: list[tuple[str, str, str]] = []
+    outputs = runtime_outputs(build_directory, arguments.config)
+    if not getattr(arguments, "no_wasm", not WASM_HOST_SUPPORTED):
+        if outputs.runtime is not None:
+            rows.append(("ok", "Runtime", str(outputs.runtime)))
+            for app in outputs.apps:
+                if app.staged:
+                    rows.append(("ok", app.label,
+                                 f"{APPS_DIRECTORY}/{app.name}/{app.module.name} "
+                                 f"({format_size(app.module.stat().st_size)})"))
+                else:
+                    rows.append(("warn", app.label,
+                                 f"{APPS_DIRECTORY}/{app.name} is not staged"))
+        elif getattr(arguments, "target", None) in (None, WASM_RUNTIME_APPLICATION):
+            rows.append(("warn", "Runtime", f"{WASM_RUNTIME_APPLICATION} was not produced"))
+    else:
+        rows.append(("info", "WASM runtime", "skipped (--no-wasm); no playable apps"))
+    for retired in outputs.retired:
+        rows.append(("warn", "Stale output", f"{retired} (pre-WASM; delete it)"))
+    marks = {"ok": ("+", ANSI_GREEN), "warn": ("!", ANSI_YELLOW), "info": ("-", ANSI_DIM)}
+    try:
+        "✔⚠·".encode(sys.stdout.encoding or "utf-8")
+        marks = {"ok": ("✔", ANSI_GREEN), "warn": ("⚠", ANSI_YELLOW), "info": ("·", ANSI_DIM)}
+    except UnicodeEncodeError:
+        pass
+    heading = f"{title} in {format_duration(time.monotonic() - started)}"
+    print()
+    print(dashboard_style(heading, ANSI_BOLD + ANSI_GREEN, ansi))
+    label_width = max((len(label) for _kind, label, _detail in rows), default=0)
+    for kind, label, detail in rows:
+        mark, style = marks[kind]
+        print(f"  {dashboard_style(mark, style, ansi)} {label.ljust(label_width)}  {detail}")
+    sys.stdout.flush()
+
 def validate_build_settings(arguments: argparse.Namespace) -> None:
     directory = resolve_build_directory(arguments.build_dir)
     validate_workspace_build_directory(directory)
@@ -2971,18 +3315,10 @@ def run_doctor(arguments: argparse.Namespace) -> None:
         record("cache", "ok", str(directory) if cache else f"No cache yet: {directory}")
     except BuildError as error:
         record("cache", "error", str(error))
-    definitions: dict[str, str] = {}
-    for option in configure_command(arguments, "cmake"):
-        match = re.fullmatch(r"-D([^:=]+)(?::[^=]+)?=(.*)", option)
-        if match:
-            definitions[match[1]] = match[2]
+    definitions = configure_definitions(arguments)
 
     def enabled(key: str) -> bool:
-        value = definitions.get(key, "").upper()
-        return (
-            value not in ("", "0", "OFF", "NO", "FALSE", "N", "IGNORE", "NOTFOUND")
-            and not value.endswith("-NOTFOUND")
-        )
+        return cmake_truthy(definitions.get(key, ""))
 
     generator = arguments.generator or cache.get("CMAKE_GENERATOR", "")
     required = {"cmake": "cmake"}
@@ -3034,12 +3370,47 @@ def run_doctor(arguments: argparse.Namespace) -> None:
         compiler if compiler_found else
         "No existing compiler verified. CMake configure must resolve the compiler and SDK.",
     )
+    wasm = enabled("ILLUMO_BUILD_WASM_RUNTIME")
+    if wasm and not WASM_HOST_SUPPORTED:
+        record("wasm toolchain", "error", "IllumoRuntime requires Windows x64; use --no-wasm.")
+    elif wasm:
+        tools = wasm_tools_directory(arguments.cmake_arg, cache)
+        missing = missing_wasm_tools(tools)
+        if missing:
+            record("wasm toolchain", "error", wasm_toolchain_error(missing))
+        else:
+            record("wasm toolchain", "ok", f"{' + '.join(wasm_toolchain_packages())} in {tools}")
+    elif WASM_HOST_SUPPORTED:
+        record("wasm toolchain", "warning",
+               "Disabled (--no-wasm): IllumoRuntime and its applications are not built.")
+    else:
+        record("wasm toolchain", "ok", "Not built on this host (the WASM runtime is Windows x64 only).")
+    cached_wasm = cache.get("ILLUMO_BUILD_WASM_RUNTIME")
+    if cached_wasm is not None and cmake_truthy(cached_wasm) != wasm:
+        record(
+            "wasm cache", "warning",
+            f"Cached ILLUMO_BUILD_WASM_RUNTIME={cached_wasm}; the next configure "
+            f"switches it {'ON' if wasm else 'OFF'}.",
+        )
+    if cache:
+        outputs = runtime_outputs(directory, arguments.config)
+        if wasm and outputs.complete:
+            record("apps", "ok", outputs.describe())
+        elif wasm:
+            record("apps", "warning",
+                   f"Not all built for {arguments.config} ({outputs.describe()}); "
+                   "run 'python build.py build'.")
+        for retired in outputs.retired:
+            record("stale output", "warning", retired_output_message(retired))
     ok = not any(check["status"] == "error" for check in checks)
     if arguments.json:
         print(json.dumps({"ok": ok, "checks": checks}, indent=2))
     else:
+        styles = {"ok": ANSI_GREEN, "warning": ANSI_YELLOW, "error": ANSI_RED}
+        ansi = sys.stdout.isatty()
         for check in checks:
-            print(f"[{check['status']}] {check['name']}: {check['detail']}")
+            status = dashboard_style(f"[{check['status']}]", styles.get(check["status"], ""), ansi)
+            print(f"{status} {check['name']}: {check['detail']}")
     if not ok:
         raise BuildError("Build diagnostics found errors. No configuration or build was started.")
 
@@ -3141,6 +3512,17 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
         help="disable clang-tidy during compile with ILLUMO_ENABLE_CLANG_TIDY=OFF",
     )
     parser.add_argument(
+        "--no-wasm",
+        action="store_true",
+        help=(
+            "skip IllumoRuntime and the IllumoGame WASM package with "
+            "ILLUMO_BUILD_WASM_RUNTIME=OFF (default: "
+            + ("on" if WASM_HOST_SUPPORTED else "off")
+            + " on this host)"
+        ),
+    )
+    parser.add_argument("--wasm", dest="no_wasm", action="store_false")
+    parser.add_argument(
         "--clean",
         "--clean-first",
         dest="clean",
@@ -3167,7 +3549,10 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="print commands without executing them",
     )
-    parser.set_defaults(tracy=False, no_tests=False, no_docs=False, no_tidy=False)
+    parser.set_defaults(
+        tracy=False, no_tests=False, no_docs=False, no_tidy=False,
+        no_wasm=not WASM_HOST_SUPPORTED,
+    )
 
 
 def create_parser(
@@ -3240,7 +3625,7 @@ def create_parser(
     app_choices = (
         workspace.applications
         if workspace.applications
-        else ("IllumoGame", "IllEd")
+        else ("IllumoRuntime", "IllEd")
     )
     default_app = workspace.primary_application
 
@@ -3268,6 +3653,43 @@ def create_parser(
         "app_arguments",
         nargs=argparse.REMAINDER,
         help="arguments after -- are passed to the application",
+    )
+
+    packages = app_names()
+    play_parser = subparsers.add_parser(
+        "play",
+        parents=[common],
+        help=f"build {WASM_RUNTIME_APPLICATION} and its applications, then run one",
+    )
+    play_parser.add_argument(
+        "--app",
+        dest="package",
+        choices=packages,
+        default=DEFAULT_APP if DEFAULT_APP in packages else packages[0],
+        help=f"installed application to run (default: {DEFAULT_APP}; "
+             f"{', '.join(packages)})",
+    )
+    play_parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="play the existing build without configuring or building",
+    )
+    play_parser.add_argument(
+        "app_arguments",
+        nargs=argparse.REMAINDER,
+        help=f"arguments after -- are passed to {WASM_RUNTIME_APPLICATION} "
+             "(e.g. -- --open scene.ilsc, or -- --capture frame.png)",
+    )
+    play_parser.set_defaults(app=WASM_RUNTIME_APPLICATION)
+
+    wasm_tools_parser = subparsers.add_parser(
+        "wasm-tools",
+        help="download and verify the pinned Wasmtime and WASI SDK (tools/bootstrap-wasm.ps1)",
+    )
+    wasm_tools_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print commands without executing them",
     )
 
     coverage_parser = subparsers.add_parser(
@@ -3522,6 +3944,9 @@ def configure_command(arguments: argparse.Namespace, cmake: str) -> list[str]:
     docs_enabled = "OFF" if arguments.no_docs else "ON"
     tracy_enabled = "ON" if arguments.tracy else "OFF"
     tidy_enabled = "OFF" if getattr(arguments, "no_tidy", False) else "ON"
+    # Always explicit: CMake's option() keeps a stale cached OFF, which
+    # silently dropped IllumoRuntime and the game package from old trees.
+    wasm_enabled = "OFF" if getattr(arguments, "no_wasm", not WASM_HOST_SUPPORTED) else "ON"
     command.extend(
         (
             f"-DCMAKE_BUILD_TYPE={arguments.config}",
@@ -3530,16 +3955,107 @@ def configure_command(arguments: argparse.Namespace, cmake: str) -> list[str]:
             f"-DILLUMO_ENABLE_TRACY={tracy_enabled}",
             "-DILLUMO_ENABLE_COVERAGE=OFF",
             f"-DILLUMO_ENABLE_CLANG_TIDY={tidy_enabled}",
+            f"-DILLUMO_BUILD_WASM_RUNTIME={wasm_enabled}",
         )
     )
     command.extend(arguments.cmake_arg)
     return command
 
 
+def cmake_truthy(value: str) -> bool:
+    upper = value.upper()
+    return (
+        upper not in ("", "0", "OFF", "NO", "FALSE", "N", "IGNORE", "NOTFOUND")
+        and not upper.endswith("-NOTFOUND")
+    )
+
+
+def configure_definitions(arguments: argparse.Namespace) -> dict[str, str]:
+    """Effective -D values of the configure command, later ones winning."""
+    definitions: dict[str, str] = {}
+    for option in configure_command(arguments, "cmake"):
+        match = re.fullmatch(r"-D([^:=]+)(?::[^=]+)?=(.*)", option)
+        if match:
+            definitions[match[1]] = match[2]
+    return definitions
+
+
+def wasm_requested(arguments: argparse.Namespace) -> bool:
+    return cmake_truthy(configure_definitions(arguments).get("ILLUMO_BUILD_WASM_RUNTIME", ""))
+
+
+def wasm_tools_directory(cmake_arguments: Sequence[str], cache: dict[str, str]) -> Path:
+    configured = cache.get("ILLUMO_WASM_TOOLS")
+    for item in cmake_arguments:
+        match = re.fullmatch(r"-DILLUMO_WASM_TOOLS(?::[^=]+)?=(.*)", item)
+        if match:
+            configured = match[1]
+    # configure runs from the repository root, so relative values resolve there.
+    return resolve_build_directory(Path(configured)) if configured else DEFAULT_WASM_TOOLS_DIRECTORY
+
+
+def wasm_toolchain_packages() -> tuple[str, str]:
+    """Wasmtime C API and WASI SDK directory names, as pinned by CMake."""
+    names = ["wasmtime-v48.0.2-x86_64-windows-c-api", "wasi-sdk-34.0-x86_64-windows"]
+    try:
+        text = WASM_CMAKE_MODULE.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    for index, variable in enumerate(("_wasmtime", "_wasi_sdk")):
+        match = re.search(
+            rf'set\(\s*{variable}\s+"\$\{{ILLUMO_WASM_TOOLS\}}/([^"]+)"\s*\)', text
+        )
+        if match:
+            names[index] = match[1]
+    return names[0], names[1]
+
+
+def missing_wasm_tools(directory: Path) -> list[Path]:
+    wasmtime, wasi_sdk = wasm_toolchain_packages()
+    required = (
+        directory / wasmtime / "include" / "wasmtime.h",
+        directory / wasmtime / "lib" / "wasmtime.dll.lib",
+        directory / wasmtime / "lib" / "wasmtime.dll",
+        directory / wasi_sdk / "bin" / "clang++.exe",
+    )
+    return [path for path in required if not path.is_file()]
+
+
+def wasm_toolchain_error(missing: list[Path]) -> str:
+    wasmtime, wasi_sdk = wasm_toolchain_packages()
+    return (
+        f"The pinned WASM toolchain is incomplete; missing {missing[0]}"
+        + (f" and {len(missing) - 1} more" if len(missing) > 1 else "")
+        + f".\nIllumoGame builds as a WASM package ({wasmtime}, {wasi_sdk}). "
+        "Run 'python build.py wasm-tools' to download and verify the pinned "
+        "toolchain, or pass --no-wasm to build without IllumoRuntime and the game."
+    )
+
+
+def require_wasm_toolchain(arguments: argparse.Namespace, dry_run: bool) -> None:
+    if not wasm_requested(arguments):
+        return
+    if not WASM_HOST_SUPPORTED:
+        raise BuildError(
+            "IllumoRuntime and the IllumoGame package require Windows x64; "
+            "drop --wasm or pass --no-wasm on this host."
+        )
+    directory = resolve_build_directory(arguments.build_dir)
+    missing = missing_wasm_tools(
+        wasm_tools_directory(arguments.cmake_arg, read_cmake_cache(directory))
+    )
+    if not missing:
+        return
+    if dry_run:
+        print(f"warning: {wasm_toolchain_error(missing)}", file=sys.stderr)
+        return
+    raise BuildError(wasm_toolchain_error(missing))
+
+
 def build_command(
     arguments: argparse.Namespace,
     cmake: str,
-    target: str | None = None,
+    target: str | Sequence[str] | None = None,
 ) -> list[str]:
     build_directory = resolve_build_directory(arguments.build_dir)
     command = [
@@ -3554,8 +4070,10 @@ def build_command(
     selected_target = (
         target if target is not None else getattr(arguments, "target", None)
     )
-    if selected_target:
+    if isinstance(selected_target, str):
         command.extend(("--target", selected_target))
+    elif selected_target:
+        command.extend(("--target", *selected_target))
     if arguments.parallel is not None:
         command.append("--parallel")
         if arguments.parallel > 0:
@@ -3568,6 +4086,7 @@ def build_command(
 def configure(arguments: argparse.Namespace, runner: CommandRunner) -> str:
     cmake = existing_tool("cmake", runner.dry_run)
     validate_build_settings(arguments)
+    require_wasm_toolchain(arguments, runner.dry_run)
     runner.run(configure_command(arguments, cmake))
     return cmake
 
@@ -3617,9 +4136,34 @@ def run_configure(arguments: argparse.Namespace) -> None:
 
 
 def run_build(arguments: argparse.Namespace) -> None:
+    started = time.monotonic()
     runner = CommandRunner(arguments.dry_run)
     cmake = configure(arguments, runner)
     runner.run(build_command(arguments, cmake))
+    print_build_summary(arguments, "Build succeeded", started)
+
+
+def run_ctest_case(
+    arguments: argparse.Namespace, cmake: str, runner: CommandRunner, test: dict,
+) -> bool:
+    """Run one exact CTest case that is not owned by a discovered runner.
+
+    Returns False when the case belongs to a discovered runner, which keeps
+    its direct --run invocation.
+    """
+    build_directory = resolve_build_directory(arguments.build_dir)
+    workspace = discover_workspace_projects(REPOSITORY_ROOT)
+    target = ctest_executable_target(test, build_directory)
+    if target in workspace.test_runners or target in workspace.smoke_targets:
+        return False
+    if target:
+        runner.run(build_command(arguments, cmake, target))
+    runner.run((
+        existing_tool("ctest", runner.dry_run), "--test-dir", str(build_directory),
+        "-C", arguments.config, "-R", f"^{re.escape(test['name'])}$",
+        "--no-tests=error", "--output-on-failure",
+    ))
+    return True
 
 
 def run_tests(arguments: argparse.Namespace) -> None:
@@ -3627,12 +4171,20 @@ def run_tests(arguments: argparse.Namespace) -> None:
         raise BuildError(
             "Cannot run tests when testing is disabled via --no-tests."
         )
+    started = time.monotonic()
     workspace = discover_workspace_projects(REPOSITORY_ROOT)
     runner = CommandRunner(arguments.dry_run)
     cmake = configure(arguments, runner)
     build_directory = resolve_build_directory(arguments.build_dir)
 
     if arguments.test:
+        # Plain add_test() cases (the WASM runtime and package tests) share
+        # name prefixes with discovered runners, so ask CTest first.
+        if not runner.dry_run and arguments.test != PUBLIC_HEADER_SMOKE_TEST:
+            listing = ctest_listing(existing_tool("ctest", False), build_directory, arguments.config)
+            test = next((item for item in listing if item["name"] == arguments.test), None)
+            if test is not None and run_ctest_case(arguments, cmake, runner, test):
+                return
         target = workspace.resolve_test_target(arguments.test)
         runner.run(build_command(arguments, cmake, target))
         test_binary = executable_path(
@@ -3676,11 +4228,14 @@ def run_tests(arguments: argparse.Namespace) -> None:
                 print(PUBLIC_HEADER_SMOKE_TEST, flush=True)
             else:
                 print(smoke_target, flush=True)
+        if not runner.dry_run:
+            owned = {*workspace.test_runners, *workspace.smoke_targets}
+            for test in ctest_listing(existing_tool("ctest", False), build_directory, arguments.config):
+                if ctest_executable_target(test, build_directory) not in owned:
+                    print(test["name"], flush=True)
         return
 
-    build_targets = [*workspace.discovery_targets, *workspace.smoke_targets]
-    for target in build_targets:
-        runner.run(build_command(arguments, cmake, target))
+    build_test_executables(arguments, cmake, runner, workspace)
 
     ctest = existing_tool("ctest", runner.dry_run)
     runner.run(
@@ -3695,12 +4250,18 @@ def run_tests(arguments: argparse.Namespace) -> None:
             "--output-on-failure",
         )
     )
+    print_build_summary(arguments, "Tests passed", started)
 
 
 def run_application(arguments: argparse.Namespace) -> None:
     workspace = discover_workspace_projects(REPOSITORY_ROOT)
     runner = CommandRunner(arguments.dry_run)
     app_name = getattr(arguments, "app", None) or workspace.primary_application
+    if app_name == WASM_RUNTIME_APPLICATION and not arguments.no_build and not wasm_requested(arguments):
+        raise BuildError(
+            f"{WASM_RUNTIME_APPLICATION} is only built with the WASM runtime enabled; "
+            "drop --no-wasm (or choose another --app)."
+        )
     if not arguments.no_build:
         cmake = configure(arguments, runner)
         runner.run(build_command(arguments, cmake, app_name))
@@ -3708,6 +4269,32 @@ def run_application(arguments: argparse.Namespace) -> None:
     build_directory = resolve_build_directory(arguments.build_dir)
     if arguments.no_build:
         validate_workspace_build_directory(build_directory)
+    app_arguments = list(arguments.app_arguments)
+    if app_arguments and app_arguments[0] == "--":
+        app_arguments.pop(0)
+    # A runtime argument naming its own app, package or module replaces --app.
+    explicit_package = any(
+        item.split("=", 1)[0] in ("--app", "--package", "--game") for item in app_arguments
+    )
+    package = getattr(arguments, "package", None) or DEFAULT_APP
+    if app_name == WASM_RUNTIME_APPLICATION and not explicit_package:
+        app_arguments = ["--app", package, *app_arguments]
+    if app_name == WASM_RUNTIME_APPLICATION and not runner.dry_run:
+        outputs = runtime_outputs(build_directory, arguments.config)
+        for retired in outputs.retired:
+            print(f"warning: {retired_output_message(retired)}", file=sys.stderr)
+        staged = outputs.app(package)
+        if outputs.runtime is not None and not explicit_package and not outputs.playable(package):
+            raise BuildError(
+                f"{outputs.runtime} has no {APPS_DIRECTORY}/{package} package beside it; "
+                f"run 'python build.py play --app {package}' to build it first."
+            )
+        if staged is not None and staged.staged and not explicit_package:
+            print(dashboard_style(
+                f"Playing {staged.label}: {APPS_DIRECTORY}/{package}/{staged.module.name} "
+                f"({format_size(staged.module.stat().st_size)}) in {WASM_RUNTIME_APPLICATION}",
+                ANSI_BOLD + ANSI_CYAN, sys.stdout.isatty(),
+            ), flush=True)
     application = executable_path(
         build_directory,
         arguments.config,
@@ -3715,10 +4302,39 @@ def run_application(arguments: argparse.Namespace) -> None:
         runner.dry_run,
         workspace,
     )
-    app_arguments = list(arguments.app_arguments)
-    if app_arguments and app_arguments[0] == "--":
-        app_arguments.pop(0)
     runner.run((str(application), *app_arguments), application.parent)
+
+
+def run_wasm_tools(arguments: argparse.Namespace) -> None:
+    if not WASM_HOST_SUPPORTED:
+        raise BuildError("The pinned Wasmtime and WASI SDK toolchain is Windows x64 only.")
+    runner = CommandRunner(arguments.dry_run)
+    missing = missing_wasm_tools(DEFAULT_WASM_TOOLS_DIRECTORY)
+    wasmtime, wasi_sdk = wasm_toolchain_packages()
+    if not missing:
+        print(f"WASM toolchain ready: {wasmtime} + {wasi_sdk} in {DEFAULT_WASM_TOOLS_DIRECTORY}")
+        return
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        if not runner.dry_run:
+            raise BuildError(f"PowerShell was not found on PATH; {WASM_BOOTSTRAP_SCRIPT.name} requires it.")
+        powershell = "powershell"
+    print(
+        f"Fetching the SHA256-pinned {wasmtime} and {wasi_sdk} release archives "
+        f"from GitHub into {DEFAULT_WASM_TOOLS_DIRECTORY}.",
+        flush=True,
+    )
+    runner.run((
+        powershell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", str(WASM_BOOTSTRAP_SCRIPT),
+        "-Destination", str(DEFAULT_WASM_TOOLS_DIRECTORY),
+    ))
+    if runner.dry_run:
+        return
+    missing = missing_wasm_tools(DEFAULT_WASM_TOOLS_DIRECTORY)
+    if missing:
+        raise BuildError(wasm_toolchain_error(missing))
+    print("WASM toolchain ready. 'python build.py play' builds and launches IllumoGame.")
 
 
 def run_coverage(arguments: argparse.Namespace) -> None:
@@ -3976,7 +4592,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if parsed.snapshot:
             print(
                 render_dashboard(
-                    DashboardState(applications=workspace.applications),
+                    DashboardState(),
                     96,
                     ansi=False,
                 )
@@ -4000,6 +4616,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "build": run_build,
         "test": run_tests,
         "run": run_application,
+        "play": run_application,
+        "wasm-tools": run_wasm_tools,
         "coverage": run_coverage,
         "tidy": run_tidy,
         "docs": run_docs,

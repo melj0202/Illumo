@@ -1,6 +1,7 @@
 #pragma once
 
 #include <IllumoGuest/Frame.h>
+#include <IllumoGuest/Services.h>
 #include <memory>
 #include <string>
 
@@ -28,6 +29,14 @@ public:
                                 std::uint32_t channels,
                                 bool linear);
   bool releaseTexture(const GuestResourceId& id);
+  // Six square RGBA faces; sampled by Skybox batches (frame schema v3).
+  GuestResourceId createCubemap(std::span<const std::byte> faces,
+                                std::uint32_t size);
+  // Retained meshes (frame schema v3): reserve, fill in order, then draw by
+  // id. The write that completes the mesh validates it and enrolls it.
+  GuestResourceId createMesh(const GuestMeshRequest& request);
+  bool writeMesh(const GuestMeshWrite& write);
+  bool releaseMesh(const GuestResourceId& id);
   bool accept(std::span<const std::byte> packet);
   void dispatch(Scene& scene);
   void retire();

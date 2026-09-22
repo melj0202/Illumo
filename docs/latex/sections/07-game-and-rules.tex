@@ -1,6 +1,22 @@
 \section{Game domain and rulesets}
 \label{sec:game}
 
+\subsection{Packaging and execution (D-E13)}
+
+IllumoGame ships only as \texttt{IllumoGame.wasm}, played by the generic
+\texttt{IllumoRuntime.exe}. The whole product described in this chapter runs in
+that store: \symbolref{GuestModuleApplication} composes a guest-local
+\symbolref{IllumoContext}, so \symbolref{MainMenuModule},
+\symbolref{CellGameModule}, the menus and the workshop run unchanged. Product
+dialogs, file transfers, clipboard access and user-catalog writes go through
+\symbolref{CSimPlatform}; a native implementation completes synchronously for
+the test oracle and the guest implementation completes on a later update.
+Saves, settings and user overlays live in the package storage directory.
+Inside the package, \symbolref{SimulationRunner} computes each generation with
+serial kernels before returning, keeping the native publication and drain
+protocol. The 3D diagnostic records lit meshes and shadow casters into frame
+schema version 2; the host re-runs the shared shadow pass with the guest camera.
+
 \subsection{CellGameModule}
 
 Edit mode includes a bottom \textbf{Cell paint} drawer, initially closed. A centered

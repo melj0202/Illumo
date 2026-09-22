@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -124,6 +125,7 @@ private:
   bool m_strictSubmission = false;
   std::string m_frameError;
   size_t m_frameRejectedBaseline = 0;
+  std::function<void(Renderer&)> m_beforePresent;
   bool checkCommandRejections();
 
   FramebufferHandle shadowFramebuffer{};
@@ -150,6 +152,8 @@ private:
   bool shadowCasterVolumeValid = false;
   std::vector<ShadowCasterDesc> shadowCasters;
   ShadowFrameContext shadowFrameContext;
+  std::array<float, 16> m_nextWorldViewProjection{};
+  bool m_hasNextWorldViewProjection = false;
 
   void beginFrameContext(Camera* camera);
   void endFrameContext();
@@ -200,6 +204,15 @@ public:
   float getUiScale() const;
 
   void registerShadowCaster(const ShadowCasterDesc& caster);
+  // Casters registered for the current RenderScene call.
+  const std::vector<ShadowCasterDesc>& getShadowCasters() const
+  {
+    return shadowCasters;
+  }
+  // The next RenderScene uses this world view-projection for its frame
+  // context and shadow fitting instead of the camera's. Hosts presenting a
+  // world authored elsewhere (a WASM guest) supply the author's camera.
+  void setNextWorldViewProjection(const std::array<float, 16>& matrix);
   bool isWorldBoundsVisible(const AxisAlignedBounds3& bounds) const;
   bool isShadowCasterRelevant(const AxisAlignedBounds3& bounds) const;
 
@@ -314,6 +327,12 @@ public:
   // Optional CPU timestamp after submission, before backend presentation.
   // This measures an elapsed-time boundary, not GPU execution.
   void EndFrame(std::chrono::steady_clock::time_point* presentationStart);
+  // Runs once per successful frame after submission and before presentation,
+  // where IBackend::readBackbuffer sees the finished image. Empty clears it.
+  void setBeforePresent(std::function<void(Renderer&)> hook)
+  {
+    m_beforePresent = std::move(hook);
+  }
   void SubmitOnly();
 
   // =========================================================================

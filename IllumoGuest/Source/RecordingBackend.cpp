@@ -28,6 +28,46 @@ GuestRecordingBackend::setLayer(GuestLayer layer)
 {
   m_layer = layer;
 }
+void
+GuestRecordingBackend::BeginLayer(RenderLayerId layer)
+{
+  m_layer = layer == RenderLayerId::World ? GuestLayer::World : GuestLayer::Ui;
+  if (layer != RenderLayerId::World || m_renderer == nullptr) {
+    return;
+  }
+  // The world camera and this frame's casters are final once RenderScene
+  // reaches the world layer; the host fits its shared shadow pass to them.
+  const Renderer::FrameContext& context = m_renderer->getFrameContext();
+  m_frame.hasCamera = context.active && context.hasWorldMvp;
+  m_frame.camera = context.worldMvp;
+  m_frame.shadowCasters.clear();
+  for (const Renderer::ShadowCasterDesc& source :
+       m_renderer->getShadowCasters()) {
+    if (m_frame.shadowCasters.size() == GuestFrameLimits{}.shadowCasters) {
+      break;
+    }
+    GuestShadowCaster caster;
+    caster.boundsMin = source.boundsMin;
+    caster.boundsMax = source.boundsMax;
+    caster.lightDirection = source.lightDirection;
+    caster.mapSize =
+      static_cast<std::uint32_t>(std::clamp(source.mapSize, 64, 8192));
+    caster.minimumRadius = source.minimumRadius;
+    caster.lightDistance = source.lightDistance;
+    caster.casterDistance = source.casterDistance;
+    m_frame.shadowCasters.push_back(caster);
+  }
+}
+bool
+GuestRecordingBackend::hasPendingTextures() const
+{
+  for (const std::pair<const std::uint32_t, Texture>& entry : m_textures) {
+    if (entry.second.pending != 0) {
+      return true;
+    }
+  }
+  return false;
+}
 bool
 GuestRecordingBackend::Initialize()
 {
@@ -41,12 +81,18 @@ GuestRecordingBackend::Shutdown()
   m_textures.clear();
   m_meshes.clear();
   m_commands.Reset();
+  m_commandLayers.clear();
 }
 void
 GuestRecordingBackend::BeginFrame()
 {
   m_frame.batches.clear();
   m_frame.textureWrites.clear();
+  m_frame.shadowCasters.clear();
+  m_frame.hasCamera = false;
+  m_shadowPass = false;
+  m_shadowMeshes.clear();
+  m_lighting = GuestLighting{};
   m_error.clear();
   m_frameRejections = m_commands.GetTotalRejected();
   m_mesh = {};
@@ -63,12 +109,17 @@ GuestRecordingBackend::EndFrame()
 void
 GuestRecordingBackend::PushToCommandQueue(RenderCommand command)
 {
+  const std::size_t before = m_commands.GetCommandCount();
   m_commands.Submit(command);
+  if (m_commands.GetCommandCount() != before) {
+    m_commandLayers.push_back(m_layer);
+  }
 }
 void
 GuestRecordingBackend::ClearCommandQueue()
 {
   m_commands.Reset();
+  m_commandLayers.clear();
 }
 std::size_t
 GuestRecordingBackend::rejectedCommandCount() const
@@ -93,13 +144,19 @@ GuestRecordingBackend::getFPS() const
 void
 GuestRecordingBackend::SubmitCommandQueue()
 {
+  const GuestLayer current = m_layer;
   try {
+    if (m_commandLayers.size() != m_commands.GetCommandCount()) {
+      throw std::runtime_error("Guest command layer journal mismatch");
+    }
     for (std::size_t index = 0; index < m_commands.GetCommandCount(); ++index) {
+      m_layer = m_commandLayers[index];
       consume(m_commands.GetCommand(index));
     }
   } catch (const std::exception& exception) {
     m_error = exception.what();
   }
+  m_layer = current;
 }
 GuestFrame
 GuestRecordingBackend::takeFrame()
@@ -148,6 +205,24 @@ GuestRecordingBackend::CreateMesh(const void* vertices,
   }
   return handle;
 }
+// The retained-mesh style for a vertex layout; 0 when a layout has no
+// retained form (skybox cubes and other small built-in geometry).
+static std::uint32_t
+retainedStyle(MeshVertexLayout layout)
+{
+  switch (layout) {
+    case MeshVertexLayout::Pos3Color4U8:
+      return static_cast<std::uint32_t>(GuestBatchStyle::Shape);
+    case MeshVertexLayout::Pos3Color4U8Uv2:
+      return static_cast<std::uint32_t>(GuestBatchStyle::Sprite);
+    case MeshVertexLayout::Pos3Color3Uv2:
+      return static_cast<std::uint32_t>(GuestBatchStyle::Canvas);
+    case MeshVertexLayout::Pos3Norm3Color4U8Uv2:
+      return static_cast<std::uint32_t>(GuestBatchStyle::LitMesh);
+    default:
+      return 0;
+  }
+}
 bool
 GuestRecordingBackend::ReplaceMesh(MeshHandle handle,
                                    const void* vertices,
@@ -155,10 +230,11 @@ GuestRecordingBackend::ReplaceMesh(MeshHandle handle,
                                    const void* indices,
                                    std::size_t indexBytes,
                                    MeshVertexLayout layout,
-                                   bool)
+                                   bool dynamic)
 {
-  if (!IsMeshValid(handle) || vertexBytes > 64u * 1024u * 1024u ||
-      indexBytes > 16u * 1024u * 1024u) {
+  if (!IsMeshValid(handle) ||
+      vertexBytes > GuestMeshRequest::MaximumVertexBytes ||
+      indexBytes > GuestMeshRequest::MaximumIndexBytes) {
     return false;
   }
   Mesh candidate;
@@ -171,8 +247,35 @@ GuestRecordingBackend::ReplaceMesh(MeshHandle handle,
   if (indices != nullptr) {
     std::memcpy(candidate.indices.data(), indices, indexBytes);
   }
-  m_meshes.at(handle.slot) = std::move(candidate);
+  const std::uint32_t style = retainedStyle(layout);
+  // Large immutable geometry (loaded models) is uploaded to the host once.
+  candidate.retain =
+    !dynamic && style != 0 && vertices != nullptr && indices != nullptr &&
+    vertexBytes >= RetainedMeshBytes && indexBytes > 0 &&
+    vertexBytes % GuestMeshRequest::stride(style) == 0 && indexBytes % 4 == 0;
+  Mesh& target = m_meshes.at(handle.slot);
+  forgetRetained(target);
+  target = std::move(candidate);
   return true;
+}
+void
+GuestRecordingBackend::forgetRetained(Mesh& mesh)
+{
+  if (mesh.id.owner != 0) {
+    m_meshRetirements.push_back(mesh.id);
+  }
+  if (mesh.create != 0) {
+    m_abandonedMeshes.push_back(mesh.create);
+  }
+  m_drained.insert(m_drained.end(), mesh.writes.begin(), mesh.writes.end());
+  mesh.retain = false;
+  mesh.id = {};
+  mesh.create = 0;
+  mesh.writes.clear();
+  mesh.vertexSent = 0;
+  mesh.indexSent = 0;
+  mesh.ready = false;
+  mesh.failed = false;
 }
 bool
 GuestRecordingBackend::DestroyMesh(MeshHandle handle)
@@ -180,6 +283,7 @@ GuestRecordingBackend::DestroyMesh(MeshHandle handle)
   if (!IsMeshValid(handle)) {
     return false;
   }
+  forgetRetained(m_meshes.at(handle.slot));
   m_meshes.erase(handle.slot);
   return m_meshHandles.release(handle);
 }
@@ -239,12 +343,53 @@ GuestRecordingBackend::CreateTexture(const unsigned char* pixels,
   return handle;
 }
 TextureHandle
-GuestRecordingBackend::CreateCubemap(const std::array<const unsigned char*, 6>&,
-                                     int,
-                                     int,
-                                     int)
+GuestRecordingBackend::CreateCubemap(
+  const std::array<const unsigned char*, 6>& faces,
+  int width,
+  int height,
+  int channels)
 {
-  return {};
+  if (m_textures.size() >= 1024 || width <= 0 || width != height ||
+      width > 2048 || (channels != 3 && channels != 4)) {
+    return {};
+  }
+  GuestCubemapRequest request;
+  request.size = static_cast<std::uint32_t>(width);
+  const std::uint64_t bytes = GuestCubemapRequest::bytesFor(request.size);
+  if (bytes > GuestServices::MaximumBytes - 64) {
+    return {};
+  }
+  // The host samples RGBA faces; RGB sources gain an opaque alpha.
+  request.faces.resize(static_cast<std::size_t>(bytes));
+  const std::size_t pixels = static_cast<std::size_t>(width) * height;
+  for (std::size_t face = 0; face < faces.size(); ++face) {
+    if (faces[face] == nullptr) {
+      return {};
+    }
+    std::byte* output = request.faces.data() + face * pixels * 4;
+    for (std::size_t pixel = 0; pixel < pixels; ++pixel) {
+      for (std::size_t component = 0; component < 4; ++component) {
+        output[pixel * 4 + component] =
+          component < static_cast<std::size_t>(channels)
+            ? static_cast<std::byte>(faces[face][pixel * channels + component])
+            : std::byte{ 255 };
+      }
+    }
+  }
+  GuestWireWriter payload;
+  request.write(payload);
+  const std::uint64_t pending =
+    m_services.enqueue(GuestService::CreateCubemap, payload.take());
+  if (pending == 0) {
+    return {};
+  }
+  const TextureHandle handle = m_textureHandles.allocate();
+  Texture texture;
+  texture.cubemap = true;
+  texture.pending = pending;
+  texture.pendingInfo = { width, height, 4 };
+  m_textures.emplace(handle.slot, std::move(texture));
+  return handle;
 }
 bool
 GuestRecordingBackend::ReplaceTexture(TextureHandle handle,
@@ -254,7 +399,7 @@ GuestRecordingBackend::ReplaceTexture(TextureHandle handle,
                                       int channels,
                                       const TextureOptions& options)
 {
-  if (!IsTextureValid(handle) || m_textures.at(handle.slot).pending != 0 ||
+  if (!IsTextureValid(handle) || m_textures.at(handle.slot).cubemap ||
       width <= 0 || height <= 0 || width > 8192 || height > 8192 ||
       (channels != 1 && channels != 3 && channels != 4) ||
       options.wrapX != TextureWrap::ClampToEdge ||
@@ -282,6 +427,11 @@ GuestRecordingBackend::ReplaceTexture(TextureHandle handle,
     return false;
   }
   Texture& texture = m_textures.at(handle.slot);
+  if (texture.pending != 0) {
+    // A newer replacement supersedes an unfinished one; the superseded
+    // acquisition is released when its completion arrives.
+    m_abandoned.push_back(texture.pending);
+  }
   texture.pending = pending;
   texture.pendingInfo = { width, height, channels };
   texture.pendingPixels = std::move(request.pixels);
@@ -411,6 +561,121 @@ GuestRecordingBackend::pump()
     m_releases.push_back(request);
     m_retirements.pop_back();
   }
+  pumpMeshes();
+}
+
+void
+GuestRecordingBackend::pumpMeshes()
+{
+  GuestServiceRecord result;
+  for (std::vector<std::uint64_t>::iterator it = m_drained.begin();
+       it != m_drained.end();) {
+    it = m_services.take(*it, result) ? m_drained.erase(it) : it + 1;
+  }
+  for (std::vector<std::uint64_t>::iterator it = m_abandonedMeshes.begin();
+       it != m_abandonedMeshes.end();) {
+    if (!m_services.take(*it, result)) {
+      ++it;
+      continue;
+    }
+    if (result.status == GuestServiceStatus::Complete) {
+      GuestWireReader reader(result.payload);
+      m_meshRetirements.push_back(GuestResourceId::read(reader));
+    }
+    it = m_abandonedMeshes.erase(it);
+  }
+  while (!m_meshRetirements.empty()) {
+    GuestWireWriter payload;
+    m_meshRetirements.back().write(payload);
+    const std::uint64_t request =
+      m_services.enqueue(GuestService::ReleaseMesh, payload.take());
+    if (request == 0) {
+      break;
+    }
+    m_drained.push_back(request);
+    m_meshRetirements.pop_back();
+  }
+  // Each pump keeps a bounded number of chunks in flight so retained uploads
+  // never starve fonts, textures or files sharing the service queue.
+  constexpr std::size_t maximumWrites = 8;
+  for (std::pair<const std::uint32_t, Mesh>& entry : m_meshes) {
+    Mesh& mesh = entry.second;
+    if (!mesh.retain || mesh.ready || mesh.failed) {
+      continue;
+    }
+    if (mesh.create != 0) {
+      if (!m_services.take(mesh.create, result)) {
+        continue;
+      }
+      mesh.create = 0;
+      GuestWireReader reader(result.payload);
+      const GuestResourceId id = GuestResourceId::read(reader);
+      if (result.status != GuestServiceStatus::Complete || !reader.finished() ||
+          id.owner == 0 || id.kind != GuestResourceKind::Mesh) {
+        mesh.failed = true;
+        continue;
+      }
+      mesh.id = id;
+    } else if (mesh.id.owner == 0) {
+      GuestMeshRequest request;
+      request.style = retainedStyle(mesh.layout);
+      request.vertexBytes = static_cast<std::uint32_t>(mesh.vertices.size());
+      request.indexBytes = static_cast<std::uint32_t>(mesh.indices.size());
+      GuestWireWriter payload;
+      request.write(payload);
+      mesh.create =
+        m_services.enqueue(GuestService::CreateMesh, payload.take());
+      continue;
+    }
+    for (std::vector<std::uint64_t>::iterator it = mesh.writes.begin();
+         it != mesh.writes.end();) {
+      if (!m_services.take(*it, result)) {
+        ++it;
+        continue;
+      }
+      mesh.failed =
+        mesh.failed || result.status != GuestServiceStatus::Complete;
+      it = mesh.writes.erase(it);
+    }
+    while (!mesh.failed && mesh.writes.size() < maximumWrites &&
+           (mesh.vertexSent < mesh.vertices.size() ||
+            mesh.indexSent < mesh.indices.size())) {
+      const bool indices = mesh.vertexSent == mesh.vertices.size();
+      const std::vector<std::byte>& source =
+        indices ? mesh.indices : mesh.vertices;
+      std::size_t& sent = indices ? mesh.indexSent : mesh.vertexSent;
+      GuestMeshWrite write;
+      write.mesh = mesh.id;
+      write.indices = indices;
+      write.offset = static_cast<std::uint32_t>(sent);
+      const std::size_t count = std::min<std::size_t>(
+        GuestMeshWrite::MaximumChunk, source.size() - sent);
+      write.bytes.assign(source.begin() + static_cast<std::ptrdiff_t>(sent),
+                         source.begin() +
+                           static_cast<std::ptrdiff_t>(sent + count));
+      GuestWireWriter payload;
+      write.write(payload);
+      const std::uint64_t request =
+        m_services.enqueue(GuestService::WriteMesh, payload.take());
+      if (request == 0) {
+        break;
+      }
+      mesh.writes.push_back(request);
+      sent += count;
+    }
+    if (mesh.failed) {
+      // Draw inline from now on; the host copy is released.
+      m_drained.insert(m_drained.end(), mesh.writes.begin(), mesh.writes.end());
+      mesh.writes.clear();
+      if (mesh.id.owner != 0) {
+        m_meshRetirements.push_back(mesh.id);
+        mesh.id = {};
+      }
+    } else if (mesh.writes.empty() && mesh.vertexSent == mesh.vertices.size() &&
+               mesh.indexSent == mesh.indices.size()) {
+      mesh.ready = true;
+    }
+  }
 }
 FramebufferHandle
 GuestRecordingBackend::CreateFramebuffer(const FramebufferDesc&,
@@ -419,19 +684,43 @@ GuestRecordingBackend::CreateFramebuffer(const FramebufferDesc&,
   return {};
 }
 FramebufferHandle
-GuestRecordingBackend::CreateDepthFramebuffer(int, int, TextureHandle*)
+GuestRecordingBackend::CreateDepthFramebuffer(int width,
+                                              int height,
+                                              TextureHandle* depth)
 {
-  return {};
+  // One virtual shadow target: it records which meshes cast shadows and is
+  // never rendered. The host owns the real depth map.
+  if (m_shadowFramebuffer.isValid() || depth == nullptr || width <= 0 ||
+      height <= 0 || m_textures.size() >= 1024) {
+    return {};
+  }
+  const TextureHandle texture = m_textureHandles.allocate();
+  Texture target;
+  target.info = { width, height, 1 };
+  target.depthOnly = true;
+  m_textures.emplace(texture.slot, std::move(target));
+  m_shadowFramebuffer = m_framebufferHandles.allocate();
+  m_shadowDepth = texture;
+  *depth = texture;
+  return m_shadowFramebuffer;
 }
 bool
-GuestRecordingBackend::DestroyFramebuffer(FramebufferHandle)
+GuestRecordingBackend::DestroyFramebuffer(FramebufferHandle handle)
 {
-  return false;
+  if (!IsFramebufferValid(handle)) {
+    return false;
+  }
+  m_textures.erase(m_shadowDepth.slot);
+  m_textureHandles.release(m_shadowDepth);
+  m_shadowDepth = {};
+  m_shadowFramebuffer = {};
+  return m_framebufferHandles.release(handle);
 }
 bool
-GuestRecordingBackend::IsFramebufferValid(FramebufferHandle) const
+GuestRecordingBackend::IsFramebufferValid(FramebufferHandle handle) const
 {
-  return false;
+  return m_framebufferHandles.isCurrent(handle) &&
+         handle == m_shadowFramebuffer;
 }
 
 static float
@@ -445,8 +734,10 @@ readFloat(const std::byte* bytes)
 void
 GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
 {
+  const bool lines = m_pipeline.primitives == Primitives::Lines;
   if (!m_renderer || !IsMeshValid(m_mesh) ||
-      m_pipeline.primitives != Primitives::Triangles || count % 3 != 0) {
+      (!lines && m_pipeline.primitives != Primitives::Triangles) ||
+      count % (lines ? 2u : 3u) != 0 || m_pipeline.wireframe) {
     throw std::runtime_error("Unsupported guest draw");
   }
   if (count == 0) {
@@ -454,24 +745,22 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
   }
   GuestBatch batch;
   bool styleFound = false;
-  for (RenderStyleId style :
-       { RenderStyleId::Shape, RenderStyleId::Sprite, RenderStyleId::Canvas }) {
+  // Derived styles (MeshVisual's depth-tested lines, triangles and world
+  // sprites) share a built-in shader; the host re-derives the pipeline from
+  // the recorded primitive, depth test and blend.
+  for (RenderStyleId style : { RenderStyleId::Shape,
+                               RenderStyleId::Sprite,
+                               RenderStyleId::Canvas,
+                               RenderStyleId::LitMesh,
+                               RenderStyleId::Skybox }) {
     const RenderStyle* registered =
       static_cast<const Renderer*>(m_renderer)->getStyle(style);
     if (registered && registered->shaderHandle == m_shader) {
-      const PipelineState& expected = registered->pipeline;
-      if (m_pipeline.depthTestEnabled != expected.depthTestEnabled ||
-          m_pipeline.blendEnabled != expected.blendEnabled ||
-          m_pipeline.blendSrc != expected.blendSrc ||
-          m_pipeline.blendDst != expected.blendDst ||
-          m_pipeline.faceCullingEnabled != expected.faceCullingEnabled ||
-          m_pipeline.cullFace != expected.cullFace ||
-          m_pipeline.frontFace != expected.frontFace || m_pipeline.wireframe) {
-        throw std::runtime_error("Pipeline has no guest recording contract");
-      }
       batch.style = style == RenderStyleId::Shape    ? GuestBatchStyle::Shape
                     : style == RenderStyleId::Sprite ? GuestBatchStyle::Sprite
-                                                     : GuestBatchStyle::Canvas;
+                    : style == RenderStyleId::Canvas ? GuestBatchStyle::Canvas
+                    : style == RenderStyleId::Skybox ? GuestBatchStyle::Skybox
+                                                     : GuestBatchStyle::LitMesh;
       styleFound = true;
       break;
     }
@@ -479,26 +768,66 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
   if (!styleFound) {
     throw std::runtime_error("Shader has no guest recording contract");
   }
-  if (batch.style != GuestBatchStyle::Shape) {
-    if (!IsTextureValid(m_texture)) {
+  if (lines && batch.style != GuestBatchStyle::Shape) {
+    throw std::runtime_error("Only shape batches may draw lines");
+  }
+  const bool lit = batch.style == GuestBatchStyle::LitMesh;
+  const bool sky = batch.style == GuestBatchStyle::Skybox;
+  if ((lit || sky) && m_layer != GuestLayer::World) {
+    throw std::runtime_error("Lit meshes and skyboxes draw only in the world");
+  }
+  batch.primitive = lines ? GuestPrimitive::Lines : GuestPrimitive::Triangles;
+  batch.depthTest = m_pipeline.depthTestEnabled;
+  batch.blend = m_pipeline.blendEnabled;
+  if (lit) {
+    batch.lighting = m_lighting;
+    batch.lighting.castsShadow = m_shadowMeshes.contains(m_mesh.slot);
+  } else if (batch.style != GuestBatchStyle::Shape) {
+    if (!IsTextureValid(m_texture) ||
+        m_textures.at(m_texture.slot).cubemap != sky) {
       throw std::runtime_error("Guest draw references a stale texture");
     }
     batch.texture = m_textures.at(m_texture.slot).id;
     if (batch.texture.owner == 0) {
       return;
     } // acquisition is still pending
+    if (sky) {
+      batch.lighting.tint = m_lighting.tint;
+    }
   }
   const Mesh& mesh = m_meshes.at(m_mesh.slot);
+  // Lit meshes: position, normal, RGBA8 color, UV (36 bytes).
   const std::size_t stride = batch.style == GuestBatchStyle::Shape    ? 16
                              : batch.style == GuestBatchStyle::Sprite ? 24
+                             : lit                                    ? 36
+                             : sky                                    ? 12
                                                                       : 32;
   const MeshVertexLayout expected =
     batch.style == GuestBatchStyle::Shape    ? MeshVertexLayout::Pos3Color4U8
     : batch.style == GuestBatchStyle::Sprite ? MeshVertexLayout::Pos3Color4U8Uv2
-                                             : MeshVertexLayout::Pos3Color3Uv2;
+    : lit ? MeshVertexLayout::Pos3Norm3Color4U8Uv2
+    : sky ? MeshVertexLayout::Pos3
+          : MeshVertexLayout::Pos3Color3Uv2;
   if (mesh.layout != expected || first > mesh.indices.size() / 4 ||
       count > mesh.indices.size() / 4 - first) {
     throw std::runtime_error("Guest draw geometry mismatch");
+  }
+  if (mesh.retain && !mesh.failed) {
+    if (!mesh.ready) {
+      return; // the host copy is still uploading
+    }
+    batch.mesh = mesh.id;
+    batch.firstIndex = first;
+    batch.indexCount = count;
+    batch.mvp = m_mvp;
+    batch.layer = m_layer;
+    batch.clipped = m_clip.enabled;
+    batch.clip = { static_cast<float>(m_clip.x),
+                   m_frame.height - m_clip.y - m_clip.height,
+                   static_cast<float>(m_clip.width),
+                   static_cast<float>(m_clip.height) };
+    m_frame.batches.push_back(std::move(batch));
+    return;
   }
   batch.indices.resize(count);
   std::memcpy(batch.indices.data(),
@@ -532,12 +861,22 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
                          std::round(std::clamp(color, 0.0f, 1.0f) * 255))
                        << (component * 8);
       }
-    } else {
+    } else if (lit) {
+      for (std::size_t component = 0; component < 3; ++component) {
+        vertex.normal[component] = readFloat(source + 12 + component * 4);
+      }
+      std::memcpy(&vertex.rgba, source + 24, 4);
+    } else if (!sky) {
       std::memcpy(&vertex.rgba, source + 12, 4);
     }
-    if (batch.style != GuestBatchStyle::Shape) {
+    if (batch.style != GuestBatchStyle::Shape && !sky) {
       vertex.uv = { readFloat(source + stride - 8),
                     readFloat(source + stride - 4) };
+    }
+    for (float value : vertex.position) {
+      if (!std::isfinite(value)) {
+        throw std::runtime_error("Non-finite guest vertex");
+      }
     }
     batch.vertices.push_back(vertex);
   }
@@ -562,6 +901,11 @@ GuestRecordingBackend::consume(const RenderCommand& command)
       m_shader = command.bindShader.handle;
       break;
     case CommandType::SetTexture:
+      // Unit 1 is the shared shadow map; the host binds its own.
+      if (command.bindTexture.slot == 1 &&
+          command.bindTexture.handle == m_shadowDepth) {
+        break;
+      }
       if (command.bindTexture.slot != 0) {
         throw std::runtime_error("Unsupported guest texture unit");
       }
@@ -573,14 +917,61 @@ GuestRecordingBackend::consume(const RenderCommand& command)
     case CommandType::SetScissorState:
       m_clip = command.scissor;
       break;
-    case CommandType::SetUniformMat4:
-      if (std::strcmp(command.uniformMat4.name, "uMVP") == 0 &&
-          command.uniformMat4.value != nullptr) {
+    case CommandType::SetUniformMat4: {
+      const char* name = command.uniformMat4.name;
+      if (command.uniformMat4.value == nullptr) {
+        throw std::runtime_error("Missing guest matrix uniform");
+      }
+      if (std::strcmp(name, "uMVP") == 0 ||
+          std::strcmp(name, "uViewProjection") == 0) {
+        // uViewProjection is the skybox's rotation-only view projection.
         std::copy_n(command.uniformMat4.value, 16, m_mvp.begin());
-      } else {
+      } else if (std::strcmp(name, "uModel") == 0) {
+        std::copy_n(command.uniformMat4.value, 16, m_lighting.model.begin());
+      } else if (std::strcmp(name, "uLightSpaceMatrix") != 0 &&
+                 std::strcmp(name, "uPrevMVP") != 0) {
+        // Light space comes from the host pass; motion blur is host policy.
         throw std::runtime_error("Unsupported guest matrix uniform");
       }
       break;
+    }
+    case CommandType::SetUniformVec3: {
+      const CmdUniformVec3& value = command.uniformVec3;
+      const std::array<float, 3> vector{ value.x, value.y, value.z };
+      if (std::strcmp(value.name, "uLightDir") == 0) {
+        m_lighting.lightDirection = vector;
+      } else if (std::strcmp(value.name, "uLightColor") == 0) {
+        m_lighting.lightColor = vector;
+      } else if (std::strcmp(value.name, "uAmbientColor") == 0) {
+        m_lighting.ambientColor = vector;
+      } else {
+        throw std::runtime_error("Unsupported guest vector uniform");
+      }
+      break;
+    }
+    case CommandType::SetUniformVec4:
+      if (std::strcmp(command.uniformVec4.name, "uTint") != 0) {
+        throw std::runtime_error("Unsupported guest vector uniform");
+      }
+      m_lighting.tint = { command.uniformVec4.x,
+                          command.uniformVec4.y,
+                          command.uniformVec4.z,
+                          command.uniformVec4.w };
+      break;
+    case CommandType::SetUniformFloat: {
+      const CmdUniformFloat& value = command.uniformFloat;
+      if (std::strcmp(value.name, "uShadowBias") == 0) {
+        m_lighting.shadowBias = value.value;
+      } else if (std::strcmp(value.name, "uShadowSlopeScale") == 0) {
+        m_lighting.shadowSlopeScale = value.value;
+      } else if (std::strcmp(value.name, "uShadowNormalOffset") == 0) {
+        m_lighting.shadowNormalOffset = value.value;
+      } else if (std::strcmp(value.name, "uMotionBlurAmount") != 0 &&
+                 std::strcmp(value.name, "uMotionBlurMax") != 0) {
+        throw std::runtime_error("Unsupported guest float uniform");
+      }
+      break;
+    }
     case CommandType::UpdateBuffer:
     case CommandType::UpdateIndexBuffer: {
       const bool indices =
@@ -596,6 +987,8 @@ GuestRecordingBackend::consume(const RenderCommand& command)
       if (!IsMeshValid(handle)) {
         throw std::runtime_error("Stale guest mesh update");
       }
+      // A mesh that changes is not static after all: draw it inline.
+      forgetRetained(m_meshes.at(handle.slot));
       std::vector<std::byte>& buffer = indices
                                          ? m_meshes.at(handle.slot).indices
                                          : m_meshes.at(handle.slot).vertices;
@@ -610,7 +1003,8 @@ GuestRecordingBackend::consume(const RenderCommand& command)
     }
     case CommandType::UpdateTexture: {
       const CmdUpdateTexture& write = command.updateTexture;
-      if (!IsTextureValid(write.handle)) {
+      if (!IsTextureValid(write.handle) ||
+          m_textures.at(write.handle.slot).cubemap) {
         throw std::runtime_error("Stale guest texture update");
       }
       Texture& texture = m_textures.at(write.handle.slot);
@@ -662,27 +1056,52 @@ GuestRecordingBackend::consume(const RenderCommand& command)
       break;
     }
     case CommandType::DrawIndexed:
+      if (m_shadowPass) {
+        // Shadow depth draws only identify casters; nothing is recorded.
+        if (IsMeshValid(m_mesh)) {
+          m_shadowMeshes.insert(m_mesh.slot);
+        }
+        break;
+      }
       draw(command.drawIndexed.firstIndex, command.drawIndexed.elementCount);
       break;
     case CommandType::SetFramebuffer:
       if (command.bindFramebuffer.handle.isValid()) {
-        throw std::runtime_error(
-          "Offscreen guest rendering requires an instance contract");
+        if (command.bindFramebuffer.handle != m_shadowFramebuffer) {
+          throw std::runtime_error(
+            "Offscreen guest rendering requires an instance contract");
+        }
+        m_shadowPass = true;
+      } else {
+        m_shadowPass = false;
       }
       break;
     case CommandType::SetViewport:
-      if (command.viewport.x != 0 || command.viewport.y != 0 ||
-          command.viewport.width != m_frame.width ||
-          command.viewport.height != m_frame.height) {
+      if (!m_shadowPass &&
+          (command.viewport.x != 0 || command.viewport.y != 0 ||
+           command.viewport.width != m_frame.width ||
+           command.viewport.height != m_frame.height)) {
         throw std::runtime_error("Unsupported guest viewport");
       }
       break;
-    case CommandType::SetUniformInt:
-      if (std::strcmp(command.uniformInt.name, "uTexture") != 0 ||
-          command.uniformInt.value != 0) {
+    case CommandType::SetUniformInt: {
+      const CmdUniformInt& value = command.uniformInt;
+      if (std::strcmp(value.name, "uShadowsEnabled") == 0) {
+        m_lighting.receivesShadow = value.value != 0;
+      } else if (std::strcmp(value.name, "uShadowPcf") == 0) {
+        m_lighting.shadowPcf = value.value != 0;
+      } else if (std::strcmp(value.name, "uShadowMap") == 0) {
+        if (value.value != 1) {
+          throw std::runtime_error("Unsupported guest shadow map unit");
+        }
+      } else if (std::strcmp(value.name, "uMotionBlurEnabled") != 0 &&
+                 ((std::strcmp(value.name, "uTexture") != 0 &&
+                   std::strcmp(value.name, "uSkybox") != 0) ||
+                  value.value != 0)) {
         throw std::runtime_error("Unsupported guest integer uniform");
       }
       break;
+    }
     case CommandType::SetUniformVec2:
       if (std::strcmp(command.uniformVec2.name, "u_resolution") != 0) {
         throw std::runtime_error("Unsupported guest vector uniform");
@@ -693,7 +1112,7 @@ GuestRecordingBackend::consume(const RenderCommand& command)
     case CommandType::ClearColorBuffer:
     case CommandType::ClearStencilBuffer:
     case CommandType::ClearAll:
-      if (!m_frame.batches.empty()) {
+      if (!m_shadowPass && !m_frame.batches.empty()) {
         throw std::runtime_error(
           "Mid-frame clears require a render-pass contract");
       }

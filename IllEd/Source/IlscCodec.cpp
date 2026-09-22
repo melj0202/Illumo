@@ -1,11 +1,13 @@
 #include "IlscCodec.h"
+#if !defined(ILLUMO_SERIAL_GUEST)
 #include <Illumo/Platform/AtomicFile.h>
 #include <filesystem>
+#include <fstream>
 #include <system_error>
+#endif
 
 #include <cctype>
 #include <cmath>
-#include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -563,9 +565,10 @@ IlscCodec::encode(const IlscDocument& document)
   return root.dump(2);
 }
 
+#if !defined(ILLUMO_SERIAL_GUEST)
 bool
-IlscCodec::readFile(const std::string& path,
-                    IlscDocument* document,
+IlscCodec::readText(const std::string& path,
+                    std::string* text,
                     std::string* error)
 try {
   if (path.empty()) {
@@ -584,15 +587,16 @@ try {
     setError(error, "Failed while reading scene file");
     return false;
   }
-  return parse(buffer.str(), document, error);
+  *text = buffer.str();
+  return true;
 } catch (const std::system_error&) {
   setError(error, "Invalid or inaccessible UTF-8 file path");
   return false;
 }
 
 bool
-IlscCodec::writeFile(const std::string& path,
-                     const IlscDocument& document,
+IlscCodec::writeText(const std::string& path,
+                     const std::string& text,
                      std::string* error)
 try {
   if (path.empty()) {
@@ -601,8 +605,8 @@ try {
   }
   return AtomicFile::write(
     std::filesystem::path(std::u8string(path.begin(), path.end())),
-    [&document](std::ostream& file, std::string*) {
-      file << encode(document);
+    [&text](std::ostream& file, std::string*) {
+      file << text;
       return file.good();
     },
     error);
@@ -610,3 +614,21 @@ try {
   setError(error, "Invalid or inaccessible UTF-8 file path");
   return false;
 }
+
+bool
+IlscCodec::readFile(const std::string& path,
+                    IlscDocument* document,
+                    std::string* error)
+{
+  std::string text;
+  return readText(path, &text, error) && parse(text, document, error);
+}
+
+bool
+IlscCodec::writeFile(const std::string& path,
+                     const IlscDocument& document,
+                     std::string* error)
+{
+  return writeText(path, encode(document), error);
+}
+#endif

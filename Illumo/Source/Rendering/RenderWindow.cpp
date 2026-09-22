@@ -218,6 +218,15 @@ RenderWindow::reinitializeWindow(const int width,
 }
 
 void
+RenderWindow::setTitle(const std::string& title)
+{
+  windowTitle = title;
+  if (window != nullptr && !m_captureOnly) {
+    glfwSetWindowTitle(window, windowTitle.c_str());
+  }
+}
+
+void
 RenderWindow::reinitializeWindow()
 {
   // glfwDestroyWindow(window);

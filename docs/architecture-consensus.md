@@ -89,10 +89,12 @@ CellGameModule releases its registration on Exit and rejects exhausted startup
 before domain allocation. Generated standalone projects record source provenance
 in engine-provenance.json, distinguishing clean, dirty and unknown identity.
 
-[FrameCapture and IllumoCapture](frame-capture.md) provide bounded hidden-context
-OpenGL rendering and PNG/JSON output without starting the runtime host. Scene and
-direct producers use the same renderer. Strict capture errors, backend readback
-and first-frame depth state are explicit; normal application defaults remain.
+[FrameCapture](frame-capture.md) provides bounded hidden-context OpenGL
+rendering without starting the runtime host. Scene and direct producers use the
+same renderer. Strict capture errors, backend readback and first-frame depth
+state are explicit; normal application defaults remain. The former
+`IllumoCapture` CLI is folded into `IllumoRuntime --capture`, which reads back
+a presented frame of a running app and prints one JSON result (D-E14, §5.12).
 
 ## 0. One-line summary
 
@@ -318,8 +320,8 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **IllumoGame/Source/Game/** | CA definition/config, module factory, domain + presentation (`SparseCellGrid`, `CanvasView`, `CellGameModule`, `CellContext`); dense Canvas types are compatibility-only. |
 | **IllumoGame/Source/Rulesets/** | CA rules (GoL family, Wireworld, …). |
 | **Illumo/Source/Rendering/** | Reusable world-mesh and 2D front end, cubemaps, offscreen passes, managed assets, Scene list, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
-| **IllEd/Source/** | SceneGraph world editor, document model, `.ilsc` codec, and product UI. |
-| **IllMeshViewer/Source/** | Mesh-viewer application, camera, configuration, input, and product UI. |
+| **IllEd/Source/** | SceneGraph world editor, document model, `.ilsc` codec, and product UI; shipped as `IllEd.wasm` (`Wasm/`), with `IllEdCore` as native test oracle (D-E14). |
+| **IllMeshViewer/Source/** | Mesh-viewer application, camera, configuration, input, and product UI; shipped as `IllMeshViewer.wasm` (`Wasm/`), with `IllMeshViewerCore` as native test oracle (D-E14). |
 | **Illumo/Source/Services/** | Generic log, env, input, system CLI, branded console UI, and allocators. |
 | **Illumo/Source/Foundation/** | BuildInfo, macros, and implementation support; public aliases/utilities are under `Illumo/Include/Illumo/Foundation`. |
 | **Illumo/Source/Platform/** | OS entry, public SaveLoad implementation boundary, and native dialogs. |
@@ -1135,6 +1137,121 @@ outside this diagnostic's scope.
   the primary monitor at its current video mode, and restore the saved windowed
   bounds on exit.
 
+### 5.12 Isolated WASM application runtime (D-E13, D-E14)
+
+IllumoGame, IllEd and IllMeshViewer are WASM packages, not native
+executables (D-E14 extends D-E13 to every interactive client program). The
+shipped layout is:
+
+```text
+IllumoRuntime.exe              generic host: loop, window, GL, Wasmtime sandbox
+  envvars.json                 runtime settings (window, vsync, fps, overlays)
+  apps/game/app.json           package manifest (see below)
+  apps/game/IllumoGame.wasm    the whole product
+  apps/game/families.json ...  packaged catalogs and first-run defaults
+  apps/illed/app.json          IllEd.wasm; launchAccess "edit"
+  apps/illed/Assets/IllEd/editor-ui-atlas.jpg      package-preloaded asset
+  apps/meshviewer/app.json     IllMeshViewer.wasm; launchAccess "read"
+  apps/meshviewer/Assets/Skybox/skybox-daylight.png  package-preloaded asset
+  storage/csim/                game settings, saves, user rule overlays
+  storage/illed/               IllEd private storage
+  storage/meshviewer/          IllMeshViewer private storage
+```
+
+`app.json` carries `id`, `module`, optional `worker`, `title` (the window
+title), `launchAccess` (`"read"` or `"edit"`) and requested `memoryMiB`,
+`fuelPerCall` and `deadlineMilliseconds`, clamped to host ceilings. The
+manifests live in the source tree as `IllumoGame/app.json`, `IllEd/app.json`
+and `IllMeshViewer/app.json`; the old `game/` directory and `game.json` are
+gone.
+
+- **Host** (`Illumo/Source/Wasm`): `WasmGameModule` snapshots input, pumps
+  generic services (textures, fonts, files, dialogs, clipboard, display,
+  console trampolines, jobs) and submits validated `IRF1` frames through
+  `WasmFrameRenderer`. It contains no Game/Rulesets includes and no CA
+  opcodes. The manifest requests memory, fuel and deadline budgets; the
+  runtime clamps them to its ceilings. Launch options are cleared before
+  command-line parsing so persisted settings never replay a package.
+- **Runtime command line** (`Illumo/Source/Wasm/RuntimeApplication.cpp`):
+  `--app <name>` runs `apps/<name>` (default `game`; not combinable with
+  `--package` or `--game`). `--open <file>` hands one document to the app: the
+  guest sees only the base name (the `ILS1` startup record `GuestLaunch`), and
+  the host grants the file as the selection `launch`, writable when the
+  manifest says `launchAccess: "edit"`. `--capture <new .png>` renders until
+  `--capture-frame <n>` (default 60), reads back the presented backbuffer
+  through a `Renderer::setBeforePresent` hook, writes the PNG, prints one JSON
+  line and exits 0/1 through `IllumoApplicationDefinition::exitCode`; it
+  replaces the removed `IllumoCapture` executable ([frame-capture.md](frame-capture.md)).
+  The runtime works from its own directory wherever it is started, relative
+  command-line paths resolve against the invocation directory, and the window
+  title comes from the manifest through `IRenderWindow::setTitle`.
+- **Guest engine** (`IllumoGuest`): `GuestModuleApplication` builds a
+  guest-local `IllumoContext` (snapshot window, `InputManager` fed from the
+  snapshot, storage-backed `GuestEnvironment`, `Camera`, `Renderer` on
+  `GuestRecordingBackend`, `Scene`, a `CommandRegistry` mirrored to host
+  console trampolines, a `CommandLine` whose lines forward to the host
+  console, and a module host applying transitions at frame boundaries). It
+  renders with `Renderer::RenderScene`; `IBackend::BeginLayer` tags World and
+  UI batches. Product close requests travel as update flag bit 0; the host
+  still asks `illumo_guest_close`. It also sets `context.assetManager`:
+  `AssetManager` reads bytes through an `IAssetSource`
+  (`Illumo/Rendering/AssetSource.h`), served in the guest by
+  `GuestPackageAssets` from the files a product lists in `packageAssets()`
+  (preloaded before bootstrap). Under `ILLUMO_SERIAL_GUEST` (defined for all
+  guest code) `AssetManager` has no worker thread, completes loads in
+  `pump()`, and shader files are unavailable (shaders are host policy);
+  natively `FileAssetSource` keeps filesystem behaviour and hot reload. Every
+  app's package `envvars.json` supplies first-run defaults before
+  `applyDefaults`, `launchFile()` exposes the `--open` document, and
+  `GuestDocuments` (`IllumoGuest/Documents.h`) gives document products
+  open/edit/save dialogs and read/write by opaque location. Dialog requests
+  are version 2 (adds `edit`, an open whose selection stays writable for
+  save-in-place); results add a base-name-only `label`.
+- **Product** (`IllumoGame/Source/Wasm`): the package application bootstraps
+  storage settings plus packaged defaults, reads catalogs through
+  `CSimCatalogBootstrap`, installs `GuestCSimPlatform`, and starts
+  `MainMenuModule`. Shared Game sources use `CSimPlatform` for dialogs, file
+  transfers, clipboard and user-catalog writes; the native oracle completes
+  synchronously, the guest on a later update. IllEd
+  (`IllEd/Source/Wasm/EditorApplication.cpp`) and IllMeshViewer
+  (`IllMeshViewer/Source/Wasm/ViewerApplication.cpp`) follow the same shape
+  through their `IllEdPlatform` and `MeshViewerPlatform` seams. IllEd's
+  save/open/close-confirm are asynchronous, its document keeps an opaque
+  location plus a display label, and editing input is held while a transfer
+  is in flight; `.ilsc` is unchanged. The viewer reads mesh bytes and parses
+  them with `MeshLoader::loadFromMemory`. `IllEdCore` and
+  `IllMeshViewerCore` remain only as native test oracles.
+- **Frames**: schema version 2 adds the world camera, line and depth-tested
+  batches, lit meshes (normals plus per-batch lighting) and shadow casters.
+  The guest records its own shadow pass against a virtual depth target to
+  learn which meshes cast; the host registers the casters, fits its shared
+  shadow pass to the guest camera (`Renderer::setNextWorldViewProjection`)
+  and draws lit meshes through the built-in `LitMesh` style. Schema version
+  3 (`IllumoGuest/Frame.h`) adds retained host meshes (`CreateMesh`,
+  in-order `WriteMesh` chunks of at most 1 MiB, `ReleaseMesh`; a batch naming
+  a `mesh` id draws `indexCount` indices from `firstIndex` with no inline
+  geometry), cubemaps (`CreateCubemap`, six square RGBA faces in +X,-X,+Y,-Y,
+  +Z,-Z order, drawn by the `Skybox` batch style through the built-in skybox
+  style with a rotation-only view projection) and a per-batch blend flag. The
+  guest recorder retains static meshes of at least 64 KiB; dynamic and small
+  meshes stay inline. The host validates a complete mesh (layout stride,
+  finite positions, index range) when its last byte lands, enrolls a static
+  GPU mesh, and charges the bytes to the owner's 256 MB resident budget.
+  Cubemaps cannot be sampled as 2D textures or written through frames.
+  Motion blur and MSAA stay host policy. Version 1 and 2 packets remain
+  valid and keep their historical blend defaults.
+- **Limits**: generations run serially in the control call. The worker-store
+  offload (`CSW1`) exists for parity tests but is not yet the product runner.
+  The pinned runtime is Windows x64 only, so Linux has no runnable
+  applications; it builds the engine libraries and native test suites.
+- **Verification**: `IllumoGame.Wasm.GamePackage`, `IllEd.Wasm.Package` and
+  `IllMeshViewer.Wasm.Package` drive the real packages through the generic
+  host; `Illumo.Wasm.RetainedResources` and the v3 `Illumo.Wasm.FrameValidation`
+  cases cover retained meshes and cubemaps; `Illumo.Runtime.Help` and
+  `Illumo.Runtime.InvalidCaptureFrame` cover the command line;
+  `tools/verify_capture.py` is the real-GPU capture check. Plan and
+  validation ledger: [wasm-apps-cutover-plan.md](wasm-apps-cutover-plan.md).
+
 ---
 
 ## 6. Locked decisions (catalog)
@@ -1153,7 +1270,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-008** | House style: avoid `auto`; no namespaces; no recursion; third-party via PR. |
 | **D-N1** | Historical unified Illumo identity; superseded for product/executable/test identity by D-N2 and for product-visible identity/new save filenames by D-N4, while retained for the library, repository, host, and legacy `.illumo` loading. |
 | **D-N2** | Historical `IllumoGame` simulator identity; superseded for product-visible branding by D-N4 while retained for technical targets and test namespaces. |
-| **D-N3** | `IllEd` is the in-tree world-editor application identity (`IllEd.exe`, `.ilsc`, `IllEd.*` tests). |
+| **D-N3** | `IllEd` is the in-tree world-editor application identity (`IllEd.exe`, `.ilsc`, `IllEd.*` tests). The `IllEd.exe` executable identity is superseded by D-E14 (`IllEd.wasm` in `apps/illed`). |
 | **D-N4** | CSim is the simulator's product-visible identity and `.csim` is the canonical save extension; technical `IllumoGame` identifiers and legacy `.illumo` loading remain. |
 | **D-B1** | `DebugModule` is composed by the engine runner in Debug and RelWithDebInfo; Release must neither compile nor register it. Refined by D-E7. |
 | **D-CLI1** | Services own generic console mechanics; `CellGameModule` registers domain commands and help/completion metadata. |
@@ -1294,6 +1411,8 @@ disabled.
 | **D-E10** | `.ilsc` v1 is the editor-owned UTF-8 JSON scene interchange; SceneGraph does not serialize itself. |
 | **D-E11** | Attachments may report conservative local AABBs; SceneGraph exposes world bounds and linearly camera-culls color extraction. Renderer retains and filters directional-shadow casters against a camera-frustum extrusion, failing open on invalid data. No spatial index or subtree cache is introduced. |
 | **D-E12** | SceneGraph v2 uses intrusive SoA/TRS state, lazy preorder, revision bounds, ordered attachments, interned names/payloads, a bounded journal, and derived query BVH. IllEd edits the graph incrementally. Supersedes the storage and linear-only limits of D-E8/D-E11; no ECS or persistence migration. |
+| **D-E13** | IllumoGame ships only as `IllumoGame.wasm`, hosted by the generic `IllumoRuntime.exe`. A guest-side `GuestModuleApplication` composes the `IllumoContext` inside the store; product I/O uses `CSimPlatform`; frame schema v2 carries the world camera, lit meshes and shadow casters. `IllumoGameCore` is only the native test oracle. Supersedes D-E7's IllumoGame seam (§5.12). |
+| **D-E14** | Every interactive client program is a WASM package in `apps/<name>/` (`app.json`: id, module, worker, title, `launchAccess`, requested budgets) run by the one generic `IllumoRuntime.exe`: `game`, `illed` (`IllEd.wasm`) and `meshviewer` (`IllMeshViewer.wasm`). `--app` selects the package, `--open` grants one launch document (read or edit per manifest; the guest sees only its base name), and `--capture` folds the removed `IllumoCapture` into the runtime. Frame schema v3 adds retained host meshes, cubemaps/`Skybox` batches and a per-batch blend flag. IllEd and IllMeshViewer reach I/O through `IllEdPlatform` / `MeshViewerPlatform`; `IllEdCore` and `IllMeshViewerCore` are only native test oracles. Extends D-E13; `FrameCapture` and `IllumoCaptureGpuTests` remain (§5.12). |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |

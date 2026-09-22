@@ -1,6 +1,7 @@
 #include "MainMenuModule.h"
 
 #include "BuiltinPatterns.h"
+#include "CSimPlatform.h"
 #include "CellContext.h"
 #include "CellGameModule.h"
 #include "PatternCodec.h"
@@ -232,11 +233,15 @@ MainMenuModule::activateSelectedItem()
       spec.fileDescription = "CSim Simulations";
       spec.defaultFilename = "MyCanvas.csim";
       spec.extensionPattern = "*.CSIM;*.ILLUMO";
-      const std::string path = SaveLoad::GetLoadLocation(spec);
-      if (!path.empty()) {
-        ic->moduleHost->RequestTransition(
-          std::make_unique<CellGameModule>(path));
-      }
+      const std::weak_ptr<bool> alive = m_lifetime;
+      CSimPlatform::current().chooseLoadLocation(
+        spec, [this, alive](const std::string& location) {
+          if (!alive.expired() && !location.empty() && ic != nullptr &&
+              ic->moduleHost != nullptr) {
+            ic->moduleHost->RequestTransition(
+              std::make_unique<CellGameModule>(location));
+          }
+        });
       break;
     }
     case kSettingsItem: {
@@ -918,6 +923,7 @@ MainMenuModule::unregisterConsoleCommands()
 void
 MainMenuModule::Exit()
 {
+  m_lifetime.reset();
   unregisterConsoleCommands();
   m_newSimulationMenu.reset();
   m_configurationMenu.reset();

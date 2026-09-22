@@ -32,7 +32,9 @@ same stb MIT notice and retain the complete dual-license text in each header.
 PNG capture compiles the existing `stb_image_write` header bundled in
 `Illumo/thirdparty/glfw-3.4/deps/stb_image_write.h` under its MIT alternative
 (Copyright (c) 2017 Sean Barrett). Its complete notice remains in the header;
-the same stb MIT text is staged as `licenses/stb-LICENSE.txt` with IllumoCapture.
+the same stb MIT text is staged as `licenses/stb-LICENSE.txt` beside every
+runtime-staged executable, including `IllumoRuntime`, whose `--capture` mode
+writes the PNG.
 
 ## Vendored source not linked by the current targets
 

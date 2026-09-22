@@ -80,14 +80,18 @@ EditorModule::Start(IllumoContext* context)
   m_selectionOverlay = std::make_unique<MeshVisual>();
   m_selectionOverlay->prepare(ic->renderer);
 
+  m_lifetime = std::make_shared<bool>(true);
+  m_busy = false;
+  m_closeAfterBusy = false;
   if (m_initialScenePath.empty() && ic->envVars != nullptr) {
     m_initialScenePath = ic->envVars->getVar("LaunchScene").value;
   }
   if (!m_initialScenePath.empty()) {
-    std::string error;
-    if (!m_document.loadFromFile(m_initialScenePath, &error)) {
-      ic->commandLine->logError(error);
-      m_document.clear();
+    loadDocument({ m_initialScenePath, m_initialScenePath }, true);
+  } else {
+    const IllEdLocation launch = IllEdPlatform::current().launchDocument();
+    if (!launch.empty()) {
+      loadDocument(launch, true);
     }
   }
 
@@ -103,6 +107,9 @@ EditorModule::Start(IllumoContext* context)
 void
 EditorModule::Exit()
 {
+  m_lifetime.reset();
+  m_busy = false;
+  m_closeAfterBusy = false;
   if (ic != nullptr && ic->assetManager != nullptr && m_atlas.isValid()) {
     ic->assetManager->releaseTexture(m_atlas);
     m_atlas = TextureHandle{};
@@ -346,8 +353,9 @@ EditorModule::updateStatus()
   if (!m_toolbar) {
     return;
   }
-  std::string status =
-    m_document.path().empty() ? "Untitled" : m_document.path();
+  std::string status = m_document.displayName().empty()
+                         ? std::string("Untitled")
+                         : m_document.displayName();
   if (m_document.isDirty()) {
     status += " *";
   }
@@ -396,7 +404,7 @@ EditorModule::updateStatus()
 bool
 EditorModule::uiBlocksWorld(float screenX, float screenY) const
 {
-  if (m_confirm && m_confirm->isOpen()) {
+  if ((m_confirm && m_confirm->isOpen()) || m_busy) {
     return true;
   }
   if (m_toolbar && m_toolbar->containsScreenPoint(screenX, screenY)) {
@@ -421,67 +429,154 @@ EditorModule::uiBlocksWorld(float screenX, float screenY) const
   return false;
 }
 
-bool
-EditorModule::saveDocument(bool saveAs)
+void
+EditorModule::saveDocument(bool saveAs, std::function<void(bool saved)> done)
 {
-  std::string path = m_document.path();
-  if (saveAs || path.empty()) {
-    path = SaveLoad::GetSaveLocation(dialogSpec());
-    if (path.empty()) {
-      return false;
+  if (m_busy) {
+    if (done) {
+      done(false);
     }
+    return;
   }
-  std::string error;
-  if (!m_document.saveToFile(path, &error)) {
-    if (ic != nullptr && ic->commandLine != nullptr) {
-      ic->commandLine->logError(error);
-    }
-    if (m_toolbar) {
-      m_toolbar->showToast("Failed to save: " + error,
-                           ColorRgba{ 245, 100, 110, 255 });
-    }
-    return false;
+  if (!saveAs && !m_document.path().empty()) {
+    writeDocument({ m_document.path(), m_document.displayName() },
+                  std::move(done));
+    return;
   }
-  if (m_toolbar) {
-    m_toolbar->showToast("Saved scene: " + (path.empty() ? "Scene.ilsc" : path),
-                         ColorRgba{ 60, 220, 120, 255 });
-  }
-  updateStatus();
-  return true;
+  m_busy = true;
+  const std::weak_ptr<bool> alive = m_lifetime;
+  IllEdPlatform::current().chooseSaveLocation(
+    dialogSpec(), [this, alive, done](const IllEdLocation& chosen) {
+      if (alive.expired()) {
+        return;
+      }
+      m_busy = false;
+      if (chosen.empty()) {
+        finishBusy();
+        if (done) {
+          done(false);
+        }
+        return;
+      }
+      writeDocument(chosen, done);
+    });
 }
 
-bool
+void
+EditorModule::writeDocument(const IllEdLocation& location,
+                            std::function<void(bool saved)> done)
+{
+  m_busy = true;
+  const std::weak_ptr<bool> alive = m_lifetime;
+  IllEdPlatform::current().write(
+    location.location,
+    m_document.encode(),
+    [this, alive, location, done](bool saved, const std::string& error) {
+      if (alive.expired()) {
+        return;
+      }
+      m_busy = false;
+      if (saved) {
+        // Input was held while the write was in flight, so nothing changed
+        // since the encoded snapshot.
+        m_document.markSaved(location.location, location.label);
+        if (m_toolbar) {
+          m_toolbar->showToast("Saved scene: " + m_document.displayName(),
+                               ColorRgba{ 60, 220, 120, 255 });
+        }
+      } else {
+        if (ic != nullptr && ic->commandLine != nullptr) {
+          ic->commandLine->logError(error);
+        }
+        if (m_toolbar) {
+          m_toolbar->showToast("Failed to save: " + error,
+                               ColorRgba{ 245, 100, 110, 255 });
+        }
+      }
+      updateStatus();
+      if (done) {
+        done(saved);
+      }
+      finishBusy();
+    });
+}
+
+void
 EditorModule::openDocument()
 {
-  const std::string path = SaveLoad::GetLoadLocation(dialogSpec());
-  if (path.empty()) {
-    return false;
+  if (m_busy) {
+    return;
   }
-  std::string error;
-  if (!m_document.loadFromFile(path, &error)) {
-    if (ic != nullptr && ic->commandLine != nullptr) {
-      ic->commandLine->logError(error);
-    }
-    if (m_toolbar) {
-      m_toolbar->showToast("Failed to load: " + error,
-                           ColorRgba{ 245, 100, 110, 255 });
-    }
-    return false;
+  m_busy = true;
+  const std::weak_ptr<bool> alive = m_lifetime;
+  IllEdPlatform::current().chooseOpenLocation(
+    dialogSpec(), [this, alive](const IllEdLocation& chosen) {
+      if (alive.expired()) {
+        return;
+      }
+      m_busy = false;
+      if (chosen.empty()) {
+        finishBusy();
+        return;
+      }
+      loadDocument(chosen, false);
+    });
+}
+
+void
+EditorModule::loadDocument(const IllEdLocation& location, bool initial)
+{
+  m_busy = true;
+  const std::weak_ptr<bool> alive = m_lifetime;
+  IllEdPlatform::current().read(
+    location.location,
+    [this, alive, location, initial](
+      bool success, const std::string& text, const std::string& readError) {
+      if (alive.expired()) {
+        return;
+      }
+      m_busy = false;
+      std::string error = readError;
+      if (success && m_document.loadFromText(text, &error)) {
+        m_document.setLocation(location.location, location.label);
+        m_selectedId.clear();
+        if (ic != nullptr && ic->camera != nullptr) {
+          ic->camera->SetPositionPrecise(m_document.camera().x,
+                                         m_document.camera().y);
+          ic->camera->SetZoom(m_document.camera().zoom);
+        }
+        m_cameraTargetY = 0.0f;
+        if (m_toolbar && !initial) {
+          m_toolbar->showToast("Opened scene: " + m_document.displayName(),
+                               ColorRgba{ 66, 214, 210, 255 });
+        }
+      } else {
+        if (ic != nullptr && ic->commandLine != nullptr) {
+          ic->commandLine->logError(error);
+        }
+        if (initial) {
+          m_document.clear();
+        } else if (m_toolbar) {
+          m_toolbar->showToast("Failed to load: " + error,
+                               ColorRgba{ 245, 100, 110, 255 });
+        }
+      }
+      syncGraph();
+      updateStatus();
+      finishBusy();
+    });
+}
+
+void
+EditorModule::finishBusy()
+{
+  // A window close that arrived mid-operation is negotiated once the
+  // operation has settled.
+  if (m_busy || !m_closeAfterBusy) {
+    return;
   }
-  m_selectedId.clear();
-  if (ic != nullptr && ic->camera != nullptr) {
-    ic->camera->SetPositionPrecise(m_document.camera().x,
-                                   m_document.camera().y);
-    ic->camera->SetZoom(m_document.camera().zoom);
-  }
-  m_cameraTargetY = 0.0f;
-  if (m_toolbar) {
-    m_toolbar->showToast("Opened scene: " + path,
-                         ColorRgba{ 66, 214, 210, 255 });
-  }
-  syncGraph();
-  updateStatus();
-  return true;
+  m_closeAfterBusy = false;
+  requestAction(EditorPendingAction::ExitEditor);
 }
 
 void
@@ -584,6 +679,10 @@ EditorModule::OnCloseRequested()
     // Another started module may veto this attempt after the editor accepts.
     m_exitApproved = false;
     return true;
+  }
+  if (m_busy) {
+    m_closeAfterBusy = true;
+    return false;
   }
   if (!m_document.isDirty()) {
     return true;
@@ -996,7 +1095,7 @@ EditorModule::updateSelection(double dt)
       ic->window == nullptr) {
     return;
   }
-  if (m_confirm && m_confirm->isOpen()) {
+  if ((m_confirm && m_confirm->isOpen()) || m_busy) {
     return;
   }
   if (ic->commandLine != nullptr && ic->commandLine->isOpen) {
@@ -1186,12 +1285,20 @@ EditorModule::Update(double dt)
       performPendingAction();
     } else if (action == EditorConfirmAction::Save) {
       m_confirm->close();
-      if (saveDocument(false)) {
-        performPendingAction();
-      } else {
-        m_pendingAction = EditorPendingAction::None;
-      }
+      const std::weak_ptr<bool> alive = m_lifetime;
+      saveDocument(false, [this, alive](bool saved) {
+        if (alive.expired()) {
+          return;
+        }
+        if (saved) {
+          performPendingAction();
+        } else {
+          m_pendingAction = EditorPendingAction::None;
+        }
+      });
     }
+  } else if (m_busy) {
+    // A dialog or file transfer is in flight; editing resumes after it.
   } else if (m_toolbar) {
     const bool consoleOpen =
       ic->commandLine != nullptr && ic->commandLine->isOpen;
@@ -1215,7 +1322,7 @@ EditorModule::Update(double dt)
     (m_toolbar && m_toolbar->consumedPress()) ||
     (m_sceneGraphView && m_sceneGraphView->consumedPress()) ||
     (m_sidebar && m_sidebar->consumedPress());
-  if (!(m_confirm && m_confirm->isOpen()) &&
+  if (!(m_confirm && m_confirm->isOpen()) && !m_busy &&
       !(ic->commandLine != nullptr && ic->commandLine->isOpen)) {
     updateCamera(dt);
     applyWorldCamera();

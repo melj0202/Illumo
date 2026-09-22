@@ -148,6 +148,17 @@ Renderer::beginFrameContext(Camera* camera)
     }
   }
   frameContext.active = true;
+  if (m_hasNextWorldViewProjection) {
+    m_hasNextWorldViewProjection = false;
+    frameContext.worldMvp = m_nextWorldViewProjection;
+    frameContext.hasWorldMvp = true;
+    glm::mat4 supplied(1.0f);
+    std::memcpy(&supplied[0][0],
+                m_nextWorldViewProjection.data(),
+                m_nextWorldViewProjection.size() * sizeof(float));
+    buildBoundsFrustum(supplied, &cameraFrustum);
+    return;
+  }
   if (camera == nullptr) {
     return;
   }
@@ -210,6 +221,18 @@ Renderer::registerShadowCaster(const ShadowCasterDesc& caster)
   }
 
   shadowCasters.push_back(caster);
+}
+
+void
+Renderer::setNextWorldViewProjection(const std::array<float, 16>& matrix)
+{
+  for (const float value : matrix) {
+    if (!std::isfinite(value)) {
+      return;
+    }
+  }
+  m_nextWorldViewProjection = matrix;
+  m_hasNextWorldViewProjection = true;
 }
 
 bool
@@ -709,6 +732,9 @@ Renderer::EndFrame(std::chrono::steady_clock::time_point* presentationStart)
     *presentationStart = std::chrono::steady_clock::now();
   }
   if (m_frameError.empty()) {
+    if (m_beforePresent) {
+      m_beforePresent(*this);
+    }
     _backend->EndFrame();
   }
 }
@@ -1213,6 +1239,7 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
          ++layerIndex) {
       const RenderLayerId layer = static_cast<RenderLayerId>(layerIndex);
       const std::vector<DrawableBase*>& list = scene->drawablesIn(layer);
+      _backend->BeginLayer(layer);
 
       if (!scene->hasCustomPasses(layer)) {
         _currentPassFbo = FramebufferHandle{};

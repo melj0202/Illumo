@@ -25,7 +25,9 @@ threading behavior:
   projects, while an `IllumoWorkspace` CTest label and coverage target verify
   the complete repository.
 - The generated product is `IllumoGame.exe`; its window, command-line help,
-  version output, and console branding say `IllumoGame`.
+  version output, and console branding say `IllumoGame`. (Superseded
+  2026-09-22: IllumoGame ships only as the `IllumoGame.wasm` package hosted by
+  `IllumoRuntime.exe`; see [wasm-game-cutover-plan.md](wasm-game-cutover-plan.md).)
 
 Success requires Release and Debug builds of all four primary targets, all
 pre-existing tests rehomed under their owning prefix, new boundary and failure

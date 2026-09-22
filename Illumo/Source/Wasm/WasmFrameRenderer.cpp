@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/AxisAlignedBounds3.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/WorldLook.h>
@@ -5,7 +6,11 @@
 #include <Illumo/Wasm/WasmResourceTable.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <map>
 
 struct WasmFrameRenderer::State
 {
@@ -44,12 +49,68 @@ struct WasmFrameRenderer::State
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint32_t channels = 0;
+    // Cubemaps are sampled only by Skybox batches and never written.
+    bool cubemap = false;
     TextureHandle handle{};
+  };
+  // A retained host mesh. The table shares it as const; its upload state
+  // changes while bytes arrive, so that state lives behind an owned pointer.
+  struct RetainedMesh
+  {
+    struct Upload
+    {
+      std::vector<std::byte> vertices;
+      std::vector<std::byte> indices;
+      std::uint32_t vertexWritten = 0;
+      std::uint32_t indexWritten = 0;
+      MeshHandle handle{};
+      std::uint32_t indexCount = 0;
+      AxisAlignedBounds3 bounds;
+      bool ready = false;
+      bool failed = false;
+    };
+    RetainedMesh(Renderer& value,
+                 std::shared_ptr<Budget> account,
+                 const GuestMeshRequest& request)
+      : renderer(value)
+      , lifetime(value.getLifetimeIdentity())
+      , budget(std::move(account))
+      , bytes(static_cast<std::uint64_t>(request.vertexBytes) +
+              request.indexBytes)
+      , style(static_cast<GuestBatchStyle>(request.style))
+      , vertexBytes(request.vertexBytes)
+      , indexBytes(request.indexBytes)
+      , upload(std::make_unique<Upload>())
+    {
+      budget->bytes += bytes;
+    }
+    ~RetainedMesh()
+    {
+      if (!lifetime.expired() && upload->handle.isValid()) {
+        renderer.destroyMesh(upload->handle);
+      }
+      budget->bytes -= bytes;
+    }
+    RetainedMesh(const RetainedMesh&) = delete;
+    RetainedMesh& operator=(const RetainedMesh&) = delete;
+    RetainedMesh(RetainedMesh&&) = delete;
+    RetainedMesh& operator=(RetainedMesh&&) = delete;
+    Renderer& renderer;
+    std::weak_ptr<const void> lifetime;
+    std::shared_ptr<Budget> budget;
+    std::uint64_t bytes;
+    GuestBatchStyle style;
+    std::uint32_t vertexBytes;
+    std::uint32_t indexBytes;
+    std::unique_ptr<Upload> upload;
   };
   struct PreparedBatch
   {
     std::vector<std::byte> vertices;
     std::shared_ptr<const Texture> texture;
+    std::shared_ptr<const RetainedMesh> retained;
+    // Lit meshes: world bounds for host shadow-caster relevance.
+    AxisAlignedBounds3 worldBounds;
   };
   struct Mesh
   {
@@ -70,6 +131,19 @@ struct WasmFrameRenderer::State
     {
       return state.append(renderer, layer);
     }
+    // World lit meshes join the host's one shared shadow pass.
+    void CollectShadowCasters(Renderer* renderer) override
+    {
+      if (layer == GuestLayer::World) {
+        state.collectShadowCasters(renderer);
+      }
+    }
+    void AppendShadowCommands(Renderer* renderer) override
+    {
+      if (layer == GuestLayer::World) {
+        state.appendShadowCommands(renderer);
+      }
+    }
     State& state;
     GuestLayer layer;
   };
@@ -78,6 +152,7 @@ struct WasmFrameRenderer::State
     , lifetime(value.getLifetimeIdentity())
     , limits(quotas)
     , textures(owner)
+    , retainedMeshes(owner)
     , world(*this, GuestLayer::World)
     , ui(*this, GuestLayer::Ui)
   {
@@ -89,6 +164,10 @@ struct WasmFrameRenderer::State
         if (mesh.handle.isValid()) {
           renderer.destroyMesh(mesh.handle);
         }
+      }
+      for (const std::pair<const std::uint32_t, RenderStyleHandle>& style :
+           derivedStyles) {
+        renderer.destroyStyle(style.second);
       }
     }
   }
@@ -105,7 +184,75 @@ struct WasmFrameRenderer::State
     if (style == GuestBatchStyle::Canvas) {
       return MeshVertexLayout::Pos3Color3Uv2;
     }
+    if (style == GuestBatchStyle::LitMesh) {
+      return MeshVertexLayout::Pos3Norm3Color4U8Uv2;
+    }
+    if (style == GuestBatchStyle::Skybox) {
+      return MeshVertexLayout::Pos3;
+    }
     return MeshVertexLayout::Pos3Color4U8;
+  }
+
+  static RenderStyleId builtinStyle(GuestBatchStyle style)
+  {
+    return style == GuestBatchStyle::Shape    ? RenderStyleId::Shape
+           : style == GuestBatchStyle::Sprite ? RenderStyleId::Sprite
+           : style == GuestBatchStyle::Canvas ? RenderStyleId::Canvas
+           : style == GuestBatchStyle::Skybox ? RenderStyleId::Skybox
+                                              : RenderStyleId::LitMesh;
+  }
+
+  // Depth-tested, line and blend variants derive from the built-in styles,
+  // as MeshVisual derives its world styles. Created once per variant.
+  // Versions 1 and 2 carry no blend flag and keep the historical defaults.
+  bool bindBatchStyle(const GuestBatch& batch)
+  {
+    const RenderStyleId base = builtinStyle(batch.style);
+    const RenderStyle* source = renderer.getStyle(base);
+    if (source == nullptr) {
+      return false;
+    }
+    if (batch.style == GuestBatchStyle::Skybox) {
+      return renderer.bindStyle(base);
+    }
+    PipelineState wanted = source->pipeline;
+    if (batch.style != GuestBatchStyle::LitMesh) {
+      wanted.primitives = batch.primitive == GuestPrimitive::Lines
+                            ? Primitives::Lines
+                            : Primitives::Triangles;
+      if (batch.depthTest) {
+        wanted.depthTestEnabled = true;
+        wanted.faceCullingEnabled = false;
+        wanted.blendEnabled = batch.style == GuestBatchStyle::Sprite;
+      }
+    }
+    if (batch.hasBlend) {
+      wanted.blendEnabled = batch.blend;
+    }
+    const PipelineState& current = source->pipeline;
+    if (wanted.primitives == current.primitives &&
+        wanted.depthTestEnabled == current.depthTestEnabled &&
+        wanted.faceCullingEnabled == current.faceCullingEnabled &&
+        wanted.blendEnabled == current.blendEnabled) {
+      return renderer.bindStyle(base);
+    }
+    const std::uint32_t key =
+      static_cast<std::uint32_t>(batch.style) * 16u +
+      (wanted.primitives == Primitives::Lines ? 8u : 0u) +
+      (wanted.depthTestEnabled ? 4u : 0u) +
+      (wanted.faceCullingEnabled ? 2u : 0u) + (wanted.blendEnabled ? 1u : 0u);
+    std::map<std::uint32_t, RenderStyleHandle>::const_iterator found =
+      derivedStyles.find(key);
+    if (found == derivedStyles.end()) {
+      RenderStyle derived = *source;
+      derived.pipeline = wanted;
+      const RenderStyleHandle handle = renderer.createStyle(derived);
+      if (!handle.isValid()) {
+        return false;
+      }
+      found = derivedStyles.emplace(key, handle).first;
+    }
+    return renderer.bindStyle(found->second);
   }
 
   static void appendFloat(std::vector<std::byte>& output, float value)
@@ -113,6 +260,100 @@ struct WasmFrameRenderer::State
     const std::size_t offset = output.size();
     output.resize(offset + sizeof(value));
     std::memcpy(output.data() + offset, &value, sizeof(value));
+  }
+
+  static glm::mat4 matrix(const std::array<float, 16>& values)
+  {
+    glm::mat4 result(1.0f);
+    std::memcpy(glm::value_ptr(result), values.data(), sizeof(float) * 16);
+    return result;
+  }
+
+  // Resolves a retained batch against its mesh: ready, same style and an
+  // index range inside the mesh.
+  bool prepareRetained(const GuestBatch& batch, PreparedBatch& ready)
+  {
+    ready.retained = retainedMeshes.resolve(batch.mesh);
+    if (!ready.retained || !ready.retained->upload->ready ||
+        ready.retained->style != batch.style ||
+        static_cast<std::uint64_t>(batch.firstIndex) + batch.indexCount >
+          ready.retained->upload->indexCount) {
+      error = "Invalid, incomplete or mismatched retained guest mesh";
+      return false;
+    }
+    if (batch.style == GuestBatchStyle::LitMesh) {
+      const glm::mat4 model = matrix(batch.lighting.model);
+      const AxisAlignedBounds3& local = ready.retained->upload->bounds;
+      for (unsigned int corner = 0; corner < 8; ++corner) {
+        const glm::vec3 point(
+          (corner & 1u) != 0 ? local.maximum.x : local.minimum.x,
+          (corner & 2u) != 0 ? local.maximum.y : local.minimum.y,
+          (corner & 4u) != 0 ? local.maximum.z : local.minimum.z);
+        const glm::vec3 placed(model * glm::vec4(point, 1.0f));
+        if (corner == 0) {
+          ready.worldBounds.minimum = placed;
+          ready.worldBounds.maximum = placed;
+        } else {
+          ready.worldBounds.include(placed);
+        }
+      }
+    }
+    return true;
+  }
+
+  void prepareInline(const GuestBatch& batch, PreparedBatch& ready)
+  {
+    const bool lit = batch.style == GuestBatchStyle::LitMesh;
+    const bool sky = batch.style == GuestBatchStyle::Skybox;
+    const std::size_t stride = batch.style == GuestBatchStyle::Shape    ? 16u
+                               : batch.style == GuestBatchStyle::Sprite ? 24u
+                               : lit                                    ? 36u
+                               : sky                                    ? 12u
+                                                                        : 32u;
+    ready.vertices.reserve(batch.vertices.size() * stride);
+    const glm::mat4 model = matrix(batch.lighting.model);
+    for (const GuestVertex& vertex : batch.vertices) {
+      for (float value : vertex.position) {
+        appendFloat(ready.vertices, value);
+      }
+      if (sky) {
+        continue; // Pos3
+      }
+      if (lit) {
+        // Pos3Norm3Color4U8Uv2, matching MeshVisual's lit vertices.
+        for (float value : vertex.normal) {
+          appendFloat(ready.vertices, value);
+        }
+        const glm::vec3 placed(model * glm::vec4(vertex.position[0],
+                                                 vertex.position[1],
+                                                 vertex.position[2],
+                                                 1.0f));
+        if (&vertex == &batch.vertices.front()) {
+          ready.worldBounds.minimum = placed;
+          ready.worldBounds.maximum = placed;
+        } else {
+          ready.worldBounds.include(placed);
+        }
+      }
+      if (batch.style == GuestBatchStyle::Canvas) {
+        for (unsigned int component = 0; component < 3; ++component) {
+          appendFloat(
+            ready.vertices,
+            static_cast<float>((vertex.rgba >> (component * 8u)) & 255u) /
+              255.0f);
+        }
+      } else {
+        for (unsigned int component = 0; component < 4; ++component) {
+          ready.vertices.push_back(
+            static_cast<std::byte>(vertex.rgba >> (component * 8u)));
+        }
+      }
+      if (batch.style != GuestBatchStyle::Shape) {
+        for (float value : vertex.uv) {
+          appendFloat(ready.vertices, value);
+        }
+      }
+    }
   }
 
   bool accept(std::span<const std::byte> packet)
@@ -130,7 +371,7 @@ struct WasmFrameRenderer::State
     std::vector<std::shared_ptr<const Texture>> preparedWrites;
     for (const GuestTextureWrite& write : proposed.textureWrites) {
       std::shared_ptr<const Texture> texture = textures.resolve(write.texture);
-      if (!texture || texture->channels != write.channels ||
+      if (!texture || texture->cubemap || texture->channels != write.channels ||
           write.x > texture->width || write.y > texture->height ||
           write.width > texture->width - write.x ||
           write.height > texture->height - write.y) {
@@ -142,45 +383,30 @@ struct WasmFrameRenderer::State
     for (std::size_t index = 0; index < proposed.batches.size(); ++index) {
       const GuestBatch& batch = proposed.batches[index];
       PreparedBatch& ready = prepared[index];
-      if (batch.style != GuestBatchStyle::Shape) {
+      if (batch.style != GuestBatchStyle::Shape &&
+          batch.style != GuestBatchStyle::LitMesh) {
         ready.texture = textures.resolve(batch.texture);
-        if (!ready.texture) {
+        const bool wantsCubemap = batch.style == GuestBatchStyle::Skybox;
+        if (!ready.texture || ready.texture->cubemap != wantsCubemap) {
           error = "Invalid guest texture authority";
           return false;
         }
       }
-      const std::size_t stride = batch.style == GuestBatchStyle::Shape    ? 16u
-                                 : batch.style == GuestBatchStyle::Sprite ? 24u
-                                                                          : 32u;
-      ready.vertices.reserve(batch.vertices.size() * stride);
-      for (const GuestVertex& vertex : batch.vertices) {
-        for (float value : vertex.position) {
-          appendFloat(ready.vertices, value);
+      if (batch.retained()) {
+        if (!prepareRetained(batch, ready)) {
+          return false;
         }
-        if (batch.style == GuestBatchStyle::Canvas) {
-          for (unsigned int component = 0; component < 3; ++component) {
-            appendFloat(
-              ready.vertices,
-              static_cast<float>((vertex.rgba >> (component * 8u)) & 255u) /
-                255.0f);
-          }
-        } else {
-          for (unsigned int component = 0; component < 4; ++component) {
-            ready.vertices.push_back(
-              static_cast<std::byte>(vertex.rgba >> (component * 8u)));
-          }
-        }
-        if (batch.style != GuestBatchStyle::Shape) {
-          for (float value : vertex.uv) {
-            appendFloat(ready.vertices, value);
-          }
-        }
+      } else {
+        prepareInline(batch, ready);
       }
     }
     // Validation/lease acquisition completes before mutating renderer state.
     std::uint64_t growth = 0;
     std::uint64_t replacementPeak = 0;
     for (std::size_t index = 0; index < proposed.batches.size(); ++index) {
+      if (proposed.batches[index].retained()) {
+        continue;
+      }
       const std::size_t vertices = prepared[index].vertices.size();
       const std::size_t indices =
         proposed.batches[index].indices.size() * sizeof(std::uint32_t);
@@ -210,6 +436,9 @@ struct WasmFrameRenderer::State
     meshes.resize(std::max(meshes.size(), proposed.batches.size()));
     changingResources = true;
     for (std::size_t index = 0; index < proposed.batches.size(); ++index) {
+      if (proposed.batches[index].retained()) {
+        continue;
+      }
       Mesh& mesh = meshes[index];
       const MeshVertexLayout requested = layout(proposed.batches[index].style);
       const std::size_t vertexBytes = prepared[index].vertices.size();
@@ -222,16 +451,16 @@ struct WasmFrameRenderer::State
           std::max(mesh.vertexCapacity, vertexBytes);
         const std::size_t indexCapacity =
           std::max(mesh.indexCapacity, indexBytes);
-        bool ready = true;
+        bool allocated = true;
         if (mesh.handle.isValid()) {
-          ready = renderer.replaceDynamicMesh(
+          allocated = renderer.replaceDynamicMesh(
             mesh.handle, vertexCapacity, nullptr, indexCapacity, requested);
         } else {
           mesh.handle = renderer.enrollDynamicMesh(
             vertexCapacity, nullptr, indexCapacity, requested);
-          ready = mesh.handle.isValid();
+          allocated = mesh.handle.isValid();
         }
-        if (!ready) {
+        if (!allocated) {
           error = "Guest frame mesh allocation failed";
           renderer.reportFrameError(error);
           frame.batches.clear();
@@ -256,6 +485,13 @@ struct WasmFrameRenderer::State
     return true;
   }
 
+  // The mesh a batch draws from: its retained mesh or its per-frame slot.
+  MeshHandle batchMesh(std::size_t index) const
+  {
+    return payloads[index].retained ? payloads[index].retained->upload->handle
+                                    : meshes[index].handle;
+  }
+
   void appendWrites(std::size_t beforeBatch)
   {
     while (nextWrite < frame.textureWrites.size() &&
@@ -272,6 +508,155 @@ struct WasmFrameRenderer::State
     }
   }
 
+  // Geometry uploads precede the first pass that draws it: the shared shadow
+  // pass runs before the world color pass. Uploaded once per RenderScene.
+  bool ensureUploads()
+  {
+    const Renderer::FrameContext& context = renderer.getFrameContext();
+    if (context.active && uploadedSerial == context.frameSerial) {
+      return true;
+    }
+    uploadedSerial = context.active ? context.frameSerial : 0;
+    for (std::size_t index = 0; index < frame.batches.size(); ++index) {
+      const GuestBatch& batch = frame.batches[index];
+      if (batch.retained()) {
+        continue;
+      }
+      if (!renderer.pushUpdateBuffer(
+            meshes[index].handle,
+            0,
+            static_cast<unsigned int>(payloads[index].vertices.size()),
+            payloads[index].vertices.data()) ||
+          !renderer.pushUpdateIndexBuffer(
+            meshes[index].handle,
+            0,
+            static_cast<unsigned int>(batch.indices.size() *
+                                      sizeof(std::uint32_t)),
+            batch.indices.data())) {
+        renderer.reportFrameError("Guest frame upload rejected");
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void collectShadowCasters(Renderer* target)
+  {
+    if (target != &renderer || lifetime.expired()) {
+      return;
+    }
+    for (const GuestShadowCaster& caster : frame.shadowCasters) {
+      Renderer::ShadowCasterDesc desc;
+      desc.boundsMin = caster.boundsMin;
+      desc.boundsMax = caster.boundsMax;
+      desc.lightDirection = caster.lightDirection;
+      desc.mapSize = static_cast<int>(caster.mapSize);
+      desc.minimumRadius = caster.minimumRadius;
+      desc.lightDistance = caster.lightDistance;
+      desc.casterDistance = caster.casterDistance;
+      renderer.registerShadowCaster(desc);
+    }
+  }
+
+  void appendShadowCommands(Renderer* target)
+  {
+    const Renderer::ShadowFrameContext& shadow =
+      renderer.getShadowFrameContext();
+    if (target != &renderer || lifetime.expired() || !shadow.active ||
+        !ensureUploads()) {
+      return;
+    }
+    glm::mat4 lightSpace(1.0f);
+    std::memcpy(glm::value_ptr(lightSpace),
+                shadow.lightSpaceMatrix.data(),
+                shadow.lightSpaceMatrix.size() * sizeof(float));
+    for (std::size_t index = 0; index < frame.batches.size(); ++index) {
+      const GuestBatch& batch = frame.batches[index];
+      if (batch.style != GuestBatchStyle::LitMesh ||
+          !batch.lighting.castsShadow ||
+          !renderer.isShadowCasterRelevant(payloads[index].worldBounds)) {
+        continue;
+      }
+      const glm::mat4 lightMvp = lightSpace * matrix(batch.lighting.model);
+      renderer.pushUniformMat4(WorldLook::kMvpUniform,
+                               glm::value_ptr(lightMvp));
+      renderer.pushSetMesh(batchMesh(index));
+      renderer.pushDrawIndexed(batch.drawCount(), batch.firstIndex);
+    }
+  }
+
+  // Mirrors MeshVisual's lit draw; the light space, shadow map and resolved
+  // light direction come from the host's shared shadow pass.
+  void appendLitMesh(const GuestBatch& batch, MeshHandle mesh)
+  {
+    const Renderer::ShadowFrameContext& shadow =
+      renderer.getShadowFrameContext();
+    const GuestLighting& lighting = batch.lighting;
+    const bool shadowed =
+      lighting.receivesShadow && shadow.active && shadow.depthTexture.isValid();
+    static const std::array<float, 16> identity{ 1, 0, 0, 0, 0, 1, 0, 0,
+                                                 0, 0, 1, 0, 0, 0, 0, 1 };
+    const std::array<float, 3>& direction =
+      shadowed ? shadow.lightDirection : lighting.lightDirection;
+    renderer.pushSetMesh(mesh);
+    renderer.pushUniformMat4(WorldLook::kMvpUniform, batch.mvp.data());
+    renderer.pushUniformMat4(WorldLook::kModelUniform, lighting.model.data());
+    renderer.pushUniformMat4(WorldLook::kLightSpaceMatrixUniform,
+                             shadowed ? shadow.lightSpaceMatrix.data()
+                                      : identity.data());
+    renderer.pushUniformVec3(
+      WorldLook::kLightDirUniform, direction[0], direction[1], direction[2]);
+    renderer.pushUniformVec3(WorldLook::kLightColorUniform,
+                             lighting.lightColor[0],
+                             lighting.lightColor[1],
+                             lighting.lightColor[2]);
+    renderer.pushUniformVec3(WorldLook::kAmbientColorUniform,
+                             lighting.ambientColor[0],
+                             lighting.ambientColor[1],
+                             lighting.ambientColor[2]);
+    renderer.pushUniformInt(WorldLook::kShadowsEnabledUniform,
+                            shadowed ? 1 : 0);
+    renderer.pushUniformFloat(WorldLook::kShadowBiasUniform,
+                              lighting.shadowBias);
+    renderer.pushUniformFloat(WorldLook::kShadowSlopeScaleUniform,
+                              lighting.shadowSlopeScale);
+    renderer.pushUniformFloat(WorldLook::kShadowNormalOffsetUniform,
+                              lighting.shadowNormalOffset);
+    renderer.pushUniformInt(WorldLook::kShadowPcfUniform,
+                            lighting.shadowPcf ? 1 : 0);
+    renderer.pushUniformMat4(WorldLook::kPrevMvpUniform, batch.mvp.data());
+    renderer.pushUniformInt(WorldLook::kMotionBlurEnabledUniform, 0);
+    renderer.pushUniformFloat(WorldLook::kMotionBlurAmountUniform, 0.0f);
+    renderer.pushUniformFloat(WorldLook::kMotionBlurMaxUniform, 0.0f);
+    renderer.pushUniformVec4(WorldLook::kTintUniform,
+                             lighting.tint[0],
+                             lighting.tint[1],
+                             lighting.tint[2],
+                             lighting.tint[3]);
+    if (shadowed) {
+      renderer.pushSetTexture(shadow.depthTexture,
+                              WorldLook::kShadowTextureUnit);
+      renderer.pushUniformInt(WorldLook::kShadowMapUniform,
+                              WorldLook::kShadowTextureUnit);
+    }
+    renderer.pushDrawIndexed(batch.drawCount(), batch.firstIndex);
+  }
+
+  // Mirrors SkyboxVisual: the rotation-only view projection comes from the
+  // guest; the cubemap is a host resource the guest acquired.
+  void appendSkybox(const GuestBatch& batch,
+                    const PreparedBatch& payload,
+                    MeshHandle mesh)
+  {
+    const std::array<float, 4>& tint = batch.lighting.tint;
+    renderer.pushSetTexture(payload.texture->handle, 0);
+    renderer.pushUniformInt("uSkybox", 0);
+    renderer.pushUniformVec4("uTint", tint[0], tint[1], tint[2], tint[3]);
+    renderer.pushUniformMat4("uViewProjection", batch.mvp.data());
+    renderer.pushSetMesh(mesh);
+    renderer.pushDrawIndexed(batch.drawCount(), batch.firstIndex);
+  }
+
   bool append(Renderer* target, GuestLayer layer)
   {
     if (target != &renderer || lifetime.expired()) {
@@ -280,6 +665,9 @@ struct WasmFrameRenderer::State
     if (layer == GuestLayer::World) {
       nextWrite = 0;
     }
+    if (!ensureUploads()) {
+      return true;
+    }
     for (std::size_t index = 0; index < frame.batches.size(); ++index) {
       const GuestBatch& batch = frame.batches[index];
       if (batch.layer != layer) {
@@ -287,25 +675,18 @@ struct WasmFrameRenderer::State
       }
       appendWrites(index);
       const PreparedBatch& payload = payloads[index];
-      const Mesh& mesh = meshes[index];
-      const RenderStyleId style =
-        batch.style == GuestBatchStyle::Shape    ? RenderStyleId::Shape
-        : batch.style == GuestBatchStyle::Sprite ? RenderStyleId::Sprite
-                                                 : RenderStyleId::Canvas;
-      if (!renderer.pushUpdateBuffer(
-            mesh.handle,
-            0,
-            static_cast<unsigned int>(payload.vertices.size()),
-            payload.vertices.data()) ||
-          !renderer.pushUpdateIndexBuffer(
-            mesh.handle,
-            0,
-            static_cast<unsigned int>(batch.indices.size() *
-                                      sizeof(std::uint32_t)),
-            batch.indices.data()) ||
-          !renderer.bindStyle(style)) {
-        renderer.reportFrameError("Guest frame upload or style rejected");
+      const MeshHandle mesh = batchMesh(index);
+      if (!bindBatchStyle(batch)) {
+        renderer.reportFrameError("Guest frame style rejected");
         return true;
+      }
+      if (batch.style == GuestBatchStyle::LitMesh) {
+        appendLitMesh(batch, mesh);
+        continue;
+      }
+      if (batch.style == GuestBatchStyle::Skybox) {
+        appendSkybox(batch, payload, mesh);
+        continue;
       }
       if (batch.clipped) {
         const std::array<int, 4> viewport = renderer.getCurrentPassViewport();
@@ -328,7 +709,7 @@ struct WasmFrameRenderer::State
         renderer.pushClipRect(
           viewport[0] + x0, viewport[1] + viewport[3] - y1, x1 - x0, y1 - y0);
       }
-      renderer.pushSetMesh(mesh.handle);
+      renderer.pushSetMesh(mesh);
       renderer.pushUniformVec2(
         WorldLook::kResolutionUniform, frame.width, frame.height);
       renderer.pushUniformMat4(WorldLook::kMvpUniform, batch.mvp.data());
@@ -336,7 +717,7 @@ struct WasmFrameRenderer::State
         renderer.pushUniformInt(WorldLook::kTextureUniform, 0);
         renderer.pushSetTexture(payload.texture->handle, 0);
       }
-      renderer.pushDrawIndexed(static_cast<unsigned int>(batch.indices.size()));
+      renderer.pushDrawIndexed(batch.drawCount(), batch.firstIndex);
       if (batch.clipped) {
         renderer.popClipRect();
       }
@@ -347,16 +728,71 @@ struct WasmFrameRenderer::State
     return true;
   }
 
+  // Validates the complete mesh and enrolls it as a static GPU mesh. Staging
+  // memory is released either way.
+  bool finalizeMesh(const RetainedMesh& mesh)
+  {
+    RetainedMesh::Upload& upload = *mesh.upload;
+    const std::uint32_t stride =
+      GuestMeshRequest::stride(static_cast<std::uint32_t>(mesh.style));
+    const std::uint32_t vertexCount = mesh.vertexBytes / stride;
+    upload.indexCount = mesh.indexBytes / 4u;
+    bool valid = vertexCount > 0 && upload.indexCount > 0;
+    for (std::uint32_t vertex = 0; valid && vertex < vertexCount; ++vertex) {
+      std::array<float, 3> position{};
+      std::memcpy(position.data(),
+                  upload.vertices.data() +
+                    static_cast<std::size_t>(vertex) * stride,
+                  sizeof(position));
+      for (float value : position) {
+        valid = valid && std::isfinite(value);
+      }
+      const glm::vec3 point(position[0], position[1], position[2]);
+      if (vertex == 0) {
+        upload.bounds.minimum = point;
+        upload.bounds.maximum = point;
+      } else {
+        upload.bounds.include(point);
+      }
+    }
+    for (std::uint32_t index = 0; valid && index < upload.indexCount; ++index) {
+      std::uint32_t value = 0;
+      std::memcpy(&value,
+                  upload.indices.data() + static_cast<std::size_t>(index) * 4,
+                  sizeof(value));
+      valid = value < vertexCount;
+    }
+    if (valid) {
+      upload.handle = renderer.enrollMesh(upload.vertices.data(),
+                                          upload.vertices.size(),
+                                          upload.indices.data(),
+                                          upload.indices.size(),
+                                          layout(mesh.style),
+                                          false);
+      valid = upload.handle.isValid();
+    }
+    upload.vertices.clear();
+    upload.vertices.shrink_to_fit();
+    upload.indices.clear();
+    upload.indices.shrink_to_fit();
+    upload.ready = valid;
+    upload.failed = !valid;
+    return valid;
+  }
+
   Renderer& renderer;
   std::weak_ptr<const void> lifetime;
   GuestFrameLimits limits;
   std::shared_ptr<Budget> budget = std::make_shared<Budget>();
   WasmResourceTable<Texture, GuestResourceKind::Texture> textures;
+  WasmResourceTable<RetainedMesh, GuestResourceKind::Mesh> retainedMeshes;
   std::vector<Mesh> meshes;
   GuestFrame frame;
   std::vector<PreparedBatch> payloads;
   std::vector<std::shared_ptr<const Texture>> uploadTextures;
   std::size_t nextWrite = 0;
+  std::uint64_t uploadedSerial = 0;
+  std::map<std::uint32_t, RenderStyleHandle> derivedStyles;
   std::string error;
   bool retired = false;
   bool changingResources = false;
@@ -414,6 +850,103 @@ try {
   return {};
 }
 
+GuestResourceId
+WasmFrameRenderer::createCubemap(std::span<const std::byte> faces,
+                                 std::uint32_t size)
+try {
+  State& state = *m_state;
+  const std::uint64_t bytes = GuestCubemapRequest::bytesFor(size);
+  if (state.retired || state.lifetime.expired() || size == 0 || size > 2048 ||
+      faces.size() != bytes ||
+      bytes > State::Budget::Maximum - state.budget->bytes ||
+      !state.textures.hasCapacity()) {
+    state.error = "Invalid or over-budget guest cubemap";
+    return {};
+  }
+  std::shared_ptr<State::Texture> cubemap =
+    std::make_shared<State::Texture>(state.renderer, state.budget, bytes);
+  cubemap->width = size;
+  cubemap->height = size;
+  cubemap->channels = 4;
+  cubemap->cubemap = true;
+  const std::size_t face = static_cast<std::size_t>(bytes / 6u);
+  std::array<const unsigned char*, 6> pointers{};
+  for (std::size_t index = 0; index < pointers.size(); ++index) {
+    pointers[index] =
+      reinterpret_cast<const unsigned char*>(faces.data() + index * face);
+  }
+  cubemap->handle = state.renderer.enrollCubemap(
+    pointers, static_cast<int>(size), static_cast<int>(size), 4);
+  if (!cubemap->handle.isValid()) {
+    state.error = "Guest cubemap allocation failed";
+    return {};
+  }
+  return state.textures.insert(std::move(cubemap));
+} catch (const std::exception& exception) {
+  m_state->error = exception.what();
+  return {};
+}
+
+GuestResourceId
+WasmFrameRenderer::createMesh(const GuestMeshRequest& request)
+try {
+  State& state = *m_state;
+  const std::uint64_t bytes =
+    static_cast<std::uint64_t>(request.vertexBytes) + request.indexBytes;
+  if (state.retired || state.lifetime.expired() ||
+      bytes > State::Budget::Maximum - state.budget->bytes ||
+      !state.retainedMeshes.hasCapacity()) {
+    state.error = "Invalid or over-budget retained guest mesh";
+    return {};
+  }
+  std::shared_ptr<State::RetainedMesh> mesh =
+    std::make_shared<State::RetainedMesh>(
+      state.renderer, state.budget, request);
+  mesh->upload->vertices.resize(request.vertexBytes);
+  mesh->upload->indices.resize(request.indexBytes);
+  return state.retainedMeshes.insert(std::move(mesh));
+} catch (const std::exception& exception) {
+  m_state->error = exception.what();
+  return {};
+}
+
+bool
+WasmFrameRenderer::writeMesh(const GuestMeshWrite& write)
+try {
+  State& state = *m_state;
+  const std::shared_ptr<const State::RetainedMesh> mesh =
+    state.retainedMeshes.resolve(write.mesh);
+  if (!mesh || mesh->upload->ready || mesh->upload->failed) {
+    return false;
+  }
+  State::RetainedMesh::Upload& upload = *mesh->upload;
+  std::vector<std::byte>& target =
+    write.indices ? upload.indices : upload.vertices;
+  std::uint32_t& written =
+    write.indices ? upload.indexWritten : upload.vertexWritten;
+  // Bytes arrive strictly in order, so completion is a simple count.
+  if (write.offset != written || write.bytes.size() > target.size() - written) {
+    upload.failed = true;
+    return false;
+  }
+  std::memcpy(target.data() + written, write.bytes.data(), write.bytes.size());
+  written += static_cast<std::uint32_t>(write.bytes.size());
+  if (upload.vertexWritten == mesh->vertexBytes &&
+      upload.indexWritten == mesh->indexBytes) {
+    return state.finalizeMesh(*mesh);
+  }
+  return true;
+} catch (const std::exception& exception) {
+  m_state->error = exception.what();
+  return false;
+}
+
+bool
+WasmFrameRenderer::releaseMesh(const GuestResourceId& id)
+{
+  return m_state->retainedMeshes.release(id);
+}
+
 bool
 WasmFrameRenderer::releaseTexture(const GuestResourceId& id)
 {
@@ -438,6 +971,11 @@ try {
 void
 WasmFrameRenderer::dispatch(Scene& scene)
 {
+  // Shadow fitting and world-camera consumers follow the guest's camera.
+  if (m_state->frame.hasCamera && !m_state->retired &&
+      !m_state->lifetime.expired()) {
+    m_state->renderer.setNextWorldViewProjection(m_state->frame.camera);
+  }
   scene.AddDrawable(&m_state->world, RenderLayerId::World);
   scene.AddDrawable(&m_state->ui, RenderLayerId::UI);
 }
@@ -446,6 +984,7 @@ WasmFrameRenderer::retire()
 {
   m_state->retired = true;
   m_state->textures.retire();
+  m_state->retainedMeshes.retire();
 }
 const std::string&
 WasmFrameRenderer::error() const

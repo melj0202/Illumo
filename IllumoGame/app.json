@@ -1,0 +1,1 @@
+{"id":"csim","title":"CSim","module":"IllumoGame.wasm","memoryMiB":1024,"fuelPerCall":20000000000,"deadlineMilliseconds":10000}

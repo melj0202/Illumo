@@ -84,6 +84,8 @@ private:
   float m_itemHeight;
   float m_itemWidth;
   float m_revealElapsed = 0.0f;
+  // Platform completions hold a weak reference and are dropped after Exit.
+  std::shared_ptr<bool> m_lifetime = std::make_shared<bool>(true);
   float entranceReveal() const;
   bool reducedMotion() const;
 };

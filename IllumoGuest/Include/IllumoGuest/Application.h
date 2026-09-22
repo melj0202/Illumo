@@ -25,6 +25,8 @@ public:
   virtual bool close() = 0;
   virtual void shutdown() = 0;
   virtual std::vector<std::byte> extensionRequest() { return {}; }
+  // Reported after each update; the host starts its close sequence.
+  virtual bool closeRequested() { return false; }
   GuestServiceQueue& services() { return m_services; }
   virtual std::vector<std::byte> receive(std::span<const std::byte> message)
   {

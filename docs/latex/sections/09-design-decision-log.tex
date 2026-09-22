@@ -2235,6 +2235,71 @@ into test-only sources. No persistence format changes accompany these correction
 Renderer-bound primitives reject foreign lifetimes; rejected tokens or truncated
 geometry prevent frame presentation. See the report remediation plan for tests.
 
+\subsection*{D-E13 --- IllumoGame ships only as a WASM package}
+\begin{decisionbox}[title={D-E13 \quad 2026-09-22}]
+\textbf{Decision:} The complete IllumoGame product executes inside
+\texttt{IllumoGame.wasm}, hosted by the generic \texttt{IllumoRuntime.exe}
+(Windows x64, pinned Wasmtime 48.0.2). No native game executable is built.
+Inside the store, \symbolref{GuestModuleApplication} composes a guest-local
+\symbolref{IllumoContext} (window snapshot, input, storage-backed settings,
+camera, recording renderer, scene, console bridge, module host) so the
+existing modules, menus and workshop run unchanged. Product I/O goes through
+the product-owned \symbolref{CSimPlatform} seam; the simulation runner is
+serial in the guest. Frame schema version 2 adds the world camera, line and
+depth-tested batches, lit meshes and shadow casters so the 3D diagnostic
+renders through the host's shared shadow pass.\\
+\textbf{Why:} The design goal is a generic host that plays isolated game
+packages; keeping a native IllumoGame alongside the package made the host a
+second copy of the product.\\
+\textbf{Consequences:} \texttt{IllumoGameCore} remains only as the native test
+oracle for the shared sources. The default Windows build requires the pinned
+WASM toolchain; other hosts build no playable game until a Linux runtime pin
+exists. Host console built-ins address runtime settings, while game commands
+are trampolined into the package. Generations run inside the control call
+until a worker-store offload with asynchronous drains lands. The earlier
+rejection of compiling \texttt{CellGameModule} into the reactor is superseded
+because every context member is now a guest object.\\
+\textbf{Supersedes:} D-E7 (IllumoGame application seam)
+\end{decisionbox}
+
+\subsection*{D-E14 --- Every client program is a WASM package}
+\begin{decisionbox}[title={D-E14 \quad 2026-09-22}]
+\textbf{Decision:} Every interactive Illumo client program runs as a WASM
+package inside the one generic \texttt{IllumoRuntime.exe}. Packages live in
+\texttt{apps/<name>/} beside the runtime with an \texttt{app.json} manifest
+(\texttt{id}, \texttt{module}, optional \texttt{worker}, \texttt{title},
+\texttt{launchAccess} \texttt{read} or \texttt{edit}, requested budgets
+clamped to host ceilings) and private storage in \texttt{storage/<id>/}. The
+installed apps are \texttt{game} (\texttt{IllumoGame.wasm}), \texttt{illed}
+(\texttt{IllEd.wasm}) and \texttt{meshviewer} (\texttt{IllMeshViewer.wasm});
+the former \texttt{game/} directory and \texttt{game.json} are replaced.
+\texttt{--app} selects a package, \texttt{--open} grants one launch document
+whose base name alone reaches the guest (writable when the manifest says
+\texttt{edit}), and \texttt{--capture} renders to a chosen frame, writes a new
+PNG from the presented backbuffer and prints one JSON result, folding the
+standalone \texttt{IllumoCapture} executable into the runtime. Frame schema
+version 3 adds retained host meshes (\texttt{CreateMesh},
+\texttt{WriteMesh}, \texttt{ReleaseMesh}), cubemaps with \texttt{Skybox}
+batches, and a per-batch blend flag. IllEd and IllMeshViewer reach files and
+dialogs through the product-owned \texttt{IllEdPlatform} and
+\texttt{MeshViewerPlatform} seams.\\
+\textbf{Why:} D-E13 proved the generic host with the game; keeping native
+editor, viewer and capture executables beside it left three programs outside
+the sandbox and a second capture path that did not render real applications.\\
+\textbf{Consequences:} \texttt{IllEd.exe}, \texttt{IllMeshViewer.exe} and
+\texttt{IllumoCapture.exe} are no longer built; \texttt{IllEdCore} and
+\texttt{IllMeshViewerCore} remain as native test oracles with
+\texttt{IllEdTests} and \texttt{IllMeshViewerTests}. The engine
+\symbolref{FrameCapture} API and the explicit \texttt{IllumoCaptureGpuTests}
+target remain; \texttt{tools/verify\_capture.py} drives
+\texttt{IllumoRuntime --capture}. IllEd save, open and close confirmation
+become asynchronous over opaque locations; \texttt{.ilsc} is unchanged.
+Motion blur and MSAA stay host policy. Linux, lacking a runtime pin, has no
+runnable applications and builds only the engine libraries and native test
+suites.\\
+\textbf{Extends:} D-E13 (IllumoGame WASM package)
+\end{decisionbox}
+
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

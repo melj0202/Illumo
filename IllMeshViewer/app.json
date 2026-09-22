@@ -1,0 +1,1 @@
+{"id":"meshviewer","title":"Illumo Mesh Viewer","module":"IllMeshViewer.wasm","launchAccess":"read","memoryMiB":1024,"fuelPerCall":20000000000,"deadlineMilliseconds":10000}

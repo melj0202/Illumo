@@ -345,10 +345,15 @@ producer callback. No application host, input, simulation, audio or persistent
 configuration starts. The producer owns its content through normal token
 submission and destroys renderer-bound objects before returning. The renderer
 reads top-down RGBA8 pixels before swap and tears down before the context.
-\texttt{IllumoCapture} supplies equivalent direct and retained-graph fixtures,
-explicit camera/state, optional OBJ input, PNG output and JSON diagnostics.
 Strict capture rejects immediate fallback, invalid resources and queue overflow.
 Existing applications retain normal scheduling and visible-window defaults.
+The former \texttt{IllumoCapture} fixture CLI is removed (D-E14). Command-line
+capture is now \texttt{IllumoRuntime --capture}: a running WASM application
+renders to \texttt{--capture-frame} (default 60), a
+\texttt{Renderer::setBeforePresent} hook reads back the presented backbuffer,
+\texttt{FrameCapture::savePng} publishes a new PNG, and one JSON result line
+reports success, size and error. \texttt{FrameCapture} itself remains the
+engine API, checked on a real GPU by \texttt{IllumoCaptureGpuTests}.
 See \texttt{docs/frame-capture.md} for inputs, publication and limitations.
 
 Current 3D facilities include CPU OBJ import, directional lighting,

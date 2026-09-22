@@ -46,6 +46,36 @@ testMeshLoaderBasicMemory()
 }
 
 static void
+testMeshLoaderGeneratesMissingNormals()
+{
+  testSection("MeshLoader: OBJ without normals gets generated normals");
+
+  // A triangle in the XZ plane: its generated normal is along Y, never the
+  // +Z default a vertex has before any normal is known.
+  const std::string objContent = "v 0.0 0.0 0.0\n"
+                                 "v 0.0 0.0 1.0\n"
+                                 "v 1.0 0.0 0.0\n"
+                                 "f 1 2 3\n";
+  MeshLoadOptions options;
+  options.generateNormalsIfMissing = true;
+  const MeshLoadResult generated =
+    MeshLoader::loadFromMemory(objContent, options);
+  testTrue(g, generated.success, "Normal-less triangle loaded");
+  bool alongY = generated.mesh.vertices.size() == 3;
+  for (const MeshVertex& vertex : generated.mesh.vertices) {
+    alongY = alongY && std::abs(std::abs(vertex.normal.y) - 1.0f) < 0.001f;
+  }
+  testTrue(g, alongY, "Generated normals follow the face, not +Z");
+
+  options.generateNormalsIfMissing = false;
+  const MeshLoadResult kept = MeshLoader::loadFromMemory(objContent, options);
+  testTrue(g,
+           kept.success &&
+             std::abs(kept.mesh.vertices[0].normal.z - 1.0f) < 0.001f,
+           "Without generation, missing normals keep the +Z default");
+}
+
+static void
 testMeshLoaderQuadTriangulation()
 {
   testSection("MeshLoader: quad triangulation and options");
@@ -271,6 +301,9 @@ registerMeshLoaderTests(IllumoTestRegistry& registry)
                []() { return runMeshLoaderCase(testMeshLoaderBasicMemory); });
   registry.add("Illumo.MeshLoader.QuadTriangulation", []() {
     return runMeshLoaderCase(testMeshLoaderQuadTriangulation);
+  });
+  registry.add("Illumo.MeshLoader.GeneratesMissingNormals", []() {
+    return runMeshLoaderCase(testMeshLoaderGeneratesMissingNormals);
   });
   registry.add("Illumo.MeshLoader.MeshDataUtilities",
                []() { return runMeshLoaderCase(testMeshDataUtilities); });

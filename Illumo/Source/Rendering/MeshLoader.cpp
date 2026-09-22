@@ -4,10 +4,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#if !defined(ILLUMO_SERIAL_GUEST)
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <mutex>
+#endif
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -208,6 +210,13 @@ public:
     outResult->warning.clear();
     outResult->mesh.clear();
 
+#if defined(ILLUMO_SERIAL_GUEST)
+    // Guests have no file system; they read bytes and use loadFromMemory.
+    (void)options;
+    outResult->error =
+      "Mesh files cannot be opened by path in a guest: " + filePath;
+    return false;
+#else
     tinyobj::ObjReaderConfig readerConfig;
     readerConfig.triangulate = options.triangulate;
     if (!options.materialSearchPath.empty()) {
@@ -226,6 +235,7 @@ public:
 
     outResult->warning = reader.Warning();
     return convertToMeshData(reader, options, outResult);
+#endif
   }
 
   bool loadFromMemory(const std::string& fileContent,
@@ -358,6 +368,10 @@ private:
               vertex.normal.x = attrib.normals[offset + 0u];
               vertex.normal.y = attrib.normals[offset + 1u];
               vertex.normal.z = attrib.normals[offset + 2u];
+            } else {
+              // No source normal: leave it zero so generateNormalsIfMissing
+              // recognizes it, instead of MeshVertex's +Z default.
+              vertex.normal = glm::vec3(0.0f);
             }
 
             if (idx.texcoord_index >= 0 && !attrib.texcoords.empty()) {
@@ -389,6 +403,12 @@ private:
 
     if (options.generateNormalsIfMissing) {
       mesh.computeNormalsIfMissing();
+    } else {
+      for (MeshVertex& vertex : mesh.vertices) {
+        if (glm::dot(vertex.normal, vertex.normal) < 0.0001f) {
+          vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+        }
+      }
     }
 
     if (options.centerAndNormalize) {
@@ -400,7 +420,36 @@ private:
   }
 };
 
-static std::mutex g_backendMutex;
+#if defined(ILLUMO_SERIAL_GUEST)
+// Serial guests have one thread; the backend slot needs no lock.
+struct BackendMutex
+{
+  void lock() {}
+  void unlock() {}
+};
+#else
+using BackendMutex = std::mutex;
+#endif
+
+class BackendLock
+{
+public:
+  explicit BackendLock(BackendMutex& mutex)
+    : m_mutex(mutex)
+  {
+    m_mutex.lock();
+  }
+  ~BackendLock() { m_mutex.unlock(); }
+  BackendLock(const BackendLock&) = delete;
+  BackendLock& operator=(const BackendLock&) = delete;
+  BackendLock(BackendLock&&) = delete;
+  BackendLock& operator=(BackendLock&&) = delete;
+
+private:
+  BackendMutex& m_mutex;
+};
+
+static BackendMutex g_backendMutex;
 static std::shared_ptr<IMeshLoaderBackend> g_customBackend;
 
 } // namespace
@@ -408,7 +457,7 @@ static std::shared_ptr<IMeshLoaderBackend> g_customBackend;
 std::shared_ptr<IMeshLoaderBackend>
 MeshLoader::getActiveBackend()
 {
-  std::lock_guard<std::mutex> lock(g_backendMutex);
+  BackendLock lock(g_backendMutex);
   if (g_customBackend != nullptr) {
     return g_customBackend;
   }
@@ -449,13 +498,13 @@ MeshLoader::loadFromMemory(const std::string& fileContent,
 void
 MeshLoader::setCustomBackend(std::shared_ptr<IMeshLoaderBackend> backend)
 {
-  std::lock_guard<std::mutex> lock(g_backendMutex);
+  BackendLock lock(g_backendMutex);
   g_customBackend = backend;
 }
 
 void
 MeshLoader::resetBackend()
 {
-  std::lock_guard<std::mutex> lock(g_backendMutex);
+  BackendLock lock(g_backendMutex);
   g_customBackend.reset();
 }

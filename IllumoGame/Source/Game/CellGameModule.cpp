@@ -1,16 +1,15 @@
 #include "CellGameModule.h"
 #include "BuiltinPatterns.h"
+#include "CSimPlatform.h"
 #include "CanvasCoordinatePolicy.h"
 #include "IllumoCodec.h"
 #include "MainMenuModule.h"
 #include "PatternCodec.h"
-#include "RuleCatalogLoader.h"
+#include "RuleCatalogOverlay.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
-#include <Illumo/Platform/Clipboard.h>
-#include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -231,6 +230,7 @@ CellGameModule::CellGameModule(std::string initialSavePath)
   , inspectHeld(false)
   , deleteHeld(false)
   , initialSaveFile(std::move(initialSavePath))
+  , m_lifetime(std::make_shared<bool>(true))
 {
   ic = nullptr;
 }
@@ -1018,10 +1018,7 @@ CellGameModule::registerConsoleCommands()
         ic->commandLine->logError("Usage: save <filename>");
         return;
       }
-      const std::string filename = IllumoCodec::withCSimExtension(args[0]);
-      if (SaveCellGame(filename)) {
-        ic->commandLine->logSuccess("Saved canvas to " + filename);
-      }
+      saveCellGameTo(IllumoCodec::withCSimExtension(args[0]), true);
     },
     "save <filename>",
     "Save the current canvas; .csim is added when omitted");
@@ -1033,19 +1030,11 @@ CellGameModule::registerConsoleCommands()
         ic->commandLine->logError("Usage: load <filename>");
         return;
       }
-      std::string filename = args[0];
-      std::ifstream exactFile(filename, std::ios::binary);
-      if (!exactFile.is_open()) {
-        filename = IllumoCodec::withCSimExtension(filename);
-        std::ifstream csimFile(filename, std::ios::binary);
-        if (!csimFile.is_open()) {
-          filename = args[0] + ".illumo";
-        }
-      }
-      exactFile.close();
-      if (LoadCellGame(filename)) {
-        ic->commandLine->logSuccess("Loaded canvas from " + filename);
-      }
+      // Exact name first, then the current and legacy extensions.
+      loadCellGameFrom({ args[0],
+                         IllumoCodec::withCSimExtension(args[0]),
+                         args[0] + ".illumo" },
+                       true);
     },
     "load <filename>",
     "Load a canvas and activate its saved ruleset");
@@ -1060,15 +1049,18 @@ CellGameModule::registerConsoleCommands()
       const SaveLoadDialogSpec dialogSpec{ "CSim Simulation",
                                            "MyCanvas.csim",
                                            "*.CSIM" };
-      const std::string selectedPath = SaveLoad::GetSaveLocation(dialogSpec);
-      if (selectedPath.empty()) {
-        ic->commandLine->logWarning("Save cancelled");
-        return;
-      }
-      const std::string filename = IllumoCodec::withCSimExtension(selectedPath);
-      if (SaveCellGame(filename)) {
-        ic->commandLine->logSuccess("Saved canvas to " + filename);
-      }
+      const std::weak_ptr<bool> alive = m_lifetime;
+      CSimPlatform::current().chooseSaveLocation(
+        dialogSpec, [this, alive](const std::string& location) {
+          if (alive.expired()) {
+            return;
+          }
+          if (location.empty()) {
+            ic->commandLine->logWarning("Save cancelled");
+            return;
+          }
+          saveCellGameTo(location, true);
+        });
     },
     "save_dialog",
     "Open the native save-file picker");
@@ -1083,14 +1075,18 @@ CellGameModule::registerConsoleCommands()
       const SaveLoadDialogSpec dialogSpec{ "CSim Simulation",
                                            "myCanvas.csim",
                                            "*.CSIM;*.ILLUMO" };
-      const std::string filename = SaveLoad::GetLoadLocation(dialogSpec);
-      if (filename.empty()) {
-        ic->commandLine->logWarning("Load cancelled");
-        return;
-      }
-      if (LoadCellGame(filename)) {
-        ic->commandLine->logSuccess("Loaded canvas from " + filename);
-      }
+      const std::weak_ptr<bool> alive = m_lifetime;
+      CSimPlatform::current().chooseLoadLocation(
+        dialogSpec, [this, alive](const std::string& location) {
+          if (alive.expired()) {
+            return;
+          }
+          if (location.empty()) {
+            ic->commandLine->logWarning("Load cancelled");
+            return;
+          }
+          loadCellGameFrom({ location }, true);
+        });
     },
     "load_dialog",
     "Open the native load-file picker");
@@ -1174,7 +1170,10 @@ CellGameModule::registerConsoleCommands()
       CanvasView* canvas = cellContext->getCanvasView();
       prepareGridMutation();
       canvas->syncVisibleRegion();
-      std::mt19937 generator(std::random_device{}());
+      // Seeded from the monotonic clock: the WASM host grants bounded clocks
+      // but no entropy import, and a sandbox randomizer needs no secrecy.
+      std::mt19937 generator(static_cast<std::uint32_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count()));
       std::uniform_real_distribution<double> distribution(0.0, 100.0);
       const RuleSet* rules = cellContext->getRuleSet();
       unsigned char occupiedState = 0u;
@@ -1884,137 +1883,26 @@ CellGameModule::Update(double dt)
       const SaveLoadDialogSpec specification{ "CSim Rules Catalog",
                                               "rulesets.json",
                                               "*.JSON" };
-      const std::string filename = SaveLoad::GetLoadLocation(specification);
-      if (!filename.empty()) {
-        RuleSetRegistry imported;
-        if (!RuleCatalogLoader::loadFromFile(imported, filename) ||
-            imported.getDefinitions().empty() ||
-            imported.getFamilyDefinitions().empty()) {
-          rulesetWorkshopMenu->setError("The selected catalog is invalid.");
-        } else {
-          std::vector<RuleFamilyDefinition> families =
-            imported.getFamilyDefinitions();
-          const std::vector<RuleSetDefinition> definitions =
-            imported.getDefinitions();
-          const RuleSet* currentActiveRule = cellContext->getRuleSet();
-          RuleSetRegistry staged = RuleSetRegistry::instance();
-          bool valid = true;
-          for (RuleFamilyDefinition& familyDefinition : families) {
-            const RuleFamilyDefinition* existing =
-              staged.getFamilyDefinition(familyDefinition.id);
-            if (existing != nullptr && existing->builtIn) {
-              const bool identical =
-                existing->name == familyDefinition.name &&
-                existing->kind == familyDefinition.kind &&
-                existing->stateCount == familyDefinition.stateCount &&
-                existing->stateNames == familyDefinition.stateNames &&
-                existing->stateColors == familyDefinition.stateColors;
-              if (!identical) {
-                valid = false;
-                break;
-              }
-              familyDefinition.builtIn = true;
-            }
-            if (!staged.registerFamily(familyDefinition)) {
-              valid = false;
-              break;
-            }
+      const std::weak_ptr<bool> alive = m_lifetime;
+      CSimPlatform::current().chooseLoadLocation(
+        specification, [this, alive](const std::string& location) {
+          if (!alive.expired() && !location.empty()) {
+            importRuleCatalog(location);
           }
-          for (const RuleSetDefinition& definition : definitions) {
-            const RuleSetDefinition* existing =
-              staged.getRuleSetDefinition(definition.id);
-            if (valid && existing != nullptr && existing->builtIn) {
-              valid = false;
-            }
-            if (valid && !staged.registerRule(definition)) {
-              valid = false;
-              break;
-            }
-          }
-          bool reducesActiveRuleStateRange = false;
-          if (valid && currentActiveRule != nullptr) {
-            const RuleFamilyDefinition* stagedActiveFamily =
-              staged.getFamilyDefinition(cellContext->getFamilyString());
-            if (stagedActiveFamily != nullptr &&
-                stagedActiveFamily->stateCount <
-                  currentActiveRule->getStateCount()) {
-              reducesActiveRuleStateRange = true;
-            }
-          }
-          std::error_code errorCode;
-          const std::filesystem::path workingDirectory =
-            std::filesystem::current_path(errorCode);
-          std::string error;
-          std::vector<RuleFamilyDefinition> userFamilies;
-          for (const RuleFamilyDefinition& familyDefinition : families) {
-            if (!familyDefinition.builtIn) {
-              userFamilies.push_back(familyDefinition);
-            }
-          }
-          if (!valid || reducesActiveRuleStateRange || errorCode ||
-              (!userFamilies.empty() &&
-               !RuleCatalogLoader::saveUserFamilies(
-                 workingDirectory, userFamilies, &error)) ||
-              !RuleCatalogLoader::saveUserRules(
-                workingDirectory, definitions, &error)) {
-            if (reducesActiveRuleStateRange) {
-              rulesetWorkshopMenu->setError(
-                "The import would invalidate states of the active ruleset.");
-            } else {
-              rulesetWorkshopMenu->setError(
-                error.empty() ? "The selected catalog could not be imported."
-                              : error);
-            }
-          } else {
-            RuleSetRegistry::instance() = std::move(staged);
-            const RuleSetDefinition* selected =
-              RuleSetRegistry::instance().getRuleSetDefinition(
-                definitions.front().id);
-            const RuleFamilyDefinition* selectedFamily =
-              selected == nullptr
-                ? nullptr
-                : RuleSetRegistry::instance().getFamilyDefinition(
-                    selected->familyId);
-            if (selected != nullptr && selectedFamily != nullptr) {
-              rulesetWorkshopMenu->setDraft(*selectedFamily, *selected);
-            }
-          }
-        }
-      }
+        });
     } else if (action == RulesetWorkshopAction::Export) {
       const SaveLoadDialogSpec specification{
         "CSim Rule Definition",
         rulesetWorkshopMenu->getDraft().id + ".json",
         "*.JSON"
       };
-      const std::string filename = SaveLoad::GetSaveLocation(specification);
-      if (!filename.empty()) {
-        RuleFamilyDefinition familyDraft =
-          rulesetWorkshopMenu->getFamilyDraft();
-        RuleSetDefinition ruleDraft = rulesetWorkshopMenu->getDraft();
-        bool canExport = true;
-        if (rulesetWorkshopMenu->isFamilyDraftChanged() &&
-            familyDraft.builtIn) {
-          const std::string customFamilyId =
-            uniqueCustomFamilyId(familyDraft.id);
-          if (customFamilyId.empty()) {
-            rulesetWorkshopMenu->setError(
-              "Unable to allocate an ID for the copied family.");
-            canExport = false;
-          } else {
-            familyDraft.id = customFamilyId;
-            familyDraft.name = "Custom " + familyDraft.name;
-            familyDraft.builtIn = false;
-            ruleDraft.familyId = customFamilyId;
+      const std::weak_ptr<bool> alive = m_lifetime;
+      CSimPlatform::current().chooseSaveLocation(
+        specification, [this, alive](const std::string& location) {
+          if (!alive.expired() && !location.empty()) {
+            exportRuleCatalog(location);
           }
-        }
-        std::string error;
-        if (canExport && !RuleCatalogLoader::saveCatalog(
-                           filename, familyDraft, ruleDraft, &error)) {
-          rulesetWorkshopMenu->setError(
-            error.empty() ? "The rule could not be exported." : error);
-        }
-      }
+        });
     } else if (action == RulesetWorkshopAction::Apply) {
       // The published grid can advance while the workshop is open. Drain
       // first so validation sees the latest generation and the runner no
@@ -2051,40 +1939,53 @@ CellGameModule::Update(double dt)
       } else {
         const RuleSetDefinition* compiled =
           staged.getRuleSetDefinition(draft.id);
-        std::error_code errorCode;
-        const std::filesystem::path workingDirectory =
-          std::filesystem::current_path(errorCode);
-        std::string error;
         const RuleFamilyDefinition* compiledFamily =
           staged.getFamilyDefinition(familyDraft.id);
-        if (compiled == nullptr || compiledFamily == nullptr || errorCode ||
-            (!compiledFamily->builtIn &&
-             !RuleCatalogLoader::saveUserFamily(
-               workingDirectory, *compiledFamily, &error)) ||
-            !RuleCatalogLoader::saveUserRule(
-              workingDirectory, *compiled, &error)) {
-          rulesetWorkshopMenu->setError(
-            error.empty() ? "The user catalog could not be saved." : error);
+        if (compiled == nullptr || compiledFamily == nullptr) {
+          rulesetWorkshopMenu->setError("The user catalog could not be saved.");
         } else {
-          RuleSetRegistry::instance() = std::move(staged);
-          const bool activePairUnchanged =
-            cellContext->getFamilyString() == draft.familyId &&
-            cellContext->getRuleSetString() == draft.id;
-          const bool activated =
-            activePairUnchanged
-              ? cellContext->refreshRuleSet()
-              : cellContext->setRuleSet(draft.familyId, draft.id);
-          if (activated) {
-            cellContext->getCanvasView()->rebuildPalette(
-              cellContext->getRuleSet());
-            m_paintBrush = 0u;
-            updateVisualTargets();
-            rulesetWorkshopMenu->close();
-          } else {
-            rulesetWorkshopMenu->setError(
-              "The saved rule could not be "
-              "activated; the world was preserved.");
+          std::vector<RuleFamilyDefinition> userFamilies;
+          if (!compiledFamily->builtIn) {
+            userFamilies.push_back(*compiledFamily);
           }
+          const std::weak_ptr<bool> alive = m_lifetime;
+          CSimPlatform::current().saveUserCatalog(
+            std::move(userFamilies),
+            { *compiled },
+            [this, alive, staged, draft](bool saved,
+                                         const std::string& error) mutable {
+              if (alive.expired() || rulesetWorkshopMenu == nullptr) {
+                return;
+              }
+              if (!saved) {
+                rulesetWorkshopMenu->setError(
+                  error.empty() ? "The user catalog could not be saved."
+                                : error);
+                return;
+              }
+              // The overlay write may complete on a later update; the world
+              // must not be mid-generation when the rule object is replaced.
+              prepareGridMutation();
+              RuleSetRegistry::instance() = std::move(staged);
+              const bool activePairUnchanged =
+                cellContext->getFamilyString() == draft.familyId &&
+                cellContext->getRuleSetString() == draft.id;
+              const bool activated =
+                activePairUnchanged
+                  ? cellContext->refreshRuleSet()
+                  : cellContext->setRuleSet(draft.familyId, draft.id);
+              if (activated) {
+                cellContext->getCanvasView()->rebuildPalette(
+                  cellContext->getRuleSet());
+                m_paintBrush = 0u;
+                updateVisualTargets();
+                rulesetWorkshopMenu->close();
+              } else {
+                rulesetWorkshopMenu->setError(
+                  "The saved rule could not be "
+                  "activated; the world was preserved.");
+              }
+            });
         }
       }
     }
@@ -2221,6 +2122,8 @@ CellGameModule::Update(double dt)
 void
 CellGameModule::Exit()
 {
+  // Late platform completions must not touch a module that has exited.
+  m_lifetime.reset();
   if (inputContextId >= 0 && ic != nullptr && ic->inputManager != nullptr) {
     ic->inputManager->unregisterInputContext(inputContextId);
     inputContextId = -1;
@@ -2413,19 +2316,39 @@ CellGameModule::pasteAtCursor()
       cellContext->getCanvasView() == nullptr) {
     return false;
   }
-  prepareGridMutation();
-  std::string error;
-  const bool result = clipboard.pasteAtCursor(cellContext->getGrid(),
-                                              cellContext->getCanvasView(),
-                                              hoverX,
-                                              hoverY,
-                                              &error);
-  if (!result) {
-    Logger::LogError(error.c_str());
-    return false;
-  }
-  updateVisualTargets();
-  return true;
+  // The origin is fixed at request time; the text may arrive on a later update.
+  const std::int64_t originX = hoverX;
+  const std::int64_t originY = hoverY;
+  const std::shared_ptr<int> outcome = std::make_shared<int>(-1);
+  const std::weak_ptr<bool> alive = m_lifetime;
+  CSimPlatform::current().readClipboard(
+    [this, alive, outcome, originX, originY](bool available,
+                                             const std::string& text) {
+      *outcome = 0;
+      if (alive.expired() || cellContext == nullptr ||
+          cellContext->getGrid() == nullptr ||
+          cellContext->getCanvasView() == nullptr) {
+        return;
+      }
+      if (!available) {
+        Logger::LogError("Clipboard text is unavailable");
+        return;
+      }
+      prepareGridMutation();
+      std::string error;
+      if (!clipboard.pasteText(cellContext->getGrid(),
+                               cellContext->getCanvasView(),
+                               text,
+                               originX,
+                               originY,
+                               &error)) {
+        Logger::LogError(error.c_str());
+        return;
+      }
+      *outcome = 1;
+      updateVisualTargets();
+    });
+  return *outcome != 0;
 }
 
 bool
@@ -3418,7 +3341,25 @@ CellGameModule::updateEditorCursor()
 bool
 CellGameModule::SaveCellGame(std::string filename)
 {
+  return saveCellGameTo(std::move(filename), false);
+}
+
+bool
+CellGameModule::LoadCellGame(std::string filename)
+{
   if (filename.empty()) {
+    if (ic != nullptr && ic->commandLine != nullptr) {
+      ic->commandLine->logError("Load path is empty");
+    }
+    return false;
+  }
+  return loadCellGameFrom({ std::move(filename) }, false);
+}
+
+bool
+CellGameModule::saveCellGameTo(std::string location, bool announce)
+{
+  if (location.empty()) {
     if (ic != nullptr && ic->commandLine != nullptr) {
       ic->commandLine->logError("Save path is empty");
     }
@@ -3440,35 +3381,222 @@ CellGameModule::SaveCellGame(std::string filename)
   doc.worldChunkHeight = cellContext->getWorldChunkHeight();
   doc.sourceGrid = cellContext->getGrid();
 
+  // Encode the published world now; only the byte transfer is deferred.
   std::string error;
-  if (!IllumoCodec::writeFile(filename, doc, &error)) {
+  std::ostringstream encoded(std::ios::binary);
+  if (!IllumoCodec::writeStream(encoded, doc, &error)) {
     if (ic != nullptr && ic->commandLine != nullptr) {
       ic->commandLine->logError(error);
     }
     return false;
   }
-  return true;
+  // -1 pending, 0 failed, 1 written; shared with a possibly later completion.
+  const std::shared_ptr<int> outcome = std::make_shared<int>(-1);
+  const std::weak_ptr<bool> alive = m_lifetime;
+  CSimPlatform::current().writeFile(
+    location,
+    encoded.str(),
+    [this, alive, outcome, location, announce](bool written,
+                                               const std::string& failure) {
+      *outcome = written ? 1 : 0;
+      if (alive.expired() || ic == nullptr || ic->commandLine == nullptr) {
+        return;
+      }
+      if (!written) {
+        ic->commandLine->logError(failure);
+      } else if (announce) {
+        ic->commandLine->logSuccess("Saved canvas to " + location);
+      }
+    });
+  return *outcome != 0;
 }
 
 bool
-CellGameModule::LoadCellGame(std::string filename)
+CellGameModule::loadCellGameFrom(std::vector<std::string> candidates,
+                                 bool announce)
 {
-  if (filename.empty()) {
-    if (ic != nullptr && ic->commandLine != nullptr) {
-      ic->commandLine->logError("Load path is empty");
-    }
-    return false;
-  }
+  const std::shared_ptr<int> outcome = std::make_shared<int>(-1);
+  const std::weak_ptr<bool> alive = m_lifetime;
+  CSimPlatform::current().readFirst(
+    std::move(candidates),
+    [this, alive, outcome, announce](const CSimReadResult& read) {
+      *outcome = 0;
+      if (alive.expired() || ic == nullptr) {
+        return;
+      }
+      IllumoDocument document;
+      std::string error = read.error;
+      bool decoded = false;
+      if (read.success) {
+        std::istringstream stream(read.bytes, std::ios::binary);
+        decoded = IllumoCodec::readStream(stream, &document, &error);
+      }
+      if (!decoded) {
+        if (ic->commandLine != nullptr) {
+          ic->commandLine->logError(error);
+        }
+        return;
+      }
+      if (!applyLoadedDocument(document)) {
+        return;
+      }
+      *outcome = 1;
+      if (announce && ic->commandLine != nullptr) {
+        ic->commandLine->logSuccess("Loaded canvas from " + read.location);
+      }
+    });
+  return *outcome != 0;
+}
 
-  IllumoDocument doc;
+void
+CellGameModule::importRuleCatalog(const std::string& location)
+{
+  const std::weak_ptr<bool> alive = m_lifetime;
+  CSimPlatform::current().readFirst(
+    { location }, [this, alive](const CSimReadResult& read) {
+      if (alive.expired() || rulesetWorkshopMenu == nullptr) {
+        return;
+      }
+      RuleSetRegistry imported;
+      if (!read.success || !imported.loadRulePackage(read.bytes) ||
+          imported.getDefinitions().empty() ||
+          imported.getFamilyDefinitions().empty()) {
+        rulesetWorkshopMenu->setError("The selected catalog is invalid.");
+        return;
+      }
+      std::vector<RuleFamilyDefinition> families =
+        imported.getFamilyDefinitions();
+      const std::vector<RuleSetDefinition> definitions =
+        imported.getDefinitions();
+      const RuleSet* currentActiveRule = cellContext->getRuleSet();
+      RuleSetRegistry staged = RuleSetRegistry::instance();
+      bool valid = true;
+      for (RuleFamilyDefinition& familyDefinition : families) {
+        const RuleFamilyDefinition* existing =
+          staged.getFamilyDefinition(familyDefinition.id);
+        if (existing != nullptr && existing->builtIn) {
+          const bool identical =
+            existing->name == familyDefinition.name &&
+            existing->kind == familyDefinition.kind &&
+            existing->stateCount == familyDefinition.stateCount &&
+            existing->stateNames == familyDefinition.stateNames &&
+            existing->stateColors == familyDefinition.stateColors;
+          if (!identical) {
+            valid = false;
+            break;
+          }
+          familyDefinition.builtIn = true;
+        }
+        if (!staged.registerFamily(familyDefinition)) {
+          valid = false;
+          break;
+        }
+      }
+      for (const RuleSetDefinition& definition : definitions) {
+        const RuleSetDefinition* existing =
+          staged.getRuleSetDefinition(definition.id);
+        if (valid && existing != nullptr && existing->builtIn) {
+          valid = false;
+        }
+        if (valid && !staged.registerRule(definition)) {
+          valid = false;
+          break;
+        }
+      }
+      if (valid && currentActiveRule != nullptr) {
+        const RuleFamilyDefinition* stagedActiveFamily =
+          staged.getFamilyDefinition(cellContext->getFamilyString());
+        if (stagedActiveFamily != nullptr &&
+            stagedActiveFamily->stateCount <
+              currentActiveRule->getStateCount()) {
+          rulesetWorkshopMenu->setError(
+            "The import would invalidate states of the active ruleset.");
+          return;
+        }
+      }
+      if (!valid) {
+        rulesetWorkshopMenu->setError(
+          "The selected catalog could not be imported.");
+        return;
+      }
+      std::vector<RuleFamilyDefinition> userFamilies;
+      for (const RuleFamilyDefinition& familyDefinition : families) {
+        if (!familyDefinition.builtIn) {
+          userFamilies.push_back(familyDefinition);
+        }
+      }
+      CSimPlatform::current().saveUserCatalog(
+        std::move(userFamilies),
+        definitions,
+        [this, alive, staged, definitions](bool saved,
+                                           const std::string& error) mutable {
+          if (alive.expired() || rulesetWorkshopMenu == nullptr) {
+            return;
+          }
+          if (!saved) {
+            rulesetWorkshopMenu->setError(
+              error.empty() ? "The selected catalog could not be imported."
+                            : error);
+            return;
+          }
+          RuleSetRegistry::instance() = std::move(staged);
+          const RuleSetDefinition* selected =
+            RuleSetRegistry::instance().getRuleSetDefinition(
+              definitions.front().id);
+          const RuleFamilyDefinition* selectedFamily =
+            selected == nullptr
+              ? nullptr
+              : RuleSetRegistry::instance().getFamilyDefinition(
+                  selected->familyId);
+          if (selected != nullptr && selectedFamily != nullptr) {
+            rulesetWorkshopMenu->setDraft(*selectedFamily, *selected);
+          }
+        });
+    });
+}
+
+void
+CellGameModule::exportRuleCatalog(const std::string& location)
+{
+  if (rulesetWorkshopMenu == nullptr) {
+    return;
+  }
+  RuleFamilyDefinition familyDraft = rulesetWorkshopMenu->getFamilyDraft();
+  RuleSetDefinition ruleDraft = rulesetWorkshopMenu->getDraft();
+  if (rulesetWorkshopMenu->isFamilyDraftChanged() && familyDraft.builtIn) {
+    const std::string customFamilyId = uniqueCustomFamilyId(familyDraft.id);
+    if (customFamilyId.empty()) {
+      rulesetWorkshopMenu->setError(
+        "Unable to allocate an ID for the copied family.");
+      return;
+    }
+    familyDraft.id = customFamilyId;
+    familyDraft.name = "Custom " + familyDraft.name;
+    familyDraft.builtIn = false;
+    ruleDraft.familyId = customFamilyId;
+  }
+  std::string text;
   std::string error;
-  if (!IllumoCodec::readFile(filename, &doc, &error)) {
-    if (ic != nullptr && ic->commandLine != nullptr) {
-      ic->commandLine->logError(error);
-    }
-    return false;
+  if (!RuleCatalogOverlay::packageText(familyDraft, ruleDraft, &text, &error)) {
+    rulesetWorkshopMenu->setError(
+      error.empty() ? "The rule could not be exported." : error);
+    return;
   }
+  const std::weak_ptr<bool> alive = m_lifetime;
+  CSimPlatform::current().writeFile(
+    location,
+    std::move(text),
+    [this, alive](bool written, const std::string& failure) {
+      if (!written && !alive.expired() && rulesetWorkshopMenu != nullptr) {
+        rulesetWorkshopMenu->setError(
+          failure.empty() ? "The rule could not be exported." : failure);
+      }
+    });
+}
 
+bool
+CellGameModule::applyLoadedDocument(IllumoDocument& doc)
+{
   // All parsing and allocation completed against temporary state.
   prepareGridMutation();
   if ((cellContext->getWorldChunkWidth() != doc.worldChunkWidth ||

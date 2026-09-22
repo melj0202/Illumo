@@ -68,6 +68,14 @@ public:
                       std::int64_t originY,
                       std::string* error = nullptr);
 
+  // Parses clipboard text; a failed parse leaves the world and buffer intact.
+  bool pasteText(SparseCellGrid* grid,
+                 CanvasView* canvas,
+                 const std::string& clipboardText,
+                 std::int64_t hoverX,
+                 std::int64_t hoverY,
+                 std::string* error = nullptr);
+  // Native-only synchronous convenience over the system clipboard.
   bool pasteAtCursor(SparseCellGrid* grid,
                      CanvasView* canvas,
                      std::int64_t hoverX,

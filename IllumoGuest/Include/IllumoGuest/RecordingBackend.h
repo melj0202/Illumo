@@ -6,6 +6,7 @@
 #include <IllumoGuest/Frame.h>
 #include <IllumoGuest/Services.h>
 #include <map>
+#include <set>
 
 // Guest-only backend: consumes borrowed CPU tokens synchronously and records
 // explicit wire values. It owns no native resources and executes no shaders.
@@ -21,7 +22,12 @@ public:
   GuestRecordingBackend& operator=(GuestRecordingBackend&&) = delete;
   void setRenderer(Renderer& renderer);
   void setFrame(float width, float height);
+  // Applies to commands pushed afterwards, so one frame may append World
+  // drawables before Ui drawables and submit them together.
   void setLayer(GuestLayer layer);
+  // True while any texture acquisition or replacement awaits the host. A
+  // replacement requested in that window supersedes the pending one.
+  bool hasPendingTextures() const;
   void pump();
   TextureHandle importTexture(GuestResourceId id);
   GuestFrame takeFrame();
@@ -33,6 +39,8 @@ public:
   void SubmitCommandQueue() override;
   void PushToCommandQueue(RenderCommand command) override;
   void ClearCommandQueue() override;
+  // Scene World maps to GuestLayer::World; UI and Debug map to Ui.
+  void BeginLayer(RenderLayerId layer) override;
   std::size_t rejectedCommandCount() const override;
   std::size_t commandHighWaterMark() const override;
   std::string submissionError() const override;
@@ -86,12 +94,26 @@ public:
   bool DestroyFramebuffer(FramebufferHandle) override;
   bool IsFramebufferValid(FramebufferHandle) const override;
 
+  // Static meshes at least this large are uploaded once to a retained host
+  // mesh (frame schema v3) instead of travelling inline every frame.
+  static constexpr std::size_t RetainedMeshBytes = 64u * 1024u;
+
 private:
   struct Mesh
   {
     MeshVertexLayout layout = MeshVertexLayout::Pos3Color4U8;
     std::vector<std::byte> vertices;
     std::vector<std::byte> indices;
+    // Retained upload state. Draws skip the mesh until the host copy is
+    // complete, and fall back to inline geometry if the upload fails.
+    bool retain = false;
+    GuestResourceId id;
+    std::uint64_t create = 0;
+    std::vector<std::uint64_t> writes;
+    std::size_t vertexSent = 0;
+    std::size_t indexSent = 0;
+    bool ready = false;
+    bool failed = false;
   };
   struct Texture
   {
@@ -102,22 +124,44 @@ private:
     TextureInfo pendingInfo;
     std::vector<std::byte> pendingPixels;
     bool changed = false;
+    // Virtual shadow depth target: never acquired from the host.
+    bool depthOnly = false;
+    // Sampled only by Skybox batches; never written after creation.
+    bool cubemap = false;
   };
   void consume(const RenderCommand& command);
   void draw(std::uint32_t first, std::uint32_t count);
   void release(GuestResourceId id);
+  // Drops a mesh's host copy (after replacement, update or destruction).
+  void forgetRetained(Mesh& mesh);
+  void pumpMeshes();
   GuestServiceQueue& m_services;
   Renderer* m_renderer = nullptr;
   ResourceHandlePool<MeshHandle> m_meshHandles;
   ResourceHandlePool<ShaderHandle> m_shaderHandles;
   ResourceHandlePool<TextureHandle> m_textureHandles;
+  // The Renderer's shared shadow pass targets one virtual framebuffer. Its
+  // commands record only which meshes cast shadows; the host re-runs the
+  // real pass from the frame's casters and world camera.
+  ResourceHandlePool<FramebufferHandle> m_framebufferHandles;
+  FramebufferHandle m_shadowFramebuffer;
+  TextureHandle m_shadowDepth;
+  bool m_shadowPass = false;
+  std::set<std::uint32_t> m_shadowMeshes;
+  GuestLighting m_lighting;
   std::map<std::uint32_t, Mesh> m_meshes;
   std::map<std::uint32_t, Texture> m_textures;
   std::vector<std::uint64_t> m_abandoned;
   std::vector<std::uint64_t> m_releases;
   std::vector<GuestResourceId> m_retirements;
+  // Retained meshes: creations whose result must be released on arrival,
+  // host copies to release, and requests whose results are only drained.
+  std::vector<std::uint64_t> m_abandonedMeshes;
+  std::vector<GuestResourceId> m_meshRetirements;
+  std::vector<std::uint64_t> m_drained;
   std::size_t m_frameRejections = 0;
   CommandQueue m_commands;
+  std::vector<GuestLayer> m_commandLayers;
   GuestFrame m_frame;
   GuestLayer m_layer = GuestLayer::Ui;
   MeshHandle m_mesh;

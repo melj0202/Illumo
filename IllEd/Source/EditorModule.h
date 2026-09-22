@@ -6,13 +6,14 @@
 #include "EditorSceneGraphView.h"
 #include "EditorSidebar.h"
 #include "EditorToolbar.h"
+#include "IllEdPlatform.h"
 #include <Illumo/Engine/IModule.h>
-#include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Scene/SceneNodeHandle.h>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -91,6 +92,13 @@ private:
   glm::vec3 m_dragGizmoOrigin{ 0.0f };
   glm::vec3 m_dragGizmoHitOffset{ 0.0f };
   float m_cameraTargetY = 0.0f;
+  // A dialog, read or write is in flight (always briefly: guest services
+  // complete on a later update). Editing input is held until it finishes.
+  bool m_busy = false;
+  bool m_closeAfterBusy = false;
+  // Expires on Exit so late platform completions never touch a stopped
+  // module.
+  std::shared_ptr<bool> m_lifetime;
 
   void syncFontSize();
   void applyFontSize(float size);
@@ -100,8 +108,14 @@ private:
   void handleCommand(EditorCommand command);
   void requestAction(EditorPendingAction action);
   void performPendingAction();
-  bool saveDocument(bool saveAs);
-  bool openDocument();
+  // `done` receives whether the document was saved (false on cancellation).
+  void saveDocument(bool saveAs, std::function<void(bool saved)> done = {});
+  void writeDocument(const IllEdLocation& location,
+                     std::function<void(bool saved)> done);
+  void openDocument();
+  // `initial` loads the launch document: failures are logged, not toasted.
+  void loadDocument(const IllEdLocation& location, bool initial);
+  void finishBusy();
   void newDocument();
   void createNode(SceneNodeKind kind);
   void deleteSelection();

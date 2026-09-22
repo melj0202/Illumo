@@ -141,7 +141,7 @@ class BuildTests(unittest.TestCase):
 
     def test_doctor_json_and_no_build_side_effects(self):
         with patch.object(build.shutil, "which", return_value=None), patch.object(build.subprocess, "run") as run:
-            code, output, errors = self.invoke("doctor", "--json", "--build-dir", str(self.root / "new"))
+            code, output, errors = self.invoke("doctor", "--json", "--no-wasm", "--build-dir", str(self.root / "new"))
         self.assertEqual(code, 1)
         self.assertFalse(json.loads(output)["ok"])
         self.assertIn("No configuration", errors)
@@ -152,14 +152,14 @@ class BuildTests(unittest.TestCase):
         with patch.object(build.shutil, "which", return_value="tool"), patch.object(
             build.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "cmake version 3.19", ""),
                                                  subprocess.TimeoutExpired("ctest", 10)]):
-            code, output, _ = self.invoke("doctor", "--json", "--no-tidy", "--no-docs", "--build-dir", str(self.root))
+            code, output, _ = self.invoke("doctor", "--json", "--no-tidy", "--no-docs", "--no-wasm", "--build-dir", str(self.root))
         self.assertEqual(code, 1)
         errors = [item for item in json.loads(output)["checks"] if item["status"] == "error"]
         self.assertEqual([item["name"] for item in errors], ["cmake", "ctest"])
 
     def test_doctor_dry_run_does_not_launch_probes(self):
         with patch.object(build.shutil, "which", return_value="tool"), patch.object(build.subprocess, "run") as run:
-            code, output, errors = self.invoke("doctor", "--json", "--dry-run", "--build-dir", str(self.root))
+            code, output, errors = self.invoke("doctor", "--json", "--dry-run", "--no-wasm", "--build-dir", str(self.root))
         self.assertEqual(code, 0, errors)
         self.assertIn("Version probe skipped", output)
         run.assert_not_called()
@@ -169,7 +169,7 @@ class BuildTests(unittest.TestCase):
             return "cmake" if name == "cmake" else None
         with patch.object(build.shutil, "which", side_effect=which), patch.object(
             build.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "cmake version 4.3", "")):
-            code, output, errors = self.invoke("doctor", "--json", "--no-tests", "--no-docs",
+            code, output, errors = self.invoke("doctor", "--json", "--no-tests", "--no-docs", "--no-wasm",
                                                "--build-dir", str(self.root),
                                                "--cmake-arg=-DILLUMO_ENABLE_CLANG_TIDY:BOOL=OFF")
         self.assertEqual(code, 0, errors)
@@ -185,7 +185,7 @@ class BuildTests(unittest.TestCase):
     def test_doctor_explicit_tidy_executable_and_enable_override(self):
         with patch.object(build.shutil, "which", side_effect=lambda name: name) as which, patch.object(
             build.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "cmake version 4.3", "")):
-            code, _, errors = self.invoke("doctor", "--json", "--no-tests", "--no-docs", "--no-tidy",
+            code, _, errors = self.invoke("doctor", "--json", "--no-tests", "--no-docs", "--no-tidy", "--no-wasm",
                                           "--build-dir", str(self.root),
                                           "--cmake-arg=-DILLUMO_ENABLE_CLANG_TIDY=ON",
                                           "--cmake-arg=-DILLUMO_CLANG_TIDY_EXECUTABLE=custom-tidy")
@@ -920,6 +920,165 @@ class ToolboxTests(unittest.TestCase):
             run.assert_not_called()
             with self.assertRaisesRegex(build.BuildError, "no longer exists"):
                 build.open_artifact(self.root / "missing")
+
+
+class WasmRuntimeTests(unittest.TestCase):
+    """The game only exists as a WASM package, so the orchestrator must build it."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def parse(self, *extra):
+        return build.create_parser().parse_args(["build", "--build-dir", str(self.root), *extra])
+
+    def test_configure_always_states_the_wasm_option(self):
+        # A stale cached OFF used to survive every configure and drop the game.
+        expected = "ON" if build.WASM_HOST_SUPPORTED else "OFF"
+        self.assertEqual(build.configure_definitions(self.parse())["ILLUMO_BUILD_WASM_RUNTIME"], expected)
+        self.assertEqual(build.configure_definitions(self.parse("--no-wasm"))["ILLUMO_BUILD_WASM_RUNTIME"], "OFF")
+        self.assertEqual(build.configure_definitions(self.parse("--wasm"))["ILLUMO_BUILD_WASM_RUNTIME"], "ON")
+        overridden = self.parse("--wasm", "--cmake-arg=-DILLUMO_BUILD_WASM_RUNTIME:BOOL=OFF")
+        self.assertFalse(build.wasm_requested(overridden))
+
+    def test_missing_toolchain_fails_before_configure(self):
+        arguments = self.parse("--wasm", f"--cmake-arg=-DILLUMO_WASM_TOOLS={self.root / 'none'}")
+        with patch.object(build, "WASM_HOST_SUPPORTED", True):
+            with self.assertRaisesRegex(build.BuildError, "wasm-tools.*--no-wasm"):
+                build.require_wasm_toolchain(arguments, dry_run=False)
+            with contextlib.redirect_stderr(io.StringIO()) as errors:
+                build.require_wasm_toolchain(arguments, dry_run=True)
+            self.assertIn("warning:", errors.getvalue())
+            build.require_wasm_toolchain(self.parse("--no-wasm"), dry_run=False)
+        with patch.object(build, "WASM_HOST_SUPPORTED", False):
+            with self.assertRaisesRegex(build.BuildError, "Windows x64"):
+                build.require_wasm_toolchain(self.parse("--wasm"), dry_run=True)
+
+    def test_toolchain_names_follow_cmake_pins(self):
+        wasmtime, wasi_sdk = build.wasm_toolchain_packages()
+        text = build.WASM_CMAKE_MODULE.read_text(encoding="utf-8")
+        self.assertIn(wasmtime, text)
+        self.assertIn(wasi_sdk, text)
+
+    def test_wasi_guest_trees_are_not_applications(self):
+        (self.root / "CMakeLists.txt").write_text("add_subdirectory(App)\n")
+        for name, text in (("App", "add_executable(App main.cpp)\n"),
+                           ("Guest", 'if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")\nendif()\nadd_executable(GuestModule a.cpp)\n')):
+            (self.root / name).mkdir()
+            (self.root / name / "CMakeLists.txt").write_text(text)
+        self.assertEqual(build.discover_workspace_projects(self.root).applications, ("App",))
+
+    def test_installed_apps_follow_cmake_staging(self):
+        apps = build.installed_apps()
+        self.assertEqual([app.name for app in apps], ["game", "illed", "meshviewer"])
+        self.assertEqual(apps[0].module, "IllumoGame.wasm")
+        self.assertEqual(build.app_names(self.root), (build.DEFAULT_APP,))
+
+    def test_runtime_outputs_and_retired_outputs(self):
+        suffix = ".exe" if build.os.name == "nt" else ""
+        release = self.root / "Release"
+        apps = (build.AppPackage("game", "IllumoGame.wasm"),
+                build.AppPackage("illed", "IllEd.wasm"))
+        (release / "apps" / "game").mkdir(parents=True)
+        (release / f"IllumoRuntime{suffix}").write_bytes(b"")
+        self.assertFalse(build.runtime_outputs(self.root, "Release", apps).playable("game"))
+        (release / "apps" / "game" / "app.json").write_text("{}")
+        (release / "apps" / "game" / "IllumoGame.wasm").write_bytes(b"\0" * 2048)
+        (release / f"IllEd{suffix}").write_bytes(b"")
+        (release / "game").mkdir()
+        outputs = build.runtime_outputs(self.root, "Release", apps)
+        self.assertTrue(outputs.playable("game") and not outputs.playable("illed"))
+        self.assertFalse(outputs.complete)
+        self.assertIn("game (2.0 KB)", outputs.describe())
+        self.assertIn("missing illed", outputs.describe())
+        self.assertEqual(outputs.retired, (release / f"IllEd{suffix}", release / "game"))
+        self.assertFalse(build.runtime_outputs(self.root, "Debug", apps).playable("game"))
+
+    def test_play_runs_the_selected_app_through_the_runtime(self):
+        commands = []
+        arguments = build.create_parser().parse_args(
+            ["play", "--app", "meshviewer", "--no-build", "--build-dir", str(self.root),
+             "--", "--open", "model.obj"])
+        with patch.object(build.CommandRunner, "run",
+                          lambda _self, command, *_: commands.append(list(command))), \
+             patch.object(build, "executable_path",
+                          return_value=self.root / "IllumoRuntime.exe"), \
+             patch.object(build, "runtime_outputs", return_value=build.RuntimeOutputs()):
+            build.run_application(arguments)
+        self.assertEqual(commands[-1][1:], ["--app", "meshviewer", "--open", "model.obj"])
+        commands.clear()
+        explicit = build.create_parser().parse_args(
+            ["play", "--no-build", "--build-dir", str(self.root), "--", "--package", "pkg"])
+        with patch.object(build.CommandRunner, "run",
+                          lambda _self, command, *_: commands.append(list(command))), \
+             patch.object(build, "executable_path",
+                          return_value=self.root / "IllumoRuntime.exe"), \
+             patch.object(build, "runtime_outputs", return_value=build.RuntimeOutputs()):
+            build.run_application(explicit)
+        self.assertEqual(commands[-1][1:], ["--package", "pkg"])
+
+    def workspace(self):
+        project = build.ProjectInfo("App", self.root / "App", test_runners=("AppTests",),
+                                    discovery_targets=("AppTestsDiscover",), test_prefixes=("App.",))
+        return build.WorkspaceProjects(self.root, (project,))
+
+    def listing(self):
+        executable = self.root / "Release"
+        return [
+            {"name": "App.One", "command": [str(executable / "AppTests.exe"), "--run", "App.One"]},
+            {"name": "App.Wasm.Package", "command": [str(executable / "AppWasmTests.exe"), "--run", "App.Wasm.Package"]},
+            {"name": "App.Script", "command": [str(self.root.parent / "cmake.exe"), "-P", "x.cmake"]},
+        ]
+
+    def test_test_builds_every_executable_ctest_runs(self):
+        commands = []
+        runner = build.CommandRunner(False)
+        with patch.object(runner, "run", side_effect=commands.append), \
+             patch.object(build, "ctest_listing", return_value=self.listing()), \
+             patch.object(build, "existing_tool", return_value="ctest"):
+            build.build_test_executables(self.parse(), "cmake", runner, self.workspace())
+        targets = [command[command.index("--target") + 1:] for command in commands]
+        self.assertEqual(targets, [["AppTestsDiscover"], ["AppWasmTests"]])
+
+    def test_exact_test_resolves_through_ctest_before_prefixes(self):
+        commands = []
+        arguments = build.create_parser().parse_args(
+            ["test", "--test", "App.Wasm.Package", "--build-dir", str(self.root)])
+        with patch.object(build, "configure", return_value="cmake"), \
+             patch.object(build, "discover_workspace_projects", return_value=self.workspace()), \
+             patch.object(build, "ctest_listing", return_value=self.listing()), \
+             patch.object(build, "existing_tool", return_value="ctest"), \
+             patch.object(build.CommandRunner, "run", lambda _self, command, *_: commands.append(list(command))):
+            build.run_tests(arguments)
+        self.assertEqual(commands[0][commands[0].index("--target") + 1:], ["AppWasmTests"])
+        self.assertIn(r"^App\.Wasm\.Package$", commands[1])
+        # A discovered runner's case keeps the direct --run invocation.
+        self.assertEqual(self.workspace().resolve_test_target("App.One"), "AppTests")
+
+    def test_dashboard_wasm_setting_round_trips(self):
+        state = build.DashboardState(applications=("illed", "game"))
+        self.assertEqual((state.application, state.application_label), ("game", "IllumoGame"))
+        state.selected = next(i for i, item in enumerate(build.DASHBOARD_ITEMS) if item[2] == "wasm")
+        with patch.object(build, "WASM_HOST_SUPPORTED", True):
+            state.wasm_enabled = True
+            build.adjust_dashboard_setting(state, 1)
+            self.assertTrue(build.dashboard_settings(state)["no_wasm"])
+            args = build.create_parser().parse_args(build.dashboard_action_arguments(state, "play"))
+            self.assertTrue(args.no_wasm)
+            self.assertEqual((args.command, args.app, args.package),
+                             ("play", "IllumoRuntime", "game"))
+            launch = build.create_parser().parse_args(
+                build.dashboard_action_arguments(state, "launch"))
+            self.assertTrue(launch.no_build and launch.package == "game")
+            build.apply_dashboard_profile(state, "release", build.BUILTIN_PROFILES["release"])
+            self.assertTrue(state.wasm_enabled)
+
+    def test_console_fits_a_default_terminal(self):
+        state = build.DashboardState(applications=("game",))
+        for mouse in (False, True):
+            rendered = build.render_dashboard(state, 120, ansi=False, mouse_enabled=mouse)
+            self.assertLessEqual(len(rendered.splitlines()), 30)
 
 
 if __name__ == "__main__":

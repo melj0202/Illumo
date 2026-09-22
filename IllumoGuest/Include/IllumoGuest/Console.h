@@ -155,10 +155,13 @@ public:
 
 private:
   bool enqueue(GuestConsoleRequest request);
+  // Registration and log requests in flight; the host applies one exchange's
+  // records in order, so a bounded window preserves ordering.
+  static constexpr std::size_t MaximumInFlight = 16;
   GuestServiceQueue& m_services;
   std::deque<GuestConsoleRequest> m_outgoing;
   std::deque<GuestConsoleRequest> m_invocations;
-  std::uint64_t m_request = 0;
+  std::deque<std::uint64_t> m_requests;
   std::uint64_t m_listen = 0;
   bool m_listening = false;
   std::string m_error;

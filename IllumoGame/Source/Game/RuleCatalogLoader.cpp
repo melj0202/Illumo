@@ -1,4 +1,5 @@
 #include "RuleCatalogLoader.h"
+#include "RuleCatalogOverlay.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Platform/AtomicFile.h>
 #include <Illumo/Services/EnvVars.h>
@@ -174,34 +175,14 @@ RuleCatalogLoader::saveUserFamilies(
     }
     return false;
   }
-  for (RuleFamilyDefinition definition : definitions) {
-    const RuleFamilyDefinition* shippedFamily =
-      RuleSetRegistry::instance().getFamilyDefinition(definition.id);
-    if (shippedFamily != nullptr && shippedFamily->builtIn) {
-      if (error != nullptr) {
-        *error = "Built-in family IDs cannot be written to the user overlay.";
-      }
-      return false;
-    }
-    definition.builtIn = false;
-    if (!staged.registerFamily(definition)) {
-      if (error != nullptr) {
-        *error =
-          "A family definition is invalid or incompatible with its rules.";
-      }
-      return false;
-    }
+  if (!RuleCatalogOverlay::stageFamilies(staged, definitions, error)) {
+    return false;
   }
-  std::vector<RuleFamilyDefinition> userFamilies;
-  for (const RuleFamilyDefinition& family : staged.getFamilyDefinitions()) {
-    if (!family.builtIn) {
-      userFamilies.push_back(family);
-    }
-  }
+  const std::string text = RuleCatalogOverlay::familiesText(staged);
   return AtomicFile::write(
     path,
-    [&userFamilies](std::ostream& stream, std::string*) {
-      stream << RuleSetRegistry::serializeFamilies(userFamilies);
+    [&text](std::ostream& stream, std::string*) {
+      stream << text;
       return static_cast<bool>(stream);
     },
     error);
@@ -265,39 +246,15 @@ RuleCatalogLoader::saveUserRules(
     }
     return false;
   }
-  for (const RuleSetDefinition& definition : definitions) {
-    const RuleSetDefinition* shippedRule =
-      RuleSetRegistry::instance().getRuleSetDefinition(definition.id);
-    if (shippedRule != nullptr && shippedRule->builtIn) {
-      if (error != nullptr) {
-        *error = "Built-in ruleset IDs cannot be written to the user overlay.";
-      }
-      return false;
-    }
-    if (!staged.registerRule(definition)) {
-      if (error != nullptr) {
-        *error = "A rule definition failed validation.";
-      }
-      return false;
-    }
+  if (!RuleCatalogOverlay::stageRules(staged, definitions, error)) {
+    return false;
   }
-  std::vector<RuleFamilyDefinition> userFamilies;
-  std::vector<RuleSetDefinition> userRules;
-  for (const RuleFamilyDefinition& family : staged.getFamilyDefinitions()) {
-    if (!family.builtIn) {
-      userFamilies.push_back(family);
-    }
-  }
-  for (const RuleSetDefinition& rule : staged.getDefinitions()) {
-    if (!rule.builtIn) {
-      userRules.push_back(rule);
-    }
-  }
-  const std::filesystem::path userFamiliesPath = familiesPath;
+  const std::string familiesText = RuleCatalogOverlay::familiesText(staged);
+  const std::string rulesText = RuleCatalogOverlay::rulesText(staged);
   if (!AtomicFile::write(
-        userFamiliesPath,
-        [&userFamilies](std::ostream& stream, std::string*) {
-          stream << RuleSetRegistry::serializeFamilies(userFamilies);
+        familiesPath,
+        [&familiesText](std::ostream& stream, std::string*) {
+          stream << familiesText;
           return static_cast<bool>(stream);
         },
         error)) {
@@ -305,9 +262,8 @@ RuleCatalogLoader::saveUserRules(
   }
   return AtomicFile::write(
     rulesPath,
-    [&staged, &userRules](std::ostream& stream, std::string*) {
-      stream << RuleSetRegistry::serializeCatalog(staged.getFamilyDefinitions(),
-                                                  userRules);
+    [&rulesText](std::ostream& stream, std::string*) {
+      stream << rulesText;
       return static_cast<bool>(stream);
     },
     error);
@@ -319,19 +275,14 @@ RuleCatalogLoader::saveCatalog(const std::filesystem::path& path,
                                const RuleSetDefinition& definition,
                                std::string* error)
 {
-  RuleSetRegistry catalog;
-  if (!catalog.registerFamily(family) || !catalog.registerRule(definition)) {
-    if (error != nullptr) {
-      *error = "The family and ruleset definitions failed validation.";
-    }
+  std::string text;
+  if (!RuleCatalogOverlay::packageText(family, definition, &text, error)) {
     return false;
   }
   return AtomicFile::write(
     path,
-    [&catalog, &family, &definition](std::ostream& stream, std::string*) {
-      stream << RuleSetRegistry::serializeRulePackage(
-        *catalog.getFamilyDefinition(family.id),
-        *catalog.getRuleSetDefinition(definition.id));
+    [&text](std::ostream& stream, std::string*) {
+      stream << text;
       return static_cast<bool>(stream);
     },
     error);

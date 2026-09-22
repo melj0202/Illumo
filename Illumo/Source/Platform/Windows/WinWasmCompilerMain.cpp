@@ -8,7 +8,9 @@
 
 // This helper compiles but never instantiates untrusted WASM. The parent
 // assigns it to a memory-limited, single-process job before resuming its
-// initial thread.
+// initial thread. Exit codes: 0 success, 2 invalid invocation, 3 the module
+// did not compile, 4 the artifact exceeds the shared buffer. Anything else is
+// an abnormal termination (for example the job's memory limit).
 int
 main(int argc, char** argv)
 try {
@@ -41,12 +43,15 @@ try {
   if (error == nullptr) {
     error = wasmtime_module_serialize(module, &serialized);
   }
-  bool succeeded = false;
-  if (error == nullptr && serialized.size <= kCapacity - kHeaderBytes) {
+  int status = 0;
+  if (error != nullptr) {
+    status = 3;
+  } else if (serialized.size > kCapacity - kHeaderBytes) {
+    status = 4;
+  } else {
     const std::uint64_t outputSize = serialized.size;
     std::memcpy(shared + kHeaderBytes, serialized.data, serialized.size);
     std::memcpy(shared + sizeof(inputSize), &outputSize, sizeof(outputSize));
-    succeeded = true;
   }
   if (error != nullptr) {
     wasmtime_error_delete(error);
@@ -57,7 +62,7 @@ try {
   }
   wasm_engine_delete(engine);
   UnmapViewOfFile(shared);
-  return succeeded ? 0 : 1;
+  return status;
 } catch (...) {
   return 2;
 }

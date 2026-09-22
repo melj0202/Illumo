@@ -13,6 +13,7 @@
 #include <IllumoGuest/FileProtocol.h>
 #include <IllumoGuest/Protocol.h>
 #include <algorithm>
+#include <filesystem>
 
 namespace {
 class OsClipboard final : public WasmHostClipboard
@@ -43,6 +44,27 @@ bool
 hasGrant(std::uint32_t grants, GuestCapability capability)
 {
   return (grants & static_cast<std::uint32_t>(capability)) != 0;
+}
+
+// A chosen file's base name for the guest's UI, bounded at a UTF-8 boundary.
+// Never a directory; empty if it cannot be expressed as UTF-8.
+std::string
+dialogLabel(const std::filesystem::path& chosen)
+{
+  const std::u8string base = chosen.filename().u8string();
+  std::string label(reinterpret_cast<const char*>(base.data()), base.size());
+  if (label.size() > 128) {
+    std::size_t end = 128;
+    while (end > 0 &&
+           (static_cast<unsigned char>(label[end]) & 0xC0u) == 0x80u) {
+      --end;
+    }
+    label.resize(end);
+  }
+  if (!guestUtf8(label) || label.find_first_of("\\/:") != std::string::npos) {
+    label.clear();
+  }
+  return label;
 }
 } // namespace
 
@@ -210,11 +232,19 @@ WasmGameServices::completeDialog(GuestServices& results)
     if (path.empty()) {
       result.outcome = GuestFileOutcome::Cancelled;
     } else {
+      // The same path conversion the grant uses; only its base name leaves
+      // the host.
+      const std::filesystem::path chosen(path);
       std::uint64_t size = 0;
-      if (m_files->grantSelected(path, request.save, result.name, size)) {
+      const bool granted =
+        request.edit
+          ? m_files->grantEditable(chosen, result.name, size)
+          : m_files->grantSelected(chosen, request.save, result.name, size);
+      if (granted) {
         result.outcome = GuestFileOutcome::Success;
-        result.writing = request.save;
+        result.writing = request.save || request.edit;
         result.size = size;
+        result.label = dialogLabel(chosen);
       } else {
         result.outcome = GuestFileOutcome::IoError;
       }
@@ -278,6 +308,12 @@ WasmGameServices::completeConsole(GuestServices& results)
         m_registered.erase(found);
       }
       response.status = GuestServiceStatus::Complete;
+    } else if (m_commands->HasCommand(request.name) &&
+               std::find(m_registered.begin(),
+                         m_registered.end(),
+                         request.name) == m_registered.end()) {
+      // Host-owned commands are never replaced by a guest trampoline.
+      response.status = GuestServiceStatus::Rejected;
     } else {
       const std::string commandName = request.name;
       m_commands->RegisterCommand(

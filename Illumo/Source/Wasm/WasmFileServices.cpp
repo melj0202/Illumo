@@ -197,10 +197,14 @@ public:
     }
     return bytes <= limits.storageBytes;
   }
-  bool grantSelected(const std::filesystem::path& path,
-                     bool writable,
-                     std::string& name,
-                     std::uint64_t& size)
+  // Readable grants need an existing bounded file; writable grants need its
+  // directory. An empty fixed name allocates the next "sel-N".
+  bool grant(const std::filesystem::path& path,
+             bool readable,
+             bool writable,
+             const std::string& fixedName,
+             std::string& name,
+             std::uint64_t& size)
   {
     std::error_code status;
     if (!path.is_absolute()) {
@@ -212,7 +216,7 @@ public:
       return false;
     }
     std::uint64_t bytes = 0;
-    if (!writable) {
+    if (readable) {
       if (!std::filesystem::is_regular_file(absolute)) {
         return false;
       }
@@ -220,14 +224,17 @@ public:
       if (status || bytes > limits.fileBytes) {
         return false;
       }
-    } else if (!std::filesystem::is_directory(absolute.parent_path())) {
+    }
+    if (writable && !std::filesystem::is_directory(absolute.parent_path())) {
       return false;
     }
     std::lock_guard<std::mutex> lock(mutex);
-    if (stopping || selected.size() >= 16) {
+    if (stopping || selected.size() >= 16 ||
+        (!fixedName.empty() && selected.contains(fixedName))) {
       return false;
     }
-    name = "sel-" + std::to_string(++nextSelected);
+    name =
+      fixedName.empty() ? "sel-" + std::to_string(++nextSelected) : fixedName;
     selected[name] = SelectedGrant{ absolute, writable };
     size = bytes;
     return true;
@@ -489,7 +496,22 @@ WasmFileServices::grantSelected(const std::filesystem::path& path,
                                 std::string& name,
                                 std::uint64_t& size)
 {
-  return m_state->grantSelected(path, writable, name, size);
+  return m_state->grant(path, !writable, writable, {}, name, size);
+}
+bool
+WasmFileServices::grantEditable(const std::filesystem::path& path,
+                                std::string& name,
+                                std::uint64_t& size)
+{
+  return m_state->grant(path, true, true, {}, name, size);
+}
+bool
+WasmFileServices::grantLaunch(const std::filesystem::path& path,
+                              bool editable,
+                              std::uint64_t& size)
+{
+  std::string name;
+  return m_state->grant(path, true, editable, "launch", name, size);
 }
 bool
 WasmFileServices::submit(const GuestServices& incoming)

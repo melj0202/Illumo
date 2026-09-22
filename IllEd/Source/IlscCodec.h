@@ -81,12 +81,23 @@ public:
                     IlscDocument* document,
                     std::string* error);
   static std::string encode(const IlscDocument& document);
+#if !defined(ILLUMO_SERIAL_GUEST)
+  // Native file access by UTF-8 path. The WASM package reads and writes
+  // through IllEdPlatform instead.
   static bool readFile(const std::string& path,
                        IlscDocument* document,
                        std::string* error);
   static bool writeFile(const std::string& path,
                         const IlscDocument& document,
                         std::string* error);
+  static bool readText(const std::string& path,
+                       std::string* text,
+                       std::string* error);
+  // Atomic replacement through AtomicFile.
+  static bool writeText(const std::string& path,
+                        const std::string& text,
+                        std::string* error);
+#endif
   static std::string withIlscExtension(const std::string& filename);
   static const char* kindName(SceneNodeKind kind);
   static bool parseKind(const std::string& text, SceneNodeKind* kind);

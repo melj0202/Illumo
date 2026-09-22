@@ -126,7 +126,7 @@ RunIllumoApplication(int argc,
 
     illumo.shutdown();
     Logger::LogTrace(application.applicationName + " main loop finished");
-    return 0;
+    return application.exitCode != nullptr ? application.exitCode() : 0;
   } catch (const std::exception& exception) {
     Logger::LogError(std::string("Illumo application failed: ") +
                      exception.what());

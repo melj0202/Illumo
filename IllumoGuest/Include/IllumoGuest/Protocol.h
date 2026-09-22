@@ -35,6 +35,15 @@ enum class GuestCall : std::uint32_t
   Services = 7
 };
 
+// Update response flags (ABI 1). The host rejects unknown bits. A close
+// request asks the host to begin its normal close sequence, which still calls
+// illumo_guest_close before the store is shut down.
+struct GuestUpdateFlags
+{
+  static constexpr std::uint32_t RequestClose = 1u;
+  static constexpr std::uint32_t Known = RequestClose;
+};
+
 struct GuestEnvelope
 {
   static constexpr std::uint32_t Magic = 0x31474c49u; // ILG1

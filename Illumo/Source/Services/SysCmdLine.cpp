@@ -162,7 +162,7 @@ SysCmdLine::ParseCommandLine(int argc,
         return { SysCmdLineAction::ExitFailure };
       }
       if (option->valueName == "path" || option->valueName == "string" ||
-          option->valueName == "file") {
+          option->valueName == "file" || option->valueName == "name") {
         const SysCmdLineResult result =
           parseStringOption(argc, argv, &i, environment, *option);
         if (result.shouldExit()) {

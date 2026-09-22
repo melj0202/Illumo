@@ -1,6 +1,7 @@
 #include "../../Wasm/WasmCompiler.h"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -147,7 +148,18 @@ compileWasmIsolated(std::span<const std::byte> input,
   }
   DWORD exitCode = 1;
   if (!GetExitCodeProcess(processHandle.get(), &exitCode) || exitCode != 0) {
-    error = "WASM compilation failed or exceeded its memory limit";
+    // Codes 2-4 are the helper's own verdicts; others are terminations.
+    if (exitCode == 3) {
+      error = "WASM module failed to compile";
+    } else if (exitCode == 4) {
+      error = "Compiled WASM artifact exceeds the compiler buffer";
+    } else {
+      char code[16] = {};
+      std::snprintf(code, sizeof(code), "0x%08lX", exitCode);
+      error = std::string("WASM compiler terminated (") + code +
+              "); it may have exceeded its " +
+              std::to_string(memoryLimit / (1024u * 1024u)) + " MiB limit";
+    }
     return false;
   }
   shared = static_cast<std::byte*>(

@@ -130,6 +130,17 @@ makeFrame()
   return frame;
 }
 
+static void
+rejectsFrame(TestCounters& counters,
+             const GuestFrame& candidate,
+             const char* label)
+{
+  GuestWireWriter bytes;
+  candidate.write(bytes);
+  GuestFrame ignored;
+  testTrue(counters, !GuestFrame::read(bytes.data(), ignored), label);
+}
+
 static bool
 run(const std::string& name)
 {
@@ -186,6 +197,325 @@ run(const std::string& name)
       GuestFrame ignored;
       GuestFrame::read(mutation, ignored);
     }
+
+    // Version 1 packets (2D only) remain valid input.
+    GuestWireWriter legacy;
+    legacy.u32(GuestFrame::Magic);
+    legacy.u32(1);
+    legacy.f32(640);
+    legacy.f32(480);
+    legacy.u32(0);
+    legacy.u32(0);
+    testTrue(counters,
+             GuestFrame::read(legacy.data(), accepted) && !accepted.hasCamera,
+             "Version 1 frames decode without version 2 records");
+
+    // Version 2: world camera, lit mesh, depth-tested lines, shadow casters.
+    GuestFrame world = makeFrame();
+    world.batches[0].layer = GuestLayer::World;
+    world.hasCamera = true;
+    world.camera[0] = 0.5f;
+    GuestBatch lit;
+    lit.style = GuestBatchStyle::LitMesh;
+    lit.layer = GuestLayer::World;
+    lit.depthTest = true;
+    lit.lighting.castsShadow = true;
+    lit.lighting.receivesShadow = true;
+    lit.lighting.model[12] = 2.0f;
+    lit.vertices = { { { 0, 0, 0 }, 0xffffffff, {}, { 0, 1, 0 } },
+                     { { 1, 0, 0 }, 0xffffffff, {}, { 0, 1, 0 } },
+                     { { 0, 0, 1 }, 0xffffffff, {}, { 0, 1, 0 } } };
+    lit.indices = { 0, 1, 2 };
+    GuestBatch lines;
+    lines.layer = GuestLayer::World;
+    lines.primitive = GuestPrimitive::Lines;
+    lines.depthTest = true;
+    lines.vertices = { { { 0, 0, 0 } }, { { 0, 1, 0 } } };
+    lines.indices = { 0, 1 };
+    world.batches.push_back(lit);
+    world.batches.push_back(lines);
+    world.shadowCasters.push_back({ { -1, -1, -1 }, { 1, 1, 1 } });
+    GuestWireWriter worldWire;
+    world.write(worldWire);
+    testTrue(counters,
+             GuestFrame::read(worldWire.data(), accepted) &&
+               accepted.hasCamera && accepted.camera[0] == 0.5f &&
+               accepted.batches.size() == 3 &&
+               accepted.batches[1].style == GuestBatchStyle::LitMesh &&
+               accepted.batches[1].lighting.castsShadow &&
+               accepted.batches[1].lighting.model[12] == 2.0f &&
+               accepted.batches[1].vertices[0].normal[1] == 1.0f &&
+               accepted.batches[2].primitive == GuestPrimitive::Lines &&
+               accepted.shadowCasters.size() == 1,
+             "Version 2 world records round-trip");
+    for (std::size_t size = 0; size < worldWire.data().size(); ++size) {
+      if (GuestFrame::read(std::span(worldWire.data()).first(size), accepted)) {
+        rejected = false;
+      }
+    }
+    testTrue(counters, rejected, "Version 2 truncations rejected");
+    GuestFrame invalid = world;
+    invalid.batches[1].layer = GuestLayer::Ui;
+    rejectsFrame(counters, invalid, "Lit meshes are world-layer only");
+    invalid = world;
+    invalid.batches[2].style = GuestBatchStyle::Sprite;
+    invalid.batches[2].texture = { 1, GuestResourceKind::Texture, 1, 1 };
+    rejectsFrame(counters, invalid, "Only shape batches draw lines");
+    invalid = world;
+    invalid.batches[2].indices = { 0, 1, 0 };
+    rejectsFrame(counters, invalid, "Line index counts must be even");
+    invalid = world;
+    invalid.shadowCasters[0].mapSize = 16;
+    rejectsFrame(counters, invalid, "Shadow map sizes are bounded");
+    invalid = world;
+    invalid.shadowCasters[0].boundsMin[0] = 5;
+    rejectsFrame(counters, invalid, "Inverted caster bounds rejected");
+    invalid = world;
+    invalid.batches[1].lighting.tint[0] =
+      std::numeric_limits<float>::infinity();
+    rejectsFrame(counters, invalid, "Non-finite lighting rejected");
+    invalid = world;
+    invalid.shadowCasters.resize(257, world.shadowCasters[0]);
+    rejectsFrame(counters, invalid, "Shadow caster count is bounded");
+
+    // Version 2 packets without version 3 fields remain valid input.
+    GuestWireWriter version2;
+    version2.u32(GuestFrame::Magic);
+    version2.u32(2);
+    version2.f32(640);
+    version2.f32(480);
+    version2.u32(0);
+    for (unsigned int value = 0; value < 16; ++value) {
+      version2.f32(0);
+    }
+    version2.u32(0);
+    version2.u32(0);
+    version2.u32(0);
+    testTrue(counters,
+             GuestFrame::read(version2.data(), accepted) &&
+               accepted.batches.empty(),
+             "Version 2 frames decode without version 3 records");
+
+    // Version 3: blend flag, retained meshes and the cubemap skybox.
+    GuestFrame retained = makeFrame();
+    retained.batches[0].vertices.clear();
+    retained.batches[0].indices.clear();
+    retained.batches[0].mesh = { 7, GuestResourceKind::Mesh, 1, 1 };
+    retained.batches[0].firstIndex = 3;
+    retained.batches[0].indexCount = 6;
+    retained.batches[0].blend = true;
+    GuestBatch sky;
+    sky.style = GuestBatchStyle::Skybox;
+    sky.layer = GuestLayer::World;
+    sky.texture = { 7, GuestResourceKind::Texture, 2, 1 };
+    sky.lighting.tint = { 0.5f, 0.6f, 0.7f, 1.0f };
+    sky.vertices = { { { -1, -1, -1 } }, { { 1, -1, -1 } }, { { 1, 1, -1 } } };
+    sky.indices = { 0, 1, 2 };
+    retained.batches.insert(retained.batches.begin(), sky);
+    GuestWireWriter retainedWire;
+    retained.write(retainedWire);
+    testTrue(
+      counters,
+      GuestFrame::read(retainedWire.data(), accepted) &&
+        accepted.batches.size() == 2 &&
+        accepted.batches[0].style == GuestBatchStyle::Skybox &&
+        accepted.batches[0].lighting.tint[2] == 0.7f &&
+        accepted.batches[1].retained() && accepted.batches[1].firstIndex == 3 &&
+        accepted.batches[1].indexCount == 6 &&
+        accepted.batches[1].drawCount() == 6 && accepted.batches[1].blend &&
+        accepted.batches[1].hasBlend && accepted.batches[1].vertices.empty(),
+      "Version 3 retained and skybox batches round-trip");
+    for (std::size_t size = 0; size < retainedWire.data().size(); ++size) {
+      if (GuestFrame::read(std::span(retainedWire.data()).first(size),
+                           accepted)) {
+        rejected = false;
+      }
+    }
+    testTrue(counters, rejected, "Version 3 truncations rejected");
+    invalid = retained;
+    invalid.batches[1].indexCount = 4;
+    rejectsFrame(counters, invalid, "Retained index counts are whole");
+    invalid = retained;
+    invalid.batches[1].mesh.kind = GuestResourceKind::Texture;
+    rejectsFrame(counters, invalid, "Retained batches name a mesh");
+    invalid = retained;
+    invalid.batches[0].layer = GuestLayer::Ui;
+    invalid.batches[1].layer = GuestLayer::Ui;
+    rejectsFrame(counters, invalid, "Skyboxes are world-layer only");
+    invalid = retained;
+    invalid.batches[0].mesh = { 7, GuestResourceKind::Mesh, 1, 1 };
+    invalid.batches[0].vertices.clear();
+    invalid.batches[0].indices.clear();
+    invalid.batches[0].indexCount = 3;
+    rejectsFrame(counters, invalid, "Skyboxes are never retained");
+    invalid = makeFrame();
+    invalid.batches[0].firstIndex = 1;
+    rejectsFrame(counters, invalid, "Inline batches start at index zero");
+    invalid = retained;
+    invalid.batches[0].texture = {};
+    rejectsFrame(counters, invalid, "Skyboxes need a cubemap texture");
+    bool inlineRetainedRefused = false;
+    try {
+      invalid = retained;
+      invalid.batches[1].vertices = makeFrame().batches[0].vertices;
+      GuestWireWriter refused;
+      invalid.write(refused);
+    } catch (const std::length_error&) {
+      inlineRetainedRefused = true;
+    }
+    testTrue(counters,
+             inlineRetainedRefused,
+             "Writers refuse retained batches with inline geometry");
+    return counters.failures == 0;
+  }
+  if (name == "RetainedResources") {
+    NullRenderWindow window(640, 480);
+    EnvVars env;
+    env.setVar("WinX", 640);
+    env.setVar("WinY", 480);
+    Camera camera(glm::vec2(0, 0), 1, &env);
+    ThrowingBackend mock;
+    mock.Initialize();
+    Renderer renderer(&window, &env, &camera, &mock, false);
+    renderer.ensureBuiltinStyles();
+    WasmFrameRenderer bridge(renderer, 700);
+    // A retained Shape mesh: three 16-byte vertices and one triangle.
+    struct ShapeVertex
+    {
+      float x, y, z;
+      std::uint32_t rgba;
+    };
+    const std::array<ShapeVertex, 3> vertices{ { { 0, 0, 0, 0xffffffffu },
+                                                 { 50, 0, 0, 0xffffffffu },
+                                                 { 0, 50, 0, 0xffffffffu } } };
+    const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+    GuestMeshRequest request;
+    request.style = static_cast<std::uint32_t>(GuestBatchStyle::Shape);
+    request.vertexBytes = sizeof(vertices);
+    request.indexBytes = sizeof(indices);
+    const GuestResourceId mesh = bridge.createMesh(request);
+    GuestMeshWrite write;
+    write.mesh = mesh;
+    write.bytes.assign(reinterpret_cast<const std::byte*>(vertices.data()),
+                       reinterpret_cast<const std::byte*>(vertices.data()) +
+                         sizeof(vertices));
+    GuestMeshWrite outOfOrder = write;
+    outOfOrder.offset = 16;
+    GuestMeshWrite indexWrite;
+    indexWrite.mesh = mesh;
+    indexWrite.indices = true;
+    indexWrite.bytes.assign(reinterpret_cast<const std::byte*>(indices.data()),
+                            reinterpret_cast<const std::byte*>(indices.data()) +
+                              sizeof(indices));
+    GuestFrame drawn = makeFrame();
+    drawn.batches[0].vertices.clear();
+    drawn.batches[0].indices.clear();
+    drawn.batches[0].mesh = mesh;
+    drawn.batches[0].indexCount = 3;
+    GuestWireWriter drawnWire;
+    drawn.write(drawnWire);
+    testTrue(counters,
+             mesh.owner == 700 && mesh.kind == GuestResourceKind::Mesh &&
+               !bridge.accept(drawnWire.data()),
+             "An incomplete retained mesh cannot be drawn");
+    testTrue(counters,
+             bridge.writeMesh(write) && bridge.writeMesh(indexWrite),
+             "Retained mesh bytes complete in order");
+    testTrue(
+      counters, bridge.accept(drawnWire.data()), "Retained draw accepted");
+    mock.observedDraws = 0;
+    {
+      Scene scene(&window, &camera);
+      bridge.dispatch(scene);
+      renderer.BeginFrame();
+      renderer.RenderScene(&scene, &camera);
+      renderer.EndFrame();
+    }
+    testTrue(counters,
+             renderer.frameError().empty() && mock.observedDraws == 1,
+             "Retained mesh draws without inline geometry");
+    drawn.batches[0].firstIndex = 3;
+    drawnWire.clear();
+    drawn.write(drawnWire);
+    testTrue(counters,
+             !bridge.accept(drawnWire.data()),
+             "Retained index ranges are bounded by the mesh");
+    drawn.batches[0].firstIndex = 0;
+    drawn.batches[0].style = GuestBatchStyle::LitMesh;
+    drawn.batches[0].layer = GuestLayer::World;
+    drawnWire.clear();
+    drawn.write(drawnWire);
+    testTrue(counters,
+             !bridge.accept(drawnWire.data()),
+             "Retained meshes keep their style's layout");
+    const GuestResourceId broken = bridge.createMesh(request);
+    const std::array<std::uint32_t, 3> escaping{ 0, 1, 9 };
+    GuestMeshWrite brokenVertices = write;
+    brokenVertices.mesh = broken;
+    GuestMeshWrite brokenIndices = indexWrite;
+    brokenIndices.mesh = broken;
+    brokenIndices.bytes.assign(
+      reinterpret_cast<const std::byte*>(escaping.data()),
+      reinterpret_cast<const std::byte*>(escaping.data()) + sizeof(escaping));
+    testTrue(counters,
+             !bridge.writeMesh(outOfOrder) &&
+               bridge.writeMesh(brokenVertices) &&
+               !bridge.writeMesh(brokenIndices),
+             "Out-of-order bytes and escaping indices are rejected");
+    testTrue(counters,
+             bridge.releaseMesh(mesh) && !bridge.releaseMesh(mesh),
+             "Retained meshes release once");
+
+    // A cubemap sampled by a skybox, and nothing else.
+    const std::uint32_t size = 4;
+    std::vector<std::byte> faces(
+      static_cast<std::size_t>(GuestCubemapRequest::bytesFor(size)),
+      std::byte{ 128 });
+    const GuestResourceId cubemap = bridge.createCubemap(faces, size);
+    GuestFrame skyFrame;
+    skyFrame.width = 640;
+    skyFrame.height = 480;
+    GuestBatch sky;
+    sky.style = GuestBatchStyle::Skybox;
+    sky.layer = GuestLayer::World;
+    sky.texture = cubemap;
+    sky.vertices = { { { -1, -1, -1 } }, { { 1, -1, -1 } }, { { 1, 1, -1 } } };
+    sky.indices = { 0, 1, 2 };
+    skyFrame.batches.push_back(sky);
+    GuestWireWriter skyWire;
+    skyFrame.write(skyWire);
+    testTrue(counters,
+             cubemap.owner == 700 && bridge.accept(skyWire.data()),
+             "Skybox samples a guest cubemap");
+    mock.observedDraws = 0;
+    {
+      Scene scene(&window, &camera);
+      bridge.dispatch(scene);
+      renderer.BeginFrame();
+      renderer.RenderScene(&scene, &camera);
+      renderer.EndFrame();
+    }
+    testTrue(counters,
+             renderer.frameError().empty() && mock.observedDraws == 1,
+             "Skybox batch draws through the built-in style");
+    skyFrame.batches[0].style = GuestBatchStyle::Sprite;
+    skyFrame.batches[0].layer = GuestLayer::Ui;
+    skyWire.clear();
+    skyFrame.write(skyWire);
+    testTrue(counters,
+             !bridge.accept(skyWire.data()),
+             "Cubemaps cannot be sampled as 2D textures");
+    skyFrame.batches.clear();
+    skyFrame.textureWrites.push_back(
+      { cubemap, 0, 0, 1, 1, 4, std::vector<std::byte>(4), 0 });
+    skyWire.clear();
+    skyFrame.write(skyWire);
+    testTrue(counters,
+             !bridge.accept(skyWire.data()),
+             "Cubemaps are never written through frames");
+    testTrue(counters,
+             !bridge.createCubemap(faces, size + 1).owner,
+             "Cubemap byte counts must match their size");
     return counters.failures == 0;
   }
   if (name != "FrameRendering" && name != "FrameFailures" &&
@@ -948,7 +1278,8 @@ main(int argc, char** argv)
               "GuestPresentation\nIllumo.Wasm.GameJobs\nIllumo.Wasm."
               "SdkContract\nIllumo.Wasm.GameFiles\nIllumo.Wasm."
               "DisplayServices\nIllumo.Wasm.ClipboardServices\nIllumo.Wasm."
-              "ConsoleServices\nIllumo.Wasm.DialogServices");
+              "ConsoleServices\nIllumo.Wasm.DialogServices\nIllumo.Wasm."
+              "RetainedResources");
     return 0;
   }
   if (argc != 3 || std::string(argv[1]) != "--run") {

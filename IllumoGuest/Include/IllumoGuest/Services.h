@@ -18,7 +18,12 @@ enum class GuestService : std::uint32_t
   Display = 7,
   Clipboard = 8,
   Console = 9,
-  Dialog = 10
+  Dialog = 10,
+  // Frame schema v3 resources.
+  CreateMesh = 11,
+  WriteMesh = 12,
+  ReleaseMesh = 13,
+  CreateCubemap = 14
 };
 
 enum class GuestServiceStatus : std::uint32_t
@@ -81,7 +86,7 @@ struct GuestServices
       const std::uint32_t status = reader.u32();
       const std::span<const std::byte> payload = reader.bytes(reader.u32());
       if (!reader.valid() || record.request == 0 || operation < 1 ||
-          operation > 10 ||
+          operation > static_cast<std::uint32_t>(GuestService::CreateCubemap) ||
           (requests ? status != 0 : status < 1 || status > 2)) {
         return false;
       }
@@ -143,6 +148,120 @@ struct GuestTextureRequest
       reader.bytes(static_cast<std::size_t>(count));
     candidate.pixels.assign(pixels.begin(), pixels.end());
     candidate.linear = linear != 0;
+    output = std::move(candidate);
+    return true;
+  }
+};
+
+// A retained host mesh (frame schema v3). The style fixes the vertex layout:
+// Shape 16, Sprite 24, Canvas 32 and LitMesh 36 bytes per vertex. Bytes then
+// arrive in order through WriteMesh; the host validates the whole mesh when
+// the last byte lands and rejects that write if it is malformed.
+struct GuestMeshRequest
+{
+  static constexpr std::uint32_t MaximumVertexBytes = 192u * 1024u * 1024u;
+  static constexpr std::uint32_t MaximumIndexBytes = 64u * 1024u * 1024u;
+  std::uint32_t style = 0;
+  std::uint32_t vertexBytes = 0;
+  std::uint32_t indexBytes = 0;
+  static std::uint32_t stride(std::uint32_t style)
+  {
+    return style == 1 ? 16u : style == 2 ? 24u : style == 3 ? 32u : 36u;
+  }
+  void write(GuestWireWriter& output) const
+  {
+    output.u32(style);
+    output.u32(vertexBytes);
+    output.u32(indexBytes);
+  }
+  static bool read(std::span<const std::byte> bytes, GuestMeshRequest& output)
+  {
+    GuestWireReader reader(bytes);
+    GuestMeshRequest candidate;
+    candidate.style = reader.u32();
+    candidate.vertexBytes = reader.u32();
+    candidate.indexBytes = reader.u32();
+    if (!reader.finished() || candidate.style < 1 || candidate.style > 4 ||
+        candidate.vertexBytes == 0 ||
+        candidate.vertexBytes > MaximumVertexBytes ||
+        candidate.vertexBytes % stride(candidate.style) != 0 ||
+        candidate.indexBytes == 0 || candidate.indexBytes > MaximumIndexBytes ||
+        candidate.indexBytes % 4 != 0) {
+      return false;
+    }
+    output = candidate;
+    return true;
+  }
+};
+
+struct GuestMeshWrite
+{
+  static constexpr std::uint32_t MaximumChunk = 1024u * 1024u;
+  GuestResourceId mesh;
+  bool indices = false;
+  std::uint32_t offset = 0;
+  std::vector<std::byte> bytes;
+  void write(GuestWireWriter& output) const
+  {
+    mesh.write(output);
+    output.u32(indices ? 1 : 0);
+    output.u32(offset);
+    output.u32(static_cast<std::uint32_t>(bytes.size()));
+    output.bytes(bytes);
+  }
+  static bool read(std::span<const std::byte> input, GuestMeshWrite& output)
+  {
+    GuestWireReader reader(input);
+    GuestMeshWrite candidate;
+    candidate.mesh = GuestResourceId::read(reader);
+    const std::uint32_t target = reader.u32();
+    candidate.offset = reader.u32();
+    const std::uint32_t count = reader.u32();
+    if (!reader.valid() || target > 1 || count == 0 || count > MaximumChunk ||
+        candidate.mesh.owner == 0 || candidate.mesh.slot == 0 ||
+        candidate.mesh.generation == 0 ||
+        candidate.mesh.kind != GuestResourceKind::Mesh) {
+      return false;
+    }
+    const std::span<const std::byte> data = reader.bytes(count);
+    if (!reader.finished()) {
+      return false;
+    }
+    candidate.indices = target == 1;
+    candidate.bytes.assign(data.begin(), data.end());
+    output = std::move(candidate);
+    return true;
+  }
+};
+
+// Six square RGBA faces in +X, -X, +Y, -Y, +Z, -Z order (frame schema v3).
+struct GuestCubemapRequest
+{
+  std::uint32_t size = 0;
+  std::vector<std::byte> faces;
+  static std::uint64_t bytesFor(std::uint32_t size)
+  {
+    return static_cast<std::uint64_t>(size) * size * 4u * 6u;
+  }
+  void write(GuestWireWriter& output) const
+  {
+    output.u32(size);
+    output.bytes(faces);
+  }
+  static bool read(std::span<const std::byte> bytes,
+                   GuestCubemapRequest& output)
+  {
+    GuestWireReader reader(bytes);
+    GuestCubemapRequest candidate;
+    candidate.size = reader.u32();
+    if (!reader.valid() || candidate.size == 0 || candidate.size > 2048 ||
+        bytesFor(candidate.size) != reader.remaining() ||
+        bytesFor(candidate.size) > GuestServices::MaximumBytes - 64) {
+      return false;
+    }
+    const std::span<const std::byte> faces =
+      reader.bytes(static_cast<std::size_t>(bytesFor(candidate.size)));
+    candidate.faces.assign(faces.begin(), faces.end());
     output = std::move(candidate);
     return true;
   }

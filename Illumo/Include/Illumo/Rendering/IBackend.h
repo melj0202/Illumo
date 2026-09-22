@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/PipelineState.h>
+#include <Illumo/Rendering/RenderLayerId.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <array>
 #include <string>
@@ -45,6 +46,10 @@ public:
   virtual void SubmitCommandQueue() = 0;
   virtual void PushToCommandQueue(RenderCommand command) = 0;
   virtual void ClearCommandQueue() = 0;
+  // Called while RenderScene emits commands, before each composition layer's
+  // drawables. Recording backends use it to tag subsequent commands; GPU
+  // backends need no action.
+  virtual void BeginLayer(RenderLayerId layer) { (void)layer; }
   // Cumulative metrics survive intermediate pass queue resets.
   virtual size_t rejectedCommandCount() const { return 0; }
   virtual size_t commandHighWaterMark() const { return 0; }

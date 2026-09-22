@@ -146,6 +146,13 @@ try {
                                                m_guest.capabilities(),
                                                m_fileRoots.package,
                                                m_fileRoots.storage);
+    std::uint64_t size = 0;
+    if (!m_fileRoots.launch.empty() &&
+        !files->grantLaunch(
+          m_fileRoots.launch, m_fileRoots.launchEditable, size)) {
+      fail("The launch document is missing, unreadable or too large");
+      return false;
+    }
   }
   m_services = std::make_unique<WasmGameServices>(
     *m_frames,
@@ -253,9 +260,14 @@ try {
   const std::uint32_t flags = updated.u32();
   const std::uint32_t messageBytes = updated.u32();
   const std::span<const std::byte> message = updated.bytes(messageBytes);
-  if (flags != 0 || messageBytes > 65536 || !updated.finished()) {
+  if ((flags & ~GuestUpdateFlags::Known) != 0 || messageBytes > 65536 ||
+      !updated.finished()) {
     fail("Unsupported guest update response");
     return;
+  }
+  if ((flags & GuestUpdateFlags::RequestClose) != 0) {
+    // The engine still asks the guest through OnCloseRequested/Close.
+    ic->window->requestClose();
   }
   // Separate completed calls, never a recursive cross-store import. The game
   // validates the opaque reply before changing its own state or geometry.

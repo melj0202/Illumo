@@ -1,7 +1,7 @@
 #include "CellClipboard.h"
 #include "BuiltinPatterns.h"
+#include "CSimPlatform.h"
 #include "PatternCodec.h"
-#include <Illumo/Platform/Clipboard.h>
 #include <limits>
 
 void
@@ -185,8 +185,8 @@ CellClipboard::copySelection(const SparseCellGrid* grid, std::string* error)
   if (!captureSelection(grid, &m_clipboardPattern, error)) {
     return false;
   }
-  const std::string rle = PatternCodec::encodeRle(m_clipboardPattern);
-  Clipboard::SetText(rle);
+  CSimPlatform::current().writeClipboard(
+    PatternCodec::encodeRle(m_clipboardPattern));
   return true;
 }
 
@@ -276,14 +276,14 @@ CellClipboard::pastePatternAt(SparseCellGrid* grid,
 }
 
 bool
-CellClipboard::pasteAtCursor(SparseCellGrid* grid,
-                             CanvasView* canvas,
-                             std::int64_t hoverX,
-                             std::int64_t hoverY,
-                             std::string* error)
+CellClipboard::pasteText(SparseCellGrid* grid,
+                         CanvasView* canvas,
+                         const std::string& clipboardText,
+                         std::int64_t hoverX,
+                         std::int64_t hoverY,
+                         std::string* error)
 {
   CellPattern pattern;
-  const std::string clipboardText = Clipboard::GetText();
   if (!PatternCodec::parse(clipboardText, &pattern, error)) {
     return false;
   }

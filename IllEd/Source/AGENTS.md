@@ -4,11 +4,18 @@ This file specializes the repository `AGENTS.md` for `IllEd/Source/`.
 
 ## Product identity
 
-IllEd is an Illumo application: it uses the same runner, platform entry,
-services, renderer, and `CreateIllumoApplication` seam as IllumoGame. Its job
-is to author SceneGraph documents that later Illumo applications load. Treat it
-as the in-tree editor bootstrap (Unreal Editor to Unreal), not as a second
-cellular-automata product.
+IllEd is an Illumo application. Its job is to author SceneGraph documents that
+later Illumo applications load. Treat it as the in-tree editor bootstrap
+(Unreal Editor to Unreal), not as a second cellular-automata product.
+
+IllEd ships only as the `IllEd.wasm` package (`apps/illed/`, manifest
+`IllEd/app.json`, `launchAccess: "edit"`, private storage `storage/illed/`)
+run by `IllumoRuntime --app illed [--open scene.ilsc]`, like IllumoGame.
+There is no native `IllEd.exe`. `Wasm/EditorApplication.cpp` is the guest
+entry (`GuestModuleApplication`); it preloads the editor UI atlas from the
+package (`packageAssets()`) and hands the `--open` launch file to the
+platform seam. `IllEdCore` stays a native library for the `IllEdTests`
+oracle suite.
 
 ## Scope and boundaries
 
@@ -36,10 +43,21 @@ cellular-automata product.
   own world-picking and gizmo drag state; that is world input, not panel
   chrome.
 - Main-thread affine. Iterative hierarchy walks only.
+- Files and dialogs go through `IllEdPlatform` (`IllEdPlatform.h`), the
+  counterpart of the game's `CSimPlatform`: `IllEdPlatformNative.cpp` for the
+  native oracle, `Wasm/EditorApplication.cpp` over `GuestDocuments` for the
+  package. Save, open and close confirmation are asynchronous. The document
+  keeps an opaque location plus a display label (the guest never sees host
+  paths), and editing input is held while a transfer is in flight.
 
 ## Persistence
 
 `.ilsc` is the interchange contract between IllEd and future scene consumers.
 Validate a complete document before replacing live state. Extra JSON keys may
 be ignored; unknown kinds and cycles fail closed. Promote the codec into
-Illumo only when a second loader exists.
+Illumo only when a second loader exists. The WASM port did not change the
+`.ilsc` format.
+
+`IllEd.Wasm.Package` (`IllEd/Tests/Wasm/TestEditorPackage.cpp`) drives the
+real package through the generic host: launch scene, package-preloaded atlas,
+keyboard pan, and Ctrl+S save in place.

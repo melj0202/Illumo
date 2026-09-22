@@ -1,9 +1,9 @@
 #pragma once
 
 #include "MeshViewerCamera.h"
+#include "MeshViewerPlatform.h"
 #include "MeshViewerUi.h"
 #include <Illumo/Engine/IModule.h>
-#include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/MeshData.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
@@ -28,9 +28,14 @@ public:
   void DispatchDrawables(Scene* scene) override;
   void Exit() override;
 
+#if !defined(ILLUMO_SERIAL_GUEST)
+  // Native paths keep tinyobj's material search beside the OBJ.
   bool loadMesh(const std::string& path);
+#endif
   bool loadMeshFromMemory(const std::string& content,
                           const std::string& name = "model.obj");
+  // Reads a chosen or launch mesh through MeshViewerPlatform, then loads it.
+  void loadMeshLocation(const MeshViewerLocation& location);
 
   const MeshData& meshData() const { return m_meshData; }
   const std::string& meshPath() const { return m_meshPath; }
@@ -50,6 +55,7 @@ public:
   void setShowSkybox(bool show);
 
   void resetCamera();
+  // Requests the open dialog; the mesh loads when the choice completes.
   bool openMeshDialog();
 
   MeshViewerUi* ui() { return m_ui.get(); }
@@ -93,4 +99,7 @@ private:
   bool m_mouseWasDown;
   double m_lastMouseX;
   double m_lastMouseY;
+  // Expires on Exit so late platform completions never touch a stopped
+  // module.
+  std::shared_ptr<bool> m_lifetime;
 };

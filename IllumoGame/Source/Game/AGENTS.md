@@ -9,19 +9,38 @@ simulation timing, ruleset selection, and save/load orchestration. It may use
 Rulesets, Services interfaces, Foundation values, and backend-neutral Rendering
 types. It must not depend on OpenGL or native platform APIs.
 
-IllumoGame's only application seam is a declarative engine-facing definition:
-CA defaults, CA-specific CLI metadata, and the required `CellGameModule`
-factory. Do not add a process entry point, frame loop, logger lifetime,
-SysCmdLine implementation, BuildInfo, native SDK code, or platform
-implementation under IllumoGame.
+IllumoGame ships only as the `IllumoGame.wasm` package hosted by
+`IllumoRuntime`. Its application seam is `IllumoGame/Source/Wasm/
+GameApplication.cpp`, a `GuestModuleApplication` that bootstraps settings and
+catalogs, installs the guest `CSimPlatform`, and starts `MainMenuModule`. The
+same Game sources also build natively into `IllumoGameCore`, which is only the
+test oracle; `IllumoGameApplication.cpp` remains for those tests. Do not add a
+process entry point, frame loop, logger lifetime, SysCmdLine implementation,
+BuildInfo, native SDK code, or platform implementation under IllumoGame, and
+do not reintroduce a native game executable.
 
-The required-module factory initializes the shared rules catalog once before
-constructing menu or game modules. `RuleCatalogLoader` owns catalog file reads,
-first-valid base-pair lookup across executable/current/product directories,
-and the working-directory `families.user.json` and `rulesets.user.json`
-overlays. `RuleSetRegistry` starts empty and owns text validation and
-data-backed factories; Rulesets has no filesystem or native platform
-dependencies.
+Game code performs dialogs, file transfers, clipboard access and user-catalog
+writes only through `CSimPlatform`. Completions may run before the request
+returns (native oracle, `CSimPlatformNative.cpp`) or on a later update (guest,
+`Wasm/GuestPlatform.cpp`); guard callbacks with the module lifetime token and
+never assume either timing. Locations are opaque: a path natively, a storage
+name or `selected:` capability in the guest. Do not call `SaveLoad`,
+`Clipboard`, `AtomicFile`, `std::filesystem`, or `std::ifstream` from shared
+Game sources, and do not use entropy sources (`std::random_device`); the
+sandbox grants bounded clocks only.
+
+Natively, `RuleCatalogLoader` owns catalog file reads, first-valid base-pair
+lookup across executable/current/product directories, and the
+working-directory `families.user.json` and `rulesets.user.json` overlays. In
+the package, `CSimCatalogBootstrap` reads the packaged pair and storage
+overlays. Both stage overlays through the portable `RuleCatalogOverlay`.
+`RuleSetRegistry` starts empty and owns text validation and data-backed
+factories; Rulesets has no filesystem or native platform dependencies.
+
+`SimulationRunner` has a native worker-thread implementation and a guest
+serial implementation (`SimulationRunnerSerial.cpp`, `ILLUMO_SERIAL_GUEST`)
+sharing one generation body. Keep publication, mirror-delta and drain
+semantics identical across both.
 
 ## Domain and presentation invariants
 

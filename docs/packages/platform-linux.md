@@ -6,9 +6,16 @@ the Linux package list, configure/build failure table, and GUI smoke matrix.
 
 Windows remains the supported, fully verified production path. Linux sources
 and CMake on this branch are repaired so an Ubuntu 24.04 x86_64 host with X11
-or XWayland can configure, compile, and run the in-tree applications. That is
-not a support claim until the named host has completed native launch, dialog,
-input, persistence, and shutdown smoke.
+or XWayland can configure and compile the engine libraries and run the native
+test suites. That is not a support claim until the named host has completed
+native launch, dialog, input, persistence, and shutdown smoke.
+
+Every interactive application (IllumoGame, IllEd, IllMeshViewer) and the
+command-line frame capture now run only as WASM packages inside
+`IllumoRuntime`, whose pinned Wasmtime/WASI SDK toolchain is Windows x64 only.
+A Linux tree therefore has **no runnable applications** until a Linux runtime
+pin is added and verified. The native executables `IllEd`, `IllMeshViewer` and
+`IllumoCapture` are no longer built on any platform.
 
 macOS is not targeted; its scaffold has been removed.
 
@@ -114,7 +121,7 @@ cmake --build build-linux-rel --parallel
 
 `python build.py build --config Debug --no-docs --no-tidy` is the orchestrator
 equivalent if you prefer it. `python build.py doctor` reports tools; it does
-not compile.
+not compile. `python build.py play` is Windows x64 only.
 
 The default Ninja `ALL` target also runs `IllumoRunTests`. Debug AddressSanitizer
 makes `Illumo.SceneGraph.Oracle` and the large scene benches very slow (tens of
@@ -128,10 +135,10 @@ ctest --test-dir build-linux -L IllumoWorkspace -E "Bench|Oracle" --output-on-fa
 ### Expected binaries
 
 After a successful Debug build, `build-linux/Debug/` should contain the
-executables and staged runtime files (Ninja puts them in a config folder so
-they do not collide with CMake's `IllumoGame/` binary directory):
+test executables and staged runtime files (Ninja puts them in a config folder
+so they do not collide with CMake's `IllumoGame/` binary directory):
 
-- Applications: `IllumoGame`, `IllEd`, `IllMeshViewer`, `IllumoCapture`
+- Applications: none on Linux (see above)
 - Tests: `IllumoTests`, `IllumoGameTests`, `IllEdTests`,
   `IllMeshViewerTests`, `IllumoPublicHeaderSmoke`
 - Staged runtime: `Shader/`, `Assets/`, `envvars.json`,
@@ -144,8 +151,10 @@ ctest --test-dir build-linux -L IllumoWorkspace --output-on-failure
 ```
 
 That label includes `Illumo.AtomicFile` / `Illumo.Platform.AtomicFile`,
-capture CLI help/invalid-dimension tests, and the product suites. Headless
-tests do not prove GLFW, OpenGL, or GTK dialogs.
+the headless `Illumo.Capture.*` API checks, and the native product oracle
+suites. The `*.Wasm.*` and `Illumo.Runtime.*` cases need the Windows runtime
+and are not registered on Linux. Headless tests do not prove GLFW, OpenGL, or
+GTK dialogs.
 
 If CTest discovery is empty on Ninja, list and run the runners directly:
 
@@ -172,44 +181,21 @@ Windows as a shared bug, not a Linux-only defect.
 
 ## Run from the staged directory
 
-Shaders, fonts, and `envvars.json` are staged beside the executables. Launch
-from that directory:
+There is currently nothing to launch on Linux. IllumoGame, IllEd,
+IllMeshViewer and `IllumoRuntime --capture` (which replaced the `IllumoCapture`
+CLI; see [frame-capture.md](../frame-capture.md)) all need the Windows x64
+WASM runtime. The launch, working-directory-independence, capture, and
+application smoke below apply once a Linux runtime pin exists; until then
+record them as unvalidated rather than treating the port as broken.
 
-```bash
-cd build-linux/Debug
-./IllumoGame
-./IllEd
-./IllMeshViewer
-```
-
-Each window should accept keyboard and mouse, then exit 0 from `Esc`/`Q` and
-from the window-manager close button.
-
-Working-directory independence (config must resolve beside the executable):
-
-```bash
-cd /tmp
-/path/to/build-linux/Debug/IllumoGame
-```
-
-That process must read and write `build-linux/Debug/envvars.json`, not
-`/tmp/envvars.json`.
-
-Frame capture (hidden GLFW window, real GL context required). The destination
-must not already exist:
-
-```bash
-./build-linux/Debug/IllumoCapture --help
-./build-linux/Debug/IllumoCapture --output /tmp/illumo-frame.png --mode scene
-```
-
-Expect a PNG plus a JSON sidecar on stdout. If hidden-window GLX fails after
-the three GUI apps work, record capture as unvalidated rather than treating
-the whole port as broken.
+When a runtime exists, each window should accept keyboard and mouse, then exit
+0 from `Esc`/`Q` and from the window-manager close button, and a launch from
+`/tmp` must read and write the staged `envvars.json`, not `/tmp/envvars.json`.
 
 ### Application smoke (human)
 
-Do this on the Ubuntu host; headless tests cannot replace it.
+Do this on the Ubuntu host once applications can run there; headless tests
+cannot replace it.
 
 **IllumoGame:** window, menu or canvas, mouse edit on the canvas, F1, Grave
 (Debug overlay), F3, F11 fullscreen and restore, Q/Esc, WM close, second

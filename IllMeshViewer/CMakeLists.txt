@@ -4,6 +4,7 @@ add_library(IllMeshViewerCore STATIC
   Source/MeshViewerCamera.cpp
   Source/MeshViewerConfig.cpp
   Source/MeshViewerModule.cpp
+  Source/MeshViewerPlatformNative.cpp
   Source/MeshViewerUi.cpp
   Source/IllMeshViewerApplication.cpp
 )
@@ -15,13 +16,9 @@ target_include_directories(IllMeshViewerCore SYSTEM PRIVATE
 target_link_libraries(IllMeshViewerCore PUBLIC Illumo::Illumo)
 illumo_configure_runtime_target(IllMeshViewerCore)
 
-add_executable(IllMeshViewer $<TARGET_OBJECTS:IllumoPlatformEntry>)
-target_link_libraries(IllMeshViewer PRIVATE IllMeshViewerCore Illumo::Illumo)
-illumo_configure_runtime_target(IllMeshViewer)
-illumo_stage_runtime(IllMeshViewer)
-illumo_stage_default_file(IllMeshViewer
-  "${CMAKE_CURRENT_SOURCE_DIR}/envvars.json" envvars.json)
-illumo_stage_msvc_asan(IllMeshViewer)
+# IllMeshViewer ships only as the WASM package apps/meshviewer
+# (cmake/IllumoWasm.cmake), played by IllumoRuntime. IllMeshViewerCore
+# remains the native test oracle.
 
 if(BUILD_TESTING)
   add_executable(IllMeshViewerTests
@@ -40,5 +37,5 @@ if(BUILD_TESTING)
   illumo_configure_runtime_target(IllMeshViewerTests)
   illumo_discover_test_runner(IllMeshViewerTests IllMeshViewer)
   illumo_stage_msvc_asan(IllMeshViewerTests)
-  add_dependencies(IllMeshViewerTests IllMeshViewerRuntimeStage)
+  illumo_stage_runtime(IllMeshViewerTests)
 endif()

@@ -1,7 +1,6 @@
 #include "MeshViewerModule.h"
 
 #include <Illumo/Engine/IllumoContext.h>
-#include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/MeshLoader.h>
@@ -14,8 +13,18 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <filesystem>
 #include <utility>
+#if !defined(ILLUMO_SERIAL_GUEST)
+#include <filesystem>
+#endif
+
+// The file part of a path or label, without the file system library.
+static std::string
+baseName(const std::string& path)
+{
+  const std::size_t separator = path.find_last_of("/\\");
+  return separator == std::string::npos ? path : path.substr(separator + 1);
+}
 
 static bool
 viewerContextComplete(const IllumoContext* context)
@@ -82,10 +91,14 @@ MeshViewerModule::Start(IllumoContext* context)
   m_wireframeVisual->prepare(ic->renderer);
 
   if (ic->assetManager != nullptr) {
+    // The WASM package preloads this name; native runs may start from the
+    // repository root instead of the staged runtime directory.
     std::string skyboxPath = "Assets/Skybox/skybox-daylight.png";
+#if !defined(ILLUMO_SERIAL_GUEST)
     if (!std::filesystem::exists(skyboxPath)) {
       skyboxPath = "Illumo/Assets/Skybox/skybox-daylight.png";
     }
+#endif
     TextureHandle skyboxCubemap =
       ic->assetManager->acquireCubemapFromCross(skyboxPath);
     if (skyboxCubemap.isValid()) {
@@ -111,23 +124,58 @@ MeshViewerModule::Start(IllumoContext* context)
 
   rebuildGrid();
 
+  m_lifetime = std::make_shared<bool>(true);
   if (m_initialMeshPath.empty() && ic->envVars != nullptr) {
     m_initialMeshPath = ic->envVars->getVar("LaunchMesh").value;
   }
+  m_camera.reset();
+  m_camera.applyTo(ic->camera);
+  syncUiMetadata();
+  const MeshViewerLocation launch = MeshViewerPlatform::current().launchMesh();
   if (!m_initialMeshPath.empty()) {
-    loadMesh(m_initialMeshPath);
-  } else {
-    m_camera.reset();
-    m_camera.applyTo(ic->camera);
-    syncUiMetadata();
+    loadMeshLocation({ m_initialMeshPath, baseName(m_initialMeshPath) });
+  } else if (!launch.empty()) {
+    loadMeshLocation(launch);
   }
 
   return true;
 }
 
 void
+MeshViewerModule::loadMeshLocation(const MeshViewerLocation& location)
+{
+  const std::weak_ptr<bool> alive = m_lifetime;
+  MeshViewerPlatform::current().read(
+    location.location,
+    [this, alive, location](
+      bool success, const std::string& bytes, const std::string& readError) {
+      if (alive.expired()) {
+        return;
+      }
+      const std::string name =
+        location.label.empty() ? baseName(location.location) : location.label;
+      const bool loaded = success && loadMeshFromMemory(bytes, name);
+      const std::string error =
+        success ? "Unreadable or empty mesh: " + name : readError;
+      if (!loaded) {
+        if (ic != nullptr && ic->commandLine != nullptr) {
+          ic->commandLine->logError("Failed to load mesh: " + error);
+        }
+        if (m_ui) {
+          m_ui->showToast("Error: " + error, ColorRgba{ 245, 100, 110, 255 });
+        }
+        return;
+      }
+      if (m_ui) {
+        m_ui->showToast("Loaded: " + name, ColorRgba{ 60, 220, 120, 255 });
+      }
+    });
+}
+
+void
 MeshViewerModule::Exit()
 {
+  m_lifetime.reset();
   m_ui.reset();
   m_wireframeVisual.reset();
   m_meshVisual.reset();
@@ -141,6 +189,7 @@ MeshViewerModule::Exit()
   m_meshPath.clear();
 }
 
+#if !defined(ILLUMO_SERIAL_GUEST)
 bool
 MeshViewerModule::loadMesh(const std::string& path)
 {
@@ -194,13 +243,14 @@ MeshViewerModule::loadMesh(const std::string& path)
 
   syncUiMetadata();
 
-  const std::string filename = std::filesystem::path(path).filename().string();
   if (m_ui) {
-    m_ui->showToast("Loaded: " + filename, ColorRgba{ 60, 220, 120, 255 });
+    m_ui->showToast("Loaded: " + baseName(path),
+                    ColorRgba{ 60, 220, 120, 255 });
   }
 
   return true;
 }
+#endif
 
 bool
 MeshViewerModule::loadMeshFromMemory(const std::string& content,
@@ -320,11 +370,14 @@ MeshViewerModule::dialogSpec() const
 bool
 MeshViewerModule::openMeshDialog()
 {
-  const std::string path = SaveLoad::GetLoadLocation(dialogSpec());
-  if (path.empty()) {
-    return false;
-  }
-  return loadMesh(path);
+  const std::weak_ptr<bool> alive = m_lifetime;
+  MeshViewerPlatform::current().chooseMesh(
+    dialogSpec(), [this, alive](const MeshViewerLocation& chosen) {
+      if (!alive.expired() && !chosen.empty()) {
+        loadMeshLocation(chosen);
+      }
+    });
+  return true;
 }
 
 void
@@ -601,9 +654,7 @@ MeshViewerModule::syncUiMetadata()
   MeshMetadata meta;
   if (!m_meshData.isEmpty()) {
     meta.hasMesh = true;
-    meta.filename = m_meshPath.empty()
-                      ? "memory.obj"
-                      : std::filesystem::path(m_meshPath).filename().string();
+    meta.filename = m_meshPath.empty() ? "memory.obj" : baseName(m_meshPath);
     meta.vertexCount = m_meshData.vertices.size();
     meta.triangleCount = m_meshData.indices.size() / 3;
     meta.submeshCount =

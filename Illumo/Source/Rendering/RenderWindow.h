@@ -37,6 +37,7 @@ public:
   void swapBuffers() override;
   void requestClose() override;
   void cancelCloseRequest() override;
+  void setTitle(const std::string& title) override;
 
 private:
   friend std::unique_ptr<IRenderWindow> CreateCaptureWindow(int width,

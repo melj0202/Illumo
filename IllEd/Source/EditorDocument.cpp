@@ -99,6 +99,7 @@ EditorDocument::clear()
   m_document = IlscDocument{};
   m_document.camera.zoom = 32.0f;
   m_path.clear();
+  m_label.clear();
   m_dirty = false;
   m_nextId = 1;
 }
@@ -191,6 +192,7 @@ EditorDocument::loadFromText(const std::string& text, std::string* error)
   return true;
 }
 
+#if !defined(ILLUMO_SERIAL_GUEST)
 bool
 EditorDocument::loadFromFile(const std::string& path, std::string* error)
 {
@@ -200,7 +202,7 @@ EditorDocument::loadFromFile(const std::string& path, std::string* error)
   }
   m_document = std::move(loaded);
   rebuildRuntime();
-  m_path = path;
+  setPath(path);
   m_nextId = 1;
   m_dirty = false;
   return true;
@@ -213,10 +215,11 @@ EditorDocument::saveToFile(const std::string& path, std::string* error)
   if (!IlscCodec::writeFile(resolved, serializationDocument(), error)) {
     return false;
   }
-  m_path = resolved;
+  setPath(resolved);
   m_dirty = false;
   return true;
 }
+#endif
 
 std::string
 EditorDocument::encode() const

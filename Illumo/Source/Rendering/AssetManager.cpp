@@ -1,15 +1,62 @@
 #define STB_IMAGE_IMPLEMENTATION
+#if defined(ILLUMO_SERIAL_GUEST)
+// Guests decode from memory only; stdio would import WASI file functions.
+#define STBI_NO_STDIO
+#endif
 #include "thirdparty/stb/stb_image.h"
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Renderer.h>
+#if !defined(ILLUMO_SERIAL_GUEST)
 #include <Illumo/Rendering/ShaderPreprocessor.h>
+#endif
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cctype>
-#include <fstream>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <sstream>
+
+// Scoped queue lock that also works with the serial guest's no-op mutex.
+class AssetQueueLock
+{
+public:
+  explicit AssetQueueLock(AssetQueueMutex& mutex)
+    : m_mutex(mutex)
+  {
+    m_mutex.lock();
+  }
+  ~AssetQueueLock() { m_mutex.unlock(); }
+  AssetQueueLock(const AssetQueueLock&) = delete;
+  AssetQueueLock& operator=(const AssetQueueLock&) = delete;
+  AssetQueueLock(AssetQueueLock&&) = delete;
+  AssetQueueLock& operator=(AssetQueueLock&&) = delete;
+
+private:
+  AssetQueueMutex& m_mutex;
+};
+
+// Decodes an image held in memory to RGBA8. Null on failure.
+static unsigned char*
+decodeImage(const IAssetSource* source,
+            const std::string& path,
+            int& width,
+            int& height)
+{
+  std::vector<unsigned char> bytes;
+  if (source == nullptr || !source->read(path, bytes) || bytes.empty() ||
+      bytes.size() >
+        static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    return nullptr;
+  }
+  int sourceChannels = 0;
+  return stbi_load_from_memory(bytes.data(),
+                               static_cast<int>(bytes.size()),
+                               &width,
+                               &height,
+                               &sourceChannels,
+                               STBI_rgb_alpha);
+}
 
 struct ManagedMeshVertex
 {
@@ -69,30 +116,39 @@ assetStateName(AssetState state)
   return "unknown";
 }
 
-AssetManager::AssetManager(Renderer* rendererValue, bool startWorker)
+AssetManager::AssetManager(Renderer* rendererValue,
+                           bool startWorker,
+                           IAssetSource* sourceValue)
   : renderer(rendererValue)
+  , source(sourceValue != nullptr ? sourceValue : DefaultAssetSource())
   , workerEnabled(startWorker)
   , nextHotReloadPoll(std::chrono::steady_clock::now())
 {
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   hotReloadEnabled = true;
 #endif
+#if defined(ILLUMO_SERIAL_GUEST)
+  workerEnabled = false;
+#else
   if (workerEnabled) {
     worker = std::thread(&AssetManager::workerMain, this);
   }
+#endif
 }
 
 AssetManager::~AssetManager()
 {
   {
-    std::lock_guard<std::mutex> lock(queueMutex);
+    AssetQueueLock lock(queueMutex);
     stopping = true;
     jobs.clear();
   }
+#if !defined(ILLUMO_SERIAL_GUEST)
   queueCondition.notify_all();
   if (worker.joinable()) {
     worker.join();
   }
+#endif
 
   if (renderer != nullptr) {
     for (std::unordered_map<uint32_t, MeshEntry>::iterator it = meshes.begin();
@@ -116,23 +172,9 @@ AssetManager::~AssetManager()
 }
 
 std::string
-AssetManager::canonicalPath(const std::string& path)
+AssetManager::canonicalPath(const std::string& path) const
 {
-  std::error_code error;
-  std::filesystem::path absolute = std::filesystem::absolute(path, error);
-  if (error) {
-    return std::filesystem::path(path).lexically_normal().string();
-  }
-  std::filesystem::path canonical =
-    std::filesystem::weakly_canonical(absolute, error);
-  std::string result =
-    (error ? absolute.lexically_normal() : canonical).string();
-#ifdef _WIN32
-  std::transform(result.begin(), result.end(), result.begin(), [](char value) {
-    return static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
-  });
-#endif
-  return result;
+  return source != nullptr ? source->canonical(path) : path;
 }
 
 std::string
@@ -146,7 +188,7 @@ AssetManager::textureKey(const std::string& canonical,
 }
 
 std::string
-AssetManager::shaderKey(const ShaderPaths& paths)
+AssetManager::shaderKey(const ShaderPaths& paths) const
 {
   return canonicalPath(paths.vertexPath) + "|" +
          canonicalPath(paths.fragmentPath);
@@ -154,7 +196,7 @@ AssetManager::shaderKey(const ShaderPaths& paths)
 
 std::string
 AssetManager::meshKey(const std::string& canonical,
-                      const MeshLoadOptions& options)
+                      const MeshLoadOptions& options) const
 {
   std::ostringstream key;
   key.precision(std::numeric_limits<float>::max_digits10);
@@ -169,13 +211,10 @@ AssetManager::meshKey(const std::string& canonical,
   return key.str();
 }
 
-std::filesystem::file_time_type
-AssetManager::writeTime(const std::string& path)
+std::int64_t
+AssetManager::writeTime(const std::string& path) const
 {
-  std::error_code error;
-  std::filesystem::file_time_type time =
-    std::filesystem::last_write_time(path, error);
-  return error ? std::filesystem::file_time_type{} : time;
+  return source != nullptr ? source->stamp(path) : 0;
 }
 
 TextureHandle
@@ -224,7 +263,7 @@ AssetManager::acquireTexture(const std::string& path,
     job.requestSerial = stored.requestSerial;
     job.pathA = stored.path;
     job.textureOptions = stored.options;
-    LoadResult result = executeJob(job);
+    LoadResult result = executeJob(job, source);
     processResult(result);
   } else {
     queueTexture(textures[handle.slot]);
@@ -275,7 +314,7 @@ AssetManager::acquireCubemapSources(TextureSourceKind kind,
   LoadJob job;
   job.sourceKind = kind;
   job.sourcePaths = paths;
-  LoadResult result = executeJob(job);
+  LoadResult result = executeJob(job, source);
   if (!result.success) {
     Logger::LogError(result.error.c_str());
     return {};
@@ -305,25 +344,22 @@ AssetManager::acquireCubemapSources(TextureSourceKind kind,
 }
 
 void
-AssetManager::decodeCubemap(const LoadJob& job, LoadResult& result)
+AssetManager::decodeCubemap(const LoadJob& job,
+                            const IAssetSource& source,
+                            LoadResult& result)
 {
   const size_t count =
     job.sourceKind == TextureSourceKind::CubemapFaces ? 6 : 1;
   for (size_t i = 0; i < count; ++i) {
-    result.sourceWriteTimes[i] = writeTime(job.sourcePaths[i]);
+    result.sourceWriteTimes[i] = source.stamp(job.sourcePaths[i]);
   }
   result.channels = STBI_rgb_alpha;
   if (job.sourceKind == TextureSourceKind::CubemapFaces) {
     for (size_t i = 0; i < count; ++i) {
       int width = 0;
       int height = 0;
-      int sourceChannels = 0;
       std::unique_ptr<unsigned char, decltype(&stbi_image_free)> decoded(
-        stbi_load(job.sourcePaths[i].c_str(),
-                  &width,
-                  &height,
-                  &sourceChannels,
-                  STBI_rgb_alpha),
+        decodeImage(&source, job.sourcePaths[i], width, height),
         stbi_image_free);
       if (!decoded || width <= 0 || width != height ||
           (i != 0 && (width != result.width || height != result.height))) {
@@ -342,14 +378,8 @@ AssetManager::decodeCubemap(const LoadJob& job, LoadResult& result)
   }
   int width = 0;
   int height = 0;
-  int sourceChannels = 0;
   std::unique_ptr<unsigned char, decltype(&stbi_image_free)> decoded(
-    stbi_load(job.sourcePaths[0].c_str(),
-              &width,
-              &height,
-              &sourceChannels,
-              STBI_rgb_alpha),
-    stbi_image_free);
+    decodeImage(&source, job.sourcePaths[0], width, height), stbi_image_free);
   if (!decoded || width <= 0 || height <= 0) {
     result.error = "Unable to decode cubemap cross: " + job.sourcePaths[0];
     return;
@@ -511,7 +541,7 @@ AssetManager::acquireShader(const ShaderPaths& paths, AssetLoadMode mode)
     job.pathA = stored.paths.vertexPath;
     job.pathB = stored.paths.fragmentPath;
     job.defines = stored.paths.defines;
-    LoadResult result = executeJob(job);
+    LoadResult result = executeJob(job, source);
     processResult(result);
   } else {
     queueShader(shaders[handle.slot]);
@@ -542,7 +572,18 @@ AssetManager::acquireMesh(const std::string& path,
     return entry.handle;
   }
 
-  const MeshLoadResult loaded = MeshLoader::loadFromFile(canonical, options);
+  // Native files keep tinyobj's material search beside the OBJ; byte sources
+  // (package preloads) parse the bytes alone.
+  MeshLoadResult loaded;
+  std::vector<unsigned char> bytes;
+  if (source != nullptr && source->hasFileSystem()) {
+    loaded = MeshLoader::loadFromFile(canonical, options);
+  } else if (source != nullptr && source->read(canonical, bytes)) {
+    loaded = MeshLoader::loadFromMemory(
+      std::string(bytes.begin(), bytes.end()), options, "");
+  } else {
+    loaded.error = "Unable to read mesh: " + canonical;
+  }
   if (!loaded.success) {
     Logger::LogError(loaded.error.c_str());
     return MeshHandle{};
@@ -571,21 +612,21 @@ AssetManager::enrollMesh(const MeshData& mesh,
   glm::vec3 minBounds(std::numeric_limits<float>::max());
   glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
   for (size_t i = 0; i < mesh.vertices.size(); ++i) {
-    const MeshVertex& source = mesh.vertices[i];
-    vertices.push_back({ source.position.x,
-                         source.position.y,
-                         source.position.z,
-                         source.normal.x,
-                         source.normal.y,
-                         source.normal.z,
-                         meshColorChannel(source.color.r),
-                         meshColorChannel(source.color.g),
-                         meshColorChannel(source.color.b),
-                         meshColorChannel(source.color.a),
-                         source.texCoords.x,
-                         source.texCoords.y });
-    minBounds = glm::min(minBounds, source.position);
-    maxBounds = glm::max(maxBounds, source.position);
+    const MeshVertex& input = mesh.vertices[i];
+    vertices.push_back({ input.position.x,
+                         input.position.y,
+                         input.position.z,
+                         input.normal.x,
+                         input.normal.y,
+                         input.normal.z,
+                         meshColorChannel(input.color.r),
+                         meshColorChannel(input.color.g),
+                         meshColorChannel(input.color.b),
+                         meshColorChannel(input.color.a),
+                         input.texCoords.x,
+                         input.texCoords.y });
+    minBounds = glm::min(minBounds, input.position);
+    maxBounds = glm::max(maxBounds, input.position);
   }
 
   const MeshHandle handle =
@@ -912,18 +953,21 @@ void
 AssetManager::enqueue(const LoadJob& job)
 {
   {
-    std::lock_guard<std::mutex> lock(queueMutex);
+    AssetQueueLock lock(queueMutex);
     if (stopping) {
       return;
     }
     jobs.push_back(job);
   }
+#if !defined(ILLUMO_SERIAL_GUEST)
   queueCondition.notify_one();
+#endif
 }
 
 void
 AssetManager::workerMain()
 {
+#if !defined(ILLUMO_SERIAL_GUEST)
   while (true) {
     LoadJob job;
     {
@@ -935,18 +979,19 @@ AssetManager::workerMain()
       job = jobs.front();
       jobs.pop_front();
     }
-    LoadResult result = executeJob(job);
+    LoadResult result = executeJob(job, source);
     {
-      std::lock_guard<std::mutex> lock(queueMutex);
+      AssetQueueLock lock(queueMutex);
       if (!stopping) {
         results.push_back(std::move(result));
       }
     }
   }
+#endif
 }
 
 AssetManager::LoadResult
-AssetManager::executeJob(const LoadJob& job)
+AssetManager::executeJob(const LoadJob& job, const IAssetSource* source)
 {
   LoadResult result;
   result.kind = job.kind;
@@ -956,14 +1001,17 @@ AssetManager::executeJob(const LoadJob& job)
   result.textureOptions = job.textureOptions;
   result.sourceKind = job.sourceKind;
 
+  if (source == nullptr) {
+    result.error = "No asset source: " + job.pathA;
+    return result;
+  }
   if (job.kind == AssetKind::Texture) {
     if (job.sourceKind != TextureSourceKind::Image2D) {
-      decodeCubemap(job, result);
+      decodeCubemap(job, *source, result);
       return result;
     }
-    int sourceChannels = 0;
-    unsigned char* decoded = stbi_load(
-      job.pathA.c_str(), &result.width, &result.height, &sourceChannels, 4);
+    unsigned char* decoded =
+      decodeImage(source, job.pathA, result.width, result.height);
     if (decoded == nullptr) {
       result.error = "Unable to decode texture: " + job.pathA;
       return result;
@@ -977,6 +1025,15 @@ AssetManager::executeJob(const LoadJob& job)
     return result;
   }
 
+#if defined(ILLUMO_SERIAL_GUEST)
+  // Shader programs are host policy; guests record built-in styles only.
+  result.error = "Shader files are unavailable in a WASM guest: " + job.pathA;
+  return result;
+#else
+  if (!source->hasFileSystem()) {
+    result.error = "Shader includes need the native file system: " + job.pathA;
+    return result;
+  }
   PreprocessOptions vsOptions;
   vsOptions.defines = job.defines;
   vsOptions.sourcePath = job.pathA;
@@ -1019,6 +1076,7 @@ AssetManager::executeJob(const LoadJob& job)
   }
   result.success = true;
   return result;
+#endif
 }
 
 void
@@ -1132,8 +1190,8 @@ AssetManager::pollHotReload()
       }
       continue;
     }
-    const std::filesystem::file_time_type current = writeTime(entry.path);
-    if (!entry.reloadPending && current != std::filesystem::file_time_type{} &&
+    const std::int64_t current = writeTime(entry.path);
+    if (!entry.reloadPending && current != 0 &&
         current != entry.lastWriteTime) {
       queueTexture(entry);
     }
@@ -1142,27 +1200,21 @@ AssetManager::pollHotReload()
        it != shaders.end();
        ++it) {
     ShaderEntry& entry = it->second;
-    const std::filesystem::file_time_type vertex =
-      writeTime(entry.paths.vertexPath);
-    const std::filesystem::file_time_type fragment =
-      writeTime(entry.paths.fragmentPath);
+    const std::int64_t vertex = writeTime(entry.paths.vertexPath);
+    const std::int64_t fragment = writeTime(entry.paths.fragmentPath);
     bool needsReload = false;
-    if (vertex != std::filesystem::file_time_type{} &&
-        vertex != entry.vertexWriteTime) {
+    if (vertex != 0 && vertex != entry.vertexWriteTime) {
       needsReload = true;
-    } else if (fragment != std::filesystem::file_time_type{} &&
-               fragment != entry.fragmentWriteTime) {
+    } else if (fragment != 0 && fragment != entry.fragmentWriteTime) {
       needsReload = true;
     } else {
       for (size_t i = 0; i < entry.dependencies.size(); ++i) {
         const std::string& dep = entry.dependencies[i];
-        const std::filesystem::file_time_type depTime = writeTime(dep);
-        std::unordered_map<std::string,
-                           std::filesystem::file_time_type>::const_iterator
-          itDep = entry.dependencyWriteTimes.find(dep);
-        if (depTime != std::filesystem::file_time_type{} &&
-            (itDep == entry.dependencyWriteTimes.end() ||
-             itDep->second != depTime)) {
+        const std::int64_t depTime = writeTime(dep);
+        std::unordered_map<std::string, std::int64_t>::const_iterator itDep =
+          entry.dependencyWriteTimes.find(dep);
+        if (depTime != 0 && (itDep == entry.dependencyWriteTimes.end() ||
+                             itDep->second != depTime)) {
           needsReload = true;
           break;
         }
@@ -1177,9 +1229,18 @@ AssetManager::pollHotReload()
 void
 AssetManager::pump()
 {
+#if defined(ILLUMO_SERIAL_GUEST)
+  // No worker: queued (Async) loads complete here, on the caller.
+  std::deque<LoadJob> queued;
+  queued.swap(jobs);
+  while (!queued.empty()) {
+    results.push_back(executeJob(queued.front(), source));
+    queued.pop_front();
+  }
+#endif
   std::deque<LoadResult> completed;
   {
-    std::lock_guard<std::mutex> lock(queueMutex);
+    AssetQueueLock lock(queueMutex);
     completed.swap(results);
   }
   while (!completed.empty()) {
@@ -1195,11 +1256,11 @@ AssetManager::completePendingForTests()
 {
   std::deque<LoadJob> pending;
   {
-    std::lock_guard<std::mutex> lock(queueMutex);
+    AssetQueueLock lock(queueMutex);
     pending.swap(jobs);
   }
   while (!pending.empty()) {
-    LoadResult result = executeJob(pending.front());
+    LoadResult result = executeJob(pending.front(), source);
     pending.pop_front();
     processResult(result);
   }
