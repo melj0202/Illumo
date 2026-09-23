@@ -568,7 +568,9 @@ an interactive terminal:
 python build.py
 ```
 
-Use the arrow keys to choose `Release`, `Debug`, `RelWithDebInfo`, or
+The **Profile** setting cycles `Default`, the built-in profiles and any saved
+ones; changing a later setting marks the profile `(edited)` as a session
+override. Use the arrow keys to choose `Release`, `Debug`, `RelWithDebInfo`, or
 `MinSizeRel`, cycle the **Application** setting through the installed apps
 (IllumoGame / IllEd / Mesh Viewer), toggle documentation, Tracy and the WASM
 runtime, select build parallelism, and run a focused action: **Play**,
@@ -576,24 +578,57 @@ runtime, select build parallelism, and run a focused action: **Play**,
 **Run existing build**, and the tools below. **Play** builds `IllumoRuntime`
 (which stages every package) and runs the selected app. The header line
 reports which apps are staged in the selected tree, whether the WASM
-toolchain is missing, and how many stale pre-WASM outputs remain. On Windows consoles, moving the mouse over a row
+toolchain is missing, and how many stale pre-WASM outputs remain; the line
+above it shows the Git branch, commit and working-tree state. Each action has
+a one-letter hotkey shown beside it (`p` Play, `b` Build everything, `a`
+runtime and apps, `t` tests, `r` Run existing build, `s` statistics, `o`
+Development Tools, `d` docs, `c` coverage, `i` clang-tidy); `/` opens a
+command palette that fuzzy-matches every action, tool, profile and setting
+value (`/ cfg deb` Enter selects Debug), `.` repeats the
+last action, `?` lists every shortcut with its command-line equivalent, Tab
+jumps between Settings and Actions, and Home/End/Page Up/Page Down move
+further. Recorded actions show their latest result for the selected tree
+(for example `✔ 3m 12s · 2h ago`) when the row has room. The bottom border
+explains the selected setting or shows the exact `python build.py ...`
+command the selected action runs. Terminals with at least 34 rows show a
+block-letter ILLUMO banner above the menu; the progress view and every
+Development Tools subview use the same rounded frame, with the title in the
+top border and the status message in the bottom one. Consoles whose encoding
+cannot show these glyphs (a redirected Windows stdout) get ASCII instead.
+
+The console is animated. The menu unrolls when it opens (any key finishes
+it), a sheen crosses the banner every few seconds, the selection marker
+pulses, and a changed status line gets one sheen. The progress view repaints
+about 16 times a second: the title's colors flow, a sheen runs along the
+filled bar, tools without a total show a streak with a fading tail, and the
+result badge flashes briefly when the action ends. Animation only changes
+colors, never positions, and idle frames that look the same are not
+redrawn. Set `ILLUMO_NO_ANIMATION=1` to turn all motion off; redirected
+output never animates. On Windows consoles, moving the mouse over a row
 highlights it without activating it. Left-click a setting to cycle forward
 or an action to run it. Click the setting's left arrow or right-click it to
 cycle backward; scroll over menu rows to move the selection. Button
 releases, dragging, and the second press of a double-click do not activate
 actions. Input mode is restored while commands run and when the dashboard
 exits. Other terminals retain keyboard controls. Mouse hit testing requires
-the whole dashboard to fit (at least 56 columns and 29 rows); enlarge the
+the whole dashboard to fit (at least 56 columns and 30 rows); enlarge the
 terminal if clicks are ignored.
 
-Build, test, coverage, tidy, and documentation actions open a live progress
-view: current phase and command, total/phase elapsed time, a bounded
-recent-output panel, and warning/error line counts. CTest counts and
-Ninja/CMake progress are shown when the tools report them. These describe
-the current tool, not an estimated percentage of the whole action; MSBuild
-and quiet tools may show an activity indicator instead. The final view
-includes success/failure, exit code, and the log location. Press Enter to
-return to the menu.
+Build, test, coverage, tidy, documentation and WASM-toolchain actions open a
+live progress view: a phase timeline (`✔ Configuring 4.1s › ⠹ Building`),
+the current command, total/phase elapsed time, a colorized recent-output
+panel, and warning/error line counts. CTest counts and Ninja/CMake progress
+are shown when the tools report them, with a rate-based ETA for step and
+test counts and a sparkline of the last 24 seconds' completions per second.
+These describe the current tool, not the whole action. MSBuild
+and quiet tools show an activity bar, or, when the same action last
+succeeded on the same tree, elapsed time against that run's duration. The
+window title follows the action, and Windows Terminal and ConEmu also show
+taskbar progress. Actions longer than 10 seconds ring the terminal bell on
+completion. A successful run is compared with the previous one ("12% faster
+than the last run"); a failed run lists its first errors above the output tail. From
+the final view, press `d` to open the run in the diagnostic browser, `l` to
+read the full log, or any other key to return to the menu.
 
 Complete combined output is saved under Git-ignored
 `build-orchestrator-logs/`; logs are retained until you remove them. Ctrl+C
@@ -619,6 +654,9 @@ python build.py test --list-tests
 python build.py test --test IllumoGame.CellGame.SaveLoadRoundTrip
 python build.py test --test IllumoGame.Wasm.GamePackage
 python build.py test --test IllEd.Wasm.Package
+python build.py watch
+python build.py watch --config RelWithDebInfo --target IllumoRuntime
+python build.py watch --test IllumoGame.CellGame.SaveLoadRoundTrip
 python build.py play --app illed -- -ww 1280 -wh 720
 python build.py run --config Debug --no-build
 python build.py stats
@@ -630,6 +668,13 @@ python build.py tidy
 python build.py docs
 python build.py new-project ../MyNewGame --name MyNewGame
 ```
+
+`watch` configures once, builds, then polls first-party sources, shaders,
+CMake files and JSON manifests (build trees, `archive/`, `Illumo/thirdparty/`,
+`docs/` and dot-directories excluded) and rebuilds after each save, waiting
+for bursts of writes to settle. With `--test NAME` it also runs that exact
+CTest case after each build. Failures are reported and watching continues;
+Ctrl+C stops it. `--interval` sets the polling period (default 1 second).
 
 When standard input or output is redirected, `python build.py` with no
 command performs the normal Release build instead of opening the console.
@@ -702,10 +747,21 @@ loop without leaving the console:
   settings**. Coverage and tidy retain their dedicated Debug/Ninja trees and
   honor selected parallelism.
 - **Artifact shortcuts** offers existing build directories, the latest log
-  for the selected build identity, the coverage HTML report, and generated
-  PDFs. Opening uses Windows' default handler and never starts a build.
+  for the selected build identity, the coverage HTML report, generated
+  PDFs, and the orchestrator log folder. Opening uses Windows' default
+  handler and never starts a build.
+- **Build trends** charts each action's recorded runs, oldest to newest, as
+  a duration sparkline colored by outcome, with the median duration and
+  success rate; details compare the latest success with the median.
+- **Watch** runs `build.py watch` with the current settings in the console;
+  Ctrl+C stops it and returns to the menu.
+- **Toolchain doctor** runs `build.py doctor` with the current settings;
+  **Fetch the pinned WASM toolchain** runs `build.py wasm-tools` in the
+  progress view. **Keyboard shortcuts** is the same page as `?`.
 
-Subviews scroll with arrows, the wheel, Page Up/Down, and Home/End. Hit
+The recorded-runs list shows each run's outcome, action, configuration,
+duration and age. Subviews scroll with arrows, the wheel, Page Up/Down, and
+Home/End, with a scrollbar once a list overflows. Hit
 regions follow the visible viewport; hover changes selection and only action
 rows execute work. `q` or Escape returns to the previous view outside text
 entry. Source-file statistics is also available in Development Tools.

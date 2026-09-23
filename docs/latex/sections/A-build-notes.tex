@@ -20,17 +20,35 @@ The Python front end configures the root workspace and exposes the same flow:
 Its interactive Windows console accepts left-clicks to activate rows, the left
 setting arrow or right-clicks to cycle backward, and wheel input to navigate.
 Mouse movement highlights the row under the pointer without activating it.
-Keyboard controls remain available. Mouse hit testing requires the complete
-dashboard to fit (at least 56 columns by 29 rows). Native console input mode is
+Keyboard controls remain available: every action has a one-letter hotkey, a
+slash opens a command palette that fuzzy-matches every action, tool, profile,
+and setting value, period repeats the last action, a question mark lists shortcuts with their
+command-line equivalents, and a Profile setting cycles default, built-in and
+saved profiles. The header shows the Git position; recorded actions show their
+latest result for the selected tree, and the bottom border shows the selected
+action's exact command. Terminals of at least 34 rows add a block-letter
+banner, and the progress view and toolbox subviews share the menu's frame;
+encodings without the glyphs fall back to ASCII. The console animates with
+timed input ticks: an opening unroll, periodic sheens, a pulsing selection
+marker, flowing progress colors, an indeterminate streak, and a brief result
+flash. Animation recolors without moving anything, and
+\texttt{ILLUMO\_NO\_ANIMATION=1} disables it. The doctor prints an aligned
+table with a status tally. Mouse hit testing requires the complete
+dashboard to fit (at least 56 columns by 30 rows). Native console input mode is
 restored around child commands and on exit; other terminals use keyboard input.
-Build, test, coverage, tidy, and documentation menu actions display a live phase,
-elapsed times, tool-reported progress, diagnostic line counts, and recent output.
-Unknown totals use an activity indicator rather than an estimated percentage.
+Build, test, coverage, tidy, documentation, and toolchain menu actions display a
+phase timeline, elapsed times, tool-reported progress with a rate-based ETA and
+throughput sparkline, diagnostic line counts, and colorized recent output; a
+successful run is compared with the previous one. Unknown totals use an
+activity indicator, or elapsed time against the last successful run of the same
+action and tree, rather than an estimated percentage of the whole action.
 The complete combined log remains under \pathref{build-orchestrator-logs/}.
 Ctrl+C stops the action's owned processes; Windows Job Objects retain descendant
 ownership even if the launcher exits first. The completion screen shows exit
-status and remains until Enter. Application launches and statistics retain
-direct output, and explicit CLI output is unchanged.
+status and a failed run's first errors; it opens the diagnostic browser or raw
+log on request and otherwise returns on any key. Application launches and
+statistics retain direct output. Explicit CLI commands keep their output and
+add styling and step durations only on an interactive terminal.
 \begin{lstlisting}[language={}]
 python build.py build --config Debug --target IllumoGame --parallel
 python build.py test
@@ -73,8 +91,13 @@ Orchestrator regression tests run through Python unittest discovery with
 
 \subsubsection{Everyday development toolbox}
 The compact dashboard opens a scrollable Development Tools submenu with a
-test explorer, diagnostic browser, profile picker, existing-artifact shortcuts,
-and source-file statistics. Arrows, wheel, Page Up/Down, and Home/End navigate;
+test explorer, diagnostic browser, per-action build trends (duration sparklines
+colored by outcome, median, and success rate), profile picker,
+existing-artifact shortcuts, source-file statistics, watch mode, the toolchain
+doctor, and the pinned WASM toolchain fetch. \texttt{python build.py watch}
+configures once, rebuilds after each first-party source, shader, or CMake
+change, optionally runs one exact CTest case (\texttt{--test}), reports
+failures without exiting, and stops on Ctrl+C. Arrows, wheel, Page Up/Down, and Home/End navigate;
 mouse hit regions follow the visible viewport. Hover and ordinary item selection
 only update details. Explicit action rows execute work. Slash focuses search;
 ordinary characters (including navigation letters) become text, Backspace edits,

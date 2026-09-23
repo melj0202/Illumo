@@ -341,12 +341,17 @@ class DashboardProgressTests(unittest.TestCase):
             progress.finished = progress.started + 2
         with patch.object(build, "REPOSITORY_ROOT", Path(self.temporary.name)), \
              patch.object(build, "run_dashboard_progress", side_effect=finish), \
-             patch("builtins.input", return_value=""), contextlib.redirect_stdout(io.StringIO()) as output:
+             patch.object(build, "read_action_choice", return_value="") as choice, \
+             patch.object(build, "dashboard_follow_up") as follow_up, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
             build.execute_dashboard_action(state, "build", terminal)
         terminal.leave.assert_called_once()
         terminal.enter.assert_called_once()
+        choice.assert_called_once()
+        # The follow-up (d/l) opens only after the console is back in raw mode.
+        self.assertEqual(follow_up.call_args.args[0], "")
         self.assertEqual(state.status_kind, "failure")
-        self.assertIn("failed (2.0s)", state.status)
+        self.assertIn("Build everything failed (2.0s)", state.status)
         self.assertIn(build.ANSI_LEAVE_SCREEN, output.getvalue())
 
     @unittest.skipUnless(sys.platform == "win32" and sys.stdin.isatty(), "requires isolated Windows console")
@@ -452,7 +457,9 @@ class DashboardMouseTests(unittest.TestCase):
         ), "unknown")
 
     def test_borders_headers_and_empty_regions_ignore_clicks(self):
-        for x, y in ((1, 6), (94, 6), (4, 1), (4, 5), (95, 6)):
+        right = self.regions[0].right  # The right border's column.
+        self.assertEqual(self.regions[0].row, 6)
+        for x, y in ((1, 6), (right, 6), (4, 1), (4, 5), (right + 1, 6)):
             self.assertEqual(build.dashboard_mouse_key(
                 self.state, build.DashboardMouseEvent(x, y, "left"), self.regions,
             ), "unknown")
@@ -480,7 +487,8 @@ class DashboardMouseTests(unittest.TestCase):
 
     def test_hover_outside_menu_preserves_selection(self):
         self.state.selected = 6
-        for x, y in ((1, 6), (94, 6), (5, 5), (5, 1), (100, 100)):
+        right = self.regions[0].right
+        for x, y in ((1, 6), (right, 6), (5, 5), (5, 1), (100, 100)):
             result = build.dashboard_mouse_key(
                 self.state, build.DashboardMouseEvent(x, y, "hover"), self.regions,
             )
@@ -916,7 +924,9 @@ class ToolboxTests(unittest.TestCase):
         (self.root / "Product").mkdir()
         (self.root / "CMakeLists.txt").write_text("add_subdirectory(Product)\n")
         (self.root / "Product/CMakeLists.txt").write_text("add_executable(Product main.cpp)\nadd_executable(ProductTests tests.cpp)\nillumo_discover_test_runner(ProductTests Product)\n")
-        result = subprocess.run([sys.executable, str(self.root / "build.py"), "menu", "--snapshot"], capture_output=True, text=True)
+        # The child picks Unicode or ASCII glyphs from its own stdout encoding.
+        result = subprocess.run([sys.executable, str(self.root / "build.py"), "menu", "--snapshot"],
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Development Tools", result.stdout)
         self.assertIn("Product", result.stdout)
@@ -1090,6 +1100,480 @@ class WasmRuntimeTests(unittest.TestCase):
         for mouse in (False, True):
             rendered = build.render_dashboard(state, 120, ansi=False, mouse_enabled=mouse)
             self.assertLessEqual(len(rendered.splitlines()), 30)
+
+
+class DashboardPolishTests(unittest.TestCase):
+    """Hotkeys, profile cycling, run badges, styled layout and progress."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.state = build.DashboardState(applications=("game",), profiles_file=self.root / "none.json")
+
+    def index(self, key):
+        return [item[2] for item in build.DASHBOARD_ITEMS].index(key)
+
+    def test_hotkeys_select_and_run_their_action(self):
+        self.assertEqual(build.printable_key("p"), "key:p")
+        self.assertEqual(build.printable_key("\x00"), "unknown")
+        self.assertEqual(build.dashboard_key_action(self.state, "key:b"), "build")
+        self.assertEqual(self.state.selected, self.index("build"))
+        self.assertIsNone(build.dashboard_key_action(self.state, "key:z"))
+        letters = list(build.DASHBOARD_HOTKEYS.values())
+        self.assertEqual(len(letters), len(set(letters)))
+        self.assertFalse(set(letters) & set("hjkl"))
+
+    def test_repeat_and_enter_only_run_actions(self):
+        self.assertIsNone(build.dashboard_key_action(self.state, "key:."))
+        self.assertIn("Nothing to repeat", self.state.status)
+        self.state.last_action = "docs"
+        self.assertEqual(build.dashboard_key_action(self.state, "key:."), "docs")
+        self.assertEqual(self.state.selected, self.index("docs"))
+        self.state.selected = self.index("configuration")
+        self.assertIsNone(build.dashboard_key_action(self.state, "enter"))
+
+    def test_navigation_keys(self):
+        first_action = next(i for i, item in enumerate(build.DASHBOARD_ITEMS) if item[0] == "action")
+        self.assertTrue(build.dashboard_navigate(self.state, "tab"))
+        self.assertEqual(self.state.selected, first_action)
+        self.assertTrue(build.dashboard_navigate(self.state, "tab"))
+        self.assertEqual(self.state.selected, 0)
+        build.dashboard_navigate(self.state, "end")
+        self.assertEqual(self.state.selected, len(build.DASHBOARD_ITEMS) - 1)
+        build.dashboard_navigate(self.state, "page_down")
+        self.assertEqual(self.state.selected, len(build.DASHBOARD_ITEMS) - 1)
+        self.assertFalse(build.dashboard_navigate(self.state, "enter"))
+        for sequence, expected in (("[H", "home"), ("OF", "end"), ("[5~", "page_up"), ("[6~", "page_down")):
+            self.assertEqual(build.posix_escape_to_key(sequence, False), expected)
+
+    def test_profile_setting_cycles_and_marks_overrides(self):
+        self.state.selected = self.index("profile")
+        names = list(build.load_profiles(self.state.profiles_file, allow_missing=True))
+        build.adjust_dashboard_setting(self.state, 1)
+        self.assertEqual(self.state.profile_name, names[0])
+        self.assertEqual(self.state.configuration, build.BUILTIN_PROFILES[names[0]]["config"])
+        self.state.selected = self.index("tracy")
+        build.adjust_dashboard_setting(self.state, 1)
+        self.assertEqual(self.state.profile_label, f"{names[0]} (edited)")
+        self.state.selected = self.index("profile")
+        build.adjust_dashboard_setting(self.state, -1)
+        self.assertIsNone(self.state.profile_name)
+        self.assertEqual((self.state.overrides, self.state.profile_label), ({}, "Default"))
+        build.adjust_dashboard_setting(self.state, -1)
+        self.assertEqual(self.state.profile_name, names[-1])
+
+    def test_selection_hint_shows_the_equivalent_command(self):
+        self.state.selected = self.index("build")
+        hint = build.dashboard_selection_hint(self.state)
+        self.assertTrue(hint.startswith("$ python build.py build "), hint)
+        self.assertIn("--config=Release", hint)
+        self.state.selected = self.index("configuration")
+        self.assertIn("AddressSanitizer", build.dashboard_selection_hint(self.state))
+        rendered = build.render_dashboard(self.state, 120, ansi=False)
+        self.assertIn("AddressSanitizer", rendered.splitlines()[-1])
+
+    def test_last_run_badges_follow_the_selected_tree(self):
+        identity = build.build_identity(build.dashboard_settings(self.state))
+        self.state.history = [
+            {"action": "build", "identity": {**identity, "configuration": "Debug"},
+             "status": "failed", "started": 50.0},
+            {"action": "build", "identity": identity, "status": "succeeded",
+             "elapsed": 192.0, "started": 100.0},
+            {"action": "docs", "identity": {}, "status": "failed", "started": 100.0},
+        ]
+        glyphs = build.ASCII_GLYPHS
+        self.assertEqual(build.dashboard_run_badge(self.state, "build", glyphs, now=100.0 + 7200),
+                         ("+ 3m 12s | 2h ago", build.ANSI_GREEN))
+        self.assertEqual(build.dashboard_run_badge(self.state, "docs", glyphs, now=130.0)[0], "x failed | just now")
+        self.assertIsNone(build.dashboard_run_badge(self.state, "play", glyphs))
+        self.state.configuration_index = build.DASHBOARD_CONFIGURATIONS.index("MinSizeRel")
+        self.assertIsNone(build.dashboard_run_badge(self.state, "build", glyphs))
+
+    def test_styled_rows_keep_geometry_and_never_split_escapes(self):
+        self.state.history = [{"action": "build", "status": "succeeded", "elapsed": 5.0, "started": 0.0,
+                               "identity": build.build_identity(build.dashboard_settings(self.state))}]
+        self.state.git_summary = "main @ 0123abcd | clean"
+        for columns in (40, 72, 96, 140):
+            plain = build.render_dashboard(self.state, columns, ansi=False)
+            styled = build.render_dashboard(self.state, columns, ansi=True)
+            self.assertEqual(len(plain.splitlines()), len(styled.splitlines()))
+            for plain_line, styled_line in zip(plain.splitlines(), styled.splitlines()):
+                self.assertEqual(build._ANSI_SEQUENCE.sub("", styled_line.replace("\x1b[0m", "")), plain_line)
+        segments = [("abc", build.ANSI_RED), ("defgh", build.ANSI_GREEN)]
+        self.assertEqual(build.render_segments(segments, 6, False, ellipsis="..."), "abc...")
+        self.assertEqual(build.render_segments(segments, 10, False), "abcdefgh  ")
+        self.assertEqual(build._ANSI_SEQUENCE.sub("", build.render_segments(segments, 5, True, ellipsis="~")), "abcd~")
+        self.assertEqual(build.render_segments(segments, 2, False, ellipsis="..."), "..")
+        self.assertIs(build.terminal_glyphs("cp1252"), build.ASCII_GLYPHS)
+        self.assertIs(build.terminal_glyphs("utf-8"), build.UNICODE_GLYPHS)
+
+    def test_progress_timeline_eta_and_first_errors(self):
+        progress = build.DashboardProgress("Build everything", "Release", self.root / "run.log", started=0.0)
+        progress.consume('> "cmake" -S source -B build', 1)
+        progress.consume('> "cmake" --build build', 5)
+        progress.consume("[25/100] Building CXX object a.cpp", 15)
+        self.assertEqual([phase[0] for phase in progress.phases], ["Configuring", "Building"])
+        self.assertEqual(progress.phases[0][2], 5)
+        self.assertEqual(build.progress_eta(progress, 15), "ETA ~30.0s")
+        rendered = build.render_dashboard_progress(progress, 110, 40, now=15, ansi=False)
+        self.assertIn("Configuring 4.0s", rendered)
+        self.assertIn("ETA ~30.0s", rendered)
+        progress.consume("src/a.cpp(3): error C2065: 'x': undeclared identifier", 16)
+        progress.returncode = 2
+        progress.finish(17)
+        self.assertEqual(progress.phases[-1][2], 17)
+        rendered = build.render_dashboard_progress(progress, 110, 40, now=30, ansi=False)
+        self.assertIn("First errors", rendered)
+        self.assertIn("error C2065", rendered)
+        self.assertIn("d diagnostics", rendered)
+
+    def test_quiet_tool_uses_the_last_run_as_an_estimate(self):
+        progress = build.DashboardProgress("Docs", "Release", self.root / "run.log", started=0.0)
+        progress.previous_elapsed = 40.0
+        rendered = build.render_dashboard_progress(progress, 110, 30, now=10, ansi=False)
+        self.assertIn("~25% of the last run (40.0s)", rendered)
+        self.assertIn("has not reported a total", rendered)
+        self.assertIn("Last run 40.0s", rendered)
+
+    def test_terminal_signals_only_drive_the_taskbar_where_supported(self):
+        progress = build.DashboardProgress("Build", "Release", self.root / "run.log", started=0.0)
+        progress.completed, progress.total = 3, 4
+        with patch.dict(build.os.environ, {"WT_SESSION": "1"}):
+            self.assertIn("\x1b]9;4;1;75\x07", build.terminal_progress_signals(progress))
+            self.assertIn("\x1b]9;4;0;0\x07", build.terminal_progress_signals(None))
+        with patch.dict(build.os.environ, {}, clear=True):
+            signals = build.terminal_progress_signals(progress)
+            self.assertNotIn("9;4", signals)
+            self.assertIn("Illumo | Build | Starting 75%", signals)
+
+    def test_styled_toolbox_keeps_hit_rows_and_adds_a_scrollbar(self):
+        rows = [build.action_row("run", "Run selected")] + [
+            build.ToolboxRow(str(i), f"Test {i}", tone="bad" if i % 2 else "ok") for i in range(50)]
+        view = build.ToolboxView(selected=30)
+        plain, plain_regions, _ = build.render_toolbox("Tests", rows, view, 90, 22)
+        styled, styled_regions, _ = build.render_toolbox("Tests", rows, view, 90, 22, ansi=True)
+        self.assertEqual(plain_regions, styled_regions)
+        self.assertNotIn("\x1b", plain)
+        styled_lines = [build._ANSI_SEQUENCE.sub("", line) for line in styled.splitlines()]
+        for region in styled_regions:
+            self.assertIn(rows[region.index].label, styled_lines[region.row - 1])
+        glyphs = build.terminal_glyphs()
+        # The scrollbar sits in the last content column, inside the frame.
+        self.assertTrue(any(line[-3] == glyphs["thumb"] for line in plain.splitlines()))
+        self.assertTrue(all(len(line) == 89 for line in plain.splitlines()))
+        self.assertTrue(plain.splitlines()[0].startswith(glyphs["top_left"]))
+        self.assertTrue(plain.splitlines()[-1].startswith(glyphs["bottom_left"]))
+
+    def test_throughput_sparkline_and_last_run_comparison(self):
+        glyphs = build.ASCII_GLYPHS
+        self.assertEqual(build.sparkline([0, 7, 14], glyphs, low=0), "_=#")
+        self.assertEqual(build.sparkline([3, 3], glyphs), "==")
+        self.assertEqual(build.sparkline([0, 0], glyphs, low=0), "__")
+        progress = build.DashboardProgress("Build", "Release", self.root / "run.log", started=0.0)
+        progress.consume('> "cmake" --build build', 0)
+        for second in range(1, 7):
+            progress.consume(f"[{second * 10}/200] Building CXX object f{second}.cpp", second)
+        self.assertEqual(build.progress_throughput(progress, 6.0), [10, 10, 10, 10, 10])
+        rendered = build.render_dashboard_progress(progress, 110, 40, now=6, ansi=False)
+        self.assertIn("Rate:", rendered)
+        self.assertIn("10.0 steps/s", rendered)
+        progress.consume('> "ctest" --test-dir build', 7)
+        self.assertEqual(len(progress.samples), 0)
+        self.assertEqual(build.compare_with_last_run(90, 100), "10% faster than the last run (1m 40s)")
+        self.assertEqual(build.compare_with_last_run(150, 100), "50% slower than the last run (1m 40s)")
+        self.assertIn("about the same", build.compare_with_last_run(100.5, 100))
+        progress.returncode, progress.previous_elapsed = 0, 20.0
+        progress.finish(10)
+        self.assertIn("Action finished in 10.0s  50% faster than the last run (20.0s)",
+                      build.render_dashboard_progress(progress, 110, 40, ansi=False))
+
+    def test_build_trends_group_actions_and_color_outcomes(self):
+        history = [  # Newest first, as run_history returns.
+            {"action": "build", "status": "succeeded", "elapsed": 90.0, "started": 30.0,
+             "identity": {"configuration": "Release"}},
+            {"action": "test", "status": "failed", "elapsed": 10.0, "started": 20.0},
+            {"action": "build", "status": "failed", "elapsed": 30.0, "started": 10.0},
+            {"action": "build", "status": "succeeded", "elapsed": 120.0, "started": 0.0},
+            {"action": "build", "status": "running", "started": 40.0},
+            {"log": "legacy.log"},
+        ]
+        trends = build.action_trends(history)
+        self.assertEqual([action for action, _runs in trends], ["build", "test"])
+        self.assertEqual([run["elapsed"] for run in trends[0][1]], [120.0, 30.0, 90.0])
+        row = build.trend_row("build", trends[0][1], build.ASCII_GLYPHS, now=90.0)
+        self.assertEqual("".join(text for text, _style in row.segments), row.label)
+        self.assertIn("median   1m 45s", row.label)
+        self.assertIn(" 66% ok", row.label)
+        self.assertEqual([style for text, style in row.segments[1:4]],
+                         [build.ANSI_GREEN, build.ANSI_RED, build.ANSI_GREEN])
+        self.assertIn("2 succeeded, 1 failed", row.details[0])
+        self.assertIn("14% faster than the median", row.details[3])
+        rendered, regions, _ = build.render_toolbox("Trends", [row], build.ToolboxView(), 100, 20)
+        self.assertIn(row.label, rendered.splitlines()[regions[0].row - 1])
+
+    def test_fuzzy_palette_ranks_and_applies_choices(self):
+        self.assertIsNone(build.fuzzy_match("xyz", "Build everything"))
+        self.assertEqual(build.fuzzy_match("bev", "Build everything")[1], (0, 6, 7))
+        self.assertGreater(build.fuzzy_match("tidy", "Run clang-tidy")[0],
+                           build.fuzzy_match("tidy", "Toolchain doctor (tidy)x")[0] - 100)
+        rows, total = build.palette_rows(self.state, "cfg deb")
+        self.assertGreater(total, len(rows))
+        self.assertEqual(rows[0].key, "set:configuration=Debug")
+        self.assertEqual("".join(text for text, _style in rows[0].segments), rows[0].label)
+        rows, _ = build.palette_rows(self.state, "play")
+        self.assertEqual(rows[0].key, "action:play")
+        terminal = unittest.mock.Mock()
+        self.assertIsNone(build.apply_palette_choice(self.state, terminal, "set:configuration=Debug"))
+        self.assertEqual((self.state.configuration, self.state.overrides["config"]), ("Debug", "Debug"))
+        self.assertIsNone(build.apply_palette_choice(self.state, terminal, "set:parallel=8 jobs"))
+        self.assertEqual(build.dashboard_settings(self.state)["parallel"], 8)
+        self.assertIsNone(build.apply_palette_choice(self.state, terminal, "set:tracy=On"))
+        self.assertTrue(self.state.tracy_enabled)
+        self.assertIsNone(build.apply_palette_choice(self.state, terminal, "profile:release"))
+        self.assertEqual((self.state.profile_name, self.state.overrides), ("release", {}))
+        self.assertEqual(build.apply_palette_choice(self.state, terminal, "action:docs"), "docs")
+        with patch.object(build, "run_trends_view") as trends:
+            build.apply_palette_choice(self.state, terminal, "tool:trends")
+        trends.assert_called_once_with(terminal)
+
+    def test_palette_types_filters_and_runs(self):
+        terminal = unittest.mock.Mock()
+        terminal.read_event.side_effect = [build.DashboardTextEvent(c) for c in "tidyx"] + [
+            "backspace", "enter"]
+        with patch.object(build.shutil, "get_terminal_size", return_value=build.os.terminal_size((100, 32))), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(build.run_command_palette(self.state, terminal), "action:tidy")
+        terminal.read_event.side_effect = [build.DashboardTextEvent("zzzz"), "enter", "escape"]
+        with patch.object(build.shutil, "get_terminal_size", return_value=build.os.terminal_size((100, 32))), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(build.run_command_palette(self.state, terminal))
+
+    def test_watch_snapshot_skips_generated_trees(self):
+        for relative in ("App/Source/a.cpp", "App/CMakeLists.txt", "App/app.json", "App/notes.txt",
+                         "build-x/gen.cpp", ".git/x.h", "Illumo/thirdparty/lib.h", "Illumo/Source/b.h",
+                         "docs/snippet.cpp", "archive/old.cpp", "App/__pycache__/m.json"):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x")
+        before = build.watch_snapshot(self.root)
+        self.assertEqual(sorted(before), ["App/CMakeLists.txt", "App/Source/a.cpp", "App/app.json",
+                                          "Illumo/Source/b.h"])
+        (self.root / "App/Source/a.cpp").unlink()
+        (self.root / "App/Source/new.hpp").write_text("x")
+        self.assertEqual(build.watch_changes(before, build.watch_snapshot(self.root)),
+                         ["App/Source/a.cpp", "App/Source/new.hpp"])
+
+    def test_watch_rebuilds_on_change_and_stops_on_ctrl_c(self):
+        commands = []
+        snapshots = iter([{"a.cpp": 1}, {"a.cpp": 1}, {"a.cpp": 2}, {"a.cpp": 2}])
+        sleeps = iter([None, None, None, KeyboardInterrupt()])
+
+        def sleep(_seconds):
+            value = next(sleeps)
+            if value is not None:
+                raise value
+        arguments = build.create_parser().parse_args(
+            ["watch", "--build-dir", str(self.root), "--test", "App.Case+1", "--interval", "0.5"])
+        with patch.object(build, "configure", return_value="cmake"), \
+             patch.object(build, "existing_tool", return_value="ctest"), \
+             patch.object(build, "watch_snapshot", side_effect=lambda _root: next(snapshots)), \
+             patch.object(build.time, "sleep", side_effect=sleep), \
+             patch.object(build.CommandRunner, "run", lambda _self, command, *_: commands.append(list(command))), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            build.run_watch(arguments)
+        self.assertEqual(len(commands), 4)  # Build and test, twice.
+        self.assertIn(r"^(App\.Case\+1)$", commands[1])
+        self.assertIn("1 changed (a.cpp)", output.getvalue())
+        self.assertIn("Watch stopped after 2 cycles", output.getvalue())
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            build.create_parser().parse_args(["watch", "--interval", "0"])
+
+    def test_tall_terminals_get_the_block_banner(self):
+        compact = build.render_dashboard(self.state, 120, ansi=False, terminal_rows=30)
+        with patch.object(build, "terminal_glyphs", return_value=build.UNICODE_GLYPHS):
+            tall = build.render_dashboard(self.state, 120, ansi=False, terminal_rows=40)
+            narrow = build.render_dashboard(self.state, 40, ansi=False, terminal_rows=40)
+        with patch.object(build, "terminal_glyphs", return_value=build.ASCII_GLYPHS):
+            ascii_tall = build.render_dashboard(self.state, 120, ansi=False, terminal_rows=40)
+        self.assertEqual(len(tall.splitlines()), len(compact.splitlines()) + 3)
+        self.assertLessEqual(len(tall.splitlines()), build.BANNER_MIN_ROWS)
+        for row in build.BANNER_ROWS:
+            self.assertIn(row, tall)
+            self.assertNotIn(row, narrow)
+            self.assertNotIn(row, ascii_tall)
+        styled = build.render_dashboard(self.state, 120, ansi=True, terminal_rows=40)
+        self.assertEqual(len(styled.splitlines()), len(build.render_dashboard(
+            self.state, 120, ansi=False, terminal_rows=40).splitlines()))
+
+    def test_switches_configuration_colors_and_status_time(self):
+        glyphs = build.UNICODE_GLYPHS
+        self.assertEqual(build.dashboard_value_text("On", glyphs), "● On")
+        self.assertEqual(build.dashboard_value_text("Off", glyphs), "○ Off")
+        self.assertEqual(build.dashboard_value_text("Release", glyphs), "Release")
+        self.assertIn(build.ANSI_YELLOW, build.dashboard_value_style("configuration", "Debug", self.state))
+        self.state.status, self.state.status_time = "Build everything succeeded (3.0s)", "14:02"
+        status_row = next(line for line in build.render_dashboard(self.state, 100, ansi=False).splitlines()
+                          if "succeeded (3.0s)" in line)
+        self.assertTrue(status_row.rstrip(build.terminal_glyphs()["vertical"]).rstrip().endswith("14:02"))
+
+    def test_frames_are_exact_width_and_trim_labels(self):
+        glyphs = build.UNICODE_GLYPHS
+        for width in (8, 24, 60):
+            self.assertEqual(len(build.frame_rule("╭", "╮", [("a long label " * 5, "")], width, glyphs, False)), width)
+            self.assertEqual(len(build.frame_line([("x" * 100, "")], width, glyphs, False)), width)
+        self.assertEqual(build.frame_rule("╭", "╮", [("hi", "")], 12, glyphs, False), "╭─ hi ─────╮")
+        progress = build.DashboardProgress("Build", "Release", self.root / "run.log", started=0.0)
+        rendered = build.render_dashboard_progress(progress, 60, 20, now=1, ansi=False).splitlines()
+        self.assertTrue(rendered[0].startswith("╭") or rendered[0].startswith("+"))
+        self.assertIn("RUNNING", rendered[2])
+        self.assertTrue(any("Output" in line and line.startswith(("├", "+")) for line in rendered))
+        self.assertTrue(rendered[-1].startswith(("╰", "+")))
+        self.assertIn("Ctrl+C cancels", rendered[-1])
+
+    def test_doctor_text_is_an_aligned_table(self):
+        with patch.object(build.shutil, "which", return_value=None), \
+             contextlib.redirect_stdout(io.StringIO()) as output, \
+             contextlib.redirect_stderr(io.StringIO()):
+            code = build.main(["doctor", "--build-dir", str(self.root), "--no-wasm", "--no-docs"])
+        self.assertEqual(code, 1)
+        lines = [line for line in output.getvalue().splitlines() if line.strip()]
+        self.assertTrue(lines[-1].strip().endswith("errors"))
+        detail_columns = {line.index("Not found") for line in lines if "Not found" in line}
+        self.assertEqual(len(detail_columns), 1)
+
+    def test_shine_sweeps_once_per_period(self):
+        self.assertEqual(build.shine_band(0, 10), (-3, 0))
+        self.assertEqual(build.shine_band(4, 10), (3, 6))
+        self.assertIsNone(build.shine_band(20, 10))
+        self.assertEqual(build.shine_band(build.SHINE_PERIOD_FRAMES + 4, 10), (3, 6))
+        lit = build.apply_shine([(c, "s") for c in "ab cd"], (1, 4))
+        self.assertEqual([style for _text, style in lit], ["s", build.ANSI_SHINE, "s", build.ANSI_SHINE, "s"])
+        self.assertEqual(build.apply_shine([("a", "s")], None), [("a", "s")])
+
+    def test_animation_only_recolors_never_moves(self):
+        self.state.status_frame = 0
+        still = build.render_dashboard(self.state, 110, ansi=False, terminal_rows=40)
+        frames = {build.render_dashboard(self.state, 110, ansi=True, terminal_rows=40, frame=frame)
+                  for frame in range(0, 70, 2)}
+        self.assertGreater(len(frames), 3)
+        for styled in frames:
+            plain = "\n".join(build._ANSI_SEQUENCE.sub("", line.replace("\x1b[0m", ""))
+                              for line in styled.splitlines())
+            self.assertEqual(plain, still)
+        whole = build.render_dashboard(self.state, 110, ansi=False).splitlines()
+        revealed = build.render_dashboard(self.state, 110, ansi=False, reveal=4).split("\n")
+        self.assertEqual(len(revealed), len(whole))
+        self.assertEqual(revealed[:4], whole[:4])
+        self.assertFalse(any(revealed[4:]))
+
+    def run_loop(self, events, environment=None):
+        terminal = unittest.mock.Mock()
+        terminal.windows_input = object()
+        terminal.read_event.side_effect = events
+        with patch.object(build, "DashboardTerminal", return_value=terminal), \
+             patch.object(build, "refresh_dashboard_context"), \
+             patch.object(build, "dashboard_terminal_size", return_value=build.os.terminal_size((100, 30))), \
+             patch.object(build.sys.stdin, "isatty", return_value=True), \
+             patch.dict(build.os.environ, environment or {}), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            with patch.object(build.sys.stdout, "isatty", return_value=True):
+                self.assertEqual(build.run_dashboard(), 0)
+        return terminal, output.getvalue()
+
+    def test_ticks_unroll_the_menu_and_repaint_in_place(self):
+        terminal, output = self.run_loop(["tick"] * 12 + ["quit"], {"ILLUMO_NO_ANIMATION": ""})
+        self.assertEqual(output.count(build.ANSI_CLEAR), 1)
+        self.assertGreaterEqual(output.count(build.ANSI_HOME + ""), 10)
+        self.assertEqual(terminal.read_event.call_args.kwargs["timeout"], build.DASHBOARD_TICK_SECONDS)
+        # Any input ends the unroll immediately.
+        _terminal, output = self.run_loop(["down", "quit"], {"ILLUMO_NO_ANIMATION": ""})
+        self.assertIn("Build everything", output.split(build.ANSI_CLEAR)[-1])
+
+    def test_no_animation_environment_blocks_on_input(self):
+        terminal, output = self.run_loop(["quit"], {"ILLUMO_NO_ANIMATION": "1"})
+        self.assertIsNone(terminal.read_event.call_args.kwargs["timeout"])
+        self.assertIn("Build everything", output)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows console ABI")
+    def test_native_reader_times_out_into_ticks(self):
+        import ctypes
+        api = unittest.mock.Mock()
+        api.GetStdHandle.side_effect = [10, 11]
+        api.GetConsoleMode.return_value = 1
+        api.WaitForSingleObject.return_value = 0x102
+        with patch.object(ctypes, "WinDLL", return_value=api):
+            reader = build.WindowsDashboardInput()
+        self.assertEqual(reader.read_event(timeout=0.05), "tick")
+        api.ReadConsoleInputW.assert_not_called()
+
+    def test_progress_streak_sheen_and_finale(self):
+        glyphs = build.UNICODE_GLYPHS
+        forward = build.activity_bar(0.25, 20, glyphs)
+        backward = build.activity_bar(1.5, 20, glyphs)  # Step 18 of a 15-cell travel: returning.
+        for bar in (forward, backward):
+            self.assertEqual(sum(len(text) for text, _style in bar), 20)
+        head = f"\x1b[38;5;{build.COMET_COLORS[-1]}m"
+        streak = [style for text, style in forward if text == glyphs["bar_fill"]]
+        self.assertEqual(streak[-1], head)
+        self.assertEqual([s for t, s in backward if t == glyphs["bar_fill"]][0], head)
+        lit = build.progress_bar(0.5, 20, glyphs, shine=4)
+        self.assertEqual([style for _text, style in lit[3:6]], [build.ANSI_SHINE] * 3)
+        progress = build.DashboardProgress("Build", "Release", self.root / "run.log", started=0.0)
+        progress.consume("[5/10] Building", 1)
+        with patch.object(build, "motion_enabled", return_value=True):
+            moving = {build.render_dashboard_progress(progress, 100, 24, now=t, ansi=True) for t in (2, 2.2, 2.4)}
+            self.assertEqual(len(moving), 3)
+            progress.returncode = 0
+            progress.finish(10.0)
+            flash = build.render_dashboard_progress(progress, 100, 24, now=10.05, ansi=True)
+            steady = build.render_dashboard_progress(progress, 100, 24, now=10.2, ansi=True)
+            after = build.render_dashboard_progress(progress, 100, 24, now=12, ansi=True)
+        self.assertIn(build.PROGRESS_BADGE_FLASHES["SUCCEEDED"], flash)
+        self.assertNotIn(build.PROGRESS_BADGE_FLASHES["SUCCEEDED"], steady)
+        self.assertNotIn(build.PROGRESS_BADGE_FLASHES["SUCCEEDED"], after)
+        with patch.object(build, "motion_enabled", return_value=False), \
+             patch.object(build, "paint_dashboard_progress") as paint:
+            build.play_progress_finale(progress)
+        paint.assert_not_called()
+
+    def test_finished_runs_with_tool_totals_still_summarize(self):
+        progress = build.DashboardProgress("Build", "Release", self.root / "run.log", started=0.0)
+        progress.previous_elapsed = 10.0
+        progress.consume('> "cmake" --build build', 0)
+        progress.consume("[980/980] Linking", 7)
+        progress.returncode = 0
+        progress.finish(8.0)
+        rendered = build.render_dashboard_progress(progress, 110, 30, now=20, ansi=False)
+        self.assertIn("Action finished in 8.0s", rendered)
+        self.assertIn("980/980 steps", rendered)
+        self.assertIn("20% faster than the last run", rendered)
+        self.assertNotIn("tool-reported", rendered)
+        progress.returncode, progress.completed = 2, 490
+        rendered = build.render_dashboard_progress(progress, 110, 30, now=20, ansi=False)
+        self.assertIn("490/980 steps", rendered)
+        self.assertNotIn("faster", rendered)
+
+    def test_palette_cursor_blinks_on_ticks(self):
+        terminal = unittest.mock.Mock()
+        terminal.read_event.side_effect = ["tick", "tick", build.DashboardTextEvent("x"), "escape"]
+        with patch.object(build, "motion_enabled", return_value=True), \
+             patch.object(build.shutil, "get_terminal_size", return_value=build.os.terminal_size((100, 32))), \
+             patch.object(build, "palette_rows", wraps=build.palette_rows) as rows, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(build.run_command_palette(self.state, terminal))
+        self.assertEqual(terminal.read_event.call_args.kwargs["timeout"], 0.5)
+        self.assertEqual(rows.call_count, 2)  # Blinks repaint without re-ranking.
+        self.assertEqual(output.getvalue().count(build.ANSI_CLEAR), 2)
+
+    def test_run_history_label(self):
+        run = {"log": str(self.root / "build-1.log"), "status": "failed", "action": "build",
+               "identity": {"configuration": "Debug"}, "elapsed": 75.0, "started": 0.0}
+        label = build.run_history_label(run, build.ASCII_GLYPHS, now=7200.0)
+        self.assertTrue(label.startswith("x failed    build      Debug"), label)
+        self.assertIn("1m 15s", label)
+        self.assertIn("2h ago", label)
+        self.assertIn("legacy log", build.run_history_label({"log": "old.log"}, build.ASCII_GLYPHS))
 
 
 if __name__ == "__main__":

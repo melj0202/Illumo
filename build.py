@@ -17,6 +17,7 @@ import re
 import shlex
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -105,20 +106,117 @@ def dashboard_applications(root: Path | None = None) -> tuple[str, ...]:
 ANSI_RESET = "\x1b[0m"
 ANSI_BOLD = "\x1b[1m"
 ANSI_DIM = "\x1b[2m"
+ANSI_UNDERLINE = "\x1b[4m"
 ANSI_CYAN = "\x1b[38;5;45m"
 ANSI_GREEN = "\x1b[38;5;82m"
 ANSI_YELLOW = "\x1b[38;5;220m"
 ANSI_BLUE = "\x1b[38;5;111m"
 ANSI_RED = "\x1b[38;5;203m"
+ANSI_VIOLET = "\x1b[38;5;141m"
+ANSI_FRAME = "\x1b[38;5;61m"
+ANSI_SELECTED = "\x1b[48;5;24m\x1b[38;5;231m"
 ANSI_REVERSE = "\x1b[7m"
 ANSI_CLEAR = "\x1b[2J\x1b[H"
+ANSI_HOME = "\x1b[H"
+ANSI_ERASE_LINE = "\x1b[K"
+ANSI_ERASE_BELOW = "\x1b[J"
 ANSI_ENTER_SCREEN = "\x1b[?1049h"
 ANSI_LEAVE_SCREEN = "\x1b[?1049l"
 ANSI_HIDE_CURSOR = "\x1b[?25l"
 ANSI_SHOW_CURSOR = "\x1b[?25h"
 ANSI_DISABLE_WRAP = "\x1b[?7l"
 ANSI_ENABLE_WRAP = "\x1b[?7h"
+# xterm title stack: keep the shell's own title across the console session.
+ANSI_PUSH_TITLE = "\x1b[22;0t"
+ANSI_POP_TITLE = "\x1b[23;0t"
 _ANSI_SEQUENCE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# Cyan to violet; the wordmark and progress bars sweep across it.
+GRADIENT_COLORS = (51, 45, 39, 33, 69, 105, 141, 177)
+
+# Unicode glyphs, with ASCII stand-ins for consoles whose encoding lacks them
+# (a redirected Windows stdout is cp1252). Block and arrow glyphs are CP437.
+UNICODE_GLYPHS = {
+    "ok": "✔", "bad": "✘", "warn": "▲", "info": "·", "bullet": "●", "hollow": "○",
+    "top_left": "╭", "top_right": "╮", "middle_left": "├", "middle_right": "┤",
+    "bottom_left": "╰", "bottom_right": "╯", "horizontal": "─", "vertical": "│",
+    "heavy": "━", "marker": "▸", "left": "‹", "right": "›", "separator": "·",
+    "chevron": "›", "block": "█", "half": "▌", "track": "░", "thumb": "┃",
+    "rail": "│", "ellipsis": "…",
+    "spinner": ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"),
+    "sparks": ("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"),
+    "up_down": "↑↓", "left_right": "←→", "refresh": "⟳",
+    # Thin-line progress bars: filled, half-filled tip, and track.
+    "bar_fill": "━", "bar_half": "╸", "bar_track": "━",
+}
+ASCII_GLYPHS = {
+    "ok": "+", "bad": "x", "warn": "!", "info": "-", "bullet": "*", "hollow": "o",
+    "top_left": "+", "top_right": "+", "middle_left": "+", "middle_right": "+",
+    "bottom_left": "+", "bottom_right": "+", "horizontal": "-", "vertical": "|",
+    "heavy": "=", "marker": ">", "left": "<", "right": ">", "separator": "|",
+    "chevron": ">", "block": "#", "half": "#", "track": "-", "thumb": "#",
+    "rail": "|", "ellipsis": "...",
+    "spinner": ("|", "/", "-", "\\"),
+    "sparks": ("_", ".", ":", "-", "=", "+", "*", "#"),
+    "up_down": "Up/Down", "left_right": "Left/Right", "refresh": "@",
+    "bar_fill": "#", "bar_half": "#", "bar_track": "-",
+}
+# Block-letter wordmark for terminals with room to spare (CP437 glyphs).
+BANNER_ROWS = (
+    "▀█▀ █   █   █ █ █▄ ▄█ █▀█",
+    " █  █   █   █ █ █ ▀ █ █ █",
+    "▄█▄ █▄▄ █▄▄ █▄█ █   █ █▄█",
+)
+# The banner needs three extra rows over the compact 30-row console.
+BANNER_MIN_ROWS = 34
+ANSI_TRACK = "\x1b[38;5;238m"
+
+# Motion. The menu advances one frame per timed input tick; nothing moves
+# for redirected output or with ILLUMO_NO_ANIMATION set.
+DASHBOARD_TICK_SECONDS = 0.07
+INTRO_ROWS_PER_FRAME = 3
+SHINE_PERIOD_FRAMES = 64
+ANSI_SHINE = "\x1b[1;38;5;231m"
+MARKER_PULSE = (45, 51, 87, 123, 159, 123, 87, 51)
+# Tail to head of the indeterminate progress streak.
+COMET_COLORS = (236, 24, 31, 38, 45, 51, 195)
+
+
+def motion_enabled() -> bool:
+    return (os.environ.get("ILLUMO_NO_ANIMATION", "") in ("", "0")
+            and getattr(sys.stdout, "isatty", lambda: False)())
+
+
+def shine_band(frame: int, length: int, speed: float = 1.5, band: int = 3,
+               period: int = SHINE_PERIOD_FRAMES) -> tuple[int, int] | None:
+    """The [start, end) cells lit by a sheen sweeping once per period."""
+    head = int((frame % period) * speed) - band
+    if head >= length:
+        return None
+    return head, head + band
+
+
+def apply_shine(segments: Sequence[tuple[str, str]], band: tuple[int, int] | None,
+                offset: int = 0) -> list[tuple[str, str]]:
+    """Light the glyphs of one-glyph segments that fall inside the band."""
+    if band is None:
+        return list(segments)
+    low, high = band[0] + offset, band[1] + offset
+    return [(text, ANSI_SHINE if low <= index < high and not text.isspace() else style)
+            for index, (text, style) in enumerate(segments)]
+
+
+def terminal_glyphs(encoding: str | None = None) -> dict:
+    encoding = encoding or getattr(sys.stdout, "encoding", None) or "utf-8"
+    sample = "".join(
+        "".join(value) if isinstance(value, tuple) else value
+        for value in UNICODE_GLYPHS.values()
+    )
+    try:
+        sample.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return ASCII_GLYPHS
+    return UNICODE_GLYPHS
+
 
 DASHBOARD_CONFIGURATIONS = ("Release", "Debug", "RelWithDebInfo", "MinSizeRel")
 DASHBOARD_PARALLEL_OPTIONS = (
@@ -129,7 +227,9 @@ DASHBOARD_PARALLEL_OPTIONS = (
     ("8 jobs", 8),
     ("16 jobs", 16),
 )
+DASHBOARD_DEFAULT_PROFILE = "Default"
 DASHBOARD_ITEMS = (
+    ("setting", "Profile", "profile"),
     ("setting", "Configuration", "configuration"),
     ("setting", "Application", "application"),
     ("setting", "Testing", "testing"),
@@ -163,6 +263,31 @@ DASHBOARD_DESCRIPTIONS = {
     "tidy": "Ninja, Clang, and first-party clang-tidy",
     "quit": "return to the shell",
 }
+# Single-key shortcuts; h/j/k/l and q stay navigation and quit.
+DASHBOARD_HOTKEYS = {
+    "play": "p", "build": "b", "build_app": "a", "test": "t", "launch": "r",
+    "stats": "s", "tools": "o", "docs": "d", "coverage": "c", "tidy": "i",
+    "quit": "q",
+}
+DASHBOARD_SETTING_HINTS = {
+    "profile": "Cycles built-in and saved profiles; later changes become session overrides",
+    "configuration": "Debug is the AddressSanitizer profile; play and measure with RelWithDebInfo",
+    "application": "The package that Play and Run existing build launch in IllumoRuntime",
+    "testing": "BUILD_TESTING: test runners, discovery and every registered CTest case",
+    "documentation": "ILLUMO_BUILD_DOCUMENTATION: the PDFs, when latexmk is available",
+    "tracy": "ILLUMO_ENABLE_TRACY: Tracy profiler instrumentation",
+    "wasm": "ILLUMO_BUILD_WASM_RUNTIME: IllumoRuntime and every app package",
+    "parallel": "Job limit passed to cmake --build --parallel",
+}
+ACTION_TITLES = {
+    **{key: label for kind, label, key in DASHBOARD_ITEMS if kind == "action"},
+    "file_stats": "Source file statistics",
+    "doctor": "Toolchain doctor",
+    "wasm_tools": "Fetch WASM toolchain",
+    "watch": "Watch and rebuild",
+}
+# Actions that stream through the live progress view and leave a run record.
+PROGRESS_ACTIONS = ("build", "build_app", "test", "coverage", "tidy", "docs", "wasm_tools")
 
 
 class BuildError(RuntimeError):
@@ -422,6 +547,17 @@ class DashboardState:
     profile_settings: dict = field(default_factory=dict)
     overrides: dict = field(default_factory=dict)
     profiles_file: Path = DEFAULT_PROFILES_FILE
+    # Context refreshed on entry and after each action, never per keystroke.
+    git_summary: str | None = None
+    history: list[dict] | None = None
+    last_action: str | None = None
+    # Wall-clock "HH:MM" of the last status change, shown beside it.
+    status_time: str | None = None
+    # Animation clock (ticks) and the tick at which the status last changed.
+    frame: int = 0
+    status_frame: int | None = None
+    # (key, monotonic time, value) for the file-backed workspace status line.
+    workspace_cache: tuple | None = None
 
     def __post_init__(self) -> None:
         # Applications are the runtime's installed packages (game, illed, ...),
@@ -451,6 +587,34 @@ class DashboardState:
         if "parallel" in self.profile_settings:
             return self.profile_settings["parallel"]
         return DASHBOARD_PARALLEL_OPTIONS[self.parallel_index][1]
+
+    @property
+    def profile_label(self) -> str:
+        name = self.profile_name or DASHBOARD_DEFAULT_PROFILE
+        return f"{name} (edited)" if self.overrides else name
+
+
+def refresh_dashboard_context(state: DashboardState) -> None:
+    """Git position and recorded runs for the header and last-run badges."""
+    branch = git_output(REPOSITORY_ROOT, ("rev-parse", "--abbrev-ref", "HEAD"))
+    commit = git_output(REPOSITORY_ROOT, ("rev-parse", "--short=8", "HEAD"))
+    if branch and commit:
+        worktree = worktree_statistics(REPOSITORY_ROOT)
+        changed = 0 if worktree is None else (
+            worktree.staged + worktree.modified + worktree.untracked + worktree.conflicted
+        )
+        branch = branch.strip()
+        state.git_summary = (
+            f"{'detached HEAD' if branch == 'HEAD' else branch} @ {commit.strip()}"
+            + (" | clean" if worktree is not None and not changed else "")
+            + (f" | {changed} changed" if changed else "")
+        )
+    else:
+        state.git_summary = None
+    try:
+        state.history = run_history()
+    except OSError:
+        state.history = []
 
 
 class DashboardTerminal:
@@ -504,10 +668,13 @@ class DashboardTerminal:
             )
             sys.stdout.flush()
 
-    def read_event(self, text_mode: bool = False) -> str | DashboardMouseEvent | DashboardTextEvent:
+    def read_event(
+        self, text_mode: bool = False, timeout: float | None = None,
+    ) -> str | DashboardMouseEvent | DashboardTextEvent:
+        """The next input event, or "tick" once `timeout` seconds pass."""
         if self.windows_input is not None:
-            return self.windows_input.read_event(text_mode=text_mode)
-        return read_dashboard_key(text_mode=text_mode)
+            return self.windows_input.read_event(text_mode=text_mode, timeout=timeout)
+        return read_dashboard_key(text_mode=text_mode, timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -585,6 +752,8 @@ class WindowsDashboardInput:
         self.api.ReadConsoleInputW.restype = wintypes.BOOL
         self.api.GetConsoleScreenBufferInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(ScreenInfo)]
         self.api.GetConsoleScreenBufferInfo.restype = wintypes.BOOL
+        self.api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.api.WaitForSingleObject.restype = wintypes.DWORD
         self.handle = self.api.GetStdHandle(-10)
         self.output_handle = self.api.GetStdHandle(-11)
         mode = wintypes.DWORD()
@@ -602,12 +771,20 @@ class WindowsDashboardInput:
         if not self.api.SetConsoleMode(self.handle, self.original_mode):
             raise BuildError("Could not restore the console input mode.")
 
-    def read_event(self, text_mode: bool = False) -> str | DashboardMouseEvent | DashboardTextEvent:
+    def read_event(
+        self, text_mode: bool = False, timeout: float | None = None,
+    ) -> str | DashboardMouseEvent | DashboardTextEvent:
         from ctypes import wintypes
 
         record = self.record_type()
         count = wintypes.DWORD()
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
+            if deadline is not None:
+                # Ignored records (key releases) must not extend the wait.
+                remaining = max(0, int((deadline - time.monotonic()) * 1000))
+                if self.api.WaitForSingleObject(self.handle, remaining) == 0x102:  # WAIT_TIMEOUT
+                    return "tick"
             if not self.api.ReadConsoleInputW(
                 self.handle, self.ctypes.byref(record), 1, self.ctypes.byref(count)
             ):
@@ -629,7 +806,7 @@ class WindowsDashboardInput:
                     "q": "quit", "Q": "quit", "j": "down", "k": "up",
                     "h": "left", "l": "right",
                     "/": "search",
-                }.get(key.character, "unknown"))
+                }.get(key.character, printable_key(key.character)))
             if record.kind == 4:
                 return "resize"
             if record.kind == 2:
@@ -770,6 +947,8 @@ def dashboard_style(text: str, style: str, ansi: bool) -> str:
 
 
 def dashboard_value(state: DashboardState, key: str) -> str:
+    if key == "profile":
+        return state.profile_label
     if key == "configuration":
         return state.configuration
     if key == "application":
@@ -790,7 +969,20 @@ def dashboard_value(state: DashboardState, key: str) -> str:
 
 
 def dashboard_workspace_status(state: DashboardState, ok: str, bad: str) -> tuple[str, str]:
-    """One header line saying whether the selected tree can play its apps."""
+    """One header line saying whether the selected tree can play its apps.
+    Animation frames repaint often; the file checks refresh every second."""
+    settings = dashboard_settings(state)
+    key = (settings["build_dir"], settings["config"], state.wasm_enabled,
+           tuple(settings.get("cmake_arg", [])), ok, bad)
+    now = time.monotonic()
+    if state.workspace_cache and state.workspace_cache[0] == key and now - state.workspace_cache[1] < 1.0:
+        return state.workspace_cache[2]
+    value = _dashboard_workspace_status(state, ok, bad)
+    state.workspace_cache = (key, now, value)
+    return value
+
+
+def _dashboard_workspace_status(state: DashboardState, ok: str, bad: str) -> tuple[str, str]:
     if not WASM_HOST_SUPPORTED:
         return "Apps: IllumoRuntime and its packages are Windows x64 only", ANSI_DIM
     if not state.wasm_enabled:
@@ -818,114 +1010,265 @@ def dashboard_workspace_status(state: DashboardState, ok: str, bad: str) -> tupl
             ANSI_YELLOW)
 
 
+def gradient_segments(text: str, offset: int = 0) -> list[tuple[str, str]]:
+    """One styled run per glyph, sweeping the wordmark gradient."""
+    visible = sum(1 for character in text if not character.isspace())
+    span = max(1, visible - 1)
+    segments: list[tuple[str, str]] = []
+    seen = 0
+    for character in text:
+        if character.isspace():
+            segments.append((character, ""))
+            continue
+        position = (seen / span) * (len(GRADIENT_COLORS) - 1) + offset
+        color = GRADIENT_COLORS[int(round(position)) % len(GRADIENT_COLORS)]
+        segments.append((character, f"{ANSI_BOLD}\x1b[38;5;{color}m"))
+        seen += 1
+    return segments
+
+
+def render_segments(
+    segments: Sequence[tuple[str, str]], width: int, ansi: bool,
+    base: str = "", ellipsis: str = "...",
+) -> str:
+    """Lay styled runs into exactly `width` cells. Plain text is measured and
+    truncated before styling, so a cut never splits an escape sequence."""
+    if width < 1:
+        return ""
+    total = sum(dashboard_visible_width(text) for text, _style in segments)
+    overflow = total > width
+    if overflow and dashboard_visible_width(ellipsis) > width:
+        ellipsis = "." * width
+    limit = width - dashboard_visible_width(ellipsis) if overflow else width
+    runs: list[tuple[str, str]] = []
+    used = 0
+    full = False
+    for text, style in segments:
+        kept: list[str] = []
+        for character in text:
+            cell = dashboard_visible_width(character)
+            if used + cell > limit:
+                full = True
+                break
+            kept.append(character)
+            used += cell
+        if kept:
+            runs.append(("".join(kept), style))
+        if full:
+            break
+    if overflow:
+        runs.append((ellipsis, runs[-1][1] if runs else ""))
+        used += dashboard_visible_width(ellipsis)
+    if used < width:
+        runs.append((" " * (width - used), ""))
+    if not ansi:
+        return "".join(text for text, _style in runs)
+    return "".join(
+        f"{base}{style}{text}{ANSI_RESET}" if base or style else text
+        for text, style in runs
+    )
+
+
+def centered_segments(
+    segments: Sequence[tuple[str, str]], width: int,
+) -> list[tuple[str, str]]:
+    used = sum(dashboard_visible_width(text) for text, _style in segments)
+    if used >= width:
+        return list(segments)
+    return [(" " * ((width - used) // 2), ""), *segments]
+
+
+def dashboard_value_style(key: str, value: str, state: DashboardState) -> str:
+    if value == "On":
+        return ANSI_GREEN
+    if value in ("Off", "Windows x64 only"):
+        return ANSI_DIM
+    if key == "profile":
+        return ANSI_BOLD + (ANSI_YELLOW if state.overrides else ANSI_CYAN)
+    if key == "application":
+        return ANSI_BOLD + ANSI_VIOLET
+    if key == "configuration":
+        # Debug is the sanitizer build; the rest shade from fast to small.
+        return ANSI_BOLD + {"Debug": ANSI_YELLOW, "Release": ANSI_GREEN,
+                            "RelWithDebInfo": ANSI_CYAN}.get(value, ANSI_VIOLET)
+    return ANSI_BOLD + ANSI_CYAN
+
+
+def dashboard_value_text(value: str, glyphs: dict) -> str:
+    """Switch-style On/Off: a filled or hollow dot before the word."""
+    if value == "On":
+        return f"{glyphs['bullet']} On"
+    if value == "Off":
+        return f"{glyphs['hollow']} Off"
+    return value
+
+
+def banner_segments(row: str) -> list[tuple[str, str]]:
+    """One banner row, colored by column so the gradient runs vertically true."""
+    width = max(1, len(BANNER_ROWS[0]) - 1)
+    return [
+        (character, "" if character == " " else
+         f"{ANSI_BOLD}\x1b[38;5;{GRADIENT_COLORS[column * (len(GRADIENT_COLORS) - 1) // width]}m")
+        for column, character in enumerate(row)
+    ]
+
+
+def format_age(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return "just now"
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{int(seconds // size)}{unit} ago"
+    return "just now"
+
+
+def dashboard_run_badge(
+    state: DashboardState, action: str, glyphs: dict, now: float | None = None,
+) -> tuple[str, str] | None:
+    """The latest recorded outcome of an action, for its menu row."""
+    if not state.history or action not in PROGRESS_ACTIONS:
+        return None
+    identity = None
+    if action in ("build", "build_app", "test"):
+        try:
+            identity = build_identity(dashboard_settings(state))
+        except (BuildError, OSError):
+            return None
+    run = next((run for run in state.history if run.get("action") == action
+                and (identity is None or run.get("identity") == identity)), None)
+    if run is None:
+        return None
+    started = run.get("started", run.get("recorded_at"))
+    age = format_age((time.time() if now is None else now) - started) if isinstance(
+        started, (int, float)) else ""
+    separator = f" {glyphs['separator']} " if age else ""
+    elapsed = run.get("elapsed")
+    if run.get("status") == "succeeded" and isinstance(elapsed, (int, float)):
+        return f"{glyphs['ok']} {format_duration(elapsed)}{separator}{age}", ANSI_GREEN
+    if run.get("status") == "failed":
+        return f"{glyphs['bad']} failed{separator}{age}", ANSI_RED
+    if run.get("status") == "cancelled":
+        return f"{glyphs['info']} cancelled{separator}{age}", ANSI_DIM
+    return None
+
+
+def dashboard_selection_hint(state: DashboardState) -> str:
+    """What the selected row does: a setting's meaning, an action's command."""
+    kind, _label, key = DASHBOARD_ITEMS[state.selected % len(DASHBOARD_ITEMS)]
+    if kind == "setting":
+        return DASHBOARD_SETTING_HINTS.get(key, "")
+    if key == "tools":
+        return "Test explorer, diagnostics, build trends, profiles, artifacts, watch and doctor"
+    if key == "quit":
+        return "Leave the build console"
+    try:
+        arguments = dashboard_action_arguments(state, key)
+    except (BuildError, OSError):
+        return ""
+    return "$ " + format_command(["python", "build.py", *arguments])
+
+
 def render_dashboard(
     state: DashboardState, terminal_width: int, ansi: bool = True,
     hit_regions: list[DashboardHitRegion] | None = None,
     mouse_enabled: bool = False,
+    terminal_rows: int | None = None,
+    frame: int | None = None,
+    reveal: int | None = None,
 ) -> str:
+    """The menu. `frame` animates it (None renders the still image);
+    `reveal` shows only the first rows, for the opening unroll."""
     # Never emit a row as wide as the TTY: the cursor wrap-around on the last
     # column splits labels and descriptions into overlapping columns.
     usable = max(20, terminal_width - 1)
-    width = min(94, usable)
+    width = min(100, usable)
     inner_width = max(1, width - 2)
     lines: list[str] = []
     if hit_regions is not None:
         hit_regions.clear()
-    encoding = sys.stdout.encoding or "utf-8"
-    try:
-        "╭─╮│├┤╰╯>‹›↑↓←→✔✘".encode(encoding)
-        glyphs = {
-            "ok": "✔",
-            "bad": "✘",
-            "top_left": "╭",
-            "top_right": "╮",
-            "middle_left": "├",
-            "middle_right": "┤",
-            "bottom_left": "╰",
-            "bottom_right": "╯",
-            "horizontal": "─",
-            "vertical": "│",
-            "marker": ">",
-            "left": "‹",
-            "right": "›",
-            "help": "Up/Down navigate   Left/Right change   Enter select   q quit",
-        }
-    except UnicodeEncodeError:
-        glyphs = {
-            "ok": "+",
-            "bad": "x",
-            "top_left": "+",
-            "top_right": "+",
-            "middle_left": "+",
-            "middle_right": "+",
-            "bottom_left": "+",
-            "bottom_right": "+",
-            "horizontal": "-",
-            "vertical": "|",
-            "marker": ">",
-            "left": "<",
-            "right": ">",
-            "help": "Up/Down navigate   Left/Right change   Enter select   q quit",
-        }
+    glyphs = terminal_glyphs()
+    ellipsis = glyphs["ellipsis"]
+    vertical = dashboard_style(glyphs["vertical"], ANSI_FRAME, ansi)
 
-    def border(left: str, fill: str, right: str, title: str = "") -> None:
-        fill_width = dashboard_visible_width(fill) or 1
+    def border(left: str, right: str, title: str = "", title_style: str = "") -> None:
         # Section titles sit in the rule itself, so the whole console still
         # fits a default 30-row terminal (taller output disables the mouse).
-        label = f" {title} " if title and dashboard_visible_width(title) + 4 <= inner_width else ""
+        fill = glyphs["horizontal"]
+        label = ""
+        if title and inner_width >= 12:
+            label = f" {dashboard_pad(title, inner_width - 6).rstrip()} "
         lead = fill if label else ""
-        remaining = inner_width - dashboard_visible_width(lead + label)
-        count = max(0, remaining // fill_width)
+        remaining = max(0, inner_width - dashboard_visible_width(lead + label))
         lines.append(
-            left + lead + dashboard_style(label, ANSI_BOLD + ANSI_BLUE, ansi)
-            + dashboard_pad(fill * count, remaining) + right
+            dashboard_style(left + lead, ANSI_FRAME, ansi)
+            + dashboard_style(label, title_style, ansi)
+            + dashboard_style(fill * remaining + right, ANSI_FRAME, ansi)
         )
 
-    def content(
-        value: str = "", style: str = "", align: str = "left"
-    ) -> None:
-        if align == "center":
-            padded = dashboard_pad(value, inner_width, "center")
-        else:
-            padded = dashboard_pad(" " + value, inner_width)
-        lines.append(
-            glyphs["vertical"]
-            + dashboard_style(padded, style, ansi)
-            + glyphs["vertical"]
-        )
+    def row(segments: Sequence[tuple[str, str]], base: str = "") -> None:
+        lines.append(vertical + render_segments(segments, inner_width, ansi, base, ellipsis) + vertical)
 
-    border(glyphs["top_left"], glyphs["horizontal"], glyphs["top_right"])
-    content("ILLUMO WORKSPACE BUILD CONSOLE", ANSI_BOLD + ANSI_CYAN, "center")
-    content(
-        f"Profile: {state.profile_name or 'Default'}" + (" | session overrides" if state.overrides else ""),
-        ANSI_DIM,
-        "center",
-    )
+    border(glyphs["top_left"], glyphs["top_right"])
+    if (terminal_rows is not None and terminal_rows >= BANNER_MIN_ROWS
+            and glyphs is UNICODE_GLYPHS and inner_width >= 40):
+        band = None if frame is None else shine_band(frame, len(BANNER_ROWS[0]) + len(BANNER_ROWS))
+        for index, banner_row in enumerate(BANNER_ROWS):
+            # Offsetting each row by its index tilts the sheen diagonally.
+            row(centered_segments(apply_shine(banner_segments(banner_row), band, index), inner_width))
+        row(centered_segments([("workspace build console", ANSI_DIM)], inner_width))
+    else:
+        band = None if frame is None else shine_band(frame, 11, speed=1.0)
+        wordmark = apply_shine(gradient_segments("I L L U M O"), band)
+        subtitle = f"  {glyphs['separator']}  workspace build console"
+        if 11 + dashboard_visible_width(subtitle) <= inner_width:
+            wordmark.append((subtitle, ANSI_DIM))
+        row(centered_segments(wordmark, inner_width))
+    settings = dashboard_settings(state)
+    context = [f"tree {settings['build_dir']} ({settings['config']})"]
+    if state.git_summary:
+        context.insert(0, state.git_summary)
+    row(centered_segments([(f" {glyphs['separator']} ".join(context), ANSI_DIM)], inner_width))
     workspace_status, workspace_style = dashboard_workspace_status(
         state, glyphs["ok"], glyphs["bad"]
     )
-    content(workspace_status, workspace_style, "center")
+    row(centered_segments([(workspace_status, workspace_style)], inner_width))
+
     last_kind = None
     for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
         if kind != last_kind:
             border(
-                glyphs["middle_left"],
-                glyphs["horizontal"],
-                glyphs["middle_right"],
-                "Settings" if kind == "setting" else "Actions",
+                glyphs["middle_left"], glyphs["middle_right"],
+                "Settings" if kind == "setting" else "Actions", ANSI_BOLD + ANSI_BLUE,
             )
             last_kind = kind
-
-        marker = glyphs["marker"] if index == state.selected else " "
-        prefix = f" {marker} {label}"
+        selected = index == state.selected
+        hotkey = DASHBOARD_HOTKEYS.get(key, " ") if kind == "action" else " "
+        marker_style = ANSI_BOLD + (
+            ANSI_CYAN if frame is None
+            else f"\x1b[38;5;{MARKER_PULSE[(frame // 3) % len(MARKER_PULSE)]}m"
+        )
+        prefix = [
+            (f" {glyphs['marker'] if selected else ' '} ", marker_style),
+            (f"{hotkey} ", ANSI_VIOLET if kind == "action" else ""),
+            (label, ANSI_BOLD if selected else ""),
+        ]
+        prefix_width = sum(dashboard_visible_width(text) for text, _style in prefix)
+        segments = list(prefix)
+        previous_x = None
         if kind == "setting":
             value = dashboard_value(state, key)
-            suffix = f"{glyphs['left']} {value} {glyphs['right']} "
-            gap = inner_width - dashboard_visible_width(prefix) - dashboard_visible_width(suffix)
-            if gap < 1:
-                raw = prefix
-            else:
-                raw = prefix + (" " * gap) + suffix
+            suffix = [
+                (f"{glyphs['left']} ", ANSI_DIM),
+                (dashboard_value_text(value, glyphs), dashboard_value_style(key, value, state)),
+                (f" {glyphs['right']} ", ANSI_DIM),
+            ]
+            gap = inner_width - prefix_width - sum(
+                dashboard_visible_width(text) for text, _style in suffix
+            )
+            if gap >= 1:
+                segments += [(" " * gap, ""), *suffix]
+                previous_x = prefix_width + gap + 2
         else:
             if key in ("play", "launch", "build_app") and not state.wasm_enabled:
                 description = "needs the WASM runtime setting"
@@ -935,52 +1278,66 @@ def render_dashboard(
                 description = f"run the built {state.application_label}"
             else:
                 description = DASHBOARD_DESCRIPTIONS[key]
-            suffix = f"{description} "
-            gap = inner_width - dashboard_visible_width(prefix) - dashboard_visible_width(
-                suffix
-            )
-            if gap >= 2:
-                raw = prefix + (" " * gap) + suffix
-            else:
-                raw = prefix
-        raw = dashboard_pad(raw, inner_width)
+            badge = dashboard_run_badge(state, key, glyphs)
+            choices = []
+            if badge is not None:
+                choices.append([(description, ANSI_DIM), (f"  {badge[0]} ", badge[1])])
+            choices.append([(f"{description} ", ANSI_DIM)])
+            for suffix in choices:
+                gap = inner_width - prefix_width - sum(
+                    dashboard_visible_width(text) for text, _style in suffix
+                )
+                if gap >= 2:
+                    segments += [(" " * gap, ""), *suffix]
+                    break
         if hit_regions is not None:
-            previous_x = raw.rfind(glyphs["left"]) + 2 if kind == "setting" else None
             hit_regions.append(DashboardHitRegion(index, len(lines) + 1, width, previous_x))
-        style = ANSI_REVERSE if index == state.selected else ""
-        lines.append(
-            glyphs["vertical"]
-            + dashboard_style(raw, style, ansi)
-            + glyphs["vertical"]
-        )
+        row(segments, ANSI_SELECTED if selected else "")
 
-    border(
-        glyphs["middle_left"],
-        glyphs["horizontal"],
-        glyphs["middle_right"],
+    border(glyphs["middle_left"], glyphs["middle_right"])
+    keys_help = (
+        f"{glyphs['up_down']} move  {glyphs['left_right']} change  Enter run  "
+        "/ find  ? help  q quit"
     )
-    combined_help = (
-        "Up/Down move  Left/Right change  Enter select  q quit | "
-        "Mouse: click, right-click, wheel"
-    )
+    mouse_help = "Mouse: click, right-click, wheel"
+    combined_help = f"{keys_help} | {mouse_help}"
     if mouse_enabled and dashboard_visible_width(combined_help) + 1 <= inner_width:
-        content(combined_help, ANSI_DIM)
+        row([(" " + combined_help, ANSI_DIM)])
     else:
-        content(glyphs["help"], ANSI_DIM)
+        row([(" " + keys_help, ANSI_DIM)])
         if mouse_enabled:
-            content("Click select | Right-click previous | Wheel navigate", ANSI_DIM)
-    status_style = ""
-    if state.status_kind == "success":
-        status_style = ANSI_GREEN
-    elif state.status_kind == "failure":
-        status_style = ANSI_YELLOW
-    content(f"Status: {state.status}", status_style)
+            row([(" Click select | Right-click previous | Wheel navigate", ANSI_DIM)])
+    icon, status_style = {
+        "success": (glyphs["ok"], ANSI_GREEN),
+        "failure": (glyphs["bad"], ANSI_YELLOW),
+    }.get(state.status_kind, (glyphs["bullet"], ANSI_DIM))
+    status = [(f" {icon} ", status_style), (state.status, status_style)]
+    if frame is not None and state.status_frame is not None:
+        # One sheen across a status that just changed.
+        band = shine_band(frame - state.status_frame, len(state.status) + 3,
+                          speed=3.0, band=6, period=1 << 30)
+        if band is not None and frame >= state.status_frame:
+            status = [status[0], *apply_shine(
+                [(character, status_style) for character in state.status], band)]
+    if state.status_time:
+        stamp = f"{state.status_time} "
+        used = sum(dashboard_visible_width(text) for text, _style in status)
+        if used + dashboard_visible_width(stamp) + 2 <= inner_width:
+            status += [(" " * (inner_width - used - dashboard_visible_width(stamp)), ""),
+                       (stamp, ANSI_DIM)]
+    row(status)
     border(
-        glyphs["bottom_left"],
-        glyphs["horizontal"],
-        glyphs["bottom_right"],
+        glyphs["bottom_left"], glyphs["bottom_right"],
+        dashboard_selection_hint(state), ANSI_DIM,
     )
+    if reveal is not None:
+        lines = [line if index < reveal else "" for index, line in enumerate(lines)]
     return "\n".join(lines)
+
+
+def printable_key(character: str) -> str:
+    """Unmapped printable keys reach the menus as hotkeys (key:p)."""
+    return f"key:{character}" if len(character) == 1 and character.isprintable() else "unknown"
 
 
 def posix_escape_to_key(sequence: str, text_mode: bool) -> str:
@@ -991,6 +1348,12 @@ def posix_escape_to_key(sequence: str, text_mode: bool) -> str:
     final = sequence[-1]
     if final in "ABCD":
         return {"A": "up", "B": "down", "C": "right", "D": "left"}[final]
+    if final in "HF":
+        return "home" if final == "H" else "end"
+    editing = {"[1~": "home", "[7~": "home", "[4~": "end", "[8~": "end",
+               "[5~": "page_up", "[6~": "page_down"}
+    if sequence in editing:
+        return editing[sequence]
     return "escape" if text_mode else "unknown"
 
 
@@ -1006,10 +1369,18 @@ def _posix_read_byte(file_descriptor: int, timeout: float | None) -> bytes | Non
     return data or None
 
 
-def read_dashboard_key(text_mode: bool = False) -> str | DashboardTextEvent:
+def read_dashboard_key(
+    text_mode: bool = False, timeout: float | None = None,
+) -> str | DashboardTextEvent:
     if os.name == "nt":
         import msvcrt
 
+        if timeout is not None:
+            deadline = time.monotonic() + timeout
+            while not msvcrt.kbhit():
+                if time.monotonic() >= deadline:
+                    return "tick"
+                time.sleep(0.01)
         character = msvcrt.getwch()
         if character in ("\x00", "\xe0"):
             return {
@@ -1032,12 +1403,13 @@ def read_dashboard_key(text_mode: bool = False) -> str | DashboardTextEvent:
             "l": "right",
             "/": "search", "\x08": "backspace", "\t": "tab",
             "\x1b": "escape" if text_mode else "quit",
-        }.get(character, "unknown")
+        }.get(character, printable_key(character))
 
     file_descriptor = sys.stdin.fileno()
-    first = _posix_read_byte(file_descriptor, 0.25)
+    # Without a caller timeout, poll so window resizes still repaint.
+    first = _posix_read_byte(file_descriptor, 0.25 if timeout is None else timeout)
     if first is None:
-        return "resize"
+        return "resize" if timeout is None else "tick"
     code = first[0]
     if code == 3:
         raise KeyboardInterrupt
@@ -1069,11 +1441,26 @@ def read_dashboard_key(text_mode: bool = False) -> str | DashboardTextEvent:
         "h": "left",
         "l": "right",
         "/": "search", "\x7f": "backspace", "\x08": "backspace", "\t": "tab",
-    }.get(character, "unknown")
+    }.get(character, printable_key(character))
+
+
+def cycle_dashboard_profile(state: DashboardState, direction: int) -> None:
+    """Step through Default, the built-ins and saved profiles; overrides clear."""
+    profiles = load_profiles(state.profiles_file, allow_missing=True)
+    names = [DASHBOARD_DEFAULT_PROFILE, *profiles]
+    current = state.profile_name if state.profile_name in profiles else DASHBOARD_DEFAULT_PROFILE
+    name = names[(names.index(current) + direction) % len(names)]
+    if name == DASHBOARD_DEFAULT_PROFILE:
+        apply_dashboard_profile(state, None, {})
+    else:
+        apply_dashboard_profile(state, name, profiles[name])
 
 
 def adjust_dashboard_setting(state: DashboardState, direction: int) -> None:
     key = DASHBOARD_ITEMS[state.selected][2]
+    if key == "profile":
+        cycle_dashboard_profile(state, direction)
+        return
     if key == "configuration":
         state.configuration_index = (
             state.configuration_index + direction
@@ -1185,6 +1572,12 @@ def dashboard_action_arguments(
         return ["stats"]
     if action == "file_stats":
         return ["file-stats"]
+    if action == "doctor":
+        return ["doctor", *dashboard_common_arguments(state)]
+    if action == "wasm_tools":
+        return ["wasm-tools"]
+    if action == "watch":
+        return ["watch", *dashboard_common_arguments(state)]
     if action == "docs":
         return ["docs"]
     if action == "coverage":
@@ -1198,6 +1591,14 @@ def progress_text(value: str) -> str:
     """Keep subprocess control sequences out of the dashboard itself."""
     value = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))", "", value)
     return "".join(character if character.isprintable() else " " for character in value)
+
+
+WARNING_LINE = re.compile(
+    r"\bwarning\b\s*(?:[A-Z]+\d+\s*)?:|^\s*CMake Warning(?: \(dev\))? (?:at|in)\b", re.IGNORECASE,
+)
+ERROR_LINE = re.compile(
+    r"\b(?:fatal error|error)\b\s*(?:[A-Z]+\d+\s*)?:|^\s*CMake Error (?:at|in)\b", re.IGNORECASE,
+)
 
 
 @dataclass
@@ -1220,16 +1621,29 @@ class DashboardProgress:
     finished: float | None = None
     cancelled: bool = False
     lines: deque[str] = field(default_factory=lambda: deque(maxlen=200))
+    # Duration of the last successful run of the same action and build tree.
+    previous_elapsed: float | None = None
+    # Phase timeline: [name, started, ended or None while current].
+    phases: list[list] = field(default_factory=list)
+    first_errors: list[str] = field(default_factory=list)
+    # (time, completed) for the current phase's reported total; drives the
+    # throughput sparkline.
+    samples: deque[tuple[float, int]] = field(default_factory=lambda: deque(maxlen=512))
 
     def __post_init__(self) -> None:
         self.phase_started = self.started
 
     def set_phase(self, name: str, now: float, *, reset: bool = False) -> None:
         if name != self.phase or reset:
+            if name != self.phase or not self.phases:
+                if self.phases and self.phases[-1][2] is None:
+                    self.phases[-1][2] = now
+                self.phases.append([name, now, None])
             self.phase = name
             self.phase_started = now
             self.completed = self.total = 0
             self.unit = ""
+            self.samples.clear()
             if name == "Testing":
                 self.tests_completed = self.tests_total = 0
 
@@ -1238,16 +1652,12 @@ class DashboardProgress:
         if not line:
             return
         self.lines.append(line[:8192])
-        if re.search(
-            r"\bwarning\b\s*(?:[A-Z]+\d+\s*)?:|^\s*CMake Warning(?: \(dev\))? (?:at|in)\b",
-            line, re.IGNORECASE,
-        ):
+        if WARNING_LINE.search(line):
             self.warnings += 1
-        if re.search(
-            r"\b(?:fatal error|error)\b\s*(?:[A-Z]+\d+\s*)?:|^\s*CMake Error (?:at|in)\b",
-            line, re.IGNORECASE,
-        ):
+        if ERROR_LINE.search(line):
             self.errors += 1
+            if len(self.first_errors) < 5:
+                self.first_errors.append(line[:512])
         if line.startswith("> "):
             self.command = line[2:]
             lower = self.command.lower()
@@ -1283,6 +1693,160 @@ class DashboardProgress:
             ".vcxproj ->" in line or line.lstrip().startswith(("Building ", "Linking "))
         ):
             self.set_phase("Building", now)
+        if test or ninja:
+            self.samples.append((now, self.completed))
+
+    def finish(self, now: float) -> None:
+        self.finished = now
+        if self.phases and self.phases[-1][2] is None:
+            self.phases[-1][2] = now
+
+
+def progress_bar(fraction: float, width: int, glyphs: dict, style: str = "",
+                 shine: float | None = None) -> list[tuple[str, str]]:
+    """Half-cell resolution; the filled part sweeps the gradient unless
+    styled. `shine` lights the filled cells around that position."""
+    fraction = min(1.0, max(0.0, fraction))
+    full, half = divmod(int(round(fraction * width * 2)), 2)
+    segments: list[tuple[str, str]] = []
+    for index in range(full + half):
+        color = style or f"\x1b[38;5;{GRADIENT_COLORS[index * len(GRADIENT_COLORS) // max(1, width)]}m"
+        if shine is not None and abs(index - shine) < 1.5:
+            color = ANSI_SHINE
+        segments.append((glyphs["bar_fill"] if index < full else glyphs["bar_half"], color))
+    segments.append((glyphs["bar_track"] * max(0, width - full - half), ANSI_TRACK))
+    return segments
+
+
+def sparkline(values: Sequence[float], glyphs: dict,
+              low: float | None = None, high: float | None = None) -> str:
+    """One eighth-height bar per value, scaled between low and high."""
+    if not values:
+        return ""
+    sparks = glyphs["sparks"]
+    low = min(values) if low is None else low
+    high = max(values) if high is None else high
+    span = high - low
+    if span <= 0:
+        return sparks[0 if high <= 0 else len(sparks) // 2] * len(values)
+    top = len(sparks) - 1
+    return "".join(sparks[max(0, min(top, int((value - low) / span * top + 0.5)))] for value in values)
+
+
+def progress_throughput(progress: DashboardProgress, now: float, window: int = 24) -> list[float]:
+    """Completions per second over the last `window` seconds of the phase."""
+    samples = list(progress.samples)
+    if len(samples) < 2:
+        return []
+    start = max(samples[0][0], now - window)
+    rates: list[float] = []
+    index, completed = 0, samples[0][1]
+    while index < len(samples) and samples[index][0] <= start:
+        completed = samples[index][1]
+        index += 1
+    edge = start
+    while edge < now:
+        previous = completed
+        edge = min(now, edge + 1)
+        while index < len(samples) and samples[index][0] <= edge:
+            completed = samples[index][1]
+            index += 1
+        rates.append(max(0, completed - previous))
+    return rates
+
+
+def compare_with_last_run(elapsed: float, previous: float) -> str:
+    change = (elapsed - previous) / previous * 100 if previous > 0 else 0.0
+    if abs(change) < 2:
+        return f"about the same as the last run ({format_duration(previous)})"
+    return (f"{abs(change):.0f}% {'faster' if change < 0 else 'slower'} than the last run "
+            f"({format_duration(previous)})")
+
+
+def activity_bar(elapsed: float, width: int, glyphs: dict) -> list[tuple[str, str]]:
+    """A streak sweeping back and forth while a tool reports no total; its
+    bright head leads and its tail fades behind it."""
+    size = max(2, width // 4)
+    travel = max(1, width - size)
+    step = int(elapsed * 12) % (2 * travel)
+    forward = step <= travel
+    start = step if forward else 2 * travel - step
+    ramp = [COMET_COLORS[round(index * (len(COMET_COLORS) - 1) / (size - 1))] for index in range(size)]
+    if not forward:
+        ramp.reverse()
+    return [
+        (glyphs["bar_track"] * start, ANSI_TRACK),
+        *((glyphs["bar_fill"], f"\x1b[38;5;{color}m") for color in ramp),
+        (glyphs["bar_track"] * max(0, width - start - size), ANSI_TRACK),
+    ]
+
+
+def progress_eta(progress: DashboardProgress, now: float) -> str:
+    """Remaining time from the current phase's reported rate."""
+    if progress.unit not in ("steps", "tests") or not 0 < progress.completed < progress.total:
+        return ""
+    spent = now - progress.phase_started
+    if spent < 3:
+        return ""
+    remaining = spent * (progress.total - progress.completed) / progress.completed
+    return f"ETA ~{format_duration(remaining)}"
+
+
+PROGRESS_BADGES = {
+    "RUNNING": "\x1b[1;48;5;25;38;5;231m",
+    "SUCCEEDED": "\x1b[1;48;5;28;38;5;231m",
+    "FAILED": "\x1b[1;48;5;160;38;5;231m",
+    "CANCELLED": "\x1b[1;48;5;136;38;5;16m",
+}
+# Brighter badges alternated with the normal ones as an action finishes.
+PROGRESS_BADGE_FLASHES = {
+    "SUCCEEDED": "\x1b[1;48;5;46;38;5;16m",
+    "FAILED": "\x1b[1;48;5;196;38;5;231m",
+    "CANCELLED": "\x1b[1;48;5;220;38;5;16m",
+}
+PROGRESS_FINALE_SECONDS = 0.9
+
+
+def frame_rule(
+    left: str, right: str, label: Sequence[tuple[str, str]], width: int,
+    glyphs: dict, ansi: bool,
+) -> str:
+    """A border row exactly `width` cells wide, with an optional label that
+    sits in the rule ("╭─ label ───╮") and is trimmed to fit."""
+    inner = max(0, width - 2)
+    fill = glyphs["horizontal"]
+    label_width = sum(dashboard_visible_width(text) for text, _style in label)
+    if label and inner >= 6:
+        used = min(label_width, inner - 3)
+        middle = (dashboard_style(fill + " ", ANSI_FRAME, ansi)
+                  + render_segments(label, used, ansi, ellipsis=glyphs["ellipsis"])
+                  + dashboard_style(" " + fill * (inner - 3 - used), ANSI_FRAME, ansi))
+    else:
+        middle = dashboard_style(fill * inner, ANSI_FRAME, ansi)
+    return dashboard_style(left, ANSI_FRAME, ansi) + middle + dashboard_style(right, ANSI_FRAME, ansi)
+
+
+def frame_line(
+    segments: Sequence[tuple[str, str]], width: int, glyphs: dict, ansi: bool,
+    base: str = "",
+) -> str:
+    """One boxed content row: a border, a one-cell margin, content, margin."""
+    edge = dashboard_style(glyphs["vertical"], ANSI_FRAME, ansi)
+    content = render_segments(segments, max(1, width - 4), ansi, base, glyphs["ellipsis"])
+    margin = dashboard_style(" ", base, ansi) if base else " "
+    return edge + margin + content + margin + edge
+
+
+def progress_line_style(line: str) -> str:
+    if line.startswith("> "):
+        return ANSI_VIOLET
+    if ERROR_LINE.search(line) or re.search(r"\*\*\*Failed|\bFAILED\b", line):
+        return ANSI_RED
+    if WARNING_LINE.search(line):
+        return ANSI_YELLOW
+    if re.search(r"Test\s+#\d+:.*\bPassed\b|\b100% tests passed\b", line):
+        return ANSI_GREEN
+    return ""
 
 
 def render_dashboard_progress(
@@ -1294,59 +1858,226 @@ def render_dashboard_progress(
     elapsed = max(0.0, end - progress.started)
     width = max(1, min(110, columns - 1))
     height = max(1, rows - 2)
+    glyphs = terminal_glyphs()
+    separator = glyphs["separator"]
     running = progress.returncode is None
+    succeeded = not running and progress.returncode == 0 and not progress.cancelled
     status = "RUNNING" if running else (
         "CANCELLED" if progress.cancelled else "SUCCEEDED" if progress.returncode == 0 else "FAILED"
     )
-    spinner = "|/-\\"[int(elapsed * 5) % 4] if running else "*"
+    if running:
+        frames = glyphs["spinner"]
+        icon, tone = frames[int(elapsed * 10) % len(frames)], ANSI_CYAN
+    elif succeeded:
+        icon, tone = glyphs["ok"], ANSI_GREEN
+    elif progress.cancelled:
+        icon, tone = glyphs["info"], ANSI_YELLOW
+    else:
+        icon, tone = glyphs["bad"], ANSI_RED
     try:
         log_label = str(progress.log_path.relative_to(REPOSITORY_ROOT))
     except ValueError:
         log_label = str(progress.log_path)
-    if progress.total > 0:
+    phase_elapsed = max(0.0, end - progress.phase_started)
+    # Framed like the menu when there is room; tiny terminals get bare lines.
+    framed = width >= 24 and height >= 8
+    content_width = width - 4 if framed else width
+    bar_width = max(4, min(32, content_width - 44))
+
+    # Motion: the title's colors flow and a sheen runs along the bar while
+    # running; the result badge flashes for a moment after finishing.
+    moving = ansi and motion_enabled()
+    finale = (moving and not running and progress.finished is not None
+              and 0 <= now - progress.finished < PROGRESS_FINALE_SECONDS)
+    count = f"{progress.completed}/{progress.total} {progress.unit}"
+    if progress.unit == "%":
+        count = f"{progress.completed}%"
+    if not running:
+        # A result bar: full and green on success, red where a failure stopped.
+        reached = progress.completed / progress.total if progress.total else 0.0
+        summary = f"Action finished in {format_duration(elapsed)}"
+        if progress.total:
+            summary += f" {separator} {count}"
+        tool_line = [(summary, tone)]
+        if succeeded or progress.total:
+            sweep = (now - progress.finished) * bar_width * 2.5 if finale else None
+            tool_line = [*progress_bar(1.0 if succeeded else reached, bar_width, glyphs,
+                                       ANSI_GREEN if succeeded else ANSI_RED, shine=sweep),
+                         (" ", ""), *tool_line]
+        if succeeded and progress.previous_elapsed:
+            tool_line.append((f"  {compare_with_last_run(elapsed, progress.previous_elapsed)}", ANSI_DIM))
+    elif progress.total > 0:
         fraction = min(1.0, max(0.0, progress.completed / progress.total))
-        bar_width = max(4, min(26, width - 36))
-        fill = int(fraction * bar_width)
-        count = f"{progress.completed}/{progress.total} {progress.unit}"
-        if progress.unit == "%":
-            count = f"{progress.completed}%"
-        tool_progress = f"[{'#' * fill}{'-' * (bar_width - fill)}] {count} (tool-reported)"
+        eta = progress_eta(progress, end)
+        filled = fraction * bar_width
+        shine = (elapsed * 16) % (filled + 12) - 3 if moving and running else None
+        tool_line = [*progress_bar(fraction, bar_width, glyphs, shine=shine),
+                     (f" {count} (tool-reported)", "")]
+        if eta:
+            tool_line.append((f"  {eta}", ANSI_DIM))
+    elif running and progress.previous_elapsed:
+        fraction = min(0.99, elapsed / progress.previous_elapsed)
+        tool_line = [
+            *progress_bar(fraction, bar_width, glyphs, ANSI_BLUE),
+            (f" ~{int(fraction * 100)}% of the last run ({format_duration(progress.previous_elapsed)}); "
+             "this tool has not reported a total", ANSI_DIM),
+        ]
     else:
-        tool_progress = f"[{spinner}] Working; this tool has not reported a total" if running else "Action finished"
-    heading = [
-        f"ILLUMO  /  {progress.title}",
-        progress.context,
-        "=" * width,
-        f"{status}   Elapsed {elapsed:.1f}s   Phase {max(0.0, end - progress.phase_started):.1f}s",
-        f"Phase: {progress.phase}",
-        tool_progress,
-        f"Warning lines: {progress.warnings}   Error lines: {progress.errors}"
-        + (f"   Last test run: {progress.tests_completed}/{progress.tests_total}" if progress.tests_total else ""),
-        f"Command: {progress.command}",
-        f"Full log: {log_label}",
-        "-" * width,
+        tool_line = [*activity_bar(elapsed, bar_width, glyphs),
+                     (" Working; this tool has not reported a total", ANSI_DIM)]
+    rates = progress_throughput(progress, end) if running and progress.unit in ("steps", "tests") else []
+    throughput_line = None
+    if len(rates) >= 3:
+        first_time, first_count = progress.samples[0]
+        last_time, last_count = progress.samples[-1]
+        average = (last_count - first_count) / max(0.001, last_time - first_time)
+        throughput_line = [("Rate:   ", ANSI_DIM), (sparkline(rates, glyphs, low=0), ANSI_CYAN),
+                           (f"  {average:.1f} {progress.unit}/s", ANSI_DIM)]
+
+    if progress.phases:
+        chips = []
+        for index, (name, started, ended) in enumerate(progress.phases):
+            current = index == len(progress.phases) - 1
+            if current and running:
+                mark, style = icon, ANSI_BOLD + ANSI_CYAN
+            elif current and not succeeded:
+                mark, style = (glyphs["info"], ANSI_YELLOW) if progress.cancelled else (glyphs["bad"], ANSI_RED)
+            else:
+                mark, style = glyphs["ok"], ANSI_GREEN
+            chips.append((f"{mark} {name} {format_duration((ended or end) - started)}", style))
+        joint = f" {glyphs['chevron']} "
+        available = content_width - dashboard_visible_width("Phases: ")
+        dropped = False
+        while len(chips) > 1 and sum(
+            dashboard_visible_width(text) for text, _style in chips
+        ) + dashboard_visible_width(joint) * (len(chips) - 1 + dropped) > available:
+            chips.pop(0)
+            dropped = True
+        phase_line = [("Phases: ", ANSI_DIM)]
+        if dropped:
+            phase_line.append((glyphs["ellipsis"] + joint, ANSI_DIM))
+        for index, chip in enumerate(chips):
+            if index:
+                phase_line.append((joint, ANSI_DIM))
+            phase_line.append(chip)
+    else:
+        phase_line = [("Phase: ", ANSI_DIM), (progress.phase, ANSI_BOLD)]
+
+    badge = PROGRESS_BADGES[status]
+    if finale and int((now - progress.finished) / 0.15) % 2 == 0:
+        badge = PROGRESS_BADGE_FLASHES.get(status, badge)
+    status_line = [(f" {status} ", badge),
+                   (f"  Elapsed {elapsed:.1f}s   Phase {phase_elapsed:.1f}s", "")]
+    if progress.previous_elapsed:
+        status_line.append((f"   Last run {format_duration(progress.previous_elapsed)}", ANSI_DIM))
+    counts = [
+        (f"{glyphs['warn']} Warning lines: {progress.warnings}",
+         ANSI_YELLOW if progress.warnings else ANSI_DIM),
+        ("   ", ""),
+        (f"{glyphs['bad']} Error lines: {progress.errors}", ANSI_RED if progress.errors else ANSI_DIM),
     ]
+    if progress.tests_total:
+        counts.append((f"   Last test run: {progress.tests_completed}/{progress.tests_total}", ""))
+    title = [(f"{icon} ", tone), *gradient_segments("ILLUMO", elapsed * 6 if moving and running else 0),
+             (f" {glyphs['chevron']} {progress_text(progress.title)}", ANSI_BOLD)]
+    info: list[list[tuple[str, str]]] = [
+        [(progress_text(progress.context), ANSI_DIM)],
+        status_line,
+        phase_line,
+        tool_line,
+        *([throughput_line] if throughput_line else []),
+        counts,
+        [("$ ", ANSI_VIOLET), (progress_text(progress.command), "")],
+        [("Full log: ", ANSI_DIM), (log_label, "")],
+    ]
+    errors: list[list[tuple[str, str]]] = []
+    if not running and not succeeded and not progress.cancelled and progress.first_errors:
+        errors = [[(line, ANSI_RED)] for line in progress.first_errors[:3]]
+    if running:
+        footer = [("Ctrl+C cancels this action", ANSI_DIM)]
+    else:
+        footer = [(f"Exit code: {progress.returncode} {separator} ", ANSI_DIM),
+                  ("Enter", ANSI_BOLD), (f" back {separator} ", ANSI_DIM),
+                  ("d", ANSI_BOLD + ANSI_VIOLET), (f" diagnostics {separator} ", ANSI_DIM),
+                  ("l", ANSI_BOLD + ANSI_VIOLET), (" full log", ANSI_DIM)]
+    ellipsis = glyphs["ellipsis"]
+
+    if framed:
+        chrome = 1 + len(info) + (1 + len(errors) if errors else 0) + 2
+        tail_count = max(0, height - chrome)
+        tail = list(progress.lines)[-tail_count:] if tail_count else []
+        lines = [frame_rule(glyphs["top_left"], glyphs["top_right"], title, width, glyphs, ansi)]
+        lines += [frame_line(segments, width, glyphs, ansi) for segments in info]
+        if errors:
+            lines.append(frame_rule(glyphs["middle_left"], glyphs["middle_right"],
+                                    [("First errors", ANSI_BOLD + ANSI_RED)], width, glyphs, ansi))
+            lines += [frame_line(segments, width, glyphs, ansi) for segments in errors]
+        lines.append(frame_rule(glyphs["middle_left"], glyphs["middle_right"],
+                                [("Output", ANSI_BOLD + ANSI_BLUE)], width, glyphs, ansi))
+        lines += [frame_line([(line, progress_line_style(line))], width, glyphs, ansi) for line in tail]
+        lines.append(frame_rule(glyphs["bottom_left"], glyphs["bottom_right"], footer, width, glyphs, ansi))
+        return "\n".join(lines[:height])
+
+    rule = [(glyphs["horizontal"] * width, ANSI_FRAME)]
+    heading = [title, *info, rule]
+    if errors:
+        heading += [[("First errors", ANSI_BOLD + ANSI_RED)], *errors, rule]
     tail_count = max(0, height - len(heading) - 2)
     tail = list(progress.lines)[-tail_count:] if tail_count else []
-    footer = "Ctrl+C cancels this action" if running else f"Exit code: {progress.returncode} | Full output saved to log"
-    lines = (heading + tail + ["-" * width, footer])[:height]
-    rendered: list[str] = []
-    for index, line in enumerate(lines):
-        text = progress_text(line)
-        text = text[:width] if width < 4 else (text[:width - 3] + "..." if len(text) > width else text)
-        style = ANSI_BOLD + ANSI_CYAN if index == 0 else ""
-        if index == 3:
-            style = ANSI_CYAN if running else ANSI_GREEN if progress.returncode == 0 else ANSI_YELLOW
-        rendered.append(dashboard_style(text.ljust(width), style, ansi))
-    return "\n".join(rendered)
+    body = heading + [[(line, progress_line_style(line))] for line in tail] + [rule, footer]
+    return "\n".join(
+        render_segments(segments, width, ansi, ellipsis=ellipsis) for segments in body[:height]
+    )
+
+
+def supports_taskbar_progress() -> bool:
+    """OSC 9;4 drives the taskbar ring in Windows Terminal and ConEmu; other
+    terminals (iTerm2) read OSC 9 as a desktop notification instead."""
+    return bool(os.environ.get("WT_SESSION") or os.environ.get("ConEmuPID"))
+
+
+def terminal_progress_signals(progress: DashboardProgress | None) -> str:
+    """Window title and taskbar progress for the running action; None clears."""
+    if progress is None:
+        clear = "\x1b]9;4;0;0\x07" if supports_taskbar_progress() else ""
+        return "\x1b]2;Illumo build console\x07" + clear
+    running = progress.returncode is None
+    percent = None
+    if progress.total > 0:
+        percent = min(100, max(0, int(100 * progress.completed / progress.total)))
+    if running:
+        detail = f"{progress.phase}" + (f" {percent}%" if percent is not None else "")
+    elif progress.cancelled:
+        detail = "cancelled"
+    else:
+        detail = "succeeded" if progress.returncode == 0 else "failed"
+    signals = f"\x1b]2;{progress_text(f'Illumo | {progress.title} | {detail}')}\x07"
+    if supports_taskbar_progress():
+        if running:
+            state = f"1;{percent}" if percent is not None else "3;0"
+        else:
+            state = "1;100" if progress.returncode == 0 else "4;100" if progress.cancelled else "2;100"
+        signals += f"\x1b]9;4;{state}\x07"
+    return signals
+
+
+def play_progress_finale(progress: DashboardProgress) -> None:
+    """Repaint briefly after an action ends so its result badge flashes."""
+    if not motion_enabled() or progress.finished is None:
+        return
+    while time.monotonic() - progress.finished < PROGRESS_FINALE_SECONDS:
+        paint_dashboard_progress(progress)
+        time.sleep(0.05)
+    paint_dashboard_progress(progress)
 
 
 def paint_dashboard_progress(progress: DashboardProgress) -> None:
+    # Home and overwrite instead of clearing, so 10 Hz repaints never flicker.
     size = shutil.get_terminal_size((96, 30))
+    frame = render_dashboard_progress(progress, size.columns, size.lines)
     sys.stdout.write(
-        ANSI_CLEAR + tui_newlines(
-            render_dashboard_progress(progress, size.columns, size.lines)
-        )
+        ANSI_HOME + tui_newlines(frame.replace("\n", ANSI_ERASE_LINE + "\n"))
+        + ANSI_ERASE_LINE + ANSI_ERASE_BELOW + terminal_progress_signals(progress)
     )
     sys.stdout.flush()
 
@@ -1548,11 +2279,13 @@ def run_dashboard_progress(
                         progress.returncode = 130 if progress.cancelled else code
                         break
                     now = time.monotonic()
-                    if now - last_paint >= 0.1:
+                    # About 16 frames a second keeps the spinner, sheen and
+                    # streak smooth; output is still read between frames.
+                    if now - last_paint >= 0.06:
                         paint_dashboard_progress(progress)
                         last_paint = now
                     if not chunk:
-                        time.sleep(0.1)
+                        time.sleep(0.05)
                 except KeyboardInterrupt:
                     progress.cancelled = True
                     stop_dashboard_process(process, job)
@@ -1568,8 +2301,79 @@ def run_dashboard_progress(
                 process.wait(timeout=5)
             else:
                 stop_dashboard_process(process)
-        progress.finished = time.monotonic()
+        progress.finish(time.monotonic())
     paint_dashboard_progress(progress)
+
+
+def read_action_choice() -> str:
+    """One key after an action: a letter picks a follow-up, anything else
+    returns. Keys typed while the action ran are discarded first."""
+    sys.stdout.write(ANSI_SHOW_CURSOR)
+    sys.stdout.flush()
+    try:
+        if not sys.stdin.isatty():
+            return input().strip().lower()[:1]
+        if os.name == "nt":
+            import msvcrt
+
+            while msvcrt.kbhit():
+                msvcrt.getwch()
+            character = msvcrt.getwch()
+            if character in ("\x00", "\xe0"):
+                msvcrt.getwch()  # Arrow and function keys arrive as two reads.
+                return ""
+        else:
+            import termios
+            import tty
+
+            descriptor = sys.stdin.fileno()
+            original = termios.tcgetattr(descriptor)
+            try:
+                tty.setcbreak(descriptor)
+                termios.tcflush(descriptor, termios.TCIFLUSH)
+                data = os.read(descriptor, 1)
+            finally:
+                termios.tcsetattr(descriptor, termios.TCSADRAIN, original)
+            character = data.decode("latin1") if data else ""
+    except (EOFError, KeyboardInterrupt, OSError):
+        return ""
+    return character.lower() if character.isalpha() else ""
+
+
+def previous_success_elapsed(action: str, identity: dict) -> float | None:
+    """How long the last successful run of this action on this tree took."""
+    try:
+        history = run_history()
+    except OSError:
+        return None
+    for run in history:
+        elapsed = run.get("elapsed")
+        if (run.get("action") == action and run.get("identity") == identity
+                and run.get("status") == "succeeded" and isinstance(elapsed, (int, float))):
+            return float(elapsed)
+    return None
+
+
+def ring_completion_bell(progress: DashboardProgress) -> None:
+    """Long actions ring the bell; Windows Terminal flashes the taskbar."""
+    if (progress.finished or progress.started) - progress.started >= 10 and sys.stdout.isatty():
+        sys.stdout.write("\a")
+
+
+def dashboard_follow_up(
+    choice: str, log_path: Path, record: dict, state: DashboardState,
+    terminal: DashboardTerminal,
+) -> None:
+    """Open the finished action's diagnostics (d) or raw log (l)."""
+    try:
+        if choice == "d":
+            browse_run_diagnostics({**record, "log": str(log_path)}, terminal)
+        elif choice == "l":
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            show_toolbox_text("Raw log (authoritative): " + log_path.name, lines, terminal)
+    except OSError as error:
+        state.status = f"Could not open {log_path.name}: {error}"
+        state.status_kind = "failure"
 
 
 def execute_dashboard_action(
@@ -1583,10 +2387,12 @@ def execute_dashboard_action(
     if action == "test":
         execute_toolbox_run(state, terminal, None, True)
         return
+    title = ACTION_TITLES.get(action, action)
     arguments = dashboard_action_arguments(state, action)
     command = [sys.executable, str(Path(__file__).resolve()), *arguments]
     terminal.leave()
-    if action in ("build", "build_app", "test", "coverage", "tidy", "docs"):
+    if action in PROGRESS_ACTIONS:
+        choice, record, progress = "", None, None
         log_directory = REPOSITORY_ROOT / "build-orchestrator-logs"
         try:
             log_directory.mkdir(exist_ok=True)
@@ -1594,7 +2400,7 @@ def execute_dashboard_action(
                 prefix=f"{action}-", suffix=".log", dir=log_directory, delete=False,
             ) as log:
                 progress = DashboardProgress(
-                    DASHBOARD_ITEMS[state.selected][1],
+                    title,
                     f"{state.configuration} | {state.application} | Parallel: {dashboard_parallel_label(state)}",
                     Path(log.name),
                 )
@@ -1602,7 +2408,9 @@ def execute_dashboard_action(
             sys.stdout.flush()
             try:
                 record = new_run_record(state, action, command)
-                progress.context = f"{record['identity']['configuration']} | {record['identity']['build_directory']} | Parallel: {dashboard_parallel_label(state)}"
+                identity = record["identity"]
+                progress.context = f"{identity['configuration']} | {identity['build_directory']} | Parallel: {dashboard_parallel_label(state)}"
+                progress.previous_elapsed = previous_success_elapsed(action, identity)
                 write_json_atomic(progress.log_path.with_suffix(".json"), record)
                 run_dashboard_progress(command, progress)
                 finish_run_record(progress, record)
@@ -1610,39 +2418,56 @@ def execute_dashboard_action(
                 outcome = "cancelled" if progress.cancelled else "succeeded" if progress.returncode == 0 else "failed"
                 state.status = f"{progress.title} {outcome} ({elapsed:.1f}s)"
                 state.status_kind = "success" if progress.returncode == 0 else "failure"
-                sys.stdout.write(ANSI_SHOW_CURSOR)
-                try:
-                    input("\nPress Enter to return to the build console...")
-                except EOFError:
-                    pass
+                ring_completion_bell(progress)
+                play_progress_finale(progress)
+                choice = read_action_choice()
             finally:
-                sys.stdout.write(ANSI_RESET + ANSI_SHOW_CURSOR + ANSI_LEAVE_SCREEN)
+                sys.stdout.write(
+                    ANSI_RESET + ANSI_SHOW_CURSOR + ANSI_LEAVE_SCREEN
+                    + terminal_progress_signals(None)
+                )
                 sys.stdout.flush()
         except OSError as error:
             state.status = f"Could not start progress display: {error}"
             state.status_kind = "failure"
         terminal.enter()
+        if record is not None and progress is not None:
+            dashboard_follow_up(choice, progress.log_path, record, state, terminal)
         return
-    print(f"\n=== {DASHBOARD_ITEMS[state.selected][1]} ===\n")
-    print(f"> {format_command(command)}\n", flush=True)
+    glyphs = terminal_glyphs()
+    ansi = sys.stdout.isatty()
+    heavy = glyphs["heavy"]
+    print()
+    print(dashboard_style(f"{heavy * 2} {title} ", ANSI_BOLD + ANSI_CYAN, ansi)
+          + dashboard_style(heavy * 40, ANSI_FRAME, ansi))
+    print(dashboard_style(f"> {format_command(command)}", ANSI_DIM, ansi) + "\n", flush=True)
+    started = time.monotonic()
     try:
-        result = subprocess.run(command, cwd=REPOSITORY_ROOT, check=False)
-        if result.returncode == 0:
-            state.status = f"{DASHBOARD_ITEMS[state.selected][1]} succeeded"
+        process = subprocess.Popen(command, cwd=REPOSITORY_ROOT)
+        interrupted = False
+        while True:
+            try:
+                returncode = process.wait()
+                break
+            except KeyboardInterrupt:
+                # The child shares the console and receives Ctrl+C itself
+                # (watch stops, a launch closes); keep the console open.
+                interrupted = True
+        elapsed = time.monotonic() - started
+        if returncode == 0:
+            state.status = f"{title} {'stopped' if interrupted else 'succeeded'} ({elapsed:.1f}s)"
             state.status_kind = "success"
         else:
-            state.status = (
-                f"{DASHBOARD_ITEMS[state.selected][1]} failed "
-                f"(exit {result.returncode})"
-            )
+            state.status = f"{title} failed (exit {returncode})"
             state.status_kind = "failure"
     except OSError as error:
         state.status = f"Could not start action: {error}"
         state.status_kind = "failure"
-    try:
-        input("\nPress Enter to return to the build console...")
-    except EOFError:
-        pass
+    mark, style = (glyphs["ok"], ANSI_GREEN) if state.status_kind == "success" else (glyphs["bad"], ANSI_RED)
+    print("\n" + dashboard_style(f"{mark} {state.status}", ANSI_BOLD + style, ansi))
+    print(dashboard_style("Press any key to return to the build console...", ANSI_DIM, ansi),
+          end="", flush=True)
+    read_action_choice()
     terminal.enter()
 
 
@@ -1967,6 +2792,8 @@ def execute_toolbox_run(state: DashboardState, terminal: DashboardTerminal,
     write_json_atomic(path.with_suffix(".json"), record)
     progress = DashboardProgress("Refresh Inventory" if refresh else "Run tests",
                                  f"{state.configuration} | {'Prepare and run' if build_first else 'Run Existing'}", path)
+    progress.previous_elapsed = previous_success_elapsed(record["action"], record["identity"])
+    choice = ""
     terminal.leave()
     try:
         sys.stdout.write(ANSI_ENTER_SCREEN + ANSI_HIDE_CURSOR)
@@ -1974,13 +2801,15 @@ def execute_toolbox_run(state: DashboardState, terminal: DashboardTerminal,
         finish_run_record(progress, record)
         state.status = f"{progress.title}: {record['status']} | {path.name}"
         state.status_kind = "success" if progress.returncode == 0 else "failure"
-        try:
-            input("\nPress Enter to return to Development Tools...")
-        except EOFError:
-            pass
+        ring_completion_bell(progress)
+        play_progress_finale(progress)
+        choice = read_action_choice()
     finally:
-        sys.stdout.write(ANSI_RESET + ANSI_SHOW_CURSOR + ANSI_LEAVE_SCREEN)
+        sys.stdout.write(
+            ANSI_RESET + ANSI_SHOW_CURSOR + ANSI_LEAVE_SCREEN + terminal_progress_signals(None)
+        )
         terminal.enter()
+    dashboard_follow_up(choice, path, record, state, terminal)
 
 
 @dataclass
@@ -1989,6 +2818,14 @@ class ToolboxRow:
     label: str
     details: tuple[str, ...] = ()
     action: bool = False
+    # Color only: "ok", "bad", "warn" or "dim"; the text carries the meaning.
+    tone: str = ""
+    # Optional styled runs drawn in place of the label; their text must
+    # spell the label so search and tests still see it.
+    segments: tuple[tuple[str, str], ...] = ()
+
+
+TOOLBOX_TONES = {"ok": ANSI_GREEN, "bad": ANSI_RED, "warn": ANSI_YELLOW, "dim": ANSI_DIM}
 
 
 @dataclass
@@ -2047,7 +2884,9 @@ def toolbox_event(view: ToolboxView, rows: list[ToolboxRow], event: object,
 
 
 def render_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
-                   width: int, height: int, status: str = "") -> tuple[str, list[DashboardHitRegion], int]:
+                   width: int, height: int, status: str = "",
+                   ansi: bool = False, help_text: str | None = None,
+                   prompt: str | None = None, caret: str = "") -> tuple[str, list[DashboardHitRegion], int]:
     width = max(1, width - 1)
     page = max(1, height - 13)
     view.selected = max(0, min(view.selected, len(rows) - 1))
@@ -2058,20 +2897,85 @@ def render_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
     if rows and not rows[view.selected].action:
         selected = rows[view.selected]
         view.focused = selected.key
-    lines = [title, "Arrows / hover: select | Enter / click action: execute | /: search | q/Esc: back",
-             ("Search editing (Enter applies, Escape cancels): " + view.draft)
-             if view.draft is not None else "Search: " + (view.search or "(none)"), ""]
+    glyphs = terminal_glyphs()
+    ellipsis = glyphs["ellipsis"]
+    # Boxed like the menu: title in the top border, the list count in a
+    # divider and the status message in the bottom border. Very narrow
+    # terminals fall back to bare lines with the same row positions.
+    framed = width >= 20
+    content_width = width - 4 if framed else width
+
+    def rule(left: str, right: str, label: list[tuple[str, str]]) -> str:
+        if framed:
+            return frame_rule(left, right, label, width, glyphs, ansi)
+        return render_segments(label, width, ansi, ellipsis=ellipsis).rstrip()
+
+    def line(segments: list[tuple[str, str]]) -> str:
+        if framed:
+            return frame_line(segments, width, glyphs, ansi)
+        return render_segments(segments, width, ansi, ellipsis=ellipsis).rstrip()
+
+    search = (
+        [(prompt or "Search editing (Enter applies, Escape cancels): ", ANSI_YELLOW),
+         (progress_text(view.draft), ANSI_BOLD), (caret, ANSI_CYAN)]
+        if view.draft is not None else
+        [("Search: ", ANSI_DIM), (progress_text(view.search) or "(none)",
+                                  ANSI_BOLD if view.search else ANSI_DIM)]
+    )
+    lines = [
+        rule(glyphs["top_left"], glyphs["top_right"],
+             [*gradient_segments("ILLUMO"), (f" {glyphs['chevron']} ", ANSI_DIM),
+              (progress_text(title), ANSI_BOLD)]),
+        line([(help_text or "Arrows / hover: select | Enter / click action: execute | /: search | q/Esc: back",
+               ANSI_DIM)]),
+        line(search),
+        rule(glyphs["middle_left"], glyphs["middle_right"], []),
+    ]
     regions = []
-    for index in range(view.top, min(len(rows), view.top + page)):
-        row = rows[index]
-        lines.append(("> " if index == view.selected else "  ") + ("[Action] " if row.action else "") + row.label)
-        regions.append(DashboardHitRegion(index, len(lines), width, 1))
-    lines.extend([""] * (page - min(page, max(0, len(rows) - view.top))))
-    lines.append(f"Rows {view.top + 1 if rows else 0}-{min(len(rows), view.top + page)} of {len(rows)}")
+    visible = min(page, max(0, len(rows) - view.top))
+    # A proportional scrollbar in the last content column once rows overflow.
+    scrollbar = len(rows) > page and width >= 30
+    thumb_size = max(1, page * page // len(rows)) if scrollbar else 0
+    thumb_top = (view.top * (page - thumb_size) // max(1, len(rows) - page)) if scrollbar else 0
+    label_width = content_width - 2 if scrollbar else content_width
+    edge = dashboard_style(glyphs["vertical"], ANSI_FRAME, ansi)
+    for offset in range(page):
+        segments: list[tuple[str, str]] = []
+        base = ""
+        index = view.top + offset
+        if offset < visible:
+            row = rows[index]
+            chosen = index == view.selected
+            segments = [
+                (f"{glyphs['marker']} " if chosen else "  ", ANSI_BOLD + ANSI_CYAN),
+                ("[Action] " if row.action else "", ANSI_VIOLET),
+                *(row.segments or [(
+                    progress_text(row.label),
+                    ANSI_CYAN if row.action and not row.tone else TOOLBOX_TONES.get(row.tone, ""),
+                )]),
+            ]
+            base = ANSI_SELECTED if chosen else ""
+        text = render_segments(segments, label_width, ansi, base, ellipsis)
+        if scrollbar:
+            on_thumb = thumb_top <= offset < thumb_top + thumb_size
+            text += " " + dashboard_style(
+                glyphs["thumb"] if on_thumb else glyphs["rail"],
+                ANSI_CYAN if on_thumb else ANSI_TRACK, ansi,
+            )
+        if framed:
+            margin = dashboard_style(" ", base, ansi) if base else " "
+            text = edge + margin + text + " " + edge
+        lines.append(text)
+        if offset < visible:
+            regions.append(DashboardHitRegion(index, len(lines), width, 1))
+    counter = f"Rows {view.top + 1 if rows else 0}-{min(len(rows), view.top + page)} of {len(rows)}"
+    lines.append(rule(glyphs["middle_left"], glyphs["middle_right"], [(counter, ANSI_DIM)]))
     details = selected.details if selected else ("Select an item to inspect its details.",)
-    lines.extend(list(details[:6]) + [""] * max(0, 6 - len(details)))
-    lines.append(status)
-    rendered = "\n".join(progress_text(line)[:width] for line in lines[:max(1, height - 1)])
+    for number, detail in enumerate(list(details[:6]) + [""] * max(0, 6 - len(details))):
+        lines.append(line([(progress_text(detail), ANSI_BOLD if number == 0 else ANSI_DIM)]))
+    lines.append(rule(glyphs["bottom_left"], glyphs["bottom_right"],
+                      [(progress_text(status), ANSI_YELLOW)] if status else []))
+    rendered = "\n".join(lines[:max(1, height - 1)])
     return rendered, regions if width >= 30 and height >= 12 else [], page
 
 
@@ -2082,7 +2986,9 @@ def choose_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
     last = None
     while True:
         size = shutil.get_terminal_size((100, 32))
-        rendered, regions, page = render_toolbox(title, rows, view, size.columns, size.lines, status)
+        rendered, regions, page = render_toolbox(
+            title, rows, view, size.columns, size.lines, status, ansi=True,
+        )
         if rendered != last:
             sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
             sys.stdout.flush()
@@ -2148,7 +3054,9 @@ def run_test_explorer(state: DashboardState, terminal: DashboardTerminal) -> Non
             result = outcomes.get(test["name"], {})
             duration = f"{result['duration']:.3f}s" if result.get("duration") is not None else "duration unavailable"
             suffix = f" [{result['status']}, {duration}]" if result else ""
-            rows.append(ToolboxRow(test["name"], test["name"] + suffix, test_details(test)))
+            tone = {"passed": "ok", "failed": "bad", "disabled": "dim"}.get(
+                result.get("status"), "warn" if result else "")
+            rows.append(ToolboxRow(test["name"], test["name"] + suffix, test_details(test), tone=tone))
         action = choose_toolbox("Test explorer", rows, view, terminal, message)
         try:
             if action == "back":
@@ -2236,7 +3144,8 @@ def browse_run_diagnostics(run: dict, terminal: DashboardTerminal) -> None:
                              "CURRENT SOURCE (read-only; may have changed)",
                              str(item.get("source") or "Source location unavailable"),
                              next((line for line in diagnostic_preview(item, lines) if line.startswith("> ")),
-                                  diagnostic_preview(item, lines)[-1])))
+                                  diagnostic_preview(item, lines)[-1])),
+                            tone="bad" if item["severity"] == "error" else "warn")
                  for index, item in enumerate(diagnostics)
                  if (severity == "all" or item["severity"] == severity) and view.search.casefold() in item["raw"].casefold()]
         action = choose_toolbox("Diagnostics: " + Path(run["log"]).name, rows, view, terminal,
@@ -2252,15 +3161,100 @@ def browse_run_diagnostics(run: dict, terminal: DashboardTerminal) -> None:
             show_toolbox_text("Diagnostic and CURRENT SOURCE", diagnostic_preview(diagnostics[int(view.focused)], lines), terminal)
 
 
+def run_history_label(run: dict, glyphs: dict, now: float | None = None) -> str:
+    """Status, action, configuration, duration and age of one recorded run."""
+    name = Path(run["log"]).name
+    status = run.get("status")
+    if status is None:
+        return f"{glyphs['info']} legacy log  {name}"
+    mark = {"succeeded": glyphs["ok"], "failed": glyphs["bad"]}.get(status, glyphs["info"])
+    elapsed = run.get("elapsed")
+    duration = format_duration(elapsed) if isinstance(elapsed, (int, float)) else "-"
+    started = run.get("started", run.get("recorded_at"))
+    age = format_age((time.time() if now is None else now) - started) if isinstance(
+        started, (int, float)) else ""
+    configuration = run.get("identity", {}).get("configuration", "?")
+    return (f"{mark} {status:<9} {str(run.get('action', '?')):<10} {configuration:<14} "
+            f"{duration:>8}  {age:>9}  {name}")
+
+
+def action_trends(history: list[dict], limit: int = 24) -> list[tuple[str, list[dict]]]:
+    """Recorded runs per action, oldest first, most recently used action first."""
+    grouped: dict[str, list[dict]] = {}
+    for run in history:  # Newest first.
+        action = run.get("action")
+        if isinstance(action, str) and run.get("status") in ("succeeded", "failed", "cancelled"):
+            runs = grouped.setdefault(action, [])
+            if len(runs) < limit:
+                runs.append(run)
+    return [(action, list(reversed(runs))) for action, runs in grouped.items()]
+
+
+def trend_row(action: str, runs: list[dict], glyphs: dict, now: float | None = None) -> ToolboxRow:
+    """A duration sparkline of one action's runs, colored by outcome."""
+    title = ACTION_TITLES.get(action, "Refresh test inventory" if action == "inventory" else action)
+    durations = [run["elapsed"] if isinstance(run.get("elapsed"), (int, float)) else 0.0 for run in runs]
+    # Scale from a little under the fastest run so differences stay visible.
+    positive = [duration for duration in durations if duration > 0]
+    bars = sparkline(durations, glyphs, low=min(positive) * 0.8 if positive else 0)
+    colors = {"succeeded": ANSI_GREEN, "failed": ANSI_RED, "cancelled": ANSI_DIM}
+    successes = sorted(duration for run, duration in zip(runs, durations) if run["status"] == "succeeded")
+    counts = {status: sum(1 for run in runs if run["status"] == status)
+              for status in ("succeeded", "failed", "cancelled")}
+    median = format_duration(statistics.median(successes)) if successes else "-"
+    rate = f"{100 * counts['succeeded'] // len(runs)}%"
+    name = f"{title:<24} "
+    tail = f"{' ' * (24 - len(bars))}  median {median:>8}  {rate:>4} ok"
+    segments = ((name, ANSI_BOLD),
+                *((bar, colors[run["status"]]) for bar, run in zip(bars, runs)),
+                (tail, ANSI_DIM))
+    latest = runs[-1]
+    started = latest.get("started", latest.get("recorded_at"))
+    age = format_age((time.time() if now is None else now) - started) if isinstance(
+        started, (int, float)) else "at an unknown time"
+    details = [
+        f"{title}: {len(runs)} recorded runs ({counts['succeeded']} succeeded, "
+        f"{counts['failed']} failed, {counts['cancelled']} cancelled)",
+        (f"Successful runs: median {median}, fastest {format_duration(successes[0])}, "
+         f"slowest {format_duration(successes[-1])}") if successes else "No successful runs recorded",
+        f"Latest: {latest['status']} {age} in {format_duration(durations[-1])} "
+        f"({latest.get('identity', {}).get('configuration', '?')})",
+    ]
+    if successes and latest["status"] == "succeeded" and len(successes) > 1:
+        details.append("Latest success is " + compare_with_last_run(
+            durations[-1], statistics.median(successes)).replace("the last run", "the median"))
+    details.append("Bars are durations, oldest to newest: green succeeded, red failed, dim cancelled.")
+    return ToolboxRow(action, name + bars + tail, tuple(details),
+                      tone={"succeeded": "ok", "failed": "bad"}.get(latest["status"], "dim"),
+                      segments=segments)
+
+
+def run_trends_view(terminal: DashboardTerminal) -> None:
+    view = ToolboxView()
+    glyphs = terminal_glyphs()
+    while True:
+        trends = action_trends(run_history())
+        rows = [action_row("back", "Back"), action_row("refresh", "Refresh")]
+        rows += [trend_row(action, runs, glyphs) for action, runs in trends
+                 if view.search.casefold() in ACTION_TITLES.get(action, action).casefold()]
+        message = (f"{sum(len(runs) for _action, runs in trends)} runs across {len(trends)} actions"
+                   if trends else "No recorded runs yet; progress actions record them.")
+        if choose_toolbox("Build trends", rows, view, terminal, message) == "back":
+            return
+
+
 def run_diagnostic_browser(terminal: DashboardTerminal) -> None:
     view = ToolboxView()
+    glyphs = terminal_glyphs()
     while True:
         runs = run_history()
         rows = [action_row("back", "Back"), action_row("open", "Browse selected run"), action_row("refresh", "Refresh runs")]
-        rows += [ToolboxRow(run["log"], f"{Path(run['log']).name} | {run.get('status', 'legacy log')}",
+        rows += [ToolboxRow(run["log"], run_history_label(run, glyphs),
                             (str(run.get("identity", "No trusted metadata")),
                              "Command: " + format_command(run.get("command", [])),
-                             "Working directory: " + run.get("working_directory", "unknown")))
+                             "Working directory: " + run.get("working_directory", "unknown")),
+                            tone={"succeeded": "ok", "failed": "bad", "cancelled": "warn"}.get(
+                                run.get("status"), "dim"))
                  for run in runs if view.search.casefold() in (run["log"] + str(run.get("identity", ""))).casefold()]
         action = choose_toolbox("Recorded runs", rows, view, terminal)
         if action == "back":
@@ -2319,7 +3313,8 @@ def available_artifacts(settings: dict, history: list[dict]) -> list[tuple[str, 
     artifacts = [("Selected build directory", Path(identity["build_directory"])),
                  ("Coverage HTML (coverage build)", resolve_build_directory(DEFAULT_COVERAGE_DIRECTORY) / "coverage-html" / "index.html"),
                  ("Documentation", REPOSITORY_ROOT / "docs" / "output" / "illumo.pdf"),
-                 ("Architecture map", REPOSITORY_ROOT / "docs" / "output" / "architecture-map.pdf")]
+                 ("Architecture map", REPOSITORY_ROOT / "docs" / "output" / "architecture-map.pdf"),
+                 ("Orchestrator logs folder", REPOSITORY_ROOT / "build-orchestrator-logs")]
     if latest:
         artifacts.insert(1, ("Latest applicable log", Path(latest["log"])))
     return [(label, path) for label, path in artifacts if path.exists()]
@@ -2351,28 +3346,293 @@ def run_artifact_picker(state: DashboardState, terminal: DashboardTerminal) -> N
                 message = str(error)
 
 
+DEVELOPMENT_TOOLS = (
+    ("tests", "Test explorer"),
+    ("diagnostics", "Diagnostic browser"),
+    ("trends", "Build trends (durations and outcomes per action)"),
+    ("profiles", "Profile picker"),
+    ("artifacts", "Artifact shortcuts"),
+    ("stats", "Source file statistics"),
+    ("watch", "Watch: rebuild on every save"),
+    ("doctor", "Toolchain doctor (tools, cache, staged apps, stale outputs)"),
+    ("wasm_tools", "Fetch the pinned WASM toolchain"),
+    ("shortcuts", "Keyboard shortcuts and command-line equivalents"),
+)
+
+
+def run_development_tool(state: DashboardState, terminal: DashboardTerminal, tool: str) -> str:
+    """Open one Development Tools entry; returns a status message."""
+    if tool == "tests":
+        run_test_explorer(state, terminal)
+    elif tool == "diagnostics":
+        run_diagnostic_browser(terminal)
+    elif tool == "trends":
+        run_trends_view(terminal)
+    elif tool == "profiles":
+        run_profile_picker(state, terminal)
+    elif tool == "artifacts":
+        run_artifact_picker(state, terminal)
+    elif tool == "stats":
+        execute_dashboard_action(state, "file_stats", terminal)
+    elif tool in ("doctor", "wasm_tools", "watch"):
+        execute_dashboard_action(state, tool, terminal)
+        return state.status
+    elif tool == "shortcuts":
+        show_toolbox_text("Keyboard shortcuts", dashboard_shortcut_lines(state), terminal)
+    else:
+        raise BuildError(f"Unknown development tool: {tool}")
+    return ""
+
+
 def run_development_tools(state: DashboardState, terminal: DashboardTerminal) -> None:
     view, message = ToolboxView(), ""
-    rows = [action_row("back", "Back to dashboard"), action_row("tests", "Test explorer"),
-            action_row("diagnostics", "Diagnostic browser"), action_row("profiles", "Profile picker"),
-            action_row("artifacts", "Artifact shortcuts"), action_row("stats", "Source file statistics")]
+    rows = [action_row("back", "Back to dashboard"),
+            *(action_row(key, label) for key, label in DEVELOPMENT_TOOLS)]
     while True:
         action = choose_toolbox("Development Tools", rows, view, terminal, message)
+        if action == "back":
+            return
         try:
-            if action == "back":
-                return
-            if action == "tests":
-                run_test_explorer(state, terminal)
-            elif action == "diagnostics":
-                run_diagnostic_browser(terminal)
-            elif action == "profiles":
-                run_profile_picker(state, terminal)
-            elif action == "artifacts":
-                run_artifact_picker(state, terminal)
-            elif action == "stats":
-                execute_dashboard_action(state, "file_stats", terminal)
+            message = run_development_tool(state, terminal, action)
         except (OSError, BuildError) as error:
             message = str(error)
+
+
+def fuzzy_match(query: str, text: str) -> tuple[int, tuple[int, ...]] | None:
+    """Subsequence match, scored for word starts and runs; None if absent.
+    Returns the score and the matched character positions."""
+    folded = text.casefold()
+    score, position, previous = 0, 0, -2
+    matched: list[int] = []
+    for character in query.casefold():
+        if character.isspace():
+            continue
+        found = folded.find(character, position)
+        if found < 0:
+            return None
+        if found == 0 or not folded[found - 1].isalnum():
+            score += 10
+        if found == previous + 1:
+            score += 6
+        score -= min(found - position, 8)
+        matched.append(found)
+        previous, position = found, found + 1
+    return score, tuple(matched)
+
+
+def palette_entries(state: DashboardState) -> list[tuple[str, str, str, str]]:
+    """(key, category, text, detail) for every action, setting value and tool."""
+    entries = []
+    selected = state.selected
+    try:
+        for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
+            if kind == "action" and key != "quit":
+                state.selected = index
+                entries.append((f"action:{key}", "Action", label, dashboard_selection_hint(state)))
+    finally:
+        state.selected = selected
+    entries += [(f"tool:{key}", "Tool", label, "Development Tools") for key, label in DEVELOPMENT_TOOLS]
+    try:
+        profiles = [DASHBOARD_DEFAULT_PROFILE, *load_profiles(state.profiles_file, allow_missing=True)]
+    except BuildError:
+        profiles = [DASHBOARD_DEFAULT_PROFILE]
+    entries += [(f"profile:{name}", "Profile", f"Profile: {name}", "Clears session overrides")
+                for name in profiles]
+    options = {
+        "configuration": list(DASHBOARD_CONFIGURATIONS),
+        "application": [APP_LABELS.get(app, app) for app in state.applications],
+        "parallel": [label for label, _value in DASHBOARD_PARALLEL_OPTIONS],
+    }
+    for kind, label, key in DASHBOARD_ITEMS:
+        if kind != "setting" or key == "profile" or (key == "wasm" and not WASM_HOST_SUPPORTED):
+            continue
+        for value in options.get(key, ["On", "Off"]):
+            entries.append((f"set:{key}={value}", "Setting", f"{label}: {value}",
+                            DASHBOARD_SETTING_HINTS.get(key, "")))
+    return entries
+
+
+def palette_rows(state: DashboardState, query: str) -> tuple[list[ToolboxRow], int]:
+    entries = palette_entries(state)
+    ranked = []
+    for order, (key, category, text, detail) in enumerate(entries):
+        match = fuzzy_match(query, text)
+        if match is not None:
+            ranked.append((-match[0], order, key, category, text, detail, set(match[1])))
+    ranked.sort()
+    # A verb per category: what choosing the row will do.
+    verbs = {"Action": ("Run", ANSI_VIOLET), "Tool": ("Open", ANSI_CYAN),
+             "Profile": ("Use", ANSI_YELLOW), "Setting": ("Set", ANSI_BLUE)}
+    rows = []
+    for _score, _order, key, category, text, detail, positions in ranked:
+        verb, color = verbs[category]
+        segments = ((f"{verb:<6}", color),
+                    *((character, ANSI_BOLD + ANSI_UNDERLINE if index in positions else "")
+                      for index, character in enumerate(text)))
+        rows.append(ToolboxRow(key, f"{verb:<6}{text}", (text, detail), segments=segments))
+    return rows, len(entries)
+
+
+def run_command_palette(state: DashboardState, terminal: DashboardTerminal) -> str | None:
+    """Type to filter every action, tool, profile and setting value."""
+    view = ToolboxView(draft="")
+    last = None
+    moving = motion_enabled()
+    caret_on = True
+    rows: list[ToolboxRow] = []
+    total = 0
+    event: object = None
+    while True:
+        if event != "tick":  # A blink repaints; only input can change the rows.
+            rows, total = palette_rows(state, view.draft or "")
+        size = shutil.get_terminal_size((100, 32))
+        rendered, regions, page = render_toolbox(
+            "Command palette", rows, view, size.columns, size.lines,
+            f"{len(rows)} of {total} commands", ansi=True,
+            help_text="Type to filter | Up/Down or hover: choose | Enter or click: run | Escape: close",
+            prompt=f"{terminal_glyphs()['chevron']} ",
+            caret="▏" if caret_on and terminal_glyphs() is UNICODE_GLYPHS else ("_" if caret_on else " "),
+        )
+        if rendered != last:
+            if event == "tick" and last is not None:
+                sys.stdout.write(ANSI_HOME + tui_newlines(rendered.replace("\n", ANSI_ERASE_LINE + "\n"))
+                                 + ANSI_ERASE_LINE + ANSI_ERASE_BELOW)
+            else:
+                sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
+            sys.stdout.flush()
+            last = rendered
+        event = terminal.read_event(text_mode=True, timeout=0.5 if moving else None)
+        if event == "tick":
+            caret_on = not caret_on
+            continue
+        caret_on = True  # Typing keeps the cursor solid.
+        if isinstance(event, DashboardTextEvent):
+            view.draft += event.text
+            view.selected = view.top = 0
+        elif event == "backspace":
+            view.draft = view.draft[:-1]
+            view.selected = view.top = 0
+        elif event in ("escape", "quit"):
+            return None
+        elif event == "enter":
+            return rows[view.selected].key if rows else None
+        elif isinstance(event, DashboardMouseEvent):
+            if event.kind in ("wheel_up", "wheel_down"):
+                view.selected += -1 if event.kind == "wheel_up" else 1
+            else:
+                region = next((hit for hit in regions if hit.row == event.y and 1 <= event.x <= hit.right), None)
+                if region is not None:
+                    view.selected = region.index
+                    if event.kind == "left":
+                        return rows[region.index].key
+        else:
+            movement = {"up": -1, "down": 1, "page_up": -page, "page_down": page}
+            if event in movement:
+                view.selected += movement[event]
+            elif event in ("home", "end"):
+                view.selected = 0 if event == "home" else len(rows) - 1
+        view.selected = max(0, min(view.selected, len(rows) - 1))
+
+
+def apply_palette_choice(state: DashboardState, terminal: DashboardTerminal, choice: str) -> str | None:
+    """Apply a palette entry; returns a dashboard action still to execute."""
+    kind, _separator, value = choice.partition(":")
+    if kind == "action":
+        state.selected = [item[2] for item in DASHBOARD_ITEMS].index(value)
+        return value
+    if kind == "tool":
+        message = run_development_tool(state, terminal, value)
+        if message:
+            state.status = message
+        return None
+    if kind == "profile":
+        profiles = load_profiles(state.profiles_file, allow_missing=True)
+        if value in profiles:
+            apply_dashboard_profile(state, value, profiles[value])
+        else:
+            apply_dashboard_profile(state, None, {})
+        state.selected = [item[2] for item in DASHBOARD_ITEMS].index("profile")
+        state.status, state.status_kind = f"Profile {state.profile_label} applied", "normal"
+        return None
+    if kind == "set":
+        key, _equals, target = value.partition("=")
+        state.selected = [item[2] for item in DASHBOARD_ITEMS].index(key)
+        # Step through the same path as Left/Right so overrides are recorded.
+        for _attempt in range(len(DASHBOARD_PARALLEL_OPTIONS) + len(state.applications) + 4):
+            if dashboard_value(state, key) == target:
+                break
+            adjust_dashboard_setting(state, 1)
+        state.status, state.status_kind = f"{DASHBOARD_ITEMS[state.selected][1]}: {dashboard_value(state, key)}", "normal"
+    return None
+
+
+def dashboard_shortcut_lines(state: DashboardState) -> list[str]:
+    lines = ["Build console", "  Up/Down or j/k      move the selection (wheel too)",
+             "  Left/Right or h/l   change a setting (right-click steps back)",
+             "  Enter or click      run the selected action",
+             "  Tab                 jump between Settings and Actions",
+             "  Home/End            first or last row",
+             "  /                   command palette: type to find any action, tool,",
+             "                      profile or setting value; Enter runs it",
+             "  .                   repeat the last action",
+             "  ?                   this page", "  q or Escape         leave", "",
+             "Action hotkeys (command-line equivalent)"]
+    selected = state.selected
+    try:
+        for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
+            if kind != "action" or key == "quit":
+                continue
+            state.selected = index
+            lines.append(f"  {DASHBOARD_HOTKEYS.get(key, ' ')}  {label:<24} "
+                         f"{dashboard_selection_hint(state)}")
+    finally:
+        state.selected = selected
+    lines += ["", "After a progress action",
+              "  d   browse its diagnostics     l   read its full log     any other key: back",
+              "", "Subviews", "  /   edit the search     Enter apply     Escape cancel / back",
+              "  Page Up/Down, Home/End scroll long lists"]
+    return lines
+
+
+def dashboard_navigate(state: DashboardState, key: str) -> bool:
+    """Apply a selection-only key; False when the key is not navigation."""
+    count = len(DASHBOARD_ITEMS)
+    first_action = next(index for index, item in enumerate(DASHBOARD_ITEMS) if item[0] == "action")
+    if key == "up":
+        state.selected = (state.selected - 1) % count
+    elif key == "down":
+        state.selected = (state.selected + 1) % count
+    elif key == "home":
+        state.selected = 0
+    elif key == "end":
+        state.selected = count - 1
+    elif key == "page_up":
+        state.selected = max(0, state.selected - 5)
+    elif key == "page_down":
+        state.selected = min(count - 1, state.selected + 5)
+    elif key == "tab":
+        state.selected = 0 if state.selected >= first_action else first_action
+    else:
+        return False
+    return True
+
+
+def dashboard_key_action(state: DashboardState, key: str) -> str | None:
+    """The action a key runs: a hotkey, '.' (repeat) or Enter on an action."""
+    for action, letter in DASHBOARD_HOTKEYS.items():
+        if key == f"key:{letter}":
+            state.selected = [item[2] for item in DASHBOARD_ITEMS].index(action)
+            return action
+    if key == "key:.":
+        if state.last_action is None:
+            state.status, state.status_kind = "Nothing to repeat yet", "normal"
+            return None
+        if state.last_action in [item[2] for item in DASHBOARD_ITEMS]:
+            state.selected = [item[2] for item in DASHBOARD_ITEMS].index(state.last_action)
+        return state.last_action
+    if key == "enter" and DASHBOARD_ITEMS[state.selected][0] == "action":
+        return DASHBOARD_ITEMS[state.selected][2]
+    return None
 
 
 def run_dashboard() -> int:
@@ -2386,25 +3646,55 @@ def run_dashboard() -> int:
 
     state = DashboardState()
     terminal = DashboardTerminal()
+    refresh_dashboard_context(state)
+    sys.stdout.write(ANSI_PUSH_TITLE + terminal_progress_signals(None))
     try:
         terminal.enter()
         last_rendered: str | None = None
+        last_status = state.status
+        animate = motion_enabled()
+        # The opening unroll reveals a few rows per tick; None shows all.
+        reveal: int | None = 0 if animate else None
+        last_size = None
+        ticked = False
         while True:
+            if state.status != last_status:
+                state.status_time, last_status = time.strftime("%H:%M"), state.status
+                state.status_frame = state.frame
             terminal_size = dashboard_terminal_size()
             regions: list[DashboardHitRegion] = []
             rendered = render_dashboard(
                 state, terminal_size.columns, hit_regions=regions,
                 mouse_enabled=terminal.windows_input is not None,
+                terminal_rows=terminal_size.lines,
+                frame=state.frame if animate else None, reveal=reveal,
             )
             # Wrapped or vertically clipped output cannot be hit-tested safely.
             rendered_rows = len(rendered.splitlines())
             if terminal_size.columns < 56 or rendered_rows > terminal_size.lines:
                 regions.clear()
             if rendered != last_rendered:
-                sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
+                if ticked and last_rendered is not None and terminal_size == last_size:
+                    # Animation frames overwrite in place; clearing would flicker.
+                    sys.stdout.write(
+                        ANSI_HOME + tui_newlines(rendered.replace("\n", ANSI_ERASE_LINE + "\n"))
+                        + ANSI_ERASE_LINE + ANSI_ERASE_BELOW
+                    )
+                else:
+                    sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
                 sys.stdout.flush()
                 last_rendered = rendered
-            event = terminal.read_event()
+            last_size = terminal_size
+            event = terminal.read_event(timeout=DASHBOARD_TICK_SECONDS if animate else None)
+            ticked = event == "tick"
+            if ticked:
+                state.frame += 1
+                if reveal is not None:
+                    reveal += INTRO_ROWS_PER_FRAME
+                    if reveal >= rendered_rows:
+                        reveal = None
+                continue
+            reveal = None  # Any input finishes the opening unroll at once.
             if isinstance(event, DashboardMouseEvent):
                 if dashboard_terminal_size() != terminal_size:
                     continue
@@ -2415,26 +3705,39 @@ def run_dashboard() -> int:
                 last_rendered = None
             if key == "quit":
                 return 0
-            if key == "up":
-                state.selected = (state.selected - 1) % len(DASHBOARD_ITEMS)
-            elif key == "down":
-                state.selected = (state.selected + 1) % len(DASHBOARD_ITEMS)
-            elif key in ("left", "right"):
-                if DASHBOARD_ITEMS[state.selected][0] == "setting":
-                    adjust_dashboard_setting(
-                        state, -1 if key == "left" else 1
-                    )
-            elif key == "enter":
-                kind, _label, action = DASHBOARD_ITEMS[state.selected]
-                if kind == "setting":
-                    adjust_dashboard_setting(state, 1)
-                elif action == "quit":
-                    return 0
-                else:
-                    execute_dashboard_action(state, action, terminal)
+            if dashboard_navigate(state, key):
+                continue
+            try:
+                if key in ("left", "right") or (
+                    key == "enter" and DASHBOARD_ITEMS[state.selected][0] == "setting"
+                ):
+                    if DASHBOARD_ITEMS[state.selected][0] == "setting":
+                        adjust_dashboard_setting(state, -1 if key == "left" else 1)
+                    continue
+                if key == "key:?":
+                    show_toolbox_text("Keyboard shortcuts", dashboard_shortcut_lines(state), terminal)
                     last_rendered = None
+                    continue
+                if key == "search":
+                    choice = run_command_palette(state, terminal)
+                    last_rendered = None
+                    action = apply_palette_choice(state, terminal, choice) if choice else None
+                else:
+                    action = dashboard_key_action(state, key)
+                if action == "quit":
+                    return 0
+                if action is not None:
+                    execute_dashboard_action(state, action, terminal)
+                    state.last_action = action
+                    refresh_dashboard_context(state)
+                    sys.stdout.write(terminal_progress_signals(None))
+                    last_rendered = None
+            except BuildError as error:
+                state.status, state.status_kind = str(error), "failure"
     finally:
         terminal.leave()
+        sys.stdout.write(ANSI_POP_TITLE)
+        sys.stdout.flush()
 
 
 class CommandRunner:
@@ -2458,7 +3761,11 @@ class CommandRunner:
         if context_path and not self.dry_run:
             with Path(context_path).open("a", encoding="utf-8") as context:
                 context.write(json.dumps({"command": list(command), "working_directory": str(working_directory)}) + "\n")
-        print(f"> {format_command(command)}", flush=True)
+        # Progress views parse "> command" from a redirected stream; style
+        # only what a person reads in a terminal.
+        ansi = sys.stdout.isatty()
+        print(dashboard_style("> ", ANSI_BOLD + ANSI_VIOLET, ansi)
+              + dashboard_style(format_command(command), ANSI_BOLD, ansi), flush=True)
         if self.dry_run:
             return
 
@@ -2469,6 +3776,11 @@ class CommandRunner:
                 cwd=working_directory,
                 check=False,
             )
+            elapsed = time.monotonic() - started
+            if ansi and result.returncode == 0 and elapsed >= 1:
+                print(dashboard_style(
+                    f"  {terminal_glyphs()['ok']} {format_duration(elapsed)}", ANSI_DIM + ANSI_GREEN, ansi,
+                ), flush=True)
         except OSError as error:
             raise BuildError(
                 f"Could not start {format_command(command)}\n"
@@ -2798,12 +4110,18 @@ def print_repository_statistics(statistics: RepositoryStatistics) -> None:
         f"{statistics.first_party_loc:,} LOC, "
         f"{statistics.first_party_physical_lines:,} physical lines"
     )
-    for category in statistics.categories:
+    glyphs = terminal_glyphs()
+    ansi = sys.stdout.isatty()
+    largest = max((category.loc for category in statistics.categories), default=0)
+    for index, category in enumerate(statistics.categories):
+        cells = round(24 * category.loc / largest) if largest else 0
+        color = f"\x1b[38;5;{GRADIENT_COLORS[index * 2 % len(GRADIENT_COLORS)]}m"
         print(
             f"  {category.label:<24} "
             f"{category.files:>4,} files  "
             f"{category.loc:>8,} LOC  "
             f"{category.physical_lines:>8,} physical"
+            + ("  " + dashboard_style(glyphs["block"] * cells, color, ansi) if cells else "")
         )
     source = (
         "tracked files"
@@ -3412,11 +4730,23 @@ def run_doctor(arguments: argparse.Namespace) -> None:
     if arguments.json:
         print(json.dumps({"ok": ok, "checks": checks}, indent=2))
     else:
-        styles = {"ok": ANSI_GREEN, "warning": ANSI_YELLOW, "error": ANSI_RED}
+        glyphs = terminal_glyphs()
         ansi = sys.stdout.isatty()
+        marks = {"ok": (glyphs["ok"], ANSI_GREEN), "warning": (glyphs["warn"], ANSI_YELLOW),
+                 "error": (glyphs["bad"], ANSI_RED)}
+        name_width = max(len(check["name"]) for check in checks)
         for check in checks:
-            status = dashboard_style(f"[{check['status']}]", styles.get(check["status"], ""), ansi)
-            print(f"{status} {check['name']}: {check['detail']}")
+            mark, style = marks.get(check["status"], (glyphs["info"], ""))
+            # Continuation lines of a detail align under its first line.
+            detail = check["detail"].replace("\n", "\n" + " " * (name_width + 6))
+            print(f"  {dashboard_style(mark, style, ansi)} "
+                  f"{dashboard_style(check['name'].ljust(name_width), ANSI_BOLD, ansi)}  {detail}")
+        tally = {status: sum(1 for check in checks if check["status"] == status) for status in marks}
+        print("\n  " + "   ".join(
+            dashboard_style(f"{marks[status][0]} {count} {label}", marks[status][1] if count else ANSI_DIM, ansi)
+            for status, count, label in (("ok", tally["ok"], "ok"),
+                                         ("warning", tally["warning"], "warnings"),
+                                         ("error", tally["error"], "errors"))))
     if not ok:
         raise BuildError("Build diagnostics found errors. No configuration or build was started.")
 
@@ -3687,6 +5017,17 @@ def create_parser(
              "(e.g. -- --open scene.ilsc, or -- --capture frame.png)",
     )
     play_parser.set_defaults(app=WASM_RUNTIME_APPLICATION)
+
+    watch_parser = subparsers.add_parser(
+        "watch",
+        parents=[common],
+        help="build, then rebuild (and re-run one test) whenever a source file changes",
+    )
+    watch_parser.add_argument("--target", help="rebuild a focused CMake target")
+    watch_parser.add_argument("--test", metavar="NAME",
+                              help="exact CTest name to run after each successful build")
+    watch_parser.add_argument("--interval", type=positive_interval, default=1.0, metavar="SECONDS",
+                              help="polling interval (default: %(default)s)")
 
     wasm_tools_parser = subparsers.add_parser(
         "wasm-tools",
@@ -4311,6 +5652,126 @@ def run_application(arguments: argparse.Namespace) -> None:
     runner.run((str(application), *app_arguments), application.parent)
 
 
+WATCH_SUFFIXES = {
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl",
+    ".vert", ".frag", ".glsl", ".cmake", ".json",
+}
+# Top-level scratch and output folders; build*, archive, thirdparty and
+# dot-directories are pruned everywhere.
+WATCH_PRUNED_ROOTS = {"docs", "tmp", "scratch", "output", "licenses", "__pycache__"}
+
+
+def watch_snapshot(root: Path) -> dict[str, int]:
+    """Modification times of first-party sources, shaders and CMake files."""
+    snapshot: dict[str, int] = {}
+    for directory, children, files in os.walk(root):
+        relative = Path(directory).relative_to(root)
+        children[:] = [
+            name for name in children
+            if not name.startswith(".") and name != "__pycache__"
+            and not (relative == Path(".") and name.lower() in WATCH_PRUNED_ROOTS)
+            and not is_excluded_repository_path(relative / name / "entry")
+        ]
+        for name in files:
+            if name == "CMakeLists.txt" or Path(name).suffix.lower() in WATCH_SUFFIXES:
+                path = Path(directory) / name
+                try:
+                    snapshot[(relative / name).as_posix()] = path.stat().st_mtime_ns
+                except OSError:
+                    continue  # Deleted between listing and stat.
+    return snapshot
+
+
+def watch_changes(before: dict[str, int], after: dict[str, int]) -> list[str]:
+    return sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+
+
+def run_watch_cycle(
+    runner: CommandRunner, commands: Sequence[Sequence[str]], changed: Sequence[str],
+    cycle: int, glyphs: dict, ansi: bool,
+) -> bool:
+    """Run the build (then the test) once; report the outcome, never raise."""
+    heavy = glyphs["heavy"]
+    heading = f"{glyphs['refresh']} Cycle {cycle}"
+    if changed:
+        shown = ", ".join(changed[:4]) + (f" and {len(changed) - 4} more" if len(changed) > 4 else "")
+        heading += f": {len(changed)} changed ({shown})"
+    print()
+    print(dashboard_style(f"{heavy * 2} {heading} ", ANSI_BOLD + ANSI_CYAN, ansi)
+          + dashboard_style(heavy * 8, ANSI_FRAME, ansi), flush=True)
+    started = time.monotonic()
+    ok = True
+    for command in commands:
+        try:
+            runner.run(command)
+        except BuildError as error:
+            print(str(error), file=sys.stderr, flush=True)
+            ok = False
+            break
+    elapsed = format_duration(time.monotonic() - started)
+    mark, style = (glyphs["ok"], ANSI_GREEN) if ok else (glyphs["bad"], ANSI_RED)
+    print(dashboard_style(f"{mark} Cycle {cycle} {'passed' if ok else 'failed'} in {elapsed}",
+                          ANSI_BOLD + style, ansi), flush=True)
+    if ansi:
+        sys.stdout.write(f"\x1b]2;Illumo watch | cycle {cycle} {'passed' if ok else 'failed'}\x07"
+                         + ("" if ok else "\a"))
+        sys.stdout.flush()
+    return ok
+
+
+def run_watch(arguments: argparse.Namespace) -> None:
+    """Build once, then rebuild (and re-run --test) whenever a source changes."""
+    runner = CommandRunner(arguments.dry_run)
+    cmake = configure(arguments, runner)
+    build_directory = resolve_build_directory(arguments.build_dir)
+    commands = [build_command(arguments, cmake)]
+    if arguments.test:
+        commands.append([
+            existing_tool("ctest", runner.dry_run), "--test-dir", str(build_directory),
+            "-C", arguments.config, "-R", test_name_batches([arguments.test])[0][1],
+            "--no-tests=error", "--output-on-failure",
+        ])
+    if runner.dry_run:
+        for command in commands:
+            runner.run(command)
+        return
+    glyphs = terminal_glyphs()
+    ansi = sys.stdout.isatty()
+    snapshot = watch_snapshot(REPOSITORY_ROOT)
+    changed: list[str] = []
+    cycle = 0
+    try:
+        while True:
+            cycle += 1
+            run_watch_cycle(runner, commands, changed, cycle, glyphs, ansi)
+            print(dashboard_style(
+                f"Watching {len(snapshot):,} files; save one to rebuild (Ctrl+C stops).",
+                ANSI_DIM, ansi), flush=True)
+            changed = []
+            while not changed:
+                time.sleep(arguments.interval)
+                current = watch_snapshot(REPOSITORY_ROOT)
+                if watch_changes(snapshot, current):
+                    # Editors and generators write in bursts; let them settle.
+                    time.sleep(0.3)
+                    current = watch_snapshot(REPOSITORY_ROOT)
+                    changed = watch_changes(snapshot, current)
+                    snapshot = current
+    except KeyboardInterrupt:
+        print("\n" + dashboard_style(f"Watch stopped after {cycle} cycle{'s' if cycle != 1 else ''}.",
+                                     ANSI_DIM, ansi), flush=True)
+
+
+def positive_interval(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("interval must be a number of seconds") from error
+    if not 0.1 <= seconds <= 60:
+        raise argparse.ArgumentTypeError("interval must be between 0.1 and 60 seconds")
+    return seconds
+
+
 def run_wasm_tools(arguments: argparse.Namespace) -> None:
     if not WASM_HOST_SUPPORTED:
         raise BuildError("The pinned Wasmtime and WASI SDK toolchain is Windows x64 only.")
@@ -4624,6 +6085,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "run": run_application,
         "play": run_application,
         "wasm-tools": run_wasm_tools,
+        "watch": run_watch,
         "coverage": run_coverage,
         "tidy": run_tidy,
         "docs": run_docs,
