@@ -72,6 +72,40 @@ must support hard links (e.g. NTFS). Failure never overwrites an existing
 output. A crash may leave a staging file; inspect it before removing it and
 retrying. No bit-identical cross-driver guarantee is made.
 
+## Runtime benchmark mode
+
+The same shell times a live session instead of capturing it:
+
+```powershell
+.\IllumoRuntime.exe --app game --storage D:\bench-storage --bench-script dense.txt --bench-frames 600
+```
+
+- `--bench-frames N`: frames to time (positive, at most 1000000); `0` or a
+  malformed value refuses to start. It cannot be combined with `--capture`.
+- `--bench-warmup W`: frames run after the script before timing (default 120).
+- `--bench-script file`: one line per step, run in order before warm-up. A
+  console command line is queued once its command exists (guest commands
+  register asynchronously); `@key Name` presses one `KeyCode` (for example
+  `@key End`) and waits two frames; `@wait n` pauses `n` frames. `#` starts a
+  comment. An unknown directive or key fails the benchmark.
+
+Stdout carries one JSON line: `success`, `application`, `error`,
+`warmupFrames`, `frames`, `seconds`, `fps`, `frameIntervalMs` and
+`moduleUpdateMs` (p50/p95/p99/max over the timed frames), `wasmMs` (rolling
+p50/p95/max of the services, update, receive, frame and accept exchanges and
+the frame size) and `lastFrame` (the last accepted frame's batches, retained
+batches, inline vertex/index bytes, texture writes, dynamic mesh write bytes,
+and lifetime host mesh slot allocations and replacements). A finished
+benchmark closes without product dialogs; the exit code is 0 on success.
+
+Frame pacing follows the settings in effect: a package's storage
+`envvars.json` with `"vsync": "0"` and `"fps": "0"` measures uncapped work. The
+in-app `wasm_stats` console command prints the same exchange statistics, and
+the game's `status` command adds where generations execute. Headless,
+repeatable measurements are `IllumoGame.Sim.RunnerBench` (native reference
+runner) and `IllumoGame.Wasm.PackageBench` (label `IllumoBenchmark`, not part
+of `IllumoWorkspace`).
+
 ## Public API and ownership
 
 `FrameCapture::render(options, producer)` in

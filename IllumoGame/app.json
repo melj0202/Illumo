@@ -1,1 +1,1 @@
-{"id":"csim","title":"CSim","module":"IllumoGame.wasm","memoryMiB":1024,"fuelPerCall":20000000000,"deadlineMilliseconds":10000}
+{"id":"csim","title":"CSim","module":"IllumoGame.wasm","worker":"CSimWorkerGuest.wasm","workers":8,"workerMemoryMiB":512,"workerDeadlineMilliseconds":10000,"memoryMiB":1024,"metering":"epoch","deadlineMilliseconds":10000}

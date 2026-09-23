@@ -1,8 +1,13 @@
+#include <Illumo/Wasm/AppManifest.h>
 #include <Illumo/Wasm/WasmGuest.h>
 #include <Illumo/Wasm/WasmInstance.h>
 #include <Illumo/Wasm/WasmResourceTable.h>
 #include <Illumo/Wasm/WasmWorker.h>
 #include <IllumoGuest/Wire.h>
+
+// Narrow private policy headers: engine options and the isolated compiler.
+#include "../../Source/Wasm/WasmCompiler.h"
+#include "../../Source/Wasm/WasmEngineConfig.h"
 
 #include <wasmtime.h>
 
@@ -60,9 +65,150 @@ waitWorker(WasmWorker& worker, WasmWorkerStatus expected)
   return false;
 }
 
+// True when an artifact compiled with compileOptions deserializes into an
+// engine created with engineOptions.
+static bool
+deserializes(const std::vector<std::byte>& bytes,
+             std::uint32_t compileOptions,
+             std::uint32_t engineOptions)
+{
+  std::vector<std::byte> artifact;
+  std::string error;
+  WasmEngineOptions options;
+  if (!compileWasmIsolated(bytes,
+                           1024ull * 1024ull * 1024ull,
+                           30000u,
+                           compileOptions,
+                           artifact,
+                           error) ||
+      !decodeWasmEngineOptions(engineOptions, options)) {
+    return false;
+  }
+  wasm_engine_t* engine = createWasmEngine(options);
+  wasmtime_module_t* module = nullptr;
+  wasmtime_error_t* failure = wasmtime_module_deserialize(
+    engine,
+    reinterpret_cast<const std::uint8_t*>(artifact.data()),
+    artifact.size(),
+    &module);
+  const bool accepted = failure == nullptr && module != nullptr;
+  if (failure != nullptr) {
+    wasmtime_error_delete(failure);
+  }
+  if (module != nullptr) {
+    wasmtime_module_delete(module);
+  }
+  wasm_engine_delete(engine);
+  return accepted;
+}
+
+static bool
+engineModes(const std::vector<std::byte>& bytes)
+{
+  const std::uint32_t metered = wasmHostEngineOptions(true);
+  const std::uint32_t epoch = wasmHostEngineOptions(false);
+#if defined(ILLUMO_ASAN) || defined(__SANITIZE_ADDRESS__)
+  const bool sanitized = true;
+#else
+  const bool sanitized = false;
+#endif
+  WasmEngineOptions decoded;
+  if (!require(decodeWasmEngineOptions(metered, decoded) && decoded.meterFuel &&
+                 decoded.explicitBounds == sanitized &&
+                 decodeWasmEngineOptions(epoch, decoded) &&
+                 !decoded.meterFuel && decoded.explicitBounds == sanitized,
+               "Host engine options follow metering and the ASan build") ||
+      !require(!decodeWasmEngineOptions(4u, decoded),
+               "Unknown engine option bits are rejected")) {
+    return false;
+  }
+  std::vector<std::byte> artifact;
+  std::string error;
+  if (!require(
+        !compileWasmIsolated(
+          bytes, 1024ull * 1024ull * 1024ull, 30000u, 4u, artifact, error),
+        "The compiler refuses an invalid options mask") ||
+      !require(deserializes(bytes, metered, metered) &&
+                 deserializes(bytes, epoch, epoch),
+               "Artifacts load under the options they were compiled with") ||
+      !require(!deserializes(bytes, metered, epoch) &&
+                 !deserializes(bytes, epoch, metered),
+               "Mismatched artifacts fail closed at deserialization")) {
+    return false;
+  }
+  WasmLimits limits;
+  limits.meterFuel = false;
+  limits.fuelPerCall = 0;
+  WasmInstance instance(limits);
+  std::int32_t result = 0;
+  return require(instance.load(bytes) &&
+                   instance.call("compatibility", {}, result) && result == 4,
+                 "An epoch-only store needs no fuel budget",
+                 &instance);
+}
+
+static bool
+manifestDecoder()
+{
+  AppManifestCeilings ceilings;
+  ceilings.memoryMiB = 100;
+  ceilings.fuelPerCall = 1000;
+  ceilings.deadlineMilliseconds = 5000;
+  ceilings.workers = 4;
+  AppManifest manifest;
+  std::string error;
+  if (!require(
+        decodeAppManifest(
+          R"({"id":"csim","module":"game.wasm"})", ceilings, manifest, error) &&
+          manifest.meterFuel && manifest.workers == 1,
+        "Absent metering keeps fuel") ||
+      !require(decodeAppManifest(
+                 R"({"id":"csim","module":"g.wasm","metering":"epoch",
+                     "worker":"w.wasm","workers":16,"workerMemoryMiB":900,
+                     "workerDeadlineMilliseconds":9000,"memoryMiB":50})",
+                 ceilings,
+                 manifest,
+                 error) &&
+                 !manifest.meterFuel && manifest.workers == 4 &&
+                 manifest.workerMemoryMiB == 100 &&
+                 manifest.workerDeadlineMilliseconds == 5000 &&
+                 manifest.memoryMiB == 50,
+               "Epoch metering and clamped worker budgets")) {
+    return false;
+  }
+  const char* const rejected[] = {
+    R"({"id":"csim","module":"g.wasm","metering":"none"})",
+    R"({"id":"csim","module":"g.wasm","metering":1})",
+    R"({"id":"csim","module":"g.wasm","metering":"epoch","fuelPerCall":5})",
+    R"({"id":"csim","module":"g.wasm","workers":2})",
+    R"({"id":"csim","module":"g.wasm","worker":"w.wasm","workers":0})",
+    R"({"id":"csim","module":"g.wasm","worker":"../w.wasm"})",
+    R"({"id":"csim","module":"g.wasm","memoryMiB":-1})",
+    R"({"id":"CSim","module":"g.wasm"})",
+    R"({"module":"g.wasm"})",
+    R"(not json)"
+  };
+  for (const char* text : rejected) {
+    AppManifest untouched;
+    untouched.id = "kept";
+    if (!require(!decodeAppManifest(text, ceilings, untouched, error) &&
+                   !error.empty() && untouched.id == "kept",
+                 text)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool
 run(const std::string& name, const std::vector<std::byte>& bytes)
 {
+  if (name == "EngineModes") {
+    return engineModes(bytes);
+  }
+  if (name == "Manifest") {
+    return manifestDecoder();
+  }
   if (name == "Resources") {
     WasmResourceTable<int, GuestResourceKind::Texture> first(1, 1);
     WasmResourceTable<int, GuestResourceKind::Texture> second(2, 1);
@@ -285,8 +431,13 @@ run(const std::string& name, const std::vector<std::byte>& bytes)
                    "Compiler subprocess deadline",
                    &compilerLimited);
   }
+  if (name == "Fuel") {
+    limits.meterFuel = true;
+  }
   if (name == "Epoch") {
-    limits.fuelPerCall = std::numeric_limits<std::uint64_t>::max();
+    // Epoch-only: no fuel instrumentation, so the deadline must interrupt.
+    limits.meterFuel = false;
+    limits.fuelPerCall = 0;
     limits.deadlineMilliseconds = 50;
   }
   WasmInstance instance(limits);
@@ -385,10 +536,11 @@ run(const std::string& name, const std::vector<std::byte>& bytes)
 int
 main(int argc, char** argv)
 {
-  constexpr std::array<const char*, 13> kCases{
-    "Compatibility", "Isolation",     "Fuel",     "Epoch", "Memory",
-    "DeniedImports", "InvalidModule", "Worker",   "Wire",  "CompilerLimits",
-    "Lifecycle",     "Protocol",      "Resources"
+  constexpr std::array<const char*, 15> kCases{
+    "Compatibility", "Isolation",      "Fuel",          "Epoch",
+    "Memory",        "DeniedImports",  "InvalidModule", "Worker",
+    "Wire",          "CompilerLimits", "Lifecycle",     "Protocol",
+    "Resources",     "EngineModes",    "Manifest"
   };
   if (argc == 2 && std::string(argv[1]) == "--list") {
     for (const char* name : kCases) {

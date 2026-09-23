@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Game/SparseCellGrid.h"
+#include <Illumo/Foundation/RollingMetric.h>
+#include <memory>
+#include <string>
 #ifndef ILLUMO_SERIAL_GUEST
 #include <condition_variable>
 #include <mutex>
@@ -8,6 +11,7 @@
 #endif
 
 class RuleSet;
+class SimulationLaneCoordinator;
 
 struct SimulationRunnerTimings
 {
@@ -20,15 +24,25 @@ struct SimulationRunnerTimings
   bool usedDirectSourceAdvance = false;
 };
 
-// Native builds advance on one persistent worker thread. A WASM guest
-// (ILLUMO_SERIAL_GUEST) has no threads: start() runs the same generation body
-// immediately and the result is taken by the next try/wait call, so callers
-// keep one publication and drain protocol.
+// Native builds advance on one persistent worker thread. The WASM guest
+// (ILLUMO_SERIAL_GUEST) has no threads: it fans each generation out to
+// isolated simulation lanes (CSimPlatform::simulationLanes()) when granted and
+// otherwise runs the same generation body inside start(). Either way results
+// are taken by the next try call, so callers keep one publication protocol.
 class SimulationRunner
 {
 public:
   SimulationRunner();
   ~SimulationRunner();
+
+  // False when an outstanding generation can only complete on a later frame
+  // (guest lanes): drain it with retire() instead of waitAndTakeCompleted().
+  bool canBlock() const;
+  // Discards any outstanding or completed-but-untaken generation. The
+  // published grid is never touched by outstanding work.
+  void retire();
+  // One status line describing where generations execute.
+  std::string describeExecution() const;
 
   SimulationRunner(const SimulationRunner&) = delete;
   SimulationRunner& operator=(const SimulationRunner&) = delete;
@@ -68,6 +82,13 @@ private:
   mutable std::mutex mutex;
   std::condition_variable condition;
   std::thread worker;
+#else
+  std::unique_ptr<SimulationLaneCoordinator> lanes;
+  bool laneRequestPending = false;
+  // Lanes pay a round trip and a merge per generation, so they are used
+  // only while a serial generation would cost more than that.
+  bool preferLanes = false;
+  RollingMetric serialCost;
 #endif
   bool stopping = false;
   bool requestPending = false;

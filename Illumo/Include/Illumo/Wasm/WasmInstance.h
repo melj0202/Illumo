@@ -10,6 +10,10 @@
 struct WasmLimits
 {
   std::uint64_t memoryBytes = 64u * 1024u * 1024u;
+  // Fuel metering instruments every compiled block and bounds each call by
+  // fuelPerCall. Without it (epoch-only) the deadline alone bounds a call and
+  // fuelPerCall is ignored.
+  bool meterFuel = true;
   std::uint64_t fuelPerCall = 10000000u;
   std::uint32_t deadlineMilliseconds = 1000u;
   std::uint32_t moduleBytes = 64u * 1024u * 1024u;
@@ -17,6 +21,11 @@ struct WasmLimits
   std::uint64_t compilerMemoryBytes = 1024u * 1024u * 1024u;
   std::uint32_t compilerDeadlineMilliseconds = 30000u;
 };
+
+// The engine options mask (see WasmEngineConfig.h) this host uses for a store
+// with or without fuel metering. Exposed for diagnostics and tests.
+std::uint32_t
+wasmHostEngineOptions(bool meterFuel);
 
 enum class WasmFailure
 {

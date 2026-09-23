@@ -302,7 +302,24 @@ publish only at a frame boundary. Journals of at least 2,048 presentation
 chunks capture a lightweight replacement marker instead of per-chunk
 payloads. There is no backlog, and overdue whole steps
 are dropped while fractional time is retained. Pause, edit, save/load, ruleset
-changes, manual stepping, and shutdown drain first. Painting, Bresenham strokes, rectangular selection, copy/cut/paste, built-in
+changes, manual stepping, and shutdown drain first.
+
+In the package (D-E17) the guest runner measures its serial generations and,
+once they exceed 4 ms, runs generations on up to eight simulation lanes
+(`IllumoGame/Source/Wasm/SimulationLanes.*`): isolated
+`CSimWorkerGuest.wasm` stores that own interleaved bands of eight chunk rows
+plus a one-row halo, advance them with the same kernels, and return their
+owned changes. The control store merges them into the spare grid as one exact
+delta (explicit changed chunks, never the replacement marker), publishes it as
+above, and launches the next generation from the halos before merging. Lanes
+resynchronize after any change to the published world, rule or topology.
+Their generations finish on a later frame, so the runner reports
+`canBlock()` false and a drain retires the outstanding generation: at most
+one generation is discarded, and pause, save, load, edits and exit act on the
+displayed world. Lanes stop for small or settled worlds (all lanes together
+under 1 ms), and never run elementary 1D rules, radii above 16 or after a
+lane failure. `status` reports the execution mode, round trip, slowest lane,
+merge time, resynchronizations and retirements. Painting, Bresenham strokes, rectangular selection, copy/cut/paste, built-in
 stamps, RLE/plaintext import, `setcell`,
 randomization, and clearing operate directly on signed world coordinates.
 The bottom edit-control legend defaults on and follows the persisted

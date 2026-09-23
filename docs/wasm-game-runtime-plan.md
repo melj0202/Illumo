@@ -236,6 +236,20 @@ reuse a trapped mutable instance as if its last operation were transactional.
   favor of the package and `IllumoGame.Wasm.GamePackage`. Details and evidence
   are in [wasm-game-cutover-plan.md](wasm-game-cutover-plan.md).
 
+2026-09-22, performance recovery (D-E15 to D-E17; execution plan and
+measurements in `.agent/wasm-runtime-performance-plan.md`):
+
+- The Debug entry above still holds for sanitizer builds, but explicit guest
+  bounds checks now follow AddressSanitizer rather than `_DEBUG`: the host
+  passes `WasmEngineOptions` to the isolated compiler, and non-ASan Debug or
+  RelWithDebInfo hosts keep fault-based traps (D-E15). Manifests may choose
+  epoch-only metering; the first-party packages do.
+- Frame schema v4 keeps dynamic 2D meshes on the host and sends only changed
+  spans (D-E16).
+- The game's generations run on up to eight simulation lanes with
+  retire-on-drain (D-E17). The single `CSW1` job route described above remains
+  for parity tests; the product now uses `LaneJob`.
+
 2026-09-19, historical proposal preparation (before approval):
 
 - Read live product build/factory, simulation, rendering, service and lifetime

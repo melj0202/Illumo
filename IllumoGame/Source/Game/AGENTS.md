@@ -38,9 +38,15 @@ overlays. Both stage overlays through the portable `RuleCatalogOverlay`.
 factories; Rulesets has no filesystem or native platform dependencies.
 
 `SimulationRunner` has a native worker-thread implementation and a guest
-serial implementation (`SimulationRunnerSerial.cpp`, `ILLUMO_SERIAL_GUEST`)
-sharing one generation body. Keep publication, mirror-delta and drain
-semantics identical across both.
+implementation (`Wasm/SimulationRunnerGuest.cpp`, `ILLUMO_SERIAL_GUEST`) that
+runs the shared generation body serially or fans it out to simulation lanes
+through `CSimPlatform::simulationLanes()` (`Wasm/SimulationLanes.*`). Keep
+publication and mirror-delta semantics identical across both. A drain
+consumes the outstanding generation when `canBlock()` is true and retires it
+(discarding at most one generation) when lanes make it false; never wait for
+a lane inside one frame. Lanes must produce exactly the serial generation:
+change partitioning, halos or `SparseCellGrid::applyChunkPatches` only with
+`IllumoGame.Wasm.LaneParity` green.
 
 ## Domain and presentation invariants
 

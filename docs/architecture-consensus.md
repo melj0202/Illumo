@@ -1137,7 +1137,7 @@ outside this diagnostic's scope.
   the primary monitor at its current video mode, and restore the saved windowed
   bounds on exit.
 
-### 5.12 Isolated WASM application runtime (D-E13, D-E14)
+### 5.12 Isolated WASM application runtime (D-E13 to D-E17)
 
 IllumoGame, IllEd and IllMeshViewer are WASM packages, not native
 executables (D-E14 extends D-E13 to every interactive client program). The
@@ -1148,6 +1148,7 @@ IllumoRuntime.exe              generic host: loop, window, GL, Wasmtime sandbox
   envvars.json                 runtime settings (window, vsync, fps, overlays)
   apps/game/app.json           package manifest (see below)
   apps/game/IllumoGame.wasm    the whole product
+  apps/game/CSimWorkerGuest.wasm  simulation lane worker (one store per lane)
   apps/game/families.json ...  packaged catalogs and first-run defaults
   apps/illed/app.json          IllEd.wasm; launchAccess "edit"
   apps/illed/Assets/IllEd/editor-ui-atlas.jpg      package-preloaded asset
@@ -1159,19 +1160,39 @@ IllumoRuntime.exe              generic host: loop, window, GL, Wasmtime sandbox
 ```
 
 `app.json` carries `id`, `module`, optional `worker`, `title` (the window
-title), `launchAccess` (`"read"` or `"edit"`) and requested `memoryMiB`,
-`fuelPerCall` and `deadlineMilliseconds`, clamped to host ceilings. The
-manifests live in the source tree as `IllumoGame/app.json`, `IllEd/app.json`
-and `IllMeshViewer/app.json`; the old `game/` directory and `game.json` are
-gone.
+title), `launchAccess` (`"read"` or `"edit"`), `metering` (`"fuel"`, the
+default, or `"epoch"`) and requested `memoryMiB`, `fuelPerCall` (fuel only)
+and `deadlineMilliseconds`; with a `worker`, `workers` (lanes),
+`workerMemoryMiB` and `workerDeadlineMilliseconds`. Requests are clamped to
+host ceilings (lanes: at most 8 and two fewer than the hardware threads). The
+decoder is `decodeAppManifest` (`Illumo/Wasm/AppManifest.h`). The manifests
+live in the source tree as `IllumoGame/app.json`, `IllEd/app.json` and
+`IllMeshViewer/app.json`; all three are epoch-metered, and the game requests
+eight lanes. The old `game/` directory and `game.json` are gone.
+
+- **Engine modes** (D-E15): compiled code depends on `WasmEngineOptions`
+  (`meterFuel`, `explicitBounds`), which the host passes to the isolated
+  compiler so artifacts always match the deserializing engine (a mismatch
+  fails closed). Explicit guest bounds checks are selected by AddressSanitizer
+  (`ILLUMO_ASAN`, `ILLUMO_ENABLE_ASAN=ON` in Debug), not by `_DEBUG`, because
+  Windows ASan's shadow-page handler can recurse into Wasmtime's trap handler;
+  every other build keeps signal-based traps. Epoch-only stores carry no fuel
+  instrumentation and are bounded by their per-call deadline; mods stay
+  fuel-metered. `--fuel n` forces metering for one launch.
 
 - **Host** (`Illumo/Source/Wasm`): `WasmGameModule` snapshots input, pumps
   generic services (textures, fonts, files, dialogs, clipboard, display,
   console trampolines, jobs) and submits validated `IRF1` frames through
   `WasmFrameRenderer`. It contains no Game/Rulesets includes and no CA
-  opcodes. The manifest requests memory, fuel and deadline budgets; the
-  runtime clamps them to its ceilings. Launch options are cleared before
-  command-line parsing so persisted settings never replay a package.
+  opcodes. The manifest requests memory, metering, deadline and lane budgets;
+  the runtime clamps them to its ceilings. Launch options are cleared before
+  command-line parsing so persisted settings never replay a package. When an
+  update reports `GuestUpdateFlags::ServicesPending`, the host runs a second
+  services exchange before the frame, so requests queued by that update
+  (compute lanes especially) start while the frame renders. `WasmFrameStats`
+  (exchange timings) and `WasmFrameCounters` (batches, inline bytes, texture
+  and mesh writes, slot allocations) are shown by the host-owned
+  `wasm_stats` console command.
 - **Runtime command line** (`Illumo/Source/Wasm/RuntimeApplication.cpp`):
   `--app <name>` runs `apps/<name>` (default `game`; not combinable with
   `--package` or `--game`). `--open <file>` hands one document to the app: the
@@ -1182,6 +1203,9 @@ gone.
   through a `Renderer::setBeforePresent` hook, writes the PNG, prints one JSON
   line and exits 0/1 through `IllumoApplicationDefinition::exitCode`; it
   replaces the removed `IllumoCapture` executable ([frame-capture.md](frame-capture.md)).
+  `--bench-frames <n>` (with `--bench-warmup` and `--bench-script`) runs a
+  scripted, timed session and prints one JSON line of frame and exchange
+  statistics (see the same document).
   The runtime works from its own directory wherever it is started, relative
   command-line paths resolve against the invocation directory, and the window
   title comes from the manifest through `IRenderWindow::setTitle`.
@@ -1240,17 +1264,64 @@ gone.
   Cubemaps cannot be sampled as 2D textures or written through frames.
   Motion blur and MSAA stay host policy. Version 1 and 2 packets remain
   valid and keep their historical blend defaults.
-- **Limits**: generations run serially in the control call. The worker-store
-  offload (`CSW1`) exists for parity tests but is not yet the product runner.
-  The pinned runtime is Windows x64 only, so Linux has no runnable
-  applications; it builds the engine libraries and native test suites.
+- **Frame schema v4** (D-E16): dynamic 2D meshes (Shape, Sprite, Canvas; at
+  most 4 MiB per buffer) are retained on the host too. `CreateMesh` with the
+  `dynamic` flag returns a mesh that is ready and zero-filled at once; the
+  frame's trailing `meshWrites` section (at most 4,096 writes and 32 MiB)
+  patches it in place before any of the frame's batches draw. The host
+  validates each write (whole vertices with finite positions and Canvas
+  colors, whole indices inside the vertex capacity) into a CPU shadow and
+  uploads only dirty spans before the next draw. The guest records only the
+  span that actually differs from its mirror, draws a dynamic mesh inline
+  until its host copy exists, and turns a mesh inline for good (converting
+  that frame's by-reference draws) if it changes again after being drawn in
+  the same frame. Remaining inline batches use one grow-only host mesh slot
+  pool per style, so batch reordering no longer rebuilds GPU meshes. Lit
+  meshes stay inline or static-retained. Version 1 to 3 packets remain valid.
+- **Simulation lanes** (D-E17): with a `worker` and the Jobs grant the game
+  asks `JobLanes` once at startup; the host compiles one isolated worker
+  store per lane (in parallel, while menus run) and answers only when all are
+  ready, so serial generations continue meanwhile. Each lane owns interleaved
+  bands of eight chunk rows plus a one-row halo (`SimulationLanePartition`),
+  speaks the `CSL1` protocol (`IllumoGame/Source/Wasm/SimulationLanes.*`:
+  multipart sync, advance with halo patches, owned-change replies) and
+  advances its rows exactly with the unchanged `SparseCellGrid` kernels;
+  `SparseCellGrid::applyChunkPatches` keeps each lane's frontier journal
+  sound across halo updates. The control store (`SimulationLaneCoordinator`
+  behind the guest `SimulationRunner`) merges owned changes into the spare
+  grid as one exact delta and publishes it through the unchanged
+  mirror/publication path, launches the next generation from the halos
+  before merging (pipelining), and resynchronizes lanes whenever the
+  published world, rule or topology changed. Drains cannot wait inside one
+  frame: `SimulationRunner::canBlock()` is false with lanes, so edits, loads,
+  ruleset changes, saves and exit retire the outstanding generation (the
+  displayed world is what they act on) and stale replies are dropped by
+  session and epoch. Lanes are used once serial generations exceed 4 ms and
+  dropped for small or settled worlds; elementary 1D rules (a global source
+  row) and radii above 16 stay serial, as does everything after a lane
+  failure. The legacy whole-world `CSW1` worker remains for parity tests in
+  the same worker module.
+- **Limits**: the pinned runtime is Windows x64 only, so Linux has no
+  runnable applications; it builds the engine libraries and native test
+  suites.
 - **Verification**: `IllumoGame.Wasm.GamePackage`, `IllEd.Wasm.Package` and
   `IllMeshViewer.Wasm.Package` drive the real packages through the generic
-  host; `Illumo.Wasm.RetainedResources` and the v3 `Illumo.Wasm.FrameValidation`
-  cases cover retained meshes and cubemaps; `Illumo.Runtime.Help` and
-  `Illumo.Runtime.InvalidCaptureFrame` cover the command line;
-  `tools/verify_capture.py` is the real-GPU capture check. Plan and
-  validation ledger: [wasm-apps-cutover-plan.md](wasm-apps-cutover-plan.md).
+  host, and `IllumoGame.Wasm.GamePackageLanes` runs the game on real lanes and
+  compares its save with a native serial reference;
+  `IllumoGame.Wasm.LaneParity` checks every rule, both topologies and 1-3
+  lanes (one-row bands, edits, retirement) plus large 4-lane worlds against
+  serial generations, and `IllumoGame.Wasm.LaneProtocol` the CSL1 decoders and
+  lane rejections; `Illumo.Wasm.RetainedResources`,
+  `Illumo.Wasm.FrameValidation`, `Illumo.Wasm.FrameFailures` and the guest
+  `Illumo.Wasm.SdkContract` cover retained, dynamic and pooled meshes;
+  `Illumo.Wasm.EngineModes` and `Illumo.Wasm.Manifest` cover engine options
+  and manifest decoding; `Illumo.Runtime.Help`,
+  `Illumo.Runtime.InvalidCaptureFrame` and `Illumo.Runtime.InvalidBenchFrames`
+  cover the command line; `tools/verify_capture.py` is the real-GPU capture
+  check. Performance: `IllumoGame.Sim.RunnerBench` (native reference) and
+  `IllumoGame.Wasm.PackageBench` (label `IllumoBenchmark`). Plans and ledgers:
+  [wasm-apps-cutover-plan.md](wasm-apps-cutover-plan.md) and
+  `.agent/wasm-runtime-performance-plan.md`.
 
 ---
 
@@ -1413,6 +1484,9 @@ disabled.
 | **D-E12** | SceneGraph v2 uses intrusive SoA/TRS state, lazy preorder, revision bounds, ordered attachments, interned names/payloads, a bounded journal, and derived query BVH. IllEd edits the graph incrementally. Supersedes the storage and linear-only limits of D-E8/D-E11; no ECS or persistence migration. |
 | **D-E13** | IllumoGame ships only as `IllumoGame.wasm`, hosted by the generic `IllumoRuntime.exe`. A guest-side `GuestModuleApplication` composes the `IllumoContext` inside the store; product I/O uses `CSimPlatform`; frame schema v2 carries the world camera, lit meshes and shadow casters. `IllumoGameCore` is only the native test oracle. Supersedes D-E7's IllumoGame seam (§5.12). |
 | **D-E14** | Every interactive client program is a WASM package in `apps/<name>/` (`app.json`: id, module, worker, title, `launchAccess`, requested budgets) run by the one generic `IllumoRuntime.exe`: `game`, `illed` (`IllEd.wasm`) and `meshviewer` (`IllMeshViewer.wasm`). `--app` selects the package, `--open` grants one launch document (read or edit per manifest; the guest sees only its base name), and `--capture` folds the removed `IllumoCapture` into the runtime. Frame schema v3 adds retained host meshes, cubemaps/`Skybox` batches and a per-batch blend flag. IllEd and IllMeshViewer reach I/O through `IllEdPlatform` / `MeshViewerPlatform`; `IllEdCore` and `IllMeshViewerCore` are only native test oracles. Extends D-E13; `FrameCapture` and `IllumoCaptureGpuTests` remain (§5.12). |
+| **D-E15** | Compiled WASM depends on `WasmEngineOptions` (fuel metering, explicit bounds) passed from the host to the isolated compiler; mismatched artifacts fail closed. Explicit guest bounds checks follow AddressSanitizer (`ILLUMO_ENABLE_ASAN`), not `_DEBUG`. Manifests choose `metering` `fuel` (default) or `epoch`; first-party packages are epoch-only, mods stay metered, `--fuel` forces metering. Build profiles `dev` (RelWithDebInfo) and `debug-noasan` sit beside the `debug` sanitizer profile (§5.12). |
+| **D-E16** | Frame schema v4: dynamic 2D meshes are host-retained, created ready and patched by per-frame `meshWrites` applied before the frame's batches; the guest sends only differing spans and falls back to inline geometry when a mesh changes after a by-reference draw in the same frame. Inline batches use per-style grow-only host slot pools. v1-v3 stay valid (§5.12). |
+| **D-E17** | IllumoGame generations run on up to eight isolated simulation lanes (`CSimWorkerGuest.wasm`, `LaneJob`/`JobLanes` services) owning interleaved eight-row chunk bands with one-row halos; the control store merges exact deltas, pipelines the next generation, and publishes through the unchanged path. Drains retire the outstanding generation instead of waiting (`SimulationRunner::canBlock()`). Lanes engage above 4 ms serial generations; elementary 1D rules, radii above 16 and failures stay serial. Completes milestone 6 of the game cutover (§5.12). |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |

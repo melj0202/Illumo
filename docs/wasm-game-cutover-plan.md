@@ -137,7 +137,8 @@ stay valid.
 4. Frame ABI 3D extension and the render test mode.
 5. Documentation, guidance and README sync; full validation.
 6. (Follow-up) Worker-store simulation offload with asynchronous drains; perf
-   gates.
+   gates. Done 2026-09-22 as simulation lanes with retire-on-drain (D-E17);
+   see the ledger below and `.agent/wasm-runtime-performance-plan.md`.
 
 ## 7. Risks and containment
 
@@ -219,7 +220,25 @@ Not verified, and why:
 
 Follow-ups:
 
-- Worker-store simulation offload with asynchronous drains (milestone 6).
+- Worker-store simulation offload with asynchronous drains (milestone 6);
+  completed below.
 - Set the window title from the manifest.
 - Package-scoped mapping of the host console's `set`/`get` onto guest
   settings.
+
+2026-09-22, milestone 6 complete (D-E17; execution plan and measurements in
+`.agent/wasm-runtime-performance-plan.md`):
+
+- The design's single worker became N lanes: `CSimWorkerGuest.wasm` stores
+  owning interleaved eight-row chunk bands with one-row halos (CSL1 protocol
+  beside the unchanged CSW1 parity worker), generic `LaneJob`/`JobLanes`
+  services, same-frame submission through `GuestUpdateFlags::ServicesPending`,
+  and a pipelined control-side merge.
+- Drains retire the outstanding generation instead of becoming pending
+  operations (the §8 "retire" option, chosen by the user).
+- `IllumoGame.Wasm.LaneParity`, `IllumoGame.Wasm.LaneProtocol` and
+  `IllumoGame.Wasm.GamePackageLanes` pass; 493/493 Release workspace tests.
+- Gates: frames no longer wait for generations (dense 4,285-chunk world at a
+  locked 60 FPS versus about 48 serially), but uncapped TPS is 19-32% of the
+  native production runner, below the proposed 80% gate. The control-side
+  merge (about 2 ms per dense generation) bounds it. Recorded, not waived.

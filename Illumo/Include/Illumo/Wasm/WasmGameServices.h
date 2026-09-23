@@ -54,6 +54,14 @@ public:
                std::vector<std::byte>& completions);
   void cancel();
   const std::string& error() const { return m_error; }
+  // Budgets for compute children: the Job worker, created on its first job,
+  // and `lanes` LaneJob workers, created when the guest asks for its lanes.
+  static WasmLimits defaultWorkerLimits();
+  void setWorkerLimits(const WasmLimits& limits, std::uint32_t lanes = 1u)
+  {
+    m_workerLimits = limits;
+    m_laneCount = lanes;
+  }
 
 private:
   void unregisterCommands();
@@ -85,9 +93,28 @@ private:
   std::deque<Invocation> m_invocations;
   std::uint32_t m_grants;
   std::vector<std::byte> m_module;
+  WasmLimits m_workerLimits = defaultWorkerLimits();
   std::unique_ptr<WasmWorker> m_worker;
   GuestServiceRecord m_job;
   std::uint64_t m_hostJob = 0;
+  // Compute lanes: one isolated worker store per lane, one job in flight.
+  struct Lane
+  {
+    std::unique_ptr<WasmWorker> worker;
+    GuestServiceRecord job;
+    std::uint64_t hostJob = 0;
+    // A finished job whose reply waits for room in a completion exchange.
+    bool finished = false;
+    bool accepted = false;
+    std::vector<std::byte> reply;
+  };
+  bool lanesGranted() const;
+  void ensureLaneWorkers();
+  // Answers a deferred JobLanes query once every lane store left Loading.
+  void completeLaneQuery(GuestServices& results);
+  std::uint32_t m_laneCount = 1u;
+  std::vector<Lane> m_lanes;
+  GuestServiceRecord m_laneQuery;
   std::uint64_t m_lastRequest = 0;
   bool m_cancelled = false;
   std::string m_error;

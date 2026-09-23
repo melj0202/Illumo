@@ -346,6 +346,17 @@ state. Measure duplicate storage, delta bytes, marshaling and compute separately
 If copying or serial execution fails the agreed gates, resolve that before final
 cutover; the engine/product boundary must not be weakened as a shortcut.
 
+Implemented 2026-09-22 (D-E17), differing from the recommendation above in two
+approved ways. There are up to eight worker instances (lanes), not one: each
+holds only its interleaved bands of eight chunk rows plus a one-row halo and
+returns owned changes, so no whole-world snapshot or replacement marker
+crosses stores after the first synchronization. Drains retire the outstanding
+generation rather than becoming pending operations. The control store merges
+exact deltas and pipelines the next generation from the halos. The measured
+gates are recorded in `.agent/wasm-runtime-performance-plan.md`: frames no
+longer wait for generations, but uncapped throughput is still well below the
+native production runner because the control-side merge is serial.
+
 ## 9. Other services and compatibility
 
 | Surface | Guest responsibility | Native mechanism |

@@ -293,7 +293,13 @@ Windows (VS generator): `build-workspace/Release/` for `build.py`, or
 `build/Release/` for `-B build`. Linux (Ninja): `build-linux/<CONFIG>/`.
 
 The default `ALL` target also runs the `IllumoWorkspace` CTest label via
-`IllumoRunTests`. Debug builds enable AddressSanitizer on MSVC and GCC/Clang.
+`IllumoRunTests`. Debug builds enable AddressSanitizer on MSVC and GCC/Clang
+(`ILLUMO_ENABLE_ASAN`, default `ON`). Debug is the sanitizer profile: its
+WASM guests also run with explicit bounds checks on every memory access, so
+it is markedly slower to play. Play and profile with RelWithDebInfo
+(`python build.py play --profile dev`), which keeps the developer console
+and profiler; `--profile debug-noasan` keeps Debug code generation without
+the sanitizer.
 
 The library can configure independently, without the products:
 
@@ -364,10 +370,11 @@ Catalogs may add ruleset IDs; F2 on the canvas edits a rule. See
 [docs/packages/game.md](docs/packages/game.md) and
 [docs/wasm-game-cutover-plan.md](docs/wasm-game-cutover-plan.md).
 
-`apps\game\app.json` names the module and requests memory, fuel and per-call
-deadline budgets; the runtime clamps them to host ceilings. `--memory-mib`,
-`--fuel` and `--deadline-ms` override a launch. Launch options are never
-persisted. Game settings (`tps`, ruleset, fade, `render3dTest`, ...) live in
+`apps\game\app.json` names the module and the simulation lane worker and
+requests memory, metering (`epoch`: calls are bounded by a wall-clock
+deadline, not fuel), deadline and lane budgets; the runtime clamps them to
+host ceilings. `--memory-mib`, `--deadline-ms` and `--fuel` (which forces fuel
+metering) override a launch. Launch options are never persisted. Game settings (`tps`, ruleset, fade, `render3dTest`, ...) live in
 the game's own `storage\csim\envvars.json`; the host console's `set`/`get`
 address runtime settings, while the game's commands are forwarded into the
 package.
@@ -397,9 +404,13 @@ diagnostic `SceneGraph` (not the normal canvas). Set it back to `0` to
 restore the orthographic CA view. Its lit meshes cast into the runtime's
 shared shadow pass through frame schema version 2.
 
-Simulation publishes at most one generation per frame; inside the package the
-runner computes it with serial kernels in the game store. Overdue whole steps
-are dropped. The visible viewport is a padded, integer-LOD
+Simulation publishes at most one generation per frame. Once a generation
+costs more than 4 ms, it runs on up to eight isolated simulation lanes
+(`CSimWorkerGuest.wasm` stores, each owning bands of chunk rows) while frames
+keep rendering; smaller worlds and elementary 1D rules run in the game store.
+Editing, loading or saving while running discards at most the one generation
+in flight. `status` shows where generations execute. Overdue whole steps are
+dropped. The visible viewport is a padded, integer-LOD
 cache with tiled uploads. Timing, fade, and upload details:
 [docs/packages/game.md](docs/packages/game.md).
 
@@ -424,7 +435,9 @@ Displays one `.obj` on a 3D reference grid inside `IllMeshViewer.wasm`. The
 launch document is read-only; its bytes are parsed in the guest with
 `MeshLoader::loadFromMemory`, large static meshes are uploaded once as
 retained host meshes (frame schema v3), and the skybox cross is preloaded
-from the package and drawn as a host cubemap.
+from the package and drawn as a host cubemap. As in every app, dynamic UI and
+line geometry stays on the host and only changed bytes travel (frame schema
+v4).
 
 ```text
 IllumoRuntime.exe --app meshviewer
@@ -452,6 +465,13 @@ with 0 or 1. Real GPU required; the output must be a new `.png` path. See
 .\IllumoRuntime.exe --app meshviewer --open model.obj --capture frame.png
 .\IllumoRuntime.exe --capture game.png --capture-frame 120 -ww 1280 -wh 720
 ```
+
+`--bench-frames n` times `n` frames after `--bench-warmup` (default 120) and
+prints one JSON line (frame intervals, module update time, WASM exchange
+timings, frame payload counters); `--bench-script file` first runs console
+lines, `@key Name` presses and `@wait n` pauses. The in-app `wasm_stats`
+command shows the same exchange statistics. See
+[docs/frame-capture.md](docs/frame-capture.md).
 
 ### Developer console
 
@@ -699,15 +719,19 @@ until explicitly removed. The toolbox uses only the standard library inside
 Use `python build.py profiles` to list named configurations (`--json` is
 also available). Built-in `debug` and `release` profiles select their
 configuration and separate `build-workspace-debug` /
-`build-workspace-release` directories. Commands without a profile retain
-their existing defaults.
+`build-workspace-release` directories; `dev` is RelWithDebInfo in
+`build-workspace-dev` (play and profile), and `debug-noasan` is Debug without
+AddressSanitizer in `build-workspace-debug-noasan`. A saved profile with a
+built-in's name replaces it. Commands without a profile retain their
+existing defaults.
 
 ```bash
 python build.py doctor --profile release
+python build.py play --profile dev
 python build.py build --profile debug --parallel 4
-python build.py profile-save dev --profile debug --no-docs --parallel 4
-python build.py test --profile dev
-python build.py build --profile dev --docs --config RelWithDebInfo --dry-run
+python build.py profile-save mine --profile debug --no-docs --parallel 4
+python build.py test --profile mine
+python build.py build --profile mine --docs --config RelWithDebInfo --dry-run
 ```
 
 Profiles apply to `configure`, `build`, `test`, `run`, `doctor`, and

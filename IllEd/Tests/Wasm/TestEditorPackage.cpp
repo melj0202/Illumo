@@ -90,7 +90,7 @@ editorLimits()
 {
   WasmLimits limits;
   limits.memoryBytes = 512ull * 1024ull * 1024ull;
-  limits.fuelPerCall = 5000000000u;
+  limits.meterFuel = false; // As shipped: app.json requests epoch metering.
   limits.deadlineMilliseconds = 10000;
   return limits;
 }

@@ -2300,6 +2300,79 @@ suites.\\
 \textbf{Extends:} D-E13 (IllumoGame WASM package)
 \end{decisionbox}
 
+\subsection*{D-E15 --- Host-chosen WASM engine modes}
+\begin{decisionbox}[title={D-E15 \quad 2026-09-22}]
+\textbf{Decision:} Code generation depends on \texttt{WasmEngineOptions}
+(fuel metering, explicit bounds checks). The host chooses them per store and
+passes them to the isolated compiler, so an artifact always matches the engine
+that deserializes it; a mismatch fails closed. Explicit guest bounds checks
+follow AddressSanitizer (\texttt{ILLUMO\_ENABLE\_ASAN}, default on for Debug),
+not \texttt{\_DEBUG}. Package manifests choose \texttt{metering}
+\texttt{fuel} (default) or \texttt{epoch}; the three first-party packages are
+epoch-only, mods stay fuel-metered, and \texttt{--fuel} forces metering for a
+launch. \texttt{build.py} adds the \texttt{dev} (RelWithDebInfo) and
+\texttt{debug-noasan} profiles beside the \texttt{debug} sanitizer profile.\\
+\textbf{Why:} Players used the sanitizer profile, where every guest memory
+access carried an explicit check, and fuel instrumented every compiled block
+although the epoch deadline already bounds each call.\\
+\textbf{Consequences:} Epoch-only stores are bounded by their deadline alone;
+fuel remains an opt-in and a comparison tool. Measured: removing fuel gains
+3--7\% on the game's own generations; the Debug sanitizer profile costs
+1.3--1.6$\times$ in headless play.\\
+\textbf{Extends:} D-E13, D-E14
+\end{decisionbox}
+
+\subsection*{D-E16 --- Frame schema v4: retained dynamic meshes}
+\begin{decisionbox}[title={D-E16 \quad 2026-09-22}]
+\textbf{Decision:} Dynamic 2D meshes (Shape, Sprite, Canvas; at most 4\,MiB
+per buffer) are retained on the host. \texttt{CreateMesh} with the dynamic
+flag returns a ready, zero-filled mesh; a frame's trailing
+\texttt{meshWrites} section patches it before any of the frame's batches draw,
+and the host validates each write into a CPU shadow and uploads only dirty
+spans. The guest sends only the span that differs from its mirror, draws
+inline until the host copy exists, and makes a mesh inline for good (converting
+that frame's by-reference draws) when it changes after being drawn in the same
+frame. Remaining inline batches use one grow-only host mesh pool per style.
+Versions 1--3 stay valid.\\
+\textbf{Why:} Every UI, text and GameVisual buffer was re-extracted,
+serialized, decoded and re-uploaded each frame, and batch reordering rebuilt
+host meshes.\\
+\textbf{Consequences:} The game menu's per-frame module work fell from
+2.75\,ms to 0.64\,ms, IllEd's from 0.51\,ms to 0.23\,ms and the mesh viewer's
+from 0.35\,ms to 0.16\,ms (Release, idle screens). Lit dynamic meshes stay
+inline so shadow bounds remain exact.\\
+\textbf{Extends:} D-E14 (frame schema v3)
+\end{decisionbox}
+
+\subsection*{D-E17 --- Simulation lanes with retire-on-drain}
+\begin{decisionbox}[title={D-E17 \quad 2026-09-22}]
+\textbf{Decision:} IllumoGame generations run on up to eight isolated
+simulation lanes: worker stores of \texttt{CSimWorkerGuest.wasm} reached
+through the generic \texttt{LaneJob} and \texttt{JobLanes} services. Each lane
+owns interleaved bands of eight chunk rows with a one-row halo and advances
+them exactly with the unchanged sparse kernels;
+\symbolref{SparseCellGrid}\texttt{::applyChunkPatches} keeps its frontier
+journal sound across halo updates. The control store merges the owned changes
+into the spare grid as one exact delta, launches the next generation from the
+halos before merging, and publishes through the unchanged mirror path.
+\symbolref{SimulationRunner}\texttt{::canBlock()} is false with lanes, so
+edits, loads, ruleset changes, saves and exit retire the outstanding
+generation instead of waiting for it. Lanes engage above 4\,ms serial
+generations; elementary 1D rules (global source row), radii above 16 and lane
+failures stay serial.\\
+\textbf{Why:} Serial generations ran inside the frame's update call, so large
+worlds froze frames; native production used a worker thread and 4--8 pool
+workers.\\
+\textbf{Consequences:} Frames no longer wait for generations: a
+4,285-chunk dense world holds 60\,FPS at vsync instead of about 48, and
+uncapped headless frame rates rise 3--4$\times$. Throughput is bounded by the control
+store's merge (about 2\,ms per dense generation); measured uncapped TPS is
+1.3--1.6$\times$ serial for dense worlds and remains below native production
+(about 20--35\%). At most one generation is discarded when the world changes
+while running. The whole-world \texttt{CSW1} worker remains for parity tests.\\
+\textbf{Completes:} D-E13 (worker-store offload, milestone 6)
+\end{decisionbox}
+
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

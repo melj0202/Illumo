@@ -4,6 +4,10 @@ option(ILLUMO_ENABLE_TRACY
   "Enable Tracy instrumentation in optimized builds" OFF)
 option(ILLUMO_ENABLE_COVERAGE
   "Instrument first-party workspace targets for LLVM coverage" OFF)
+# Debug is the sanitizer profile by default. With ASan off, a Debug host also
+# keeps Wasmtime's fast signal-based guest bounds traps.
+option(ILLUMO_ENABLE_ASAN
+  "Build Debug runtime targets with AddressSanitizer" ON)
 option(ILLUMO_ENABLE_CLANG_TIDY
   "Run clang-tidy on first-party C++ during build" ON)
 if(UNIX AND NOT APPLE)
@@ -129,8 +133,11 @@ function(illumo_configure_cpp_target target_name)
     target_compile_options(${target_name} PRIVATE -Wall -Wextra)
   endif()
 
+  # Debug Tracy records only while a profiler is connected; otherwise every
+  # zone would be queued for a client that may never attach.
   target_compile_definitions(${target_name} PRIVATE
     $<$<CONFIG:Debug>:TRACY_ENABLE>
+    $<$<CONFIG:Debug>:TRACY_ON_DEMAND>
     $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:ILLUMO_ENABLE_DEBUG_TOOLS=1>
   )
   if(ILLUMO_ENABLE_TRACY)
@@ -161,11 +168,16 @@ endfunction()
 
 function(illumo_configure_runtime_target target_name)
   illumo_configure_cpp_target(${target_name})
+  if(ILLUMO_ENABLE_ASAN AND NOT ILLUMO_ENABLE_COVERAGE)
+    # Read by the WASM host to select explicit guest bounds checks.
+    target_compile_definitions(${target_name} PRIVATE
+      $<$<CONFIG:Debug>:ILLUMO_ASAN=1>)
+  endif()
   if(MSVC)
     target_compile_options(${target_name} PRIVATE
       $<$<CONFIG:Debug>:/Od>
       $<$<CONFIG:Release>:/O2>)
-    if(NOT ILLUMO_ENABLE_COVERAGE)
+    if(ILLUMO_ENABLE_ASAN AND NOT ILLUMO_ENABLE_COVERAGE)
       target_compile_options(${target_name} PRIVATE
         $<$<CONFIG:Debug>:/fsanitize=address>)
     endif()
@@ -174,7 +186,7 @@ function(illumo_configure_runtime_target target_name)
       $<$<CONFIG:Debug>:-O0>
       $<$<CONFIG:Debug>:-g>
       $<$<CONFIG:Release>:-O3>)
-    if(NOT ILLUMO_ENABLE_COVERAGE)
+    if(ILLUMO_ENABLE_ASAN AND NOT ILLUMO_ENABLE_COVERAGE)
       target_compile_options(${target_name} PRIVATE
         $<$<CONFIG:Debug>:-fsanitize=address>)
       get_target_property(target_type ${target_name} TYPE)

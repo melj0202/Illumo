@@ -111,6 +111,26 @@ SimulationRunner::isBusy() const
   return requestPending || running || completed;
 }
 
+bool
+SimulationRunner::canBlock() const
+{
+  return true;
+}
+
+void
+SimulationRunner::retire()
+{
+  // The worker finishes within one generation; its result is dropped.
+  SparseGenerationDelta discarded;
+  waitAndTakeCompleted(nullptr, &discarded, nullptr, nullptr, nullptr);
+}
+
+std::string
+SimulationRunner::describeExecution() const
+{
+  return "native worker thread";
+}
+
 void
 SimulationRunner::shutdown()
 {

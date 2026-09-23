@@ -181,6 +181,11 @@ Canvas truth (verify here before trusting older notes):
   consumes the delta before reuse. Only one generation
   may be outstanding, overdue whole steps are dropped, and state mutations,
   persistence, ruleset changes, manual stepping, and shutdown drain first.
+  In the package, generations costing more than 4 ms run on up to eight
+  isolated simulation lanes (`CSimWorkerGuest.wasm` stores owning interleaved
+  eight-row chunk bands with one-row halos; D-E17) and the control store
+  merges one exact delta per generation; there a drain retires the outstanding
+  generation instead of waiting for it.
   Status derives achieved TPS from published completions and reports rolling
   generation latency. The default `0 x 0` topology is infinite and
   non-toroidal; positive chunk width and height select a finite torus with
@@ -300,16 +305,25 @@ outputs (`IllumoGame.exe`, `IllEd.exe`, `IllMeshViewer.exe`,
 --app game|illed|meshviewer [-- runtime args]` builds the runtime and runs
 one app (`--no-build` skips building). `python build.py test` builds every
 executable CTest runs; `tools/test_build.py` covers the orchestrator.
+Debug is the AddressSanitizer profile (`ILLUMO_ENABLE_ASAN`, default ON),
+whose WASM guests also use explicit bounds checks; play and measure with the
+`dev` profile (RelWithDebInfo) or `debug-noasan`, not Debug.
 
 Package-level checks drive each real package through the generic host:
 `IllumoGame.Wasm.GamePackage` (menu, setup, edit, step, save/load, 3D mode),
-`IllEd.Wasm.Package` (launch scene, preloaded atlas, keyboard pan, Ctrl+S
-save in place) and `IllMeshViewer.Wasm.Package` (launch mesh as a retained
-host mesh, skybox cubemap). The `Illumo.Wasm.*` cases cover the sandbox, ABI
-decoders and host services; `Illumo.Runtime.Help` and
-`Illumo.Runtime.InvalidCaptureFrame` cover the runtime command line. Real-GPU
-capture is checked with `python tools/verify_capture.py
-build-workspace/Release/IllumoRuntime.exe --output-dir <dir>`.
+`IllumoGame.Wasm.GamePackageLanes` (real simulation lanes against a native
+serial reference), `IllEd.Wasm.Package` (launch scene, preloaded atlas,
+keyboard pan, Ctrl+S save in place) and `IllMeshViewer.Wasm.Package` (launch
+mesh as a retained host mesh, skybox cubemap). `IllumoGame.Wasm.LaneParity`
+and `IllumoGame.Wasm.LaneProtocol` cover lane exactness and the CSL1
+decoders. The `Illumo.Wasm.*` cases cover the sandbox, engine modes, the
+manifest decoder, ABI decoders and host services; `Illumo.Runtime.Help`,
+`Illumo.Runtime.InvalidCaptureFrame` and `Illumo.Runtime.InvalidBenchFrames`
+cover the runtime command line. Real-GPU capture is checked with `python
+tools/verify_capture.py build-workspace/Release/IllumoRuntime.exe
+--output-dir <dir>`. Performance is measured with `--bench-frames`,
+`IllumoGame.Sim.RunnerBench` and `IllumoGame.Wasm.PackageBench` (label
+`IllumoBenchmark`; see `docs/frame-capture.md`).
 
 Focused test work:
 

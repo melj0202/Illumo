@@ -97,6 +97,8 @@ public:
   // Static meshes at least this large are uploaded once to a retained host
   // mesh (frame schema v3) instead of travelling inline every frame.
   static constexpr std::size_t RetainedMeshBytes = 64u * 1024u;
+  // Diagnostics: bytes of dynamic mesh writes in the last recorded frame.
+  std::size_t lastMeshWriteBytes() const { return m_lastMeshWriteBytes; }
 
 private:
   struct Mesh
@@ -104,7 +106,7 @@ private:
     MeshVertexLayout layout = MeshVertexLayout::Pos3Color4U8;
     std::vector<std::byte> vertices;
     std::vector<std::byte> indices;
-    // Retained upload state. Draws skip the mesh until the host copy is
+    // Retained upload state. Draws skip a static mesh until the host copy is
     // complete, and fall back to inline geometry if the upload fails.
     bool retain = false;
     GuestResourceId id;
@@ -114,6 +116,15 @@ private:
     std::size_t indexSent = 0;
     bool ready = false;
     bool failed = false;
+    // Dynamic retained meshes (frame schema v4) are ready once created and
+    // are kept current by the frame's mesh writes: only the byte ranges
+    // changed since the last frame travel. They draw inline until ready.
+    bool dynamic = false;
+    bool drawnThisFrame = false;
+    std::size_t vertexDirtyBegin = 0;
+    std::size_t vertexDirtyEnd = 0;
+    std::size_t indexDirtyBegin = 0;
+    std::size_t indexDirtyEnd = 0;
   };
   struct Texture
   {
@@ -131,9 +142,24 @@ private:
   };
   void consume(const RenderCommand& command);
   void draw(std::uint32_t first, std::uint32_t count);
+  // Copies indices [first, first + count) and the vertices they reference
+  // into batch as inline geometry. The batch style must already be set.
+  static void extractInline(const Mesh& mesh,
+                            GuestBatch& batch,
+                            std::uint32_t first,
+                            std::uint32_t count);
   void release(GuestResourceId id);
   // Drops a mesh's host copy (after replacement, update or destruction).
   void forgetRetained(Mesh& mesh);
+  // A dynamic mesh changed after it was drawn by reference this frame.
+  // Converts those draws to inline geometry (still the pre-change contents)
+  // and keeps the mesh inline from now on.
+  void demoteDynamic(Mesh& mesh);
+  static void markDirty(std::size_t& begin,
+                        std::size_t& end,
+                        std::size_t offset,
+                        std::size_t size);
+  void emitMeshWrites();
   void pumpMeshes();
   GuestServiceQueue& m_services;
   Renderer* m_renderer = nullptr;
@@ -150,6 +176,8 @@ private:
   std::set<std::uint32_t> m_shadowMeshes;
   GuestLighting m_lighting;
   std::map<std::uint32_t, Mesh> m_meshes;
+  // Dynamic meshes drawn by reference in the current frame.
+  std::vector<std::uint32_t> m_drawnDynamic;
   std::map<std::uint32_t, Texture> m_textures;
   std::vector<std::uint64_t> m_abandoned;
   std::vector<std::uint64_t> m_releases;
@@ -171,4 +199,5 @@ private:
   CmdScissor m_clip{};
   PipelineState m_pipeline{};
   std::string m_error;
+  std::size_t m_lastMeshWriteBytes = 0;
 };

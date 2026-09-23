@@ -94,6 +94,17 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(code, 0, errors)
         self.assertFalse(self.profiles.exists())
 
+    def test_builtin_play_and_sanitizer_profiles(self):
+        # "dev" is optimized with debug tools; "debug-noasan" keeps Debug
+        # code without AddressSanitizer (fast WASM guest bounds traps).
+        dev = build.profile_arguments(build.BUILTIN_PROFILES["dev"])
+        self.assertIn("--config=RelWithDebInfo", dev)
+        no_asan = build.profile_arguments(build.BUILTIN_PROFILES["debug-noasan"])
+        self.assertIn("--config=Debug", no_asan)
+        self.assertIn("--cmake-arg=-DILLUMO_ENABLE_ASAN=OFF", no_asan)
+        self.assertNotEqual(build.BUILTIN_PROFILES["debug-noasan"]["build_dir"],
+                            build.BUILTIN_PROFILES["debug"]["build_dir"])
+
     def test_save_from_builtin_to_new_shared_file(self):
         code, _, errors = self.invoke("profile-save", "custom", "--profile", "debug",
                                       "--profiles-file", str(self.profiles))

@@ -45,6 +45,14 @@ struct SparseChunkRecord
   std::array<unsigned char, 16 * 16> cells{};
 };
 
+// A whole-chunk replacement: present with these cells, or removed.
+struct SparseChunkPatch
+{
+  ChunkAddress address;
+  bool present = false;
+  std::array<unsigned char, 16 * 16> cells{};
+};
+
 struct SparseChangedChunkRecord
 {
   ChunkAddress address;
@@ -173,6 +181,17 @@ public:
 
   void swap(SparseCellGrid& other) noexcept;
   bool assignChunk(const SparseChunkRecord& record);
+  // The exact one-revision delta that replacing chunks with `patches` makes
+  // (no records and an unchanged revision when nothing differs). Patches must
+  // name distinct canonical chunks; all-background cells mean removal.
+  bool buildPatchDelta(const std::vector<SparseChunkPatch>& patches,
+                       SparseGenerationDelta* delta) const;
+  // Replaces chunks as one revision. The changes journaled by the previous
+  // generation stay journaled beside the patch's own, so the next frontier
+  // still covers every cell that differs from that generation's input.
+  bool applyChunkPatches(const std::vector<SparseChunkPatch>& patches);
+  // Every stored chunk, in unspecified order.
+  void visitChunks(const ChunkVisitor& visitor) const;
   std::vector<SparseChunkRecord> collectChunkRecords() const;
   void collectChunkRecords(std::vector<SparseChunkRecord>* records) const;
   void visitChunksInBounds(const ChunkAddress& minimum,
@@ -416,6 +435,10 @@ private:
   std::vector<ChunkAddress> m_mirrorIncomingAddresses;
   std::vector<AddressIndexSlot> m_mirrorIncomingAddressIndex;
   std::uint64_t m_mirrorIncomingAddressGeneration = 0u;
+  // Retained duplicate check for buildPatchDelta (logically const).
+  mutable std::vector<ChunkAddress> m_patchAddresses;
+  mutable std::vector<AddressIndexSlot> m_patchAddressIndex;
+  mutable std::uint64_t m_patchAddressGeneration = 0u;
   bool m_backgroundTransitionsStayBinary = false;
   bool m_countedChangeCoversStateChange = false;
   mutable std::unique_ptr<ChunkMemoState> m_chunkMemo;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Game/SimulationLaneTransport.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Platform/SaveLoad.h>
 #include <functional>
@@ -58,6 +59,9 @@ public:
   virtual void saveUserCatalog(std::vector<RuleFamilyDefinition> families,
                                std::vector<RuleSetDefinition> rules,
                                WriteCallback done) = 0;
+  // Isolated simulation compute lanes, or null where generations run on the
+  // simulation runner's own thread.
+  virtual SimulationLaneTransport* simulationLanes() { return nullptr; }
 
   // Defined once per link: the native oracle or the guest service adapter.
   static CSimPlatform& current();

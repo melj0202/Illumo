@@ -1,6 +1,7 @@
 #include "DenseRuleEvaluator.h"
 // Simulation performance and generation-path correctness tests.
 
+#include "BenchWorlds.h"
 #include "Game/Canvas.h"
 #include "Game/CellGrid.h"
 #include "Game/SimulationRunner.h"
@@ -1106,6 +1107,81 @@ testFrameLatencyBenchReport()
               overheadPercent);
 }
 
+// Generations per second through the production publication cycle: one
+// outstanding SimulationRunner generation on a spare grid, a pointer swap on
+// completion and the completed delta mirrored into the next spare, exactly as
+// CellGameModule and CellContext::publishSpareGrid drive it (presentation
+// excluded).
+static double
+runnerGenerationsPerSecond(const BenchWorld& world,
+                           const RuleSet& rules,
+                           int workers,
+                           std::size_t* chunks)
+{
+  SparseCellGrid first;
+  SparseCellGrid second;
+  seedBenchWorld(first, world);
+  SparseCellGrid::setWorkerOverrideForTesting(workers);
+  SimulationRunner runner;
+  SparseCellGrid* published = &first;
+  SparseCellGrid* spare = &second;
+  SparseGenerationDelta mirror;
+  bool mirrorValid = false;
+  std::chrono::steady_clock::time_point start{};
+  const int warmup = 3;
+  const int generations = 30;
+  for (int generation = 0; generation < warmup + generations; ++generation) {
+    if (generation == warmup) {
+      start = std::chrono::steady_clock::now();
+    }
+    SparseCellGrid* completed = nullptr;
+    SparseGenerationDelta delta;
+    bool succeeded = false;
+    if (!runner.start(
+          spare, published, &rules, std::move(mirror), mirrorValid) ||
+        !runner.waitAndTakeCompleted(
+          &completed, &delta, nullptr, &succeeded, nullptr) ||
+        !succeeded || completed != spare) {
+      SparseCellGrid::setWorkerOverrideForTesting(0);
+      return 0.0;
+    }
+    std::swap(published, spare);
+    mirror = std::move(delta);
+    mirrorValid = true;
+  }
+  const double seconds =
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+      .count();
+  runner.shutdown();
+  SparseCellGrid::setWorkerOverrideForTesting(0);
+  *chunks = published->getAllocatedChunkCount();
+  return seconds > 0.0 ? static_cast<double>(generations) / seconds : 0.0;
+}
+
+// Native reference for IllumoGame.Wasm.PackageBench: the same seeded worlds
+// through the production runner with automatic workers (the design's gate
+// baseline) and with one worker (the guest's serial kernel configuration).
+static void
+testRunnerBenchReport()
+{
+  LifeLikeRuleSet rules{};
+  for (const BenchWorld& world : kBenchWorlds) {
+    std::size_t chunks = 0;
+    const double production =
+      runnerGenerationsPerSecond(world, rules, 0, &chunks);
+    const double serial = runnerGenerationsPerSecond(world, rules, 1, &chunks);
+    std::printf("BENCH-JSON {\"bench\":\"native-runner\",\"world\":\"%s\","
+                "\"chunks\":%zu,\"productionGps\":%.2f,\"serialGps\":%.2f}\n",
+                world.name,
+                chunks,
+                production,
+                serial);
+    testTrue(g,
+             production > 0.0 && serial > 0.0,
+             "Runner benchmark advances every world");
+  }
+}
+
 static int
 runSimCase(void (*testFunction)())
 {
@@ -1141,4 +1217,8 @@ registerSimTests(IllumoTestRegistry& registry)
     "IllumoGame.Sim.FrameLatencyBench",
     []() { return runSimCase(testFrameLatencyBenchReport); },
     180);
+  registry.add(
+    "IllumoGame.Sim.RunnerBench",
+    []() { return runSimCase(testRunnerBenchReport); },
+    300);
 }

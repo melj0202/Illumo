@@ -6,6 +6,40 @@
 #include <IllumoGuest/Files.h>
 #include <deque>
 
+// Simulation lanes over host job services: one LaneJob per lane in flight,
+// and the granted lane count from one JobLanes query (none without Jobs).
+class GuestSimulationLanes final : public SimulationLaneTransport
+{
+public:
+  explicit GuestSimulationLanes(GuestServiceQueue& services);
+  ~GuestSimulationLanes() override = default;
+  GuestSimulationLanes(const GuestSimulationLanes&) = delete;
+  GuestSimulationLanes& operator=(const GuestSimulationLanes&) = delete;
+  GuestSimulationLanes(GuestSimulationLanes&&) = delete;
+  GuestSimulationLanes& operator=(GuestSimulationLanes&&) = delete;
+
+  void pump();
+  std::uint32_t laneCount() override;
+  bool laneCountKnown() const override;
+  bool submit(std::uint32_t lane, std::vector<std::byte>&& request) override;
+  int poll(std::uint32_t lane, std::vector<std::byte>& reply) override;
+  bool busy(std::uint32_t lane) const override;
+
+private:
+  enum class Grant
+  {
+    Unknown,
+    Requested,
+    Known
+  };
+  GuestServiceQueue& m_services;
+  Grant m_grant = Grant::Unknown;
+  std::uint64_t m_query = 0;
+  std::uint32_t m_lanes = 0;
+  std::vector<std::uint64_t> m_outstanding;
+  std::vector<bool> m_failed;
+};
+
 // CSimPlatform over guest services. Locations are storage-relative names, or
 // "selected:<capability>" for files granted by a native dialog. Completions
 // run from pump() on a later update, never inside the requesting call.
@@ -37,6 +71,7 @@ public:
   void saveUserCatalog(std::vector<RuleFamilyDefinition> families,
                        std::vector<RuleSetDefinition> rules,
                        WriteCallback done) override;
+  SimulationLaneTransport* simulationLanes() override { return &m_lanes; }
 
 private:
   struct DialogRequest
@@ -66,6 +101,7 @@ private:
   std::uint64_t submitWrite(const std::string& location, std::string bytes);
 
   GuestFiles& m_files;
+  GuestSimulationLanes m_lanes;
   GuestDialog m_dialog;
   GuestClipboard m_clipboard;
   std::deque<DialogRequest> m_dialogs;

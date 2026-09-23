@@ -6,6 +6,8 @@
 #include <IllumoGuest/FontProvider.h>
 #include <IllumoGuest/InputProvider.h>
 #include <IllumoGuest/SnapshotWindow.h>
+#include <array>
+#include <functional>
 
 static void
 require(bool condition, const char* message)
@@ -115,11 +117,20 @@ recordingContract()
   fonts.pump();
   backend.pump();
   pending = exchange(queue);
-  require(pending.records.size() == 1 &&
-            pending.records[0].operation == GuestService::ReleaseTexture,
+  // The visual's dynamic meshes also request host copies (frame schema v4);
+  // completing them without an id leaves them drawing inline.
+  std::size_t releases = 0;
+  bool onlyMeshes = true;
+  for (GuestServiceRecord& record : pending.records) {
+    releases += record.operation == GuestService::ReleaseTexture ? 1u : 0u;
+    onlyMeshes =
+      onlyMeshes && (record.operation == GuestService::ReleaseTexture ||
+                     record.operation == GuestService::CreateMesh);
+    record.payload.clear();
+    record.status = GuestServiceStatus::Complete;
+  }
+  require(releases == 1 && onlyMeshes,
           "Clearing font cache drains pending atlas acquisition");
-  pending.records[0].payload.clear();
-  pending.records[0].status = GuestServiceStatus::Complete;
   exchange(queue, pending);
   backend.pump();
 
@@ -282,6 +293,85 @@ dialogContract()
           "Later dialog request carries the latest save intent");
 }
 
+// Frame schema v4: a dynamic mesh draws inline until its host copy exists,
+// then by reference with only its changed spans travelling; a change after a
+// by-reference draw in the same frame turns that draw back into inline data.
+static void
+dynamicMeshContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  renderer.ensureBuiltinStyles();
+  const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+  const MeshHandle mesh = renderer.enrollDynamicMesh(
+    3 * 16, indices.data(), sizeof(indices), MeshVertexLayout::Pos3Color4U8);
+  require(mesh.isValid(), "Dynamic mesh enrollment");
+  // Token payloads are borrowed until submission: one array per update.
+  const std::array<float, 12> vertices{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0 };
+  const std::array<float, 12> shifted{ 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0 };
+  const std::array<float, 4> moved{ 5, 0, 0, 0 };
+  const float* uploaded = vertices.data();
+  const std::function<GuestFrame(bool)> record = [&](bool updateAfterDraw) {
+    renderer.BeginFrame();
+    backend.setFrame(1280, 720);
+    backend.pump();
+    renderer.bindStyle(RenderStyleId::Shape);
+    renderer.pushUpdateBuffer(mesh, 0, sizeof(vertices), uploaded);
+    renderer.pushSetMesh(mesh);
+    renderer.pushDrawIndexed(3, 0);
+    if (updateAfterDraw) {
+      renderer.pushUpdateBuffer(mesh, 0, sizeof(moved), moved.data());
+      renderer.pushDrawIndexed(3, 0);
+    }
+    renderer.EndFrame();
+    return backend.takeFrame();
+  };
+  GuestFrame inlineFrame = record(false);
+  require(inlineFrame.batches.size() == 1 &&
+            !inlineFrame.batches[0].retained() &&
+            inlineFrame.meshWrites.empty(),
+          "Dynamic mesh draws inline before its host copy exists");
+  GuestServices pending = exchange(queue);
+  require(pending.records.size() == 1 &&
+            pending.records[0].operation == GuestService::CreateMesh,
+          "Dynamic mesh requests one host copy");
+  GuestMeshRequest request;
+  require(GuestMeshRequest::read(pending.records[0].payload, request) &&
+            request.dynamic && request.style == 1 && request.vertexBytes == 48,
+          "Dynamic mesh request encoding");
+  const GuestResourceId host{ 7, GuestResourceKind::Mesh, 1, 1 };
+  GuestWireWriter created;
+  host.write(created);
+  pending.records[0].payload = created.take();
+  pending.records[0].status = GuestServiceStatus::Complete;
+  exchange(queue, pending);
+  const GuestFrame first = record(false);
+  require(first.batches.size() == 1 && first.batches[0].retained() &&
+            first.meshWrites.size() == 2,
+          "First referenced frame sends the whole mesh");
+  const GuestFrame unchanged = record(false);
+  require(unchanged.batches.size() == 1 && unchanged.batches[0].retained() &&
+            unchanged.meshWrites.empty(),
+          "Rewriting identical bytes sends nothing");
+  uploaded = shifted.data();
+  const GuestFrame changed = record(false);
+  require(changed.batches.size() == 1 && changed.batches[0].retained() &&
+            changed.meshWrites.size() == 1 && !changed.meshWrites[0].indices &&
+            changed.meshWrites[0].offset == 16 &&
+            changed.meshWrites[0].bytes.size() == 16,
+          "Only the changed vertex travels");
+  const GuestFrame reordered = record(true);
+  require(reordered.batches.size() == 2 && !reordered.batches[0].retained() &&
+            !reordered.batches[1].retained() &&
+            reordered.batches[0].vertices[0].position[0] == 0.0f &&
+            reordered.batches[1].vertices[0].position[0] == 5.0f,
+          "Change after a referenced draw keeps painter order inline");
+  backend.Shutdown();
+}
+
 class SdkContract final : public GuestApplication
 {
 public:
@@ -300,6 +390,7 @@ public:
     consoleContract();
     dialogContract();
     recordingContract();
+    dynamicMeshContract();
     return true;
   }
   void update(const GuestInput&) override {}

@@ -15,6 +15,7 @@
 #include <new>
 #include <thread>
 #include <tracy/Tracy.hpp>
+#include <unordered_set>
 
 static std::size_t
 mixAddress(std::uint64_t value)
@@ -2378,6 +2379,163 @@ SparseCellGrid::assignChunk(const SparseChunkRecord& record)
   publishChangedChunkRevision(ChunkAddress{ record.chunkX, record.chunkY },
                               true);
   return true;
+}
+
+bool
+SparseCellGrid::buildPatchDelta(const std::vector<SparseChunkPatch>& patches,
+                                SparseGenerationDelta* delta) const
+{
+  if (delta == nullptr ||
+      revision == std::numeric_limits<std::uint64_t>::max()) {
+    return false;
+  }
+  delta->clear();
+  delta->fromRevision = revision;
+  delta->toRevision = revision;
+  try {
+    beginAddressSet(
+      &m_patchAddresses, &m_patchAddressIndex, &m_patchAddressGeneration);
+    delta->changedChunks.reserve(patches.size());
+    for (const SparseChunkPatch& patch : patches) {
+      if (!(canonicalizeChunk(patch.address) == patch.address) ||
+          !insertAddressSet(patch.address,
+                            &m_patchAddresses,
+                            &m_patchAddressIndex,
+                            m_patchAddressGeneration)) {
+        return false;
+      }
+      const ChunkMap::const_iterator found = chunks.find(patch.address);
+      if (found != chunks.end() && patch.present &&
+          found->second.cells == patch.cells) {
+        continue;
+      }
+      // One pass: occupancy, counting, counts and change masks against the
+      // current contents (background where the chunk is absent).
+      SparseChangedChunkRecord& record = delta->changedChunks.emplace_back();
+      record.address = patch.address;
+      record.present = patch.present;
+      const CellArray* previous =
+        found == chunks.end() ? nullptr : &found->second.cells;
+      std::uint16_t occupiedCount = 0u;
+      std::uint16_t countedCount = 0u;
+      for (std::size_t word = 0u; word < kChunkCellCount / 64u; ++word) {
+        std::uint64_t occupied = 0u;
+        std::uint64_t counted = 0u;
+        std::uint64_t stateChanged = 0u;
+        std::uint64_t countedChanged = 0u;
+        for (std::size_t bit = 0u; bit < 64u; ++bit) {
+          const std::size_t index = word * 64u + bit;
+          const unsigned char next =
+            patch.present ? patch.cells[index] : BackgroundState;
+          const unsigned char before =
+            previous == nullptr ? BackgroundState : (*previous)[index];
+          const std::uint64_t mask = static_cast<std::uint64_t>(1u) << bit;
+          occupied |= next != BackgroundState ? mask : 0u;
+          counted |= next == CountedNeighborState ? mask : 0u;
+          stateChanged |= next != before ? mask : 0u;
+          countedChanged |=
+            (next == CountedNeighborState) != (before == CountedNeighborState)
+              ? mask
+              : 0u;
+          record.cells[index] = next;
+        }
+        record.occupied[word] = occupied;
+        record.counted[word] = counted;
+        record.stateChanged[word] = stateChanged;
+        record.countedChanged[word] = countedChanged;
+        occupiedCount += static_cast<std::uint16_t>(std::popcount(occupied));
+        countedCount += static_cast<std::uint16_t>(std::popcount(counted));
+      }
+      record.present = occupiedCount != 0u;
+      record.occupiedCellCount = occupiedCount;
+      record.countedCellCount = countedCount;
+      if (!record.present && previous == nullptr) {
+        delta->changedChunks.pop_back(); // absent and still absent
+      }
+    }
+  } catch (const std::bad_alloc&) {
+    delta->clear();
+    return false;
+  }
+  if (!delta->changedChunks.empty()) {
+    delta->toRevision = revision + 1u;
+  }
+  return true;
+}
+
+bool
+SparseCellGrid::applyChunkPatches(const std::vector<SparseChunkPatch>& patches)
+{
+  SparseGenerationDelta delta;
+  if (!buildPatchDelta(patches, &delta)) {
+    return false;
+  }
+  if (delta.changedChunks.empty()) {
+    return true; // contents and journal stay as they are
+  }
+  const bool frontierWasInvalid = m_frontierInvalid;
+  try {
+    if (!frontierWasInvalid) {
+      // Carry the previous generation's journal: those chunks keep their
+      // masks (and their unchanged contents) beside the patch's own changes.
+      std::unordered_map<ChunkAddress, std::size_t, ChunkAddressHash> patched;
+      patched.reserve(delta.changedChunks.size());
+      for (std::size_t index = 0; index < delta.changedChunks.size(); ++index) {
+        patched.emplace(delta.changedChunks[index].address, index);
+      }
+      for (std::size_t index = 0; index < m_changedChunks.size(); ++index) {
+        const ChunkAddress& address = m_changedChunks[index];
+        const std::unordered_map<ChunkAddress, std::size_t, ChunkAddressHash>::
+          const_iterator found = patched.find(address);
+        if (found != patched.end()) {
+          SparseChangedChunkRecord& record = delta.changedChunks[found->second];
+          for (std::size_t word = 0; word < record.stateChanged.size();
+               ++word) {
+            record.stateChanged[word] |= m_changedCellMasks[index][word];
+            record.countedChanged[word] |= m_changedCountedMasks[index][word];
+          }
+          continue;
+        }
+        SparseChangedChunkRecord record;
+        record.address = address;
+        record.cells.fill(BackgroundState);
+        const ChunkMap::const_iterator current = chunks.find(address);
+        record.present = current != chunks.end();
+        if (record.present) {
+          record.cells = current->second.cells;
+          record.occupied = current->second.occupied;
+          record.counted = current->second.counted;
+          record.occupiedCellCount = current->second.occupiedCellCount;
+          record.countedCellCount = current->second.countedCellCount;
+        }
+        record.stateChanged = m_changedCellMasks[index];
+        record.countedChanged = m_changedCountedMasks[index];
+        delta.changedChunks.push_back(record);
+      }
+    }
+  } catch (const std::bad_alloc&) {
+    return false;
+  }
+  if (!applyGenerationDelta(delta)) {
+    return false;
+  }
+  if (frontierWasInvalid) {
+    // A journal that had already overflowed cannot be carried; the next
+    // generation evaluates completely.
+    m_frontierInvalid = true;
+  }
+  return true;
+}
+
+void
+SparseCellGrid::visitChunks(const ChunkVisitor& visitor) const
+{
+  if (!visitor) {
+    return;
+  }
+  for (ChunkMap::const_reference entry : chunks) {
+    visitor(entry.first, entry.second.cells);
+  }
 }
 
 std::vector<SparseChunkRecord>

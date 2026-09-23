@@ -107,6 +107,18 @@ struct GuestFrameLimits
   std::uint32_t textureWrites = 256;
   std::uint32_t uploadBytes = 16u * 1024u * 1024u;
   std::uint32_t shadowCasters = 256;
+  std::uint32_t meshWrites = 4096;
+  std::uint32_t meshWriteBytes = 32u * 1024u * 1024u;
+};
+
+// Version 4: a byte range written into a dynamic retained host mesh. Every
+// write in a frame applies before any of its batches draw.
+struct GuestFrameMeshWrite
+{
+  GuestResourceId mesh;
+  bool indices = false;
+  std::uint32_t offset = 0;
+  std::vector<std::byte> bytes;
 };
 
 struct GuestTextureWrite
@@ -126,9 +138,9 @@ struct GuestFrame
   static constexpr std::uint32_t Magic = 0x31465249u; // IRF1
   // Version 1 carries 2D batches only. Version 2 adds the world camera,
   // primitive/depth flags, lit meshes and shadow casters. Version 3 adds the
-  // blend flag, retained host meshes and the cubemap skybox. The host
-  // accepts all three.
-  static constexpr std::uint32_t Version = 3;
+  // blend flag, retained host meshes and the cubemap skybox. Version 4 adds
+  // in-place writes to dynamic retained meshes. The host accepts all four.
+  static constexpr std::uint32_t Version = 4;
   float width = 1280;
   float height = 720;
   // World view-projection used for host shadow fitting (version 2).
@@ -139,6 +151,17 @@ struct GuestFrame
   std::vector<GuestBatch> batches;
   std::vector<GuestTextureWrite> textureWrites;
   std::vector<GuestShadowCaster> shadowCasters;
+  std::vector<GuestFrameMeshWrite> meshWrites;
+
+  // Empties the frame but keeps every container's capacity for reuse.
+  void clear()
+  {
+    batches.clear();
+    textureWrites.clear();
+    shadowCasters.clear();
+    meshWrites.clear();
+    hasCamera = false;
+  }
 
   static void writeFloats(GuestWireWriter& output, const float* values, int n)
   {
@@ -241,6 +264,20 @@ struct GuestFrame
       output.f32(caster.lightDistance);
       output.f32(caster.casterDistance);
     }
+    if (meshWrites.size() > UINT32_MAX) {
+      throw std::length_error("Too many guest mesh writes");
+    }
+    output.u32(static_cast<std::uint32_t>(meshWrites.size()));
+    for (const GuestFrameMeshWrite& write : meshWrites) {
+      if (write.bytes.size() > UINT32_MAX) {
+        throw std::length_error("Guest mesh write exceeds ABI range");
+      }
+      write.mesh.write(output);
+      output.u32(write.indices ? 1 : 0);
+      output.u32(write.offset);
+      output.u32(static_cast<std::uint32_t>(write.bytes.size()));
+      output.bytes(write.bytes);
+    }
   }
 
   // Decode transactionally before resource resolution or renderer calls.
@@ -258,7 +295,7 @@ struct GuestFrame
     GuestFrame frame;
     frame.width = reader.f32();
     frame.height = reader.f32();
-    if (magic != Magic || version < 1 || version > 3 || !reader.valid() ||
+    if (magic != Magic || version < 1 || version > 4 || !reader.valid() ||
         !std::isfinite(frame.width) || !std::isfinite(frame.height) ||
         frame.width < 1 || frame.height < 1 || frame.width > 65536 ||
         frame.height > 65536) {
@@ -293,7 +330,8 @@ struct GuestFrame
       batch.texture = GuestResourceId::read(reader);
       const std::uint32_t clipped = reader.u32();
       batch.clipped = clipped != 0;
-      const std::uint32_t maximumStyle = version + 2u;
+      // Version 1: Shape to Canvas; 2 adds LitMesh; 3 and later add Skybox.
+      const std::uint32_t maximumStyle = version >= 3 ? 5u : version + 2u;
       if (style < 1 || style > maximumStyle || layer < 1 || layer > 2 ||
           clipped > 1) {
         return false;
@@ -492,6 +530,35 @@ struct GuestFrame
           }
         }
         frame.shadowCasters.push_back(caster);
+      }
+    }
+    if (version >= 4) {
+      // Minimum encoded write: 20-byte id, target, offset, count, one byte.
+      const std::uint32_t meshWrites = reader.u32();
+      if (!reader.valid() || meshWrites > limits.meshWrites ||
+          meshWrites > reader.remaining() / 33u) {
+        return false;
+      }
+      std::uint32_t writeBytes = 0;
+      frame.meshWrites.reserve(meshWrites);
+      for (std::uint32_t index = 0; index < meshWrites; ++index) {
+        GuestFrameMeshWrite write;
+        write.mesh = GuestResourceId::read(reader);
+        const std::uint32_t target = reader.u32();
+        write.offset = reader.u32();
+        const std::uint32_t bytes = reader.u32();
+        if (!reader.valid() || write.mesh.owner == 0 || write.mesh.slot == 0 ||
+            write.mesh.generation == 0 ||
+            write.mesh.kind != GuestResourceKind::Mesh || target > 1 ||
+            bytes == 0 || bytes > limits.meshWriteBytes - writeBytes ||
+            bytes > reader.remaining()) {
+          return false;
+        }
+        writeBytes += bytes;
+        write.indices = target == 1;
+        const std::span<const std::byte> data = reader.bytes(bytes);
+        write.bytes.assign(data.begin(), data.end());
+        frame.meshWrites.push_back(std::move(write));
       }
     }
     if (!reader.finished()) {

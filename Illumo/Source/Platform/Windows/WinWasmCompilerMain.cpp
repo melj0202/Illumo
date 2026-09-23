@@ -8,13 +8,20 @@
 
 // This helper compiles but never instantiates untrusted WASM. The parent
 // assigns it to a memory-limited, single-process job before resuming its
-// initial thread. Exit codes: 0 success, 2 invalid invocation, 3 the module
-// did not compile, 4 the artifact exceeds the shared buffer. Anything else is
-// an abnormal termination (for example the job's memory limit).
+// initial thread. Arguments: the shared mapping handle and the engine options
+// mask of the host engine that will deserialize the artifact. Exit codes: 0
+// success, 2 invalid invocation, 3 the module did not compile, 4 the artifact
+// exceeds the shared buffer. Anything else is an abnormal termination (for
+// example the job's memory limit).
 int
 main(int argc, char** argv)
 try {
-  if (argc != 2) {
+  WasmEngineOptions options;
+  if (argc != 3 ||
+      std::string(argv[2]).find_first_not_of("0123456789") !=
+        std::string::npos ||
+      !decodeWasmEngineOptions(static_cast<std::uint32_t>(std::stoul(argv[2])),
+                               options)) {
     return 2;
   }
   constexpr std::size_t kCapacity = 256u * 1024u * 1024u;
@@ -31,7 +38,7 @@ try {
     UnmapViewOfFile(shared);
     return 2;
   }
-  wasm_engine_t* engine = createWasmEngine();
+  wasm_engine_t* engine = createWasmEngine(options);
   if (engine == nullptr) {
     UnmapViewOfFile(shared);
     return 2;

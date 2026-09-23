@@ -164,7 +164,7 @@ function(illumo_stage_runtime_file target_name source_file destination_name)
 endfunction()
 
 function(illumo_stage_msvc_asan target_name)
-  if(NOT MSVC)
+  if(NOT MSVC OR NOT ILLUMO_ENABLE_ASAN OR ILLUMO_ENABLE_COVERAGE)
     return()
   endif()
   get_filename_component(msvc_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)

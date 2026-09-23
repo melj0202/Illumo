@@ -81,8 +81,11 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
         __builtin_trap();
       }
       application->update(input);
-      payload.u32(application->closeRequested() ? GuestUpdateFlags::RequestClose
-                                                : 0u);
+      payload.u32(
+        (application->closeRequested() ? GuestUpdateFlags::RequestClose : 0u) |
+        (application->services().hasOutgoing()
+           ? GuestUpdateFlags::ServicesPending
+           : 0u));
       const std::vector<std::byte> message = application->extensionRequest();
       if (message.size() > 65536) {
         __builtin_trap();

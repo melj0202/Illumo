@@ -130,17 +130,22 @@ illumo_add_guest(IllumoGame
   ../IllumoGame/Source/Game/RuleCatalogOverlay.cpp
   ../IllumoGame/Source/Game/RulesetWorkshopMenu.cpp
   ../IllumoGame/Source/Game/SimulationRunnerGeneration.cpp
-  ../IllumoGame/Source/Game/SimulationRunnerSerial.cpp)
+  ../IllumoGame/Source/Wasm/SimulationLanes.cpp
+  ../IllumoGame/Source/Wasm/SimulationRunnerGuest.cpp)
 target_include_directories(IllumoGame SYSTEM PRIVATE
   "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
   "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
 target_link_libraries(IllumoGame PRIVATE CSimGuestDomain IllumoGuestEngine)
 
+# The compute worker store: CSW1 whole-world jobs (parity tests) and CSL1
+# simulation lanes (the game's generations).
 add_executable(CSimWorkerGuest
+  ../IllumoGame/Source/Wasm/SimulationLanes.cpp
   ../IllumoGame/Source/Wasm/SimulationProtocol.cpp
   ../IllumoGame/Source/Wasm/SimulationWorkerExports.cpp)
 set_target_properties(CSimWorkerGuest PROPERTIES SUFFIX ".wasm")
 target_link_libraries(CSimWorkerGuest PRIVATE CSimGuestDomain)
+target_include_directories(CSimWorkerGuest PRIVATE "${ILLUMO_ROOT}/Illumo/Include")
 target_link_options(CSimWorkerGuest PRIVATE
   -Wl,--export=illumo_guest_describe -Wl,--export=illumo_guest_alloc
   -Wl,--export=illumo_guest_free -Wl,--export=illumo_guest_job

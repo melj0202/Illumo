@@ -34,9 +34,15 @@ DEFAULT_COVERAGE_DIRECTORY = Path("build-workspace-coverage")
 DEFAULT_TIDY_DIRECTORY = Path("build-workspace-tidy")
 PUBLIC_HEADER_SMOKE_TEST = "Illumo.PublicHeaders.ConsumerSmoke"
 DEFAULT_PROFILES_FILE = REPOSITORY_ROOT / "build-profiles.local.json"
+# "debug" is the AddressSanitizer profile (explicit WASM guest bounds checks);
+# "dev" is optimized with symbols and debug tools, the one to play with; and
+# "debug-noasan" keeps Debug code generation with fast guest traps.
 BUILTIN_PROFILES = {
     "debug": {"config": "Debug", "build_dir": "build-workspace-debug"},
     "release": {"config": "Release", "build_dir": "build-workspace-release"},
+    "dev": {"config": "RelWithDebInfo", "build_dir": "build-workspace-dev"},
+    "debug-noasan": {"config": "Debug", "build_dir": "build-workspace-debug-noasan",
+                     "cmake_arg": ["-DILLUMO_ENABLE_ASAN=OFF"]},
 }
 PROFILE_STRINGS = ("config", "build_dir", "generator", "architecture")
 PROFILE_FLAGS = ("tracy", "no_tests", "no_docs", "no_tidy", "no_wasm")

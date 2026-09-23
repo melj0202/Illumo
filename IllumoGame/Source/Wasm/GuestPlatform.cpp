@@ -21,9 +21,108 @@ CSimPlatform::current()
   return *installedPlatform;
 }
 
+GuestSimulationLanes::GuestSimulationLanes(GuestServiceQueue& services)
+  : m_services(services)
+{
+}
+
+void
+GuestSimulationLanes::pump()
+{
+  if (m_grant == Grant::Unknown) {
+    // Ask at startup: the host compiles lane stores while menus run and
+    // answers once they are ready.
+    laneCount();
+    return;
+  }
+  GuestServiceRecord result;
+  if (m_grant != Grant::Requested || !m_services.take(m_query, result)) {
+    return;
+  }
+  m_grant = Grant::Known;
+  GuestWireReader reader(result.payload);
+  const std::uint32_t lanes = reader.u32();
+  // A rejected query (no Jobs grant) or an out-of-range answer means none.
+  m_lanes = result.status == GuestServiceStatus::Complete &&
+                reader.finished() && lanes <= 64u
+              ? lanes
+              : 0u;
+  m_outstanding.assign(m_lanes, 0u);
+  m_failed.assign(m_lanes, false);
+}
+
+std::uint32_t
+GuestSimulationLanes::laneCount()
+{
+  if (m_grant == Grant::Unknown) {
+    m_query = m_services.enqueue(GuestService::JobLanes, {});
+    if (m_query != 0) {
+      m_grant = Grant::Requested;
+    }
+  }
+  return m_grant == Grant::Known ? m_lanes : 0u;
+}
+
+bool
+GuestSimulationLanes::laneCountKnown() const
+{
+  return m_grant == Grant::Known;
+}
+
+bool
+GuestSimulationLanes::submit(std::uint32_t lane,
+                             std::vector<std::byte>&& request)
+{
+  if (lane >= m_lanes || m_outstanding[lane] != 0 || m_failed[lane] ||
+      request.size() > GuestServices::MaximumJobBytes - 4u) {
+    return false;
+  }
+  GuestWireWriter payload;
+  payload.u32(lane);
+  payload.bytes(request);
+  const std::uint64_t id =
+    m_services.enqueue(GuestService::LaneJob, payload.take());
+  if (id == 0) {
+    return false;
+  }
+  m_outstanding[lane] = id;
+  request.clear();
+  return true;
+}
+
+int
+GuestSimulationLanes::poll(std::uint32_t lane, std::vector<std::byte>& reply)
+{
+  if (lane >= m_lanes) {
+    return -1;
+  }
+  if (m_failed[lane]) {
+    return -1;
+  }
+  GuestServiceRecord result;
+  if (m_outstanding[lane] == 0 ||
+      !m_services.take(m_outstanding[lane], result)) {
+    return 0;
+  }
+  m_outstanding[lane] = 0;
+  if (result.status != GuestServiceStatus::Complete) {
+    m_failed[lane] = true;
+    return -1;
+  }
+  reply = std::move(result.payload);
+  return 1;
+}
+
+bool
+GuestSimulationLanes::busy(std::uint32_t lane) const
+{
+  return lane < m_lanes && m_outstanding[lane] != 0;
+}
+
 GuestCSimPlatform::GuestCSimPlatform(GuestServiceQueue& services,
                                      GuestFiles& files)
   : m_files(files)
+  , m_lanes(services)
   , m_dialog(services)
   , m_clipboard(services)
 {
@@ -170,6 +269,7 @@ GuestCSimPlatform::startWrite(WriteRequest& request)
 void
 GuestCSimPlatform::pump()
 {
+  m_lanes.pump();
   // Completions are collected first; callbacks may queue further requests.
   std::vector<std::function<void()>> completions;
 

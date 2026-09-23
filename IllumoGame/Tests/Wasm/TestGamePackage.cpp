@@ -1,3 +1,4 @@
+#include "../BenchWorlds.h"
 #include "Game/IllumoCodec.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Rendering/Camera.h>
@@ -11,6 +12,7 @@
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Wasm/WasmGameModule.h>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -125,12 +127,14 @@ historyContains(const CommandLine& console, const std::string& text)
 }
 
 // Package budgets are explicit; the generic defaults stay for small guests.
+// As shipped, the package is epoch-metered; benchmarks also measure fuel.
 static WasmLimits
-gameLimits()
+gameLimits(bool meterFuel = false)
 {
   WasmLimits limits;
   limits.memoryBytes = 512ull * 1024ull * 1024ull;
-  limits.fuelPerCall = 2000000000u;
+  limits.meterFuel = meterFuel;
+  limits.fuelPerCall = 20000000000ull;
   limits.deadlineMilliseconds = 10000;
   return limits;
 }
@@ -378,16 +382,464 @@ gamePackage()
   return counters.failures == 0;
 }
 
+// Writes the shared benchmark worlds as v4 saves named <world>.csim.
+static bool
+writeBenchWorlds(const std::filesystem::path& directory)
+{
+  // The codec validates rule identity against the loaded catalogs.
+  RuleSetRegistry registry;
+  if (!registry.loadFromCatalogTexts(readText(ILLUMO_FAMILIES),
+                                     readText(ILLUMO_RULES))) {
+    return false;
+  }
+  RuleSetRegistry::instance() = registry;
+  for (const BenchWorld& world : kBenchWorlds) {
+    SparseCellGrid grid;
+    seedBenchWorld(grid, world);
+    IllumoDocument document;
+    document.familyString = "LIFE_LIKE_BINARY";
+    document.ruleString = "GAME_OF_LIFE";
+    document.sourceGrid = &grid;
+    const std::filesystem::path path =
+      directory / (std::string(world.name) + ".csim");
+    std::string error;
+    if (!IllumoCodec::writeFile(path.string(), document, &error)) {
+      std::printf(
+        "Cannot write %s: %s\n", path.string().c_str(), error.c_str());
+      return false;
+    }
+  }
+  return true;
+}
+
+static std::int64_t
+lastGeneration(const CommandLine& console, std::size_t* reports = nullptr)
+{
+  std::int64_t generation = -1;
+  std::size_t count = 0;
+  for (const CommandLine::historyBuffer& entry : console.getHistory()) {
+    if (entry.content.rfind("Generation: ", 0) == 0) {
+      generation = std::stoll(entry.content.substr(12));
+      ++count;
+    }
+  }
+  if (reports != nullptr) {
+    *reports = count;
+  }
+  return generation;
+}
+
+// Guest commands run when the guest next polls its services, so a status
+// report arrives a frame or two later; pump (with rendering) until it does.
+static std::int64_t
+requestGeneration(WasmGameModule& game,
+                  CommandRegistry& commands,
+                  const CommandLine& console,
+                  const std::function<void()>& frame)
+{
+  std::size_t before = 0;
+  lastGeneration(console, &before);
+  execute(commands, "status");
+  for (int attempt = 0; attempt < 600 && game.error().empty(); ++attempt) {
+    game.Update(1.0 / 60.0);
+    frame();
+    std::size_t after = 0;
+    const std::int64_t generation = lastGeneration(console, &after);
+    if (after > before) {
+      return generation;
+    }
+  }
+  return -1;
+}
+
+static double
+percentileOf(std::vector<double> samples, double fraction)
+{
+  if (samples.empty()) {
+    return 0.0;
+  }
+  std::sort(samples.begin(), samples.end());
+  return samples[static_cast<std::size_t>(
+    fraction * static_cast<double>(samples.size() - 1))];
+}
+
+// End-to-end headless benchmark: the real package loads each shared world,
+// runs uncapped (tps 1000) and is pumped with MockBackend rendering. Reports
+// host Update time, achieved TPS and WASM exchange statistics per world. Not
+// part of IllumoWorkspace; compare with IllumoGame.Sim.RunnerBench.
+static bool
+packageBench(bool meterFuel, std::uint32_t lanes)
+{
+  TestCounters counters;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-bench-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  WasmFileRoots files{ root / "package", root / "storage" };
+  std::filesystem::create_directories(files.package);
+  std::filesystem::create_directories(files.storage);
+  std::filesystem::copy_file(ILLUMO_FAMILIES, files.package / "families.json");
+  std::filesystem::copy_file(ILLUMO_RULES, files.package / "rulesets.json");
+  std::filesystem::copy_file(ILLUMO_GAME_DEFAULTS,
+                             files.package / "envvars.json");
+  if (!writeBenchWorlds(files.storage)) {
+    return false;
+  }
+
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  env.setVar("fullscreen", false);
+  Camera camera(glm::vec2(0, 0), 1, &env);
+  CanvasObservingBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  CommandRegistry commands;
+  CommandLine console(&env, &commands, &window, &renderer, "Bench");
+  Logger::setContext(&env, &console);
+  InputManager input(nullptr);
+  IllumoContext context;
+  context.renderer = &renderer;
+  context.window = &window;
+  context.inputManager = &input;
+  context.envVars = &env;
+  context.commandRegistry = &commands;
+  context.commandLine = &console;
+
+  WasmGameModule game(readBytes(ILLUMO_GAME_GUEST),
+                      {},
+                      gameLimits(meterFuel),
+                      {},
+                      lanes == 0u ? std::vector<std::byte>{}
+                                  : readBytes(ILLUMO_SIMULATION_WORKER),
+                      files);
+  WasmLimits laneLimits = gameLimits(meterFuel);
+  laneLimits.fuelPerCall = 1000000000u;
+  game.setWorkerLimits(laneLimits, lanes == 0u ? 1u : lanes);
+  const bool started =
+    game.Start(&context) && enterCanvas(game, commands, input);
+  testTrue(counters, started, "Benchmark package reaches the canvas");
+  if (!started) {
+    std::printf("%s\n", game.error().c_str());
+    return false;
+  }
+  const std::function<void()> frame = [&]() {
+    Scene scene(&window, &camera);
+    game.DispatchDrawables(&scene);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+  };
+  for (const BenchWorld& world : kBenchWorlds) {
+    const std::string loaded =
+      std::string("Loaded canvas from ") + world.name + ".csim";
+    execute(commands, "pause");
+    execute(commands, "load", { world.name });
+    const bool ready =
+      pumpUntil(game, [&]() { return historyContains(console, loaded); });
+    testTrue(counters, ready, "Benchmark world loads in the guest");
+    if (!ready) {
+      break;
+    }
+    execute(commands, "tps", { "1000" });
+    execute(commands, "run");
+    for (int warmup = 0; warmup < 20 && game.error().empty(); ++warmup) {
+      game.Update(1.0 / 60.0);
+      frame();
+    }
+    // Lane stores compile in parallel while serial generations run; time
+    // only once the runner reports lanes (at most 30 seconds).
+    const std::chrono::steady_clock::time_point lanesDeadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (lanes != 0u && game.error().empty() &&
+           std::chrono::steady_clock::now() < lanesDeadline) {
+      requestGeneration(game, commands, console, frame);
+      if (historyContains(console, "simulation lanes; round trip")) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    const std::int64_t firstGeneration =
+      requestGeneration(game, commands, console, frame);
+    std::vector<double> updates;
+    // At least 120 frames and two seconds: with lanes a frame no longer
+    // waits for its generation, so frames alone would be a sub-round-trip
+    // window.
+    const std::size_t frames = 120;
+    const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+    while (game.error().empty() && (updates.size() < frames ||
+                                    std::chrono::steady_clock::now() - start <
+                                      std::chrono::seconds(2))) {
+      const std::chrono::steady_clock::time_point before =
+        std::chrono::steady_clock::now();
+      game.Update(1.0 / 60.0);
+      updates.push_back(std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - before)
+                          .count());
+      frame();
+    }
+    const double frameSeconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+        .count();
+    const std::int64_t lastReported =
+      requestGeneration(game, commands, console, frame);
+    // TPS spans both status round trips, which also advance generations.
+    const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+        .count();
+    const std::int64_t generations =
+      firstGeneration >= 0 && lastReported >= firstGeneration
+        ? lastReported - firstGeneration
+        : 0;
+    const WasmFrameStats& stats = game.stats();
+    const WasmFrameCounters* frameCounters = game.frameCounters();
+    std::printf(
+      "BENCH-JSON {\"bench\":\"wasm-package\",\"world\":\"%s\","
+      "\"metering\":\"%s\",\"lanes\":%u,\"frames\":%zu,\"fps\":%.2f,"
+      "\"tps\":%.2f,"
+      "\"updateMsP50\":%.3f,\"updateMsP95\":%.3f,\"updateMsMax\":%.3f,"
+      "\"guestUpdateMsP50\":%.3f,\"guestFrameMsP50\":%.3f,"
+      "\"acceptMsP50\":%.3f,\"frameBytesP50\":%.0f,"
+      "\"textureWriteBytes\":%llu,\"inlineVertexBytes\":%llu}\n",
+      world.name,
+      meterFuel ? "fuel" : "epoch",
+      lanes,
+      updates.size(),
+      frameSeconds > 0.0 ? static_cast<double>(updates.size()) / frameSeconds
+                         : 0.0,
+      seconds > 0.0 ? static_cast<double>(generations) / seconds : 0.0,
+      percentileOf(updates, 0.5),
+      percentileOf(updates, 0.95),
+      percentileOf(updates, 1.0),
+      stats.updateMilliseconds.median(),
+      stats.frameMilliseconds.median(),
+      stats.acceptMilliseconds.median(),
+      stats.frameBytes.median(),
+      static_cast<unsigned long long>(
+        frameCounters != nullptr ? frameCounters->textureWriteBytes : 0u),
+      static_cast<unsigned long long>(
+        frameCounters != nullptr ? frameCounters->inlineVertexBytes : 0u));
+    // The guest's own stage split from the status report just requested.
+    std::string stages;
+    std::string execution;
+    for (const CommandLine::historyBuffer& entry : console.getHistory()) {
+      if (entry.content.rfind("Worker stages", 0) == 0 ||
+          entry.content.rfind("Presentation:", 0) == 0) {
+        stages = entry.content.rfind("Worker stages", 0) == 0
+                   ? entry.content
+                   : stages + " | " + entry.content;
+      } else if (entry.content.rfind("Execution:", 0) == 0) {
+        execution = entry.content;
+      }
+    }
+    // Frames that did real work (publication, presentation, generation).
+    std::size_t heavyFrames = 0;
+    double heavyMilliseconds = 0.0;
+    double totalMilliseconds = 0.0;
+    for (double update : updates) {
+      totalMilliseconds += update;
+      if (update > 1.0) {
+        ++heavyFrames;
+        heavyMilliseconds += update;
+      }
+    }
+    std::printf("BENCH-LOAD %s lanes=%u updates=%zu totalMs=%.1f heavy=%zu "
+                "heavyMeanMs=%.3f\n",
+                world.name,
+                lanes,
+                updates.size(),
+                totalMilliseconds,
+                heavyFrames,
+                heavyFrames == 0 ? 0.0 : heavyMilliseconds / heavyFrames);
+    std::printf("BENCH-STAGES %s lanes=%u %s\nBENCH-EXEC %s lanes=%u %s\n",
+                world.name,
+                lanes,
+                stages.c_str(),
+                world.name,
+                lanes,
+                execution.c_str());
+    testTrue(counters,
+             game.error().empty() && generations > 0,
+             "Benchmark world advances in the guest");
+  }
+  game.Exit();
+  if (counters.failures != 0) {
+    for (const CommandLine::historyBuffer& entry : console.getHistory()) {
+      std::printf("console: %s\n", entry.content.c_str());
+    }
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return counters.failures == 0;
+}
+
+// The shipped configuration end to end: the real package with real WASM
+// simulation lanes runs a dense world, pauses (retiring any in-flight or
+// speculative generation) and saves; the save equals a native serial
+// reference advanced the same number of generations.
+static bool
+gamePackageLanes()
+{
+  TestCounters counters;
+  RuleSetRegistry registry;
+  if (!registry.loadFromCatalogTexts(readText(ILLUMO_FAMILIES),
+                                     readText(ILLUMO_RULES))) {
+    return false;
+  }
+  RuleSetRegistry::instance() = registry;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-lanes-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  WasmFileRoots files{ root / "package", root / "storage" };
+  std::filesystem::create_directories(files.package);
+  std::filesystem::create_directories(files.storage);
+  std::filesystem::copy_file(ILLUMO_FAMILIES, files.package / "families.json");
+  std::filesystem::copy_file(ILLUMO_RULES, files.package / "rulesets.json");
+  std::filesystem::copy_file(ILLUMO_GAME_DEFAULTS,
+                             files.package / "envvars.json");
+  if (!writeBenchWorlds(files.storage)) {
+    return false;
+  }
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  env.setVar("fullscreen", false);
+  Camera camera(glm::vec2(0, 0), 1, &env);
+  CanvasObservingBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  CommandRegistry commands;
+  CommandLine console(&env, &commands, &window, &renderer, "Lanes");
+  Logger::setContext(&env, &console);
+  InputManager input(nullptr);
+  IllumoContext context;
+  context.renderer = &renderer;
+  context.window = &window;
+  context.inputManager = &input;
+  context.envVars = &env;
+  context.commandRegistry = &commands;
+  context.commandLine = &console;
+  WasmGameModule game(readBytes(ILLUMO_GAME_GUEST),
+                      {},
+                      gameLimits(),
+                      {},
+                      readBytes(ILLUMO_SIMULATION_WORKER),
+                      files);
+  WasmLimits laneLimits = gameLimits();
+  game.setWorkerLimits(laneLimits, 4u);
+  const std::function<void()> frame = [&]() {
+    Scene scene(&window, &camera);
+    game.DispatchDrawables(&scene);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+  };
+  testTrue(counters,
+           game.Start(&context) && enterCanvas(game, commands, input),
+           "Package with simulation lanes reaches the canvas");
+  execute(commands, "load", { "bench-dense32" });
+  testTrue(counters,
+           pumpUntil(game,
+                     [&]() {
+                       return historyContains(
+                         console, "Loaded canvas from bench-dense32.csim");
+                     }),
+           "Dense world loads");
+  execute(commands, "tps", { "1000" });
+  execute(commands, "run");
+  bool lanesActive = false;
+  std::int64_t generation = 0;
+  const std::chrono::steady_clock::time_point deadline =
+    std::chrono::steady_clock::now() + std::chrono::seconds(60);
+  while (game.error().empty() && std::chrono::steady_clock::now() < deadline &&
+         !(lanesActive && generation >= 60)) {
+    for (int step = 0; step < 20; ++step) {
+      game.Update(1.0 / 60.0);
+      frame();
+    }
+    generation = requestGeneration(game, commands, console, frame);
+    lanesActive = historyContains(console, "simulation lanes; round trip");
+  }
+  testTrue(counters,
+           lanesActive && generation >= 60,
+           "Generations run on simulation lanes");
+  execute(commands, "pause");
+  execute(commands, "save", { "lanes" });
+  const std::filesystem::path saved = files.storage / "lanes.csim";
+  testTrue(counters,
+           pumpUntil(game,
+                     [&]() {
+                       return historyContains(console,
+                                              "Saved canvas to lanes.csim");
+                     }),
+           "The paused lane world saves");
+  const std::int64_t published =
+    requestGeneration(game, commands, console, frame);
+  IllumoDocument document;
+  std::string error;
+  std::ifstream stream(saved, std::ios::binary);
+  const bool decoded = IllumoCodec::readStream(stream, &document, &error);
+  std::unique_ptr<RuleSet> rule = registry.createRuleSet("GAME_OF_LIFE");
+  SparseCellGrid reference;
+  seedBenchWorld(reference, kBenchWorlds[0]);
+  for (std::int64_t step = 0; rule && step < published; ++step) {
+    reference.advance(*rule);
+  }
+  testTrue(counters,
+           decoded && document.grid && published > 0 &&
+             worldHash(*document.grid) == worldHash(reference),
+           "Lane generations equal the native serial reference");
+  std::printf("Lanes: %lld generations published\n",
+              static_cast<long long>(published));
+  testTrue(counters,
+           game.error().empty() && !historyContains(console, "Frame dropped"),
+           "Every lane frame recorded without rejection");
+  game.Exit();
+  if (counters.failures != 0) {
+    for (const CommandLine::historyBuffer& entry : console.getHistory()) {
+      std::printf("console: %s\n", entry.content.c_str());
+    }
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return counters.failures == 0;
+}
+
 int
 main(int argc, char** argv)
 {
   if (argc == 2 && std::string(argv[1]) == "--list") {
     std::puts("IllumoGame.Wasm.GamePackage");
+    std::puts("IllumoGame.Wasm.GamePackageLanes");
+    std::puts("IllumoGame.Wasm.PackageBench");
     return 0;
   }
-  if (argc != 3 || std::string(argv[1]) != "--run" ||
-      std::string(argv[2]) != "IllumoGame.Wasm.GamePackage") {
+  if (argc == 3 && std::string(argv[1]) == "--write-bench-worlds") {
+    std::filesystem::create_directories(argv[2]);
+    return writeBenchWorlds(argv[2]) ? 0 : 1;
+  }
+  if (argc != 3 || std::string(argv[1]) != "--run") {
     return 2;
   }
-  return gamePackage() ? 0 : 1;
+  if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackage") {
+    return gamePackage() ? 0 : 1;
+  }
+  if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackageLanes") {
+    return gamePackageLanes() ? 0 : 1;
+  }
+  if (std::string(argv[2]) == "IllumoGame.Wasm.PackageBench") {
+    // Serial generations in the game store, then as shipped (8 lanes).
+    const bool serial = packageBench(false, 0u);
+    const bool lanes = packageBench(false, 8u);
+    return serial && lanes ? 0 : 1;
+  }
+  return 2;
 }

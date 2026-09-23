@@ -21,9 +21,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <thread>
 
@@ -61,6 +63,7 @@ public:
   bool throwTexture = false;
   bool sawModColor = false;
   std::size_t observedDraws = 0;
+  std::size_t uploadedBufferBytes = 0;
   std::vector<std::size_t> writesAfterDraws;
   void PushToCommandQueue(RenderCommand command) override
   {
@@ -68,6 +71,10 @@ public:
       ++observedDraws;
     } else if (command.commandType == CommandType::UpdateTexture) {
       writesAfterDraws.push_back(observedDraws);
+    } else if (command.commandType == CommandType::UpdateBuffer) {
+      uploadedBufferBytes += command.updateBuffer.sizeBytes;
+    } else if (command.commandType == CommandType::UpdateIndexBuffer) {
+      uploadedBufferBytes += command.updateIndexBuffer.sizeBytes;
     }
     if (command.commandType == CommandType::UpdateBuffer &&
         command.updateBuffer.data != nullptr) {
@@ -465,6 +472,111 @@ run(const std::string& name)
     testTrue(counters,
              bridge.releaseMesh(mesh) && !bridge.releaseMesh(mesh),
              "Retained meshes release once");
+
+    // Frame schema v4: a dynamic mesh is ready (zero-filled) on creation,
+    // is written in place by frame mesh writes, and uploads only the spans
+    // written since the previous frame.
+    GuestMeshRequest dynamicRequest = request;
+    dynamicRequest.dynamic = true;
+    GuestWireWriter encodedRequest;
+    dynamicRequest.write(encodedRequest);
+    GuestMeshRequest decodedRequest;
+    GuestMeshRequest litRequest = dynamicRequest;
+    litRequest.style = static_cast<std::uint32_t>(GuestBatchStyle::LitMesh);
+    litRequest.vertexBytes = 36;
+    GuestWireWriter encodedLit;
+    litRequest.write(encodedLit);
+    GuestMeshRequest decodedLit;
+    testTrue(counters,
+             GuestMeshRequest::read(encodedRequest.data(), decodedRequest) &&
+               decodedRequest.dynamic &&
+               !GuestMeshRequest::read(encodedLit.data(), decodedLit),
+             "Dynamic mesh requests round-trip; lit meshes cannot be dynamic");
+    const GuestResourceId dynamicMesh = bridge.createMesh(dynamicRequest);
+    GuestFrame dynamicFrame = makeFrame();
+    dynamicFrame.batches[0].vertices.clear();
+    dynamicFrame.batches[0].indices.clear();
+    dynamicFrame.batches[0].mesh = dynamicMesh;
+    dynamicFrame.batches[0].indexCount = 3;
+    dynamicFrame.meshWrites.push_back({ dynamicMesh, false, 0, write.bytes });
+    dynamicFrame.meshWrites.push_back(
+      { dynamicMesh, true, 0, indexWrite.bytes });
+    GuestWireWriter dynamicWire;
+    dynamicFrame.write(dynamicWire);
+    const std::function<bool(std::span<const std::byte>)> renderDynamic =
+      [&](std::span<const std::byte> packet) {
+        if (!bridge.accept(packet)) {
+          return false;
+        }
+        mock.observedDraws = 0;
+        mock.uploadedBufferBytes = 0;
+        Scene scene(&window, &camera);
+        bridge.dispatch(scene);
+        renderer.BeginFrame();
+        renderer.RenderScene(&scene, &camera);
+        renderer.EndFrame();
+        return renderer.frameError().empty() && mock.observedDraws == 1;
+      };
+    testTrue(counters,
+             dynamicMesh.owner == 700 && renderDynamic(dynamicWire.data()) &&
+               mock.uploadedBufferBytes == sizeof(vertices) + sizeof(indices),
+             "A dynamic mesh draws after its first frame writes");
+    dynamicFrame.meshWrites.clear();
+    dynamicWire.clear();
+    dynamicFrame.write(dynamicWire);
+    testTrue(counters,
+             renderDynamic(dynamicWire.data()) && mock.uploadedBufferBytes == 0,
+             "An unchanged dynamic mesh uploads nothing");
+    GuestFrameMeshWrite oneVertex{ dynamicMesh,
+                                   false,
+                                   16,
+                                   { write.bytes.begin() + 16,
+                                     write.bytes.begin() + 32 } };
+    dynamicFrame.meshWrites.push_back(oneVertex);
+    dynamicWire.clear();
+    dynamicFrame.write(dynamicWire);
+    testTrue(counters,
+             renderDynamic(dynamicWire.data()) &&
+               mock.uploadedBufferBytes == 16,
+             "Only the written span uploads");
+    const std::uint32_t escapingIndex = 9;
+    const float notFinite = std::numeric_limits<float>::infinity();
+    GuestFrameMeshWrite badIndex{ dynamicMesh, true, 0, {} };
+    badIndex.bytes.resize(4);
+    std::memcpy(badIndex.bytes.data(), &escapingIndex, 4);
+    GuestFrameMeshWrite badPosition = oneVertex;
+    std::memcpy(badPosition.bytes.data(), &notFinite, 4);
+    GuestFrameMeshWrite misaligned = oneVertex;
+    misaligned.offset = 8;
+    GuestFrameMeshWrite outside = oneVertex;
+    outside.offset = 48;
+    GuestFrameMeshWrite staticTarget = oneVertex;
+    staticTarget.mesh = broken;
+    GuestFrameMeshWrite stale = oneVertex;
+    stale.mesh.generation += 1;
+    bool denied = true;
+    for (const GuestFrameMeshWrite& invalid :
+         { badIndex, badPosition, misaligned, outside, staticTarget, stale }) {
+      GuestFrame rejected = dynamicFrame;
+      rejected.meshWrites = { invalid };
+      GuestWireWriter rejectedWire;
+      rejected.write(rejectedWire);
+      denied = denied && !bridge.accept(rejectedWire.data());
+    }
+    testTrue(counters,
+             denied,
+             "Escaping indices, non-finite positions, misaligned, outside, "
+             "static and stale mesh writes are denied");
+    GuestFrame version3 = makeFrame();
+    GuestWireWriter version3Wire;
+    version3.write(version3Wire);
+    std::vector<std::byte> version3Bytes = version3Wire.take();
+    // Rewrite as version 3: drop the empty v4 write section.
+    version3Bytes[4] = std::byte{ 3 };
+    version3Bytes.resize(version3Bytes.size() - 4);
+    testTrue(counters,
+             bridge.accept(version3Bytes),
+             "Version 3 frames without mesh writes remain accepted");
 
     // A cubemap sampled by a skybox, and nothing else.
     const std::uint32_t size = 4;
@@ -1126,16 +1238,23 @@ run(const std::string& name)
            !bridge.accept(invalidWire.data()),
            "Texture writes must stay inside the owned resource");
   if (name == "FrameFailures") {
-    frame.batches[0].style = GuestBatchStyle::Sprite;
-    frame.batches[0].texture = texture;
-    frame.batches[1].style = GuestBatchStyle::Canvas;
+    // Inline slots are pooled per style, so only growth replaces a slot.
+    // Every batch outgrows its slot; the second replacement throws after
+    // the first one succeeded.
+    for (GuestBatch& batch : frame.batches) {
+      const std::vector<GuestVertex> original = batch.vertices;
+      for (int copy = 0; copy < 3; ++copy) {
+        batch.vertices.insert(
+          batch.vertices.end(), original.begin(), original.end());
+      }
+    }
     wire.clear();
     frame.write(wire);
     mock.replacementsBeforeThrow = 1;
     testTrue(
       counters,
       !bridge.accept(wire.data()),
-      "Allocation exception contained after a successful layout replacement");
+      "Allocation exception contained after a successful slot replacement");
     Scene scene(&window, &camera);
     bridge.dispatch(scene);
     renderer.BeginFrame();

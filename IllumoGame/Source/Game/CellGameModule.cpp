@@ -724,6 +724,14 @@ CellGameModule::drainSimulation()
   if (cellContext == nullptr) {
     return;
   }
+  if (!simulationRunner.canBlock()) {
+    // Lane generations finish on a later frame and cannot be waited for:
+    // the outstanding one is discarded, and the displayed (published) world
+    // is what the caller mutates, saves or leaves.
+    simulationRunner.retire();
+    mirrorDeltaValid = false;
+    return;
+  }
   while (simulationRunner.isBusy()) {
     if (!consumeCompletedSimulation(true)) {
       break;
@@ -1628,6 +1636,8 @@ CellGameModule::printStatus() const
     std::to_string(lastSimulationRunnerTimings.advanceMilliseconds) + "/" +
     std::to_string(lastSimulationRunnerTimings.captureMilliseconds) + " ms" +
     (simulationDebtDropped ? ", catch-up dropped" : ""));
+  ic->commandLine->logNormal("Execution: " +
+                             simulationRunner.describeExecution());
   ic->commandLine->logNormal(
     "Worker stages p50/p95 ms: mirror=" +
     std::to_string(simulationMirrorMetric.median()) + "/" +

@@ -1,15 +1,21 @@
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
+#include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
+#include <Illumo/Wasm/AppManifest.h>
 #include <Illumo/Wasm/WasmGameModule.h>
 #include <IllumoGuest/Dialog.h>
+#include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <thread>
 
 // Host ceilings. A package manifest requests limits; the runtime grants at
 // most these, and command-line options are validated against the same range.
@@ -17,6 +23,7 @@ static constexpr std::uint64_t kMaximumMemoryMiB = 4095u;
 static constexpr std::uint64_t kMaximumFuelPerCall = 100000000000ull;
 static constexpr std::uint64_t kMaximumDeadlineMilliseconds = 600000u;
 static constexpr std::uint64_t kMaximumCaptureFrame = 100000u;
+static constexpr std::uint64_t kMaximumBenchFrames = 1000000u;
 static constexpr const char* kDefaultApplication = "game";
 
 // The directory the runtime was started from. The runtime then works from its
@@ -100,16 +107,6 @@ readLimit(const std::string& value,
   return true;
 }
 
-// Plain file names inside the package; paths and parent references are not
-// package members.
-static bool
-packageMember(const std::string& name)
-{
-  return !name.empty() && name.size() <= 128 &&
-         name.find_first_of("/\\:") == std::string::npos && name != "." &&
-         name != "..";
-}
-
 // Package ids and application names share one conservative alphabet, so an
 // application name is always a single directory under apps/.
 static bool
@@ -142,21 +139,21 @@ boundedText(const std::string& text, std::size_t maximum)
   return text.substr(0, end);
 }
 
-struct AppManifest
+static AppManifestCeilings
+manifestCeilings()
 {
-  std::string id;
-  std::string module;
-  std::string worker;
-  std::string title;
-  bool launchEditable = false;
-  std::uint64_t memoryMiB = 64;
-  std::uint64_t fuelPerCall = 10000000u;
-  std::uint64_t deadlineMilliseconds = 1000u;
-};
+  AppManifestCeilings ceilings;
+  ceilings.memoryMiB = kMaximumMemoryMiB;
+  ceilings.fuelPerCall = kMaximumFuelPerCall;
+  ceilings.deadlineMilliseconds = kMaximumDeadlineMilliseconds;
+  // Compute lanes leave two hardware threads for the control store and the
+  // window/render thread; at least one lane is always available.
+  const unsigned int hardware = std::thread::hardware_concurrency();
+  ceilings.workers =
+    std::clamp<std::uint64_t>(hardware > 2u ? hardware - 2u : 1u, 1u, 8u);
+  return ceilings;
+}
 
-// app.json is generic package metadata: identity, member modules, window
-// title, launch-document access and requested budgets. Product policy stays
-// in the guest.
 static bool
 readManifest(const std::filesystem::path& path, AppManifest& manifest)
 {
@@ -171,73 +168,92 @@ readManifest(const std::filesystem::path& path, AppManifest& manifest)
   if (!input.read(text.data(), size)) {
     return false;
   }
-  const nlohmann::json document = nlohmann::json::parse(text, nullptr, false);
-  if (!document.is_object() || !document.contains("id") ||
-      !document["id"].is_string() || !document.contains("module") ||
-      !document["module"].is_string()) {
-    Logger::LogError("Package manifest requires string id and module");
-    return false;
-  }
-  manifest.id = document["id"].get<std::string>();
-  manifest.module = document["module"].get<std::string>();
-  const std::pair<const char*, std::string*> strings[] = {
-    { "worker", &manifest.worker }, { "title", &manifest.title }
-  };
-  for (const std::pair<const char*, std::string*>& field : strings) {
-    if (!document.contains(field.first)) {
-      continue;
-    }
-    if (!document[field.first].is_string()) {
-      Logger::LogError(std::string("Package manifest field ") + field.first +
-                       " must be a string");
-      return false;
-    }
-    *field.second = document[field.first].get<std::string>();
-  }
-  if (document.contains("launchAccess")) {
-    const nlohmann::json& access = document["launchAccess"];
-    if (!access.is_string() || (access != "read" && access != "edit")) {
-      Logger::LogError("Package launchAccess must be \"read\" or \"edit\"");
-      return false;
-    }
-    manifest.launchEditable = access == "edit";
-  }
-  // Requests are clamped to host ceilings; packages cannot raise them.
-  const std::pair<const char*, std::uint64_t*> limits[] = {
-    { "memoryMiB", &manifest.memoryMiB },
-    { "fuelPerCall", &manifest.fuelPerCall },
-    { "deadlineMilliseconds", &manifest.deadlineMilliseconds }
-  };
-  const std::uint64_t ceilings[] = { kMaximumMemoryMiB,
-                                     kMaximumFuelPerCall,
-                                     kMaximumDeadlineMilliseconds };
-  for (std::size_t index = 0; index < 3; ++index) {
-    if (!document.contains(limits[index].first)) {
-      continue;
-    }
-    const nlohmann::json& value = document[limits[index].first];
-    if (!value.is_number_unsigned() || value.get<std::uint64_t>() == 0) {
-      Logger::LogError(std::string("Invalid package limit ") +
-                       limits[index].first);
-      return false;
-    }
-    *limits[index].second =
-      std::min(value.get<std::uint64_t>(), ceilings[index]);
-  }
-  if (!packageId(manifest.id) || !packageMember(manifest.module) ||
-      (!manifest.worker.empty() && !packageMember(manifest.worker)) ||
-      manifest.title.size() > 128) {
-    Logger::LogError("Package manifest names an invalid id, module or title");
+  std::string error;
+  if (!decodeAppManifest(text, manifestCeilings(), manifest, error)) {
+    Logger::LogError(error);
     return false;
   }
   return true;
 }
 
 static const char* const kLaunchOptions[] = {
-  "GuestModule",  "GuestMod",  "GuestWorker",    "GuestPackage",
-  "GuestStorage", "GuestFuel", "GuestMemoryMiB", "GuestDeadline",
-  "GuestApp",     "GuestOpen", "GuestCapture",   "GuestCaptureFrame"
+  "GuestModule",      "GuestMod",         "GuestWorker",
+  "GuestPackage",     "GuestStorage",     "GuestFuel",
+  "GuestMemoryMiB",   "GuestDeadline",    "GuestApp",
+  "GuestOpen",        "GuestCapture",     "GuestCaptureFrame",
+  "GuestBenchFrames", "GuestBenchWarmup", "GuestBenchScript"
 };
+
+// --bench-frames: warm up, time a fixed number of frames, print one JSON line
+// and close. The optional script queues host console lines, each once its
+// command exists (guest commands register asynchronously).
+struct BenchOptions
+{
+  std::uint64_t frames = 0;
+  std::uint64_t warmup = 120;
+  std::vector<std::vector<std::string>> script;
+};
+
+static bool
+readBenchScript(const std::filesystem::path& path,
+                std::vector<std::vector<std::string>>& script)
+{
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    return false;
+  }
+  std::string line;
+  while (std::getline(input, line) && script.size() < 256) {
+    std::vector<std::string> words;
+    std::size_t position = 0;
+    while (position < line.size()) {
+      const std::size_t start = line.find_first_not_of(" \t\r", position);
+      if (start == std::string::npos || line[start] == '#') {
+        break;
+      }
+      const std::size_t end = line.find_first_of(" \t\r", start);
+      words.push_back(line.substr(start, end - start));
+      position = end == std::string::npos ? line.size() : end;
+    }
+    if (!words.empty()) {
+      script.push_back(std::move(words));
+    }
+  }
+  return true;
+}
+
+static double
+samplePercentile(std::vector<double> samples, double fraction)
+{
+  if (samples.empty()) {
+    return 0.0;
+  }
+  std::sort(samples.begin(), samples.end());
+  const std::size_t index = static_cast<std::size_t>(
+    std::clamp(fraction, 0.0, 1.0) * static_cast<double>(samples.size() - 1));
+  return samples[index];
+}
+
+static nlohmann::json
+distribution(const std::vector<double>& samples)
+{
+  nlohmann::json result;
+  result["p50"] = samplePercentile(samples, 0.5);
+  result["p95"] = samplePercentile(samples, 0.95);
+  result["p99"] = samplePercentile(samples, 0.99);
+  result["max"] = samplePercentile(samples, 1.0);
+  return result;
+}
+
+static nlohmann::json
+rolling(const RollingMetric& metric)
+{
+  nlohmann::json result;
+  result["p50"] = metric.median();
+  result["p95"] = metric.p95();
+  result["max"] = metric.maximum();
+  return result;
+}
 
 // Launch options select what this invocation runs. The engine persists
 // settings on exit, so clear them before command-line parsing (a stale saved
@@ -289,12 +305,14 @@ public:
                 std::string title,
                 std::string application,
                 std::filesystem::path capture,
-                std::uint64_t captureFrame)
+                std::uint64_t captureFrame,
+                BenchOptions bench)
     : m_guest(std::move(guest))
     , m_title(std::move(title))
     , m_application(std::move(application))
     , m_capture(std::move(capture))
     , m_captureFrame(captureFrame)
+    , m_bench(std::move(bench))
   {
   }
   ~RuntimeModule() override
@@ -321,10 +339,48 @@ public:
       if (!m_capture.empty()) {
         report(false, 0, 0, "The package failed to start: " + m_guest->error());
       }
+      if (m_bench.frames != 0) {
+        reportBench("The package failed to start: " + m_guest->error());
+      }
     }
     return started;
   }
-  void Update(double dt) override { m_guest->Update(dt); }
+  void Update(double dt) override
+  {
+    if (m_bench.frames == 0 || m_benchDone) {
+      m_guest->Update(dt);
+      return;
+    }
+    feedBenchScript();
+    const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+    m_guest->Update(dt);
+    const std::chrono::steady_clock::time_point end =
+      std::chrono::steady_clock::now();
+    // Warm-up counts from the end of the script.
+    if (m_benchScriptLine >= m_bench.script.size() && m_benchWaitFrames == 0) {
+      ++m_benchUpdates;
+    }
+    if (m_benchUpdates > m_bench.warmup) {
+      if (m_benchFrameIntervals.empty() && m_benchUpdateMilliseconds.empty()) {
+        m_benchStart = start;
+      } else {
+        m_benchFrameIntervals.push_back(
+          std::chrono::duration<double, std::milli>(start - m_benchLastStart)
+            .count());
+      }
+      m_benchUpdateMilliseconds.push_back(
+        std::chrono::duration<double, std::milli>(end - start).count());
+      if (m_benchUpdateMilliseconds.size() >= m_bench.frames) {
+        m_benchEnd = end;
+        reportBench({});
+      }
+    }
+    m_benchLastStart = start;
+    if (!m_guest->error().empty() && !m_benchDone) {
+      reportBench("The package failed: " + m_guest->error());
+    }
+  }
   void DispatchDrawables(Scene* scene) override
   {
     m_guest->DispatchDrawables(scene);
@@ -363,15 +419,140 @@ public:
     if (!m_capture.empty() && !m_done) {
       report(false, 0, 0, "The runtime closed before the capture frame");
     }
+    if (m_bench.frames != 0 && !m_benchDone) {
+      reportBench("The runtime closed before the benchmark finished");
+    }
     m_guest->Exit();
   }
   bool OnCloseRequested() override
   {
-    // A finished capture closes without product confirmation dialogs.
-    return m_done || m_guest->OnCloseRequested();
+    // A finished capture or benchmark closes without product dialogs.
+    return m_done || m_benchDone || m_guest->OnCloseRequested();
   }
 
 private:
+  // Runs script lines in order: "@wait n" pauses n frames, "@key Name"
+  // presses one key, and any other line is a console command queued once it
+  // exists. An unknown key or directive fails the benchmark.
+  void feedBenchScript()
+  {
+    if (ic == nullptr || ic->commandRegistry == nullptr ||
+        ic->inputManager == nullptr) {
+      m_benchScriptLine = m_bench.script.size();
+      return;
+    }
+    if (m_benchWaitFrames > 0) {
+      --m_benchWaitFrames;
+      return;
+    }
+    CommandRegistry& commands = *ic->commandRegistry;
+    bool queued = false;
+    while (m_benchScriptLine < m_bench.script.size()) {
+      const std::vector<std::string>& words = m_bench.script[m_benchScriptLine];
+      if (words.front() == "@wait") {
+        std::uint64_t frames = 0;
+        if (words.size() != 2 ||
+            !readLimit(words[1], kMaximumBenchFrames, frames)) {
+          reportBench("Invalid @wait in the bench script");
+          return;
+        }
+        m_benchWaitFrames = frames;
+        ++m_benchScriptLine;
+        break;
+      }
+      if (words.front() == "@key") {
+        KeyCode key = KeyCode::None;
+        if (words.size() != 2 || !keyNamed(words[1], key)) {
+          reportBench("Invalid @key in the bench script");
+          return;
+        }
+        ic->inputManager->getKeyQueue().push({ key, InputAction::Press, 0 });
+        ++m_benchScriptLine;
+        m_benchWaitFrames = 2;
+        break;
+      }
+      if (words.front().starts_with("@")) {
+        reportBench("Unknown bench script directive " + words.front());
+        return;
+      }
+      if (!commands.HasCommand(words.front())) {
+        break;
+      }
+      commands.QueueCommand(
+        words.front(),
+        std::vector<std::string>(words.begin() + 1, words.end()));
+      ++m_benchScriptLine;
+      queued = true;
+    }
+    if (queued) {
+      commands.ExecuteQueue();
+    }
+  }
+  static bool keyNamed(const std::string& name, KeyCode& key)
+  {
+#define ILLUMO_GUEST_KEY(keyName, number)                                      \
+  if (name == #keyName) {                                                      \
+    key = KeyCode::keyName;                                                    \
+    return true;                                                               \
+  }
+#include <IllumoGuest/Keys.inc>
+#undef ILLUMO_GUEST_KEY
+    return false;
+  }
+  void reportBench(const std::string& error)
+  {
+    if (m_benchDone) {
+      return;
+    }
+    m_benchDone = true;
+    s_exitCode = error.empty() ? 0 : 1;
+    nlohmann::json result;
+    result["success"] = error.empty();
+    result["application"] = m_application;
+    result["error"] = error;
+    result["warmupFrames"] = m_bench.warmup;
+    result["frames"] = m_benchUpdateMilliseconds.size();
+    const double seconds =
+      std::chrono::duration<double>(m_benchEnd - m_benchStart).count();
+    result["seconds"] = seconds;
+    result["fps"] =
+      seconds > 0.0
+        ? static_cast<double>(m_benchFrameIntervals.size()) / seconds
+        : 0.0;
+    result["frameIntervalMs"] = distribution(m_benchFrameIntervals);
+    result["moduleUpdateMs"] = distribution(m_benchUpdateMilliseconds);
+    const WasmFrameStats& stats = m_guest->stats();
+    nlohmann::json host;
+    host["services"] = rolling(stats.servicesMilliseconds);
+    host["update"] = rolling(stats.updateMilliseconds);
+    host["receive"] = rolling(stats.receiveMilliseconds);
+    host["frame"] = rolling(stats.frameMilliseconds);
+    host["accept"] = rolling(stats.acceptMilliseconds);
+    host["frameBytes"] = rolling(stats.frameBytes);
+    result["wasmMs"] = host;
+    const WasmFrameCounters* counters = m_guest->frameCounters();
+    if (counters != nullptr) {
+      nlohmann::json frame;
+      frame["batches"] = counters->batches;
+      frame["retainedBatches"] = counters->retainedBatches;
+      frame["inlineVertexBytes"] = counters->inlineVertexBytes;
+      frame["inlineIndexBytes"] = counters->inlineIndexBytes;
+      frame["textureWrites"] = counters->textureWrites;
+      frame["textureWriteBytes"] = counters->textureWriteBytes;
+      frame["meshWriteBytes"] = counters->meshWriteBytes;
+      frame["meshEnrollments"] = counters->meshEnrollments;
+      frame["meshReplacements"] = counters->meshReplacements;
+      result["lastFrame"] = frame;
+    }
+    if (!m_guest->error().empty()) {
+      result["guestError"] = m_guest->error();
+    }
+    std::cout << result.dump() << std::endl;
+    if (ic != nullptr && ic->window != nullptr) {
+      ic->window->requestClose();
+    }
+  }
+
   void captureFrame(Renderer& renderer)
   {
     m_done = true;
@@ -421,6 +602,16 @@ private:
   bool m_clearHook = false;
   bool m_done = false;
   bool m_reported = false;
+  BenchOptions m_bench;
+  std::size_t m_benchScriptLine = 0;
+  std::uint64_t m_benchWaitFrames = 0;
+  std::uint64_t m_benchUpdates = 0;
+  std::vector<double> m_benchFrameIntervals;
+  std::vector<double> m_benchUpdateMilliseconds;
+  std::chrono::steady_clock::time_point m_benchStart{};
+  std::chrono::steady_clock::time_point m_benchEnd{};
+  std::chrono::steady_clock::time_point m_benchLastStart{};
+  bool m_benchDone = false;
 };
 
 static std::unique_ptr<IModule>
@@ -439,6 +630,13 @@ createGuestModuleFrom(IEnvVars* environment)
   const std::string captureOption = environment->getVar("GuestCapture").value;
   WasmFileRoots files;
   WasmLimits limits;
+  // Compute lanes: the historical single worker budget unless a manifest
+  // requests otherwise.
+  WasmLimits workerLimits;
+  workerLimits.memoryBytes = 512ull * 1024ull * 1024ull;
+  workerLimits.fuelPerCall = 1000000000u;
+  workerLimits.deadlineMilliseconds = 10000u;
+  std::uint32_t workerLanes = 1u;
   std::string title = "Illumo Runtime";
   std::string application;
   if (!applicationOption.empty() &&
@@ -497,9 +695,15 @@ createGuestModuleFrom(IEnvVars* environment)
       return nullptr;
     }
     limits.memoryBytes = manifest.memoryMiB * 1024u * 1024u;
+    limits.meterFuel = manifest.meterFuel;
     limits.fuelPerCall = manifest.fuelPerCall;
     limits.deadlineMilliseconds =
       static_cast<std::uint32_t>(manifest.deadlineMilliseconds);
+    workerLimits.memoryBytes = manifest.workerMemoryMiB * 1024u * 1024u;
+    workerLimits.meterFuel = manifest.meterFuel;
+    workerLimits.deadlineMilliseconds =
+      static_cast<std::uint32_t>(manifest.workerDeadlineMilliseconds);
+    workerLanes = static_cast<std::uint32_t>(manifest.workers);
   } else if (!readRoot(packageOption, files.package) ||
              !readRoot(storageOption, files.storage)) {
     return nullptr;
@@ -507,18 +711,41 @@ createGuestModuleFrom(IEnvVars* environment)
   std::uint64_t memoryMiB = limits.memoryBytes / (1024u * 1024u);
   std::uint64_t deadline = limits.deadlineMilliseconds;
   std::uint64_t captureFrame = 60;
+  BenchOptions bench;
+  const std::string fuelOption = environment->getVar("GuestFuel").value;
+  if (!fuelOption.empty()) {
+    // --fuel forces metering for this launch (comparisons, runaway triage).
+    limits.meterFuel = true;
+    workerLimits.meterFuel = true;
+  }
   if (!readLimit(environment->getVar("GuestMemoryMiB").value,
                  kMaximumMemoryMiB,
                  memoryMiB) ||
-      !readLimit(environment->getVar("GuestFuel").value,
-                 kMaximumFuelPerCall,
-                 limits.fuelPerCall) ||
+      !readLimit(fuelOption, kMaximumFuelPerCall, limits.fuelPerCall) ||
       !readLimit(environment->getVar("GuestDeadline").value,
                  kMaximumDeadlineMilliseconds,
                  deadline) ||
       !readLimit(environment->getVar("GuestCaptureFrame").value,
                  kMaximumCaptureFrame,
-                 captureFrame)) {
+                 captureFrame) ||
+      !readLimit(environment->getVar("GuestBenchFrames").value,
+                 kMaximumBenchFrames,
+                 bench.frames) ||
+      !readLimit(environment->getVar("GuestBenchWarmup").value,
+                 kMaximumBenchFrames,
+                 bench.warmup)) {
+    return nullptr;
+  }
+  const std::string benchScript = environment->getVar("GuestBenchScript").value;
+  if ((bench.frames == 0 && !benchScript.empty()) ||
+      (bench.frames != 0 && !captureOption.empty())) {
+    Logger::LogError("--bench-script needs --bench-frames, and a benchmark "
+                     "cannot be combined with --capture");
+    return nullptr;
+  }
+  if (!benchScript.empty() &&
+      !readBenchScript(optionPath(benchScript), bench.script)) {
+    Logger::LogError("--bench-script names no readable file: " + benchScript);
     return nullptr;
   }
   limits.memoryBytes = memoryMiB * 1024u * 1024u;
@@ -575,11 +802,13 @@ createGuestModuleFrom(IEnvVars* environment)
                                      std::move(mod),
                                      std::move(worker),
                                      std::move(files));
+  guest->setWorkerLimits(workerLimits, workerLanes);
   return std::make_unique<RuntimeModule>(std::move(guest),
                                          std::move(title),
                                          std::move(application),
                                          std::move(capture),
-                                         captureFrame);
+                                         captureFrame,
+                                         std::move(bench));
 }
 
 static std::unique_ptr<IModule>
@@ -617,7 +846,8 @@ CreateIllumoApplication()
     "IllumoRuntime.exe [--app name] [--open file] [--capture out.png "
     "[--capture-frame n]] [--package dir] [--storage dir] "
     "[--game module.wasm] [--mod module.wasm] [--worker module.wasm] "
-    "[--memory-mib n] [--fuel n] [--deadline-ms n]";
+    "[--memory-mib n] [--fuel n] [--deadline-ms n] "
+    "[--bench-frames n [--bench-warmup n] [--bench-script file]]";
   // SysCmdLine parses "path"/"name"/"file" values as strings and other names
   // as positive integers.
   application.commandLine.applicationOptions = {
@@ -656,11 +886,26 @@ CreateIllumoApplication()
       "count",
       "GuestMemoryMiB",
       "Linear-memory ceiling in MiB" },
-    { "--fuel", "count", "GuestFuel", "Fuel budget per call" },
+    { "--fuel",
+      "count",
+      "GuestFuel",
+      "Fuel budget per call; forces fuel metering for this launch" },
     { "--deadline-ms",
       "milliseconds",
       "GuestDeadline",
-      "Wall-clock deadline per call" }
+      "Wall-clock deadline per call" },
+    { "--bench-frames",
+      "count",
+      "GuestBenchFrames",
+      "Time this many frames after warm-up, print a JSON result and exit" },
+    { "--bench-warmup",
+      "count",
+      "GuestBenchWarmup",
+      "Frames to run before timing starts (default: 120)" },
+    { "--bench-script",
+      "file",
+      "GuestBenchScript",
+      "Console lines queued in order before timing starts" }
   };
   application.applyDefaults = prepareRuntime;
   application.createRequiredModule = createGuestModule;

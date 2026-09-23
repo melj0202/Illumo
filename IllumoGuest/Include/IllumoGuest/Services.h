@@ -23,7 +23,11 @@ enum class GuestService : std::uint32_t
   CreateMesh = 11,
   WriteMesh = 12,
   ReleaseMesh = 13,
-  CreateCubemap = 14
+  CreateCubemap = 14,
+  // Compute lanes (Jobs capability): the granted lane count, and one opaque
+  // job for lane <u32 prefix>, at most one outstanding per lane.
+  LaneJob = 15,
+  JobLanes = 16
 };
 
 enum class GuestServiceStatus : std::uint32_t
@@ -86,7 +90,7 @@ struct GuestServices
       const std::uint32_t status = reader.u32();
       const std::span<const std::byte> payload = reader.bytes(reader.u32());
       if (!reader.valid() || record.request == 0 || operation < 1 ||
-          operation > static_cast<std::uint32_t>(GuestService::CreateCubemap) ||
+          operation > static_cast<std::uint32_t>(GuestService::JobLanes) ||
           (requests ? status != 0 : status < 1 || status > 2)) {
         return false;
       }
@@ -161,9 +165,14 @@ struct GuestMeshRequest
 {
   static constexpr std::uint32_t MaximumVertexBytes = 192u * 1024u * 1024u;
   static constexpr std::uint32_t MaximumIndexBytes = 64u * 1024u * 1024u;
+  // Frame schema v4: dynamic meshes are writable in place through the
+  // frame's mesh writes, are ready (zero-filled) on creation and hold 2D
+  // styles only (Shape, Sprite, Canvas) up to MaximumDynamicBytes per buffer.
+  static constexpr std::uint32_t MaximumDynamicBytes = 4u * 1024u * 1024u;
   std::uint32_t style = 0;
   std::uint32_t vertexBytes = 0;
   std::uint32_t indexBytes = 0;
+  bool dynamic = false;
   static std::uint32_t stride(std::uint32_t style)
   {
     return style == 1 ? 16u : style == 2 ? 24u : style == 3 ? 32u : 36u;
@@ -173,6 +182,10 @@ struct GuestMeshRequest
     output.u32(style);
     output.u32(vertexBytes);
     output.u32(indexBytes);
+    // Static requests keep the version 3 encoding.
+    if (dynamic) {
+      output.u32(1);
+    }
   }
   static bool read(std::span<const std::byte> bytes, GuestMeshRequest& output)
   {
@@ -181,6 +194,14 @@ struct GuestMeshRequest
     candidate.style = reader.u32();
     candidate.vertexBytes = reader.u32();
     candidate.indexBytes = reader.u32();
+    if (reader.valid() && reader.remaining() != 0) {
+      candidate.dynamic = reader.u32() == 1;
+      if (!candidate.dynamic || candidate.style > 3 ||
+          candidate.vertexBytes > MaximumDynamicBytes ||
+          candidate.indexBytes > MaximumDynamicBytes) {
+        return false;
+      }
+    }
     if (!reader.finished() || candidate.style < 1 || candidate.style > 4 ||
         candidate.vertexBytes == 0 ||
         candidate.vertexBytes > MaximumVertexBytes ||
@@ -432,6 +453,8 @@ public:
     m_queuedBytes = 12;
     return true;
   }
+  // Requests queued since the last exchange.
+  bool hasOutgoing() const { return !m_outgoing.records.empty(); }
   bool take(std::uint64_t id, GuestServiceRecord& output)
   {
     std::map<std::uint64_t, GuestServiceRecord>::iterator found =

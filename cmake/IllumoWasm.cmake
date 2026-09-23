@@ -36,6 +36,7 @@ set_target_properties(IllumoWasmtime PROPERTIES
   IMPORTED_LOCATION "${_wasmtime}/lib/wasmtime.dll"
   INTERFACE_INCLUDE_DIRECTORIES "${_wasmtime}/include")
 add_library(IllumoWasmRuntime STATIC
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/AppManifest.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmInstance.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGuest.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmWorker.cpp"
@@ -43,6 +44,8 @@ add_library(IllumoWasmRuntime STATIC
 add_library(Illumo::WasmRuntime ALIAS IllumoWasmRuntime)
 target_include_directories(IllumoWasmRuntime PUBLIC "${CMAKE_SOURCE_DIR}/Illumo/Include")
 target_include_directories(IllumoWasmRuntime PUBLIC "${CMAKE_SOURCE_DIR}/IllumoGuest/Include")
+target_include_directories(IllumoWasmRuntime SYSTEM PRIVATE
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include")
 target_link_libraries(IllumoWasmRuntime PRIVATE IllumoWasmtime)
 illumo_configure_runtime_target(IllumoWasmRuntime)
 add_executable(IllumoWasmCompiler
@@ -50,8 +53,8 @@ add_executable(IllumoWasmCompiler
 target_link_libraries(IllumoWasmCompiler PRIVATE IllumoWasmtime)
 # No sanitizer: the helper runs no product code, and ASan's allocator would
 # only inflate Wasmtime's compilation inside the job's memory limit (a Debug
-# game package then exceeded it). Its engine settings still follow the build
-# configuration, so artifacts match the host's.
+# game package then exceeded it). Its engine settings arrive from the host on
+# the command line, so artifacts always match the deserializing engine.
 illumo_configure_cpp_target(IllumoWasmCompiler)
 add_custom_command(TARGET IllumoWasmCompiler POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -65,6 +68,9 @@ add_library(IllumoWasmRendering STATIC
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmFileServices.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGameModule.cpp")
 target_link_libraries(IllumoWasmRendering PUBLIC Illumo::WasmRuntime Illumo::Illumo)
+# Tracy zones around guest exchanges; the client itself is compiled by Illumo.
+target_include_directories(IllumoWasmRendering SYSTEM PRIVATE
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/tracy-0.13.1/public")
 illumo_configure_runtime_target(IllumoWasmRendering)
 
 include(ExternalProject)
@@ -139,10 +145,12 @@ function(illumo_stage_app target name)
   add_dependencies(IllumoRuntime ${target})
 endfunction()
 
-# IllumoGame: manifest, product module and packaged catalogs.
+# IllumoGame: manifest, product module, simulation lane worker and packaged
+# catalogs.
 illumo_stage_app(IllumoGamePackage game
   MODULE IllumoGame.wasm
   FILES
+    "${_guest_build}/CSimWorkerGuest.wasm"
     "${CMAKE_SOURCE_DIR}/IllumoGame/app.json"
     "${CMAKE_SOURCE_DIR}/IllumoGame/families.json"
     "${CMAKE_SOURCE_DIR}/IllumoGame/rulesets.json"
@@ -175,7 +183,11 @@ if(BUILD_TESTING)
   add_test(NAME Illumo.Runtime.InvalidCaptureFrame
     COMMAND IllumoRuntime --capture-frame 0)
   set_tests_properties(Illumo.Runtime.InvalidCaptureFrame PROPERTIES WILL_FAIL TRUE)
+  add_test(NAME Illumo.Runtime.InvalidBenchFrames
+    COMMAND IllumoRuntime --bench-frames 0)
+  set_tests_properties(Illumo.Runtime.InvalidBenchFrames PROPERTIES WILL_FAIL TRUE)
   set_tests_properties(Illumo.Runtime.Help Illumo.Runtime.InvalidCaptureFrame
+    Illumo.Runtime.InvalidBenchFrames
     PROPERTIES LABELS "Illumo;IllumoWorkspace")
   add_dependencies(IllumoRunTests IllumoRuntime)
 
@@ -256,7 +268,7 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "$<TARGET_FILE:IllumoWasmtime>" "$<TARGET_FILE_DIR:IllumoWasmTests>"
     VERBATIM)
-  foreach(_case Compatibility Isolation Fuel Epoch Memory DeniedImports InvalidModule Worker Wire CompilerLimits Lifecycle Protocol Resources)
+  foreach(_case Compatibility Isolation Fuel Epoch Memory DeniedImports InvalidModule Worker Wire CompilerLimits Lifecycle Protocol Resources EngineModes Manifest)
     add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmTests --run "Illumo.Wasm.${_case}")
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES
       LABELS "Illumo;IllumoWorkspace" TIMEOUT 20)
@@ -285,6 +297,7 @@ if(BUILD_TESTING)
 
   add_executable(IllumoGameWasmWorkerTests
     "${CMAKE_SOURCE_DIR}/IllumoGame/Tests/Wasm/TestSimulationWorker.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGame/Source/Wasm/SimulationLanes.cpp"
     "${CMAKE_SOURCE_DIR}/IllumoGame/Source/Wasm/SimulationProtocol.cpp")
   target_link_libraries(IllumoGameWasmWorkerTests PRIVATE IllumoGameCore Illumo::WasmRuntime)
   target_compile_definitions(IllumoGameWasmWorkerTests PRIVATE
@@ -297,6 +310,11 @@ if(BUILD_TESTING)
   add_test(NAME IllumoGame.Wasm.WorkerParity COMMAND IllumoGameWasmWorkerTests --run IllumoGame.Wasm.WorkerParity)
   add_test(NAME IllumoGame.Wasm.SimulationProtocol COMMAND IllumoGameWasmWorkerTests --run IllumoGame.Wasm.SimulationProtocol)
   set_tests_properties(IllumoGame.Wasm.SimulationProtocol PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 30)
+  add_test(NAME IllumoGame.Wasm.LaneParity COMMAND IllumoGameWasmWorkerTests --run IllumoGame.Wasm.LaneParity)
+  add_test(NAME IllumoGame.Wasm.LaneProtocol COMMAND IllumoGameWasmWorkerTests --run IllumoGame.Wasm.LaneProtocol)
+  # About 15 s in Release; the Debug ASan build needs several minutes.
+  set_tests_properties(IllumoGame.Wasm.LaneParity PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 600)
+  set_tests_properties(IllumoGame.Wasm.LaneProtocol PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 30)
   set_tests_properties(IllumoGame.Wasm.WorkerParity PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 180)
   add_dependencies(IllumoRunTests IllumoGameWasmWorkerTests)
 
@@ -308,6 +326,7 @@ if(BUILD_TESTING)
     IllumoGameCore IllumoWasmRendering Illumo::TestSupport)
   target_compile_definitions(IllumoGameWasmPackageTests PRIVATE
     "ILLUMO_GAME_GUEST=\"${_guest_build}/IllumoGame.wasm\""
+    "ILLUMO_SIMULATION_WORKER=\"${_guest_build}/CSimWorkerGuest.wasm\""
     "ILLUMO_GAME_DEFAULTS=\"${CMAKE_SOURCE_DIR}/IllumoGame/envvars.json\""
     "ILLUMO_FAMILIES=\"${CMAKE_SOURCE_DIR}/IllumoGame/families.json\""
     "ILLUMO_RULES=\"${CMAKE_SOURCE_DIR}/IllumoGame/rulesets.json\"")
@@ -322,6 +341,17 @@ if(BUILD_TESTING)
     COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.GamePackage)
   set_tests_properties(IllumoGame.Wasm.GamePackage PROPERTIES
     LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
+  add_test(NAME IllumoGame.Wasm.GamePackageLanes
+    COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.GamePackageLanes)
+  set_tests_properties(IllumoGame.Wasm.GamePackageLanes PROPERTIES
+    LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
+  # Performance measurement, not a workspace gate: ctest -L IllumoBenchmark.
+  add_test(NAME IllumoGame.Wasm.PackageBench
+    COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.PackageBench)
+  set_tests_properties(IllumoGame.Wasm.PackageBench PROPERTIES
+    LABELS "IllumoGame;IllumoBenchmark" TIMEOUT 900
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
   add_dependencies(IllumoRunTests IllumoGameWasmPackageTests)
 

@@ -92,7 +92,8 @@ struct WasmInstance::State
     wasmtime_context_set_epoch_deadline(
       context,
       (static_cast<std::uint64_t>(limits.deadlineMilliseconds) + 9u) / 10u);
-    return check(wasmtime_context_set_fuel(context, limits.fuelPerCall));
+    return !limits.meterFuel ||
+           check(wasmtime_context_set_fuel(context, limits.fuelPerCall));
   }
 
   bool bounds(std::uint32_t offset, std::size_t size)
@@ -261,6 +262,30 @@ defineLibcFunction(wasmtime_linker_t* linker,
   return error;
 }
 
+// Explicit bounds checks exactly when this host runs under AddressSanitizer.
+// Keyed on the sanitizer, not the build configuration: a non-ASan Debug host
+// keeps fast signal-based traps.
+static WasmEngineOptions
+hostEngineOptions(const WasmLimits& limits)
+{
+  WasmEngineOptions options;
+  options.meterFuel = limits.meterFuel;
+#if defined(ILLUMO_ASAN) || defined(__SANITIZE_ADDRESS__)
+  options.explicitBounds = true;
+#else
+  options.explicitBounds = false;
+#endif
+  return options;
+}
+
+std::uint32_t
+wasmHostEngineOptions(bool meterFuel)
+{
+  WasmLimits limits;
+  limits.meterFuel = meterFuel;
+  return encodeWasmEngineOptions(hostEngineOptions(limits));
+}
+
 WasmInstance::WasmInstance(WasmLimits limits)
   : m_state(std::make_unique<State>(limits))
 {
@@ -278,20 +303,22 @@ WasmInstance::load(std::span<const std::byte> bytes)
   state.attempted = true;
   if (bytes.empty() || bytes.size() > state.limits.moduleBytes ||
       state.limits.memoryBytes == 0u || state.limits.memoryBytes > UINT32_MAX ||
-      state.limits.fuelPerCall == 0u ||
+      (state.limits.meterFuel && state.limits.fuelPerCall == 0u) ||
       state.limits.deadlineMilliseconds == 0u) {
     return state.fail("Invalid guest module size or execution limits");
   }
+  const WasmEngineOptions options = hostEngineOptions(state.limits);
   std::vector<std::byte> compiled;
   std::string compileError;
   if (!compileWasmIsolated(bytes,
                            state.limits.compilerMemoryBytes,
                            state.limits.compilerDeadlineMilliseconds,
+                           encodeWasmEngineOptions(options),
                            compiled,
                            compileError)) {
     return state.fail(std::move(compileError));
   }
-  state.engine = createWasmEngine();
+  state.engine = createWasmEngine(options);
   if (state.engine == nullptr) {
     return state.fail("Cannot create WASM engine");
   }

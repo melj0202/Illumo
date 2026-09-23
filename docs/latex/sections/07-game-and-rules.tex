@@ -1,7 +1,7 @@
 \section{Game domain and rulesets}
 \label{sec:game}
 
-\subsection{Packaging and execution (D-E13)}
+\subsection{Packaging and execution (D-E13, D-E17)}
 
 IllumoGame ships only as \texttt{IllumoGame.wasm}, played by the generic
 \texttt{IllumoRuntime.exe}. The whole product described in this chapter runs in
@@ -12,10 +12,20 @@ dialogs, file transfers, clipboard access and user-catalog writes go through
 \symbolref{CSimPlatform}; a native implementation completes synchronously for
 the test oracle and the guest implementation completes on a later update.
 Saves, settings and user overlays live in the package storage directory.
-Inside the package, \symbolref{SimulationRunner} computes each generation with
-serial kernels before returning, keeping the native publication and drain
-protocol. The 3D diagnostic records lit meshes and shadow casters into frame
-schema version 2; the host re-runs the shared shadow pass with the guest camera.
+Inside the package, \symbolref{SimulationRunner} fans each generation out to
+up to eight isolated simulation lanes (D-E17) once serial generations exceed
+4\,ms. Each lane is a \texttt{CSimWorkerGuest.wasm} store owning interleaved
+bands of eight chunk rows plus a one-row halo; it advances its rows exactly
+with the same sparse kernels, and the control store merges the owned changes
+into the spare grid as one exact delta and publishes it through the native
+publication path. The next generation starts from the halos before the merge,
+so lanes compute while the control store merges and renders. Because a lane
+generation completes on a later frame, drains retire it instead of waiting:
+edits, loads, ruleset changes, saves and exit act on the displayed world.
+Small worlds, elementary 1D rules, radii above 16 and lane failures use the
+serial kernels inside the update call. The 3D diagnostic records lit meshes
+and shadow casters into frame schema version 2; the host re-runs the shared
+shadow pass with the guest camera.
 
 \subsection{CellGameModule}
 

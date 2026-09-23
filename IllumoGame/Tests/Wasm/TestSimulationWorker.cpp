@@ -1,12 +1,470 @@
 #include "DomainFixture.h"
+#include "Rulesets/RuleSet.h"
+#include "Wasm/SimulationLanes.h"
 #include "Wasm/SimulationProtocol.h"
 #include <Illumo/Wasm/WasmWorker.h>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <thread>
+
+// In-process lanes: each owns one SimulationLaneWorker and answers on the
+// poll after its submission, as the asynchronous host transport would.
+class LoopbackLanes final : public SimulationLaneTransport
+{
+public:
+  explicit LoopbackLanes(std::uint32_t lanes)
+    : m_workers(lanes)
+    , m_replies(lanes)
+    , m_ready(lanes, false)
+    , m_failed(lanes, false)
+  {
+  }
+  std::uint32_t laneCount() override
+  {
+    return static_cast<std::uint32_t>(m_workers.size());
+  }
+  bool laneCountKnown() const override { return true; }
+  bool submit(std::uint32_t lane, std::vector<std::byte>&& request) override
+  {
+    if (lane >= m_workers.size() || m_ready[lane] || m_failed[lane]) {
+      return false;
+    }
+    std::string error;
+    if (!m_workers[lane].execute(request, m_replies[lane], error)) {
+      std::fprintf(stderr, "Lane %u failed: %s\n", lane, error.c_str());
+      m_failed[lane] = true;
+    }
+    m_ready[lane] = true;
+    request.clear();
+    ++submissions;
+    return true;
+  }
+  int poll(std::uint32_t lane, std::vector<std::byte>& reply) override
+  {
+    if (lane >= m_workers.size() || !m_ready[lane]) {
+      return 0;
+    }
+    m_ready[lane] = false;
+    if (m_failed[lane]) {
+      return -1;
+    }
+    reply = std::move(m_replies[lane]);
+    return 1;
+  }
+  bool busy(std::uint32_t lane) const override
+  {
+    return lane < m_workers.size() && m_ready[lane];
+  }
+  std::size_t submissions = 0;
+
+private:
+  std::vector<SimulationLaneWorker> m_workers;
+  std::vector<std::vector<std::byte>> m_replies;
+  std::vector<bool> m_ready;
+  std::vector<bool> m_failed;
+};
+
+static std::uint64_t
+gridHash(const SparseCellGrid& grid)
+{
+  std::uint64_t result = 14695981039346656037ULL;
+  for (const SparseChunkRecord& chunk : grid.collectChunkRecords()) {
+    for (const std::int64_t coordinate : { chunk.chunkX, chunk.chunkY }) {
+      const std::uint64_t bits = static_cast<std::uint64_t>(coordinate);
+      for (unsigned int index = 0; index < 8u; ++index) {
+        result = (result ^ ((bits >> (index * 8u)) & 255u)) * 1099511628211ULL;
+      }
+    }
+    for (unsigned char cell : chunk.cells) {
+      result = (result ^ cell) * 1099511628211ULL;
+    }
+  }
+  return result;
+}
+
+// Starts one generation, retrying while lanes drain retired work, as later
+// frames would.
+static bool
+startLanes(SimulationLaneCoordinator& lanes,
+           SparseCellGrid* published,
+           SparseCellGrid* spare,
+           const RuleSet& rule,
+           SparseGenerationDelta& mirror,
+           bool mirrorValid)
+{
+  for (int attempt = 0; attempt < 10000; ++attempt) {
+    if (lanes.availability(rule) ==
+          SimulationLaneCoordinator::Availability::Available &&
+        lanes.start(spare, published, &rule, std::move(mirror), mirrorValid)) {
+      return true;
+    }
+    if (lanes.failed()) {
+      return false;
+    }
+    lanes.poll(nullptr, nullptr, nullptr, nullptr, nullptr);
+  }
+  return false;
+}
+
+// Drives one coordinator generation to completion (publication swap
+// included), pumping the loopback lanes. False on a stall or failure.
+static bool
+laneGeneration(SimulationLaneCoordinator& lanes,
+               SparseCellGrid*& published,
+               SparseCellGrid*& spare,
+               const RuleSet& rule,
+               SparseGenerationDelta& mirror,
+               bool& mirrorValid)
+{
+  if (!startLanes(lanes, published, spare, rule, mirror, mirrorValid)) {
+    return false;
+  }
+  for (int attempt = 0; attempt < 10000; ++attempt) {
+    SparseCellGrid* completed = nullptr;
+    SparseGenerationDelta delta;
+    bool succeeded = false;
+    if (lanes.poll(&completed, &delta, nullptr, &succeeded, nullptr)) {
+      if (!succeeded || completed != spare) {
+        return false;
+      }
+      std::swap(published, spare);
+      mirror = std::move(delta);
+      mirrorValid = true;
+      return true;
+    }
+    if (lanes.failed()) {
+      std::fprintf(stderr, "Lanes failed: %s\n", lanes.failure().c_str());
+      return false;
+    }
+  }
+  return false;
+}
+
+// Lane generations match serial ones for every catalog rule, both
+// topologies, several lane counts and one-row bands (every row a halo),
+// across edits and a retired in-flight generation.
+static bool
+laneParity(const std::string& families, const std::string& rules)
+{
+  DomainFixture reference;
+  if (!reference.initialize(families, rules)) {
+    return false;
+  }
+  int partitioned = 0;
+  for (int ruleIndex = 0; ruleIndex < reference.ruleCount(); ++ruleIndex) {
+    for (int topology = 0; topology < 2; ++topology) {
+      for (std::uint32_t laneCount : { 1u, 2u, 3u }) {
+        if (!reference.select(ruleIndex, topology, 2)) {
+          return false;
+        }
+        const RuleSet& rule = reference.rule();
+        LoopbackLanes transport(laneCount);
+        SimulationLaneCoordinator lanes(transport);
+        lanes.setBandRowsForTesting(1u);
+        if (lanes.availability(rule) !=
+            SimulationLaneCoordinator::Availability::Available) {
+          if (rule.getNeighborhoodKind() !=
+              RuleSet::NeighborhoodKind::Elementary1D) {
+            std::fprintf(stderr, "Rule %d refused lanes\n", ruleIndex);
+            return false;
+          }
+          continue; // global-row rules stay serial by design
+        }
+        const std::int64_t size = topology == 0 ? 0 : 4;
+        SparseCellGrid serial(size, size);
+        SparseCellGrid first(size, size);
+        SparseCellGrid second(size, size);
+        serial.copyStateFrom(reference.grid());
+        first.copyStateFrom(reference.grid());
+        SparseCellGrid* published = &first;
+        SparseCellGrid* spare = &second;
+        SparseGenerationDelta mirror;
+        bool mirrorValid = false;
+        for (int step = 0; step < 10; ++step) {
+          if (step == 4) {
+            // An edit: lanes resynchronize from the edited world.
+            published->setCell({ 3, -7 }, 0);
+            serial.setCell({ 3, -7 }, 0);
+            mirrorValid = false;
+          }
+          if (step == 6) {
+            // A retired generation leaves the published world unchanged.
+            if (!startLanes(
+                  lanes, published, spare, rule, mirror, mirrorValid)) {
+              return false;
+            }
+            lanes.retire();
+            for (int drain = 0; drain < 100 && lanes.busy(); ++drain) {
+              lanes.poll(nullptr, nullptr, nullptr, nullptr, nullptr);
+            }
+            mirrorValid = false;
+            if (lanes.busy()) {
+              return false;
+            }
+          }
+          if (!laneGeneration(
+                lanes, published, spare, rule, mirror, mirrorValid)) {
+            std::fprintf(stderr,
+                         "Lane generation failed: rule=%d topology=%d "
+                         "lanes=%u step=%d\n",
+                         ruleIndex,
+                         topology,
+                         laneCount,
+                         step);
+            return false;
+          }
+          if (!serial.advance(rule) ||
+              gridHash(serial) != gridHash(*published)) {
+            std::fprintf(stderr,
+                         "Lane state mismatch: rule=%s topology=%d lanes=%u "
+                         "step=%d\n",
+                         rule.getRuleTag().c_str(),
+                         topology,
+                         laneCount,
+                         step);
+            return false;
+          }
+        }
+        ++partitioned;
+      }
+    }
+  }
+  // A soup large enough to span many bands, grow and collide across them.
+  std::unique_ptr<RuleSet> life =
+    RuleSetRegistry::instance().createRuleSet("GAME_OF_LIFE");
+  if (!life) {
+    return false;
+  }
+  for (std::int64_t size : { std::int64_t{ 0 }, std::int64_t{ 12 } }) {
+    for (std::uint32_t bandRows : { 1u, 2u, 8u }) {
+      SparseCellGrid serial(size, size);
+      std::uint32_t state = 12345u;
+      for (std::int64_t y = -96; y < 96; ++y) {
+        for (std::int64_t x = -96; x < 96; ++x) {
+          state = state * 1664525u + 1013904223u;
+          if ((state >> 24) < 90u) {
+            serial.setCell({ x, y }, 0);
+          }
+        }
+      }
+      LoopbackLanes transport(4);
+      SimulationLaneCoordinator lanes(transport);
+      lanes.setBandRowsForTesting(bandRows);
+      SparseCellGrid first(size, size);
+      SparseCellGrid second(size, size);
+      first.copyStateFrom(serial);
+      SparseCellGrid* published = &first;
+      SparseCellGrid* spare = &second;
+      SparseGenerationDelta mirror;
+      bool mirrorValid = false;
+      for (int step = 0; step < 40; ++step) {
+        if (!laneGeneration(
+              lanes, published, spare, *life, mirror, mirrorValid) ||
+            !serial.advance(*life) ||
+            gridHash(serial) != gridHash(*published)) {
+          std::fprintf(stderr,
+                       "Large lane world mismatch: size=%lld bands=%u "
+                       "step=%d\n",
+                       static_cast<long long>(size),
+                       bandRows,
+                       step);
+          return false;
+        }
+      }
+      if (lanes.resynchronizations() != 1u) {
+        std::puts("Steady lane generations must not resynchronize");
+        return false;
+      }
+    }
+  }
+  std::printf("%d rule/topology/lane-count combinations and large worlds "
+              "match serial generations\n",
+              partitioned);
+  return partitioned > 0;
+}
+
+// CSL1 decoders and the lane worker reject malformed, stale, out-of-lane and
+// out-of-rule input before touching state.
+static bool
+laneProtocol(const std::string& families, const std::string& rules)
+{
+  RuleSetRegistry registry;
+  if (!registry.loadFromCatalogTexts(families, rules)) {
+    return false;
+  }
+  const RuleSetDefinition* definition =
+    registry.getRuleSetDefinition("GAME_OF_LIFE");
+  const RuleFamilyDefinition* family =
+    definition == nullptr ? nullptr
+                          : registry.getFamilyDefinition(definition->familyId);
+  if (definition == nullptr || family == nullptr) {
+    return false;
+  }
+  SimulationLaneRequest begin;
+  begin.kind = SimulationLaneMessage::SyncBegin;
+  begin.session = 3;
+  begin.epoch = 1;
+  begin.partition.lane = 1;
+  begin.partition.laneCount = 2;
+  begin.partition.bandRows = 1;
+  begin.ruleId = "GAME_OF_LIFE";
+  begin.rulePackage =
+    RuleSetRegistry::serializeRulePackage(*family, *definition);
+  GuestWireWriter writer;
+  begin.write(writer);
+  const std::vector<std::byte> beginBytes = writer.take();
+  SimulationLaneRequest decoded;
+  if (!SimulationLaneRequest::read(beginBytes, decoded) ||
+      decoded.partition.lane != 1 || decoded.ruleId != "GAME_OF_LIFE") {
+    std::puts("SyncBegin round trip failed");
+    return false;
+  }
+  const std::function<bool(const SimulationLaneRequest&)> rejected =
+    [](const SimulationLaneRequest& request) {
+      GuestWireWriter output;
+      request.write(output);
+      SimulationLaneRequest ignored;
+      return !SimulationLaneRequest::read(output.data(), ignored);
+    };
+  SimulationLaneRequest invalid = begin;
+  invalid.epoch = 0;
+  bool denied = rejected(invalid);
+  invalid = begin;
+  invalid.session = 0;
+  denied = denied && rejected(invalid);
+  invalid = begin;
+  invalid.partition.lane = 2;
+  denied = denied && rejected(invalid);
+  invalid = begin;
+  invalid.partition.laneCount = 0;
+  denied = denied && rejected(invalid);
+  invalid = begin;
+  invalid.partition.worldChunkWidth = 4; // mixed topology
+  denied = denied && rejected(invalid);
+  invalid = begin;
+  invalid.ruleId.clear();
+  denied = denied && rejected(invalid);
+  std::vector<std::byte> truncated = beginBytes;
+  truncated.pop_back();
+  std::vector<std::byte> trailing = beginBytes;
+  trailing.push_back(std::byte{ 0 });
+  std::vector<std::byte> badMagic = beginBytes;
+  badMagic[0] = std::byte{ 0 };
+  SimulationLaneRequest ignored;
+  denied = denied && !SimulationLaneRequest::read(truncated, ignored) &&
+           !SimulationLaneRequest::read(trailing, ignored) &&
+           !SimulationLaneRequest::read(badMagic, ignored);
+  if (!denied) {
+    std::puts("Malformed lane requests were accepted");
+    return false;
+  }
+
+  SimulationLaneWorker worker;
+  std::vector<std::byte> output;
+  std::string error;
+  SimulationLaneRequest advance;
+  advance.kind = SimulationLaneMessage::Advance;
+  advance.session = 3;
+  advance.epoch = 1;
+  GuestWireWriter advanceWriter;
+  advance.write(advanceWriter);
+  if (worker.execute(advanceWriter.data(), output, error)) {
+    std::puts("A lane advanced before synchronization");
+    return false;
+  }
+  if (!worker.execute(beginBytes, output, error)) {
+    std::fprintf(stderr, "SyncBegin failed: %s\n", error.c_str());
+    return false;
+  }
+  // Lane 1 of 2 with one-row bands owns odd rows; rows 0 and 2 are halo.
+  SparseChunkPatch owned;
+  owned.address = { 0, 1 };
+  owned.present = true;
+  owned.cells.fill(SparseCellGrid::BackgroundState);
+  owned.cells[17] = 0;
+  const std::function<bool(SimulationLaneRequest)> accepted =
+    [&](SimulationLaneRequest request) {
+      GuestWireWriter output2;
+      request.write(output2);
+      return worker.execute(output2.data(), output, error);
+    };
+  SimulationLaneRequest chunks = advance;
+  chunks.kind = SimulationLaneMessage::SyncChunks;
+  chunks.patches = { owned };
+  SimulationLaneRequest stale = chunks;
+  stale.epoch = 2;
+  SimulationLaneRequest badState = chunks;
+  badState.patches[0].cells[0] = 200;
+  SimulationLaneRequest wrongGeneration = advance;
+  wrongGeneration.generation = 5;
+  SimulationLaneRequest duplicate = advance;
+  duplicate.patches = { owned, owned };
+  if (!accepted(chunks) || accepted(stale) || accepted(badState) ||
+      accepted(wrongGeneration) || accepted(duplicate)) {
+    std::puts("Lane worker accepted stale, invalid or duplicate input");
+    return false;
+  }
+  // Lane 1 of 3 with two-row bands owns rows 2-3 (band 1) and has halo rows
+  // 1 and 4; row 5 (band 2, lane 2) borders rows 4 (lane 2) and 6 (lane 0),
+  // so it is outside the lane.
+  SimulationLaneWorker narrow;
+  begin.partition.laneCount = 3;
+  begin.partition.bandRows = 2;
+  writer.clear();
+  begin.write(writer);
+  if (!narrow.execute(writer.data(), output, error)) {
+    return false;
+  }
+  SimulationLaneRequest outside = chunks;
+  outside.patches[0].address.y = 5;
+  GuestWireWriter outsideWriter;
+  outside.write(outsideWriter);
+  if (narrow.execute(outsideWriter.data(), output, error)) {
+    std::puts("A lane accepted a patch outside its rows");
+    return false;
+  }
+  SimulationLaneReply reply;
+  reply.kind = SimulationLaneMessage::Ack;
+  reply.session = 3;
+  reply.epoch = 1;
+  reply.changes = { owned };
+  GuestWireWriter replyWriter;
+  reply.write(replyWriter);
+  SimulationLaneReply decodedReply;
+  if (SimulationLaneReply::read(replyWriter.data(), decodedReply)) {
+    std::puts("An acknowledgement carried changes");
+    return false;
+  }
+  // Informational: cost of building a merge delta for 1,024 changed chunks.
+  SparseCellGrid timed;
+  std::vector<SparseChunkPatch> patches;
+  for (std::int64_t chunk = 0; chunk < 1024; ++chunk) {
+    SparseChunkPatch patch;
+    patch.address = { chunk % 32, chunk / 32 };
+    patch.present = true;
+    patch.cells.fill(SparseCellGrid::BackgroundState);
+    patch.cells[static_cast<std::size_t>(chunk % 256)] = 0;
+    patches.push_back(patch);
+    timed.setCell({ patch.address.x * 16, patch.address.y * 16 }, 0);
+  }
+  SparseGenerationDelta built;
+  const std::chrono::steady_clock::time_point timing =
+    std::chrono::steady_clock::now();
+  for (int repeat = 0; repeat < 20; ++repeat) {
+    timed.buildPatchDelta(patches, &built);
+  }
+  std::printf("BENCH: buildPatchDelta 1024 chunks %.3f ms\n",
+              std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - timing)
+                  .count() /
+                20.0);
+  std::puts("Lane protocol decoding and worker rejection cases: PASS");
+  return true;
+}
 
 static std::string
 snapshot(const SparseCellGrid& grid, const RuleSet& rule)
@@ -225,19 +683,28 @@ int
 main(int argc, char** argv)
 {
   if (argc == 2 && std::string(argv[1]) == "--list") {
-    std::puts(
-      "IllumoGame.Wasm.WorkerParity\nIllumoGame.Wasm.SimulationProtocol");
+    std::puts("IllumoGame.Wasm.WorkerParity\nIllumoGame.Wasm.SimulationProtocol"
+              "\nIllumoGame.Wasm.LaneParity\nIllumoGame.Wasm.LaneProtocol");
     return 0;
   }
+  const std::string name = argc == 3 ? argv[2] : "";
   if (argc != 3 || std::string(argv[1]) != "--run" ||
-      (std::string(argv[2]) != "IllumoGame.Wasm.WorkerParity" &&
-       std::string(argv[2]) != "IllumoGame.Wasm.SimulationProtocol")) {
+      (name != "IllumoGame.Wasm.WorkerParity" &&
+       name != "IllumoGame.Wasm.SimulationProtocol" &&
+       name != "IllumoGame.Wasm.LaneParity" &&
+       name != "IllumoGame.Wasm.LaneProtocol")) {
     return 2;
   }
   const std::string families = readText(ILLUMO_FAMILIES);
   const std::string rules = readText(ILLUMO_RULES);
-  if (std::string(argv[2]) == "IllumoGame.Wasm.SimulationProtocol") {
+  if (name == "IllumoGame.Wasm.SimulationProtocol") {
     return protocolCases(families, rules) ? 0 : 1;
+  }
+  if (name == "IllumoGame.Wasm.LaneParity") {
+    return laneParity(families, rules) ? 0 : 1;
+  }
+  if (name == "IllumoGame.Wasm.LaneProtocol") {
+    return laneProtocol(families, rules) ? 0 : 1;
   }
   const std::string binary = readText(ILLUMO_SIMULATION_WORKER);
   std::vector<std::byte> module(binary.size());

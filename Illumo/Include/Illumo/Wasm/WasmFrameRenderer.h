@@ -8,6 +8,21 @@
 class Renderer;
 class Scene;
 
+// Diagnostics: the last accepted frame's payload plus lifetime totals of host
+// mesh slot allocations. Counting only; nothing here affects rendering.
+struct WasmFrameCounters
+{
+  std::uint64_t batches = 0;
+  std::uint64_t retainedBatches = 0;
+  std::uint64_t inlineVertexBytes = 0;
+  std::uint64_t inlineIndexBytes = 0;
+  std::uint64_t textureWrites = 0;
+  std::uint64_t textureWriteBytes = 0;
+  std::uint64_t meshWriteBytes = 0;
+  std::uint64_t meshEnrollments = 0;
+  std::uint64_t meshReplacements = 0;
+};
+
 // Main-thread renderer adapter. Accept between synchronous frame submissions.
 // All geometry/layout arrives from WASM; this class only validates, retains,
 // enrolls backend resources and translates batches into Renderer tokens.
@@ -41,6 +56,7 @@ public:
   void dispatch(Scene& scene);
   void retire();
   const std::string& error() const;
+  const WasmFrameCounters& counters() const;
 
 private:
   struct State;

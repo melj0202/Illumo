@@ -34,6 +34,7 @@ bool
 compileWasmIsolated(std::span<const std::byte> input,
                     std::uint64_t memoryLimit,
                     std::uint32_t timeoutMilliseconds,
+                    std::uint32_t engineOptions,
                     std::vector<std::byte>& artifact,
                     std::string& error)
 {
@@ -112,7 +113,8 @@ compileWasmIsolated(std::span<const std::byte> input,
   }
   std::wstring command =
     L"\"" + executable + L"\" " +
-    std::to_wstring(reinterpret_cast<std::uintptr_t>(mapping.get()));
+    std::to_wstring(reinterpret_cast<std::uintptr_t>(mapping.get())) + L" " +
+    std::to_wstring(engineOptions);
   PROCESS_INFORMATION process{};
   const BOOL created = CreateProcessW(executable.c_str(),
                                       command.data(),

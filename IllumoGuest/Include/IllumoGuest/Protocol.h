@@ -41,7 +41,10 @@ enum class GuestCall : std::uint32_t
 struct GuestUpdateFlags
 {
   static constexpr std::uint32_t RequestClose = 1u;
-  static constexpr std::uint32_t Known = RequestClose;
+  // The update queued service requests; the host runs one more services
+  // exchange before the frame so work (such as compute lanes) starts now.
+  static constexpr std::uint32_t ServicesPending = 2u;
+  static constexpr std::uint32_t Known = RequestClose | ServicesPending;
 };
 
 struct GuestEnvelope

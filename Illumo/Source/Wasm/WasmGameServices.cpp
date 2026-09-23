@@ -13,6 +13,7 @@
 #include <IllumoGuest/FileProtocol.h>
 #include <IllumoGuest/Protocol.h>
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 
 namespace {
@@ -103,6 +104,16 @@ WasmGameServices::~WasmGameServices()
 {
   cancel();
 }
+WasmLimits
+WasmGameServices::defaultWorkerLimits()
+{
+  WasmLimits limits;
+  limits.memoryBytes = 512ull * 1024ull * 1024ull;
+  limits.fuelPerCall = 1000000000u;
+  limits.deadlineMilliseconds = 10000u;
+  return limits;
+}
+
 void
 WasmGameServices::unregisterCommands()
 {
@@ -133,6 +144,63 @@ WasmGameServices::cancel()
   }
   m_job = {};
   m_hostJob = 0;
+  for (Lane& lane : m_lanes) {
+    if (lane.worker) {
+      lane.worker->requestStop();
+    }
+    lane.job = {};
+    lane.hostJob = 0;
+  }
+}
+
+bool
+WasmGameServices::lanesGranted() const
+{
+  return (m_grants & static_cast<std::uint32_t>(GuestCapability::Jobs)) != 0 &&
+         !m_module.empty() && m_laneCount != 0u;
+}
+
+void
+WasmGameServices::completeLaneQuery(GuestServices& results)
+{
+  if (m_laneQuery.request == 0) {
+    return;
+  }
+  std::uint32_t ready = 0;
+  for (const Lane& lane : m_lanes) {
+    const WasmWorkerStatus status = lane.worker->status();
+    if (status == WasmWorkerStatus::Loading) {
+      return; // still compiling: the guest keeps its serial generations
+    }
+    ready += status == WasmWorkerStatus::Failed ? 0u : 1u;
+  }
+  GuestServiceRecord answer{ m_laneQuery.request,
+                             GuestService::JobLanes,
+                             GuestServiceStatus::Rejected,
+                             {} };
+  if (ready == m_lanes.size()) {
+    GuestWireWriter count;
+    count.u32(m_laneCount);
+    answer.status = GuestServiceStatus::Complete;
+    answer.payload = count.take();
+  }
+  results.records.push_back(std::move(answer));
+  m_laneQuery = {};
+}
+
+void
+WasmGameServices::ensureLaneWorkers()
+{
+  // Every lane compiles and instantiates on its own thread, in parallel.
+  m_lanes.resize(m_laneCount);
+  for (Lane& lane : m_lanes) {
+    if (!lane.worker) {
+      lane.worker = std::make_unique<WasmWorker>(
+        m_module,
+        m_workerLimits,
+        static_cast<std::uint32_t>(GuestServices::MaximumJobBytes));
+    }
+  }
 }
 bool
 WasmGameServices::completeDisplay(GuestServices& results)
@@ -363,11 +431,16 @@ try {
     return false;
   }
   std::uint64_t last = m_lastRequest;
+  std::size_t laneJobs = 0;
+  for (const Lane& lane : m_lanes) {
+    laneJobs += lane.job.request != 0 ? 1u : 0u;
+  }
   if (incoming.records.size() + m_render.pendingRequests() +
         m_displayRequests.size() + m_clipboardRequests.size() +
         m_dialogRequests.size() + m_consoleRequests.size() +
         m_listenRequests.size() + (m_files ? m_files->pendingRequests() : 0u) +
-        (m_job.request != 0 ? 1u : 0u) >
+        (m_job.request != 0 ? 1u : 0u) + laneJobs +
+        (m_laneQuery.request != 0 ? 1u : 0u) >
       GuestServices::MaximumRecords) {
     m_error = "Too many outstanding service requests";
     return false;
@@ -415,6 +488,18 @@ try {
         return false;
       }
       files.records.push_back(record);
+    } else if (record.operation == GuestService::JobLanes) {
+      if (!record.payload.empty()) {
+        m_error = "Invalid compute lane query";
+        return false;
+      }
+    } else if (record.operation == GuestService::LaneJob) {
+      // A lane index, then a non-empty opaque job.
+      if (record.payload.size() <= 4u ||
+          record.payload.size() > GuestServices::MaximumJobBytes) {
+        m_error = "Invalid compute lane request size";
+        return false;
+      }
     } else if (record.operation != GuestService::Job) {
       rendering.records.push_back(record);
     } else if (record.payload.empty() ||
@@ -473,7 +558,76 @@ try {
       m_hostJob = 0;
     }
   }
+  // Lane replies share one completion exchange; a reply that does not fit
+  // waits in its lane for the next one.
+  std::size_t laneReplyBytes = 0;
+  constexpr std::size_t kLaneReplyBudget = 12u * 1024u * 1024u;
+  for (Lane& lane : m_lanes) {
+    WasmJobResult result;
+    if (lane.worker && lane.job.request != 0 && !lane.finished &&
+        lane.worker->poll(result)) {
+      lane.accepted = result.error.empty() && lane.hostJob != 0 &&
+                      result.requestId == lane.hostJob &&
+                      result.bytes.size() <= GuestServices::MaximumJobBytes;
+      lane.reply =
+        lane.accepted ? std::move(result.bytes) : std::vector<std::byte>{};
+      lane.finished = true;
+    }
+    if (!lane.finished ||
+        (laneReplyBytes != 0 &&
+         lane.reply.size() > kLaneReplyBudget - laneReplyBytes)) {
+      continue;
+    }
+    laneReplyBytes += std::min(lane.reply.size(), kLaneReplyBudget);
+    results.records.push_back({ lane.job.request,
+                                GuestService::LaneJob,
+                                lane.accepted ? GuestServiceStatus::Complete
+                                              : GuestServiceStatus::Rejected,
+                                std::move(lane.reply) });
+    lane.job = {};
+    lane.hostJob = 0;
+    lane.finished = false;
+    lane.accepted = false;
+    lane.reply.clear();
+  }
+  completeLaneQuery(results);
   for (GuestServiceRecord& record : incoming.records) {
+    if (record.operation == GuestService::JobLanes) {
+      if (!lanesGranted() || m_laneQuery.request != 0) {
+        results.records.push_back({ record.request,
+                                    record.operation,
+                                    GuestServiceStatus::Rejected,
+                                    {} });
+        continue;
+      }
+      // Lane stores compile in parallel; the answer waits until they can run.
+      ensureLaneWorkers();
+      m_laneQuery = std::move(record);
+      continue;
+    }
+    if (record.operation == GuestService::LaneJob) {
+      std::uint32_t lane = 0;
+      std::memcpy(&lane, record.payload.data(), sizeof(lane)); // LE wire
+      if (!lanesGranted() || lane >= m_laneCount) {
+        results.records.push_back({ record.request,
+                                    record.operation,
+                                    GuestServiceStatus::Rejected,
+                                    {} });
+        continue;
+      }
+      ensureLaneWorkers();
+      Lane& target = m_lanes[lane];
+      if (target.job.request != 0 ||
+          target.worker->status() == WasmWorkerStatus::Failed) {
+        results.records.push_back({ record.request,
+                                    record.operation,
+                                    GuestServiceStatus::Rejected,
+                                    {} });
+        continue;
+      }
+      target.job = std::move(record);
+      continue;
+    }
     if (record.operation != GuestService::Job) {
       continue;
     }
@@ -485,13 +639,9 @@ try {
       continue;
     }
     if (!m_worker) {
-      WasmLimits limits;
-      limits.memoryBytes = 512ull * 1024ull * 1024ull;
-      limits.fuelPerCall = 1000000000;
-      limits.deadlineMilliseconds = 10000;
       m_worker = std::make_unique<WasmWorker>(
         m_module,
-        limits,
+        m_workerLimits,
         static_cast<std::uint32_t>(GuestServices::MaximumJobBytes));
     }
     m_job = std::move(record);
@@ -503,6 +653,20 @@ try {
       return false;
     }
     m_job.payload.clear();
+  }
+  // Accepted lane jobs start as soon as their store is idle (it may still be
+  // compiling); submission copies the job bytes after the lane prefix.
+  for (Lane& lane : m_lanes) {
+    if (!lane.worker || lane.job.request == 0 || lane.hostJob != 0 ||
+        lane.worker->status() != WasmWorkerStatus::Idle) {
+      continue;
+    }
+    if (!lane.worker->submit(std::span(lane.job.payload).subspan(4),
+                             lane.hostJob)) {
+      m_error = "A compute lane rejected its accepted request";
+      return false;
+    }
+    lane.job.payload.clear();
   }
   if (!files.records.empty()) {
     if (m_files) {

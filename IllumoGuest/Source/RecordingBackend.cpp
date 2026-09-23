@@ -3,6 +3,9 @@
 #include <cstring>
 #include <stdexcept>
 
+static std::uint32_t
+retainedStyle(MeshVertexLayout layout);
+
 GuestRecordingBackend::GuestRecordingBackend(GuestServiceQueue& services,
                                              std::size_t commandCeiling)
   : m_services(services)
@@ -80,16 +83,21 @@ GuestRecordingBackend::Shutdown()
   // never enqueue work or throw through Renderer destruction.
   m_textures.clear();
   m_meshes.clear();
+  m_drawnDynamic.clear();
   m_commands.Reset();
   m_commandLayers.clear();
 }
 void
 GuestRecordingBackend::BeginFrame()
 {
-  m_frame.batches.clear();
-  m_frame.textureWrites.clear();
-  m_frame.shadowCasters.clear();
-  m_frame.hasCamera = false;
+  m_frame.clear();
+  for (std::uint32_t slot : m_drawnDynamic) {
+    std::map<std::uint32_t, Mesh>::iterator found = m_meshes.find(slot);
+    if (found != m_meshes.end()) {
+      found->second.drawnThisFrame = false;
+    }
+  }
+  m_drawnDynamic.clear();
   m_shadowPass = false;
   m_shadowMeshes.clear();
   m_lighting = GuestLighting{};
@@ -168,9 +176,107 @@ GuestRecordingBackend::takeFrame()
   if (!m_error.empty()) {
     throw std::runtime_error(m_error);
   }
+  // Only a frame that will be delivered consumes the dirty ranges.
+  emitMeshWrites();
   GuestFrame result = std::move(m_frame);
   m_frame = GuestFrame{};
   return result;
+}
+void
+GuestRecordingBackend::markDirty(std::size_t& begin,
+                                 std::size_t& end,
+                                 std::size_t offset,
+                                 std::size_t size)
+{
+  if (size == 0) {
+    return;
+  }
+  if (end <= begin) {
+    begin = offset;
+    end = offset + size;
+    return;
+  }
+  begin = std::min(begin, offset);
+  end = std::max(end, offset + size);
+}
+void
+GuestRecordingBackend::emitMeshWrites()
+{
+  const GuestFrameLimits limits;
+  std::size_t writes = 0;
+  std::size_t bytes = 0;
+  for (std::pair<const std::uint32_t, Mesh>& entry : m_meshes) {
+    Mesh& mesh = entry.second;
+    if (!mesh.dynamic || !mesh.retain || !mesh.ready || mesh.failed) {
+      continue;
+    }
+    // The host validates whole vertices and indices.
+    const std::size_t stride =
+      GuestMeshRequest::stride(retainedStyle(mesh.layout));
+    const std::size_t vertexBegin = mesh.vertexDirtyBegin / stride * stride;
+    const std::size_t vertexEnd =
+      std::min(mesh.vertices.size(),
+               (mesh.vertexDirtyEnd + stride - 1) / stride * stride);
+    const std::size_t indexBegin = mesh.indexDirtyBegin / 4 * 4;
+    const std::size_t indexEnd =
+      std::min(mesh.indices.size(), (mesh.indexDirtyEnd + 3) / 4 * 4);
+    const bool vertexDirty = mesh.vertexDirtyEnd > mesh.vertexDirtyBegin;
+    const bool indexDirty = mesh.indexDirtyEnd > mesh.indexDirtyBegin;
+    const std::size_t needed = (vertexDirty ? vertexEnd - vertexBegin : 0) +
+                               (indexDirty ? indexEnd - indexBegin : 0);
+    const std::size_t count = (vertexDirty ? 1u : 0u) + (indexDirty ? 1u : 0u);
+    if (count == 0) {
+      continue;
+    }
+    if (writes + count > limits.meshWrites ||
+        needed > limits.meshWriteBytes - bytes) {
+      // Over the frame's write quota: this frame's by-reference draws become
+      // inline copies of the current (final) contents.
+      demoteDynamic(mesh);
+      continue;
+    }
+    if (vertexDirty) {
+      m_frame.meshWrites.push_back(
+        { mesh.id,
+          false,
+          static_cast<std::uint32_t>(vertexBegin),
+          { mesh.vertices.begin() + static_cast<std::ptrdiff_t>(vertexBegin),
+            mesh.vertices.begin() + static_cast<std::ptrdiff_t>(vertexEnd) } });
+    }
+    if (indexDirty) {
+      m_frame.meshWrites.push_back(
+        { mesh.id,
+          true,
+          static_cast<std::uint32_t>(indexBegin),
+          { mesh.indices.begin() + static_cast<std::ptrdiff_t>(indexBegin),
+            mesh.indices.begin() + static_cast<std::ptrdiff_t>(indexEnd) } });
+    }
+    writes += count;
+    bytes += needed;
+    mesh.vertexDirtyBegin = mesh.vertexDirtyEnd = 0;
+    mesh.indexDirtyBegin = mesh.indexDirtyEnd = 0;
+  }
+  m_lastMeshWriteBytes = bytes;
+}
+void
+GuestRecordingBackend::demoteDynamic(Mesh& mesh)
+{
+  for (GuestBatch& batch : m_frame.batches) {
+    if (!batch.retained() || batch.mesh.owner != mesh.id.owner ||
+        batch.mesh.slot != mesh.id.slot ||
+        batch.mesh.generation != mesh.id.generation) {
+      continue;
+    }
+    const std::uint32_t first = batch.firstIndex;
+    const std::uint32_t count = batch.indexCount;
+    batch.mesh = {};
+    batch.firstIndex = 0;
+    batch.indexCount = 0;
+    extractInline(mesh, batch, first, count);
+  }
+  forgetRetained(mesh);
+  mesh.dynamic = false;
+  mesh.drawnThisFrame = false;
 }
 MeshHandle
 GuestRecordingBackend::CreateMesh(const void* vertices,
@@ -249,10 +355,19 @@ GuestRecordingBackend::ReplaceMesh(MeshHandle handle,
   }
   const std::uint32_t style = retainedStyle(layout);
   // Large immutable geometry (loaded models) is uploaded to the host once.
-  candidate.retain =
-    !dynamic && style != 0 && vertices != nullptr && indices != nullptr &&
-    vertexBytes >= RetainedMeshBytes && indexBytes > 0 &&
-    vertexBytes % GuestMeshRequest::stride(style) == 0 && indexBytes % 4 == 0;
+  const bool shaped = style != 0 && indexBytes > 0 && vertexBytes > 0 &&
+                      vertexBytes % GuestMeshRequest::stride(style) == 0 &&
+                      indexBytes % 4 == 0;
+  // Dynamic 2D geometry (GameVisual, text, UI) lives on the host and only
+  // its changed bytes travel; lit and oversized dynamic meshes stay inline.
+  candidate.dynamic =
+    dynamic && shaped &&
+    style != static_cast<std::uint32_t>(GuestBatchStyle::LitMesh) &&
+    vertexBytes <= GuestMeshRequest::MaximumDynamicBytes &&
+    indexBytes <= GuestMeshRequest::MaximumDynamicBytes;
+  candidate.retain = candidate.dynamic ||
+                     (!dynamic && shaped && vertices != nullptr &&
+                      indices != nullptr && vertexBytes >= RetainedMeshBytes);
   Mesh& target = m_meshes.at(handle.slot);
   forgetRetained(target);
   target = std::move(candidate);
@@ -276,6 +391,8 @@ GuestRecordingBackend::forgetRetained(Mesh& mesh)
   mesh.indexSent = 0;
   mesh.ready = false;
   mesh.failed = false;
+  mesh.vertexDirtyBegin = mesh.vertexDirtyEnd = 0;
+  mesh.indexDirtyBegin = mesh.indexDirtyEnd = 0;
 }
 bool
 GuestRecordingBackend::DestroyMesh(MeshHandle handle)
@@ -616,11 +733,21 @@ GuestRecordingBackend::pumpMeshes()
         continue;
       }
       mesh.id = id;
+      if (mesh.dynamic) {
+        // The host copy starts zero-filled: the next frame sends it all.
+        mesh.ready = true;
+        mesh.vertexDirtyBegin = 0;
+        mesh.vertexDirtyEnd = mesh.vertices.size();
+        mesh.indexDirtyBegin = 0;
+        mesh.indexDirtyEnd = mesh.indices.size();
+        continue;
+      }
     } else if (mesh.id.owner == 0) {
       GuestMeshRequest request;
       request.style = retainedStyle(mesh.layout);
       request.vertexBytes = static_cast<std::uint32_t>(mesh.vertices.size());
       request.indexBytes = static_cast<std::uint32_t>(mesh.indices.size());
+      request.dynamic = mesh.dynamic;
       GuestWireWriter payload;
       request.write(payload);
       mesh.create =
@@ -795,13 +922,7 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
       batch.lighting.tint = m_lighting.tint;
     }
   }
-  const Mesh& mesh = m_meshes.at(m_mesh.slot);
-  // Lit meshes: position, normal, RGBA8 color, UV (36 bytes).
-  const std::size_t stride = batch.style == GuestBatchStyle::Shape    ? 16
-                             : batch.style == GuestBatchStyle::Sprite ? 24
-                             : lit                                    ? 36
-                             : sky                                    ? 12
-                                                                      : 32;
+  Mesh& mesh = m_meshes.at(m_mesh.slot);
   const MeshVertexLayout expected =
     batch.style == GuestBatchStyle::Shape    ? MeshVertexLayout::Pos3Color4U8
     : batch.style == GuestBatchStyle::Sprite ? MeshVertexLayout::Pos3Color4U8Uv2
@@ -812,23 +933,45 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
       count > mesh.indices.size() / 4 - first) {
     throw std::runtime_error("Guest draw geometry mismatch");
   }
-  if (mesh.retain && !mesh.failed) {
+  batch.mvp = m_mvp;
+  batch.layer = m_layer;
+  batch.clipped = m_clip.enabled;
+  batch.clip = { static_cast<float>(m_clip.x),
+                 m_frame.height - m_clip.y - m_clip.height,
+                 static_cast<float>(m_clip.width),
+                 static_cast<float>(m_clip.height) };
+  if (mesh.retain && !mesh.failed && (mesh.ready || !mesh.dynamic)) {
     if (!mesh.ready) {
-      return; // the host copy is still uploading
+      return; // a static host copy is still uploading
     }
     batch.mesh = mesh.id;
     batch.firstIndex = first;
     batch.indexCount = count;
-    batch.mvp = m_mvp;
-    batch.layer = m_layer;
-    batch.clipped = m_clip.enabled;
-    batch.clip = { static_cast<float>(m_clip.x),
-                   m_frame.height - m_clip.y - m_clip.height,
-                   static_cast<float>(m_clip.width),
-                   static_cast<float>(m_clip.height) };
+    if (mesh.dynamic && !mesh.drawnThisFrame) {
+      mesh.drawnThisFrame = true;
+      m_drawnDynamic.push_back(m_mesh.slot);
+    }
     m_frame.batches.push_back(std::move(batch));
     return;
   }
+  // Dynamic meshes draw inline until their host copy exists.
+  extractInline(mesh, batch, first, count);
+  m_frame.batches.push_back(std::move(batch));
+}
+
+void
+GuestRecordingBackend::extractInline(const Mesh& mesh,
+                                     GuestBatch& batch,
+                                     std::uint32_t first,
+                                     std::uint32_t count)
+{
+  const bool lit = batch.style == GuestBatchStyle::LitMesh;
+  const bool sky = batch.style == GuestBatchStyle::Skybox;
+  const std::size_t stride = batch.style == GuestBatchStyle::Shape    ? 16
+                             : batch.style == GuestBatchStyle::Sprite ? 24
+                             : lit                                    ? 36
+                             : sky                                    ? 12
+                                                                      : 32;
   batch.indices.resize(count);
   std::memcpy(batch.indices.data(),
               mesh.indices.data() + static_cast<std::size_t>(first) * 4,
@@ -843,6 +986,7 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
   for (std::uint32_t& index : batch.indices) {
     index -= minimum;
   }
+  batch.vertices.clear();
   batch.vertices.reserve(static_cast<std::size_t>(maximum) - minimum + 1);
   for (std::size_t index = minimum; index <= maximum; ++index) {
     const std::byte* source = mesh.vertices.data() + index * stride;
@@ -880,14 +1024,6 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
     }
     batch.vertices.push_back(vertex);
   }
-  batch.mvp = m_mvp;
-  batch.layer = m_layer;
-  batch.clipped = m_clip.enabled;
-  batch.clip = { static_cast<float>(m_clip.x),
-                 m_frame.height - m_clip.y - m_clip.height,
-                 static_cast<float>(m_clip.width),
-                 static_cast<float>(m_clip.height) };
-  m_frame.batches.push_back(std::move(batch));
 }
 
 void
@@ -987,14 +1123,46 @@ GuestRecordingBackend::consume(const RenderCommand& command)
       if (!IsMeshValid(handle)) {
         throw std::runtime_error("Stale guest mesh update");
       }
-      // A mesh that changes is not static after all: draw it inline.
-      forgetRetained(m_meshes.at(handle.slot));
-      std::vector<std::byte>& buffer = indices
-                                         ? m_meshes.at(handle.slot).indices
-                                         : m_meshes.at(handle.slot).vertices;
+      Mesh& mesh = m_meshes.at(handle.slot);
+      std::vector<std::byte>& buffer = indices ? mesh.indices : mesh.vertices;
       if (offset > buffer.size() || size > buffer.size() - offset ||
           (size != 0 && data == nullptr)) {
         throw std::runtime_error("Invalid guest buffer update");
+      }
+      if (mesh.dynamic && mesh.retain) {
+        // Producers often re-upload a whole buffer for a small change; only
+        // the span that actually differs becomes dirty.
+        const std::byte* incoming = static_cast<const std::byte*>(data);
+        std::size_t first = 0;
+        while (first < size && buffer[offset + first] == incoming[first]) {
+          ++first;
+        }
+        if (first == size) {
+          break; // identical bytes: nothing to record or copy
+        }
+        std::size_t last = size;
+        while (last > first &&
+               buffer[offset + last - 1] == incoming[last - 1]) {
+          --last;
+        }
+        if (mesh.drawnThisFrame) {
+          // Changed again after a by-reference draw this frame; one frame's
+          // mesh writes cannot order between draws.
+          demoteDynamic(mesh);
+        } else if (indices) {
+          markDirty(mesh.indexDirtyBegin,
+                    mesh.indexDirtyEnd,
+                    offset + first,
+                    last - first);
+        } else {
+          markDirty(mesh.vertexDirtyBegin,
+                    mesh.vertexDirtyEnd,
+                    offset + first,
+                    last - first);
+        }
+      } else {
+        // A mesh that changes is not static after all: draw it inline.
+        forgetRetained(mesh);
       }
       if (size != 0) {
         std::memcpy(buffer.data() + offset, data, size);
