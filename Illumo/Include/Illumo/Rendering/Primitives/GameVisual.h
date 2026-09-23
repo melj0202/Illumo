@@ -57,6 +57,11 @@ public:
   size_t textCount() const { return texts.size(); }
   unsigned int getQuadCapacity() const { return quadCapacity; }
   unsigned int getMaxQuads() const { return maxQuadCount; }
+  // Quads tessellated by the most recent geometry rebuild (AppendCommands).
+  unsigned int builtQuadCount() const
+  {
+    return shapeQuadCount + spriteQuadCount;
+  }
 
   size_t addFilledRect(float x, float y, float w, float h, ColorRgba color);
   size_t addOutlineRect(float x,
@@ -79,6 +84,39 @@ public:
                            float x2,
                            float y2,
                            ColorRgba color);
+  // Per-vertex-color shapes for gradients, soft shadows and glows. The quad
+  // must be convex with vertices in fan order; colors interpolate across its
+  // two triangles (0,1,2) and (2,3,0), so prefer two-color axis gradients or
+  // radial fans over four unrelated corner colors.
+  size_t addGradientQuad(float x0,
+                         float y0,
+                         float x1,
+                         float y1,
+                         float x2,
+                         float y2,
+                         float x3,
+                         float y3,
+                         ColorRgba c0,
+                         ColorRgba c1,
+                         ColorRgba c2,
+                         ColorRgba c3);
+  size_t addGradientRect(float x,
+                         float y,
+                         float w,
+                         float h,
+                         ColorRgba topLeft,
+                         ColorRgba topRight,
+                         ColorRgba bottomRight,
+                         ColorRgba bottomLeft);
+  size_t addGradientTriangle(float x0,
+                             float y0,
+                             float x1,
+                             float y1,
+                             float x2,
+                             float y2,
+                             ColorRgba c0,
+                             ColorRgba c1,
+                             ColorRgba c2);
   size_t addSprite(TextureHandle textureHandle,
                    float x,
                    float y,
@@ -219,6 +257,12 @@ private:
                      Point2 p2,
                      Point2 p3,
                      ColorRgba color);
+  bool pushShapeQuadColors(Point2 p0,
+                           Point2 p1,
+                           Point2 p2,
+                           Point2 p3,
+                           const std::array<ColorRgba, 4>& colors);
+  bool pushGradientQuad(const ShapePrimitive& shape, const Rect2& hostBounds);
   bool pushLineAsQuad(Point2 p0,
                       Point2 p1,
                       float width,

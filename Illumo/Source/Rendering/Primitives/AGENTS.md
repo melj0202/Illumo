@@ -36,6 +36,12 @@ retained widget toolkit or a second renderer.
   lifetime defect.
 - Keep shared themes and style data value-only. Ownership, input behavior, and
   domain commands stay with their existing App/Game/Services owners.
+- `ShapeKind::GradientQuad` carries one color per vertex through the ordinary
+  shape vertex format and shader. Its quad must be convex and fan-ordered
+  ((0,1,2) then (2,3,0)); colors interpolate per triangle, so use two-color
+  axis gradients or radial fans rather than four unrelated corner colors.
+  Keep `rect` as the bounding box and `color` as the first vertex color so
+  bounds, culling, and pivot code treat it like any other shape.
 - Do not grow this package into a widget tree, scene graph, layout framework,
   or generalized UI architecture without explicit design approval and a real
   consumer.

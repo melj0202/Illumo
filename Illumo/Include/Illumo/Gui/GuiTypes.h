@@ -36,6 +36,22 @@ struct GuiPanelChrome
   bool drawAccent = false;
 };
 
+// Soft "glass" panel chrome: soft shadow, breathing outer glow, a vertical
+// gradient surface with a lit rim, and an animated accent hairline.
+struct GuiGlassStyle
+{
+  float radius = 22.0f;
+  unsigned char opacity = 255;
+  // Seconds into GuiMenuAnimator's ambient cycle; drives the hairline glint.
+  float ambientPhase = 0.0f;
+  // Outer glow strength, 0..1 (callers breathe it with the ambient cycle).
+  float glow = 0.6f;
+  // Fraction of the accent hairline drawn, 0..1 (entrance reveal).
+  float accentReveal = 1.0f;
+  bool shadow = true;
+  bool accentLine = true;
+};
+
 // Definition of a button in a dialog or toolbar.
 struct GuiButtonDef
 {

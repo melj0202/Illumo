@@ -2882,12 +2882,68 @@ public:
   bool HasPendingTransition() const override { return next != nullptr; }
 };
 
+// Summary of the canvas veil: how many shapes are fully opaque, full-size
+// cells (the covered part of the screen), and the veil's overall extent.
+struct VeilSummary
+{
+  std::size_t shapes = 0u;
+  std::size_t coveredCells = 0u;
+  bool allOpaque = true;
+  float right = 0.0f;
+  float bottom = 0.0f;
+  float cellWidth = 0.0f;
+  float cellHeight = 0.0f;
+};
+
+static VeilSummary
+summarizeVeil(GameVisual& veil, float cellWidth, float cellHeight)
+{
+  VeilSummary summary;
+  summary.shapes = veil.shapeCount();
+  summary.cellWidth = cellWidth;
+  summary.cellHeight = cellHeight;
+  for (std::size_t index = 0u; index < veil.shapeCount(); ++index) {
+    const ShapePrimitive* shape = veil.getShape(index);
+    summary.allOpaque = summary.allOpaque && shape->color.a == 255;
+    summary.right = std::max(summary.right, shape->rect.x + shape->rect.w);
+    summary.bottom = std::max(summary.bottom, shape->rect.y + shape->rect.h);
+    if (shape->color.a == 255 && std::abs(shape->rect.w - cellWidth) < 0.01f &&
+        std::abs(shape->rect.h - cellHeight) < 0.01f) {
+      ++summary.coveredCells;
+    }
+  }
+  return summary;
+}
+
+// Firing halos are drawn first, so find the top-left cell by position.
+static bool
+hasCoveredCornerCell(GameVisual& veil, float cellWidth, float cellHeight)
+{
+  for (std::size_t index = 0u; index < veil.shapeCount(); ++index) {
+    const ShapePrimitive* shape = veil.getShape(index);
+    if (shape->color.a == 255 && shape->rect.x == 0.0f &&
+        shape->rect.y == 0.0f && std::abs(shape->rect.w - cellWidth) < 0.01f &&
+        std::abs(shape->rect.h - cellHeight) < 0.01f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static void
 testCanvasReturn()
 {
   CanvasReturnHost host;
   CellGameFixture fixture;
   fixture.context.moduleHost = &host;
+  GameVisual& veil =
+    CellGameModuleTestAccess::getCanvasEntranceVisual(fixture.module);
+  // The first frame is fully covered: every shape is one full, opaque cell.
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  const float cellWidth = veil.getShape(0)->rect.w;
+  const float cellHeight = veil.getShape(0)->rect.h;
+  const std::size_t cellCount = veil.shapeCount();
   CellGameModuleTestAccess::advanceCanvasEntrance(fixture.module, 1.0);
   fixture.input.getKeyQueue().push({ KeyCode::Q, InputAction::Press, 0 });
   fixture.module.Update(0.0);
@@ -2895,14 +2951,13 @@ testCanvasReturn()
   fixture.module.Update(0.0);
   testEqInt(
     g, host.requests, 0, "Main Menu waits for the canvas exit animation");
-  GameVisual& veil =
-    CellGameModuleTestAccess::getCanvasEntranceVisual(fixture.module);
   fixture.module.Update(0.24);
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
+  const VeilSummary closing = summarizeVeil(veil, cellWidth, cellHeight);
   testTrue(g,
-           veil.isVisible() && veil.shapeCount() > 0 &&
-             veil.getShape(0)->color.a > 0 && veil.getShape(0)->color.a < 255,
+           veil.isVisible() && closing.shapes > 0u &&
+             closing.coveredCells > 0u && closing.coveredCells < cellCount,
            "canvas veil closes gradually before returning");
   fixture.execute("menu");
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
@@ -2916,10 +2971,11 @@ testCanvasReturn()
            "exit input does not leak into the main menu");
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
-  testEqInt(g,
-            veil.getShape(0)->color.a,
-            255,
-            "canvas is covered when the module transition is requested");
+  const VeilSummary covered = summarizeVeil(veil, cellWidth, cellHeight);
+  testTrue(g,
+           covered.allOpaque && covered.coveredCells == cellCount &&
+             covered.shapes == cellCount,
+           "canvas is covered when the module transition is requested");
   fixture.module.Update(1.0);
   testEqInt(g, host.requests, 1, "completed exit submits only once");
 }
@@ -2950,31 +3006,66 @@ testCanvasEntrance()
   testTrue(g,
            veil.isVisible() && veil.shapeCount() > 0,
            "entering a canvas starts a visible reveal");
-  testEqInt(
-    g, veil.getShape(0)->color.a, 255, "entrance initially covers the canvas");
+  const float cellWidth = veil.getShape(0)->rect.w;
+  const float cellHeight = veil.getShape(0)->rect.h;
+  const std::size_t cellCount = veil.shapeCount();
+  const VeilSummary start = summarizeVeil(veil, cellWidth, cellHeight);
+  const std::array<int, 2> dimensions = fixture.window.getWindowDimensions();
+  testTrue(g,
+           start.allOpaque && start.coveredCells == cellCount &&
+             std::abs(start.right - static_cast<float>(dimensions[0])) <
+               0.01f &&
+             std::abs(start.bottom - static_cast<float>(dimensions[1])) < 0.01f,
+           "entrance initially covers the canvas with opaque cells");
   CellGameModuleTestAccess::advanceCanvasEntrance(fixture.module, 0.24);
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
+  const VeilSummary partial = summarizeVeil(veil, cellWidth, cellHeight);
   testTrue(g,
-           veil.getShape(0)->color.a > 0 && veil.getShape(0)->color.a < 255,
+           partial.coveredCells > 0u && partial.coveredCells < cellCount,
            "entrance veil dissolves over time");
   testTrue(g,
-           veil.getShape(142)->color.a < veil.getShape(0)->color.a,
+           hasCoveredCornerCell(veil, cellWidth, cellHeight),
            "the center reveals before the outer edge");
-  const unsigned char opacity = veil.getShape(0)->color.a;
+  bool centerChanged = false;
+  const float centerX = static_cast<float>(dimensions[0]) * 0.5f;
+  const float centerY = static_cast<float>(dimensions[1]) * 0.5f;
+  for (std::size_t index = 0u; index < veil.shapeCount(); ++index) {
+    const ShapePrimitive* shape = veil.getShape(index);
+    const float shapeX = shape->rect.x + shape->rect.w * 0.5f;
+    const float shapeY = shape->rect.y + shape->rect.h * 0.5f;
+    if (std::abs(shapeX - centerX) < cellWidth &&
+        std::abs(shapeY - centerY) < cellHeight &&
+        (shape->color.a < 255 || shape->rect.w < cellWidth - 0.01f)) {
+      centerChanged = true;
+    }
+  }
+  testTrue(g, centerChanged, "center cells fire and shrink first");
+  const std::size_t shapesBefore = veil.shapeCount();
+  const std::size_t coveredBefore = partial.coveredCells;
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
-  testEqInt(g,
-            veil.getShape(0)->color.a,
-            opacity,
-            "drawing does not advance entrance time");
+  testTrue(g,
+           veil.shapeCount() == shapesBefore &&
+             summarizeVeil(veil, cellWidth, cellHeight).coveredCells ==
+               coveredBefore,
+           "drawing does not advance entrance time");
   fixture.env.setVar("uiScale", 4);
   fixture.window.handleResize(800, 600);
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
+  // At 800x600 and 4x UI scale the veil spans a 200x150 virtual viewport.
+  const VeilSummary scaled = summarizeVeil(veil, 0.0f, 0.0f);
+  bool cornerAtOrigin = false;
+  for (std::size_t index = 0u; index < veil.shapeCount(); ++index) {
+    const ShapePrimitive* shape = veil.getShape(index);
+    cornerAtOrigin =
+      cornerAtOrigin ||
+      (shape->color.a == 255 && shape->rect.x == 0.0f && shape->rect.y == 0.0f);
+  }
   testTrue(g,
-           veil.getShape(0)->rect.w * 16.0f * 4.0f == 800.0f &&
-             veil.getShape(0)->rect.h * 10.0f * 4.0f == 600.0f,
+           cornerAtOrigin && std::abs(scaled.right * 4.0f - 800.0f) < 0.05f &&
+             std::abs(scaled.bottom * 4.0f - 600.0f) < 0.05f,
            "entrance coverage follows viewport size and UI scale");
   CellGameModuleTestAccess::advanceCanvasEntrance(fixture.module, 1.0);
   fixture.scene.ClearDrawables();

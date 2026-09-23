@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MenuMotifs.h"
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <array>
@@ -43,8 +44,11 @@ public:
 private:
   static constexpr int kRowCount = 8;
   void rebuild();
+  void drawRows(unsigned char opacity, float breathe);
+  void drawFooter(float height, unsigned char opacity);
   void change(int direction);
   void select(int direction);
+  void selectRow(int row);
   NewSimulationAction activate();
   IRenderWindow* window;
   Renderer* renderer;
@@ -56,9 +60,11 @@ private:
   bool finite = false;
   bool openState = false;
   int selected = 0;
-  // Per-row emphasis; this menu lifts every row rather than gliding one
-  // highlight, so it keeps its own focus weights alongside the shared clocks.
-  std::array<float, kRowCount> focus{};
+  // Per-row hover/focus emphasis and the boundary badge's infinite/finite
+  // crossfade, both spring-driven.
+  GuiSpringArray focus;
+  GuiSpring modeBlend;
+  CellMotif motif;
   float x = 0;
   float y = 0;
   float width = 0;

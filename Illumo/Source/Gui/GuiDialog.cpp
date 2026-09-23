@@ -36,6 +36,7 @@ GuiDialog::GuiDialog(IRenderWindow* window, Renderer* renderer)
   m_visual.setRenderer(renderer);
   m_visual.prepare(renderer);
   setVisible(false);
+  m_buttonFocus.configure(3.2f, 0.65f);
 }
 
 void
@@ -77,6 +78,11 @@ GuiDialog::open()
   m_animElapsed = 0.0f;
   m_hoveredButton = -1;
   m_selectionAnimElapsed = kSelectionAnimationSeconds;
+  m_selectionTravelElapsed = 1.0f;
+  m_ambientElapsed = 0.0f;
+  for (int index = 0; index < static_cast<int>(m_buttons.size()); ++index) {
+    m_buttonFocus.snap(index, index == m_selectedButton ? 1.0f : 0.0f);
+  }
   setVisible(true);
   updateLayout();
   rebuildVisual();
@@ -129,6 +135,18 @@ GuiDialog::tick(float dt)
     m_animElapsed = std::min(kOpenAnimationSeconds, m_animElapsed + dt);
     m_selectionAnimElapsed =
       std::min(kSelectionAnimationSeconds, m_selectionAnimElapsed + dt);
+    m_selectionTravelElapsed = std::min(1.0f, m_selectionTravelElapsed + dt);
+    m_ambientElapsed = m_reducedMotion
+                         ? 0.0f
+                         : std::fmod(m_ambientElapsed + std::min(dt, 0.1f),
+                                     GuiMenuAnimator::kAmbientPeriodSeconds);
+    for (int index = 0; index < static_cast<int>(m_buttons.size()); ++index) {
+      const float target = index == m_selectedButton  ? 1.0f
+                           : index == m_hoveredButton ? 0.55f
+                                                      : 0.0f;
+      m_buttonFocus.setTarget(index, target);
+    }
+    m_buttonFocus.tick(dt, m_reducedMotion);
   }
 }
 
@@ -184,6 +202,7 @@ GuiDialog::selectButton(int buttonIndex)
     m_selectionFromButton = selectionPosition();
     m_selectedButton = next;
     m_selectionAnimElapsed = 0.0f;
+    m_selectionTravelElapsed = 0.0f;
   }
 }
 
@@ -407,9 +426,6 @@ GuiDialog::rebuildVisual()
   const float slideY = (1.0f - ease) * 16.0f;
   const unsigned char bgAlpha = static_cast<unsigned char>(190.0f * ease);
 
-  // Full-screen backdrop
-  GuiKit::drawBackdrop(m_visual, virtualWidth, virtualHeight, bgAlpha);
-
   const float curPanelY = m_panelY - slideY;
   const float curButtonY = m_buttonY - slideY;
   const float effectiveWidth =
@@ -418,6 +434,13 @@ GuiDialog::rebuildVisual()
     std::min(m_panelHeight * fontScale, virtualHeight - 32.0f);
 
   if (m_roundedStyle) {
+    // Radial scrim: the world stays faintly visible at the center.
+    GuiKit::drawVignette(m_visual,
+                         virtualWidth,
+                         virtualHeight,
+                         UiTheme::fade(UiTheme::scrimCenter(), ease),
+                         UiTheme::fade(UiTheme::scrimEdge(), ease),
+                         0.3f);
     drawRoundedContents(curPanelY,
                         effectiveWidth,
                         effectiveHeight,
@@ -425,6 +448,9 @@ GuiDialog::rebuildVisual()
                         static_cast<unsigned char>(255.0f * ease));
     return;
   }
+
+  // Full-screen backdrop
+  GuiKit::drawBackdrop(m_visual, virtualWidth, virtualHeight, bgAlpha);
 
   // Panel card
   GuiPanelChrome chrome;
@@ -502,7 +528,14 @@ GuiDialog::drawRoundedContents(float panelY,
                                float fontScale,
                                unsigned char opacity)
 {
-  GuiKit::drawRoundedPanel(m_visual, m_panelX, panelY, width, height, opacity);
+  const float ambient = m_ambientElapsed;
+  const float breathe = 0.5f + 0.5f * std::sin(ambient * 1.04719755f);
+  GuiGlassStyle glass;
+  glass.opacity = opacity;
+  glass.ambientPhase = ambient;
+  glass.glow = 0.4f + 0.3f * breathe;
+  glass.accentReveal = static_cast<float>(opacity) / 255.0f;
+  GuiKit::drawGlassPanel(m_visual, m_panelX, panelY, width, height, glass);
   const float centerX = m_panelX + width * 0.5f;
   GuiKit::drawTextCentered(
     m_visual,
@@ -517,107 +550,183 @@ GuiDialog::drawRoundedContents(float panelY,
     centerX,
     panelY + 86.0f * fontScale,
     m_fontSize,
-    UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+    UiTheme::applyOpacity(UiTheme::textSecondary(), opacity));
+  // Seven cells breathe in a wave, cyan into violet.
   for (int cell = 0; cell < 7; ++cell) {
+    const float wave =
+      m_reducedMotion ? 0.5f
+                      : 0.5f + 0.5f * std::sin(ambient * 3.14159265f -
+                                               static_cast<float>(cell) * 0.7f);
+    const float size = (4.0f + 2.0f * wave) * fontScale;
+    const float cellCenterX =
+      centerX + (static_cast<float>(cell) - 3.0f) * 11.0f * fontScale + 2.5f;
+    const float cellCenterY = panelY + 119.5f * fontScale;
+    const ColorRgba tint = UiTheme::mix(UiTheme::accentCool(),
+                                        UiTheme::accentViolet(),
+                                        static_cast<float>(cell) / 6.0f);
     GuiKit::drawRoundedRect(
       m_visual,
-      centerX + (static_cast<float>(cell) - 3.0f) * 11.0f * fontScale,
-      panelY + 117.0f * fontScale,
-      5.0f * fontScale,
-      5.0f * fontScale,
+      cellCenterX - size * 0.5f,
+      cellCenterY - size * 0.5f,
+      size,
+      size,
       2.0f,
-      UiTheme::applyOpacity(
-        cell < 4 ? UiTheme::accentCool() : UiTheme::accentViolet(), opacity));
-  }
-  const float y = m_buttonY - panelOffsetY();
-  for (size_t index = 0; index < m_buttons.size(); ++index) {
-    const float x = m_buttonX[index];
-    GuiKit::drawRoundedRect(
-      m_visual,
-      x,
-      y + 4.0f,
-      m_buttonWidth,
-      m_buttonHeight,
-      12.0f,
-      UiTheme::applyOpacity(UiTheme::panelShadow(), opacity));
-    GuiKit::drawRoundedRect(
-      m_visual,
-      x,
-      y,
-      m_buttonWidth,
-      m_buttonHeight,
-      12.0f,
-      UiTheme::applyOpacity(static_cast<int>(index) == m_hoveredButton
-                              ? UiTheme::accentCool()
-                              : UiTheme::panelBorder(),
+      UiTheme::applyOpacity(UiTheme::fade(tint, 0.55f + 0.45f * wave),
                             opacity));
+  }
+
+  const float y = m_buttonY - panelOffsetY();
+  const float radius = 12.0f;
+  // Buttons: soft shadow, a rim and face that warm with focus, and a small
+  // lift (kept within the button so the label still hits it).
+  for (size_t index = 0; index < m_buttons.size(); ++index) {
+    const GuiButtonDef& button = m_buttons[index];
+    const ColorRgba accent =
+      button.isDestructive ? UiTheme::error() : UiTheme::accentCool();
+    const float e =
+      std::clamp(m_buttonFocus.value(static_cast<int>(index)), 0.0f, 1.0f);
+    const float lift = 2.0f * e;
+    const float x = m_buttonX[index];
+    GuiKit::drawSoftShadow(
+      m_visual,
+      x,
+      y - lift,
+      m_buttonWidth,
+      m_buttonHeight,
+      radius,
+      10.0f + 4.0f * e,
+      4.0f + 2.0f * e,
+      UiTheme::applyOpacity(UiTheme::glowShadow(), opacity));
     GuiKit::drawRoundedRect(
+      m_visual,
+      x,
+      y - lift,
+      m_buttonWidth,
+      m_buttonHeight,
+      radius,
+      UiTheme::applyOpacity(UiTheme::mix(UiTheme::cardRim(), accent, 0.6f * e),
+                            opacity));
+    GuiKit::drawRoundedGradientRect(
       m_visual,
       x + 1.0f,
-      y + 1.0f,
+      y - lift + 1.0f,
       m_buttonWidth - 2.0f,
       m_buttonHeight - 2.0f,
-      11.0f,
-      UiTheme::applyOpacity(UiTheme::menuCard(), opacity));
+      radius - 1.0f,
+      UiTheme::applyOpacity(UiTheme::mix(UiTheme::cardTop(), accent, 0.12f * e),
+                            opacity),
+      UiTheme::applyOpacity(UiTheme::cardBottom(), opacity));
   }
-  if (!m_buttons.empty()) {
+  if (!m_buttons.empty() && m_selectedButton >= 0 &&
+      m_selectedButton < static_cast<int>(m_buttons.size())) {
+    // The highlight stretches from the button it leaves to the one it lands
+    // on, then a sheen sweeps across it.
     const ColorRgba accent = m_buttons[m_selectedButton].isDestructive
                                ? UiTheme::error()
                                : UiTheme::accentCool();
     const float gap = m_buttonX.size() > 1 ? m_buttonX[1] - m_buttonX[0] : 0.0f;
-    const float x = m_buttonX[0] + selectionPosition() * gap;
+    const float target = static_cast<float>(m_selectedButton);
+    float leading = target;
+    float trailing = target;
+    float sheen = -1.0f;
+    if (!m_reducedMotion) {
+      const float travel = target - m_selectionFromButton;
+      leading =
+        m_selectionFromButton +
+        travel * GuiEasing::outBack(m_selectionTravelElapsed /
+                                    GuiMenuAnimator::kSelectionLeadSeconds);
+      trailing =
+        m_selectionFromButton +
+        travel * GuiEasing::outCubic(m_selectionTravelElapsed /
+                                     GuiMenuAnimator::kSelectionTrailSeconds);
+      const float sweep =
+        (m_selectionTravelElapsed - GuiMenuAnimator::kSelectionLeadSeconds) /
+        GuiMenuAnimator::kSheenSeconds;
+      sheen = sweep > 0.0f && sweep < 1.0f ? sweep : -1.0f;
+    }
+    const float lift =
+      2.0f * std::clamp(m_buttonFocus.value(m_selectedButton), 0.0f, 1.0f);
+    const float x = m_buttonX[0] + std::min(leading, trailing) * gap;
+    const float highlightWidth =
+      std::abs(leading - trailing) * gap + m_buttonWidth;
+    GuiKit::drawRoundedBand(
+      m_visual,
+      x,
+      y - lift,
+      highlightWidth,
+      m_buttonHeight,
+      radius,
+      0.0f,
+      12.0f + 4.0f * breathe,
+      UiTheme::applyOpacity(UiTheme::fade(accent, 0.22f + 0.12f * breathe),
+                            opacity),
+      UiTheme::transparentOf(accent));
     GuiKit::drawRoundedRect(m_visual,
-                            x - 1.0f,
-                            y - 1.0f,
-                            m_buttonWidth + 2.0f,
-                            m_buttonHeight + 2.0f,
-                            13.0f,
+                            x,
+                            y - lift,
+                            highlightWidth,
+                            m_buttonHeight,
+                            radius,
                             UiTheme::applyOpacity(accent, opacity));
-    GuiKit::drawRoundedRect(
+    GuiKit::drawRoundedGradientRect(
+      m_visual,
+      x + 1.0f,
+      y - lift + 1.0f,
+      highlightWidth - 2.0f,
+      m_buttonHeight - 2.0f,
+      radius - 1.0f,
+      UiTheme::applyOpacity(UiTheme::mix(UiTheme::cardTop(), accent, 0.38f),
+                            opacity),
+      UiTheme::applyOpacity(UiTheme::mix(UiTheme::cardBottom(), accent, 0.2f),
+                            opacity));
+    GuiKit::drawSheen(
       m_visual,
       x,
-      y,
-      m_buttonWidth,
+      y - lift,
+      highlightWidth,
       m_buttonHeight,
-      12.0f,
-      UiTheme::applyOpacity(UiTheme::menuCard(), opacity));
-    GuiKit::drawRoundedRect(
-      m_visual,
-      x,
-      y,
-      m_buttonWidth,
-      m_buttonHeight,
-      12.0f,
-      UiTheme::applyOpacity(accent, static_cast<unsigned char>(opacity / 5u)));
+      radius,
+      sheen,
+      UiTheme::applyOpacity(ColorRgba{ 220, 250, 255, 44 }, opacity));
   }
   for (size_t index = 0; index < m_buttons.size(); ++index) {
     const GuiButtonDef& button = m_buttons[index];
     const ColorRgba accent =
       button.isDestructive ? UiTheme::error() : UiTheme::accentCool();
-    const ColorRgba text = static_cast<int>(index) == m_selectedButton
-                             ? accent
-                             : UiTheme::textPrimary();
+    const float e =
+      std::clamp(m_buttonFocus.value(static_cast<int>(index)), 0.0f, 1.0f);
+    const float lift = 2.0f * e;
+    const ColorRgba text =
+      static_cast<int>(index) == m_selectedButton
+        ? UiTheme::mix(accent, UiTheme::textPrimary(), 0.2f)
+        : UiTheme::mix(UiTheme::textPrimary(), accent, e);
     GuiKit::drawTextCentered(m_visual,
                              button.label,
                              m_buttonX[index] + m_buttonWidth * 0.5f,
-                             y + m_buttonHeight * 0.36f,
+                             y + m_buttonHeight * 0.36f - lift,
                              17.0f * fontScale,
                              UiTheme::applyOpacity(text, opacity));
     GuiKit::drawTextCentered(
       m_visual,
       button.shortcut,
       m_buttonX[index] + m_buttonWidth * 0.5f,
-      y + m_buttonHeight * 0.73f,
+      y + m_buttonHeight * 0.73f - lift,
       10.0f * fontScale,
-      UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+      UiTheme::applyOpacity(
+        UiTheme::mix(UiTheme::textMuted(), UiTheme::textSecondary(), e),
+        opacity));
   }
-  GuiKit::drawTextCentered(
-    m_visual,
-    "ARROWS / MOUSE   Select     ENTER   Open",
-    centerX,
-    panelY + height - 21.0f * fontScale,
-    10.0f * fontScale,
-    UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+  // Footer key hints, centered.
+  const float hintSize = 9.0f * fontScale;
+  const float hintWidth =
+    GuiKit::measureKeyHint("LEFTRIGHT", "Select", hintSize) +
+    GuiKit::measureKeyHint("ENTER", "Open", hintSize) - hintSize * 1.6f;
+  float hintX = centerX - hintWidth * 0.5f;
+  const float hintY = panelY + height - 30.0f * fontScale;
+  hintX += GuiKit::drawKeyHint(
+    m_visual, hintX, hintY, "LEFTRIGHT", "Select", hintSize, opacity);
+  GuiKit::drawKeyHint(
+    m_visual, hintX, hintY, "ENTER", "Open", hintSize, opacity);
 }
 
 bool

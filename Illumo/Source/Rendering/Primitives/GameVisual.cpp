@@ -271,6 +271,79 @@ GameVisual::addFilledTriangle(float x0,
 }
 
 size_t
+GameVisual::addGradientQuad(float x0,
+                            float y0,
+                            float x1,
+                            float y1,
+                            float x2,
+                            float y2,
+                            float x3,
+                            float y3,
+                            ColorRgba c0,
+                            ColorRgba c1,
+                            ColorRgba c2,
+                            ColorRgba c3)
+{
+  ShapePrimitive shape;
+  shape.kind = ShapeKind::GradientQuad;
+  shape.x0 = x0;
+  shape.y0 = y0;
+  shape.x1 = x1;
+  shape.y1 = y1;
+  shape.x2 = x2;
+  shape.y2 = y2;
+  shape.x3 = x3;
+  shape.y3 = y3;
+  const float minX = std::min(std::min(x0, x1), std::min(x2, x3));
+  const float minY = std::min(std::min(y0, y1), std::min(y2, y3));
+  const float maxX = std::max(std::max(x0, x1), std::max(x2, x3));
+  const float maxY = std::max(std::max(y0, y1), std::max(y2, y3));
+  shape.rect = { minX, minY, maxX - minX, maxY - minY };
+  shape.vertexColors = { c0, c1, c2, c3 };
+  shape.color = c0;
+  return appendShape(shape);
+}
+
+size_t
+GameVisual::addGradientRect(float x,
+                            float y,
+                            float w,
+                            float h,
+                            ColorRgba topLeft,
+                            ColorRgba topRight,
+                            ColorRgba bottomRight,
+                            ColorRgba bottomLeft)
+{
+  return addGradientQuad(x,
+                         y,
+                         x + w,
+                         y,
+                         x + w,
+                         y + h,
+                         x,
+                         y + h,
+                         topLeft,
+                         topRight,
+                         bottomRight,
+                         bottomLeft);
+}
+
+size_t
+GameVisual::addGradientTriangle(float x0,
+                                float y0,
+                                float x1,
+                                float y1,
+                                float x2,
+                                float y2,
+                                ColorRgba c0,
+                                ColorRgba c1,
+                                ColorRgba c2)
+{
+  // The degenerate fourth vertex repeats vertex 2, so (2,3,0) has no area.
+  return addGradientQuad(x0, y0, x1, y1, x2, y2, x2, y2, c0, c1, c2, c2);
+}
+
+size_t
 GameVisual::appendShape(const ShapePrimitive& shape)
 {
   shapes.push_back(shape);
@@ -641,6 +714,17 @@ GameVisual::pushShapeQuad(Point2 p0,
                           Point2 p3,
                           ColorRgba color)
 {
+  const std::array<ColorRgba, 4> colors = { color, color, color, color };
+  return pushShapeQuadColors(p0, p1, p2, p3, colors);
+}
+
+bool
+GameVisual::pushShapeQuadColors(Point2 p0,
+                                Point2 p1,
+                                Point2 p2,
+                                Point2 p3,
+                                const std::array<ColorRgba, 4>& colors)
+{
   if (quadOutsideCullRect(p0, p1, p2, p3)) {
     return true;
   }
@@ -648,20 +732,33 @@ GameVisual::pushShapeQuad(Point2 p0,
     return false;
   }
   const unsigned int base = shapeQuadCount * 4;
-  shapeVerts[base + 0] = {
-    p0.x, p0.y, 0.0f, color.r, color.g, color.b, color.a
-  };
-  shapeVerts[base + 1] = {
-    p1.x, p1.y, 0.0f, color.r, color.g, color.b, color.a
-  };
-  shapeVerts[base + 2] = {
-    p2.x, p2.y, 0.0f, color.r, color.g, color.b, color.a
-  };
-  shapeVerts[base + 3] = {
-    p3.x, p3.y, 0.0f, color.r, color.g, color.b, color.a
-  };
+  const Point2 points[4] = { p0, p1, p2, p3 };
+  for (unsigned int corner = 0; corner < 4; ++corner) {
+    const ColorRgba& color = colors[corner];
+    shapeVerts[base + corner] = { points[corner].x, points[corner].y, 0.0f,
+                                  color.r,          color.g,          color.b,
+                                  color.a };
+  }
   shapeQuadCount += 1;
   return true;
+}
+
+bool
+GameVisual::pushGradientQuad(const ShapePrimitive& shape,
+                             const Rect2& hostBounds)
+{
+  const Rect2 bounds = shape.rect;
+  const Point2 local[4] = { { shape.x0, shape.y0 },
+                            { shape.x1, shape.y1 },
+                            { shape.x2, shape.y2 },
+                            { shape.x3, shape.y3 } };
+  Point2 points[4];
+  for (int corner = 0; corner < 4; ++corner) {
+    points[corner] = applyHostTransform(
+      transformPoint(local[corner], bounds, shape.transform), hostBounds);
+  }
+  return pushShapeQuadColors(
+    points[0], points[1], points[2], points[3], shape.vertexColors);
 }
 
 bool
@@ -1018,6 +1115,10 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
       }
     } else if (shape.kind == ShapeKind::FilledTriangle) {
       if (!pushFilledTriangle(shape, hostBounds)) {
+        break;
+      }
+    } else if (shape.kind == ShapeKind::GradientQuad) {
+      if (!pushGradientQuad(shape, hostBounds)) {
         break;
       }
     } else {

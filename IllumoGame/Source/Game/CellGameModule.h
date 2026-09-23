@@ -164,8 +164,8 @@ private:
   unsigned int m_paintPaletteStateOffset = 0u;
   unsigned char m_paintBrush = 0;
   std::string m_paintRuleTag;
-  GameVisual canvasEntranceVisual{ 1024u };
-  static constexpr double kCanvasEntranceSeconds = 0.72;
+  GameVisual canvasEntranceVisual{ 4096u };
+  static constexpr double kCanvasEntranceSeconds = 0.9;
   double canvasEntranceElapsed = kCanvasEntranceSeconds;
   static constexpr double kCanvasExitSeconds = 0.48;
   bool mainMenuReturnPending = false;

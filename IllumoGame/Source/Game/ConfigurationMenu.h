@@ -109,6 +109,11 @@ private:
   int firstVisibleRow = 0;
   int visibleRows = kRowCount;
   GuiPanelFit panelFit;
+  // Row hover/focus emphasis, toggle knob travel (indexed by row) and the
+  // scrollbar thumb, all spring-driven.
+  GuiSpringArray rowFocus;
+  GuiSpringArray toggleKnobs;
+  GuiSpring scrollThumb;
 
   std::string family;
   std::string ruleSet;
@@ -129,6 +134,9 @@ private:
 
   void updateLayout();
   void rebuildVisual();
+  bool isToggleRow(int row) const;
+  bool toggleValue(int row) const;
+  void updateSprings(float deltaSeconds);
   float rowReveal(int row) const;
   float selectionRowPosition() const;
   void selectRow(int row);

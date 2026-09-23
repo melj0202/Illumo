@@ -114,11 +114,18 @@ change partitioning, halos or `SparseCellGrid::applyChunkPatches` only with
   `reducedUiMotion`; F2 wheel input scrolls visible rows without moving
   keyboard selection.
 - Menu screens take their motion, fitted virtual space, row windows, and
-  pointer edges from `Illumo/Gui/GuiMenuShell` (`GuiEasing`,
-  `GuiMenuAnimator`, `GuiPanelLayout`, `GuiPointerTracker`). Do not restate
-  easing curves, animation timings, UI-scale fitting, scroll clamping, or
+  pointer edges from `Illumo/Gui/GuiMenuShell` (`GuiEasing`, `GuiSpring`,
+  `GuiSpringArray`, `GuiMenuAnimator`, `GuiPanelLayout`, `GuiPointerTracker`)
+  and their chrome from `GuiKit`'s glass helpers. Do not restate easing curves,
+  spring integration, animation timings, UI-scale fitting, scroll clamping, or
   press-edge bookkeeping in a screen; add a new one by composing the shell and
-  supplying only that screen's rows, layout constants, and drawing.
+  supplying only that screen's rows, layout constants, and drawing. Feedback
+  animation never delays an action, and animated offsets never move a hit
+  area: rows lean in horizontally only and lift at most a couple of pixels.
+- The title screen's ambient world is presentation only. It must never write
+  the player's ruleset preference (restore `FamilyString`, `RuleSetString` and
+  `ModeString` around its `CellContext`), and it must refresh its canvas
+  targets after each advance (`rebuildTargetsFromGrid`).
 - Editor patterns (RLE/plaintext/stamps/clipboard) are a side path. World saves
   stay sparse; version 4 records family and ruleset IDs, version 3 derives family
   from its rule ID, and version 2/dense legacy readers remain compatible. Finite

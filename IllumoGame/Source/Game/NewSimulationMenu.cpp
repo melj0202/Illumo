@@ -44,8 +44,12 @@ NewSimulationMenu::open(const NewSimulationConfiguration& initial,
   animator.setReducedMotion(reducedMotion);
   animator.restart();
   selected = 0;
-  focus.fill(0);
-  focus[0] = 1;
+  focus.configure(3.0f, 0.7f);
+  focus.focusOnly(selected, kRowCount);
+  focus.snapAll();
+  modeBlend.configure(2.4f, 0.8f);
+  modeBlend.snapTo(finite ? 1.0f : 0.0f);
+  motif.resetGlider(6, 6, 1, 1);
   // Ignore the held click that opened the menu until its first release.
   pointer.reset(true);
   openState = true;
@@ -68,30 +72,42 @@ NewSimulationMenu::tick(float dt)
 {
   if (std::isfinite(dt)) {
     const float step = std::clamp(dt, 0.0f, 0.1f);
+    const bool still = animator.reducedMotion();
     animator.tick(step);
-    for (int row = 0; row < kRowCount; ++row) {
-      const float target = row == selected ? 1.0f : 0.0f;
-      const std::size_t index = static_cast<std::size_t>(row);
-      focus[index] = animator.reducedMotion()
-                       ? target
-                       : GuiEasing::approach(focus[index], target, 18.0f, step);
-    }
+    focus.focusOnly(selected, kRowCount);
+    focus.tick(step, still);
+    modeBlend.setTarget(finite ? 1.0f : 0.0f);
+    modeBlend.tick(step, still);
+    motif.tick(step, still);
   }
   rebuild();
 }
 
 void
+NewSimulationMenu::selectRow(int row)
+{
+  if (row == selected) {
+    return;
+  }
+  animator.beginSelectionTravel(
+    animator.selectionPosition(static_cast<float>(selected)));
+  selected = row;
+}
+
+void
 NewSimulationMenu::select(int direction)
 {
+  int row = selected;
   do {
-    selected = (selected + direction + kRowCount) % kRowCount;
-  } while (!finite && (selected == 3 || selected == 4));
+    row = (row + direction + kRowCount) % kRowCount;
+  } while (!finite && (row == 3 || row == 4));
+  selectRow(row);
 }
 
 void
 NewSimulationMenu::change(int direction)
 {
-  animator.triggerValuePulse();
+  animator.triggerValuePulse(direction);
   if (selected == 0) {
     const std::vector<std::string> families =
       CellContext::GetKnownFamilyStrings();
@@ -184,9 +200,9 @@ NewSimulationMenu::update(InputManager* input)
     else if (event.key == KeyCode::Right)
       change(1);
     else if (event.key == KeyCode::Home)
-      selected = 0;
+      selectRow(0);
     else if (event.key == KeyCode::End)
-      selected = kRowCount - 1;
+      selectRow(kRowCount - 1);
     else if (event.key == KeyCode::Enter && event.action == InputAction::Press)
       result = activate();
   }
@@ -207,7 +223,7 @@ NewSimulationMenu::update(InputManager* input)
       my < y + 110 + rowHeight * kRowCount) {
     const int row = static_cast<int>((my - y - 110) / rowHeight);
     if (finite || (row != 3 && row != 4)) {
-      selected = row;
+      selectRow(row);
       if (pointer.clicked()) {
         if (selected < 6 && mx < x + width * 0.55f)
           change(-1);
@@ -232,64 +248,137 @@ NewSimulationMenu::rebuild()
   y = (screenHeight - height) / 2 + animator.panelOffsetY();
   rowHeight = (height - 164) / static_cast<float>(kRowCount);
   visual.clearPrimitives();
-  GuiKit::drawBackdrop(visual, screenWidth, screenHeight, 160);
-  GuiKit::drawRoundedPanel(visual, x, y, width, height);
-  visual.addText("A FRESH WORLD", x + 28, y + 20, 11, UiTheme::accentCool());
-  visual.addText("NEW CANVAS", x + 28, y + 41, 28, UiTheme::textPrimary());
+
+  const float scrim = animator.openReveal(0.18f);
+  const float reveal = animator.panelReveal();
+  const unsigned char opacity = static_cast<unsigned char>(255.0f * reveal);
+  const float ambient = animator.ambientPhase();
+  const float breathe = 0.5f + 0.5f * std::sin(ambient * 1.04719755f);
+  const ColorRgba cyan = UiTheme::accentCool();
+  const ColorRgba violet = UiTheme::accentViolet();
+
+  GuiKit::drawVignette(visual,
+                       screenWidth,
+                       screenHeight,
+                       UiTheme::fade(UiTheme::scrimCenter(), scrim),
+                       UiTheme::fade(UiTheme::scrimEdge(), scrim),
+                       0.3f);
+  GuiGlassStyle glass;
+  glass.opacity = opacity;
+  glass.ambientPhase = ambient;
+  glass.glow = 0.4f + 0.3f * breathe;
+  glass.accentReveal = reveal;
+  GuiKit::drawGlassPanel(visual, x, y, width, height, glass);
+
+  const float headerSlide = (1.0f - reveal) * 10.0f;
+  visual.addText("A FRESH WORLD",
+                 x + 28 - headerSlide,
+                 y + 20,
+                 11,
+                 UiTheme::applyOpacity(cyan, opacity));
+  visual.addText("NEW CANVAS",
+                 x + 28 - headerSlide * 0.6f,
+                 y + 41,
+                 28,
+                 UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
   visual.addText("Choose the space. Then see what emerges.",
-                 x + 28,
+                 x + 28 - headerSlide * 0.3f,
                  y + 80,
                  13,
-                 UiTheme::textMuted());
-  // A bounded decorative cell colony echoes the main menu without simulating.
-  for (int cy = 0; cy < 6; ++cy) {
-    for (int cx = 0; cx < 6; ++cx) {
-      const float wave =
-        0.5f + 0.5f * std::sin(animator.ambientPhase() * 1.5f +
-                               static_cast<float>(cx - cy) * 0.8f);
-      const bool live = (cx + cy * 3) % 5 < 2;
-      const float size = live ? 7 + wave : 7;
-      GuiKit::drawRoundedRect(
-        visual,
-        x + width - 90 + static_cast<float>(cx) * 10,
-        y + 15 + static_cast<float>(cy) * 10,
-        size,
-        size,
-        2,
-        live
-          ? UiTheme::applyOpacity(UiTheme::accentCool(),
-                                  static_cast<unsigned char>(90 + wave * 140))
-          : UiTheme::menuCard());
-    }
-  }
+                 UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+
+  // A live glider walks a 6x6 torus, echoing the title screen's motif.
+  motif.draw(visual,
+             x + width - 90,
+             y + 15,
+             7.0f,
+             3.0f,
+             ColorRgba{ 104, 231, 241, 255 },
+             ColorRgba{ 44, 68, 100, 150 },
+             0.7f,
+             opacity);
+
+  // The boundary badge crossfades between infinite (cyan) and torus (violet).
+  const float mode = std::clamp(modeBlend.value(), 0.0f, 1.0f);
+  const ColorRgba modeColor = UiTheme::mix(cyan, violet, mode);
   const float modeBadgeX = x + width - 164;
   const float modeBadgeY = y + 79;
-  GuiKit::drawRoundedRect(visual,
-                          modeBadgeX,
-                          modeBadgeY,
-                          140,
-                          22,
-                          8,
-                          UiTheme::applyOpacity(UiTheme::accentCool(), 100));
   GuiKit::drawRoundedRect(
-    visual, modeBadgeX + 1, modeBadgeY + 1, 138, 20, 7, UiTheme::panelInset());
+    visual,
+    modeBadgeX,
+    modeBadgeY,
+    140,
+    22,
+    11,
+    UiTheme::applyOpacity(UiTheme::fade(modeColor, 0.45f), opacity));
+  GuiKit::drawRoundedGradientRect(
+    visual,
+    modeBadgeX + 1,
+    modeBadgeY + 1,
+    138,
+    20,
+    10,
+    UiTheme::applyOpacity(ColorRgba{ 16, 26, 44, 255 }, opacity),
+    UiTheme::applyOpacity(UiTheme::panelInset(), opacity));
+  GuiKit::drawSoftGlow(
+    visual,
+    modeBadgeX + 13,
+    modeBadgeY + 11,
+    12,
+    12,
+    UiTheme::applyOpacity(UiTheme::fade(modeColor, 0.35f + 0.25f * breathe),
+                          opacity),
+    12);
   visual.addFilledEllipse(modeBadgeX + 10,
                           modeBadgeY + 8,
                           6,
                           6,
-                          finite ? UiTheme::accentViolet()
-                                 : UiTheme::accentCool());
+                          UiTheme::applyOpacity(modeColor, opacity));
   visual.addText(finite ? "FINITE TORUS" : "INFINITE FIELD",
                  modeBadgeX + 22,
                  modeBadgeY + 6,
                  10,
-                 UiTheme::textPrimary());
-  visual.addFilledRect(x + 24,
-                       y + 103,
-                       width - 48,
-                       1,
-                       UiTheme::applyOpacity(UiTheme::accentCool(), 80));
+                 UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
 
+  // Divider: a cyan-to-violet hairline that fades at both ends.
+  const float dividerWidth = width - 48;
+  const ColorRgba dividerCyan =
+    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.45f), opacity);
+  const ColorRgba dividerViolet =
+    UiTheme::applyOpacity(UiTheme::fade(violet, 0.45f), opacity);
+  visual.addGradientRect(x + 24,
+                         y + 103,
+                         dividerWidth * 0.25f,
+                         1,
+                         UiTheme::transparentOf(cyan),
+                         dividerCyan,
+                         dividerCyan,
+                         UiTheme::transparentOf(cyan));
+  visual.addGradientRect(x + 24 + dividerWidth * 0.25f,
+                         y + 103,
+                         dividerWidth * 0.5f,
+                         1,
+                         dividerCyan,
+                         dividerViolet,
+                         dividerViolet,
+                         dividerCyan);
+  visual.addGradientRect(x + 24 + dividerWidth * 0.75f,
+                         y + 103,
+                         dividerWidth * 0.25f,
+                         1,
+                         dividerViolet,
+                         UiTheme::transparentOf(violet),
+                         UiTheme::transparentOf(violet),
+                         dividerViolet);
+
+  drawRows(opacity, breathe);
+  drawFooter(height, opacity);
+}
+
+void
+NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
+{
+  const ColorRgba cyan = UiTheme::accentCool();
   const RuleSetDefinition* rule =
     RuleSetRegistry::instance().getRuleSetDefinition(draft.ruleSet);
   std::string ruleName = rule == nullptr ? draft.ruleSet : rule->name;
@@ -314,102 +403,214 @@ NewSimulationMenu::rebuild()
     "Enter to begin  >",
     "Discard choices"
   };
+  const float cardX = x + 24;
+  const float cardWidth = width - 48;
+  const float cardHeight = rowHeight - 5;
+  const float radius = 10;
+  const float firstRowY = y + 110;
+
+  // Cards: soft shadow, a rim that warms with emphasis, a top-lit face. The
+  // Create row carries a teal face so the primary action reads at a glance.
+  for (int row = 0; row < kRowCount; ++row) {
+    const float rowReveal = animator.rowReveal(row, 0);
+    const unsigned char rowOpacity =
+      static_cast<unsigned char>(static_cast<float>(opacity) * rowReveal);
+    const float ry = firstRowY + static_cast<float>(row) * rowHeight +
+                     (1.0f - rowReveal) * 6.0f;
+    const float e = std::clamp(focus.value(row), 0.0f, 1.0f);
+    const bool primary = row == 6;
+    GuiKit::drawSoftShadow(
+      visual,
+      cardX,
+      ry,
+      cardWidth,
+      cardHeight,
+      radius,
+      9,
+      3,
+      UiTheme::applyOpacity(UiTheme::fade(UiTheme::glowShadow(), 0.7f),
+                            rowOpacity));
+    GuiKit::drawRoundedRect(
+      visual,
+      cardX,
+      ry,
+      cardWidth,
+      cardHeight,
+      radius,
+      UiTheme::applyOpacity(UiTheme::mix(primary
+                                           ? ColorRgba{ 52, 128, 150, 255 }
+                                           : UiTheme::cardRim(),
+                                         ColorRgba{ 80, 160, 190, 255 },
+                                         e * 0.6f),
+                            rowOpacity));
+    GuiKit::drawRoundedGradientRect(
+      visual,
+      cardX + 1,
+      ry + 1,
+      cardWidth - 2,
+      cardHeight - 2,
+      radius - 1,
+      UiTheme::applyOpacity(primary ? ColorRgba{ 30, 88, 110, 255 }
+                                    : UiTheme::cardTop(),
+                            rowOpacity),
+      UiTheme::applyOpacity(primary ? ColorRgba{ 18, 54, 74, 255 }
+                                    : UiTheme::cardBottom(),
+                            rowOpacity));
+  }
+
+  // The stretchy selection pill with a breathing glow and arrival sheen.
+  const GuiSelectionSpan span =
+    animator.selectionSpan(static_cast<float>(selected));
+  const float spanTop = std::min(span.leading, span.trailing);
+  const float spanBottom = std::max(span.leading, span.trailing);
+  const float pillY = firstRowY + spanTop * rowHeight;
+  const float pillHeight = (spanBottom - spanTop) * rowHeight + cardHeight;
+  GuiKit::drawRoundedBand(
+    visual,
+    cardX,
+    pillY,
+    cardWidth,
+    pillHeight,
+    radius,
+    0,
+    12 + 3 * breathe,
+    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.16f + 0.1f * breathe), opacity),
+    UiTheme::transparentOf(cyan));
+  GuiKit::drawRoundedRect(
+    visual,
+    cardX,
+    pillY,
+    cardWidth,
+    pillHeight,
+    radius,
+    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), opacity));
+  GuiKit::drawRoundedGradientRect(
+    visual,
+    cardX + 1,
+    pillY + 1,
+    cardWidth - 2,
+    pillHeight - 2,
+    radius - 1,
+    UiTheme::applyOpacity(UiTheme::selectionTop(), opacity),
+    UiTheme::applyOpacity(UiTheme::selectionBottom(), opacity));
+  GuiKit::drawSheen(
+    visual,
+    cardX,
+    pillY,
+    cardWidth,
+    pillHeight,
+    radius,
+    animator.selectionSheen(),
+    UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 40 }, opacity));
+  GuiKit::drawRoundedRect(visual,
+                          x + 31,
+                          pillY + 9,
+                          3,
+                          std::max(4.0f, pillHeight - 18),
+                          1.5f,
+                          UiTheme::applyOpacity(cyan, opacity));
+
+  const float pulse = animator.valuePulse();
+  const float direction = static_cast<float>(animator.valuePulseDirection());
   for (int row = 0; row < kRowCount; ++row) {
     const bool disabled = !finite && (row == 3 || row == 4);
-    const float ry = y + 110 + static_cast<float>(row) * rowHeight;
-    const float emphasis = focus[static_cast<std::size_t>(row)];
-    const float lift = emphasis * 2;
-    GuiKit::drawRoundedRect(visual,
-                            x + 24,
-                            ry + 3,
-                            width - 48,
-                            rowHeight - 5,
-                            10,
-                            ColorRgba{ 0, 0, 0, 160 });
-    GuiKit::drawRoundedRect(visual,
-                            x + 24,
-                            ry - lift,
-                            width - 48,
-                            rowHeight - 5,
-                            10,
-                            row == 6 ? ColorRgba{ 43, 111, 133, 255 }
-                                     : UiTheme::menuBorder());
-    GuiKit::drawRoundedRect(visual,
-                            x + 25,
-                            ry + 1 - lift,
-                            width - 50,
-                            rowHeight - 7,
-                            9,
-                            row == 6 ? ColorRgba{ 24, 66, 86, 255 }
-                                     : UiTheme::menuCard());
-    GuiKit::drawRoundedRect(
-      visual,
-      x + 25,
-      ry + 1 - lift,
-      width - 50,
-      rowHeight - 7,
-      9,
-      UiTheme::applyOpacity(UiTheme::selection(),
-                            static_cast<unsigned char>(emphasis * 220)));
-    GuiKit::drawRoundedRect(
-      visual,
-      x + 30,
-      ry + 10 - lift,
-      3,
-      rowHeight - 23,
-      1.5f,
-      UiTheme::applyOpacity(UiTheme::accentCool(),
-                            static_cast<unsigned char>(emphasis * 230)));
+    const float rowReveal = animator.rowReveal(row, 0);
+    const unsigned char rowOpacity =
+      static_cast<unsigned char>(static_cast<float>(opacity) * rowReveal);
+    const float ry = firstRowY + static_cast<float>(row) * rowHeight +
+                     (1.0f - rowReveal) * 6.0f;
+    const float e = std::clamp(focus.value(row), 0.0f, 1.2f);
+    const float eClamped = std::min(1.0f, e);
+    const bool active = row == selected;
     if (!disabled && row < 6) {
-      GuiKit::drawRoundedRect(visual,
-                              x + width * 0.45f,
-                              ry + 5 - lift,
-                              width * 0.55f - 37,
-                              rowHeight - 15,
-                              7,
-                              ColorRgba{ 10, 20, 35, 145 });
-      visual.addText("<",
-                     x + width * 0.45f + 8,
-                     ry + (rowHeight - 18) / 2 - lift,
-                     12,
-                     UiTheme::accentCool());
-      visual.addText(">",
-                     x + width - 50,
-                     ry + (rowHeight - 18) / 2 - lift,
-                     12,
-                     UiTheme::accentCool());
-      if (row == selected && animator.valuePulse() > 0.0f) {
-        GuiKit::drawRoundedRect(
-          visual,
-          x + width * 0.45f,
-          ry + 5 - lift,
-          width * 0.55f - 37,
-          rowHeight - 15,
-          7,
-          UiTheme::applyOpacity(
-            UiTheme::accentCool(),
-            static_cast<unsigned char>(animator.valuePulse() * 45.0f)));
+      const float boxX = x + width * 0.45f;
+      const float boxWidth = width * 0.55f - 37;
+      GuiKit::drawRoundedGradientRect(
+        visual,
+        boxX,
+        ry + 5,
+        boxWidth,
+        rowHeight - 15,
+        7,
+        UiTheme::applyOpacity(ColorRgba{ 6, 13, 26, 170 }, rowOpacity),
+        UiTheme::applyOpacity(ColorRgba{ 12, 22, 38, 150 }, rowOpacity));
+      if (active && pulse > 0.0f) {
+        GuiKit::drawRoundedBand(visual,
+                                boxX,
+                                ry + 5,
+                                boxWidth,
+                                rowHeight - 15,
+                                7,
+                                -1,
+                                8,
+                                UiTheme::fade(cyan, 0.5f * pulse),
+                                UiTheme::transparentOf(cyan));
       }
+      // Arrows lean toward the direction the value just moved.
+      const float leftNudge = active && direction < 0 ? 4.0f * pulse : 0.0f;
+      const float rightNudge = active && direction > 0 ? 4.0f * pulse : 0.0f;
+      const ColorRgba arrow = UiTheme::applyOpacity(
+        UiTheme::fade(cyan, 0.45f + 0.55f * eClamped), rowOpacity);
+      visual.addText(
+        "<", boxX + 8 - leftNudge, ry + (rowHeight - 18) / 2, 12, arrow);
+      visual.addText(
+        ">", x + width - 50 + rightNudge, ry + (rowHeight - 18) / 2, 12, arrow);
     }
-    const ColorRgba color = disabled ? UiTheme::textMuted()
-                            : row == selected || row == 6
-                              ? UiTheme::accentCool()
-                              : UiTheme::textPrimary();
-    const float labelY = ry + std::max(2.0f, (rowHeight - 16.0f) * 0.5f) - lift;
-    const float valueY = ry + std::max(2.0f, (rowHeight - 14.0f) * 0.5f) - lift;
-    visual.addText(labels[row], x + 40, labelY, 16, color);
-    visual.addText(values[row], x + width * 0.45f + 27, valueY, 14, color);
+    const ColorRgba labelColor =
+      disabled   ? UiTheme::fade(UiTheme::textMuted(), 0.7f)
+      : row == 6 ? cyan
+                 : UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped);
+    const float labelY = ry + std::max(2.0f, (rowHeight - 16.0f) * 0.5f);
+    const float valueY = ry + std::max(2.0f, (rowHeight - 14.0f) * 0.5f);
+    visual.addText(labels[row],
+                   x + 40 + 4.0f * e,
+                   labelY,
+                   16,
+                   UiTheme::applyOpacity(labelColor, rowOpacity));
+    // A changed value slides in from the side it came from.
+    const float slide = active ? direction * pulse * 10.0f : 0.0f;
+    const ColorRgba valueColor =
+      disabled ? UiTheme::fade(UiTheme::textMuted(), 0.7f)
+      : row == 6
+        ? UiTheme::mix(cyan, ColorRgba{ 210, 250, 255, 255 }, 0.3f * breathe)
+        : UiTheme::mix(
+            UiTheme::textSecondary(), UiTheme::textPrimary(), eClamped);
+    visual.addText(
+      values[row],
+      x + width * 0.45f + 27 + slide,
+      valueY,
+      14,
+      UiTheme::applyOpacity(
+        UiTheme::fade(valueColor,
+                      1.0f - 0.45f * pulse * (active ? 1.0f : 0.0f)),
+        rowOpacity));
   }
-  visual.addText(selected == 3 || selected == 4
-                   ? "LEFT / RIGHT or click either half: resize by 16 cells"
-                   : "UP / DOWN: select   LEFT / RIGHT: change   ENTER: choose",
+}
+
+void
+NewSimulationMenu::drawFooter(float height, unsigned char opacity)
+{
+  if (selected == 3 || selected == 4) {
+    visual.addText("LEFT / RIGHT or click either half: resize by 16 cells",
+                   x + 28,
+                   y + height - 45,
+                   11,
+                   UiTheme::applyOpacity(UiTheme::textSecondary(), opacity));
+  } else {
+    float hintX = x + 28;
+    const float size = 9.0f;
+    hintX += GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "UPDOWN", "Select", size, opacity);
+    hintX += GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "LEFTRIGHT", "Change", size, opacity);
+    hintX += GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "ENTER", "Choose", size, opacity);
+    GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "ESC", "Back", size, opacity);
+  }
+  visual.addText("Display and performance settings remain in F1.",
                  x + 28,
-                 y + height - 43,
-                 11,
-                 UiTheme::textMuted());
-  visual.addText("ESC: back     Display and performance settings remain in F1.",
-                 x + 28,
-                 y + height - 25,
-                 11,
-                 UiTheme::textMuted());
+                 y + height - 24,
+                 10,
+                 UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
 }

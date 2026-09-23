@@ -305,6 +305,12 @@ instead of treating thousands of CPU submissions as displayed frames (D-P32).
         GLString chrome; the two modes use distinct shared theme accents.
   \item \texttt{UiTheme}: shared value-only colors and compact panel metrics;
         it is not a retained widget tree or layout engine.
+  \item \symbolref{GameVisual} gradient quads (D-R26): convex, fan-ordered
+        quads with one color per vertex through the ordinary shape vertex
+        format and shader. GuiKit composes soft chrome from them (glass
+        panels, gradient surfaces, soft shadows, radial glows, vignettes,
+        sheens, keycaps); fades keep their color at zero alpha so
+        straight-alpha blending never darkens an edge.
   \item \symbolref{DebugModule}: \texttt{renderer\_demo}, \texttt{assets}, and
         \texttt{asset\_reload} prove managed atlas/shader loading, atlas
         animation, transforms, tint, alpha order, async load, state inspection,
@@ -352,7 +358,10 @@ capture is now \texttt{IllumoRuntime --capture}: a running WASM application
 renders to \texttt{--capture-frame} (default 60), a
 \texttt{Renderer::setBeforePresent} hook reads back the presented backbuffer,
 \texttt{FrameCapture::savePng} publishes a new PNG, and one JSON result line
-reports success, size and error. \texttt{FrameCapture} itself remains the
+reports success, size and error. \texttt{--capture-script} first runs
+bench-script steps (console lines, key presses, waits) so a capture can reach a
+later screen, and the saved frame is forced opaque to match the presented
+window. \texttt{FrameCapture} itself remains the
 engine API, checked on a real GPU by \texttt{IllumoCaptureGpuTests}.
 See \texttt{docs/frame-capture.md} for inputs, publication and limitations.
 

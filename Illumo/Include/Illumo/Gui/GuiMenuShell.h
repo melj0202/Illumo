@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
+#include <array>
 
 class GameVisual;
 class InputManager;
@@ -13,6 +14,13 @@ class GuiEasing final
 public:
   // Decelerating cubic used by every panel reveal and selection glide.
   static float outCubic(float progress);
+
+  // Decelerating curve that overshoots its target before settling (clamped
+  // progress; overshoot 1.2 peaks near 1.05).
+  static float outBack(float progress, float overshoot = 1.2f);
+
+  // Symmetric ease for back-and-forth motion.
+  static float inOutCubic(float progress);
 
   // Frame-rate independent exponential approach toward a target, for per-item
   // emphasis that never quite arrives.
@@ -30,6 +38,65 @@ public:
                               float snapEpsilon);
 };
 
+// Damped spring toward a target, for hover emphasis, knob travel and other
+// motion that should feel physical. Each step uses the exact closed-form
+// solution, so it is stable at any frame time; underdamped springs overshoot
+// once and settle. Values snap exactly onto the target once at rest.
+class GuiSpring final
+{
+public:
+  static constexpr float kMaximumStepSeconds = 0.25f;
+
+  void configure(float frequencyHz, float dampingRatio);
+  void snapTo(float value);
+  void setTarget(float target) { m_target = target; }
+  // Adds velocity (units per second), e.g. a press squish or a value nudge.
+  void kick(float velocity);
+  // Reduced motion snaps to the target immediately.
+  void tick(float deltaSeconds, bool reducedMotion);
+
+  float value() const { return m_value; }
+  float target() const { return m_target; }
+  float velocity() const { return m_velocity; }
+  bool settled() const { return m_value == m_target && m_velocity == 0.0f; }
+
+private:
+  float m_frequencyHz = 3.0f;
+  float m_dampingRatio = 0.75f;
+  float m_value = 0.0f;
+  float m_target = 0.0f;
+  float m_velocity = 0.0f;
+};
+
+// Fixed bank of springs indexed by row, for per-row hover and focus emphasis.
+// Out-of-range rows read as zero and ignore writes.
+class GuiSpringArray final
+{
+public:
+  static constexpr int kCapacity = 64;
+
+  void configure(float frequencyHz, float dampingRatio);
+  void setTarget(int index, float target);
+  // Target one for `row` and zero for every other row below `count`.
+  void focusOnly(int row, int count);
+  void snap(int index, float value);
+  void snapAll();
+  void tick(float deltaSeconds, bool reducedMotion);
+  float value(int index) const;
+
+private:
+  std::array<GuiSpring, kCapacity> m_springs{};
+};
+
+// Leading and trailing edges of a travelling selection, in row units. While
+// moving, the leading edge races ahead with a slight overshoot and the
+// trailing edge follows, so a highlight spanning [min, max + 1] stretches.
+struct GuiSelectionSpan
+{
+  float leading = 0.0f;
+  float trailing = 0.0f;
+};
+
 // Reveal, selection, value-pulse, ambient, and caret clocks shared by the
 // primitive-composed menus. The animator owns time only: it never draws, reads
 // input, or models rows beyond their index, so each overlay keeps its own
@@ -42,6 +109,12 @@ public:
   static constexpr float kRowRevealSeconds = 0.22f;
   static constexpr float kRowRevealStaggerSeconds = 0.012f;
   static constexpr float kSelectionSeconds = 0.14f;
+  static constexpr float kSelectionLeadSeconds = 0.20f;
+  static constexpr float kSelectionTrailSeconds = 0.32f;
+  static constexpr float kSheenSeconds = 0.6f;
+  static constexpr float kSelectionSettleSeconds =
+    kSelectionTrailSeconds + kSheenSeconds;
+  static constexpr float kPressSeconds = 0.32f;
   static constexpr float kValuePulseSeconds = 0.20f;
   static constexpr float kCaretBlinkPeriodSeconds = 1.0f;
   static constexpr float kAmbientPeriodSeconds = 12.0f;
@@ -76,9 +149,22 @@ public:
   void beginSelectionTravel(float fromPosition);
   void settleSelection();
   float selectionPosition(float selectedRow) const;
+  // Stretching edges of the same travel (see GuiSelectionSpan).
+  GuiSelectionSpan selectionSpan(float selectedRow) const;
+  // Highlight sweep across the arrived selection, 0..1, or -1 when idle.
+  float selectionSheen() const;
+
+  // Short press feedback (squish, ripple): 1 at the press decaying to 0.
+  void triggerPress();
+  float pressPulse() const;
+  // 0..1 progress through the press, or -1 when no press is animating.
+  float pressProgress() const;
 
   void triggerValuePulse();
+  // Records which way a stepped value moved (-1 or +1) for arrow nudges.
+  void triggerValuePulse(int direction);
   float valuePulse() const;
+  int valuePulseDirection() const { return m_valuePulseDirection; }
 
   float ambientPhase() const { return m_ambientPhase; }
 
@@ -89,8 +175,10 @@ private:
   bool m_reducedMotion = false;
   float m_openElapsed = 0.0f;
   float m_selectionFromRow = 0.0f;
-  float m_selectionElapsed = kSelectionSeconds;
+  float m_selectionElapsed = kSelectionSettleSeconds;
+  float m_pressElapsed = kPressSeconds;
   float m_valuePulseElapsed = kValuePulseSeconds;
+  int m_valuePulseDirection = 0;
   float m_ambientPhase = 0.0f;
   float m_caretElapsed = 0.0f;
 };

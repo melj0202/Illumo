@@ -2,6 +2,7 @@
 
 #include "BuiltinPatterns.h"
 #include "CSimPlatform.h"
+#include "CanvasCoordinatePolicy.h"
 #include "CellContext.h"
 #include "CellGameModule.h"
 #include "PatternCodec.h"
@@ -56,13 +57,35 @@ MainMenuModule::Start(IllumoContext* context)
   }
   ic = context;
 
-  // Reset camera for menu presentation
+  // Reset camera for menu presentation; the ambient world is drawn at a finer
+  // scale than the default canvas so it reads as texture behind the glass.
   ic->camera->SetPositionPrecise(0.0, 0.0);
-  ic->camera->SetZoom(1.0f);
+  ic->camera->SetZoom(kAmbientZoom);
 
+  // Immigration Life: Conway dynamics with cyan and coral species on a dark
+  // field, so the live world shares the menu palette. CellContext records its
+  // ruleset as the active preference, so keep the player's choice intact.
+  const std::string savedFamily = ic->envVars->getVar("FamilyString").value;
+  const std::string savedRuleSet = ic->envVars->getVar("RuleSetString").value;
+  const std::string savedMode = ic->envVars->getVar("ModeString").value;
   m_bgContext = std::make_unique<CellContext>(
-    "GAME_OF_LIFE", ic->envVars, ic->window, ic->camera, ic->renderer);
+    "IMMIGRATION", ic->envVars, ic->window, ic->camera, ic->renderer);
+  ic->envVars->setVar("FamilyString", savedFamily);
+  ic->envVars->setVar("RuleSetString", savedRuleSet);
+  ic->envVars->setVar("ModeString", savedMode);
+  if (m_bgContext->getCanvasView() != nullptr) {
+    m_bgContext->getCanvasView()->rebuildPalette(m_bgContext->getRuleSet());
+  }
   seedAmbientPattern();
+
+  m_rowEmphasis.configure(2.6f, 0.62f);
+  m_recede.configure(2.2f, 0.9f);
+  m_parallaxX.configure(0.9f, 1.0f);
+  m_parallaxY.configure(0.9f, 1.0f);
+  m_spotX.configure(2.4f, 0.85f);
+  m_spotY.configure(2.4f, 0.85f);
+  m_spotStrength.configure(1.2f, 1.0f);
+  m_motif.resetGlider(7, 7, 1, 1);
 
   m_configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
@@ -78,6 +101,8 @@ MainMenuModule::Start(IllumoContext* context)
   m_selectedItem = kPlayItem;
   m_animator.setReducedMotion(reducedMotion());
   m_animator.restart();
+  m_rowEmphasis.focusOnly(m_selectedItem, kItemCount);
+  m_rowEmphasis.snapAll();
   m_revealElapsed = 0.0f;
   m_bgSimAccum = 0.0;
   // Preserve the press edge so a click that left another screen is not
@@ -92,6 +117,41 @@ MainMenuModule::Start(IllumoContext* context)
   return true;
 }
 
+// Immigration Life states: coral 0, background 1, cyan 2.
+static const unsigned char kCoralState = 0;
+static const unsigned char kCyanState = 2;
+
+void
+MainMenuModule::stampPattern(const char* name,
+                             std::int64_t originX,
+                             std::int64_t originY,
+                             bool flipX,
+                             bool flipY,
+                             unsigned char state)
+{
+  CellPattern pattern;
+  if (!m_bgContext || !m_bgContext->getCanvasView() ||
+      !BuiltinPatterns::find(name, &pattern)) {
+    return;
+  }
+  CanvasView* canvas = m_bgContext->getCanvasView();
+  for (const CellPatternCell& cell : pattern.getCells()) {
+    // Pattern rows grow downward in RLE but upward in world space, so an
+    // unflipped glider travels right and up on screen.
+    const std::int64_t dx = flipX ? -cell.dx : cell.dx;
+    const std::int64_t dy = flipY ? -cell.dy : cell.dy;
+    canvas->setCanvasPixel(originX + dx, originY + dy, state);
+  }
+}
+
+std::uint32_t
+MainMenuModule::nextRandom()
+{
+  // Deterministic LCG: the menu needs variety, not entropy.
+  m_randomState = m_randomState * 1664525u + 1013904223u;
+  return m_randomState >> 8u;
+}
+
 void
 MainMenuModule::seedAmbientPattern()
 {
@@ -100,27 +160,66 @@ MainMenuModule::seedAmbientPattern()
   }
   CanvasView* canvas = m_bgContext->getCanvasView();
   canvas->clearCanvas();
+  m_worldElapsed = 0.0;
+  m_visitorElapsed = kVisitorSeconds * 0.6f;
 
-  // Stamp Pulsar patterns in the background for ambient motion
-  CellPattern pulsar;
-  if (BuiltinPatterns::find("Pulsar", &pulsar)) {
-    for (std::int64_t x = -60; x <= 60; x += 60) {
-      for (std::int64_t y = -40; y <= 40; y += 40) {
-        for (const CellPatternCell& cell : pulsar.getCells()) {
-          canvas->setCanvasPixel(x + cell.dx, y + cell.dy, cell.state);
-        }
-      }
+  // A Gosper gun in the lower left streams cyan gliders up across the
+  // screen; coral methuselahs churn on either side of the panel.
+  stampPattern("gosper", -78, -40, false, false, kCyanState);
+  stampPattern("glider", 52, -30, true, false, kCyanState);
+  const std::int64_t acorns[2][2] = { { 58, 18 }, { -62, 24 } };
+  const int acornCells[7][2] = { { 1, 0 }, { 3, 1 }, { 0, 2 }, { 1, 2 },
+                                 { 4, 2 }, { 5, 2 }, { 6, 2 } };
+  for (const std::int64_t* origin : acorns) {
+    for (const int* cell : acornCells) {
+      canvas->setCanvasPixel(
+        origin[0] + cell[0], origin[1] - cell[1], kCoralState);
     }
-  } else {
-    // Fallback: Acorn pattern
-    canvas->setCanvasPixel(-1, 0, 0);
-    canvas->setCanvasPixel(1, -1, 0);
-    canvas->setCanvasPixel(1, 1, 0);
-    canvas->setCanvasPixel(2, 1, 0);
-    canvas->setCanvasPixel(3, 1, 0);
-    canvas->setCanvasPixel(4, 1, 0);
-    canvas->setCanvasPixel(0, 1, 0);
   }
+}
+
+void
+MainMenuModule::launchVisitor()
+{
+  if (!m_bgContext || !m_bgContext->getCanvasView() || ic == nullptr ||
+      ic->window == nullptr) {
+    return;
+  }
+  // Launch just outside the visible world, aimed back into it.
+  const std::array<int, 2> window = ic->window->getWindowDimensions();
+  const double cellPixels = CanvasCoordinatePolicy::kCellSize * kAmbientZoom;
+  const std::int64_t halfWidth = static_cast<std::int64_t>(
+    static_cast<double>(std::max(1, window[0])) * 0.5 / cellPixels);
+  const std::int64_t halfHeight = static_cast<std::int64_t>(
+    static_cast<double>(std::max(1, window[1])) * 0.5 / cellPixels);
+  const std::uint32_t roll = nextRandom();
+  const bool fromLeft = (roll & 1u) != 0u;
+  const bool fromBelow = (roll & 2u) != 0u;
+  const std::int64_t along =
+    static_cast<std::int64_t>((roll >> 2u) % 1000u) - 500;
+  const unsigned char state =
+    m_visitorCount % 3 == 2 ? kCyanState : kCoralState;
+  ++m_visitorCount;
+  if (m_visitorCount % 2 == 0) {
+    // Spaceships cruise straight across; flipX sends them right.
+    const std::int64_t y = along * halfHeight * 7 / 10 / 500;
+    stampPattern("lwss",
+                 fromLeft ? -halfWidth - 8 : halfWidth + 3,
+                 y,
+                 fromLeft,
+                 false,
+                 state);
+    return;
+  }
+  // Gliders enter diagonally from a corner region.
+  const std::int64_t x = fromLeft ? -halfWidth - 4 : halfWidth + 4;
+  const std::int64_t y = along * halfHeight / 500;
+  stampPattern("glider",
+               x,
+               fromBelow ? y - halfHeight / 2 : y + halfHeight / 2,
+               !fromLeft,
+               !fromBelow,
+               state);
 }
 
 void
@@ -130,12 +229,27 @@ MainMenuModule::advanceAmbientSimulation(double dt)
       !m_bgContext->getGrid() || !m_bgContext->getRuleSet()) {
     return;
   }
+  m_worldElapsed += dt;
+  if (m_bgContext->getGrid()->getAllocatedChunkCount() > kReseedChunkCount ||
+      m_worldElapsed > kReseedSeconds) {
+    seedAmbientPattern();
+  }
+  if (!reducedMotion()) {
+    m_visitorElapsed += static_cast<float>(dt);
+    if (m_visitorElapsed >= kVisitorSeconds) {
+      m_visitorElapsed = 0.0f;
+      launchVisitor();
+    }
+  }
   m_bgSimAccum += dt;
-  const double stepSeconds = 1.0 / 8.0; // 8 TPS ambient rate
+  const double stepSeconds = 1.0 / kAmbientStepsPerSecond;
   while (m_bgSimAccum >= stepSeconds) {
     m_bgSimAccum -= stepSeconds;
     m_bgContext->getGrid()->advance(*m_bgContext->getRuleSet());
   }
+  // Resample changed chunks (and stamped visitors) into the view's targets;
+  // the view then fades toward them.
+  m_bgContext->getCanvasView()->rebuildTargetsFromGrid();
   m_bgContext->getCanvasView()->tickVisual(static_cast<float>(dt));
 }
 
@@ -194,6 +308,63 @@ MainMenuModule::selectItem(int item)
     m_animator.beginSelectionTravel(itemPosition());
     m_selectedItem = nextItem;
   }
+}
+
+void
+MainMenuModule::pressItem(float originX, float originY)
+{
+  m_pressX = originX;
+  m_pressY = originY;
+  m_animator.triggerPress();
+}
+
+// Springs that make the title screen respond: row emphasis follows the
+// selection, the panel recedes behind overlays, and the background leans
+// toward the pointer while a soft spotlight follows it.
+void
+MainMenuModule::updateMotion(float dt)
+{
+  const bool still = reducedMotion();
+  m_rowEmphasis.focusOnly(m_selectedItem, kItemCount);
+  m_rowEmphasis.tick(dt, still);
+
+  const bool overlayOpen =
+    (m_configurationMenu != nullptr && m_configurationMenu->isOpen()) ||
+    (m_newSimulationMenu != nullptr && m_newSimulationMenu->isOpen());
+  m_recede.setTarget(overlayOpen ? 1.0f : 0.0f);
+  m_recede.tick(dt, still);
+
+  m_motif.tick(dt, still);
+
+  const float width = m_panelFit.virtualWidth;
+  const float height = m_panelFit.virtualHeight;
+  const float pointerX = m_pointer.x();
+  const float pointerY = m_pointer.y();
+  const bool pointerInside = !overlayOpen && !still && pointerX >= 0.0f &&
+                             pointerY >= 0.0f && pointerX <= width &&
+                             pointerY <= height;
+  if (pointerInside) {
+    m_parallaxX.setTarget(
+      std::clamp(pointerX / width * 2.0f - 1.0f, -1.0f, 1.0f));
+    m_parallaxY.setTarget(
+      std::clamp(pointerY / height * 2.0f - 1.0f, -1.0f, 1.0f));
+    if (m_spotStrength.value() <= 0.0f) {
+      // The spotlight appears where the pointer is rather than sweeping in.
+      m_spotX.snapTo(pointerX);
+      m_spotY.snapTo(pointerY);
+    }
+    m_spotX.setTarget(pointerX);
+    m_spotY.setTarget(pointerY);
+  } else if (still) {
+    m_parallaxX.setTarget(0.0f);
+    m_parallaxY.setTarget(0.0f);
+  }
+  m_spotStrength.setTarget(pointerInside ? 1.0f : 0.0f);
+  m_parallaxX.tick(dt, still);
+  m_parallaxY.tick(dt, still);
+  m_spotX.tick(dt, still);
+  m_spotY.tick(dt, still);
+  m_spotStrength.tick(dt, still);
 }
 
 void
@@ -383,6 +554,7 @@ MainMenuModule::Update(double dt)
   // Reduced motion is a live preference; the shared clocks follow it.
   m_animator.setReducedMotion(reducedMotion());
   m_animator.tick(static_cast<float>(dt));
+  updateMotion(static_cast<float>(dt));
 
   advanceAmbientSimulation(std::min(dt, 0.25));
 
@@ -470,6 +642,10 @@ MainMenuModule::Update(double dt)
                  event.key == KeyCode::Tab) {
         selectItem(m_selectedItem + 1);
       } else if (event.key == KeyCode::Enter || event.key == KeyCode::Space) {
+        const float rowY = m_firstItemY + static_cast<float>(m_selectedItem) *
+                                            (m_itemHeight + 8.0f);
+        pressItem(m_panelX + 28.0f + m_itemWidth * 0.5f,
+                  rowY + m_itemHeight * 0.5f);
         activateSelectedItem();
         activated = true;
       } else if (event.key == KeyCode::Escape) {
@@ -505,6 +681,7 @@ MainMenuModule::Update(double dt)
           selectItem(i);
         }
         if (m_pointer.clicked()) {
+          pressItem(mouseX, mouseY);
           activateSelectedItem();
         }
         break;
@@ -515,152 +692,156 @@ MainMenuModule::Update(double dt)
   rebuildVisual();
 }
 
+// Line icons that come alive with row emphasis `e` (0 idle, 1 focused): the
+// play arrow nudges forward with an echo, the folder lid lifts over a page,
+// the sliders' knobs glide, and the exit arrow pushes through the door.
 static void
-drawMenuIcon(GameVisual& visual, int item, float x, float y, ColorRgba color)
+drawMenuIcon(GameVisual& visual,
+             int item,
+             float x,
+             float y,
+             ColorRgba color,
+             float e)
 {
+  const float emphasis = std::clamp(e, 0.0f, 1.2f);
   if (item == 0) {
-    visual.addFilledTriangle(
-      x + 3.0f, y, x + 3.0f, y + 22.0f, x + 21.0f, y + 11.0f, color);
+    const float nudge = 3.0f * emphasis;
+    if (emphasis > 0.02f) {
+      visual.addFilledTriangle(x + 3.0f + nudge - 6.0f,
+                               y + 2.0f,
+                               x + 3.0f + nudge - 6.0f,
+                               y + 20.0f,
+                               x + 18.0f + nudge - 6.0f,
+                               y + 11.0f,
+                               UiTheme::fade(color, 0.3f * emphasis));
+    }
+    visual.addFilledTriangle(x + 3.0f + nudge,
+                             y,
+                             x + 3.0f + nudge,
+                             y + 22.0f,
+                             x + 21.0f + nudge,
+                             y + 11.0f,
+                             color);
   } else if (item == 1) {
+    const float lift = 3.5f * emphasis;
+    if (emphasis > 0.02f) {
+      // A page slides up out of the folder.
+      visual.addFilledRect(x + 5.0f,
+                           y + 9.0f - 4.0f * emphasis,
+                           14.0f,
+                           8.0f,
+                           UiTheme::fade(color, 0.45f * emphasis));
+    }
     visual.addOutlineRect(x, y + 6.0f, 24.0f, 17.0f, color, 2.0f);
-    visual.addLine(x, y + 5.0f, x, y + 1.0f, color, 2.0f);
-    visual.addLine(x, y + 1.0f, x + 10.0f, y + 1.0f, color, 2.0f);
-    visual.addLine(x + 10.0f, y + 1.0f, x + 15.0f, y + 6.0f, color, 2.0f);
+    visual.addLine(x, y + 5.0f - lift, x, y + 1.0f - lift, color, 2.0f);
+    visual.addLine(x, y + 1.0f - lift, x + 10.0f, y + 1.0f - lift, color, 2.0f);
+    visual.addLine(x + 10.0f,
+                   y + 1.0f - lift,
+                   x + 15.0f,
+                   y + 6.0f - lift * 0.4f,
+                   color,
+                   2.0f);
   } else if (item == 2) {
+    const float restKnob[3] = { 6.0f, 16.0f, 9.0f };
+    const float focusKnob[3] = { 15.0f, 5.0f, 17.0f };
     for (int line = 0; line < 3; ++line) {
       const float ly = y + 3.0f + static_cast<float>(line) * 8.0f;
-      const float knob = line == 1 ? 16.0f : 6.0f;
-      visual.addLine(x, ly, x + 24.0f, ly, color, 2.0f);
+      const float knob =
+        restKnob[line] + (focusKnob[line] - restKnob[line]) * emphasis;
+      visual.addLine(x, ly, x + 24.0f, ly, UiTheme::fade(color, 0.55f), 2.0f);
+      visual.addLine(x, ly, x + knob + 2.0f, ly, color, 2.0f);
       visual.addFilledRect(x + knob, ly - 3.0f, 4.0f, 6.0f, color);
     }
   } else {
+    const float push = 4.0f * emphasis;
     visual.addLine(x + 2.0f, y, x + 2.0f, y + 24.0f, color, 2.0f);
     visual.addLine(x + 2.0f, y, x + 10.0f, y, color, 2.0f);
     visual.addLine(x + 2.0f, y + 24.0f, x + 10.0f, y + 24.0f, color, 2.0f);
-    visual.addLine(x + 8.0f, y + 12.0f, x + 25.0f, y + 12.0f, color, 2.0f);
-    visual.addLine(x + 19.0f, y + 6.0f, x + 25.0f, y + 12.0f, color, 2.0f);
-    visual.addLine(x + 19.0f, y + 18.0f, x + 25.0f, y + 12.0f, color, 2.0f);
+    visual.addLine(
+      x + 8.0f + push, y + 12.0f, x + 25.0f + push, y + 12.0f, color, 2.0f);
+    visual.addLine(
+      x + 19.0f + push, y + 6.0f, x + 25.0f + push, y + 12.0f, color, 2.0f);
+    visual.addLine(
+      x + 19.0f + push, y + 18.0f, x + 25.0f + push, y + 12.0f, color, 2.0f);
   }
 }
 
 void
-MainMenuModule::rebuildVisual()
+MainMenuModule::drawBackground(float width, float height, float reveal)
 {
-  updateLayout();
-  m_menuVisual.clearPrimitives();
-  const float width = m_panelFit.virtualWidth;
-  const float height = m_panelFit.virtualHeight;
-  const float reveal = entranceReveal();
-  const unsigned char opacity = static_cast<unsigned char>(255.0f * reveal);
   const float ambient = m_animator.ambientPhase();
-  const float breathe = 0.5f + 0.5f * std::sin(ambient * 1.04719755f);
-  const ColorRgba cyan = UiTheme::accentCool();
-  const ColorRgba violet = UiTheme::accentViolet();
-  m_menuVisual.addFilledRect(
-    0.0f, 0.0f, width, height, ColorRgba{ 8, 14, 28, 250 });
   const float phase = ambient * 0.52359877f;
+  const float leanX = m_parallaxX.value();
+  const float leanY = m_parallaxY.value();
 
-  // Fixed primitive counts keep the animated light field independent of
-  // resolution.
-  for (int light = 0; light < 2; ++light) {
-    const float side = static_cast<float>(light);
-    const float cx =
-      width * (0.12f + side * 0.78f) + std::sin(phase + side * 3.0f) * 45.0f;
-    const float cy =
-      height * (0.30f + side * 0.35f) + std::cos(phase + side) * 60.0f;
-    const ColorRgba tint = light == 0 ? cyan : violet;
-    for (int ring = 12; ring > 0; --ring) {
-      const float radius = static_cast<float>(ring) * width * 0.033f;
-      m_menuVisual.addFilledEllipse(cx - radius,
-                                    cy - radius * 1.2f,
-                                    radius * 2.0f,
-                                    radius * 2.4f,
-                                    UiTheme::applyOpacity(tint, 3));
-    }
-  }
-  for (int column = 0; column <= 32; ++column) {
-    const float x = width * static_cast<float>(column) / 32.0f;
-    m_menuVisual.addLine(
-      x, 0.0f, x, height, ColorRgba{ 109, 155, 199, 9 }, 1.0f);
-  }
-  for (int row = 0; row <= 18; ++row) {
-    const float y = height * static_cast<float>(row) / 18.0f;
-    m_menuVisual.addLine(
-      0.0f, y, width, y, ColorRgba{ 109, 155, 199, 9 }, 1.0f);
-  }
-  for (int ribbon = 0; ribbon < 3; ++ribbon) {
-    const float offset = static_cast<float>(ribbon) * 1.8f;
-    const ColorRgba tint = ribbon == 1 ? violet : cyan;
-    for (int segment = 0; segment < 64; ++segment) {
-      const float u = static_cast<float>(segment) / 64.0f;
-      const float v = static_cast<float>(segment + 1) / 64.0f;
-      const float y0 =
-        height * (0.5f + 0.28f * std::sin(u * 5.0f + phase + offset) +
-                  0.07f * std::cos(u * 11.0f - phase * 2.0f));
-      const float y1 =
-        height * (0.5f + 0.28f * std::sin(v * 5.0f + phase + offset) +
-                  0.07f * std::cos(v * 11.0f - phase * 2.0f));
-      m_menuVisual.addLine(
-        u * width, y0, v * width, y1, UiTheme::applyOpacity(tint, 5), 16.0f);
-      m_menuVisual.addLine(
-        u * width, y0, v * width, y1, UiTheme::applyOpacity(tint, 35), 1.0f);
-    }
+  // The live Immigration world shows through a translucent tint; a radial
+  // scrim darkens the corners so the panel sits in a pool of light.
+  m_menuVisual.addFilledRect(
+    0.0f, 0.0f, width, height, ColorRgba{ 5, 10, 22, 118 });
+  GuiKit::drawVignette(m_menuVisual,
+                       width,
+                       height,
+                       ColorRgba{ 4, 8, 18, 0 },
+                       ColorRgba{ 2, 4, 11, 232 },
+                       0.34f);
+
+  // Three slow aurora glows drift on the ambient cycle and lean against the
+  // pointer at different depths.
+  const ColorRgba tints[3] = { UiTheme::accentCool(),
+                               UiTheme::accentViolet(),
+                               ColorRgba{ 40, 120, 210, 255 } };
+  const float depths[3] = { 26.0f, 44.0f, 16.0f };
+  for (int light = 0; light < 3; ++light) {
+    const float seed = static_cast<float>(light);
+    const float cx = width * (0.16f + 0.34f * seed) +
+                     std::sin(phase + seed * 2.1f) * width * 0.06f -
+                     leanX * depths[light];
+    const float cy = height * (0.28f + 0.2f * static_cast<float>(light % 2)) +
+                     std::cos(phase * 0.8f + seed * 1.3f) * height * 0.08f -
+                     leanY * depths[light];
+    const float swell = 1.0f + 0.08f * std::sin(phase * 1.7f + seed);
+    GuiKit::drawSoftGlow(
+      m_menuVisual,
+      cx,
+      cy,
+      width * 0.34f * swell,
+      height * 0.52f * swell,
+      UiTheme::fade(tints[light], (light == 2 ? 0.12f : 0.16f) * reveal),
+      20);
   }
 
-  // Crossfade glider phases while each small cluster follows a continuous
-  // orbit.
-  const unsigned int gliders[4] = {
-    0b111100010u, 0b010110101u, 0b110101100u, 0b011110001u
-  };
-  for (int cluster = 0; cluster < 10; ++cluster) {
-    const int clusterRow = cluster / 2;
-    const float seed = static_cast<float>(cluster);
-    const float orbit = phase + seed * 1.7f;
-    const float x = width * (cluster % 2 == 0 ? 0.07f : 0.84f) +
-                    std::sin(orbit) * (25.0f + seed * 2.0f);
-    const float y = height * (0.12f + static_cast<float>(clusterRow) * 0.18f) +
-                    std::cos(orbit) * 22.0f;
-    const float cellSize = 5.0f + static_cast<float>(cluster % 3) * 2.0f;
-    const float generation = ambient / 3.0f + seed;
-    const int frame = static_cast<int>(generation) % 4;
-    const float blend =
-      GuiEasing::outCubic(generation - std::floor(generation));
-    const ColorRgba tint = cluster % 3 == 0 ? violet : cyan;
-    for (int cell = 0; cell < 9; ++cell) {
-      const int cellRow = cell / 3;
-      const float current = (gliders[frame] & (1u << cell)) != 0u ? 1.0f : 0.0f;
-      const float next =
-        (gliders[(frame + 1) % 4] & (1u << cell)) != 0u ? 1.0f : 0.0f;
-      const float intensity = current + (next - current) * blend;
-      const float px = x + static_cast<float>(cell % 3) * (cellSize + 3.0f);
-      const float py = y + static_cast<float>(cellRow) * (cellSize + 3.0f);
-      m_menuVisual.addFilledRect(
-        px - 3.0f,
-        py - 3.0f,
-        cellSize + 6.0f,
-        cellSize + 6.0f,
-        UiTheme::applyOpacity(tint,
-                              static_cast<unsigned char>(intensity * 12.0f)));
-      m_menuVisual.addFilledRect(
-        px,
-        py,
-        cellSize,
-        cellSize,
-        UiTheme::applyOpacity(
-          tint, static_cast<unsigned char>(15.0f + intensity * 100.0f)));
-    }
+  const float spot = m_spotStrength.value();
+  if (spot > 0.01f) {
+    GuiKit::drawSoftGlow(m_menuVisual,
+                         m_spotX.value(),
+                         m_spotY.value(),
+                         150.0f,
+                         150.0f,
+                         UiTheme::fade(UiTheme::accentCool(), 0.1f * spot),
+                         20);
   }
+}
 
-  const float room = std::clamp((m_panelHeight - 456.0f) / 144.0f, 0.0f, 1.0f);
-  GuiKit::drawRoundedPanel(
-    m_menuVisual, m_panelX, m_panelY, m_panelWidth, m_panelHeight, opacity);
-  m_menuVisual.addText("C E L L U L A R   P L A Y G R O U N D",
-                       m_panelX + 30.0f,
-                       m_panelY + 23.0f,
-                       9.0f + room * 2.0f,
-                       UiTheme::applyOpacity(cyan, opacity));
+void
+MainMenuModule::drawTitle(float room, unsigned char opacity)
+{
+  const ColorRgba cyan = UiTheme::accentCool();
+  const bool still = reducedMotion();
+  const float ambient = m_animator.ambientPhase();
+  const float eyebrowReveal =
+    still ? 1.0f : GuiEasing::outCubic(m_revealElapsed / 0.5f);
+  m_menuVisual.addText(
+    "C E L L U L A R   P L A Y G R O U N D",
+    m_panelX + 30.0f - 8.0f * (1.0f - eyebrowReveal),
+    m_panelY + 23.0f,
+    9.0f + room * 2.0f,
+    UiTheme::applyOpacity(UiTheme::fade(cyan, eyebrowReveal), opacity));
+
   const float titleSize = 40.0f + room * 18.0f;
-  const float displayedTitleSize = titleSize * m_panelFit.layoutScale;
+  // Letters overshoot while landing; the raster covers that peak so glyphs
+  // are never magnified.
+  const float peakTitleSize = titleSize * 1.08f;
+  const float displayedTitleSize = peakTitleSize * m_panelFit.layoutScale;
   // Three cached resolutions cover the supported 1x-4x UI scales without
   // enlarging the default 32px glyphs or caching an atlas for every resize.
   const int rasterSize = displayedTitleSize <= 64.0f    ? 64
@@ -675,77 +856,105 @@ MainMenuModule::rebuildVisual()
     }
     m_titleRasterSize = rasterSize;
   }
-  const size_t titleIndex = m_menuVisual.addText(
-    "CSIM",
-    m_panelX + 28.0f,
-    m_panelY + 43.0f,
-    titleSize,
-    UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
-  m_menuVisual.getText(titleIndex)->font = m_titleFont;
+  // Each letter drops in on its own overshooting curve, then breathes with
+  // a gentle bob that ripples across the word.
+  const char* letters[4] = { "C", "S", "I", "M" };
+  const float titleX = m_panelX + 28.0f;
+  const float titleY = m_panelY + 43.0f;
+  float advance = 0.0f;
+  for (int letter = 0; letter < 4; ++letter) {
+    const float start = kTitleLetterDelaySeconds +
+                        static_cast<float>(letter) * kTitleLetterStaggerSeconds;
+    const float progress =
+      still ? 1.0f : (m_revealElapsed - start) / kTitleLetterSeconds;
+    const float landed = still ? 1.0f : GuiEasing::outBack(progress, 1.6f);
+    const float fade = std::clamp(progress * 2.2f, 0.0f, 1.0f);
+    const float bob =
+      still
+        ? 0.0f
+        : std::sin(ambient * 2.0943951f - static_cast<float>(letter) * 0.9f) *
+            1.5f * std::clamp(progress - 1.0f, 0.0f, 1.0f);
+    const float size = titleSize * (0.82f + 0.18f * landed);
+    const float letterWidth =
+      m_titleFont != nullptr
+        ? m_titleFont->measureText(letters[letter], titleSize).width
+        : titleSize * 0.6f;
+    const float drawnWidth =
+      m_titleFont != nullptr
+        ? m_titleFont->measureText(letters[letter], size).width
+        : size * 0.6f;
+    const size_t index = m_menuVisual.addText(
+      letters[letter],
+      titleX + advance + (letterWidth - drawnWidth) * 0.5f,
+      titleY + (1.0f - landed) * 22.0f + (titleSize - size) * 0.5f + bob,
+      size,
+      UiTheme::applyOpacity(UiTheme::fade(UiTheme::textPrimary(), fade),
+                            opacity));
+    m_menuVisual.getText(index)->font = m_titleFont;
+    advance += letterWidth;
+  }
+  // A cyan-to-violet underline draws out beneath the word.
+  const float underline =
+    still
+      ? 1.0f
+      : GuiEasing::outCubic((m_revealElapsed - 0.42f) / kTitleLetterSeconds);
+  if (underline > 0.0f) {
+    const float lineY = titleY + titleSize * 0.98f + 4.0f;
+    m_menuVisual.addGradientRect(
+      titleX + 2.0f,
+      lineY,
+      std::max(0.0f, advance - 4.0f) * underline,
+      3.0f,
+      UiTheme::applyOpacity(cyan, opacity),
+      UiTheme::applyOpacity(UiTheme::accentViolet(), opacity),
+      UiTheme::applyOpacity(UiTheme::accentViolet(), opacity),
+      UiTheme::applyOpacity(cyan, opacity));
+  }
+
+  const float taglineReveal =
+    still ? 1.0f : GuiEasing::outCubic((m_revealElapsed - 0.3f) / 0.45f);
   m_menuVisual.addText(
     "Small rules. Endless possibilities.",
     m_panelX + 30.0f,
-    m_panelY + 98.0f + room * 20.0f,
+    m_panelY + 98.0f + room * 20.0f + 6.0f * (1.0f - taglineReveal),
     13.0f + room * 3.0f,
-    UiTheme::applyOpacity(ColorRgba{ 182, 207, 226, 255 }, opacity));
+    UiTheme::applyOpacity(
+      UiTheme::fade(UiTheme::textSecondary(), taglineReveal), opacity));
   if (room > 0.5f) {
-    m_menuVisual.addText("Build a world. See what emerges.",
-                         m_panelX + 30.0f,
-                         m_panelY + 145.0f,
-                         12.0f,
-                         UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+    const float secondReveal =
+      still ? 1.0f : GuiEasing::outCubic((m_revealElapsed - 0.4f) / 0.45f);
+    m_menuVisual.addText(
+      "Build a world. See what emerges.",
+      m_panelX + 30.0f,
+      m_panelY + 145.0f + 6.0f * (1.0f - secondReveal),
+      12.0f,
+      UiTheme::applyOpacity(UiTheme::fade(UiTheme::textMuted(), secondReveal),
+                            opacity));
   }
 
+  // The motif is a real glider walking a 7x7 torus, leaning with the
+  // pointer like the background but less, so it floats between the layers.
   const float cellSize = 7.0f + room * 5.0f;
-  const float cellStep = cellSize + 3.0f;
-  const float motifWidth = cellStep * 7.0f;
-  const float motifX = m_panelX + m_panelWidth - motifWidth - 30.0f;
-  const float motifY = m_panelY + 35.0f;
-  const unsigned int motifRows[7] = { 0u, 8u, 4u, 28u, 0u, 0u, 0u };
-  for (int row = 0; row < 7; ++row) {
-    for (int col = 0; col < 7; ++col) {
-      const bool lit = (motifRows[row] & (1u << col)) != 0u;
-      // The per-cell phase offset must not survive as a static pattern when
-      // decorative motion is off.
-      const float shimmer =
-        reducedMotion()
-          ? 0.5f
-          : 0.5f + 0.5f * std::sin(ambient * 1.57079633f -
-                                   static_cast<float>(row + col) * 0.65f);
-      const float x = motifX + static_cast<float>(col) * cellStep;
-      const float y = motifY + static_cast<float>(row) * cellStep;
-      if (lit) {
-        GuiKit::drawRoundedRect(
-          m_menuVisual,
-          x - 3.0f,
-          y - 3.0f,
-          cellSize + 6.0f,
-          cellSize + 6.0f,
-          4.0f,
-          UiTheme::applyOpacity(
-            ColorRgba{ 75,
-                       220,
-                       238,
-                       static_cast<unsigned char>(25.0f + 25.0f * shimmer) },
-            opacity));
-      }
-      GuiKit::drawRoundedRect(
-        m_menuVisual,
-        x,
-        y,
-        cellSize,
-        cellSize,
-        2.0f,
-        UiTheme::applyOpacity(lit ? ColorRgba{ 104, 231, 241, 255 }
-                                  : ColorRgba{ 60,
-                                               90,
-                                               128,
-                                               static_cast<unsigned char>(
-                                                 65.0f + 65.0f * shimmer) },
-                              opacity));
-    }
-  }
+  const float gap = 3.0f;
+  const float motifWidth = m_motif.width(cellSize, gap);
+  const float motifX =
+    m_panelX + m_panelWidth - motifWidth - 33.0f + m_parallaxX.value() * 3.0f;
+  const float motifY = m_panelY + 35.0f + m_parallaxY.value() * 3.0f;
+  m_motif.draw(m_menuVisual,
+               motifX,
+               motifY,
+               cellSize,
+               gap,
+               ColorRgba{ 104, 231, 241, 255 },
+               ColorRgba{ 52, 80, 116, 120 },
+               0.8f,
+               opacity);
+}
 
+void
+MainMenuModule::drawRows(float room, unsigned char opacity, float breathe)
+{
+  const ColorRgba cyan = UiTheme::accentCool();
   const char* labels[kItemCount] = {
     "New simulation", "Load simulation", "Settings", "Exit to desktop"
   };
@@ -755,118 +964,275 @@ MainMenuModule::rebuildVisual()
     "Tune simulation, display, and motion",
     "Close CSim"
   };
+  const bool still = reducedMotion();
   const float itemX = m_panelX + 28.0f;
   const float stride = m_itemHeight + 8.0f;
+  const float radius = 13.0f;
+
+  float rowReveal[kItemCount];
   for (int item = 0; item < kItemCount; ++item) {
-    const float y = m_firstItemY + static_cast<float>(item) * stride;
-    GuiKit::drawRoundedRect(
+    rowReveal[item] = still
+                        ? 1.0f
+                        : GuiEasing::outCubic(
+                            (m_revealElapsed - static_cast<float>(item) *
+                                                 kItemEntranceStaggerSeconds) /
+                            kItemEntranceSeconds);
+  }
+
+  // Cards: soft drop shadow, a rim that warms toward the accent with
+  // emphasis, and a top-lit gradient face.
+  for (int item = 0; item < kItemCount; ++item) {
+    const float y = m_firstItemY + static_cast<float>(item) * stride +
+                    (1.0f - rowReveal[item]) * 8.0f;
+    const unsigned char rowOpacity =
+      static_cast<unsigned char>(static_cast<float>(opacity) * rowReveal[item]);
+    const float e = std::clamp(m_rowEmphasis.value(item), 0.0f, 1.0f);
+    GuiKit::drawSoftShadow(
       m_menuVisual,
       itemX,
-      y + 3.0f,
+      y,
       m_itemWidth,
       m_itemHeight,
-      13.0f,
-      UiTheme::applyOpacity(ColorRgba{ 4, 10, 21, 220 }, opacity));
+      radius,
+      12.0f,
+      4.0f,
+      UiTheme::applyOpacity(UiTheme::glowShadow(), rowOpacity));
     GuiKit::drawRoundedRect(
       m_menuVisual,
       itemX,
       y,
       m_itemWidth,
       m_itemHeight,
-      13.0f,
-      UiTheme::applyOpacity(ColorRgba{ 43, 61, 85, 255 }, opacity));
-    GuiKit::drawRoundedRect(
+      radius,
+      UiTheme::applyOpacity(
+        UiTheme::mix(UiTheme::cardRim(), ColorRgba{ 70, 140, 170, 255 }, e),
+        rowOpacity));
+    GuiKit::drawRoundedGradientRect(
       m_menuVisual,
       itemX + 1.0f,
       y + 1.0f,
       m_itemWidth - 2.0f,
       m_itemHeight - 2.0f,
-      12.0f,
-      UiTheme::applyOpacity(ColorRgba{ 23, 36, 56, 255 }, opacity));
+      radius - 1.0f,
+      UiTheme::applyOpacity(UiTheme::cardTop(), rowOpacity),
+      UiTheme::applyOpacity(UiTheme::cardBottom(), rowOpacity));
   }
-  const float selectionY = m_firstItemY + itemPosition() * stride;
-  GuiKit::drawRoundedRect(
+
+  // The selection pill stretches between rows while it travels, breathes a
+  // soft glow while it rests, and a sheen sweeps across when it lands.
+  const GuiSelectionSpan span =
+    m_animator.selectionSpan(static_cast<float>(m_selectedItem));
+  const float spanTop = std::min(span.leading, span.trailing);
+  const float spanBottom = std::max(span.leading, span.trailing);
+  const float press = m_animator.pressPulse();
+  const float squish = 3.0f * press * press;
+  const float pillX = itemX + squish;
+  const float pillY = m_firstItemY + spanTop * stride + squish * 0.5f;
+  const float pillWidth = m_itemWidth - squish * 2.0f;
+  const float pillHeight =
+    (spanBottom - spanTop) * stride + m_itemHeight - squish;
+  const unsigned char pillOpacity = static_cast<unsigned char>(
+    static_cast<float>(opacity) * rowReveal[m_selectedItem]);
+  GuiKit::drawRoundedBand(
     m_menuVisual,
-    itemX - 3.0f,
-    selectionY - 3.0f,
-    m_itemWidth + 6.0f,
-    m_itemHeight + 6.0f,
-    16.0f,
-    UiTheme::applyOpacity(
-      ColorRgba{
-        68, 204, 229, static_cast<unsigned char>(22.0f + 12.0f * breathe) },
-      opacity));
+    pillX,
+    pillY,
+    pillWidth,
+    pillHeight,
+    radius,
+    0.0f,
+    16.0f + 4.0f * breathe,
+    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.2f + 0.12f * breathe),
+                          pillOpacity),
+    UiTheme::transparentOf(cyan));
   GuiKit::drawRoundedRect(m_menuVisual,
-                          itemX,
-                          selectionY,
-                          m_itemWidth,
-                          m_itemHeight,
-                          13.0f,
-                          UiTheme::applyOpacity(cyan, opacity));
-  GuiKit::drawRoundedRect(
+                          pillX,
+                          pillY,
+                          pillWidth,
+                          pillHeight,
+                          radius,
+                          UiTheme::applyOpacity(cyan, pillOpacity));
+  GuiKit::drawRoundedGradientRect(
     m_menuVisual,
-    itemX + 1.0f,
-    selectionY + 1.0f,
-    m_itemWidth - 2.0f,
-    m_itemHeight - 2.0f,
-    12.0f,
-    UiTheme::applyOpacity(ColorRgba{ 28, 78, 102, 255 }, opacity));
+    pillX + 1.0f,
+    pillY + 1.0f,
+    pillWidth - 2.0f,
+    pillHeight - 2.0f,
+    radius - 1.0f,
+    UiTheme::applyOpacity(UiTheme::selectionTop(), pillOpacity),
+    UiTheme::applyOpacity(UiTheme::selectionBottom(), pillOpacity));
+  GuiKit::drawSheen(
+    m_menuVisual,
+    pillX,
+    pillY,
+    pillWidth,
+    pillHeight,
+    radius,
+    m_animator.selectionSheen(),
+    UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 46 }, pillOpacity));
+  const float pressProgress = m_animator.pressProgress();
+  if (pressProgress >= 0.0f) {
+    // A ring ripples out of the pressed card and a flash blooms at the
+    // press point.
+    const float ring = GuiEasing::outCubic(pressProgress);
+    const float fadeOut = 1.0f - pressProgress;
+    GuiKit::drawRoundedBand(m_menuVisual,
+                            pillX,
+                            pillY,
+                            pillWidth,
+                            pillHeight,
+                            radius,
+                            2.0f + 18.0f * ring,
+                            5.0f + 26.0f * ring,
+                            UiTheme::fade(cyan, 0.7f * fadeOut),
+                            UiTheme::transparentOf(cyan));
+    GuiKit::drawSoftGlow(
+      m_menuVisual,
+      m_pressX,
+      m_pressY,
+      40.0f + 140.0f * ring,
+      30.0f + 60.0f * ring,
+      UiTheme::fade(ColorRgba{ 190, 245, 255, 255 }, 0.35f * fadeOut),
+      16);
+  }
+
   for (int item = 0; item < kItemCount; ++item) {
-    const float rowReveal =
-      reducedMotion() ? 1.0f
-                      : GuiEasing::outCubic(
-                          (m_revealElapsed - static_cast<float>(item) *
-                                               kItemEntranceStaggerSeconds) /
-                          kItemEntranceSeconds);
     const unsigned char rowOpacity =
-      static_cast<unsigned char>(255.0f * rowReveal);
-    const float y = m_firstItemY + static_cast<float>(item) * stride;
-    const float slide = (1.0f - rowReveal) * 10.0f;
+      static_cast<unsigned char>(static_cast<float>(opacity) * rowReveal[item]);
+    const float y = m_firstItemY + static_cast<float>(item) * stride +
+                    (1.0f - rowReveal[item]) * 8.0f;
+    const float e = std::max(0.0f, m_rowEmphasis.value(item));
+    const float eClamped = std::min(1.0f, e);
+    const float slide = (1.0f - rowReveal[item]) * 10.0f + 6.0f * e;
+
+    // Icon tile grows and glows with emphasis.
+    const float tileScale = 1.0f + 0.06f * e;
+    const float tileWidth = 44.0f * tileScale;
+    const float tileHeight = 42.0f * tileScale;
+    const float tileCenterX = itemX + 38.0f;
+    const float tileCenterY = y + m_itemHeight * 0.5f;
+    if (eClamped > 0.02f) {
+      GuiKit::drawSoftGlow(
+        m_menuVisual,
+        tileCenterX,
+        tileCenterY,
+        40.0f,
+        38.0f,
+        UiTheme::applyOpacity(UiTheme::fade(cyan, 0.3f * eClamped), rowOpacity),
+        16);
+    }
+    GuiKit::drawRoundedGradientRect(
+      m_menuVisual,
+      tileCenterX - tileWidth * 0.5f,
+      tileCenterY - tileHeight * 0.5f,
+      tileWidth,
+      tileHeight,
+      10.0f,
+      UiTheme::applyOpacity(UiTheme::mix(ColorRgba{ 52, 72, 101, 220 },
+                                         ColorRgba{ 66, 150, 172, 200 },
+                                         eClamped),
+                            rowOpacity),
+      UiTheme::applyOpacity(UiTheme::mix(ColorRgba{ 38, 55, 80, 220 },
+                                         ColorRgba{ 42, 104, 128, 200 },
+                                         eClamped),
+                            rowOpacity));
+    drawMenuIcon(
+      m_menuVisual,
+      item,
+      tileCenterX - 12.0f,
+      tileCenterY - 12.0f,
+      UiTheme::applyOpacity(
+        UiTheme::mix(ColorRgba{ 166, 186, 213, 255 }, cyan, eClamped),
+        rowOpacity),
+      e);
+
     m_menuVisual.addText(
       labels[item],
       itemX + 80.0f + slide,
       y + 12.0f + room * 7.0f,
       19.0f + room * 2.0f,
       UiTheme::applyOpacity(
-        item == m_selectedItem ? cyan : UiTheme::textPrimary(), rowOpacity));
+        UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity));
     m_menuVisual.addText(
       descriptions[item],
       itemX + 80.0f + slide,
       y + 37.0f + room * 8.0f,
       10.0f + room * 2.0f,
-      UiTheme::applyOpacity(UiTheme::textMuted(), rowOpacity));
-    const float iconY = y + (m_itemHeight - 42.0f) * 0.5f;
-    GuiKit::drawRoundedRect(
-      m_menuVisual,
-      itemX + 16.0f,
-      iconY,
-      44.0f,
-      42.0f,
-      10.0f,
-      UiTheme::applyOpacity(item == m_selectedItem
-                              ? ColorRgba{ 61, 139, 162, 170 }
-                              : ColorRgba{ 46, 65, 92, 200 },
+      UiTheme::applyOpacity(
+        UiTheme::mix(UiTheme::textMuted(), UiTheme::textSecondary(), eClamped),
+        rowOpacity));
+    // The chevron wakes up and leans toward the action.
+    const float chevronBob =
+      still ? 0.0f
+            : std::sin(m_animator.ambientPhase() * 6.2831853f / 1.6f) * 1.5f *
+                eClamped;
+    m_menuVisual.addText(
+      ">",
+      itemX + m_itemWidth - 26.0f + 6.0f * e + chevronBob,
+      y + m_itemHeight * 0.5f - 9.0f,
+      18.0f,
+      UiTheme::applyOpacity(UiTheme::fade(cyan, 0.35f + 0.65f * eClamped),
                             rowOpacity));
-    drawMenuIcon(m_menuVisual,
-                 item,
-                 itemX + 26.0f,
-                 iconY + 9.0f,
-                 UiTheme::applyOpacity(item == m_selectedItem
-                                         ? cyan
-                                         : ColorRgba{ 166, 186, 213, 255 },
-                                       rowOpacity));
-    m_menuVisual.addText(">",
-                         itemX + m_itemWidth - 24.0f,
-                         y + m_itemHeight * 0.5f - 9.0f,
-                         18.0f,
-                         UiTheme::applyOpacity(cyan, rowOpacity));
   }
-  m_menuVisual.addText(
-    "ARROWS / MOUSE   Select     ENTER   Open     F1   Settings",
-    m_panelX + 28.0f,
-    m_panelY + m_panelHeight - 23.0f,
-    10.0f,
-    UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+}
+
+void
+MainMenuModule::drawFooter(unsigned char opacity)
+{
+  const float size = 9.0f;
+  struct Hint
+  {
+    const char* key;
+    const char* action;
+  };
+  const Hint hints[4] = { { "UPDOWN", "Select" },
+                          { "ENTER", "Open" },
+                          { "F1", "Settings" },
+                          { "ESC", "Quit" } };
+  float total = 0.0f;
+  for (const Hint& hint : hints) {
+    total += GuiKit::measureKeyHint(hint.key, hint.action, size);
+  }
+  total -= size * 1.6f;
+  float x = m_panelX + (m_panelWidth - total) * 0.5f;
+  const float y = m_panelY + m_panelHeight - 25.0f;
+  for (const Hint& hint : hints) {
+    x += GuiKit::drawKeyHint(
+      m_menuVisual, x, y, hint.key, hint.action, size, opacity);
+  }
+}
+
+void
+MainMenuModule::rebuildVisual()
+{
+  updateLayout();
+  m_menuVisual.clearPrimitives();
+  const float width = m_panelFit.virtualWidth;
+  const float height = m_panelFit.virtualHeight;
+  const float reveal = entranceReveal();
+  // The panel dims as it recedes behind an open overlay.
+  const float presence =
+    1.0f - 0.45f * std::clamp(m_recede.value(), 0.0f, 1.0f);
+  const unsigned char opacity =
+    static_cast<unsigned char>(255.0f * reveal * presence);
+  const float ambient = m_animator.ambientPhase();
+  const float breathe = 0.5f + 0.5f * std::sin(ambient * 1.04719755f);
+
+  drawBackground(width, height, reveal);
+
+  const float room = std::clamp((m_panelHeight - 456.0f) / 144.0f, 0.0f, 1.0f);
+  GuiGlassStyle glass;
+  glass.opacity = opacity;
+  glass.ambientPhase = ambient;
+  glass.glow = 0.45f + 0.35f * breathe;
+  glass.accentReveal =
+    reducedMotion() ? 1.0f : GuiEasing::outCubic(m_revealElapsed / 0.8f);
+  GuiKit::drawGlassPanel(
+    m_menuVisual, m_panelX, m_panelY, m_panelWidth, m_panelHeight, glass);
+
+  drawTitle(room, opacity);
+  drawRows(room, opacity, breathe);
+  drawFooter(opacity);
   m_menuVisual.setVisible(true);
 }
 

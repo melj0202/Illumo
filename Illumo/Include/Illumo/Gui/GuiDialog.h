@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Gui/GuiTypes.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -104,6 +105,11 @@ private:
   int m_hoveredButton;
   float m_selectionFromButton;
   float m_selectionAnimElapsed;
+  // Rounded style only: the stretching selection travel (with its arrival
+  // sheen), the ambient clock, and per-button focus springs.
+  float m_selectionTravelElapsed = 1.0f;
+  float m_ambientElapsed = 0.0f;
+  GuiSpringArray m_buttonFocus;
 
   float m_panelX;
   float m_panelY;

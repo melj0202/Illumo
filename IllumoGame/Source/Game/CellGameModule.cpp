@@ -10,6 +10,7 @@
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -2615,13 +2616,73 @@ CellGameModule::updateEditHintsVisual(double dt)
     std::min(dimensions[1], static_cast<int>(std::ceil(panelHeight * scale)));
   panelHeight = static_cast<float>(editHintsFullInsetPixels) / scale;
   const float top = height - panelHeight;
-  // A flat, opaque footer reserves its own band; no canvas shows through.
-  editHintsVisual.addFilledRect(
-    0.0f, top, width, panelHeight, UiTheme::menuSurface());
-  editHintsVisual.addLine(0.0f, top, width, top, UiTheme::divider(), 1.0f);
+  // An opaque glass footer reserves its own band; no canvas shows through.
+  ColorRgba footerTop = UiTheme::glassTop();
+  footerTop.a = 255;
+  ColorRgba footerBottom = UiTheme::glassBottom();
+  footerBottom.a = 255;
+  editHintsVisual.addGradientRect(0.0f,
+                                  top,
+                                  width,
+                                  panelHeight,
+                                  footerTop,
+                                  footerTop,
+                                  footerBottom,
+                                  footerBottom);
+  const ColorRgba cyan = UiTheme::accentCool();
+  const ColorRgba violet = UiTheme::accentViolet();
+  editHintsVisual.addGradientRect(0.0f,
+                                  top,
+                                  width * 0.5f,
+                                  1.0f,
+                                  UiTheme::fade(cyan, 0.15f),
+                                  cyan,
+                                  cyan,
+                                  UiTheme::fade(cyan, 0.15f));
+  editHintsVisual.addGradientRect(width * 0.5f,
+                                  top,
+                                  width * 0.5f,
+                                  1.0f,
+                                  cyan,
+                                  UiTheme::fade(violet, 0.15f),
+                                  UiTheme::fade(violet, 0.15f),
+                                  cyan);
+  // Each hint reads as an accent key and a muted action. Pieces sit at the
+  // measured offset of the complete line, so wrapping and fitting above
+  // still govern the layout, and their text concatenates to the full hint.
   float y = top + 6.0f;
   for (const std::string& hintLine : lines) {
-    editHintsVisual.addText(hintLine, 12.0f, y, fontSize, UiTheme::textMuted());
+    std::size_t start = 0u;
+    while (start < hintLine.size()) {
+      if (hintLine[start] == ' ') {
+        ++start;
+        continue;
+      }
+      const std::size_t gap = hintLine.find("  ", start);
+      const std::size_t end = gap == std::string::npos ? hintLine.size() : gap;
+      const std::string hint = hintLine.substr(start, end - start);
+      const float hintX =
+        12.0f + measureWidth(hintLine.substr(0, start), fontSize);
+      const std::size_t colon = hint.find(':');
+      if (colon == std::string::npos) {
+        editHintsVisual.addText(
+          hint, hintX, y, fontSize, UiTheme::textSecondary());
+      } else {
+        const std::string key = hint.substr(0, colon + 1u);
+        editHintsVisual.addText(
+          key,
+          hintX,
+          y,
+          fontSize,
+          UiTheme::mix(cyan, UiTheme::textPrimary(), 0.2f));
+        editHintsVisual.addText(hint.substr(colon + 1u),
+                                hintX + measureWidth(key, fontSize),
+                                y,
+                                fontSize,
+                                UiTheme::textMuted());
+      }
+      start = end;
+    }
     y += lineHeight;
   }
   editHintsInsetPixels = static_cast<int>(std::ceil(
@@ -2727,9 +2788,38 @@ CellGameModule::updateInspectorVisual()
   const float inspX = 12.0f;
   const float inspY =
     std::clamp(72.0f, 0.0f, std::max(0.0f, virtHeight - inspH));
-  GuiKit::drawCard(inspectorVisual, inspX, inspY, inspW, inspH);
+  // A small glass card with a cyan-to-violet spine; the generation line
+  // leads in the accent color.
+  GuiKit::drawSoftShadow(inspectorVisual,
+                         inspX,
+                         inspY,
+                         inspW,
+                         inspH,
+                         10.0f,
+                         14.0f,
+                         5.0f,
+                         UiTheme::glowShadow());
+  GuiKit::drawRoundedRect(
+    inspectorVisual, inspX, inspY, inspW, inspH, 10.0f, UiTheme::glassRim());
+  GuiKit::drawRoundedGradientRect(inspectorVisual,
+                                  inspX + 1.0f,
+                                  inspY + 1.0f,
+                                  inspW - 2.0f,
+                                  inspH - 2.0f,
+                                  9.0f,
+                                  UiTheme::glassTop(),
+                                  UiTheme::glassBottom());
+  inspectorVisual.addGradientRect(inspX + 5.0f,
+                                  inspY + 10.0f,
+                                  2.0f,
+                                  inspH - 20.0f,
+                                  UiTheme::accentCool(),
+                                  UiTheme::accentCool(),
+                                  UiTheme::accentViolet(),
+                                  UiTheme::accentViolet());
   std::string remaining = text.str();
   float lineY = inspY + 8.0f;
+  bool firstLine = true;
   while (!remaining.empty()) {
     const std::size_t newline = remaining.find('\n');
     std::string line = remaining;
@@ -2739,8 +2829,13 @@ CellGameModule::updateInspectorVisual()
     } else {
       remaining.clear();
     }
-    inspectorVisual.addText(
-      line, inspX + 10.0f, lineY, 16.0f, UiTheme::textPrimary());
+    inspectorVisual.addText(line,
+                            inspX + 14.0f,
+                            lineY,
+                            16.0f,
+                            firstLine ? UiTheme::accentCool()
+                                      : UiTheme::textPrimary());
+    firstLine = false;
     lineY += 18.0f;
   }
   inspectorVisual.setVisible(true);
@@ -2846,6 +2941,21 @@ CellGameModule::Edit(double dt)
     clipboard.stopSelectionDrag();
   }
 }
+
+// One vertical gradient sampled by absolute y, so the drawer's separate
+// surfaces (tab, joint, body) share a seamless color ramp.
+struct DrawerGradient
+{
+  ColorRgba top;
+  ColorRgba bottom;
+  float startY;
+  float span;
+
+  ColorRgba operator()(float atY) const
+  {
+    return UiTheme::mix(top, bottom, (atY - startY) / span);
+  }
+};
 
 void
 CellGameModule::updatePaintPalette(double dt)
@@ -2988,33 +3098,61 @@ CellGameModule::updatePaintPalette(double dt)
     *paletteScroll = 0.0;
   }
   // Draw one joined silhouette, then cover the shared edge with its surface.
-  // Opaque fills avoid darker seams where the tab and drawer meet.
-  ColorRgba surface = UiTheme::panelSurface();
-  surface.a = 255;
-  ColorRgba rim = UiTheme::panelBorder();
+  // Opaque fills avoid darker seams where the tab and drawer meet. Every
+  // surface samples one vertical gradient by absolute y, so tab, joint and
+  // drawer blend continuously.
+  const float surfaceTop = y;
+  const float surfaceBottom = y + header + body + 21.0f;
+  ColorRgba glassTop = UiTheme::glassTop();
+  glassTop.a = 255;
+  ColorRgba glassBottom = UiTheme::glassBottom();
+  glassBottom.a = 255;
+  const DrawerGradient surfaceAt{ glassTop,
+                                  glassBottom,
+                                  surfaceTop,
+                                  std::max(1.0f, surfaceBottom - surfaceTop) };
+  ColorRgba rim = UiTheme::mix(
+    UiTheme::glassRim(), UiTheme::accentCool(), headerHovered ? 0.45f : 0.0f);
   rim.a = 255;
   GuiKit::drawRoundedRect(
     m_paintPaletteVisual, tabX, y, tabWidth, header + 16.0f, 12.0f, rim);
   if (m_paintPaletteReveal > 0.001f) {
     GuiKit::drawRoundedRect(
       m_paintPaletteVisual, x, y + header, width, body + 20.0f, 12.0f, rim);
-    GuiKit::drawRoundedRect(m_paintPaletteVisual,
-                            x + 1.0f,
-                            y + header + 1.0f,
-                            width - 2.0f,
-                            body + 20.0f,
-                            11.0f,
-                            surface);
+    GuiKit::drawRoundedGradientRect(m_paintPaletteVisual,
+                                    x + 1.0f,
+                                    y + header + 1.0f,
+                                    width - 2.0f,
+                                    body + 20.0f,
+                                    11.0f,
+                                    surfaceAt(y + header + 1.0f),
+                                    surfaceAt(y + header + body + 21.0f));
   }
-  GuiKit::drawRoundedRect(m_paintPaletteVisual,
-                          tabX + 1.0f,
-                          y + 1.0f,
-                          tabWidth - 2.0f,
-                          header + 16.0f,
-                          11.0f,
-                          surface);
-  m_paintPaletteVisual.addFilledRect(
-    tabX + 1.0f, y + header - 1.0f, tabWidth - 2.0f, 18.0f, surface);
+  GuiKit::drawRoundedGradientRect(m_paintPaletteVisual,
+                                  tabX + 1.0f,
+                                  y + 1.0f,
+                                  tabWidth - 2.0f,
+                                  header + 16.0f,
+                                  11.0f,
+                                  surfaceAt(y + 1.0f),
+                                  surfaceAt(y + header + 17.0f));
+  m_paintPaletteVisual.addGradientRect(tabX + 1.0f,
+                                       y + header - 1.0f,
+                                       tabWidth - 2.0f,
+                                       18.0f,
+                                       surfaceAt(y + header - 1.0f),
+                                       surfaceAt(y + header - 1.0f),
+                                       surfaceAt(y + header + 17.0f),
+                                       surfaceAt(y + header + 17.0f));
+  // A cyan-to-violet hairline crowns the tab.
+  m_paintPaletteVisual.addGradientRect(tabX + 14.0f,
+                                       y + 1.0f,
+                                       tabWidth - 28.0f,
+                                       1.5f,
+                                       UiTheme::accentCool(),
+                                       UiTheme::accentViolet(),
+                                       UiTheme::accentViolet(),
+                                       UiTheme::accentCool());
   if (headerHovered) {
     GuiKit::drawRoundedRect(m_paintPaletteVisual,
                             tabX + 8.0f,
@@ -3058,13 +3196,21 @@ CellGameModule::updatePaintPalette(double dt)
     if (m_paintPaletteReveal <= 0.001f) {
       continue;
     }
-    GuiKit::drawRoundedRect(m_paintPaletteVisual,
-                            cardX,
-                            cardY,
-                            124.0f,
-                            64.0f,
-                            8.0f,
-                            UiTheme::panelRaised());
+    // Cards warm toward the accent with emphasis; the chosen brush glows and
+    // its swatch lifts off the card.
+    const float lit = std::clamp(emphasis, 0.0f, 1.0f);
+    if (lit > 0.02f) {
+      GuiKit::drawRoundedBand(m_paintPaletteVisual,
+                              cardX,
+                              cardY,
+                              124.0f,
+                              64.0f,
+                              8.0f,
+                              0.0f,
+                              7.0f,
+                              UiTheme::fade(UiTheme::accentCool(), 0.28f * lit),
+                              UiTheme::transparentOf(UiTheme::accentCool()));
+    }
     GuiKit::drawRoundedRect(
       m_paintPaletteVisual,
       cardX,
@@ -3072,36 +3218,85 @@ CellGameModule::updatePaintPalette(double dt)
       124.0f,
       64.0f,
       8.0f,
-      UiTheme::applyOpacity(UiTheme::selection(),
-                            static_cast<unsigned char>(65.0f * emphasis)));
+      UiTheme::mix(UiTheme::cardRim(), UiTheme::accentCool(), 0.75f * lit));
+    GuiKit::drawRoundedGradientRect(
+      m_paintPaletteVisual,
+      cardX + 1.0f,
+      cardY + 1.0f,
+      122.0f,
+      62.0f,
+      7.0f,
+      UiTheme::mix(UiTheme::cardTop(), UiTheme::selectionTop(), 0.6f * lit),
+      UiTheme::mix(
+        UiTheme::cardBottom(), UiTheme::selectionBottom(), 0.6f * lit));
     unsigned char rgb[3]{};
     rules->evalCell(static_cast<unsigned char>(state), rgb);
-    GuiKit::drawCard(m_paintPaletteVisual,
-                     cardX + 49.0f,
-                     cardY + 8.0f,
-                     26.0f,
-                     26.0f,
-                     ColorRgba{ rgb[0], rgb[1], rgb[2], 255 },
-                     UiTheme::panelBorder());
+    const ColorRgba swatch{ rgb[0], rgb[1], rgb[2], 255 };
+    const float swatchLift = 3.0f * lit;
+    if (lit > 0.02f) {
+      GuiKit::drawSoftShadow(m_paintPaletteVisual,
+                             cardX + 49.0f,
+                             cardY + 8.0f - swatchLift,
+                             26.0f,
+                             26.0f,
+                             4.0f,
+                             6.0f,
+                             2.0f + swatchLift,
+                             UiTheme::fade(UiTheme::glowShadow(), lit));
+    }
+    GuiKit::drawRoundedRect(
+      m_paintPaletteVisual,
+      cardX + 49.0f,
+      cardY + 8.0f - swatchLift,
+      26.0f,
+      26.0f,
+      4.0f,
+      UiTheme::mix(UiTheme::panelBorder(), swatch, 0.35f));
+    GuiKit::drawRoundedRect(m_paintPaletteVisual,
+                            cardX + 50.0f,
+                            cardY + 9.0f - swatchLift,
+                            24.0f,
+                            24.0f,
+                            3.0f,
+                            swatch);
     GuiKit::drawTextCentered(
       m_paintPaletteVisual,
       rules->getStateName(static_cast<unsigned char>(state)),
       cardX + 62.0f,
       cardY + 48.0f,
       11.0f,
-      UiTheme::textPrimary());
+      UiTheme::mix(UiTheme::textPrimary(), UiTheme::accentCool(), lit));
     if (m_paintBrush == state) {
-      m_paintPaletteVisual.addFilledRect(
-        cardX + 50.0f, cardY + 60.0f, 24.0f, 2.0f, UiTheme::accentSoft());
+      m_paintPaletteVisual.addGradientRect(
+        cardX + 38.0f,
+        cardY + 60.0f,
+        48.0f,
+        2.0f,
+        UiTheme::transparentOf(UiTheme::accentCool()),
+        UiTheme::accentCool(),
+        UiTheme::accentCool(),
+        UiTheme::transparentOf(UiTheme::accentCool()));
     }
   }
   if (m_paintPaletteReveal > 0.001f) {
-    m_paintPaletteVisual.addLine(x + 18.0f,
-                                 y + header + 82.0f,
-                                 x + width - 18.0f,
-                                 y + header + 82.0f,
-                                 UiTheme::divider(),
-                                 1.0f);
+    const float dividerWidth = width - 36.0f;
+    const ColorRgba dividerColor = UiTheme::divider();
+    m_paintPaletteVisual.addGradientRect(x + 18.0f,
+                                         y + header + 82.0f,
+                                         dividerWidth * 0.5f,
+                                         1.0f,
+                                         UiTheme::transparentOf(dividerColor),
+                                         dividerColor,
+                                         dividerColor,
+                                         UiTheme::transparentOf(dividerColor));
+    m_paintPaletteVisual.addGradientRect(x + 18.0f + dividerWidth * 0.5f,
+                                         y + header + 82.0f,
+                                         dividerWidth * 0.5f,
+                                         1.0f,
+                                         dividerColor,
+                                         UiTheme::transparentOf(dividerColor),
+                                         UiTheme::transparentOf(dividerColor),
+                                         dividerColor);
     GuiKit::drawTextCentered(
       m_paintPaletteVisual,
       "States " + std::to_string(m_paintPaletteStateOffset + 1u) + "-" +
@@ -3244,56 +3439,90 @@ CellGameModule::updateHamburgerVisual(double dt)
            ? static_cast<float>(1.0 - std::exp(-14.0 * std::min(dt, 0.25)))
            : 0.0f);
   hamburgerHoverBlend += (target - hamburgerHoverBlend) * blend;
-  const unsigned char bgAlpha =
-    isPressed ? 180
-              : static_cast<unsigned char>(60.0f + 90.0f * hamburgerHoverBlend);
-  const unsigned char borderAlpha =
-    isPressed
-      ? 230
-      : static_cast<unsigned char>(90.0f + 110.0f * hamburgerHoverBlend);
-  const unsigned char barAlpha =
-    isPressed
-      ? 255
-      : static_cast<unsigned char>(130.0f + 110.0f * hamburgerHoverBlend);
+  const float hover = std::clamp(hamburgerHoverBlend, 0.0f, 1.0f);
+  const ColorRgba cyan = UiTheme::accentCool();
 
-  ColorRgba bgColor = UiTheme::panelSurface();
-  bgColor.a = bgAlpha;
-  ColorRgba borderColor =
-    isPressed ? UiTheme::accent() : UiTheme::panelBorder();
-  borderColor.a = borderAlpha;
-  ColorRgba barColor = isPressed ? UiTheme::accent() : UiTheme::textPrimary();
-  barColor.a = barAlpha;
+  // A glass tile that glows and warms toward the accent on hover.
+  const float radius = 9.0f;
+  if (hover > 0.01f) {
+    GuiKit::drawRoundedBand(hamburgerVisual,
+                            hamburgerX,
+                            hamburgerY,
+                            hamburgerSize,
+                            hamburgerSize,
+                            radius,
+                            0.0f,
+                            10.0f,
+                            UiTheme::fade(cyan, 0.3f * hover),
+                            UiTheme::transparentOf(cyan));
+  }
+  GuiKit::drawRoundedRect(
+    hamburgerVisual,
+    hamburgerX,
+    hamburgerY,
+    hamburgerSize,
+    hamburgerSize,
+    radius,
+    isPressed ? cyan
+              : UiTheme::fade(UiTheme::mix(UiTheme::glassRim(), cyan, hover),
+                              0.6f + 0.4f * hover));
+  GuiKit::drawRoundedGradientRect(
+    hamburgerVisual,
+    hamburgerX + 1.0f,
+    hamburgerY + 1.0f,
+    hamburgerSize - 2.0f,
+    hamburgerSize - 2.0f,
+    radius - 1.0f,
+    UiTheme::fade(UiTheme::mix(UiTheme::glassTop(), cyan, 0.15f * hover),
+                  0.55f + 0.4f * hover),
+    UiTheme::fade(UiTheme::glassBottom(), 0.55f + 0.4f * hover));
 
-  // Panel card background
-  GuiKit::drawCard(hamburgerVisual,
-                   hamburgerX,
-                   hamburgerY,
-                   hamburgerSize,
-                   hamburgerSize,
-                   bgColor,
-                   borderColor,
-                   1.0f);
-
-  // 3 horizontal bars (hamburger lines)
-  const float barWidth = 16.0f + 4.0f * hamburgerHoverBlend;
+  // Bars widen one after another as the pointer arrives.
+  const ColorRgba barColor =
+    isPressed ? cyan
+              : UiTheme::fade(UiTheme::mix(UiTheme::textPrimary(), cyan, hover),
+                              0.55f + 0.45f * hover);
   const float barHeight = 2.0f;
-  const float barX = hamburgerX + (hamburgerSize - barWidth) * 0.5f;
   const float startY = hamburgerY + 9.0f;
   const float spacing = 5.0f;
-
   for (int i = 0; i < 3; ++i) {
+    const float stagger =
+      std::clamp(hover * 1.5f - static_cast<float>(i) * 0.25f, 0.0f, 1.0f);
+    const float barWidth = 14.0f + 6.0f * stagger;
+    const float barX = hamburgerX + (hamburgerSize - barWidth) * 0.5f;
     const float y = startY + static_cast<float>(i) * spacing;
-    hamburgerVisual.addFilledRect(barX, y, barWidth, barHeight, barColor);
+    GuiKit::drawRoundedRect(
+      hamburgerVisual, barX, y, barWidth, barHeight, 1.0f, barColor);
   }
 
-  if (hamburgerHoverBlend > 0.01f) {
-    const unsigned char opacity =
-      static_cast<unsigned char>(255.0f * hamburgerHoverBlend);
+  if (hover > 0.01f) {
+    // Tooltip pill slides in from the button.
+    const unsigned char opacity = static_cast<unsigned char>(255.0f * hover);
+    const float tipWidth = 108.0f;
+    const float tipX = hamburgerX - tipWidth - 8.0f + (1.0f - hover) * 12.0f;
+    const float tipY = hamburgerY + 4.0f;
+    GuiKit::drawRoundedRect(
+      hamburgerVisual,
+      tipX,
+      tipY,
+      tipWidth,
+      24.0f,
+      12.0f,
+      UiTheme::applyOpacity(UiTheme::fade(UiTheme::glassRim(), 0.9f), opacity));
+    GuiKit::drawRoundedGradientRect(
+      hamburgerVisual,
+      tipX + 1.0f,
+      tipY + 1.0f,
+      tipWidth - 2.0f,
+      22.0f,
+      11.0f,
+      UiTheme::applyOpacity(UiTheme::glassTop(), opacity),
+      UiTheme::applyOpacity(UiTheme::glassBottom(), opacity));
     hamburgerVisual.addText("Settings  F1",
-                            hamburgerX - 102.0f,
-                            hamburgerY + 10.0f,
+                            tipX + 12.0f,
+                            tipY + 6.0f,
                             12.0f,
-                            UiTheme::applyOpacity(UiTheme::accent(), opacity));
+                            UiTheme::applyOpacity(cyan, opacity));
   }
 
   hamburgerVisual.setVisible(true);
@@ -3840,46 +4069,84 @@ CellGameModule::rebuildCanvasEntrance()
   const float scale = ic->renderer->getUiScale();
   const float width = static_cast<float>(std::max(1, dimensions[0])) / scale;
   const float height = static_cast<float>(std::max(1, dimensions[1])) / scale;
-  const float progress =
-    static_cast<float>(canvasEntranceElapsed / kCanvasEntranceSeconds);
-  constexpr int columns = 16;
-  constexpr int rows = 10;
+  const float progress = std::clamp(
+    static_cast<float>(canvasEntranceElapsed / kCanvasEntranceSeconds),
+    0.0f,
+    1.0f);
+  // Roughly 44-pixel cells tile the viewport exactly, echoing canvas pixels.
+  const int columns =
+    std::clamp(static_cast<int>(std::lround(width / 44.0f)), 8, 48);
+  const int rows =
+    std::clamp(static_cast<int>(std::lround(height / 44.0f)), 6, 32);
   const float cellWidth = width / static_cast<float>(columns);
   const float cellHeight = height / static_cast<float>(rows);
-  // A bounded, screen-space veil reveals the world without changing its camera,
-  // simulation, or input. Neighboring cells dissolve outward from the center.
-  for (int row = 0; row < rows; ++row) {
-    for (int column = 0; column < columns; ++column) {
-      const float x = static_cast<float>(column) * cellWidth;
-      const float y = static_cast<float>(row) * cellHeight;
-      const float nx =
-        (static_cast<float>(column) + 0.5f) / columns * 2.0f - 1.0f;
-      const float ny = (static_cast<float>(row) + 0.5f) / rows * 2.0f - 1.0f;
-      const float distance = std::sqrt(nx * nx + ny * ny) * 0.70710678f;
-      const float local =
-        std::clamp((progress - distance * 0.28f) / 0.72f, 0.0f, 1.0f);
-      const float remaining = (1.0f - local) * (1.0f - local) * (1.0f - local);
-      const unsigned char opacity =
-        static_cast<unsigned char>(255.0f * remaining);
-      if (opacity == 0) {
-        continue;
+  const float halfDiagonal = std::sqrt(width * width + height * height) * 0.5f;
+  ColorRgba cover = UiTheme::glassBottom();
+  cover.a = 255;
+  const ColorRgba firing = UiTheme::accentCool();
+  const ColorRgba afterglow = UiTheme::accentViolet();
+
+  // A bounded, screen-space veil reveals the world without changing its
+  // camera, simulation, or input. The reveal is itself a cellular wave: it
+  // spreads from the center with a ragged, deterministic front; each cell
+  // fires cyan as the wave reaches it, cools to violet, then shrinks to a dot
+  // and fades. Leaving runs the same wave backwards, so cells regrow from the
+  // edges inward until the canvas is covered. Two passes keep every halo
+  // beneath every cell.
+  for (int pass = 0; pass < 2; ++pass) {
+    for (int row = 0; row < rows; ++row) {
+      for (int column = 0; column < columns; ++column) {
+        const float x = static_cast<float>(column) * cellWidth;
+        const float y = static_cast<float>(row) * cellHeight;
+        const float dx = x + cellWidth * 0.5f - width * 0.5f;
+        const float dy = y + cellHeight * 0.5f - height * 0.5f;
+        const float distance = std::sqrt(dx * dx + dy * dy) / halfDiagonal;
+        // A per-cell hash roughens the wavefront like a growing colony.
+        const unsigned int hash =
+          (static_cast<unsigned int>(column) * 73856093u) ^
+          (static_cast<unsigned int>(row) * 19349663u);
+        const float jitter = static_cast<float>((hash >> 4u) % 1024u) / 1023.0f;
+        const float arrival = distance * 0.7f + jitter * 0.08f;
+        const float local =
+          std::clamp((progress - arrival) / 0.22f, 0.0f, 1.0f);
+        // Heat rises as the cell fires, then decays through the afterglow.
+        const float heat = local <= 0.18f
+                             ? local / 0.18f
+                             : std::max(0.0f, 1.0f - (local - 0.18f) / 0.6f);
+        const ColorRgba tint = UiTheme::mix(
+          firing, afterglow, std::clamp((local - 0.18f) / 0.5f, 0.0f, 1.0f));
+        if (pass == 0) {
+          if (heat > 0.05f) {
+            const float spread = std::min(cellWidth, cellHeight) * 0.35f * heat;
+            canvasEntranceVisual.addFilledRect(
+              x - spread,
+              y - spread,
+              cellWidth + spread * 2.0f,
+              cellHeight + spread * 2.0f,
+              UiTheme::fade(tint, 0.3f * heat));
+          }
+          continue;
+        }
+        const float shrink =
+          local <= 0.3f ? 0.0f : GuiEasing::inOutCubic((local - 0.3f) / 0.7f);
+        const float fade = std::clamp((local - 0.35f) / 0.65f, 0.0f, 1.0f);
+        // Once fired, a cell keeps its glow color while it shrinks away.
+        const float glow = std::min(1.0f, heat + local * 2.0f);
+        const unsigned char opacity =
+          static_cast<unsigned char>(255.0f * (1.0f - fade));
+        const float tileWidth = cellWidth * (1.0f - shrink);
+        const float tileHeight = cellHeight * (1.0f - shrink);
+        if (opacity == 0 || tileWidth <= 0.01f || tileHeight <= 0.01f) {
+          continue;
+        }
+        canvasEntranceVisual.addFilledRect(
+          x + (cellWidth - tileWidth) * 0.5f,
+          y + (cellHeight - tileHeight) * 0.5f,
+          tileWidth,
+          tileHeight,
+          UiTheme::applyOpacity(UiTheme::mix(cover, tint, 0.85f * glow),
+                                opacity));
       }
-      canvasEntranceVisual.addFilledRect(
-        x,
-        y,
-        cellWidth,
-        cellHeight,
-        UiTheme::applyOpacity(UiTheme::menuSurface(), opacity));
-      canvasEntranceVisual.addOutlineRect(
-        x + 0.5f,
-        y + 0.5f,
-        std::max(0.0f, cellWidth - 1.0f),
-        std::max(0.0f, cellHeight - 1.0f),
-        UiTheme::applyOpacity(
-          column < columns / 2 ? UiTheme::accentCool()
-                               : UiTheme::accentViolet(),
-          static_cast<unsigned char>(42.0f * local * remaining)),
-        1.0f);
     }
   }
 }

@@ -131,23 +131,98 @@ testTitleRasterResolution()
     fixture.module.DispatchDrawables(&fixture.scene);
     GameVisual* visual = static_cast<GameVisual*>(
       fixture.scene.drawablesIn(RenderLayerId::UI).front());
-    bool found = false;
+    // The title is drawn letter by letter so each can animate; every letter
+    // shares the dedicated title atlas.
+    std::string title;
+    bool sharp = true;
     for (size_t index = 0; index < visual->textCount(); ++index) {
       const TextPrimitive* text = visual->getText(index);
-      if (text->content == "CSIM") {
-        found = true;
-        testTrue(g,
-                 text->font != nullptr && text->font->getMetrics().pixelSize >=
-                                            text->sizePt *
-                                              visual->getTransform().scaleY *
-                                              static_cast<float>(scale),
-                 "title glyphs are never magnified at supported UI scales");
-        testTrue(g,
-                 text->font != Font::getDefaultFont(),
-                 "title atlas does not replace the small-text default font");
+      if (text->font == nullptr || text->font == Font::getDefaultFont()) {
+        continue;
       }
+      title += text->content;
+      // Letters overshoot by up to 8% while landing.
+      sharp = sharp && text->font->getMetrics().pixelSize >=
+                         text->sizePt * 1.08f * visual->getTransform().scaleY *
+                           static_cast<float>(scale);
     }
-    testTrue(g, found, "main-menu title is present");
+    testTrue(g,
+             title == "CSIM",
+             "main-menu title letters use their own atlas, not the default");
+    testTrue(
+      g, sharp, "title glyphs are never magnified at supported UI scales");
+  }
+}
+
+static void
+testMainMenuKeepsRulePreference()
+{
+  testSection("MainMenuModule: the ambient world keeps the player's ruleset");
+  MainMenuFixture fixture;
+  fixture.module.Exit();
+  fixture.env.setVar("FamilyString", "LIFE_LIKE_BINARY");
+  fixture.env.setVar("RuleSetString", "HIGHLIFE");
+  fixture.env.setVar("ModeString", "HIGHLIFE");
+  testTrue(g, fixture.module.Start(&fixture.context), "menu restarts");
+  testTrue(g,
+           fixture.env.getVar("RuleSetString").value == "HIGHLIFE" &&
+             fixture.env.getVar("ModeString").value == "HIGHLIFE" &&
+             fixture.env.getVar("FamilyString").value == "LIFE_LIKE_BINARY",
+           "the background ruleset never replaces the saved preference");
+}
+
+static void
+testMainMenuAmbientWorld()
+{
+  testSection("MainMenuModule: the ambient world is seeded and alive");
+  MainMenuFixture fixture;
+  fixture.window.handleResize(1280, 720);
+  const CellContext* world = fixture.module.ambientContextForTesting();
+  testTrue(g,
+           world != nullptr && world->getRuleSet() != nullptr &&
+             world->getModeString() == "IMMIGRATION",
+           "the background runs Immigration Life");
+  const std::size_t seeded =
+    world != nullptr ? world->getGrid()->getAllocatedChunkCount() : 0u;
+  testTrue(g, seeded > 0u, "the gun and methuselahs are stamped");
+  for (int frame = 0; frame < 600; ++frame) {
+    fixture.module.Update(1.0 / 60.0);
+  }
+  testTrue(g,
+           world != nullptr && world->getGrid()->getAllocatedChunkCount() > 0u,
+           "the world is still alive after ten seconds");
+}
+
+static void
+testMainMenuPrimitiveBudget()
+{
+  testSection("MainMenuModule: primitive budget at 720p and 4K");
+  MainMenuFixture fixture;
+  const int sizes[2][3] = { { 1280, 720, 1 }, { 3840, 2160, 4 } };
+  for (const int* size : sizes) {
+    fixture.window.handleResize(size[0], size[1]);
+    fixture.env.setVar("uiScale", size[2]);
+    // Walk through the entrance, a selection change and a press.
+    for (int frame = 0; frame < 30; ++frame) {
+      fixture.module.Update(1.0 / 60.0);
+    }
+    fixture.module.selectItemForTesting(2);
+    fixture.module.Update(0.1);
+    fixture.scene.ClearDrawables();
+    fixture.module.DispatchDrawables(&fixture.scene);
+    testEqSize(g,
+               fixture.scene.drawablesIn(RenderLayerId::UI).size(),
+               1u,
+               "the title screen is one UI drawable while no overlay is open");
+    GameVisual* visual = static_cast<GameVisual*>(
+      fixture.scene.drawablesIn(RenderLayerId::UI).front());
+    fixture.renderer.BeginFrame();
+    visual->AppendCommands(&fixture.renderer);
+    fixture.renderer.EndFrame();
+    testTrue(g,
+             visual->builtQuadCount() > 200u &&
+               visual->builtQuadCount() <= 2600u,
+             "the living title screen stays within its quad budget");
   }
 }
 
@@ -552,7 +627,13 @@ registerMainMenuTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.MainMenu.TitleResolution",
                []() { return runMainMenuCase(testTitleRasterResolution); });
-
+  registry.add("IllumoGame.MainMenu.KeepsRulePreference", []() {
+    return runMainMenuCase(testMainMenuKeepsRulePreference);
+  });
+  registry.add("IllumoGame.MainMenu.AmbientWorld",
+               []() { return runMainMenuCase(testMainMenuAmbientWorld); });
+  registry.add("IllumoGame.MainMenu.PrimitiveBudget",
+               []() { return runMainMenuCase(testMainMenuPrimitiveBudget); });
   registry.add("IllumoGame.MainMenu.MouseIsolation",
                []() { return runMainMenuCase(testSettingsMouseIsolation); });
   registry.add("IllumoGame.MainMenu.SettingsApply",

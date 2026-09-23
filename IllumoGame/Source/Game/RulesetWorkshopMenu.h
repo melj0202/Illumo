@@ -119,6 +119,12 @@ private:
   GameVisual visual;
   GuiMenuAnimator animator;
   GuiPointerTracker pointer;
+  // Spring-driven row emphasis (by body row), neighbor-count chip glow
+  // (birth 0-8, survival 9-17), footer button focus and scrollbar thumb.
+  GuiSpringArray rowFocus;
+  GuiSpringArray chipGlow;
+  GuiSpringArray footerFocus;
+  GuiSpring scrollThumb;
   GuiPanelFit panelFit;
   RuleFamilyDefinition familyDraft;
   RuleSetDefinition draft;
@@ -175,6 +181,7 @@ private:
   void resizeGenerationStates(unsigned int count);
   void refreshPreview();
   void rebuildVisual();
+  void updateSprings(float deltaSeconds, bool snap);
   std::string valueForControl(Control control) const;
   std::string helpForControl(Control control) const;
   Control controlForRow(int row) const;

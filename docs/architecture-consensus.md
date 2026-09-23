@@ -1006,34 +1006,63 @@ or blocking input. The mouse wheel scrolls the viewport without changing the
 selected row; an offscreen selection has no visible highlight. Keyboard navigation
 keeps the selected row visible, including Page Up/Down and Home/End. Rows retain
 readable height; drawing and pointer conversion share a fitted UI
-scale. A held opening click is consumed until release. The main-menu card adds
-a larger responsive title area, rounded raised action cards with icons, a
-glowing animated cell motif, flowing cyan/violet light ribbons, softly lit grid,
-and drifting glider clusters that crossfade between phases. The background uses
-fixed primitive counts and a continuous 12-second decorative cycle. Settings
-share the rounded panel, raised rows, inset values, and toggle pills; the pause
-and exit dialog uses the same chrome, raised actions, and gliding selection.
-`GuiKit::drawRoundedRect` composes non-overlapping triangles and rectangles in
-the existing GameVisual stream; `drawRoundedPanel` shares theme colors and
-layered chrome. `GuiDialog` provides opt-in rounded presentation with a fitted
-visual/pointer scale; its default presentation remains available to other apps.
+scale. A held opening click is consumed until release.
+
+The menus share one "living glass" visual language (D-R26). Panels, cards and
+buttons are soft-shadowed glass: a lit rim over a vertical-gradient face, a
+breathing outer glow, and a cyan-to-violet accent hairline with a travelling
+glint. Overlays sit on a radial scrim rather than a flat backdrop. Selection is
+a pill whose leading edge races ahead with a slight overshoot while its trailing
+edge follows, so it stretches between rows and then settles; a sheen sweeps it
+on arrival. Rows lean in (label slide, tile growth, glow) on spring-driven
+emphasis; toggle knobs, count chips, footer buttons and scrollbar thumbs travel
+on springs; changed values bloom and stepper arrows nudge toward the change.
+Footers use keycap hints. The title screen runs a real Immigration Life world
+behind the glass: a Gosper gun streams cyan gliders, coral acorns churn, and a
+deterministic generator launches gliders and spaceships in from the edges every
+few seconds. The world is reseeded when it grows past 1,400 chunks or after 15
+minutes, and it never replaces the player's saved ruleset preference. A radial
+vignette and three drifting soft glows lean against the pointer (parallax), a
+soft spotlight follows it, the panel dims while an overlay is open, the CSIM
+letters cascade in on an overshooting curve and then bob gently, a real glider
+walks the 7x7 motif torus (`CellMotif`, shared with canvas setup), menu icons
+animate with emphasis, and a ripple blooms from a pressed row. Actions are
+never delayed by feedback animation, and overlays close immediately (a closed
+overlay emits no commands). The pause dialog, the F2 workshop, the cell-paint
+drawer, the inspector card, the hamburger button and the edit-hint footer use
+the same chrome; the drawer and the hint footer stay opaque.
+`GuiKit` supplies the chrome: `drawRoundedRect` (three rectangles plus packed
+two-wedge corner quads), `drawRoundedGradientRect`, `drawRoundedBand` (the
+shared core of outlines, soft shadows and glows), `drawSoftShadow`,
+`drawSoftGlow`, `drawVignette`, `drawSheen`, `drawGlassPanel`
+(`drawRoundedPanel` forwards to it) and keycap hints. Fades target the same
+color at zero alpha (`UiTheme::transparentOf`) so straight-alpha blending never
+darkens an edge. `GuiDialog` provides opt-in rounded presentation with a fitted
+visual/pointer scale; its default flat presentation remains available to other
+apps unchanged.
 `MainMenuModule`, `ConfigurationMenu`, `NewSimulationMenu`, and
 `RulesetWorkshopMenu` share one motion and layout vocabulary through
 `GuiMenuShell` rather than repeating it: the reveal, staggered row entrance,
-gliding selection, value pulse, ambient cycle, and caret blink come from
-`GuiMenuAnimator`; the fitted virtual space, visible-row window, and wheel
-scrolling come from `GuiPanelLayout`; hover and press edges come from
-`GuiPointerTracker`. Each overlay still owns its own layout constants, rows, and
-`GameVisual` composition. The title screen keeps its own slower entrance clock.
-The game advances pause-dialog time once per frame, and submission refreshes
-the visual even while input yields to the console. `reducedUiMotion` snaps menu
-animations and disables decorative motion, including pause/exit transitions;
-it does not change domain simulation or cell fading. `showInspector`
-loads at product startup and applies to the existing inspector drawable.
+gliding and stretching selection, arrival sheen, press pulse, directional value
+pulse, ambient cycle, and caret blink come from `GuiMenuAnimator`; physical
+motion comes from `GuiSpring` and `GuiSpringArray` (closed-form damped springs
+that are stable at any frame time and snap exactly at rest); easing curves
+(`outCubic`, `outBack`, `inOutCubic`) come from `GuiEasing`; the fitted virtual
+space, visible-row window, and wheel scrolling come from `GuiPanelLayout`; hover
+and press edges come from `GuiPointerTracker`. Each overlay still owns its own
+layout constants, rows, and `GameVisual` composition. The title screen keeps
+its own slower entrance clock. The game advances pause-dialog time once per
+frame, and submission refreshes the visual even while input yields to the
+console. `reducedUiMotion` snaps every clock and spring and disables decorative
+motion (sheen, ripple, title bob, parallax, spotlight, background visitors,
+motif crossfades, dialog breathing), including pause/exit transitions; it does
+not change domain simulation or cell fading. `showInspector` loads at product
+startup and applies to the existing inspector drawable.
 
-The large main-menu title uses a separate font atlas at 64, 128, or 256 pixels,
-selected to cover its fitted display size without upscaling glyphs. Smaller
-labels retain the default font atlas; resizing reuses the bounded title sizes.
+The large main-menu title is drawn letter by letter from a separate font atlas
+at 64, 128, or 256 pixels, selected to cover its fitted display size at the
+letters' peak (overshoot) size without upscaling glyphs. Smaller labels retain
+the default font atlas; resizing reuses the bounded title sizes.
 
 New simulation and the menu console command `play` open a dedicated canvas
 setup screen, independent of F1 configuration. It offers the rules catalog,
@@ -1042,17 +1071,23 @@ empty or starter contents. Infinite mode disables dimensions while retaining
 the finite draft. Create passes validated canvas values to CellGameModule;
 Back or Escape discards the draft. Display and performance preferences are not
 part of this payload. The screen fits all rows, respects reduced menu motion,
-and consumes wheel input without changing selection or values. Raised cards,
-eased focus lighting, value pulses, and a decorative cell colony match the
-main menu; reduced motion freezes the colony and snaps focus feedback.
+and consumes wheel input without changing selection or values. Glass cards,
+spring-driven focus lighting, a stretching selection pill, directional value
+pulses, a crossfading boundary badge, and a live glider on a 6x6 torus match
+the main menu; reduced motion freezes the motif and snaps focus feedback.
 
-Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
-A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
-retires after completion. It covers the canvas and HUD but remains beneath
+Entering a new or loaded cell canvas plays a 0.9-second cellular wave. A
+module-owned, screen-space GameVisual veil tiles the viewport with cells of
+roughly 44 virtual pixels, opaque and dark at first. A wave spreads from the
+center with a deterministic, per-cell ragged front: each cell fires cyan as the
+wave reaches it (with a soft halo), cools to violet, then shrinks to a dot and
+fades, revealing the world. Its cell count follows the viewport and UI scale,
+and it retires after completion. It covers the canvas and HUD but remains beneath
 settings and confirmation dialogs. The transition never changes camera or
 simulation state and does not block input. Reduced menu motion and the 3D
-diagnostic view skip it from the first frame. Returning to the main menu reverses
-this veil over 0.48 seconds, then submits one module transition. Repeated return
+diagnostic view skip it from the first frame. Returning to the main menu runs
+the wave backwards over 0.48 seconds (cells regrow from the edges inward, fire,
+and darken until the canvas is covered), then submits one module transition. Repeated return
 requests do not restart it; product input is consumed during the accepted exit,
 while the global console retains its input. Reduced motion returns immediately.
 Both the pause-menu action and the console menu command use this path.
@@ -1203,6 +1238,9 @@ eight lanes. The old `game/` directory and `game.json` are gone.
   through a `Renderer::setBeforePresent` hook, writes the PNG, prints one JSON
   line and exits 0/1 through `IllumoApplicationDefinition::exitCode`; it
   replaces the removed `IllumoCapture` executable ([frame-capture.md](frame-capture.md)).
+  `--capture-script <file>` runs bench-script steps first so a capture can
+  reach a later screen; the capture frame counts from the script's end, and the
+  saved frame is forced opaque to match the presented window.
   `--bench-frames <n>` (with `--bench-warmup` and `--bench-script`) runs a
   scripted, timed session and prints one JSON line of frame and exchange
   statistics (see the same document).
@@ -1378,11 +1416,12 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R17** | AssetManager owns canonical-path texture/shader caching, references, one CPU worker, stable fallbacks, render-thread pump/replacement, explicit reload, and Debug 500 ms timestamp polling. |
 | **D-R18** | Painter-correct 2D stream: parent/local transforms, normalized pivots, atlas regions/flips, stable cross-type draw order, adjacent-only batching, bounded dynamic quad buffers, and caller-updated passive sprite animation. |
 | **D-R19** | Superseded by D-E6: the sibling IllumoGame consumer establishes the explicit library boundary. Future downstream repositories still require install/package validation. |
-| **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. |
+| **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. Soft chrome (gradients, glows, shadows) stays primitive-composed per D-R26. |
 | **D-R21** | One world look (`uMVP`). Sprites are textured quads; 2D vs 3D is the camera projection. `MeshVisual` is the world object host; `GameVisual` remains overlay/painter composition. |
 | **D-R23** | Pixel-space `GameVisual` geometry culls wholly excluded quads against the logical viewport or an optional clip before upload. Partial clips use nested, intersected scissor tokens that restore the prior state. D-E11 separately governs world-space `MeshVisual` and SceneGraph bounds. |
 | **D-R24** | `AssetManager` reference-counts immutable static meshes and canonical file/options cache entries. `MeshVisual` borrows the managed `MeshHandle` and draw metadata, retaining only per-instance transform/tint/lighting state; procedural geometry remains visual-owned and dynamic. Automatic instancing remains a measured follow-up. |
 | **D-R25** | SceneGraphDrawable consumes one immutable graph-owned snapshot per renderer frame. Two reusable buffers, explicit invalidation, and per-callback validation protect borrowed content. Shared shadow relevance follows caster collection; token/backend contracts remain unchanged. |
+| **D-R26** | `GameVisual` adds `ShapeKind::GradientQuad`: convex, fan-ordered quads with one color per vertex (`addGradientQuad`/`addGradientRect`/`addGradientTriangle`), carried by the existing shape vertex format and shader. Soft UI chrome (gradients, glows, soft shadows, sheens, vignettes) is composed from these in `GuiKit`; no new shader, blur pass, or widget tree. Menu motion uses `GuiMenuShell` springs and curves. |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
 | **D-C2** | `CellGrid` domain + `Canvas` presentation; rulesets depend only on `CellGrid`. |

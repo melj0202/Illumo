@@ -57,6 +57,99 @@ public:
                                float height,
                                unsigned char opacity = 255);
 
+  // --- Living-glass chrome (per-vertex-color shapes) ---
+  // Rounded rect whose color blends from `top` to `bottom` (13 quads).
+  static void drawRoundedGradientRect(GameVisual& visual,
+                                      float x,
+                                      float y,
+                                      float width,
+                                      float height,
+                                      float radius,
+                                      ColorRgba top,
+                                      ColorRgba bottom);
+  // Ring between the rounded rect grown by `innerOffset` and by `outerOffset`
+  // (negative offsets inset), blending innerColor to outerColor (28 quads).
+  // The shared core of outlines, soft shadows and glows.
+  static void drawRoundedBand(GameVisual& visual,
+                              float x,
+                              float y,
+                              float width,
+                              float height,
+                              float radius,
+                              float innerOffset,
+                              float outerOffset,
+                              ColorRgba innerColor,
+                              ColorRgba outerColor);
+  static void drawRoundedOutline(GameVisual& visual,
+                                 float x,
+                                 float y,
+                                 float width,
+                                 float height,
+                                 float radius,
+                                 float thickness,
+                                 ColorRgba color);
+  // Soft shadow falling away from the rounded rect's edge over `spread`.
+  static void drawSoftShadow(GameVisual& visual,
+                             float x,
+                             float y,
+                             float width,
+                             float height,
+                             float radius,
+                             float spread,
+                             float offsetY,
+                             ColorRgba color);
+  // Radial glow: `color` at the center fading to transparent at the rim.
+  static void drawSoftGlow(GameVisual& visual,
+                           float centerX,
+                           float centerY,
+                           float radiusX,
+                           float radiusY,
+                           ColorRgba color,
+                           int segments = 20);
+  // Full-screen radial scrim from `center` to `edge` at the corners.
+  static void drawVignette(GameVisual& visual,
+                           float width,
+                           float height,
+                           ColorRgba center,
+                           ColorRgba edge,
+                           float innerFraction = 0.4f);
+  // Diagonal highlight band sweeping left to right as progress goes 0..1,
+  // kept inside [x + inset, x + width - inset].
+  static void drawSheen(GameVisual& visual,
+                        float x,
+                        float y,
+                        float width,
+                        float height,
+                        float inset,
+                        float progress,
+                        ColorRgba color);
+  static void drawGlassPanel(GameVisual& visual,
+                             float x,
+                             float y,
+                             float width,
+                             float height,
+                             const GuiGlassStyle& style);
+  // Raised keyboard key chip. Labels UP, DOWN, LEFT, RIGHT, UPDOWN and
+  // LEFTRIGHT draw arrow glyphs. Returns the chip width.
+  static float drawKeycap(GameVisual& visual,
+                          float x,
+                          float y,
+                          const std::string& label,
+                          float sizePt,
+                          unsigned char opacity = 255);
+  // Keycap followed by a muted action label; returns the advance to the next
+  // hint (including trailing spacing).
+  static float drawKeyHint(GameVisual& visual,
+                           float x,
+                           float y,
+                           const std::string& key,
+                           const std::string& action,
+                           float sizePt,
+                           unsigned char opacity = 255);
+  static float measureKeyHint(const std::string& key,
+                              const std::string& action,
+                              float sizePt);
+
   static bool isPointInRect(float px,
                             float py,
                             float rx,

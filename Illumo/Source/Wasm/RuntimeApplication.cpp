@@ -177,16 +177,18 @@ readManifest(const std::filesystem::path& path, AppManifest& manifest)
 }
 
 static const char* const kLaunchOptions[] = {
-  "GuestModule",      "GuestMod",         "GuestWorker",
-  "GuestPackage",     "GuestStorage",     "GuestFuel",
-  "GuestMemoryMiB",   "GuestDeadline",    "GuestApp",
-  "GuestOpen",        "GuestCapture",     "GuestCaptureFrame",
-  "GuestBenchFrames", "GuestBenchWarmup", "GuestBenchScript"
+  "GuestModule",       "GuestMod",         "GuestWorker",
+  "GuestPackage",      "GuestStorage",     "GuestFuel",
+  "GuestMemoryMiB",    "GuestDeadline",    "GuestApp",
+  "GuestOpen",         "GuestCapture",     "GuestCaptureFrame",
+  "GuestBenchFrames",  "GuestBenchWarmup", "GuestBenchScript",
+  "GuestCaptureScript"
 };
 
 // --bench-frames: warm up, time a fixed number of frames, print one JSON line
 // and close. The optional script queues host console lines, each once its
-// command exists (guest commands register asynchronously).
+// command exists (guest commands register asynchronously). A --capture run
+// may carry the same script (--capture-script) to reach a later screen.
 struct BenchOptions
 {
   std::uint64_t frames = 0;
@@ -348,17 +350,31 @@ public:
   void Update(double dt) override
   {
     if (m_bench.frames == 0 || m_benchDone) {
+      if (!m_capture.empty() && !m_done) {
+        std::string error;
+        if (!feedScript(&error)) {
+          report(false, 0, 0, error);
+          m_done = true;
+          if (ic != nullptr && ic->window != nullptr) {
+            ic->window->requestClose();
+          }
+        }
+      }
       m_guest->Update(dt);
       return;
     }
-    feedBenchScript();
+    std::string scriptError;
+    if (!feedScript(&scriptError)) {
+      reportBench(scriptError);
+      return;
+    }
     const std::chrono::steady_clock::time_point start =
       std::chrono::steady_clock::now();
     m_guest->Update(dt);
     const std::chrono::steady_clock::time_point end =
       std::chrono::steady_clock::now();
     // Warm-up counts from the end of the script.
-    if (m_benchScriptLine >= m_bench.script.size() && m_benchWaitFrames == 0) {
+    if (scriptFinished()) {
       ++m_benchUpdates;
     }
     if (m_benchUpdates > m_bench.warmup) {
@@ -392,6 +408,10 @@ public:
     }
     if (m_capture.empty() || m_done || ic == nullptr ||
         ic->renderer == nullptr) {
+      return;
+    }
+    // Like bench warm-up, the capture frame counts from the end of the script.
+    if (!scriptFinished()) {
       return;
     }
     ++m_frames;
@@ -431,19 +451,24 @@ public:
   }
 
 private:
+  bool scriptFinished() const
+  {
+    return m_benchScriptLine >= m_bench.script.size() && m_benchWaitFrames == 0;
+  }
   // Runs script lines in order: "@wait n" pauses n frames, "@key Name"
   // presses one key, and any other line is a console command queued once it
-  // exists. An unknown key or directive fails the benchmark.
-  void feedBenchScript()
+  // exists. An unknown key or directive fails the run (false with *error).
+  bool feedScript(std::string* error)
   {
     if (ic == nullptr || ic->commandRegistry == nullptr ||
         ic->inputManager == nullptr) {
       m_benchScriptLine = m_bench.script.size();
-      return;
+      m_benchWaitFrames = 0;
+      return true;
     }
     if (m_benchWaitFrames > 0) {
       --m_benchWaitFrames;
-      return;
+      return true;
     }
     CommandRegistry& commands = *ic->commandRegistry;
     bool queued = false;
@@ -453,8 +478,8 @@ private:
         std::uint64_t frames = 0;
         if (words.size() != 2 ||
             !readLimit(words[1], kMaximumBenchFrames, frames)) {
-          reportBench("Invalid @wait in the bench script");
-          return;
+          *error = "Invalid @wait in the script";
+          return false;
         }
         m_benchWaitFrames = frames;
         ++m_benchScriptLine;
@@ -463,8 +488,8 @@ private:
       if (words.front() == "@key") {
         KeyCode key = KeyCode::None;
         if (words.size() != 2 || !keyNamed(words[1], key)) {
-          reportBench("Invalid @key in the bench script");
-          return;
+          *error = "Invalid @key in the script";
+          return false;
         }
         ic->inputManager->getKeyQueue().push({ key, InputAction::Press, 0 });
         ++m_benchScriptLine;
@@ -472,12 +497,19 @@ private:
         break;
       }
       if (words.front().starts_with("@")) {
-        reportBench("Unknown bench script directive " + words.front());
-        return;
+        *error = "Unknown script directive " + words.front();
+        return false;
       }
       if (!commands.HasCommand(words.front())) {
+        // Guest commands register asynchronously; one that never appears
+        // fails the run instead of stalling it.
+        if (++m_scriptCommandWaitFrames > kScriptCommandWaitFrames) {
+          *error = "Script command never registered: " + words.front();
+          return false;
+        }
         break;
       }
+      m_scriptCommandWaitFrames = 0;
       commands.QueueCommand(
         words.front(),
         std::vector<std::string>(words.begin() + 1, words.end()));
@@ -487,6 +519,7 @@ private:
     if (queued) {
       commands.ExecuteQueue();
     }
+    return true;
   }
   static bool keyNamed(const std::string& name, KeyCode& key)
   {
@@ -557,8 +590,13 @@ private:
   {
     m_done = true;
     const std::array<int, 2> size = ic->window->getWindowDimensions();
-    const FrameReadback image =
+    FrameReadback image =
       renderer.getBackend()->readBackbuffer(size[0], size[1]);
+    // The window presents opaquely whatever alpha translucent UI leaves in
+    // the backbuffer, so the screenshot must be opaque to match it.
+    for (std::size_t index = 3; index < image.pixels.size(); index += 4) {
+      image.pixels[index] = 255;
+    }
     std::string error = image.error;
     if (image.success() && !FrameCapture::savePng(m_capture, image, &error) &&
         error.empty()) {
@@ -603,8 +641,10 @@ private:
   bool m_done = false;
   bool m_reported = false;
   BenchOptions m_bench;
+  static constexpr std::uint64_t kScriptCommandWaitFrames = 600;
   std::size_t m_benchScriptLine = 0;
   std::uint64_t m_benchWaitFrames = 0;
+  std::uint64_t m_scriptCommandWaitFrames = 0;
   std::uint64_t m_benchUpdates = 0;
   std::vector<double> m_benchFrameIntervals;
   std::vector<double> m_benchUpdateMilliseconds;
@@ -737,15 +777,27 @@ createGuestModuleFrom(IEnvVars* environment)
     return nullptr;
   }
   const std::string benchScript = environment->getVar("GuestBenchScript").value;
+  const std::string captureScript =
+    environment->getVar("GuestCaptureScript").value;
   if ((bench.frames == 0 && !benchScript.empty()) ||
       (bench.frames != 0 && !captureOption.empty())) {
     Logger::LogError("--bench-script needs --bench-frames, and a benchmark "
                      "cannot be combined with --capture");
     return nullptr;
   }
+  if (!captureScript.empty() && captureOption.empty()) {
+    Logger::LogError("--capture-script needs --capture");
+    return nullptr;
+  }
   if (!benchScript.empty() &&
       !readBenchScript(optionPath(benchScript), bench.script)) {
     Logger::LogError("--bench-script names no readable file: " + benchScript);
+    return nullptr;
+  }
+  if (!captureScript.empty() &&
+      !readBenchScript(optionPath(captureScript), bench.script)) {
+    Logger::LogError("--capture-script names no readable file: " +
+                     captureScript);
     return nullptr;
   }
   limits.memoryBytes = memoryMiB * 1024u * 1024u;
@@ -844,7 +896,8 @@ CreateIllumoApplication()
     "apps/<name>/ beside the runtime; the game runs by default.";
   application.commandLine.usage =
     "IllumoRuntime.exe [--app name] [--open file] [--capture out.png "
-    "[--capture-frame n]] [--package dir] [--storage dir] "
+    "[--capture-frame n] [--capture-script file]] [--package dir] "
+    "[--storage dir] "
     "[--game module.wasm] [--mod module.wasm] [--worker module.wasm] "
     "[--memory-mib n] [--fuel n] [--deadline-ms n] "
     "[--bench-frames n [--bench-warmup n] [--bench-script file]]";
@@ -868,6 +921,10 @@ CreateIllumoApplication()
       "count",
       "GuestCaptureFrame",
       "Frame to capture (default: 60)" },
+    { "--capture-script",
+      "file",
+      "GuestCaptureScript",
+      "Console lines, @key and @wait run before --capture-frame counts" },
     { "--package",
       "path",
       "GuestPackage",

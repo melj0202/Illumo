@@ -318,8 +318,10 @@ mesh as a retained host mesh, skybox cubemap). `IllumoGame.Wasm.LaneParity`
 and `IllumoGame.Wasm.LaneProtocol` cover lane exactness and the CSL1
 decoders. The `Illumo.Wasm.*` cases cover the sandbox, engine modes, the
 manifest decoder, ABI decoders and host services; `Illumo.Runtime.Help`,
-`Illumo.Runtime.InvalidCaptureFrame` and `Illumo.Runtime.InvalidBenchFrames`
-cover the runtime command line. Real-GPU capture is checked with `python
+`Illumo.Runtime.InvalidCaptureFrame`, `Illumo.Runtime.InvalidBenchFrames` and
+`Illumo.Runtime.CaptureScriptNeedsCapture` cover the runtime command line.
+`--capture-script` drives a capture to a later screen (menus, overlays) for
+visual checks. Real-GPU capture is checked with `python
 tools/verify_capture.py build-workspace/Release/IllumoRuntime.exe
 --output-dir <dir>`. Performance is measured with `--bench-frames`,
 `IllumoGame.Sim.RunnerBench` and `IllumoGame.Wasm.PackageBench` (label

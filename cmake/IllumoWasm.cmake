@@ -186,8 +186,12 @@ if(BUILD_TESTING)
   add_test(NAME Illumo.Runtime.InvalidBenchFrames
     COMMAND IllumoRuntime --bench-frames 0)
   set_tests_properties(Illumo.Runtime.InvalidBenchFrames PROPERTIES WILL_FAIL TRUE)
+  add_test(NAME Illumo.Runtime.CaptureScriptNeedsCapture
+    COMMAND IllumoRuntime --capture-script missing-script.txt)
+  set_tests_properties(Illumo.Runtime.CaptureScriptNeedsCapture
+    PROPERTIES WILL_FAIL TRUE)
   set_tests_properties(Illumo.Runtime.Help Illumo.Runtime.InvalidCaptureFrame
-    Illumo.Runtime.InvalidBenchFrames
+    Illumo.Runtime.InvalidBenchFrames Illumo.Runtime.CaptureScriptNeedsCapture
     PROPERTIES LABELS "Illumo;IllumoWorkspace")
   add_dependencies(IllumoRunTests IllumoRuntime)
 

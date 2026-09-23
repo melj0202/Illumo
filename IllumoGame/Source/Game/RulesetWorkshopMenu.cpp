@@ -100,6 +100,8 @@ stateLabel(const RuleFamilyDefinition& definition, unsigned int state)
   return "State " + std::to_string(state);
 }
 
+// Inset stepper: glass side buttons whose glyphs lean toward the direction a
+// value just moved (`nudge` is signed, -1..1, already scaled by the pulse).
 void
 drawValueStepper(GameVisual& visual,
                  float x,
@@ -108,54 +110,64 @@ drawValueStepper(GameVisual& visual,
                  float height,
                  const std::string& value,
                  ColorRgba accent,
-                 unsigned char opacity)
+                 unsigned char opacity,
+                 float nudge)
 {
-  GuiKit::drawRoundedRect(
+  GuiKit::drawRoundedGradientRect(
     visual,
     x,
     y,
     width,
     height,
     6.0f,
+    UiTheme::applyOpacity(ColorRgba{ 5, 11, 22, 230 }, opacity),
     UiTheme::applyOpacity(UiTheme::panelInset(), opacity));
   const float sideWidth = std::clamp(width * 0.16f, 20.0f, 30.0f);
-  GuiKit::drawRoundedRect(
-    visual,
-    x + 2.0f,
-    y + 2.0f,
-    sideWidth,
-    std::max(1.0f, height - 4.0f),
-    4.0f,
-    UiTheme::applyOpacity(UiTheme::panelBorder(), opacity));
-  GuiKit::drawRoundedRect(
-    visual,
-    x + width - sideWidth - 2.0f,
-    y + 2.0f,
-    sideWidth,
-    std::max(1.0f, height - 4.0f),
-    4.0f,
-    UiTheme::applyOpacity(UiTheme::panelBorder(), opacity));
+  const float sideHeight = std::max(1.0f, height - 4.0f);
+  const float sides[2] = { x + 2.0f, x + width - sideWidth - 2.0f };
+  for (const float sideX : sides) {
+    GuiKit::drawRoundedGradientRect(
+      visual,
+      sideX,
+      y + 2.0f,
+      sideWidth,
+      sideHeight,
+      4.0f,
+      UiTheme::applyOpacity(ColorRgba{ 62, 88, 116, 255 }, opacity),
+      UiTheme::applyOpacity(ColorRgba{ 40, 60, 84, 255 }, opacity));
+  }
   const float controlFont = std::clamp(height * 0.58f, 12.0f, 14.0f);
   const float textY = y + std::max(2.0f, (height - controlFont) * 0.5f);
-  visual.addText("-",
-                 x + sideWidth * 0.5f - controlFont * 0.22f,
-                 textY,
-                 controlFont,
-                 UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
-  visual.addText("+",
-                 x + width - sideWidth * 0.5f - controlFont * 0.25f,
-                 textY,
-                 controlFont,
-                 UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
+  const float minusShift = nudge < 0.0f ? nudge * 3.0f : 0.0f;
+  const float plusShift = nudge > 0.0f ? nudge * 3.0f : 0.0f;
+  visual.addText(
+    "-",
+    x + sideWidth * 0.5f - controlFont * 0.22f + minusShift,
+    textY,
+    controlFont,
+    UiTheme::applyOpacity(
+      UiTheme::mix(UiTheme::textPrimary(), UiTheme::accentCool(), -nudge),
+      opacity));
+  visual.addText(
+    "+",
+    x + width - sideWidth * 0.5f - controlFont * 0.25f + plusShift,
+    textY,
+    controlFont,
+    UiTheme::applyOpacity(
+      UiTheme::mix(UiTheme::textPrimary(), UiTheme::accentCool(), nudge),
+      opacity));
   const float valueFont = std::clamp(height * 0.58f, 12.0f, 14.0f);
   const float valueWidth = static_cast<float>(value.size()) * valueFont * 0.58f;
   visual.addText(value,
-                 x + std::max(sideWidth + 4.0f, (width - valueWidth) * 0.5f),
+                 x + std::max(sideWidth + 4.0f, (width - valueWidth) * 0.5f) +
+                   nudge * 6.0f,
                  y + std::max(2.0f, (height - valueFont) * 0.5f),
                  valueFont,
                  UiTheme::applyOpacity(accent, opacity));
 }
 
+// Glass action button tinted by its outcome; `emphasis` (0..1) floods the
+// face with the tint and adds a glow as the button takes focus.
 void
 drawActionButton(GameVisual& visual,
                  float x,
@@ -164,9 +176,23 @@ drawActionButton(GameVisual& visual,
                  float height,
                  const std::string& label,
                  ColorRgba tint,
-                 bool selected,
+                 float emphasis,
                  unsigned char opacity)
 {
+  const float e = std::clamp(emphasis, 0.0f, 1.0f);
+  if (e > 0.01f) {
+    GuiKit::drawRoundedBand(
+      visual,
+      x,
+      y,
+      width,
+      height,
+      8.0f,
+      0.0f,
+      10.0f,
+      UiTheme::applyOpacity(UiTheme::fade(tint, 0.3f * e), opacity),
+      UiTheme::transparentOf(tint));
+  }
   GuiKit::drawRoundedRect(
     visual,
     x,
@@ -174,25 +200,33 @@ drawActionButton(GameVisual& visual,
     width,
     height,
     8.0f,
-    UiTheme::applyOpacity(selected ? UiTheme::selection() : UiTheme::menuCard(),
+    UiTheme::applyOpacity(UiTheme::mix(UiTheme::fade(tint, 0.55f), tint, e),
                           opacity));
-  GuiKit::drawRoundedRect(
+  GuiKit::drawRoundedGradientRect(
     visual,
-    x,
-    y,
-    width,
-    height,
-    8.0f,
+    x + 1.0f,
+    y + 1.0f,
+    width - 2.0f,
+    height - 2.0f,
+    7.0f,
     UiTheme::applyOpacity(
-      tint, static_cast<unsigned char>(selected ? opacity : opacity * 0.55f)));
+      UiTheme::mix(UiTheme::mix(UiTheme::cardTop(), tint, 0.14f),
+                   UiTheme::mix(UiTheme::cardTop(), tint, 0.62f),
+                   e),
+      opacity),
+    UiTheme::applyOpacity(
+      UiTheme::mix(UiTheme::mix(UiTheme::cardBottom(), tint, 0.08f),
+                   UiTheme::mix(UiTheme::cardBottom(), tint, 0.42f),
+                   e),
+      opacity));
   const float fontSize = std::clamp(height * 0.42f, 12.0f, 15.0f);
   const float textWidth = static_cast<float>(label.size()) * fontSize * 0.58f;
-  visual.addText(
-    label,
-    x + std::max(8.0f, (width - textWidth) * 0.5f),
-    y + std::max(2.0f, (height - fontSize) * 0.5f),
-    fontSize,
-    UiTheme::applyOpacity(selected ? UiTheme::textPrimary() : tint, opacity));
+  visual.addText(label,
+                 x + std::max(8.0f, (width - textWidth) * 0.5f),
+                 y + std::max(2.0f, (height - fontSize) * 0.5f),
+                 fontSize,
+                 UiTheme::applyOpacity(
+                   UiTheme::mix(tint, UiTheme::textPrimary(), e), opacity));
 }
 
 } // namespace
@@ -209,6 +243,40 @@ RulesetWorkshopMenu::RulesetWorkshopMenu(IRenderWindow* targetWindow,
   visual.setRenderer(renderer);
   visual.prepare(renderer);
   setVisible(false);
+  rowFocus.configure(3.0f, 0.7f);
+  chipGlow.configure(3.2f, 0.65f);
+  footerFocus.configure(3.0f, 0.7f);
+  scrollThumb.configure(3.0f, 0.9f);
+}
+
+void
+RulesetWorkshopMenu::updateSprings(float deltaSeconds, bool snap)
+{
+  const int selectedBody = bodyIndexForRow(selectedRow);
+  rowFocus.focusOnly(selectedBody,
+                     std::min(bodyRowCount, GuiSpringArray::kCapacity));
+  for (unsigned int count = 0u; count <= 8u; ++count) {
+    chipGlow.setTarget(static_cast<int>(count),
+                       ((draft.birthMask >> count) & 1u) != 0u ? 1.0f : 0.0f);
+    chipGlow.setTarget(static_cast<int>(count) + 9,
+                       ((draft.surviveMask >> count) & 1u) != 0u ? 1.0f : 0.0f);
+  }
+  const Control focused = controlForRow(selectedRow);
+  footerFocus.setTarget(0, focused == Control::Apply ? 1.0f : 0.0f);
+  footerFocus.setTarget(1, focused == Control::Discard ? 1.0f : 0.0f);
+  scrollThumb.setTarget(static_cast<float>(firstVisibleRow));
+  if (snap) {
+    rowFocus.snapAll();
+    chipGlow.snapAll();
+    footerFocus.snapAll();
+    scrollThumb.snapTo(scrollThumb.target());
+    return;
+  }
+  const bool still = animator.reducedMotion();
+  rowFocus.tick(deltaSeconds, still);
+  chipGlow.tick(deltaSeconds, still);
+  footerFocus.tick(deltaSeconds, still);
+  scrollThumb.tick(deltaSeconds, still);
 }
 
 bool
@@ -238,6 +306,7 @@ RulesetWorkshopMenu::open(const RuleFamilyDefinition& currentFamily,
   openState = true;
   setVisible(true);
   updateLayout();
+  updateSprings(0.0f, true);
   rebuildVisual();
   return true;
 }
@@ -296,6 +365,7 @@ RulesetWorkshopMenu::tick(float deltaSeconds)
     return;
   }
   animator.tick(deltaSeconds);
+  updateSprings(deltaSeconds, false);
 }
 
 float
@@ -971,7 +1041,7 @@ RulesetWorkshopMenu::changeControl(Control control, int direction)
     if (control == Control::BirthCounts || control == Control::SurvivalCounts) {
       previewDirty = true;
     }
-    animator.triggerValuePulse();
+    animator.triggerValuePulse(direction);
   }
   return changed;
 }
@@ -1330,42 +1400,60 @@ RulesetWorkshopMenu::rebuildVisual()
   refreshPreview();
   const float virtualWidth = panelFit.virtualWidth;
   const float virtualHeight = panelFit.virtualHeight;
+  const ColorRgba cyan = UiTheme::accentCool();
   const float reveal = animator.panelReveal();
   const float animatedPanelY = panelY + animator.panelOffsetY();
   const float animatedFirstRowY = firstRowY + animator.panelOffsetY();
-  const unsigned char backdropOpacity =
-    static_cast<unsigned char>(std::round(animator.openReveal(0.18f) * 255.0f));
+  const float backdrop = animator.openReveal(0.18f);
   const unsigned char panelOpacity =
     static_cast<unsigned char>(std::round(reveal * 255.0f));
   const float breathe =
     0.5f + 0.5f * std::sin(animator.ambientPhase() * 1.04719755f);
 
-  visual.addFilledRect(
-    0.0f,
-    0.0f,
-    virtualWidth,
-    virtualHeight,
-    UiTheme::applyOpacity(UiTheme::canvasShade(), backdropOpacity));
-  GuiKit::drawRoundedPanel(
-    visual, panelX, animatedPanelY, panelWidth, panelHeight, panelOpacity);
-  GuiKit::drawRoundedRect(
-    visual,
-    panelX + 20.0f,
-    animatedFirstRowY - 5.0f,
-    (panelWidth - 40.0f) * reveal,
-    2.0f,
-    1.0f,
-    UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
+  GuiKit::drawVignette(visual,
+                       virtualWidth,
+                       virtualHeight,
+                       UiTheme::fade(UiTheme::scrimCenter(), backdrop),
+                       UiTheme::fade(UiTheme::scrimEdge(), backdrop),
+                       0.3f);
+  GuiGlassStyle glass;
+  glass.opacity = panelOpacity;
+  glass.ambientPhase = animator.ambientPhase();
+  glass.glow = 0.35f + 0.3f * breathe;
+  glass.accentReveal = reveal;
+  GuiKit::drawGlassPanel(
+    visual, panelX, animatedPanelY, panelWidth, panelHeight, glass);
+  const float ruleWidth = (panelWidth - 40.0f) * reveal;
+  const ColorRgba ruleCyan = UiTheme::applyOpacity(cyan, panelOpacity);
+  const ColorRgba ruleViolet = UiTheme::applyOpacity(
+    UiTheme::fade(UiTheme::accentViolet(), 0.8f), panelOpacity);
+  visual.addGradientRect(panelX + 20.0f,
+                         animatedFirstRowY - 5.0f,
+                         ruleWidth * 0.7f,
+                         2.0f,
+                         ruleCyan,
+                         ruleViolet,
+                         ruleViolet,
+                         ruleCyan);
+  visual.addGradientRect(panelX + 20.0f + ruleWidth * 0.7f,
+                         animatedFirstRowY - 5.0f,
+                         ruleWidth * 0.3f,
+                         2.0f,
+                         ruleViolet,
+                         UiTheme::transparentOf(ruleViolet),
+                         UiTheme::transparentOf(ruleViolet),
+                         ruleViolet);
 
   const float titleFont = std::clamp(panelWidth * 0.038f, 16.0f, 26.0f);
   const float smallFont = panelHeight >= 400.0f ? 12.0f : 10.0f;
+  const float headerSlide = (1.0f - reveal) * 10.0f;
   visual.addText("F2  /  RULESET WORKSHOP",
-                 panelX + 28.0f,
+                 panelX + 28.0f - headerSlide,
                  animatedPanelY + 14.0f,
                  11.0f,
-                 UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
+                 UiTheme::applyOpacity(cyan, panelOpacity));
   visual.addText("RULESET WORKSHOP",
-                 panelX + 28.0f,
+                 panelX + 28.0f - headerSlide * 0.6f,
                  animatedPanelY + 31.0f,
                  titleFont,
                  UiTheme::applyOpacity(UiTheme::textPrimary(), panelOpacity));
@@ -1373,7 +1461,7 @@ RulesetWorkshopMenu::rebuildVisual()
                  panelX + 30.0f,
                  animatedPanelY + (headerHeight >= 90.0f ? 63.0f : 52.0f),
                  14.0f,
-                 UiTheme::applyOpacity(UiTheme::textMuted(), panelOpacity));
+                 UiTheme::applyOpacity(UiTheme::textSecondary(), panelOpacity));
 
   const std::string family = familyLabel(familyDraft.kind);
   const float familyChipWidth =
@@ -1384,30 +1472,38 @@ RulesetWorkshopMenu::rebuildVisual()
   const float familyChipX = panelX + panelWidth - chipGroupWidth - 24.0f;
   const float chipY = animatedPanelY + 18.0f;
   if (panelWidth >= chipGroupWidth + 56.0f) {
-    GuiKit::drawRoundedRect(
-      visual,
-      familyChipX,
-      chipY,
-      familyChipWidth,
-      25.0f,
-      7.0f,
-      UiTheme::applyOpacity(UiTheme::panelInset(), panelOpacity));
+    // Pill chips with a lit rim: family in cyan, state count in violet.
+    const float chipXs[2] = { familyChipX,
+                              familyChipX + familyChipWidth + chipGap };
+    const float chipWidths[2] = { familyChipWidth, stateChipWidth };
+    const ColorRgba chipTints[2] = { cyan, UiTheme::accentViolet() };
+    for (int chip = 0; chip < 2; ++chip) {
+      GuiKit::drawRoundedRect(
+        visual,
+        chipXs[chip],
+        chipY,
+        chipWidths[chip],
+        25.0f,
+        12.5f,
+        UiTheme::applyOpacity(UiTheme::fade(chipTints[chip], 0.45f),
+                              panelOpacity));
+      GuiKit::drawRoundedGradientRect(
+        visual,
+        chipXs[chip] + 1.0f,
+        chipY + 1.0f,
+        chipWidths[chip] - 2.0f,
+        23.0f,
+        11.5f,
+        UiTheme::applyOpacity(ColorRgba{ 16, 27, 45, 255 }, panelOpacity),
+        UiTheme::applyOpacity(UiTheme::panelInset(), panelOpacity));
+    }
     visual.addText(family,
-                   familyChipX + 8.0f,
+                   familyChipX + 9.0f,
                    chipY + 7.0f,
                    11.0f,
-                   UiTheme::applyOpacity(UiTheme::accentCool(), panelOpacity));
-    const float stateChipX = familyChipX + familyChipWidth + chipGap;
-    GuiKit::drawRoundedRect(
-      visual,
-      stateChipX,
-      chipY,
-      stateChipWidth,
-      25.0f,
-      7.0f,
-      UiTheme::applyOpacity(UiTheme::panelInset(), panelOpacity));
+                   UiTheme::applyOpacity(cyan, panelOpacity));
     visual.addText(std::to_string(familyDraft.stateCount) + " STATES",
-                   stateChipX + 8.0f,
+                   chipXs[1] + 9.0f,
                    chipY + 7.0f,
                    11.0f,
                    UiTheme::applyOpacity(UiTheme::textPrimary(), panelOpacity));
@@ -1425,9 +1521,134 @@ RulesetWorkshopMenu::rebuildVisual()
   const float valueLeft = panelX + panelWidth * 0.53f;
   const float valueRight = panelX + panelWidth - 36.0f;
   const float valueWidth = std::max(24.0f, valueRight - valueLeft);
-  for (int bodyRow = firstVisibleRow;
-       bodyRow < firstVisibleRow + visibleRows && bodyRow < bodyRowCount;
-       ++bodyRow) {
+  const int lastVisibleRow =
+    std::min(firstVisibleRow + visibleRows, bodyRowCount);
+  const float cardX = panelX + 20.0f;
+  const float cardWidth = panelWidth - 40.0f;
+
+  // Pass one: row surfaces (section rules, inset information rows, cards).
+  for (int bodyRow = firstVisibleRow; bodyRow < lastVisibleRow; ++bodyRow) {
+    const MenuRow& row = rows[static_cast<std::size_t>(bodyRow)];
+    const float rowY =
+      animatedFirstRowY +
+      rowHeight * static_cast<float>(bodyRow - firstVisibleRow);
+    const unsigned char rowOpacity = static_cast<unsigned char>(
+      std::round(rowReveal(bodyRow) * static_cast<float>(panelOpacity)));
+    if (row.kind == RowKind::Section) {
+      const float dividerX =
+        panelX + 34.0f + static_cast<float>(row.label.size()) * 7.2f;
+      const float dividerWidth =
+        std::max(0.0f, panelX + panelWidth - 56.0f - dividerX);
+      const ColorRgba ruleColor = UiTheme::applyOpacity(
+        UiTheme::mix(UiTheme::panelBorder(), cyan, 0.35f), rowOpacity);
+      visual.addGradientRect(dividerX,
+                             rowY + rowHeight * 0.55f,
+                             dividerWidth,
+                             1.0f,
+                             ruleColor,
+                             UiTheme::transparentOf(ruleColor),
+                             UiTheme::transparentOf(ruleColor),
+                             ruleColor);
+      continue;
+    }
+    if (row.kind == RowKind::Information) {
+      GuiKit::drawRoundedGradientRect(
+        visual,
+        panelX + 22.0f,
+        rowY + 1.0f,
+        panelWidth - 44.0f,
+        rowHeight - 3.0f,
+        7.0f,
+        UiTheme::applyOpacity(ColorRgba{ 8, 14, 26, 220 }, rowOpacity),
+        UiTheme::applyOpacity(UiTheme::panelInset(), rowOpacity));
+      continue;
+    }
+    const float e = std::clamp(rowFocus.value(bodyRow), 0.0f, 1.0f);
+    GuiKit::drawRoundedRect(
+      visual,
+      cardX,
+      rowY + 1.0f,
+      cardWidth,
+      rowHeight - 5.0f,
+      8.0f,
+      UiTheme::applyOpacity(UiTheme::mix(UiTheme::cardRim(),
+                                         ColorRgba{ 80, 160, 190, 255 },
+                                         e * 0.5f),
+                            rowOpacity));
+    GuiKit::drawRoundedGradientRect(
+      visual,
+      cardX + 1.0f,
+      rowY + 2.0f,
+      cardWidth - 2.0f,
+      rowHeight - 7.0f,
+      7.0f,
+      UiTheme::applyOpacity(UiTheme::cardTop(), rowOpacity),
+      UiTheme::applyOpacity(UiTheme::cardBottom(), rowOpacity));
+  }
+
+  // The gliding, stretching selection pill (body rows only; footer actions
+  // light their own buttons).
+  const int selectedBody = bodyIndexForRow(selectedRow);
+  if (selectedBody >= firstVisibleRow && selectedBody < lastVisibleRow) {
+    const float windowTop = static_cast<float>(firstVisibleRow);
+    const float windowBottom = static_cast<float>(lastVisibleRow - 1);
+    const GuiSelectionSpan span =
+      animator.selectionSpan(static_cast<float>(selectedBody));
+    const float spanTop = std::clamp(
+      std::min(span.leading, span.trailing), windowTop, windowBottom);
+    const float spanBottom = std::clamp(
+      std::max(span.leading, span.trailing), windowTop, windowBottom);
+    const float pillY =
+      animatedFirstRowY + rowHeight * (spanTop - windowTop) + 1.0f;
+    const float pillHeight =
+      rowHeight * (spanBottom - spanTop) + rowHeight - 5.0f;
+    const unsigned char pillOpacity = static_cast<unsigned char>(
+      std::round(rowReveal(selectedBody) * static_cast<float>(panelOpacity)));
+    GuiKit::drawRoundedBand(
+      visual,
+      cardX,
+      pillY,
+      cardWidth,
+      pillHeight,
+      8.0f,
+      0.0f,
+      9.0f + 3.0f * breathe,
+      UiTheme::applyOpacity(UiTheme::fade(cyan, 0.18f + 0.1f * breathe),
+                            pillOpacity),
+      UiTheme::transparentOf(cyan));
+    GuiKit::drawRoundedRect(
+      visual,
+      cardX,
+      pillY,
+      cardWidth,
+      pillHeight,
+      8.0f,
+      UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), pillOpacity));
+    GuiKit::drawRoundedGradientRect(
+      visual,
+      cardX + 1.0f,
+      pillY + 1.0f,
+      cardWidth - 2.0f,
+      pillHeight - 2.0f,
+      7.0f,
+      UiTheme::applyOpacity(UiTheme::selectionTop(), pillOpacity),
+      UiTheme::applyOpacity(UiTheme::selectionBottom(), pillOpacity));
+    GuiKit::drawSheen(
+      visual,
+      cardX,
+      pillY,
+      cardWidth,
+      pillHeight,
+      8.0f,
+      animator.selectionSheen(),
+      UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 38 }, pillOpacity));
+  }
+
+  // Pass two: row contents.
+  const float pulse = animator.valuePulse();
+  const float pulseDirection =
+    static_cast<float>(animator.valuePulseDirection());
+  for (int bodyRow = firstVisibleRow; bodyRow < lastVisibleRow; ++bodyRow) {
     const MenuRow& row = rows[static_cast<std::size_t>(bodyRow)];
     const float rowY =
       animatedFirstRowY +
@@ -1441,27 +1662,11 @@ RulesetWorkshopMenu::rebuildVisual()
                      panelX + 28.0f,
                      textY,
                      std::clamp(rowFontSize * 0.78f, 11.0f, 13.0f),
-                     UiTheme::applyOpacity(UiTheme::accentCool(), rowOpacity));
-      const float dividerX =
-        panelX + 34.0f + static_cast<float>(row.label.size()) * 7.2f;
-      visual.addFilledRect(
-        dividerX,
-        rowY + rowHeight * 0.55f,
-        std::max(0.0f, panelX + panelWidth - 56.0f - dividerX),
-        1.0f,
-        UiTheme::applyOpacity(UiTheme::panelBorder(), rowOpacity));
+                     UiTheme::applyOpacity(cyan, rowOpacity));
       continue;
     }
 
     if (row.kind == RowKind::Information) {
-      GuiKit::drawRoundedRect(
-        visual,
-        panelX + 22.0f,
-        rowY + 1.0f,
-        panelWidth - 44.0f,
-        rowHeight - 3.0f,
-        7.0f,
-        UiTheme::applyOpacity(UiTheme::panelInset(), rowOpacity));
       if (row.control == Control::PreviewResult) {
         const float swatchSize = std::clamp(rowHeight * 0.42f, 11.0f, 16.0f);
         const float swatchY = rowY + (rowHeight - swatchSize) * 0.5f;
@@ -1511,88 +1716,108 @@ RulesetWorkshopMenu::rebuildVisual()
       continue;
     }
 
-    GuiKit::drawRoundedRect(
-      visual,
-      panelX + 20.0f,
-      rowY + 2.0f,
-      panelWidth - 40.0f,
-      rowHeight - 4.0f,
-      8.0f,
-      UiTheme::applyOpacity(
-        selected ? UiTheme::selection() : UiTheme::menuCard(), rowOpacity));
-    GuiKit::drawRoundedRect(
-      visual,
-      panelX + 20.0f,
-      rowY + 1.0f,
-      panelWidth - 40.0f,
-      rowHeight - 5.0f,
-      8.0f,
-      UiTheme::applyOpacity(
-        selected ? UiTheme::accentCool() : UiTheme::panelBorder(),
-        static_cast<unsigned char>(
-          selected ? rowOpacity * (0.62f + 0.18f * breathe) : rowOpacity)));
-    if (selected && animator.valuePulse() > 0.0f) {
-      GuiKit::drawRoundedRect(
+    const float e = std::clamp(rowFocus.value(bodyRow), 0.0f, 1.2f);
+    const float eClamped = std::min(1.0f, e);
+    if (selected && pulse > 0.0f) {
+      GuiKit::drawRoundedBand(
         visual,
-        panelX + 21.0f,
-        rowY + 2.0f,
-        panelWidth - 42.0f,
-        rowHeight - 7.0f,
-        7.0f,
-        UiTheme::applyOpacity(UiTheme::accentCool(),
-                              static_cast<unsigned char>(
-                                rowOpacity * animator.valuePulse() * 0.16f)));
+        cardX,
+        rowY + 1.0f,
+        cardWidth,
+        rowHeight - 5.0f,
+        8.0f,
+        -1.0f,
+        6.0f,
+        UiTheme::applyOpacity(UiTheme::fade(cyan, 0.45f * pulse), rowOpacity),
+        UiTheme::transparentOf(cyan));
     }
-    visual.addText(row.label,
-                   panelX + 34.0f,
-                   textY,
-                   rowFontSize,
-                   UiTheme::applyOpacity(selected ? UiTheme::accentCool()
-                                                  : UiTheme::textPrimary(),
-                                         rowOpacity));
+    visual.addText(
+      row.label,
+      panelX + 34.0f + 4.0f * e,
+      textY,
+      rowFontSize,
+      UiTheme::applyOpacity(
+        UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity));
 
     const Control control = row.control;
+    const float nudge = selected ? pulseDirection * pulse : 0.0f;
     if (control == Control::BirthCounts || control == Control::SurvivalCounts) {
-      const unsigned int mask =
-        control == Control::BirthCounts ? draft.birthMask : draft.surviveMask;
+      const int glowBase = control == Control::BirthCounts ? 0 : 9;
       const float gap = 3.0f;
       const float chipWidth = std::min(25.0f, (valueWidth - gap * 8.0f) / 9.0f);
       const float chipsWidth = chipWidth * 9.0f + gap * 8.0f;
       const float countChipX = valueLeft + (valueWidth - chipsWidth) * 0.5f;
       const bool countRowFocused = selected;
       for (unsigned int count = 0u; count <= 8u; ++count) {
-        const bool enabled = ((mask >> count) & 1u) != 0u;
+        const float lit = std::clamp(
+          chipGlow.value(glowBase + static_cast<int>(count)), 0.0f, 1.1f);
+        const float litClamped = std::min(1.0f, lit);
         const bool cursor = countRowFocused && count == neighborCount;
-        const ColorRgba chipColor =
-          enabled ? UiTheme::accentCool() : UiTheme::panelBorder();
         const float currentX = countChipX + (chipWidth + gap) * count;
-        GuiKit::drawRoundedRect(
+        const float chipHeight = rowHeight - 10.0f;
+        // Enabled counts light up on a spring and glow softly.
+        if (litClamped > 0.02f) {
+          GuiKit::drawRoundedBand(
+            visual,
+            currentX,
+            rowY + 4.0f,
+            chipWidth,
+            chipHeight,
+            5.0f,
+            0.0f,
+            5.0f,
+            UiTheme::applyOpacity(UiTheme::fade(cyan, 0.4f * litClamped),
+                                  rowOpacity),
+            UiTheme::transparentOf(cyan));
+        }
+        GuiKit::drawRoundedGradientRect(
           visual,
           currentX,
           rowY + 4.0f,
           chipWidth,
-          rowHeight - 10.0f,
+          chipHeight,
           5.0f,
-          UiTheme::applyOpacity(cursor ? UiTheme::selection() : chipColor,
+          UiTheme::applyOpacity(UiTheme::mix(ColorRgba{ 52, 74, 100, 255 },
+                                             ColorRgba{ 120, 236, 250, 255 },
+                                             litClamped),
+                                rowOpacity),
+          UiTheme::applyOpacity(
+            UiTheme::mix(UiTheme::panelBorder(), cyan, litClamped),
+            rowOpacity));
+        if (cursor) {
+          GuiKit::drawRoundedOutline(
+            visual,
+            currentX - 2.0f,
+            rowY + 2.0f,
+            chipWidth + 4.0f,
+            chipHeight + 4.0f,
+            6.0f,
+            1.5f,
+            UiTheme::applyOpacity(
+              UiTheme::fade(UiTheme::textPrimary(), 0.6f + 0.4f * breathe),
+              rowOpacity));
+        }
+        visual.addText(
+          std::to_string(count),
+          currentX + std::max(3.0f, (chipWidth - 8.0f) * 0.5f),
+          textY,
+          rowFontSize,
+          UiTheme::applyOpacity(UiTheme::mix(UiTheme::textMuted(),
+                                             ColorRgba{ 6, 18, 30, 255 },
+                                             litClamped),
                                 rowOpacity));
-        visual.addText(std::to_string(count),
-                       currentX + std::max(3.0f, (chipWidth - 8.0f) * 0.5f),
-                       textY,
-                       rowFontSize,
-                       UiTheme::applyOpacity(enabled ? UiTheme::textPrimary()
-                                                     : UiTheme::textMuted(),
-                                             rowOpacity));
       }
     } else if (control == Control::RulesetName ||
                control == Control::FamilyName ||
                control == Control::StateName) {
-      GuiKit::drawRoundedRect(
+      GuiKit::drawRoundedGradientRect(
         visual,
         valueLeft,
         rowY + 4.0f,
         valueWidth,
         rowHeight - 10.0f,
         5.0f,
+        UiTheme::applyOpacity(ColorRgba{ 5, 11, 22, 230 }, rowOpacity),
         UiTheme::applyOpacity(UiTheme::panelInset(), rowOpacity));
       const std::string value = valueForControl(control);
       const std::string editHint =
@@ -1617,18 +1842,19 @@ RulesetWorkshopMenu::rebuildVisual()
           std::min(GuiKit::caretOriginAfterText(
                      displayValue, valueLeft + 8.0f, fieldFont),
                    valueRight - 44.0f);
-        visual.addText(
-          "|",
-          caretX,
-          textY,
-          fieldFont,
-          UiTheme::applyOpacity(UiTheme::accentCool(), rowOpacity));
+        visual.addText("|",
+                       caretX,
+                       textY,
+                       fieldFont,
+                       UiTheme::applyOpacity(cyan, rowOpacity));
       }
-      visual.addText(editHint,
-                     valueRight - 30.0f,
-                     textY,
-                     10.0f,
-                     UiTheme::applyOpacity(UiTheme::accentCool(), rowOpacity));
+      visual.addText(
+        editHint,
+        valueRight - 30.0f,
+        textY,
+        10.0f,
+        UiTheme::applyOpacity(UiTheme::fade(cyan, 0.55f + 0.45f * eClamped),
+                              rowOpacity));
     } else if (control == Control::Import || control == Control::Export) {
       const float actionWidth = std::min(valueWidth, 210.0f);
       drawActionButton(visual,
@@ -1638,8 +1864,8 @@ RulesetWorkshopMenu::rebuildVisual()
                        rowHeight - 10.0f,
                        control == Control::Import ? "IMPORT JSON"
                                                   : "EXPORT JSON",
-                       UiTheme::accentCool(),
-                       false,
+                       cyan,
+                       0.35f * eClamped,
                        rowOpacity);
     } else if (control == Control::Red || control == Control::Green ||
                control == Control::Blue) {
@@ -1662,23 +1888,30 @@ RulesetWorkshopMenu::rebuildVisual()
                        stepperHeight,
                        valueForControl(control),
                        UiTheme::textPrimary(),
-                       rowOpacity);
+                       rowOpacity,
+                       nudge);
+      // Channel meter: a gradient from dim to the channel's full tint.
       const float barHeight = 3.0f;
       const float barY = rowY + rowHeight - barHeight - 2.0f;
+      const float barWidth = valueWidth - 6.0f;
       GuiKit::drawRoundedRect(
         visual,
         valueLeft + 3.0f,
         barY,
-        valueWidth - 6.0f,
+        barWidth,
         barHeight,
-        2.0f,
+        1.5f,
         UiTheme::applyOpacity(UiTheme::panelBorder(), rowOpacity));
-      visual.addFilledRect(
+      const float filled = std::max(0.0f, barWidth * amount / 255.0f);
+      visual.addGradientRect(
         valueLeft + 3.0f,
         barY,
-        std::max(0.0f, (valueWidth - 6.0f) * amount / 255.0f),
+        filled,
         barHeight,
-        UiTheme::applyOpacity(tint, rowOpacity));
+        UiTheme::applyOpacity(UiTheme::fade(tint, 0.35f), rowOpacity),
+        UiTheme::applyOpacity(tint, rowOpacity),
+        UiTheme::applyOpacity(tint, rowOpacity),
+        UiTheme::applyOpacity(UiTheme::fade(tint, 0.35f), rowOpacity));
     } else {
       drawValueStepper(visual,
                        valueLeft,
@@ -1686,9 +1919,9 @@ RulesetWorkshopMenu::rebuildVisual()
                        valueWidth,
                        rowHeight - 10.0f,
                        valueForControl(control),
-                       selected ? UiTheme::accentCool()
-                                : UiTheme::textPrimary(),
-                       rowOpacity);
+                       UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped),
+                       rowOpacity,
+                       nudge);
       if (control == Control::PaletteState &&
           paletteState < familyDraft.stateColors.size()) {
         const float swatchSize = std::clamp(rowHeight * 0.42f, 11.0f, 16.0f);
@@ -1716,34 +1949,50 @@ RulesetWorkshopMenu::rebuildVisual()
     const float trackTravel = std::max(0.0f, trackHeight - thumbHeight);
     const float maxOffset =
       static_cast<float>(std::max(1, bodyRowCount - visibleRows));
-    const float thumbY =
-      trackTop + trackTravel * static_cast<float>(firstVisibleRow) / maxOffset;
-    visual.addFilledRect(
-      panelX + panelWidth - 12.0f,
+    const float thumbRow = std::clamp(scrollThumb.value(), 0.0f, maxOffset);
+    const float thumbY = trackTop + trackTravel * thumbRow / maxOffset;
+    GuiKit::drawRoundedRect(
+      visual,
+      panelX + panelWidth - 13.0f,
       trackTop,
-      3.0f,
+      4.0f,
       trackHeight,
+      2.0f,
       UiTheme::applyOpacity(UiTheme::panelInset(), panelOpacity));
-    visual.addFilledRect(
-      panelX + panelWidth - 12.0f,
+    GuiKit::drawRoundedRect(
+      visual,
+      panelX + panelWidth - 13.0f,
       thumbY,
-      3.0f,
+      4.0f,
       thumbHeight,
+      2.0f,
       UiTheme::applyOpacity(UiTheme::accent(), panelOpacity));
   }
 
   const float footerY = animatedPanelY + panelHeight - footerHeight;
-  visual.addFilledRect(
-    panelX + 20.0f,
-    footerY,
-    panelWidth - 40.0f,
-    1.0f,
-    UiTheme::applyOpacity(UiTheme::panelBorder(), panelOpacity));
-  const Control focusedControl = controlForRow(selectedRow);
+  const ColorRgba footerRule =
+    UiTheme::applyOpacity(UiTheme::panelBorder(), panelOpacity);
+  visual.addGradientRect(panelX + 20.0f,
+                         footerY,
+                         (panelWidth - 40.0f) * 0.5f,
+                         1.0f,
+                         UiTheme::transparentOf(footerRule),
+                         footerRule,
+                         footerRule,
+                         UiTheme::transparentOf(footerRule));
+  visual.addGradientRect(panelX + 20.0f + (panelWidth - 40.0f) * 0.5f,
+                         footerY,
+                         (panelWidth - 40.0f) * 0.5f,
+                         1.0f,
+                         footerRule,
+                         UiTheme::transparentOf(footerRule),
+                         UiTheme::transparentOf(footerRule),
+                         footerRule);
   const std::string footerMessage =
-    errorMessage.empty() ? helpForControl(focusedControl) : errorMessage;
+    errorMessage.empty() ? helpForControl(controlForRow(selectedRow))
+                         : errorMessage;
   const ColorRgba footerColor =
-    errorMessage.empty() ? UiTheme::textMuted() : UiTheme::error();
+    errorMessage.empty() ? UiTheme::textSecondary() : UiTheme::error();
   if (footerHeight >= 65.0f) {
     visual.addText(footerMessage.substr(0u, 100u),
                    panelX + 28.0f,
@@ -1763,7 +2012,7 @@ RulesetWorkshopMenu::rebuildVisual()
                    buttonHeight,
                    "SAVE & APPLY",
                    UiTheme::success(),
-                   focusedControl == Control::Apply,
+                   footerFocus.value(0),
                    panelOpacity);
   drawActionButton(visual,
                    buttonX + buttonWidth + buttonGap,
@@ -1772,7 +2021,7 @@ RulesetWorkshopMenu::rebuildVisual()
                    buttonHeight,
                    "DISCARD",
                    UiTheme::warning(),
-                   focusedControl == Control::Discard,
+                   footerFocus.value(1),
                    panelOpacity);
   setVisible(true);
 }

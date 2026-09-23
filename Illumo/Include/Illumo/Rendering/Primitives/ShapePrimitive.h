@@ -2,6 +2,7 @@
 
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 #include <Illumo/Rendering/ResourceHandle.h>
+#include <array>
 
 enum class ShapeKind : unsigned char
 {
@@ -9,7 +10,10 @@ enum class ShapeKind : unsigned char
   OutlineRect = 1,
   Line = 2,
   FilledEllipse = 3,
-  FilledTriangle = 4
+  FilledTriangle = 4,
+  // Convex quad in fan order (0,1,2)+(2,3,0) with one color per vertex; the
+  // backend interpolates colors across each of the two triangles.
+  GradientQuad = 5
 };
 
 // Value-type shape description. Compose many on a GameVisual (or any host
@@ -23,10 +27,14 @@ struct ShapePrimitive
   float y0 = 0.0f;
   float x1 = 0.0f;
   float y1 = 0.0f;
-  float x2 = 0.0f; // FilledTriangle vertex 2
+  float x2 = 0.0f; // FilledTriangle / GradientQuad vertex 2
   float y2 = 0.0f;
+  float x3 = 0.0f; // GradientQuad vertex 3
+  float y3 = 0.0f;
   float lineWidth = 1.0f; // OutlineRect border / Line thickness in space units
-  ColorRgba color;
+  ColorRgba color;        // GradientQuad: vertexColors[0]
+  // GradientQuad per-vertex colors; other kinds use `color`.
+  std::array<ColorRgba, 4> vertexColors{};
   Transform2D transform;
   RenderStyleHandle styleHandle{};
   int drawOrder = 0;

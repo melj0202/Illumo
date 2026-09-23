@@ -81,6 +81,14 @@ and retired texture handles are reenrolled. Fonts do not own renderer or GPU
 lifetimes. Renderer destruction invalidates its identity before backend
 teardown, so shared fonts safely survive successive renderer lifetimes.
 
+GameVisual shapes include `ShapeKind::GradientQuad` (D-R26): convex,
+fan-ordered quads with one color per vertex, added through `addGradientQuad`,
+`addGradientRect` and `addGradientTriangle`. They use the ordinary shape vertex
+format and shader, batch with neighboring solid shapes, honor per-shape and host
+transforms and clipping, and keep `rect` as their bounding box.
+`builtQuadCount()` reports the quads the last geometry rebuild produced, for
+budget tests. `GuiKit` composes soft UI chrome from them.
+
 GameVisual binds its resources to one renderer lifetime; setters reject a foreign
 renderer and emission reports a frame error. Partial enrollment rolls back both
 mesh handles. Truncated geometry is reported on every affected frame, including

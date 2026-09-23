@@ -329,7 +329,7 @@ Installed packages live in `apps\<name>\`, each with an `app.json` manifest:
 
 ```text
 IllumoRuntime.exe [--app name] [--open file] [-ww width] [-wh height]
-IllumoRuntime.exe [--app name] [--open file] --capture new.png [--capture-frame n]
+IllumoRuntime.exe [--app name] [--open file] --capture new.png [--capture-frame n] [--capture-script file]
 IllumoRuntime.exe --package dir [--storage dir]
 IllumoRuntime.exe --game module.wasm --package dir --storage dir
 IllumoRuntime.exe --help
@@ -457,13 +457,16 @@ Controls:
 `IllumoRuntime --capture` replaces the former `IllumoCapture` tool. It runs
 the selected app until `--capture-frame` (default 60), reads back the
 presented backbuffer, writes a new PNG, prints one JSON result line and exits
-with 0 or 1. Real GPU required; the output must be a new `.png` path. See
-[docs/frame-capture.md](docs/frame-capture.md).
+with 0 or 1. Real GPU required; the output must be a new `.png` path.
+`--capture-script file` first runs the same steps as `--bench-script` (below),
+so a capture can reach a later screen; the capture frame then counts from the
+end of the script. See [docs/frame-capture.md](docs/frame-capture.md).
 
 ```powershell
 # Windows, from the staged Release directory
 .\IllumoRuntime.exe --app meshviewer --open model.obj --capture frame.png
 .\IllumoRuntime.exe --capture game.png --capture-frame 120 -ww 1280 -wh 720
+.\IllumoRuntime.exe --capture settings.png --capture-script f1.txt --capture-frame 30
 ```
 
 `--bench-frames n` times `n` frames after `--bench-warmup` (default 120) and

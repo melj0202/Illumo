@@ -135,9 +135,24 @@ empty or starter contents. Infinite mode disables dimensions while retaining
 the finite draft. Create passes validated canvas values to CellGameModule;
 Back or Escape discards the draft. Display and performance preferences are not
 part of this payload. The screen fits all rows, respects reduced menu motion,
-and consumes wheel input without changing selection or values. Raised cards,
-eased focus lighting, value pulses, and a decorative cell colony match the
-main menu; reduced motion freezes the colony and snaps focus feedback.
+and consumes wheel input without changing selection or values. Glass cards,
+spring-driven focus lighting, a stretching selection pill, directional value
+pulses (arrows lean toward the change), a spring crossfade on the boundary
+badge, and a live glider walking a 6x6 torus (`CellMotif`) match the main
+menu; reduced motion freezes the motif and snaps focus feedback.
+
+The title screen (`MainMenuModule`) runs Immigration Life behind its glass
+panel at half zoom: a Gosper gun streams cyan gliders, coral acorns churn, and
+a deterministic generator launches gliders and spaceships in from the edges
+every 4.5 seconds (not under reduced motion). The world is reseeded past 1,400
+chunks or after 15 minutes. Its `CellContext` restores the saved family,
+ruleset and mode preferences it would otherwise overwrite, and the menu
+refreshes the canvas targets after each advance. Above it, a radial vignette,
+drifting soft glows with pointer parallax, and a pointer spotlight frame a
+glass panel whose title letters cascade in; the 7x7 motif runs a real glider;
+rows lean in with spring emphasis and animated icons; the selection pill
+stretches, sweeps a sheen, and ripples on press; keycaps form the footer. The
+panel dims while settings or canvas setup is open.
 
 ## SparseCellGrid (simulation domain)
 
@@ -359,9 +374,11 @@ remains live during every transition.
 
 That behavior is not restated per screen. `MainMenuModule`,
 `ConfigurationMenu`, `NewSimulationMenu`, and `RulesetWorkshopMenu` share
-`Illumo/Gui/GuiMenuShell`: `GuiEasing` curves, `GuiMenuAnimator`
-reveal/row-stagger/selection/value-pulse/ambient/caret clocks including
-`reducedUiMotion`, `GuiPanelLayout` virtual-resolution fitting plus visible-row
+`Illumo/Gui/GuiMenuShell`: `GuiEasing` curves, `GuiSpring`/`GuiSpringArray`
+damped springs (row emphasis, toggle knobs, count chips, footer buttons,
+scroll thumbs), `GuiMenuAnimator`
+reveal/row-stagger/selection-span/sheen/press/value-pulse/ambient/caret clocks
+including `reducedUiMotion`, `GuiPanelLayout` virtual-resolution fitting plus visible-row
 window and wheel scrolling, and `GuiPointerTracker` virtual-space pointer
 sampling with hover and press edges. Each screen supplies only its rows, layout
 constants, and `GameVisual` composition, so a new interface inherits the

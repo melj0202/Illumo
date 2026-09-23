@@ -30,7 +30,19 @@ cd build-workspace\Release
   must not already exist; anything else is refused before the app starts.
 - `--capture-frame N`: the frame to capture, counted in dispatched frames;
   default 60. It must be a positive integer (at most 100000); `0` or a
-  malformed value refuses to start.
+  malformed value refuses to start. With `--capture-script`, frames count from
+  the end of the script.
+- `--capture-script file`: steps run before the capture frame counts, in the
+  `--bench-script` format below (console lines, `@key Name`, `@wait n`), so a
+  capture can reach a later screen, for example a settings overlay:
+
+  ```text
+  @wait 30
+  @key F1
+  ```
+
+  It requires `--capture`. A malformed step, or a console command that has not
+  registered within 600 frames, fails the capture.
 - `-ww` / `-wh`: window width and height, which set the captured size.
 - `--app`, `--open`, `--package`, `--storage`, `--game`, `--mod`, `--worker`,
   `--memory-mib`, `--fuel` and `--deadline-ms` select and configure the app as
@@ -40,7 +52,9 @@ cd build-workspace\Release
 The runtime renders normally until the target frame. A `Renderer`
 before-present hook (`Renderer::setBeforePresent`, run after submission and
 before presentation) then reads back the presented backbuffer, writes the PNG
-and requests close. A finished capture closes without product confirmation
+and requests close. The window presents opaquely whatever alpha translucent UI
+leaves in the backbuffer, so the capture forces every pixel's alpha to 255 to
+match what is on screen. A finished capture closes without product confirmation
 dialogs. Launch options are never persisted.
 
 ### Result
@@ -87,7 +101,8 @@ The same shell times a live session instead of capturing it:
   console command line is queued once its command exists (guest commands
   register asynchronously); `@key Name` presses one `KeyCode` (for example
   `@key End`) and waits two frames; `@wait n` pauses `n` frames. `#` starts a
-  comment. An unknown directive or key fails the benchmark.
+  comment. An unknown directive or key, or a console command that has not
+  registered within 600 frames, fails the benchmark.
 
 Stdout carries one JSON line: `success`, `application`, `error`,
 `warmupFrames`, `frames`, `seconds`, `fps`, `frameIntervalMs` and

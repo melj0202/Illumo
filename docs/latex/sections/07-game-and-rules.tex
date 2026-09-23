@@ -96,19 +96,30 @@ input remains active throughout. The mouse wheel scrolls the view without
 changing selection; an offscreen selection has no visible highlight. Keyboard
 navigation, including Page Up/Down and Home/End, brings selection into view.
 Rows retain readable height rather than shrinking text to fit the list. Rendering and mouse
-conversion share a fitted UI scale. Main-menu F1 opens the same overlay; the
-main-menu card adds a larger responsive title area, rounded raised action
-cards with icons, a glowing animated cell motif, cyan/violet accents, drifting
-glider clusters that crossfade between phases, a softly lit grid, and flowing
-light ribbons. Fixed primitive counts and a continuous 12-second decorative
-cycle keep the background bounded. Settings share rounded panel chrome, raised
-rows, inset values, and toggle pills; the pause/exit dialog shares rounded
-actions and a gliding highlight. Stateless GuiKit rounded-surface helpers use
-non-overlapping triangles and rectangles. GuiDialog's rounded style is opt-in
-and fits drawing and pointer coordinates together. Every menu screen draws its
-motion and layout arithmetic from the shared \symbolref{GuiMenuShell}: easing
-curves, reveal, staggered row entrance, gliding selection, value pulse, ambient
-cycle, and caret blink from \symbolref{GuiMenuAnimator}; fitted virtual space,
+conversion share a fitted UI scale. Main-menu F1 opens the same overlay.
+
+All menus share a ``living glass'' language (D-R26): soft-shadowed glass
+panels and cards with lit rims, gradient faces, a breathing glow and a
+cyan-to-violet hairline with a travelling glint, set on a radial scrim. The
+selection pill stretches between rows (its leading edge overshoots, its
+trailing edge follows) and sweeps a sheen on arrival; rows lean in on
+spring-driven emphasis; toggle knobs, count chips, buttons and scroll thumbs
+travel on springs; changed values bloom; footers show keycap hints. The title
+screen runs Immigration Life behind the glass: a Gosper gun streams cyan
+gliders, coral acorns churn, and a deterministic generator launches gliders and
+spaceships from the edges. It never replaces the player's saved ruleset and is
+reseeded when it grows past 1,400 chunks or after 15 minutes. A vignette,
+drifting glows with pointer parallax, and a pointer spotlight frame the panel;
+the CSIM letters cascade in; a real glider walks the 7x7 motif torus
+(\symbolref{CellMotif}); icons animate with emphasis and pressed rows ripple.
+Actions are never delayed by feedback animation, and overlays close
+immediately. GuiKit composes this chrome from \symbolref{GameVisual} gradient
+quads; GuiDialog's rounded style is opt-in and fits drawing and pointer
+coordinates together, while its flat style is unchanged. Every menu screen
+draws its motion and layout arithmetic from the shared
+\symbolref{GuiMenuShell}: easing curves and damped springs; reveal, staggered
+row entrance, stretching selection, sheen, press, value pulse, ambient cycle,
+and caret blink from \symbolref{GuiMenuAnimator}; fitted virtual space,
 visible-row window, and wheel scrolling from \symbolref{GuiPanelLayout}; hover
 and press edges from \symbolref{GuiPointerTracker}. Each screen keeps only its
 own rows, layout constants, and drawing, so a new interface inherits the
@@ -130,9 +141,10 @@ editable rather than a large in-game matrix. Wheel scrolling does not steal
 keyboard focus, and reduced-motion preference snaps transitions and stops
 decorative pulsing.
 
-The large main-menu title uses a separate font atlas at 64, 128, or 256 pixels,
-selected to cover its fitted display size without upscaling glyphs. Smaller
-labels retain the default font atlas; resizing reuses the bounded title sizes.
+The large main-menu title is drawn letter by letter from a separate font atlas
+at 64, 128, or 256 pixels, selected to cover its fitted display size at the
+letters' peak overshoot size without upscaling glyphs. Smaller labels retain
+the default font atlas; resizing reuses the bounded title sizes.
 
 New simulation and the menu console command \texttt{play} open a dedicated canvas
 setup screen, independent of F1 configuration. It offers the rules catalog,
@@ -141,17 +153,23 @@ empty or starter contents. Infinite mode disables dimensions while retaining
 the finite draft. Create passes validated canvas values to CellGameModule;
 Back or Escape discards the draft. Display and performance preferences are not
 part of this payload. The screen fits all rows, respects reduced menu motion,
-and consumes wheel input without changing selection or values. Raised cards,
-eased focus lighting, value pulses, and a decorative cell colony match the
-main menu; reduced motion freezes the colony and snaps focus feedback.
+and consumes wheel input without changing selection or values. Glass cards,
+spring-driven focus lighting, a stretching selection pill, directional value
+pulses, a crossfading boundary badge, and a live glider on a 6x6 torus match
+the main menu; reduced motion freezes the motif and snaps focus feedback.
 
-Entering a new or loaded cell canvas uses a 0.72-second center-out dissolve.
-A module-owned, screen-space GameVisual veil uses a fixed 16 by 10 grid and
-retires after completion. It covers the canvas and HUD but remains beneath
+Entering a new or loaded cell canvas plays a 0.9-second cellular wave. A
+module-owned, screen-space GameVisual veil tiles the viewport with cells of
+roughly 44 virtual pixels, opaque and dark at first. A wave spreads from the
+center with a deterministic, per-cell ragged front: each cell fires cyan as the
+wave reaches it (with a soft halo), cools to violet, then shrinks to a dot and
+fades, revealing the world. Its cell count follows the viewport and UI scale,
+and it retires after completion. It covers the canvas and HUD but remains beneath
 settings and confirmation dialogs. The transition never changes camera or
 simulation state and does not block input. Reduced menu motion and the 3D
-diagnostic view skip it from the first frame. Returning to the main menu reverses
-this veil over 0.48 seconds, then submits one module transition. Repeated return
+diagnostic view skip it from the first frame. Returning to the main menu runs
+the wave backwards over 0.48 seconds (cells regrow from the edges inward, fire,
+and darken until the canvas is covered), then submits one module transition. Repeated return
 requests do not restart it; product input is consumed during the accepted exit,
 while the global console retains its input. Reduced motion returns immediately.
 Both the pause-menu action and the console menu command use this path.

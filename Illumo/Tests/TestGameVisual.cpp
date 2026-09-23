@@ -640,6 +640,140 @@ testGameVisualTransformAndAtlas()
   }
 }
 
+struct CapturedShapeVertex
+{
+  float x;
+  float y;
+  float z;
+  unsigned char r;
+  unsigned char green;
+  unsigned char b;
+  unsigned char a;
+};
+
+static bool
+vertexColorIs(const CapturedShapeVertex& vertex, ColorRgba color)
+{
+  return vertex.r == color.r && vertex.green == color.g &&
+         vertex.b == color.b && vertex.a == color.a;
+}
+
+static void
+testGameVisualGradientShapes()
+{
+  testSection("GameVisual: gradient quads and triangles carry vertex colors");
+  NullRenderWindow window(320, 240);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  GameVisual visual;
+  visual.setWindow(&window);
+  visual.prepare(&renderer);
+  const ColorRgba topLeft{ 255, 0, 0, 255 };
+  const ColorRgba topRight{ 0, 255, 0, 200 };
+  const ColorRgba bottomRight{ 0, 0, 255, 100 };
+  const ColorRgba bottomLeft{ 30, 40, 50, 0 };
+  const ColorRgba solid{ 9, 9, 9, 255 };
+  visual.addFilledRect(0.0f, 0.0f, 4.0f, 4.0f, solid);
+  const size_t rectIndex = visual.addGradientRect(
+    10.0f, 20.0f, 40.0f, 30.0f, topLeft, topRight, bottomRight, bottomLeft);
+  const size_t triangleIndex = visual.addGradientTriangle(
+    100.0f, 100.0f, 140.0f, 100.0f, 120.0f, 130.0f, topLeft, topRight, solid);
+  testEqSize(g, visual.shapeCount(), 3u, "gradient shapes are stored");
+
+  const ShapePrimitive* rect = visual.getShape(rectIndex);
+  testTrue(g,
+           rect != nullptr && rect->kind == ShapeKind::GradientQuad &&
+             nearFloat(rect->rect.x, 10.0f) && nearFloat(rect->rect.y, 20.0f) &&
+             nearFloat(rect->rect.w, 40.0f) && nearFloat(rect->rect.h, 30.0f),
+           "a gradient rect keeps its bounding box");
+  testTrue(g,
+           rect != nullptr && rect->color.r == topLeft.r &&
+             rect->color.a == topLeft.a,
+           "the solid color mirrors the first vertex color");
+  const ShapePrimitive* triangle = visual.getShape(triangleIndex);
+  testTrue(g,
+           triangle != nullptr && nearFloat(triangle->rect.w, 40.0f) &&
+             nearFloat(triangle->rect.h, 30.0f),
+           "a gradient triangle bounds its three vertices");
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "gradient append");
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             1u,
+             "gradient shapes batch with adjacent solid shapes");
+  testEqInt(g,
+            static_cast<int>(visual.builtQuadCount()),
+            3,
+            "each gradient shape tessellates to one quad");
+  const RenderCommand* update =
+    findSubmittedCommand(mock, CommandType::UpdateBuffer, 0);
+  testTrue(g, update != nullptr, "gradient vertices are uploaded");
+  if (update != nullptr) {
+    const CapturedShapeVertex* vertices =
+      static_cast<const CapturedShapeVertex*>(update->updateBuffer.data);
+    testTrue(g,
+             vertexColorIs(vertices[0], solid) &&
+               vertexColorIs(vertices[3], solid),
+             "solid rects keep one color per quad");
+    testTrue(g,
+             vertexColorIs(vertices[4], topLeft) &&
+               vertexColorIs(vertices[5], topRight) &&
+               vertexColorIs(vertices[6], bottomRight) &&
+               vertexColorIs(vertices[7], bottomLeft),
+             "gradient rect corners keep distinct colors in fan order");
+    testTrue(g,
+             nearFloat(vertices[6].x, 50.0f) && nearFloat(vertices[6].y, 50.0f),
+             "gradient rect corners follow the rect");
+    testTrue(g,
+             nearFloat(vertices[11].x, vertices[10].x) &&
+               nearFloat(vertices[11].y, vertices[10].y) &&
+               vertexColorIs(vertices[11], solid),
+             "a gradient triangle repeats its last vertex and color");
+  }
+
+  GameVisual moved;
+  moved.setWindow(&window);
+  moved.prepare(&renderer);
+  const size_t movedIndex = moved.addGradientRect(
+    0.0f, 0.0f, 10.0f, 10.0f, topLeft, topLeft, bottomLeft, bottomLeft);
+  moved.getShape(movedIndex)->transform.x = 7.0f;
+  Transform2D host;
+  host.y = 5.0f;
+  moved.setTransform(host);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  moved.AppendCommands(&renderer);
+  renderer.EndFrame();
+  const RenderCommand* movedUpdate =
+    findSubmittedCommand(mock, CommandType::UpdateBuffer, 0);
+  if (movedUpdate != nullptr) {
+    const CapturedShapeVertex* vertices =
+      static_cast<const CapturedShapeVertex*>(movedUpdate->updateBuffer.data);
+    testTrue(g,
+             nearFloat(vertices[0].x, 7.0f) && nearFloat(vertices[0].y, 5.0f),
+             "local and host transforms move gradient corners");
+  } else {
+    testTrue(g, false, "moved gradient uploads");
+  }
+
+  moved.setPixelClipRect(Rect2{ 200.0f, 200.0f, 20.0f, 20.0f });
+  mock.resetCounters();
+  renderer.BeginFrame();
+  moved.AppendCommands(&renderer);
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             0u,
+             "gradient quads outside the clip are culled");
+}
+
 static void
 testGameVisualDynamicCapacity()
 {
@@ -955,6 +1089,9 @@ registerGameVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.GameVisual.TransformAndAtlas", []() {
     return runGameVisualCase(testGameVisualTransformAndAtlas);
+  });
+  registry.add("Illumo.GameVisual.GradientShapes", []() {
+    return runGameVisualCase(testGameVisualGradientShapes);
   });
   registry.add("Illumo.GameVisual.DynamicCapacity", []() {
     return runGameVisualCase(testGameVisualDynamicCapacity);
