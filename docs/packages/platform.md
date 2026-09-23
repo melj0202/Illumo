@@ -14,6 +14,13 @@ generic Illumo runner. Dialog implementations accept game-owned labels and
 defaults as data; they do not include Game types or parse save files. Clipboard
 text (`Clipboard::GetText` / `SetText`) follows the same platform split:
 Windows uses Win32; Linux uses the GTK clipboard after one-shot gtkmm init.
+`PixelWindow` (`Source/Platform/PixelWindow.*`, engine-internal) is a secondary
+GLFW window created with `GLFW_NO_API` for CPU-drawn tools such as the detached
+developer console (D-UI5). GLFW supplies creation, input callbacks, and native
+move/resize/close; a per-OS presenter blits the RGBA image — Windows uses GDI
+`StretchDIBits` (`Windows/WinPixelWindowPresent.cpp`), Linux reports
+presentation unsupported (`Linux/LinuxPixelWindowPresent.cpp`). It never
+creates or touches an OpenGL context.
 macOS is not targeted; its scaffold has been removed and CMake rejects Apple
 targets. Source presence does not establish
 support: each port requires native build, tests, live rendering/input, dialogs,

@@ -1164,8 +1164,39 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
 - `vid_restart` is not advertised: safely recreating an OpenGL context requires a
   complete resource re-enrollment design, so the old no-op now reports that limit.
 - Editing supports measured caret placement, selection, Home/End, Delete,
-  Ctrl+word movement/deletion, Ctrl+A, quoted arguments, history, and horizontal
-  input scrolling. The caret is rendered as a glowing dual-layer geometry bar at the measured insertion point.
+  Ctrl+word movement/deletion, Ctrl+A, Ctrl+C/X/V (selection or whole input;
+  pasted line breaks become `;`), quoted arguments, history, and horizontal
+  input scrolling. PageUp/PageDown scroll output by a page, Ctrl+Up/Down by a
+  line, and Ctrl+Home/End jump to either end; a scrolled-back view stays
+  anchored while new output arrives.
+- The console is deliberately plain (D-UI4): its own flat terminal palette
+  instead of `UiTheme`, a header, output anchored above the input line, a
+  one-line status bar (FPS and frame time, line counts, active filters, scroll
+  position, and the usage or completion hint), and a completion list for
+  ambiguous Tab. There is no full-screen shade, shadow, or pulsing accent; only
+  the open/close slide animates.
+- Output entries record a level, a timestamp, and a repeat count; identical
+  consecutive lines collapse to one entry with `(xN)`. The buffer holds 2,048
+  entries and command recall 256. `filter <text>|off` and
+  `loglevel trace|info|warning|error` hide entries without discarding them;
+  `timestamps` adds a dmesg-style gutter; `copy [<n>|all]` and
+  `savelog <file>` export output; `exec <file>` runs a command script (blank
+  lines and `#` comments skipped, 1,000 lines, nested depth 8); `!!`, `!<n>`,
+  and `!<prefix>` recall history; `help <word>` searches names and
+  descriptions. `bind <F1-F12> <command>` runs a command on a function key
+  whether or not the console is open (F3, F5, F6, F11 stay host-reserved);
+  `DebugModule` consumes only bound keys. `add <var> <n>` and
+  `cycle <var> <values...>` adjust settings (useful behind binds);
+  `watch`/`unwatch` pin up to eight variables to a live strip under the
+  header; `writeconfig <file>` saves aliases, binds, watches, and view
+  settings as an `exec` script.
+- Ctrl+R starts a shell-style reverse history search (repeat for older
+  matches, Enter runs, Right accepts for editing, Escape cancels). Clicking an
+  echoed command in the output recalls it. Warning and error lines carry a
+  thin severity mark, filter matches are highlighted, and the status bar
+  counts lines that arrived while scrolled back. While the console is closed,
+  errors and warnings raise a small top-right count badge (`alerts` toggles
+  it); opening the console acknowledges them.
 - Multi-command chaining splits on `;` (preserving quotes and escape sequences).
 - Alias macro management (`alias`, `unalias`) expands user-defined command shortcuts (with recursion capped at depth 8) and integrates aliases into auto-completion.
 - Inline ghost-text auto-suggestions display faint completion candidates after the caret; pressing Right-Arrow or Tab accepts the ghost text.
@@ -1176,9 +1207,24 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
   quads. History wraps to panel width and scrolls by visual lines, sharing
   mounted/floating layout metrics (D-UI2). Wrap metrics are cached until
   history contents or panel wrap width change; only the visible window is
-  tessellated. Settled composition is replayed until history, input, scroll,
-  layout, caret phase, or a quantized accent pulse changes, so idle frames
-  `DrawIndexed` without a new `UpdateBuffer` (D-P2).
+  tessellated; entries hidden by view filters wrap to zero lines. Settled
+  composition is replayed until history, input, scroll, layout, caret phase,
+  the reported FPS, or a watched value changes, so idle frames `DrawIndexed`
+  without a new `UpdateBuffer` (D-P2). The closed-console badge replays the
+  same way until its counts or the window size change.
+- The console can pop out into its own OS window (D-UI5): the header's
+  `pop out` button, `console_mode detached`, or dragging the floating title bar
+  past the game window's edge. `dock`, closing the window, or `` ` `` from
+  either window brings it back (dock reopens it in-game; the others return it
+  closed). `DebugModule` owns the `GLFW_NO_API` `PixelWindow`, routes its
+  keyboard/mouse events to the console, and presents a `SoftwareCanvas` raster
+  of the console's `GameVisual` primitives (Windows GDI; Linux reports it
+  unavailable). No second OpenGL context exists; while detached the console is
+  not `isOpen`, so the game keeps its input and no in-game console draws.
+- WASM guests compile the same console as a log bridge. Clipboard and file
+  access are compiled out under `ILLUMO_SERIAL_GUEST`; the bridge forwards
+  collapsed repeats, and the host restores the success level for guest
+  `SUCCESS:` lines.
 - `Logger` may mirror output into the console while services are alive. The host
   clears that non-owning logger context before destroying the services.
 
@@ -1429,6 +1475,8 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-UI1** | Console editing and caret placement use measured text geometry; one enlarged batch must fit a full help page. |
 | **D-UI2** | Console history wraps and scrolls by visual lines using shared mounted/floating layout metrics. |
 | **D-UI3** | Console can be mounted or floating; floating mode supports title-bar drag and corner resize. |
+| **D-UI4** | Console is a plain tool with its own palette (not `UiTheme`), levelled/timestamped/collapsing output, view filters, scripts, log export, clipboard, and F-key bindings. |
+| **D-UI5** | Console can pop out into a separate `GLFW_NO_API` window drawn by `SoftwareCanvas` and presented by the platform; no second GL context. |
 | **D-DOC1** | Established one first-party documentation tree; refined by D-DOC2. |
 | **D-DOC2** | Canonical technical documentation remains under `docs/`; `illumo.tex` is the prose book and `architecture-map.tex` the chart pack. Root/nested `AGENTS.md` and `.agent/` are operational-guidance exceptions. |
 | **D-T1** | Independent compile-efficient test runners expose exact cases; `IllumoWorkspace` aggregates all registered runners and combined Clang/LLVM coverage enforces at least 85% production line coverage across their linked production code. |
@@ -1459,7 +1507,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R17** | AssetManager owns canonical-path texture/shader caching, references, one CPU worker, stable fallbacks, render-thread pump/replacement, explicit reload, and Debug 500 ms timestamp polling. |
 | **D-R18** | Painter-correct 2D stream: parent/local transforms, normalized pivots, atlas regions/flips, stable cross-type draw order, adjacent-only batching, bounded dynamic quad buffers, and caller-updated passive sprite animation. |
 | **D-R19** | Superseded by D-E6: the sibling IllumoGame consumer establishes the explicit library boundary. Future downstream repositories still require install/package validation. |
-| **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. Soft chrome (gradients, glows, shadows) stays primitive-composed per D-R26. |
+| **D-R20** | Product UI is composed from `GameVisual` shapes/text with shared value-only `UiTheme` styling. Keep console, label, and splash behavior in their existing owners; do not introduce a retained widget tree. Soft chrome (gradients, glows, shadows) stays primitive-composed per D-R26. The developer console keeps its own plain palette instead (D-UI4). |
 | **D-R21** | One world look (`uMVP`). Sprites are textured quads; 2D vs 3D is the camera projection. `MeshVisual` is the world object host; `GameVisual` remains overlay/painter composition. |
 | **D-R23** | Pixel-space `GameVisual` geometry culls wholly excluded quads against the logical viewport or an optional clip before upload. Partial clips use nested, intersected scissor tokens that restore the prior state. D-E11 separately governs world-space `MeshVisual` and SceneGraph bounds. |
 | **D-R24** | `AssetManager` reference-counts immutable static meshes and canonical file/options cache entries. `MeshVisual` borrows the managed `MeshHandle` and draw metadata, retaining only per-instance transform/tint/lighting state; procedural geometry remains visual-owned and dynamic. Automatic instancing remains a measured follow-up. |

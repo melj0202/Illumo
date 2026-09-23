@@ -36,8 +36,12 @@ public:
                    GuestConsole& console,
                    const std::string& applicationName);
   void onHistoryAppended(const historyBuffer& item, bool erasedFront) override;
+  // A repeat collapsed into the newest line is forwarded again; the host
+  // console performs its own collapsing.
+  void onHistoryBackUpdated() override;
 
 private:
+  void forward(const historyBuffer& item);
   GuestConsole& m_console;
 };
 

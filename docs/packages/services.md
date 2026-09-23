@@ -3,9 +3,25 @@
 The static library owns generic logging, environment variables, input, command
 registry/console editing, and allocators. `CommandLine` receives its branding
 from the application name and owns only generic help, editing, history, alias,
-environment, window/presentation, and quit behavior. It renders through
-`GameVisual` and the value-only `UiTheme`. History wrap metrics are cached until
-contents or panel width change; settled console composition is replayed until a
+environment, window/presentation, and quit behavior, plus generic debugging
+tools: output view filters (`filter`, `loglevel`), `timestamps`, `copy`,
+`savelog`, `exec` scripts, F-key `bind`/`unbind`, `!!`/`!n`/`!prefix` recall,
+Ctrl+R reverse search, `help <word>` search, `add`/`cycle` setting steps,
+`watch`/`unwatch` live variables, `writeconfig`, and the closed-console
+`alerts` badge (D-UI4). Output entries record a `ConsoleLevel`, a
+timestamp, and a repeat count; identical consecutive lines collapse. The buffer
+keeps `MAX_CONSOLE_LINES` (2,048) entries and command recall `MAX_CMD_HISTORY`
+(256). Clipboard and file access go through `CommandLineCore` virtual hooks and
+are compiled out under `ILLUMO_SERIAL_GUEST`.
+
+`CommandLine` renders through `GameVisual` with its own flat palette rather than
+`UiTheme`, so the tool never reads as product UI. Composition is separate from
+token submission: attached, primitives go to the Renderer; detached (D-UI5),
+the host's `SoftwareCanvas` rasterizes them for a separate window.
+`CommandLine` never creates windows; it raises `Detach`/`Dock`/`Close`
+requests (`takeWindowRequest`) that `DebugModule` fulfils. History wrap metrics are
+cached until contents, view filters, timestamps, or panel width change; hidden
+entries wrap to zero lines. Settled console composition is replayed until a
 dirty reason fires.
 
 Illumo generic defaults cover window dimensions, fullscreen, VSync, FPS display,

@@ -17,6 +17,10 @@ or persistence parsing.
 - Do not duplicate the main loop, parser, renderer, or save format by platform.
 - Treat dialog cancellation as a normal empty result; selection must not mutate
   game state.
+- `PixelWindow` secondary windows are `GLFW_NO_API` and presented from CPU
+  images by the per-OS presenter; never give them an OpenGL context or share
+  the main context (D-UI5). Create, pump, present, and destroy them on the
+  main thread, before GLFW terminates.
 
 ## Support status
 

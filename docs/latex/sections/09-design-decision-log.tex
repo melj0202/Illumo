@@ -679,6 +679,64 @@ without changing the MockBackend decision.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-UI4 --- Plain developer console with levelled, filterable output}
+\begin{decisionbox}[title={D-UI4 \quad 2026-09-23}]
+\textbf{Decision:} The developer console stops using the product
+\texttt{UiTheme} and draws with its own flat terminal palette: an opaque dark
+panel, one-pixel border and rules, a header, an output band anchored at the
+input, an input line, and a status bar (FPS/frame time, line counts, active
+filters, scroll position, contextual hint). No full-screen shade, drop shadow,
+pulsing accent, or panel easing remain; only the open/close slide animates.
+Output entries record a \texttt{ConsoleLevel}, a timestamp, and a repeat count
+(identical consecutive lines collapse). The buffer holds 2,048 entries;
+command recall keeps 256. New built-ins: \texttt{filter}, \texttt{loglevel},
+\texttt{timestamps}, \texttt{copy}, \texttt{savelog}, \texttt{exec},
+\texttt{bind}/\texttt{unbind} (F1--F12 except host-reserved F3, F5, F6, F11),
+\texttt{!!}/\texttt{!n}/\texttt{!prefix} recall, and \texttt{help <word>}
+search; a follow-up added Ctrl+R reverse search, \texttt{add},
+\texttt{cycle}, \texttt{watch}/\texttt{unwatch} (a live strip of up to eight
+variables), \texttt{writeconfig}, click-to-recall on echoed commands,
+severity marks, filter-match highlights, and a closed-console error/warning
+badge (\texttt{alerts}). Clipboard and file access go through
+\symbolref{CommandLineCore} virtual hooks and are compiled out of WASM
+guests.\\
+\textbf{Why:} The console is a debugging tool; styling it like the product
+menus blurred that line, and a debugging session needs severity filtering,
+repeat collapsing, scripts, and log export more than decoration.\\
+\textbf{Consequences:} Hidden entries wrap to zero lines, so D-UI2 scroll
+metrics and D-P2 settled replay are unchanged; a scrolled-back view stays
+anchored while output arrives. Log prefixes (\texttt{ERROR:} and so on) stay
+in entry text for compatibility. Guest console bridges forward collapsed
+repeats and restore the success level on the host.\\
+\textbf{Supersedes:} the console part of D-R20 (UiTheme styling)
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-UI5 --- Detached console window without a second GL context}
+\begin{decisionbox}[title={D-UI5 \quad 2026-09-23}]
+\textbf{Decision:} The developer console can pop out into its own OS window
+(header \texttt{pop out} button, \texttt{console\_mode detached}, or dragging
+the floating title bar past the game window's edge) and return (\texttt{dock}
+button, closing the window, or the console key from either window). The
+window is
+a GLFW \texttt{GLFW\_NO\_API} window owned by \symbolref{DebugModule}
+(\texttt{Platform/PixelWindow}); \texttt{SoftwareCanvas} rasterizes the same
+\symbolref{GameVisual} primitives the in-game console submits, and the
+platform presents the CPU image (Windows GDI; unsupported elsewhere).
+\symbolref{CommandLine} only raises detach/dock/close requests and composes
+at the detached window's size; while detached \texttt{isOpen} is false so the
+game keeps its input.\\
+\textbf{Why:} A second OpenGL context would break the single-context backend
+contract (unshared VAOs, cached device state); a CPU presenter keeps the
+renderer untouched and the console's look identical.\\
+\textbf{Consequences:} Console composition is split from token submission.
+Detached drawing costs a CPU raster only when composition is dirty (typing,
+caret blink, output). Linux reports detaching as unavailable. Headless tests
+cover the canvas and request logic; the OS window itself needs a manual
+Windows smoke.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{D-R11 --- Backend constructed at composition root}
 \begin{decisionbox}[title={D-R11 \quad 2026-08-06}]
 \textbf{Decision:} Construct the concrete production backend

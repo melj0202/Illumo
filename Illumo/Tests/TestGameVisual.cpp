@@ -2,6 +2,7 @@
 
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
@@ -1042,6 +1043,95 @@ testCustomStyleRegistry()
            "stale style destroy safely no-ops");
 }
 
+static void
+testSoftwareCanvasRasterizesPrimitives()
+{
+  testSection("SoftwareCanvas: CPU rasterization of GameVisual primitives");
+  const ColorRgba black{ 0, 0, 0, 255 };
+  const ColorRgba red{ 255, 0, 0, 255 };
+  const ColorRgba white{ 255, 255, 255, 255 };
+  SoftwareCanvas canvas;
+  canvas.resize(32, 24);
+  canvas.clear(black);
+  testTrue(g,
+           canvas.width() == 32 && canvas.height() == 24 &&
+             canvas.pixels().size() == 32u * 24u * 4u,
+           "resize allocates RGBA storage");
+  testTrue(g, canvas.pixel(40, 40).a == 0, "out-of-range reads are empty");
+
+  canvas.fillRect(2.0f, 2.0f, 3.0f, 3.0f, red);
+  testTrue(g,
+           canvas.pixel(2, 2).r == 255 && canvas.pixel(4, 4).r == 255 &&
+             canvas.pixel(5, 5).r == 0 && canvas.pixel(1, 2).r == 0,
+           "whole-pixel rectangles are crisp");
+  canvas.fillRect(10.5f, 0.0f, 1.0f, 1.0f, white);
+  testTrue(g,
+           canvas.pixel(10, 0).r > 110 && canvas.pixel(10, 0).r < 145,
+           "fractional edges receive partial coverage");
+  canvas.fillRect(20.0f, 0.0f, 1.0f, 1.0f, ColorRgba{ 255, 255, 255, 128 });
+  testTrue(g,
+           canvas.pixel(20, 0).g > 110 && canvas.pixel(20, 0).g < 145,
+           "translucent colors blend source-over");
+  canvas.fillRect(-10.0f, -10.0f, 5.0f, 5.0f, white);
+  testTrue(g, canvas.pixel(0, 0).r == 0, "fully clipped fills draw nothing");
+
+  canvas.clear(black);
+  canvas.drawLine(0.0f, 10.0f, 20.0f, 10.0f, 1.0f, white);
+  testTrue(g,
+           canvas.pixel(5, 10).r == 255 && canvas.pixel(5, 9).r == 0 &&
+             canvas.pixel(5, 11).r == 0,
+           "one-pixel horizontal rules snap to a single row");
+  canvas.drawLine(3.0f, 0.0f, 3.0f, 8.0f, 1.0f, white);
+  testTrue(g,
+           canvas.pixel(3, 4).r == 255 && canvas.pixel(2, 4).r == 0,
+           "one-pixel vertical rules snap to a single column");
+  canvas.clear(black);
+  canvas.drawLine(0.0f, 0.0f, 20.0f, 20.0f, 2.0f, white);
+  testTrue(g,
+           canvas.pixel(10, 10).r > 200 && canvas.pixel(18, 2).r == 0,
+           "diagonal strokes cover their segment only");
+
+  // Painter order, outline chrome, and text through a GameVisual.
+  GameVisual visual;
+  visual.addFilledRect(0.0f, 0.0f, 32.0f, 24.0f, red);
+  visual.addText("MM", 2.0f, 2.0f, 14.0f, white);
+  const size_t late =
+    visual.addFilledRect(24.0f, 0.0f, 8.0f, 24.0f, ColorRgba{ 0, 0, 255, 255 });
+  visual.addOutlineRect(0.0f, 0.0f, 32.0f, 24.0f, black, 1.0f);
+  const size_t early =
+    visual.addFilledRect(0.0f, 20.0f, 4.0f, 4.0f, ColorRgba{ 0, 255, 0, 255 });
+  visual.getShape(early)->drawOrder = -1;
+  const std::vector<GameVisual::PrimitiveRef> order = visual.paintOrder();
+  testTrue(g,
+           order.size() == 5u &&
+             order[0].kind == GameVisual::PrimitiveKind::Shape &&
+             order[0].index == early &&
+             order[2].kind == GameVisual::PrimitiveKind::Text,
+           "paint order sorts by drawOrder, then insertion");
+  (void)late;
+  canvas.clear(black);
+  canvas.draw(visual);
+  testTrue(g,
+           canvas.pixel(28, 12).b == 255 && canvas.pixel(28, 12).r == 0,
+           "later shapes paint over earlier ones");
+  testTrue(g,
+           canvas.pixel(1, 21).r == 255 && canvas.pixel(1, 21).g == 0,
+           "a negative drawOrder paints beneath later shapes");
+  testTrue(g,
+           canvas.pixel(0, 12).r == 0 && canvas.pixel(12, 0).r == 0,
+           "outline rectangles draw their edges");
+  int litText = 0;
+  for (int y = 2; y < 18; ++y) {
+    for (int x = 2; x < 22; ++x) {
+      const ColorRgba pixel = canvas.pixel(x, y);
+      if (pixel.g > 120) {
+        ++litText;
+      }
+    }
+  }
+  testTrue(g, litText > 10, "font-atlas text rasterizes visible glyphs");
+}
+
 static int
 runGameVisualCase(void (*testFunction)())
 {
@@ -1055,6 +1145,9 @@ registerGameVisualTests(IllumoTestRegistry& registry)
 {
   registry.add("Illumo.GameVisual.RendererOwnership", []() {
     return runGameVisualCase(testGameVisualRendererOwnership);
+  });
+  registry.add("Illumo.SoftwareCanvas.Primitives", []() {
+    return runGameVisualCase(testSoftwareCanvasRasterizesPrimitives);
   });
   registry.add("Illumo.Renderer.QueueOverflowStatus", []() {
     return runGameVisualCase(testRendererQueueOverflowStatus);

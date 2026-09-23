@@ -147,6 +147,23 @@ public:
   ShapePrimitive* getShape(size_t index);
   SpritePrimitive* getSprite(size_t index);
   TextPrimitive* getText(size_t index);
+  const ShapePrimitive* getShape(size_t index) const;
+  const TextPrimitive* getText(size_t index) const;
+
+  // Painter order (drawOrder, then insertion) for CPU consumers such as
+  // SoftwareCanvas that draw the same primitives without the GPU path.
+  enum class PrimitiveKind : unsigned char
+  {
+    Shape,
+    Sprite,
+    Text
+  };
+  struct PrimitiveRef
+  {
+    PrimitiveKind kind = PrimitiveKind::Shape;
+    size_t index = 0;
+  };
+  std::vector<PrimitiveRef> paintOrder() const;
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;

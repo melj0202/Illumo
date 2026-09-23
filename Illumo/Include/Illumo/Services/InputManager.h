@@ -124,13 +124,24 @@ private:
   std::array<double, 2> m_snapshotMouse{};
   std::array<bool, static_cast<size_t>(KeyCode::F12) + 1> m_suppressedKeys{};
 
-  KeyCode TranslateKeyCodeToGLFW(int glfwKey);
+  static KeyCode TranslateKeyCodeToGLFW(int glfwKey);
 
   int TranslateKeyCodeFromGLFW(KeyCode keyCode);
 
-  [[nodiscard]] InputAction TranslateInputActionGLFW(int glfwAction);
+  [[nodiscard]] static InputAction TranslateInputActionGLFW(int glfwAction);
 
 public:
+  // GLFW key/action translation for secondary windows (the detached console)
+  // whose callbacks are not routed through this manager.
+  static KeyCode keyCodeFromGlfw(int glfwKey)
+  {
+    return TranslateKeyCodeToGLFW(glfwKey);
+  }
+  static InputAction inputActionFromGlfw(int glfwAction)
+  {
+    return TranslateInputActionGLFW(glfwAction);
+  }
+
   InputManager(GLFWwindow* window);
   ~InputManager();
   InputManager(const InputManager&) = delete;

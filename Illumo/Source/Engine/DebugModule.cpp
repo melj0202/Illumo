@@ -2,14 +2,20 @@
 #define GLFW_INCLUDE_NONE
 #endif
 #include "DebugOverlayState.h"
+#include "Platform/PixelWindow.h"
 #include "ProfilerOverlay.h"
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/DebugModule.h>
 #include <Illumo/Rendering/Font.h>
+#include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
+#include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
+#include <algorithm>
 #include <queue>
+#include <string>
 #include <tracy/Tracy.hpp>
+#include <vector>
 
 DebugModule::DebugModule(FrameProfiler* profiler)
   : m_profiler(profiler)
@@ -62,6 +68,9 @@ DebugModule::Start(IllumoContext* context)
 
   createRendererDemo();
   registerRendererCommands();
+  // The console may pop out into its own window where the platform can
+  // present one (D-UI5).
+  ic->commandLine->setDetachAvailable(PixelWindow::isPresentationSupported());
 
   return true;
 }
@@ -331,8 +340,6 @@ DebugModule::Update(double dt)
 
     KeyCode key = event.key;
     InputAction action = event.action;
-    bool controlPressed = (event.modifiers & GLFW_MOD_CONTROL) != 0;
-    bool shiftPressed = (event.modifiers & GLFW_MOD_SHIFT) != 0;
 
     if (m_profilerOverlay != nullptr &&
         m_profilerOverlay->handleKey(
@@ -342,9 +349,30 @@ DebugModule::Update(double dt)
     }
 
     if (key == KeyCode::Grave && action == InputAction::Press) {
-      ic->commandLine->Toggle();
+      // With the console in its own window, the console key sends it back
+      // into the game, closed.
+      if (ic->commandLine->isDetached()) {
+        closeDetachedConsole(false);
+      } else {
+        ic->commandLine->Toggle();
+      }
       ic->inputManager->clearCharQueue();
       continue;
+    }
+
+    // Console `bind` targets F1-F12 and works whether or not the console is
+    // open. Unbound keys fall through to the console or the product.
+    if (key >= KeyCode::F1 && key <= KeyCode::F12) {
+      const std::string keyName =
+        "F" + std::to_string(static_cast<int>(key) -
+                             static_cast<int>(KeyCode::F1) + 1);
+      if (ic->commandLine->HasKeyBinding(keyName)) {
+        if (action == InputAction::Press) {
+          ic->commandLine->RunKeyBinding(keyName);
+        }
+        ic->inputManager->suppressKeyForFrame(key);
+        continue;
+      }
     }
 
     if (!ic->commandLine->isOpen) {
@@ -352,39 +380,7 @@ DebugModule::Update(double dt)
       continue;
     }
 
-    if (action == InputAction::Press || action == InputAction::Hold) {
-      if (key == KeyCode::Backspace) {
-        ic->commandLine->HandleBackspace(controlPressed);
-      } else if (key == KeyCode::Delete) {
-        ic->commandLine->HandleDelete(controlPressed);
-      } else if (key == KeyCode::Left) {
-        ic->commandLine->MoveCursorLeft(controlPressed, shiftPressed);
-      } else if (key == KeyCode::Right) {
-        ic->commandLine->MoveCursorRight(controlPressed, shiftPressed);
-      } else if (key == KeyCode::Home) {
-        ic->commandLine->MoveCursorHome(shiftPressed);
-      } else if (key == KeyCode::End) {
-        ic->commandLine->MoveCursorEnd(shiftPressed);
-      } else if (key == KeyCode::Tab) {
-        ic->commandLine->Complete();
-      } else if (controlPressed && key == KeyCode::A) {
-        ic->commandLine->SelectAll();
-      } else if (controlPressed && key == KeyCode::L) {
-        ic->commandLine->ClearInput();
-      } else if (key == KeyCode::Enter) {
-        ic->commandLine->ExecuteCommand();
-      } else if (key == KeyCode::Escape) {
-        ic->commandLine->Toggle();
-      } else if (key == KeyCode::Up) {
-        ic->commandLine->HistoryUp();
-      } else if (key == KeyCode::Down) {
-        ic->commandLine->HistoryDown();
-      } else if (key == KeyCode::PageUp) {
-        ic->commandLine->ScrollUp();
-      } else if (key == KeyCode::PageDown) {
-        ic->commandLine->ScrollDown();
-      }
-    }
+    routeConsoleKey(key, action, event.modifiers);
   }
   keyQueue.swap(remainingKeys);
 
@@ -408,8 +404,8 @@ DebugModule::Update(double dt)
     }
   }
 
-  // 3. Process Mouse Input for CommandLine
-  if (ic->commandLine && ic->commandLine->isOpen && ic->inputManager) {
+  // Mouse input for the in-game console.
+  if (ic->commandLine->isOpen) {
     double* scrollOffsetPtr = ic->inputManager->getMouseScrollOffset();
     if (scrollOffsetPtr && *scrollOffsetPtr != 0.0) {
       ic->commandLine->HandleScroll(*scrollOffsetPtr);
@@ -422,31 +418,274 @@ DebugModule::Update(double dt)
     bool isLeftReleased =
       ic->inputManager->isMouseButtonReleased(KeyCode::MouseLeft);
 
-    static bool wasMouseLeftPressed = false;
     if (isLeftPressed) {
-      if (!wasMouseLeftPressed) {
+      if (!m_consoleMouseDown) {
         ic->commandLine->HandleMousePress(mouseCoords[0], mouseCoords[1]);
-        wasMouseLeftPressed = true;
+        m_consoleMouseDown = true;
       } else {
         ic->commandLine->HandleMouseDrag(mouseCoords[0], mouseCoords[1]);
       }
-    } else {
-      if (wasMouseLeftPressed || isLeftReleased) {
-        ic->commandLine->HandleMouseRelease();
-        wasMouseLeftPressed = false;
-      }
+    } else if (m_consoleMouseDown || isLeftReleased) {
+      ic->commandLine->HandleMouseRelease();
+      m_consoleMouseDown = false;
     }
+  } else {
+    // A drag that tore the console out ends here; the next open starts clean.
+    m_consoleMouseDown = false;
   }
 
-  // 4. Execute command queue
+  processConsoleWindowRequest();
+  updateDetachedConsole();
+  processConsoleWindowRequest();
+
+  // Execute command queue
   if (ic->commandRegistry != nullptr) {
     ic->commandRegistry->ExecuteQueue();
   }
 }
 
 void
+DebugModule::routeConsoleKey(KeyCode key, InputAction action, int modifiers)
+{
+  const bool controlPressed = (modifiers & GLFW_MOD_CONTROL) != 0;
+  const bool shiftPressed = (modifiers & GLFW_MOD_SHIFT) != 0;
+  if (action == InputAction::Press || action == InputAction::Hold) {
+    if (key == KeyCode::Backspace) {
+      ic->commandLine->HandleBackspace(controlPressed);
+    } else if (key == KeyCode::Delete) {
+      ic->commandLine->HandleDelete(controlPressed);
+    } else if (key == KeyCode::Left) {
+      ic->commandLine->MoveCursorLeft(controlPressed, shiftPressed);
+    } else if (key == KeyCode::Right) {
+      ic->commandLine->MoveCursorRight(controlPressed, shiftPressed);
+    } else if (controlPressed && key == KeyCode::Home) {
+      ic->commandLine->ScrollToTop();
+    } else if (controlPressed && key == KeyCode::End) {
+      ic->commandLine->ScrollToBottom();
+    } else if (key == KeyCode::Home) {
+      ic->commandLine->MoveCursorHome(shiftPressed);
+    } else if (key == KeyCode::End) {
+      ic->commandLine->MoveCursorEnd(shiftPressed);
+    } else if (key == KeyCode::Tab) {
+      ic->commandLine->Complete();
+    } else if (controlPressed && key == KeyCode::A) {
+      ic->commandLine->SelectAll();
+    } else if (controlPressed && key == KeyCode::L) {
+      ic->commandLine->ClearInput();
+    } else if (controlPressed && key == KeyCode::C) {
+      ic->commandLine->CopySelection();
+    } else if (controlPressed && key == KeyCode::X) {
+      ic->commandLine->CutSelection();
+    } else if (controlPressed && key == KeyCode::V) {
+      ic->commandLine->Paste();
+    } else if (key == KeyCode::Enter) {
+      ic->commandLine->ExecuteCommand();
+    } else if (controlPressed && key == KeyCode::R) {
+      ic->commandLine->BeginReverseSearch();
+    } else if (key == KeyCode::Escape) {
+      // Key repeat must not re-toggle the console it just closed; Escape
+      // first leaves a history search. A detached window closes only
+      // through its own controls, so a stray Escape cannot lose it.
+      if (ic->commandLine->isReverseSearchActive()) {
+        ic->commandLine->CancelReverseSearch();
+      } else if (action == InputAction::Press &&
+                 !ic->commandLine->isDetached()) {
+        ic->commandLine->Toggle();
+      }
+    } else if (controlPressed && key == KeyCode::Up) {
+      ic->commandLine->ScrollUp();
+    } else if (controlPressed && key == KeyCode::Down) {
+      ic->commandLine->ScrollDown();
+    } else if (key == KeyCode::Up) {
+      ic->commandLine->HistoryUp();
+    } else if (key == KeyCode::Down) {
+      ic->commandLine->HistoryDown();
+    } else if (key == KeyCode::PageUp) {
+      ic->commandLine->ScrollPageUp();
+    } else if (key == KeyCode::PageDown) {
+      ic->commandLine->ScrollPageDown();
+    }
+  }
+}
+
+void
+DebugModule::processConsoleWindowRequest()
+{
+  const CommandLine::WindowRequest request =
+    ic->commandLine->takeWindowRequest();
+  switch (request.kind) {
+    case CommandLine::WindowRequestKind::Detach:
+      detachConsole(
+        request.originX, request.originY, request.width, request.height);
+      break;
+    case CommandLine::WindowRequestKind::Dock:
+      closeDetachedConsole(true);
+      break;
+    case CommandLine::WindowRequestKind::Close:
+      closeDetachedConsole(false);
+      break;
+    case CommandLine::WindowRequestKind::None:
+    default:
+      break;
+  }
+}
+
+void
+DebugModule::detachConsole(int originX, int originY, int width, int height)
+{
+  if (m_consoleWindow != nullptr) {
+    m_consoleWindow->focus();
+    return;
+  }
+  // The request is relative to the game window's client area; place the
+  // new window's client area at the same spot on screen.
+  int windowX = 0;
+  int windowY = 0;
+  GLFWwindow* mainWindow = ic->window->getWindowInstance();
+  if (mainWindow != nullptr) {
+    glfwGetWindowPos(mainWindow, &windowX, &windowY);
+  }
+  const int clientWidth = std::max(480, width);
+  const int clientHeight = std::max(280, height);
+  std::string error;
+  m_consoleWindow =
+    PixelWindow::create(ic->commandLine->getApplicationName() + " console",
+                        windowX + originX,
+                        std::max(windowY + originY, 32),
+                        clientWidth,
+                        clientHeight,
+                        &error);
+  if (m_consoleWindow == nullptr) {
+    ic->commandLine->logError("Could not pop out the console: " + error);
+    return;
+  }
+  if (m_consoleCanvas == nullptr) {
+    m_consoleCanvas = std::make_unique<SoftwareCanvas>();
+  }
+  int actualWidth = clientWidth;
+  int actualHeight = clientHeight;
+  m_consoleWindow->clientSize(&actualWidth, &actualHeight);
+  m_detachedMouseDown = false;
+  ic->commandLine->setDetached(true, actualWidth, actualHeight);
+  ic->inputManager->clearCharQueue();
+}
+
+void
+DebugModule::closeDetachedConsole(bool reopenInGame)
+{
+  if (m_consoleWindow == nullptr && !ic->commandLine->isDetached()) {
+    return;
+  }
+  m_consoleWindow.reset();
+  m_detachedMouseDown = false;
+  ic->commandLine->setDetached(false, 0, 0);
+  if (reopenInGame && !ic->commandLine->isOpen) {
+    ic->commandLine->Toggle();
+  }
+  GLFWwindow* mainWindow = ic->window->getWindowInstance();
+  if (mainWindow != nullptr) {
+    glfwFocusWindow(mainWindow);
+  }
+}
+
+void
+DebugModule::updateDetachedConsole()
+{
+  if (m_consoleWindow == nullptr) {
+    return;
+  }
+  if (m_consoleWindow->isCloseRequested()) {
+    closeDetachedConsole(false);
+    return;
+  }
+  CommandLine* console = ic->commandLine;
+  const std::vector<PixelWindow::Event> events = m_consoleWindow->takeEvents();
+  for (const PixelWindow::Event& event : events) {
+    if (m_consoleWindow == nullptr || !console->isDetached()) {
+      break;
+    }
+    switch (event.kind) {
+      case PixelWindow::EventKind::Key:
+        if (event.key == KeyCode::Grave && event.action == InputAction::Press) {
+          closeDetachedConsole(false);
+        } else if (event.key >= KeyCode::F1 && event.key <= KeyCode::F12) {
+          const std::string keyName =
+            "F" + std::to_string(static_cast<int>(event.key) -
+                                 static_cast<int>(KeyCode::F1) + 1);
+          if (event.action == InputAction::Press &&
+              console->HasKeyBinding(keyName)) {
+            console->RunKeyBinding(keyName);
+          }
+        } else {
+          routeConsoleKey(event.key, event.action, event.modifiers);
+        }
+        break;
+      case PixelWindow::EventKind::Character:
+        if (event.codepoint != '`' && event.codepoint != '~') {
+          console->AddCharacter(event.codepoint);
+        }
+        break;
+      case PixelWindow::EventKind::MouseButton:
+        if (event.key != KeyCode::MouseLeft) {
+          break;
+        }
+        if (event.action == InputAction::Press) {
+          m_detachedMouseDown = true;
+          console->HandleMousePress(event.x, event.y);
+        } else if (event.action == InputAction::Release) {
+          m_detachedMouseDown = false;
+          console->HandleMouseRelease();
+        }
+        break;
+      case PixelWindow::EventKind::MouseMove:
+        if (m_detachedMouseDown) {
+          console->HandleMouseDrag(event.x, event.y);
+        }
+        break;
+      case PixelWindow::EventKind::Scroll:
+        console->HandleScroll(event.scroll);
+        break;
+      default:
+        break;
+    }
+  }
+  if (m_consoleWindow == nullptr || !console->isDetached()) {
+    return;
+  }
+
+  int width = 0;
+  int height = 0;
+  m_consoleWindow->clientSize(&width, &height);
+  if (width <= 0 || height <= 0) {
+    // Minimized: nothing to draw until it is restored.
+    return;
+  }
+  console->setDetachedSize(width, height);
+  const bool resized =
+    m_consoleCanvas->width() != width || m_consoleCanvas->height() != height;
+  if (resized) {
+    m_consoleCanvas->resize(width, height);
+  }
+  const bool rebuilt = console->ComposeDetached();
+  if (rebuilt || resized) {
+    m_consoleCanvas->clear(ColorRgba{ 14, 14, 14, 255 });
+    m_consoleCanvas->draw(console->getVisual());
+    m_consoleWindow->takeRepaintRequest();
+    m_consoleWindow->present(m_consoleCanvas->pixels(), width, height);
+  } else if (m_consoleWindow->takeRepaintRequest()) {
+    m_consoleWindow->present(m_consoleCanvas->pixels(), width, height);
+  }
+}
+
+void
 DebugModule::Exit()
 {
+  if (ic != nullptr && ic->commandLine != nullptr) {
+    closeDetachedConsole(false);
+    ic->commandLine->setDetachAvailable(false);
+  }
+  m_consoleWindow.reset();
+  m_consoleCanvas.reset();
   unregisterRendererCommands();
   m_profilerOverlay.reset();
   if (m_profiler != nullptr) {

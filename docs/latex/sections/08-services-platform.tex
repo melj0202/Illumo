@@ -14,7 +14,12 @@ The library owns reusable cross-cutting facilities:
         and \symbolref{KeyCode}; no Game types.
   \item \textbf{Console} --- parameterized \symbolref{CommandLine} branding,
         generic editing/history/alias/help behavior, generic host commands, and
-        \symbolref{CommandRegistry} metadata/completion.
+        \symbolref{CommandRegistry} metadata/completion. Output entries carry a
+        level, timestamp, and repeat count; view filters, scripts, log export,
+        clipboard editing, reverse search, watched variables, and F-key
+        bindings are generic console tools
+        (D-UI4). The console draws with its own plain palette, not
+        \texttt{UiTheme}.
   \item \textbf{System command line} --- \symbolref{SysCmdLine} owns
         help/version, window-dimension parsing, validation, and exit-code
         mechanics while accepting declarative application options.
@@ -83,6 +88,12 @@ and filename defaults through \symbolref{SaveLoadDialogSpec}. Source presence
 and CMake selection do not establish support: a port still requires native
 configure, build, launch, tests, rendering/input, dialogs, and shutdown
 validation.
+
+An engine-internal \texttt{PixelWindow} provides secondary GLFW windows
+without a client API for CPU-drawn tools (the detached console, D-UI5). GLFW
+handles creation, input, and native move/resize/close; a per-OS presenter blits
+the image (Windows GDI; Linux reports it unsupported). No second OpenGL
+context is created.
 
 SaveLoad strings and returned paths use UTF-8. Windows adapts them to wide common
 dialogs with a 32,768-character path buffer. Codecs convert UTF-8 paths explicitly

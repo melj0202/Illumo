@@ -30,8 +30,9 @@ if(WIN32)
     Source/Platform/Windows/WinAtomicFile.cpp
     Source/Platform/Windows/WinClipboard.cpp
     Source/Platform/Windows/WinTimer.cpp
-    Source/Platform/Windows/WinProcessMemoryStats.cpp)
-  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm)
+    Source/Platform/Windows/WinProcessMemoryStats.cpp
+    Source/Platform/Windows/WinPixelWindowPresent.cpp)
+  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm Gdi32)
 elseif(UNIX)
   find_package(PkgConfig REQUIRED)
   find_package(Threads REQUIRED)
@@ -43,6 +44,7 @@ elseif(UNIX)
     Source/Platform/PosixAtomicFile.cpp
     Source/Platform/Linux/LinuxClipboard.cpp
     Source/Platform/Linux/LinuxTimer.cpp
+    Source/Platform/Linux/LinuxPixelWindowPresent.cpp
     Source/Platform/UnsupportedProcessMemoryStats.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES
     PkgConfig::GTK Threads::Threads ${CMAKE_DL_LIBS})
@@ -96,6 +98,7 @@ add_library(Illumo STATIC
   Source/Services/CommandLine.cpp
   Source/Services/CommandLineCore.cpp
   Source/Platform/AtomicFile.cpp
+  Source/Platform/PixelWindow.cpp
   Source/Services/DebugAlloc.cpp
   Source/Services/EnvVars.cpp
   Source/Services/EnvVarsValues.cpp
@@ -121,6 +124,7 @@ add_library(Illumo STATIC
   Source/Rendering/Primitives/MeshVisual.cpp
   Source/Rendering/Primitives/SkyboxVisual.cpp
   Source/Rendering/Primitives/GameVisual.cpp
+  Source/Rendering/Primitives/SoftwareCanvas.cpp
   Source/Rendering/Primitives/SpriteAnimation.cpp
   Source/Rendering/OpenGL/CreateOpenGLBackend.cpp
   Source/Rendering/OpenGL/GLBackend.cpp

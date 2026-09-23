@@ -782,6 +782,106 @@ testCommandLineCoreHeadless()
   testTrue(g, foundRecursionLimit, "recursive alias depth limit safely caught");
 }
 
+// Captures clipboard traffic so tests never touch the real OS clipboard.
+class ClipboardProbeConsole final : public CommandLineCore
+{
+public:
+  ClipboardProbeConsole(IEnvVars* vars, CommandRegistry* registry)
+    : CommandLineCore(vars, registry, "ClipboardTest")
+  {
+  }
+  bool writeClipboard(const std::string& text) override
+  {
+    stored = text;
+    ++writes;
+    return true;
+  }
+  std::string readClipboard() const override { return stored; }
+  std::string stored;
+  int writes = 0;
+};
+
+static void
+typeInto(CommandLineCore& core, const std::string& text)
+{
+  for (char character : text) {
+    core.AddCharacter(static_cast<unsigned int>(character));
+  }
+}
+
+static void
+testCommandLineCoreClipboard()
+{
+  testSection("CommandLineCore: copy, cut, paste, and copy command");
+  EnvVars env;
+  CommandRegistry registry;
+  ClipboardProbeConsole core(&env, &registry);
+
+  testTrue(g, !core.CopySelection(), "copying empty input does nothing");
+  typeInto(core, "echo alpha beta");
+  testTrue(g,
+           core.CopySelection() && core.stored == "echo alpha beta",
+           "copy without selection takes the whole input");
+  core.MoveCursorLeft(true, true);
+  testTrue(g,
+           core.CopySelection() && core.stored == "beta",
+           "copy with a selection takes only the selection");
+  testTrue(g, core.CutSelection(), "cut succeeds with a selection");
+  testTrue(g,
+           core.getCurrentInput() == "echo alpha " && core.stored == "beta",
+           "cut removes the selected text");
+  testTrue(g, core.Paste(), "paste inserts clipboard text");
+  testTrue(g,
+           core.getCurrentInput() == "echo alpha beta",
+           "paste restores the cut text at the caret");
+
+  core.ClearInput();
+  core.stored = "echo one\r\n\r\necho two\n\techo\x01three\n";
+  core.Paste();
+  testTrue(g,
+           core.getCurrentInput() == "echo one; echo two;  echothree",
+           "pasted line breaks become command separators");
+  core.ExecuteCommand();
+  testTrue(g,
+           core.getCommandHistory().back() == "echo one; echo two;  echothree",
+           "pasted chain executes as one history entry");
+
+  core.ClearInput();
+  core.stored = std::string(MAX_CHARS_PER_LINE * 2, 'x');
+  core.Paste();
+  testEqSize(g,
+             core.getCurrentInput().size(),
+             MAX_CHARS_PER_LINE - 1u,
+             "paste respects the input capacity");
+  core.ClearInput();
+
+  core.logNormal("copy-me-1");
+  core.logNormal("copy-me-2");
+  const int writesBefore = core.writes;
+  core.ExecuteSingleCommand("copy 2");
+  testTrue(g,
+           core.writes == writesBefore + 1 &&
+             core.stored == "copy-me-2\n> copy 2",
+           "copy <n> copies the newest visible lines");
+  core.ExecuteSingleCommand("copy all");
+  testTrue(g,
+           core.stored.find("ClipboardTest Developer Console") == 0,
+           "copy all starts at the oldest line");
+  core.ExecuteSingleCommand("copy zero");
+  bool sawUsage = false;
+  for (const CommandLineCore::historyBuffer& line : core.getHistory()) {
+    sawUsage =
+      sawUsage || line.content.find("Usage: copy") != std::string::npos;
+  }
+  testTrue(g, sawUsage, "copy validates its argument");
+
+  CommandLineCore plain(&env, &registry, "NoClipboard");
+  typeInto(plain, "text");
+  testTrue(g,
+           !plain.CopySelection() && !plain.Paste(),
+           "base core reports no clipboard");
+}
+
 static int
 runServiceCase(void (*testFunction)())
 {
@@ -820,4 +920,6 @@ registerServiceTests(IllumoTestRegistry& registry)
                []() { return runServiceCase(testLoggerLevelsAndSinks); });
   registry.add("Illumo.CommandLineCore.Headless",
                []() { return runServiceCase(testCommandLineCoreHeadless); });
+  registry.add("Illumo.CommandLineCore.Clipboard",
+               []() { return runServiceCase(testCommandLineCoreClipboard); });
 }

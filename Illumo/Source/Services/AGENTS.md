@@ -57,7 +57,11 @@ Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
   act on them.
 - Console token payload storage must remain valid through renderer submission.
   Keep the existing token-rendered console; do not introduce an independent
-  retained widget hierarchy.
+  retained widget hierarchy. The console keeps its own plain palette rather
+  than `UiTheme`/`GuiKit` styling (D-UI4).
+- WASM guests compile `CommandLine`/`CommandLineCore`. Reach the clipboard and
+  files only through the `CommandLineCore` hooks and keep those paths behind
+  `ILLUMO_SERIAL_GUEST` guards.
 - Cached console wrap results must stay equivalent to direct wrapping of the
   same history at the same width. Settled composition cache must not skip a
   frame that changed history, scroll, input, or settled layout.

@@ -2,6 +2,7 @@
 
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/PipelineState.h>
+#include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/CommandLine.h>
@@ -11,6 +12,9 @@
 #include <Illumo/Testing/TestRegistry.h>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <thread>
 
 static TestCounters g;
@@ -1071,7 +1075,7 @@ testCommandLineHistoryNavigationAndLimits()
            "history down restores draft input");
   fixture.console.HistoryDown();
 
-  for (int i = 0; i < MAX_CMD_HISTORY + 10; ++i) {
+  for (int i = 0; i < MAX_CONSOLE_LINES + 10; ++i) {
     fixture.console.AddToHistory("command-" + std::to_string(i));
     fixture.console.AppendString(
       255, 255, 255, 255, "line-" + std::to_string(i));
@@ -1079,14 +1083,16 @@ testCommandLineHistoryNavigationAndLimits()
   fixture.console.AppendStringLn(1, 2, 3, 4, "last-line");
   testEqSize(g,
              fixture.console.getHistory().size(),
-             MAX_CMD_HISTORY,
+             MAX_CONSOLE_LINES,
              "visible history evicts oldest lines at capacity");
+  testEqSize(g,
+             fixture.console.getCommandHistory().size(),
+             MAX_CMD_HISTORY,
+             "command recall history keeps its own smaller bound");
   testTrue(g,
            fixture.console.getHistory().back().content == "last-line\n",
            "AppendStringLn appends newline");
-  for (int i = 0; i < MAX_CMD_HISTORY + 10; ++i) {
-    fixture.console.ScrollUp();
-  }
+  fixture.console.ScrollToTop();
   const int scrollAtStart = fixture.console.getScrollOffset();
   testTrue(g,
            scrollAtStart > 0,
@@ -1096,13 +1102,16 @@ testCommandLineHistoryNavigationAndLimits()
             fixture.console.getScrollOffset(),
             scrollAtStart,
             "extra PageUp at the start does not overscroll past oldest lines");
-  for (int i = 0; i < MAX_CMD_HISTORY + 10; ++i) {
-    fixture.console.ScrollDown();
-  }
+  fixture.console.ScrollPageDown();
+  testTrue(g,
+           fixture.console.getScrollOffset() < scrollAtStart &&
+             fixture.console.getScrollOffset() > 0,
+           "PageDown moves a page toward the newest output");
+  fixture.console.ScrollToBottom();
   testEqInt(g,
             fixture.console.getScrollOffset(),
             0,
-            "PageDown returns scroll to the newest history end");
+            "ScrollToBottom returns scroll to the newest history end");
   fixture.console.DrawImpl();
 }
 
@@ -1434,6 +1443,615 @@ testCommandLineMouseInteraction()
   console.HandleMouseRelease();
 }
 
+static void
+testCommandLineConsoleTools()
+{
+  testSection("CommandLine: levels, repeat collapsing, view filters, help "
+              "search, history recall, bindings, scripts, and log files");
+  CommandLineFixture fixture(1280, 720);
+  CommandLine& console = fixture.console;
+
+  // Levels and repeat collapsing.
+  const std::size_t before = console.getHistory().size();
+  console.logNormal("spam-line");
+  console.logNormal("spam-line");
+  console.logNormal("spam-line");
+  testEqSize(g,
+             console.getHistory().size(),
+             before + 1u,
+             "identical consecutive lines collapse into one entry");
+  testEqInt(g,
+            static_cast<int>(console.getHistory().back().repeatCount),
+            3,
+            "collapsed entry counts its repeats");
+  testTrue(g,
+           CommandLineCore::DisplayText(console.getHistory().back()) ==
+             "spam-line  (x3)",
+           "display text shows the repeat count");
+  console.logError("broken-thing");
+  testTrue(g,
+           console.getHistory().back().level == ConsoleLevel::Error &&
+             console.getHistory().back().content == "ERROR: broken-thing",
+           "errors keep their prefix and record their level");
+  executeConsoleText(console, "echo level-probe");
+  bool sawCommandEcho = false;
+  for (const CommandLine::historyBuffer& line : console.getHistory()) {
+    sawCommandEcho = sawCommandEcho || (line.level == ConsoleLevel::Command &&
+                                        line.content == "> echo level-probe");
+  }
+  testTrue(g, sawCommandEcho, "typed commands echo at the command level");
+
+  // View filters hide lines without discarding them.
+  executeConsoleText(console, "filter spam");
+  testTrue(g,
+           console.isViewFiltered() && console.getViewFilter() == "spam",
+           "filter sets a text view filter");
+  bool spamVisible = false;
+  bool otherVisible = false;
+  for (const CommandLine::historyBuffer& line : console.getHistory()) {
+    if (!console.isEntryVisible(line)) {
+      continue;
+    }
+    spamVisible = spamVisible || line.content == "spam-line";
+    otherVisible =
+      otherVisible || line.content.find("spam") == std::string::npos;
+  }
+  testTrue(
+    g, spamVisible && !otherVisible, "text filter shows only matching entries");
+  executeConsoleText(console, "filter off");
+  testTrue(g, console.getViewFilter().empty(), "filter off clears the text");
+  executeConsoleText(console, "loglevel error");
+  testEqInt(g,
+            console.getMinimumSeverity(),
+            CommandLineCore::kSeverityError,
+            "loglevel error hides lower severities");
+  for (const CommandLine::historyBuffer& line : console.getHistory()) {
+    if (console.isEntryVisible(line)) {
+      testTrue(g,
+               line.level == ConsoleLevel::Error,
+               "only errors remain visible at error level");
+    }
+  }
+  executeConsoleText(console, "loglevel loud");
+  testTrue(g,
+           consoleHistoryContains(console, "Usage: loglevel"),
+           "invalid loglevel reports usage");
+  executeConsoleText(console, "loglevel trace");
+  testTrue(g, !console.isViewFiltered(), "loglevel trace shows everything");
+
+  executeConsoleText(console, "timestamps on");
+  testTrue(g, console.getTimestampsVisible(), "timestamps on shows gutter");
+  testTrue(g,
+           console.BuildLogText(1, true).rfind("[", 0) == 0,
+           "log text carries timestamps when enabled");
+  executeConsoleText(console, "timestamps off");
+  testTrue(g, !console.getTimestampsVisible(), "timestamps off hides gutter");
+
+  // Help search.
+  executeConsoleText(console, "help alia");
+  testTrue(g,
+           consoleHistoryContains(console, "Commands matching 'alia'") &&
+             consoleHistoryContains(console, "unalias <name>"),
+           "help with a partial word lists matching commands");
+  executeConsoleText(console, "help qqqqq");
+  testTrue(g,
+           consoleHistoryContains(console, "No help available for 'qqqqq'"),
+           "help without matches still reports an error");
+
+  // History recall.
+  executeConsoleText(console, "set recall 1");
+  executeConsoleText(console, "!!");
+  testTrue(g,
+           console.getCommandHistory().back() == "set recall 1",
+           "!! stores the expanded command");
+  executeConsoleText(console, "!set");
+  testTrue(g,
+           console.getCommandHistory().back() == "set recall 1",
+           "!prefix recalls the newest matching command");
+  executeConsoleText(console, "!9999");
+  testTrue(g,
+           consoleHistoryContains(console, "History entry out of range"),
+           "!n outside history reports an error");
+  executeConsoleText(console, "!nosuchprefix");
+  testTrue(g,
+           consoleHistoryContains(console, "No command in history starts"),
+           "!prefix without a match reports an error");
+
+  // Function-key bindings.
+  executeConsoleText(console, "bind f2 echo bound-key-ran");
+  testTrue(g, console.HasKeyBinding("F2"), "bind stores an F-key binding");
+  testTrue(g, console.RunKeyBinding("F2"), "bound key runs its command");
+  testTrue(g,
+           consoleHistoryContains(console, "bound-key-ran"),
+           "bound command output reaches the console");
+  testTrue(g, !console.RunKeyBinding("F4"), "unbound key reports false");
+  executeConsoleText(console, "bind F5 echo nope");
+  testTrue(g,
+           !console.HasKeyBinding("F5") &&
+             consoleHistoryContains(console, "reserved by the host"),
+           "host-reserved keys cannot be bound");
+  executeConsoleText(console, "bind Q echo nope");
+  testTrue(g,
+           consoleHistoryContains(console, "Only F1-F12 can be bound"),
+           "non-function keys are rejected");
+  executeConsoleText(console, "unbind F2");
+  testTrue(g, !console.HasKeyBinding("F2"), "unbind removes the binding");
+
+  // Scripts and log files.
+  const std::filesystem::path script =
+    std::filesystem::temp_directory_path() / "illumo-console-test-script.cfg";
+  {
+    std::ofstream out(script);
+    out << "# comment line\n\n  set scriptvar 7  \necho from-script; echo "
+           "second-cmd\n";
+  }
+  executeConsoleText(console, ("exec \"" + script.string() + "\"").c_str());
+  testTrue(g,
+           fixture.env.getVar("scriptvar").value == "7",
+           "exec runs script commands");
+  testTrue(g,
+           consoleHistoryContains(console, "from-script") &&
+             consoleHistoryContains(console, "second-cmd"),
+           "exec splits chained script lines");
+  testTrue(g,
+           consoleHistoryContains(console, ">> set scriptvar 7"),
+           "exec echoes each script line");
+  std::filesystem::remove(script);
+  executeConsoleText(console, ("exec \"" + script.string() + "\"").c_str());
+  testTrue(g,
+           consoleHistoryContains(console, "Cannot open script"),
+           "exec reports a missing script");
+
+  const std::filesystem::path logPath =
+    std::filesystem::temp_directory_path() / "illumo-console-test-log.txt";
+  executeConsoleText(console, ("savelog \"" + logPath.string() + "\"").c_str());
+  {
+    std::ifstream in(logPath);
+    const std::string contents((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+    testTrue(g,
+             contents.find("spam-line  (x3)") != std::string::npos &&
+               contents.find("ERROR: broken-thing") != std::string::npos,
+             "savelog writes every entry with repeat counts");
+  }
+  std::filesystem::remove(logPath);
+  executeConsoleText(console, "savelog");
+  testTrue(g,
+           consoleHistoryContains(console, "Usage: savelog <file>"),
+           "savelog validates its argument");
+
+  // Drawing with timestamps, a filter that hides everything, and an open
+  // completion list stays on the single-batch token path.
+  executeConsoleText(console, "timestamps on");
+  console.Toggle();
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  for (int i = 0; i < 4; ++i) {
+    console.AppendCommands(&fixture.renderer);
+  }
+  enterConsoleText(console, "s");
+  console.Complete();
+  testTrue(g,
+           console.getCompletionMatches().size() > 1u,
+           "ambiguous Tab keeps the full match list");
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  testTrue(g,
+           console.AppendCommands(&fixture.renderer),
+           "completion list frame emits tokens");
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 1u,
+           "completion list frame draws");
+  console.ClearInput();
+  testTrue(g,
+           console.getCompletionMatches().empty(),
+           "editing clears the completion list");
+  console.SetViewFilter("text-that-matches-nothing");
+  fixture.renderer.BeginFrame();
+  testTrue(g,
+           console.AppendCommands(&fixture.renderer),
+           "fully filtered output still draws chrome");
+  fixture.renderer.EndFrame();
+  console.SetViewFilter("");
+
+  // A reader scrolled back keeps their place while new output arrives.
+  for (int i = 0; i < 80; ++i) {
+    console.logNormal("anchor-line-" + std::to_string(i));
+  }
+  console.AppendCommands(&fixture.renderer);
+  console.ScrollPageUp();
+  const int anchored = console.getScrollOffset();
+  testTrue(g, anchored > 0, "PageUp scrolls back by a page");
+  console.logNormal("arrives-while-scrolled");
+  testEqInt(g,
+            console.getScrollOffset(),
+            anchored + 1,
+            "new output keeps a scrolled-back view anchored");
+  console.ScrollToBottom();
+  testEqInt(g, console.getScrollOffset(), 0, "ScrollToBottom follows output");
+
+  // Multi-line reports split into visual lines instead of drawing text with
+  // embedded line breaks that would escape the panel layout.
+  console.logNormal("report-line-a\nreport-line-b\r\nreport-line-c");
+  console.AppendCommands(&fixture.renderer);
+  bool sawEmbeddedBreak = false;
+  bool sawLastLine = false;
+  GameVisual& visual = console.getVisual();
+  for (std::size_t i = 0; i < visual.textCount(); ++i) {
+    const TextPrimitive* text = visual.getText(i);
+    if (text == nullptr) {
+      continue;
+    }
+    sawEmbeddedBreak =
+      sawEmbeddedBreak || text->content.find('\n') != std::string::npos;
+    sawLastLine = sawLastLine || text->content == "report-line-c";
+  }
+  testTrue(g, !sawEmbeddedBreak, "no drawn text contains a line break");
+  testTrue(g, sawLastLine, "each report line draws as its own text run");
+}
+
+static void
+testCommandLineConsoleWorkflow()
+{
+  testSection("CommandLine: reverse search, watches, add/cycle, config "
+              "round trip, click recall, and closed-console alerts");
+  CommandLineFixture fixture(1280, 720);
+  CommandLine& console = fixture.console;
+
+  // Reverse incremental search.
+  executeConsoleText(console, "set alpha 1");
+  executeConsoleText(console, "echo two");
+  executeConsoleText(console, "set beta 2");
+  enterConsoleText(console, "draft");
+  console.BeginReverseSearch();
+  testTrue(g, console.isReverseSearchActive(), "Ctrl+R starts a search");
+  enterConsoleText(console, "set");
+  testTrue(g,
+           console.getCurrentInput() == "set beta 2",
+           "search shows the newest matching command");
+  console.BeginReverseSearch();
+  testTrue(g,
+           console.getCurrentInput() == "set alpha 1",
+           "repeated Ctrl+R steps to an older match");
+  console.BeginReverseSearch();
+  testTrue(g,
+           console.isReverseSearchFailing() &&
+             console.getCurrentInput() == "set alpha 1",
+           "stepping past the oldest match fails but keeps the match");
+  console.CancelReverseSearch();
+  testTrue(g,
+           !console.isReverseSearchActive() &&
+             console.getCurrentInput() == "draft",
+           "cancel restores the draft input");
+  console.ClearInput();
+  console.BeginReverseSearch();
+  enterConsoleText(console, "ECHO");
+  console.ExecuteCommand();
+  testTrue(g,
+           console.getCommandHistory().back() == "echo two" &&
+             !console.isReverseSearchActive(),
+           "Enter runs the case-insensitive match");
+  console.BeginReverseSearch();
+  enterConsoleText(console, "zzz");
+  testTrue(g, console.isReverseSearchFailing(), "no match reports failing");
+  console.HandleBackspace();
+  console.HandleBackspace();
+  console.HandleBackspace();
+  enterConsoleText(console, "alp");
+  console.MoveCursorRight();
+  testTrue(g,
+           !console.isReverseSearchActive() &&
+             console.getCurrentInput() == "set alpha 1",
+           "Right accepts the match for editing");
+  console.ClearInput();
+
+  // Watches.
+  fixture.env.setVar("tps", 30);
+  executeConsoleText(console, "watch tps");
+  executeConsoleText(console, "watch nosuchvar");
+  testTrue(g,
+           console.GetWatches().size() == 1u &&
+             console.GetWatches()[0] == "tps" &&
+             consoleHistoryContains(console, "Unknown variable: nosuchvar"),
+           "watch pins known variables only");
+  console.Toggle();
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  for (int i = 0; i < 4; ++i) {
+    console.AppendCommands(&fixture.renderer);
+  }
+  fixture.env.setVar("tps", 45);
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  console.AppendCommands(&fixture.renderer);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           fixture.mock.countNonEmptyOfType(CommandType::UpdateBuffer) >= 1u,
+           "a watched value change redraws the console");
+  bool sawWatchedValue = false;
+  GameVisual& visual = console.getVisual();
+  for (std::size_t i = 0; i < visual.textCount(); ++i) {
+    const TextPrimitive* text = visual.getText(i);
+    sawWatchedValue =
+      sawWatchedValue || (text != nullptr && text->content == "45");
+  }
+  testTrue(g, sawWatchedValue, "the watch strip draws the live value");
+
+  // add / cycle.
+  executeConsoleText(console, "add tps 5");
+  testTrue(g,
+           fixture.env.getVar("tps").value == "50",
+           "add keeps whole numbers whole");
+  fixture.env.setVar("speedFactor", "1");
+  executeConsoleText(console, "add speedFactor 0.5");
+  testTrue(g,
+           fixture.env.getVar("speedFactor").value == "1.5",
+           "add produces decimals when the amount has them");
+  executeConsoleText(console, "add tps many");
+  testTrue(g,
+           consoleHistoryContains(console, "Usage: add"),
+           "add rejects non-numeric amounts");
+  // The fixture's configuration persists between runs; start from a value
+  // outside the list so the first step is deterministic.
+  fixture.env.setVar("cycleProbe", "unset");
+  executeConsoleText(console, "cycle cycleProbe red green blue");
+  testTrue(g,
+           fixture.env.getVar("cycleProbe").value == "red",
+           "cycle starts at the first value");
+  executeConsoleText(console, "cycle cycleProbe red green blue");
+  testTrue(g,
+           fixture.env.getVar("cycleProbe").value == "green",
+           "cycle steps to the next value");
+  executeConsoleText(console, "cycle cycleProbe red green blue");
+  executeConsoleText(console, "cycle cycleProbe red green blue");
+  testTrue(g,
+           fixture.env.getVar("cycleProbe").value == "red",
+           "cycle wraps after the last value");
+
+  // writeconfig -> exec round trip.
+  executeConsoleText(console, "alias boost \"set tps 99; echo \"\"hi\"\"\"");
+  executeConsoleText(console, "bind F8 add tps 1");
+  const std::filesystem::path configPath =
+    std::filesystem::temp_directory_path() / "illumo-console-test-config.cfg";
+  executeConsoleText(console,
+                     ("writeconfig \"" + configPath.string() + "\"").c_str());
+  const std::string expectedAlias = console.GetAlias("boost");
+  executeConsoleText(console, "unalias boost");
+  executeConsoleText(console, "unbind all");
+  executeConsoleText(console, "unwatch all");
+  testTrue(g,
+           console.GetWatches().empty() && !console.HasKeyBinding("F8"),
+           "unwatch/unbind clear state before restoring");
+  executeConsoleText(console, ("exec \"" + configPath.string() + "\"").c_str());
+  std::filesystem::remove(configPath);
+  testTrue(g,
+           console.HasAlias("boost") &&
+             console.GetAlias("boost") == expectedAlias &&
+             console.GetKeyBinding("F8") == "add tps 1" &&
+             console.GetWatches().size() == 1u,
+           "writeconfig output restores aliases, binds, and watches");
+
+  // Clicking an echoed command recalls it.
+  console.ClearInput();
+  executeConsoleText(console, "echo recall-me");
+  console.AppendCommands(&fixture.renderer);
+  float echoY = -1.0f;
+  for (std::size_t i = 0; i < visual.textCount(); ++i) {
+    const TextPrimitive* text = visual.getText(i);
+    if (text != nullptr && text->content == "> echo recall-me") {
+      echoY = text->y;
+    }
+  }
+  testTrue(g, echoY > 0.0f, "echoed command is drawn");
+  console.HandleMousePress(200.0, static_cast<double>(echoY + 6.0f));
+  console.HandleMouseRelease();
+  testTrue(g,
+           console.getCurrentInput() == "echo recall-me",
+           "clicking an echoed command recalls it");
+  console.ClearInput();
+
+  // Severity marks: an error line gets a filled mark in its color.
+  console.logError("marked-error");
+  console.AppendCommands(&fixture.renderer);
+  bool sawMark = false;
+  for (std::size_t i = 0; i < visual.shapeCount(); ++i) {
+    const ShapePrimitive* shape = visual.getShape(i);
+    sawMark =
+      sawMark ||
+      (shape != nullptr && shape->kind == ShapeKind::FilledRect &&
+       shape->rect.w == 2.0f && shape->color.r > 200 && shape->color.g < 140);
+  }
+  testTrue(g, sawMark, "error lines carry a severity mark");
+
+  // Closed-console alerts.
+  console.Toggle();
+  for (int i = 0; i < 30 && console.wantsDraw(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    console.AppendCommands(&fixture.renderer);
+  }
+  testTrue(g, !console.wantsDraw(), "closed console without alerts is idle");
+  console.logError("while-closed");
+  console.logError("while-closed");
+  console.logWarning("careful");
+  testEqInt(g,
+            console.getUnseenErrorCount(),
+            2,
+            "collapsed repeats still count as unseen errors");
+  testEqInt(g, console.getUnseenWarningCount(), 1, "warnings are counted");
+  testTrue(g, console.wantsDraw(), "unseen alerts keep the badge drawable");
+  Scene scene(&fixture.window, &fixture.camera);
+  scene.AddDrawable(&console, RenderLayerId::UI);
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 1u,
+           "the closed-console badge draws");
+  console.setAlertsEnabled(false);
+  testTrue(g, !console.wantsDraw(), "alerts off hides the badge");
+  console.setAlertsEnabled(true);
+  console.Toggle();
+  testTrue(g,
+           console.getUnseenErrorCount() == 0 &&
+             console.getUnseenWarningCount() == 0,
+           "opening the console acknowledges alerts");
+}
+
+static const TextPrimitive*
+findConsoleText(const GameVisual& visual, const std::string& content)
+{
+  for (std::size_t i = 0; i < visual.textCount(); ++i) {
+    const TextPrimitive* text = visual.getText(i);
+    if (text != nullptr && text->content == content) {
+      return text;
+    }
+  }
+  return nullptr;
+}
+
+static void
+testCommandLineDetachedWindow()
+{
+  testSection("CommandLine: detached window mode, pop-out/dock requests, "
+              "tear-off drag, and software composition");
+  CommandLineFixture fixture(1280, 720);
+  CommandLine& console = fixture.console;
+
+  // Without host support there is no button and no request.
+  console.Toggle();
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  for (int i = 0; i < 4; ++i) {
+    console.AppendCommands(&fixture.renderer);
+  }
+  testTrue(g,
+           findConsoleText(console.getVisual(), "pop out") == nullptr,
+           "no pop-out button without a host window");
+  executeConsoleText(console, "console_mode detached");
+  fixture.registry.ExecuteQueue();
+  testTrue(g,
+           console.takeWindowRequest().kind ==
+               CommandLine::WindowRequestKind::None &&
+             consoleHistoryContains(console, "not available"),
+           "detaching is refused when unavailable");
+
+  // The header button raises a detach request sized like the panel.
+  console.setDetachAvailable(true);
+  console.markCompositionDirty();
+  console.AppendCommands(&fixture.renderer);
+  const TextPrimitive* popOut = findConsoleText(console.getVisual(), "pop out");
+  testTrue(g, popOut != nullptr, "header shows a pop-out button");
+  if (popOut != nullptr) {
+    console.HandleMousePress(popOut->x + 4.0f, popOut->y + 4.0f);
+    console.HandleMouseRelease();
+  }
+  CommandLine::WindowRequest request = console.takeWindowRequest();
+  testTrue(g,
+           request.kind == CommandLine::WindowRequestKind::Detach &&
+             request.width == 1280 && request.height > 300,
+           "pop-out button requests a window the size of the panel");
+  executeConsoleText(console, "console_mode detached");
+  fixture.registry.ExecuteQueue();
+  testTrue(g,
+           console.takeWindowRequest().kind ==
+             CommandLine::WindowRequestKind::Detach,
+           "console_mode detached requests a window");
+
+  // Detached: no in-game drawing, full-window layout, still editable.
+  console.setDetached(true, 640, 400);
+  testTrue(g,
+           console.isDetached() && !console.isOpen && console.isInteractive() &&
+             !console.wantsDraw(),
+           "detached consoles leave the game and stay interactive");
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  testTrue(g,
+           console.AppendCommands(&fixture.renderer),
+           "detached AppendCommands is a no-op success");
+  fixture.renderer.EndFrame();
+  testEqSize(g,
+             fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             0u,
+             "detached console submits no in-game draws");
+  testTrue(g, console.ComposeDetached(), "first detached composition builds");
+  bool fillsWindow = false;
+  const GameVisual& visual = console.getVisual();
+  for (std::size_t i = 0; i < visual.shapeCount(); ++i) {
+    const ShapePrimitive* shape = visual.getShape(i);
+    fillsWindow = fillsWindow ||
+                  (shape != nullptr && shape->kind == ShapeKind::FilledRect &&
+                   shape->rect.x == 0.0f && shape->rect.y == 0.0f &&
+                   shape->rect.w == 640.0f && shape->rect.h == 400.0f);
+  }
+  testTrue(g, fillsWindow, "detached panel fills its window");
+  testTrue(g,
+           findConsoleText(visual, "dock") != nullptr &&
+             findConsoleText(visual, "detached") != nullptr,
+           "detached header shows its mode and a dock button");
+  enterConsoleText(console, "echo from-detached");
+  console.ExecuteCommand();
+  testTrue(g,
+           consoleHistoryContains(console, "from-detached"),
+           "detached consoles still run commands");
+  console.logError("detached-error");
+  testEqInt(g,
+            console.getUnseenErrorCount(),
+            0,
+            "errors are not unseen while the console is visible detached");
+  console.setDetachedSize(800, 500);
+  testTrue(g, console.ComposeDetached(), "resizing recomposes");
+
+  SoftwareCanvas canvas;
+  canvas.resize(800, 500);
+  canvas.clear(ColorRgba{ 255, 0, 255, 255 });
+  canvas.draw(console.getVisual());
+  const ColorRgba body = canvas.pixel(400, 150);
+  testTrue(g,
+           body.r < 40 && body.g < 40 && body.b < 40,
+           "software canvas paints the console's dark body");
+
+  const TextPrimitive* dock = findConsoleText(console.getVisual(), "dock");
+  testTrue(g, dock != nullptr, "dock button is drawn");
+  if (dock != nullptr) {
+    console.HandleMousePress(dock->x + 4.0f, dock->y + 4.0f);
+    console.HandleMouseRelease();
+  }
+  testTrue(g,
+           console.takeWindowRequest().kind ==
+             CommandLine::WindowRequestKind::Dock,
+           "dock button requests a return to the game");
+  executeConsoleText(console, "close");
+  testTrue(g,
+           console.takeWindowRequest().kind ==
+             CommandLine::WindowRequestKind::Close,
+           "close while detached requests closing the window");
+
+  console.setDetached(false, 0, 0);
+  testTrue(g,
+           !console.isDetached() && !console.isOpen,
+           "returning to the game leaves the console closed until opened");
+
+  // Tearing the floating console off past the game window's edge.
+  console.setFloatingMode(true);
+  console.Toggle();
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  for (int i = 0; i < 4; ++i) {
+    console.AppendCommands(&fixture.renderer);
+  }
+  console.HandleMousePress(260.0, 26.0);
+  console.HandleMouseDrag(300.0, 60.0);
+  testTrue(g,
+           console.takeWindowRequest().kind ==
+             CommandLine::WindowRequestKind::None,
+           "dragging inside the game window only moves the panel");
+  console.HandleMouseDrag(320.0, -60.0);
+  request = console.takeWindowRequest();
+  testTrue(g,
+           request.kind == CommandLine::WindowRequestKind::Detach &&
+             request.originY < 0,
+           "dragging past the window edge tears the console off");
+  console.HandleMouseRelease();
+}
+
 static int
 runUITokenCase(void (*testFunction)())
 {
@@ -1607,4 +2225,10 @@ registerUITokenTests(IllumoTestRegistry& registry)
   registry.add("Illumo.CommandLine.UnregistersConsoleCommands", []() {
     return runUITokenCase(testCommandLineUnregistersConsoleCommands);
   });
+  registry.add("Illumo.CommandLine.ConsoleTools",
+               []() { return runUITokenCase(testCommandLineConsoleTools); });
+  registry.add("Illumo.CommandLine.ConsoleWorkflow",
+               []() { return runUITokenCase(testCommandLineConsoleWorkflow); });
+  registry.add("Illumo.CommandLine.DetachedWindow",
+               []() { return runUITokenCase(testCommandLineDetachedWindow); });
 }

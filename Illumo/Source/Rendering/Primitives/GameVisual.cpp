@@ -466,6 +466,43 @@ GameVisual::getText(size_t index)
   return &texts[index];
 }
 
+const ShapePrimitive*
+GameVisual::getShape(size_t index) const
+{
+  return index < shapes.size() ? &shapes[index] : nullptr;
+}
+
+const TextPrimitive*
+GameVisual::getText(size_t index) const
+{
+  return index < texts.size() ? &texts[index] : nullptr;
+}
+
+std::vector<GameVisual::PrimitiveRef>
+GameVisual::paintOrder() const
+{
+  std::vector<VisualItem> ordered = items;
+  std::stable_sort(ordered.begin(),
+                   ordered.end(),
+                   [this](const VisualItem& a, const VisualItem& b) {
+                     const int leftOrder = drawOrder(a);
+                     const int rightOrder = drawOrder(b);
+                     return leftOrder == rightOrder ? a.sequence < b.sequence
+                                                    : leftOrder < rightOrder;
+                   });
+  std::vector<PrimitiveRef> result;
+  result.reserve(ordered.size());
+  for (const VisualItem& item : ordered) {
+    PrimitiveRef ref;
+    ref.index = item.index;
+    ref.kind = item.kind == VisualItemKind::Shape    ? PrimitiveKind::Shape
+               : item.kind == VisualItemKind::Sprite ? PrimitiveKind::Sprite
+                                                     : PrimitiveKind::Text;
+    result.push_back(ref);
+  }
+  return result;
+}
+
 std::vector<unsigned int>
 GameVisual::buildIndices(unsigned int capacity) const
 {

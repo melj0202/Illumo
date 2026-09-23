@@ -42,17 +42,31 @@ void
 GuestCommandLine::onHistoryAppended(const historyBuffer& item, bool erasedFront)
 {
   (void)erasedFront;
-  // CommandLineCore colors identify the log level; the host re-applies its
-  // own prefixes for errors, warnings and traces.
+  forward(item);
+}
+
+void
+GuestCommandLine::onHistoryBackUpdated()
+{
+  if (!getHistory().empty()) {
+    forward(getHistory().back());
+  }
+}
+
+void
+GuestCommandLine::forward(const historyBuffer& item)
+{
+  // The host re-applies its own prefixes for errors, warnings and traces;
+  // success lines keep theirs, which the host maps back to its success level.
   std::uint32_t level = 3;
   std::string text = item.content;
-  if (item.r == 255 && item.g == 100 && item.b == 100) {
+  if (item.level == ConsoleLevel::Error) {
     level = 1;
     text = stripPrefix(text, "ERROR: ");
-  } else if (item.r == 255 && item.g == 220 && item.b == 100) {
+  } else if (item.level == ConsoleLevel::Warning) {
     level = 2;
     text = stripPrefix(text, "WARNING: ");
-  } else if (item.r == 206 && item.g == 0 && item.b == 252) {
+  } else if (item.level == ConsoleLevel::Trace) {
     level = 4;
     text = stripPrefix(text, "TRACE: ");
   }

@@ -354,6 +354,10 @@ WasmGameServices::completeConsole(GuestServices& results)
           m_console->logWarning(text);
         } else if (request.level == 4) {
           m_console->logTrace(text);
+        } else if (text.rfind("SUCCESS: ", 0) == 0) {
+          // Guest success lines keep CommandLineCore's prefix; restore the
+          // level so the host console colors and filters them as successes.
+          m_console->logSuccess(text.substr(9));
         } else {
           m_console->logNormal(text);
         }

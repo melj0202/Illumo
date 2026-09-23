@@ -3,12 +3,15 @@
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
+#include <Illumo/Services/KeyCode.h>
 
 #include <memory>
 
 class DebugOverlayState;
 class FrameProfiler;
+class PixelWindow;
 class ProfilerOverlay;
+class SoftwareCanvas;
 
 class DebugModule : public IModule
 {
@@ -32,6 +35,20 @@ private:
   void registerRendererCommands();
   void unregisterRendererCommands();
   void createRendererDemo();
+
+  // Console editing keys shared by the game window and the detached window.
+  void routeConsoleKey(KeyCode key, InputAction action, int modifiers);
+  // Detached console window (D-UI5): created on request, pumped, drawn by a
+  // software canvas, and destroyed on dock/close/exit.
+  void processConsoleWindowRequest();
+  void detachConsole(int originX, int originY, int width, int height);
+  void closeDetachedConsole(bool reopenInGame);
+  void updateDetachedConsole();
+
+  std::unique_ptr<PixelWindow> m_consoleWindow;
+  std::unique_ptr<SoftwareCanvas> m_consoleCanvas;
+  bool m_consoleMouseDown = false;
+  bool m_detachedMouseDown = false;
 
   GLString* diagnosticsLabel;
   std::unique_ptr<DebugOverlayState> diagnostics;
