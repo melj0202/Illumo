@@ -197,7 +197,8 @@ The versioned JSON catalog describes every shipped transition and palette.
 Schema v3 supports \texttt{life\_like}, \texttt{generations},
 \texttt{moore\_table}, \texttt{cyclic}, \texttt{species\_life},
 \texttt{larger\_than\_life}, \texttt{hodgepodge}, \texttt{turmite},
-\texttt{lattice\_gas}, \texttt{dominance}, and \texttt{elementary\_1d}.
+\texttt{lattice\_gas}, \texttt{dominance}, \texttt{von\_neumann\_table},
+\texttt{sandpile}, and \texttt{elementary\_1d}.
 Legacy schema-v1/v2 catalogs remain readable. These compile to DataRuleSet;
 count-based Moore rules use the cached 256-by-9 table, while full-state
 histogram, extended-range, directional, and elementary history rules use their
@@ -418,12 +419,12 @@ the 14-color random-initial-condition experiment described by Fisch, Gravner,
 and Griffeath.
 
 Larger-than-Life definitions carry range, optional center counting, inclusive
-birth/survival intervals, and square or circular neighborhood shape. Range is
-bounded to 16 and B0 is rejected. Bosco/Bugs, Bugsmovie, and Globe use the
-parameters documented by Golly. Their serial sparse kernel expands occupied
-chunks by the required chunk radius and uses authoritative cell lookup before
-transactional output publication; it does not alter the optimized radius-one
-paths.
+birth/survival intervals, and square, circular, or diamond neighborhood shape.
+Range is bounded to 16 and B0 is rejected. Bosco/Bugs, Bugsmovie, and Globe use
+the parameters documented by Golly. Their serial sparse kernel expands occupied
+chunks by the required chunk radius and reads each target's canonical halo
+window before transactional output publication; it does not alter the
+optimized radius-one paths.
 
 Rules may also own deterministic starter data. Active soups drive Generations
 and Larger-than-Life, phase soups drive cyclic systems, species soups include
@@ -450,6 +451,39 @@ of the Gerhardt--Schuster Hodgepodge Machine, Moreira and Gajardo's Turmite
 formalization, Hardy--Pomeau--de Pazzis lattice gas, Toffoli and Margolus's
 cellular-automata treatment, and Vukov--Szolnoki--Szabó five-species dominance.
 
+The third expansion (D-GC8) adds self-replication, sandpiles, long-range
+cycles, and trails. \texttt{von\_neumann\_table} families store Golly
+\texttt{@TABLE} text verbatim and compile it to a dense lookup of $n^5$
+entries for at most twelve states. The compiler follows Golly: the first
+matching transition wins, a variable repeated in one transition binds to one
+value, symmetries expand every written transition, and unmatched
+neighborhoods keep their center. Golly's quiescent state 0 swaps with Illumo's
+background state 1. Langton's, Byl's, Chou--Reggia, SDSR, and Evoloop tables
+ship with their published starting loops as exact RLE starters, and their
+evolution is checked against an independent reference implementation.
+
+\texttt{sandpile} families hold heights 0--7 in the background-zero encoding
+and then the phases of a pulsed grain source. A cell with four or more grains
+topples one grain to each von Neumann neighbor; the dropping source phase
+emits four grains without depleting. Mandala, binary-star, and
+critical-square starters grow the Abelian sandpile fractal.
+
+Cyclic rules accept an optional range and square, circular, or diamond shape.
+Radius-one square rules keep the Moore histogram path; wider rules implement
+Griffeath's cyclic automata (313, Lava Lamp, Stripes, Squarish Spirals, Cyclic
+Spirals, Turbulent Phase) on the extended-range kernel, which counts the state
+returned by \texttt{getExtendedCountedState}: the successor for cyclic rules
+and the active state otherwise. Because a full cycle also advances the empty
+background, such soups would invade the infinite canvas at up to their radius
+per generation; the Griffeath rules therefore set \texttt{inert\_background},
+which removes state 1 from the cycle so each soup stays in its dish. Larger than Life gains the diamond shape and
+Golly's C-state decay trail, in which a dying cell walks states $2..C-1$
+without counting or accepting births; Comet Rockets' light-speed spaceships and
+the Rainbow Tides, Neon Coral, and Bubble Swarm soups use it. The extended and
+directional kernels read each target chunk and its margin into a halo window
+once rather than hashing every neighbor lookup. Forty-five further classic
+Life-like and Generations rules from Golly and MCell complete the catalog.
+
 Game's \texttt{RuleCatalogLoader} selects the first valid base family/rule
 catalog pair beside the executable, in the working directory, or in its
 \texttt{IllumoGame} subdirectory. It then transactionally layers the
@@ -475,6 +509,7 @@ class RuleSet {
   virtual unsigned char nextStateFromDirectionalNeighborhood(
     unsigned char cell,
     const DirectionalNeighbors& neighbors) const;
+  virtual unsigned char getExtendedCountedState(unsigned char cell) const;
   virtual unsigned char nextStateFromExtendedCount(
     unsigned char cell,
     unsigned int aliveCount) const;
@@ -539,8 +574,8 @@ transactional output and change journal. The optimized count-table paths remain
 unchanged. Dense compatibility evaluation uses the same histogram contract.
 Colorized-Life shares that histogram kernel. Larger-than-Life uses a separate
 serial extended-range kernel and the same transactional result/change-journal
-machinery. Hodgepodge and dominance share the histogram kernel; Turmites and
-HPP share the serial direction-preserving kernel.
+machinery. Hodgepodge and dominance share the histogram kernel; Turmites,
+HPP, rule tables, and sandpiles share the serial direction-preserving kernel.
 
 \begin{decisionbox}[title={Keep rules pure}]
 Rulesets stay free of rendering and input. They read/write cell buffers only

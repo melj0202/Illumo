@@ -415,6 +415,7 @@ private:
   std::vector<AddressIndexSlot> m_completeTargetIndex;
   std::uint64_t m_completeTargetGeneration = 0u;
   std::vector<TargetResult> m_completeResults;
+  std::vector<unsigned char> m_haloWindow;
   std::uint64_t m_candidateIndexGeneration = 0u;
   std::uint64_t m_directOutputGeneration = 0u;
   std::uint64_t m_candidateTopologyRevision = 1u;
@@ -543,6 +544,12 @@ private:
   bool advanceStateHistogram(const RuleSet& ruleSet);
   bool advanceExtendedRange(const RuleSet& ruleSet);
   bool advanceDirectionalNeighborhood(const RuleSet& ruleSet);
+  // Copies a target chunk plus a `radius`-cell margin into m_haloWindow
+  // (row-major, side kChunkDim + 2 * radius) so full-neighborhood evaluators
+  // index neighbors directly instead of hashing every neighbor lookup.
+  void fillHaloWindow(const SparseCellGrid& source,
+                      const ChunkAddress& target,
+                      int radius);
   bool advanceToroidal(const RuleSet& ruleSet);
   bool advanceElementarySpaceTime(const RuleSet& ruleSet);
   void enrollToroidalCandidate(const CellAddress& address,

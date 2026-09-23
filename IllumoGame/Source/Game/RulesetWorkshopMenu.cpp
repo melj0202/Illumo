@@ -50,6 +50,10 @@ familyLabel(RuleFamily family)
       return "SPECIES DOMINANCE";
     case RuleFamily::Elementary1D:
       return "ELEMENTARY 1D";
+    case RuleFamily::VonNeumannTable:
+      return "VON NEUMANN TABLE";
+    case RuleFamily::Sandpile:
+      return "ABELIAN SANDPILE";
     default:
       return "UNKNOWN FAMILY";
   }
@@ -577,7 +581,9 @@ RulesetWorkshopMenu::rebuildRows()
   } else if (familyDraft.kind == RuleFamily::Hodgepodge ||
              familyDraft.kind == RuleFamily::Turmite ||
              familyDraft.kind == RuleFamily::LatticeGas ||
-             familyDraft.kind == RuleFamily::Dominance) {
+             familyDraft.kind == RuleFamily::Dominance ||
+             familyDraft.kind == RuleFamily::VonNeumannTable ||
+             familyDraft.kind == RuleFamily::Sandpile) {
     appendInformation(Control::TableInformation,
                       "Interaction contract",
                       draft.rule.empty()
@@ -963,15 +969,32 @@ RulesetWorkshopMenu::changeControl(Control control, int direction)
     }
   } else if (control == Control::CyclicThreshold &&
              familyDraft.kind == RuleFamily::Cyclic) {
+    // Long-range cyclic rules may require more than eight successors.
+    int maximum = 0;
+    const int radius = static_cast<int>(draft.neighborhoodRadius);
+    for (int y = -radius; y <= radius; ++y) {
+      for (int x = -radius; x <= radius; ++x) {
+        if ((x != 0 || y != 0) &&
+            RuleSet::extendedNeighborhoodContains(
+              draft.extendedNeighborhoodShape, radius, x, y)) {
+          maximum += 1;
+        }
+      }
+    }
+    maximum = std::max(1, maximum);
     const int next = static_cast<int>(draft.cyclicThreshold) + direction - 1;
     const unsigned int wrapped =
-      static_cast<unsigned int>((next % 8 + 8) % 8 + 1);
+      static_cast<unsigned int>((next % maximum + maximum) % maximum + 1);
     changed = wrapped != draft.cyclicThreshold;
     draft.cyclicThreshold = wrapped;
     previewDirty = true;
   } else if (control == Control::CyclicStep &&
              familyDraft.kind == RuleFamily::Cyclic) {
-    const unsigned int stateCount = std::max(2u, familyDraft.stateCount);
+    // An inert background is not a phase, so the cycle is one state shorter.
+    const unsigned int stateCount =
+      std::max(2u,
+               draft.inertBackground ? familyDraft.stateCount - 1u
+                                     : familyDraft.stateCount);
     unsigned int next = draft.cyclicStep;
     for (unsigned int attempt = 0u; attempt < stateCount; ++attempt) {
       const int candidate = static_cast<int>(next) + direction - 1;
@@ -1200,8 +1223,8 @@ RulesetWorkshopMenu::refreshPreview()
   unsigned char next = 1u;
   if (familyDraft.kind == RuleFamily::Cyclic) {
     RuleSet::NeighborStateCounts counts{};
-    const unsigned int successor =
-      (previewState + draft.cyclicStep) % familyDraft.stateCount;
+    const unsigned char successor =
+      rule->getExtendedCountedState(static_cast<unsigned char>(previewState));
     counts[successor] = static_cast<unsigned char>(previewNeighborCount);
     next = rule->nextStateFromNeighborhood(
       static_cast<unsigned char>(previewState), counts);
@@ -1224,7 +1247,9 @@ RulesetWorkshopMenu::refreshPreview()
     next = rule->nextStateFromNeighborhood(
       static_cast<unsigned char>(previewState), counts);
   } else if (familyDraft.kind == RuleFamily::Turmite ||
-             familyDraft.kind == RuleFamily::LatticeGas) {
+             familyDraft.kind == RuleFamily::LatticeGas ||
+             familyDraft.kind == RuleFamily::VonNeumannTable ||
+             familyDraft.kind == RuleFamily::Sandpile) {
     RuleSet::DirectionalNeighbors neighbors{};
     neighbors.fill(1u);
     next = rule->nextStateFromDirectionalNeighborhood(

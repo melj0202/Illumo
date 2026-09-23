@@ -14,6 +14,15 @@ namespace {
 const unsigned int kMaximumStateCount = 256u;
 const unsigned int kMaximumNeighborCount = 8u;
 const unsigned int kMaximumExtendedRadius = 16u;
+const unsigned int kMaximumExtendedCount = 1089u;
+// A dense von Neumann table holds stateCount^5 entries (248,832 at 12).
+const unsigned int kMaximumTableStateCount = 12u;
+// Bounds the work of expanding table variables and symmetries at load time.
+const std::uint64_t kMaximumTableExpansions = 8000000u;
+// Sandpile heights 0..7 occupy the first eight states; later states are the
+// phases of a pulsed grain source.
+const unsigned int kSandpileHeightCount = 8u;
+const unsigned int kMaximumSandpileStateCount = 64u;
 const unsigned char kBackgroundState = 1u;
 const unsigned char kCountedState = 0u;
 
@@ -91,6 +100,371 @@ readColor(const nlohmann::json& values, std::array<unsigned char, 3>& color)
     color[index] = static_cast<unsigned char>(channel);
   }
   return true;
+}
+
+// Golly numbering uses 0 as the quiescent state; Illumo reserves state 1 for
+// the sparse background and state 0 for the counted state.
+unsigned char
+gollyToIllumoState(unsigned int state)
+{
+  if (state == 0u) {
+    return kBackgroundState;
+  }
+  if (state == 1u) {
+    return kCountedState;
+  }
+  return static_cast<unsigned char>(state);
+}
+
+unsigned int
+extendedNeighborhoodSize(unsigned int radius,
+                         RuleSet::ExtendedNeighborhoodShape shape,
+                         bool includeCenter)
+{
+  const int range = static_cast<int>(radius);
+  unsigned int count = includeCenter ? 1u : 0u;
+  for (int y = -range; y <= range; ++y) {
+    for (int x = -range; x <= range; ++x) {
+      if ((x != 0 || y != 0) &&
+          RuleSet::extendedNeighborhoodContains(shape, range, x, y)) {
+        count += 1u;
+      }
+    }
+  }
+  return count;
+}
+
+bool
+parseNeighborhoodShape(const std::string& value,
+                       RuleSet::ExtendedNeighborhoodShape& shape)
+{
+  if (value == "square") {
+    shape = RuleSet::ExtendedNeighborhoodShape::Square;
+  } else if (value == "circular") {
+    shape = RuleSet::ExtendedNeighborhoodShape::Circular;
+  } else if (value == "diamond") {
+    shape = RuleSet::ExtendedNeighborhoodShape::Diamond;
+  } else {
+    return false;
+  }
+  return true;
+}
+
+const char*
+neighborhoodShapeName(RuleSet::ExtendedNeighborhoodShape shape)
+{
+  if (shape == RuleSet::ExtendedNeighborhoodShape::Circular) {
+    return "circular";
+  }
+  if (shape == RuleSet::ExtendedNeighborhoodShape::Diamond) {
+    return "diamond";
+  }
+  return "square";
+}
+
+// Golly's LtL notation: NM Moore square, NC circular, NN von Neumann diamond.
+const char*
+neighborhoodShapeSuffix(RuleSet::ExtendedNeighborhoodShape shape)
+{
+  if (shape == RuleSet::ExtendedNeighborhoodShape::Circular) {
+    return "NC";
+  }
+  if (shape == RuleSet::ExtendedNeighborhoodShape::Diamond) {
+    return "NN";
+  }
+  return "NM";
+}
+
+bool
+isCyclicExtended(const RuleSetDefinition& definition)
+{
+  return definition.neighborhoodRadius > 1u ||
+         definition.extendedNeighborhoodShape !=
+           RuleSet::ExtendedNeighborhoodShape::Square;
+}
+
+std::string
+trimCopy(const std::string& text)
+{
+  std::size_t first = 0u;
+  while (first < text.size() &&
+         std::isspace(static_cast<unsigned char>(text[first])) != 0) {
+    ++first;
+  }
+  std::size_t last = text.size();
+  while (last > first &&
+         std::isspace(static_cast<unsigned char>(text[last - 1u])) != 0) {
+    --last;
+  }
+  return text.substr(first, last - first);
+}
+
+bool
+isTableVariableName(const std::string& name)
+{
+  if (name.empty() || name.size() > 32u ||
+      std::isalpha(static_cast<unsigned char>(name[0])) == 0) {
+    return false;
+  }
+  for (const char character : name) {
+    if (std::isalnum(static_cast<unsigned char>(character)) == 0 &&
+        character != '_') {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool
+parseTableNumber(const std::string& token,
+                 unsigned int stateCount,
+                 unsigned int& value)
+{
+  if (token.empty() || token.size() > 3u) {
+    return false;
+  }
+  value = 0u;
+  for (const char character : token) {
+    if (character < '0' || character > '9') {
+      return false;
+    }
+    value = value * 10u + static_cast<unsigned int>(character - '0');
+  }
+  return value < stateCount;
+}
+
+struct TableVariable
+{
+  std::string name;
+  std::vector<unsigned int> values;
+};
+
+const TableVariable*
+findTableVariable(const std::vector<TableVariable>& variables,
+                  const std::string& name)
+{
+  for (const TableVariable& variable : variables) {
+    if (variable.name == name) {
+      return &variable;
+    }
+  }
+  return nullptr;
+}
+
+bool
+tableSymmetryPermutations(const std::string& symmetry,
+                          std::vector<std::array<unsigned int, 4>>& output)
+{
+  // Each permutation lists, for north, east, south and west in turn, which
+  // source slot of the written transition supplies that neighbor.
+  const std::array<std::array<unsigned int, 4>, 4> rotations = {
+    { { 0u, 1u, 2u, 3u },
+      { 3u, 0u, 1u, 2u },
+      { 2u, 3u, 0u, 1u },
+      { 1u, 2u, 3u, 0u } }
+  };
+  output.clear();
+  if (symmetry == "none") {
+    output.push_back(rotations[0]);
+  } else if (symmetry == "reflect_horizontal") {
+    output.push_back(rotations[0]);
+    output.push_back({ 0u, 3u, 2u, 1u });
+  } else if (symmetry == "rotate4" || symmetry == "rotate4reflect") {
+    for (const std::array<unsigned int, 4>& rotation : rotations) {
+      output.push_back(rotation);
+    }
+    if (symmetry == "rotate4reflect") {
+      for (const std::array<unsigned int, 4>& rotation : rotations) {
+        output.push_back(
+          { rotation[0], rotation[3], rotation[2], rotation[1] });
+      }
+    }
+  } else if (symmetry == "permute") {
+    std::array<unsigned int, 4> permutation = { 0u, 1u, 2u, 3u };
+    do {
+      output.push_back(permutation);
+    } while (std::next_permutation(permutation.begin(), permutation.end()));
+  } else {
+    return false;
+  }
+  return true;
+}
+
+// Compiles Golly @TABLE transitions for a von Neumann neighborhood. The first
+// written transition that matches a neighborhood wins, variables that repeat
+// within one transition bind to the same value, and unmatched neighborhoods
+// keep the center state, exactly as Golly's RuleTable algorithm behaves.
+bool
+compileVonNeumannTable(const std::vector<std::string>& lines,
+                       const std::string& symmetry,
+                       unsigned int stateCount,
+                       std::vector<unsigned char>& table)
+{
+  const unsigned char kUnset = 0xFFu;
+  std::vector<std::array<unsigned int, 4>> permutations;
+  if (stateCount < 2u || stateCount > kMaximumTableStateCount ||
+      !tableSymmetryPermutations(symmetry, permutations)) {
+    return false;
+  }
+  std::size_t entryCount = 1u;
+  for (int slot = 0; slot < 5; ++slot) {
+    entryCount *= stateCount;
+  }
+  table.assign(entryCount, kUnset);
+
+  std::vector<TableVariable> variables;
+  std::uint64_t expansions = 0u;
+  bool anyTransition = false;
+  for (const std::string& rawLine : lines) {
+    std::string line = rawLine;
+    const std::size_t comment = line.find('#');
+    if (comment != std::string::npos) {
+      line.resize(comment);
+    }
+    line = trimCopy(line);
+    if (line.empty()) {
+      continue;
+    }
+
+    if (line.rfind("var", 0u) == 0u && line.size() > 3u &&
+        std::isspace(static_cast<unsigned char>(line[3])) != 0) {
+      const std::size_t equals = line.find('=');
+      const std::size_t open = line.find('{');
+      const std::size_t close = line.rfind('}');
+      if (equals == std::string::npos || open == std::string::npos ||
+          close == std::string::npos || open < equals || close < open ||
+          !trimCopy(line.substr(close + 1u)).empty()) {
+        return false;
+      }
+      TableVariable variable;
+      variable.name = trimCopy(line.substr(3u, equals - 3u));
+      if (!isTableVariableName(variable.name) ||
+          findTableVariable(variables, variable.name) != nullptr ||
+          !trimCopy(line.substr(equals + 1u, open - equals - 1u)).empty()) {
+        return false;
+      }
+      std::stringstream members(line.substr(open + 1u, close - open - 1u));
+      std::string member;
+      while (std::getline(members, member, ',')) {
+        member = trimCopy(member);
+        unsigned int value = 0u;
+        const TableVariable* nested = findTableVariable(variables, member);
+        if (nested != nullptr) {
+          variable.values.insert(variable.values.end(),
+                                 nested->values.begin(),
+                                 nested->values.end());
+        } else if (parseTableNumber(member, stateCount, value)) {
+          variable.values.push_back(value);
+        } else {
+          return false;
+        }
+      }
+      if (variable.values.empty()) {
+        return false;
+      }
+      variables.push_back(std::move(variable));
+      continue;
+    }
+
+    std::vector<std::string> tokens;
+    if (line.find(',') != std::string::npos) {
+      std::stringstream fields(line);
+      std::string field;
+      while (std::getline(fields, field, ',')) {
+        tokens.push_back(trimCopy(field));
+      }
+    } else if (stateCount <= 10u) {
+      for (const char character : line) {
+        if (std::isspace(static_cast<unsigned char>(character)) == 0) {
+          tokens.push_back(std::string(1u, character));
+        }
+      }
+    } else {
+      return false;
+    }
+    if (tokens.size() != 6u) {
+      return false;
+    }
+
+    // Distinct variables in first-use order; fixed tokens resolve directly.
+    std::vector<const TableVariable*> bound;
+    std::array<int, 6> slotVariable{};
+    std::array<unsigned int, 6> fixedValue{};
+    for (std::size_t slot = 0u; slot < tokens.size(); ++slot) {
+      const TableVariable* variable =
+        findTableVariable(variables, tokens[slot]);
+      if (variable == nullptr) {
+        if (!parseTableNumber(tokens[slot], stateCount, fixedValue[slot])) {
+          return false;
+        }
+        slotVariable[slot] = -1;
+        continue;
+      }
+      int boundIndex = -1;
+      for (std::size_t index = 0u; index < bound.size(); ++index) {
+        if (bound[index] == variable) {
+          boundIndex = static_cast<int>(index);
+        }
+      }
+      if (boundIndex < 0) {
+        boundIndex = static_cast<int>(bound.size());
+        bound.push_back(variable);
+      }
+      slotVariable[slot] = boundIndex;
+    }
+
+    std::vector<std::size_t> odometer(bound.size(), 0u);
+    bool more = true;
+    while (more) {
+      expansions += permutations.size();
+      if (expansions > kMaximumTableExpansions) {
+        return false;
+      }
+      std::array<unsigned int, 6> values{};
+      for (std::size_t slot = 0u; slot < values.size(); ++slot) {
+        values[slot] =
+          slotVariable[slot] < 0
+            ? fixedValue[slot]
+            : bound[static_cast<std::size_t>(slotVariable[slot])]->values
+                [odometer[static_cast<std::size_t>(slotVariable[slot])]];
+      }
+      for (const std::array<unsigned int, 4>& permutation : permutations) {
+        std::size_t index = gollyToIllumoState(values[0]);
+        for (unsigned int direction = 0u; direction < 4u; ++direction) {
+          index = index * stateCount +
+                  gollyToIllumoState(values[1u + permutation[direction]]);
+        }
+        if (table[index] == kUnset) {
+          table[index] = gollyToIllumoState(values[5]);
+        }
+      }
+      more = false;
+      for (std::size_t digit = 0u; digit < odometer.size(); ++digit) {
+        odometer[digit] += 1u;
+        if (odometer[digit] < bound[digit]->values.size()) {
+          more = true;
+          break;
+        }
+        odometer[digit] = 0u;
+      }
+    }
+    anyTransition = true;
+  }
+  if (!anyTransition) {
+    return false;
+  }
+
+  const std::size_t centerStride = entryCount / stateCount;
+  for (std::size_t index = 0u; index < entryCount; ++index) {
+    if (table[index] == kUnset) {
+      table[index] = static_cast<unsigned char>(index / centerStride);
+    }
+  }
+  std::size_t quiescent = 0u;
+  for (int slot = 0; slot < 5; ++slot) {
+    quiescent = quiescent * stateCount + kBackgroundState;
+  }
+  return table[quiescent] == kBackgroundState;
 }
 
 void
@@ -549,8 +923,11 @@ validateFamily(RuleFamilyDefinition& definition)
        definition.stateCount < 3u) ||
       (definition.kind == RuleFamily::SpeciesLife &&
        definition.stateCount != 3u && definition.stateCount != 5u) ||
-      (definition.kind == RuleFamily::LargerThanLife &&
-       definition.stateCount != 2u) ||
+      (definition.kind == RuleFamily::VonNeumannTable &&
+       definition.stateCount > kMaximumTableStateCount) ||
+      (definition.kind == RuleFamily::Sandpile &&
+       (definition.stateCount <= kSandpileHeightCount ||
+        definition.stateCount > kMaximumSandpileStateCount)) ||
       (definition.kind == RuleFamily::Hodgepodge &&
        definition.stateCount < 3u) ||
       (definition.kind == RuleFamily::Turmite &&
@@ -705,44 +1082,32 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
     }
     definition.hasTransitionTable = false;
   } else if (family.kind == RuleFamily::LargerThanLife) {
-    if (stateCount != 2u || definition.neighborhoodRadius < 1u ||
+    // More than two states adds Golly's C-state decay trail: a dying cell
+    // walks states 2..C-1 before returning to background and never counts.
+    if (stateCount < 2u || definition.neighborhoodRadius < 1u ||
         definition.neighborhoodRadius > kMaximumExtendedRadius ||
         definition.birthMinimum == 0u ||
         definition.birthMinimum > definition.birthMaximum ||
         definition.survivalMinimum > definition.survivalMaximum) {
       return false;
     }
-    const unsigned int diameter = definition.neighborhoodRadius * 2u + 1u;
-    unsigned int maximumCount = diameter * diameter;
-    if (!definition.includeCenter) {
-      maximumCount -= 1u;
-    }
-    if (definition.extendedNeighborhoodShape ==
-        RuleSet::ExtendedNeighborhoodShape::Circular) {
-      maximumCount = definition.includeCenter ? 1u : 0u;
-      const int radius = static_cast<int>(definition.neighborhoodRadius);
-      for (int y = -radius; y <= radius; ++y) {
-        for (int x = -radius; x <= radius; ++x) {
-          if ((x != 0 || y != 0) && x * x + y * y <= radius * radius) {
-            maximumCount += 1u;
-          }
-        }
-      }
-    }
+    const unsigned int maximumCount =
+      extendedNeighborhoodSize(definition.neighborhoodRadius,
+                               definition.extendedNeighborhoodShape,
+                               definition.includeCenter);
     if (definition.birthMaximum > maximumCount ||
         definition.survivalMaximum > maximumCount) {
       return false;
     }
-    definition.rule = "R" + std::to_string(definition.neighborhoodRadius) +
-                      ",C2,M" + (definition.includeCenter ? "1" : "0") + ",S" +
-                      std::to_string(definition.survivalMinimum) + ".." +
-                      std::to_string(definition.survivalMaximum) + ",B" +
-                      std::to_string(definition.birthMinimum) + ".." +
-                      std::to_string(definition.birthMaximum) +
-                      (definition.extendedNeighborhoodShape ==
-                           RuleSet::ExtendedNeighborhoodShape::Circular
-                         ? ",NC"
-                         : ",NM");
+    definition.rule =
+      "R" + std::to_string(definition.neighborhoodRadius) + ",C" +
+      std::to_string(stateCount) + ",M" +
+      (definition.includeCenter ? "1" : "0") + ",S" +
+      std::to_string(definition.survivalMinimum) + ".." +
+      std::to_string(definition.survivalMaximum) + ",B" +
+      std::to_string(definition.birthMinimum) + ".." +
+      std::to_string(definition.birthMaximum) + "," +
+      neighborhoodShapeSuffix(definition.extendedNeighborhoodShape);
     definition.transitionTable.fill(kBackgroundState);
     definition.hasTransitionTable = false;
   } else if (family.kind == RuleFamily::MooreTable) {
@@ -763,11 +1128,35 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
       }
     }
   } else if (family.kind == RuleFamily::Cyclic) {
-    if (definition.cyclicThreshold < 1u ||
-        definition.cyclicThreshold > kMaximumNeighborCount ||
-        definition.cyclicStep < 1u || definition.cyclicStep >= stateCount ||
-        std::gcd(definition.cyclicStep, stateCount) != 1u) {
+    // Radius one with the square shape keeps the Moore histogram path; any
+    // other range or shape is Griffeath's long-range cyclic automaton.
+    const bool extended = isCyclicExtended(definition);
+    if (definition.neighborhoodRadius < 1u ||
+        definition.neighborhoodRadius > kMaximumExtendedRadius) {
       return false;
+    }
+    const unsigned int maximumThreshold =
+      extended ? extendedNeighborhoodSize(definition.neighborhoodRadius,
+                                          definition.extendedNeighborhoodShape,
+                                          false)
+               : kMaximumNeighborCount;
+    // An inert background leaves the other states to form the cycle.
+    const unsigned int cycleLength =
+      definition.inertBackground ? stateCount - 1u : stateCount;
+    if (cycleLength < 2u || definition.cyclicThreshold < 1u ||
+        definition.cyclicThreshold > maximumThreshold ||
+        definition.cyclicStep < 1u || definition.cyclicStep >= cycleLength ||
+        std::gcd(definition.cyclicStep, cycleLength) != 1u) {
+      return false;
+    }
+    // The center never holds its own successor, so it never counts.
+    definition.includeCenter = false;
+    if (extended) {
+      definition.rule =
+        "R" + std::to_string(definition.neighborhoodRadius) + "/T" +
+        std::to_string(definition.cyclicThreshold) + "/C" +
+        std::to_string(cycleLength) + "/" +
+        neighborhoodShapeSuffix(definition.extendedNeighborhoodShape);
     }
     definition.transitionTable.fill(kBackgroundState);
     definition.hasTransitionTable = false;
@@ -821,6 +1210,25 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
       "DOMINANCE/T" + std::to_string(definition.dominanceThreshold);
     definition.transitionTable.fill(kBackgroundState);
     definition.hasTransitionTable = false;
+  } else if (family.kind == RuleFamily::VonNeumannTable) {
+    if (!compileVonNeumannTable(definition.ruleTable,
+                                definition.tableSymmetry,
+                                stateCount,
+                                definition.vonNeumannTransitions)) {
+      return false;
+    }
+    definition.rule = "TABLE/VN/" + definition.tableSymmetry;
+    definition.transitionTable.fill(kBackgroundState);
+    definition.hasTransitionTable = false;
+  } else if (family.kind == RuleFamily::Sandpile) {
+    if (stateCount <= kSandpileHeightCount ||
+        stateCount > kMaximumSandpileStateCount) {
+      return false;
+    }
+    definition.rule =
+      "SANDPILE/P" + std::to_string(stateCount - kSandpileHeightCount);
+    definition.transitionTable.fill(kBackgroundState);
+    definition.hasTransitionTable = false;
   } else if (family.kind == RuleFamily::Elementary1D) {
     if (stateCount != 2u || definition.ruleNumber > 255u ||
         (definition.ruleNumber & 1u) != 0u) {
@@ -836,6 +1244,19 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
     return false;
   }
   definition.transitionTableStateCount = stateCount;
+  if (family.kind != RuleFamily::VonNeumannTable) {
+    definition.vonNeumannTransitions.clear();
+  }
+  if (definition.seedPattern == RuleSeedPattern::Rle) {
+    std::vector<RuleSeedCell> seedCells;
+    if (!RuleSetRegistry::decodeSeedRle(
+          definition.seedRle, stateCount, seedCells) ||
+        seedCells.empty()) {
+      return false;
+    }
+  } else {
+    definition.seedRle.clear();
+  }
   if (family.kind == RuleFamily::Elementary1D) {
     if (definition.elementaryTransitions[0] != kBackgroundState) {
       return false;
@@ -940,21 +1361,21 @@ parseModernRule(const nlohmann::json& item,
         !readUnsigned(item["radius"],
                       kMaximumExtendedRadius,
                       definition.neighborhoodRadius) ||
-        !readUnsigned(item["birth_min"], 1089u, definition.birthMinimum) ||
-        !readUnsigned(item["birth_max"], 1089u, definition.birthMaximum) ||
-        !readUnsigned(item["survive_min"], 1089u, definition.survivalMinimum) ||
-        !readUnsigned(item["survive_max"], 1089u, definition.survivalMaximum)) {
+        !readUnsigned(
+          item["birth_min"], kMaximumExtendedCount, definition.birthMinimum) ||
+        !readUnsigned(
+          item["birth_max"], kMaximumExtendedCount, definition.birthMaximum) ||
+        !readUnsigned(item["survive_min"],
+                      kMaximumExtendedCount,
+                      definition.survivalMinimum) ||
+        !readUnsigned(item["survive_max"],
+                      kMaximumExtendedCount,
+                      definition.survivalMaximum)) {
       return false;
     }
     definition.includeCenter = item["include_center"].get<bool>();
-    const std::string neighborhood = item["neighborhood"].get<std::string>();
-    if (neighborhood == "square") {
-      definition.extendedNeighborhoodShape =
-        RuleSet::ExtendedNeighborhoodShape::Square;
-    } else if (neighborhood == "circular") {
-      definition.extendedNeighborhoodShape =
-        RuleSet::ExtendedNeighborhoodShape::Circular;
-    } else {
+    if (!parseNeighborhoodShape(item["neighborhood"].get<std::string>(),
+                                definition.extendedNeighborhoodShape)) {
       return false;
     }
   } else if (family.kind == RuleFamily::MooreTable) {
@@ -970,11 +1391,30 @@ parseModernRule(const nlohmann::json& item,
   } else if (family.kind == RuleFamily::Cyclic) {
     if (!item.contains("threshold") || !item.contains("step") ||
         !readUnsigned(item["threshold"],
-                      kMaximumNeighborCount,
+                      kMaximumExtendedCount,
                       definition.cyclicThreshold) ||
         !readUnsigned(
           item["step"], family.stateCount - 1u, definition.cyclicStep)) {
       return false;
+    }
+    // Optional Griffeath range and shape; compileRule bounds the threshold.
+    if (item.contains("radius") &&
+        !readUnsigned(item["radius"],
+                      kMaximumExtendedRadius,
+                      definition.neighborhoodRadius)) {
+      return false;
+    }
+    if (item.contains("neighborhood") &&
+        (!item["neighborhood"].is_string() ||
+         !parseNeighborhoodShape(item["neighborhood"].get<std::string>(),
+                                 definition.extendedNeighborhoodShape))) {
+      return false;
+    }
+    if (item.contains("inert_background")) {
+      if (!item["inert_background"].is_boolean()) {
+        return false;
+      }
+      definition.inertBackground = item["inert_background"].get<bool>();
     }
   } else if (family.kind == RuleFamily::Hodgepodge) {
     if (!item.contains("infection_divisor") || !item.contains("ill_divisor") ||
@@ -1010,6 +1450,21 @@ parseModernRule(const nlohmann::json& item,
       }
       definition.dominancePreyOffsets.push_back(offset);
     }
+  } else if (family.kind == RuleFamily::VonNeumannTable) {
+    if (!item.contains("rule_table") || !item["rule_table"].is_array() ||
+        (item.contains("symmetries") && !item["symmetries"].is_string())) {
+      return false;
+    }
+    definition.tableSymmetry = item.value("symmetries", "none");
+    definition.ruleTable.clear();
+    for (const nlohmann::json& line : item["rule_table"]) {
+      if (!line.is_string()) {
+        return false;
+      }
+      definition.ruleTable.push_back(line.get<std::string>());
+    }
+  } else if (family.kind == RuleFamily::Sandpile) {
+    // The sandpile is fixed by its family: heights plus source phases.
   } else if (family.kind == RuleFamily::Elementary1D) {
     if (!item.contains("rule_number") ||
         !readUnsigned(item["rule_number"], 255u, definition.ruleNumber)) {
@@ -1036,6 +1491,12 @@ parseModernRule(const nlohmann::json& item,
         (!readUnsigned(seed["density"], 100u, definition.seedDensity) ||
          definition.seedDensity < 1u)) {
       return false;
+    }
+    if (definition.seedPattern == RuleSeedPattern::Rle) {
+      if (!seed.contains("rle") || !seed["rle"].is_string()) {
+        return false;
+      }
+      definition.seedRle = seed["rle"].get<std::string>();
     }
   }
   return compileRule(definition, family);
@@ -1078,10 +1539,8 @@ ruleToJson(const RuleSetDefinition& definition,
     item["birth_max"] = definition.birthMaximum;
     item["survive_min"] = definition.survivalMinimum;
     item["survive_max"] = definition.survivalMaximum;
-    item["neighborhood"] = definition.extendedNeighborhoodShape ==
-                               RuleSet::ExtendedNeighborhoodShape::Circular
-                             ? "circular"
-                             : "square";
+    item["neighborhood"] =
+      neighborhoodShapeName(definition.extendedNeighborhoodShape);
   } else if (family.kind == RuleFamily::MooreTable) {
     item["transition_table"] = nlohmann::json::array();
     for (unsigned int state = 0u; state < family.stateCount; ++state) {
@@ -1098,6 +1557,14 @@ ruleToJson(const RuleSetDefinition& definition,
   } else if (family.kind == RuleFamily::Cyclic) {
     item["threshold"] = definition.cyclicThreshold;
     item["step"] = definition.cyclicStep;
+    if (isCyclicExtended(definition)) {
+      item["radius"] = definition.neighborhoodRadius;
+      item["neighborhood"] =
+        neighborhoodShapeName(definition.extendedNeighborhoodShape);
+    }
+    if (definition.inertBackground) {
+      item["inert_background"] = true;
+    }
   } else if (family.kind == RuleFamily::Hodgepodge) {
     item["infection_divisor"] = definition.infectionDivisor;
     item["ill_divisor"] = definition.illDivisor;
@@ -1107,6 +1574,9 @@ ruleToJson(const RuleSetDefinition& definition,
   } else if (family.kind == RuleFamily::Dominance) {
     item["threshold"] = definition.dominanceThreshold;
     item["prey_offsets"] = definition.dominancePreyOffsets;
+  } else if (family.kind == RuleFamily::VonNeumannTable) {
+    item["symmetries"] = definition.tableSymmetry;
+    item["rule_table"] = definition.ruleTable;
   } else if (family.kind == RuleFamily::Elementary1D) {
     item["rule_number"] = definition.ruleNumber;
   }
@@ -1116,6 +1586,9 @@ ruleToJson(const RuleSetDefinition& definition,
       { "radius", definition.seedRadius },
       { "density", definition.seedDensity }
     };
+    if (definition.seedPattern == RuleSeedPattern::Rle) {
+      item["seed"]["rle"] = definition.seedRle;
+    }
   }
   return item;
 }
@@ -1163,6 +1636,10 @@ RuleSetRegistry::parseFamily(const std::string& value, RuleFamily& family)
     family = RuleFamily::Dominance;
   } else if (value == "elementary_1d") {
     family = RuleFamily::Elementary1D;
+  } else if (value == "von_neumann_table") {
+    family = RuleFamily::VonNeumannTable;
+  } else if (value == "sandpile") {
+    family = RuleFamily::Sandpile;
   } else {
     return false;
   }
@@ -1195,6 +1672,10 @@ RuleSetRegistry::familyName(RuleFamily family)
       return "dominance";
     case RuleFamily::Elementary1D:
       return "elementary_1d";
+    case RuleFamily::VonNeumannTable:
+      return "von_neumann_table";
+    case RuleFamily::Sandpile:
+      return "sandpile";
     default:
       return nullptr;
   }
@@ -1224,6 +1705,8 @@ RuleSetRegistry::parseSeedPattern(const std::string& value,
     pattern = RuleSeedPattern::TurmiteSwarm;
   } else if (value == "particle_cloud") {
     pattern = RuleSeedPattern::ParticleCloud;
+  } else if (value == "rle") {
+    pattern = RuleSeedPattern::Rle;
   } else {
     return false;
   }
@@ -1254,9 +1737,72 @@ RuleSetRegistry::seedPatternName(RuleSeedPattern pattern)
       return "turmite_swarm";
     case RuleSeedPattern::ParticleCloud:
       return "particle_cloud";
+    case RuleSeedPattern::Rle:
+      return "rle";
     default:
       return nullptr;
   }
+}
+
+bool
+RuleSetRegistry::decodeSeedRle(const std::string& text,
+                               unsigned int stateCount,
+                               std::vector<RuleSeedCell>& cells)
+{
+  // Starter patterns are small curated stamps; bound them like CellPattern.
+  const int kMaximumExtent = 256;
+  cells.clear();
+  int x = 0;
+  int y = 0;
+  unsigned int run = 0u;
+  bool terminated = false;
+  for (std::size_t index = 0u; index < text.size() && !terminated; ++index) {
+    const char character = text[index];
+    if (std::isspace(static_cast<unsigned char>(character)) != 0) {
+      continue;
+    }
+    if (character >= '0' && character <= '9') {
+      run = run * 10u + static_cast<unsigned int>(character - '0');
+      if (run > static_cast<unsigned int>(kMaximumExtent)) {
+        return false;
+      }
+      continue;
+    }
+    const int count = run == 0u ? 1 : static_cast<int>(run);
+    run = 0u;
+    if (character == '!') {
+      terminated = true;
+      continue;
+    }
+    if (character == '$') {
+      y += count;
+      x = 0;
+      if (y >= kMaximumExtent) {
+        return false;
+      }
+      continue;
+    }
+    unsigned int state = 0u;
+    if (character == '.' || character == 'b') {
+      state = 0u;
+    } else if (character == 'o') {
+      state = 1u;
+    } else if (character >= 'A' && character <= 'X') {
+      state = static_cast<unsigned int>(character - 'A') + 1u;
+    } else {
+      return false;
+    }
+    if (state >= stateCount || x + count > kMaximumExtent) {
+      return false;
+    }
+    if (state != 0u) {
+      for (int step = 0; step < count; ++step) {
+        cells.push_back(RuleSeedCell{ x + step, y, gollyToIllumoState(state) });
+      }
+    }
+    x += count;
+  }
+  return terminated;
 }
 
 bool

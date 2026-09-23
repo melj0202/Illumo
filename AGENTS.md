@@ -224,8 +224,10 @@ Canvas truth (verify here before trusting older notes):
 Ruleset truth:
 
 - Active catalogs include Life-like, Generations, Wireworld, elementary 1D,
-  cyclic/CCA, colorized Life, Larger-than-Life, Hodgepodge chemistry,
-  directional Turmites, HPP lattice gas, and five-species dominance rules.
+  cyclic/CCA (including long-range Griffeath rules), colorized Life,
+  Larger-than-Life (with decay trails), Hodgepodge chemistry, directional
+  Turmites, HPP lattice gas, five-species dominance, Golly-table
+  self-replicating loops, and Abelian sandpile rules.
 - Binary rules encode `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, conductor `3`.
 - Rule 90 and Rule 184 are elementary 1D space-time diagrams: source row is the

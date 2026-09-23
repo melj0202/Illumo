@@ -76,7 +76,15 @@ DataRuleSet::getNeighborhoodKind() const
     return NeighborhoodKind::Elementary1D;
   }
   if (family.kind == RuleFamily::Cyclic) {
-    return NeighborhoodKind::MooreStateCounts;
+    const bool extended =
+      definition.neighborhoodRadius > 1u ||
+      definition.extendedNeighborhoodShape != ExtendedNeighborhoodShape::Square;
+    return extended ? NeighborhoodKind::ExtendedRange
+                    : NeighborhoodKind::MooreStateCounts;
+  }
+  if (family.kind == RuleFamily::VonNeumannTable ||
+      family.kind == RuleFamily::Sandpile) {
+    return NeighborhoodKind::VonNeumannDirectional;
   }
   if (family.kind == RuleFamily::SpeciesLife) {
     return NeighborhoodKind::MooreStateCounts;
@@ -234,11 +242,12 @@ DataRuleSet::nextStateFromNeighborhood(
   if (static_cast<unsigned int>(cell) >= family.stateCount) {
     return 1u;
   }
-  const unsigned int successor =
-    (static_cast<unsigned int>(cell) + definition.cyclicStep) %
-    family.stateCount;
+  if (definition.inertBackground && cell == 1u) {
+    return cell;
+  }
+  const unsigned char successor = getExtendedCountedState(cell);
   return neighborStateCounts[successor] >= definition.cyclicThreshold
-           ? static_cast<unsigned char>(successor)
+           ? successor
            : cell;
 }
 
@@ -286,6 +295,48 @@ DataRuleSet::nextStateFromDirectionalNeighborhood(
                                       arrivalDirection);
   }
 
+  if (family.kind == RuleFamily::VonNeumannTable) {
+    const unsigned int stateCount = family.stateCount;
+    if (static_cast<unsigned int>(cell) >= stateCount) {
+      return 1u;
+    }
+    std::size_t index = cell;
+    for (unsigned char neighbor : neighbors) {
+      if (static_cast<unsigned int>(neighbor) >= stateCount) {
+        return cell;
+      }
+      index = index * stateCount + neighbor;
+    }
+    return definition.vonNeumannTransitions[index];
+  }
+
+  if (family.kind == RuleFamily::Sandpile) {
+    // Heights 0..7 use the background-zero encoding. A cell holding four or
+    // more grains topples one grain to each neighbor; a source phase-zero
+    // cell emits the same four grains without depleting.
+    const unsigned int heightCount = 8u;
+    if (static_cast<unsigned int>(cell) >= family.stateCount) {
+      return 1u;
+    }
+    if (static_cast<unsigned int>(cell) >= heightCount) {
+      const unsigned int phase = static_cast<unsigned int>(cell) - heightCount;
+      const unsigned int period = family.stateCount - heightCount;
+      return static_cast<unsigned char>(heightCount + (phase + 1u) % period);
+    }
+    unsigned int height = decodeBackgroundZero(cell);
+    if (height >= 4u) {
+      height -= 4u;
+    }
+    for (unsigned char neighbor : neighbors) {
+      const unsigned int state = neighbor;
+      if (state == heightCount ||
+          (state < heightCount && decodeBackgroundZero(neighbor) >= 4u)) {
+        height += 1u;
+      }
+    }
+    return encodeBackgroundZero(height);
+  }
+
   if (family.kind == RuleFamily::LatticeGas) {
     unsigned int incomingMask = 0u;
     for (unsigned int neighborIndex = 0u; neighborIndex < neighbors.size();
@@ -309,19 +360,61 @@ DataRuleSet::nextStateFromDirectionalNeighborhood(
 }
 
 unsigned char
+DataRuleSet::getExtendedCountedState(unsigned char cell) const
+{
+  if (family.kind != RuleFamily::Cyclic ||
+      static_cast<unsigned int>(cell) >= family.stateCount) {
+    return 0u;
+  }
+  if (!definition.inertBackground) {
+    return static_cast<unsigned char>(
+      (static_cast<unsigned int>(cell) + definition.cyclicStep) %
+      family.stateCount);
+  }
+  // The cycle runs over states 0, 2, 3, ..., n-1; background has no
+  // successor, and counting background neighbors never changes it.
+  if (cell == 1u) {
+    return 1u;
+  }
+  const unsigned int cycleLength = family.stateCount - 1u;
+  const unsigned int ordinal = speciesOrdinal(cell);
+  return speciesState((ordinal + definition.cyclicStep) % cycleLength);
+}
+
+unsigned char
 DataRuleSet::nextStateFromExtendedCount(unsigned char cell,
                                         unsigned int aliveCount) const
 {
-  if (family.kind != RuleFamily::LargerThanLife ||
-      static_cast<unsigned int>(cell) >= family.stateCount) {
+  if (static_cast<unsigned int>(cell) >= family.stateCount) {
     return 1u;
+  }
+  if (family.kind == RuleFamily::Cyclic) {
+    if (definition.inertBackground && cell == 1u) {
+      return cell;
+    }
+    // aliveCount holds the neighbors in this cell's successor state.
+    return aliveCount >= definition.cyclicThreshold
+             ? getExtendedCountedState(cell)
+             : cell;
+  }
+  if (family.kind != RuleFamily::LargerThanLife) {
+    return 1u;
+  }
+  if (cell >= 2u) {
+    // Decay trail: dying states neither count nor accept births.
+    return static_cast<unsigned int>(cell) + 1u < family.stateCount
+             ? static_cast<unsigned char>(cell + 1u)
+             : 1u;
   }
   const bool active = cell == 0u;
   const unsigned int minimum =
     active ? definition.survivalMinimum : definition.birthMinimum;
   const unsigned int maximum =
     active ? definition.survivalMaximum : definition.birthMaximum;
-  return aliveCount >= minimum && aliveCount <= maximum ? 0u : 1u;
+  if (aliveCount >= minimum && aliveCount <= maximum) {
+    return 0u;
+  }
+  return active && family.stateCount > 2u ? 2u : 1u;
 }
 
 unsigned char

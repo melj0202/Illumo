@@ -1005,10 +1005,11 @@ testShippedExperimentalFamilies()
              excitable->stateCount == 5u &&
              excitable->stateNames[4] == "Refractory III",
            "excitable-media family owns five named phases");
-  testTrue(g,
-           registry.getKnownRules("GENERATIONS_4_PHASE") ==
-             std::vector<std::string>{ "STAR_WARS", "NOVA_TRAILS" },
-           "Generations family exposes only its two shipped rules");
+  testTrue(
+    g,
+    registry.getKnownRules("GENERATIONS_4_PHASE") ==
+      std::vector<std::string>{ "STAR_WARS", "NOVA_TRAILS", "CATERPILLARS" },
+    "Generations family exposes only its three shipped rules");
   testTrue(
     g,
     registry.getKnownRules("EXCITABLE_MEDIA_5_PHASE") ==
@@ -1740,6 +1741,756 @@ testDirectionalAndChemicalFamilies()
   }
 }
 
+// Non-background cells per state across every stored sparse chunk.
+static std::array<std::size_t, 256>
+sparseStateHistogram(const SparseCellGrid& grid)
+{
+  std::array<std::size_t, 256> histogram{};
+  grid.visitChunks(
+    [&histogram](const ChunkAddress&, const SparseCellGrid::ChunkCells& cells) {
+      for (const unsigned char state : cells) {
+        histogram[state] += 1u;
+      }
+    });
+  histogram[SparseCellGrid::BackgroundState] = 0u;
+  return histogram;
+}
+
+static std::size_t
+sparsePopulation(const SparseCellGrid& grid)
+{
+  const std::array<std::size_t, 256> histogram = sparseStateHistogram(grid);
+  std::size_t population = 0u;
+  for (const std::size_t count : histogram) {
+    population += count;
+  }
+  return population;
+}
+
+static bool
+stampSeedRle(SparseCellGrid& grid,
+             const RuleSetDefinition& definition,
+             unsigned int stateCount,
+             std::int64_t originX,
+             std::int64_t originY)
+{
+  std::vector<RuleSeedCell> cells;
+  if (!RuleSetRegistry::decodeSeedRle(definition.seedRle, stateCount, cells)) {
+    return false;
+  }
+  for (const RuleSeedCell& cell : cells) {
+    grid.setCell(CellAddress{ originX + cell.x, originY + cell.y }, cell.state);
+  }
+  return !cells.empty();
+}
+
+// Runs a 64x64 torus through the sparse grid and the dense reference
+// evaluator and reports whether every cell agrees after each generation.
+static bool
+sparseTorusMatchesDense(const RuleSet& rule,
+                        const std::vector<RuleSeedCell>& seed,
+                        int generations)
+{
+  const int size = 64;
+  HeadlessCanvasFixture dense(size, size);
+  dense.clearDead();
+  SparseCellGrid sparse(4, 4);
+  for (const RuleSeedCell& cell : seed) {
+    dense.canvas->setCanvasPixel(cell.x, cell.y, cell.state);
+    sparse.setCell(CellAddress{ cell.x - size / 2, cell.y - size / 2 },
+                   cell.state);
+  }
+  DenseRuleEvaluator evaluator(dense.canvas, rule);
+  for (int generation = 0; generation < generations; ++generation) {
+    evaluator.calcGeneration(0, 0, size, size);
+    if (!sparse.advance(rule)) {
+      return false;
+    }
+    for (int y = 0; y < size; ++y) {
+      for (int x = 0; x < size; ++x) {
+        if (dense.at(x, y) !=
+            sparse.getCell(CellAddress{ x - size / 2, y - size / 2 })) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+// Compares an infinite sparse grid against a dense canvas large enough that
+// its wrap never reaches the evolving region.
+static bool
+sparseInfiniteMatchesDense(const RuleSet& rule,
+                           const std::vector<RuleSeedCell>& seed,
+                           int generations)
+{
+  const int size = 128;
+  const int offset = size / 2;
+  HeadlessCanvasFixture dense(size, size);
+  dense.clearDead();
+  SparseCellGrid sparse;
+  for (const RuleSeedCell& cell : seed) {
+    dense.canvas->setCanvasPixel(cell.x + offset, cell.y + offset, cell.state);
+    sparse.setCell(CellAddress{ cell.x, cell.y }, cell.state);
+  }
+  DenseRuleEvaluator evaluator(dense.canvas, rule);
+  for (int generation = 0; generation < generations; ++generation) {
+    evaluator.calcGeneration(0, 0, size, size);
+    if (!sparse.advance(rule)) {
+      return false;
+    }
+  }
+  for (int y = 0; y < size; ++y) {
+    for (int x = 0; x < size; ++x) {
+      if (dense.at(x, y) !=
+          sparse.getCell(CellAddress{ x - offset, y - offset })) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Deterministic soup of `stateCount` states over a square centered on the
+// origin, used for sparse/dense parity.
+static std::vector<RuleSeedCell>
+parityPhaseSoup(unsigned int stateCount, int radius, bool originAtCorner)
+{
+  std::vector<RuleSeedCell> cells;
+  std::uint32_t value = 2463534242u;
+  for (int y = -radius; y < radius; ++y) {
+    for (int x = -radius; x < radius; ++x) {
+      value ^= value << 13u;
+      value ^= value >> 17u;
+      value ^= value << 5u;
+      const int shift = originAtCorner ? radius : 0;
+      cells.push_back(RuleSeedCell{
+        x + shift, y + shift, static_cast<unsigned char>(value % stateCount) });
+    }
+  }
+  return cells;
+}
+
+static void
+testVonNeumannTableFamilies()
+{
+  testSection("RuleSetRegistry: von Neumann rule tables and self-replicators");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "catalog with rule-table loops loads");
+  RuleFamily parsedFamily = RuleFamily::LifeLike;
+  testTrue(g,
+           RuleSetRegistry::parseFamily("von_neumann_table", parsedFamily) &&
+             parsedFamily == RuleFamily::VonNeumannTable &&
+             std::string(RuleSetRegistry::familyName(parsedFamily)) ==
+               "von_neumann_table",
+           "von Neumann table model has a stable schema name");
+
+  // Compiler semantics on a small hand-written table (Golly numbering).
+  RuleFamilyDefinition tableFamily;
+  tableFamily.id = "VN_TABLE_TEST";
+  tableFamily.kind = RuleFamily::VonNeumannTable;
+  tableFamily.stateCount = 3u;
+  tableFamily.stateNames = { "One", "Zero", "Two" };
+  tableFamily.stateColors = { { 1u, 1u, 1u }, { 0u, 0u, 0u }, { 2u, 2u, 2u } };
+  RuleSetRegistry validation;
+  testTrue(g,
+           validation.registerFamily(tableFamily),
+           "custom three-state table family registers");
+  RuleSetDefinition table;
+  table.id = "VN_TABLE_RULE";
+  table.familyId = tableFamily.id;
+  table.tableSymmetry = "none";
+  table.ruleTable = { "# comment lines are ignored",
+                      "var a={0,2}",
+                      "1,a,0,0,0,a",
+                      "1,2,0,0,0,1",
+                      "1 0 0 0 2 2  # compact form with spaces" };
+  testTrue(g, validation.registerRule(table), "hand-written table compiles");
+  std::unique_ptr<RuleSet> tableRule = validation.createRuleSet(table.id);
+  if (tableRule != nullptr) {
+    testTrue(g,
+             tableRule->getNeighborhoodKind() ==
+               RuleSet::NeighborhoodKind::VonNeumannDirectional,
+             "tables evaluate the ordered north-east-south-west neighborhood");
+    testEqUChar(
+      g,
+      tableRule->nextStateFromDirectionalNeighborhood(0u, { 1u, 1u, 1u, 1u }),
+      1u,
+      "Golly state 0 maps to the Illumo background");
+    testEqUChar(
+      g,
+      tableRule->nextStateFromDirectionalNeighborhood(0u, { 2u, 1u, 1u, 1u }),
+      2u,
+      "a repeated variable binds to one value; first match wins");
+    testEqUChar(
+      g,
+      tableRule->nextStateFromDirectionalNeighborhood(0u, { 1u, 2u, 1u, 1u }),
+      0u,
+      "unmatched neighborhoods keep their center without symmetry");
+    testEqUChar(
+      g,
+      tableRule->nextStateFromDirectionalNeighborhood(0u, { 1u, 1u, 1u, 2u }),
+      2u,
+      "compact digit transitions compile");
+    testEqUChar(
+      g,
+      tableRule->nextStateFromDirectionalNeighborhood(1u, { 1u, 1u, 1u, 1u }),
+      1u,
+      "the quiescent neighborhood stays background");
+  }
+  RuleSetDefinition rotated = table;
+  rotated.id = "VN_TABLE_ROTATED";
+  rotated.tableSymmetry = "rotate4";
+  testTrue(g, validation.registerRule(rotated), "rotate4 table compiles");
+  std::unique_ptr<RuleSet> rotatedRule = validation.createRuleSet(rotated.id);
+  if (rotatedRule != nullptr) {
+    testEqUChar(
+      g,
+      rotatedRule->nextStateFromDirectionalNeighborhood(0u, { 1u, 2u, 1u, 1u }),
+      2u,
+      "rotate4 applies every rotation of a transition");
+  }
+
+  const std::vector<std::vector<std::string>> invalidTables = {
+    {},
+    { "1,0,0,0,0" },
+    { "1,0,0,0,0,3" },
+    { "1,b,0,0,0,1" },
+    { "var a={0,1}", "var a={0,2}", "1,a,0,0,0,1" },
+    { "var a={}", "1,a,0,0,0,1" },
+    { "0,0,0,0,0,1" },
+    { "n_states:3", "1,0,0,0,0,1" },
+  };
+  for (std::size_t index = 0u; index < invalidTables.size(); ++index) {
+    RuleSetDefinition invalid = table;
+    invalid.id = "VN_TABLE_INVALID_" + std::to_string(index);
+    invalid.ruleTable = invalidTables[index];
+    const std::string message = "malformed or background-breaking table " +
+                                std::to_string(index) + " is rejected";
+    testTrue(g, !validation.registerRule(invalid), message.c_str());
+  }
+  RuleSetDefinition badSymmetry = table;
+  badSymmetry.id = "VN_TABLE_BAD_SYMMETRY";
+  badSymmetry.tableSymmetry = "rotate8";
+  testTrue(g,
+           !validation.registerRule(badSymmetry),
+           "Moore-only symmetries are rejected for von Neumann tables");
+  RuleFamilyDefinition hugeFamily = tableFamily;
+  hugeFamily.id = "VN_TABLE_HUGE";
+  hugeFamily.stateCount = 13u;
+  hugeFamily.stateNames.assign(13u, "State");
+  hugeFamily.stateColors.assign(13u, { 0u, 0u, 0u });
+  testTrue(g,
+           !validation.registerFamily(hugeFamily),
+           "dense tables above twelve states are rejected");
+
+  RuleSetRegistry roundTrip;
+  testTrue(
+    g,
+    roundTrip.loadFromCatalogTexts(
+      RuleSetRegistry::serializeFamilies(validation.getFamilyDefinitions()),
+      RuleSetRegistry::serializeCatalog(validation.getFamilyDefinitions(),
+                                        validation.getDefinitions())),
+    "rule-table catalog serializes and reloads");
+  const RuleSetDefinition* reloadedTable =
+    roundTrip.getRuleSetDefinition("VN_TABLE_ROTATED");
+  const RuleSetDefinition* originalTable =
+    validation.getRuleSetDefinition("VN_TABLE_ROTATED");
+  testTrue(g,
+           reloadedTable != nullptr && originalTable != nullptr &&
+             reloadedTable->tableSymmetry == "rotate4" &&
+             reloadedTable->ruleTable == originalTable->ruleTable &&
+             reloadedTable->vonNeumannTransitions ==
+               originalTable->vonNeumannTransitions,
+           "table text, symmetry, and compiled transitions round-trip");
+
+  // Shipped loops reproduce populations from an independent reference
+  // implementation of Golly's RuleTable semantics (histograms in Illumo
+  // encoding at generations 60 and 300).
+  struct LoopReference
+  {
+    const char* id;
+    std::vector<std::size_t> early;
+    std::vector<std::size_t> late;
+  };
+  const std::vector<LoopReference> references = {
+    { "LANGTONS_LOOPS",
+      { 20, 0, 84, 0, 4, 0, 0, 9 },
+      { 63, 0, 239, 1, 8, 0, 0, 27 } },
+    { "BYL_LOOP", { 16, 0, 40, 16, 12, 0 }, { 207, 0, 1554, 478, 207, 207 } },
+    { "CHOU_REGGIA_LOOP_1",
+      { 42, 0, 0, 7, 8, 2, 8, 0 },
+      { 1002, 0, 0, 25, 25, 12, 33, 0 } },
+    { "CHOU_REGGIA_LOOP_2",
+      { 29, 0, 0, 11, 16, 2, 0, 16 },
+      { 1278, 0, 0, 619, 641, 18, 0, 141 } },
+    { "SDSR_LOOPS",
+      { 20, 0, 84, 0, 4, 0, 0, 9, 0 },
+      { 63, 0, 239, 1, 8, 0, 0, 27, 0 } },
+    { "EVOLOOP",
+      { 32, 0, 130, 1, 3, 0, 0, 15, 0 },
+      { 55, 0, 221, 0, 4, 0, 0, 27, 0 } },
+  };
+  for (const LoopReference& reference : references) {
+    const RuleSetDefinition* definition =
+      registry.getRuleSetDefinition(reference.id);
+    std::unique_ptr<RuleSet> loop = registry.createRuleSet(reference.id);
+    const std::string loaded = std::string(reference.id) + " ships a seed";
+    testTrue(g,
+             definition != nullptr && loop != nullptr &&
+               definition->seedPattern == RuleSeedPattern::Rle,
+             loaded.c_str());
+    if (definition == nullptr || loop == nullptr) {
+      continue;
+    }
+    SparseCellGrid grid;
+    testTrue(g,
+             stampSeedRle(grid, *definition, loop->getStateCount(), -7, -5),
+             "loop seed stamps into the sparse grid");
+    bool advanced = true;
+    std::array<std::size_t, 256> early{};
+    for (int generation = 1; generation <= 300; ++generation) {
+      advanced = advanced && grid.advance(*loop);
+      if (generation == 60) {
+        early = sparseStateHistogram(grid);
+      }
+    }
+    const std::array<std::size_t, 256> late = sparseStateHistogram(grid);
+    bool matches = advanced;
+    for (std::size_t state = 0u; state < reference.early.size(); ++state) {
+      matches = matches && early[state] == reference.early[state] &&
+                late[state] == reference.late[state];
+    }
+    const std::string message =
+      std::string(reference.id) + " matches the reference evolution";
+    testTrue(g, matches, message.c_str());
+  }
+
+  std::unique_ptr<RuleSet> langton = registry.createRuleSet("LANGTONS_LOOPS");
+  const RuleSetDefinition* langtonDefinition =
+    registry.getRuleSetDefinition("LANGTONS_LOOPS");
+  if (langton != nullptr && langtonDefinition != nullptr) {
+    std::vector<RuleSeedCell> seed;
+    RuleSetRegistry::decodeSeedRle(langtonDefinition->seedRle, 8u, seed);
+    for (RuleSeedCell& cell : seed) {
+      cell.x += 4;
+      cell.y += 20;
+    }
+    testTrue(g,
+             sparseTorusMatchesDense(*langton, seed, 160),
+             "sparse torus matches the dense reference across wrap edges");
+  }
+}
+
+static void
+testSandpileFamily()
+{
+  testSection("RuleSetRegistry: Abelian sandpile with pulsed sources");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "catalog with sandpiles loads");
+  const RuleFamilyDefinition* family =
+    registry.getFamilyDefinition("SANDPILE_PULSE_2");
+  std::unique_ptr<RuleSet> sand = registry.createRuleSet("SANDPILE_MANDALA");
+  testTrue(g,
+           family != nullptr && family->kind == RuleFamily::Sandpile &&
+             family->stateCount == 10u && sand != nullptr &&
+             sand->getNeighborhoodKind() ==
+               RuleSet::NeighborhoodKind::VonNeumannDirectional,
+           "sandpile family exposes eight heights and two source phases");
+  if (sand == nullptr) {
+    return;
+  }
+  testEqUChar(
+    g,
+    sand->nextStateFromDirectionalNeighborhood(4u, { 1u, 1u, 1u, 1u }),
+    1u,
+    "a height-four cell topples all four grains");
+  testEqUChar(
+    g,
+    sand->nextStateFromDirectionalNeighborhood(3u, { 4u, 8u, 9u, 3u }),
+    5u,
+    "toppling neighbors and the dropping source each add one grain");
+  testEqUChar(
+    g,
+    sand->nextStateFromDirectionalNeighborhood(1u, { 7u, 1u, 1u, 1u }),
+    0u,
+    "background receives its first grain as state zero");
+  testEqUChar(
+    g,
+    sand->nextStateFromDirectionalNeighborhood(8u, { 1u, 1u, 1u, 1u }),
+    9u,
+    "source phases cycle from drop to rest");
+  testEqUChar(
+    g,
+    sand->nextStateFromDirectionalNeighborhood(9u, { 1u, 1u, 1u, 1u }),
+    8u,
+    "source phases wrap back to the dropping phase");
+
+  // Seven grains on one cell relax without losing a grain.
+  SparseCellGrid pile;
+  pile.setCell(CellAddress{ 15, 15 }, 7u);
+  bool advanced = true;
+  for (int generation = 0; generation < 40; ++generation) {
+    advanced = advanced && pile.advance(*sand);
+  }
+  const std::array<std::size_t, 256> relaxed = sparseStateHistogram(pile);
+  std::size_t grains = relaxed[0];
+  bool stable = true;
+  for (unsigned int state = 2u; state < 8u; ++state) {
+    grains += relaxed[state] * state;
+    stable = stable && (state < 4u || relaxed[state] == 0u);
+  }
+  testTrue(g,
+           advanced && grains == 7u && stable,
+           "toppling conserves grains and settles below four per cell");
+
+  // A lone source grows a pattern with the von Neumann square's symmetry.
+  SparseCellGrid mandala;
+  mandala.setCell(CellAddress{ 0, 0 }, 8u);
+  for (int generation = 0; generation < 400; ++generation) {
+    advanced = advanced && mandala.advance(*sand);
+  }
+  bool symmetric = advanced;
+  for (int y = -30; y <= 30 && symmetric; ++y) {
+    for (int x = -30; x <= 30; ++x) {
+      if (mandala.getCell(CellAddress{ x, y }) !=
+          mandala.getCell(CellAddress{ -y, x })) {
+        symmetric = false;
+        break;
+      }
+    }
+  }
+  testTrue(g,
+           symmetric && sparsePopulation(mandala) > 100u,
+           "single-source mandala keeps four-fold rotational symmetry");
+
+  std::vector<RuleSeedCell> seed;
+  seed.push_back(RuleSeedCell{ 30, 30, 8u });
+  seed.push_back(RuleSeedCell{ 2, 33, 7u });
+  testTrue(g,
+           sparseTorusMatchesDense(*sand, seed, 200),
+           "sandpile sparse torus matches the dense reference");
+
+  const RuleSetDefinition* avalanche =
+    registry.getRuleSetDefinition("SANDPILE_AVALANCHE");
+  testTrue(g,
+           avalanche != nullptr &&
+             avalanche->seedPattern == RuleSeedPattern::Rle,
+           "critical avalanche ships an exact starter");
+  if (avalanche != nullptr) {
+    SparseCellGrid critical;
+    testTrue(g,
+             stampSeedRle(critical, *avalanche, 10u, -40, -40),
+             "critical square stamps");
+    const std::array<std::size_t, 256> before = sparseStateHistogram(critical);
+    testTrue(g,
+             before[3] == 81u * 81u - 1u && before[8] == 1u,
+             "avalanche starter is an 81x81 critical square with one source");
+  }
+
+  RuleFamilyDefinition shortFamily = *family;
+  shortFamily.id = "SANDPILE_WITHOUT_SOURCE";
+  shortFamily.stateCount = 8u;
+  shortFamily.stateNames.resize(8u);
+  shortFamily.stateColors.resize(8u);
+  RuleSetRegistry validation;
+  testTrue(g,
+           !validation.registerFamily(shortFamily),
+           "sandpile families must declare at least one source phase");
+}
+
+static void
+testLongRangeCyclicAndTrails()
+{
+  testSection(
+    "RuleSetRegistry: long-range cyclic and trailing Larger than Life");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "catalog with Griffeath and trail rules loads");
+
+  std::unique_ptr<RuleSet> spirals =
+    registry.createRuleSet("CCA_CYCLIC_SPIRALS");
+  std::unique_ptr<RuleSet> stripes = registry.createRuleSet("CCA_STRIPES");
+  std::unique_ptr<RuleSet> classic = registry.createRuleSet("CCA_313");
+  testTrue(g,
+           spirals != nullptr &&
+             spirals->getNeighborhoodKind() ==
+               RuleSet::NeighborhoodKind::ExtendedRange &&
+             spirals->getNeighborhoodRadius() == 3u &&
+             !spirals->includesCenterInNeighborCount(),
+           "range-three cyclic rule uses the extended evaluator");
+  testTrue(g,
+           stripes != nullptr && stripes->getExtendedNeighborhoodShape() ==
+                                   RuleSet::ExtendedNeighborhoodShape::Diamond,
+           "Stripes counts a von Neumann diamond");
+  testTrue(g,
+           classic != nullptr && classic->getNeighborhoodKind() ==
+                                   RuleSet::NeighborhoodKind::MooreStateCounts,
+           "radius-one square cyclic rules keep the Moore histogram path");
+  if (spirals != nullptr) {
+    testEqUChar(g,
+                spirals->getExtendedCountedState(2u),
+                3u,
+                "a cyclic cell counts its successor");
+    testEqUChar(g,
+                spirals->getExtendedCountedState(0u),
+                2u,
+                "the inert void is skipped when phase zero advances");
+    testEqUChar(g,
+                spirals->getExtendedCountedState(8u),
+                0u,
+                "the last phase counts the first");
+    testEqUChar(g,
+                spirals->nextStateFromExtendedCount(2u, 5u),
+                3u,
+                "threshold successors advance the cell");
+    testEqUChar(g,
+                spirals->nextStateFromExtendedCount(2u, 4u),
+                2u,
+                "below-threshold successors leave the cell");
+    testEqUChar(g,
+                spirals->nextStateFromExtendedCount(1u, 48u),
+                1u,
+                "an inert void never joins the cycle");
+    const unsigned int spiralStates = spirals->getStateCount();
+    testTrue(g,
+             sparseTorusMatchesDense(
+               *spirals, parityPhaseSoup(spiralStates, 32, true), 12),
+             "range-three cyclic sparse torus matches the dense reference");
+    testTrue(g,
+             sparseInfiniteMatchesDense(
+               *spirals, parityPhaseSoup(spiralStates, 18, false), 8),
+             "range-three cyclic infinite grid matches the dense reference");
+
+    // A void-free soup stays inside its dish on the infinite canvas.
+    SparseCellGrid dish;
+    for (const RuleSeedCell& cell : parityPhaseSoup(spiralStates, 12, false)) {
+      dish.setCell(CellAddress{ cell.x, cell.y },
+                   cell.state == 1u ? 0u : cell.state);
+    }
+    bool advanced = true;
+    for (int generation = 0; generation < 30; ++generation) {
+      advanced = advanced && dish.advance(*spirals);
+    }
+    bool bounded = advanced;
+    dish.visitChunks([&bounded](const ChunkAddress& address,
+                                const SparseCellGrid::ChunkCells& cells) {
+      for (int index = 0; index < static_cast<int>(cells.size()); ++index) {
+        const std::int64_t x = address.x * SparseCellGrid::kChunkDim +
+                               index % SparseCellGrid::kChunkDim;
+        const std::int64_t y = address.y * SparseCellGrid::kChunkDim +
+                               index / SparseCellGrid::kChunkDim;
+        const bool inside = x >= -12 && x < 12 && y >= -12 && y < 12;
+        if (!inside && cells[static_cast<std::size_t>(index)] !=
+                         SparseCellGrid::BackgroundState) {
+          bounded = false;
+        }
+      }
+    });
+    testTrue(g,
+             bounded && sparsePopulation(dish) == 24u * 24u,
+             "an inert-background cyclic soup never invades the void");
+  }
+  if (stripes != nullptr) {
+    testTrue(
+      g,
+      sparseTorusMatchesDense(
+        *stripes, parityPhaseSoup(stripes->getStateCount(), 32, true), 12),
+      "diamond cyclic sparse torus matches the dense reference");
+  }
+
+  const RuleFamilyDefinition* cyclicFamily =
+    registry.getFamilyDefinition("GRIFFEATH_CCA_6");
+  if (cyclicFamily != nullptr) {
+    RuleSetRegistry validation;
+    testTrue(g,
+             validation.registerFamily(*cyclicFamily),
+             "Griffeath family registers");
+    RuleSetDefinition diamond;
+    diamond.id = "DIAMOND_LIMIT";
+    diamond.familyId = cyclicFamily->id;
+    diamond.neighborhoodRadius = 2u;
+    diamond.extendedNeighborhoodShape =
+      RuleSet::ExtendedNeighborhoodShape::Diamond;
+    diamond.cyclicThreshold = 12u;
+    testTrue(g,
+             validation.registerRule(diamond),
+             "a radius-two diamond accepts all twelve neighbors");
+    diamond.id = "DIAMOND_TOO_MANY";
+    diamond.cyclicThreshold = 13u;
+    testTrue(g,
+             !validation.registerRule(diamond),
+             "thresholds above the neighborhood size are rejected");
+    RuleSetDefinition moore = diamond;
+    moore.id = "MOORE_TOO_MANY";
+    moore.neighborhoodRadius = 1u;
+    moore.extendedNeighborhoodShape =
+      RuleSet::ExtendedNeighborhoodShape::Square;
+    moore.cyclicThreshold = 9u;
+    testTrue(g,
+             !validation.registerRule(moore),
+             "radius-one square cyclic rules keep the eight-neighbor bound");
+    RuleSetDefinition inert = moore;
+    inert.id = "INERT_STEP_FIVE";
+    inert.cyclicThreshold = 1u;
+    inert.inertBackground = true;
+    inert.cyclicStep = 5u;
+    testTrue(g,
+             validation.registerRule(inert),
+             "inert cycles validate steps against the shortened cycle");
+    inert.id = "INERT_STEP_THREE";
+    inert.cyclicStep = 3u;
+    testTrue(g,
+             !validation.registerRule(inert),
+             "inert cycle steps must be coprime with the phase count");
+    RuleSetRegistry roundTrip;
+    testTrue(
+      g,
+      roundTrip.loadFromCatalogTexts(
+        RuleSetRegistry::serializeFamilies(validation.getFamilyDefinitions()),
+        RuleSetRegistry::serializeCatalog(validation.getFamilyDefinitions(),
+                                          validation.getDefinitions())),
+      "long-range cyclic catalog round-trips");
+    const RuleSetDefinition* reloaded =
+      roundTrip.getRuleSetDefinition("DIAMOND_LIMIT");
+    testTrue(g,
+             reloaded != nullptr && reloaded->neighborhoodRadius == 2u &&
+               reloaded->cyclicThreshold == 12u &&
+               reloaded->extendedNeighborhoodShape ==
+                 RuleSet::ExtendedNeighborhoodShape::Diamond,
+             "cyclic range, shape, and threshold survive serialization");
+    const RuleSetDefinition* reloadedInert =
+      roundTrip.getRuleSetDefinition("INERT_STEP_FIVE");
+    const RuleSetDefinition* reloadedDiamond =
+      roundTrip.getRuleSetDefinition("DIAMOND_LIMIT");
+    testTrue(g,
+             reloadedInert != nullptr && reloadedInert->inertBackground &&
+               reloadedDiamond != nullptr && !reloadedDiamond->inertBackground,
+             "the inert-background flag survives serialization");
+  }
+
+  std::unique_ptr<RuleSet> comets = registry.createRuleSet("COMET_ROCKETS");
+  const RuleSetDefinition* cometDefinition =
+    registry.getRuleSetDefinition("COMET_ROCKETS");
+  testTrue(g,
+           comets != nullptr && cometDefinition != nullptr &&
+             comets->getStateCount() == 7u &&
+             cometDefinition->rule == "R2,C7,M1,S6..9,B6..8,NM",
+           "Comet Rockets compiles as a seven-state trailing LtL rule");
+  if (comets != nullptr && cometDefinition != nullptr) {
+    testEqUChar(g,
+                comets->nextStateFromExtendedCount(0u, 5u),
+                2u,
+                "an unsupported live cell starts its decay trail");
+    testEqUChar(g,
+                comets->nextStateFromExtendedCount(2u, 7u),
+                3u,
+                "trail cells ignore births and keep decaying");
+    testEqUChar(g,
+                comets->nextStateFromExtendedCount(6u, 7u),
+                1u,
+                "the last trail state returns to background");
+    testEqUChar(g,
+                comets->nextStateFromExtendedCount(1u, 6u),
+                0u,
+                "background births inside the birth interval");
+
+    SparseCellGrid fleet;
+    testTrue(
+      g, stampSeedRle(fleet, *cometDefinition, 7u, 0, 0), "comet fleet stamps");
+    std::int64_t startTop = 0;
+    bool foundStart = false;
+    for (std::int64_t y = 0; y < 40 && !foundStart; ++y) {
+      for (std::int64_t x = 0; x < 40; ++x) {
+        if (fleet.getCell(CellAddress{ x, y }) == 0u) {
+          startTop = y;
+          foundStart = true;
+          break;
+        }
+      }
+    }
+    bool advanced = true;
+    for (int generation = 0; generation < 20; ++generation) {
+      advanced = advanced && fleet.advance(*comets);
+    }
+    const std::array<std::size_t, 256> histogram = sparseStateHistogram(fleet);
+    bool movedNorth = false;
+    for (std::int64_t x = 0; x < 40; ++x) {
+      if (fleet.getCell(CellAddress{ x, startTop - 20 }) == 0u) {
+        movedNorth = true;
+      }
+    }
+    testTrue(g,
+             advanced && histogram[0] == 44u && movedNorth,
+             "four comets fly apart at light speed with intact bodies");
+  }
+
+  std::unique_ptr<RuleSet> coral = registry.createRuleSet("NEON_CORAL");
+  if (coral != nullptr) {
+    std::vector<RuleSeedCell> soup = parityPhaseSoup(3u, 16, false);
+    for (RuleSeedCell& cell : soup) {
+      cell.state = cell.state == 2u ? 1u : cell.state;
+    }
+    testTrue(g,
+             sparseInfiniteMatchesDense(*coral, soup, 10),
+             "trailing LtL infinite grid matches the dense reference");
+  }
+
+  const RuleFamilyDefinition* trails =
+    registry.getFamilyDefinition("LTL_TRAILS_8");
+  if (trails != nullptr) {
+    RuleSetRegistry validation;
+    validation.registerFamily(*trails);
+    RuleSetDefinition diamond;
+    diamond.id = "DIAMOND_TRAILS";
+    diamond.familyId = trails->id;
+    diamond.neighborhoodRadius = 2u;
+    diamond.extendedNeighborhoodShape =
+      RuleSet::ExtendedNeighborhoodShape::Diamond;
+    diamond.includeCenter = true;
+    diamond.birthMinimum = 2u;
+    diamond.birthMaximum = 13u;
+    diamond.survivalMinimum = 1u;
+    diamond.survivalMaximum = 13u;
+    testTrue(g,
+             validation.registerRule(diamond),
+             "a diamond LtL rule may count all thirteen cells");
+    const RuleSetDefinition* compiled =
+      validation.getRuleSetDefinition("DIAMOND_TRAILS");
+    testTrue(g,
+             compiled != nullptr &&
+               compiled->rule == "R2,C8,M1,S1..13,B2..13,NN",
+             "diamond LtL rules use Golly's NN notation");
+    diamond.id = "DIAMOND_TRAILS_TOO_MANY";
+    diamond.birthMaximum = 14u;
+    testTrue(g,
+             !validation.registerRule(diamond),
+             "diamond LtL thresholds are bounded by the diamond size");
+  }
+
+  std::vector<RuleSeedCell> cells;
+  testTrue(g,
+           RuleSetRegistry::decodeSeedRle("2A$.B!", 3u, cells) &&
+             cells.size() == 3u && cells[0].state == 0u && cells[2].x == 1 &&
+             cells[2].y == 1 && cells[2].state == 2u,
+           "seed RLE decodes Golly states into Illumo encoding");
+  testTrue(g,
+           RuleSetRegistry::decodeSeedRle("bo$2o!", 2u, cells) &&
+             cells.size() == 3u,
+           "two-state b/o RLE tokens decode");
+  testTrue(g,
+           !RuleSetRegistry::decodeSeedRle("C!", 3u, cells) &&
+             !RuleSetRegistry::decodeSeedRle("2A", 3u, cells) &&
+             !RuleSetRegistry::decodeSeedRle("2Z!", 30u, cells),
+           "seed RLE rejects out-of-family states and missing terminators");
+}
+
 static int
 runRuleSetCase(void (*testFunction)())
 {
@@ -1766,6 +2517,12 @@ registerRuleSetTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.Rules.DirectionalChemicalFamilies", []() {
     return runRuleSetCase(testDirectionalAndChemicalFamilies);
   });
+  registry.add("IllumoGame.Rules.VonNeumannTables",
+               []() { return runRuleSetCase(testVonNeumannTableFamilies); });
+  registry.add("IllumoGame.Rules.SandpileFamily",
+               []() { return runRuleSetCase(testSandpileFamily); });
+  registry.add("IllumoGame.Rules.LongRangeCyclicAndTrails",
+               []() { return runRuleSetCase(testLongRangeCyclicAndTrails); });
   registry.add("IllumoGame.Rules.TransitionTable", []() {
     return runRuleSetCase(testTransitionTableCacheAndEquivalence);
   });

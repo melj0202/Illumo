@@ -743,8 +743,9 @@ simulation models, state counts, state labels, and colors. The separate
 `rulesets.json` (schema 3) owns stable rule IDs, display names, one required
 `family_id`, transition parameters, and an optional deterministic starter
 strategy. Life-like, Generations, Moore-table, cyclic, colorized-Life,
-Larger-than-Life, Hodgepodge, Turmite, lattice-gas, dominance, and elementary
-1D definitions compile to the existing `DataRuleSet`;
+Larger-than-Life, Hodgepodge, Turmite, lattice-gas, dominance, von Neumann
+rule-table, sandpile, and elementary 1D definitions compile to the existing
+`DataRuleSet`;
 the elementary rules retain their separate history path. Older unversioned,
 schema-v1, and schema-v2 rules catalogs are normalized into compatible family
 and rule definitions in memory.
@@ -776,8 +777,14 @@ Excitable Waves thresholds, Prism Rush, Chromatic Storm, Crystal Domains,
 Elemental Surge, Aurora Conflict, Immigration, QuadLife, Bosco/Bugs,
 Bugsmovie, Globe, Banners, Transers, Fireworks, the classic 14-color cyclic
 automaton, Hodgepodge Classic and Spiral Bloom, Langton's Ant plus RRL and RRLL
-Turmites, HPP Gas, and two five-species RPSLS thresholds. They compile to the
-common `DataRuleSet`;
+Turmites, HPP Gas, and two five-species RPSLS thresholds; Langton's, Byl's,
+two Chou-Reggia, SDSR, and Evoloop self-replicating loops; Sandpile Mandala,
+Binary Star, and Critical Avalanche; Griffeath's 313, Lava Lamp, Stripes,
+Squarish Spirals, Cyclic Spirals, and Turbulent Phase; Comet Rockets, Rainbow
+Tides, Neon Coral, and Bubble Swarm trailing Larger-than-Life rules; and 45
+classic Golly/MCell Life-like and Generations rules (Maze, Coral, Anneal,
+Diamoeba, Replicator, Frogs, Lava, Swirl, Bombers, Xtasy, Thrill Grill, and
+others). They compile to the common `DataRuleSet`;
 life-like and Generations definitions use neighbor masks, while Wireworld and
 the five-phase excitable-media family use explicit Moore transition tables.
 The twelve-state Prismatic Ecology and nine-state Elemental Court use cyclic
@@ -794,13 +801,41 @@ selects the absent fourth species. Both dense compatibility and sparse
 production use the full-state histogram contract.
 
 Larger-than-Life rules carry radius, optional center counting, inclusive birth
-and survival intervals, and square or circular neighborhood shape. Range is
-bounded to 16 and B0 is rejected. The correctness-first sparse evaluator
-expands each occupied chunk by the necessary chunk radius, counts state-zero
-cells directly, and commits through the existing transactional output/change
-journal. It intentionally does not enter the radius-one candidate, halo, memo,
-or worker fast paths (D-GC6). Shipped parameters match Golly's documented
-Bosco/Bugs, Bugsmovie, and Globe examples.
+and survival intervals, and square, circular, or diamond (von Neumann range)
+neighborhood shape. Range is bounded to 16 and B0 is rejected. Families with
+more than two states add Golly's C-state decay trail: an active cell outside
+its survival interval walks states 2..C-1 back to background, and trail cells
+neither count nor accept births. The correctness-first sparse evaluator
+expands each occupied chunk by the necessary chunk radius, copies each target
+chunk plus its margin into a canonical halo window once, counts the state named
+by `RuleSet::getExtendedCountedState` (state 0 for Larger than Life), and
+commits through the existing transactional output/change journal. It
+intentionally does not enter the radius-one candidate, halo, memo, or worker
+fast paths (D-GC6). Shipped parameters match Golly's documented Bosco/Bugs,
+Bugsmovie, and Globe examples.
+
+Cyclic rules accept an optional `radius` (1..16) and `neighborhood`
+(`square`, `circular`, `diamond`). Radius-one square rules keep the Moore
+histogram path and their serialized form; wider rules are Griffeath's
+long-range cyclic automata on the extended-range kernel, where each cell counts
+its successor state and the threshold is bounded by the neighborhood size.
+An optional `inert_background` removes state 1 from the cycle: the void never
+advances and the phases 0, 2..n-1 cycle among themselves, so a seeded soup
+stays inside its dish instead of invading the infinite background at up to the
+neighborhood radius per generation. The shipped Griffeath rules set it; the
+older full-cycle rules keep their behavior (D-GC8).
+
+`von_neumann_table` families (at most 12 states) store rules as Golly
+`@TABLE` text: `var` lines plus comma or compact `C,N,E,S,W,C'` transitions
+with `none`, `reflect_horizontal`, `rotate4`, `rotate4reflect`, or `permute`
+symmetry. Compilation produces a dense `n^5` lookup with Golly's semantics:
+the first matching transition wins, a variable repeated within one transition
+binds to one value, and unmatched neighborhoods keep their center. Table and
+RLE starter text use Golly numbering, whose quiescent state 0 swaps with
+Illumo background state 1. `sandpile` families encode heights 0..7 in the
+background-zero form followed by pulsed grain-source phases; a cell holding
+four or more grains topples one to each von Neumann neighbor, and the phase-0
+source emits four without depleting (D-GC8).
 
 Hodgepodge rules expose 101 visible chemical levels. Healthy state 1 is the
 sparse background; state 0 encodes infection level one, and numeric states
@@ -810,18 +845,21 @@ Tyson transition. RPSLS dominance uses that same histogram with five species,
 two prey offsets per species, and a deterministic synchronous invasion
 threshold (D-GC7).
 
-Turmites and HPP gas use `NeighborhoodKind::VonNeumannDirectional`. Its four
+Turmites, HPP gas, rule tables, and sandpiles use
+`NeighborhoodKind::VonNeumannDirectional`. Its four
 entries retain north/east/south/west identity rather than collapsing neighbors
 into counts. Turmite state is `n` tape colors plus `4n` agent states;
 simultaneous arrivals annihilate deterministically. HPP's 16 states encode four
 particle-direction bits. Opposing pairs collide into the perpendicular axis
 before all particles stream. The serial sparse evaluator expands source chunks
-by one and publishes through the same transactional map and change journal as
-the histogram and extended-range paths.
+by one, reads each target through a one-cell halo window, and publishes through
+the same transactional map and change journal as the histogram and
+extended-range paths.
 
 Rules may request deterministic glider, single-cell, wire, active-soup,
-phase-soup, species-soup, excitable-break, Turmite-swarm, or particle-cloud
-starters. Omitted data keeps a
+phase-soup, species-soup, excitable-break, Turmite-swarm, particle-cloud, or
+exact `rle` starters; an RLE starter is validated against its family when the
+rule compiles and is stamped centered on the origin. Omitted data keeps a
 model-appropriate default. This replaces the former assumption that a Life
 glider is meaningful for every Moore-count rule: Generations and
 Larger-than-Life begin from reproducible active soups, cyclic systems from
@@ -864,6 +902,8 @@ class RuleSet {
   virtual unsigned char nextStateFromDirectionalNeighborhood(
     unsigned char cell,
     const DirectionalNeighbors& neighbors) const;
+  // State counted by extended-range kernels (0, or a cyclic successor).
+  virtual unsigned char getExtendedCountedState(unsigned char cell) const;
   virtual unsigned char nextStateFromExtendedCount(
     unsigned char cell,
     unsigned int aliveCount) const;
@@ -879,7 +919,10 @@ class RuleSet {
 | **Wireworld** | `0` head, `1` empty, `2` tail, `3` conductor (head = 0 reuses head-neighbor counting) |
 | Cyclic ecology | `1` remains sparse background; all declared values can trigger their predecessor |
 | Colorized Life | `1` background; every other declared value is a live species |
-| Larger-than-Life | binary encoding with a radius 1..16 extended neighborhood |
+| Larger-than-Life | `0` active, `1` background, `2..C-1` decay trail; radius 1..16 extended neighborhood |
+| Long-range cyclic | as cyclic ecology, or with an inert `1` void and phases `0, 2..n-1`; the successor is counted over a radius 1..16 shape |
+| Von Neumann table | Golly table states with `0` and `1` swapped; `1` quiescent background |
+| Sandpile | `1` empty; `0` one grain; `2..7` grains; `8..` pulsed source phases (`8` drops) |
 | Hodgepodge | `1` healthy; `0` level one; `2..100` infection/ill levels |
 | Turmite | `n` tape states followed by `4n` directional agent states |
 | HPP gas | remapped 4-bit north/east/south/west particle occupancy; `1` vacuum |

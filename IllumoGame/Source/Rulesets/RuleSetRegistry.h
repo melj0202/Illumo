@@ -19,7 +19,9 @@ enum class RuleFamily
   Turmite,
   LatticeGas,
   Dominance,
-  Elementary1D
+  Elementary1D,
+  VonNeumannTable,
+  Sandpile
 };
 
 enum class RuleSeedPattern
@@ -33,7 +35,16 @@ enum class RuleSeedPattern
   SpeciesSoup,
   ExcitableBreak,
   TurmiteSwarm,
-  ParticleCloud
+  ParticleCloud,
+  // Exact starter stamped from `seedRle` (Golly multistate RLE).
+  Rle
+};
+
+struct RuleSeedCell
+{
+  int x = 0;
+  int y = 0;
+  unsigned char state = 0u;
 };
 
 struct RuleSetDefinition
@@ -49,6 +60,9 @@ struct RuleSetDefinition
   unsigned int ruleNumber = 0u;
   unsigned int cyclicThreshold = 1u;
   unsigned int cyclicStep = 1u;
+  // Cyclic only: background state 1 never advances and is not a phase, so a
+  // seeded region cannot invade the infinite background.
+  bool inertBackground = false;
   unsigned int neighborhoodRadius = 1u;
   unsigned int birthMinimum = 3u;
   unsigned int birthMaximum = 3u;
@@ -63,14 +77,24 @@ struct RuleSetDefinition
   RuleSet::ExtendedNeighborhoodShape extendedNeighborhoodShape =
     RuleSet::ExtendedNeighborhoodShape::Square;
   bool includeCenter = false;
+  // Von Neumann rule table in Golly @TABLE syntax (`var` lines and
+  // C,N,E,S,W,C' transitions). Table states use Golly numbering, where 0 is
+  // the quiescent state; the compiler swaps 0 and 1 into Illumo's encoding.
+  std::string tableSymmetry = "none";
+  std::vector<std::string> ruleTable;
   RuleSeedPattern seedPattern = RuleSeedPattern::Automatic;
   unsigned int seedRadius = 18u;
   unsigned int seedDensity = 42u;
+  // Golly multistate RLE for RuleSeedPattern::Rle, in Golly numbering.
+  std::string seedRle;
   // Compiled transition artifacts; these are not serialized into ruleset data.
   bool hasTransitionTable = false;
   unsigned int transitionTableStateCount = 0u;
   RuleSet::TransitionTable transitionTable{};
   std::array<unsigned char, 8> elementaryTransitions{};
+  // Dense stateCount^5 lookup indexed by center, north, east, south, west in
+  // Illumo encoding.
+  std::vector<unsigned char> vonNeumannTransitions;
 };
 
 struct RuleFamilyDefinition
@@ -98,6 +122,11 @@ public:
   static bool parseLifeLikeRuleString(const std::string& ruleStr,
                                       unsigned int& outBirth,
                                       unsigned int& outSurvive);
+  // Decodes Golly multistate RLE ('.'/'b' = 0, 'o' = 1, 'A'..'X' = 1..24)
+  // into non-background cells already mapped to Illumo encoding.
+  static bool decodeSeedRle(const std::string& text,
+                            unsigned int stateCount,
+                            std::vector<RuleSeedCell>& cells);
 
   RuleSetRegistry();
   RuleSetRegistry(const RuleSetRegistry&) = default;

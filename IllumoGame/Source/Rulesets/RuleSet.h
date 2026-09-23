@@ -32,8 +32,28 @@ public:
   enum class ExtendedNeighborhoodShape
   {
     Square,
-    Circular
+    Circular,
+    // Von Neumann range: |dx| + |dy| <= radius.
+    Diamond
   };
+
+  // Shared membership test for every extended-range evaluator. The center
+  // cell is always inside the shape; callers apply the center policy.
+  static bool extendedNeighborhoodContains(ExtendedNeighborhoodShape shape,
+                                           int radius,
+                                           int offsetX,
+                                           int offsetY)
+  {
+    if (shape == ExtendedNeighborhoodShape::Circular) {
+      return offsetX * offsetX + offsetY * offsetY <= radius * radius;
+    }
+    if (shape == ExtendedNeighborhoodShape::Diamond) {
+      const int distanceX = offsetX < 0 ? -offsetX : offsetX;
+      const int distanceY = offsetY < 0 ? -offsetY : offsetY;
+      return distanceX + distanceY <= radius;
+    }
+    return true;
+  }
 
   RuleSet() = default;
 
@@ -111,6 +131,15 @@ public:
   }
 
   virtual bool includesCenterInNeighborCount() const { return false; }
+
+  // Extended-range evaluators count neighbors equal to this state. Life-like
+  // ranges count the active state 0; long-range cyclic rules count the
+  // current cell's successor.
+  virtual unsigned char getExtendedCountedState(unsigned char cell) const
+  {
+    (void)cell;
+    return 0u;
+  }
 
   virtual unsigned char nextStateFromExtendedCount(
     unsigned char cell,

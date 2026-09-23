@@ -489,8 +489,13 @@ CellGameModule::seedInitialPattern()
           seedPattern = RuleSeedPattern::ParticleCloud;
           break;
         case RuleFamily::Elementary1D:
+        case RuleFamily::VonNeumannTable:
           seedPattern = RuleSeedPattern::SingleCell;
           break;
+        case RuleFamily::Sandpile:
+          // A lone phase-zero grain source grows the sandpile fractal.
+          grid->setCell(CellAddress{ 0, 0 }, 8u);
+          return;
         case RuleFamily::LifeLike:
         default:
           seedPattern = RuleSeedPattern::Glider;
@@ -522,6 +527,27 @@ CellGameModule::seedInitialPattern()
   if (seedPattern == RuleSeedPattern::SingleCell) {
     grid->setCell(CellAddress{ 0, 0 }, 0);
     return;
+  }
+
+  if (seedPattern == RuleSeedPattern::Rle && definition != nullptr) {
+    std::vector<RuleSeedCell> cells;
+    if (RuleSetRegistry::decodeSeedRle(
+          definition->seedRle, rules->getStateCount(), cells) &&
+        !cells.empty()) {
+      int maximumX = 0;
+      int maximumY = 0;
+      for (const RuleSeedCell& cell : cells) {
+        maximumX = std::max(maximumX, cell.x);
+        maximumY = std::max(maximumY, cell.y);
+      }
+      // Center the stamp on the origin so the camera frames it.
+      for (const RuleSeedCell& cell : cells) {
+        grid->setCell(
+          CellAddress{ cell.x - maximumX / 2, cell.y - maximumY / 2 },
+          cell.state);
+      }
+      return;
+    }
   }
 
   if (seedPattern == RuleSeedPattern::ActiveSoup) {

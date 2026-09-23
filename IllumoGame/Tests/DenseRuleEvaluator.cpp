@@ -308,12 +308,17 @@ DenseRuleEvaluator::calcGeneration(const int& x_start,
     bool anyChange = false;
     for (int y = 0; y < height; ++y) {
       for (int x = 0; x < width; ++x) {
+        const std::size_t index =
+          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+        const unsigned char countedState =
+          rules.getExtendedCountedState(src[index]);
         unsigned int aliveCount = 0u;
         for (int offsetY = -radius; offsetY <= radius; ++offsetY) {
           for (int offsetX = -radius; offsetX <= radius; ++offsetX) {
             if ((!includeCenter && offsetX == 0 && offsetY == 0) ||
-                (shape == RuleSet::ExtendedNeighborhoodShape::Circular &&
-                 offsetX * offsetX + offsetY * offsetY > radius * radius)) {
+                !RuleSet::extendedNeighborhoodContains(
+                  shape, radius, offsetX, offsetY)) {
               continue;
             }
             const int neighborX = ((x + offsetX) % width + width) % width;
@@ -322,14 +327,11 @@ DenseRuleEvaluator::calcGeneration(const int& x_start,
               static_cast<std::size_t>(neighborY) *
                 static_cast<std::size_t>(width) +
               static_cast<std::size_t>(neighborX);
-            if (src[neighborIndex] == 0u) {
+            if (src[neighborIndex] == countedState) {
               aliveCount += 1u;
             }
           }
         }
-        const std::size_t index =
-          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
-          static_cast<std::size_t>(x);
         const unsigned char next =
           rules.nextStateFromExtendedCount(src[index], aliveCount);
         dst[index] = next;

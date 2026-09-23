@@ -2159,6 +2159,42 @@ gas, continuous chemistry, and generic Turing-machine controllers remain out of
 scope.
 \end{decisionbox}
 
+\subsection*{D-GC8 --- Rule tables, sandpiles, long-range cycles, and trails}
+\begin{decisionbox}[title={D-GC8 \quad 2026-09-23}]
+\textbf{Decision:} Add typed \texttt{von\_neumann\_table} and
+\texttt{sandpile} families on the existing directional contract. Rule tables
+are stored as Golly \texttt{@TABLE} text (variables, comma or compact
+transitions, \texttt{none}, \texttt{reflect\_horizontal},
+\texttt{rotate4}, \texttt{rotate4reflect}, or \texttt{permute} symmetry) and
+compile to a dense $n^5$ lookup for at most twelve states with Golly
+semantics: first match wins, repeated variables bind, unmatched neighborhoods
+keep their center, and Golly state 0 swaps with Illumo background state 1.
+Sandpiles use heights 0--7 plus a pulsed grain source whose phase count comes
+from the family. Cyclic rules gain an optional range and square, circular, or
+diamond shape and an optional inert background that is not a phase of the
+cycle; Larger than Life gains the diamond shape and Golly's C-state
+decay trail. Extended-range kernels count the state named by
+\texttt{RuleSet::getExtendedCountedState} and read a per-target halo window.
+Rules may carry an exact Golly-RLE starter.\\
+\textbf{Why:} Self-replicating loops, sandpile fractals, Griffeath spirals, and
+trailing Larger-than-Life spaceships are well-documented behaviors that the
+unordered-count and radius-one cyclic contracts could not express. Storing
+published tables verbatim keeps them auditable against their sources.\\
+\textbf{Consequences:} Langton, Byl, Chou--Reggia, SDSR, and Evoloop loops,
+three sandpile starters, six Griffeath rules, four trailing LtL rules, and 45
+classic Life-like and Generations rules ship as data. Loop evolution is checked
+against an independent reference implementation. Radius-one square cyclic rules
+keep the Moore histogram path and serialized form. A full cycle advances the
+empty background too, so long-range soups would grow without bound on the
+infinite canvas; the shipped Griffeath rules use the inert background, while
+existing full-cycle rules are unchanged. The halo window replaces
+per-neighbor hash lookups for extended and directional rules without changing
+their results; the kernels remain serial and use the existing transactional
+publication. Moore-neighborhood tables, JvN29-scale state counts, and
+Margolus partitioning remain out of scope.\\
+\textbf{Extends:} D-GC6, D-GC7
+\end{decisionbox}
+
 \subsection*{D-DEP1 --- Narrow public math dependency exposure}
 \begin{decisionbox}[title={D-DEP1 \quad 2026-09-14}]
 \textbf{Decision:} Illumo exports its public headers and a CMake-managed GLM-only

@@ -34,6 +34,7 @@ public:
   {
     return definition.includeCenter;
   }
+  unsigned char getExtendedCountedState(unsigned char cell) const override;
   unsigned char nextState(unsigned char cell,
                           unsigned char neighborCount) const override;
   unsigned char nextStateFromNeighborhood(

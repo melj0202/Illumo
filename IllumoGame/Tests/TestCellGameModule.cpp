@@ -518,6 +518,43 @@ testCyclicMultistateSeed()
 }
 
 static void
+testEveryShippedRuleStarts()
+{
+  testSection("CellGameModule: every shipped rule starts and advances");
+  CellGameFixture fixture(24, 18);
+  const std::vector<RuleSetDefinition> definitions =
+    RuleSetRegistry::instance().getDefinitions();
+  for (const RuleSetDefinition& definition : definitions) {
+    fixture.module.Exit();
+    fixture.started = false;
+    fixture.env.setVar("FamilyString", definition.familyId);
+    fixture.env.setVar("RuleSetString", definition.id);
+    fixture.env.setVar("ModeString", definition.id);
+    fixture.started = fixture.module.Start(&fixture.context);
+    CellContext* context =
+      CellGameModuleTestAccess::getCellContext(fixture.module);
+    const std::string started = definition.id + " starts";
+    testTrue(g,
+             fixture.started && context != nullptr &&
+               context->getRuleSet()->getRuleTag() == definition.id,
+             started.c_str());
+    if (context == nullptr) {
+      continue;
+    }
+    const std::string seeded = definition.id + " seeds a starter";
+    testTrue(
+      g, context->getGrid()->getAllocatedChunkCount() > 0u, seeded.c_str());
+    bool advanced = true;
+    for (int generation = 0; generation < 3; ++generation) {
+      advanced =
+        advanced && context->getGrid()->advance(*context->getRuleSet());
+    }
+    const std::string stepped = definition.id + " advances its starter";
+    testTrue(g, advanced, stepped.c_str());
+  }
+}
+
+static void
 testResearchedStarterSeeds()
 {
   testSection("CellGameModule: researched rules start with active populations");
@@ -3133,6 +3170,9 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CellGame.CyclicMultistateSeed", []() {
     return runCellGameModuleCase(testCyclicMultistateSeed);
+  });
+  registry.add("IllumoGame.CellGame.EveryShippedRuleStarts", []() {
+    return runCellGameModuleCase(testEveryShippedRuleStarts);
   });
   registry.add("IllumoGame.CellGame.ResearchedStarterSeeds", []() {
     return runCellGameModuleCase(testResearchedStarterSeeds);

@@ -18,7 +18,15 @@ Rendering, Services, Engine, platform APIs, and OpenGL.
   rules are compiled from validated `RuleSetDefinition` data into `DataRuleSet`.
 - Directional von Neumann rules receive neighbors in north, east, south, west
   order. Preserve that ordering in dense and sparse evaluators; do not collapse
-  Turmite or lattice-gas input into an unordered histogram.
+  Turmite, lattice-gas, rule-table, or sandpile input into an unordered
+  histogram.
+- `von_neumann_table` rules keep Golly `@TABLE` semantics: first matching
+  transition wins, repeated variables bind, unmatched neighborhoods keep their
+  center, and Golly state 0 swaps with background state 1. Keep table text
+  verbatim against its published source.
+- Extended-range kernels count the state returned by
+  `getExtendedCountedState`; neighborhood shape membership comes only from
+  `RuleSet::extendedNeighborhoodContains`.
 - Binary rules encode state `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, and conductor `3`; only
   states declared by its counting mask contribute to neighbors.
@@ -38,7 +46,7 @@ state metadata. The staged `IllumoGame/families.json` and
 `IllumoGame/rulesets.json` are the source of truth for shipped definitions.
 Family models include `life_like`, `generations`, `moore_table`, `cyclic`,
 `species_life`, `larger_than_life`, `hodgepodge`, `turmite`, `lattice_gas`,
-`dominance`, and `elementary_1d`. Family catalogs use schema 1 and ruleset
+`dominance`, `von_neumann_table`, `sandpile`, and `elementary_1d`. Family catalogs use schema 1 and ruleset
 catalogs schema 3;
 unversioned and schema-v1/v2 legacy rule catalogs normalize into separated
 definitions in memory. Validation must be transactional and preserve state `1`

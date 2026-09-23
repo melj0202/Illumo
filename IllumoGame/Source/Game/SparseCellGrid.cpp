@@ -4405,17 +4405,18 @@ SparseCellGrid::advanceDirectionalNeighborhood(const RuleSet& ruleSet)
       result.hasNonBackground = false;
       result.completeCells = true;
 
-      const std::int64_t originX = result.address.x * kChunkDim;
-      const std::int64_t originY = result.address.y * kChunkDim;
+      fillHaloWindow(source, result.address, 1);
+      const int side = kChunkDim + 2;
       for (int localY = 0; localY < kChunkDim; ++localY) {
         for (int localX = 0; localX < kChunkDim; ++localX) {
-          const CellAddress address{ originX + localX, originY + localY };
-          const unsigned char current = source.getCell(address);
+          const std::size_t center =
+            static_cast<std::size_t>((localY + 1) * side + localX + 1);
+          const unsigned char current = m_haloWindow[center];
           const RuleSet::DirectionalNeighbors neighbors = {
-            source.getCell(CellAddress{ address.x, address.y - 1 }),
-            source.getCell(CellAddress{ address.x + 1, address.y }),
-            source.getCell(CellAddress{ address.x, address.y + 1 }),
-            source.getCell(CellAddress{ address.x - 1, address.y })
+            m_haloWindow[center - static_cast<std::size_t>(side)],
+            m_haloWindow[center + 1u],
+            m_haloWindow[center + static_cast<std::size_t>(side)],
+            m_haloWindow[center - 1u]
           };
           const unsigned char next =
             ruleSet.nextStateFromDirectionalNeighborhood(current, neighbors);
@@ -4483,6 +4484,41 @@ SparseCellGrid::advanceDirectionalNeighborhood(const RuleSet& ruleSet)
   return true;
 }
 
+void
+SparseCellGrid::fillHaloWindow(const SparseCellGrid& source,
+                               const ChunkAddress& target,
+                               int radius)
+{
+  const int side = kChunkDim + 2 * radius;
+  m_haloWindow.assign(static_cast<std::size_t>(side) *
+                        static_cast<std::size_t>(side),
+                      BackgroundState);
+  const int chunkRadius = (radius + kChunkDim - 1) / kChunkDim;
+  for (int chunkY = -chunkRadius; chunkY <= chunkRadius; ++chunkY) {
+    for (int chunkX = -chunkRadius; chunkX <= chunkRadius; ++chunkX) {
+      // Canonical chunks supply wrapped content on a finite torus.
+      const CellArray* cells = source.findChunk(source.canonicalizeChunk(
+        ChunkAddress{ target.x + chunkX, target.y + chunkY }));
+      if (cells == nullptr) {
+        continue;
+      }
+      const int originX = chunkX * kChunkDim + radius;
+      const int originY = chunkY * kChunkDim + radius;
+      const int firstX = std::max(0, -originX);
+      const int lastX = std::min(kChunkDim, side - originX);
+      const int firstY = std::max(0, -originY);
+      const int lastY = std::min(kChunkDim, side - originY);
+      for (int localY = firstY; localY < lastY; ++localY) {
+        for (int localX = firstX; localX < lastX; ++localX) {
+          m_haloWindow[static_cast<std::size_t>((originY + localY) * side +
+                                                originX + localX)] =
+            (*cells)[static_cast<std::size_t>(localY * kChunkDim + localX)];
+        }
+      }
+    }
+  }
+}
+
 bool
 SparseCellGrid::advanceExtendedRange(const RuleSet& ruleSet)
 {
@@ -4495,7 +4531,21 @@ SparseCellGrid::advanceExtendedRange(const RuleSet& ruleSet)
   const bool includeCenter = ruleSet.includesCenterInNeighborCount();
   const RuleSet::ExtendedNeighborhoodShape shape =
     ruleSet.getExtendedNeighborhoodShape();
+  const int side = kChunkDim + 2 * radius;
   try {
+    // Window-relative offsets of every counted neighbor, built once per step.
+    std::vector<std::ptrdiff_t> offsets;
+    for (int neighborY = -radius; neighborY <= radius; ++neighborY) {
+      for (int neighborX = -radius; neighborX <= radius; ++neighborX) {
+        if ((!includeCenter && neighborX == 0 && neighborY == 0) ||
+            !RuleSet::extendedNeighborhoodContains(
+              shape, radius, neighborX, neighborY)) {
+          continue;
+        }
+        offsets.push_back(static_cast<std::ptrdiff_t>(neighborY) * side +
+                          neighborX);
+      }
+    }
     beginAddressSet(
       &m_completeTargets, &m_completeTargetIndex, &m_completeTargetGeneration);
     for (ChunkMap::const_reference entry : sourceChunks) {
@@ -4530,27 +4580,17 @@ SparseCellGrid::advanceExtendedRange(const RuleSet& ruleSet)
       result.hasNonBackground = false;
       result.completeCells = true;
 
-      const std::int64_t originX = result.address.x * kChunkDim;
-      const std::int64_t originY = result.address.y * kChunkDim;
+      fillHaloWindow(source, result.address, radius);
       for (int localY = 0; localY < kChunkDim; ++localY) {
         for (int localX = 0; localX < kChunkDim; ++localX) {
-          const CellAddress address{ originX + localX, originY + localY };
-          const unsigned char current = source.getCell(address);
+          const unsigned char* center =
+            m_haloWindow.data() + (localY + radius) * side + localX + radius;
+          const unsigned char current = *center;
+          const unsigned char countedState =
+            ruleSet.getExtendedCountedState(current);
           unsigned int aliveCount = 0u;
-          for (int neighborY = -radius; neighborY <= radius; ++neighborY) {
-            for (int neighborX = -radius; neighborX <= radius; ++neighborX) {
-              if ((!includeCenter && neighborX == 0 && neighborY == 0) ||
-                  (shape == RuleSet::ExtendedNeighborhoodShape::Circular &&
-                   neighborX * neighborX + neighborY * neighborY >
-                     radius * radius)) {
-                continue;
-              }
-              if (source.getCell(CellAddress{ address.x + neighborX,
-                                              address.y + neighborY }) ==
-                  CountedNeighborState) {
-                aliveCount += 1u;
-              }
-            }
+          for (const std::ptrdiff_t offset : offsets) {
+            aliveCount += center[offset] == countedState ? 1u : 0u;
           }
           const unsigned char next =
             ruleSet.nextStateFromExtendedCount(current, aliveCount);

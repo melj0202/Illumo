@@ -12,8 +12,9 @@ defines each rule's stable identity, required `family_id`, and transition data.
 The current rules schema is version 3; it supports Life-like B/S, Generations,
 explicit Moore tables, cyclic interaction, colorized Life, Larger-than-Life,
 Hodgepodge chemistry, directional Turmites, HPP lattice gas, five-species
-dominance, and Wolfram elementary 1D. Rules can also select a deterministic starter
-strategy and soup radius/density. The reader retains
+dominance, Golly von Neumann rule tables, Abelian sandpiles, and Wolfram
+elementary 1D. Rules can also select a deterministic starter strategy and soup
+radius/density, or an exact Golly-RLE starter. The reader retains
 unversioned and schema-v1/v2 rule-catalog compatibility. Stable built-in IDs
 remain unchanged for saved worlds.
 
@@ -86,6 +87,32 @@ Further research references: [Dewdney's Hodgepodge Machine description](https://
 [Cellular Automata Machines](https://people.csail.mit.edu/nhm/cam-book.pdf), and
 [five-species cyclic dominance](https://arxiv.org/abs/1308.0964).
 
+The third expansion (D-GC8) adds self-replication, sandpiles, long-range
+cycles, and trails. `SELF_REPLICATING_LOOPS_8`, `BYL_LOOP_6`, and
+`SAYAMA_LOOPS_9` are `von_neumann_table` families: Langton's Loops, Byl's
+Loop, Chou-Reggia Loops I and II, SDSR Loops, and Evoloop store their Golly
+rule tables verbatim and start from their published loops.
+`SANDPILE_PULSE_2` topples four-grain cells to their von Neumann neighbors and
+feeds a source that drops four grains every other generation; Mandala, Binary
+Star, and Critical Avalanche starters grow the sandpile fractal. Griffeath's
+313, Lava Lamp, Stripes, Squarish Spirals, Cyclic Spirals, and Turbulent Phase
+use cyclic rules with range 1..3 and square or diamond neighborhoods; their
+`inert_background` keeps a void that is not a phase, so each soup stays in its
+dish instead of invading the infinite canvas. The
+`LTL_TRAILS_7` and `LTL_TRAILS_8` families add Golly's decay trail to Larger
+than Life: Comet Rockets starts four light-speed spaceships, and Rainbow Tides,
+Neon Coral, and Bubble Swarm grow from soups. Forty-five more classic
+Life-like and Generations rules (Maze, Coral, Anneal, Vote, Diamoeba,
+Replicator, Frogs, Brian 6, Lava, Swirl, BelZhab, Bombers, Xtasy, Thrill
+Grill, and others) complete the catalog with new neon Generations palettes.
+
+Third-expansion references: [Golly's RuleTable format and rule files](https://golly.sourceforge.io/Help/formats.html#table),
+C. G. Langton, *Self-reproduction in cellular automata*, Physica D 10 (1984);
+J. Byl, Physica D 34 (1989); Reggia et al., Science 259 (1993); H. Sayama's
+SDSR (1998) and Evoloop (1999) papers; Bak--Tang--Wiesenfeld,
+[Self-organized criticality](https://doi.org/10.1103/PhysRevLett.59.381); and
+Fisch--Gravner--Griffeath's cyclic automata paper above.
+
 `RuleCatalogLoader` owns file reads and selects the first valid base catalog
 pair beside the executable, in the working directory, or in its `IllumoGame`
 subdirectory. It then layers the working-directory `families.user.json` and
@@ -106,9 +133,9 @@ B/S count chips, Generations adds its state count, elementary rules show their
 Wolfram number, cyclic rules expose successor threshold and cycle step, and
 Moore tables explain that transitions are edited in JSON. Larger-than-Life
 shows its canonical range/threshold summary and uses JSON import for parameter
-editing. Hodgepodge, Turmite, lattice-gas, and dominance definitions show their
-compiled interaction contract and retain their parameters through JSON
-import/export.
+editing. Hodgepodge, Turmite, lattice-gas, dominance, rule-table, and sandpile
+definitions show their compiled interaction contract and retain their
+parameters through JSON import/export.
 Rule settings and a configurable transition example come first; state labels
 and colors plus JSON import/export are lower sections in the same scrollable
 page. Save & Apply and Discard stay in a pinned action area below the scrolling
@@ -244,7 +271,7 @@ panel dims while settings or canvas setup is open.
 - Its revision changes only when a generation or edit changes the stored cell
   contents, allowing dependent views to skip idle resampling.
 - Rulesets supply pure `nextState`, `nextStateFromNeighborhood`,
-  `nextStateFromExtendedCount`, and `evalCell`
+  `getExtendedCountedState`, `nextStateFromExtendedCount`, and `evalCell`
   behavior. Data-defined rules compile to the same transition interface. Each ruleset's
   complete 256x9 transition table is cached once and shared by all serial and
   worker hot loops. Life-like and Generations definitions compile from neighbor

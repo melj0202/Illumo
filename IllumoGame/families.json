@@ -419,6 +419,331 @@
         { "value": 4, "name": "Lizard", "color": [65, 240, 120] },
         { "value": 5, "name": "Spock", "color": [190, 75, 255] }
       ]
+    },
+    {
+      "id": "SELF_REPLICATING_LOOPS_8",
+      "name": "Self-replicating Loops",
+      "model": "von_neumann_table",
+      "state_count": 8,
+      "states": [
+        { "value": 0, "name": "Core", "color": [70, 140, 255] },
+        { "value": 1, "name": "Void", "color": [4, 6, 16] },
+        { "value": 2, "name": "Sheath", "color": [255, 70, 96] },
+        { "value": 3, "name": "Signal III", "color": [70, 255, 140] },
+        { "value": 4, "name": "Signal IV", "color": [255, 228, 70] },
+        { "value": 5, "name": "Signal V", "color": [255, 84, 232] },
+        { "value": 6, "name": "Signal VI", "color": [246, 246, 255] },
+        { "value": 7, "name": "Signal VII", "color": [60, 238, 255] }
+      ]
+    },
+    {
+      "id": "BYL_LOOP_6",
+      "name": "Byl's Loop",
+      "model": "von_neumann_table",
+      "state_count": 6,
+      "states": [
+        { "value": 0, "name": "Core", "color": [70, 140, 255] },
+        { "value": 1, "name": "Void", "color": [4, 6, 16] },
+        { "value": 2, "name": "Sheath", "color": [255, 70, 96] },
+        { "value": 3, "name": "Signal III", "color": [70, 255, 140] },
+        { "value": 4, "name": "Signal IV", "color": [255, 228, 70] },
+        { "value": 5, "name": "Signal V", "color": [255, 84, 232] }
+      ]
+    },
+    {
+      "id": "SAYAMA_LOOPS_9",
+      "name": "Sayama Loops",
+      "model": "von_neumann_table",
+      "state_count": 9,
+      "states": [
+        { "value": 0, "name": "Core", "color": [70, 140, 255] },
+        { "value": 1, "name": "Void", "color": [4, 6, 16] },
+        { "value": 2, "name": "Sheath", "color": [255, 70, 96] },
+        { "value": 3, "name": "Signal III", "color": [70, 255, 140] },
+        { "value": 4, "name": "Signal IV", "color": [255, 228, 70] },
+        { "value": 5, "name": "Signal V", "color": [255, 84, 232] },
+        { "value": 6, "name": "Signal VI", "color": [246, 246, 255] },
+        { "value": 7, "name": "Signal VII", "color": [60, 238, 255] },
+        { "value": 8, "name": "Dissolver", "color": [255, 138, 30] }
+      ]
+    },
+    {
+      "id": "SANDPILE_PULSE_2",
+      "name": "Abelian Sandpile",
+      "model": "sandpile",
+      "state_count": 10,
+      "states": [
+        { "value": 0, "name": "One Grain", "color": [42, 74, 196] },
+        { "value": 1, "name": "Empty", "color": [5, 8, 22] },
+        { "value": 2, "name": "Two Grains", "color": [62, 204, 232] },
+        { "value": 3, "name": "Three Grains", "color": [255, 198, 64] },
+        { "value": 4, "name": "Toppling 4", "color": [255, 255, 255] },
+        { "value": 5, "name": "Toppling 5", "color": [255, 238, 214] },
+        { "value": 6, "name": "Toppling 6", "color": [255, 214, 180] },
+        { "value": 7, "name": "Toppling 7", "color": [255, 190, 150] },
+        { "value": 8, "name": "Source Drop", "color": [255, 58, 70] },
+        { "value": 9, "name": "Source Rest", "color": [196, 36, 70] }
+      ]
+    },
+    {
+      "id": "GRIFFEATH_CCA_3",
+      "name": "Griffeath Tricolor CCA",
+      "model": "cyclic",
+      "state_count": 4,
+      "states": [
+        { "value": 0, "name": "Phase 00", "color": [255, 71, 46] },
+        { "value": 1, "name": "Void", "color": [4, 6, 16] },
+        { "value": 2, "name": "Phase 01", "color": [46, 255, 71] },
+        { "value": 3, "name": "Phase 02", "color": [71, 46, 255] }
+      ]
+    },
+    {
+      "id": "GRIFFEATH_CCA_5",
+      "name": "Griffeath Five-color CCA",
+      "model": "cyclic",
+      "state_count": 6,
+      "states": [
+        { "value": 0, "name": "Phase 00", "color": [46, 192, 255] },
+        { "value": 1, "name": "Void", "color": [4, 6, 16] },
+        { "value": 2, "name": "Phase 01", "color": [150, 46, 255] },
+        { "value": 3, "name": "Phase 02", "color": [255, 46, 109] },
+        { "value": 4, "name": "Phase 03", "color": [255, 234, 46] },
+        { "value": 5, "name": "Phase 04", "color": [46, 255, 67] }
+      ]
+    },
+    {
+      "id": "GRIFFEATH_CCA_6",
+      "name": "Griffeath Six-color CCA",
+      "model": "cyclic",
+      "state_count": 7,
+      "states": [
+        { "value": 0, "name": "Phase 00", "color": [255, 46, 171] },
+        { "value": 1, "name": "Void", "color": [4, 6, 16] },
+        { "value": 2, "name": "Phase 01", "color": [255, 130, 46] },
+        { "value": 3, "name": "Phase 02", "color": [171, 255, 46] },
+        { "value": 4, "name": "Phase 03", "color": [46, 255, 130] },
+        { "value": 5, "name": "Phase 04", "color": [46, 171, 255] },
+        { "value": 6, "name": "Phase 05", "color": [130, 46, 255] }
+      ]
+    },
+    {
+      "id": "GRIFFEATH_CCA_8",
+      "name": "Griffeath Eight-color CCA",
+      "model": "cyclic",
+      "state_count": 9,
+      "states": [
+        { "value": 0, "name": "Phase 00", "color": [255, 46, 46] },
+        { "value": 1, "name": "Void", "color": [4, 6, 16] },
+        { "value": 2, "name": "Phase 01", "color": [255, 203, 46] },
+        { "value": 3, "name": "Phase 02", "color": [150, 255, 46] },
+        { "value": 4, "name": "Phase 03", "color": [46, 255, 98] },
+        { "value": 5, "name": "Phase 04", "color": [46, 255, 255] },
+        { "value": 6, "name": "Phase 05", "color": [46, 98, 255] },
+        { "value": 7, "name": "Phase 06", "color": [150, 46, 255] },
+        { "value": 8, "name": "Phase 07", "color": [255, 46, 203] }
+      ]
+    },
+    {
+      "id": "LTL_TRAILS_7",
+      "name": "Larger than Life with Trails (C7)",
+      "model": "larger_than_life",
+      "state_count": 7,
+      "states": [
+        { "value": 0, "name": "Alive", "color": [255, 246, 206] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Trail 01", "color": [255, 25, 25] },
+        { "value": 3, "name": "Trail 02", "color": [200, 215, 22] },
+        { "value": 4, "name": "Trail 03", "color": [18, 176, 43] },
+        { "value": 5, "name": "Trail 04", "color": [14, 107, 136] },
+        { "value": 6, "name": "Trail 05", "color": [38, 10, 97] }
+      ]
+    },
+    {
+      "id": "LTL_TRAILS_8",
+      "name": "Larger than Life with Trails (C8)",
+      "model": "larger_than_life",
+      "state_count": 8,
+      "states": [
+        { "value": 0, "name": "Alive", "color": [255, 246, 206] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Trail 01", "color": [255, 25, 25] },
+        { "value": 3, "name": "Trail 02", "color": [223, 196, 22] },
+        { "value": 4, "name": "Trail 03", "color": [66, 192, 19] },
+        { "value": 5, "name": "Trail 04", "color": [16, 160, 101] },
+        { "value": 6, "name": "Trail 05", "color": [13, 76, 129] },
+        { "value": 7, "name": "Trail 06", "color": [38, 10, 97] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_3_NEON",
+      "name": "Neon Three-state Generations",
+      "model": "generations",
+      "state_count": 3,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [255, 250, 214] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Trail 01", "color": [31, 228, 255] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_6_PHASE",
+      "name": "Six-state Generations",
+      "model": "generations",
+      "state_count": 6,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [255, 250, 214] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Trail 01", "color": [255, 31, 98] },
+        { "value": 3, "name": "Trail 02", "color": [199, 94, 24] },
+        { "value": 4, "name": "Trail 03", "color": [130, 143, 17] },
+        { "value": 5, "name": "Trail 04", "color": [26, 87, 10] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_8_PHASE",
+      "name": "Eight-state Generations",
+      "model": "generations",
+      "state_count": 8,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [255, 250, 214] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Trail 01", "color": [255, 138, 31] },
+        { "value": 3, "name": "Trail 02", "color": [178, 221, 27] },
+        { "value": 4, "name": "Trail 03", "color": [28, 188, 23] },
+        { "value": 5, "name": "Trail 04", "color": [18, 154, 115] },
+        { "value": 6, "name": "Trail 05", "color": [14, 72, 120] },
+        { "value": 7, "name": "Trail 06", "color": [26, 10, 87] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_9_PHASE",
+      "name": "Nine-state Generations",
+      "model": "generations",
+      "state_count": 9,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [255, 250, 214] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Trail 01", "color": [31, 120, 255] },
+        { "value": 3, "name": "Trail 02", "color": [37, 27, 227] },
+        { "value": 4, "name": "Trail 03", "color": [111, 24, 199] },
+        { "value": 5, "name": "Trail 04", "color": [163, 21, 171] },
+        { "value": 6, "name": "Trail 05", "color": [143, 17, 93] },
+        { "value": 7, "name": "Trail 06", "color": [115, 14, 29] },
+        { "value": 8, "name": "Trail 07", "color": [87, 33, 10] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_16_PHASE",
+      "name": "Sixteen-state Generations",
+      "model": "generations",
+      "state_count": 16,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [255, 250, 214] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Trail 01", "color": [251, 31, 255] },
+        { "value": 3, "name": "Trail 02", "color": [242, 29, 168] },
+        { "value": 4, "name": "Trail 03", "color": [229, 27, 84] },
+        { "value": 5, "name": "Trail 04", "color": [216, 43, 26] },
+        { "value": 6, "name": "Trail 05", "color": [203, 106, 24] },
+        { "value": 7, "name": "Trail 06", "color": [190, 161, 23] },
+        { "value": 8, "name": "Trail 07", "color": [147, 177, 21] },
+        { "value": 9, "name": "Trail 08", "color": [83, 164, 20] },
+        { "value": 10, "name": "Trail 09", "color": [27, 151, 18] },
+        { "value": 11, "name": "Trail 10", "color": [17, 138, 54] },
+        { "value": 12, "name": "Trail 11", "color": [15, 126, 89] },
+        { "value": 13, "name": "Trail 12", "color": [14, 108, 113] },
+        { "value": 14, "name": "Trail 13", "color": [12, 64, 100] },
+        { "value": 15, "name": "Trail 14", "color": [10, 27, 87] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_25_PHASE",
+      "name": "Twenty-five-state Generations",
+      "model": "generations",
+      "state_count": 25,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [255, 250, 214] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Trail 01", "color": [255, 31, 31] },
+        { "value": 3, "name": "Trail 02", "color": [247, 74, 30] },
+        { "value": 4, "name": "Trail 03", "color": [240, 115, 29] },
+        { "value": 5, "name": "Trail 04", "color": [232, 153, 28] },
+        { "value": 6, "name": "Trail 05", "color": [224, 188, 27] },
+        { "value": 7, "name": "Trail 06", "color": [212, 217, 26] },
+        { "value": 8, "name": "Trail 07", "color": [167, 209, 25] },
+        { "value": 9, "name": "Trail 08", "color": [125, 201, 24] },
+        { "value": 10, "name": "Trail 09", "color": [85, 194, 23] },
+        { "value": 11, "name": "Trail 10", "color": [48, 186, 22] },
+        { "value": 12, "name": "Trail 11", "color": [21, 178, 29] },
+        { "value": 13, "name": "Trail 12", "color": [21, 171, 58] },
+        { "value": 14, "name": "Trail 13", "color": [20, 163, 85] },
+        { "value": 15, "name": "Trail 14", "color": [19, 156, 109] },
+        { "value": 16, "name": "Trail 15", "color": [18, 148, 130] },
+        { "value": 17, "name": "Trail 16", "color": [17, 132, 140] },
+        { "value": 18, "name": "Trail 17", "color": [16, 101, 133] },
+        { "value": 19, "name": "Trail 18", "color": [15, 72, 125] },
+        { "value": 20, "name": "Trail 19", "color": [14, 47, 117] },
+        { "value": 21, "name": "Trail 20", "color": [13, 24, 110] },
+        { "value": 22, "name": "Trail 21", "color": [20, 12, 102] },
+        { "value": 23, "name": "Trail 22", "color": [36, 11, 94] },
+        { "value": 24, "name": "Trail 23", "color": [49, 10, 87] }
+      ]
+    },
+    {
+      "id": "GENERATIONS_48_PHASE",
+      "name": "Forty-eight-state Generations",
+      "model": "generations",
+      "state_count": 48,
+      "states": [
+        { "value": 0, "name": "Firing", "color": [255, 250, 214] },
+        { "value": 1, "name": "Background", "color": [5, 8, 22] },
+        { "value": 2, "name": "Trail 01", "color": [255, 192, 31] },
+        { "value": 3, "name": "Trail 02", "color": [251, 237, 30] },
+        { "value": 4, "name": "Trail 03", "color": [216, 248, 30] },
+        { "value": 5, "name": "Trail 04", "color": [167, 244, 29] },
+        { "value": 6, "name": "Trail 05", "color": [119, 240, 29] },
+        { "value": 7, "name": "Trail 06", "color": [73, 236, 28] },
+        { "value": 8, "name": "Trail 07", "color": [28, 233, 28] },
+        { "value": 9, "name": "Trail 08", "color": [27, 229, 70] },
+        { "value": 10, "name": "Trail 09", "color": [27, 225, 112] },
+        { "value": 11, "name": "Trail 10", "color": [27, 221, 151] },
+        { "value": 12, "name": "Trail 11", "color": [26, 218, 190] },
+        { "value": 13, "name": "Trail 12", "color": [26, 201, 214] },
+        { "value": 14, "name": "Trail 13", "color": [25, 158, 210] },
+        { "value": 15, "name": "Trail 14", "color": [25, 117, 206] },
+        { "value": 16, "name": "Trail 15", "color": [24, 77, 203] },
+        { "value": 17, "name": "Trail 16", "color": [24, 38, 199] },
+        { "value": 18, "name": "Trail 17", "color": [46, 23, 195] },
+        { "value": 19, "name": "Trail 18", "color": [81, 23, 191] },
+        { "value": 20, "name": "Trail 19", "color": [115, 23, 188] },
+        { "value": 21, "name": "Trail 20", "color": [147, 22, 184] },
+        { "value": 22, "name": "Trail 21", "color": [178, 22, 180] },
+        { "value": 23, "name": "Trail 22", "color": [176, 21, 145] },
+        { "value": 24, "name": "Trail 23", "color": [173, 21, 110] },
+        { "value": 25, "name": "Trail 24", "color": [169, 20, 76] },
+        { "value": 26, "name": "Trail 25", "color": [165, 20, 43] },
+        { "value": 27, "name": "Trail 26", "color": [162, 27, 19] },
+        { "value": 28, "name": "Trail 27", "color": [158, 56, 19] },
+        { "value": 29, "name": "Trail 28", "color": [154, 84, 18] },
+        { "value": 30, "name": "Trail 29", "color": [150, 110, 18] },
+        { "value": 31, "name": "Trail 30", "color": [147, 135, 18] },
+        { "value": 32, "name": "Trail 31", "color": [128, 143, 17] },
+        { "value": 33, "name": "Trail 32", "color": [98, 139, 17] },
+        { "value": 34, "name": "Trail 33", "color": [70, 135, 16] },
+        { "value": 35, "name": "Trail 34", "color": [44, 132, 16] },
+        { "value": 36, "name": "Trail 35", "color": [18, 128, 15] },
+        { "value": 37, "name": "Trail 36", "color": [15, 124, 35] },
+        { "value": 38, "name": "Trail 37", "color": [14, 120, 57] },
+        { "value": 39, "name": "Trail 38", "color": [14, 117, 77] },
+        { "value": 40, "name": "Trail 39", "color": [14, 113, 96] },
+        { "value": 41, "name": "Trail 40", "color": [13, 105, 109] },
+        { "value": 42, "name": "Trail 41", "color": [13, 82, 105] },
+        { "value": 43, "name": "Trail 42", "color": [12, 60, 102] },
+        { "value": 44, "name": "Trail 43", "color": [12, 39, 98] },
+        { "value": 45, "name": "Trail 44", "color": [11, 20, 94] },
+        { "value": 46, "name": "Trail 45", "color": [19, 11, 90] },
+        { "value": 47, "name": "Trail 46", "color": [35, 10, 87] }
+      ]
     }
   ]
 }
