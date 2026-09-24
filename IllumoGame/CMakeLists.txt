@@ -6,6 +6,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/CellClipboard.cpp
   Source/Game/CellClipboardSystem.cpp
   Source/Game/CSimPlatformNative.cpp
+  Source/Game/CSimSounds.cpp
   Source/Game/CSimTypeface.cpp
   Source/Game/CellContext.cpp
   Source/Game/CellGameModule.cpp
@@ -67,6 +68,7 @@ if(BUILD_TESTING)
     Tests/TestCanvasInf.cpp
     Tests/TestWorldTopology.cpp
     Tests/TestConfigurationMenu.cpp
+    Tests/TestCSimSounds.cpp
     Tests/TestExitConfirmDialog.cpp
     Tests/TestIllumoGameConfig.cpp
     Tests/TestEditor.cpp

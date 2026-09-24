@@ -27,7 +27,10 @@ enum class GuestCapability : std::uint32_t
   ProjectFiles = 1u << 9u,
   // Extra top-level windows showing guest-drawn surfaces (frame schema v5,
   // input v2); offered only when the host can present them.
-  Windows = 1u << 10u
+  Windows = 1u << 10u,
+  // Sound effects mixed by the host (Audio service); offered only when the
+  // host has an audio output.
+  Audio = 1u << 11u
 };
 
 enum class GuestCall : std::uint32_t
@@ -57,7 +60,7 @@ struct GuestEnvelope
 {
   static constexpr std::uint32_t Magic = 0x31474c49u; // ILG1
   static constexpr std::uint32_t Version = 1;
-  static constexpr std::uint32_t KnownCapabilities = (1u << 11u) - 1u;
+  static constexpr std::uint32_t KnownCapabilities = (1u << 12u) - 1u;
   static constexpr std::size_t HeaderBytes = 32;
 
   GuestCall call = GuestCall::Init;

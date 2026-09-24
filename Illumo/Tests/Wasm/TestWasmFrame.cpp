@@ -29,6 +29,10 @@
 #include <stdexcept>
 #include <thread>
 
+// TestWasmAudio.cpp: the Audio capability cases.
+bool
+runWasmAudioTest(const std::string& name);
+
 class MemoryClipboard final : public WasmHostClipboard
 {
 public:
@@ -1444,7 +1448,8 @@ main(int argc, char** argv)
               "SdkContract\nIllumo.Wasm.GameFiles\nIllumo.Wasm."
               "DisplayServices\nIllumo.Wasm.ClipboardServices\nIllumo.Wasm."
               "ConsoleServices\nIllumo.Wasm.DialogServices\nIllumo.Wasm."
-              "RetainedResources");
+              "RetainedResources\nIllumo.Wasm.AudioServiceDecoder\nIllumo."
+              "Wasm.AudioServices\nIllumo.Wasm.GuestAudio");
     return 0;
   }
   if (argc != 3 || std::string(argv[1]) != "--run") {
@@ -1453,6 +1458,9 @@ main(int argc, char** argv)
   const std::string name(argv[2]);
   if (!name.starts_with("Illumo.Wasm.")) {
     return 2;
+  }
+  if (name.find("Audio", 12) != std::string::npos) {
+    return runWasmAudioTest(name.substr(12)) ? 0 : 1;
   }
   return run(name.substr(12)) ? 0 : 1;
 }

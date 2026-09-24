@@ -7,6 +7,7 @@
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmGameServices.h>
 #include <Illumo/Wasm/WasmPanelWindows.h>
+#include <IllumoGuest/Audio.h>
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Console.h>
 #include <IllumoGuest/Dialog.h>
@@ -139,6 +140,7 @@ WasmGameServices::cancel()
   m_listenRequests.clear();
   m_invocations.clear();
   unregisterCommands();
+  releaseAudio();
   if (m_files) {
     m_files->cancel();
   }
@@ -275,6 +277,97 @@ WasmGameServices::completeWindows(GuestServices& results)
     m_windowRequests.pop_front();
   }
 }
+void
+WasmGameServices::setAudio(IAudio* audio)
+{
+  if (audio != m_audio) {
+    releaseAudio();
+    m_audio = audio;
+  }
+}
+
+void
+WasmGameServices::releaseAudio()
+{
+  if (m_audio == nullptr) {
+    m_sounds.clear();
+    m_soundSamples = 0;
+    return;
+  }
+  for (const std::pair<const std::uint32_t, AudioSound>& sound : m_sounds) {
+    m_audio->destroySound(sound.second.handle);
+  }
+  if (!m_sounds.empty()) {
+    m_audio->stopAll();
+  }
+  if (m_masterVolumeChanged) {
+    m_audio->setMasterVolume(1.0f);
+    m_masterVolumeChanged = false;
+  }
+  m_sounds.clear();
+  m_soundSamples = 0;
+}
+
+void
+WasmGameServices::completeAudio(std::uint64_t request,
+                                GuestAudioRequest& audio,
+                                GuestServices& results)
+{
+  // Unknown sound ids, a full table or budget and a missing output are all
+  // rejections: the guest keeps running and nothing else changes.
+  bool accepted = false;
+  if (m_audio != nullptr && hasGrant(m_grants, GuestCapability::Audio)) {
+    const std::map<std::uint32_t, AudioSound>::iterator found =
+      m_sounds.find(audio.sound);
+    switch (audio.action) {
+      case GuestAudioAction::Create:
+        if (found == m_sounds.end() &&
+            audio.samples.size() <= kMaximumGuestSamples - m_soundSamples) {
+          AudioClip clip;
+          clip.channels = audio.channels;
+          clip.sampleRate = audio.sampleRate;
+          clip.samples = std::move(audio.samples);
+          const SoundHandle handle = m_audio->createSound(clip);
+          if (handle.isValid()) {
+            m_sounds.emplace(audio.sound,
+                             AudioSound{ handle, clip.samples.size() });
+            m_soundSamples += clip.samples.size();
+            accepted = true;
+          }
+        }
+        break;
+      case GuestAudioAction::Destroy:
+        if (found != m_sounds.end()) {
+          m_audio->destroySound(found->second.handle);
+          m_soundSamples -= found->second.samples;
+          m_sounds.erase(found);
+          accepted = true;
+        }
+        break;
+      case GuestAudioAction::Play:
+        if (found != m_sounds.end()) {
+          accepted = m_audio->play(found->second.handle,
+                                   { audio.volume, audio.pan, audio.pitch });
+        }
+        break;
+      case GuestAudioAction::StopAll:
+        m_audio->stopAll();
+        accepted = true;
+        break;
+      case GuestAudioAction::SetVolume:
+        m_audio->setMasterVolume(audio.volume);
+        m_masterVolumeChanged = true;
+        accepted = true;
+        break;
+    }
+  }
+  results.records.push_back(
+    { request,
+      GuestService::Audio,
+      accepted ? GuestServiceStatus::Complete : GuestServiceStatus::Rejected,
+      {} });
+}
+
 bool
 WasmGameServices::completeClipboard(GuestServices& results)
 {
@@ -482,6 +575,7 @@ try {
   }
   GuestServices rendering;
   GuestServices files;
+  std::vector<std::pair<std::uint64_t, GuestAudioRequest>> audio;
   unsigned int listens = 0;
   for (const GuestServiceRecord& record : incoming.records) {
     if (record.request <= last) {
@@ -507,6 +601,13 @@ try {
         m_error = "Invalid window request";
         return false;
       }
+    } else if (record.operation == GuestService::Audio) {
+      GuestAudioRequest request;
+      if (!GuestAudioRequest::read(record.payload, request)) {
+        m_error = "Invalid audio request";
+        return false;
+      }
+      audio.emplace_back(record.request, std::move(request));
     } else if (record.operation == GuestService::Dialog) {
       GuestDialogRequest request;
       if (!GuestDialogRequest::read(record.payload, request)) {
@@ -583,6 +684,10 @@ try {
   completeWindows(results);
   completeDialog(results);
   completeConsole(results);
+  // In request order, so a sound registered and played in one update plays.
+  for (std::pair<std::uint64_t, GuestAudioRequest>& request : audio) {
+    completeAudio(request.first, request.second, results);
+  }
   // Poll before accepting another operation. Never block the control frame on
   // worker compilation, execution or a game-defined synchronization barrier.
   if (m_worker && m_job.request != 0) {

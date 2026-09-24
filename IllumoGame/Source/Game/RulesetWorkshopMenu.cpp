@@ -1,4 +1,5 @@
 #include "RulesetWorkshopMenu.h"
+#include "CSimSounds.h"
 #include "RuleCatalogLoader.h"
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Font.h>
@@ -503,6 +504,7 @@ RulesetWorkshopMenu::selectRow(int row)
     }
     selectedRow = row;
     animator.resetCaret();
+    CSimSounds::play(CSimSound::MenuHover);
   }
   if (nextBody >= 0) {
     firstVisibleRow =
@@ -656,6 +658,9 @@ void
 RulesetWorkshopMenu::setError(const std::string& error)
 {
   errorMessage = error;
+  if (!error.empty()) {
+    CSimSounds::play(CSimSound::MenuError);
+  }
   rebuildVisual();
 }
 
@@ -857,6 +862,11 @@ RulesetWorkshopMenu::update(InputManager* input)
     }
   }
   rebuildVisual();
+  // Apply, import and export are voiced by the canvas once they succeed or
+  // fail; discarding is always a step back.
+  if (action == RulesetWorkshopAction::Cancel) {
+    CSimSounds::play(CSimSound::MenuBack);
+  }
   return action;
 }
 
@@ -941,6 +951,7 @@ RulesetWorkshopMenu::toggleNeighborCount(Control control, unsigned int count)
   draft.rule.clear();
   previewDirty = true;
   errorMessage.clear();
+  CSimSounds::play(CSimSound::MenuSelect);
   return true;
 }
 
@@ -1085,6 +1096,7 @@ RulesetWorkshopMenu::changeControl(Control control, int direction)
       previewDirty = true;
     }
     animator.triggerValuePulse(direction);
+    CSimSounds::play(CSimSound::MenuSelect);
   }
   return changed;
 }

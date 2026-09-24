@@ -1,3 +1,4 @@
+#include "Game/CSimSounds.h"
 #include "Game/CanvasCoordinatePolicy.h"
 #include "Game/CellGameModule.h"
 #include "Game/RuleCatalogLoader.h"
@@ -1002,7 +1003,7 @@ testReleaseConfigurationWorkflow()
              fixture.env.getVar("fps").valueAsLong == 144,
            "invalid FPS cap leaves applied preferences intact");
   menu->open(applied);
-  for (int row = 0; row < 17; ++row) {
+  for (int row = 0; row < 18; ++row) {
     fixture.input.getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
   }
@@ -3117,8 +3118,12 @@ hasCoveredCornerCell(GameVisual& veil, float cellWidth, float cellHeight)
 static void
 testCanvasReturn()
 {
+  CSimSounds::resetCounts();
   CanvasReturnHost host;
   CellGameFixture fixture;
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasEnter) == 1,
+           "starting the canvas plays the enter cue");
   fixture.context.moduleHost = &host;
   GameVisual& veil =
     CellGameModuleTestAccess::getCanvasEntranceVisual(fixture.module);
@@ -3135,6 +3140,9 @@ testCanvasReturn()
   fixture.module.Update(0.0);
   testEqInt(
     g, host.requests, 0, "Main Menu waits for the canvas exit animation");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasExit) == 1,
+           "leaving for the main menu plays the exit cue at once");
   fixture.module.Update(0.24);
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
@@ -3162,6 +3170,10 @@ testCanvasReturn()
            "canvas is covered when the module transition is requested");
   fixture.module.Update(1.0);
   testEqInt(g, host.requests, 1, "completed exit submits only once");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasExit) == 1,
+           "repeated return requests voice the exit once");
+  CSimSounds::resetCounts();
 }
 
 static void

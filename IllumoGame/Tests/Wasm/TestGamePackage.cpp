@@ -1,4 +1,5 @@
 #include "../BenchWorlds.h"
+#include "Game/CSimSounds.h"
 #include "Game/IllumoCodec.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "Wasm/CatalogBootstrap.h"
@@ -10,6 +11,7 @@
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
+#include <Illumo/Testing/AudioFixtures.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
@@ -922,11 +924,134 @@ catalogMerge()
   return counters.failures == 0;
 }
 
+// The package's sound cues through the generic host: the guest decodes its
+// own Sounds/*.wav, registers them over the Audio service and plays cues as
+// the player moves through the menus and into and out of the canvas.
+static bool
+gamePackageAudio()
+{
+  TestCounters counters;
+  RuleSetRegistry registry;
+  if (!registry.loadFromCatalogTexts(readText(ILLUMO_FAMILIES),
+                                     readText(ILLUMO_RULES))) {
+    return false;
+  }
+  RuleSetRegistry::instance() = registry;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-game-audio-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  WasmFileRoots files{ root / "package", root / "storage" };
+  std::filesystem::create_directories(files.package / "Sounds");
+  std::filesystem::create_directories(files.storage);
+  std::filesystem::copy_file(ILLUMO_FAMILIES, files.package / "families.json");
+  std::filesystem::copy_file(ILLUMO_RULES, files.package / "rulesets.json");
+  std::filesystem::create_directories(files.package / "Scenes");
+  std::filesystem::copy_file(ILLUMO_RENDER3D_SCENE,
+                             files.package / "Scenes" / "render3d-test.ilsc");
+  std::filesystem::copy_file(ILLUMO_GAME_DEFAULTS,
+                             files.package / "envvars.json");
+  // Each cue's file has its own length, which identifies it on the host.
+  const std::vector<std::string> sounds = CSimSounds::fileNames();
+  for (std::size_t cue = 0; cue < sounds.size(); ++cue) {
+    const std::size_t frames = 100u * (cue + 1u);
+    const std::vector<std::byte> wav =
+      makeWav(makeTone(frames, 1, 22050), 1, 22050);
+    std::ofstream(files.package / sounds[cue], std::ios::binary)
+      .write(reinterpret_cast<const char*>(wav.data()),
+             static_cast<std::streamsize>(wav.size()));
+  }
+
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  env.setVar("fullscreen", false);
+  Camera camera(glm::vec2(0, 0), 1, &env);
+  CanvasObservingBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  CommandRegistry commands;
+  CommandLine console(&env, &commands, &window, &renderer, "Test");
+  Logger::setContext(&env, &console);
+  InputManager input(nullptr);
+  IllumoContext context;
+  context.renderer = &renderer;
+  context.window = &window;
+  context.inputManager = &input;
+  context.envVars = &env;
+  context.commandRegistry = &commands;
+  context.commandLine = &console;
+
+  RecordingAudio audio;
+  // Plays of one cue, identified by its registered clip's length.
+  const std::function<std::size_t(CSimSound)> plays = [&](CSimSound cue) {
+    const std::size_t frames = 100u * (static_cast<std::size_t>(cue) + 1u);
+    std::size_t count = 0;
+    for (const RecordingAudio::Play& play : audio.plays) {
+      count += play.sound.slot >= 1 && play.sound.slot <= audio.clips.size() &&
+                   audio.clips[play.sound.slot - 1].frames() == frames
+                 ? 1u
+                 : 0u;
+    }
+    return count;
+  };
+
+  WasmGameModule game(
+    readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(), {}, {}, files);
+  game.setAudio(&audio);
+  testTrue(counters, game.Start(&context), "the package starts with audio");
+  testTrue(counters,
+           pumpUntil(game, [&]() { return commands.HasCommand("play"); }),
+           "the main menu comes up");
+  testTrue(counters,
+           audio.clips.size() == sounds.size(),
+           "every packaged sound is decoded in the guest and registered");
+  testTrue(counters,
+           plays(CSimSound::ProgramStart) == 1,
+           "the start cue plays with the first screen");
+  const std::size_t hoversBefore = plays(CSimSound::MenuHover);
+  input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  int frame = 0;
+  pumpUntil(game, [&]() { return ++frame > 3; });
+  testTrue(counters,
+           plays(CSimSound::MenuHover) == hoversBefore + 1,
+           "moving the menu selection plays the hover cue");
+  bool quiet = false;
+  for (const RecordingAudio::Play& play : audio.plays) {
+    if (audio.clips[play.sound.slot - 1].frames() == 200u) {
+      quiet = std::abs(play.playback.volume - 0.35f * 0.8f) < 1e-4f;
+    }
+  }
+  testTrue(counters, quiet, "the packaged 80% volume scales the cue mix");
+  input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
+  testTrue(counters,
+           enterCanvas(game, commands, input) &&
+             plays(CSimSound::CanvasEnter) == 1,
+           "entering the canvas plays the enter cue");
+  execute(commands, "menu");
+  testTrue(counters,
+           pumpUntil(game, [&]() { return commands.HasCommand("play"); }) &&
+             plays(CSimSound::CanvasExit) == 1,
+           "returning to the menu plays the exit cue");
+  game.Exit();
+  testTrue(counters,
+           audio.destroyed.size() == sounds.size() && audio.stops >= 1,
+           "the host releases the guest's sounds when it exits");
+  Logger::setContext(nullptr, nullptr);
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return counters.failures == 0;
+}
+
 int
 main(int argc, char** argv)
 {
   if (argc == 2 && std::string(argv[1]) == "--list") {
     std::puts("IllumoGame.Wasm.GamePackage");
+    std::puts("IllumoGame.Wasm.GamePackageAudio");
     std::puts("IllumoGame.Wasm.CatalogMerge");
     std::puts("IllumoGame.Wasm.GamePackageLanes");
     std::puts("IllumoGame.Wasm.PackageBench");
@@ -944,6 +1069,9 @@ main(int argc, char** argv)
   }
   if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackage") {
     return gamePackage() ? 0 : 1;
+  }
+  if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackageAudio") {
+    return gamePackageAudio() ? 0 : 1;
   }
   if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackageLanes") {
     return gamePackageLanes() ? 0 : 1;

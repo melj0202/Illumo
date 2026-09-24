@@ -16,7 +16,11 @@ Illumo:
   tools read it at use time and never cache it. Its `panelSurfaces` slot
   (`IPanelSurfaces*`, null by default) offers extra windows for detached tool
   panels (D-E27); the guest application composes it only when the host
-  granted `Windows`, and products must work fully docked without it.
+  granted `Windows`, and products must work fully docked without it. Its
+  `audio` slot (`IAudio*`, null by default) plays sound effects (D-E28); the
+  guest application composes it only when the host granted `Audio`, and
+  products must also work silently. The native engine never fills it; the
+  WASM runtime's `AudioDevice` reaches guests through `WasmGameModule`.
 - `IModule` retains `Start` / `Update` / `DispatchDrawables` / `Exit`.
 - Optional `IModule::OnCloseRequested()` accepts by default. The runner calls
   `Illumo::processCloseRequest()` before termination; started modules may defer

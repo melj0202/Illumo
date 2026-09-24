@@ -50,4 +50,6 @@ public:
 
 private:
   GuiDialog m_dialog;
+  // The dialog recomputes hover every frame; cues fire when it changes.
+  int m_lastHovered = -1;
 };

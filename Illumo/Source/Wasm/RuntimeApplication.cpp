@@ -1,3 +1,4 @@
+#include <Illumo/Audio/AudioDevice.h>
 #include <Illumo/Content/PackageMounts.h>
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Rendering/FrameCapture.h>
@@ -302,13 +303,15 @@ runtimeExitCode()
 class RuntimeModule final : public IModule
 {
 public:
-  RuntimeModule(std::unique_ptr<WasmGameModule> guest,
+  RuntimeModule(std::unique_ptr<AudioDevice> audio,
+                std::unique_ptr<WasmGameModule> guest,
                 std::string title,
                 std::string application,
                 std::filesystem::path capture,
                 std::uint64_t captureFrame,
                 BenchOptions bench)
-    : m_guest(std::move(guest))
+    : m_audio(std::move(audio))
+    , m_guest(std::move(guest))
     , m_title(std::move(title))
     , m_application(std::move(application))
     , m_capture(std::move(capture))
@@ -629,6 +632,8 @@ private:
     std::cout << result.dump() << std::endl;
   }
 
+  // Declared first so it outlives the guest, which borrows it.
+  std::unique_ptr<AudioDevice> m_audio;
   std::unique_ptr<WasmGameModule> m_guest;
   std::string m_title;
   std::string m_application;
@@ -927,7 +932,19 @@ createGuestModuleFrom(IEnvVars* environment)
   if (!capture.empty() || bench.frames != 0) {
     guest->setSurfaceWindows(nullptr);
   }
-  return std::make_unique<RuntimeModule>(std::move(guest),
+  // Sound plays through the default output device. Captures and benchmarks
+  // stay silent, and a machine without an output runs without audio.
+  std::unique_ptr<AudioDevice> audio;
+  if (capture.empty() && bench.frames == 0) {
+    std::string audioError;
+    audio = AudioDevice::create({}, audioError);
+    if (!audio) {
+      Logger::LogWarning("Audio disabled: " + audioError);
+    }
+    guest->setAudio(audio.get());
+  }
+  return std::make_unique<RuntimeModule>(std::move(audio),
+                                         std::move(guest),
                                          std::move(title),
                                          std::move(application),
                                          std::move(capture),

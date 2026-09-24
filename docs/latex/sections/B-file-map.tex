@@ -38,6 +38,10 @@
 \path{Illumo/Include/Illumo/Gui/PanelSurfaces.h} & \texttt{IPanelSurfaces}, extra windows for detached panels (D-E27) \\
 \path{Illumo/Source/Wasm/WasmPanelWindows.cpp} & Host panel windows: replay, readback, present, events (D-R27) \\
 \path{IllumoGuest/Include/IllumoGuest/PanelSurfaces.h} & Guest \texttt{GuestPanelSurfaces} over the Window service \\
+\path{Illumo/Include/Illumo/Audio/*} & \texttt{IAudio}, \texttt{AudioClip}/\texttt{AudioDecoder}, native \texttt{AudioDevice} (D-E28) \\
+\path{Illumo/Source/Audio/*} & miniaudio-backed decoding (the one implementation unit) and output mixing \\
+\path{IllumoGuest/Include/IllumoGuest/Audio.h} & Audio service wire record and guest \texttt{GuestAudio} \\
+\path{IllumoGame/Source/Game/CSimSounds.*} & CSim sound cues and the \texttt{soundVolume} setting \\
 \path{Illumo/Include/Illumo/Content/} & \texttt{Illumo::Content} public API: paths, manifests, archives, file tree, scenes \\
 \path{Illumo/Source/Content/IlscCodec.cpp} & \texttt{.ilsc} format 2 strict parser and canonical encoder \\
 \path{Illumo/Source/Content/SceneInstance.cpp} & Live graph, attachments, lighting, skybox, picking from a document \\

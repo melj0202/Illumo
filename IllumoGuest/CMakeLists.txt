@@ -42,7 +42,8 @@ illumo_add_guest(PaddleFaultyMod Examples/Paddle/PaletteMod.cpp)
 target_compile_definitions(PaddleFaultyMod PRIVATE ILLUMO_FAULTY_MOD)
 
 add_library(IllumoGuestRendering STATIC
-  Source/RecordingBackend.cpp Source/FontProvider.cpp Source/Diagnostics.cpp Source/InputProvider.cpp Source/Files.cpp Source/FileTree.cpp Source/Environment.cpp Source/Display.cpp Source/Clipboard.cpp Source/Console.cpp Source/Dialog.cpp
+  Source/RecordingBackend.cpp Source/FontProvider.cpp Source/Diagnostics.cpp Source/InputProvider.cpp Source/Files.cpp Source/FileTree.cpp Source/Environment.cpp Source/Display.cpp Source/Clipboard.cpp Source/Console.cpp Source/Dialog.cpp Source/Audio.cpp
+  ../Illumo/Source/Audio/AudioDecoder.cpp
   ../Illumo/Source/Rendering/Renderer.cpp
   ../Illumo/Source/Rendering/RendererStyles.cpp
   ../Illumo/Source/Rendering/Camera.cpp
@@ -51,7 +52,15 @@ add_library(IllumoGuestRendering STATIC
   ../Illumo/Source/Rendering/Primitives/GameVisual.cpp
   ../Illumo/Source/Services/EnvVarsValues.cpp)
 target_sources(IllumoGuestRendering PRIVATE ../Illumo/Source/Services/InputManagerState.cpp)
-target_include_directories(IllumoGuestRendering SYSTEM PRIVATE "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include")
+target_include_directories(IllumoGuestRendering SYSTEM PRIVATE
+  "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
+  "${ILLUMO_ROOT}/Illumo/thirdparty/miniaudio-0.11.25")
+# Guests decode their own sound files; miniaudio here is only its decoders
+# (no devices, threads, mixing engine or node graph), reached through their
+# memory entry points so no file-system import is linked. The host mixes.
+target_compile_definitions(IllumoGuestRendering PRIVATE
+  MA_NO_DEVICE_IO MA_NO_THREADING MA_NO_ENGINE MA_NO_NODE_GRAPH
+  MA_NO_RESOURCE_MANAGER MA_NO_ENCODING MA_NO_GENERATION)
 target_link_libraries(IllumoGuestRendering PUBLIC IllumoGuestOptions)
 target_include_directories(IllumoGuestRendering PUBLIC "${ILLUMO_ROOT}/Illumo/Include")
 target_include_directories(IllumoGuestRendering SYSTEM PUBLIC "${_illumo_guest_math}")
@@ -147,6 +156,7 @@ illumo_add_guest(IllumoGame
   ../IllumoGame/Source/Game/CellContext.cpp
   ../IllumoGame/Source/Game/CellGameModule.cpp
   ../IllumoGame/Source/Game/ConfigurationMenu.cpp
+  ../IllumoGame/Source/Game/CSimSounds.cpp
   ../IllumoGame/Source/Game/CSimTypeface.cpp
   ../IllumoGame/Source/Game/Cursor.cpp
   ../IllumoGame/Source/Game/ExitConfirmDialog.cpp

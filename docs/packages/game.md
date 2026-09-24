@@ -432,6 +432,20 @@ Frame-delta-driven scalar state provides an eased reveal, staggered rows, a
 gliding selection highlight, and a short pulse after values change; input
 remains live during every transition.
 
+Sound cues (D-E28): `CSimSounds` plays the package's `Sounds/*.wav` through
+`IllumoContext::audio` when the host granted `Audio`. The start cue plays with
+the first screen; menus play hover when the selection or pointed button
+changes, select when a value changes or an action succeeds, back on cancel
+or discard, and error for rejected keystrokes, values at their limit,
+disabled rows and reported errors; the canvas plays enter at the end of its
+startup and exit when the return to the main menu begins. Each cue has a mix
+level (hover is quietest) scaled by `soundVolume` (0-100, default 80), the F1
+"Sound volume" row, which previews each step at the new level. The bank is
+installed for the store's lifetime so menus without a context can fire cues;
+without it cues are silent but counted for tests. The WAV sources in
+`IllumoGame/Assets` are not tracked in git; a package staged without them is
+silent.
+
 That behavior is not restated per screen. `MainMenuModule`,
 `ConfigurationMenu`, `NewSimulationMenu`, and `RulesetWorkshopMenu` share
 `Illumo/Gui/GuiMenuShell`: `GuiEasing` curves and spring shapes,

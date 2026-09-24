@@ -1,3 +1,4 @@
+#include "Game/CSimSounds.h"
 #include "Game/ConfigurationMenu.h"
 #include "Game/RuleCatalogLoader.h"
 #include "Rulesets/RuleSetRegistry.h"
@@ -245,7 +246,7 @@ testConfigurationNavigationAndActions()
            fixture.menu.getValuePulseForTesting() == 0.0f,
            "value accent pulse fades to rest");
 
-  for (int row = 0; row < 15; ++row) {
+  for (int row = 0; row < 16; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -297,7 +298,7 @@ testConfigurationNavigationAndActions()
            "reopening preserves the hints setting");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 17; ++row) {
+  for (int row = 0; row < 18; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -554,6 +555,81 @@ testDisplaySettingsAndScrolling()
   testTrue(g, foundCap, "scrolling to actions retains nearby display controls");
 }
 
+static void
+testSoundVolumeAndCues()
+{
+  ConfigurationMenuFixture fixture;
+  CSimSounds::resetCounts();
+  SimulatorConfiguration initial = defaultConfiguration();
+  initial.soundVolume = 90;
+  fixture.menu.open(initial);
+  fixture.menu.tick(1.0f);
+  fixture.press(KeyCode::Up);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == 0,
+           "a selection that cannot move is silent");
+  for (int row = 0; row < 15; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == 15,
+           "every selection change plays the hover cue");
+
+  SimulatorConfiguration parsed;
+  std::string error;
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.soundVolume == 100 &&
+             CSimSounds::playCount(CSimSound::MenuSelect) == 1,
+           "RIGHT raises the volume by 10 and previews it");
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.soundVolume == 100 &&
+             CSimSounds::playCount(CSimSound::MenuError) == 1,
+           "the volume stops at 100 with the error cue");
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.soundVolume == 0,
+           "ENTER wraps the volume from 100 to off");
+  fixture.press(KeyCode::Left);
+  for (int step = 0; step < 3; ++step) {
+    fixture.press(KeyCode::Right);
+  }
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.soundVolume == 30 &&
+             CSimSounds::playCount(CSimSound::MenuError) == 2,
+           "LEFT stops at off and steps build the draft volume");
+
+  fixture.menu.setError("Settings could not be applied.");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuError) == 3,
+           "a reported error plays the error cue");
+  fixture.press(KeyCode::Escape);
+  testTrue(g,
+           fixture.menu.update(&fixture.input) ==
+               ConfigurationMenuAction::Cancel &&
+             CSimSounds::playCount(CSimSound::MenuBack) == 1,
+           "discarding plays the back cue");
+
+  initial.soundVolume = 250;
+  fixture.menu.open(initial);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             parsed.soundVolume == 100,
+           "an out-of-range stored volume opens clamped");
+  CSimSounds::resetCounts();
+}
+
 static int
 runConfigurationMenuCase(void (*testFunction)())
 {
@@ -574,6 +650,9 @@ registerConfigurationMenuTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.ConfigurationMenu.Navigation", []() {
     return runConfigurationMenuCase(testConfigurationNavigationAndActions);
+  });
+  registry.add("IllumoGame.ConfigurationMenu.SoundVolume", []() {
+    return runConfigurationMenuCase(testSoundVolumeAndCues);
   });
   registry.add("IllumoGame.ConfigurationMenu.Tokens", []() {
     return runConfigurationMenuCase(

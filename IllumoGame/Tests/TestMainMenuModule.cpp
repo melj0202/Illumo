@@ -1,3 +1,4 @@
+#include "Game/CSimSounds.h"
 #include "Game/CellGameModule.h"
 #include "Game/MainMenuModule.h"
 #include "Game/RuleCatalogLoader.h"
@@ -343,6 +344,7 @@ static void
 testMainMenuNavigation()
 {
   testSection("MainMenuModule: keyboard navigation");
+  CSimSounds::resetCounts();
   MainMenuFixture fixture;
   testTrue(g, fixture.started, "menu started");
 
@@ -387,6 +389,27 @@ testMainMenuNavigation()
             fixture.module.getSelectedItemForTesting(),
             3,
             "Up wraps to item 3 (Exit)");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == 5 &&
+             CSimSounds::playCount(CSimSound::MenuSelect) == 0,
+           "every selection move plays one hover cue");
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Up, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           fixture.module.isSettingsOpenForTesting() &&
+             CSimSounds::playCount(CSimSound::MenuSelect) == 1,
+           "activating an item plays the select cue");
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.module.isSettingsOpenForTesting() &&
+             CSimSounds::playCount(CSimSound::MenuBack) == 1,
+           "leaving settings plays the back cue");
+  CSimSounds::resetCounts();
 }
 
 static void
@@ -466,7 +489,7 @@ testMainMenuSettingsApply()
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
-  for (int row = 0; row < 4; ++row) {
+  for (int row = 0; row < 5; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
@@ -507,7 +530,7 @@ testSettingsMouseIsolation()
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
-  for (int row = 0; row < 4; ++row) {
+  for (int row = 0; row < 5; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.module.Update(0.016);

@@ -72,6 +72,8 @@ void
 registerIlscCodecTests(IllumoTestRegistry& registry);
 void
 registerSceneInstanceTests(IllumoTestRegistry& registry);
+void
+registerAudioTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -109,6 +111,7 @@ createRegistry()
   registerGuiPanelDockTests(registry);
   registerShaderPreprocessorTests(registry);
   registerFontTests(registry);
+  registerAudioTests(registry);
   return registry;
 }
 

@@ -1,4 +1,5 @@
 #include "NewSimulationMenu.h"
+#include "CSimSounds.h"
 #include "CellContext.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "SparseCellGrid.h"
@@ -99,6 +100,7 @@ NewSimulationMenu::selectRow(int row)
   animator.beginSelectionTravel(static_cast<float>(selected),
                                 static_cast<float>(row));
   selected = row;
+  CSimSounds::play(CSimSound::MenuHover);
 }
 
 void
@@ -115,6 +117,7 @@ void
 NewSimulationMenu::change(int direction)
 {
   animator.triggerValuePulse(direction);
+  bool changed = true;
   if (selected == 0) {
     const std::vector<std::string> families =
       CellContext::GetKnownFamilyStrings();
@@ -153,20 +156,29 @@ NewSimulationMenu::change(int direction)
   } else if (finite && (selected == 3 || selected == 4)) {
     std::int64_t& dimension =
       selected == 3 ? draft.worldChunkWidth : draft.worldChunkHeight;
+    const std::int64_t before = dimension;
     dimension = std::clamp(dimension + direction,
                            std::int64_t{ 1 },
                            SparseCellGrid::kMaximumWorldChunksPerAxis);
+    // A size already at its limit does not move.
+    changed = dimension != before;
   } else if (selected == 5) {
     draft.starterPattern = !draft.starterPattern;
+  } else {
+    return; // the action rows have no value
   }
+  CSimSounds::play(changed ? CSimSound::MenuSelect : CSimSound::MenuError);
 }
 
 NewSimulationAction
 NewSimulationMenu::activate()
 {
   if (selected == 6) {
-    return configuration().isValid() ? NewSimulationAction::Create
-                                     : NewSimulationAction::None;
+    if (!configuration().isValid()) {
+      CSimSounds::play(CSimSound::MenuError);
+      return NewSimulationAction::None;
+    }
+    return NewSimulationAction::Create;
   }
   if (selected == 7) {
     return NewSimulationAction::Back;
@@ -237,6 +249,9 @@ NewSimulationMenu::update(InputManager* input)
         else
           result = activate();
       }
+    } else if (pointer.clicked()) {
+      // World size rows are disabled while the world is infinite.
+      CSimSounds::play(CSimSound::MenuError);
     }
   }
   rebuild();

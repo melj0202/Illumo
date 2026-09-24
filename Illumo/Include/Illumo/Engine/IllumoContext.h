@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Audio/Audio.h>
 #include <Illumo/Foundation/MacroDefs.h>
 #include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -36,6 +37,10 @@ struct IllumoContext
   // (IllumoRuntime guests granted the Windows capability). Composed by the
   // guest application; products must also work without it.
   IPanelSurfaces* panelSurfaces{ nullptr };
+  // Sound effects, when the host can play them (IllumoRuntime guests
+  // granted the Audio capability). Composed by the guest application;
+  // products must also work silently without it.
+  IAudio* audio{ nullptr };
 };
 
 // Required wiring for DebugModule (console, FPS overlay, env flags).

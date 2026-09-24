@@ -1,6 +1,7 @@
 #include "CellGameModule.h"
 #include "BuiltinPatterns.h"
 #include "CSimPlatform.h"
+#include "CSimSounds.h"
 #include "CanvasCoordinatePolicy.h"
 #include "IllumoCodec.h"
 #include "MainMenuModule.h"
@@ -440,6 +441,7 @@ CellGameModule::Start(IllumoContext* context)
   mainMenuReturnPending = false;
   mainMenuReturnSubmitted = false;
   advanceCanvasEntrance(0.0);
+  CSimSounds::play(CSimSound::CanvasEnter);
 
   configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
@@ -843,6 +845,7 @@ CellGameModule::currentConfiguration() const
     ic->envVars->getVar("showInspector").valueAsBool;
   configuration.reducedUiMotion =
     ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  configuration.soundVolume = CSimSounds::volumeSetting(ic->envVars);
   return configuration;
 }
 
@@ -920,6 +923,7 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
   ic->envVars->setVar("uiScale", configuration.uiScale);
   ic->envVars->setVar("msaa", configuration.msaa);
+  ic->envVars->setVar("soundVolume", configuration.soundVolume);
 
   if (msaaChanged && ic->commandLine != nullptr) {
     ic->commandLine->logWarning(
@@ -1905,6 +1909,7 @@ CellGameModule::Update(double dt)
         configurationMenu->setError(
           "Settings could not be applied; the current world was preserved.");
       } else {
+        CSimSounds::play(CSimSound::MenuSelect);
         configurationMenu->close();
       }
     }
@@ -2048,6 +2053,7 @@ CellGameModule::Update(double dt)
                   cellContext->getRuleSet());
                 m_paintBrush = 0u;
                 updateVisualTargets();
+                CSimSounds::play(CSimSound::MenuSelect);
                 rulesetWorkshopMenu->close();
               } else {
                 rulesetWorkshopMenu->setError(
@@ -4276,6 +4282,7 @@ CellGameModule::requestMainMenuReturn()
     return;
   }
   mainMenuReturnPending = true;
+  CSimSounds::play(CSimSound::CanvasExit);
   configurationMenu->close();
   exitConfirmDialog->close();
   // Reverse the existing reveal from its current position, even during entry.

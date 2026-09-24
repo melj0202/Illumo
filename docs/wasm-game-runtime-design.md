@@ -260,6 +260,24 @@ only when it can present extra windows (not on Linux, `--capture` or
   modules as `IllumoContext::panelSurfaces`. See
   `docs/detachable-panels-design.md`.
 
+Note (2026-09-24): `GuestCapability::Audio` (bit 11) was added, so
+`KnownCapabilities` is now `(1 << 12) - 1` (D-E28). This supersedes the
+"adding ... audio" exclusion in section 1 for sound effects. The host grants
+it only when it has an output device (never for `--capture` or
+`--bench-*`); guests never require it. With it, `GuestService::Audio` (18)
+carries `GuestAudioRequest` version 1: `Create` registers float samples (1-2
+channels, 8-192 kHz, at most 3 Mi samples) under a guest-chosen id,
+`Destroy` and `Play` name that id (volume 0-1, pan -1 to 1, pitch 0.25-4),
+and `StopAll` and `SetVolume` act on the whole output. Unused fields must be
+zero; a malformed request fails the exchange. Requests complete at once
+with no payload and the guest queue discards Audio completions. Unknown ids,
+a full table and the 64 MiB per-guest sample budget are rejections that
+leave the guest running. Guests decode their own files (`AudioDecoder`,
+memory entry points only, so no WASI file import is linked), and the host
+releases a guest's sounds when it retires. The guest SDK exposes the service
+as `GuestAudio`, published as `IllumoContext::audio`. See
+`docs/audio-subsystem-plan.md`.
+
 Quotas cover linear memory, aggregate child-worker memory, tables/stack, compiled
 module input, instructions/time, pending requests, handles, upload bytes and GPU
 allocations. Game packages cannot raise ceilings themselves. Proposed starting
@@ -403,6 +421,7 @@ native production runner because the control-side merge is serial.
 | Files | Catalog precedence, codecs, filenames/extensions and save semantics | Read/write selected capabilities; bounded streaming; atomic replace |
 | Dialogs | Product labels/filters and response handling | Async request IDs and selected-file capabilities; distinct cancel/error/denied results |
 | Clipboard | RLE/pattern interpretation | Bounded permitted UTF-8 transfer |
+| Audio (2026-09-24) | Decoding its own sound files, cue choice and volume policy | Validated float samples registered per guest; mixing on the host output (`Audio` capability) |
 | Transitions | Guest-local menu/game ownership | Native host only switches complete packages |
 | Close | Product save/confirmation UI | Generic defer/accept handshake and forced shutdown cleanup |
 | Diagnostics | Game metrics and timing labels | Guest-safe logging/profiling imports; no native Tracy client in guest |

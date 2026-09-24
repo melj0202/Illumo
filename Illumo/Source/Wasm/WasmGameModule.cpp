@@ -156,6 +156,9 @@ try {
           (m_surfaceWindows != nullptr && m_surfaceWindows->available()
              ? static_cast<std::uint32_t>(GuestCapability::Windows)
              : 0u) |
+          (m_audio != nullptr && m_audio->available()
+             ? static_cast<std::uint32_t>(GuestCapability::Audio)
+             : 0u) |
           static_cast<std::uint32_t>(GuestCapability::Messages),
         m_startup,
         response)) {
@@ -204,6 +207,10 @@ try {
     m_windows = std::make_unique<WasmPanelWindows>(
       *ic->renderer, *ic->window, *m_surfaceWindows);
     m_services->setWindows(m_windows.get());
+  }
+  if ((m_guest.capabilities() &
+       static_cast<std::uint32_t>(GuestCapability::Audio)) != 0) {
+    m_services->setAudio(m_audio);
   }
   GuestWireWriter emptyServices;
   GuestServices{}.write(emptyServices);

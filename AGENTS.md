@@ -268,6 +268,7 @@ Ruleset truth:
 | World editor | `IllEd/Source/EditorModule*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
 | Scene format, packages, virtual file tree | `Illumo/Include/Illumo/Content/*`, `Illumo/Source/Content/*`, `Illumo/tools/IllumoPack.cpp` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
+| Sound effects (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `IllumoGame/Source/Game/CSimSounds.*` |
 | Domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
 | Bounded view, fade, dirty upload | `IllumoGame/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
 | Compatibility dense storage | `IllumoGame/Source/Game/CellGrid.*`, `Canvas.*` |
@@ -323,6 +324,8 @@ whose WASM guests also use explicit bounds checks; play and measure with the
 
 Package-level checks drive each real package through the generic host:
 `IllumoGame.Wasm.GamePackage` (menu, setup, edit, step, save/load, 3D mode),
+`IllumoGame.Wasm.GamePackageAudio` (packaged sound cues reach a recording
+audio output),
 `IllumoGame.Wasm.GamePackageLanes` (real simulation lanes against a native
 serial reference), `IllEd.Wasm.Package` (launch scene, preloaded atlas,
 keyboard pan, Ctrl+S save in place), `IllEd.Wasm.ProjectPackage` (project
@@ -525,7 +528,8 @@ A change is complete only when its scope is reviewed for accidental edits and:
 Subsystem rules live in:
 
 - `Illumo/Source/Engine/AGENTS.md`, `Illumo/Source/Foundation/AGENTS.md`, and
-  `Illumo/Source/Scene/AGENTS.md`, `Illumo/Source/Gui/AGENTS.md`, and
+  `Illumo/Source/Scene/AGENTS.md`, `Illumo/Source/Gui/AGENTS.md`,
+  `Illumo/Source/Audio/AGENTS.md`, and
   `Illumo/Source/Platform/AGENTS.md` plus
   its Windows and Linux child guidance;
 - `IllumoGame/Source/Game/AGENTS.md` and

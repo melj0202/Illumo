@@ -52,6 +52,10 @@ public:
   }
   // Null unless the guest was granted surface windows.
   const WasmPanelWindows* panelWindows() const { return m_windows.get(); }
+  // Sound output for the guest (Audio capability), borrowed; it must outlive
+  // this module. Null, the default, withholds the capability (tests,
+  // capture, benchmarks). Call before Start.
+  void setAudio(IAudio* audio) { m_audio = audio; }
   bool Start(IllumoContext* context) override;
   void Update(double elapsed) override;
   void DispatchDrawables(Scene* scene) override;
@@ -84,6 +88,7 @@ private:
   std::unique_ptr<WasmGameServices> m_services;
   ISurfaceWindowFactory* m_surfaceWindows = &PlatformSurfaceWindows();
   std::unique_ptr<WasmPanelWindows> m_windows;
+  IAudio* m_audio = nullptr;
   std::vector<std::byte> m_completions;
   std::string m_error;
   std::string m_modError;

@@ -1,4 +1,5 @@
 #include "ConfigurationMenu.h"
+#include "Game/CSimSounds.h"
 #include "Game/CellContext.h"
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/RuleSetRegistry.h"
@@ -174,6 +175,7 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
   fpsCapText = std::to_string(std::max(0L, current.fpsCap));
   showInspector = current.showInspector;
   reducedUiMotion = current.reducedUiMotion;
+  soundVolume = std::clamp(current.soundVolume, 0L, 100L);
   firstVisibleRow = 0;
   errorMessage.clear();
   selectedRow = 0;
@@ -297,6 +299,9 @@ void
 ConfigurationMenu::setError(const std::string& message)
 {
   errorMessage = message;
+  if (!message.empty()) {
+    CSimSounds::play(CSimSound::MenuError);
+  }
 }
 
 void
@@ -344,6 +349,7 @@ ConfigurationMenu::selectRow(int row)
                                   static_cast<float>(nextRow));
     selectedRow = nextRow;
     animator.resetCaret();
+    CSimSounds::play(CSimSound::MenuHover);
   }
   firstVisibleRow =
     GuiPanelLayout::scrollToRow(firstVisibleRow, selectedRow, visibleRows);
@@ -389,6 +395,7 @@ ConfigurationMenu::addCharacter(unsigned int codepoint)
     accepted = accepted || character == '.';
   }
   if (!accepted || (!replaceFieldOnType && field->size() >= 16u)) {
+    CSimSounds::play(CSimSound::MenuError);
     return;
   }
   if (replaceFieldOnType) {
@@ -499,6 +506,17 @@ ConfigurationMenu::cycleSelected(int direction)
   } else if (selectedRow == kEditHintsRow) {
     editHints = !editHints;
     changed = true;
+  } else if (selectedRow == kSoundVolumeRow) {
+    const long next = std::clamp(soundVolume + direction * 10L, 0L, 100L);
+    if (next == soundVolume) {
+      // Already at the end of the range.
+      CSimSounds::play(CSimSound::MenuError);
+    } else {
+      soundVolume = next;
+      // Previewed at the level just chosen, before it is applied.
+      CSimSounds::playAt(CSimSound::MenuSelect, static_cast<int>(soundVolume));
+      animator.triggerValuePulse(direction);
+    }
   } else if (selectedRow == kVsyncRow) {
     vsync = !vsync;
     changed = true;
@@ -540,6 +558,7 @@ ConfigurationMenu::cycleSelected(int direction)
   }
   if (changed) {
     animator.triggerValuePulse(direction);
+    CSimSounds::play(CSimSound::MenuSelect);
   }
   replaceFieldOnType = true;
   errorMessage.clear();
@@ -556,6 +575,16 @@ ConfigurationMenu::activateSelected()
   }
   if (selectedRow == kExitRow) {
     return ConfigurationMenuAction::Exit;
+  }
+  if (selectedRow == kSoundVolumeRow) {
+    // ENTER steps up and wraps from 100% back to off.
+    if (soundVolume >= 100) {
+      soundVolume = 0;
+      animator.triggerValuePulse(-1);
+    } else {
+      cycleSelected(1);
+    }
+    return ConfigurationMenuAction::None;
   }
   if (selectedRow == kFamilyRow || selectedRow == kRulesetRow ||
       selectedRow == kVsyncRow || selectedRow == kFullscreenRow ||
@@ -644,6 +673,12 @@ ConfigurationMenu::update(InputManager* inputManager)
       }
     }
   }
+  // Apply is voiced by the caller, which knows whether it succeeded.
+  if (action == ConfigurationMenuAction::Cancel) {
+    CSimSounds::play(CSimSound::MenuBack);
+  } else if (action == ConfigurationMenuAction::Exit) {
+    CSimSounds::play(CSimSound::MenuSelect);
+  }
   return action;
 }
 
@@ -707,6 +742,7 @@ ConfigurationMenu::readConfiguration(SimulatorConfiguration* configuration,
   parsed.fullscreen = fullscreen;
   parsed.uiScale = uiScale > 0 ? uiScale : 1;
   parsed.msaa = msaa;
+  parsed.soundVolume = soundVolume;
   *configuration = parsed;
   if (error != nullptr) {
     error->clear();
@@ -866,6 +902,7 @@ ConfigurationMenu::rebuildVisual()
                                           "Simulation inspector",
                                           "Reduced menu motion",
                                           "Edit control hints",
+                                          "Sound volume",
                                           "Apply changes",
                                           "Discard changes",
                                           "Exit simulator" };
@@ -887,6 +924,7 @@ ConfigurationMenu::rebuildVisual()
     showInspector ? "On" : "Off",
     reducedUiMotion ? "On" : "Off",
     editHints ? "On" : "Off",
+    soundVolume == 0 ? "Off" : std::to_string(soundVolume) + "%",
     "ENTER",
     "ENTER",
     "ENTER"
@@ -907,6 +945,7 @@ ConfigurationMenu::rebuildVisual()
     "Show generation, cell coordinates, and population in the simulation.",
     "Disable decorative motion and snap menu transitions.",
     "Show input hints at the bottom while editing.",
+    "Sound effect volume, off to 100%; each step previews the new level.",
     "Validate, save, and apply the displayed settings.",
     "Close the menu without changing any settings.",
     "Leave CSim (confirmation appears during a simulation)."

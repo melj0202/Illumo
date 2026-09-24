@@ -2,6 +2,7 @@
 
 #include "BuiltinPatterns.h"
 #include "CSimPlatform.h"
+#include "CSimSounds.h"
 #include "CSimTypeface.h"
 #include "CanvasCoordinatePolicy.h"
 #include "CellContext.h"
@@ -321,6 +322,7 @@ MainMenuModule::selectItem(int item)
     m_animator.beginSelectionTravel(static_cast<float>(m_selectedItem),
                                     static_cast<float>(nextItem));
     m_selectedItem = nextItem;
+    CSimSounds::play(CSimSound::MenuHover);
   }
 }
 
@@ -511,6 +513,7 @@ MainMenuModule::activateSelectedItem()
     return;
   }
 
+  CSimSounds::play(CSimSound::MenuSelect);
   switch (m_selectedItem) {
     case kPlayItem: {
       openCanvasSetup();
@@ -624,6 +627,7 @@ MainMenuModule::currentConfiguration() const
   config.fpsCap = getTargetFps(ic->envVars);
   config.showInspector = ic->envVars->getVar("showInspector").valueAsBool;
   config.reducedUiMotion = ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  config.soundVolume = CSimSounds::volumeSetting(ic->envVars);
   return config;
 }
 
@@ -661,6 +665,7 @@ MainMenuModule::applyConfiguration(const SimulatorConfiguration& configuration)
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
   ic->envVars->setVar("uiScale", configuration.uiScale);
   ic->envVars->setVar("msaa", configuration.msaa);
+  ic->envVars->setVar("soundVolume", configuration.soundVolume);
   if (fullscreenChanged && ic->window != nullptr) {
     ic->window->toggleFullscreen();
   }
@@ -703,6 +708,7 @@ MainMenuModule::Update(double dt)
           m_newSimulationMenu->configuration()));
         m_newSimulationMenu->close();
       } else if (action == NewSimulationAction::Back) {
+        CSimSounds::play(CSimSound::MenuBack);
         m_newSimulationMenu->close();
       }
     }
@@ -725,6 +731,7 @@ MainMenuModule::Update(double dt)
         std::string error;
         if (m_configurationMenu->readConfiguration(&config, &error)) {
           if (applyConfiguration(config)) {
+            CSimSounds::play(CSimSound::MenuSelect);
             m_configurationMenu->close();
           } else {
             m_configurationMenu->setError("Unable to apply settings.");

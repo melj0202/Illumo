@@ -2742,6 +2742,33 @@ headless runs keep every panel docked with pop-out disabled.\\
 \textbf{Extends:} D-E23 (capabilities)
 \end{decisionbox}
 
+\subsection*{D-E28 --- Sound effects}
+\begin{decisionbox}[title={D-E28 \quad 2026-09-24}]
+\textbf{Decision:} \texttt{IAudio}, published as \texttt{IllumoContext::audio},
+registers decoded clips as sounds (at most 256) and plays them by
+generational handle, one voice per play (at most 32, the oldest replaced),
+with volume, pan, pitch, \texttt{stopAll} and a master volume. The native
+implementation, \texttt{AudioDevice}, and the \texttt{AudioDecoder} for WAV,
+FLAC and MP3 wrap vendored miniaudio 0.11.25, which stays private to
+\texttt{Illumo/Source/Audio}. Guests get \texttt{IAudio} through the
+\texttt{Audio} capability (bit 11), granted only when the host has an output
+and never for \texttt{--capture} or \texttt{--bench-*}, and the Audio service
+(18): \texttt{GuestAudioRequest} version 1 with Create, Destroy, Play, StopAll
+and SetVolume. Requests complete in the same exchange without a payload and
+the guest queue discards their completions.\\
+\textbf{Why:} Guests decode their own package files, as they decode textures,
+so the host never parses untrusted encoded audio; only range-checked float
+samples cross the ABI. The decoder uses miniaudio's memory entry points so
+no file-system import reaches a guest. The public seam keeps products free of
+library and guest types, as D-E27 did for windows.\\
+\textbf{Consequences:} A clip holds at most 3\,Mi samples and a guest at most
+64\,MiB of registered samples; beyond that, and for unknown ids, requests are
+rejected without retiring the guest. The host releases a guest's sounds and
+restores the master volume when it retires. Products must also work
+silently. CSim plays seven cues scaled by its \texttt{soundVolume} setting.\\
+\textbf{Extends:} D-E27 (capability pattern)
+\end{decisionbox}
+
 \subsection*{D-R27 --- Surface frames and offscreen readback}
 \begin{decisionbox}[title={D-R27 \quad 2026-09-23}]
 \textbf{Decision:} Frame schema v5 adds a trailing section of at most eight

@@ -148,6 +148,16 @@ endfunction()
 
 # IllumoGame: manifest, product module, simulation lane worker and packaged
 # catalogs.
+# Sound effects ship as Sounds/<file>.wav. Their sources in IllumoGame/Assets
+# are not tracked in git, so a checkout without them builds a silent package.
+set(_game_sounds)
+foreach(_sound canvas_enter canvas_exit csim_program_start ui_menu_back
+    ui_menu_error ui_menu_hover ui_menu_select)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/IllumoGame/Assets/${_sound}.wav")
+    list(APPEND _game_sounds
+      "${CMAKE_SOURCE_DIR}/IllumoGame/Assets/${_sound}.wav" "Sounds/${_sound}.wav")
+  endif()
+endforeach()
 illumo_stage_app(IllumoGamePackage game
   MODULE IllumoGame.wasm
   FILES
@@ -158,7 +168,8 @@ illumo_stage_app(IllumoGamePackage game
     "${CMAKE_SOURCE_DIR}/IllumoGame/envvars.json"
   ASSETS
     "${CMAKE_SOURCE_DIR}/IllumoGame/Scenes/render3d-test.ilsc"
-    "Scenes/render3d-test.ilsc")
+    "Scenes/render3d-test.ilsc"
+    ${_game_sounds})
 
 # IllEd: the world editor; its UI atlas is preloaded from the package.
 illumo_stage_app(IllEdPackage illed
@@ -245,7 +256,9 @@ if(BUILD_TESTING)
     Illumo.Wasm.MountedDeny Illumo.Wasm.GuestFileTree Illumo.Wasm.GuestPinnedPreload
     Illumo.Wasm.GuestAssetFetchAndEvict Illumo.Wasm.GuestLocalEntries PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20 WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/Testing/WasmFiles")
   add_dependencies(IllumoRunTests IllumoWasmFileTests)
-  add_executable(IllumoWasmFrameTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmFrame.cpp")
+  add_executable(IllumoWasmFrameTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmFrame.cpp"
+    "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmAudio.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/Audio.cpp")
   target_link_libraries(IllumoWasmFrameTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
   target_compile_definitions(IllumoWasmFrameTests PRIVATE "ILLUMO_PADDLE_GUEST=\"${_guest_build}/PaddleGuest.wasm\"")
   target_compile_definitions(IllumoWasmFrameTests PRIVATE
@@ -260,7 +273,7 @@ if(BUILD_TESTING)
   add_dependencies(IllumoWasmFrameTests IllumoGuestBuild)
   illumo_configure_runtime_target(IllumoWasmFrameTests)
   illumo_stage_msvc_asan(IllumoWasmFrameTests)
-  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices RetainedResources)
+  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices RetainedResources AudioServiceDecoder AudioServices GuestAudio)
     add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmFrameTests --run "Illumo.Wasm.${_case}")
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20 WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmFrameTests>")
   endforeach()
@@ -415,6 +428,11 @@ if(BUILD_TESTING)
   add_test(NAME IllumoGame.Wasm.GamePackage
     COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.GamePackage)
   set_tests_properties(IllumoGame.Wasm.GamePackage PROPERTIES
+    LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
+  add_test(NAME IllumoGame.Wasm.GamePackageAudio
+    COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.GamePackageAudio)
+  set_tests_properties(IllumoGame.Wasm.GamePackageAudio PROPERTIES
     LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
   add_test(NAME IllumoGame.Wasm.CatalogMerge

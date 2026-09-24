@@ -87,7 +87,14 @@ if(NOT TARGET glew_s)
   endif()
 endif()
 
+# miniaudio (Source/Audio only): decoders and the mixing engine with device
+# output, without its resource manager, encoders or signal generators.
+set(ILLUMO_MINIAUDIO_DEFINITIONS
+  MA_NO_ENCODING MA_NO_GENERATION MA_NO_RESOURCE_MANAGER)
+
 add_library(Illumo STATIC
+  Source/Audio/AudioDecoder.cpp
+  Source/Audio/AudioDevice.cpp
   Source/Foundation/MacroDefs.cpp
   Source/Scene/SceneGraph.cpp
   Source/Scene/SceneGraphCompile.cpp
@@ -173,7 +180,12 @@ target_include_directories(Illumo SYSTEM PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glew-2.1.0/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/json/single_include"
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
+  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/miniaudio-0.11.25"
 )
+# miniaudio stays private to Source/Audio (AudioDecoder.cpp holds its
+# implementation). Every unit of this target sees the same feature switches,
+# so miniaudio's struct layouts agree across them.
+target_compile_definitions(Illumo PRIVATE ${ILLUMO_MINIAUDIO_DEFINITIONS})
 target_link_libraries(Illumo PRIVATE
   glm::glm glew_s glfw OpenGL::GL freetype-interface freetype
   ${ILLUMO_PLATFORM_LIBRARIES})
@@ -233,6 +245,7 @@ target_include_directories(IllumoTestSupport INTERFACE
 if(BUILD_TESTING)
   add_executable(IllumoTests
     Tests/TestMain.cpp
+    Tests/TestAudio.cpp
     Tests/TestMockBackend.cpp
     Tests/TestRendererE2E.cpp
     Tests/TestUITokens.cpp

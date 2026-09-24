@@ -41,6 +41,7 @@ IllumoGameConfig::ApplyDefaults(IEnvVars* environment)
     { "reducedUiMotion", "0" },
     { "showInspector", "0" },
     { "editHints", "1" },
+    { "soundVolume", "80" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (environment->getVar(defaultValue.name).value.empty()) {

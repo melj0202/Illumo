@@ -22,5 +22,6 @@
  "msaa": "4",
  "reducedUiMotion": "0",
  "showInspector": "0",
- "editHints": "1"
+ "editHints": "1",
+ "soundVolume": "80"
 }

@@ -238,6 +238,25 @@ reads it back asynchronously and presents it in a \texttt{GLFW\_NO\_API}
 window one frame late (D-R27). Hosts without windows omit it, and every panel
 stays docked.
 
+\subsection{Sound effects (D-E28)}
+\texttt{IllumoContext::audio} (\texttt{IAudio}) plays sound effects: a product
+registers a decoded \texttt{AudioClip} once and plays it by
+\texttt{SoundHandle}, each play an independent voice with its own volume, pan
+and pitch. \texttt{AudioDecoder} turns WAV, FLAC or MP3 bytes into float
+samples at the source rate; \texttt{AudioDevice}, the native implementation,
+mixes voices on the default output device and converts each to the device's
+rate. Both wrap vendored miniaudio, which no public header exposes, and the
+decoder reaches only miniaudio's memory entry points.
+
+Guests decode their own package files and send the samples through the
+\texttt{Audio} capability's service, so the host never parses a guest's
+encoded audio. \texttt{GuestAudio} implements \texttt{IAudio} over that
+service with guest-local handles; its requests complete at once and their
+completions are discarded. The runtime opens one output device, except for
+captures and benchmarks, and releases a guest's sounds when the guest
+retires. Without an output, \texttt{audio} is null and products run silently.
+CSim's cues (\texttt{CSimSounds}) scale with its \texttt{soundVolume} setting.
+
 \subsection{Third-party and runtime data}
 Dependencies remain vendored under \pathref{Illumo/thirdparty/}. Illumo owns
 its shaders, fonts, RendererDemo assets, notices, and dependency licenses and

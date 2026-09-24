@@ -94,6 +94,7 @@ GuestModuleApplication::GuestModuleApplication(std::string applicationName,
   , m_input(nullptr)
   , m_scene(&m_window, &m_camera)
   , m_panels(services(), m_window, m_camera)
+  , m_audio(services())
   , m_commandLine(&m_settings,
                   &m_consoleBuiltins,
                   &m_window,
@@ -202,6 +203,8 @@ GuestModuleApplication::start(std::span<const std::byte> startup)
   m_panels.setGranted(granted(GuestCapability::Windows));
   m_context.panelSurfaces =
     granted(GuestCapability::Windows) ? &m_panels : nullptr;
+  m_audio.setGranted(granted(GuestCapability::Audio));
+  m_context.audio = granted(GuestCapability::Audio) ? &m_audio : nullptr;
   Font::getDefaultFont();
   m_settings.load();
   return true;

@@ -11,6 +11,7 @@
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
 #include <IllumoGuest/Application.h>
+#include <IllumoGuest/Audio.h>
 #include <IllumoGuest/Console.h>
 #include <IllumoGuest/Diagnostics.h>
 #include <IllumoGuest/Dialog.h>
@@ -137,6 +138,9 @@ private:
   // Detached panel windows (Windows capability); published as
   // IllumoContext::panelSurfaces only when granted.
   GuestPanelSurfaces m_panels;
+  // Sound effects (Audio capability); published as IllumoContext::audio only
+  // when granted.
+  GuestAudio m_audio;
   CommandRegistry m_commands;
   CommandRegistry m_consoleBuiltins;
   GuestCommandLine m_commandLine;

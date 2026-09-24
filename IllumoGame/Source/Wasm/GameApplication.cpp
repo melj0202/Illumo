@@ -1,3 +1,4 @@
+#include "Game/CSimSounds.h"
 #include "Game/CSimTypeface.h"
 #include "Game/IllumoGameConfig.h"
 #include "Game/MainMenuModule.h"
@@ -5,6 +6,7 @@
 #include "Wasm/GuestPlatform.h"
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/ModuleApplication.h>
+#include <cstring>
 #include <stdexcept>
 
 // IllumoGame as a WASM package: the complete product (menus, canvas, editor,
@@ -20,9 +22,15 @@ public:
   {
     m_platform.install();
   }
+  ~IllumoGameGuest() override { CSimSounds::uninstall(); }
+  IllumoGameGuest(const IllumoGameGuest&) = delete;
+  IllumoGameGuest& operator=(const IllumoGameGuest&) = delete;
+  IllumoGameGuest(IllumoGameGuest&&) = delete;
+  IllumoGameGuest& operator=(IllumoGameGuest&&) = delete;
   GuestDescriptor describe() const override
   {
-    // Jobs is optional: generations run with serial kernels in this store.
+    // Jobs and Audio are optional: generations run with serial kernels in
+    // this store, and without Audio the game is silent.
     return { GuestRole::Game,
              static_cast<std::uint32_t>(GuestCapability::Render) |
                static_cast<std::uint32_t>(GuestCapability::Assets) |
@@ -61,7 +69,8 @@ protected:
     if (m_catalog.failed()) {
       throw std::runtime_error(m_catalog.error());
     }
-    if (!m_catalog.ready() || !CSimTypeface::ready()) {
+    const bool soundsReady = loadSounds();
+    if (!m_catalog.ready() || !CSimTypeface::ready() || !soundsReady) {
       return false;
     }
     RuleSetRegistry::instance() = m_catalog.registry();
@@ -76,12 +85,57 @@ protected:
 
   std::unique_ptr<IModule> createFirstModule() override
   {
+    CSimSounds::play(CSimSound::ProgramStart);
     return std::make_unique<MainMenuModule>();
   }
 
 private:
+  // Sound files load beside the catalogs when the host can play sound; they
+  // are decoded here, in the store, and only samples go to the host. A
+  // missing or damaged file silences just its own cue.
+  bool loadSounds()
+  {
+    IAudio* audio = context().audio;
+    if (m_soundsLoaded || audio == nullptr) {
+      return true;
+    }
+    if (m_soundFetch == 0) {
+      m_soundFetch = assetCache().fetch(CSimSounds::fileNames());
+    }
+    std::vector<std::string> missing;
+    if (!assetCache().fetched(m_soundFetch, &missing)) {
+      return false;
+    }
+    std::vector<std::string> problems;
+    CSimSounds::install(
+      audio,
+      &settings(),
+      [this](const std::string& path, std::vector<std::byte>& bytes) {
+        std::vector<unsigned char> raw;
+        if (!assetCache().read(assetCache().canonical(path), raw)) {
+          return false;
+        }
+        bytes.resize(raw.size());
+        std::memcpy(bytes.data(), raw.data(), raw.size());
+        return true;
+      },
+      problems);
+    assetCache().release(m_soundFetch);
+    m_soundsLoaded = true;
+    if (missing.size() == CSimSounds::fileNames().size()) {
+      Logger::LogInfo("No sound files are packaged; CSim plays silently");
+    } else {
+      for (const std::string& problem : problems) {
+        Logger::LogWarning("Sound unavailable: " + problem);
+      }
+    }
+    return true;
+  }
+
   GuestCSimPlatform m_platform;
   CSimCatalogBootstrap m_catalog;
+  std::uint64_t m_soundFetch = 0;
+  bool m_soundsLoaded = false;
 };
 
 std::unique_ptr<GuestApplication>

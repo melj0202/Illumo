@@ -1,4 +1,5 @@
 #include "ExitConfirmDialog.h"
+#include "CSimSounds.h"
 
 ExitConfirmDialog::ExitConfirmDialog(IRenderWindow* window, Renderer* renderer)
   : m_dialog(window, renderer)
@@ -41,6 +42,7 @@ ExitConfirmDialog::open()
 {
   m_dialog.selectButton(0);
   m_dialog.open();
+  m_lastHovered = -1;
   setVisible(true);
 }
 
@@ -61,13 +63,23 @@ ExitConfirmAction
 ExitConfirmDialog::update(InputManager* inputManager)
 {
   // The product ticks once with the frame delta, including console-open frames.
+  const int selectedBefore = m_dialog.selectedButton();
   const int action = m_dialog.update(inputManager, 0.0f);
+  const int hovered = m_dialog.hoveredButton();
+  if (m_dialog.selectedButton() != selectedBefore ||
+      (hovered >= 0 && hovered != m_lastHovered)) {
+    CSimSounds::play(CSimSound::MenuHover);
+  }
+  m_lastHovered = hovered;
   switch (action) {
     case static_cast<int>(ExitConfirmAction::Cancel):
+      CSimSounds::play(CSimSound::MenuBack);
       return ExitConfirmAction::Cancel;
     case static_cast<int>(ExitConfirmAction::MainMenu):
+      // The canvas voices its own exit as it returns to the menu.
       return ExitConfirmAction::MainMenu;
     case static_cast<int>(ExitConfirmAction::Confirm):
+      CSimSounds::play(CSimSound::MenuSelect);
       return ExitConfirmAction::Confirm;
     default:
       return ExitConfirmAction::None;

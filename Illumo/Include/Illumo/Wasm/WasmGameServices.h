@@ -1,10 +1,14 @@
 #pragma once
+#include <Illumo/Audio/Audio.h>
 #include <Illumo/Wasm/WasmFileServices.h>
 #include <Illumo/Wasm/WasmRenderServices.h>
 #include <Illumo/Wasm/WasmWorker.h>
 #include <deque>
+#include <map>
 #include <string>
 #include <vector>
+
+struct GuestAudioRequest;
 
 class IRenderWindow;
 class WasmPanelWindows;
@@ -58,6 +62,13 @@ public:
   // Surface windows for the Window service (Windows capability); null
   // rejects every window request.
   void setWindows(WasmPanelWindows* windows) { m_windows = windows; }
+  // Sound output for the Audio service (Audio capability); null rejects
+  // every audio request. Replacing it releases the guest's sounds first.
+  // The output must outlive these services or be withdrawn with null.
+  void setAudio(IAudio* audio);
+  // Most samples one guest may keep registered (64 MiB of float samples).
+  static constexpr std::size_t kMaximumGuestSamples = 16u * 1024u * 1024u;
+  std::size_t audioSounds() const { return m_sounds.size(); }
   // Budgets for compute children: the Job worker, created on its first job,
   // and `lanes` LaneJob workers, created when the guest asks for its lanes.
   static WasmLimits defaultWorkerLimits();
@@ -74,6 +85,12 @@ private:
   bool completeDialog(GuestServices& results);
   bool completeConsole(GuestServices& results);
   void completeWindows(GuestServices& results);
+  // Audio requests run at once; each completes Complete or Rejected.
+  void completeAudio(std::uint64_t request,
+                     GuestAudioRequest& audio,
+                     GuestServices& results);
+  // Destroys every sound this guest registered and silences its voices.
+  void releaseAudio();
   WasmRenderServices m_render;
   std::unique_ptr<WasmFileServices> m_files;
   IRenderWindow* m_window;
@@ -90,6 +107,16 @@ private:
   std::deque<GuestServiceRecord> m_consoleRequests;
   std::deque<GuestServiceRecord> m_windowRequests;
   WasmPanelWindows* m_windows = nullptr;
+  IAudio* m_audio = nullptr;
+  // Guest sound id to the output's sound, plus that sound's sample count.
+  struct AudioSound
+  {
+    SoundHandle handle;
+    std::size_t samples = 0;
+  };
+  std::map<std::uint32_t, AudioSound> m_sounds;
+  std::size_t m_soundSamples = 0;
+  bool m_masterVolumeChanged = false;
   std::deque<GuestServiceRecord> m_listenRequests;
   std::vector<std::string> m_registered;
   struct Invocation
