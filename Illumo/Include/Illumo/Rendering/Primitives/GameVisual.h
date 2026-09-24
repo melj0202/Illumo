@@ -286,7 +286,15 @@ private:
                       ColorRgba color,
                       const Rect2& hostBounds);
   bool pushSpriteQuad(const SpritePrimitive& sprite, const Rect2& hostBounds);
-  bool pushTextRun(const TextPrimitive& text, const Rect2& hostBounds);
+  // One pass of `text` in `font`. With a partner, glyph advances blend toward
+  // the partner's by `blend` and each glyph centers in its blended cell;
+  // `alpha` scales the text color's alpha.
+  bool pushTextRun(const TextPrimitive& text,
+                   const Font& font,
+                   const Font* partner,
+                   float blend,
+                   float alpha,
+                   const Rect2& hostBounds);
   size_t appendShape(const ShapePrimitive& shape);
   bool pushFilledEllipse(const ShapePrimitive& shape, const Rect2& hostBounds);
   bool pushFilledTriangle(const ShapePrimitive& shape, const Rect2& hostBounds);

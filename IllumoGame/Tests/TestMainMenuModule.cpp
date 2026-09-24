@@ -13,6 +13,7 @@
 #include <Illumo/Testing/TestAccess.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <memory>
@@ -154,6 +155,116 @@ testTitleRasterResolution()
     testTrue(
       g, sharp, "title glyphs are never magnified at supported UI scales");
   }
+}
+
+// The title letters as drawn this frame, in order.
+static std::vector<TextPrimitive>
+titleLetters(MainMenuFixture& fixture)
+{
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  const GameVisual* visual = static_cast<const GameVisual*>(
+    fixture.scene.drawablesIn(RenderLayerId::UI).front());
+  std::vector<TextPrimitive> letters;
+  for (size_t index = 0; index < visual->textCount(); ++index) {
+    const TextPrimitive* text = visual->getText(index);
+    if (text->font != nullptr && text->font != Font::getDefaultFont()) {
+      letters.push_back(*text);
+    }
+  }
+  return letters;
+}
+
+static float
+stretchOf(const TextPrimitive& text)
+{
+  return std::max(std::abs(text.stretchX - 1.0f),
+                  std::abs(text.stretchY - 1.0f));
+}
+
+static void
+testTitleLettersPose()
+{
+  testSection("MainMenuModule: title letters pose one at a time");
+  MainMenuFixture fixture;
+  float strongest = 0.0f;
+  int soloFrames = 0;
+  bool fourLetters = true;
+  for (int frame = 0; frame < 720; ++frame) {
+    fixture.module.Update(1.0 / 60.0);
+    if (frame < 120) {
+      continue; // the entrance
+    }
+    const std::vector<TextPrimitive> letters = titleLetters(fixture);
+    fourLetters = fourLetters && letters.size() == 4u;
+    int posing = 0;
+    for (const TextPrimitive& letter : letters) {
+      strongest = std::max(strongest, stretchOf(letter));
+      if (stretchOf(letter) > 0.08f) {
+        ++posing;
+      }
+    }
+    if (posing == 1) {
+      ++soloFrames;
+    }
+  }
+  testTrue(g, fourLetters, "the word is drawn as four letters");
+  testTrue(g, strongest > 0.15f, "resting letters squash and stretch in poses");
+  testTrue(g, soloFrames > 30, "single letters pose on their own");
+
+  MainMenuFixture still;
+  still.env.setVar("reducedUiMotion", true);
+  float stillest = 0.0f;
+  for (int frame = 0; frame < 480; ++frame) {
+    still.module.Update(1.0 / 60.0);
+    for (const TextPrimitive& letter : titleLetters(still)) {
+      stillest = std::max(stillest, stretchOf(letter));
+    }
+  }
+  testTrue(g, stillest == 0.0f, "reduced motion keeps the letters unstretched");
+}
+
+static void
+testTitlePokeHops()
+{
+  testSection("MainMenuModule: clicking the title sends a hop through it");
+  // A control menu gets the same pointer without the click, so the only
+  // difference between the two is the hop.
+  MainMenuFixture fixture;
+  MainMenuFixture control;
+  for (int frame = 0; frame < 96; ++frame) {
+    fixture.module.Update(1.0 / 60.0);
+    control.module.Update(1.0 / 60.0);
+  }
+  const std::array<float, 4> bounds = fixture.module.titleBoundsForTesting();
+  testTrue(g, bounds[2] > 0.0f && bounds[3] > 0.0f, "the title has bounds");
+  const float scale = fixture.module.layoutScaleForTesting();
+  for (MainMenuFixture* menu : { &fixture, &control }) {
+    menu->window.mouseX = (bounds[0] + bounds[2] * 0.5f) * scale;
+    menu->window.mouseY = (bounds[1] + bounds[3] * 0.5f) * scale;
+  }
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(1.0 / 60.0);
+  control.module.Update(1.0 / 60.0);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  float firstLift = 0.0f;
+  float lastLift = 0.0f;
+  for (int frame = 0; frame < 30; ++frame) {
+    fixture.module.Update(1.0 / 60.0);
+    control.module.Update(1.0 / 60.0);
+    const std::vector<TextPrimitive> poked = titleLetters(fixture);
+    const std::vector<TextPrimitive> still = titleLetters(control);
+    firstLift = std::max(firstLift, still.front().y - poked.front().y);
+    lastLift = std::max(lastLift, still.back().y - poked.back().y);
+  }
+  testTrue(g, firstLift > 5.0f && lastLift > 5.0f, "every letter hops");
+  testTrue(g,
+           !fixture.host.HasPendingTransition() &&
+             !fixture.module.isSettingsOpenForTesting() &&
+             !fixture.module.isCanvasSetupOpenForTesting(),
+           "poking the title activates nothing");
 }
 
 static void
@@ -690,6 +801,10 @@ registerMainMenuTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.MainMenu.TitleResolution",
                []() { return runMainMenuCase(testTitleRasterResolution); });
+  registry.add("IllumoGame.MainMenu.TitleLettersPose",
+               []() { return runMainMenuCase(testTitleLettersPose); });
+  registry.add("IllumoGame.MainMenu.TitlePokeHops",
+               []() { return runMainMenuCase(testTitlePokeHops); });
   registry.add("IllumoGame.MainMenu.KeepsRulePreference", []() {
     return runMainMenuCase(testMainMenuKeepsRulePreference);
   });

@@ -5,6 +5,7 @@
 #include "NewSimulationMenu.h"
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Gui/GuiMenuShell.h>
+#include <Illumo/Rendering/FontWeightRamp.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <array>
 #include <cstdint>
@@ -39,6 +40,10 @@ public:
   }
   float tiltXForTesting() const { return m_tilt.x(); }
   float tiltYForTesting() const { return m_tilt.y(); }
+  // The rectangle the title word was last drawn in: x, y, width, height.
+  std::array<float, 4> titleBoundsForTesting() const { return m_titleBounds; }
+  // Window pixels per virtual layout pixel.
+  float layoutScaleForTesting() const { return m_panelFit.layoutScale; }
   // The rectangle a pointer must hit for `item`: x, y, width, height.
   std::array<float, 4> itemHitBoundsForTesting(int item) const;
   void selectItemForTesting(int item);
@@ -67,6 +72,22 @@ private:
   // the entrance ceiling.
   static constexpr float kTitleLetterBounceHz = 2.6f;
   static constexpr float kTitleLetterBounceDamping = 0.4f;
+  // Title weight: letters fall thin and land at rest weight, the impact
+  // squashing them heavier; then a swell of weight rolls through the word
+  // with the bob, and letters near the pointer pool heavier.
+  static constexpr float kTitleFallWeight = 220.0f;
+  static constexpr float kTitleBreathWeight = 110.0f;
+  static constexpr float kTitlePointerWeight = 300.0f;
+  // Once the word has landed, one letter at a time strikes a pose: it flexes
+  // heavy and squat, slims thin and tall, or hops (thin in flight, squashed
+  // heavy on landing), holds it briefly and springs back; now and then a wave
+  // of hops ripples out from it. The next pose comes after a random pause;
+  // clicking the word sends a hop through it.
+  static constexpr int kTitleLetterCount = 4;
+  static constexpr float kTitlePoseStartSeconds = 1.1f;
+  static constexpr float kTitlePoseMinPauseSeconds = 0.55f;
+  static constexpr float kTitlePosePauseRangeSeconds = 1.0f;
+  static constexpr float kTitleHopStaggerSeconds = 0.08f;
   // Background world: generations per second, the pause between visitors
   // (gliders and spaceships launched in from the edges), and the growth or
   // age at which the world is reseeded.
@@ -88,6 +109,9 @@ private:
                     unsigned char state);
   std::uint32_t nextRandom();
   void updateMotion(float dt);
+  void updateTitlePoses(float dt);
+  void strikeTitlePose(int letter);
+  void hopTitleLetter(int letter);
   void updateLayout();
   void rebuildVisual();
   void drawBackground(float width, float height, float reveal);
@@ -125,7 +149,27 @@ private:
   float m_pressX = 0.0f;
   float m_pressY = 0.0f;
   std::shared_ptr<Font> m_titleFont;
+  // The title's weights when the variable typeface is installed (then
+  // m_titleFont is unused); empty otherwise, and the title draws in
+  // m_titleFont at one weight.
+  FontWeightRamp m_titleRamp;
   int m_titleRasterSize = 0;
+  // A title letter's pose: extra weight, squash (+ squat and wide, - tall and
+  // narrow) and hop height, each on its own spring, plus the time left
+  // holding the pose and a pending hop from a click.
+  struct TitleLetterPose
+  {
+    GuiSpring weight;
+    GuiSpring squash;
+    GuiSpring hop;
+    float hold = 0.0f;
+    float hopDelay = -1.0f;
+  };
+  std::array<TitleLetterPose, kTitleLetterCount> m_letterPoses;
+  float m_poseCountdown = 0.0f;
+  int m_lastPosedLetter = -1;
+  // Where the word was last drawn (x, y, width, height), for clicks on it.
+  std::array<float, 4> m_titleBounds{};
   int m_selectedItem;
   double m_bgSimAccum;
   double m_worldElapsed = 0.0;

@@ -1071,14 +1071,17 @@ ConfigurationMenu::rebuildVisual()
           UiTheme::applyOpacity(UiTheme::textPrimary(), rowOpacity));
       }
     }
-    // Labels lean in horizontally only; their row baseline stays fixed.
-    visual.addText(
+    // Labels lean in horizontally only; their row baseline stays fixed. They
+    // thicken with focus.
+    GuiKit::drawEmphasizedText(
+      visual,
       labels[row],
       panelX + 36.0f + 4.0f * e,
       textY,
       rowFontSize,
       UiTheme::applyOpacity(
-        UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity));
+        UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity),
+      e);
     const ColorRgba valueColor =
       row == kApplyRow  ? UiTheme::success()
       : row == kExitRow ? UiTheme::error()

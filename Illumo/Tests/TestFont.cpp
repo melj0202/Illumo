@@ -1,5 +1,6 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Font.h>
+#include <Illumo/Rendering/FontWeightRamp.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/EnvVars.h>
@@ -214,9 +215,221 @@ testRendererLifetimeEnrollment()
   std::destroy_at(second);
 }
 
+static const char* kKikutaPath =
+  ILLUMO_ENGINE_ASSETS "/Fonts/Kikuta/Kikuta-Variable.ttf";
+static const char* kSpaceMonoPath =
+  ILLUMO_ENGINE_ASSETS "/Fonts/Space_Mono/SpaceMono-Regular.ttf";
+
+static double
+atlasCoverage(const Font& font)
+{
+  double total = 0.0;
+  const std::vector<unsigned char>& pixels = font.getAtlasPixels();
+  for (size_t index = 3; index < pixels.size(); index += 4) {
+    total += pixels[index];
+  }
+  return total;
+}
+
+static void
+testVariableFace()
+{
+  testSection("Font: variable weight, fallback face and glyph subsets");
+  FontFaceOptions thin;
+  thin.weight = 200.0f;
+  FontFaceOptions black;
+  black.weight = 950.0f;
+  Font light;
+  Font heavy;
+  testTrue(g,
+           light.loadFile(kKikutaPath, 32.0f, thin) &&
+             heavy.loadFile(kKikutaPath, 32.0f, black),
+           "the variable face loads at two weights");
+  testTrue(g,
+           atlasCoverage(heavy) > atlasCoverage(light) * 1.2,
+           "the heavier instance inks noticeably more of each glyph");
+  testTrue(g,
+           heavy.getAdvance('M', 32.0f) > light.getAdvance('M', 32.0f),
+           "heavier letters advance further");
+
+  // Kikuta has no '>'; the fallback face supplies it.
+  Font mono;
+  testTrue(g, mono.loadFile(kSpaceMonoPath, 32.0f), "fallback face loads");
+  FontFaceOptions withFallback;
+  withFallback.weight = 400.0f;
+  withFallback.fallbackPath = kSpaceMonoPath;
+  Font merged;
+  testTrue(g,
+           merged.loadFile(kKikutaPath, 32.0f, withFallback),
+           "the face loads with a fallback");
+  const GlyphInfo* chevron = merged.getGlyph('>');
+  const GlyphInfo* monoChevron = mono.getGlyph('>');
+  testTrue(g,
+           chevron != nullptr && monoChevron != nullptr && chevron->visible &&
+             chevron->width == monoChevron->width &&
+             chevron->advanceX == monoChevron->advanceX,
+           "missing glyphs are rasterized from the fallback face");
+  testTrue(g,
+           merged.getAdvance('W', 32.0f) != mono.getAdvance('W', 32.0f),
+           "glyphs the face has stay its own");
+
+  FontFaceOptions subset;
+  subset.glyphs = "CSIM";
+  Font word;
+  testTrue(
+    g, word.loadFile(kKikutaPath, 32.0f, subset), "a glyph subset loads");
+  const GlyphInfo* c = word.getGlyph('C');
+  const GlyphInfo* m = word.getGlyph('M');
+  const GlyphInfo* space = word.getGlyph(' ');
+  const GlyphInfo* q = word.getGlyph('Q');
+  testTrue(g,
+           c != nullptr && c->codepoint == U'C' && m != nullptr &&
+             m->codepoint == U'M' && space != nullptr &&
+             space->codepoint == U' ',
+           "the subset keeps its glyphs and space");
+  testTrue(g,
+           q != nullptr && q->codepoint == U'?',
+           "characters outside the subset resolve to '?'");
+
+  Font fixed;
+  FontFaceOptions ignored;
+  ignored.weight = 900.0f;
+  testTrue(g,
+           fixed.loadFile(kSpaceMonoPath, 32.0f, ignored) &&
+             fixed.getAdvance('A', 32.0f) == mono.getAdvance('A', 32.0f),
+           "static faces ignore the weight");
+}
+
+static void
+testWeightRamp()
+{
+  testSection("FontWeightRamp: sample choice, blending and measurement");
+  FontFaceOptions regular;
+  regular.weight = 400.0f;
+  FontFaceOptions bold;
+  bold.weight = 800.0f;
+  std::shared_ptr<Font> light = std::make_shared<Font>();
+  std::shared_ptr<Font> heavy = std::make_shared<Font>();
+  light->loadFile(kKikutaPath, 32.0f, regular);
+  heavy->loadFile(kKikutaPath, 32.0f, bold);
+  const FontWeightRamp ramp(
+    { { 800.0f, heavy }, { 400.0f, light } }, 400.0f, 800.0f);
+  testTrue(g, ramp.ready(), "loaded samples make the ramp ready");
+  testTrue(g,
+           ramp.weightFor(0.0f) == 400.0f && ramp.weightFor(1.0f) == 800.0f &&
+             ramp.weightFor(1.25f) == 900.0f,
+           "emphasis maps rest to emphasis weight and past it");
+
+  TextPrimitive text;
+  testTrue(g, ramp.apply(text, 600.0f), "a weight between samples applies");
+  testTrue(g,
+           text.font == light && text.heavyFont == heavy &&
+             std::abs(text.heavyBlend - 0.5f) < 1e-5f,
+           "between samples, the heavier overlays at the fraction");
+  ramp.apply(text, 400.0f);
+  testTrue(g,
+           text.font == light && text.heavyFont == nullptr,
+           "a sample's own weight draws that sample alone");
+  ramp.apply(text, 1000.0f);
+  testTrue(g,
+           text.font == heavy && text.heavyFont == nullptr,
+           "weights past the ramp clamp to its heaviest sample");
+  ramp.apply(text, 100.0f);
+  testTrue(g,
+           text.font == light && text.heavyFont == nullptr,
+           "weights below the ramp clamp to its lightest sample");
+  const float lightWidth = light->measureText("Settings", 20.0f).width;
+  const float heavyWidth = heavy->measureText("Settings", 20.0f).width;
+  testTrue(g,
+           std::abs(ramp.measure("Settings", 20.0f, 700.0f) -
+                    (lightWidth + (heavyWidth - lightWidth) * 0.75f)) < 1e-3f,
+           "measurement interpolates like the drawn advances");
+
+  std::shared_ptr<Font> pending = std::make_shared<Font>();
+  const FontWeightRamp loading(
+    { { 400.0f, pending }, { 800.0f, heavy } }, 400.0f, 800.0f);
+  testTrue(g, !loading.ready(), "a pending sample keeps the ramp unready");
+  testTrue(g,
+           loading.apply(text, 500.0f) && text.font == heavy &&
+             text.heavyFont == nullptr,
+           "pending samples are skipped");
+  const FontWeightRamp waiting({ { 400.0f, pending } }, 400.0f, 800.0f);
+  testTrue(g,
+           !waiting.apply(text, 400.0f) && text.font == pending &&
+             waiting.measure("A", 12.0f, 400.0f) < 0.0f,
+           "with nothing loaded the text waits on the first sample");
+  text.font = light;
+  testTrue(g,
+           !FontWeightRamp().apply(text, 900.0f) && text.font == light,
+           "an empty ramp leaves the text alone");
+}
+
+static void
+testHeavyOverlayRendering()
+{
+  testSection("GameVisual: a heavier weight overlays the text run");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  FontFaceOptions regular;
+  regular.weight = 400.0f;
+  FontFaceOptions bold;
+  bold.weight = 800.0f;
+  std::shared_ptr<Font> light = std::make_shared<Font>();
+  std::shared_ptr<Font> heavy = std::make_shared<Font>();
+  light->loadFile(kKikutaPath, 32.0f, regular);
+  heavy->loadFile(kKikutaPath, 32.0f, bold);
+
+  GameVisual visual;
+  visual.setWindow(&window);
+  visual.prepare(&renderer);
+  const size_t index =
+    visual.addText("MM", 10.0f, 20.0f, 16.0f, ColorRgba{ 255, 255, 255, 255 });
+  visual.getText(index)->font = light;
+  testTrue(g, visual.AppendCommands(&renderer), "plain run draws");
+  renderer.EndFrame();
+  const unsigned int plainQuads = visual.builtQuadCount();
+
+  visual.getText(index)->heavyFont = heavy;
+  visual.getText(index)->heavyBlend = 0.5f;
+  mock.resetCounters();
+  testTrue(g, visual.AppendCommands(&renderer), "blended run draws");
+  renderer.EndFrame();
+  testTrue(g,
+           plainQuads == 2u && visual.builtQuadCount() == 4u,
+           "the heavier weight adds one quad per glyph");
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::DrawIndexed) >= 2u,
+           "each weight's atlas draws in its own batch");
+
+  visual.getText(index)->heavyFont = std::make_shared<Font>();
+  testTrue(g, visual.AppendCommands(&renderer), "pending overlay draws");
+  renderer.EndFrame();
+  testTrue(
+    g, visual.builtQuadCount() == 2u, "a pending heavier weight is skipped");
+}
+
 void
 registerFontTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Font.VariableFace", []() {
+    g = {};
+    testVariableFace();
+    return g.failures;
+  });
+  registry.add("Illumo.Font.WeightRamp", []() {
+    g = {};
+    testWeightRamp();
+    return g.failures;
+  });
+  registry.add("Illumo.Font.HeavyOverlayRendering", []() {
+    g = {};
+    testHeavyOverlayRendering();
+    return g.failures;
+  });
   registry.add("Illumo.Font.RendererLifetimeEnrollment", []() {
     g = {};
     testRendererLifetimeEnrollment();

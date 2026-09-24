@@ -1114,7 +1114,41 @@ shared core of outlines, soft shadows and glows), `drawSoftShadow`,
 `drawSoftGlow`, `drawVignette`, `drawSheen`, `drawGlassPanel`
 (`drawRoundedPanel` forwards to it), `drawLiquidSelection` (non-overlapping
 slices across the travel, so translucent faces stay even), `drawSplash` and
-keycap hints. Fades target the same
+keycap hints.
+
+CSim's type is Kikuta, a variable-weight face (D-UI9). The host font service
+resolves `kikuta:<weight>[:<glyphs>]` (weight 1..1000, an optional subset of
+up to 32 printable ASCII glyphs) by instancing the face's `wght` axis
+(`FontFaceOptions`) and rasterizing the printable ASCII Kikuta lacks
+(`# $ % * + < = > ^ _` and braces, among others) from Space Mono of a similar
+weight; the guest ABI is unchanged. `CSimTypeface::install` runs during package
+bootstrap: Kikuta 400 becomes the default font and weights 400/600/800/1000 at
+the 32 px raster become the UI `FontWeightRamp`. A ramp maps any weight to the
+two loaded samples around it; `TextPrimitive::heavyFont`/`heavyBlend` overlay
+the heavier sample at the fraction between them with interpolated advances, so
+weight animates continuously from a handful of atlases. `GuiKit`'s
+`drawEmphasizedText`, `drawEmphasizedTextCentered` and `measureEmphasizedText`
+map a row or button's emphasis spring onto that ramp (400 at rest, 800 focused,
+heavier through the jelly overshoot) in the title rows, settings, canvas setup,
+Ruleset Workshop rows and action buttons, and the glass dialogs; without an
+installed ramp (IllEd, the viewer, the native test oracle) they draw plain
+text. The CSIM title uses its own ramp rasterized for just those four glyphs
+at weights 200..1000, and each letter also squashes and stretches
+(`TextPrimitive::stretchX`/`stretchY`, scaled about the run's left edge and
+baseline so feet stay on the line). Letters fall thin and tall and splat heavy
+and squat on impact (the landing spring's overshoot carries them past their
+700 rest), a weight swell rolls through the word with the bob, and letters
+near the pointer pool heavier and puff up. Once the word has landed, one
+letter at a time strikes a random pose every 0.55--1.55 s on its own springs:
+it flexes black and squat, slims to a hairline and grows tall, or hops
+(thinning in flight, squashing heavy as it dips back past the line, with a
+glow pooling on the underline beneath it), holds briefly and springs back
+while its neighbours get jostled; now and then a wave of hops ripples out from
+it across the word. Wider letters shoulder their neighbours
+aside. Clicking the word sends a staggered hop through it; poses rest while an
+overlay is open. Reduced motion holds the title still at rest weight. The developer console follows the default font.
+
+Fades target the same
 color at zero alpha (`UiTheme::transparentOf`) so straight-alpha blending never
 darkens an edge. `GuiDialog` provides opt-in rounded presentation with a fitted
 visual/pointer scale; its default flat presentation remains available to other

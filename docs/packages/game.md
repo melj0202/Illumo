@@ -196,6 +196,24 @@ a sheen, and wobbles on press while a splash of teardrop droplets leaps from
 the press point; keycaps form the footer. The panel dims while settings or
 canvas setup is open.
 
+Type is Kikuta, a variable-weight face (`CSimTypeface`, D-UI9). Package
+bootstrap installs weight 400 as the default font and a 400/600/800/1000 UI
+weight ramp, and waits for the rest weight before the first menu. Row labels on
+the title screen, settings, canvas setup and Ruleset Workshop, the workshop's
+action buttons and the glass dialog buttons thicken with their emphasis springs
+(`GuiKit::drawEmphasizedText`). The CSIM title draws from its own four-glyph
+ramp (200..1000) and squashes and stretches each letter
+(`TextPrimitive::stretchX`/`stretchY`): letters fall thin and tall and land
+heavy and squat, a weight swell rolls through the word with the bob, and
+letters near the pointer pool heavier. After the entrance, one letter at a time
+strikes a random pose every 0.55--1.55 s (flex, slim, hop, or now and then a
+wave of hops rippling out from it; `TitleLetterPose`
+springs, the deterministic menu generator picks the letter and pose) and
+jostles its neighbours; clicking the word sends a staggered hop through it.
+Poses pause behind overlays and stop under reduced motion.
+Characters Kikuta lacks come from Space Mono. The native test oracle installs
+no typeface and keeps the engine default font.
+
 ## SparseCellGrid (simulation domain)
 
 - Authoritative signed 64-bit cell coordinates.

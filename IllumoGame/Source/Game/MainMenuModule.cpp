@@ -2,6 +2,7 @@
 
 #include "BuiltinPatterns.h"
 #include "CSimPlatform.h"
+#include "CSimTypeface.h"
 #include "CanvasCoordinatePolicy.h"
 #include "CellContext.h"
 #include "CellGameModule.h"
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <queue>
 
 MainMenuModule::MainMenuModule()
@@ -88,6 +90,19 @@ MainMenuModule::Start(IllumoContext* context)
   m_spotY.configure(GuiMotion::kDrift);
   m_spotStrength.configure(GuiMotion::kSwell);
   m_motif.resetGlider(7, 7, 1, 1);
+  // Poses spring in and out with a jelly squash; hops boing.
+  for (TitleLetterPose& pose : m_letterPoses) {
+    pose.weight.configure(GuiMotion::kBoing);
+    pose.squash.configure(GuiMotion::kJelly);
+    pose.hop.configure(GuiMotion::kBoing);
+    pose.weight.snapTo(0.0f);
+    pose.squash.snapTo(0.0f);
+    pose.hop.snapTo(0.0f);
+    pose.hold = 0.0f;
+    pose.hopDelay = -1.0f;
+  }
+  m_poseCountdown = kTitlePoseStartSeconds + kTitlePoseMinPauseSeconds;
+  m_lastPosedLetter = -1;
 
   m_configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
@@ -368,6 +383,105 @@ MainMenuModule::updateMotion(float dt)
   m_spotX.tick(dt, still);
   m_spotY.tick(dt, still);
   m_spotStrength.tick(dt, still);
+  updateTitlePoses(dt);
+}
+
+// A hop launches the letter up on a boingy spring: it stretches thin as it
+// flies, then dips past the line on the way back, which reads as a heavy
+// squash, and bounces once more.
+void
+MainMenuModule::hopTitleLetter(int letter)
+{
+  TitleLetterPose& pose = m_letterPoses[static_cast<std::size_t>(letter)];
+  // High enough to read as a jump, low enough to clear the eyebrow label.
+  pose.hop.kick(400.0f);
+  pose.squash.kick(-8.0f);
+}
+
+void
+MainMenuModule::strikeTitlePose(int letter)
+{
+  TitleLetterPose& pose = m_letterPoses[static_cast<std::size_t>(letter)];
+  const std::uint32_t roll = nextRandom();
+  const float hold = 0.3f + static_cast<float>((roll >> 4u) % 400u) / 1000.0f;
+  // Flex and slim hold a shape; a hop is a jump; now and then a wave of hops
+  // ripples out from the letter across the whole word.
+  const std::uint32_t kind = roll % 7u;
+  if (kind == 6u) {
+    for (int other = 0; other < kTitleLetterCount; ++other) {
+      m_letterPoses[static_cast<std::size_t>(other)].hopDelay =
+        static_cast<float>(std::abs(other - letter)) * kTitleHopStaggerSeconds;
+    }
+    return;
+  }
+  if (kind >= 4u) {
+    hopTitleLetter(letter);
+    return;
+  }
+  // Flex: black and squat. Slim: hairline and tall.
+  const bool flex = kind < 2u;
+  pose.weight.setTarget(flex ? 320.0f : -460.0f);
+  pose.squash.setTarget(flex ? 1.0f : -1.0f);
+  pose.hold = hold;
+  // Neighbours get jostled the other way.
+  for (int side = -1; side <= 1; side += 2) {
+    const int neighbour = letter + side;
+    if (neighbour >= 0 && neighbour < kTitleLetterCount) {
+      m_letterPoses[static_cast<std::size_t>(neighbour)].squash.kick(
+        flex ? -3.5f : 3.5f);
+    }
+  }
+}
+
+void
+MainMenuModule::updateTitlePoses(float dt)
+{
+  const bool still = reducedMotion();
+  for (int letter = 0; letter < kTitleLetterCount; ++letter) {
+    TitleLetterPose& pose = m_letterPoses[static_cast<std::size_t>(letter)];
+    if (still) {
+      pose.hold = 0.0f;
+      pose.hopDelay = -1.0f;
+    }
+    if (pose.hopDelay >= 0.0f) {
+      pose.hopDelay -= dt;
+      if (pose.hopDelay < 0.0f) {
+        pose.hopDelay = -1.0f;
+        hopTitleLetter(letter);
+      }
+    }
+    if (pose.hold > 0.0f) {
+      pose.hold -= dt;
+    }
+    if (pose.hold <= 0.0f) {
+      pose.hold = 0.0f;
+      pose.weight.setTarget(0.0f);
+      pose.squash.setTarget(0.0f);
+    }
+    pose.weight.tick(dt, still);
+    pose.squash.tick(dt, still);
+    pose.hop.tick(dt, still);
+  }
+  // Poses wait for the word to land and rest while an overlay is up.
+  if (still || m_revealElapsed < kTitlePoseStartSeconds ||
+      m_recede.target() > 0.5f) {
+    return;
+  }
+  m_poseCountdown -= dt;
+  if (m_poseCountdown > 0.0f) {
+    return;
+  }
+  int letter = static_cast<int>(nextRandom() % kTitleLetterCount);
+  if (letter == m_lastPosedLetter) {
+    letter =
+      (letter + 1 + static_cast<int>(nextRandom() % (kTitleLetterCount - 1))) %
+      kTitleLetterCount;
+  }
+  strikeTitlePose(letter);
+  m_lastPosedLetter = letter;
+  m_poseCountdown = kTitlePoseMinPauseSeconds +
+                    kTitlePosePauseRangeSeconds *
+                      static_cast<float>(nextRandom() % 1000u) / 1000.0f;
 }
 
 void
@@ -686,6 +800,20 @@ MainMenuModule::Update(double dt)
     const float mouseX = m_pointer.x();
     const float mouseY = m_pointer.y();
 
+    // Poking the word sends a hop rippling through it.
+    if (m_pointer.clicked() && !reducedMotion() &&
+        GuiKit::isPointInRect(mouseX,
+                              mouseY,
+                              m_titleBounds[0],
+                              m_titleBounds[1],
+                              m_titleBounds[2],
+                              m_titleBounds[3])) {
+      for (int letter = 0; letter < kTitleLetterCount; ++letter) {
+        m_letterPoses[static_cast<std::size_t>(letter)].hopDelay =
+          static_cast<float>(letter) * kTitleHopStaggerSeconds;
+      }
+    }
+
     // Rows are hit where they are drawn, tilt included.
     const float itemX =
       m_panelX + m_tilt.shiftX(GuiPanelTilt::kBodyDepth) + 28.0f;
@@ -866,7 +994,8 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
   m_menuVisual.addText(
     "C E L L U L A R   P L A Y G R O U N D",
     panelX + 30.0f - 8.0f * (1.0f - eyebrowReveal),
-    panelY + 23.0f,
+    // Headroom for the title's hops.
+    panelY + 18.0f,
     9.0f + room * 2.0f,
     UiTheme::applyOpacity(UiTheme::fade(cyan, eyebrowReveal), opacity));
 
@@ -881,21 +1010,37 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
                          : displayedTitleSize <= 128.0f ? 128
                                                         : 256;
   if (m_titleRasterSize != rasterSize) {
-    m_titleFont = Font::getDefaultFont();
-    if (m_titleFont != nullptr && !m_titleFont->getPath().empty() &&
-        m_titleFont->getPath() != "<memory>") {
-      m_titleFont = Font::loadFromFile(m_titleFont->getPath(),
-                                       static_cast<float>(rasterSize));
+    // A variable typeface rasterizes just the word, at each title weight;
+    // otherwise the default face gets one atlas at this size.
+    m_titleRamp = CSimTypeface::titleRamp(rasterSize, "CSIM");
+    m_titleFont.reset();
+    if (m_titleRamp.empty()) {
+      m_titleFont = Font::getDefaultFont();
+      if (m_titleFont != nullptr && !m_titleFont->getPath().empty() &&
+          m_titleFont->getPath() != "<memory>") {
+        m_titleFont = Font::loadFromFile(m_titleFont->getPath(),
+                                         static_cast<float>(rasterSize));
+      }
     }
     m_titleRasterSize = rasterSize;
   }
-  // Each letter falls in like a drop and bounces as it lands, then the word
-  // floats on a slow swell that ripples from letter to letter.
-  const char* letters[4] = { "C", "S", "I", "M" };
+  // Each letter falls in like a drop, stretched tall and thin, and splats
+  // squat and heavy as it lands before bouncing back; then the word floats on
+  // a slow swell that ripples weight from letter to letter, letters near the
+  // pointer pool heavier and puff up, and one letter at a time strikes a pose
+  // (updateTitlePoses). Squash keeps each letter's feet on the line, and
+  // wider, heavier letters shoulder their neighbours aside.
+  const char* letters[kTitleLetterCount] = { "C", "S", "I", "M" };
   const float titleX = panelX + 28.0f;
   const float titleY = panelY + 43.0f;
+  const float pointerPull =
+    still ? 0.0f : std::clamp(m_spotStrength.value(), 0.0f, 1.0f);
+  const float pointerReach = titleSize * 1.1f;
+  const float lineY = titleY + titleSize * 0.98f + 4.0f;
   float advance = 0.0f;
-  for (int letter = 0; letter < 4; ++letter) {
+  for (int letter = 0; letter < kTitleLetterCount; ++letter) {
+    const TitleLetterPose& pose =
+      m_letterPoses[static_cast<std::size_t>(letter)];
     const float start = kTitleLetterDelaySeconds +
                         static_cast<float>(letter) * kTitleLetterStaggerSeconds;
     const float progress =
@@ -906,37 +1051,107 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
                                                    kTitleLetterBounceHz,
                                                    kTitleLetterBounceDamping);
     const float fade = std::clamp(progress * 2.2f, 0.0f, 1.0f);
-    const float bob =
-      still
-        ? 0.0f
-        : std::sin(ambient * 2.0943951f - static_cast<float>(letter) * 0.9f) *
-            2.2f * std::clamp(progress - 1.0f, 0.0f, 1.0f);
+    const float settled = std::clamp(progress - 1.0f, 0.0f, 1.0f);
+    const float swell =
+      std::sin(ambient * 2.0943951f - static_cast<float>(letter) * 0.9f);
+    const float bob = still ? 0.0f : swell * 2.2f * settled;
     const float size = titleSize * (0.82f + 0.18f * landed);
-    const float letterWidth =
-      m_titleFont != nullptr
-        ? m_titleFont->measureText(letters[letter], titleSize).width
-        : titleSize * 0.6f;
-    const float drawnWidth =
-      m_titleFont != nullptr
-        ? m_titleFont->measureText(letters[letter], size).width
-        : size * 0.6f;
+
+    // A hop is height above the line; its dip below the line on the way back
+    // becomes squash, so feet never leave the baseline downward.
+    const float hop = pose.hop.value();
+    const float lift = std::max(0.0f, hop);
+    const float flight = std::min(1.0f, std::abs(pose.hop.velocity()) / 400.0f);
+    const float impact = std::clamp(-hop / 5.0f, 0.0f, 1.0f);
+
+    float weight = CSimTypeface::kTitleRestWeight;
+    // Squash: + squat and wide, - tall and narrow.
+    float squash = 0.0f;
+    if (!still) {
+      // `landed` overshoots 1 at impact, so the letter lands heavier than it
+      // rests; sinking letters are heavy and rising ones light.
+      weight = kTitleFallWeight +
+               (CSimTypeface::kTitleRestWeight - kTitleFallWeight) * landed +
+               kTitleBreathWeight * swell * settled + pose.weight.value() -
+               260.0f * flight + 280.0f * impact;
+      squash = pose.squash.value() - 0.7f * flight + 1.1f * impact;
+      if (progress > 0.0f) {
+        // Tall while falling, splatted on impact.
+        squash += -0.8f * std::clamp(1.0f - landed, 0.0f, 1.0f) +
+                  3.0f * std::max(0.0f, landed - 1.0f);
+      }
+      if (pointerPull > 0.0f) {
+        const float restWidth =
+          m_titleRamp.empty()
+            ? 0.0f
+            : m_titleRamp.measure(
+                letters[letter], titleSize, CSimTypeface::kTitleRestWeight);
+        const float dx = m_spotX.value() -
+                         (titleX + advance + std::max(0.0f, restWidth) * 0.5f);
+        const float dy = m_spotY.value() - (titleY + titleSize * 0.5f);
+        const float closeness =
+          pointerPull *
+          std::exp(-(dx * dx + dy * dy) / (2.0f * pointerReach * pointerReach));
+        weight += kTitlePointerWeight * closeness;
+        squash += 0.3f * closeness;
+      }
+    }
+    squash = std::clamp(squash, -1.4f, 1.4f);
+    const float stretchX = 1.0f + 0.2f * squash;
+    const float stretchY = 1.0f - 0.17f * squash;
+
+    float letterWidth =
+      m_titleRamp.empty()
+        ? -1.0f
+        : m_titleRamp.measure(letters[letter], titleSize, weight);
+    float drawnWidth = m_titleRamp.empty()
+                         ? -1.0f
+                         : m_titleRamp.measure(letters[letter], size, weight);
+    if (letterWidth < 0.0f || drawnWidth < 0.0f) {
+      letterWidth =
+        m_titleFont != nullptr
+          ? m_titleFont->measureText(letters[letter], titleSize).width
+          : titleSize * 0.6f;
+      drawnWidth = m_titleFont != nullptr
+                     ? m_titleFont->measureText(letters[letter], size).width
+                     : size * 0.6f;
+    }
+    const float cellWidth = letterWidth * stretchX;
+    if (lift > 1.0f) {
+      // A glow pools on the line under a hopping letter and shrinks as it
+      // rises.
+      const float away = std::clamp(lift / 18.0f, 0.0f, 1.0f);
+      GuiKit::drawSoftGlow(
+        m_menuVisual,
+        titleX + advance + cellWidth * 0.5f,
+        lineY + 1.5f,
+        cellWidth * (0.7f - 0.3f * away),
+        5.0f,
+        UiTheme::applyOpacity(UiTheme::fade(cyan, 0.5f * (1.0f - away)),
+                              opacity),
+        12);
+    }
     const size_t index = m_menuVisual.addText(
       letters[letter],
-      titleX + advance + (letterWidth - drawnWidth) * 0.5f,
-      titleY + (1.0f - landed) * 22.0f + (titleSize - size) * 0.5f + bob,
+      titleX + advance + (letterWidth - drawnWidth) * stretchX * 0.5f,
+      titleY + (1.0f - landed) * 22.0f + (titleSize - size) * 0.5f + bob - lift,
       size,
       UiTheme::applyOpacity(UiTheme::fade(UiTheme::textPrimary(), fade),
                             opacity));
-    m_menuVisual.getText(index)->font = m_titleFont;
-    advance += letterWidth;
+    TextPrimitive* text = m_menuVisual.getText(index);
+    text->font = m_titleFont;
+    text->stretchX = stretchX;
+    text->stretchY = stretchY;
+    m_titleRamp.apply(*text, weight);
+    advance += cellWidth;
   }
+  m_titleBounds = { titleX, titleY, advance, titleSize };
   // A cyan-to-violet underline draws out beneath the word.
   const float underline =
     still
       ? 1.0f
       : GuiEasing::outCubic((m_revealElapsed - 0.42f) / kTitleLetterSeconds);
   if (underline > 0.0f) {
-    const float lineY = titleY + titleSize * 0.98f + 4.0f;
     m_menuVisual.addGradientRect(
       titleX + 2.0f,
       lineY,
@@ -1167,13 +1382,17 @@ MainMenuModule::drawRows(float room, unsigned char opacity, float breathe)
         rowOpacity),
       e);
 
-    m_menuVisual.addText(
+    // The label thickens as the row takes focus, swelling past bold on the
+    // jelly spring's overshoot before it settles.
+    GuiKit::drawEmphasizedText(
+      m_menuVisual,
       labels[item],
       itemX + 80.0f + slide,
       y + 12.0f + room * 7.0f,
       19.0f + room * 2.0f,
       UiTheme::applyOpacity(
-        UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity));
+        UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity),
+      std::min(e, 1.3f));
     m_menuVisual.addText(
       descriptions[item],
       itemX + 80.0f + slide,

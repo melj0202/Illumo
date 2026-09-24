@@ -1,5 +1,6 @@
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Font.h>
+#include <Illumo/Rendering/FontWeightRamp.h>
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -80,6 +81,59 @@ GuiKit::drawTextAligned(GameVisual& visual,
     drawX = x + std::max(0.0f, width - textW);
   }
   visual.addText(text, drawX, y, sizePt, color);
+}
+
+size_t
+GuiKit::drawEmphasizedText(GameVisual& visual,
+                           const std::string& text,
+                           float x,
+                           float y,
+                           float sizePt,
+                           ColorRgba color,
+                           float emphasis)
+{
+  const size_t index = visual.addText(text, x, y, sizePt, color);
+  const FontWeightRamp& ramp = FontWeightRamp::ui();
+  TextPrimitive* primitive = visual.getText(index);
+  if (!ramp.empty() && primitive != nullptr) {
+    ramp.apply(*primitive, ramp.weightFor(emphasis));
+  }
+  return index;
+}
+
+float
+GuiKit::measureEmphasizedText(const std::string& text,
+                              float sizePt,
+                              float emphasis)
+{
+  const FontWeightRamp& ramp = FontWeightRamp::ui();
+  const float weighted =
+    ramp.empty() ? -1.0f : ramp.measure(text, sizePt, ramp.weightFor(emphasis));
+  if (weighted >= 0.0f) {
+    return weighted;
+  }
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  return font ? font->measureText(text, sizePt).width
+              : estimateTextWidth(text, sizePt);
+}
+
+void
+GuiKit::drawEmphasizedTextCentered(GameVisual& visual,
+                                   const std::string& text,
+                                   float centerX,
+                                   float centerY,
+                                   float sizePt,
+                                   ColorRgba color,
+                                   float emphasis)
+{
+  const float textW = measureEmphasizedText(text, sizePt, emphasis);
+  drawEmphasizedText(visual,
+                     text,
+                     centerX - textW * 0.5f,
+                     centerY - sizePt * 0.5f,
+                     sizePt,
+                     color,
+                     emphasis);
 }
 
 void

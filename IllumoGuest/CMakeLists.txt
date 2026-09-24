@@ -47,6 +47,7 @@ add_library(IllumoGuestRendering STATIC
   ../Illumo/Source/Rendering/RendererStyles.cpp
   ../Illumo/Source/Rendering/Camera.cpp
   ../Illumo/Source/Rendering/FontLayout.cpp
+  ../Illumo/Source/Rendering/FontWeightRamp.cpp
   ../Illumo/Source/Rendering/Primitives/GameVisual.cpp
   ../Illumo/Source/Services/EnvVarsValues.cpp)
 target_sources(IllumoGuestRendering PRIVATE ../Illumo/Source/Services/InputManagerState.cpp)
@@ -146,6 +147,7 @@ illumo_add_guest(IllumoGame
   ../IllumoGame/Source/Game/CellContext.cpp
   ../IllumoGame/Source/Game/CellGameModule.cpp
   ../IllumoGame/Source/Game/ConfigurationMenu.cpp
+  ../IllumoGame/Source/Game/CSimTypeface.cpp
   ../IllumoGame/Source/Game/Cursor.cpp
   ../IllumoGame/Source/Game/ExitConfirmDialog.cpp
   ../IllumoGame/Source/Game/IllumoGameConfig.cpp

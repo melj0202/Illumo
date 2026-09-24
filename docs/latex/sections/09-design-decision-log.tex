@@ -2794,6 +2794,36 @@ motion snaps every new spring and wobble, and the rounded
 is unchanged.\\
 \textbf{Extends:} D-UI1 (menu shell), D-R26 (living-glass chrome)
 \end{decisionbox}
+
+\subsection*{D-UI9 --- Variable-weight type for CSim}
+\begin{decisionbox}[title={D-UI9 \quad 2026-09-23}]
+\textbf{Decision:} CSim sets its type in Kikuta (SIL OFL 1.1), a
+variable-weight face shipped under \texttt{Assets/Fonts/Kikuta}. The host font
+service keeps its closed catalog and adds the name
+\texttt{kikuta:<weight>[:<glyphs>]}: FreeType instances the \texttt{wght} axis
+(\texttt{FontFaceOptions}), rasterizes the printable ASCII Kikuta lacks from
+Space Mono, and can restrict an atlas to up to 32 glyphs. Weight animates
+without a live rasterizer: \texttt{FontWeightRamp} holds a few rasterized
+weights and maps any weight to the two around it, and
+\texttt{TextPrimitive::heavyFont} overlays the heavier at the fraction between
+them with interpolated advances. \texttt{CSimTypeface} installs Kikuta 400 as
+the default font and a 400--1000 UI ramp during package bootstrap;
+\texttt{GuiKit::drawEmphasizedText} and its centered and measuring companions
+turn a row or button's emphasis spring into weight, and the CSIM title animates
+its own four-glyph ramp (thin while falling, heavy on impact, a rolling weight
+swell and a pull toward the pointer). \texttt{TextPrimitive::stretchX} and
+\texttt{stretchY} squash and stretch a run about its left edge and baseline;
+the title letters use them with weight for random one-at-a-time poses (flex,
+slim, hop) and a hop wave when the word is clicked.\\
+\textbf{Why:} The owner supplied the face and asked for hover emphasis to
+thicken labels and for play with the title's weight.\\
+\textbf{Consequences:} The guest ABI and \texttt{GuestFontRequest} are
+unchanged. Products without an installed ramp draw emphasized text plainly, so
+IllEd and the viewer are unaffected. Each ramp sample is one font request
+against the guest's 32-font budget (CSim uses at most 20). Kikuta's B and S
+resemble 8 and 5, which rule strings such as B3/S23 inherit.\\
+\textbf{Extends:} D-UI8 (menu motion), D-R26 (living-glass chrome)
+\end{decisionbox}
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

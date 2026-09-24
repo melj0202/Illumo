@@ -6,6 +6,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/CellClipboard.cpp
   Source/Game/CellClipboardSystem.cpp
   Source/Game/CSimPlatformNative.cpp
+  Source/Game/CSimTypeface.cpp
   Source/Game/CellContext.cpp
   Source/Game/CellGameModule.cpp
   Source/Game/CellPattern.cpp

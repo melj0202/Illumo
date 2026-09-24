@@ -43,6 +43,18 @@ struct TextBounds
   float minY = 0.0f;
 };
 
+// How loadFile samples a face. A variable face is instanced at `weight` on its
+// 'wght' axis (clamped to the axis; 0 keeps the default instance, and static
+// faces ignore it). Codepoints the face lacks are rasterized from
+// `fallbackPath` when given. `glyphs` restricts the atlas to those printable
+// ASCII characters plus space and '?'; empty rasterizes all of 32..126.
+struct FontFaceOptions
+{
+  float weight = 0.0f;
+  std::string fallbackPath;
+  std::string glyphs;
+};
+
 // TrueType/OpenType font rasterizer and atlas holder backed by FreeType 2.
 class Font : public std::enable_shared_from_this<Font>
 {
@@ -72,6 +84,9 @@ public:
   static void clearCache();
 
   bool loadFile(const std::string& path, float pixelSize = kDefaultPixelSize);
+  bool loadFile(const std::string& path,
+                float pixelSize,
+                const FontFaceOptions& options);
   bool loadMemory(const unsigned char* data,
                   size_t size,
                   float pixelSize = kDefaultPixelSize);
@@ -116,5 +131,8 @@ private:
   TextureHandle textureHandle{};
 
   void buildFallbackAtlas(float pixelSize);
-  bool rasterizeFace(void* ftFace, float pixelSize);
+  bool rasterizeFace(void* ftFace,
+                     void* ftFallbackFace,
+                     float pixelSize,
+                     const std::string& glyphSet);
 };

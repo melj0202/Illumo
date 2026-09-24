@@ -28,6 +28,11 @@ engine.
   `drawLiquidSelection` rather than restating pill layers. Keep the
   flat helpers (`drawPanel`, `drawCard`, `drawBackdrop`, `drawButton`, ...)
   byte-stable; tools and labels depend on their exact shapes.
+- Hover and focus weight goes through `GuiKit::drawEmphasizedText` (and its
+  centered and measuring companions), which read the product's
+  `FontWeightRamp::ui()` (D-UI9). Measure emphasized labels with
+  `measureEmphasizedText` rather than character-count estimates; weight
+  changes their width.
 - Overlay behavior that more than one screen would repeat belongs in
   `GuiMenuShell`: easing curves and clock-driven spring shapes (`GuiEasing`),
   damped springs for physical motion (`GuiSpring`, `GuiSpringArray`) tuned

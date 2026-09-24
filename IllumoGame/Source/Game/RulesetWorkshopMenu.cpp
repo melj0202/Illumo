@@ -161,7 +161,8 @@ drawValueStepper(GameVisual& visual,
       UiTheme::mix(UiTheme::textPrimary(), UiTheme::accentCool(), nudge),
       opacity));
   const float valueFont = std::clamp(height * 0.58f, 12.0f, 14.0f);
-  const float valueWidth = static_cast<float>(value.size()) * valueFont * 0.58f;
+  const float valueWidth =
+    GuiKit::measureEmphasizedText(value, valueFont, 0.0f);
   visual.addText(value,
                  x + std::max(sideWidth + 4.0f, (width - valueWidth) * 0.5f) +
                    nudge * 6.0f,
@@ -224,13 +225,20 @@ drawActionButton(GameVisual& visual,
                    e),
       opacity));
   const float fontSize = std::clamp(height * 0.42f, 12.0f, 15.0f);
-  const float textWidth = static_cast<float>(label.size()) * fontSize * 0.58f;
-  visual.addText(label,
-                 x + std::max(8.0f, (width - textWidth) * 0.5f),
-                 y + std::max(2.0f, (height - fontSize) * 0.5f),
-                 fontSize,
-                 UiTheme::applyOpacity(
-                   UiTheme::mix(tint, UiTheme::textPrimary(), e), opacity));
+  // The label thickens with focus, bolder still through the spring's
+  // overshoot.
+  const float weight = std::clamp(emphasis, 0.0f, 1.3f);
+  const float textWidth =
+    GuiKit::measureEmphasizedText(label, fontSize, weight);
+  GuiKit::drawEmphasizedText(
+    visual,
+    label,
+    x + std::max(8.0f, (width - textWidth) * 0.5f),
+    y + std::max(2.0f, (height - fontSize) * 0.5f),
+    fontSize,
+    UiTheme::applyOpacity(UiTheme::mix(tint, UiTheme::textPrimary(), e),
+                          opacity),
+    weight);
 }
 
 } // namespace
@@ -1757,13 +1765,15 @@ RulesetWorkshopMenu::rebuildVisual()
         UiTheme::applyOpacity(UiTheme::fade(cyan, 0.45f * pulse), rowOpacity),
         UiTheme::transparentOf(cyan));
     }
-    visual.addText(
+    GuiKit::drawEmphasizedText(
+      visual,
       row.label,
       panelX + 34.0f + 4.0f * e,
       textY,
       rowFontSize,
       UiTheme::applyOpacity(
-        UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity));
+        UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity),
+      e);
 
     const Control control = row.control;
     // Stepped values spring the way they moved and wobble back.

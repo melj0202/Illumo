@@ -26,6 +26,63 @@ fontPath(const std::string& name)
   return nullptr;
 }
 
+// An engine font request: a catalog path plus how to sample it.
+struct EngineFontRequest
+{
+  const char* path = nullptr;
+  FontFaceOptions options;
+};
+
+// Resolves `family[:weight[:glyphs]]`. Fixed faces take the plain names
+// above. The variable family "kikuta" takes an integer weight of 1..1000
+// (default 400) and an optional subset of 1..32 printable ASCII glyphs; the
+// characters it lacks come from Space Mono of a similar weight. Anything else
+// is outside the engine catalog.
+static bool
+resolveEngineFont(const std::string& name, EngineFontRequest& request)
+{
+  const std::size_t colon = name.find(':');
+  const std::string family = name.substr(0, colon);
+  if (family != "kikuta") {
+    request.path = colon == std::string::npos ? fontPath(name) : nullptr;
+    return request.path != nullptr;
+  }
+  int weight = 400;
+  std::string glyphs;
+  if (colon != std::string::npos) {
+    const std::size_t second = name.find(':', colon + 1);
+    const std::string digits = name.substr(
+      colon + 1,
+      second == std::string::npos ? std::string::npos : second - colon - 1);
+    if (digits.empty() || digits.size() > 4 ||
+        digits.find_first_not_of("0123456789") != std::string::npos) {
+      return false;
+    }
+    weight = std::stoi(digits);
+    if (weight < 1 || weight > 1000) {
+      return false;
+    }
+    if (second != std::string::npos) {
+      glyphs = name.substr(second + 1);
+      if (glyphs.empty() || glyphs.size() > 32) {
+        return false;
+      }
+      for (char character : glyphs) {
+        if (character < 32 || character > 126) {
+          return false;
+        }
+      }
+    }
+  }
+  request.path = "Fonts/Kikuta/Kikuta-Variable.ttf";
+  request.options.weight = static_cast<float>(weight);
+  request.options.glyphs = glyphs;
+  request.options.fallbackPath = weight >= 600
+                                   ? "Fonts/Space_Mono/SpaceMono-Bold.ttf"
+                                   : "Fonts/Space_Mono/SpaceMono-Regular.ttf";
+  return true;
+}
+
 WasmRenderServices::WasmRenderServices(WasmFrameRenderer& frames,
                                        std::uint32_t grants,
                                        std::filesystem::path engineAssets)
@@ -188,12 +245,19 @@ try {
       ++fontCount;
       GuestFontRequest requested;
       GuestFontRequest::read(record.payload, requested);
-      const char* path = fontPath(requested.name);
+      EngineFontRequest engineFont;
+      const bool known = resolveEngineFont(requested.name, engineFont);
       // Do not use Font's process-global unbounded file cache for guest input.
       std::shared_ptr<Font> font = std::make_shared<Font>();
-      if (path != nullptr && m_engineAssets.is_absolute()) {
-        if (!font->loadFile((m_engineAssets / path).string(),
-                            requested.pixelSize)) {
+      if (known && m_engineAssets.is_absolute()) {
+        FontFaceOptions options = engineFont.options;
+        if (!options.fallbackPath.empty()) {
+          options.fallbackPath =
+            (m_engineAssets / options.fallbackPath).string();
+        }
+        if (!font->loadFile((m_engineAssets / engineFont.path).string(),
+                            requested.pixelSize,
+                            options)) {
           font = Font::createFallback(requested.pixelSize);
         }
       } else {

@@ -1,3 +1,4 @@
+#include "Game/CSimTypeface.h"
 #include "Game/IllumoGameConfig.h"
 #include "Game/MainMenuModule.h"
 #include "Wasm/CatalogBootstrap.h"
@@ -51,11 +52,16 @@ protected:
 
   bool bootstrap() override
   {
+    // Kikuta replaces the engine default; its weights load beside the
+    // catalogs, and the menu waits only for the rest weight.
+    if (!CSimTypeface::installed()) {
+      CSimTypeface::install();
+    }
     m_catalog.pump();
     if (m_catalog.failed()) {
       throw std::runtime_error(m_catalog.error());
     }
-    if (!m_catalog.ready()) {
+    if (!m_catalog.ready() || !CSimTypeface::ready()) {
       return false;
     }
     RuleSetRegistry::instance() = m_catalog.registry();

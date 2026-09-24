@@ -33,6 +33,27 @@ public:
                               float sizePt,
                               ColorRgba color,
                               GuiAlignment alignment = GuiAlignment::Left);
+  // Text whose weight follows `emphasis` on the product's UI weight ramp
+  // (FontWeightRamp::ui()): rest weight at 0, emphasis weight at 1 (hovered
+  // or focused), bolder still through a spring's overshoot. Without a ramp it
+  // is plain default-font text. Returns the text index.
+  static size_t drawEmphasizedText(GameVisual& visual,
+                                   const std::string& text,
+                                   float x,
+                                   float y,
+                                   float sizePt,
+                                   ColorRgba color,
+                                   float emphasis);
+  static void drawEmphasizedTextCentered(GameVisual& visual,
+                                         const std::string& text,
+                                         float centerX,
+                                         float centerY,
+                                         float sizePt,
+                                         ColorRgba color,
+                                         float emphasis);
+  static float measureEmphasizedText(const std::string& text,
+                                     float sizePt,
+                                     float emphasis);
   static void drawLabelValue(GameVisual& visual,
                              const std::string& label,
                              const std::string& value,

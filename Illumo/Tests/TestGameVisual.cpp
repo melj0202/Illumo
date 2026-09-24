@@ -1,6 +1,7 @@
 // GameVisual primitive host: shapes + sprites via MockBackend (no OpenGL).
 
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
@@ -12,6 +13,7 @@
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <glm/gtc/type_ptr.hpp>
@@ -584,6 +586,71 @@ testGameVisualClipCullingAndNesting()
              "empty clip culls all geometry before upload and draw");
 }
 
+static bool
+withinPixel(float left, float right)
+{
+  return std::abs(left - right) < 0.01f;
+}
+
+// The first glyph quad of a one-letter text run at `stretchX`, `stretchY`.
+static bool
+captureGlyphQuad(float stretchX,
+                 float stretchY,
+                 std::array<CapturedSpriteVertex, 4>& quad)
+{
+  NullRenderWindow window(320, 240);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  GameVisual visual;
+  visual.setWindow(&window);
+  visual.prepare(&renderer);
+  const size_t index =
+    visual.addText("H", 40.0f, 50.0f, 24.0f, ColorRgba{ 255, 255, 255, 255 });
+  visual.getText(index)->stretchX = stretchX;
+  visual.getText(index)->stretchY = stretchY;
+  mock.resetCounters();
+  visual.AppendCommands(&renderer);
+  renderer.EndFrame();
+  const RenderCommand* update =
+    findSubmittedCommand(mock, CommandType::UpdateBuffer, 0);
+  if (update == nullptr) {
+    return false;
+  }
+  std::memcpy(quad.data(), update->updateBuffer.data, sizeof(quad));
+  return true;
+}
+
+static void
+testGameVisualTextStretch()
+{
+  testSection("GameVisual: text squash and stretch keeps the baseline");
+  std::array<CapturedSpriteVertex, 4> plain{};
+  std::array<CapturedSpriteVertex, 4> squat{};
+  testTrue(g,
+           captureGlyphQuad(1.0f, 1.0f, plain) &&
+             captureGlyphQuad(2.0f, 0.5f, squat),
+           "both runs upload a glyph");
+  const std::shared_ptr<Font> font = Font::getDefaultFont();
+  const float baseline = 50.0f + font->getAscender(24.0f);
+  testTrue(
+    g,
+    withinPixel(squat[0].x - 40.0f, (plain[0].x - 40.0f) * 2.0f) &&
+      withinPixel(squat[1].x - squat[0].x, (plain[1].x - plain[0].x) * 2.0f),
+    "stretchX scales glyphs and their offset from the run's left edge");
+  testTrue(
+    g,
+    withinPixel(baseline - squat[0].y, (baseline - plain[0].y) * 0.5f) &&
+      withinPixel(squat[2].y - squat[0].y, (plain[2].y - plain[0].y) * 0.5f),
+    "stretchY scales glyphs about the baseline");
+  testTrue(g,
+           withinPixel(squat[0].u, plain[0].u) &&
+             withinPixel(squat[2].v, plain[2].v),
+           "stretch leaves atlas coordinates alone");
+}
+
 static void
 testGameVisualTransformAndAtlas()
 {
@@ -1146,6 +1213,8 @@ registerGameVisualTests(IllumoTestRegistry& registry)
   registry.add("Illumo.GameVisual.RendererOwnership", []() {
     return runGameVisualCase(testGameVisualRendererOwnership);
   });
+  registry.add("Illumo.GameVisual.TextStretch",
+               []() { return runGameVisualCase(testGameVisualTextStretch); });
   registry.add("Illumo.SoftwareCanvas.Primitives", []() {
     return runGameVisualCase(testSoftwareCanvasRasterizesPrimitives);
   });

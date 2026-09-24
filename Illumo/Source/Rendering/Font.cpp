@@ -5,6 +5,7 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_MULTIPLE_MASTERS_H
 
 #include <algorithm>
 #include <cmath>
@@ -181,8 +182,46 @@ Font::clearCache()
   s_defaultFont.reset();
 }
 
+// Instances a variable face at `weight` on its 'wght' axis; other axes keep
+// their defaults. Static faces and faces without the axis are left alone.
+static void
+setFaceWeight(FT_Library library, FT_Face face, float weight)
+{
+  if (!(weight > 0.0f) || !FT_HAS_MULTIPLE_MASTERS(face)) {
+    return;
+  }
+  FT_MM_Var* variation = nullptr;
+  if (FT_Get_MM_Var(face, &variation) != 0 || variation == nullptr) {
+    return;
+  }
+  std::vector<FT_Fixed> coordinates(variation->num_axis);
+  bool hasWeight = false;
+  for (FT_UInt axis = 0; axis < variation->num_axis; ++axis) {
+    const FT_Var_Axis& info = variation->axis[axis];
+    coordinates[axis] = info.def;
+    if (info.tag == FT_MAKE_TAG('w', 'g', 'h', 't')) {
+      const FT_Fixed requested = static_cast<FT_Fixed>(weight * 65536.0f);
+      coordinates[axis] = std::clamp(requested, info.minimum, info.maximum);
+      hasWeight = true;
+    }
+  }
+  if (hasWeight) {
+    FT_Set_Var_Design_Coordinates(
+      face, variation->num_axis, coordinates.data());
+  }
+  FT_Done_MM_Var(library, variation);
+}
+
 bool
 Font::loadFile(const std::string& path, float pixelSize)
+{
+  return loadFile(path, pixelSize, FontFaceOptions{});
+}
+
+bool
+Font::loadFile(const std::string& path,
+               float pixelSize,
+               const FontFaceOptions& options)
 {
   sourcePath = path;
   FT_Library library = getFreeTypeLibrary();
@@ -195,8 +234,19 @@ Font::loadFile(const std::string& path, float pixelSize)
   if (err != 0 || face == nullptr) {
     return false;
   }
+  setFaceWeight(library, face, options.weight);
 
-  bool ok = rasterizeFace(face, pixelSize);
+  // A missing fallback only costs the glyphs the primary face lacks.
+  FT_Face fallback = nullptr;
+  if (!options.fallbackPath.empty() &&
+      FT_New_Face(library, options.fallbackPath.c_str(), 0, &fallback) != 0) {
+    fallback = nullptr;
+  }
+
+  bool ok = rasterizeFace(face, fallback, pixelSize, options.glyphs);
+  if (fallback != nullptr) {
+    FT_Done_Face(fallback);
+  }
   FT_Done_Face(face);
   return ok;
 }
@@ -221,22 +271,39 @@ Font::loadMemory(const unsigned char* data, size_t size, float pixelSize)
     return false;
   }
 
-  bool ok = rasterizeFace(face, pixelSize);
+  bool ok = rasterizeFace(face, nullptr, pixelSize, std::string());
   FT_Done_Face(face);
   return ok;
 }
 
 bool
-Font::rasterizeFace(void* ftFace, float pixelSize)
+Font::rasterizeFace(void* ftFace,
+                    void* ftFallbackFace,
+                    float pixelSize,
+                    const std::string& glyphSet)
 {
   if (ftFace == nullptr) {
     return false;
   }
   FT_Face face = static_cast<FT_Face>(ftFace);
+  FT_Face fallback = static_cast<FT_Face>(ftFallbackFace);
 
   FT_Error err = FT_Set_Pixel_Sizes(face, 0, static_cast<FT_UInt>(pixelSize));
   if (err != 0) {
     return false;
+  }
+  if (fallback != nullptr &&
+      FT_Set_Pixel_Sizes(fallback, 0, static_cast<FT_UInt>(pixelSize)) != 0) {
+    fallback = nullptr;
+  }
+
+  // Printable ASCII, or the requested subset of it plus space and '?'.
+  std::vector<char32_t> codepoints;
+  for (char32_t cp = 32; cp <= 126; ++cp) {
+    if (glyphSet.empty() || cp == U' ' || cp == U'?' ||
+        glyphSet.find(static_cast<char>(cp)) != std::string::npos) {
+      codepoints.push_back(cp);
+    }
   }
 
   metrics.pixelSize = pixelSize;
@@ -267,14 +334,19 @@ Font::rasterizeFace(void* ftFace, float pixelSize)
   };
 
   std::vector<RenderedGlyph> renderedGlyphs;
-  renderedGlyphs.reserve(96);
+  renderedGlyphs.reserve(codepoints.size());
 
-  for (char32_t cp = 32; cp <= 126; ++cp) {
+  for (char32_t cp : codepoints) {
     RenderedGlyph rg;
     rg.codepoint = cp;
-    FT_Error loadErr = FT_Load_Char(face, cp, FT_LOAD_RENDER);
-    if (loadErr == 0 && face->glyph != nullptr) {
-      FT_GlyphSlot slot = face->glyph;
+    FT_Face source = face;
+    if (fallback != nullptr && FT_Get_Char_Index(face, cp) == 0 &&
+        FT_Get_Char_Index(fallback, cp) != 0) {
+      source = fallback;
+    }
+    FT_Error loadErr = FT_Load_Char(source, cp, FT_LOAD_RENDER);
+    if (loadErr == 0 && source->glyph != nullptr) {
+      FT_GlyphSlot slot = source->glyph;
       rg.width = slot->bitmap.width;
       rg.height = slot->bitmap.rows;
       rg.bearingX = slot->bitmap_left;

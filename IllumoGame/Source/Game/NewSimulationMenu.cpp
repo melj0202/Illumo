@@ -562,11 +562,13 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
                  : UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped);
     const float labelY = ry + std::max(2.0f, (rowHeight - 16.0f) * 0.5f);
     const float valueY = ry + std::max(2.0f, (rowHeight - 14.0f) * 0.5f);
-    visual.addText(labels[row],
-                   x + 40 + 4.0f * e,
-                   labelY,
-                   16,
-                   UiTheme::applyOpacity(labelColor, rowOpacity));
+    GuiKit::drawEmphasizedText(visual,
+                               labels[row],
+                               x + 40 + 4.0f * e,
+                               labelY,
+                               16,
+                               UiTheme::applyOpacity(labelColor, rowOpacity),
+                               disabled ? 0.0f : e);
     // A changed value lurches the way it moved and wobbles back into place.
     const float slide = active ? animator.valueWobble() * 8.0f : 0.0f;
     const ColorRgba valueColor =

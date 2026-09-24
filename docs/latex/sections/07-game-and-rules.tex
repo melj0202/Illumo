@@ -140,6 +140,15 @@ CSIM letters fall in like drops and bounce; a real glider walks the 7x7 motif to
 its newborn cells pop in as bouncing beads; icons animate with emphasis; a
 pressed row wobbles like jelly while a splash of teardrop droplets leaps from
 the press.
+Type is set in Kikuta, a variable-weight face (D-UI9). Focused and hovered
+labels thicken on their emphasis springs, swelling past bold on the overshoot,
+through a \texttt{FontWeightRamp} of four rasterized weights whose neighbours
+are blended per glyph. The CSIM letters fall thin and tall and splat heavy and
+squat, a swell of weight rolls through the word, and letters near the pointer
+pool heavier. Then one letter at a time strikes a random pose on springs
+(flexing black and squat, slimming to a tall hairline, or hopping with a
+squash on landing) while its neighbours jostle; clicking the word sends a hop
+through it.
 Actions are never delayed by feedback animation, and overlays close
 immediately. GuiKit composes this chrome from \symbolref{GameVisual} gradient
 quads; GuiDialog's rounded style is opt-in and fits drawing and pointer

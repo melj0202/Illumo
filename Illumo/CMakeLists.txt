@@ -113,6 +113,7 @@ add_library(Illumo STATIC
   Source/Rendering/Camera.cpp
   Source/Rendering/Font.cpp
   Source/Rendering/FontLayout.cpp
+  Source/Rendering/FontWeightRamp.cpp
   Source/Rendering/FrameCapture.cpp
   Source/Rendering/FrameCaptureImage.cpp
   Source/Rendering/GLString.cpp
@@ -269,7 +270,10 @@ if(BUILD_TESTING)
     glfw)
   target_include_directories(IllumoTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source")
-  target_compile_definitions(IllumoTests PRIVATE ILLUMO_TESTING)
+  # Font tests load engine fonts from source; each case runs in its own
+  # working directory.
+  target_compile_definitions(IllumoTests PRIVATE ILLUMO_TESTING
+    "ILLUMO_ENGINE_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/Assets\"")
   illumo_configure_runtime_target(IllumoTests)
   illumo_discover_test_runner(IllumoTests Illumo)
   illumo_stage_msvc_asan(IllumoTests)

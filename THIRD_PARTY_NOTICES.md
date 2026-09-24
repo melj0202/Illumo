@@ -23,6 +23,7 @@ IllumoGame executable.
 | [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) | Wavefront OBJ mesh loading | MIT License | Copyright (c) 2012-Present Syoyo Fujita and many contributors. | [`LICENSE`](Illumo/thirdparty/tinyobjloader/LICENSE) |
 | [Tracy Profiler 0.13.1](https://github.com/wolfpld/tracy) | Debug profiling instrumentation | BSD 3-Clause License | Copyright (c) 2017-2025 Bartosz Taudul. | [`LICENSE`](Illumo/thirdparty/tracy-0.13.1/LICENSE) |
 | [Handjet](https://github.com/rosettatype/Handjet/) | Application TrueType font | SIL Open Font License 1.1 | Copyright 2018 The Handjet Project Authors. | [`OFL.txt`](Illumo/Assets/Fonts/Handjet/OFL.txt) |
+| [Kikuta](https://fontesk.com/kikuta-font/) | Variable-weight application TrueType font (CSim) | SIL Open Font License 1.1 | Copyright 2023 Erwan Le Rétif. | [`OFL.txt`](Illumo/Assets/Fonts/Kikuta/OFL.txt) |
 | [Space Mono](https://github.com/googlefonts/spacemono) | Application TrueType font | SIL Open Font License 1.1 | Copyright 2016 The Space Mono Project Authors. | [`OFL.txt`](Illumo/Assets/Fonts/Space_Mono/OFL.txt) |
 
 The repository also contains `stb_image_resize2` 2.10 and `stb_truetype` 1.26.

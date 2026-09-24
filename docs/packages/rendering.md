@@ -90,6 +90,18 @@ and retired texture handles are reenrolled. Fonts do not own renderer or GPU
 lifetimes. Renderer destruction invalidates its identity before backend
 teardown, so shared fonts safely survive successive renderer lifetimes.
 
+`Font::loadFile` takes `FontFaceOptions`: a `wght` value for variable faces
+(static faces ignore it), a fallback face for codepoints the face lacks, and an
+optional glyph subset. `FontWeightRamp` (portable, also in the guest) holds a
+few weights of one family and raster size; `apply` points a `TextPrimitive` at
+the loaded samples around a weight and GameVisual draws the heavier
+(`heavyFont`) over the lighter at `heavyBlend` in its own batch, centering each
+glyph in the interpolated advance, so weight animates continuously (D-UI9). A
+pending heavier sample is skipped and the run redrawn when it arrives.
+`TextPrimitive::stretchX`/`stretchY` squash and stretch a run about its left
+edge and first baseline (1 leaves the run byte-identical).
+`SoftwareCanvas` draws the base font only, unstretched.
+
 GameVisual shapes include `ShapeKind::GradientQuad` (D-R26): convex,
 fan-ordered quads with one color per vertex, added through `addGradientQuad`,
 `addGradientRect` and `addGradientTriangle`. They use the ordinary shape vertex

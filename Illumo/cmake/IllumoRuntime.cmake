@@ -93,6 +93,9 @@ function(illumo_stage_runtime target_name)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${ILLUMO_LIBRARY_SOURCE_DIR}/Assets/Fonts/Handjet/OFL.txt"
       "${runtime_directory}/licenses/Handjet-OFL.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ILLUMO_LIBRARY_SOURCE_DIR}/Assets/Fonts/Kikuta/OFL.txt"
+      "${runtime_directory}/licenses/Kikuta-OFL.txt"
     VERBATIM
     COMMENT "Staging Illumo runtime assets and licenses for ${target_name}"
   )

@@ -944,21 +944,31 @@ GameVisual::pushSpriteQuad(const SpritePrimitive& sprite,
 }
 
 bool
-GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
+GameVisual::pushTextRun(const TextPrimitive& text,
+                        const Font& font,
+                        const Font* partner,
+                        float blend,
+                        float alpha,
+                        const Rect2& hostBounds)
 {
   if (text.content.empty()) {
     return true;
   }
-  std::shared_ptr<Font> font = text.font ? text.font : Font::getDefaultFont();
-  if (font == nullptr) {
-    return true;
-  }
 
-  const float scale = font->getMetrics().pixelSize > 0.0f
-                        ? (text.sizePt / font->getMetrics().pixelSize)
+  const float scale = font.getMetrics().pixelSize > 0.0f
+                        ? (text.sizePt / font.getMetrics().pixelSize)
                         : 1.0f;
-  const float lineHeight = font->getLineHeight(text.sizePt);
-  const float ascender = font->getAscender(text.sizePt);
+  const float lineHeight = font.getLineHeight(text.sizePt);
+  const float ascender = font.getAscender(text.sizePt);
+  ColorRgba color = text.color;
+  color.a = static_cast<unsigned char>(
+    std::lround(static_cast<float>(color.a) * std::clamp(alpha, 0.0f, 1.0f)));
+  const float stretchX =
+    std::isfinite(text.stretchX) && text.stretchX > 0.0f ? text.stretchX : 1.0f;
+  const float stretchY =
+    std::isfinite(text.stretchY) && text.stretchY > 0.0f ? text.stretchY : 1.0f;
+  const bool stretched = stretchX != 1.0f || stretchY != 1.0f;
+  const float baseline = text.y + ascender;
 
   float penX = 0.0f;
   float penY = 0.0f;
@@ -970,16 +980,30 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
       penY += lineHeight;
       continue;
     }
-    const GlyphInfo* glyph =
-      font->getGlyph(static_cast<char32_t>(static_cast<unsigned char>(ch)));
+    const char32_t codepoint =
+      static_cast<char32_t>(static_cast<unsigned char>(ch));
+    const GlyphInfo* glyph = font.getGlyph(codepoint);
     if (glyph == nullptr) {
       continue;
     }
+    const float ownAdvance = glyph->advanceX * scale;
+    float advance = ownAdvance;
+    if (partner != nullptr) {
+      advance += (partner->getAdvance(codepoint, text.sizePt) - ownAdvance) *
+                 std::clamp(blend, 0.0f, 1.0f);
+    }
     if (glyph->visible && glyph->width > 0.0f && glyph->height > 0.0f) {
-      const float x0 = text.x + penX + glyph->bearingX * scale;
-      const float y0 = text.y + penY + (ascender - glyph->bearingY * scale);
-      const float x1 = x0 + glyph->width * scale;
-      const float y1 = y0 + glyph->height * scale;
+      float x0 =
+        text.x + penX + glyph->bearingX * scale + (advance - ownAdvance) * 0.5f;
+      float y0 = text.y + penY + (ascender - glyph->bearingY * scale);
+      float x1 = x0 + glyph->width * scale;
+      float y1 = y0 + glyph->height * scale;
+      if (stretched) {
+        x0 = text.x + (x0 - text.x) * stretchX;
+        x1 = text.x + (x1 - text.x) * stretchX;
+        y0 = baseline + (y0 - baseline) * stretchY;
+        y1 = baseline + (y1 - baseline) * stretchY;
+      }
 
       Point2 p0 = applyHostTransform({ x0, y0 }, hostBounds);
       Point2 p1 = applyHostTransform({ x1, y0 }, hostBounds);
@@ -987,7 +1011,7 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
       Point2 p3 = applyHostTransform({ x0, y1 }, hostBounds);
 
       if (quadOutsideCullRect(p0, p1, p2, p3)) {
-        penX += glyph->advanceX * scale;
+        penX += advance;
         continue;
       }
       if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
@@ -995,7 +1019,6 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
       }
 
       const unsigned int base = spriteQuadCount * 4;
-      const ColorRgba color = text.color;
       spriteVerts[base + 0] = { p0.x,    p0.y,    0.0f,      color.r,  color.g,
                                 color.b, color.a, glyph->u0, glyph->v0 };
       spriteVerts[base + 1] = { p1.x,    p1.y,    0.0f,      color.r,  color.g,
@@ -1006,7 +1029,7 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
                                 color.b, color.a, glyph->u0, glyph->v1 };
       spriteQuadCount += 1;
     }
-    penX += glyph->advanceX * scale;
+    penX += advance;
   }
   return true;
 }
@@ -1098,8 +1121,22 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
         pendingFontGeometry = true;
         continue;
       }
+      // A heavier weight overlays the run until its sample arrives.
+      const Font* heavy = nullptr;
+      TextureHandle heavyTex{};
+      if (text.heavyFont != nullptr && text.heavyFont != font &&
+          text.heavyBlend > 0.0f) {
+        heavyTex = text.heavyFont->getTextureHandle(renderer);
+        if (text.heavyFont->isValid()) {
+          heavy = text.heavyFont.get();
+        } else {
+          pendingFontGeometry = true;
+        }
+      }
+      const float blend =
+        heavy != nullptr ? std::clamp(text.heavyBlend, 0.0f, 1.0f) : 0.0f;
       const unsigned int first = spriteQuadCount;
-      if (!pushTextRun(text, hostBounds)) {
+      if (!pushTextRun(text, *font, heavy, blend, 1.0f, hostBounds)) {
         break;
       }
       appendBatch(BatchKind::Sprite,
@@ -1107,6 +1144,18 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
                   fontTex,
                   first,
                   spriteQuadCount - first);
+      if (heavy != nullptr) {
+        const unsigned int heavyFirst = spriteQuadCount;
+        if (!pushTextRun(
+              text, *heavy, font.get(), 1.0f - blend, blend, hostBounds)) {
+          break;
+        }
+        appendBatch(BatchKind::Sprite,
+                    styleHandle,
+                    heavyTex,
+                    heavyFirst,
+                    spriteQuadCount - heavyFirst);
+      }
       continue;
     }
 

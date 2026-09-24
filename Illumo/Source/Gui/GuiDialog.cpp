@@ -684,12 +684,15 @@ GuiDialog::drawRoundedContents(float panelY,
       static_cast<int>(index) == m_selectedButton
         ? UiTheme::mix(accent, UiTheme::textPrimary(), 0.2f)
         : UiTheme::mix(UiTheme::textPrimary(), accent, e);
-    GuiKit::drawTextCentered(m_visual,
-                             button.label,
-                             m_buttonX[index] + m_buttonWidth * 0.5f,
-                             y + m_buttonHeight * 0.36f - lift,
-                             17.0f * fontScale,
-                             UiTheme::applyOpacity(text, opacity));
+    // The label thickens with focus and swells past it on the spring.
+    GuiKit::drawEmphasizedTextCentered(
+      m_visual,
+      button.label,
+      m_buttonX[index] + m_buttonWidth * 0.5f,
+      y + m_buttonHeight * 0.36f - lift,
+      17.0f * fontScale,
+      UiTheme::applyOpacity(text, opacity),
+      std::clamp(m_buttonFocus.value(static_cast<int>(index)), 0.0f, 1.3f));
     GuiKit::drawTextCentered(
       m_visual,
       button.shortcut,

@@ -1062,6 +1062,52 @@ run(const std::string& name)
     testTrue(counters,
              !services.process(payload.data(), completions),
              "Resource request replay rejected");
+    // The variable family takes a weight and an optional glyph subset.
+    std::uint64_t nextRequest = 10;
+    const std::function<bool(const std::string&, GuestFont*)> loadNamed =
+      [&](const std::string& fontName, GuestFont* description) {
+        GuestServices named;
+        GuestWireWriter namedPayload;
+        GuestFontRequest{ fontName, 48 }.write(namedPayload);
+        named.records.push_back({ nextRequest++,
+                                  GuestService::LoadFont,
+                                  GuestServiceStatus::Request,
+                                  namedPayload.take() });
+        GuestWireWriter batchBytes;
+        named.write(batchBytes);
+        GuestServices namedResult;
+        if (!services.process(batchBytes.data(), completions) ||
+            !GuestServices::read(completions, namedResult, false) ||
+            namedResult.records.size() != 1 ||
+            namedResult.records[0].status != GuestServiceStatus::Complete) {
+          return false;
+        }
+        return description == nullptr ||
+               GuestFont::read(namedResult.records[0].payload, *description);
+      };
+    GuestFont word;
+    testTrue(counters,
+             loadNamed("kikuta:700:CSIM", &word) && word.glyphs.size() == 6u,
+             "A weighted subset rasterizes only its glyphs, space and '?'");
+    GuestFont full;
+    testTrue(counters,
+             loadNamed("kikuta:400", &full) && full.glyphs.size() == 95u &&
+               loadNamed("kikuta", nullptr),
+             "The whole family loads at a weight or its default");
+    bool refused = true;
+    for (const char* invalid : { "kikuta:0",
+                                 "kikuta:1001",
+                                 "kikuta:40a",
+                                 "kikuta:",
+                                 "kikuta:400:",
+                                 "kikuta:400:\x01",
+                                 "mono-bold:400" }) {
+      refused = refused && !loadNamed(invalid, nullptr);
+    }
+    testTrue(counters,
+             refused,
+             "Weights outside 1..1000, bad subsets and weighted fixed faces "
+             "are refused");
     return counters.failures == 0;
   }
   if (name == "GameHost" || name == "ModIsolation" ||
