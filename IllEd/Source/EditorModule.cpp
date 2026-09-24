@@ -1,12 +1,15 @@
 #include "EditorModule.h"
 
+#include "EditorAssets.h"
 #include "EditorUiAtlas.h"
+#include <Illumo/Content/SceneInstance.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Gui/GuiMenuShell.h>
-#include <Illumo/Platform/SaveLoad.h>
+#include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/CommandLine.h>
@@ -16,8 +19,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <glm/gtc/matrix_inverse.hpp>
-#include <limits>
 #include <utility>
 
 static bool
@@ -58,7 +59,10 @@ EditorModule::Start(IllumoContext* context)
   m_toolbar = std::make_unique<EditorToolbar>(ic->window, ic->renderer);
   m_sceneGraphView =
     std::make_unique<EditorSceneGraphView>(ic->window, ic->renderer);
-  m_sidebar = std::make_unique<EditorSidebar>(ic->window, ic->renderer);
+  m_assetBrowser =
+    std::make_unique<EditorAssetBrowser>(ic->window, ic->renderer);
+  m_tools = std::make_unique<EditorToolsPanel>(ic->window, ic->renderer);
+  m_inspector = std::make_unique<EditorInspector>(ic->window, ic->renderer);
   m_confirm = std::make_unique<EditorConfirmDialog>(ic->window, ic->renderer);
 
   syncFontSize();
@@ -71,14 +75,25 @@ EditorModule::Start(IllumoContext* context)
     if (ic->assetManager->getState(m_atlas).state == AssetState::Ready) {
       m_toolbar->setAtlas(m_atlas);
       m_sceneGraphView->setAtlas(m_atlas);
-      m_sidebar->setAtlas(m_atlas);
+      m_tools->setAtlas(m_atlas);
     }
   }
+  m_document.setAssetManager(ic->assetManager);
+  m_document.setRenderer(ic->renderer);
+  // New documents belong to the mounted project, when there is one.
+  m_document.rebase(documentRoot({}));
   m_grid = std::make_unique<MeshVisual>();
   m_grid->prepare(ic->renderer);
-  rebuildGrid();
+  m_gridBuilt = false;
   m_selectionOverlay = std::make_unique<MeshVisual>();
   m_selectionOverlay->prepare(ic->renderer);
+  m_marquee = std::make_unique<GameVisual>(16u);
+  m_marquee->setSpace(PrimitiveSpace::Pixels);
+  m_marquee->setLayerHint(RenderLayerId::UI);
+  m_marquee->setWindow(ic->window);
+  m_marquee->setRenderer(ic->renderer);
+  m_marquee->prepare(ic->renderer);
+  m_boxSelecting = false;
 
   m_lifetime = std::make_shared<bool>(true);
   m_busy = false;
@@ -95,11 +110,12 @@ EditorModule::Start(IllumoContext* context)
     }
   }
 
+  setupDock();
+  updateDock(false);
+  registerCommands();
   ic->camera->SetSmoothingSpeed(18.0f);
-  ic->camera->SetPositionPrecise(m_document.camera().x, m_document.camera().y);
-  ic->camera->SetZoom(m_document.camera().zoom);
-
-  syncGraph();
+  restoreCameraState();
+  refreshView();
   updateStatus();
   return true;
 }
@@ -107,6 +123,9 @@ EditorModule::Start(IllumoContext* context)
 void
 EditorModule::Exit()
 {
+  unregisterCommands();
+  syncLayout();
+  closePanelWindows();
   m_lifetime.reset();
   m_busy = false;
   m_closeAfterBusy = false;
@@ -114,153 +133,29 @@ EditorModule::Exit()
     ic->assetManager->releaseTexture(m_atlas);
     m_atlas = TextureHandle{};
   }
-  // The document owns nodes and its picking proxies. Release only the module's
-  // render bindings so a stopped module can restart with the same document.
-  m_graph.invalidateSnapshots();
-  for (size_t i = 0; i < m_attachmentHandles.size(); ++i) {
-    if (m_attachments[i]) {
-      m_graph.removeAttachment(m_attachmentHandles[i], m_attachments[i].get());
-    }
-  }
-  m_attachmentHandles.clear();
-  m_attachments.clear();
-  m_graphCursor = std::numeric_limits<uint64_t>::max();
+  // The document keeps its nodes and history; only render bindings are
+  // released, so a stopped module can restart with the same document.
+  m_document.setRenderer(nullptr);
   m_gridBuilt = false;
   m_selectionOverlay.reset();
+  m_marquee.reset();
   m_grid.reset();
   m_confirm.reset();
-  m_sidebar.reset();
+  m_inspector.reset();
+  m_tools.reset();
+  m_dockVisual.reset();
+  for (std::unique_ptr<GameVisual>& chrome : m_detachedChrome) {
+    chrome.reset();
+  }
+  m_assetBrowser.reset();
   m_sceneGraphView.reset();
   m_toolbar.reset();
 }
 
-glm::mat4
-EditorModule::currentViewProjection() const
-{
-  float aspect = 1.0f;
-  if (ic != nullptr && ic->window != nullptr) {
-    const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-    if (dimensions[1] > 0) {
-      aspect =
-        static_cast<float>(dimensions[0]) / static_cast<float>(dimensions[1]);
-    }
-  }
-  if (ic == nullptr || ic->camera == nullptr) {
-    return glm::mat4(1.0f);
-  }
-  return ic->camera->GetMVPMatrix(aspect);
-}
-
 void
-EditorModule::applyWorldCamera()
+EditorModule::refreshView()
 {
-  if (ic == nullptr || ic->camera == nullptr) {
-    return;
-  }
-  if (m_document.worldMode() != IlscWorldMode::World3D) {
-    ic->camera->setProjectionType(ProjectionType::Orthographic);
-    return;
-  }
-
-  const IlscCameraState& state = m_document.camera();
-  const glm::dvec2 position = ic->camera->GetPositionPrecise();
-  const float zoom = ic->camera->GetZoom();
-  const float distance = std::max(2.0f, 12.0f / std::max(0.15f, zoom / 32.0f));
-  const glm::vec3 target(static_cast<float>(position.x),
-                         m_cameraTargetY,
-                         static_cast<float>(position.y));
-  const glm::vec3 eye =
-    target + glm::vec3(std::cos(state.pitch) * std::sin(state.yaw) * distance,
-                       std::sin(state.pitch) * distance,
-                       std::cos(state.pitch) * std::cos(state.yaw) * distance);
-  ic->camera->lookAt(eye, target, glm::vec3(0.0f, 1.0f, 0.0f));
-  ic->camera->setPerspective(50.0f, 0.1f, 250.0f);
-  ic->camera->setProjectionType(ProjectionType::Perspective);
-}
-
-bool
-EditorModule::syncAttachment(SceneNodeHandle handle)
-{
-  if (!m_graph.isNodeValid(handle)) {
-    if (handle.slot < m_attachmentHandles.size() &&
-        m_attachmentHandles[handle.slot] == handle) {
-      m_attachments[handle.slot].reset();
-      m_attachmentHandles[handle.slot] = {};
-    }
-    return true;
-  }
-  uint64_t index = 0;
-  if (!m_graph.getUserData(handle, &index)) {
-    return false;
-  }
-  const IlscNode* node = m_document.nodeAt(static_cast<size_t>(index));
-  if (node == nullptr || ic == nullptr || ic->renderer == nullptr) {
-    return true;
-  }
-  if (handle.slot >= m_attachments.size()) {
-    m_attachments.resize(static_cast<size_t>(handle.slot) + 1);
-    m_attachmentHandles.resize(static_cast<size_t>(handle.slot) + 1);
-  }
-  if (m_attachmentHandles[handle.slot] != handle) {
-    // A destroyed slot may already have been reused; its old snapshots were
-    // invalidated by destruction before the old visual is released here.
-    m_attachments[handle.slot].reset();
-    m_attachmentHandles[handle.slot] = handle;
-  }
-  if (!IlscCodec::kindHasGeometry(node->kind)) {
-    return true;
-  }
-  m_graph.invalidateSnapshots();
-  if (!m_attachments[handle.slot]) {
-    m_attachments[handle.slot] = std::make_unique<EditorAttachment>();
-    m_graph.addAttachment(handle, m_attachments[handle.slot].get());
-  }
-  const bool configured = m_attachments[handle.slot]->configure(
-    ic->renderer, ic->camera, *node, m_document.worldMode());
-  m_graph.notifyAttachmentChanged(handle);
-  return configured;
-}
-
-bool
-EditorModule::syncGraph()
-{
-  bool result = true;
-  if (!m_graph.readChanges(m_graphCursor, &m_graphChanges)) {
-    // Journal overflow resynchronizes bindings, preserving graph handles and
-    // existing visual objects. It never clears or reconstructs the hierarchy.
-    for (size_t i = 0; i < m_attachmentHandles.size(); ++i) {
-      if (!m_graph.isNodeValid(m_attachmentHandles[i])) {
-        m_attachments[i].reset();
-        m_attachmentHandles[i] = {};
-      }
-    }
-    for (SceneNodeHandle node = m_graph.firstNode(); !node.isNull();
-         node = m_graph.nextNode(node)) {
-      result = syncAttachment(node) && result;
-    }
-  } else {
-    m_changedBindings.clear();
-    for (const SceneChange& change : m_graphChanges) {
-      if (change.kind == SceneChangeKind::Created ||
-          change.kind == SceneChangeKind::Destroyed ||
-          change.kind == SceneChangeKind::Attachments) {
-        m_changedBindings.push_back(change.node);
-      }
-    }
-    std::sort(m_changedBindings.begin(),
-              m_changedBindings.end(),
-              [](SceneNodeHandle a, SceneNodeHandle b) {
-                return a.slot != b.slot ? a.slot < b.slot
-                                        : a.generation < b.generation;
-              });
-    m_changedBindings.erase(
-      std::unique(m_changedBindings.begin(), m_changedBindings.end()),
-      m_changedBindings.end());
-    for (SceneNodeHandle node : m_changedBindings) {
-      result = syncAttachment(node) && result;
-    }
-  }
-  m_graphCursor = m_graph.getChangeSequence();
+  m_selection.prune(m_document.scene());
   applyWorldCamera();
   if (!m_gridBuilt || m_gridMode != m_document.worldMode()) {
     rebuildGrid();
@@ -268,83 +163,39 @@ EditorModule::syncGraph()
     m_gridMode = m_document.worldMode();
   }
   rebuildSelectionOverlay();
-  return result;
 }
 
 void
-EditorModule::rebuildGrid()
+EditorModule::storeCameraState()
 {
-  if (!m_grid || ic == nullptr || ic->renderer == nullptr) {
+  if (ic == nullptr || ic->camera == nullptr) {
     return;
   }
-  m_grid->clearPrimitives();
-  if (m_document.worldMode() == IlscWorldMode::World3D) {
-    const int halfCount = 20;
-    const float spacing = 1.0f;
-    const float extent = static_cast<float>(halfCount) * spacing;
-    const ColorRgba minorColor{ 38, 50, 66, 255 };
-    const ColorRgba majorColor{ 58, 76, 100, 255 };
-    for (int i = -halfCount; i <= halfCount; ++i) {
-      if (i == 0) {
-        continue;
-      }
-      const float pos = static_cast<float>(i) * spacing;
-      const ColorRgba color = (i % 5 == 0) ? majorColor : minorColor;
-      m_grid->addLine(
-        glm::vec3(-extent, 0.0f, pos), glm::vec3(extent, 0.0f, pos), color);
-      m_grid->addLine(
-        glm::vec3(pos, 0.0f, -extent), glm::vec3(pos, 0.0f, extent), color);
-    }
-    m_grid->addLine(glm::vec3(-extent, 0.0f, 0.0f),
-                    glm::vec3(extent, 0.0f, 0.0f),
-                    ColorRgba{ 220, 65, 65, 255 });
-    m_grid->addLine(glm::vec3(0.0f, 0.0f, -extent),
-                    glm::vec3(0.0f, 0.0f, extent),
-                    ColorRgba{ 65, 120, 230, 255 });
-    m_grid->addLine(glm::vec3(0.0f, 0.0f, 0.0f),
-                    glm::vec3(0.0f, 2.5f, 0.0f),
-                    ColorRgba{ 65, 210, 95, 255 });
-  } else {
-    const int halfCount = 30;
-    const float spacing = 1.0f;
-    const float extent = static_cast<float>(halfCount) * spacing;
-    const ColorRgba minorColor{ 32, 44, 58, 255 };
-    const ColorRgba majorColor{ 48, 66, 88, 255 };
-    for (int i = -halfCount; i <= halfCount; ++i) {
-      if (i == 0) {
-        continue;
-      }
-      const float pos = static_cast<float>(i) * spacing;
-      const ColorRgba color = (i % 5 == 0) ? majorColor : minorColor;
-      m_grid->addLine(
-        glm::vec3(-extent, pos, 0.0f), glm::vec3(extent, pos, 0.0f), color);
-      m_grid->addLine(
-        glm::vec3(pos, -extent, 0.0f), glm::vec3(pos, extent, 0.0f), color);
-    }
-    m_grid->addLine(glm::vec3(-extent, 0.0f, 0.0f),
-                    glm::vec3(extent, 0.0f, 0.0f),
-                    ColorRgba{ 190, 60, 60, 255 });
-    m_grid->addLine(glm::vec3(0.0f, -extent, 0.0f),
-                    glm::vec3(0.0f, extent, 0.0f),
-                    ColorRgba{ 60, 180, 85, 255 });
-    const float cross = 0.35f;
-    m_grid->addLine(glm::vec3(-cross, 0.0f, 0.01f),
-                    glm::vec3(cross, 0.0f, 0.01f),
-                    ColorRgba{ 255, 220, 100, 255 });
-    m_grid->addLine(glm::vec3(0.0f, -cross, 0.01f),
-                    glm::vec3(0.0f, cross, 0.01f),
-                    ColorRgba{ 255, 220, 100, 255 });
+  SceneEditorState state = m_document.editorState();
+  const glm::dvec2 position = ic->camera->GetPositionPrecise();
+  const float zoom = ic->camera->GetZoom();
+  if (std::abs(state.cameraX - position.x) > 0.001 ||
+      std::abs(state.cameraY - position.y) > 0.001 ||
+      std::abs(state.zoom - zoom) > 0.001f ||
+      !m_document.scene().document().hasEditor) {
+    state.cameraX = position.x;
+    state.cameraY = position.y;
+    state.zoom = std::clamp(zoom, 0.1f, 100.0f);
+    // View state is saved with the scene but never marks it dirty.
+    m_document.setEditorState(state);
   }
 }
 
-SaveLoadDialogSpec
-EditorModule::dialogSpec() const
+void
+EditorModule::restoreCameraState()
 {
-  SaveLoadDialogSpec specification;
-  specification.fileDescription = "Illumo Scene";
-  specification.defaultFilename = "Scene.ilsc";
-  specification.extensionPattern = "*.ilsc";
-  return specification;
+  if (ic == nullptr || ic->camera == nullptr) {
+    return;
+  }
+  const SceneEditorState& state = m_document.editorState();
+  ic->camera->SetPositionPrecise(state.cameraX, state.cameraY);
+  ic->camera->SetZoom(state.zoom);
+  m_cameraTargetY = 0.0f;
 }
 
 void
@@ -359,45 +210,45 @@ EditorModule::updateStatus()
   if (m_document.isDirty()) {
     status += " *";
   }
-  if (!m_selectedId.empty()) {
-    const IlscNode* node = m_document.findNode(m_selectedId);
-    status += "  |  ";
-    if (node != nullptr) {
-      status += node->name;
-      status += " (#";
-      status += node->id;
-      status += ")";
-    } else {
-      status += m_selectedId;
+  const SceneNode* node = m_document.findNode(m_selection.primary());
+  if (node != nullptr) {
+    status += "  |  " + node->name + " (#" + node->id + ")";
+    if (m_selection.size() > 1) {
+      status += " +" + std::to_string(m_selection.size() - 1);
     }
   }
   status += "  |  ";
-  status += IlscCodec::worldModeName(m_document.worldMode());
+  status += m_document.worldMode() == SceneWorldMode::World3D ? "3d" : "2d";
+  status += m_gizmoMode == GizmoMode::Translate ? "  |  Move"
+            : m_gizmoMode == GizmoMode::Rotate  ? "  |  Rotate"
+                                                : "  |  Scale";
+  status += m_gizmoSpace == GizmoSpace::World ? " world" : " local";
+  if (m_document.editorState().snapEnabled) {
+    status += " snap";
+  }
   if (ic != nullptr && ic->window != nullptr && ic->camera != nullptr) {
     const std::array<double, 2> mouse = ic->window->getMouseCoords();
-    const glm::dvec2 world =
-      ic->camera->ScreenToWorldPrecise(glm::dvec2(mouse[0], mouse[1]));
-    status += "  |  X: ";
-    status += std::to_string(static_cast<int>(std::round(world.x)));
-    status += ", Y: ";
-    status += std::to_string(static_cast<int>(std::round(world.y)));
+    float worldX = 0.0f;
+    float worldY = 0.0f;
+    if (screenToWorld(static_cast<float>(mouse[0]),
+                      static_cast<float>(mouse[1]),
+                      &worldX,
+                      &worldY)) {
+      const bool is3D = m_document.worldMode() == SceneWorldMode::World3D;
+      status += "  |  X: ";
+      status += std::to_string(static_cast<int>(std::round(worldX)));
+      status += is3D ? ", Z: " : ", Y: ";
+      status += std::to_string(static_cast<int>(std::round(worldY)));
+    }
     const int zoom = static_cast<int>(std::round(ic->camera->GetZoom()));
     status += "  |  Zoom: " + std::to_string(zoom) + "x";
   }
-#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-  if (m_document.worldMode() == IlscWorldMode::World3D) {
-    status +=
-      "  |  [WASD/MMB: Pan  QE: Up/Down  RMB: Orbit  Wheel: Zoom  ~: Console]";
+  if (m_document.worldMode() == SceneWorldMode::World3D) {
+    status += "  |  [Arrows/MMB: Pan  PgUp/PgDn: Up/Down  RMB: Orbit  "
+              "Wheel: Zoom  F: Frame]";
   } else {
-    status += "  |  [WASD/MMB: Pan  Wheel: Zoom  ~: Console]";
+    status += "  |  [Arrows/MMB: Pan  Wheel: Zoom  F: Frame]";
   }
-#else
-  if (m_document.worldMode() == IlscWorldMode::World3D) {
-    status += "  |  [WASD/MMB: Pan  QE: Up/Down  RMB: Orbit  Wheel: Zoom]";
-  } else {
-    status += "  |  [WASD/MMB: Pan  Wheel: Zoom]";
-  }
-#endif
   m_toolbar->setStatus(status);
 }
 
@@ -410,854 +261,12 @@ EditorModule::uiBlocksWorld(float screenX, float screenY) const
   if (m_toolbar && m_toolbar->containsScreenPoint(screenX, screenY)) {
     return true;
   }
-  if (m_sceneGraphView &&
-      m_sceneGraphView->containsScreenPoint(screenX, screenY)) {
+  if (m_dock.dragging() || m_dock.overPanels(screenX, screenY)) {
     return true;
   }
-  if (m_sidebar && m_sidebar->containsScreenPoint(screenX, screenY)) {
-    return true;
-  }
-  if (ic != nullptr && ic->window != nullptr) {
-    const float virtualHeight =
-      GuiPanelLayout::viewport(ic->window, ic->renderer).virtualHeight;
-    const float statusHeight = m_toolbar ? m_toolbar->statusHeight()
-                                         : EditorToolbar::kDefaultStatusHeight;
-    if (screenY >= virtualHeight - statusHeight) {
-      return true;
-    }
-  }
-  return false;
+  // Only the viewport between the dock columns and the bars is the world.
+  return !m_dock.center().contains(screenX, screenY);
 }
-
-void
-EditorModule::saveDocument(bool saveAs, std::function<void(bool saved)> done)
-{
-  if (m_busy) {
-    if (done) {
-      done(false);
-    }
-    return;
-  }
-  if (!saveAs && !m_document.path().empty()) {
-    writeDocument({ m_document.path(), m_document.displayName() },
-                  std::move(done));
-    return;
-  }
-  m_busy = true;
-  const std::weak_ptr<bool> alive = m_lifetime;
-  IllEdPlatform::current().chooseSaveLocation(
-    dialogSpec(), [this, alive, done](const IllEdLocation& chosen) {
-      if (alive.expired()) {
-        return;
-      }
-      m_busy = false;
-      if (chosen.empty()) {
-        finishBusy();
-        if (done) {
-          done(false);
-        }
-        return;
-      }
-      writeDocument(chosen, done);
-    });
-}
-
-void
-EditorModule::writeDocument(const IllEdLocation& location,
-                            std::function<void(bool saved)> done)
-{
-  m_busy = true;
-  const std::weak_ptr<bool> alive = m_lifetime;
-  IllEdPlatform::current().write(
-    location.location,
-    m_document.encode(),
-    [this, alive, location, done](bool saved, const std::string& error) {
-      if (alive.expired()) {
-        return;
-      }
-      m_busy = false;
-      if (saved) {
-        // Input was held while the write was in flight, so nothing changed
-        // since the encoded snapshot.
-        m_document.markSaved(location.location, location.label);
-        if (m_toolbar) {
-          m_toolbar->showToast("Saved scene: " + m_document.displayName(),
-                               ColorRgba{ 60, 220, 120, 255 });
-        }
-      } else {
-        if (ic != nullptr && ic->commandLine != nullptr) {
-          ic->commandLine->logError(error);
-        }
-        if (m_toolbar) {
-          m_toolbar->showToast("Failed to save: " + error,
-                               ColorRgba{ 245, 100, 110, 255 });
-        }
-      }
-      updateStatus();
-      if (done) {
-        done(saved);
-      }
-      finishBusy();
-    });
-}
-
-void
-EditorModule::openDocument()
-{
-  if (m_busy) {
-    return;
-  }
-  m_busy = true;
-  const std::weak_ptr<bool> alive = m_lifetime;
-  IllEdPlatform::current().chooseOpenLocation(
-    dialogSpec(), [this, alive](const IllEdLocation& chosen) {
-      if (alive.expired()) {
-        return;
-      }
-      m_busy = false;
-      if (chosen.empty()) {
-        finishBusy();
-        return;
-      }
-      loadDocument(chosen, false);
-    });
-}
-
-void
-EditorModule::loadDocument(const IllEdLocation& location, bool initial)
-{
-  m_busy = true;
-  const std::weak_ptr<bool> alive = m_lifetime;
-  IllEdPlatform::current().read(
-    location.location,
-    [this, alive, location, initial](
-      bool success, const std::string& text, const std::string& readError) {
-      if (alive.expired()) {
-        return;
-      }
-      m_busy = false;
-      std::string error = readError;
-      if (success && m_document.loadFromText(text, &error)) {
-        m_document.setLocation(location.location, location.label);
-        m_selectedId.clear();
-        if (ic != nullptr && ic->camera != nullptr) {
-          ic->camera->SetPositionPrecise(m_document.camera().x,
-                                         m_document.camera().y);
-          ic->camera->SetZoom(m_document.camera().zoom);
-        }
-        m_cameraTargetY = 0.0f;
-        if (m_toolbar && !initial) {
-          m_toolbar->showToast("Opened scene: " + m_document.displayName(),
-                               ColorRgba{ 66, 214, 210, 255 });
-        }
-      } else {
-        if (ic != nullptr && ic->commandLine != nullptr) {
-          ic->commandLine->logError(error);
-        }
-        if (initial) {
-          m_document.clear();
-        } else if (m_toolbar) {
-          m_toolbar->showToast("Failed to load: " + error,
-                               ColorRgba{ 245, 100, 110, 255 });
-        }
-      }
-      syncGraph();
-      updateStatus();
-      finishBusy();
-    });
-}
-
-void
-EditorModule::finishBusy()
-{
-  // A window close that arrived mid-operation is negotiated once the
-  // operation has settled.
-  if (m_busy || !m_closeAfterBusy) {
-    return;
-  }
-  m_closeAfterBusy = false;
-  requestAction(EditorPendingAction::ExitEditor);
-}
-
-void
-EditorModule::newDocument()
-{
-  m_document.clear();
-  m_selectedId.clear();
-  if (ic != nullptr && ic->camera != nullptr) {
-    ic->camera->Reset();
-    ic->camera->SetZoom(32.0f);
-  }
-  m_cameraTargetY = 0.0f;
-  if (m_toolbar) {
-    m_toolbar->showToast("Created new scene", ColorRgba{ 66, 214, 210, 255 });
-  }
-  syncGraph();
-  updateStatus();
-}
-
-void
-EditorModule::createNode(SceneNodeKind kind)
-{
-  const std::string parentId = m_selectedId;
-  const std::string id = m_document.createNode(kind, parentId);
-  if (id.empty()) {
-    return;
-  }
-  if (ic != nullptr && ic->window != nullptr) {
-    const std::array<double, 2> mouse = ic->window->getMouseCoords();
-    float worldX = 0.0f;
-    float worldY = 0.0f;
-    if (screenToWorld(static_cast<float>(mouse[0]),
-                      static_cast<float>(mouse[1]),
-                      &worldX,
-                      &worldY)) {
-      m_document.setTransform(
-        id, m_document.makeEditPlaneTransform(worldX, worldY));
-    }
-  }
-  m_selectedId = id;
-  if (m_toolbar) {
-    const IlscNode* node = m_document.findNode(id);
-    m_toolbar->showToast("Created " + (node ? node->name : "node"),
-                         ColorRgba{ 60, 220, 120, 255 });
-  }
-  syncGraph();
-  updateStatus();
-}
-
-void
-EditorModule::deleteSelection()
-{
-  if (m_selectedId.empty()) {
-    return;
-  }
-  m_document.destroySubtree(m_selectedId);
-  m_selectedId.clear();
-  if (m_toolbar) {
-    m_toolbar->showToast("Deleted selected node",
-                         ColorRgba{ 245, 100, 110, 255 });
-  }
-  syncGraph();
-  updateStatus();
-}
-
-void
-EditorModule::unparentSelection()
-{
-  if (m_selectedId.empty()) {
-    return;
-  }
-  if (m_document.setParent(m_selectedId, {})) {
-    if (m_toolbar) {
-      m_toolbar->showToast("Unparented node to root",
-                           ColorRgba{ 66, 214, 210, 255 });
-    }
-    syncGraph();
-    updateStatus();
-  }
-}
-
-void
-EditorModule::requestAction(EditorPendingAction action)
-{
-  if (m_document.isDirty()) {
-    m_pendingAction = action;
-    if (m_confirm) {
-      m_confirm->open("Save changes before continuing?");
-    }
-    return;
-  }
-  m_pendingAction = action;
-  performPendingAction();
-}
-
-bool
-EditorModule::OnCloseRequested()
-{
-  if (m_exitApproved) {
-    // Another started module may veto this attempt after the editor accepts.
-    m_exitApproved = false;
-    return true;
-  }
-  if (m_busy) {
-    m_closeAfterBusy = true;
-    return false;
-  }
-  if (!m_document.isDirty()) {
-    return true;
-  }
-  // Preserve an existing confirmation (including New/Open) on repeated close.
-  if (!m_confirm || !m_confirm->isOpen()) {
-    requestAction(EditorPendingAction::ExitEditor);
-  }
-  return false;
-}
-
-void
-EditorModule::performPendingAction()
-{
-  const EditorPendingAction action = m_pendingAction;
-  m_pendingAction = EditorPendingAction::None;
-  if (action == EditorPendingAction::NewDocument) {
-    newDocument();
-  } else if (action == EditorPendingAction::OpenDocument) {
-    openDocument();
-  } else if (action == EditorPendingAction::ExitEditor) {
-    if (ic != nullptr && ic->window != nullptr) {
-      m_exitApproved = true;
-      ic->window->requestClose();
-    }
-  }
-}
-
-void
-EditorModule::handleCommand(EditorCommand command)
-{
-  if (command == EditorCommand::None) {
-    return;
-  }
-  if (command == EditorCommand::NewDocument) {
-    requestAction(EditorPendingAction::NewDocument);
-  } else if (command == EditorCommand::OpenDocument) {
-    requestAction(EditorPendingAction::OpenDocument);
-  } else if (command == EditorCommand::SaveDocument) {
-    saveDocument(false);
-  } else if (command == EditorCommand::SaveDocumentAs) {
-    saveDocument(true);
-  } else if (command == EditorCommand::ExitEditor) {
-    requestAction(EditorPendingAction::ExitEditor);
-  } else if (command == EditorCommand::DeleteNode) {
-    deleteSelection();
-  } else if (command == EditorCommand::UnparentNode) {
-    unparentSelection();
-  } else if (command == EditorCommand::CreateEmpty ||
-             command == EditorCommand::CreateRect ||
-             command == EditorCommand::CreateEllipse ||
-             command == EditorCommand::CreateTriangle ||
-             command == EditorCommand::CreateCube ||
-             command == EditorCommand::CreatePyramid ||
-             command == EditorCommand::CreateSphere) {
-    m_activeTool = command;
-    if (m_sidebar) {
-      m_sidebar->setActiveTool(command);
-    }
-  } else if (command == EditorCommand::SelectTool) {
-    m_activeTool = EditorCommand::SelectTool;
-    if (m_sidebar) {
-      m_sidebar->setActiveTool(m_activeTool);
-    }
-  } else if (command == EditorCommand::SetMode2D) {
-    m_document.setWorldMode(IlscWorldMode::World2D);
-    if (m_toolbar) {
-      m_toolbar->showToast("Mode: 2D Orthographic (XY)",
-                           ColorRgba{ 60, 220, 120, 255 });
-    }
-    syncGraph();
-  } else if (command == EditorCommand::SetMode3D) {
-    m_document.setWorldMode(IlscWorldMode::World3D);
-    if (m_toolbar) {
-      m_toolbar->showToast("Mode: 3D Perspective (XZ)",
-                           ColorRgba{ 70, 160, 255, 255 });
-    }
-    syncGraph();
-  } else if (command == EditorCommand::NudgeExtent) {
-    nudgeSelectedExtent();
-  } else if (command == EditorCommand::CycleColor) {
-    cycleSelectedColor();
-  } else if (command == EditorCommand::ResetCamera && ic != nullptr &&
-             ic->camera != nullptr) {
-    ic->camera->Reset();
-    ic->camera->SetZoom(32.0f);
-    m_cameraTargetY = 0.0f;
-    if (m_toolbar) {
-      m_toolbar->showToast("Camera reset to origin",
-                           ColorRgba{ 66, 214, 210, 255 });
-    }
-  } else if (command == EditorCommand::ToggleSceneGraph) {
-    if (m_sceneGraphView) {
-      m_sceneGraphView->toggleCollapsed();
-      if (m_toolbar) {
-        m_toolbar->showToast(m_sceneGraphView->isCollapsed()
-                               ? "Scene Graph collapsed"
-                               : "Scene Graph expanded",
-                             ColorRgba{ 66, 214, 210, 255 });
-      }
-    }
-  } else if (command == EditorCommand::ToggleSidebar) {
-    if (m_sidebar) {
-      m_sidebar->toggleCollapsed();
-      if (m_toolbar) {
-        m_toolbar->showToast(m_sidebar->isCollapsed() ? "Inspector collapsed"
-                                                      : "Inspector expanded",
-                             ColorRgba{ 66, 214, 210, 255 });
-      }
-    }
-  }
-}
-
-void
-EditorModule::updateCamera(double dt)
-{
-  if (ic == nullptr || ic->camera == nullptr || ic->inputManager == nullptr ||
-      ic->window == nullptr) {
-    return;
-  }
-  const std::array<double, 2> mouse = ic->window->getMouseCoords();
-  const bool middle =
-    ic->inputManager->isMouseButtonPressed(KeyCode::MouseMiddle);
-  const bool right =
-    ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
-
-  if (m_document.worldMode() == IlscWorldMode::World3D) {
-    const IlscCameraState& camState = m_document.camera();
-    const float sinYaw = std::sin(camState.yaw);
-    const float cosYaw = std::cos(camState.yaw);
-    // Camera right vector on XZ plane: (cosYaw, 0, -sinYaw)
-    // Camera forward vector on XZ plane: (-sinYaw, 0, -cosYaw)
-    const glm::dvec2 rightDir(cosYaw, -sinYaw);
-    const glm::dvec2 forwardDir(-sinYaw, -cosYaw);
-
-    if (!ic->inputManager->isControlPressed()) {
-      const double speed = 420.0 * dt;
-      glm::dvec2 pan(0.0, 0.0);
-      if (ic->inputManager->isKeyPressed(KeyCode::A) ||
-          ic->inputManager->isKeyPressed(KeyCode::Left)) {
-        pan -= rightDir * speed;
-      }
-      if (ic->inputManager->isKeyPressed(KeyCode::D) ||
-          ic->inputManager->isKeyPressed(KeyCode::Right)) {
-        pan += rightDir * speed;
-      }
-      if (ic->inputManager->isKeyPressed(KeyCode::W) ||
-          ic->inputManager->isKeyPressed(KeyCode::Up)) {
-        pan += forwardDir * speed;
-      }
-      if (ic->inputManager->isKeyPressed(KeyCode::S) ||
-          ic->inputManager->isKeyPressed(KeyCode::Down)) {
-        pan -= forwardDir * speed;
-      }
-      if (ic->inputManager->isKeyPressed(KeyCode::E) ||
-          ic->inputManager->isKeyPressed(KeyCode::Space)) {
-        m_cameraTargetY += static_cast<float>(speed);
-      }
-      if (ic->inputManager->isKeyPressed(KeyCode::Q) ||
-          ic->inputManager->isKeyPressed(KeyCode::C)) {
-        m_cameraTargetY -= static_cast<float>(speed);
-      }
-      if (pan.x != 0.0 || pan.y != 0.0) {
-        ic->camera->Pan(pan);
-      }
-    }
-
-    if (middle) {
-      if (m_panning) {
-        const double deltaScreenX = mouse[0] - m_lastMouseX;
-        const double deltaScreenY = mouse[1] - m_lastMouseY;
-        // Dragging mouse right moves world right (camera moves left)
-        // Dragging mouse down moves world towards camera / down screen (camera
-        // moves forward)
-        const glm::dvec2 panOffset =
-          -rightDir * deltaScreenX + forwardDir * deltaScreenY;
-        ic->camera->Pan(panOffset);
-      }
-      m_panning = true;
-    } else {
-      m_panning = false;
-    }
-
-    if (right) {
-      IlscCameraState camera = m_document.camera();
-      camera.yaw += static_cast<float>(mouse[0] - m_lastMouseX) * 0.01f;
-      camera.pitch = std::clamp(
-        camera.pitch + static_cast<float>(m_lastMouseY - mouse[1]) * 0.01f,
-        0.05f,
-        1.5f);
-      m_document.setCamera(camera);
-    }
-  } else {
-    if (!ic->inputManager->isControlPressed()) {
-      const float speed = 420.0f * static_cast<float>(dt);
-      glm::vec2 pan(0.0f, 0.0f);
-      if (ic->inputManager->isKeyPressed(KeyCode::A) ||
-          ic->inputManager->isKeyPressed(KeyCode::Left)) {
-        pan.x -= speed;
-      }
-      if (ic->inputManager->isKeyPressed(KeyCode::D) ||
-          ic->inputManager->isKeyPressed(KeyCode::Right)) {
-        pan.x += speed;
-      }
-      if (ic->inputManager->isKeyPressed(KeyCode::W) ||
-          ic->inputManager->isKeyPressed(KeyCode::Up)) {
-        pan.y += speed;
-      }
-      if (ic->inputManager->isKeyPressed(KeyCode::S) ||
-          ic->inputManager->isKeyPressed(KeyCode::Down)) {
-        pan.y -= speed;
-      }
-      if (pan.x != 0.0f || pan.y != 0.0f) {
-        ic->camera->Pan(pan);
-      }
-    }
-
-    if (middle || right) {
-      if (m_panning) {
-        ic->camera->Pan(
-          glm::dvec2(m_lastMouseX - mouse[0], mouse[1] - m_lastMouseY));
-      }
-      m_panning = true;
-    } else {
-      m_panning = false;
-    }
-  }
-
-  double* scroll = ic->inputManager->getMouseScrollOffset();
-  if (scroll != nullptr && *scroll != 0.0) {
-    const float factor = *scroll > 0.0 ? 1.1f : 0.9f;
-    if (m_document.worldMode() != IlscWorldMode::World3D) {
-      const glm::dvec2 worldMouse =
-        ic->camera->ScreenToWorldPrecise(glm::dvec2(mouse[0], mouse[1]));
-      ic->camera->ZoomAt(factor, worldMouse);
-    } else {
-      ic->camera->ZoomAt(factor, ic->camera->GetPositionPrecise());
-    }
-    *scroll = 0.0;
-  }
-}
-
-void
-EditorModule::rebuildSelectionOverlay()
-{
-  if (!m_selectionOverlay) {
-    return;
-  }
-  m_selectionOverlay->clearPrimitives();
-  if (m_selectedId.empty()) {
-    return;
-  }
-  const IlscNode* node = m_document.findNode(m_selectedId);
-  if (node == nullptr) {
-    return;
-  }
-  glm::vec3 half(0.25f, 0.25f, 0.25f);
-  if (IlscCodec::kindHasGeometry(node->kind)) {
-    half = node->primitive.extent * 1.08f;
-  }
-  const float pulse = 0.82f + 0.18f * std::sin(m_animTime * 4.0f);
-  const ColorRgba gold{ 255,
-                        static_cast<unsigned char>(205.0f * pulse),
-                        static_cast<unsigned char>(60.0f * pulse),
-                        255 };
-
-  const Matrix4 worldMat = m_document.worldMatrix(m_selectedId);
-  const Transform3D worldTransform = Transform3D::fromMatrix(worldMat);
-  const Vector3 worldPos = worldTransform.position;
-  const Vector3 worldScale = worldTransform.scale;
-  half *= worldScale;
-
-  m_selectionOverlay->addWireCube(worldPos, half, gold);
-
-  // Outer corner bracket / halo flare
-  const float outerPulse = 0.5f + 0.5f * std::sin(m_animTime * 6.0f);
-  const unsigned char cyanAlpha =
-    static_cast<unsigned char>(180.0f * outerPulse);
-  const ColorRgba haloCyan{ 66, 214, 210, cyanAlpha };
-  m_selectionOverlay->addWireCube(worldPos, half * 1.05f, haloCyan);
-
-  // --- Full Interactive Transform Gizmo (Axes + Planes) ---
-  const bool is3D = (m_document.worldMode() == IlscWorldMode::World3D);
-  const float gScale = gizmoScale(worldPos);
-
-  const GizmoPart activeOrHover = (m_activeGizmoPart != GizmoPart::None)
-                                    ? m_activeGizmoPart
-                                    : m_hoveredGizmoPart;
-
-  // Colors: matching standard DCC tool palettes (X = Red, Y = Green, Z = Blue)
-  const ColorRgba redAxis{ 235, 55, 65, 255 };
-  const ColorRgba greenAxis{ 55, 215, 75, 255 };
-  const ColorRgba blueAxis{ 55, 125, 245, 255 };
-  const ColorRgba activeHighlight{ 255, 245, 75, 255 };
-
-  // Sleek, professional proportions
-  const float planeSize = gScale * 0.28f;
-  const float axisLen = gScale * 0.85f;
-  const float capHalf = gScale * 0.035f;
-
-  // 1. Center Box Handle (sleek small cube)
-  const ColorRgba centerColor = (activeOrHover == GizmoPart::Center)
-                                  ? activeHighlight
-                                  : ColorRgba{ 245, 245, 245, 230 };
-  m_selectionOverlay->addSolidCube(
-    worldPos, glm::vec3(gScale * 0.035f), centerColor);
-  m_selectionOverlay->addWireCube(
-    worldPos, glm::vec3(gScale * 0.038f), ColorRgba{ 30, 30, 30, 255 });
-
-  // 2. Plane Handles:
-  // Colors match the normal axis or bounding axes:
-  // - Plane XY (normal is Z: Blue)
-  // - Plane XZ (normal is Y: Green)
-  // - Plane YZ (normal is X: Red)
-  // Semi-transparent quad with tinted outline
-  const ColorRgba xyColor =
-    (activeOrHover == GizmoPart::PlaneXY) ? activeHighlight : blueAxis;
-  m_selectionOverlay->addLine(worldPos + glm::vec3(planeSize, 0, 0),
-                              worldPos + glm::vec3(planeSize, planeSize, 0),
-                              xyColor);
-  m_selectionOverlay->addLine(worldPos + glm::vec3(0, planeSize, 0),
-                              worldPos + glm::vec3(planeSize, planeSize, 0),
-                              xyColor);
-  m_selectionOverlay->addSolidTriangle(
-    worldPos,
-    worldPos + glm::vec3(planeSize, 0, 0),
-    worldPos + glm::vec3(planeSize, planeSize, 0),
-    ColorRgba{ xyColor.r, xyColor.g, xyColor.b, 65 });
-  m_selectionOverlay->addSolidTriangle(
-    worldPos,
-    worldPos + glm::vec3(planeSize, planeSize, 0),
-    worldPos + glm::vec3(0, planeSize, 0),
-    ColorRgba{ xyColor.r, xyColor.g, xyColor.b, 65 });
-
-  if (is3D) {
-    // Plane XZ (Ground, normal is Y: Green)
-    const ColorRgba xzColor =
-      (activeOrHover == GizmoPart::PlaneXZ) ? activeHighlight : greenAxis;
-    m_selectionOverlay->addLine(worldPos + glm::vec3(planeSize, 0, 0),
-                                worldPos + glm::vec3(planeSize, 0, planeSize),
-                                xzColor);
-    m_selectionOverlay->addLine(worldPos + glm::vec3(0, 0, planeSize),
-                                worldPos + glm::vec3(planeSize, 0, planeSize),
-                                xzColor);
-    m_selectionOverlay->addSolidTriangle(
-      worldPos,
-      worldPos + glm::vec3(planeSize, 0, 0),
-      worldPos + glm::vec3(planeSize, 0, planeSize),
-      ColorRgba{ xzColor.r, xzColor.g, xzColor.b, 65 });
-    m_selectionOverlay->addSolidTriangle(
-      worldPos,
-      worldPos + glm::vec3(planeSize, 0, planeSize),
-      worldPos + glm::vec3(0, 0, planeSize),
-      ColorRgba{ xzColor.r, xzColor.g, xzColor.b, 65 });
-
-    // Plane YZ (normal is X: Red)
-    const ColorRgba yzColor =
-      (activeOrHover == GizmoPart::PlaneYZ) ? activeHighlight : redAxis;
-    m_selectionOverlay->addLine(worldPos + glm::vec3(0, planeSize, 0),
-                                worldPos + glm::vec3(0, planeSize, planeSize),
-                                yzColor);
-    m_selectionOverlay->addLine(worldPos + glm::vec3(0, 0, planeSize),
-                                worldPos + glm::vec3(0, planeSize, planeSize),
-                                yzColor);
-    m_selectionOverlay->addSolidTriangle(
-      worldPos,
-      worldPos + glm::vec3(0, planeSize, 0),
-      worldPos + glm::vec3(0, planeSize, planeSize),
-      ColorRgba{ yzColor.r, yzColor.g, yzColor.b, 65 });
-    m_selectionOverlay->addSolidTriangle(
-      worldPos,
-      worldPos + glm::vec3(0, planeSize, planeSize),
-      worldPos + glm::vec3(0, 0, planeSize),
-      ColorRgba{ yzColor.r, yzColor.g, yzColor.b, 65 });
-  }
-
-  // 3. Axis Shafts and End Caps
-  // X Axis (Red)
-  const ColorRgba cX =
-    (activeOrHover == GizmoPart::AxisX) ? activeHighlight : redAxis;
-  m_selectionOverlay->addLine(
-    worldPos, worldPos + glm::vec3(axisLen, 0, 0), cX);
-  m_selectionOverlay->addSolidCube(
-    worldPos + glm::vec3(axisLen, 0, 0), glm::vec3(capHalf), cX);
-
-  // Y Axis (Green)
-  const ColorRgba cY =
-    (activeOrHover == GizmoPart::AxisY) ? activeHighlight : greenAxis;
-  m_selectionOverlay->addLine(
-    worldPos, worldPos + glm::vec3(0, axisLen, 0), cY);
-  m_selectionOverlay->addSolidCube(
-    worldPos + glm::vec3(0, axisLen, 0), glm::vec3(capHalf), cY);
-
-  // Z Axis (in 3D, Blue)
-  if (is3D) {
-    const ColorRgba cZ =
-      (activeOrHover == GizmoPart::AxisZ) ? activeHighlight : blueAxis;
-    m_selectionOverlay->addLine(
-      worldPos, worldPos + glm::vec3(0, 0, axisLen), cZ);
-    m_selectionOverlay->addSolidCube(
-      worldPos + glm::vec3(0, 0, axisLen), glm::vec3(capHalf), cZ);
-  }
-}
-
-void
-EditorModule::updateSelection(double dt)
-{
-  (void)dt;
-  if (ic == nullptr || ic->inputManager == nullptr || ic->camera == nullptr ||
-      ic->window == nullptr) {
-    return;
-  }
-  if ((m_confirm && m_confirm->isOpen()) || m_busy) {
-    return;
-  }
-  if (ic->commandLine != nullptr && ic->commandLine->isOpen) {
-    return;
-  }
-
-  const std::array<double, 2> mouse = ic->window->getMouseCoords();
-  const float uiScale =
-    GuiPanelLayout::viewport(ic->window, ic->renderer).layoutScale;
-  const float uiX = static_cast<float>(mouse[0]) / uiScale;
-  const float uiY = static_cast<float>(mouse[1]) / uiScale;
-  const float mouseScreenX = static_cast<float>(mouse[0]);
-  const float mouseScreenY = static_cast<float>(mouse[1]);
-  const bool left = ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
-
-  // If we are actively dragging an object or gizmo handle and left mouse is
-  // held, continue tracking the drag anywhere on screen (even over panels or if
-  // cursor briefly left and re-entered).
-  if (left && m_dragging && !m_selectedId.empty()) {
-    glm::vec3 rayOrigin{ 0.0f };
-    glm::vec3 rayDir{ 0.0f, 0.0f, -1.0f };
-    if (screenToWorldRay(mouseScreenX, mouseScreenY, &rayOrigin, &rayDir)) {
-      glm::vec3 currentHit{ 0.0f };
-      if (intersectGizmoConstraint(m_activeGizmoPart,
-                                   m_dragGizmoOrigin,
-                                   rayOrigin,
-                                   rayDir,
-                                   &currentHit)) {
-        const Matrix4 currentMat = m_document.worldMatrix(m_selectedId);
-        const glm::vec3 currentPos(
-          currentMat[3][0], currentMat[3][1], currentMat[3][2]);
-        const glm::vec3 desiredPos = currentHit - m_dragGizmoHitOffset;
-        const glm::vec3 delta = desiredPos - currentPos;
-
-        if (glm::length(delta) > 0.00001f) {
-          m_document.translate(m_selectedId, delta);
-        }
-      }
-    }
-    rebuildSelectionOverlay();
-    m_mouseWasDown = left;
-    return;
-  }
-
-  // If left button is released, terminate any active drag
-  if (!left) {
-    m_dragging = false;
-    m_activeGizmoPart = GizmoPart::None;
-  }
-
-  if (uiBlocksWorld(uiX, uiY)) {
-    m_mouseWasDown = left;
-    return;
-  }
-
-  // Compute gizmo scale & origin for selection
-  glm::vec3 selectedWorldPos{ 0.0f };
-  float gizmoScale = 1.0f;
-  const bool hasSelection =
-    !m_selectedId.empty() && (m_document.findNode(m_selectedId) != nullptr);
-  if (hasSelection) {
-    const Matrix4 mat = m_document.worldMatrix(m_selectedId);
-    selectedWorldPos = glm::vec3(mat[3][0], mat[3][1], mat[3][2]);
-    gizmoScale = this->gizmoScale(selectedWorldPos);
-  }
-
-  // Update hover state when not actively dragging
-  if (!m_dragging && hasSelection) {
-    const GizmoPart hovered =
-      hitTestGizmo(mouseScreenX, mouseScreenY, selectedWorldPos, gizmoScale);
-    if (hovered != m_hoveredGizmoPart) {
-      m_hoveredGizmoPart = hovered;
-      rebuildSelectionOverlay();
-    }
-  } else if (!hasSelection) {
-    m_hoveredGizmoPart = GizmoPart::None;
-  }
-
-  float worldX = 0.0f;
-  float worldY = 0.0f;
-  const bool groundHit =
-    screenToWorld(mouseScreenX, mouseScreenY, &worldX, &worldY);
-
-  if (left && !m_mouseWasDown) {
-    if (m_activeTool != EditorCommand::SelectTool &&
-        m_activeTool != EditorCommand::None) {
-      if (groundHit) {
-        applyActiveToolAt(worldX, worldY);
-      }
-    } else {
-      // Check if gizmo handle was clicked first
-      if (hasSelection) {
-        const GizmoPart hitPart = hitTestGizmo(
-          mouseScreenX, mouseScreenY, selectedWorldPos, gizmoScale);
-        if (hitPart != GizmoPart::None) {
-          m_activeGizmoPart = hitPart;
-          m_dragging = true;
-          m_dragGizmoOrigin = selectedWorldPos;
-
-          glm::vec3 rayOrigin{ 0.0f };
-          glm::vec3 rayDir{ 0.0f, 0.0f, -1.0f };
-          screenToWorldRay(mouseScreenX, mouseScreenY, &rayOrigin, &rayDir);
-          glm::vec3 initialHit{ 0.0f };
-          if (intersectGizmoConstraint(m_activeGizmoPart,
-                                       m_dragGizmoOrigin,
-                                       rayOrigin,
-                                       rayDir,
-                                       &initialHit)) {
-            m_dragGizmoHitOffset = initialHit - m_dragGizmoOrigin;
-          } else {
-            m_dragGizmoHitOffset = glm::vec3(0.0f);
-          }
-          rebuildSelectionOverlay();
-          m_mouseWasDown = left;
-          return;
-        }
-      }
-
-      // If no gizmo handle hit, perform object picking
-      std::string hit;
-      glm::vec3 pickOrigin{ 0.0f };
-      glm::vec3 pickDirection{ 0.0f };
-      const bool picked =
-        m_document.worldMode() == IlscWorldMode::World3D
-          ? (screenToWorldRay(
-               mouseScreenX, mouseScreenY, &pickOrigin, &pickDirection) &&
-             m_document.pickRay(pickOrigin, pickDirection, &hit))
-          : (groundHit && m_document.pick(worldX, worldY, &hit));
-      if (picked) {
-        m_selectedId = hit;
-        m_dragging = true;
-        m_activeGizmoPart = GizmoPart::Center;
-        const Matrix4 mat = m_document.worldMatrix(m_selectedId);
-        m_dragGizmoOrigin = glm::vec3(mat[3][0], mat[3][1], mat[3][2]);
-        glm::vec3 rayOrigin{ 0.0f };
-        glm::vec3 rayDir{ 0.0f };
-        glm::vec3 initialHit{ 0.0f };
-        m_dragging =
-          screenToWorldRay(mouseScreenX, mouseScreenY, &rayOrigin, &rayDir) &&
-          intersectGizmoConstraint(m_activeGizmoPart,
-                                   m_dragGizmoOrigin,
-                                   rayOrigin,
-                                   rayDir,
-                                   &initialHit);
-        if (m_dragging) {
-          // Keep the picked body point under the cursor instead of snapping
-          // the object's origin to it on the next held frame.
-          m_dragGizmoHitOffset = initialHit - m_dragGizmoOrigin;
-        } else {
-          m_activeGizmoPart = GizmoPart::None;
-        }
-      } else {
-        m_selectedId.clear();
-        m_dragging = false;
-        m_activeGizmoPart = GizmoPart::None;
-      }
-    }
-    rebuildSelectionOverlay();
-  }
-  m_mouseWasDown = left;
-}
-
 void
 EditorModule::Update(double dt)
 {
@@ -1272,9 +281,18 @@ EditorModule::Update(double dt)
   m_animTime += dtF;
 
   if (m_toolbar) {
-    m_toolbar->setWorldMode(m_document.worldMode() == IlscWorldMode::World3D);
+    m_toolbar->setWorldMode(m_document.worldMode() == SceneWorldMode::World3D);
+    m_toolbar->setHistoryLabels(m_document.history().undoLabel(),
+                                m_document.history().redoLabel());
   }
 
+  const bool consoleOpen =
+    ic->commandLine != nullptr && ic->commandLine->isOpen;
+  const bool modal =
+    (m_confirm && m_confirm->isOpen()) || m_busy || consoleOpen;
+  syncLayout();
+  updateDock(modal);
+  const uint64_t revisionBefore = m_document.revision();
   if (m_confirm && m_confirm->isOpen()) {
     const EditorConfirmAction action = m_confirm->update(ic->inputManager, dtF);
     if (action == EditorConfirmAction::Cancel) {
@@ -1300,18 +318,39 @@ EditorModule::Update(double dt)
   } else if (m_busy) {
     // A dialog or file transfer is in flight; editing resumes after it.
   } else if (m_toolbar) {
-    const bool consoleOpen =
-      ic->commandLine != nullptr && ic->commandLine->isOpen;
     if (!consoleOpen) {
+      // A focused inspector field consumes the keys first, so typing never
+      // triggers editor shortcuts.
+      updateInspector(dtF);
       handleCommand(m_toolbar->update(ic->inputManager, dtF));
       if (m_sceneGraphView) {
-        if (m_sceneGraphView->update(
-              ic->inputManager, &m_document, &m_selectedId, dtF)) {
-          syncGraph();
+        m_sceneGraphView->update(
+          ic->inputManager, &m_document, &m_selection, dtF);
+        // Context-menu choices and double-click renames act on the selection,
+        // which the panel already moved to the chosen row.
+        handleCommand(m_sceneGraphView->takeCommand(nullptr));
+      }
+      if (m_assetBrowser) {
+        m_assetBrowser->update(ic->inputManager, dtF);
+        const std::string activated = m_assetBrowser->takeActivated();
+        if (!activated.empty() &&
+            EditorAssets::kindFor(activated) == EditorAssetKind::Scene) {
+          const std::size_t slash = activated.rfind('/');
+          m_pendingLocation = { IllEdPlatform::kTreePrefix + activated,
+                                activated.substr(slash + 1) };
+          requestAction(EditorPendingAction::OpenLocation);
+        }
+        // A drop may come from a detached Assets window; it places where
+        // it lands in the main window.
+        const EditorAssetBrowser::Drop dropped = m_assetBrowser->takeDrop();
+        float dropX = 0.0f;
+        float dropY = 0.0f;
+        if (!dropped.path.empty() && dropToMain(dropped, &dropX, &dropY)) {
+          placeDroppedAsset(dropped.path, dropX, dropY);
         }
       }
-      if (m_sidebar) {
-        handleCommand(m_sidebar->update(ic->inputManager, dtF));
+      if (m_tools) {
+        handleCommand(m_tools->update(ic->inputManager, dtF));
       }
     } else {
       m_toolbar->closeMenus();
@@ -1321,7 +360,10 @@ EditorModule::Update(double dt)
   const bool uiConsumedClick =
     (m_toolbar && m_toolbar->consumedPress()) ||
     (m_sceneGraphView && m_sceneGraphView->consumedPress()) ||
-    (m_sidebar && m_sidebar->consumedPress());
+    (m_assetBrowser && m_assetBrowser->consumedPress()) ||
+    (m_tools && m_tools->consumedPress()) ||
+    (m_inspector && m_inspector->consumedPress()) ||
+    m_dock.consumedPress(IPanelSurfaces::kMainSurface) || m_dock.dragging();
   if (!(m_confirm && m_confirm->isOpen()) && !m_busy &&
       !(ic->commandLine != nullptr && ic->commandLine->isOpen)) {
     updateCamera(dt);
@@ -1336,29 +378,23 @@ EditorModule::Update(double dt)
     }
   }
 
-  if (!m_selectedId.empty()) {
+  if (m_document.revision() != revisionBefore) {
+    refreshView();
+  }
+  m_document.scene().update();
+  if (!m_selection.empty()) {
     rebuildSelectionOverlay();
   }
+  storeCameraState();
 
-  if (ic->camera != nullptr) {
-    IlscCameraState camera = m_document.camera();
-    const glm::dvec2 position = ic->camera->GetPositionPrecise();
-    camera.x = position.x;
-    camera.y = position.y;
-    camera.zoom = ic->camera->GetZoom();
-    if (std::abs(camera.x - m_document.camera().x) > 0.001 ||
-        std::abs(camera.y - m_document.camera().y) > 0.001 ||
-        std::abs(camera.zoom - m_document.camera().zoom) > 0.001f) {
-      m_document.setCamera(camera);
-    }
-  }
-
-  if (m_sidebar) {
-    m_sidebar->setDetail(sceneDetail());
-    m_sidebar->setActiveTool(m_activeTool);
-  }
-  if (m_toolbar && m_sidebar) {
-    m_toolbar->setSidebarCollapsed(m_sidebar->isCollapsed());
+  if (m_tools) {
+    EditorToolsState state;
+    state.is3D = m_document.worldMode() == SceneWorldMode::World3D;
+    state.activeTool = m_activeTool;
+    state.gizmoMode = m_gizmoMode;
+    state.gizmoSpace = m_gizmoSpace;
+    state.snap = m_document.editorState().snapEnabled;
+    m_tools->setState(state);
   }
   applyWorldCamera();
   updateStatus();
@@ -1373,8 +409,128 @@ EditorModule::Update(double dt)
   if (m_sceneGraphView) {
     m_sceneGraphView->getVisual().prepare(ic->renderer);
   }
-  if (m_sidebar) {
-    m_sidebar->getVisual().prepare(ic->renderer);
+  if (m_assetBrowser) {
+    m_assetBrowser->getVisual().prepare(ic->renderer);
+  }
+  if (m_marquee && m_boxSelecting) {
+    m_marquee->prepare(ic->renderer);
+  }
+  if (m_tools) {
+    m_tools->getVisual().prepare(ic->renderer);
+  }
+  if (m_inspector) {
+    m_inspector->getVisual().prepare(ic->renderer);
+  }
+  if (m_dockVisual) {
+    m_dockVisual->prepare(ic->renderer);
+  }
+  for (std::unique_ptr<GameVisual>& chrome : m_detachedChrome) {
+    if (chrome) {
+      chrome->prepare(ic->renderer);
+    }
+  }
+}
+
+void
+EditorModule::registerCommands()
+{
+  if (ic == nullptr || ic->commandRegistry == nullptr) {
+    return;
+  }
+  ic->commandRegistry->RegisterCommand(
+    "scene_select",
+    [this](const std::vector<std::string>& args) {
+      m_selection.clear();
+      for (const std::string& id : args) {
+        if (m_document.findNode(id) != nullptr) {
+          m_selection.add(id);
+        }
+      }
+      refreshView();
+    },
+    "scene_select [id...]",
+    "Select scene nodes by id (none clears the selection)");
+  ic->commandRegistry->RegisterCommand(
+    "scene_place",
+    [this](const std::vector<std::string>& args) {
+      if (args.empty()) {
+        return;
+      }
+      float x = 0.0f;
+      float y = 0.0f;
+      try {
+        x = args.size() > 1 ? std::stof(args[1]) : 0.0f;
+        y = args.size() > 2 ? std::stof(args[2]) : 0.0f;
+      } catch (...) {
+        return;
+      }
+      placeAssetAt(args[0], m_document.makeEditPlaneTransform(x, y));
+    },
+    "scene_place <virtual path> [x] [y]",
+    "Place a mesh or texture from the file tree on the edit plane");
+  ic->commandRegistry->RegisterCommand(
+    "scene_save_project",
+    [this](const std::vector<std::string>&) { saveToProject(); },
+    "scene_save_project",
+    "Save the scene into /project/scenes (needs --project)");
+  ic->commandRegistry->RegisterCommand(
+    "scene_undo",
+    [this](const std::vector<std::string>&) {
+      handleCommand(EditorCommand::Undo);
+    },
+    "scene_undo",
+    "Undo the last scene edit");
+  ic->commandRegistry->RegisterCommand(
+    "scene_redo",
+    [this](const std::vector<std::string>&) {
+      handleCommand(EditorCommand::Redo);
+    },
+    "scene_redo",
+    "Redo the next scene edit");
+  ic->commandRegistry->RegisterCommand(
+    "scene_frame",
+    [this](const std::vector<std::string>&) {
+      handleCommand(EditorCommand::FrameSelection);
+    },
+    "scene_frame",
+    "Frame the selection (or the whole scene)");
+}
+
+void
+EditorModule::unregisterCommands()
+{
+  if (ic == nullptr || ic->commandRegistry == nullptr) {
+    return;
+  }
+  for (const char* name : { "scene_select",
+                            "scene_place",
+                            "scene_save_project",
+                            "scene_undo",
+                            "scene_redo",
+                            "scene_frame" }) {
+    ic->commandRegistry->UnregisterCommand(name);
+  }
+}
+
+void
+EditorModule::updateInspector(float dt)
+{
+  if (!m_inspector || ic == nullptr) {
+    return;
+  }
+  m_inspector->update(ic->inputManager, &m_document, &m_selection, dt);
+  std::string copied;
+  if (m_inspector->takeCopyRequest(&copied)) {
+    IllEdPlatform::current().setClipboardText(copied);
+  }
+  if (m_inspector->takePasteRequest()) {
+    const std::weak_ptr<bool> alive = m_lifetime;
+    IllEdPlatform::current().requestClipboardText(
+      [this, alive](const std::string& text) {
+        if (!alive.expired() && m_inspector) {
+          m_inspector->providePaste(text);
+        }
+      });
   }
 }
 
@@ -1384,19 +540,22 @@ EditorModule::DispatchDrawables(Scene* scene)
   if (scene == nullptr) {
     return;
   }
-  if (m_grid) {
+  if (m_document.worldMode() == SceneWorldMode::World3D &&
+      m_document.scene().skybox() != nullptr) {
+    scene->AddDrawable(m_document.scene().skybox(), RenderLayerId::World);
+  }
+  if (m_grid && m_document.editorState().gridVisible) {
     scene->AddDrawable(m_grid.get(), RenderLayerId::World);
   }
-  scene->AddDrawable(&m_graphDrawable, RenderLayerId::World);
+  scene->AddDrawable(&m_document.scene().drawable(), RenderLayerId::World);
   if (m_selectionOverlay) {
     scene->AddDrawable(m_selectionOverlay.get(), RenderLayerId::World);
   }
-  if (m_sceneGraphView) {
-    scene->AddDrawable(m_sceneGraphView.get(), RenderLayerId::UI);
+  if (m_marquee && m_boxSelecting) {
+    scene->AddDrawable(m_marquee.get(), RenderLayerId::UI);
   }
-  if (m_sidebar) {
-    scene->AddDrawable(m_sidebar.get(), RenderLayerId::UI);
-  }
+  // Dock chrome and docked panels here; detached ones in their windows.
+  dispatchPanels(scene);
   if (m_toolbar) {
     scene->AddDrawable(m_toolbar.get(), RenderLayerId::UI);
   }
@@ -1408,485 +567,7 @@ EditorModule::DispatchDrawables(Scene* scene)
 EditorSceneDetail
 EditorModule::sceneDetail() const
 {
-  return m_document.sceneDetail(m_selectedId);
-}
-
-SceneNodeKind
-EditorModule::kindFromTool(EditorCommand command) const
-{
-  if (command == EditorCommand::CreateRect) {
-    return SceneNodeKind::FilledRect;
-  }
-  if (command == EditorCommand::CreateEllipse) {
-    return SceneNodeKind::FilledEllipse;
-  }
-  if (command == EditorCommand::CreateTriangle) {
-    return SceneNodeKind::FilledTriangle;
-  }
-  if (command == EditorCommand::CreateCube) {
-    return SceneNodeKind::SolidCube;
-  }
-  if (command == EditorCommand::CreatePyramid) {
-    return SceneNodeKind::SolidPyramid;
-  }
-  if (command == EditorCommand::CreateSphere) {
-    return SceneNodeKind::WireSphere;
-  }
-  return SceneNodeKind::Empty;
-}
-
-void
-EditorModule::applyActiveToolAt(float worldX, float worldY)
-{
-  const SceneNodeKind kind = kindFromTool(m_activeTool);
-  const std::string parentId = m_selectedId;
-  const std::string id = m_document.createNode(kind, parentId);
-  if (id.empty()) {
-    return;
-  }
-  if (!parentId.empty()) {
-    const Matrix4 parentWorld = m_document.worldMatrix(parentId);
-    const Matrix4 invParent = glm::inverse(parentWorld);
-    const Transform3D worldTarget =
-      m_document.makeEditPlaneTransform(worldX, worldY);
-    const Matrix4 localMat = invParent * worldTarget.toMatrix();
-    const Vector3 localPos(localMat[3][0], localMat[3][1], localMat[3][2]);
-    m_document.setTransform(id, Transform3D::fromPosition(localPos));
-  } else {
-    m_document.setTransform(id,
-                            m_document.makeEditPlaneTransform(worldX, worldY));
-  }
-  m_selectedId = id;
-  if (m_toolbar) {
-    const IlscNode* created = m_document.findNode(id);
-    m_toolbar->showToast("Created " + (created ? created->name : "node"),
-                         ColorRgba{ 60, 220, 120, 255 });
-  }
-  syncGraph();
-  m_activeTool = EditorCommand::SelectTool;
-  if (m_sidebar) {
-    m_sidebar->setActiveTool(m_activeTool);
-  }
-}
-
-void
-EditorModule::nudgeSelectedExtent()
-{
-  if (m_selectedId.empty()) {
-    return;
-  }
-  const IlscNode* node = m_document.findNode(m_selectedId);
-  if (node == nullptr) {
-    return;
-  }
-  Vector3 extent = node->primitive.extent * 1.15f;
-  if (m_document.setExtent(m_selectedId, extent)) {
-    if (m_toolbar) {
-      m_toolbar->showToast("Nudged node size", ColorRgba{ 66, 214, 210, 255 });
-    }
-    syncGraph();
-  }
-}
-
-void
-EditorModule::cycleSelectedColor()
-{
-  if (m_selectedId.empty()) {
-    return;
-  }
-  const IlscNode* node = m_document.findNode(m_selectedId);
-  if (node == nullptr) {
-    return;
-  }
-  ColorRgba next = node->primitive.color;
-  if (next.r >= 180 && next.g < 180) {
-    next = ColorRgba{ 80, 180, 90, 255 };
-  } else if (next.g >= 180 && next.b < 180) {
-    next = ColorRgba{ 70, 140, 220, 255 };
-  } else {
-    next = ColorRgba{ 210, 90, 70, 255 };
-  }
-  if (m_document.setColor(m_selectedId, next)) {
-    if (m_toolbar) {
-      m_toolbar->showToast("Updated node color", next);
-    }
-    syncGraph();
-  }
-}
-
-bool
-EditorModule::screenToWorld(float screenX,
-                            float screenY,
-                            float* worldX,
-                            float* worldY) const
-{
-  if (worldX == nullptr || worldY == nullptr || ic == nullptr ||
-      ic->camera == nullptr || ic->window == nullptr) {
-    return false;
-  }
-  if (m_document.worldMode() != IlscWorldMode::World3D) {
-    const glm::dvec2 world = ic->camera->ScreenToWorldPrecise(
-      glm::dvec2(static_cast<double>(screenX), static_cast<double>(screenY)));
-    *worldX = static_cast<float>(world.x);
-    *worldY = static_cast<float>(world.y);
-    return true;
-  }
-  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-  if (dimensions[0] <= 0 || dimensions[1] <= 0) {
-    return false;
-  }
-  const float ndcX =
-    (2.0f * screenX / static_cast<float>(dimensions[0])) - 1.0f;
-  const float ndcY =
-    1.0f - (2.0f * screenY / static_cast<float>(dimensions[1]));
-  const glm::mat4 inverse = glm::inverse(currentViewProjection());
-  glm::vec4 nearPoint = inverse * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
-  glm::vec4 farPoint = inverse * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
-  if (std::fabs(nearPoint.w) < 0.000001f || std::fabs(farPoint.w) < 0.000001f) {
-    return false;
-  }
-  nearPoint /= nearPoint.w;
-  farPoint /= farPoint.w;
-  const glm::vec3 direction = glm::vec3(farPoint) - glm::vec3(nearPoint);
-  if (std::fabs(direction.y) < 0.000001f) {
-    return false;
-  }
-  const float t = -nearPoint.y / direction.y;
-  *worldX = nearPoint.x + direction.x * t;
-  *worldY = nearPoint.z + direction.z * t;
-  return true;
-}
-
-bool
-EditorModule::screenToWorldRay(float screenX,
-                               float screenY,
-                               glm::vec3* rayOrigin,
-                               glm::vec3* rayDir) const
-{
-  if (rayOrigin == nullptr || rayDir == nullptr || ic == nullptr ||
-      ic->camera == nullptr || ic->window == nullptr) {
-    return false;
-  }
-  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-  if (dimensions[0] <= 0 || dimensions[1] <= 0) {
-    return false;
-  }
-  if (m_document.worldMode() != IlscWorldMode::World3D) {
-    const glm::dvec2 world = ic->camera->ScreenToWorldPrecise(
-      glm::dvec2(static_cast<double>(screenX), static_cast<double>(screenY)));
-    *rayOrigin = glm::vec3(
-      static_cast<float>(world.x), static_cast<float>(world.y), 10.0f);
-    *rayDir = glm::vec3(0.0f, 0.0f, -1.0f);
-    return true;
-  }
-  const float ndcX =
-    (2.0f * screenX / static_cast<float>(dimensions[0])) - 1.0f;
-  const float ndcY =
-    1.0f - (2.0f * screenY / static_cast<float>(dimensions[1]));
-  const glm::mat4 inverse = glm::inverse(currentViewProjection());
-  glm::vec4 nearPoint = inverse * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
-  glm::vec4 farPoint = inverse * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
-  if (std::fabs(nearPoint.w) < 0.000001f || std::fabs(farPoint.w) < 0.000001f) {
-    return false;
-  }
-  nearPoint /= nearPoint.w;
-  farPoint /= farPoint.w;
-  *rayOrigin = glm::vec3(nearPoint);
-  const glm::vec3 dir = glm::vec3(farPoint) - glm::vec3(nearPoint);
-  const float len = glm::length(dir);
-  if (len < 0.000001f) {
-    return false;
-  }
-  *rayDir = dir / len;
-  return true;
-}
-
-float
-EditorModule::gizmoScale(const glm::vec3& worldPos) const
-{
-  if (ic == nullptr || ic->camera == nullptr) {
-    return 1.0f;
-  }
-  if (m_document.worldMode() != IlscWorldMode::World3D) {
-    const float zoom = ic->camera->GetZoom();
-    return std::clamp(28.0f / std::max(1.0f, zoom), 0.35f, 3.0f);
-  }
-  const glm::vec3 eye = ic->camera->getEye();
-  const float dist = glm::length(eye - worldPos);
-  // Keep constant screen size: at dist 12, scale is ~1.0
-  return std::clamp(dist * 0.085f, 0.4f, 8.0f);
-}
-
-static float
-distRayToSegment(const glm::vec3& rayOrigin,
-                 const glm::vec3& rayDir,
-                 const glm::vec3& segA,
-                 const glm::vec3& segB,
-                 float* segT)
-{
-  const glm::vec3 u = rayDir;
-  const glm::vec3 v = segB - segA;
-  const glm::vec3 w = rayOrigin - segA;
-  const float a = glm::dot(u, u);
-  const float b = glm::dot(u, v);
-  const float c = glm::dot(v, v);
-  const float d = glm::dot(u, w);
-  const float e = glm::dot(v, w);
-  const float denom = a * c - b * b;
-  float sN = 0.0f;
-  float tN = 0.0f;
-  float tD = denom;
-  if (denom < 0.000001f) {
-    sN = 0.0f;
-    tN = e;
-    tD = c;
-  } else {
-    sN = (b * e - c * d);
-    tN = (a * e - b * d);
-    if (sN < 0.0f) {
-      sN = 0.0f;
-      tN = e;
-      tD = c;
-    }
-  }
-  float sc = (std::abs(sN) < 0.000001f ? 0.0f : sN / denom);
-  float tc = (std::abs(tN) < 0.000001f ? 0.0f : tN / tD);
-  tc = std::clamp(tc, 0.0f, 1.0f);
-  if (segT != nullptr) {
-    *segT = tc;
-  }
-  const glm::vec3 dP = w + (sc * u) - (tc * v);
-  return glm::length(dP);
-}
-
-static bool
-intersectRayQuad(const glm::vec3& rayOrigin,
-                 const glm::vec3& rayDir,
-                 const glm::vec3& origin,
-                 const glm::vec3& uAxis,
-                 const glm::vec3& vAxis,
-                 float size,
-                 float* hitDistance)
-{
-  const glm::vec3 normal = glm::normalize(glm::cross(uAxis, vAxis));
-  const float denom = glm::dot(rayDir, normal);
-  if (std::abs(denom) < 0.000001f) {
-    return false;
-  }
-  const float t = glm::dot(origin - rayOrigin, normal) / denom;
-  if (t < 0.0f) {
-    return false;
-  }
-  const glm::vec3 p = rayOrigin + rayDir * t;
-  const glm::vec3 d = p - origin;
-  const float u = glm::dot(d, uAxis);
-  const float v = glm::dot(d, vAxis);
-  if (u >= 0.0f && u <= size && v >= 0.0f && v <= size) {
-    if (hitDistance != nullptr) {
-      *hitDistance = t;
-    }
-    return true;
-  }
-  return false;
-}
-
-GizmoPart
-EditorModule::hitTestGizmo(float screenX,
-                           float screenY,
-                           const glm::vec3& gizmoOrigin,
-                           float gizmoScale) const
-{
-  glm::vec3 rayOrigin{ 0.0f };
-  glm::vec3 rayDir{ 0.0f, 0.0f, -1.0f };
-  if (!screenToWorldRay(screenX, screenY, &rayOrigin, &rayDir)) {
-    return GizmoPart::None;
-  }
-
-  const bool is3D = (m_document.worldMode() == IlscWorldMode::World3D);
-  const float scale = std::max(0.1f, gizmoScale);
-  const float axisLength = scale * 0.85f;
-  const float planeSize = scale * 0.28f;
-
-  // 1. Center handle check (sphere / cube hit)
-  const float centerRadius = scale * 0.08f;
-  const glm::vec3 toCenter = gizmoOrigin - rayOrigin;
-  const float projCenter = glm::dot(toCenter, rayDir);
-  if (projCenter >= 0.0f) {
-    const glm::vec3 closestPoint = rayOrigin + rayDir * projCenter;
-    if (glm::length(closestPoint - gizmoOrigin) <= centerRadius) {
-      return GizmoPart::Center;
-    }
-  }
-
-  // 2. Plane handles check (closer to center, checked before axes)
-  float bestPlaneDist = 1e9f;
-  GizmoPart hitPlane = GizmoPart::None;
-  float dist = 0.0f;
-
-  // Plane XY
-  if (intersectRayQuad(rayOrigin,
-                       rayDir,
-                       gizmoOrigin,
-                       glm::vec3(1, 0, 0),
-                       glm::vec3(0, 1, 0),
-                       planeSize,
-                       &dist)) {
-    if (dist < bestPlaneDist) {
-      bestPlaneDist = dist;
-      hitPlane = GizmoPart::PlaneXY;
-    }
-  }
-
-  if (is3D) {
-    // Plane XZ (ground plane)
-    if (intersectRayQuad(rayOrigin,
-                         rayDir,
-                         gizmoOrigin,
-                         glm::vec3(1, 0, 0),
-                         glm::vec3(0, 0, 1),
-                         planeSize,
-                         &dist)) {
-      if (dist < bestPlaneDist) {
-        bestPlaneDist = dist;
-        hitPlane = GizmoPart::PlaneXZ;
-      }
-    }
-    // Plane YZ
-    if (intersectRayQuad(rayOrigin,
-                         rayDir,
-                         gizmoOrigin,
-                         glm::vec3(0, 1, 0),
-                         glm::vec3(0, 0, 1),
-                         planeSize,
-                         &dist)) {
-      if (dist < bestPlaneDist) {
-        bestPlaneDist = dist;
-        hitPlane = GizmoPart::PlaneYZ;
-      }
-    }
-  }
-
-  if (hitPlane != GizmoPart::None) {
-    return hitPlane;
-  }
-
-  // 3. Axis handles check
-  const float axisThreshold = scale * 0.10f;
-  float bestAxisDist = axisThreshold;
-  GizmoPart hitAxis = GizmoPart::None;
-
-  // X Axis
-  float segT = 0.0f;
-  const float distX =
-    distRayToSegment(rayOrigin,
-                     rayDir,
-                     gizmoOrigin,
-                     gizmoOrigin + glm::vec3(axisLength, 0, 0),
-                     &segT);
-  if (distX < bestAxisDist) {
-    bestAxisDist = distX;
-    hitAxis = GizmoPart::AxisX;
-  }
-
-  // Y Axis
-  const float distY =
-    distRayToSegment(rayOrigin,
-                     rayDir,
-                     gizmoOrigin,
-                     gizmoOrigin + glm::vec3(0, axisLength, 0),
-                     &segT);
-  if (distY < bestAxisDist) {
-    bestAxisDist = distY;
-    hitAxis = GizmoPart::AxisY;
-  }
-
-  // Z Axis (in 3D)
-  if (is3D) {
-    const float distZ =
-      distRayToSegment(rayOrigin,
-                       rayDir,
-                       gizmoOrigin,
-                       gizmoOrigin + glm::vec3(0, 0, axisLength),
-                       &segT);
-    if (distZ < bestAxisDist) {
-      bestAxisDist = distZ;
-      hitAxis = GizmoPart::AxisZ;
-    }
-  }
-
-  return hitAxis;
-}
-
-bool
-EditorModule::intersectGizmoConstraint(GizmoPart part,
-                                       const glm::vec3& gizmoOrigin,
-                                       const glm::vec3& rayOrigin,
-                                       const glm::vec3& rayDir,
-                                       glm::vec3* outIntersection) const
-{
-  if (outIntersection == nullptr) {
-    return false;
-  }
-
-  // Plane intersections
-  if (part == GizmoPart::PlaneXY ||
-      (part == GizmoPart::Center &&
-       m_document.worldMode() != IlscWorldMode::World3D)) {
-    // Normal is (0, 0, 1)
-    if (std::abs(rayDir.z) < 0.000001f) {
-      return false;
-    }
-    const float t = (gizmoOrigin.z - rayOrigin.z) / rayDir.z;
-    *outIntersection = rayOrigin + rayDir * t;
-    return true;
-  }
-
-  if (part == GizmoPart::PlaneXZ ||
-      (part == GizmoPart::Center &&
-       m_document.worldMode() == IlscWorldMode::World3D)) {
-    // Normal is (0, 1, 0)
-    if (std::abs(rayDir.y) < 0.000001f) {
-      return false;
-    }
-    const float t = (gizmoOrigin.y - rayOrigin.y) / rayDir.y;
-    *outIntersection = rayOrigin + rayDir * t;
-    return true;
-  }
-
-  if (part == GizmoPart::PlaneYZ) {
-    // Normal is (1, 0, 0)
-    if (std::abs(rayDir.x) < 0.000001f) {
-      return false;
-    }
-    const float t = (gizmoOrigin.x - rayOrigin.x) / rayDir.x;
-    *outIntersection = rayOrigin + rayDir * t;
-    return true;
-  }
-
-  // Axis intersections: project the closest point on the axis line
-  glm::vec3 axisDir(1.0f, 0.0f, 0.0f);
-  if (part == GizmoPart::AxisY) {
-    axisDir = glm::vec3(0.0f, 1.0f, 0.0f);
-  } else if (part == GizmoPart::AxisZ) {
-    axisDir = glm::vec3(0.0f, 0.0f, 1.0f);
-  }
-
-  // Find closest approach between ray and axis line
-  const glm::vec3 u = rayDir;
-  const glm::vec3 v = axisDir;
-  const glm::vec3 w = rayOrigin - gizmoOrigin;
-  const float a = glm::dot(u, u);
-  const float b = glm::dot(u, v);
-  const float c = glm::dot(v, v);
-  const float d = glm::dot(u, w);
-  const float e = glm::dot(v, w);
-  const float denom = a * c - b * b;
-  if (std::abs(denom) < 0.000001f) {
-    return false;
-  }
-  const float tN = (a * e - b * d) / denom;
-  *outIntersection = gizmoOrigin + axisDir * tN;
-  return true;
+  return m_document.sceneDetail(m_selection);
 }
 
 void
@@ -1924,18 +605,16 @@ EditorModule::applyFontSize(float size)
   if (m_sceneGraphView) {
     m_sceneGraphView->setFontSize(size);
   }
-  if (m_sidebar) {
-    m_sidebar->setFontSize(size);
+  if (m_assetBrowser) {
+    m_assetBrowser->setFontSize(size);
+  }
+  if (m_tools) {
+    m_tools->setFontSize(size);
+  }
+  if (m_inspector) {
+    m_inspector->setFontSize(size);
   }
   if (m_confirm) {
     m_confirm->setFontSize(size);
-  }
-  if (m_toolbar && m_sidebar) {
-    m_sidebar->setToolbarDimensions(m_toolbar->barHeight(),
-                                    m_toolbar->statusHeight());
-  }
-  if (m_toolbar && m_sceneGraphView) {
-    m_sceneGraphView->setToolbarDimensions(m_toolbar->barHeight(),
-                                           m_toolbar->statusHeight());
   }
 }

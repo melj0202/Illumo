@@ -28,29 +28,78 @@ testMenuHits()
 }
 
 static void
-testFontSizeScaling()
+testChromeMetrics()
 {
-  testSection("EditorToolbar: font size scaling");
+  testSection("EditorToolbar: plain chrome keeps the tool metrics");
   HeadlessRenderFixture fixture(1280, 720);
   EditorToolbar toolbar(&fixture.window, &fixture.renderer);
 
   testTrue(
     g, std::abs(toolbar.fontSize() - 13.0f) < 0.001f, "default fontSize 13");
-  testTrue(
-    g, std::abs(toolbar.barHeight() - 28.0f) < 0.001f, "default barHeight 28");
   testTrue(g,
-           std::abs(toolbar.statusHeight() - 22.0f) < 0.001f,
-           "default statusHeight 22");
+           std::abs(toolbar.barHeight() - GuiToolStyle::kMenuHeight) < 0.001f,
+           "the menu bar has the tool height");
+  testTrue(g,
+           std::abs(toolbar.statusHeight() - GuiToolStyle::kStatusHeight) <
+             0.001f,
+           "the status bar has the tool height");
 
   toolbar.setFontSize(26.0f);
   testTrue(
     g, std::abs(toolbar.fontSize() - 26.0f) < 0.001f, "fontSize updated to 26");
-  testTrue(g, toolbar.barHeight() >= 56.0f, "barHeight scaled to >= 56");
-  testTrue(g, toolbar.statusHeight() >= 44.0f, "statusHeight scaled to >= 44");
-  testTrue(
-    g, toolbar.containsScreenPoint(20.0f, 40.0f), "bar contains scaled point");
+  testTrue(g,
+           std::abs(toolbar.barHeight() - GuiToolStyle::kMenuHeight) < 0.001f,
+           "panel font size leaves the chrome alone");
+  toolbar.update(nullptr, 0.016f);
+  testTrue(g,
+           toolbar.getVisual().shapeCount() > 0u &&
+             toolbar.getVisual().spriteCount() == 0u,
+           "the plain bars draw flat shapes, no sprites");
 }
 
+static void
+testViewMenuPanels()
+{
+  testSection("EditorToolbar: View menu lists the dock panels");
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorToolbar toolbar(&fixture.window, &fixture.renderer);
+  std::vector<EditorPanelMenuEntry> panels;
+  EditorPanelMenuEntry hierarchy;
+  hierarchy.title = "Hierarchy";
+  hierarchy.toggle = EditorCommand::ToggleHierarchyPanel;
+  hierarchy.popOut = EditorCommand::PopOutHierarchyPanel;
+  panels.push_back(hierarchy);
+  toolbar.setPanels(panels, false);
+
+  float x = 0.0f;
+  float y = 0.0f;
+  testTrue(g,
+           toolbar.menuItemCenterForTesting(
+             EditorCommand::ToggleHierarchyPanel, &x, &y),
+           "the panel has a show/hide item");
+  testTrue(g,
+           toolbar.clickAtForTesting(x, y) ==
+             EditorCommand::ToggleHierarchyPanel,
+           "the show/hide item fires");
+  testTrue(g,
+           toolbar.menuItemCenterForTesting(
+             EditorCommand::PopOutHierarchyPanel, &x, &y),
+           "the panel has a pop-out item");
+  testTrue(g,
+           toolbar.clickAtForTesting(x, y) == EditorCommand::None &&
+             toolbar.isMenuOpen(),
+           "pop-out is disabled where windows are unavailable");
+  toolbar.closeMenus();
+  toolbar.setPanels(panels, true);
+  toolbar.menuItemCenterForTesting(EditorCommand::PopOutHierarchyPanel, &x, &y);
+  testTrue(g,
+           toolbar.clickAtForTesting(x, y) ==
+             EditorCommand::PopOutHierarchyPanel,
+           "pop-out fires where windows are available");
+  testTrue(g,
+           toolbar.menuItemCenterForTesting(EditorCommand::ResetLayout, &x, &y),
+           "the View menu resets the layout");
+}
 void
 registerEditorToolbarTests(IllumoTestRegistry& registry)
 {
@@ -59,9 +108,14 @@ registerEditorToolbarTests(IllumoTestRegistry& registry)
     testMenuHits();
     return g.failures;
   });
-  registry.add("IllEd.Toolbar.FontSizeScaling", []() {
+  registry.add("IllEd.Toolbar.ChromeMetrics", []() {
     g = {};
-    testFontSizeScaling();
+    testChromeMetrics();
+    return g.failures;
+  });
+  registry.add("IllEd.Toolbar.ViewMenuPanels", []() {
+    g = {};
+    testViewMenuPanels();
     return g.failures;
   });
 }

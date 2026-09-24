@@ -36,7 +36,7 @@ target_include_directories(IllumoGameCore PUBLIC
 target_include_directories(IllumoGameCore SYSTEM PRIVATE
   "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/json/single_include"
   "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
-target_link_libraries(IllumoGameCore PUBLIC Illumo::Illumo)
+target_link_libraries(IllumoGameCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllumoGameCore)
 
 # IllumoGame ships only as the IllumoGame.wasm package hosted by IllumoRuntime
@@ -86,4 +86,12 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/rulesets.json" rulesets.json)
   illumo_stage_runtime_file(IllumoGameTests
     "${CMAKE_CURRENT_SOURCE_DIR}/families.json" families.json)
+  # render3dTest reads its scene through the asset source (relative to the
+  # working directory natively).
+  add_custom_command(TARGET IllumoGameTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:IllumoGameTests>/Scenes"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/Scenes/render3d-test.ilsc"
+      "$<TARGET_FILE_DIR:IllumoGameTests>/Scenes/render3d-test.ilsc"
+    VERBATIM)
 endif()

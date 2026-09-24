@@ -18,13 +18,18 @@ IllumoGame, IllEd, and IllMeshViewer.
 \pathref{Illumo/Source/Services/} & Logging, environment, input, system CLI, generic console, and allocators. \\
 \pathref{Illumo/Source/Rendering/} & Backend-neutral renderer plus private window/OpenGL implementation. \\
 \pathref{Illumo/Source/Platform/} & OS entry points, native dialogs, and SaveLoad implementations. \\
+\pathref{Illumo/Include/Illumo/Content/}, \pathref{Illumo/Source/Content/} & Optional \texttt{Illumo::Content} library (D-E18): \texttt{VirtualPath}, \texttt{PackageManifest}, \texttt{PackageArchive}, \texttt{VirtualFileSystem}, \texttt{PackageMounts}, \texttt{VfsAssetSource}, \texttt{VfsConsole}, \texttt{VfsTreeSource}, \texttt{SceneDocument}, \texttt{IlscCodec}, \texttt{SceneAssetRefs}, and \texttt{SceneInstance}. Core Illumo never includes it; guests link the mirror \texttt{IllumoGuestContent}. \\
+\pathref{Illumo/tools/IllumoPack.cpp} & Host tool that packs a package directory into an \texttt{.ilpk} or verifies one. \\
 \pathref{Illumo/Tests/} & Library-owned \texttt{Illumo.*} cases and private implementation tests. \\
+\pathref{Illumo/Tests/Content/} & \texttt{Illumo.Content.*} cases and the \pathref{Fixtures/archive} package that CMake zips as a reader fixture. \\
+\pathref{IllumoGuest/Include/IllumoGuest/} & Guest SDK, including \texttt{FileTree.h} (\texttt{GuestFileTree}), \texttt{VfsAssets.h} (\texttt{GuestVfsAssets}), and \texttt{SceneFetches.h} (\texttt{GuestSceneFetches}). \\
 \pathref{Illumo/TestSupport/Include/} & Test-only \texttt{Illumo::TestSupport} headers, including MockBackend. \\
 \pathref{IllumoGame/Source/Game/} & Application definition, CA defaults, canvas, sparse simulation, editor, and game module. \\
 \pathref{IllumoGame/Source/Rulesets/} & Cellular-automata rules and palettes. \\
+\pathref{IllumoGame/Scenes/} & Packaged scenes; \pathref{render3d-test.ilsc} is the \texttt{render3dTest} diagnostic. \\
 \pathref{IllumoGame/Tests/} & Product-owned \texttt{IllumoGame.*} cases. \\
-\pathref{IllEd/Source/}, \pathref{IllEd/Tests/} & World editor, document codec, and \texttt{IllEd.*} cases. \\
-\pathref{IllMeshViewer/Source/}, \pathref{IllMeshViewer/Tests/} & Mesh viewer and \texttt{IllMeshViewer.*} cases. \\
+\pathref{IllEd/Source/}, \pathref{IllEd/Tests/} & World editor (document over \texttt{SceneInstance}, history, selection, shortcuts, gizmo, inspector, clipboard, asset browser) and \texttt{IllEd.*} cases. \\
+\pathref{IllMeshViewer/Source/}, \pathref{IllMeshViewer/Tests/} & Mesh and scene viewer and \texttt{IllMeshViewer.*} cases. \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -36,6 +41,9 @@ IllumoGame, IllEd, and IllMeshViewer.
   \item \pathref{Illumo/thirdparty/} holds vendored dependencies and licenses.
   \item \pathref{IllumoGame/envvars.json} is product-owned default configuration
         and is seeded separately from library assets.
+  \item \pathref{IllumoGame/illumo.json}, \pathref{IllEd/illumo.json}, and
+        \pathref{IllMeshViewer/illumo.json} are the package manifests staged
+        into \pathref{apps/<name>/} (D-E22); \texttt{app.json} no longer exists.
   \item \pathref{archive/} is historical code and is not built.
   \item \pathref{docs/} is the canonical technical-documentation tree.
   \item Root and nested \texttt{AGENTS.md} plus \pathref{.agent/} are D-DOC2
@@ -54,3 +62,8 @@ Downstream code uses package-qualified public includes such as
 \texttt{<Illumo/Engine/Illumo.h>}. IllumoGame receives no private
 \pathref{Illumo/Source/} include root, and OpenGL implementation headers stay
 private. A consumer-only compile smoke target continuously checks this boundary.
+Products that load scenes or packages also link \texttt{Illumo::Content} and
+include \texttt{<Illumo/Content/...>}, as does the WASM host
+(\pathref{Illumo/Source/Wasm/}); the core static library never includes those
+headers. Engine tools see the file tree only through the core interface
+\symbolref{IFileTreeSource} (\pathref{Illumo/Services/FileTreeSource.h}).

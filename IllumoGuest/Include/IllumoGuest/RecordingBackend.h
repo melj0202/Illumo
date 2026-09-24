@@ -31,7 +31,11 @@ public:
   void pump();
   TextureHandle importTexture(GuestResourceId id);
   GuestFrame takeFrame();
-
+  // Frame schema v5: commands submitted between beginSurface and endSurface
+  // record into a surface of that logical size instead of the main frame.
+  // Surfaces take UI batches only; texture and mesh writes stay frame-level.
+  void beginSurface(std::uint32_t surface, float width, float height);
+  void endSurface();
   bool Initialize() override;
   void Shutdown() override;
   void BeginFrame() override;
@@ -191,6 +195,11 @@ private:
   CommandQueue m_commands;
   std::vector<GuestLayer> m_commandLayers;
   GuestFrame m_frame;
+  // Index into m_frame.surfaces while recording a surface, else -1.
+  std::ptrdiff_t m_surface = -1;
+  std::vector<GuestBatch>& targetBatches();
+  float targetWidth() const;
+  float targetHeight() const;
   GuestLayer m_layer = GuestLayer::Ui;
   MeshHandle m_mesh;
   ShaderHandle m_shader;

@@ -3,22 +3,30 @@
 #include <filesystem>
 #include <memory>
 
+class VirtualFileSystem;
+
 struct WasmFileLimits
 {
   std::uint64_t fileBytes = 512ull * 1024ull * 1024ull;
   std::uint64_t stagedBytes = 512ull * 1024ull * 1024ull;
   std::uint64_t storageBytes = 1024ull * 1024ull * 1024ull;
+  // Everything written into /project, tracked incrementally.
+  std::uint64_t projectBytes = 4096ull * 1024ull * 1024ull;
   std::uint32_t openFiles = 64;
 };
 
 struct WasmFileRoots
 {
+  // The package directory, used when packages is null (direct --game runs).
   std::filesystem::path package;
   std::filesystem::path storage;
   // A document the user named at launch (--open). Granted before the first
   // update as the selection "launch"; editable grants may be saved in place.
   std::filesystem::path launch;
   bool launchEditable = false;
+  // The launch's virtual file tree; when set, the Package area serves its
+  // /app view instead of the package directory.
+  std::shared_ptr<const VirtualFileSystem> packages;
 };
 
 // A dedicated native I/O worker owns streams and staging files. No guest call
@@ -27,9 +35,16 @@ struct WasmFileRoots
 class WasmFileServices
 {
 public:
+  // Serves packageRoot (a directory) as the Package area.
   WasmFileServices(std::uint64_t owner,
                    std::uint32_t grants,
                    std::filesystem::path packageRoot,
+                   std::filesystem::path storageRoot,
+                   WasmFileLimits limits = {});
+  // Serves the /app view of a virtual file tree as the Package area.
+  WasmFileServices(std::uint64_t owner,
+                   std::uint32_t grants,
+                   std::shared_ptr<const VirtualFileSystem> packages,
                    std::filesystem::path storageRoot,
                    WasmFileLimits limits = {});
   ~WasmFileServices();
@@ -57,6 +72,8 @@ public:
   const std::string& error() const;
 
 private:
+  static std::shared_ptr<const VirtualFileSystem> packageDirectory(
+    const std::filesystem::path& root);
   class State;
   std::unique_ptr<State> m_state;
 };

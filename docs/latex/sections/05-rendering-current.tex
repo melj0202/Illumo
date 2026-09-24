@@ -68,14 +68,64 @@ snapshot bounds after fitting. This resolves the proposal's early-shadow-flag
 assumption without changing the renderer's shadow policy. The temporary
 \texttt{sceneSnapshotExtraction=0} switch selects guarded direct traversal.
 
-IllEd's document is the mutation gateway to its authoritative runtime graph;
-serialization recipes and exact local-box picking remain editor policy.
-Transforms and recolors preserve graph handles and visual objects. Journal
-overflow resynchronizes bindings without rebuilding nodes. \texttt{.ilsc} v1
-is unchanged. The simulator diagnostic and capture fixtures use the adapter;
-CA storage and UI remain separate. See
-\pathref{docs/scene-graph-v2-design.md} and
-\pathref{docs/scene-graph-v2-plan.md} for evidence and gated follow-ups.
+Sibling order is part of the contract (D-E26):
+\texttt{setParent(node, parent, insertBefore)} places a node immediately before
+a current child of \texttt{parent}, or last when \texttt{insertBefore} is null,
+and \texttt{getPreviousSibling} complements \texttt{getNextSibling}. The cycle
+check and Reparented change record apply as for any reparent, and an unchanged
+position records nothing. Scene documents store nodes in graph preorder, so
+sibling order round-trips, and undo can restore a deleted node to its exact
+position.
+
+\subsection{SceneInstance (D-E18/D-E19)}
+Scenes reach the renderer through \symbolref{SceneInstance} in
+\texttt{Illumo::Content}, not through product code. It owns the document
+state, one \symbolref{SceneGraph}, one \symbolref{MeshVisual} per renderable
+component, and the asset references those visuals hold; stable node ids are
+graph names. Programs add \texttt{drawable()} (and \texttt{skybox()} when the
+environment names one) to their frame Scene and call \texttt{update()} once
+per frame. Per-node edits (transform, flags, components, reparent with sibling
+position, create, remove) validate first, change only the nodes they touch,
+and invalidate graph snapshots before reconfiguring an attachment; recolors
+and resizes that keep a node's component kinds reconfigure the visual in
+place.
+\begin{itemize}
+  \item \textbf{Primitives:} solid shapes (rect, ellipse, triangle, cube,
+        pyramid, sphere) share one immutable unit mesh per shape and instance,
+        enrolled through \texttt{AssetManager::acquireMesh(MeshData)}; the
+        primitive extent is the visual's model scale and its color the tint.
+        Wire cube and wire sphere stay procedural.
+  \item \textbf{Assets:} mesh, texture, atlas, and cubemap assets load through
+        \symbolref{AssetManager} by normalized virtual path. A missing or
+        failed asset draws a magenta placeholder and records a warning the
+        program can read (\texttt{warnings()}).
+  \item \textbf{Lighting:} the first enabled, visible \texttt{light} component
+        in preorder supplies the one directional light; otherwise the
+        environment sun does. Ambient color and shadow settings are pushed
+        into every visual. 2D scenes are unlit.
+  \item \textbf{Skybox:} the environment's cubemap asset is drawn by a
+        \texttt{SkyboxVisual} that is a separate drawable, not a graph node.
+        \pathref{SkyboxVisual.cpp} moved into the shared guest engine so
+        every guest can use it.
+  \item \textbf{Picking:} \texttt{pickRay} tests attachment local bounds from
+        \texttt{SceneGraph::raycastCandidates} with rotation, scale and
+        effective visibility, preferring the later node in preorder on ties
+        (drawn on top in 2D). Optional pick proxies give empty, light and
+        camera nodes a selectable box.
+\end{itemize}
+Loading 2,000 nodes takes about 3.8\,ms and 1,000 batched transform edits
+about 0.8\,ms in Release (\texttt{Illumo.Content.Bench.Instantiate2000}).
+
+IllEd's \texttt{EditorDocument} wraps one \texttt{SceneInstance} and is the
+only mutation gateway; the editor adds no per-node attachments. IllMeshViewer
+opens scenes through the same class, and IllumoGame's \texttt{render3dTest}
+diagnostic is \pathref{IllumoGame/Scenes/render3d-test.ilsc} instantiated by
+it. Journal overflow resynchronizes bindings without rebuilding nodes. Capture
+fixtures use the adapter; CA storage and UI remain separate. See
+\pathref{docs/scene-graph-v2-design.md},
+\pathref{docs/scene-graph-v2-plan.md}, and
+\pathref{docs/content-packages-and-scenes-design.md} for evidence and gated
+follow-ups.
 
 \subsection{Layers, styles, and drawables (D-R14, D-R18)}
 The initial clear explicitly selects the screen framebuffer and full-window
@@ -184,6 +234,17 @@ the backend resource. In-memory mesh data can be enrolled once and explicitly
 retained for multiple consumers. Managed mesh metadata supplies the immutable
 vertex/index counts and bounds needed by drawables. Mesh hot reload, materials,
 and automatic instance aggregation remain outside this milestone.
+
+The byte source is an \texttt{IAssetSource}: the file system natively,
+\texttt{VfsAssetSource} over the host file tree in tools and native tests, and
+\texttt{GuestVfsAssets} in guests, where canonical keys are normalized
+absolute virtual paths (D-E24). \texttt{AssetManager::assetSource()} exposes
+the source so a product can read a scene through it. MTL libraries beside an
+OBJ resolve through the same source: \texttt{MeshLoader::materialLibraryNames}
+is the single \texttt{mtllib} scanner, \texttt{AssetManager::acquireMesh}
+reads each named library relative to the OBJ, and the text reaches the loader
+as \texttt{MeshLoadOptions::materialText}. Materials are parsed but still not
+bound.
 
 Cubemaps retain their source kind and all canonical face paths (or the cross
 path). Initial acquisition remains synchronous; reload decoding uses the same
@@ -366,8 +427,10 @@ engine API, checked on a real GPU by \texttt{IllumoCaptureGpuTests}.
 See \texttt{docs/frame-capture.md} for inputs, publication and limitations.
 
 Current 3D facilities include CPU OBJ import, directional lighting,
-per-drawable self-shadowing and post-processing. These do not yet implement the
-charter's scene-wide lighting, registered game objects or physics integration.
+per-drawable self-shadowing and post-processing, and scene-level environment
+lighting, sun and skybox resolved by \texttt{SceneInstance} from a scene's
+\texttt{settings.environment}. These do not yet implement registered game
+objects or physics integration.
 
 Renderer-bound GameVisual resources retain one renderer lifetime. Foreign use,
 truncated geometry, and queue rejection report incomplete frames and suppress

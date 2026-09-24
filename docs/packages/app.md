@@ -19,3 +19,23 @@ Each in-tree product implements that definition: IllumoGame in
 `IllEd/Source/IllEdApplication.cpp`, and IllMeshViewer in
 `IllMeshViewer/Source/IllMeshViewerApplication.cpp`. These contain product policy only — no
 process loop, logger lifetime, platform SDK code, or system parser.
+
+`IllumoRuntime` (`Illumo/Source/Wasm/RuntimeApplication.cpp`) is the generic
+application definition for WASM packages. It launches one `app` package
+described by `illumo.json`: `--app <name>` resolves `apps/<name>/` or
+`apps/<name>.ilpk` beside the runtime (`game` by default), and `--package`
+takes a package directory or `.ilpk` instead (`--app` cannot be combined with
+`--package` or `--game`). Every package in `packages/` beside the runtime is
+discovered and mounted at `/packages/<id>`; `--mount <dir|.ilpk>` (a
+repeatable `paths` SysCmdLine option) adds more, and `--project <dir>` mounts
+a writable `/project`. A missing mount, project or package refuses to start,
+as do `--mount` and `--project` with `--game`. Module and worker bytes are
+read from `/app` through the virtual file tree (`PackageMounts`, see
+`content.md`), and the host registers the `vfs` console command when a tree
+exists. Guests reach the tree through file protocol v2 (`GuestFileRequest`
+version 2 in `IllumoGuest/FileProtocol.h`): the `Mounted` area takes absolute
+virtual paths (`Package` stays an alias of `/app`), and `List`, `Stat`,
+`Import` and `Pack` join the transfer actions. Reading and listing mounted
+paths need `Assets`; project writes, `Import` and `Pack` need the
+`ProjectFiles` capability, which the host offers only when `/project` is
+mounted. `../wasm-game-runtime-design.md` records the protocol limits.

@@ -65,7 +65,10 @@ owns content through synchronous submission and destroys renderer-bound content
 before returning. Strict capture rejects immediate fallback; render attachments
 must report required-resource emission failures with `Renderer::reportFrameError`.
 Readback occurs before swap and preserves pixel-pack state; diagnostics survive
-queue reset. Do not imply that a successful submission proves useful pixels.
+queue reset. Offscreen framebuffer readback (`requestFramebufferReadback` /
+`takeFramebufferReadback`) is asynchronous through fenced pixel-pack buffers,
+restores every binding it touches, and never blocks unless the caller asks to
+wait; `Renderer::renderOffscreen` is refused inside `RenderScene` (D-R27). Do not imply that a successful submission proves useful pixels.
 
 Treat command layout, handle semantics, ordering, capacity, blend/state
 behavior, and shader-visible data as cross-backend contracts. Validate sizes,

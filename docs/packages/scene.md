@@ -43,16 +43,30 @@ is rejected inside extraction/bounds callbacks. All scene work stays on the
 main thread. The `sceneSnapshotExtraction` environment value defaults to on;
 zero temporarily selects guarded direct traversal for containment.
 
-IllEd's `EditorDocument` owns the runtime graph and is its edit gateway. Stable
-file IDs become graph names; recipe indices use user data. Render bindings
-persist across transform/recolor edits, journal overflow resynchronizes bindings,
-and serialization exports hierarchy order from the graph. Picking keeps the
-editor's exact transformed local-box narrow phase after graph broad-phase
-queries. `.ilsc` remains version 1. IllumoGame's diagnostic scene and capture
-fixtures use the same adapter; CA storage and primitive-composed UI stay
-separate. Generic `WorkerPool` is available without importing CA policy; scene
-parallelism and a separate culling index remain measurement-gated.
+Sibling order is part of the graph contract: `setParent(node, parent,
+insertBefore)` places a node immediately before a current child of `parent`
+(null appends, even under the same parent), with the same cycle rules and
+Reparented record as `setParent`; an unchanged position records nothing.
+`getPreviousSibling` complements `getNextSibling`. This narrow addition serves
+hierarchy reordering and exact sibling restore on undo; nothing else in the v2
+contract changed.
+
+The graph still never serializes itself. `Illumo::Content` owns `.ilsc`
+format 2 and `SceneInstance`, the one scene loader, which builds graphs only
+through this public API: stable file IDs become graph names (an id-to-record
+map lives in the instance), attachments persist across in-place edits, and
+`document()` exports hierarchy order from the graph (see `content.md`). IllEd's
+`EditorDocument` wraps one `SceneInstance` and is its edit gateway; picking
+uses `SceneInstance::pickRay` over attachment local bounds with rotation and
+effective visibility. IllumoGame's `render3dTest` scene
+(`Scenes/render3d-test.ilsc`) and IllMeshViewer's scenes load the same way;
+CA storage and primitive-composed UI stay separate. Generic `WorkerPool` is
+available without importing CA policy; scene parallelism and a separate
+culling index remain measurement-gated.
 
 See `../scene-graph-v2-design.md`, `../scene-graph-v2-plan.md`, and decisions
 D-E12/D-R25 for implementation, benchmark gates, and verification. The v1
-design remains historical context for D-E8/D-E11.
+design remains historical context for D-E8/D-E11. The sibling-order API and
+the move of `.ilsc` into Content are recorded in
+`../content-packages-and-scenes-design.md` (section 7) and its plan (M3);
+`Illumo.SceneGraph.SiblingInsertBefore` covers the API.

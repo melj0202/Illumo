@@ -28,15 +28,15 @@ runNativeSceneEdits(Illumo& host, EditorModule& editor)
   EditorModuleTestAccess::handleCommand(editor, EditorCommand::SetMode3D);
   std::string parent;
   for (size_t i = 0; i < 64; ++i) {
-    parent = document.createNode(SceneNodeKind::Empty, parent);
+    parent = document.createPrimitive(
+      true, ScenePrimitiveShape::Cube, parent, Transform3D{});
   }
-  const std::string child =
-    document.createNode(SceneNodeKind::SolidCube, parent);
+  const std::string child = document.createPrimitive(
+    false, ScenePrimitiveShape::Cube, parent, Transform3D{});
   const SceneNodeHandle handle = document.nodeHandle(child);
   EditorModuleTestAccess::setSelectedId(editor, child);
-  requireCloseCheck(EditorModuleTestAccess::rebuildGraph(editor),
-                    "deep scene binds");
-  ISceneRenderAttachment* retained = document.graph().getAttachment(handle, 1);
+  EditorModuleTestAccess::refreshView(editor);
+  ISceneRenderAttachment* retained = document.graph().getAttachment(handle, 0);
   for (size_t step = 0; step < 6; ++step) {
     if (step == 1) {
       document.translate(child, Vector3(0.5f, 0.5f, 0));
@@ -50,14 +50,13 @@ runNativeSceneEdits(Illumo& host, EditorModule& editor)
     if (step == 4) {
       document.setParent(child, parent);
     }
-    requireCloseCheck(EditorModuleTestAccess::rebuildGraph(editor),
-                      "scene edit synchronizes");
+    EditorModuleTestAccess::refreshView(editor);
     const uint64_t extracted = document.graph().getStatistics().extractions;
     host.render();
     requireCloseCheck(host.context().renderer->frameError().empty(),
                       "native edit frame submits");
     requireCloseCheck(document.nodeHandle(child) == handle &&
-                        document.graph().getAttachment(handle, 1) == retained,
+                        document.graph().getAttachment(handle, 0) == retained,
                       "native edits retain graph and visual identities");
     requireCloseCheck(document.graph().getStatistics().extractions ==
                         extracted + 1,
@@ -65,16 +64,14 @@ runNativeSceneEdits(Illumo& host, EditorModule& editor)
   }
   requireCloseCheck(document.destroySubtree(parent),
                     "native deep subtree deletes");
-  requireCloseCheck(EditorModuleTestAccess::rebuildGraph(editor),
-                    "deleted bindings retire");
+  EditorModuleTestAccess::refreshView(editor);
   host.render();
   requireCloseCheck(!document.graph().isNodeValid(handle) &&
                       host.context().renderer->frameError().empty(),
                     "native deletion leaves no stale callback");
   document.clear();
   EditorModuleTestAccess::setSelectedId(editor, {});
-  requireCloseCheck(EditorModuleTestAccess::rebuildGraph(editor),
-                    "clear resynchronizes native bindings");
+  EditorModuleTestAccess::refreshView(editor);
 }
 
 static void
@@ -95,7 +92,7 @@ runNativeCloseCase(bool discard, const std::filesystem::path& scratch)
   ShowWindow(window, SW_HIDE);
   runNativeSceneEdits(host, *editor);
   EditorDocument& document = EditorModuleTestAccess::document(*editor);
-  EditorModuleTestAccess::createNode(*editor, SceneNodeKind::SolidCube);
+  EditorModuleTestAccess::createNode(*editor, EditorCommand::CreateCube);
 
   // WM_CLOSE is the title-bar close path; SC_CLOSE is the native Alt+F4 action.
   SendMessageW(window, WM_CLOSE, 0, 0);
@@ -136,10 +133,13 @@ runNativeCloseCase(bool discard, const std::filesystem::path& scratch)
   } else {
     EditorDocument reloaded;
     std::string error;
-    requireCloseCheck(!document.isDirty() &&
-                        reloaded.loadFromFile(saved.string(), &error) &&
-                        reloaded.nodeCount() == document.nodeCount(),
-                      "saved scene survives native close");
+    std::string text;
+    requireCloseCheck(
+      !document.isDirty() &&
+        IllEdNativeFiles::readText(saved.string(), &text, &error) &&
+        reloaded.loadFromText(text, &error) &&
+        reloaded.nodeCount() == document.nodeCount(),
+      "saved scene survives native close");
   }
   host.shutdown();
 }

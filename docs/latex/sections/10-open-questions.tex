@@ -67,3 +67,43 @@ decision log when resolved.
         \textbf{Deferred D-F1:} fix only when it starts to cause problems.
 \end{enumerate}
 \end{openbox}
+
+Follow-ups recorded by the content packages and scenes effort (D-E18 to
+D-E26, D-UI6; \pathref{docs/content-packages-and-scenes-design.md} \S15 and
+the plan's validation log):
+
+\begin{openbox}
+\begin{enumerate}
+  \item \textbf{Whiteouts:} a mod cannot hide or delete a base file; overlays
+        only add or replace. Overlays onto mounts other than \texttt{/app} are
+        also not supported.
+  \item \textbf{Chunked textures:} a guest texture upload stays below the
+        16\,MiB payload cap (cubemap faces about 836\,px); IllEd imports are
+        checked against it. Larger images need chunked texture creation.
+  \item \textbf{Material system:} MTL files beside an OBJ are found and parsed,
+        but materials are not bound; glTF is not read.
+  \item \textbf{Folder dialog:} \texttt{--project <dir>} is the only way to
+        open a writable project; there is no folder chooser, recent-project
+        list, or persisted mount.
+  \item \textbf{Ids inside opaque data:} duplicate and paste remap node ids in
+        core records only; ids inside namespaced components and
+        \texttt{extensions} are copied verbatim. Asset paths pasted between
+        packages are not rewritten either.
+  \item \textbf{\texttt{vfs mount} / \texttt{vfs unmount}:} the debug-tools
+        mount commands were not added; the mount table is fixed per launch.
+  \item \textbf{Drag preview in IllEd:} a file dragged from the asset browser
+        is placed at the release point on the edit plane with no preview in
+        the viewport.
+  \item \textbf{Mounted-read block speed:} 1\,MiB mounted blocks do not beat
+        64\,KiB storage reads yet (about 434 versus 440\,MB/s) because the
+        directory backend resolves and reopens the file for every block;
+        caching the open stream per \texttt{VfsFile} is the follow-up.
+  \item \textbf{Hot reload after a mount change:} guest assets are not
+        reloaded when mounts change; the scene must be reloaded.
+  \item \textbf{Prefabs and nested scene instances:} not part of format 2.0.
+  \item \textbf{IllMeshViewer packages:} there is no \texttt{--open x.ilpk};
+        a packaged scene is viewed by mounting it and running
+        \texttt{viewer\_open}. A dialog-picked scene resolves relative
+        references under \texttt{/local}, so they draw as placeholders.
+\end{enumerate}
+\end{openbox}

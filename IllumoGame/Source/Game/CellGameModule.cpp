@@ -7,10 +7,13 @@
 #include "PatternCodec.h"
 #include "RuleCatalogOverlay.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
+#include <Illumo/Rendering/AssetManager.h>
+#include <Illumo/Rendering/AssetSource.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -208,8 +211,7 @@ CellGameModule::CellGameModule(std::string initialSavePath)
   , modeSplash(nullptr)
   , configurationMenu(nullptr)
   , exitConfirmDialog(nullptr)
-  , render3dTestStatic(nullptr)
-  , render3dTestAnimated(nullptr)
+  , render3dLoadFailed(false)
   , render3dTestTime(0.0)
   , render3dCameraApplied(false)
   , clipboard()
@@ -2173,13 +2175,8 @@ CellGameModule::Exit()
   rulesetWorkshopMenu.reset();
   configurationMenu.reset();
   modeSplash.reset();
-  render3dSceneGraph.clear();
-  render3dRootNode = SceneNodeHandle{};
-  render3dOrbitNode = SceneNodeHandle{};
-  render3dChildNode = SceneNodeHandle{};
-  render3dTestChild.reset();
-  render3dTestAnimated.reset();
-  render3dTestStatic.reset();
+  render3dScene.reset();
+  render3dLoadFailed = false;
   hamburgerVisual.clearPrimitives();
   hamburgerVisual.setVisible(false);
   m_paintPaletteVisual.clearPrimitives();
@@ -3946,45 +3943,39 @@ CellGameModule::isRender3dTestEnabled() const
 void
 CellGameModule::ensureRender3dTestDrawables()
 {
-  if (ic == nullptr || ic->renderer == nullptr ||
-      (render3dTestStatic != nullptr && render3dTestAnimated != nullptr &&
-       render3dTestChild != nullptr)) {
+  if (render3dScene || render3dLoadFailed || ic == nullptr ||
+      ic->renderer == nullptr) {
     return;
   }
-
-  render3dTestStatic = std::make_unique<MeshVisual>();
-  render3dTestStatic->prepare(ic->renderer);
-  render3dTestStatic->addAxes(glm::vec3(0.0f), 3.0f);
-  render3dTestStatic->addGrid(10, 1.0f, ColorRgba{ 72, 96, 128, 255 });
-
-  render3dTestAnimated = std::make_unique<MeshVisual>();
-  render3dTestAnimated->prepare(ic->renderer);
-  render3dTestAnimated->addSolidCube(
-    glm::vec3(0.0f), glm::vec3(0.75f), ColorRgba{ 255, 180, 72, 255 });
-  render3dTestAnimated->addWireCube(
-    glm::vec3(0.0f), glm::vec3(1.0f), ColorRgba{ 224, 244, 255, 255 });
-
-  render3dTestChild = std::make_unique<MeshVisual>();
-  render3dTestChild->prepare(ic->renderer);
-  render3dTestChild->addSolidCube(
-    glm::vec3(0.0f), glm::vec3(0.35f), ColorRgba{ 100, 220, 255, 255 });
-  render3dTestChild->addWireCube(
-    glm::vec3(0.0f), glm::vec3(0.45f), ColorRgba{ 255, 255, 255, 255 });
-
-  render3dSceneGraph.clear();
-  render3dRootNode = render3dSceneGraph.createNode();
-  render3dSceneGraph.setRenderAttachment(render3dRootNode,
-                                         render3dTestStatic.get());
-
-  render3dOrbitNode = render3dSceneGraph.createNode(render3dRootNode);
-  render3dSceneGraph.setRenderAttachment(render3dOrbitNode,
-                                         render3dTestAnimated.get());
-
-  render3dChildNode = render3dSceneGraph.createNode(render3dOrbitNode);
-  render3dSceneGraph.setRenderAttachment(render3dChildNode,
-                                         render3dTestChild.get());
+  // Read through the asset source: the guest preloads the scene from the
+  // package; the native oracle finds it staged beside its executable.
+  render3dLoadFailed = true;
+  static constexpr const char* kScenePath = "Scenes/render3d-test.ilsc";
+  IAssetSource* source =
+    ic->assetManager != nullptr ? ic->assetManager->assetSource() : nullptr;
+  std::vector<unsigned char> bytes;
+  SceneDocument document;
+  std::string error;
+  if (source == nullptr ||
+      !source->read(source->canonical(kScenePath), bytes)) {
+    Logger::LogError(std::string("render3dTest: cannot read ") + kScenePath);
+    return;
+  }
+  if (!IlscCodec::parse(
+        std::string(bytes.begin(), bytes.end()), document, error)) {
+    Logger::LogError("render3dTest: " + error);
+    return;
+  }
+  std::unique_ptr<SceneInstance> instance =
+    std::make_unique<SceneInstance>(ic->assetManager, SceneInstanceOptions{});
+  instance->setRenderer(ic->renderer);
+  if (!instance->load(document, "/app", error)) {
+    Logger::LogError("render3dTest: " + error);
+    return;
+  }
+  render3dScene = std::move(instance);
+  render3dLoadFailed = false;
 }
-
 void
 CellGameModule::applyRender3dTestCamera()
 {
@@ -4012,13 +4003,9 @@ CellGameModule::restoreRender3dTestCamera()
 void
 CellGameModule::updateRender3dTestMatrices()
 {
-  if (ic == nullptr || render3dTestStatic == nullptr ||
-      render3dTestAnimated == nullptr || render3dTestChild == nullptr) {
+  if (!render3dScene) {
     return;
   }
-
-  render3dSceneGraph.setLocalTransform(render3dRootNode, Matrix4(1.0f));
-
   const float elapsed = static_cast<float>(render3dTestTime);
   Transform3D orbitTransform;
   orbitTransform.position = Vector3(std::sin(elapsed) * 4.0f,
@@ -4026,7 +4013,7 @@ CellGameModule::updateRender3dTestMatrices()
                                     std::cos(elapsed) * 4.0f);
   orbitTransform.rotation =
     Quaternion(Vector3(elapsed * 0.8f, elapsed * 1.4f, 0.0f));
-  render3dSceneGraph.setLocalTransform(render3dOrbitNode, orbitTransform);
+  render3dScene->setTransform("orbit", orbitTransform);
 
   Transform3D childTransform;
   childTransform.position = Vector3(std::sin(elapsed * 2.5f) * 2.2f,
@@ -4034,9 +4021,9 @@ CellGameModule::updateRender3dTestMatrices()
                                     std::cos(elapsed * 2.5f) * 2.2f);
   childTransform.rotation =
     Quaternion(Vector3(0.0f, elapsed * 3.0f, elapsed * 2.0f));
-  render3dSceneGraph.setLocalTransform(render3dChildNode, childTransform);
+  render3dScene->setTransform("child", childTransform);
+  render3dScene->update();
 }
-
 void
 CellGameModule::requestMainMenuReturn()
 {
@@ -4191,7 +4178,9 @@ CellGameModule::DispatchDrawables(Scene* scene)
     ensureRender3dTestDrawables();
     applyRender3dTestCamera();
     updateRender3dTestMatrices();
-    scene->AddDrawable(&render3dSceneDrawable, RenderLayerId::World);
+    if (render3dScene) {
+      scene->AddDrawable(&render3dScene->drawable(), RenderLayerId::World);
+    }
   } else {
     restoreRender3dTestCamera();
     scene->AddDrawable(this->cellContext->getCanvasView(),

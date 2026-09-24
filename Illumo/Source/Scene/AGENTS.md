@@ -10,7 +10,9 @@ This file specializes the repository `AGENTS.md` for `Illumo/Source/Scene/`.
 - Expose graph-ID-plus-slot-plus-generation handles, never node addresses.
   Zero is invalid; destruction invalidates every descendant before reuse.
 - Reject stale, foreign, and cyclic relationships without partial mutation.
-  Preserve root/sibling insertion order; reparenting appends to its destination.
+  Preserve root/sibling insertion order; reparenting appends to its destination
+  unless `setParent(node, parent, insertBefore)` names the sibling to precede
+  (D-E26), which is the only ordering call.
 - Keep all graph walks iterative. Transform setters mark one slot and lower a
   watermark; getters must not consume dirtiness required by compiled updates.
 - Names need not be unique; lookup returns first preorder match. Payloads are

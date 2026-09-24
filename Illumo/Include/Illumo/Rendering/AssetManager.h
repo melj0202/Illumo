@@ -110,6 +110,9 @@ public:
   AssetStatus getState(MeshHandle handle) const;
   TextureInfo getTextureInfo(TextureHandle handle) const;
   MeshAssetInfo getMeshInfo(MeshHandle handle) const;
+  // The byte source every load reads through (the file system natively, the
+  // guest's asset cache in a WASM package).
+  IAssetSource* assetSource() const { return source; }
 
   bool reload(TextureHandle handle);
   bool reload(ShaderHandle handle);

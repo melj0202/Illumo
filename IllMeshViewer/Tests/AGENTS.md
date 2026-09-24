@@ -10,8 +10,13 @@ skybox cubemap.
 
 ## Invariants
 
-- Tests must run headlessly with `MockBackend` and `NullRenderWindow`.- Follow the CTest single-case discovery pattern via `TestRegistry`.
+- Tests must run headlessly with `MockBackend` and `NullRenderWindow`.
+- Follow the CTest single-case discovery pattern via `TestRegistry`.
 - Verify camera math, config defaults, lighting, shadow, and motion-blur
-  EnvVars, UI layout/interaction, and module lifecycle.
+  EnvVars, the menus, the Info and Display panels docked and detached
+  (through `FakePanelSurfaces`), and module lifecycle.
+- `EnvVars` loads and saves `envvars.json` in the working directory, so module
+  fixtures give it a fresh file in the temp directory: display toggles,
+  Display panel edits and panel layouts must never leak between cases.
 - Follow `docs/contributing.md`: avoid `auto`, avoid namespaces, keep ownership
   explicit, and format with Mozilla-style `clang-format`.

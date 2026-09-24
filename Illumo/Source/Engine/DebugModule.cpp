@@ -2,6 +2,7 @@
 #define GLFW_INCLUDE_NONE
 #endif
 #include "DebugOverlayState.h"
+#include "FileTreeOverlay.h"
 #include "Platform/PixelWindow.h"
 #include "ProfilerOverlay.h"
 #include <GLFW/glfw3.h>
@@ -50,6 +51,8 @@ DebugModule::Start(IllumoContext* context)
     m_profilerOverlay = std::make_unique<ProfilerOverlay>(*m_profiler);
     m_profilerOverlay->prepare(ic->renderer, ic->window, ic->camera);
   }
+  m_fileTreeOverlay = std::make_unique<FileTreeOverlay>();
+  m_fileTreeOverlay->prepare(ic->renderer, ic->window, ic->camera);
 
   // Required for GLString / SplashText screen-space drawing
   GLString::setRenderWindow(ic->window);
@@ -187,6 +190,37 @@ DebugModule::registerRendererCommands()
       { "on", "off", "toggle" });
   }
   ic->commandRegistry->RegisterCommand(
+    "files",
+    [this](const std::vector<std::string>& args) {
+      if (args.size() > 1) {
+        ic->commandLine->logError("Usage: files [path|off]");
+        return;
+      }
+      if (!args.empty() && args[0] == "off") {
+        m_fileTreeOverlay->hide();
+        return;
+      }
+      if (ic->fileTree == nullptr) {
+        ic->commandLine->logError("No file tree is mounted in this host");
+        return;
+      }
+      const std::string root = args.empty() ? std::string("/") : args[0];
+      FileTreeStatus status;
+      // The synthesized root always lists; any other root must be a
+      // directory in the tree.
+      if (root != "/" &&
+          (!ic->fileTree->stat(root, status) || !status.directory)) {
+        ic->commandLine->logError("Not a directory: " + root);
+        return;
+      }
+      m_fileTreeOverlay->show(ic->fileTree, root);
+      ic->commandLine->logSuccess("Browsing " + root +
+                                  " (close the console to navigate)");
+    },
+    "files [path|off]",
+    "Browse the mounted file tree; arrows navigate, Escape closes",
+    { "off", "/", "/app", "/engine", "/packages", "/project" });
+  ic->commandRegistry->RegisterCommand(
     "renderer_demo",
     [this](const std::vector<std::string>& args) {
       if (args.size() > 1 ||
@@ -251,6 +285,7 @@ DebugModule::unregisterRendererCommands()
     return;
   }
   ic->commandRegistry->UnregisterCommand("renderer_demo");
+  ic->commandRegistry->UnregisterCommand("files");
   if (m_profiler != nullptr) {
     ic->commandRegistry->UnregisterCommand("profiler");
   }
@@ -347,6 +382,11 @@ DebugModule::Update(double dt)
       ic->inputManager->suppressKeyForFrame(key);
       continue;
     }
+    if (m_fileTreeOverlay != nullptr && event.modifiers == 0 &&
+        m_fileTreeOverlay->handleKey(key, action, ic->commandLine->isOpen)) {
+      ic->inputManager->suppressKeyForFrame(key);
+      continue;
+    }
 
     if (key == KeyCode::Grave && action == InputAction::Press) {
       // With the console in its own window, the console key sends it back
@@ -390,6 +430,22 @@ DebugModule::Update(double dt)
     const float scale = ic->renderer->getUiScale();
     m_profilerOverlay->update(dt,
                               static_cast<float>(dimensions[0]) / scale,
+                              static_cast<float>(dimensions[1]) / scale);
+  }
+
+  if (m_fileTreeOverlay != nullptr && m_fileTreeOverlay->visible()) {
+    // A tree that was withdrawn (the product exited) closes the browser.
+    if (ic->fileTree == nullptr) {
+      m_fileTreeOverlay->hide();
+    } else if (!ic->commandLine->isOpen) {
+      double* scroll = ic->inputManager->getMouseScrollOffset();
+      if (scroll != nullptr && m_fileTreeOverlay->scroll(*scroll)) {
+        *scroll = 0.0;
+      }
+    }
+    const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+    const float scale = ic->renderer->getUiScale();
+    m_fileTreeOverlay->update(static_cast<float>(dimensions[0]) / scale,
                               static_cast<float>(dimensions[1]) / scale);
   }
 
@@ -688,6 +744,7 @@ DebugModule::Exit()
   m_consoleCanvas.reset();
   unregisterRendererCommands();
   m_profilerOverlay.reset();
+  m_fileTreeOverlay.reset();
   if (m_profiler != nullptr) {
     m_profiler->setEnabled(false);
   }
@@ -735,6 +792,9 @@ DebugModule::DispatchDrawables(Scene* scene)
   }
   if (m_profilerOverlay != nullptr && m_profiler->enabled()) {
     scene->AddDrawable(&m_profilerOverlay->visual(), RenderLayerId::Debug);
+  }
+  if (m_fileTreeOverlay != nullptr && m_fileTreeOverlay->visible()) {
+    scene->AddDrawable(&m_fileTreeOverlay->visual(), RenderLayerId::Debug);
   }
   if (watermarkLabel && watermarkLabel->isVisible()) {
     scene->AddDrawable(watermarkLabel, RenderLayerId::Debug);

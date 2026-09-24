@@ -127,29 +127,9 @@ public:
     return module.exitConfirmDialog.get();
   }
 
-  static MeshVisual* getRender3dTestStatic(CellGameModule& module)
+  static SceneInstance* getRender3dScene(CellGameModule& module)
   {
-    return module.render3dTestStatic.get();
-  }
-
-  static MeshVisual* getRender3dTestAnimated(CellGameModule& module)
-  {
-    return module.render3dTestAnimated.get();
-  }
-
-  static MeshVisual* getRender3dTestChild(CellGameModule& module)
-  {
-    return module.render3dTestChild.get();
-  }
-
-  static SceneGraph* getRender3dSceneGraph(CellGameModule& module)
-  {
-    return &module.render3dSceneGraph;
-  }
-
-  static DrawableBase* getRender3dSceneDrawable(CellGameModule& module)
-  {
-    return &module.render3dSceneDrawable;
+    return module.render3dScene.get();
   }
 
   static SimulatorConfiguration currentConfiguration(

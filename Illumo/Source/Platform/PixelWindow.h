@@ -14,7 +14,8 @@ struct GLFWwindow;
 // GLFW_NO_API) supplies the native title bar, move/resize, close, focus, and
 // input callbacks; content is a CPU RGBA image the platform presents (Windows:
 // GDI). The main loop's glfwPollEvents pumps it. Main-thread only; destroy it
-// before GLFW terminates. Used by the detached developer console (D-UI5).
+// before GLFW terminates. Used by the detached developer console (D-UI5) and,
+// through ISurfaceWindow, by guest surface windows (detached tool panels).
 class PixelWindow
 {
 public:
@@ -62,6 +63,13 @@ public:
   std::vector<Event> takeEvents();
   bool present(const std::vector<std::uint8_t>& rgba, int width, int height);
   void focus();
+  // Client-area origin in screen coordinates.
+  void clientOrigin(int* x, int* y) const;
+  void setTitle(const std::string& title);
+  bool isFocused() const;
+  // Current cursor position in client coordinates.
+  void cursor(double* x, double* y) const;
+  void setMinimumSize(int width, int height);
 
 private:
   PixelWindow() = default;

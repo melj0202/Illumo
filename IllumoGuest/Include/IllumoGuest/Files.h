@@ -15,6 +15,9 @@ struct GuestFileResult
 class GuestFiles
 {
 public:
+  // Tasks and in-flight requests held at once.
+  static constexpr std::size_t MaximumTasks = 16;
+
   explicit GuestFiles(GuestServiceQueue& services)
     : m_services(services)
   {
@@ -31,6 +34,17 @@ public:
   std::uint64_t write(GuestFileArea area,
                       std::string path,
                       std::vector<std::byte> bytes);
+  // Single-request queries (file protocol v2). A successful result's bytes
+  // hold a GuestFileListing (list) or GuestFileStatus (stat) payload; import
+  // and pack succeed with no bytes.
+  std::uint64_t list(std::string path,
+                     std::uint32_t cursor,
+                     std::uint32_t limit = GuestFileRequest::MaximumListPage);
+  std::uint64_t stat(std::string path);
+  // Copies a Selected grant into the project at target.
+  std::uint64_t importFile(std::string grant, std::string target);
+  // Packs the project directory source into a writable Selected grant.
+  std::uint64_t pack(std::string grant, std::string source);
   void pump();
   bool take(std::uint64_t task, GuestFileResult& result);
   void cancel(std::uint64_t task);
@@ -64,7 +78,11 @@ private:
     Stage stage = Stage::Open;
     GuestFileOutcome outcome = GuestFileOutcome::Success;
     bool writing = false, cancelled = false;
+    // A single-request query (List, Stat, Import, Pack).
+    bool query = false;
+    GuestFileRequest request;
   };
+  std::uint64_t addQuery(GuestFileRequest request);
   bool enqueue(Task& task, GuestFileRequest request, std::uint32_t count = 0);
   void complete(Task& task,
                 const Pending& pending,

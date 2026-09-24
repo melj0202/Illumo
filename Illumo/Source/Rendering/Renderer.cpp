@@ -739,6 +739,61 @@ Renderer::EndFrame(std::chrono::steady_clock::time_point* presentationStart)
   }
 }
 
+bool
+Renderer::renderOffscreen(FramebufferHandle target,
+                          int width,
+                          int height,
+                          const std::vector<DrawableBase*>& drawables,
+                          const std::array<float, 4>& clearColor,
+                          float uiScale)
+{
+  if (frameContext.active || !target.isValid() || width < 1 || height < 1 ||
+      !_backend->IsFramebufferValid(target)) {
+    return false;
+  }
+  const std::string previousError = m_frameError;
+  m_frameError.clear();
+  m_frameRejectedBaseline = _backend->rejectedCommandCount();
+  clearCommandQueue();
+  // Pixel-space drawables read the frame context while it is active.
+  const FrameContext savedContext = frameContext;
+  frameContext = FrameContext{};
+  frameContext.windowDimensions = { width, height };
+  frameContext.uiScale = uiScale > 0.0f ? uiScale : 1.0f;
+  frameContext.frameSerial = savedContext.frameSerial;
+  frameContext.active = true;
+  _currentPassFbo = target;
+  _currentPassViewport = { 0, 0, width, height };
+  currentScissorState = ScissorState{};
+  scissorStateStack.clear();
+  pushFramebuffer(target);
+  pushViewport(0, 0, width, height);
+  PipelineState state;
+  state.depthTestEnabled = false;
+  state.blendEnabled = true;
+  state.faceCullingEnabled = false;
+  state.primitives = Primitives::Triangles;
+  pushPipelineState(state);
+  pushClearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
+  for (DrawableBase* drawable : drawables) {
+    if (drawable != nullptr && drawable->isVisible() &&
+        !drawable->AppendCommands(this)) {
+      reportFrameError("Drawable did not emit a complete offscreen submission");
+    }
+  }
+  pushFramebuffer(FramebufferHandle{});
+  SubmitOnly();
+  clearCommandQueue();
+  frameContext = savedContext;
+  _currentPassFbo = FramebufferHandle{};
+  const std::array<int, 2> dims =
+    _window ? _window->getWindowDimensions() : std::array<int, 2>{ 0, 0 };
+  _currentPassViewport = { 0, 0, dims[0], dims[1] };
+  const bool succeeded = m_frameError.empty();
+  m_frameError = previousError;
+  return succeeded;
+}
+
 void
 Renderer::SubmitOnly()
 {

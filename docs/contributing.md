@@ -39,8 +39,12 @@ reviewed.
   lifetime; it must not depend on Game or Rulesets.
 - IllumoGame owns only CA configuration/CLI metadata, Game, Rulesets, and its
   required game-module factory.
-- IllEd owns the world-editor document, `.ilsc` codec, toolbar, and its
+- IllEd owns the world-editor document, history, tools, toolbar, and its
   required editor-module factory. It must not depend on Game or Rulesets.
+- `Illumo::Content` owns the `.ilsc` scene format and codec (`SceneDocument`,
+  `IlscCodec`, `SceneInstance`), `illumo.json` package manifests, `.ilpk`
+  archives, and the virtual file tree. Core `Illumo` never includes
+  `<Illumo/Content/...>`, and Content never depends on Wasm or a product.
 - IllumoGame consumes supported headers through `<Illumo/...>`; OpenGL
   implementation headers and TestSupport are not production API.
 - Game and rules code do not issue raw OpenGL calls.

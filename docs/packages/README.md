@@ -10,8 +10,9 @@ documentation, not build inputs.
 | `app.md` | Illumo application definition, generic runner, and process loop |
 | `engine.md` | Illumo host, context, modules, and failure semantics |
 | `scene.md` | Persistent nodes, hierarchy, transforms, and render attachments |
+| `content.md` | Packages, `illumo.json`, `.ilpk`, the virtual file tree, `.ilsc` format 2, and `SceneInstance` |
 | `game.md` | IllumoGame canvas, simulation, editing, and persistence |
-| `illed.md` | IllEd world editor, SceneGraph documents, and `.ilsc` |
+| `illed.md` | IllEd world editor and its scene documents |
 | `rendering.md` | Public renderer boundary and private OpenGL implementation |
 | `services.md` | Generic Illumo services versus IllumoGame policy |
 | `foundation.md` | Dependency-light public utilities |

@@ -26,7 +26,10 @@ Engine must remain independent of Game and Rulesets.
   `unique_ptr`; borrowed pointers in `IllumoContext` never transfer ownership.
 - Populate and freeze `IllumoContext` during initialization. Do not grow the
   context casually; prefer explicit constructor dependencies when a genuinely
-  different consumer appears.
+  different consumer appears. `fileTree` is the one member a module publishes
+  (the WASM host, during Start) and withdraws (on Exit); readers such as
+  DebugModule's `files` browser (`FileTreeOverlay.h`) look it up at use time
+  and never cache it.
 - `IModule::Start` is a fallible `bool` contract. A false return rejects the
   module without `Update`, `DispatchDrawables`, or `Exit`. If Start throws,
   attempt Exit once to release partial startup state, then discard the module.

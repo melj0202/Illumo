@@ -1343,3 +1343,95 @@ GuiKit::drawTreeRow(GameVisual& visual,
                  13.0f,
                  isSelected ? UiTheme::textPrimary() : UiTheme::textMuted());
 }
+
+static float
+measureText(const std::string& text, float sizePt)
+{
+  if (text.empty()) {
+    return 0.0f;
+  }
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font == nullptr) {
+    return GuiKit::estimateTextWidth(text, sizePt);
+  }
+  return font->measureText(text, sizePt).width;
+}
+
+void
+GuiKit::drawTextField(GameVisual& visual,
+                      float x,
+                      float y,
+                      float w,
+                      float h,
+                      const std::string& value,
+                      float fontSize,
+                      const GuiTextEdit* edit,
+                      bool invalid,
+                      bool hovered,
+                      bool readOnly)
+{
+  const bool focused = edit != nullptr && edit->active();
+  const ColorRgba background = readOnly  ? ColorRgba{ 14, 20, 30, 255 }
+                               : focused ? ColorRgba{ 10, 16, 26, 255 }
+                                         : ColorRgba{ 18, 26, 40, 255 };
+  visual.addFilledRect(x, y, w, h, background);
+  if (!readOnly) {
+    const ColorRgba border = invalid   ? ColorRgba{ 240, 70, 80, 255 }
+                             : focused ? ColorRgba{ 66, 214, 210, 255 }
+                             : hovered ? ColorRgba{ 66, 120, 180, 255 }
+                                       : ColorRgba{ 44, 62, 86, 255 };
+    visual.addOutlineRect(x, y, w, h, border, focused ? 1.5f : 1.0f);
+  }
+  const float padding = 4.0f;
+  const float textY = y + std::max(0.0f, std::round((h - fontSize) * 0.5f));
+  const float room = std::max(1.0f, w - padding * 2.0f);
+  const ColorRgba textColor =
+    readOnly ? UiTheme::textMuted() : UiTheme::textPrimary();
+  if (!focused) {
+    std::string shown = value;
+    if (measureText(shown, fontSize) > room) {
+      while (!shown.empty() && measureText(shown + "...", fontSize) > room) {
+        shown.pop_back();
+        // Never leave half of a multi-byte sequence.
+        while (!shown.empty() &&
+               (static_cast<unsigned char>(shown.back()) & 0xc0u) == 0x80u) {
+          shown.pop_back();
+        }
+        if (!shown.empty() &&
+            static_cast<unsigned char>(shown.back()) >= 0xc0u) {
+          shown.pop_back();
+        }
+      }
+      shown += "...";
+    }
+    visual.addText(shown, x + padding, textY, fontSize, textColor);
+    return;
+  }
+  const std::string& text = edit->text();
+  // Scroll so the caret stays inside the field.
+  const float caretX = measureText(text.substr(0, edit->caret()), fontSize);
+  const float offset = std::max(0.0f, caretX - room + 2.0f);
+  const float originX = x + padding - offset;
+  if (edit->hasSelection()) {
+    const float start =
+      measureText(text.substr(0, edit->selectionStart()), fontSize);
+    const float end =
+      measureText(text.substr(0, edit->selectionEnd()), fontSize);
+    const float left = std::max(x + 1.0f, originX + start);
+    const float right = std::min(x + w - 1.0f, originX + end);
+    if (right > left) {
+      visual.addFilledRect(
+        left, y + 2.0f, right - left, h - 4.0f, ColorRgba{ 40, 90, 140, 255 });
+    }
+  }
+  visual.addText(text, originX, textY, fontSize, textColor);
+  if (edit->caretVisible()) {
+    const float caretScreenX = originX + caretX;
+    visual.addLine(caretScreenX,
+                   y + 3.0f,
+                   caretScreenX,
+                   y + h - 3.0f,
+                   ColorRgba{ 230, 240, 250, 255 },
+                   1.0f);
+  }
+}

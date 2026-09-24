@@ -1,18 +1,15 @@
 #include "EditorSceneGraphView.h"
+#include "EditorShortcuts.h"
 #include "EditorToolbar.h"
 #include "EditorUiAtlas.h"
 
-#include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiToolStyle.h>
 #include <Illumo/Rendering/IRenderWindow.h>
-#include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/InputManager.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <queue>
-#include <sstream>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -27,22 +24,15 @@ EditorSceneGraphView::EditorSceneGraphView(IRenderWindow* window,
   , m_dragStartX(0.0f)
   , m_dragStartY(0.0f)
   , m_fontSize(EditorToolbar::kDefaultFontSize)
-  , m_width(kDefaultWidth)
+  , m_width(0.0f)
   , m_rowHeight(kDefaultRowHeight)
-  , m_barHeight(EditorToolbar::kDefaultBarHeight)
-  , m_statusHeight(EditorToolbar::kDefaultStatusHeight)
   , m_x(0.0f)
-  , m_y(EditorToolbar::kDefaultBarHeight)
-  , m_height(670.0f)
-  , m_headerY(EditorToolbar::kDefaultBarHeight)
-  , m_treeStartY(EditorToolbar::kDefaultBarHeight + 30.0f)
+  , m_y(0.0f)
+  , m_height(0.0f)
+  , m_treeStartY(0.0f)
   , m_animTime(0.0f)
   , m_hoverRow(-1)
   , m_hoverRootZone(false)
-  , m_collapsed(false)
-  , m_hoverCollapse(false)
-  , m_collapseAnim(0.0f)
-  , m_collapsedWidth(24.0f)
   , m_mouseX(0.0f)
   , m_mouseY(0.0f)
 {
@@ -51,20 +41,11 @@ EditorSceneGraphView::EditorSceneGraphView(IRenderWindow* window,
   m_visual.setWindow(window);
   m_visual.setRenderer(renderer);
   m_visual.prepare(renderer);
+  // Until the module places it: the top of a left dock column.
+  m_placement.area = {
+    0.0f, GuiToolStyle::kMenuHeight + GuiToolStyle::kTitleHeight, 250.0f, 400.0f
+  };
   updateLayout();
-}
-
-void
-EditorSceneGraphView::setCollapsed(bool collapsed)
-{
-  if (m_collapsed != collapsed) {
-    m_collapsed = collapsed;
-    m_isDragging = false;
-    m_draggedNodeId.clear();
-    m_dropTargetNodeId.clear();
-    m_dropValid = false;
-    updateLayout();
-  }
 }
 
 void
@@ -78,10 +59,18 @@ EditorSceneGraphView::setFontSize(float sizePt)
 }
 
 void
-EditorSceneGraphView::setToolbarDimensions(float barHeight, float statusHeight)
+EditorSceneGraphView::setPlacement(const GuiPanelPlacement& placement)
 {
-  m_barHeight = barHeight;
-  m_statusHeight = statusHeight;
+  if (placement.surface != m_placement.surface ||
+      (m_placement.visible && !placement.visible)) {
+    // A drag or menu never follows the panel into another window.
+    m_isDragging = false;
+    m_draggedNodeId.clear();
+    m_dropTargetNodeId.clear();
+    m_dropValid = false;
+    m_menuOpen = false;
+  }
+  m_placement = placement;
   updateLayout();
 }
 
@@ -94,27 +83,53 @@ EditorSceneGraphView::setAtlas(TextureHandle atlas)
 void
 EditorSceneGraphView::updateLayout()
 {
-  const float virtualHeight =
-    GuiPanelLayout::viewport(m_window, m_renderer).virtualHeight;
-
   const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
-  m_collapsedWidth = std::max(24.0f, std::round(24.0f * fontScale));
-  const float expandedW = std::max(220.0f, std::round(220.0f * fontScale));
-  m_width =
-    std::round(expandedW + (m_collapsedWidth - expandedW) * m_collapseAnim);
-  m_rowHeight = std::max(22.0f, std::round(22.0f * fontScale));
-
-  m_x = 0.0f;
-  m_y = m_barHeight;
-  m_height = std::max(80.0f, virtualHeight - m_barHeight - m_statusHeight);
-  m_headerY = m_y;
-  m_treeStartY = m_y + std::max(30.0f, std::round(30.0f * fontScale));
+  m_rowHeight = std::max(20.0f, std::round(20.0f * fontScale));
+  m_x = m_placement.area.x;
+  m_y = m_placement.area.y;
+  m_width = std::max(0.0f, m_placement.area.w);
+  m_height = std::max(0.0f, m_placement.area.h);
+  m_treeStartY = m_y + 4.0f;
 }
 
 bool
 EditorSceneGraphView::containsScreenPoint(float x, float y) const
 {
-  return x >= m_x && x <= m_x + m_width && y >= m_y && y <= m_y + m_height;
+  if (!m_placement.visible) {
+    return false;
+  }
+  return (x >= m_x && x <= m_x + m_width && y >= m_y && y <= m_y + m_height) ||
+         menuContains(x, y);
+}
+
+static EditorCommand
+iconFor(const SceneNode& node)
+{
+  if (node.components.empty()) {
+    return EditorCommand::CreateEmpty;
+  }
+  const ScenePrimitive* primitive =
+    std::get_if<ScenePrimitive>(&node.components.front().value);
+  if (primitive == nullptr) {
+    return EditorCommand::CreateEmpty;
+  }
+  switch (primitive->shape) {
+    case ScenePrimitiveShape::Rect:
+      return EditorCommand::CreateRect;
+    case ScenePrimitiveShape::Ellipse:
+      return EditorCommand::CreateEllipse;
+    case ScenePrimitiveShape::Triangle:
+      return EditorCommand::CreateTriangle;
+    case ScenePrimitiveShape::Cube:
+    case ScenePrimitiveShape::WireCube:
+      return EditorCommand::CreateCube;
+    case ScenePrimitiveShape::Pyramid:
+      return EditorCommand::CreatePyramid;
+    case ScenePrimitiveShape::Sphere:
+    case ScenePrimitiveShape::WireSphere:
+      return EditorCommand::CreateSphere;
+  }
+  return EditorCommand::CreateEmpty;
 }
 
 void
@@ -125,40 +140,130 @@ EditorSceneGraphView::rebuildTreeRows(const EditorDocument* document)
     return;
   }
   const SceneGraph& graph = document->graph();
-  float currentY = m_treeStartY;
+  float currentY = m_treeStartY - m_scroll;
   std::vector<SceneNodeHandle> ancestors;
+  // Rows deeper than a folded row are skipped until the walk leaves it.
+  int foldedDepth = -1;
   for (SceneNodeHandle handle = graph.firstNode(); !handle.isNull();
        handle = graph.nextNode(handle)) {
-    uint64_t index = 0;
-    if (!graph.getUserData(handle, &index)) {
-      continue;
-    }
-    const IlscNode* node = document->nodeAt(static_cast<size_t>(index));
-    if (node == nullptr) {
-      continue;
-    }
     const SceneNodeHandle parent = graph.getParent(handle);
     while (!ancestors.empty() && ancestors.back() != parent) {
       ancestors.pop_back();
     }
     const int depth = static_cast<int>(ancestors.size());
     ancestors.push_back(handle);
+    if (foldedDepth >= 0) {
+      if (depth > foldedDepth) {
+        continue;
+      }
+      foldedDepth = -1;
+    }
+    const SceneNode* node =
+      document->findNode(std::string(graph.getName(handle)));
+    if (node == nullptr) {
+      continue;
+    }
     TreeRow row;
     row.id = node->id;
     row.name = node->name.empty() ? ("Node #" + node->id) : node->name;
-    row.kind = node->kind;
+    row.icon = iconFor(*node);
     row.depth = depth;
     row.y = currentY;
     row.isLastChild = graph.getNextSibling(handle).isNull();
+    row.hasChildren = graph.getChildCount(handle) > 0;
+    row.folded = row.hasChildren && isFolded(row.id);
+    row.visible = node->visible;
+    if (row.folded) {
+      foldedDepth = depth;
+    }
     m_rows.push_back(row);
     currentY += m_rowHeight;
   }
 }
 
+float
+EditorSceneGraphView::treeBottom() const
+{
+  return m_y + m_height - 4.0f;
+}
+
+void
+EditorSceneGraphView::clampScroll()
+{
+  // Two spare rows keep a root drop zone below the last row.
+  const float content = static_cast<float>(m_rows.size() + 2) * m_rowHeight;
+  const float window = std::max(0.0f, treeBottom() - m_treeStartY);
+  const float clamped =
+    std::clamp(m_scroll, 0.0f, std::max(0.0f, content - window));
+  const float shift = m_scroll - clamped;
+  if (shift != 0.0f) {
+    for (TreeRow& row : m_rows) {
+      row.y += shift;
+    }
+    m_scroll = clamped;
+  }
+}
+
+void
+EditorSceneGraphView::revealPrimary(const EditorDocument* document,
+                                    const EditorSelection* selection)
+{
+  const std::string primary =
+    selection != nullptr ? selection->primary() : std::string();
+  if (primary == m_revealedPrimary) {
+    return;
+  }
+  m_revealedPrimary = primary;
+  if (primary.empty() || document == nullptr) {
+    return;
+  }
+  bool unfolded = false;
+  std::string ancestor = document->scene().parentOf(primary);
+  while (!ancestor.empty()) {
+    unfolded = m_folded.erase(ancestor) > 0 || unfolded;
+    ancestor = document->scene().parentOf(ancestor);
+  }
+  if (unfolded) {
+    rebuildTreeRows(document);
+  }
+  for (const TreeRow& row : m_rows) {
+    if (row.id != primary) {
+      continue;
+    }
+    if (row.y < m_treeStartY) {
+      m_scroll -= m_treeStartY - row.y;
+    } else if (row.y + m_rowHeight > treeBottom()) {
+      m_scroll += row.y + m_rowHeight - treeBottom();
+    }
+    rebuildTreeRows(document);
+    break;
+  }
+}
+
+EditorSceneGraphView::RowGeometry
+EditorSceneGraphView::rowGeometry(const TreeRow& row) const
+{
+  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
+  const float indent = std::max(14.0f, std::round(14.0f * fontScale));
+  RowGeometry geometry;
+  geometry.x = m_x + 2.0f;
+  geometry.w = m_width - 4.0f - GuiToolStyle::kScrollbar;
+  geometry.y = row.y;
+  geometry.h = m_rowHeight - 1.0f;
+  geometry.iconSize = std::max(14.0f, std::round(14.0f * fontScale));
+  geometry.foldX =
+    geometry.x + 4.0f * fontScale + static_cast<float>(row.depth) * indent;
+  geometry.contentX = geometry.foldX + 12.0f * fontScale;
+  geometry.eyeX =
+    geometry.x + geometry.w - geometry.iconSize - 4.0f * fontScale;
+  return geometry;
+}
+
 int
 EditorSceneGraphView::hitTestRow(float x, float y) const
 {
-  if (m_collapsed || x < m_x || x > m_x + m_width) {
+  if (!m_placement.visible || x < m_x || x > m_x + m_width ||
+      y < m_treeStartY || y >= treeBottom()) {
     return -1;
   }
   for (size_t i = 0; i < m_rows.size(); ++i) {
@@ -172,44 +277,238 @@ EditorSceneGraphView::hitTestRow(float x, float y) const
 bool
 EditorSceneGraphView::hitTestRootZone(float x, float y) const
 {
-  if (m_collapsed || x < m_x || x > m_x + m_width) {
+  if (!m_placement.visible || x < m_x || x > m_x + m_width) {
     return false;
   }
   const float treeEndY =
-    m_treeStartY + static_cast<float>(m_rows.size()) * m_rowHeight;
-  return y >= treeEndY && y <= m_y + m_height;
+    m_rows.empty() ? m_treeStartY : m_rows.back().y + m_rowHeight;
+  return y >= std::max(treeEndY, m_treeStartY) && y <= m_y + m_height;
+}
+
+bool
+EditorSceneGraphView::foldCenterForTesting(size_t index,
+                                           float* x,
+                                           float* y) const
+{
+  if (index >= m_rows.size() || !m_rows[index].hasChildren) {
+    return false;
+  }
+  const RowGeometry geometry = rowGeometry(m_rows[index]);
+  *x = geometry.foldX + 5.0f;
+  *y = geometry.y + geometry.h * 0.5f;
+  return true;
+}
+
+bool
+EditorSceneGraphView::eyeCenterForTesting(size_t index,
+                                          float* x,
+                                          float* y) const
+{
+  if (index >= m_rows.size()) {
+    return false;
+  }
+  const RowGeometry geometry = rowGeometry(m_rows[index]);
+  *x = geometry.eyeX + geometry.iconSize * 0.5f;
+  *y = geometry.y + geometry.h * 0.5f;
+  return true;
+}
+
+struct SceneGraphMenuEntry
+{
+  const char* label;
+  EditorCommand command;
+};
+
+static const std::array<SceneGraphMenuEntry, 10> kMenuEntries = { {
+  { "Rename", EditorCommand::Rename },
+  { "Duplicate", EditorCommand::Duplicate },
+  { "Copy", EditorCommand::Copy },
+  { "Cut", EditorCommand::Cut },
+  { "Paste", EditorCommand::Paste },
+  { "Add Child", EditorCommand::CreateChild },
+  { "Show/Hide", EditorCommand::ToggleVisible },
+  { "Enable/Disable", EditorCommand::ToggleEnabled },
+  { "Unparent", EditorCommand::UnparentNode },
+  { "Delete", EditorCommand::DeleteNode },
+} };
+
+float
+EditorSceneGraphView::menuWidth() const
+{
+  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
+  return std::min(std::max(160.0f, std::round(170.0f * fontScale)),
+                  std::max(40.0f, m_width - 8.0f));
+}
+
+float
+EditorSceneGraphView::menuHeight() const
+{
+  return static_cast<float>(kMenuEntries.size()) * m_rowHeight + 6.0f;
+}
+
+bool
+EditorSceneGraphView::menuContains(float x, float y) const
+{
+  return m_menuOpen && x >= m_menuX && x <= m_menuX + menuWidth() &&
+         y >= m_menuY && y <= m_menuY + menuHeight();
+}
+
+int
+EditorSceneGraphView::menuItemAt(float x, float y) const
+{
+  if (!menuContains(x, y)) {
+    return -1;
+  }
+  const int index =
+    static_cast<int>(std::floor((y - m_menuY - 3.0f) / m_rowHeight));
+  return index >= 0 && index < static_cast<int>(kMenuEntries.size()) ? index
+                                                                     : -1;
+}
+
+bool
+EditorSceneGraphView::menuItemCenterForTesting(EditorCommand command,
+                                               float* x,
+                                               float* y) const
+{
+  for (size_t index = 0; index < kMenuEntries.size(); ++index) {
+    if (m_menuOpen && kMenuEntries[index].command == command) {
+      *x = m_menuX + menuWidth() * 0.5f;
+      *y = m_menuY + 3.0f + (static_cast<float>(index) + 0.5f) * m_rowHeight;
+      return true;
+    }
+  }
+  return false;
+}
+
+void
+EditorSceneGraphView::openMenu(float x,
+                               float y,
+                               EditorDocument* document,
+                               EditorSelection* selection)
+{
+  const int rowIndex = hitTestRow(x, y);
+  m_menuTarget.clear();
+  if (rowIndex >= 0) {
+    m_menuTarget = m_rows[static_cast<size_t>(rowIndex)].id;
+    if (selection != nullptr && !selection->contains(m_menuTarget)) {
+      selection->set(m_menuTarget);
+    }
+  } else if (selection != nullptr && hitTestRootZone(x, y)) {
+    selection->clear();
+  }
+  (void)document;
+  m_menuOpen = true;
+  m_menuHover = -1;
+  // The menu stays inside the panel, which may be its own window.
+  m_menuX = std::clamp(x, m_x + 2.0f, m_x + m_width - menuWidth() - 2.0f);
+  m_menuY = std::max(m_y, std::min(y, m_y + m_height - menuHeight()));
+}
+
+void
+EditorSceneGraphView::openContextMenuForTesting(float x,
+                                                float y,
+                                                EditorDocument* document,
+                                                EditorSelection* selection)
+{
+  updateLayout();
+  rebuildTreeRows(document);
+  openMenu(x, y, document, selection);
+}
+
+EditorCommand
+EditorSceneGraphView::takeCommand(std::string* targetId)
+{
+  const EditorCommand command = m_pendingCommand;
+  if (targetId != nullptr) {
+    *targetId = m_pendingTarget;
+  }
+  m_pendingCommand = EditorCommand::None;
+  m_pendingTarget.clear();
+  return command;
+}
+
+bool
+EditorSceneGraphView::handlePress(float x,
+                                  float y,
+                                  EditorDocument* document,
+                                  EditorSelection* selection,
+                                  bool toggle,
+                                  bool armDrag)
+{
+  if (m_menuOpen) {
+    const int item = menuItemAt(x, y);
+    if (item >= 0) {
+      m_pendingCommand = kMenuEntries[static_cast<size_t>(item)].command;
+      m_pendingTarget = m_menuTarget;
+    }
+    m_menuOpen = false;
+    return false;
+  }
+  const int rowIndex = hitTestRow(x, y);
+  if (rowIndex >= 0) {
+    const TreeRow& row = m_rows[static_cast<size_t>(rowIndex)];
+    const RowGeometry geometry = rowGeometry(row);
+    if (row.hasChildren && x >= geometry.foldX - 2.0f &&
+        x < geometry.contentX - 1.0f) {
+      if (!m_folded.erase(row.id)) {
+        m_folded.insert(row.id);
+      }
+      rebuildTreeRows(document);
+      return false;
+    }
+    if (x >= geometry.eyeX - 2.0f &&
+        x <= geometry.eyeX + geometry.iconSize + 2.0f) {
+      return document != nullptr && document->setVisible(row.id, !row.visible);
+    }
+    const std::string clickedId = row.id;
+    if (selection != nullptr) {
+      if (toggle) {
+        selection->toggle(clickedId);
+      } else if (selection->contains(clickedId)) {
+        selection->add(clickedId);
+      } else {
+        selection->set(clickedId);
+      }
+    }
+    // A second click on the same row soon after renames it.
+    if (!toggle && clickedId == m_lastClickId &&
+        m_animTime - m_lastClickTime < 0.35f) {
+      m_pendingCommand = EditorCommand::Rename;
+      m_pendingTarget = clickedId;
+      m_lastClickId.clear();
+    } else {
+      m_lastClickId = clickedId;
+      m_lastClickTime = m_animTime;
+    }
+    if (armDrag) {
+      m_draggedNodeId = clickedId;
+      m_dragStartX = x;
+      m_dragStartY = y;
+      m_isDragging = false;
+    }
+    return false;
+  }
+  if (hitTestRootZone(x, y)) {
+    if (selection != nullptr) {
+      selection->clear();
+    }
+    m_draggedNodeId.clear();
+    m_isDragging = false;
+  }
+  return false;
 }
 
 void
 EditorSceneGraphView::clickAtForTesting(float x,
                                         float y,
                                         EditorDocument* document,
-                                        std::string* selectedId)
+                                        EditorSelection* selection,
+                                        bool toggle)
 {
   updateLayout();
-  if (m_collapsed) {
-    if (containsScreenPoint(x, y)) {
-      setCollapsed(false);
-    }
-    return;
-  }
-
-  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
-  const float btnSize = std::max(18.0f, std::round(18.0f * fontScale));
-  const float collapseBtnX = m_x + m_width - btnSize - 6.0f * fontScale;
-  const float collapseBtnY = m_headerY + 4.0f * fontScale;
-  if (x >= collapseBtnX && x <= collapseBtnX + btnSize && y >= collapseBtnY &&
-      y <= collapseBtnY + btnSize) {
-    setCollapsed(true);
-    return;
-  }
-
   rebuildTreeRows(document);
-  const int rowIdx = hitTestRow(x, y);
-  if (rowIdx >= 0 && static_cast<size_t>(rowIdx) < m_rows.size() &&
-      selectedId) {
-    *selectedId = m_rows[rowIdx].id;
-  }
+  clampScroll();
+  handlePress(x, y, document, selection, toggle, false);
 }
 
 void
@@ -223,131 +522,170 @@ EditorSceneGraphView::dragAndDropForTesting(const std::string& sourceId,
 }
 
 bool
+EditorSceneGraphView::dropForTesting(const std::string& sourceId,
+                                     const std::string& targetId,
+                                     int zone,
+                                     EditorDocument* document)
+{
+  return applyDrop(sourceId, targetId, zone, document);
+}
+
+// The parent and insert-before sibling a drop lands on: into the target, or
+// beside it (zone -1 before, 1 after).
+static bool
+dropPlacement(const EditorDocument& document,
+              const std::string& sourceId,
+              const std::string& targetId,
+              int zone,
+              std::string* parentId,
+              std::string* insertBefore)
+{
+  if (zone == 0) {
+    *parentId = targetId;
+    insertBefore->clear();
+    return document.canSetParent(sourceId, targetId);
+  }
+  const SceneNode* target = document.findNode(targetId);
+  if (target == nullptr || targetId == sourceId) {
+    return false;
+  }
+  *parentId = document.scene().parentOf(targetId);
+  *insertBefore =
+    zone < 0 ? targetId : document.scene().nextSiblingId(targetId);
+  if (*insertBefore == sourceId) {
+    *insertBefore = document.scene().nextSiblingId(sourceId);
+  }
+  return document.canSetParent(sourceId, *parentId);
+}
+
+bool
+EditorSceneGraphView::applyDrop(const std::string& sourceId,
+                                const std::string& targetId,
+                                int zone,
+                                EditorDocument* document)
+{
+  std::string parentId;
+  std::string insertBefore;
+  if (document == nullptr ||
+      !dropPlacement(
+        *document, sourceId, targetId, zone, &parentId, &insertBefore)) {
+    return false;
+  }
+  return document->setParent(sourceId, parentId, insertBefore);
+}
+
+bool
 EditorSceneGraphView::update(InputManager* inputManager,
                              EditorDocument* document,
-                             std::string* selectedId,
+                             EditorSelection* selection,
                              float dt)
 {
   m_animTime += std::max(0.0f, dt);
-  const float targetCollapse = m_collapsed ? 1.0f : 0.0f;
-  m_collapseAnim = GuiEasing::approachLinear(
-    m_collapseAnim, targetCollapse, 18.0f, std::max(0.0f, dt), 0.001f);
   updateLayout();
-  if (m_collapseAnim < 0.99f) {
-    rebuildTreeRows(document);
-  } else {
-    m_rows.clear();
-  }
 
   m_consumedPress = false;
   bool hierarchyChanged = false;
 
-  // Track mouse coordinates
-  m_pointer.sample(m_window,
-                   inputManager,
-                   GuiPanelLayout::viewport(m_window, m_renderer).layoutScale);
-  if (m_window != nullptr) {
-    m_mouseX = m_pointer.x();
-    m_mouseY = m_pointer.y();
-  }
-
+  m_pointer.sample(m_placement, m_window, m_renderer, inputManager);
+  m_mouseX = m_pointer.x();
+  m_mouseY = m_pointer.y();
   const bool inPanel = containsScreenPoint(m_mouseX, m_mouseY);
-  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
-  const float btnSize = std::max(18.0f, std::round(18.0f * fontScale));
-  const float collapseBtnX = m_x + m_width - btnSize - 6.0f * fontScale;
-  const float collapseBtnY = m_headerY + 4.0f * fontScale;
 
-  m_hoverCollapse = false;
-  if (m_collapsed) {
-    m_hoverCollapse = inPanel;
-    m_hoverRow = -1;
-    m_hoverRootZone = false;
-  } else {
-    m_hoverCollapse =
-      (m_mouseX >= collapseBtnX && m_mouseX <= collapseBtnX + btnSize &&
-       m_mouseY >= collapseBtnY && m_mouseY <= collapseBtnY + btnSize);
-    m_hoverRow = inPanel ? hitTestRow(m_mouseX, m_mouseY) : -1;
-    m_hoverRootZone = inPanel ? hitTestRootZone(m_mouseX, m_mouseY) : false;
+  if (inPanel) {
+    const float wheel = m_pointer.takeWheel();
+    if (wheel != 0.0f) {
+      m_scroll -= wheel * m_rowHeight * 3.0f;
+    }
   }
+  if (m_isDragging) {
+    // Auto-scroll while a dragged row nears the window's edges.
+    if (m_mouseY < m_treeStartY + m_rowHeight) {
+      m_scroll -= 480.0f * std::max(0.0f, dt);
+    } else if (m_mouseY > treeBottom() - m_rowHeight) {
+      m_scroll += 480.0f * std::max(0.0f, dt);
+    }
+  }
+  if (m_placement.visible) {
+    revealPrimary(document, selection);
+    rebuildTreeRows(document);
+    clampScroll();
+  } else {
+    m_rows.clear();
+  }
+
+  m_menuHover = menuItemAt(m_mouseX, m_mouseY);
+  const bool overPanel = inPanel && !menuContains(m_mouseX, m_mouseY);
+  m_hoverRow = overPanel ? hitTestRow(m_mouseX, m_mouseY) : -1;
+  m_hoverRootZone = overPanel ? hitTestRootZone(m_mouseX, m_mouseY) : false;
 
   if (inputManager != nullptr) {
     const bool mouseDown = m_pointer.pressed();
+    if (m_pointer.rightClicked() && inPanel && !m_isDragging) {
+      m_consumedPress = true;
+      openMenu(m_mouseX, m_mouseY, document, selection);
+    }
 
-    // Mouse Press event
     if (m_pointer.clicked()) {
-      if (m_collapsed) {
-        if (inPanel) {
-          m_consumedPress = true;
-          setCollapsed(false);
-        }
+      if (m_menuOpen) {
+        // Any click closes the menu; it never reaches the viewport.
+        m_consumedPress = true;
+        handlePress(m_mouseX, m_mouseY, document, selection, false, false);
       } else if (inPanel) {
         m_consumedPress = true;
-        if (m_hoverCollapse) {
-          setCollapsed(true);
-        } else if (m_hoverRow >= 0 &&
-                   static_cast<size_t>(m_hoverRow) < m_rows.size()) {
-          const std::string clickedId = m_rows[m_hoverRow].id;
-          if (selectedId != nullptr) {
-            *selectedId = clickedId;
-          }
-          // Arm potential drag
-          m_draggedNodeId = clickedId;
-          m_dragStartX = m_mouseX;
-          m_dragStartY = m_mouseY;
-          m_isDragging = false;
-        } else if (m_hoverRootZone) {
-          // Clicking empty space clears selection
-          if (selectedId != nullptr) {
-            selectedId->clear();
-          }
-          m_draggedNodeId.clear();
-          m_isDragging = false;
-        }
+        hierarchyChanged = handlePress(m_mouseX,
+                                       m_mouseY,
+                                       document,
+                                       selection,
+                                       inputManager->isControlPressed() ||
+                                         inputManager->isShiftPressed(),
+                                       true) ||
+                           hierarchyChanged;
       }
     }
 
-    // Drag in progress
     if (mouseDown && !m_draggedNodeId.empty()) {
       const float dx = m_mouseX - m_dragStartX;
       const float dy = m_mouseY - m_dragStartY;
-      const float distSq = dx * dx + dy * dy;
-      if (distSq > 16.0f) { // 4px threshold
+      if (dx * dx + dy * dy > 16.0f) { // 4px threshold
         m_isDragging = true;
       }
-
       if (m_isDragging) {
         m_consumedPress = true;
-        if (inPanel) {
-          if (m_hoverRow >= 0 &&
-              static_cast<size_t>(m_hoverRow) < m_rows.size()) {
-            m_dropTargetNodeId = m_rows[m_hoverRow].id;
-            m_dropValid =
-              (document != nullptr) &&
-              document->canSetParent(m_draggedNodeId, m_dropTargetNodeId);
-          } else if (m_hoverRootZone) {
-            m_dropTargetNodeId = ""; // reparent to root
-            m_dropValid = (document != nullptr) &&
-                          document->canSetParent(m_draggedNodeId, "");
-          } else {
-            m_dropTargetNodeId.clear();
-            m_dropValid = false;
-          }
-        } else {
-          m_dropTargetNodeId.clear();
-          m_dropValid = false;
+        m_dropTargetNodeId.clear();
+        m_dropValid = false;
+        m_dropZone = 0;
+        if (inPanel && m_hoverRow >= 0) {
+          const TreeRow& row = m_rows[static_cast<size_t>(m_hoverRow)];
+          const float within = (m_mouseY - row.y) / m_rowHeight;
+          m_dropZone = within < 0.3f ? -1 : (within > 0.7f ? 1 : 0);
+          m_dropTargetNodeId = row.id;
+          std::string parentId;
+          std::string insertBefore;
+          m_dropValid = document != nullptr && dropPlacement(*document,
+                                                             m_draggedNodeId,
+                                                             row.id,
+                                                             m_dropZone,
+                                                             &parentId,
+                                                             &insertBefore);
+        } else if (inPanel && m_hoverRootZone) {
+          m_dropValid =
+            document != nullptr && document->canSetParent(m_draggedNodeId, "");
         }
       }
     }
 
-    // Mouse Release event
     if (m_pointer.released()) {
-      if (m_isDragging && !m_draggedNodeId.empty()) {
-        if (inPanel && m_dropValid && document != nullptr) {
-          if (document->setParent(m_draggedNodeId, m_dropTargetNodeId)) {
-            hierarchyChanged = true;
-            if (selectedId != nullptr) {
-              *selectedId = m_draggedNodeId;
-            }
+      if (m_isDragging && !m_draggedNodeId.empty() && inPanel && m_dropValid &&
+          document != nullptr) {
+        const bool dropped =
+          m_dropTargetNodeId.empty()
+            ? document->setParent(m_draggedNodeId, "")
+            : applyDrop(
+                m_draggedNodeId, m_dropTargetNodeId, m_dropZone, document);
+        if (dropped) {
+          hierarchyChanged = true;
+          if (selection != nullptr && !selection->contains(m_draggedNodeId)) {
+            selection->set(m_draggedNodeId);
           }
         }
       }
@@ -355,409 +693,294 @@ EditorSceneGraphView::update(InputManager* inputManager,
       m_draggedNodeId.clear();
       m_dropTargetNodeId.clear();
       m_dropValid = false;
+      m_dropZone = 0;
     }
   }
 
-  const std::string activeSel = selectedId ? *selectedId : std::string{};
-  rebuildVisual(document, activeSel);
+  if (hierarchyChanged && m_placement.visible) {
+    rebuildTreeRows(document);
+    clampScroll();
+  }
+  rebuildVisual(document, selection);
   return hierarchyChanged;
+}
+
+// A small eye drawn with lines; struck through when the node is hidden.
+static void
+drawEye(GameVisual& visual,
+        float x,
+        float centreY,
+        float size,
+        bool open,
+        ColorRgba color)
+{
+  const float height = size * 0.55f;
+  const float top = centreY - height * 0.5f;
+  visual.addLine(x, centreY, x + size * 0.5f, top, color, 1.0f);
+  visual.addLine(x + size * 0.5f, top, x + size, centreY, color, 1.0f);
+  visual.addLine(x + size, centreY, x + size * 0.5f, top + height, color, 1.0f);
+  visual.addLine(x + size * 0.5f, top + height, x, centreY, color, 1.0f);
+  if (open) {
+    visual.addFilledRect(
+      x + size * 0.5f - 2.0f, centreY - 2.0f, 4.0f, 4.0f, color);
+  } else {
+    visual.addLine(
+      x + 1.0f, top + height + 1.0f, x + size - 1.0f, top - 1.0f, color, 1.0f);
+  }
 }
 
 void
 EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
-                                    const std::string& selectedId)
+                                    const EditorSelection* selection)
 {
   m_visual.clearPrimitives();
   updateLayout();
+  if (!m_placement.visible || m_width <= 0.0f || m_height <= 0.0f) {
+    return;
+  }
+  m_visual.setPixelClipRect(Rect2{ m_x, m_y, m_width, m_height });
 
   const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
-  const float headerFontSize = std::max(9.0f, std::round(11.0f * fontScale));
-  const float pillFontSize = std::max(8.0f, std::round(10.0f * fontScale));
-  const float rowFontSize = std::max(10.0f, std::round(12.0f * fontScale));
+  const float smallFont = std::max(9.0f, std::round(11.0f * fontScale));
+  const float rowFont = std::max(10.0f, std::round(13.0f * fontScale));
   const float iconSize = std::max(14.0f, std::round(14.0f * fontScale));
   const float indent = std::max(14.0f, std::round(14.0f * fontScale));
 
-  const ColorRgba panelBg{ 13, 19, 29, 255 };
-  const ColorRgba panelBorder{ 40, 56, 78, 255 };
-  const ColorRgba text = UiTheme::textPrimary();
-  const ColorRgba muted = UiTheme::textMuted();
-  const ColorRgba cyanAccent{ 66, 214, 210, 255 };
-  const ColorRgba treeLineColor{ 45, 65, 90, 220 };
-
-  // Background and right border
-  m_visual.addFilledRect(m_x,
-                         m_y,
-                         m_width,
-                         m_height,
-                         (m_collapseAnim > 0.8f && m_hoverCollapse)
-                           ? ColorRgba{ 18, 28, 42, 255 }
-                           : panelBg);
-  m_visual.addLine(
-    m_x + m_width, m_y, m_x + m_width, m_y + m_height, panelBorder, 1.0f);
-
-  // If mostly or fully collapsed, draw the compact vertical docking tab strip
-  if (m_collapseAnim > 0.05f) {
-    const float tabAlpha = m_collapseAnim;
-    // Glowing accent pip when hovered or idle
-    const float stripPulse = 0.70f + 0.30f * std::sin(m_animTime * 3.0f);
-    const unsigned char stripAlpha = static_cast<unsigned char>(
-      (m_hoverCollapse ? 255.0f : (180.0f * stripPulse)) * tabAlpha);
-    m_visual.addFilledRect(m_x,
-                           m_y + 8.0f * fontScale,
-                           2.0f,
-                           24.0f * fontScale,
-                           ColorRgba{ 66, 214, 210, stripAlpha });
-
-    // Expand arrow ">"
-    const float arrowFontSize = std::max(11.0f, std::round(13.0f * fontScale));
-    const unsigned char arrowAlpha =
-      static_cast<unsigned char>(255.0f * tabAlpha);
-    m_visual.addText(
-      ">",
-      m_x +
-        std::max(0.0f, std::round((m_width - arrowFontSize * 0.55f) * 0.5f)),
-      m_y + 12.0f * fontScale,
-      arrowFontSize,
-      m_hoverCollapse ? ColorRgba{ 255, 255, 255, arrowAlpha }
-                      : ColorRgba{ 66, 214, 210, arrowAlpha });
-
-    // Vertical text label "SCENE"
-    const char* letters[] = { "S", "C", "E", "N", "E" };
-    const float letterFont = std::max(8.0f, std::round(9.0f * fontScale));
-    float letterY = m_y + 44.0f * fontScale;
-    for (const char* l : letters) {
-      m_visual.addText(
-        l,
-        m_x + std::max(0.0f, std::round((m_width - letterFont * 0.55f) * 0.5f)),
-        letterY,
-        letterFont,
-        m_hoverCollapse
-          ? ColorRgba{ 200, 230, 255, arrowAlpha }
-          : ColorRgba{ muted.r,
-                       muted.g,
-                       muted.b,
-                       static_cast<unsigned char>(muted.a * tabAlpha) });
-      letterY += 13.0f * fontScale;
-    }
-
-    if (m_collapseAnim >= 0.98f) {
-      return;
-    }
-  }
-
-  const float expandAlpha = 1.0f - m_collapseAnim;
-  const auto fadeColor = [expandAlpha](ColorRgba c) -> ColorRgba {
-    return ColorRgba{ c.r,
-                      c.g,
-                      c.b,
-                      static_cast<unsigned char>(static_cast<float>(c.a) *
-                                                 expandAlpha) };
-  };
-
-  // Section Header: SCENE GRAPH
-  const float headerGlow = 0.70f + 0.30f * std::sin(m_animTime * 3.0f);
-  m_visual.addFilledRect(
-    m_x + 6.0f * fontScale,
-    m_headerY + 8.0f * fontScale,
-    2.0f,
-    8.0f * fontScale,
-    fadeColor(ColorRgba{
-      66, 214, 210, static_cast<unsigned char>(255.0f * headerGlow) }));
-  m_visual.addText("SCENE GRAPH",
-                   m_x + 12.0f * fontScale,
-                   m_headerY + 6.0f * fontScale,
-                   headerFontSize,
-                   fadeColor(muted));
-
-  // Collapse button [<] at right of header
-  const float btnSize = std::max(18.0f, std::round(18.0f * fontScale));
-  const float collapseBtnX = m_x + m_width - btnSize - 6.0f * fontScale;
-  const float collapseBtnY = m_headerY + 4.0f * fontScale;
-  if (m_hoverCollapse) {
-    m_visual.addFilledRect(collapseBtnX,
-                           collapseBtnY,
-                           btnSize,
-                           btnSize,
-                           fadeColor(ColorRgba{ 26, 44, 66, 240 }));
-    m_visual.addOutlineRect(collapseBtnX,
-                            collapseBtnY,
-                            btnSize,
-                            btnSize,
-                            fadeColor(cyanAccent),
-                            1.0f);
-  } else {
-    m_visual.addFilledRect(collapseBtnX,
-                           collapseBtnY,
-                           btnSize,
-                           btnSize,
-                           fadeColor(ColorRgba{ 18, 28, 42, 180 }));
-    m_visual.addOutlineRect(collapseBtnX,
-                            collapseBtnY,
-                            btnSize,
-                            btnSize,
-                            fadeColor(ColorRgba{ 40, 56, 78, 200 }),
-                            1.0f);
-  }
-  const float btnArrowFont = std::max(9.0f, std::round(10.0f * fontScale));
-  m_visual.addText(
-    "<",
-    collapseBtnX +
-      std::max(0.0f, std::round((btnSize - btnArrowFont * 0.55f) * 0.5f)),
-    collapseBtnY + std::max(0.0f, std::round((btnSize - btnArrowFont) * 0.5f)),
-    btnArrowFont,
-    fadeColor(m_hoverCollapse ? ColorRgba{ 255, 255, 255, 255 } : cyanAccent));
-
-  // Node count pill badge (placed to the left of the collapse button)
-  const size_t totalNodes = document ? document->nodeCount() : 0;
-  const std::string countStr = std::to_string(totalNodes);
-  const float badgeW =
-    std::max(28.0f * fontScale,
-             static_cast<float>(countStr.size()) * pillFontSize * 0.55f +
-               12.0f * fontScale);
-  const float badgeH = std::max(14.0f, std::round(14.0f * fontScale));
-  const float badgeX = collapseBtnX - badgeW - 6.0f * fontScale;
-
-  m_visual.addFilledRect(badgeX,
-                         m_headerY + 6.0f * fontScale,
-                         badgeW,
-                         badgeH,
-                         fadeColor(ColorRgba{ 20, 32, 48, 220 }));
-  m_visual.addOutlineRect(badgeX,
-                          m_headerY + 6.0f * fontScale,
-                          badgeW,
-                          badgeH,
-                          fadeColor(ColorRgba{ 44, 62, 86, 255 }),
-                          1.0f);
-  m_visual.addText(countStr,
-                   badgeX + 6.0f * fontScale,
-                   m_headerY + 6.0f * fontScale +
-                     std::max(0.0f, std::round((badgeH - pillFontSize) * 0.5f)),
-                   pillFontSize,
-                   fadeColor(cyanAccent));
-
-  // Divider under header
-  m_visual.addLine(m_x + 6.0f * fontScale,
-                   m_headerY + 24.0f * fontScale,
-                   m_x + m_width - 6.0f * fontScale,
-                   m_headerY + 24.0f * fontScale,
-                   fadeColor(ColorRgba{ 35, 48, 66, 255 }),
-                   1.0f);
-
-  // Empty state note if no nodes exist
   if (m_rows.empty()) {
-    m_visual.addText("No nodes in scene",
-                     m_x + 16.0f * fontScale,
-                     m_treeStartY + 16.0f * fontScale,
-                     headerFontSize,
-                     fadeColor(muted));
-    m_visual.addText("Use Tools or Create menu",
-                     m_x + 16.0f * fontScale,
-                     m_treeStartY + 34.0f * fontScale,
-                     headerFontSize,
-                     fadeColor(ColorRgba{ 90, 112, 135, 255 }));
-    return;
+    GuiToolStyle::fittedText(m_visual,
+                             "No nodes yet",
+                             m_x + GuiToolStyle::kPad,
+                             m_treeStartY + 6.0f,
+                             m_width - GuiToolStyle::kPad * 2.0f,
+                             smallFont,
+                             GuiToolPalette::dim);
+    GuiToolStyle::fittedText(m_visual,
+                             "Use Create or the Tools panel",
+                             m_x + GuiToolStyle::kPad,
+                             m_treeStartY + 8.0f + smallFont * 1.5f,
+                             m_width - GuiToolStyle::kPad * 2.0f,
+                             smallFont,
+                             GuiToolPalette::faint);
   }
 
-  // Render tree rows
+  // Rows inside the row window only.
+  const float windowTop = m_treeStartY;
+  const float windowBottom = treeBottom();
   for (size_t i = 0; i < m_rows.size(); ++i) {
     const TreeRow& row = m_rows[i];
-    const bool isSelected = (row.id == selectedId);
-    const bool isHovered = (m_hoverRow == static_cast<int>(i));
-    const bool isDragged = (m_isDragging && row.id == m_draggedNodeId);
-    const bool isDropTarget = (m_isDragging && row.id == m_dropTargetNodeId);
+    if (row.y + m_rowHeight <= windowTop) {
+      continue;
+    }
+    if (row.y >= windowBottom) {
+      break;
+    }
+    const bool isSelected = selection != nullptr && selection->contains(row.id);
+    const bool isHovered = m_hoverRow == static_cast<int>(i);
+    const bool isDragged = m_isDragging && row.id == m_draggedNodeId;
+    const bool isDropTarget = m_isDragging && row.id == m_dropTargetNodeId;
+    const bool dropInto = isDropTarget && m_dropZone == 0;
 
-    const float rowX = m_x + 4.0f * fontScale;
-    const float rowW = m_width - 8.0f * fontScale;
-    const float rowY = row.y;
-    const float rowH = m_rowHeight - 2.0f;
-
-    // Row background and borders
-    if (isDropTarget) {
-      if (m_dropValid) {
-        // Valid drop target: glowing cyan border and pill
-        m_visual.addFilledRect(
-          rowX, rowY, rowW, rowH, ColorRgba{ 25, 80, 100, 240 });
-        m_visual.addOutlineRect(
-          rowX, rowY, rowW, rowH, ColorRgba{ 66, 214, 210, 255 }, 1.5f);
-        m_visual.addFilledRect(rowX, rowY, 3.0f, rowH, cyanAccent);
-      } else {
-        // Invalid drop target (cycle / self): red warning pill
-        m_visual.addFilledRect(
-          rowX, rowY, rowW, rowH, ColorRgba{ 90, 25, 30, 240 });
-        m_visual.addOutlineRect(
-          rowX, rowY, rowW, rowH, ColorRgba{ 240, 70, 80, 255 }, 1.5f);
-        m_visual.addFilledRect(
-          rowX, rowY, 3.0f, rowH, ColorRgba{ 240, 70, 80, 255 });
-      }
-    } else if (isSelected) {
-      // Selected row: vibrant blue/cyan highlight with glowing left edge
-      const float pulse = 0.85f + 0.15f * std::sin(m_animTime * 3.5f);
-      const ColorRgba activeBg{ 25, 75, 110, 240 };
-      const ColorRgba activeBorder{
-        66, 180, 230, static_cast<unsigned char>(255.0f * pulse)
-      };
-      m_visual.addFilledRect(rowX, rowY, rowW, rowH, activeBg);
-      m_visual.addOutlineRect(rowX, rowY, rowW, rowH, activeBorder, 1.0f);
-      m_visual.addFilledRect(rowX, rowY, 3.0f, rowH, cyanAccent);
-    } else if (isHovered && !m_isDragging) {
-      m_visual.addFilledRect(
-        rowX, rowY, rowW, rowH, ColorRgba{ 24, 38, 56, 220 });
-      m_visual.addOutlineRect(
-        rowX, rowY, rowW, rowH, ColorRgba{ 52, 75, 105, 200 }, 1.0f);
-    } else if (isDragged) {
-      // Ghost dimming for the node being dragged
-      m_visual.addFilledRect(
-        rowX, rowY, rowW, rowH, ColorRgba{ 15, 22, 33, 160 });
-      m_visual.addOutlineRect(
-        rowX, rowY, rowW, rowH, ColorRgba{ 40, 55, 75, 160 }, 1.0f);
+    const RowGeometry geometry = rowGeometry(row);
+    const GuiToolRect rect{ geometry.x, geometry.y, geometry.w, geometry.h };
+    GuiToolStyle::row(
+      m_visual, rect, isSelected, isHovered && !m_isDragging && !isSelected);
+    const ColorRgba dropColor =
+      m_dropValid ? GuiToolPalette::accent : GuiToolPalette::error;
+    if (dropInto) {
+      m_visual.addOutlineRect(rect.x, rect.y, rect.w, rect.h, dropColor, 1.0f);
+    } else if (isDropTarget) {
+      // Insertion line above or below the target, at its depth.
+      const float lineY =
+        m_dropZone < 0 ? rect.y - 1.0f : rect.y + m_rowHeight - 1.0f;
+      m_visual.addFilledRect(geometry.foldX,
+                             lineY - 1.0f,
+                             rect.x + rect.w - geometry.foldX,
+                             2.0f,
+                             dropColor);
     }
 
-    // Depth indentation & tree guide branch lines
-    const float contentX =
-      rowX + 8.0f * fontScale + static_cast<float>(row.depth) * indent;
-
+    // Tree guide: a hook from the parent's fold column into this row.
+    const float hookY = rect.y + rect.h * 0.5f;
     if (row.depth > 0) {
-      // Draw horizontal hook into the node
-      const float hookX0 = contentX - 10.0f * fontScale;
-      const float hookX1 = contentX - 2.0f * fontScale;
-      const float hookY = rowY + rowH * 0.5f;
+      const float stemX = geometry.foldX - indent + 5.0f * fontScale;
       m_visual.addLine(
-        hookX0, hookY, hookX1, hookY, fadeColor(treeLineColor), 1.0f);
-
-      // Draw vertical stem
-      const float stemY0 = rowY;
-      const float stemY1 = row.isLastChild ? hookY : (rowY + m_rowHeight);
+        stemX, hookY, geometry.foldX - 1.0f, hookY, GuiToolPalette::rule, 1.0f);
+      const float stemBottom = row.isLastChild ? hookY : (rect.y + m_rowHeight);
       m_visual.addLine(
-        hookX0, stemY0, hookX0, stemY1, fadeColor(treeLineColor), 1.0f);
+        stemX, rect.y, stemX, stemBottom, GuiToolPalette::rule, 1.0f);
     }
 
-    // Node icon (from atlas if available or styled bullet)
-    float labelX = contentX;
-    if (m_atlas.isValid()) {
-      EditorCommand iconCmd = EditorCommand::CreateEmpty;
-      switch (row.kind) {
-        case SceneNodeKind::FilledRect:
-          iconCmd = EditorCommand::CreateRect;
-          break;
-        case SceneNodeKind::FilledEllipse:
-          iconCmd = EditorCommand::CreateEllipse;
-          break;
-        case SceneNodeKind::FilledTriangle:
-          iconCmd = EditorCommand::CreateTriangle;
-          break;
-        case SceneNodeKind::SolidCube:
-          iconCmd = EditorCommand::CreateCube;
-          break;
-        case SceneNodeKind::SolidPyramid:
-          iconCmd = EditorCommand::CreatePyramid;
-          break;
-        case SceneNodeKind::WireSphere:
-          iconCmd = EditorCommand::CreateSphere;
-          break;
-        default:
-          iconCmd = EditorCommand::CreateEmpty;
-          break;
+    // Fold arrow: right-pointing (folded) or down-pointing.
+    if (row.hasChildren) {
+      const float ax = geometry.foldX + 1.0f;
+      const float size = std::max(6.0f, std::round(7.0f * fontScale));
+      const ColorRgba arrow =
+        isHovered ? GuiToolPalette::text : GuiToolPalette::dim;
+      if (row.folded) {
+        m_visual.addLine(
+          ax, hookY - size * 0.5f, ax + size * 0.6f, hookY, arrow, 1.0f);
+        m_visual.addLine(
+          ax + size * 0.6f, hookY, ax, hookY + size * 0.5f, arrow, 1.0f);
+      } else {
+        m_visual.addLine(ax,
+                         hookY - size * 0.3f,
+                         ax + size * 0.5f,
+                         hookY + size * 0.3f,
+                         arrow,
+                         1.0f);
+        m_visual.addLine(ax + size * 0.5f,
+                         hookY + size * 0.3f,
+                         ax + size,
+                         hookY - size * 0.3f,
+                         arrow,
+                         1.0f);
       }
-      m_visual.addCenteredSprite(m_atlas,
-                                 contentX + iconSize * 0.5f,
-                                 rowY + rowH * 0.5f,
-                                 iconSize,
-                                 iconSize,
-                                 EditorUiAtlas::regionFor(iconCmd),
-                                 fadeColor(ColorRgba{ 255, 255, 255, 255 }));
-      labelX = contentX + iconSize + 4.0f * fontScale;
-    } else {
-      // Small bullet dot
-      m_visual.addFilledRect(contentX + 2.0f * fontScale,
-                             rowY +
-                               std::round((rowH - 4.0f * fontScale) * 0.5f),
-                             4.0f * fontScale,
-                             4.0f * fontScale,
-                             fadeColor(isSelected ? cyanAccent : muted));
-      labelX = contentX + 10.0f * fontScale;
     }
 
-    // Node label and id tag
-    const std::string labelText = row.name + " (#" + row.id + ")";
-    const ColorRgba labelColor =
-      isDragged ? ColorRgba{ 120, 140, 160, 180 }
-                : (isSelected ? ColorRgba{ 255, 255, 255, 255 }
-                              : (isHovered ? ColorRgba{ 220, 235, 250, 255 }
-                                           : ColorRgba{ 180, 198, 218, 255 }));
+    float labelX = geometry.contentX;
+    if (m_atlas.isValid()) {
+      m_visual.addCenteredSprite(m_atlas,
+                                 geometry.contentX + iconSize * 0.5f,
+                                 hookY,
+                                 iconSize,
+                                 iconSize,
+                                 EditorUiAtlas::regionFor(row.icon),
+                                 row.visible ? ColorRgba{ 255, 255, 255, 255 }
+                                             : ColorRgba{ 255, 255, 255, 110 });
+      labelX = geometry.contentX + iconSize + 4.0f * fontScale;
+    }
 
+    ColorRgba labelColor = isDragged     ? GuiToolPalette::faint
+                           : row.visible ? GuiToolPalette::text
+                                         : GuiToolPalette::dim;
     const float textY =
-      rowY + std::max(0.0f, std::round((rowH - rowFontSize) * 0.5f));
-    m_visual.addText(
-      labelText, labelX, textY, rowFontSize, fadeColor(labelColor));
+      rect.y + std::max(0.0f, std::round((rect.h - rowFont) * 0.5f)) - 1.0f;
+    GuiToolStyle::fittedText(m_visual,
+                             row.name,
+                             labelX,
+                             textY,
+                             geometry.eyeX - 4.0f * fontScale - labelX,
+                             rowFont,
+                             labelColor);
+
+    if (isHovered || isSelected || !row.visible) {
+      drawEye(m_visual,
+              geometry.eyeX,
+              hookY,
+              iconSize,
+              row.visible,
+              row.visible ? GuiToolPalette::dim : GuiToolPalette::faint);
+    }
   }
 
-  // Root drop zone indicator if dragging
+  // Scrollbar when rows overflow the window.
+  const float content = static_cast<float>(m_rows.size() + 2) * m_rowHeight;
+  GuiToolStyle::scrollbar(m_visual,
+                          GuiToolRect{ m_x + m_width - GuiToolStyle::kScrollbar,
+                                       windowTop,
+                                       GuiToolStyle::kScrollbar - 1.0f,
+                                       windowBottom - windowTop },
+                          m_scroll,
+                          windowBottom - windowTop,
+                          content);
+
   if (m_isDragging) {
-    const float treeEndY = m_treeStartY +
-                           static_cast<float>(m_rows.size()) * m_rowHeight +
-                           6.0f * fontScale;
-    const float zoneH =
-      std::min(40.0f * fontScale,
-               std::max(24.0f * fontScale,
-                        m_y + m_height - treeEndY - 8.0f * fontScale));
-
-    if (zoneH > 20.0f) {
-      const bool isTargetRoot = (m_dropTargetNodeId.empty() && m_hoverRootZone);
-      const ColorRgba rootZoneBg = isTargetRoot ? ColorRgba{ 25, 75, 95, 220 }
-                                                : ColorRgba{ 15, 22, 33, 180 };
-      const ColorRgba rootZoneBorder = isTargetRoot
-                                         ? ColorRgba{ 66, 214, 210, 255 }
-                                         : ColorRgba{ 35, 50, 70, 180 };
-
-      m_visual.addFilledRect(m_x + 8.0f * fontScale,
-                             treeEndY,
-                             m_width - 16.0f * fontScale,
-                             zoneH,
-                             rootZoneBg);
-      m_visual.addOutlineRect(m_x + 8.0f * fontScale,
+    // The root drop zone below the rows, and a label beside the cursor.
+    const float treeEndY =
+      std::max(m_treeStartY,
+               m_rows.empty() ? m_treeStartY : m_rows.back().y + m_rowHeight) +
+      4.0f;
+    const float zoneH = std::min(
+      32.0f * fontScale, std::max(0.0f, m_y + m_height - treeEndY - 6.0f));
+    if (zoneH > 16.0f) {
+      const bool isTargetRoot = m_dropTargetNodeId.empty() && m_hoverRootZone;
+      m_visual.addOutlineRect(m_x + GuiToolStyle::kPad,
                               treeEndY,
-                              m_width - 16.0f * fontScale,
+                              m_width - GuiToolStyle::kPad * 2.0f,
                               zoneH,
-                              rootZoneBorder,
+                              isTargetRoot ? GuiToolPalette::accent
+                                           : GuiToolPalette::border,
                               1.0f);
-      m_visual.addText(
-        "Drop here -> Root",
-        m_x + 16.0f * fontScale,
-        treeEndY + std::max(0.0f, std::round((zoneH - headerFontSize) * 0.5f)),
-        headerFontSize,
-        isTargetRoot ? ColorRgba{ 255, 255, 255, 255 } : muted);
+      GuiToolStyle::text(
+        m_visual,
+        "Drop here to move to the root",
+        m_x + GuiToolStyle::kPad * 2.0f,
+        treeEndY + std::max(0.0f, std::round((zoneH - smallFont) * 0.5f)),
+        smallFont,
+        isTargetRoot ? GuiToolPalette::text : GuiToolPalette::dim);
     }
-
-    // Dragged floating ghost pill following cursor
-    const float ghostW = std::max(130.0f, std::round(130.0f * fontScale));
-    const float ghostH = m_rowHeight;
-    const float ghostX = m_mouseX + 12.0f * fontScale;
-    const float ghostY = m_mouseY - ghostH * 0.5f;
-
-    const ColorRgba ghostBg =
-      m_dropValid ? ColorRgba{ 18, 55, 80, 240 } : ColorRgba{ 70, 25, 30, 240 };
-    const ColorRgba ghostBorder = m_dropValid ? ColorRgba{ 66, 214, 210, 255 }
-                                              : ColorRgba{ 230, 60, 70, 255 };
-
-    m_visual.addFilledRect(ghostX, ghostY, ghostW, ghostH, ghostBg);
-    m_visual.addOutlineRect(ghostX, ghostY, ghostW, ghostH, ghostBorder, 1.5f);
-
-    const IlscNode* draggedNode =
+    const SceneNode* draggedNode =
       document ? document->findNode(m_draggedNodeId) : nullptr;
     const std::string draggedTitle =
-      draggedNode ? (draggedNode->name + " (#" + m_draggedNodeId + ")")
-                  : ("#" + m_draggedNodeId);
-    m_visual.addText(
+      draggedNode ? draggedNode->name : ("#" + m_draggedNodeId);
+    const float ghostW = std::max(120.0f, std::round(130.0f * fontScale));
+    const float ghostX = m_mouseX + 12.0f;
+    const float ghostY = m_mouseY - m_rowHeight * 0.5f;
+    m_visual.addFilledRect(
+      ghostX, ghostY, ghostW, m_rowHeight, GuiToolPalette::bar);
+    m_visual.addOutlineRect(ghostX,
+                            ghostY,
+                            ghostW,
+                            m_rowHeight,
+                            m_dropValid ? GuiToolPalette::accent
+                                        : GuiToolPalette::error,
+                            1.0f);
+    GuiToolStyle::fittedText(
+      m_visual,
       draggedTitle,
-      ghostX + 8.0f * fontScale,
-      ghostY + std::max(0.0f, std::round((ghostH - headerFontSize) * 0.5f)),
-      headerFontSize,
-      ColorRgba{ 255, 255, 255, 255 });
+      ghostX + 6.0f,
+      ghostY + std::max(0.0f, std::round((m_rowHeight - smallFont) * 0.5f)),
+      ghostW - 12.0f,
+      smallFont,
+      GuiToolPalette::text);
+  }
+
+  // Context menu, drawn last so it sits above the rows.
+  if (m_menuOpen) {
+    const float menuW = menuWidth();
+    const float menuH = menuHeight();
+    m_visual.addFilledRect(m_menuX, m_menuY, menuW, menuH, GuiToolPalette::bar);
+    m_visual.addOutlineRect(
+      m_menuX, m_menuY, menuW, menuH, GuiToolPalette::border, 1.0f);
+    for (size_t index = 0; index < kMenuEntries.size(); ++index) {
+      const float itemY =
+        m_menuY + 3.0f + static_cast<float>(index) * m_rowHeight;
+      if (m_menuHover == static_cast<int>(index)) {
+        m_visual.addFilledRect(m_menuX + 2.0f,
+                               itemY,
+                               menuW - 4.0f,
+                               m_rowHeight,
+                               GuiToolPalette::selection);
+      }
+      const float textY =
+        itemY + std::max(0.0f, std::round((m_rowHeight - rowFont) * 0.5f)) -
+        1.0f;
+      GuiToolStyle::text(m_visual,
+                         kMenuEntries[index].label,
+                         m_menuX + GuiToolStyle::kPad,
+                         textY,
+                         rowFont,
+                         GuiToolPalette::text);
+      const std::string hint =
+        EditorShortcuts::labelFor(kMenuEntries[index].command);
+      if (!hint.empty()) {
+        GuiToolStyle::text(m_visual,
+                           hint,
+                           m_menuX + menuW - GuiToolStyle::kPad -
+                             GuiToolStyle::textWidth(hint, smallFont),
+                           textY + 1.0f,
+                           smallFont,
+                           GuiToolPalette::faint);
+      }
+    }
   }
 }
 
 bool
 EditorSceneGraphView::AppendCommands(Renderer* renderer)
 {
+  if (!m_placement.visible) {
+    return true;
+  }
   return m_visual.AppendCommands(renderer);
 }

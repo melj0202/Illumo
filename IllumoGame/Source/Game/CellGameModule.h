@@ -9,6 +9,7 @@
 #include "Game/SimulationRunner.h"
 #include "NewSimulationMenu.h"
 #include "RulesetWorkshopMenu.h"
+#include <Illumo/Content/SceneInstance.h>
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -137,14 +138,10 @@ private:
   std::unique_ptr<ConfigurationMenu> configurationMenu;
   std::unique_ptr<RulesetWorkshopMenu> rulesetWorkshopMenu;
   std::unique_ptr<ExitConfirmDialog> exitConfirmDialog;
-  SceneGraph render3dSceneGraph;
-  SceneGraphDrawable render3dSceneDrawable{ render3dSceneGraph };
-  SceneNodeHandle render3dRootNode;
-  SceneNodeHandle render3dOrbitNode;
-  SceneNodeHandle render3dChildNode;
-  std::unique_ptr<MeshVisual> render3dTestStatic;
-  std::unique_ptr<MeshVisual> render3dTestAnimated;
-  std::unique_ptr<MeshVisual> render3dTestChild;
+  // The 3D diagnostic: Scenes/render3d-test.ilsc from the package, loaded on
+  // first use; the nodes "orbit" and "child" are animated by id.
+  std::unique_ptr<SceneInstance> render3dScene;
+  bool render3dLoadFailed;
   double render3dTestTime;
   bool render3dCameraApplied;
   Cursor editorCursor;

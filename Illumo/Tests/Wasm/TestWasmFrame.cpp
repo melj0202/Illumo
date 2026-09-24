@@ -571,9 +571,9 @@ run(const std::string& name)
     GuestWireWriter version3Wire;
     version3.write(version3Wire);
     std::vector<std::byte> version3Bytes = version3Wire.take();
-    // Rewrite as version 3: drop the empty v4 write section.
+    // Rewrite as version 3: drop the empty v4 write and v5 surface sections.
     version3Bytes[4] = std::byte{ 3 };
-    version3Bytes.resize(version3Bytes.size() - 4);
+    version3Bytes.resize(version3Bytes.size() - 8);
     testTrue(counters,
              bridge.accept(version3Bytes),
              "Version 3 frames without mesh writes remain accepted");

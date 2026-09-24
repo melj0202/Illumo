@@ -13,8 +13,33 @@ rulesets, simulation and persistence policy, product commands, CA defaults, and
 a declarative application definition. \textbf{IllEd} is the SceneGraph world
 editor that writes \texttt{.ilsc} documents so later Illumo applications can
 be authored rather than only coded. \textbf{IllMeshViewer} provides interactive
-mesh inspection. These products do not contain process entry,
+mesh and scene inspection. These products do not contain process entry,
 native dialog implementation, logging lifetime, system parser, or frame loop.
+
+\textbf{Illumo::Content} (D-E18) is an optional library above the engine that
+every product links. It owns the one scene format, \texttt{.ilsc} format 2
+(D-E19), and \symbolref{SceneInstance}, the live loader that builds a
+SceneGraph and its attachments from a document. IllEd edits scenes through it,
+IllMeshViewer opens them, and IllumoGame's \texttt{render3dTest} diagnostic is
+one. Every program is a package described by \texttt{illumo.json} (D-E22),
+either a loose directory or an \texttt{.ilpk} archive (D-E20). The runtime
+mounts packages on one virtual file tree (D-E21): the launched application at
+\texttt{/app}, engine assets at \texttt{/engine}, every other installed or
+\texttt{--mount}ed package at \texttt{/packages/<id>}, and an optional writable
+\texttt{/project}. Mods and expansions are additive: a content package adds
+files under its own mount and may overlay files onto \texttt{/app}, but cannot
+delete a base file. Guests reach the tree through file protocol v2 (D-E23) and
+a fetch-on-demand asset cache (D-E24).
+
+IllEd (D-E25) has patch undo/redo, a multi-node selection with box select,
+translate/rotate/scale gizmos in local or world space with snapping, a typed
+inspector with text entry, clipboard copy/paste of subtrees, a hierarchy with
+reordering and folding, mesh/sprite/light/camera nodes, an environment editor,
+and an asset browser over the file tree. With \texttt{--project <dir>} it
+imports files into the project, saves scenes there, and packs the project into
+an \texttt{.ilpk}. Its Hierarchy, Assets, Tools and Inspector panels, like
+IllMeshViewer's Info and Display panels, dock in columns or pop out into
+their own windows, in a plain tool look (D-UI7).
 
 IllumoGame supports multiple rule sets (Game of Life, Brian's Brain,
 Wireworld, \ldots), camera navigation, edit/run modes, save/load, and a compact
@@ -40,7 +65,7 @@ ABI, or speculative multi-backend framework.
   arr/.style={-{Latex}, thick}
 ]
   \node[box, fill=orange!10] (game) {IllumoGame / IllEd\\IllMeshViewer\\application definitions};
-  \node[box, fill=green!10, right=2.0cm of game] (lib) {Illumo static library\\Application + Platform + Engine\\Scene + Foundation + Services + Rendering};
+  \node[box, fill=green!10, right=2.0cm of game] (lib) {Illumo static library\\Application + Platform + Engine\\Scene + Foundation + Services + Rendering\\(+ Illumo::Content)};
   \node[box, fill=purple!8, below=1.0cm of lib] (gl) {private OpenGL backend\\Illumo assets + licenses};
   \node[box, fill=gray!10, below=1.0cm of game] (tests) {Four test runners\\Illumo::TestSupport};
 
@@ -63,8 +88,12 @@ module and engine-owned optional Debug module $\rightarrow$ \texttt{std::chrono}
 \begin{itemize}
   \item No install/export package, shared DLL, or stable binary ABI.
   \item No general-purpose AAA renderer, full ECS, or speculative framework.
-  \item No SceneGraph serialization, retained UI, culling hierarchy, or update
-        framework until a concrete consumer defines those contracts.
+  \item No SceneGraph self-serialization (scenes are written by
+        Illumo::Content's codec through the public graph API), retained UI,
+        culling hierarchy, or update framework until a concrete consumer
+        defines those contracts.
+  \item No material system, animation, scripting, physics, prefabs, or nested
+        scene instances in the scene format yet.
   \item No multiplayer or networking.
   \item No Linux support claim until native validation exists; macOS is not targeted.
 \end{itemize}

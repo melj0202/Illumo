@@ -573,3 +573,17 @@ GuiPointerTracker::sample(IRenderWindow* window,
   m_released = !down && m_pressed;
   m_pressed = down;
 }
+
+void
+GuiPointerTracker::sample(const PanelSurfacePointer& pointer, float layoutScale)
+{
+  const float scale = layoutScale > 0.0f ? layoutScale : 1.0f;
+  const float pointerX = static_cast<float>(pointer.x) / scale;
+  const float pointerY = static_cast<float>(pointer.y) / scale;
+  m_moved = pointerX != m_x || pointerY != m_y;
+  m_x = pointerX;
+  m_y = pointerY;
+  m_clicked = pointer.left && !m_pressed;
+  m_released = !pointer.left && m_pressed;
+  m_pressed = pointer.left;
+}

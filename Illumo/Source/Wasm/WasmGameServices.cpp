@@ -6,12 +6,14 @@
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmGameServices.h>
+#include <Illumo/Wasm/WasmPanelWindows.h>
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Console.h>
 #include <IllumoGuest/Dialog.h>
 #include <IllumoGuest/Display.h>
 #include <IllumoGuest/FileProtocol.h>
 #include <IllumoGuest/Protocol.h>
+#include <IllumoGuest/Windows.h>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -131,6 +133,7 @@ WasmGameServices::cancel()
   m_cancelled = true;
   m_displayRequests.clear();
   m_clipboardRequests.clear();
+  m_windowRequests.clear();
   m_dialogRequests.clear();
   m_consoleRequests.clear();
   m_listenRequests.clear();
@@ -244,6 +247,33 @@ WasmGameServices::completeDisplay(GuestServices& results)
   results.records.push_back(std::move(response));
   m_displayRequests.pop_front();
   return true;
+}
+void
+WasmGameServices::completeWindows(GuestServices& results)
+{
+  // Window requests are synchronous on the host, so each completes now.
+  while (!m_windowRequests.empty()) {
+    const GuestServiceRecord& record = m_windowRequests.front();
+    GuestServiceRecord response{
+      record.request, GuestService::Window, GuestServiceStatus::Rejected, {}
+    };
+    GuestWindowRequest request;
+    if (m_windows != nullptr && hasGrant(m_grants, GuestCapability::Windows) &&
+        GuestWindowRequest::read(record.payload, request)) {
+      GuestWindowOpened opened;
+      std::string reason;
+      if (m_windows->handle(request, &opened, &reason)) {
+        response.status = GuestServiceStatus::Complete;
+        if (request.action == GuestWindowAction::Open) {
+          GuestWireWriter payload;
+          opened.write(payload);
+          response.payload = payload.take();
+        }
+      }
+    }
+    results.records.push_back(std::move(response));
+    m_windowRequests.pop_front();
+  }
 }
 bool
 WasmGameServices::completeClipboard(GuestServices& results)
@@ -441,8 +471,9 @@ try {
   }
   if (incoming.records.size() + m_render.pendingRequests() +
         m_displayRequests.size() + m_clipboardRequests.size() +
-        m_dialogRequests.size() + m_consoleRequests.size() +
-        m_listenRequests.size() + (m_files ? m_files->pendingRequests() : 0u) +
+        m_windowRequests.size() + m_dialogRequests.size() +
+        m_consoleRequests.size() + m_listenRequests.size() +
+        (m_files ? m_files->pendingRequests() : 0u) +
         (m_job.request != 0 ? 1u : 0u) + laneJobs +
         (m_laneQuery.request != 0 ? 1u : 0u) >
       GuestServices::MaximumRecords) {
@@ -468,6 +499,12 @@ try {
       GuestClipboardRequest request;
       if (!GuestClipboardRequest::read(record.payload, request)) {
         m_error = "Invalid clipboard request";
+        return false;
+      }
+    } else if (record.operation == GuestService::Window) {
+      GuestWindowRequest request;
+      if (!GuestWindowRequest::read(record.payload, request)) {
+        m_error = "Invalid window request";
         return false;
       }
     } else if (record.operation == GuestService::Dialog) {
@@ -533,6 +570,8 @@ try {
       m_displayRequests.push_back(record);
     } else if (record.operation == GuestService::Clipboard) {
       m_clipboardRequests.push_back(record);
+    } else if (record.operation == GuestService::Window) {
+      m_windowRequests.push_back(record);
     } else if (record.operation == GuestService::Dialog) {
       m_dialogRequests.push_back(record);
     } else if (record.operation == GuestService::Console) {
@@ -541,6 +580,7 @@ try {
   }
   completeDisplay(results);
   completeClipboard(results);
+  completeWindows(results);
   completeDialog(results);
   completeConsole(results);
   // Poll before accepting another operation. Never block the control frame on

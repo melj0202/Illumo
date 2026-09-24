@@ -16,6 +16,8 @@ void
 registerMeshViewerUiTests(IllumoTestRegistry& registry);
 void
 registerMeshViewerModuleTests(IllumoTestRegistry& registry);
+void
+registerMeshViewerPanelsTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -25,6 +27,7 @@ createRegistry()
   registerMeshViewerCameraTests(registry);
   registerMeshViewerUiTests(registry);
   registerMeshViewerModuleTests(registry);
+  registerMeshViewerPanelsTests(registry);
   return registry;
 }
 

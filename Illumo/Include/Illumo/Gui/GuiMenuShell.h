@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 #include <array>
 
@@ -251,6 +252,9 @@ public:
 
   // Sample once per update; the press edge is consumed by that single call.
   void sample(IRenderWindow* window, InputManager* input, float layoutScale);
+  // The same bookkeeping for a detached window's pointer (IPanelSurfaces),
+  // whose position is in that window's pixels.
+  void sample(const PanelSurfacePointer& pointer, float layoutScale);
 
   float x() const { return m_x; }
   float y() const { return m_y; }

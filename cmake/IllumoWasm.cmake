@@ -36,7 +36,6 @@ set_target_properties(IllumoWasmtime PROPERTIES
   IMPORTED_LOCATION "${_wasmtime}/lib/wasmtime.dll"
   INTERFACE_INCLUDE_DIRECTORIES "${_wasmtime}/include")
 add_library(IllumoWasmRuntime STATIC
-  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/AppManifest.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmInstance.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGuest.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmWorker.cpp"
@@ -66,8 +65,9 @@ add_library(IllumoWasmRendering STATIC
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmRenderServices.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGameServices.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmFileServices.cpp"
-  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGameModule.cpp")
-target_link_libraries(IllumoWasmRendering PUBLIC Illumo::WasmRuntime Illumo::Illumo)
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGameModule.cpp"
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmPanelWindows.cpp")
+target_link_libraries(IllumoWasmRendering PUBLIC Illumo::WasmRuntime Illumo::Illumo Illumo::Content)
 # Tracy zones around guest exchanges; the client itself is compiled by Illumo.
 target_include_directories(IllumoWasmRendering SYSTEM PRIVATE
   "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/tracy-0.13.1/public")
@@ -94,7 +94,8 @@ ExternalProject_Add(IllumoGuestBuild
   INSTALL_COMMAND "")
 
 # Generic host executable. It contains no product code; installed applications
-# are staged beside it in apps/<name>/, each described by an app.json manifest.
+# are staged beside it in apps/<name>/, each described by an illumo.json
+# package manifest.
 add_executable(IllumoRuntime $<TARGET_OBJECTS:IllumoPlatformEntry>
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/RuntimeApplication.cpp")
 target_link_libraries(IllumoRuntime PRIVATE IllumoWasmRendering)
@@ -151,16 +152,19 @@ illumo_stage_app(IllumoGamePackage game
   MODULE IllumoGame.wasm
   FILES
     "${_guest_build}/CSimWorkerGuest.wasm"
-    "${CMAKE_SOURCE_DIR}/IllumoGame/app.json"
+    "${CMAKE_SOURCE_DIR}/IllumoGame/illumo.json"
     "${CMAKE_SOURCE_DIR}/IllumoGame/families.json"
     "${CMAKE_SOURCE_DIR}/IllumoGame/rulesets.json"
-    "${CMAKE_SOURCE_DIR}/IllumoGame/envvars.json")
+    "${CMAKE_SOURCE_DIR}/IllumoGame/envvars.json"
+  ASSETS
+    "${CMAKE_SOURCE_DIR}/IllumoGame/Scenes/render3d-test.ilsc"
+    "Scenes/render3d-test.ilsc")
 
 # IllEd: the world editor; its UI atlas is preloaded from the package.
 illumo_stage_app(IllEdPackage illed
   MODULE IllEd.wasm
   FILES
-    "${CMAKE_SOURCE_DIR}/IllEd/app.json"
+    "${CMAKE_SOURCE_DIR}/IllEd/illumo.json"
     "${CMAKE_SOURCE_DIR}/IllEd/envvars.json"
   ASSETS
     "${CMAKE_SOURCE_DIR}/IllEd/Assets/editor-ui-atlas.jpg"
@@ -170,7 +174,7 @@ illumo_stage_app(IllEdPackage illed
 illumo_stage_app(IllMeshViewerPackage meshviewer
   MODULE IllMeshViewer.wasm
   FILES
-    "${CMAKE_SOURCE_DIR}/IllMeshViewer/app.json"
+    "${CMAKE_SOURCE_DIR}/IllMeshViewer/illumo.json"
     "${CMAKE_SOURCE_DIR}/IllMeshViewer/envvars.json"
   ASSETS
     "${CMAKE_SOURCE_DIR}/Illumo/Assets/Skybox/skybox-daylight.png"
@@ -190,18 +194,56 @@ if(BUILD_TESTING)
     COMMAND IllumoRuntime --capture-script missing-script.txt)
   set_tests_properties(Illumo.Runtime.CaptureScriptNeedsCapture
     PROPERTIES WILL_FAIL TRUE)
+  # A staged application packs into an .ilpk that reads back intact.
+  add_test(NAME Illumo.Pack.StagedApp
+    COMMAND ${CMAKE_COMMAND} "-DPACK=$<TARGET_FILE:IllumoPack>"
+      "-DAPP=$<TARGET_FILE_DIR:IllumoRuntime>/apps/illed"
+      "-DOUT=${CMAKE_BINARY_DIR}/Testing/illed.ilpk"
+      -P "${CMAKE_SOURCE_DIR}/cmake/IllumoPackCheck.cmake")
+  set_tests_properties(Illumo.Pack.StagedApp PROPERTIES
+    LABELS "Illumo;IllumoWorkspace" TIMEOUT 60)
+  add_dependencies(IllumoRunTests IllumoPack)
+  # A named package, mount or project that does not exist refuses to start.
+  add_test(NAME Illumo.Runtime.MountMissingDir
+    COMMAND IllumoRuntime --app illed --mount missing-package-dir)
+  add_test(NAME Illumo.Runtime.ProjectMissingDir
+    COMMAND IllumoRuntime --app illed --project missing-project-dir)
+  add_test(NAME Illumo.Runtime.PackageMissing
+    COMMAND IllumoRuntime --package missing-package.ilpk)
+  set_tests_properties(Illumo.Runtime.MountMissingDir
+    Illumo.Runtime.ProjectMissingDir Illumo.Runtime.PackageMissing
+    PROPERTIES WILL_FAIL TRUE)
   set_tests_properties(Illumo.Runtime.Help Illumo.Runtime.InvalidCaptureFrame
     Illumo.Runtime.InvalidBenchFrames Illumo.Runtime.CaptureScriptNeedsCapture
+    Illumo.Runtime.MountMissingDir Illumo.Runtime.ProjectMissingDir
+    Illumo.Runtime.PackageMissing
     PROPERTIES LABELS "Illumo;IllumoWorkspace")
   add_dependencies(IllumoRunTests IllumoRuntime)
 
-  add_executable(IllumoWasmFileTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmFiles.cpp")
+  # The guest SDK's file client runs natively here against the host service.
+  add_executable(IllumoWasmFileTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmFiles.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/Files.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/FileTree.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/VfsAssets.cpp")
   target_link_libraries(IllumoWasmFileTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
   illumo_configure_runtime_target(IllumoWasmFileTests)
   illumo_stage_msvc_asan(IllumoWasmFileTests)
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/Testing/WasmFiles")
   add_test(NAME Illumo.Wasm.FileServices COMMAND IllumoWasmFileTests --run Illumo.Wasm.FileServices)
-  set_tests_properties(Illumo.Wasm.FileServices PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20 WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/Testing/WasmFiles")
+  # Performance measurement, not a workspace gate: ctest -L IllumoBenchmark.
+  add_test(NAME Illumo.Wasm.Bench.FileThroughput
+    COMMAND IllumoWasmFileTests --run Illumo.Wasm.Bench.FileThroughput)
+  set_tests_properties(Illumo.Wasm.Bench.FileThroughput PROPERTIES
+    LABELS "Illumo;IllumoBenchmark" TIMEOUT 300
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/Testing/WasmFiles")
+  foreach(_case PackageFromArchive FileProtocolV2Decoder MountedFiles MountedDeny GuestFileTree
+      GuestPinnedPreload GuestAssetFetchAndEvict GuestLocalEntries)
+    add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmFileTests --run "Illumo.Wasm.${_case}")
+  endforeach()
+  set_tests_properties(Illumo.Wasm.FileServices Illumo.Wasm.PackageFromArchive
+    Illumo.Wasm.FileProtocolV2Decoder Illumo.Wasm.MountedFiles
+    Illumo.Wasm.MountedDeny Illumo.Wasm.GuestFileTree Illumo.Wasm.GuestPinnedPreload
+    Illumo.Wasm.GuestAssetFetchAndEvict Illumo.Wasm.GuestLocalEntries PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20 WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/Testing/WasmFiles")
   add_dependencies(IllumoRunTests IllumoWasmFileTests)
   add_executable(IllumoWasmFrameTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmFrame.cpp")
   target_link_libraries(IllumoWasmFrameTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
@@ -223,6 +265,30 @@ if(BUILD_TESTING)
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20 WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmFrameTests>")
   endforeach()
   add_dependencies(IllumoRunTests IllumoWasmFrameTests)
+  # Surface windows: the Window service, frame v5, input v2 and the host
+  # panel windows through a fake window platform.
+  add_executable(IllumoWasmWindowTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmWindows.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/PanelSurfaces.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/RecordingBackend.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/Display.cpp")
+  target_link_libraries(IllumoWasmWindowTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
+  target_compile_definitions(IllumoWasmWindowTests PRIVATE
+    "ILLUMO_ENGINE_ASSETS=\"${CMAKE_SOURCE_DIR}/Illumo/Assets\"")
+  illumo_configure_runtime_target(IllumoWasmWindowTests)
+  illumo_stage_msvc_asan(IllumoWasmWindowTests)
+  foreach(_case WindowServiceDecoder InputV2 FrameV5Surfaces WindowDeny PanelWindowsLifecycle
+      GuestPanelSurfaces)
+    add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmWindowTests --run "Illumo.Wasm.${_case}")
+    set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20
+      WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmWindowTests>")
+  endforeach()
+  # Performance measurement, not a workspace gate: ctest -L IllumoBenchmark.
+  add_test(NAME Illumo.Wasm.Bench.PanelSurface
+    COMMAND IllumoWasmWindowTests --run Illumo.Wasm.Bench.PanelSurface)
+  set_tests_properties(Illumo.Wasm.Bench.PanelSurface PROPERTIES
+    LABELS "Illumo;IllumoBenchmark" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmWindowTests>")
+  add_dependencies(IllumoRunTests IllumoWasmWindowTests)
   set(_guest_source "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/CompatibilityGuest.cpp")
   set(_guest_binary "${CMAKE_BINARY_DIR}/wasm-tests/compatibility.wasm")
   add_custom_command(OUTPUT "${_guest_binary}"
@@ -272,7 +338,7 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "$<TARGET_FILE:IllumoWasmtime>" "$<TARGET_FILE_DIR:IllumoWasmTests>"
     VERBATIM)
-  foreach(_case Compatibility Isolation Fuel Epoch Memory DeniedImports InvalidModule Worker Wire CompilerLimits Lifecycle Protocol Resources EngineModes Manifest)
+  foreach(_case Compatibility Isolation Fuel Epoch Memory DeniedImports InvalidModule Worker Wire CompilerLimits Lifecycle Protocol Resources EngineModes)
     add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmTests --run "Illumo.Wasm.${_case}")
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES
       LABELS "Illumo;IllumoWorkspace" TIMEOUT 20)
@@ -324,8 +390,12 @@ if(BUILD_TESTING)
 
 
   # The complete product package driven through the generic host.
+  # The catalog bootstrap and the SDK file client also run natively here,
+  # against the host file service, for the package catalog merge.
   add_executable(IllumoGameWasmPackageTests
-    "${CMAKE_SOURCE_DIR}/IllumoGame/Tests/Wasm/TestGamePackage.cpp")
+    "${CMAKE_SOURCE_DIR}/IllumoGame/Tests/Wasm/TestGamePackage.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGame/Source/Wasm/CatalogBootstrap.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/Files.cpp")
   target_link_libraries(IllumoGameWasmPackageTests PRIVATE
     IllumoGameCore IllumoWasmRendering Illumo::TestSupport)
   target_compile_definitions(IllumoGameWasmPackageTests PRIVATE
@@ -333,7 +403,8 @@ if(BUILD_TESTING)
     "ILLUMO_SIMULATION_WORKER=\"${_guest_build}/CSimWorkerGuest.wasm\""
     "ILLUMO_GAME_DEFAULTS=\"${CMAKE_SOURCE_DIR}/IllumoGame/envvars.json\""
     "ILLUMO_FAMILIES=\"${CMAKE_SOURCE_DIR}/IllumoGame/families.json\""
-    "ILLUMO_RULES=\"${CMAKE_SOURCE_DIR}/IllumoGame/rulesets.json\"")
+    "ILLUMO_RULES=\"${CMAKE_SOURCE_DIR}/IllumoGame/rulesets.json\""
+    "ILLUMO_RENDER3D_SCENE=\"${CMAKE_SOURCE_DIR}/IllumoGame/Scenes/render3d-test.ilsc\"")
   illumo_configure_runtime_target(IllumoGameWasmPackageTests)
   illumo_stage_msvc_asan(IllumoGameWasmPackageTests)
   add_dependencies(IllumoGameWasmPackageTests IllumoGuestBuild)
@@ -345,6 +416,11 @@ if(BUILD_TESTING)
     COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.GamePackage)
   set_tests_properties(IllumoGame.Wasm.GamePackage PROPERTIES
     LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
+  add_test(NAME IllumoGame.Wasm.CatalogMerge
+    COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.CatalogMerge)
+  set_tests_properties(IllumoGame.Wasm.CatalogMerge PROPERTIES
+    LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 60
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
   add_test(NAME IllumoGame.Wasm.GamePackageLanes
     COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.GamePackageLanes)
@@ -378,7 +454,10 @@ if(BUILD_TESTING)
     VERBATIM)
   add_test(NAME IllEd.Wasm.Package
     COMMAND IllEdWasmPackageTests --run IllEd.Wasm.Package)
-  set_tests_properties(IllEd.Wasm.Package PROPERTIES
+  # With a writable /project: place project assets and save into the project.
+  add_test(NAME IllEd.Wasm.ProjectPackage
+    COMMAND IllEdWasmPackageTests --run IllEd.Wasm.ProjectPackage)
+  set_tests_properties(IllEd.Wasm.Package IllEd.Wasm.ProjectPackage PROPERTIES
     LABELS "IllEd;IllumoWorkspace" TIMEOUT 300
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllEdWasmPackageTests>")
   add_dependencies(IllumoRunTests IllEdWasmPackageTests)
@@ -388,7 +467,7 @@ if(BUILD_TESTING)
   add_executable(IllMeshViewerWasmPackageTests
     "${CMAKE_SOURCE_DIR}/IllMeshViewer/Tests/Wasm/TestViewerPackage.cpp")
   target_link_libraries(IllMeshViewerWasmPackageTests PRIVATE
-    IllumoWasmRendering Illumo::TestSupport)
+    IllumoWasmRendering Illumo::Content Illumo::TestSupport)
   target_compile_definitions(IllMeshViewerWasmPackageTests PRIVATE
     "ILLUMO_VIEWER_GUEST=\"${_guest_build}/IllMeshViewer.wasm\""
     "ILLUMO_VIEWER_DEFAULTS=\"${CMAKE_SOURCE_DIR}/IllMeshViewer/envvars.json\""
@@ -403,7 +482,10 @@ if(BUILD_TESTING)
     VERBATIM)
   add_test(NAME IllMeshViewer.Wasm.Package
     COMMAND IllMeshViewerWasmPackageTests --run IllMeshViewer.Wasm.Package)
-  set_tests_properties(IllMeshViewer.Wasm.Package PROPERTIES
+  # A mounted content package: viewer_open fetches a scene and its mesh.
+  add_test(NAME IllMeshViewer.Wasm.ScenePackage
+    COMMAND IllMeshViewerWasmPackageTests --run IllMeshViewer.Wasm.ScenePackage)
+  set_tests_properties(IllMeshViewer.Wasm.Package IllMeshViewer.Wasm.ScenePackage PROPERTIES
     LABELS "IllMeshViewer;IllumoWorkspace" TIMEOUT 300
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllMeshViewerWasmPackageTests>")
   add_dependencies(IllumoRunTests IllMeshViewerWasmPackageTests)

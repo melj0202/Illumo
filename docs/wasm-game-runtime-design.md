@@ -177,6 +177,17 @@ missing guests and incompatible mod API versions reject activation clearly.
 Package paths stay inside the package; user-selected files receive separate
 capabilities. No guest-controlled search of DLLs/native executable code.
 
+Note (2026-09-23): the layout and manifest names above are superseded by
+content packages (`docs/content-packages-and-scenes-design.md`, execution
+record in `docs/content-packages-and-scenes-plan.md`). Every package, a loose
+directory or an `.ilpk` archive, carries one strict `illumo.json` of kind
+`app`, `content` or `mod`; it replaced the earlier `app.json`, and its `app`
+section carries the module, worker and budget requests, still clamped to host
+ceilings. Installed applications live in `apps/<name>/` or `apps/<name>.ilpk`.
+The host mounts them into a read-only virtual file tree (`/engine`, `/app`,
+`/packages/<id>`, and an optional writable `/project`), and module bytes are
+read from `/app` through that tree.
+
 Conceptual exports (names and layouts become an ABI header in milestone 1):
 
 | Export | Contract |
@@ -223,6 +234,31 @@ Capabilities cover resource creation, packaged asset reads, private storage,
 selected-file access, clipboard, console registration, display requests and
 job/message submission. Mods get a minimal game-granted subset; game APIs grant
 operations, not arbitrary access to the game's service bag.
+
+Note (2026-09-23): `GuestCapability::ProjectFiles` (bit 9) was added, so
+`GuestEnvelope::KnownCapabilities` is now `(1 << 10) - 1`. The host offers it
+only when a writable `/project` is mounted; project writes, Import and Pack
+require it (Import and Pack also `SelectedFiles`). Reading and listing
+mounted paths require `Assets`. See section 9.
+
+Note (2026-09-23): `GuestCapability::Windows` (bit 10) was added, so
+`KnownCapabilities` is now `(1 << 11) - 1` (D-E27, D-R27). The host grants it
+only when it can present extra windows (not on Linux, `--capture` or
+`--bench-*`); guests never require it. With it:
+
+- `GuestService::Window` (17) opens, retitles and closes up to 8 panel
+  windows (160×120 to 4096², offset at most ±16384 from the main client
+  origin, titles of at most 128 bytes of UTF-8). Open completes with the
+  client size.
+- Input v2 appends the main client origin, the focused surface, a surface tag
+  per key and character event, per-surface size, origin, pointer, buttons,
+  wheel and focus, and window events (Closed, Resized, Moved, focus).
+- Frame schema v5 appends up to 8 UI-only surfaces, each a batch list with a
+  revision or `same`. `WasmPanelWindows` replays a changed surface offscreen,
+  reads it back asynchronously and presents it one frame late.
+- The guest SDK exposes these as `GuestPanelSurfaces`, published to product
+  modules as `IllumoContext::panelSurfaces`. See
+  `docs/detachable-panels-design.md`.
 
 Quotas cover linear memory, aggregate child-worker memory, tables/stack, compiled
 module input, instructions/time, pending requests, handles, upload bytes and GPU
@@ -383,6 +419,40 @@ with existing user files preserved. Private per-game storage becomes the default
 for new packages. Never copy arbitrary host directories into guest authority or
 overwrite user settings during staging. Verify precedence and Unicode paths.
 
+Note (2026-09-23): file protocol v2 and a VFS-backed guest asset cache
+replace the flat package reads described above. `GuestFileRequest` version 2
+(`IllumoGuest/FileProtocol.h`) refuses version 1, since host and SDK ship
+together, and adds:
+
+| Addition | Meaning |
+|---|---|
+| Area `Mounted` | `path` is an absolute virtual path (`/packages/forest/a.png`) |
+| Area `Package` | kept as an alias of `/app` |
+| Field `target` | the project path an Import writes or a Pack reads |
+| Action `List` | one directory page; `offset` is the cursor, `size` the page limit (at most 256) |
+| Action `Stat` | kind, size and supplying package id |
+| Action `Import` | copy a Selected grant into `/project` |
+| Action `Pack` | pack a project directory into an `.ilpk` at a writable Selected grant, on a dedicated host pack worker |
+
+Mounted transfers use blocks up to 1 MiB; Package, Storage and Selected files
+keep 64 KiB. `GuestFileListing` and `GuestFileStatus` are the completion
+payloads. `GuestFiles` holds 16 tasks and in-flight requests (previously 8).
+Project writes stage in memory, commit through the virtual file tree (modules
+and manifests are refused) and count against an incrementally maintained
+quota (`WasmFileLimits::projectBytes`). `GuestFileTree` wraps listing, stat,
+Import and Pack with callbacks.
+
+`GuestVfsAssets` replaces `GuestPackageAssets` as every guest's AssetManager
+byte source. Canonical names are absolute virtual paths, with relative names
+joined to `/app`. `packageAssets()` names pinned preloads, read before
+`bootstrap()`. Fetch sets load a scene's references on demand in
+collect-fetch-instantiate order (`GuestSceneFetches` adds a second stage for
+OBJ material libraries). Unpinned, unheld bytes are evicted least recently
+used past a 256 MiB default budget, and `/local/<name>` holds bytes the app
+supplies itself. `IAssetSource::read` stays synchronous. IllumoGame reads its
+packaged catalogs from `/app` and merges every `/packages/<id>/csim/*.json`
+after them and before the storage `*.user.json` overlays.
+
 Native command closures point only to the generic adapter and owner identity;
 they enqueue guest endpoints. Native services must not retain a guest function
 pointer. Imports never synchronously reenter a guest. Late dialog/file/job
@@ -415,6 +485,17 @@ changes to game meaning version the game's API.
 Live reload initially means clean stop/start of an instance. State continuity
 requires an explicit game-defined versioned checkpoint and validation. Raw WASM
 memory snapshots are not a portable save or migration contract.
+
+Note (2026-09-23): mods and expansions are packages. Every package in
+`packages/` beside the runtime, and each `--mount <dir|.ilpk>`, is mounted
+read-only at `/packages/<id>` in dependency order (missing dependencies and
+cycles leave a package unmounted), so content is additive. A package may
+overlay the launched application's `/app` view when its `targets` name that
+application or `"*"`; overlays stack by priority, then dependency order, then
+id, and cannot hide lower files. A `mod` package declares its module and
+`extensionApi` in `illumo.json`, but its module is still started through
+`--mod`; the manifest does not load it yet. Data such as CSim catalogs merge
+by product policy rather than file replacement (section 9).
 
 ## 11. Build and source changes
 

@@ -69,6 +69,7 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
         (application->describe().requiredCapabilities & ~grants) != 0) {
       __builtin_trap();
     }
+    application->grantCapabilities(grants);
     started = application->start(startup.bytes(startup.remaining()));
     payload.u32(started ? 1 : 0);
   } else {

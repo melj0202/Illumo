@@ -1,18 +1,27 @@
 cmake_minimum_required(VERSION 3.25)
 
 add_library(IllEdCore STATIC
-  Source/EditorAttachment.cpp
+  Source/EditorAssetBrowser.cpp
+  Source/EditorAssets.cpp
+  Source/EditorClipboard.cpp
   Source/EditorConfirmDialog.cpp
   Source/EditorDocument.cpp
+  Source/EditorGizmo.cpp
+  Source/EditorHistory.cpp
+  Source/EditorInspector.cpp
   Source/EditorModule.cpp
+  Source/EditorModuleCommands.cpp
+  Source/EditorModulePanels.cpp
+  Source/EditorModuleViewport.cpp
   Source/EditorSceneGraphView.cpp
-  Source/EditorSidebar.cpp
+  Source/EditorSelection.cpp
+  Source/EditorShortcuts.cpp
   Source/EditorToolbar.cpp
+  Source/EditorToolsPanel.cpp
   Source/EditorUiAtlas.cpp
   Source/IllEdApplication.cpp
   Source/IllEdConfig.cpp
   Source/IllEdPlatformNative.cpp
-  Source/IlscCodec.cpp
 )
 
 function(illed_stage_assets target_name)
@@ -27,9 +36,8 @@ endfunction()
 target_include_directories(IllEdCore PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_include_directories(IllEdCore SYSTEM PRIVATE
-  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/json/single_include"
   "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
-target_link_libraries(IllEdCore PUBLIC Illumo::Illumo)
+target_link_libraries(IllEdCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllEdCore)
 
 # IllEd ships only as the WASM package apps/illed (cmake/IllumoWasm.cmake),
@@ -47,20 +55,24 @@ if(BUILD_TESTING)
   endif()
   add_executable(IllEdTests
     Tests/TestMain.cpp
+    Tests/TestEditorAssets.cpp
+    Tests/TestEditorClipboard.cpp
     Tests/TestEditorDocument.cpp
+    Tests/TestEditorGizmo.cpp
+    Tests/TestEditorHistory.cpp
+    Tests/TestEditorInspector.cpp
     Tests/TestEditorModule.cpp
+    Tests/TestEditorPanels.cpp
     Tests/TestEditorSceneGraphView.cpp
-    Tests/TestEditorSidebar.cpp
     Tests/TestEditorToolbar.cpp
+    Tests/TestEditorToolsPanel.cpp
     Tests/TestEditorUiAtlas.cpp
     Tests/TestIllEdConfig.cpp
-    Tests/TestIlscCodec.cpp
   )
   target_compile_definitions(IllEdTests PRIVATE ILLUMO_TESTING)
   target_include_directories(IllEdTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
   target_include_directories(IllEdTests SYSTEM PRIVATE
-    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/json/single_include"
     "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
   target_link_libraries(IllEdTests PRIVATE IllEdCore Illumo::TestSupport)
   illumo_configure_runtime_target(IllEdTests)

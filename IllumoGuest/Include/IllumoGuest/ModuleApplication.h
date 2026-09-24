@@ -18,9 +18,10 @@
 #include <IllumoGuest/Environment.h>
 #include <IllumoGuest/Files.h>
 #include <IllumoGuest/FontProvider.h>
-#include <IllumoGuest/PackageAssets.h>
+#include <IllumoGuest/PanelSurfaces.h>
 #include <IllumoGuest/RecordingBackend.h>
 #include <IllumoGuest/SnapshotWindow.h>
+#include <IllumoGuest/VfsAssets.h>
 #include <optional>
 #include <set>
 
@@ -84,7 +85,8 @@ protected:
   // package's first-run envvars.json has filled any values still unset.
   virtual void applyDefaults(IEnvVars& settings);
   // Package files AssetManager serves to modules (textures, cubemap crosses,
-  // meshes by name). All are read before bootstrap() first runs.
+  // meshes by name), relative to /app or absolute virtual paths. All are read
+  // and pinned before bootstrap() first runs.
   virtual std::vector<std::string> packageAssets() const;
   // Pumped every update until true; throw to fail startup visibly.
   virtual bool bootstrap();
@@ -92,6 +94,8 @@ protected:
   // Product service adapters pumped every update before modules run.
   virtual void pumpProduct();
   GuestFiles& files() { return m_files; }
+  // AssetManager's byte source: pinned preloads, fetch sets and /local bytes.
+  GuestVfsAssets& assetCache() { return m_assetCache; }
   GuestEnvironment& settings() { return m_settings; }
   const IllumoContext& context() const { return m_context; }
   bool running() const { return m_phase == Phase::Running; }
@@ -121,7 +125,7 @@ private:
   GuestSnapshotWindow m_window;
   Camera m_camera;
   Renderer m_renderer;
-  GuestPackageAssets m_packageAssets;
+  GuestVfsAssets m_assetCache;
   // After the renderer: releases its textures and meshes first.
   AssetManager m_assets;
   bool m_assetsRequested = false;
@@ -130,6 +134,9 @@ private:
   GuestFontProvider m_fonts;
   InputManager m_input;
   Scene m_scene;
+  // Detached panel windows (Windows capability); published as
+  // IllumoContext::panelSurfaces only when granted.
+  GuestPanelSurfaces m_panels;
   CommandRegistry m_commands;
   CommandRegistry m_consoleBuiltins;
   GuestCommandLine m_commandLine;

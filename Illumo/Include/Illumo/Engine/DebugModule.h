@@ -8,6 +8,7 @@
 #include <memory>
 
 class DebugOverlayState;
+class FileTreeOverlay;
 class FrameProfiler;
 class PixelWindow;
 class ProfilerOverlay;
@@ -30,6 +31,8 @@ public:
 private:
   FrameProfiler* m_profiler;
   std::unique_ptr<ProfilerOverlay> m_profilerOverlay;
+  // The `files` browser over IllumoContext::fileTree.
+  std::unique_ptr<FileTreeOverlay> m_fileTreeOverlay;
   void updateDiagnostics(double dt);
   void updateWatermarkPosition();
   void registerRendererCommands();

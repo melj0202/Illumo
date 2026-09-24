@@ -101,6 +101,8 @@ struct GuestShadowCaster
 struct GuestFrameLimits
 {
   std::uint32_t bytes = 64u * 1024u * 1024u;
+  // Batches, vertices and indices bound the main frame and every surface
+  // together.
   std::uint32_t batches = 4096;
   std::uint32_t vertices = 1000000;
   std::uint32_t indices = 3000000;
@@ -133,14 +135,31 @@ struct GuestTextureWrite
   std::uint32_t beforeBatch = 0; // ordered between draws; batches.size() is end
 };
 
+// Version 5: the content of one surface window (Windows capability). Its
+// batches are UI only (Shape, Sprite, Canvas) in the surface's own logical
+// space, drawn after every main batch and texture write. A surface whose
+// content did not change since its last revision is sent as `same`.
+struct GuestSurfaceFrame
+{
+  std::uint32_t surface = 0;
+  float width = 0;
+  float height = 0;
+  std::uint64_t revision = 0;
+  bool same = false;
+  std::vector<GuestBatch> batches;
+};
+
 struct GuestFrame
 {
   static constexpr std::uint32_t Magic = 0x31465249u; // IRF1
   // Version 1 carries 2D batches only. Version 2 adds the world camera,
   // primitive/depth flags, lit meshes and shadow casters. Version 3 adds the
   // blend flag, retained host meshes and the cubemap skybox. Version 4 adds
-  // in-place writes to dynamic retained meshes. The host accepts all four.
-  static constexpr std::uint32_t Version = 4;
+  // in-place writes to dynamic retained meshes. Version 5 adds surface
+  // windows. The host accepts all five.
+  static constexpr std::uint32_t Version = 5;
+  static constexpr std::uint32_t MaximumSurfaces = 8;
+  static constexpr std::uint32_t MaximumSurfaceId = 0x7fffffffu;
   float width = 1280;
   float height = 720;
   // World view-projection used for host shadow fitting (version 2).
@@ -152,6 +171,7 @@ struct GuestFrame
   std::vector<GuestTextureWrite> textureWrites;
   std::vector<GuestShadowCaster> shadowCasters;
   std::vector<GuestFrameMeshWrite> meshWrites;
+  std::vector<GuestSurfaceFrame> surfaces;
 
   // Empties the frame but keeps every container's capacity for reuse.
   void clear()
@@ -160,6 +180,7 @@ struct GuestFrame
     textureWrites.clear();
     shadowCasters.clear();
     meshWrites.clear();
+    surfaces.clear();
     hasCamera = false;
   }
 
@@ -180,6 +201,58 @@ struct GuestFrame
     return reader.valid();
   }
 
+  static void writeBatch(GuestWireWriter& output, const GuestBatch& batch)
+  {
+    if (batch.vertices.size() > UINT32_MAX ||
+        batch.indices.size() > UINT32_MAX ||
+        (batch.retained() &&
+         (!batch.vertices.empty() || !batch.indices.empty()))) {
+      throw std::length_error("Guest geometry exceeds ABI range");
+    }
+    output.u32(static_cast<std::uint32_t>(batch.style));
+    output.u32(static_cast<std::uint32_t>(batch.layer));
+    batch.texture.write(output);
+    output.u32(batch.clipped ? 1 : 0);
+    writeFloats(output, batch.clip.data(), 4);
+    writeFloats(output, batch.mvp.data(), 16);
+    output.u32(static_cast<std::uint32_t>(batch.primitive));
+    output.u32(batch.depthTest ? 1 : 0);
+    output.u32(batch.blend ? 1 : 0);
+    batch.mesh.write(output);
+    output.u32(batch.firstIndex);
+    const bool lit = batch.style == GuestBatchStyle::LitMesh;
+    if (batch.style == GuestBatchStyle::Skybox) {
+      writeFloats(output, batch.lighting.tint.data(), 4);
+    }
+    if (lit) {
+      const GuestLighting& lighting = batch.lighting;
+      writeFloats(output, lighting.model.data(), 16);
+      writeFloats(output, lighting.lightDirection.data(), 3);
+      writeFloats(output, lighting.lightColor.data(), 3);
+      writeFloats(output, lighting.ambientColor.data(), 3);
+      writeFloats(output, lighting.tint.data(), 4);
+      output.f32(lighting.shadowBias);
+      output.f32(lighting.shadowSlopeScale);
+      output.f32(lighting.shadowNormalOffset);
+      output.u32((lighting.shadowPcf ? 1u : 0u) |
+                 (lighting.receivesShadow ? 2u : 0u) |
+                 (lighting.castsShadow ? 4u : 0u));
+    }
+    output.u32(static_cast<std::uint32_t>(batch.vertices.size()));
+    output.u32(batch.drawCount());
+    for (const GuestVertex& vertex : batch.vertices) {
+      writeFloats(output, vertex.position.data(), 3);
+      output.u32(vertex.rgba);
+      writeFloats(output, vertex.uv.data(), 2);
+      if (lit) {
+        writeFloats(output, vertex.normal.data(), 3);
+      }
+    }
+    for (std::uint32_t index : batch.indices) {
+      output.u32(index);
+    }
+  }
+
   void write(GuestWireWriter& output) const
   {
     if (batches.size() > UINT32_MAX || shadowCasters.size() > UINT32_MAX) {
@@ -193,54 +266,7 @@ struct GuestFrame
     writeFloats(output, camera.data(), 16);
     output.u32(static_cast<std::uint32_t>(batches.size()));
     for (const GuestBatch& batch : batches) {
-      if (batch.vertices.size() > UINT32_MAX ||
-          batch.indices.size() > UINT32_MAX ||
-          (batch.retained() &&
-           (!batch.vertices.empty() || !batch.indices.empty()))) {
-        throw std::length_error("Guest geometry exceeds ABI range");
-      }
-      output.u32(static_cast<std::uint32_t>(batch.style));
-      output.u32(static_cast<std::uint32_t>(batch.layer));
-      batch.texture.write(output);
-      output.u32(batch.clipped ? 1 : 0);
-      writeFloats(output, batch.clip.data(), 4);
-      writeFloats(output, batch.mvp.data(), 16);
-      output.u32(static_cast<std::uint32_t>(batch.primitive));
-      output.u32(batch.depthTest ? 1 : 0);
-      output.u32(batch.blend ? 1 : 0);
-      batch.mesh.write(output);
-      output.u32(batch.firstIndex);
-      const bool lit = batch.style == GuestBatchStyle::LitMesh;
-      if (batch.style == GuestBatchStyle::Skybox) {
-        writeFloats(output, batch.lighting.tint.data(), 4);
-      }
-      if (lit) {
-        const GuestLighting& lighting = batch.lighting;
-        writeFloats(output, lighting.model.data(), 16);
-        writeFloats(output, lighting.lightDirection.data(), 3);
-        writeFloats(output, lighting.lightColor.data(), 3);
-        writeFloats(output, lighting.ambientColor.data(), 3);
-        writeFloats(output, lighting.tint.data(), 4);
-        output.f32(lighting.shadowBias);
-        output.f32(lighting.shadowSlopeScale);
-        output.f32(lighting.shadowNormalOffset);
-        output.u32((lighting.shadowPcf ? 1u : 0u) |
-                   (lighting.receivesShadow ? 2u : 0u) |
-                   (lighting.castsShadow ? 4u : 0u));
-      }
-      output.u32(static_cast<std::uint32_t>(batch.vertices.size()));
-      output.u32(batch.drawCount());
-      for (const GuestVertex& vertex : batch.vertices) {
-        writeFloats(output, vertex.position.data(), 3);
-        output.u32(vertex.rgba);
-        writeFloats(output, vertex.uv.data(), 2);
-        if (lit) {
-          writeFloats(output, vertex.normal.data(), 3);
-        }
-      }
-      for (std::uint32_t index : batch.indices) {
-        output.u32(index);
-      }
+      writeBatch(output, batch);
     }
     output.u32(static_cast<std::uint32_t>(textureWrites.size()));
     for (const GuestTextureWrite& write : textureWrites) {
@@ -278,6 +304,240 @@ struct GuestFrame
       output.u32(static_cast<std::uint32_t>(write.bytes.size()));
       output.bytes(write.bytes);
     }
+    if (surfaces.size() > MaximumSurfaces) {
+      throw std::length_error("Too many guest surfaces");
+    }
+    output.u32(static_cast<std::uint32_t>(surfaces.size()));
+    for (const GuestSurfaceFrame& surface : surfaces) {
+      output.u32(surface.surface);
+      output.f32(surface.width);
+      output.f32(surface.height);
+      output.u64(surface.revision);
+      output.u32(surface.same ? 1 : 0);
+      if (surface.same) {
+        continue;
+      }
+      if (surface.batches.size() > UINT32_MAX) {
+        throw std::length_error("Too many guest surface batches");
+      }
+      output.u32(static_cast<std::uint32_t>(surface.batches.size()));
+      for (const GuestBatch& batch : surface.batches) {
+        writeBatch(output, batch);
+      }
+    }
+  }
+
+  // Running totals shared by the main batches and every surface's batches.
+  struct Totals
+  {
+    std::uint32_t batches = 0;
+    std::uint32_t vertices = 0;
+    std::uint32_t indices = 0;
+  };
+
+  // Decodes one batch (without layer ordering, which callers check).
+  static bool readBatch(GuestWireReader& reader,
+                        std::uint32_t version,
+                        const GuestFrameLimits& limits,
+                        Totals& totals,
+                        GuestBatch& batch)
+  {
+    const std::uint32_t style = reader.u32();
+    const std::uint32_t layer = reader.u32();
+    batch.style = static_cast<GuestBatchStyle>(style);
+    batch.layer = static_cast<GuestLayer>(layer);
+    batch.texture = GuestResourceId::read(reader);
+    const std::uint32_t clipped = reader.u32();
+    batch.clipped = clipped != 0;
+    // Version 1: Shape to Canvas; 2 adds LitMesh; 3 and later add Skybox.
+    const std::uint32_t maximumStyle = version >= 3 ? 5u : version + 2u;
+    if (style < 1 || style > maximumStyle || layer < 1 || layer > 2 ||
+        clipped > 1) {
+      return false;
+    }
+    const bool lit = batch.style == GuestBatchStyle::LitMesh;
+    const bool sky = batch.style == GuestBatchStyle::Skybox;
+    if (style == 1 || lit) {
+      if (batch.texture.owner != 0 || batch.texture.slot != 0 ||
+          batch.texture.generation != 0) {
+        return false;
+      }
+    } else if (batch.texture.owner == 0 || batch.texture.slot == 0 ||
+               batch.texture.generation == 0 ||
+               batch.texture.kind != GuestResourceKind::Texture) {
+      return false;
+    }
+    if (!readFloats(reader, batch.clip.data(), 4)) {
+      return false;
+    }
+    for (float value : batch.clip) {
+      if (std::abs(value) > 65536) {
+        return false;
+      }
+    }
+    if (batch.clip[2] < 0 || batch.clip[3] < 0 ||
+        !readFloats(reader, batch.mvp.data(), 16)) {
+      return false;
+    }
+    if (version >= 2) {
+      const std::uint32_t primitive = reader.u32();
+      const std::uint32_t depthTest = reader.u32();
+      if (primitive < 1 || primitive > 2 || depthTest > 1 ||
+          (primitive == 2 && style != 1) ||
+          ((lit || sky) && batch.layer != GuestLayer::World)) {
+        return false;
+      }
+      batch.primitive = static_cast<GuestPrimitive>(primitive);
+      batch.depthTest = depthTest != 0;
+    }
+    if (version >= 3) {
+      const std::uint32_t blend = reader.u32();
+      batch.mesh = GuestResourceId::read(reader);
+      batch.firstIndex = reader.u32();
+      if (!reader.valid() || blend > 1) {
+        return false;
+      }
+      batch.blend = blend != 0;
+      batch.hasBlend = true;
+      if (batch.retained()
+            ? (batch.mesh.kind != GuestResourceKind::Mesh ||
+               batch.mesh.slot == 0 || batch.mesh.generation == 0 || sky)
+            : (batch.mesh.slot != 0 || batch.mesh.generation != 0 ||
+               batch.firstIndex != 0)) {
+        return false;
+      }
+    }
+    if (sky && !readFloats(reader, batch.lighting.tint.data(), 4)) {
+      return false;
+    }
+    if (lit) {
+      GuestLighting& lighting = batch.lighting;
+      if (!readFloats(reader, lighting.model.data(), 16) ||
+          !readFloats(reader, lighting.lightDirection.data(), 3) ||
+          !readFloats(reader, lighting.lightColor.data(), 3) ||
+          !readFloats(reader, lighting.ambientColor.data(), 3) ||
+          !readFloats(reader, lighting.tint.data(), 4)) {
+        return false;
+      }
+      lighting.shadowBias = reader.f32();
+      lighting.shadowSlopeScale = reader.f32();
+      lighting.shadowNormalOffset = reader.f32();
+      const std::uint32_t flags = reader.u32();
+      if (!reader.valid() || flags > 7 || !std::isfinite(lighting.shadowBias) ||
+          !std::isfinite(lighting.shadowSlopeScale) ||
+          !std::isfinite(lighting.shadowNormalOffset)) {
+        return false;
+      }
+      lighting.shadowPcf = (flags & 1u) != 0;
+      lighting.receivesShadow = (flags & 2u) != 0;
+      lighting.castsShadow = (flags & 4u) != 0;
+    }
+    const std::uint32_t vertices = reader.u32();
+    const std::uint32_t indices = reader.u32();
+    const std::uint32_t stride = lit ? 36u : 24u;
+    const std::uint32_t group =
+      batch.primitive == GuestPrimitive::Lines ? 2u : 3u;
+    if (batch.retained()) {
+      // Only the index range travels; the host resolves and bounds it
+      // against the retained mesh.
+      if (!reader.valid() || vertices != 0 || indices == 0 ||
+          indices % group != 0) {
+        return false;
+      }
+      batch.indexCount = indices;
+      return true;
+    }
+    if (!reader.valid() || vertices == 0 || indices == 0 ||
+        indices % group != 0 || vertices > limits.vertices - totals.vertices ||
+        indices > limits.indices - totals.indices ||
+        vertices > reader.remaining() / stride) {
+      return false;
+    }
+    totals.vertices += vertices;
+    totals.indices += indices;
+    batch.vertices.resize(vertices);
+    for (GuestVertex& vertex : batch.vertices) {
+      if (!readFloats(reader, vertex.position.data(), 3)) {
+        return false;
+      }
+      vertex.rgba = reader.u32();
+      if (!readFloats(reader, vertex.uv.data(), 2) ||
+          (lit && !readFloats(reader, vertex.normal.data(), 3))) {
+        return false;
+      }
+    }
+    if (indices > reader.remaining() / 4u) {
+      return false;
+    }
+    batch.indices.resize(indices);
+    for (std::uint32_t& index : batch.indices) {
+      index = reader.u32();
+      if (index >= vertices) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Minimum encoded batch: 120 bytes (v1), 128 (v2), 156 (v3 and later).
+  static std::uint32_t minimumBatchBytes(std::uint32_t version)
+  {
+    return version == 1 ? 120u : (version == 2 ? 128u : 156u);
+  }
+
+  static bool readSurfaces(GuestWireReader& reader,
+                           const GuestFrameLimits& limits,
+                           Totals& totals,
+                           GuestFrame& frame)
+  {
+    const std::uint32_t count = reader.u32();
+    // Minimum encoded surface: id, size, revision, same flag (24 bytes).
+    if (!reader.valid() || count > MaximumSurfaces ||
+        count > reader.remaining() / 24u) {
+      return false;
+    }
+    frame.surfaces.resize(count);
+    for (std::size_t index = 0; index < frame.surfaces.size(); ++index) {
+      GuestSurfaceFrame& surface = frame.surfaces[index];
+      surface.surface = reader.u32();
+      surface.width = reader.f32();
+      surface.height = reader.f32();
+      surface.revision = reader.u64();
+      const std::uint32_t same = reader.u32();
+      surface.same = same != 0;
+      if (!reader.valid() || surface.surface == 0 ||
+          surface.surface > MaximumSurfaceId || surface.revision == 0 ||
+          same > 1 || !std::isfinite(surface.width) ||
+          !std::isfinite(surface.height) || surface.width < 1 ||
+          surface.height < 1 || surface.width > 65536 ||
+          surface.height > 65536) {
+        return false;
+      }
+      for (std::size_t earlier = 0; earlier < index; ++earlier) {
+        if (frame.surfaces[earlier].surface == surface.surface) {
+          return false;
+        }
+      }
+      if (surface.same) {
+        continue;
+      }
+      const std::uint32_t batches = reader.u32();
+      if (!reader.valid() || batches > limits.batches - totals.batches ||
+          batches > reader.remaining() / minimumBatchBytes(5)) {
+        return false;
+      }
+      totals.batches += batches;
+      surface.batches.resize(batches);
+      for (GuestBatch& batch : surface.batches) {
+        if (!readBatch(reader, 5, limits, totals, batch) ||
+            batch.layer != GuestLayer::Ui ||
+            batch.style == GuestBatchStyle::LitMesh ||
+            batch.style == GuestBatchStyle::Skybox || batch.depthTest) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   // Decode transactionally before resource resolution or renderer calls.
@@ -295,7 +555,7 @@ struct GuestFrame
     GuestFrame frame;
     frame.width = reader.f32();
     frame.height = reader.f32();
-    if (magic != Magic || version < 1 || version > 4 || !reader.valid() ||
+    if (magic != Magic || version < 1 || version > Version || !reader.valid() ||
         !std::isfinite(frame.width) || !std::isfinite(frame.height) ||
         frame.width < 1 || frame.height < 1 || frame.width > 65536 ||
         frame.height > 65536) {
@@ -309,161 +569,23 @@ struct GuestFrame
       frame.hasCamera = hasCamera != 0;
     }
     const std::uint32_t count = reader.u32();
-    // Minimum encoded batch: 120 bytes (v1), 128 (v2), 156 (v3).
-    const std::uint32_t minimumBatch = version == 1   ? 120u
-                                       : version == 2 ? 128u
-                                                      : 156u;
     if (!reader.valid() || count > limits.batches ||
-        count > reader.remaining() / minimumBatch) {
+        count > reader.remaining() / minimumBatchBytes(version)) {
       return false;
     }
-    std::uint32_t totalVertices = 0;
-    std::uint32_t totalIndices = 0;
+    Totals totals;
+    totals.batches = count;
     std::uint32_t lastLayer = 1;
-    frame.batches.reserve(count);
-    for (std::uint32_t batchIndex = 0; batchIndex < count; ++batchIndex) {
-      GuestBatch batch;
-      const std::uint32_t style = reader.u32();
-      const std::uint32_t layer = reader.u32();
-      batch.style = static_cast<GuestBatchStyle>(style);
-      batch.layer = static_cast<GuestLayer>(layer);
-      batch.texture = GuestResourceId::read(reader);
-      const std::uint32_t clipped = reader.u32();
-      batch.clipped = clipped != 0;
-      // Version 1: Shape to Canvas; 2 adds LitMesh; 3 and later add Skybox.
-      const std::uint32_t maximumStyle = version >= 3 ? 5u : version + 2u;
-      if (style < 1 || style > maximumStyle || layer < 1 || layer > 2 ||
-          clipped > 1) {
+    frame.batches.resize(count);
+    for (GuestBatch& batch : frame.batches) {
+      if (!readBatch(reader, version, limits, totals, batch)) {
         return false;
       }
+      const std::uint32_t layer = static_cast<std::uint32_t>(batch.layer);
       if (layer < lastLayer) {
         return false;
       }
       lastLayer = layer;
-      const bool lit = batch.style == GuestBatchStyle::LitMesh;
-      const bool sky = batch.style == GuestBatchStyle::Skybox;
-      if (style == 1 || lit) {
-        if (batch.texture.owner != 0 || batch.texture.slot != 0 ||
-            batch.texture.generation != 0) {
-          return false;
-        }
-      } else if (batch.texture.owner == 0 || batch.texture.slot == 0 ||
-                 batch.texture.generation == 0 ||
-                 batch.texture.kind != GuestResourceKind::Texture) {
-        return false;
-      }
-      if (!readFloats(reader, batch.clip.data(), 4)) {
-        return false;
-      }
-      for (float value : batch.clip) {
-        if (std::abs(value) > 65536) {
-          return false;
-        }
-      }
-      if (batch.clip[2] < 0 || batch.clip[3] < 0 ||
-          !readFloats(reader, batch.mvp.data(), 16)) {
-        return false;
-      }
-      if (version >= 2) {
-        const std::uint32_t primitive = reader.u32();
-        const std::uint32_t depthTest = reader.u32();
-        if (primitive < 1 || primitive > 2 || depthTest > 1 ||
-            (primitive == 2 && style != 1) ||
-            ((lit || sky) && batch.layer != GuestLayer::World)) {
-          return false;
-        }
-        batch.primitive = static_cast<GuestPrimitive>(primitive);
-        batch.depthTest = depthTest != 0;
-      }
-      if (version >= 3) {
-        const std::uint32_t blend = reader.u32();
-        batch.mesh = GuestResourceId::read(reader);
-        batch.firstIndex = reader.u32();
-        if (!reader.valid() || blend > 1) {
-          return false;
-        }
-        batch.blend = blend != 0;
-        batch.hasBlend = true;
-        if (batch.retained()
-              ? (batch.mesh.kind != GuestResourceKind::Mesh ||
-                 batch.mesh.slot == 0 || batch.mesh.generation == 0 || sky)
-              : (batch.mesh.slot != 0 || batch.mesh.generation != 0 ||
-                 batch.firstIndex != 0)) {
-          return false;
-        }
-      }
-      if (sky && !readFloats(reader, batch.lighting.tint.data(), 4)) {
-        return false;
-      }
-      if (lit) {
-        GuestLighting& lighting = batch.lighting;
-        if (!readFloats(reader, lighting.model.data(), 16) ||
-            !readFloats(reader, lighting.lightDirection.data(), 3) ||
-            !readFloats(reader, lighting.lightColor.data(), 3) ||
-            !readFloats(reader, lighting.ambientColor.data(), 3) ||
-            !readFloats(reader, lighting.tint.data(), 4)) {
-          return false;
-        }
-        lighting.shadowBias = reader.f32();
-        lighting.shadowSlopeScale = reader.f32();
-        lighting.shadowNormalOffset = reader.f32();
-        const std::uint32_t flags = reader.u32();
-        if (!reader.valid() || flags > 7 ||
-            !std::isfinite(lighting.shadowBias) ||
-            !std::isfinite(lighting.shadowSlopeScale) ||
-            !std::isfinite(lighting.shadowNormalOffset)) {
-          return false;
-        }
-        lighting.shadowPcf = (flags & 1u) != 0;
-        lighting.receivesShadow = (flags & 2u) != 0;
-        lighting.castsShadow = (flags & 4u) != 0;
-      }
-      const std::uint32_t vertices = reader.u32();
-      const std::uint32_t indices = reader.u32();
-      const std::uint32_t stride = lit ? 36u : 24u;
-      const std::uint32_t group =
-        batch.primitive == GuestPrimitive::Lines ? 2u : 3u;
-      if (batch.retained()) {
-        // Only the index range travels; the host resolves and bounds it
-        // against the retained mesh.
-        if (!reader.valid() || vertices != 0 || indices == 0 ||
-            indices % group != 0) {
-          return false;
-        }
-        batch.indexCount = indices;
-        frame.batches.push_back(std::move(batch));
-        continue;
-      }
-      if (!reader.valid() || vertices == 0 || indices == 0 ||
-          indices % group != 0 || vertices > limits.vertices - totalVertices ||
-          indices > limits.indices - totalIndices ||
-          vertices > reader.remaining() / stride) {
-        return false;
-      }
-      totalVertices += vertices;
-      totalIndices += indices;
-      batch.vertices.resize(vertices);
-      for (GuestVertex& vertex : batch.vertices) {
-        if (!readFloats(reader, vertex.position.data(), 3)) {
-          return false;
-        }
-        vertex.rgba = reader.u32();
-        if (!readFloats(reader, vertex.uv.data(), 2) ||
-            (lit && !readFloats(reader, vertex.normal.data(), 3))) {
-          return false;
-        }
-      }
-      if (indices > reader.remaining() / 4u) {
-        return false;
-      }
-      batch.indices.resize(indices);
-      for (std::uint32_t& index : batch.indices) {
-        index = reader.u32();
-        if (index >= vertices) {
-          return false;
-        }
-      }
-      frame.batches.push_back(std::move(batch));
     }
     const std::uint32_t writes = reader.u32();
     if (!reader.valid() || writes > limits.textureWrites ||
@@ -560,6 +682,9 @@ struct GuestFrame
         write.bytes.assign(data.begin(), data.end());
         frame.meshWrites.push_back(std::move(write));
       }
+    }
+    if (version >= 5 && !readSurfaces(reader, limits, totals, frame)) {
+      return false;
     }
     if (!reader.finished()) {
       return false;

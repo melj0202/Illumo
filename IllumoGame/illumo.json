@@ -1,0 +1,18 @@
+{
+  "format": "ilpk",
+  "format_version": 1,
+  "id": "csim",
+  "version": "26.09",
+  "title": "CSim",
+  "kind": "app",
+  "app": {
+    "module": "IllumoGame.wasm",
+    "worker": "CSimWorkerGuest.wasm",
+    "workers": 8,
+    "workerMemoryMiB": 512,
+    "workerDeadlineMilliseconds": 10000,
+    "memoryMiB": 1024,
+    "metering": "epoch",
+    "deadlineMilliseconds": 10000
+  }
+}

@@ -1,5 +1,7 @@
 #include "MeshViewerModule.h"
 #include "TestAccess.h"
+#include <Illumo/Content/VfsAssetSource.h>
+#include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
@@ -15,10 +17,23 @@
 #include <Illumo/Testing/TestRegistry.h>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 
 static TestCounters g;
 static int g_loadDialogCalls = 0;
 
+// A fresh settings file per fixture, so saved toggles and layouts never leak
+// into other cases through the shared envvars.json.
+static std::filesystem::path
+isolatedSettings(const char* name)
+{
+  const std::filesystem::path path =
+    std::filesystem::temp_directory_path() / name;
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  return path;
+}
 std::string
 SaveLoad::GetLoadLocation(const SaveLoadDialogSpec&)
 {
@@ -64,13 +79,13 @@ struct ModuleFixture
   MeshViewerModule module;
   bool started;
 
-  ModuleFixture()
+  explicit ModuleFixture(IAssetSource* source = nullptr)
     : window(1280, 720)
-    , env()
+    , env(isolatedSettings("meshviewer-module-settings.json"))
     , camera(glm::vec2(0.0f, 0.0f), 1.0f, &env)
     , mock()
     , renderer(&window, &env, &camera, &mock, false)
-    , assets(&renderer, false)
+    , assets(&renderer, false, source)
     , registry()
     , console(&env, &registry, &window, &renderer, "IllMeshViewer")
     , input(nullptr)
@@ -417,9 +432,213 @@ testRepeatedShortcuts()
     g, !second.module.showGrid(), "second instance has independent shortcuts");
 }
 
+static const char* const kDemoScene = R"({
+  "format": "ilsc",
+  "format_version": [2, 0],
+  "metadata": { "title": "Demo" },
+  "settings": { "world_mode": "3d" },
+  "assets": [ { "id": "cube", "type": "mesh", "path": "meshes/cube.obj" } ],
+  "nodes": [
+    { "id": "root", "name": "Root" },
+    { "id": "floor", "parent": "root",
+      "transform": { "position": [0, -1, 0] },
+      "components": [ { "type": "primitive", "shape": "cube",
+                        "extent": [4, 0.1, 4], "color": [90, 110, 140, 255] } ] },
+    { "id": "model", "parent": "root",
+      "transform": { "position": [3, 0, 0] },
+      "components": [ { "type": "mesh", "asset": "cube" } ] }
+  ]
+})";
+
+static void
+writeText(const std::filesystem::path& path, const std::string& text)
+{
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream file(path, std::ios::binary);
+  file << text;
+}
+
+// A loose package mounted at /packages/demo, as the runtime mounts one found
+// in packages/ or named by --mount.
+static std::shared_ptr<VirtualFileSystem>
+mountDemoPackage(const std::filesystem::path& root)
+{
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  writeText(root / "scenes" / "demo.ilsc", kDemoScene);
+  writeText(root / "meshes" / "cube.obj", g_testCubeObj);
+  std::shared_ptr<VirtualFileSystem> tree =
+    std::make_shared<VirtualFileSystem>();
+  std::string error;
+  std::shared_ptr<DirectoryVfsBackend> backend =
+    DirectoryVfsBackend::open(root, false, error);
+  testTrue(g, backend != nullptr, "demo package directory opens");
+  if (backend) {
+    testTrue(
+      g,
+      tree->mount({ "/packages/demo", { { backend, "demo" } }, {} }, error),
+      "demo package mounts");
+  }
+  return tree;
+}
+
+static bool
+drawsLayerDrawable(Scene& scene, const DrawableBase* drawable)
+{
+  for (const DrawableBase* candidate :
+       scene.drawablesIn(RenderLayerId::World)) {
+    if (candidate == drawable) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void
+testSceneFromTree()
+{
+  testSection("MeshViewerModule: opens an .ilsc scene from the file tree");
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() / "IllMeshViewerSceneTest";
+  std::shared_ptr<VirtualFileSystem> tree = mountDemoPackage(root);
+  MeshViewerNativeTree::install(tree);
+  VfsAssetSource source(tree);
+  {
+    ModuleFixture fixture(&source);
+    testTrue(g, fixture.started, "module started over the tree");
+    fixture.module.loadMeshFromMemory(g_testCubeObj, "cube.obj");
+    for (int step = 0; step < 60; ++step) {
+      fixture.module.Update(0.1);
+    }
+    const float meshDistance = fixture.module.cameraController().distance();
+
+    testTrue(g,
+             fixture.registry.QueueCommand(
+               "viewer_open", { "/packages/demo/scenes/demo.ilsc" }),
+             "viewer_open is registered");
+    fixture.registry.ExecuteQueue();
+    SceneInstance* opened = fixture.module.sceneInstance();
+    testTrue(g, opened != nullptr, "viewer_open instantiates the scene");
+    testTrue(g,
+             fixture.module.meshData().isEmpty(),
+             "opening a scene replaces the loose mesh");
+    if (opened != nullptr) {
+      testEqSize(g, opened->nodeCount(), 3u, "every node instantiates");
+      testTrue(g,
+               opened->warnings().empty(),
+               "the package-relative mesh resolves against /packages/demo");
+      testTrue(g,
+               opened->packageRoot() == "/packages/demo",
+               "the scene's package root is its mount");
+      const MeshMetadata& meta =
+        MeshViewerModuleTestAccess::ui(fixture.module)->meshMetadata();
+      testTrue(g, meta.isScene && meta.hasMesh, "the card describes a scene");
+      testEqSize(g, meta.nodeCount, 3u, "the card counts nodes");
+      testEqSize(g, meta.assetCount, 1u, "the card counts assets");
+      testEqSize(g, meta.missingCount, 0u, "no asset is missing");
+      testTrue(g,
+               meta.dimensions.x > 4.0f,
+               "bounds span the floor and the offset model");
+      // The orbit camera eases toward its framing target.
+      for (int step = 0; step < 60; ++step) {
+        fixture.module.Update(0.1);
+      }
+      testTrue(g,
+               fixture.module.cameraController().distance() >
+                 meshDistance * 2.0f,
+               "the camera frames the larger scene bounds");
+
+      fixture.module.setShowWireframe(true);
+      fixture.module.Update(0.016);
+      fixture.scene.ClearDrawables();
+      fixture.module.DispatchDrawables(&fixture.scene);
+      testTrue(g,
+               drawsLayerDrawable(fixture.scene, &opened->drawable()),
+               "the scene draws in the World layer");
+      testTrue(g,
+               !drawsLayerDrawable(
+                 fixture.scene,
+                 MeshViewerModuleTestAccess::meshVisual(fixture.module)),
+               "the empty mesh visual is not drawn");
+      testTrue(g,
+               drawsLayerDrawable(
+                 fixture.scene,
+                 MeshViewerModuleTestAccess::wireframeVisual(fixture.module)),
+               "wireframe outlines the scene bounds");
+    }
+
+    fixture.module.loadMeshFromMemory(g_testCubeObj, "cube.obj");
+    testTrue(g,
+             fixture.module.sceneInstance() == nullptr,
+             "loading a mesh closes the scene");
+
+    fixture.registry.QueueCommand("viewer_open",
+                                  { "/packages/demo/scenes/absent.ilsc" });
+    fixture.registry.ExecuteQueue();
+    testTrue(g,
+             fixture.module.sceneInstance() == nullptr &&
+               !fixture.module.meshData().isEmpty(),
+             "a missing scene leaves the current mesh");
+    fixture.registry.QueueCommand("viewer_open", { "relative/scene.ilsc" });
+    fixture.registry.ExecuteQueue();
+    testTrue(g,
+             fixture.module.sceneInstance() == nullptr,
+             "viewer_open refuses a relative path");
+
+    // A dialog pick has no package: relative references cannot resolve, so
+    // the scene opens with a placeholder instead of failing.
+    fixture.module.openLocation(
+      { (root / "scenes" / "demo.ilsc").string(), "demo.ilsc" });
+    opened = fixture.module.sceneInstance();
+    testTrue(g, opened != nullptr, "a picked scene file opens");
+    if (opened != nullptr) {
+      testTrue(g,
+               opened->packageRoot() == "/local",
+               "a picked scene resolves against /local");
+      testTrue(g,
+               !opened->warnings().empty(),
+               "its package-relative mesh falls back to a placeholder");
+    }
+  }
+  MeshViewerNativeTree::install(nullptr);
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+}
+
+static void
+testSceneFromTextRejectsInvalid()
+{
+  testSection("MeshViewerModule: invalid scene text keeps the current view");
+  ModuleFixture fixture;
+  fixture.module.loadMeshFromMemory(g_testCubeObj, "cube.obj");
+  std::string error;
+  testTrue(g,
+           !fixture.module.loadSceneFromText(
+             R"({"format":"ilsc","format_version":[1,0],"nodes":[]})",
+             "old.ilsc",
+             "/local",
+             {},
+             &error),
+           "a format 1 scene is refused");
+  testTrue(g, !error.empty(), "the refusal explains itself");
+  testTrue(g,
+           fixture.module.sceneInstance() == nullptr &&
+             !fixture.module.meshData().isEmpty(),
+           "the mesh stays open");
+  testTrue(g,
+           MeshViewerModule::isSceneLocation({ "x", "Forest.ILSC" }) &&
+             !MeshViewerModule::isSceneLocation({ "x", "forest.obj" }) &&
+             MeshViewerModule::isSceneLocation({ "vfs:/app/a.ilsc", "" }),
+           "scene locations are recognized by extension");
+}
+
 void
 registerMeshViewerModuleTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllMeshViewer.Module.SceneFromTree",
+               []() { return runModuleCase(testSceneFromTree); });
+  registry.add("IllMeshViewer.Module.SceneRejectsInvalid",
+               []() { return runModuleCase(testSceneFromTextRejectsInvalid); });
   registry.add("IllMeshViewer.Module.RepeatedShortcuts",
                []() { return runModuleCase(testRepeatedShortcuts); });
   registry.add("IllMeshViewer.Module.StartupAndLifecycle",

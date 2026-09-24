@@ -6,10 +6,12 @@
 #include "Rulesets/WireworldRuleSet.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
+#include <Illumo/Content/VfsAssetSource.h>
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Platform/SaveLoad.h>
+#include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -156,6 +158,22 @@ setWorkshopDraft(RulesetWorkshopMenu& menu, const RuleSetDefinition& rule)
   }
 }
 
+// The oracle's package: files staged beside the test executable, mounted at
+// /app as the runtime mounts a launched package.
+static std::shared_ptr<VirtualFileSystem>
+stagedPackage()
+{
+  std::shared_ptr<VirtualFileSystem> files =
+    std::make_shared<VirtualFileSystem>();
+  std::string error;
+  std::shared_ptr<DirectoryVfsBackend> backend = DirectoryVfsBackend::open(
+    EnvVars::ApplicationConfigPath().parent_path(), false, error);
+  if (backend) {
+    files->mount({ "/app", { { backend, "illumogame" } }, {} }, error);
+  }
+  return files;
+}
+
 struct CellGameFixture
 {
   NullRenderWindow window;
@@ -163,6 +181,8 @@ struct CellGameFixture
   Camera camera;
   MockBackend mock;
   Renderer renderer;
+  VfsAssetSource source;
+  AssetManager assets;
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
@@ -177,12 +197,14 @@ struct CellGameFixture
     , camera(glm::vec2(1.0f, 1.0f), 1.0f, &env)
     , mock()
     , renderer(&window, &env, &camera, &mock, false)
+    , source(stagedPackage())
+    , assets(&renderer, false, &source)
     , registry()
     , console(&env, &registry, &window, &renderer)
     , input(nullptr)
     , scene(&window, &camera)
     , context{ &scene,  &window, &console, &input,   &renderer,
-               nullptr, &env,    &camera,  &registry }
+               &assets, &env,    &camera,  &registry }
     , module()
     , started(false)
   {
@@ -365,41 +387,33 @@ testRender3dTestFlag()
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
 
-  MeshVisual* staticScene =
-    CellGameModuleTestAccess::getRender3dTestStatic(fixture.module);
-  MeshVisual* animatedScene =
-    CellGameModuleTestAccess::getRender3dTestAnimated(fixture.module);
-  MeshVisual* childScene =
-    CellGameModuleTestAccess::getRender3dTestChild(fixture.module);
-  SceneGraph* render3dGraph =
-    CellGameModuleTestAccess::getRender3dSceneGraph(fixture.module);
+  SceneInstance* diagnostic =
+    CellGameModuleTestAccess::getRender3dScene(fixture.module);
   testTrue(g,
-           staticScene != nullptr && animatedScene != nullptr &&
-             childScene != nullptr && render3dGraph != nullptr,
-           "flag builds all 3D diagnostic attachments and SceneGraph");
+           diagnostic != nullptr,
+           "the flag loads Scenes/render3d-test.ilsc into a scene instance");
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::World).size(),
              1u,
-             "flag replaces CanvasView with the single SceneGraph drawable");
-  testEqSize(g,
-             render3dGraph->getNodeCount(),
-             3u,
-             "SceneGraph holds root, orbit, and child nodes");
-  if (render3dGraph != nullptr) {
-    testTrue(
-      g,
-      fixture.scene.drawablesIn(RenderLayerId::World)[0] ==
-        CellGameModuleTestAccess::getRender3dSceneDrawable(fixture.module),
-      "diagnostic scene registers SceneGraph in World layer");
-    const SceneNodeHandle root = render3dGraph->getRoot(0);
+             "flag replaces CanvasView with the scene's drawable");
+  if (diagnostic != nullptr) {
     testTrue(g,
-             render3dGraph->getRenderAttachment(root) == staticScene,
-             "root attaches the axes/grid MeshVisual");
+             fixture.scene.drawablesIn(RenderLayerId::World)[0] ==
+               &diagnostic->drawable(),
+             "the scene draws in the World layer");
     testTrue(g,
-             render3dGraph->getChildCount(root) == 1u &&
-               render3dGraph->getRenderAttachment(
-                 render3dGraph->getChild(root, 0)) == animatedScene,
-             "orbit child attaches the cube MeshVisual");
+             diagnostic->findNode("orbit") != nullptr &&
+               diagnostic->findNode("child") != nullptr &&
+               diagnostic->parentOf("child") == "orbit",
+             "the scene holds the animated orbit and child nodes");
+    const Transform3D before = diagnostic->findNode("orbit")->transform;
+    fixture.module.Update(0.25);
+    fixture.scene.ClearDrawables();
+    fixture.module.DispatchDrawables(&fixture.scene);
+    const Transform3D after = diagnostic->findNode("orbit")->transform;
+    testTrue(g,
+             std::abs(before.position.x - after.position.x) > 1e-4f,
+             "the orbit node is animated by id");
   }
   testTrue(g,
            fixture.camera.getProjectionType() == ProjectionType::Perspective,

@@ -20,7 +20,12 @@ developer console (D-UI5). GLFW supplies creation, input callbacks, and native
 move/resize/close; a per-OS presenter blits the RGBA image — Windows uses GDI
 `StretchDIBits` (`Windows/WinPixelWindowPresent.cpp`), Linux reports
 presentation unsupported (`Linux/LinuxPixelWindowPresent.cpp`). It never
-creates or touches an OpenGL context.
+creates or touches an OpenGL context. `ISurfaceWindow` and
+`ISurfaceWindowFactory` (`Illumo/Platform/SurfaceWindow.h`,
+`PlatformSurfaceWindows()`) wrap it for detached tool panels (D-E27): client
+origin, title, focus, cursor, minimum size and events, with new windows
+clamped into the work area of the monitor holding their centre.
+`WasmPanelWindows` presents GPU-rendered panel surfaces through them.
 macOS is not targeted; its scaffold has been removed and CMake rejects Apple
 targets. Source presence does not establish
 support: each port requires native build, tests, live rendering/input, dialogs,

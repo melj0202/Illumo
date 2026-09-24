@@ -42,6 +42,15 @@ vertex ranges instead of recreating meshes, while managed model handles emit no
 per-instance buffer upload. The product `Camera` is orthographic by default and
 can switch to perspective look-at without a private view-projection helper.
 
+`Renderer::renderOffscreen(target, width, height, drawables, clear, uiScale)`
+draws pixel-space drawables into an offscreen framebuffer outside
+`RenderScene` and restores the screen target; it is refused inside a frame.
+`IBackend::requestFramebufferReadback` / `takeFramebufferReadback` /
+`releaseReadbackStream` read a target's first colour attachment back as
+top-down RGBA8 through caller-numbered streams of two fenced pixel-pack
+buffers (GL), so a copy never stalls; `MockBackend` returns the target's clear
+colour. Detached panel windows use both (D-R27).
+
 The Debug renderer demo proves assets, sprites, transforms, animation, and
 reload through the same library path consumed by IllumoGame. D-E6 supersedes
 the prior deferred-extraction rule: the public static-library boundary now

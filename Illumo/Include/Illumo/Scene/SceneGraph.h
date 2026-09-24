@@ -80,9 +80,17 @@ public:
 
   SceneNodeHandle getParent(SceneNodeHandle node) const;
   SceneNodeHandle getNextSibling(SceneNodeHandle node) const;
+  SceneNodeHandle getPreviousSibling(SceneNodeHandle node) const;
   size_t getChildCount(SceneNodeHandle node) const;
   SceneNodeHandle getChild(SceneNodeHandle node, size_t index) const;
   bool setParent(SceneNodeHandle node, SceneNodeHandle parent);
+  // Places node among parent's children immediately before insertBefore, or
+  // last when insertBefore is null (even under the same parent). insertBefore
+  // must be a current child of parent other than node. Same cycle rules and
+  // Reparented record as setParent; an unchanged position is a no-op.
+  bool setParent(SceneNodeHandle node,
+                 SceneNodeHandle parent,
+                 SceneNodeHandle insertBefore);
   bool canSetParent(SceneNodeHandle node, SceneNodeHandle parent) const;
 
   // Matrix input decomposes to TRS; shear/projective matrices are lossy.

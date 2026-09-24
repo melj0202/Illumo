@@ -11,7 +11,11 @@ that store: \symbolref{GuestModuleApplication} composes a guest-local
 dialogs, file transfers, clipboard access and user-catalog writes go through
 \symbolref{CSimPlatform}; a native implementation completes synchronously for
 the test oracle and the guest implementation completes on a later update.
-Saves, settings and user overlays live in the package storage directory.
+Saves, settings and user overlays live in the package storage directory. The
+package is described by \pathref{IllumoGame/illumo.json} (\texttt{kind}
+\texttt{app}, with the module, worker and budgets in its \texttt{app} section;
+D-E22) and runs mounted at \texttt{/app} of the host file tree; other
+installed packages are visible at \texttt{/packages/<id>}.
 Inside the package, \symbolref{SimulationRunner} fans each generation out to
 up to eight isolated simulation lanes (D-E17) once serial generations exceed
 4\,ms. Each lane is a \texttt{CSimWorkerGuest.wasm} store owning interleaved
@@ -233,9 +237,18 @@ followed by three live cells. Earlier unbraced multi-digit exports are ambiguous
 and require correction to braces. Sparse world saves are unaffected.
 
 The persisted \texttt{render3dTest} flag defaults to \texttt{0}. Setting it to
-\texttt{1} replaces CanvasView with a rendering diagnostic scene: fixed axes
-and grid plus orbiting, bobbing, spinning solid and wire cubes. Simulation and
-UI continue normally; disabling the flag restores the canvas immediately.
+\texttt{1} replaces CanvasView with a rendering diagnostic scene. The scene is
+data: \pathref{IllumoGame/Scenes/render3d-test.ilsc}, an \texttt{.ilsc} format 2
+document (ground, three axes, an orbiting cube with a wire frame and a child)
+staged into the package as \pathref{Scenes/render3d-test.ilsc} and preloaded
+by the guest; the native oracle stages it beside \texttt{IllumoGameTests}.
+\symbolref{CellGameModule} reads it through
+\texttt{AssetManager::assetSource()}, instantiates it with
+\symbolref{SceneInstance}, and animates only the \texttt{orbit} and
+\texttt{child} nodes by id; new geometry belongs in the scene file, not in the
+module. \texttt{IllumoGameCore} links \texttt{Illumo::Content} and the guest
+links \texttt{IllumoGuestContent}. Simulation and UI continue normally;
+disabling the flag restores the canvas immediately.
 
 \subsection{Domain console commands and persistence}
 \symbolref{CellGameModule} registers domain commands through
@@ -494,7 +507,25 @@ the active catalog. The module factory loads the catalog once before
 menu/direct-game construction. The engine's configuration path supplies
 executable location; Rulesets has no filesystem or native API dependency.
 Callers use the loader for files and \texttt{loadFromText} for text (D-GC1,
-D-GC2, D-GC4). F1, New Simulation, runtime status, and saved worlds carry an
+D-GC2, D-GC4).
+
+In the package, the control guest's \texttt{CSimCatalogBootstrap} replaces
+the native file lookup with a staged sequence over the guest SDK's
+\texttt{GuestFiles}, pumped once per update: read the packaged
+\pathref{families.json}/\pathref{rulesets.json} pair from \texttt{/app}, list
+\texttt{/packages}, list each \texttt{/packages/<id>/csim} directory for
+\texttt{*.json} (packages in id order, files in name order, at most 64), read
+those catalogs, then apply. Package catalogs merge after the packaged pair and
+before the storage \pathref{families.user.json}/\pathref{rulesets.user.json}
+overlays, so a player's own edits still win. Files named
+\texttt{families*.json} add families and every other name adds rules. Each
+catalog merges into a candidate copy of the registry; an invalid one is skipped
+with a logged warning, and the game logs what merged. Both paths stage
+overlays through the portable \texttt{RuleCatalogOverlay}. A content package
+that ships \pathref{csim/*.json} therefore extends the rule catalog without
+replacing the base files (D-E21).
+
+F1, New Simulation, runtime status, and saved worlds carry an
 explicit family/ruleset pair. Save version 4 writes both IDs; version 3,
 version 2, and dense legacy readers derive the family from the saved rule ID.
 

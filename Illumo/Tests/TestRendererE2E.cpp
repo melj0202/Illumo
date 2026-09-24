@@ -1186,9 +1186,118 @@ testUniformMatrixRetention()
   e2eTrue(!renderer.frameError().empty(), "null matrix reports a frame error");
 }
 
+// Tries to render offscreen from inside RenderScene, which must be refused.
+class ReentrantOffscreenDrawable : public DrawableBase
+{
+public:
+  FramebufferHandle target{};
+  bool attempted = false;
+  bool accepted = false;
+  void Draw() override {}
+  bool AppendCommands(Renderer* renderer) override
+  {
+    attempted = true;
+    accepted = renderer->renderOffscreen(
+      target, 8, 8, {}, { 0.0f, 0.0f, 0.0f, 1.0f }, 1.0f);
+    return true;
+  }
+};
+
+static void
+testOffscreenReadback()
+{
+  E2ENullRenderWindow window(1280, 720);
+  Camera camera;
+  MockBackend backend;
+  backend.Initialize();
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  FramebufferDesc desc;
+  desc.width = 64;
+  desc.height = 32;
+  desc.colorAttachments.push_back(FramebufferAttachmentDesc{});
+  const FramebufferHandle target = backend.CreateFramebuffer(desc);
+  TokenQuadDrawable quad;
+  quad.enroll(&renderer);
+
+  e2eTrue(renderer.renderOffscreen(
+            target, 64, 32, { &quad }, { 1.0f, 0.0f, 0.0f, 1.0f }, 1.0f),
+          "offscreen render into a framebuffer succeeds");
+  bool first = true;
+  bool targeted = false;
+  bool cleared = false;
+  bool restored = false;
+  int draws = 0;
+  for (size_t i = 0; i < backend.getLastSubmittedCount(); ++i) {
+    const RenderCommand& command = backend.getLastSubmitted(i);
+    if (command.commandType == CommandType::SetFramebuffer) {
+      if (first) {
+        targeted =
+          command.bindFramebuffer.handle.slot == target.slot &&
+          command.bindFramebuffer.handle.generation == target.generation;
+        first = false;
+      } else {
+        restored = !command.bindFramebuffer.handle.isValid();
+      }
+    } else if (command.commandType == CommandType::ClearColorBuffer) {
+      cleared = command.clear.r == 1.0f && command.clear.g == 0.0f;
+    } else if (command.commandType == CommandType::DrawIndexed) {
+      ++draws;
+    }
+  }
+  e2eTrue(targeted && cleared && draws == 1 && restored,
+          "offscreen submission targets, clears, draws and restores the "
+          "screen");
+  e2eTrue(renderer.getCurrentPassViewport() ==
+            std::array<int, 4>{ 0, 0, 1280, 720 },
+          "the screen viewport is restored");
+
+  e2eTrue(backend.requestFramebufferReadback(3, target, 64, 32),
+          "a readback is queued");
+  e2eTrue(backend.requestFramebufferReadback(3, target, 64, 32),
+          "a second readback can be in flight");
+  e2eTrue(!backend.requestFramebufferReadback(3, target, 64, 32),
+          "a third concurrent readback is refused");
+  FrameReadback pixels;
+  e2eTrue(backend.takeFramebufferReadback(3, false, pixels) &&
+            pixels.width == 64 && pixels.height == 32 &&
+            pixels.pixels.size() == 64u * 32u * 4u && pixels.pixels[0] == 255 &&
+            pixels.pixels[1] == 0 && pixels.pixels[3] == 255,
+          "the readback returns the target's cleared pixels");
+  e2eTrue(backend.takeFramebufferReadback(3, true, pixels),
+          "the second copy completes");
+  e2eTrue(!backend.takeFramebufferReadback(3, true, pixels) &&
+            !pixels.error.empty(),
+          "nothing is pending afterwards");
+  backend.releaseReadbackStream(3);
+
+  e2eTrue(!renderer.renderOffscreen(FramebufferHandle{},
+                                    64,
+                                    32,
+                                    { &quad },
+                                    { 0.0f, 0.0f, 0.0f, 1.0f },
+                                    1.0f) &&
+            !renderer.renderOffscreen(
+              target, 0, 32, { &quad }, { 0.0f, 0.0f, 0.0f, 1.0f }, 1.0f),
+          "invalid targets and sizes are refused");
+  e2eTrue(!backend.requestFramebufferReadback(4, FramebufferHandle{}, 8, 8),
+          "reading an invalid framebuffer is refused");
+
+  Scene scene(&window, &camera);
+  ReentrantOffscreenDrawable reentrant;
+  reentrant.target = target;
+  scene.AddDrawable(&reentrant, RenderLayerId::UI);
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+  e2eTrue(reentrant.attempted && !reentrant.accepted,
+          "offscreen rendering is refused inside RenderScene");
+}
+
 void
 registerRendererE2ETests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Renderer.OffscreenReadback",
+               []() { return runRendererE2ECase(testOffscreenReadback); });
   registry.add("Illumo.Renderer.PassClearMasks",
                []() { return runRendererE2ECase(testPassClearMasks); });
   registry.add("Illumo.Renderer.OrdinaryLayerTargetRestore", []() {

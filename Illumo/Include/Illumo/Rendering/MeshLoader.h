@@ -3,6 +3,7 @@
 #include <Illumo/Rendering/MeshData.h>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct MeshLoadOptions
 {
@@ -12,6 +13,10 @@ struct MeshLoadOptions
   bool centerAndNormalize = false;
   float targetRadius = 1.0f;
   std::string materialSearchPath;
+  // Material library (.mtl) text for loadFromMemory. When non-empty it is
+  // parsed instead of searching materialSearchPath, so byte sources (packages)
+  // resolve materials without a file system.
+  std::string materialText;
 };
 
 struct MeshLoadResult
@@ -51,6 +56,11 @@ public:
     const std::string& fileContent,
     const MeshLoadOptions& options = MeshLoadOptions{},
     const std::string& baseDir = "");
+
+  // The mtllib names an OBJ declares, in order, without duplicates, with '\'
+  // turned into '/'. Names are relative to the OBJ and unvalidated.
+  static std::vector<std::string> materialLibraryNames(
+    const std::string& objText);
 
   static void setCustomBackend(std::shared_ptr<IMeshLoaderBackend> backend);
   static void resetBackend();

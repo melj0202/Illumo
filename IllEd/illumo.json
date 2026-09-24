@@ -1,0 +1,15 @@
+{
+  "format": "ilpk",
+  "format_version": 1,
+  "id": "illed",
+  "version": "26.09",
+  "title": "IllEd",
+  "kind": "app",
+  "app": {
+    "module": "IllEd.wasm",
+    "launchAccess": "edit",
+    "memoryMiB": 512,
+    "metering": "epoch",
+    "deadlineMilliseconds": 10000
+  }
+}

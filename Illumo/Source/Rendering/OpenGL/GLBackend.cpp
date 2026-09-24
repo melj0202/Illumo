@@ -132,6 +132,163 @@ GLBackend::readBackbuffer(int width, int height)
 }
 
 void
+GLBackend::releaseReadbackSlot(ReadbackSlot& slot)
+{
+  if (slot.fence != nullptr) {
+    glDeleteSync(slot.fence);
+    slot.fence = nullptr;
+  }
+  if (slot.buffer != 0) {
+    glDeleteBuffers(1, &slot.buffer);
+    slot.buffer = 0;
+  }
+  slot.width = 0;
+  slot.height = 0;
+}
+
+bool
+GLBackend::requestFramebufferReadback(std::uint32_t stream,
+                                      FramebufferHandle framebuffer,
+                                      int width,
+                                      int height)
+{
+  std::unordered_map<uint32_t, GLFramebufferResourceEntry>::const_iterator
+    target = _framebufferRegistryLookup.find(framebuffer.slot);
+  if (!IsFramebufferValid(framebuffer) ||
+      target == _framebufferRegistryLookup.end() ||
+      target->second.colorTextures.empty() || width < 1 || height < 1 ||
+      width > target->second.width || height > target->second.height) {
+    return false;
+  }
+  ReadbackStream& readback = _readbackStreams[stream];
+  ReadbackSlot* available = nullptr;
+  for (ReadbackSlot& slot : readback.slots) {
+    if (slot.fence == nullptr) {
+      available = &slot;
+      break;
+    }
+  }
+  if (available == nullptr) {
+    return false;
+  }
+  const GLsizeiptr bytes =
+    static_cast<GLsizeiptr>(width) * static_cast<GLsizeiptr>(height) * 4;
+  GLint previousFramebuffer = 0;
+  GLint previousPack = 0;
+  GLint alignment = 0;
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousFramebuffer);
+  glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousPack);
+  glGetIntegerv(GL_PACK_ALIGNMENT, &alignment);
+  if (available->buffer == 0) {
+    glGenBuffers(1, &available->buffer);
+  }
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, available->buffer);
+  if (available->width != width || available->height != height) {
+    glBufferData(GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_READ);
+  }
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, target->second.fboId);
+  glReadBuffer(GL_COLOR_ATTACHMENT0);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  // With a pack buffer bound the pointer is an offset into it.
+  glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  available->fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+  available->width = width;
+  available->height = height;
+  available->order = ++_readbackOrder;
+  glPixelStorei(GL_PACK_ALIGNMENT, alignment);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                    static_cast<GLuint>(previousFramebuffer));
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousPack));
+  if (glGetError() != GL_NO_ERROR || available->fence == nullptr) {
+    releaseReadbackSlot(*available);
+    return false;
+  }
+  return true;
+}
+
+bool
+GLBackend::takeFramebufferReadback(std::uint32_t stream,
+                                   bool wait,
+                                   FrameReadback& out)
+{
+  out = FrameReadback{};
+  std::unordered_map<std::uint32_t, ReadbackStream>::iterator found =
+    _readbackStreams.find(stream);
+  if (found == _readbackStreams.end()) {
+    out.error = "No readback is pending";
+    return false;
+  }
+  ReadbackSlot* oldest = nullptr;
+  for (ReadbackSlot& slot : found->second.slots) {
+    if (slot.fence != nullptr &&
+        (oldest == nullptr || slot.order < oldest->order)) {
+      oldest = &slot;
+    }
+  }
+  if (oldest == nullptr) {
+    out.error = "No readback is pending";
+    return false;
+  }
+  // One second bounds a blocking wait; a lost GPU must not hang the frame.
+  const GLuint64 timeout = wait ? 1000000000ull : 0ull;
+  const GLenum status =
+    glClientWaitSync(oldest->fence, GL_SYNC_FLUSH_COMMANDS_BIT, timeout);
+  if (status == GL_TIMEOUT_EXPIRED) {
+    out.error = "Readback is not complete yet";
+    return false;
+  }
+  if (status == GL_WAIT_FAILED) {
+    releaseReadbackSlot(*oldest);
+    out.error = "Readback wait failed";
+    return false;
+  }
+  glDeleteSync(oldest->fence);
+  oldest->fence = nullptr;
+  GLint previousPack = 0;
+  glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousPack);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, oldest->buffer);
+  const size_t rowBytes = static_cast<size_t>(oldest->width) * 4;
+  const size_t bytes = rowBytes * static_cast<size_t>(oldest->height);
+  const unsigned char* mapped = static_cast<const unsigned char*>(
+    glMapBufferRange(GL_PIXEL_PACK_BUFFER,
+                     0,
+                     static_cast<GLsizeiptr>(bytes),
+                     GL_MAP_READ_BIT));
+  if (mapped == nullptr) {
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousPack));
+    out.error = "Readback buffer could not be mapped";
+    return false;
+  }
+  out.pixels.resize(bytes);
+  // GL rows run bottom-up; callers get top-down rows.
+  for (int row = 0; row < oldest->height; ++row) {
+    std::memcpy(out.pixels.data() + static_cast<size_t>(row) * rowBytes,
+                mapped +
+                  static_cast<size_t>(oldest->height - 1 - row) * rowBytes,
+                rowBytes);
+  }
+  glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousPack));
+  out.width = oldest->width;
+  out.height = oldest->height;
+  return true;
+}
+
+void
+GLBackend::releaseReadbackStream(std::uint32_t stream)
+{
+  std::unordered_map<std::uint32_t, ReadbackStream>::iterator found =
+    _readbackStreams.find(stream);
+  if (found == _readbackStreams.end()) {
+    return;
+  }
+  for (ReadbackSlot& slot : found->second.slots) {
+    releaseReadbackSlot(slot);
+  }
+  _readbackStreams.erase(found);
+}
+
+void
 GLBackend::EndFrame()
 {
   {
@@ -209,6 +366,16 @@ GLBackend::Shutdown()
   }
   _textureRegistryLookup.clear();
   textureHandles.clear();
+
+  for (std::unordered_map<std::uint32_t, ReadbackStream>::iterator it =
+         _readbackStreams.begin();
+       it != _readbackStreams.end();
+       ++it) {
+    for (ReadbackSlot& slot : it->second.slots) {
+      releaseReadbackSlot(slot);
+    }
+  }
+  _readbackStreams.clear();
 
   for (std::unordered_map<uint32_t, GLFramebufferResourceEntry>::iterator it =
          _framebufferRegistryLookup.begin();

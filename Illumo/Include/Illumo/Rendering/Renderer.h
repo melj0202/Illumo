@@ -18,6 +18,7 @@
 #include <vector>
 
 class Camera;
+class DrawableBase;
 class IRenderWindow;
 class IEnvVars;
 class Scene;
@@ -334,6 +335,18 @@ public:
     m_beforePresent = std::move(hook);
   }
   void SubmitOnly();
+  // Draws drawables into an offscreen framebuffer of width x height outside
+  // RenderScene and submits them immediately (detached panel windows). The
+  // target is cleared to clearColor first; pixel-space drawables lay out for
+  // the target size at uiScale; the screen target is restored afterwards.
+  // Call between frames, never from inside RenderScene. False when the
+  // arguments are invalid, a render is already active, or submission fails.
+  bool renderOffscreen(FramebufferHandle target,
+                       int width,
+                       int height,
+                       const std::vector<DrawableBase*>& drawables,
+                       const std::array<float, 4>& clearColor,
+                       float uiScale);
 
   // =========================================================================
   // Typed token helpers (push into backend queue)

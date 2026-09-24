@@ -19,7 +19,9 @@
 #include <vector>
 
 #include "Engine/DebugOverlayState.h"
+#include "Engine/FileTreeOverlay.h"
 #include "Engine/ProfilerOverlay.h"
+#include <map>
 
 static TestCounters g;
 
@@ -1033,9 +1035,132 @@ runRuntimeUtilityCase(void (*testFunction)())
   return g.failures;
 }
 
+// A small fixed tree for the file browser.
+class FakeFileTree final : public IFileTreeSource
+{
+public:
+  std::map<std::string, std::vector<FileTreeEntry>> directories{
+    { "/", { { "app", true, 0 }, { "packages", true, 0 } } },
+    { "/app",
+      { { "Scenes", true, 0 },
+        { "envvars.json", false, 120 },
+        { "illumo.json", false, 300 } } },
+    { "/app/Scenes", { { "demo.ilsc", false, 900 } } },
+    { "/packages", { { "forest", true, 0 } } },
+  };
+  mutable int listings = 0;
+  bool list(const std::string& directory,
+            std::vector<FileTreeEntry>& entries) const override
+  {
+    ++listings;
+    const std::map<std::string, std::vector<FileTreeEntry>>::const_iterator
+      found = directories.find(directory);
+    if (found == directories.end()) {
+      return false;
+    }
+    entries = found->second;
+    return true;
+  }
+  bool stat(const std::string& path, FileTreeStatus& status) const override
+  {
+    if (directories.count(path) != 0) {
+      status = { true, 0, path == "/app" ? "game" : "" };
+      return true;
+    }
+    if (path == "/app/illumo.json") {
+      status = { false, 300, "game" };
+      return true;
+    }
+    return false;
+  }
+};
+
+static void
+testFileTreeOverlayNavigation()
+{
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  FileTreeOverlay overlay;
+  overlay.prepare(&renderer, &window, &camera);
+  FakeFileTree tree;
+  testTrue(g,
+           !overlay.handleKey(KeyCode::Down, InputAction::Press, false),
+           "a hidden browser leaves arrow keys to the product");
+
+  overlay.show(&tree, "/");
+  testTrue(g, overlay.visible(), "show opens the browser");
+  testEqSize(g, overlay.rows().size(), 2u, "the root lists its mounts");
+  testTrue(g, overlay.selectedPath() == "/app", "the first row is selected");
+  testTrue(g,
+           overlay.status().find("from game") != std::string::npos,
+           "the status names the supplying package");
+  testTrue(g,
+           !overlay.handleKey(KeyCode::Down, InputAction::Press, true),
+           "the console owns keys while open");
+  testTrue(g,
+           !overlay.handleKey(KeyCode::A, InputAction::Press, false),
+           "other keys stay with the product");
+
+  overlay.handleKey(KeyCode::Right, InputAction::Press, false);
+  testEqSize(g, overlay.rows().size(), 5u, "Right expands /app in place");
+  overlay.handleKey(KeyCode::Down, InputAction::Press, false);
+  overlay.handleKey(KeyCode::Down, InputAction::Press, false);
+  overlay.handleKey(KeyCode::Down, InputAction::Press, false);
+  testTrue(g,
+           overlay.selectedPath() == "/app/illumo.json",
+           "Down walks the flattened rows");
+  testTrue(g,
+           overlay.status().find("300 bytes") != std::string::npos,
+           "a file shows its size");
+  overlay.handleKey(KeyCode::Left, InputAction::Press, false);
+  testTrue(
+    g, overlay.selectedPath() == "/app", "Left on a file selects its parent");
+  overlay.handleKey(KeyCode::Left, InputAction::Press, false);
+  testEqSize(g, overlay.rows().size(), 2u, "Left collapses an open directory");
+  const int listed = tree.listings;
+  overlay.handleKey(KeyCode::Enter, InputAction::Press, false);
+  testEqInt(g, tree.listings, listed, "reopening reuses the listing");
+  testTrue(g,
+           overlay.handleKey(KeyCode::Down, InputAction::Release, false),
+           "releases are consumed too");
+  overlay.handleKey(KeyCode::End, InputAction::Press, false);
+  testTrue(
+    g, overlay.selectedPath() == "/packages", "End selects the last row");
+  testTrue(g, overlay.scroll(1.0), "the wheel is consumed");
+  testTrue(g,
+           overlay.selectedPath() == "/app/Scenes",
+           "the wheel moves up three rows");
+  testTrue(g, !overlay.scroll(0.0), "no wheel motion is not consumed");
+
+  tree.directories.erase("/packages");
+  overlay.handleKey(KeyCode::End, InputAction::Press, false);
+  overlay.handleKey(KeyCode::Right, InputAction::Press, false);
+  testTrue(g,
+           overlay.status().find("Cannot list /packages") != std::string::npos,
+           "a failed listing is reported");
+
+  overlay.update(640, 480);
+  testTrue(g,
+           overlay.visual().textCount() >= 4,
+           "the panel draws a title, rows and a footer");
+  testTrue(g,
+           overlay.handleKey(KeyCode::Escape, InputAction::Press, false) &&
+             !overlay.visible(),
+           "Escape closes the browser");
+}
+
 void
 registerRuntimeUtilityTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Debug.FileTreeOverlay", []() {
+    return runRuntimeUtilityCase(testFileTreeOverlayNavigation);
+  });
   registry.add("Illumo.Profiler.Accounting", []() {
     return runRuntimeUtilityCase(testFrameProfilerAccounting);
   });

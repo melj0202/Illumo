@@ -55,6 +55,27 @@ SceneGraph::Impl::appendChild(uint32_t slot, uint32_t parentSlot)
   ++childCount[parentSlot];
 }
 void
+SceneGraph::Impl::insertChildBefore(uint32_t slot,
+                                    uint32_t parentSlot,
+                                    uint32_t before)
+{
+  if (before == 0) {
+    appendChild(slot, parentSlot);
+    return;
+  }
+  const uint32_t previous = previousSibling[before];
+  parent[slot] = parentSlot;
+  previousSibling[slot] = previous;
+  nextSibling[slot] = before;
+  previousSibling[before] = slot;
+  if (previous != 0) {
+    nextSibling[previous] = slot;
+  } else {
+    firstChild[parentSlot] = slot;
+  }
+  ++childCount[parentSlot];
+}
+void
 SceneGraph::Impl::detach(uint32_t slot)
 {
   const uint32_t p = parent[slot];
@@ -402,6 +423,13 @@ SceneGraph::getNextSibling(SceneNodeHandle node) const
                                : SceneNodeHandle{};
 }
 SceneNodeHandle
+SceneGraph::getPreviousSibling(SceneNodeHandle node) const
+{
+  return m_impl->current(node)
+           ? m_impl->handle(m_impl->previousSibling[node.slot])
+           : SceneNodeHandle{};
+}
+SceneNodeHandle
 SceneGraph::getChild(SceneNodeHandle node, size_t index) const
 {
   if (!m_impl->current(node)) {
@@ -439,6 +467,29 @@ SceneGraph::setParent(SceneNodeHandle node, SceneNodeHandle parent)
   }
   m_impl->detach(node.slot);
   m_impl->appendChild(node.slot, parent.slot);
+  m_impl->structuralChange();
+  m_impl->record(SceneChangeKind::Reparented, node.slot);
+  return true;
+}
+bool
+SceneGraph::setParent(SceneNodeHandle node,
+                      SceneNodeHandle parent,
+                      SceneNodeHandle insertBefore)
+{
+  if (m_impl->extractionActive || !canSetParent(node, parent)) {
+    return false;
+  }
+  if (!insertBefore.isNull() &&
+      (!m_impl->current(insertBefore) || insertBefore.slot == node.slot ||
+       m_impl->parent[insertBefore.slot] != parent.slot)) {
+    return false;
+  }
+  if (m_impl->parent[node.slot] == parent.slot &&
+      m_impl->nextSibling[node.slot] == insertBefore.slot) {
+    return true;
+  }
+  m_impl->detach(node.slot);
+  m_impl->insertChildBefore(node.slot, parent.slot, insertBefore.slot);
   m_impl->structuralChange();
   m_impl->record(SceneChangeKind::Reparented, node.slot);
   return true;

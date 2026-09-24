@@ -43,6 +43,12 @@ registerSceneBenchmarks(IllumoTestRegistry& registry);
 void
 registerGuiKitTests(IllumoTestRegistry& registry);
 void
+registerGuiTextEditTests(IllumoTestRegistry& registry);
+void
+registerGuiFileTreeTests(IllumoTestRegistry& registry);
+void
+registerGuiPanelDockTests(IllumoTestRegistry& registry);
+void
 registerMeshLoaderTests(IllumoTestRegistry& registry);
 void
 registerShaderPreprocessorTests(IllumoTestRegistry& registry);
@@ -52,12 +58,33 @@ void
 registerFrameCaptureTests(IllumoTestRegistry& registry);
 void
 registerAtomicFileTests(IllumoTestRegistry& registry);
+void
+registerVirtualPathTests(IllumoTestRegistry& registry);
+void
+registerPackageManifestTests(IllumoTestRegistry& registry);
+void
+registerPackageArchiveTests(IllumoTestRegistry& registry);
+void
+registerPackageMountsTests(IllumoTestRegistry& registry);
+void
+registerVirtualFileSystemTests(IllumoTestRegistry& registry);
+void
+registerIlscCodecTests(IllumoTestRegistry& registry);
+void
+registerSceneInstanceTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
 {
   IllumoTestRegistry registry;
   registerAtomicFileTests(registry);
+  registerVirtualPathTests(registry);
+  registerPackageManifestTests(registry);
+  registerPackageArchiveTests(registry);
+  registerPackageMountsTests(registry);
+  registerVirtualFileSystemTests(registry);
+  registerIlscCodecTests(registry);
+  registerSceneInstanceTests(registry);
   registerFrameCaptureTests(registry);
   registerMockBackendTests(registry);
   registerRendererE2ETests(registry);
@@ -77,6 +104,9 @@ createRegistry()
   registerSceneAllocationTests(registry);
   registerSceneBenchmarks(registry);
   registerGuiKitTests(registry);
+  registerGuiTextEditTests(registry);
+  registerGuiFileTreeTests(registry);
+  registerGuiPanelDockTests(registry);
   registerShaderPreprocessorTests(registry);
   registerFontTests(registry);
   return registry;

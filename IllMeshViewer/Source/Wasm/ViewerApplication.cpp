@@ -2,16 +2,24 @@
 #include "MeshViewerModule.h"
 #include "MeshViewerPlatform.h"
 #include <IllumoGuest/Documents.h>
+#include <IllumoGuest/FileTree.h>
 #include <IllumoGuest/ModuleApplication.h>
+#include <IllumoGuest/SceneFetches.h>
 #include <stdexcept>
 
 // MeshViewerPlatform over guest services: a chosen mesh is a read-only grant
 // whose bytes are parsed in memory; the host never discloses its path.
+// "vfs:" locations read the host's virtual file tree, and a scene's assets
+// are fetched into the guest asset cache before it instantiates.
 class GuestMeshViewerPlatform final : public MeshViewerPlatform
 {
 public:
-  GuestMeshViewerPlatform(GuestServiceQueue& services, GuestFiles& files)
+  GuestMeshViewerPlatform(GuestServiceQueue& services,
+                          GuestFiles& files,
+                          GuestVfsAssets& cache)
     : m_documents(services, files)
+    , m_tree(files)
+    , m_fetches(cache)
   {
   }
   void chooseMesh(const SaveLoadDialogSpec& specification,
@@ -27,18 +35,51 @@ public:
   }
   void read(const std::string& location, ReadCallback done) override
   {
+    if (isTreeLocation(location)) {
+      const bool queued = m_tree.read(
+        treePath(location),
+        [done](GuestFileOutcome outcome, std::vector<std::byte> bytes) {
+          std::string text;
+          text.reserve(bytes.size());
+          for (std::byte value : bytes) {
+            text.push_back(static_cast<char>(value));
+          }
+          const bool success = outcome == GuestFileOutcome::Success;
+          done(success,
+               text,
+               success ? std::string()
+                       : std::string("Cannot read the file from the tree"));
+        });
+      if (!queued) {
+        done(false, {}, "Too many file operations in flight");
+      }
+      return;
+    }
     m_documents.read(location, std::move(done));
   }
+  void fetchAssets(const std::vector<std::string>& paths,
+                   FetchCallback done) override
+  {
+    m_fetches.fetch(paths, std::move(done));
+  }
+  void releaseAssets() override { m_fetches.release(); }
   MeshViewerLocation launchMesh() const override { return m_launch; }
   void setLaunch(const GuestLaunch& launch)
   {
     const GuestDocumentLocation document = GuestDocuments::launch(launch);
     m_launch = { document.location, document.label };
   }
-  void pump() { m_documents.pump(); }
+  void pump()
+  {
+    m_documents.pump();
+    m_tree.pump();
+    m_fetches.pump();
+  }
 
 private:
   GuestDocuments m_documents;
+  GuestFileTree m_tree;
+  GuestSceneFetches m_fetches;
   MeshViewerLocation m_launch;
 };
 
@@ -61,7 +102,7 @@ class MeshViewerGuest final : public GuestModuleApplication
 public:
   MeshViewerGuest()
     : GuestModuleApplication(MeshViewerConfig::applicationName())
-    , m_platform(services(), files())
+    , m_platform(services(), files(), assetCache())
   {
     installedPlatform = &m_platform;
   }

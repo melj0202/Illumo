@@ -23,9 +23,9 @@ CreateIllumoApplication()
   application.applicationName = IllEdConfig::applicationName();
   application.commandLine.applicationName = application.applicationName;
   application.commandLine.description = "Illumo world editor";
-  application.commandLine.usage = "IllEd.exe [FILE]";
+  application.commandLine.usage = "IllumoRuntime --app illed [--open FILE]";
   application.commandLine.helpSections = {
-    "IllEd authors SceneGraph documents and writes .ilsc files.\n"
+    "IllEd authors .ilsc format 2 scenes for every Illumo program.\n"
     "Open a scene through File > Open or set LaunchScene in envvars.json.\n",
   };
   application.applyDefaults = IllEdConfig::ApplyDefaults;

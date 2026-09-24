@@ -50,8 +50,20 @@ scroll storage belong to that instance.
 
 Illumo owns `SysCmdLine` parser mechanics, window flags, help/version dispatch,
 and exit results. Its public parser configuration accepts CA option/help data
-without introducing Game types. Platform owns the public `<Illumo/Platform/SaveLoad.h>` dialog
+without introducing Game types. Option value names `path`, `file`, `name` and
+`string` take one string; `paths` may repeat and joins its values with
+newlines (`IllumoRuntime --mount`); anything else is a positive integer.
+Platform owns the public `<Illumo/Platform/SaveLoad.h>` dialog
 contract and its native implementations.
+
+`<Illumo/Services/FileTreeSource.h>` defines `IFileTreeSource`, a read-only,
+synchronous, main-thread view of a file tree for engine tools: `list` returns
+one directory's `FileTreeEntry` children sorted by name, and `stat` returns a
+`FileTreeStatus` (directory flag, size, supplying package id). Paths are
+normalized absolute `/` paths; core code never learns how the tree is mounted
+or where its files live on the host. `IllumoRuntime` publishes its virtual
+file tree through `IllumoContext::fileTree` using `Illumo::Content`'s
+`VfsTreeSource` (see `engine.md` and `content.md`).
 
 IllumoGame owns CA defaults and `envvars.json`, TPS, speed, fade, ruleset,
 canvas, simulation, camera, persistence commands, canvas CLI descriptors, and

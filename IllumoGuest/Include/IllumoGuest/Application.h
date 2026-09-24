@@ -28,6 +28,15 @@ public:
   // Reported after each update; the host starts its close sequence.
   virtual bool closeRequested() { return false; }
   GuestServiceQueue& services() { return m_services; }
+  // What the host granted at startup: the required capabilities plus any
+  // optional ones it offers (for example ProjectFiles with --project).
+  std::uint32_t grantedCapabilities() const { return m_granted; }
+  bool granted(GuestCapability capability) const
+  {
+    return (m_granted & static_cast<std::uint32_t>(capability)) != 0;
+  }
+  // Recorded by the export layer before start().
+  void grantCapabilities(std::uint32_t grants) { m_granted = grants; }
   virtual std::vector<std::byte> receive(std::span<const std::byte> message)
   {
     (void)message;
@@ -36,6 +45,7 @@ public:
 
 private:
   GuestServiceQueue m_services;
+  std::uint32_t m_granted = 0;
 };
 
 std::unique_ptr<GuestApplication>

@@ -1,4 +1,3 @@
-#include <Illumo/Wasm/AppManifest.h>
 #include <Illumo/Wasm/WasmGuest.h>
 #include <Illumo/Wasm/WasmInstance.h>
 #include <Illumo/Wasm/WasmResourceTable.h>
@@ -148,66 +147,10 @@ engineModes(const std::vector<std::byte>& bytes)
 }
 
 static bool
-manifestDecoder()
-{
-  AppManifestCeilings ceilings;
-  ceilings.memoryMiB = 100;
-  ceilings.fuelPerCall = 1000;
-  ceilings.deadlineMilliseconds = 5000;
-  ceilings.workers = 4;
-  AppManifest manifest;
-  std::string error;
-  if (!require(
-        decodeAppManifest(
-          R"({"id":"csim","module":"game.wasm"})", ceilings, manifest, error) &&
-          manifest.meterFuel && manifest.workers == 1,
-        "Absent metering keeps fuel") ||
-      !require(decodeAppManifest(
-                 R"({"id":"csim","module":"g.wasm","metering":"epoch",
-                     "worker":"w.wasm","workers":16,"workerMemoryMiB":900,
-                     "workerDeadlineMilliseconds":9000,"memoryMiB":50})",
-                 ceilings,
-                 manifest,
-                 error) &&
-                 !manifest.meterFuel && manifest.workers == 4 &&
-                 manifest.workerMemoryMiB == 100 &&
-                 manifest.workerDeadlineMilliseconds == 5000 &&
-                 manifest.memoryMiB == 50,
-               "Epoch metering and clamped worker budgets")) {
-    return false;
-  }
-  const char* const rejected[] = {
-    R"({"id":"csim","module":"g.wasm","metering":"none"})",
-    R"({"id":"csim","module":"g.wasm","metering":1})",
-    R"({"id":"csim","module":"g.wasm","metering":"epoch","fuelPerCall":5})",
-    R"({"id":"csim","module":"g.wasm","workers":2})",
-    R"({"id":"csim","module":"g.wasm","worker":"w.wasm","workers":0})",
-    R"({"id":"csim","module":"g.wasm","worker":"../w.wasm"})",
-    R"({"id":"csim","module":"g.wasm","memoryMiB":-1})",
-    R"({"id":"CSim","module":"g.wasm"})",
-    R"({"module":"g.wasm"})",
-    R"(not json)"
-  };
-  for (const char* text : rejected) {
-    AppManifest untouched;
-    untouched.id = "kept";
-    if (!require(!decodeAppManifest(text, ceilings, untouched, error) &&
-                   !error.empty() && untouched.id == "kept",
-                 text)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-static bool
 run(const std::string& name, const std::vector<std::byte>& bytes)
 {
   if (name == "EngineModes") {
     return engineModes(bytes);
-  }
-  if (name == "Manifest") {
-    return manifestDecoder();
   }
   if (name == "Resources") {
     WasmResourceTable<int, GuestResourceKind::Texture> first(1, 1);
@@ -540,7 +483,7 @@ main(int argc, char** argv)
     "Compatibility", "Isolation",      "Fuel",          "Epoch",
     "Memory",        "DeniedImports",  "InvalidModule", "Worker",
     "Wire",          "CompilerLimits", "Lifecycle",     "Protocol",
-    "Resources",     "EngineModes",    "Manifest"
+    "Resources",     "EngineModes"
   };
   if (argc == 2 && std::string(argv[1]) == "--list") {
     for (const char* name : kCases) {

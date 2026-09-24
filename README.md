@@ -19,8 +19,8 @@ Rulesets, or IllEd. Application policy stays in the consuming product.
 | `IllumoGame/` | Cellular-automata sandbox, shipped only as the isolated `IllumoGame.wasm` package. Saves write sparse `.csim` version 4; loads versions 4, 3, and 2 plus legacy dense / `.illumo` |
 | `IllumoRuntime` | Generic native host (Windows x64): window, OpenGL, services and a Wasmtime sandbox. Runs every interactive client program as a WASM package staged beside it in `apps/<name>/`, and captures PNG frames with `--capture` ([docs/wasm-game-runtime-design.md](docs/wasm-game-runtime-design.md), [docs/frame-capture.md](docs/frame-capture.md)) |
 | `IllumoGuest/` | Guest SDK and WASI build tree: ABI wire headers, guest-side engine (`GuestModuleApplication`), recording backend |
-| `IllEd/` | SceneGraph world editor, shipped as the `IllEd.wasm` package (`--app illed`). Writes `.ilsc` version 1 for later Illumo applications |
-| `IllMeshViewer/` | Single-mesh `.obj` viewer with orbit, pan, zoom, and rotate, shipped as the `IllMeshViewer.wasm` package (`--app meshviewer`) |
+| `IllEd/` | SceneGraph world editor, shipped as the `IllEd.wasm` package (`--app illed`). Writes `.ilsc` format 2 scenes for later Illumo applications; its Hierarchy, Assets, Tools and Inspector panels dock or pop out into their own windows |
+| `IllMeshViewer/` | `.obj` mesh and `.ilsc` scene viewer with orbit, pan, zoom, and rotate, and detachable Info and Display panels, shipped as the `IllMeshViewer.wasm` package (`--app meshviewer`) |
 | `build.py` | Standard-library Python 3.10+ front end for the CMake build |
 
 `SparseCellGrid` is the production simulator domain. `SceneGraph` is the
@@ -60,10 +60,10 @@ illumo/
     Tests/               # Illumo.* library cases
     Shader/ Assets/      # Runtime files staged beside executables
     thirdparty/          # Vendored dependencies
-  IllumoGame/            # CA simulator sources, catalogs and app.json manifest
+  IllumoGame/            # CA simulator sources, catalogs and illumo.json manifest
   IllumoGuest/           # WASM guest SDK and guest build tree (WASI SDK)
-  IllEd/                 # SceneGraph world editor and app.json manifest
-  IllMeshViewer/         # Mesh viewer and app.json manifest
+  IllEd/                 # SceneGraph world editor and illumo.json manifest
+  IllMeshViewer/         # Mesh viewer and illumo.json manifest
   archive/               # Historical / non-build material
 ```
 
@@ -282,8 +282,10 @@ A successful workspace build stages, in one configuration folder:
 
 - Runtime (Windows x64): `IllumoRuntime` plus `apps/game/`
   (`IllumoGame.wasm`), `apps/illed/` (`IllEd.wasm`) and `apps/meshviewer/`
-  (`IllMeshViewer.wasm`), each with its `app.json` manifest; private
+  (`IllMeshViewer.wasm`), each with its `illumo.json` manifest; private
   `storage/<id>/` directories are created on first launch
+- Tools: `IllumoPack` (`IllumoPack <package-dir> <out.ilpk>` packs a
+  package; `IllumoPack --verify <file.ilpk>` checks one)
 - Tests: `IllumoTests`, `IllumoGameTests`, `IllEdTests`,
   `IllMeshViewerTests`, `IllumoPublicHeaderSmoke`, and on Windows the WASM
   host and package test runners
@@ -319,7 +321,8 @@ documentation is enabled. Turn PDFs off with
 
 Every interactive application is a WASM package run by `IllumoRuntime.exe`
 from the staged configuration directory (see above; Windows x64 only).
-Installed packages live in `apps\<name>\`, each with an `app.json` manifest:
+Installed packages live in `apps\<name>\` (or `apps\<name>.ilpk`), each with an
+`illumo.json` manifest:
 
 | `--app` | Module | Manifest notes | Private storage |
 |---|---|---|---|
@@ -330,12 +333,21 @@ Installed packages live in `apps\<name>\`, each with an `app.json` manifest:
 ```text
 IllumoRuntime.exe [--app name] [--open file] [-ww width] [-wh height]
 IllumoRuntime.exe [--app name] [--open file] --capture new.png [--capture-frame n] [--capture-script file]
-IllumoRuntime.exe --package dir [--storage dir]
+IllumoRuntime.exe --package dir|file.ilpk [--storage dir]
+IllumoRuntime.exe [--app name] [--mount dir|file.ilpk]... [--project dir]
 IllumoRuntime.exe --game module.wasm --package dir --storage dir
 IllumoRuntime.exe --help
 ```
 
-`--app` cannot be combined with `--package` or `--game`. `--open` hands one
+`--app` cannot be combined with `--package` or `--game`. Every package in
+`packages\` beside the runtime (directories with an `illumo.json` and `*.ilpk`
+files), and each `--mount`, is mounted on the host's virtual file tree at
+`/packages/<id>`; content packages that declare an overlay of `/app` for the
+launched application also layer over its files. `--project dir` mounts a
+writable authoring directory at `/project`. The host console command
+`vfs mounts|ls|tree|stat|cat` explores the tree; in Debug and RelWithDebInfo
+builds, `files [path]` opens a keyboard browser over it (arrows navigate,
+Escape closes). `--open` hands one
 document to the app: the guest sees only the file's base name, and the host
 grants the file as the selection `launch`, writable when the manifest says
 `launchAccess: "edit"`. The window title comes from the manifest `title`.
@@ -370,7 +382,7 @@ Catalogs may add ruleset IDs; F2 on the canvas edits a rule. See
 [docs/packages/game.md](docs/packages/game.md) and
 [docs/wasm-game-cutover-plan.md](docs/wasm-game-cutover-plan.md).
 
-`apps\game\app.json` names the module and the simulation lane worker and
+`apps\game\illumo.json` names the module and the simulation lane worker and
 requests memory, metering (`epoch`: calls are bounded by a wall-clock
 deadline, not fuel), deadline and lane budgets; the runtime clamps them to
 host ceilings. `--memory-mib`, `--deadline-ms` and `--fuel` (which forces fuel
@@ -400,7 +412,8 @@ Saves append `.csim` when no extension is given. Writes are sparse version 4
 before replacing the canvas.
 
 Set `"render3dTest": "1"` in `storage\csim\envvars.json` for an opt-in 3D
-diagnostic `SceneGraph` (not the normal canvas). Set it back to `0` to
+diagnostic scene (`IllumoGame/Scenes/render3d-test.ilsc`, not the normal
+canvas). Set it back to `0` to
 restore the orthographic CA view. Its lit meshes cast into the runtime's
 shared shadow pass through frame schema version 2.
 
@@ -417,7 +430,12 @@ cache with tiled uploads. Timing, fade, and upload details:
 ### IllEd
 
 SceneGraph world editor. It does not simulate cellular automata. File / Edit /
-Create / View authors `.ilsc` JSON (version 1). The whole editor runs inside
+Create / View authors `.ilsc` format 2 scenes: primitives, meshes, sprites,
+lights and cameras with an environment and skybox, undo and redo,
+multi-selection, translate/rotate/scale gizmos, a typed inspector, clipboard
+and a hierarchy with reordering. With `--project dir`, the asset browser
+places files from the virtual file tree, and File offers Import to Project,
+Save to Project and Pack Project (an `.ilpk`). The whole editor runs inside
 `IllEd.wasm`. Open a scene at startup with `--open`, or use File > Open.
 Because the manifest grants the launch document for editing, Ctrl+S saves it
 in place. Dialogs use pattern `*.ilsc`; save, open and close confirmation
@@ -427,21 +445,27 @@ See [docs/packages/illed.md](docs/packages/illed.md).
 ```text
 IllumoRuntime.exe --app illed
 IllumoRuntime.exe --app illed --open scene.ilsc
+IllumoRuntime.exe --app illed --project my-project
 ```
 
 ### IllMeshViewer
 
-Displays one `.obj` on a 3D reference grid inside `IllMeshViewer.wasm`. The
+Displays one `.obj` mesh or `.ilsc` scene on a 3D reference grid inside `IllMeshViewer.wasm`. The
 launch document is read-only; its bytes are parsed in the guest with
 `MeshLoader::loadFromMemory`, large static meshes are uploaded once as
 retained host meshes (frame schema v3), and the skybox cross is preloaded
 from the package and drawn as a host cubemap. As in every app, dynamic UI and
 line geometry stays on the host and only changed bytes travel (frame schema
-v4).
+v4). It also opens `.ilsc` scenes: pick one in the dialog, pass it with
+`--open`, or open one from any mounted package with the console command
+`viewer_open /packages/<id>/scenes/x.ilsc`. The scene's assets are fetched
+from the virtual file tree before it appears, and its own sky replaces the
+default one.
 
 ```text
 IllumoRuntime.exe --app meshviewer
 IllumoRuntime.exe --app meshviewer --open model.obj
+IllumoRuntime.exe --app meshviewer --mount forest.ilpk
 ```
 
 Controls:

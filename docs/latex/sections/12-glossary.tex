@@ -26,13 +26,47 @@
     or immediate \texttt{Draw} (fallback).
   \item[Enrollment]
     Creating GPU resources and receiving handles outside the tight frame loop.
+  \item[Fetch set]
+    The virtual paths one scene load needs (\texttt{collectSceneFetches}),
+    fetched into the guest asset cache before the scene instantiates and held
+    there until released, so \texttt{IAssetSource::read} stays synchronous
+    (D-E24).
+  \item[.ilsc format 2]
+    The one UTF-8 JSON scene format every Illumo program reads and writes,
+    owned by \texttt{Illumo::Content} (\texttt{IlscCodec},
+    \texttt{SceneDocument}). Strict core objects, verbatim namespaced data,
+    canonical output; format 1 is refused (D-E19).
   \item[Illumo]
     Engine/host object: owns services, modules, frame pumping.
   \item[IllumoContext]
     Frozen non-owning public service bag supplied to registered modules
     (D-E5/D-E6).
+  \item[illumo.json]
+    The one manifest at the root of every package: id, version, title, kind
+    (\texttt{app}, \texttt{content}, or \texttt{mod}), targets, dependencies,
+    overlays, and an \texttt{app} or \texttt{mod} section. It replaced
+    \texttt{app.json} (D-E22).
   \item[Module]
     \symbolref{IModule} subsystem (game, debug, \ldots).
+  \item[Mount]
+    One entry of the host's virtual file tree: a mount point
+    (\texttt{/engine}, \texttt{/app}, \texttt{/packages/<id>}, or
+    \texttt{/project}) and the layers that supply it. Only \texttt{/project}
+    is writable (D-E21).
+  \item[Overlay]
+    A package layer merged onto \texttt{/app} when the package targets the
+    launched application. Layers stack by priority, then dependency order,
+    then id; directories union and the topmost file wins. There are no
+    whiteouts.
+  \item[Package (.ilpk)]
+    A unit of content with \texttt{illumo.json} at its root: a loose directory
+    or an \texttt{.ilpk} archive, a bounded ZIP subset with stored and deflate
+    entries (D-E20). Both forms resolve identically.
+  \item[Package root]
+    The mount a scene's package-relative references resolve against:
+    \texttt{/packages/<id>} under \texttt{/packages}, otherwise the first path
+    component (\texttt{/app}, \texttt{/project}, \texttt{/engine},
+    \texttt{/local}); see \texttt{scenePackageRoot}.
   \item[Palette]
     CPU table mapping all 256 possible cell-state bytes to RGB target colors.
   \item[PBO]
@@ -47,4 +81,14 @@
     Persistent scene-owned hierarchy addressed by graph-local generational
     handles. It caches world transforms and emits visible, enabled borrowed
     render attachments as one Scene drawable.
+  \item[SceneInstance]
+    \texttt{Illumo::Content}'s live scene: it owns one document state, a
+    SceneGraph, the attachments that draw each node and their asset
+    references. Per-node edits change only what they touch; stable ids are
+    graph node names.
+  \item[VFS]
+    Virtual file system: the host's \texttt{VirtualFileSystem}, an immutable
+    mount table of absolute, case-sensitive \texttt{/}-separated paths over
+    directory and archive backends. Guests list, stat and read it through
+    file protocol v2; nothing it returns is a host path.
 \end{description}

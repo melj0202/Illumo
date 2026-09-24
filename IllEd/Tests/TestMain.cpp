@@ -9,7 +9,15 @@
 #include <string>
 
 void
-registerIlscCodecTests(IllumoTestRegistry& registry);
+registerEditorHistoryTests(IllumoTestRegistry& registry);
+void
+registerEditorClipboardTests(IllumoTestRegistry& registry);
+void
+registerEditorAssetsTests(IllumoTestRegistry& registry);
+void
+registerEditorGizmoTests(IllumoTestRegistry& registry);
+void
+registerEditorInspectorTests(IllumoTestRegistry& registry);
 void
 registerEditorDocumentTests(IllumoTestRegistry& registry);
 void
@@ -17,26 +25,33 @@ registerIllEdConfigTests(IllumoTestRegistry& registry);
 void
 registerEditorToolbarTests(IllumoTestRegistry& registry);
 void
-registerEditorSidebarTests(IllumoTestRegistry& registry);
+registerEditorToolsPanelTests(IllumoTestRegistry& registry);
 void
 registerEditorSceneGraphViewTests(IllumoTestRegistry& registry);
 void
 registerEditorUiAtlasTests(IllumoTestRegistry& registry);
 void
 registerEditorModuleTests(IllumoTestRegistry& registry);
+void
+registerEditorPanelsTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
 {
   IllumoTestRegistry registry;
-  registerIlscCodecTests(registry);
+  registerEditorHistoryTests(registry);
+  registerEditorClipboardTests(registry);
+  registerEditorAssetsTests(registry);
+  registerEditorGizmoTests(registry);
+  registerEditorInspectorTests(registry);
   registerEditorDocumentTests(registry);
   registerIllEdConfigTests(registry);
   registerEditorToolbarTests(registry);
-  registerEditorSidebarTests(registry);
+  registerEditorToolsPanelTests(registry);
   registerEditorSceneGraphViewTests(registry);
   registerEditorUiAtlasTests(registry);
   registerEditorModuleTests(registry);
+  registerEditorPanelsTests(registry);
   return registry;
 }
 

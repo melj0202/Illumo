@@ -28,21 +28,65 @@
 \path{Illumo/Include/Illumo/Services/} & Generic config, input, logging, console contracts \\
 \path{Illumo/Source/Services/SysCmdLine.cpp} & System help/version and metadata-driven option parser \\
 \path{Illumo/Source/Platform/} & Engine-owned process entry and native SaveLoad implementations \\
+\path{Illumo/Include/Illumo/Services/FileTreeSource.h} & Core read-only file-tree interface behind \texttt{IllumoContext::fileTree} \\
+\path{Illumo/Source/Engine/FileTreeOverlay.h} & Debug-tools \texttt{files} browser over \texttt{IllumoContext::fileTree} \\
+\path{Illumo/Include/Illumo/Gui/GuiTextEdit.h} & Value-state UTF-8 line editing (D-UI6) \\
+\path{Illumo/Include/Illumo/Gui/GuiFileTree.h} & Flattened file-tree rows over on-demand listings (D-UI6) \\
+\path{Illumo/Include/Illumo/Gui/GuiToolStyle.h} & Plain tool palette and flat tool widgets (D-UI7) \\
+\path{Illumo/Include/Illumo/Gui/GuiPanelDock.h} & Dock columns, splitters, pop-out, tear-off, saved layouts (D-UI7) \\
+\path{Illumo/Include/Illumo/Gui/GuiPanelPointer.h} & A panel's placement and its per-window pointer (D-UI7) \\
+\path{Illumo/Include/Illumo/Gui/PanelSurfaces.h} & \texttt{IPanelSurfaces}, extra windows for detached panels (D-E27) \\
+\path{Illumo/Source/Wasm/WasmPanelWindows.cpp} & Host panel windows: replay, readback, present, events (D-R27) \\
+\path{IllumoGuest/Include/IllumoGuest/PanelSurfaces.h} & Guest \texttt{GuestPanelSurfaces} over the Window service \\
+\path{Illumo/Include/Illumo/Content/} & \texttt{Illumo::Content} public API: paths, manifests, archives, file tree, scenes \\
+\path{Illumo/Source/Content/IlscCodec.cpp} & \texttt{.ilsc} format 2 strict parser and canonical encoder \\
+\path{Illumo/Source/Content/SceneInstance.cpp} & Live graph, attachments, lighting, skybox, picking from a document \\
+\path{Illumo/Source/Content/PackageArchive.cpp} & \texttt{.ilpk} ZIP-subset reader and deterministic writer \\
+\path{Illumo/Source/Content/VirtualFileSystem.cpp} & Mount table, overlays, directory and archive backends \\
+\path{Illumo/Source/Content/PackageMounts.cpp} & Package open, \texttt{packages/} discovery, mount assembly, pack \\
+\path{Illumo/Source/Wasm/RuntimeApplication.cpp} & \texttt{IllumoRuntime} options, package launch, mounts \\
+\path{Illumo/Source/Wasm/WasmFileServices.cpp} & Host file protocol v2, project quota, Import and Pack \\
+\path{Illumo/tools/IllumoPack.cpp} & Pack a package directory into an \texttt{.ilpk}, or \texttt{--verify} one \\
+\path{cmake/IllumoPackCheck.cmake} & Packs and verifies a staged application for \texttt{Illumo.Pack.StagedApp} \\
+\path{IllumoGuest/Include/IllumoGuest/} & Guest SDK: \texttt{FileTree.h}, \texttt{VfsAssets.h}, \texttt{SceneFetches.h}, file protocol \\
 \path{Illumo/TestSupport/Include/} & Test-only MockBackend and harness API \\
 \path{Illumo/Tests/} & \texttt{Illumo.*} library cases \\
-\path{IllumoGame/CMakeLists.txt} & Product core, executable, tests, runtime seed \\
+\path{Illumo/Tests/Content/} & \texttt{Illumo.Content.*} cases and the archive fixture package \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[h]
+\centering
+\scriptsize
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.52\linewidth} X@{}}
+\toprule
+\textbf{Path} & \textbf{Why it matters} \\
+\midrule
+\path{IllumoGame/CMakeLists.txt} & Product core (native test oracle), tests, runtime seed \\
 \path{IllumoGame/Source/Game/IllumoGameApplication.cpp} & Product identity, CA CLI metadata, required-module factory \\
 \path{IllumoGame/Source/Game/IllumoGameConfig.*} & CA defaults \\
 \path{IllumoGame/Source/Game/CellGameModule.*} & Modes, input, commands, simulation orchestration \\
 \path{IllumoGame/Source/Game/SparseCellGrid.*} & Signed-coordinate sparse domain \\
 \path{IllumoGame/Source/Game/CanvasView.*} & Bounded presentation, fade, dirty upload \\
 \path{IllumoGame/Source/Rulesets/} & Cellular-automata transitions and palettes \\
+\path{IllumoGame/Scenes/render3d-test.ilsc} & Scene behind the \texttt{render3dTest} diagnostic \\
 \path{IllumoGame/Tests/} & \texttt{IllumoGame.*} product cases \\
-\path{IllEd/Source/}, \path{IllEd/Tests/} & World editor, document codec, and product cases \\
-\path{IllMeshViewer/Source/}, \path{IllMeshViewer/Tests/} & Mesh viewer and product cases \\
+\path{IllumoGame/illumo.json}, \path{IllEd/illumo.json}, \path{IllMeshViewer/illumo.json} & Package manifests (replace \texttt{app.json}) \\
+\path{IllEd/Source/EditorDocument.*} & The single mutation gateway over one \texttt{SceneInstance} \\
+\path{IllEd/Source/EditorHistory.*}, \path{EditorSelection.*}, \path{EditorShortcuts.*} & Patch undo/redo, selection set, the one key table \\
+\path{IllEd/Source/EditorGizmo.*}, \path{EditorInspector.*}, \path{EditorClipboard.*} & Transform gizmos, typed inspector, fragment copy/paste \\
+\path{IllEd/Source/EditorAssetBrowser.*}, \path{EditorAssets.*} & File-tree browser, asset kinds, import checks \\
+\path{IllEd/Source/EditorModule*.cpp} & Lifetime and frame, dock panels, command dispatch, viewport input \\
+\path{IllEd/Source/EditorToolsPanel.*}, \path{EditorToolbar.*} & Tools panel; menu bar, toasts and status bar \\
+\path{IllEd/Source/IllEdPlatform.h} & Dialogs, files, clipboard, file tree, project seam \\
+\path{IllEd/Tests/} & \texttt{IllEd.*} product cases \\
+\path{IllMeshViewer/Source/}, \path{IllMeshViewer/Tests/} & Mesh and scene viewer (menu bar, Info and Display panels) and product cases \\
 \path{docs/architecture-consensus.md} & Canonical current architecture and decisions \\
 \path{docs/scene-graph-v1-design.md} & Persistent scene hierarchy contract and rollout boundary \\
 \path{docs/illumo-library-and-illumogame-design.md} & Approved extraction design and outcome \\
+\path{docs/content-packages-and-scenes-design.md} & Packages, file tree, \texttt{.ilsc} format 2, IllEd wave 1 design \\
+\path{docs/content-packages-and-scenes-plan.md} & Per-milestone execution record for that design \\
 \path{docs/latex/illumo.tex} & Prose-book entry point \\
 \path{docs/latex/architecture-map.tex} & Chart-pack entry point \\
 \bottomrule

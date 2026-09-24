@@ -212,6 +212,7 @@ testStringOptionsAndPositionalArguments()
     config.applicationOptions = {
       { "-m", "path", "LaunchMesh", "Mesh file path" },
       { "--name", "string", "SceneName", "Name of scene" },
+      { "--mount", "paths", "Mounts", "Repeatable package path" },
     };
 
     char executable[] = "TestViewer";
@@ -241,6 +242,17 @@ testStringOptionsAndPositionalArguments()
     testTrue(g,
              environment.getVar("SceneName").value == "StanfordBunny",
              "string option --name parsed");
+
+    char mountOption[] = "--mount";
+    char firstMount[] = "packages/a";
+    char secondMount[] = "b.ilpk";
+    char* mountArgs[] = {
+      executable, mountOption, firstMount, mountOption, secondMount
+    };
+    SysCmdLine::ParseCommandLine(5, mountArgs, &environment, config);
+    testTrue(g,
+             environment.getVar("Mounts").value == "packages/a\nb.ilpk",
+             "a paths option repeats, one value per line");
   }
   std::filesystem::remove(path, error);
 }

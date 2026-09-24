@@ -1744,7 +1744,10 @@ document and owns \texttt{MeshVisual} attachments. Extra JSON keys may be
 ignored; unknown kinds and cycles fail closed. Promote the codec into Illumo
 when a second loader exists. This does not change \texttt{.illumo} or CA
 persistence.\\
-\textbf{Refines:} D-E8.
+\textbf{Refines:} D-E8.\\
+\textbf{Superseded by:} D-E18 and D-E19 (2026-09-23). The codec moved into
+\texttt{Illumo::Content} once every program needed it, and version 1 is no
+longer read.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -2406,6 +2409,8 @@ version 3 adds retained host meshes (\texttt{CreateMesh},
 batches, and a per-batch blend flag. IllEd and IllMeshViewer reach files and
 dialogs through the product-owned \texttt{IllEdPlatform} and
 \texttt{MeshViewerPlatform} seams.\\
+\textbf{Refined by:} D-E22 (2026-09-23): \texttt{illumo.json} replaces
+\texttt{app.json}, and packages may be \texttt{.ilpk} archives.\\
 \textbf{Why:} D-E13 proved the generic host with the game; keeping native
 editor, viewer and capture executables beside it left three programs outside
 the sandbox and a second capture path that did not render real applications.\\
@@ -2496,6 +2501,264 @@ while running. The whole-world \texttt{CSW1} worker remains for parity tests.\\
 \textbf{Completes:} D-E13 (worker-store offload, milestone 6)
 \end{decisionbox}
 
+\subsection*{D-E18 --- Illumo::Content, the shared content layer}
+\begin{decisionbox}[title={D-E18 \quad 2026-09-23}]
+\textbf{Decision:} Add the optional static library \texttt{Illumo::Content}
+(\texttt{Illumo/Include/Illumo/Content}, \texttt{Illumo/Source/Content}) above
+the engine. It owns virtual paths, package manifests, \texttt{.ilpk} archives,
+the virtual file tree, the \texttt{.ilsc} scene format and
+\texttt{SceneInstance}. Core \texttt{Illumo} never includes
+\texttt{<Illumo/Content/...>}; Content never depends on the WASM host or a
+product; nlohmann stays private to its sources. Guests link the serial-safe
+mirror \texttt{IllumoGuestContent} (paths, manifests, scene format, scene
+instances); archives and the file tree stay host-side.\\
+\textbf{Why:} IllEd, IllMeshViewer, IllumoGame and the runtime all needed the
+same scene and package code. D-E10's condition for promoting the codec (a
+second loader) was met.\\
+\textbf{Consequences:} \texttt{SceneGraph} still never serializes itself;
+Content builds graphs only through the public API. Engine tools reach the
+file tree through the core interface \texttt{IFileTreeSource}
+(\texttt{IllumoContext::fileTree}), which Content implements as
+\texttt{VfsTreeSource}.\\
+\textbf{Supersedes:} D-E10 (editor-owned codec)
+\end{decisionbox}
+
+\subsection*{D-E19 --- .ilsc format 2 is the one scene format}
+\begin{decisionbox}[title={D-E19 \quad 2026-09-23}]
+\textbf{Decision:} Every Illumo program reads and writes \texttt{.ilsc} format
+2 (\texttt{format\_version} \texttt{[2, minor]}; newer minors are refused).
+A document holds \texttt{metadata}, \texttt{settings} (world mode and one
+environment: skybox, ambient colour, one directional sun), an \texttt{assets}
+table (\texttt{mesh}, \texttt{texture}, \texttt{atlas}, cubemaps), nodes with
+stable string ids, parents, transforms, tags and core components
+(\texttt{primitive}, \texttt{mesh}, \texttt{sprite}, \texttt{light},
+\texttt{camera}), namespaced components and \texttt{extensions} kept verbatim,
+and an \texttt{editor} block. Core components are strict: unknown keys fail.
+Asset references are package-relative (\texttt{meshes/tree.obj}) or explicit
+absolute virtual paths (\texttt{/engine/...}, \texttt{/packages/<id>/...}).
+Output is canonical: fixed key order and shortest round-trip floats.
+\texttt{SceneInstance} is the live loader: it owns the document, graph,
+attachments and id map, applies per-node edits incrementally, shares one unit
+mesh per primitive kind, and falls back to placeholders for missing assets.\\
+\textbf{Why:} Version 1 could only describe coloured primitives, could not
+reference an asset, failed on any unknown kind, and only IllEd read it.
+Package-relative references let a project directory, its packed
+\texttt{.ilpk} and a mounted copy share one file unchanged.\\
+\textbf{Consequences:} Clean break: version 1 files are not read. Loads
+collect references (\texttt{collectSceneFetches}), fetch them, then
+instantiate, so \texttt{IAssetSource} stays synchronous. IllumoGame's
+\texttt{render3dTest} and IllMeshViewer scenes use the same path.
+\end{decisionbox}
+
+\subsection*{D-E20 --- .ilpk packages are a bounded ZIP subset}
+\begin{decisionbox}[title={D-E20 \quad 2026-09-23}]
+\textbf{Decision:} A package is a directory or an \texttt{.ilpk} archive: a
+ZIP subset with stored and deflate entries only (no zip64, multi-disk,
+encryption or symlinks). The reader rejects unsafe or duplicate names,
+file/directory collisions and local headers that disagree with the central
+directory; it bounds entry count (65,535), directory bytes (16\,MiB),
+per-entry (256\,MiB) and total (1\,GiB) inflated size and the compression
+ratio (1,024), and checks CRC-32 on every full read. The host writer
+(\texttt{PackageArchiveWriter}, the \texttt{IllumoPack} tool and the Pack file
+action) deflates through the vendored \texttt{stb\_image\_write} compressor and
+stores already-compressed images as they are.\\
+\textbf{Why:} Mods and expansions need one shippable file that standard tools
+can inspect, without a new dependency and without trusting the archive.\\
+\textbf{Consequences:} Inflate uses \texttt{stb\_image}'s decoder with an
+exact output bound. CMake's own zip output is a test fixture, so the reader is
+checked against an independent writer.
+\end{decisionbox}
+
+\subsection*{D-E21 --- Packages mount on one host virtual file tree}
+\begin{decisionbox}[title={D-E21 \quad 2026-09-23}]
+\textbf{Decision:} \texttt{IllumoRuntime} owns a \texttt{VirtualFileSystem}.
+It mounts \texttt{/engine} (runtime assets), \texttt{/app} (the launched
+package plus overlays), \texttt{/packages/<id>} (every package found in
+\texttt{packages/} beside the runtime and each \texttt{--mount}), and a
+writable \texttt{/project} only with \texttt{--project <dir>}. Mount tables are
+immutable snapshots swapped under a mutex; open files keep their backend
+alive after an unmount. Overlays target only \texttt{/app}: priority, then
+dependency order, then id; directories union and the top file wins; there are
+no whiteouts. Directory lookups are case-exact on every file system, and a
+path that escapes its root through a link does not exist. \texttt{stat} names
+the supplying package but never a host path.\\
+\textbf{Why:} Content must be browsable at runtime and in the console, and
+several packages must coexist for mods and expansions without any package
+choosing its own mount point.\\
+\textbf{Consequences:} The host \texttt{vfs} console command lists, stats and
+reads the tree, and debug builds add the \texttt{files} browser. Writes go only
+to \texttt{/project}; \texttt{*.wasm} and \texttt{illumo.json} are refused
+there. A mod cannot delete a base file.
+\end{decisionbox}
+
+\subsection*{D-E22 --- illumo.json is the one package manifest}
+\begin{decisionbox}[title={D-E22 \quad 2026-09-23}]
+\textbf{Decision:} Every package carries \texttt{illumo.json}
+(\texttt{format ilpk}, \texttt{format\_version} 1, \texttt{id},
+\texttt{version}, \texttt{title}, \texttt{kind} \texttt{app}, \texttt{content}
+or \texttt{mod}, \texttt{targets}, \texttt{dependencies}, \texttt{overlays},
+and an \texttt{app} or \texttt{mod} section). The \texttt{app} section absorbs
+the former \texttt{app.json} fields and their clamping to host ceilings. A
+\texttt{kind} whose sections do not match is refused; dependency order is
+Kahn's algorithm and cycles are refused.\\
+\textbf{Why:} Apps, content and mods are all packages; two manifest formats
+would have diverged.\\
+\textbf{Consequences:} \texttt{app.json} and \texttt{AppManifest} are removed;
+staging emits \texttt{illumo.json}; \texttt{--app} and \texttt{--package}
+accept a directory or an \texttt{.ilpk}.\\
+\textbf{Refines:} D-E14
+\end{decisionbox}
+
+\subsection*{D-E23 --- File protocol v2 and the ProjectFiles capability}
+\begin{decisionbox}[title={D-E23 \quad 2026-09-23}]
+\textbf{Decision:} Guest file requests gain a \texttt{Mounted} area addressed
+by absolute virtual paths, and the Package area becomes an alias for
+\texttt{/app}. New actions: \texttt{List} (paged), \texttt{Stat},
+\texttt{Import} (copy a dialog grant into \texttt{/project}) and \texttt{Pack}
+(\texttt{/project} to an \texttt{.ilpk} on a dedicated host worker). Mounted
+reads use blocks of up to 1\,MiB, and a guest may keep 16 file tasks in
+flight. Writing a mounted path, Import and Pack need the new capability
+\texttt{ProjectFiles} (bit 9), which the host offers only while a project is
+mounted; the project quota is tracked incrementally.\\
+\textbf{Why:} Guests could read only their own flat package directory; the
+editor needs to browse every mount and write a project without learning host
+paths.\\
+\textbf{Consequences:} Reading mounted paths needs only \texttt{Assets}.
+A pack never replaces a currently mounted archive: the replace fails and the
+guest sees \texttt{IoError} (there is no up-front check). The guest SDK adds
+\texttt{GuestFileTree}. Every new request shape has decoder and deny tests.
+\end{decisionbox}
+
+\subsection*{D-E24 --- Guest asset cache over the file tree}
+\begin{decisionbox}[title={D-E24 \quad 2026-09-23}]
+\textbf{Decision:} \texttt{GuestVfsAssets} replaces \texttt{GuestPackageAssets}
+as the guest \texttt{IAssetSource}. \texttt{packageAssets()} remains a pinned
+bootstrap preload; loads fetch sets of virtual paths on demand and hold them
+until released; unpinned, unheld bytes are evicted least recently used past a
+256\,MiB budget; \texttt{/local/<name>} holds bytes the app supplies itself.
+\texttt{GuestSceneFetches} (\texttt{IllumoGuestContent}) adds the second stage
+that fetches the material libraries an OBJ declares.\\
+\textbf{Why:} Asset bytes must be readable synchronously when a scene
+instantiates, but a guest cannot preload every package it might open.\\
+\textbf{Consequences:} IllEd and IllMeshViewer share one fetch pipeline; a
+missing material library is tolerated, a missing asset is reported and drawn
+as a placeholder.
+\end{decisionbox}
+
+\subsection*{D-E25 --- IllEd editing model}
+\begin{decisionbox}[title={D-E25 \quad 2026-09-23}]
+\textbf{Decision:} IllEd edits a format 2 document over \texttt{SceneInstance}.
+Each command is a patch of node records (before, after, parent, sibling
+position); drags merge into one command; history is capped at 512 commands
+and 64\,MiB and cleared on load; dirty means the history cursor differs from
+the saved one. Selection is a set with a primary node. One shortcut table
+drives menus and keys. New nodes go under the root unless ``create as child''
+is chosen. Picking uses \texttt{raycastCandidates} in both world modes.
+Clipboard fragments (\texttt{illed.fragment}, at most 4\,MiB) remap ids on
+paste. With \texttt{--project}, the asset browser places files from the tree,
+and Import, Save to Project and Pack Project write through D-E23.\\
+\textbf{Why:} The prototype had no undo, one selected node, world-axis
+translation only, a read-only inspector and no assets; camera motion marked
+documents dirty.\\
+\textbf{Consequences:} The module is split into document, history, selection,
+shortcut, gizmo, inspector, clipboard, asset and project units. Console
+commands \texttt{scene\_select}, \texttt{scene\_place} and
+\texttt{scene\_save\_project} script the same flows for tests.
+\end{decisionbox}
+
+\subsection*{D-E26 --- SceneGraph sibling order}
+\begin{decisionbox}[title={D-E26 \quad 2026-09-23}]
+\textbf{Decision:} Add one narrow ordering call to SceneGraph v2:
+\texttt{setParent(node, parent, insertBefore)} places a node immediately
+before a sibling, or last when \texttt{insertBefore} is null. An unchanged
+position is a no-op, and invalid or cyclic requests fail without mutating.\\
+\textbf{Why:} Scene documents and the editor hierarchy are ordered, and undo
+must restore a node to its exact position.\\
+\textbf{Consequences:} \texttt{SceneInstance} and IllEd reorder, paste and undo
+in place. No other part of the v2 contract changes.\\
+\textbf{Refines:} D-E12
+\end{decisionbox}
+
+\subsection*{D-UI6 --- GuiTextEdit and GuiFileTree}
+\begin{decisionbox}[title={D-UI6 \quad 2026-09-23}]
+\textbf{Decision:} Two primitive-composed helpers join \texttt{Illumo/Gui},
+native and guest. \texttt{GuiTextEdit} is a UTF-8 line editor (caret,
+selection, clipboard) fed by \texttt{InputManager::getCharQueue} and drawn by
+\texttt{GuiKit::drawTextField}. \texttt{GuiFileTree} keeps expansion state
+and the listings received so far, and flattens them without recursion into
+rows drawn with \texttt{GuiKit::drawTreeRow}. There is no retained widget
+tree.\\
+\textbf{Why:} IllEd's inspector needed typed fields, and the asset browser and
+the debug file browser needed one tree view over asynchronous listings.\\
+\textbf{Consequences:} The IllEd inspector and asset browser use them, and so
+does DebugModule's \texttt{files} command, which browses
+\texttt{IllumoContext::fileTree} with the keyboard and wheel only, so every
+input it takes is consumed before the product sees it.\\
+\textbf{Extends:} D-UI1 (menu shell)
+\end{decisionbox}
+
+\subsection*{D-UI7 --- Plain tool look and detachable panels}
+\begin{decisionbox}[title={D-UI7 \quad 2026-09-23}]
+\textbf{Decision:} IllEd and IllMeshViewer share a plain tool look
+(\texttt{GuiToolStyle}: a neutral palette, flat panels, title bars, splitters,
+rows, buttons, toggles, sliders, text fields, menus and status bars) and one
+\texttt{GuiPanelDock} per app window. The dock stacks panels in left and right
+columns with draggable splitters; each title bar can hide a panel or pop it
+out into its own window, and dragging a title past the window edge tears it
+off, as the console does. A detached panel docks back from its title bar, its
+window's close box or View \textgreater{} Reset Layout. Panels are content
+renderers: they draw into a \texttt{GuiPanelPlacement} (content rectangle
+plus surface) and read their pointer through \texttt{GuiPanelPointer}, which
+samples the main window or the panel's window and honours presses other
+chrome took. The layout is saved in the \texttt{panelLayout} setting and
+detached panels reopen on the next start.\\
+\textbf{Why:} The owner asked for the editor and viewer interfaces to be
+redone with panels that break off into separate windows, like the developer
+console, in a plain tool look.\\
+\textbf{Consequences:} IllEd's Hierarchy, Assets, Tools and Inspector panels
+and the viewer's Info and Display panels detach; an asset dragged from a
+detached Assets window places where it is dropped in the viewport. The chrome
+keeps fixed tool metrics while \texttt{fontSize} scales panel content. There
+is still no retained widget tree.\\
+\textbf{Extends:} D-UI4 (plain console palette), D-UI5 (console pop-out)
+\end{decisionbox}
+
+\subsection*{D-E27 --- Panel surfaces}
+\begin{decisionbox}[title={D-E27 \quad 2026-09-23}]
+\textbf{Decision:} \texttt{IPanelSurfaces}, published as
+\texttt{IllumoContext::panelSurfaces}, gives products extra top-level windows.
+Surface 0 is the main window; others are opened, titled and closed by id, and
+report size, screen origin, pointer and window events. Keys stay in the one
+\texttt{InputManager} queue and \texttt{focused()} names their window. Guests
+get it through the \texttt{Windows} capability (bit 10), which the host grants
+only when it can present windows, the Window service (17) and input v2;
+\texttt{WasmPanelWindows} owns the host windows and closes them on failure and
+exit. Products must work fully docked without it.\\
+\textbf{Why:} Product modules are shared by the guest and the native test
+oracles, so they need a seam free of guest types; \texttt{FakePanelSurfaces}
+drives the same code in tests.\\
+\textbf{Consequences:} Linux, \texttt{--capture}, \texttt{--bench-*} and
+headless runs keep every panel docked with pop-out disabled.\\
+\textbf{Extends:} D-E23 (capabilities)
+\end{decisionbox}
+
+\subsection*{D-R27 --- Surface frames and offscreen readback}
+\begin{decisionbox}[title={D-R27 \quad 2026-09-23}]
+\textbf{Decision:} Frame schema v5 adds a trailing section of at most eight
+surfaces, each a UI-only batch list with a revision, or \texttt{same} when
+nothing it draws changed. The host replays a changed surface through
+\texttt{Renderer::renderOffscreen} into a per-window target and queues an
+asynchronous readback (\texttt{IBackend::requestFramebufferReadback} and
+\texttt{takeFramebufferReadback}, two fenced pixel-pack buffers per stream);
+the newest completed copy is presented by the window's \texttt{PixelWindow},
+one frame late.\\
+\textbf{Why:} Detached panels must draw exactly as docked ones (sprites,
+ellipses, text) without a second GL context or a CPU rasterizer.\\
+\textbf{Consequences:} An unchanged panel costs neither a replay nor a
+readback. Versions 1--4 remain valid, and the frame quotas span the main frame
+and every surface.\\
+\textbf{Extends:} D-UI5 (no second GL context), D-R25
+\end{decisionbox}
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

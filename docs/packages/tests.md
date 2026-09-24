@@ -2,10 +2,10 @@
 
 | Target | Namespace and responsibility |
 |---|---|
-| `IllumoTests` | `Illumo.*`: application/host lifecycle, BuildInfo, SysCmdLine, services, allocators, persistent scene hierarchy, public/private rendering, assets, generic console/UI |
+| `IllumoTests` | `Illumo.*`: application/host lifecycle, BuildInfo, SysCmdLine, services, allocators, persistent scene hierarchy, public/private rendering, assets, generic console/UI, the content layer (`Illumo.Content.*`: paths, manifests, archives, virtual file tree, `.ilsc`, `SceneInstance`) |
 | `IllumoGameTests` | `IllumoGame.*`: CA CLI metadata/configuration, rulesets, topology, sparse simulation, presentation, editor/pattern I/O, commands, persistence |
-| `IllEdTests` | `IllEd.*`: editor identity, `.ilsc` codec, document model, toolbar hits, SceneGraph wiring |
-| `IllMeshViewerTests` | `IllMeshViewer.*`: viewer camera, configuration, module input, and UI |
+| `IllEdTests` | `IllEd.*`: editor identity, document model over `SceneInstance`, history, selection, gizmos, inspector, clipboard, hierarchy, assets and project flow, toolbar and Tools panel hits, detachable panels through `FakePanelSurfaces` (`IllEd.Panels.*`), SceneGraph wiring (the `.ilsc` codec is tested in `Illumo.Content.*`) |
+| `IllMeshViewerTests` | `IllMeshViewer.*`: viewer camera, configuration, module input, menus, the Info and Display panels docked and detached (`IllMeshViewer.Panels.*`), and `.ilsc` scenes from the file tree |
 | `IllumoPublicHeaderSmoke` | Consumer-only compile/link smoke using no private source include paths |
 
 All four runners support `--list` and exact `--run`. CMake discovers each logical

@@ -483,6 +483,46 @@ main(int argc, char** argv)
     std::cerr << "Framebuffer restoration checks: " << targets.error << '\n';
     ++failures;
   }
+  const FrameCaptureResult readback = FrameCapture::render(
+    options, [](Renderer& renderer, Camera&, std::string& error) {
+      IBackend* backend = renderer.getBackend();
+      FramebufferDesc desc;
+      desc.width = 16;
+      desc.height = 8;
+      desc.colorAttachments.push_back(FramebufferAttachmentDesc{});
+      const FramebufferHandle target = backend->CreateFramebuffer(desc);
+      GameVisual visual;
+      visual.setWindow(renderer.getWindow());
+      visual.setSpace(PrimitiveSpace::Pixels);
+      visual.prepare(&renderer);
+      visual.addFilledRect(0, 0, 16, 4, ColorRgba{ 255, 0, 0, 255 });
+      if (!renderer.renderOffscreen(
+            target, 16, 8, { &visual }, { 0.0f, 0.0f, 1.0f, 1.0f }, 1.0f)) {
+        error = "Offscreen render failed";
+        return false;
+      }
+      FrameReadback pixels;
+      if (!backend->requestFramebufferReadback(1, target, 16, 8) ||
+          !backend->takeFramebufferReadback(1, true, pixels) ||
+          pixels.width != 16 || pixels.height != 8) {
+        error = "Framebuffer readback failed: " + pixels.error;
+        return false;
+      }
+      // Rows are top-down: the rectangle covers the top half.
+      const unsigned char* top = pixels.pixels.data();
+      const unsigned char* bottom = pixels.pixels.data() + 7 * 16 * 4;
+      if (top[0] != 255 || top[2] != 0 || bottom[0] != 0 || bottom[2] != 255) {
+        error = "Readback pixels or row order differ";
+        return false;
+      }
+      backend->releaseReadbackStream(1);
+      backend->DestroyFramebuffer(target);
+      return glGetError() == GL_NO_ERROR;
+    });
+  if (!readback.success()) {
+    std::cerr << "Framebuffer readback checks: " << readback.error << '\n';
+    ++failures;
+  }
   const FrameCaptureResult uploads =
     FrameCapture::render(options, testTextureUploads);
   if (!uploads.success()) {

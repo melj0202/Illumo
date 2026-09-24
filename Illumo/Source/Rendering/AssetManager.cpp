@@ -573,14 +573,26 @@ AssetManager::acquireMesh(const std::string& path,
   }
 
   // Native files keep tinyobj's material search beside the OBJ; byte sources
-  // (package preloads) parse the bytes alone.
+  // (packages) read each mtllib beside the OBJ through the same source.
   MeshLoadResult loaded;
   std::vector<unsigned char> bytes;
   if (source != nullptr && source->hasFileSystem()) {
     loaded = MeshLoader::loadFromFile(canonical, options);
   } else if (source != nullptr && source->read(canonical, bytes)) {
-    loaded = MeshLoader::loadFromMemory(
-      std::string(bytes.begin(), bytes.end()), options, "");
+    const std::string text(bytes.begin(), bytes.end());
+    MeshLoadOptions withMaterials = options;
+    const std::size_t slash = canonical.rfind('/');
+    const std::string directory = slash == std::string::npos
+                                    ? std::string()
+                                    : canonical.substr(0, slash + 1);
+    std::vector<unsigned char> material;
+    for (const std::string& name : MeshLoader::materialLibraryNames(text)) {
+      if (source->read(source->canonical(directory + name), material)) {
+        withMaterials.materialText.append(material.begin(), material.end());
+        withMaterials.materialText += '\n';
+      }
+    }
+    loaded = MeshLoader::loadFromMemory(text, withMaterials, "");
   } else {
     loaded.error = "Unable to read mesh: " + canonical;
   }

@@ -88,11 +88,12 @@ GuestModuleApplication::GuestModuleApplication(std::string applicationName,
   , m_backend(services())
   , m_camera(glm::vec2(0.0f, 0.0f), 1.0f, &m_settings)
   , m_renderer(&m_window, &m_settings, &m_camera, &m_backend, false)
-  , m_packageAssets(m_files)
-  , m_assets(&m_renderer, false, &m_packageAssets)
+  , m_assetCache(m_files)
+  , m_assets(&m_renderer, false, &m_assetCache)
   , m_fonts(services(), m_backend)
   , m_input(nullptr)
   , m_scene(&m_window, &m_camera)
+  , m_panels(services(), m_window, m_camera)
   , m_commandLine(&m_settings,
                   &m_consoleBuiltins,
                   &m_window,
@@ -198,6 +199,9 @@ GuestModuleApplication::start(std::span<const std::byte> startup)
   }
   m_renderer.ensureBuiltinStyles();
   GLString::setRenderWindow(&m_window);
+  m_panels.setGranted(granted(GuestCapability::Windows));
+  m_context.panelSurfaces =
+    granted(GuestCapability::Windows) ? &m_panels : nullptr;
   Font::getDefaultFont();
   m_settings.load();
   return true;
@@ -207,6 +211,7 @@ void
 GuestModuleApplication::update(const GuestInput& input)
 {
   m_window.accept(input);
+  m_panels.accept(input);
   // Camera and settings-driven layout read the window size from settings.
   m_settings.setVar("WinX", static_cast<int>(input.width));
   m_settings.setVar("WinY", static_cast<int>(input.height));
@@ -216,6 +221,7 @@ GuestModuleApplication::update(const GuestInput& input)
   m_settings.pump();
   m_fonts.pump();
   m_console.pump();
+  m_panels.pump();
   pumpProduct();
   if (m_phase == Phase::Settings) {
     if (!m_settings.loaded() || !applyPackagedDefaults()) {
@@ -230,10 +236,10 @@ GuestModuleApplication::update(const GuestInput& input)
   }
   if (m_phase == Phase::Bootstrap) {
     if (!m_assetsRequested) {
-      m_packageAssets.preload(packageAssets());
+      m_assetCache.preload(packageAssets());
       m_assetsRequested = true;
     }
-    if (!m_packageAssets.ready() || !bootstrap()) {
+    if (!m_assetCache.ready() || !bootstrap()) {
       return;
     }
     m_phase = Phase::Running;
@@ -265,17 +271,22 @@ GuestModuleApplication::frame()
                        static_cast<float>(dimensions[1]));
     m_backend.pump();
     m_scene.ClearDrawables();
+    m_panels.clearScenes();
     if (m_module) {
       m_module->DispatchDrawables(&m_scene);
     }
     // As the native host: queued asset loads complete before submission.
     m_assets.pump();
     m_renderer.RenderScene(&m_scene, &m_camera);
+    // Detached panels record after the main scene, into the frame's
+    // surfaces section.
+    m_panels.record(m_renderer, m_backend, m_window);
     m_renderer.EndFrame();
     if (!m_renderer.frameError().empty()) {
       throw std::runtime_error(m_renderer.frameError());
     }
     GuestFrame recorded = m_backend.takeFrame();
+    m_panels.finish(recorded);
     m_lastFrameError.clear();
     return recorded;
   } catch (const std::runtime_error& error) {

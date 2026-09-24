@@ -20,7 +20,8 @@ or persistence parsing.
 - `PixelWindow` secondary windows are `GLFW_NO_API` and presented from CPU
   images by the per-OS presenter; never give them an OpenGL context or share
   the main context (D-UI5). Create, pump, present, and destroy them on the
-  main thread, before GLFW terminates.
+  main thread, before GLFW terminates. Detached tool panels reach them only
+  through `ISurfaceWindow` / `ISurfaceWindowFactory` (`SurfaceWindow.h`).
 
 ## Support status
 

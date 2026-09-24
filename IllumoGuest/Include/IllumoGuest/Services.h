@@ -27,7 +27,9 @@ enum class GuestService : std::uint32_t
   // Compute lanes (Jobs capability): the granted lane count, and one opaque
   // job for lane <u32 prefix>, at most one outstanding per lane.
   LaneJob = 15,
-  JobLanes = 16
+  JobLanes = 16,
+  // Windows capability: open, close or retitle a surface window.
+  Window = 17
 };
 
 enum class GuestServiceStatus : std::uint32_t
@@ -90,7 +92,7 @@ struct GuestServices
       const std::uint32_t status = reader.u32();
       const std::span<const std::byte> payload = reader.bytes(reader.u32());
       if (!reader.valid() || record.request == 0 || operation < 1 ||
-          operation > static_cast<std::uint32_t>(GuestService::JobLanes) ||
+          operation > static_cast<std::uint32_t>(GuestService::Window) ||
           (requests ? status != 0 : status < 1 || status > 2)) {
         return false;
       }

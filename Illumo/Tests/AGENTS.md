@@ -20,6 +20,13 @@ SceneGraph cases are `Illumo.SceneGraph.HandlesAndLifetime`,
 `Illumo.MeshVisual.ShadowUniformsFromSetters`, and
 `Illumo.MeshVisual.MotionBlurUniformsFromSetters`.
 
+Content cases (`Illumo/Tests/Content/`) are `Illumo.Content.*`: virtual paths,
+manifests and dependency order, the `.ilsc` codec (round trip, canonical
+golden, rejects, extensions), `SceneInstance`, archives (including the CMake
+zip fixture packed by `IllumoArchiveFixture`), the virtual file tree and its
+adapters, and package mounting. `Illumo.Debug.FileTreeOverlay` covers the
+debug file browser through its header.
+
 Use `Illumo::TestSupport` for MockBackend and test-only fixtures. Tests must be
 headless, deterministic, and isolated under `build/Testing/Illumo/`.
 

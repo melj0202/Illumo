@@ -18,23 +18,34 @@ public:
     return module.m_document;
   }
 
-  static SceneGraph& graph(EditorModule& module) { return module.m_graph; }
+  static SceneGraph& graph(EditorModule& module)
+  {
+    return module.m_document.graph();
+  }
+
+  static EditorSelection& selection(EditorModule& module)
+  {
+    return module.m_selection;
+  }
 
   static const std::string& selectedId(const EditorModule& module)
   {
-    return module.m_selectedId;
+    return module.m_selection.primary();
   }
 
   static void setSelectedId(EditorModule& module, const std::string& id)
   {
-    module.m_selectedId = id;
+    module.m_selection.set(id);
   }
 
-  static bool rebuildGraph(EditorModule& module) { return module.syncGraph(); }
+  static void refreshView(EditorModule& module) { module.refreshView(); }
 
-  static void createNode(EditorModule& module, SceneNodeKind kind)
+  // Creates a node through the armed-tool path at the world origin.
+  static std::string createNode(EditorModule& module, EditorCommand tool)
   {
-    module.createNode(kind);
+    module.m_activeTool = tool;
+    module.applyActiveToolAt(0.0f, 0.0f);
+    return module.m_selection.primary();
   }
 
   static void deleteSelection(EditorModule& module)
@@ -52,10 +63,17 @@ public:
     return module.m_toolbar.get();
   }
 
-  static EditorSidebar* sidebar(EditorModule& module)
+  static EditorToolsPanel* tools(EditorModule& module)
   {
-    return module.m_sidebar.get();
+    return module.m_tools.get();
   }
+
+  static EditorInspector* inspector(EditorModule& module)
+  {
+    return module.m_inspector.get();
+  }
+
+  static GuiPanelDock& dock(EditorModule& module) { return module.m_dock; }
 
   static EditorSceneGraphView* sceneGraphView(EditorModule& module)
   {
@@ -119,5 +137,51 @@ public:
   static bool isDragging(const EditorModule& module)
   {
     return module.m_dragging;
+  }
+
+  static bool worldToScreen(const EditorModule& module,
+                            const Vector3& world,
+                            float* screenX,
+                            float* screenY)
+  {
+    return module.worldToScreen(world, screenX, screenY);
+  }
+
+  static void boxSelect(EditorModule& module,
+                        float x0,
+                        float y0,
+                        float x1,
+                        float y1,
+                        bool additive)
+  {
+    module.boxSelect(x0, y0, x1, y1, additive);
+  }
+
+  static bool boxSelecting(const EditorModule& module)
+  {
+    return module.m_boxSelecting;
+  }
+
+  static bool pasteText(EditorModule& module, const std::string& text)
+  {
+    return module.pasteText(text);
+  }
+
+  static void placeDroppedAsset(EditorModule& module,
+                                const std::string& path,
+                                float screenX,
+                                float screenY)
+  {
+    module.placeDroppedAsset(path, screenX, screenY);
+  }
+
+  static void openLocation(EditorModule& module, const IllEdLocation& location)
+  {
+    module.loadDocument(location, false);
+  }
+
+  static EditorAssetBrowser* assetBrowser(EditorModule& module)
+  {
+    return module.m_assetBrowser.get();
   }
 };

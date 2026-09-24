@@ -1,3 +1,6 @@
+#include "WasmInputMapping.h"
+#include <Illumo/Content/VfsConsole.h>
+#include <Illumo/Content/VfsTreeSource.h>
 #include <Illumo/Wasm/WasmGameModule.h>
 #include <IllumoGuest/Input.h>
 #include <algorithm>
@@ -11,35 +14,6 @@ millisecondsSince(std::chrono::steady_clock::time_point start)
   return std::chrono::duration<double, std::milli>(
            std::chrono::steady_clock::now() - start)
     .count();
-}
-
-static GuestKeyAction
-guestAction(InputAction action)
-{
-  switch (action) {
-    case InputAction::Press:
-      return GuestKeyAction::Press;
-    case InputAction::Release:
-      return GuestKeyAction::Release;
-    case InputAction::Hold:
-      return GuestKeyAction::Hold;
-    default:
-      return GuestKeyAction::None;
-  }
-}
-
-static GuestKey
-guestKey(KeyCode key)
-{
-  switch (key) {
-#define ILLUMO_GUEST_KEY(name, number)                                         \
-  case KeyCode::name:                                                          \
-    return GuestKey::name;
-#include <IllumoGuest/Keys.inc>
-#undef ILLUMO_GUEST_KEY
-    default:
-      return GuestKey::Count;
-  }
 }
 
 static GuestInput
@@ -63,18 +37,18 @@ snapshot(IllumoContext& context, double elapsed)
                     (manager.isControlPressed() ? 2u : 0u) |
                     (manager.isAltPressed() ? 4u : 0u);
 #define ILLUMO_GUEST_KEY(name, number)                                         \
-  input.keys[number] = guestAction(manager.frameAction(KeyCode::name));
+  input.keys[number] = wasmGuestAction(manager.frameAction(KeyCode::name));
 #include <IllumoGuest/Keys.inc>
 #undef ILLUMO_GUEST_KEY
   std::queue<InputManager::KeyPressEvent>& keys = manager.getKeyQueue();
   while (!keys.empty() && input.events.size() < GuestInput::MaximumEvents) {
     const InputManager::KeyPressEvent event = keys.front();
     keys.pop();
-    const GuestKey key = guestKey(event.key);
+    const GuestKey key = wasmGuestKey(event.key);
     if (key != GuestKey::Count) {
       input.events.push_back(
         { key,
-          guestAction(event.action),
+          wasmGuestAction(event.action),
           static_cast<std::uint32_t>(event.modifiers) & 15u });
     }
   }
@@ -134,6 +108,23 @@ try {
       },
       "wasm_stats",
       "Show WASM host exchange timings and frame payload counters");
+    if (m_fileRoots.packages) {
+      // The virtual file tree belongs to the host; guests never see it here.
+      context->commandRegistry->RegisterCommand(
+        "vfs",
+        [this](const std::vector<std::string>& arguments) {
+          if (ic == nullptr || ic->commandLine == nullptr) {
+            return;
+          }
+          for (const std::string& line :
+               VfsConsole::run(*m_fileRoots.packages, arguments)) {
+            ic->commandLine->logNormal(line);
+          }
+        },
+        "vfs mounts | ls <path> | tree <path> [depth] | stat <path> | cat "
+        "<path> [bytes]",
+        "Explore the mounted packages' virtual file tree");
+    }
   }
   std::vector<std::byte> response;
   if (!m_guest.start(
@@ -151,12 +142,20 @@ try {
           (m_fileRoots.storage.empty()
              ? 0u
              : static_cast<std::uint32_t>(GuestCapability::Storage)) |
-          (m_fileRoots.package.empty() && m_fileRoots.storage.empty()
+          (m_fileRoots.package.empty() && m_fileRoots.storage.empty() &&
+               !m_fileRoots.packages
              ? 0u
              : static_cast<std::uint32_t>(GuestCapability::SelectedFiles)) |
           (m_workerModule.empty()
              ? 0u
              : static_cast<std::uint32_t>(GuestCapability::Jobs)) |
+          (m_fileRoots.packages &&
+               m_fileRoots.packages->table()->find("/project") != nullptr
+             ? static_cast<std::uint32_t>(GuestCapability::ProjectFiles)
+             : 0u) |
+          (m_surfaceWindows != nullptr && m_surfaceWindows->available()
+             ? static_cast<std::uint32_t>(GuestCapability::Windows)
+             : 0u) |
           static_cast<std::uint32_t>(GuestCapability::Messages),
         m_startup,
         response)) {
@@ -171,7 +170,12 @@ try {
   m_frames =
     std::make_unique<WasmFrameRenderer>(*ic->renderer, m_guest.session());
   std::unique_ptr<WasmFileServices> files;
-  if (!m_fileRoots.package.empty() || !m_fileRoots.storage.empty()) {
+  if (m_fileRoots.packages) {
+    files = std::make_unique<WasmFileServices>(m_guest.session(),
+                                               m_guest.capabilities(),
+                                               m_fileRoots.packages,
+                                               m_fileRoots.storage);
+  } else if (!m_fileRoots.package.empty() || !m_fileRoots.storage.empty()) {
     files = std::make_unique<WasmFileServices>(m_guest.session(),
                                                m_guest.capabilities(),
                                                m_fileRoots.package,
@@ -195,6 +199,12 @@ try {
     ic->commandRegistry,
     ic->commandLine);
   m_services->setWorkerLimits(m_workerLimits, m_workerLanes);
+  if ((m_guest.capabilities() &
+       static_cast<std::uint32_t>(GuestCapability::Windows)) != 0) {
+    m_windows = std::make_unique<WasmPanelWindows>(
+      *ic->renderer, *ic->window, *m_surfaceWindows);
+    m_services->setWindows(m_windows.get());
+  }
   GuestWireWriter emptyServices;
   GuestServices{}.write(emptyServices);
   m_completions = emptyServices.take();
@@ -237,6 +247,11 @@ try {
   m_module.shrink_to_fit();
   m_startup.clear();
   Update(0);
+  if (m_guest.isAlive() && m_fileRoots.packages) {
+    // Engine tools (the debug `files` browser) see the same tree as `vfs`.
+    m_treeSource = std::make_unique<VfsTreeSource>(m_fileRoots.packages);
+    context->fileTree = m_treeSource.get();
+  }
   return m_guest.isAlive();
 } catch (const std::exception& exception) {
   fail(exception.what());
@@ -248,6 +263,10 @@ WasmGameModule::fail(std::string error)
 {
   if (m_services) {
     m_services->cancel();
+    m_services->setWindows(nullptr);
+  }
+  if (m_windows) {
+    m_windows->closeAll();
   }
   m_error = std::move(error);
   m_guest.retire(m_error);
@@ -277,8 +296,18 @@ try {
   ZoneScopedN("Wasm.Update");
   const std::chrono::steady_clock::time_point updateStart =
     std::chrono::steady_clock::now();
+  // Surfaces of the frame drawn last time replay into their windows now,
+  // after its texture writes and before the next frame replaces them.
+  if (m_windows) {
+    ZoneScopedN("Wasm.SurfaceWindows");
+    m_windows->present(*m_frames);
+  }
+  GuestInput snapshotInput = snapshot(*ic, elapsed);
+  if (m_windows) {
+    m_windows->collectInput(snapshotInput);
+  }
   GuestWireWriter input;
-  snapshot(*ic, elapsed).write(input);
+  snapshotInput.write(input);
   std::vector<std::byte> response;
   std::chrono::steady_clock::time_point stageStart = updateStart;
   {
@@ -416,13 +445,19 @@ WasmGameModule::Exit()
   }
   if (m_frames) {
     m_services.reset();
+    m_windows.reset();
     m_completions.clear();
     m_frames->retire();
     m_frames.reset();
   }
   if (ic != nullptr && ic->commandRegistry != nullptr) {
     ic->commandRegistry->UnregisterCommand("wasm_stats");
+    ic->commandRegistry->UnregisterCommand("vfs");
   }
+  if (ic != nullptr && m_treeSource && ic->fileTree == m_treeSource.get()) {
+    ic->fileTree = nullptr;
+  }
+  m_treeSource.reset();
   ic = nullptr;
 }
 

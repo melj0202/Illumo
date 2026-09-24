@@ -194,6 +194,17 @@ threading precedent in the library.
   attachments, not a general component store.
 - No serialization format. `.ilsc` stays editor-owned; the graph never
   serializes itself.
+
+  Note (2026-09-23): the graph still never serializes itself, but `.ilsc` is
+  no longer editor-owned. `Illumo::Content` owns `.ilsc` format 2
+  (`SceneDocument`, `IlscCodec`), and `SceneInstance` is the one scene loader.
+  It builds graphs only through the public SceneGraph API. For scene editing,
+  SceneGraph gained one narrow sibling-order API:
+  `setParent(node, parent, insertBefore)` places a node before a current child
+  of `parent` (null appends), and `getPreviousSibling` was added. The cycle
+  rules and Reparented record are unchanged, and an unchanged position records
+  nothing. See `docs/content-packages-and-scenes-design.md` section 7 and the
+  plan's M3 entry; `Illumo.SceneGraph.SiblingInsertBefore` covers it.
 - No prefabs, animation system, scripting, physics, networking, or retained UI
   tree.
 - No render graph, no additional graphics backend, no material system.

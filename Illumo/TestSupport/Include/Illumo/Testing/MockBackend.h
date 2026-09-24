@@ -75,7 +75,39 @@ private:
   std::unordered_map<uint32_t, uint32_t> liveFramebuffers;
   std::unordered_map<uint32_t, TextureInfo> textureInfos;
   std::unordered_map<uint32_t, bool> cubemapKinds;
+  // Readback simulation: the colour each framebuffer was last cleared to by
+  // submitted commands, and up to two pending copies per stream.
+  struct PendingReadback
+  {
+    int width = 0;
+    int height = 0;
+    std::array<unsigned char, 4> color{ 0, 0, 0, 0 };
+  };
+  uint32_t boundFramebufferSlot = 0;
+  std::unordered_map<uint32_t, std::array<unsigned char, 4>> clearColors;
+  std::unordered_map<uint32_t, std::deque<PendingReadback>> readbacks;
+  int readbackRequestCount = 0;
 
+  static unsigned char colorByte(float value)
+  {
+    const float clamped = value < 0.0f ? 0.0f : (value > 1.0f ? 1.0f : value);
+    return static_cast<unsigned char>(clamped * 255.0f + 0.5f);
+  }
+  void trackSubmitted(const RenderCommand& command)
+  {
+    if (command.commandType == CommandType::SetFramebuffer) {
+      boundFramebufferSlot = command.bindFramebuffer.handle.isValid()
+                               ? command.bindFramebuffer.handle.slot
+                               : 0;
+    } else if (command.commandType == CommandType::ClearColorBuffer ||
+               command.commandType == CommandType::ClearScreen ||
+               command.commandType == CommandType::ClearAll) {
+      clearColors[boundFramebufferSlot] = { colorByte(command.clear.r),
+                                            colorByte(command.clear.g),
+                                            colorByte(command.clear.b),
+                                            colorByte(command.clear.a) };
+    }
+  }
   bool isCommandResourceValid(const RenderCommand& command) const
   {
     switch (command.commandType) {
@@ -151,6 +183,7 @@ public:
           snapshot.uniformMat4.value = retained.data();
         }
         lastSubmitted.push_back(snapshot);
+        trackSubmitted(snapshot);
       } else {
         rejectedStaleCommands++;
       }
@@ -570,6 +603,66 @@ public:
       liveFramebuffers.find(handle.slot);
     return framebufferHandles.isCurrent(handle) &&
            it != liveFramebuffers.end() && it->second == handle.generation;
+  }
+
+  bool requestFramebufferReadback(std::uint32_t stream,
+                                  FramebufferHandle framebuffer,
+                                  int width,
+                                  int height) override
+  {
+    std::deque<PendingReadback>& pending = readbacks[stream];
+    if (!IsFramebufferValid(framebuffer) || width < 1 || height < 1 ||
+        pending.size() >= 2) {
+      return false;
+    }
+    PendingReadback copy;
+    copy.width = width;
+    copy.height = height;
+    std::unordered_map<uint32_t, std::array<unsigned char, 4>>::const_iterator
+      color = clearColors.find(framebuffer.slot);
+    if (color != clearColors.end()) {
+      copy.color = color->second;
+    }
+    pending.push_back(copy);
+    ++readbackRequestCount;
+    return true;
+  }
+
+  bool takeFramebufferReadback(std::uint32_t stream,
+                               bool wait,
+                               FrameReadback& out) override
+  {
+    (void)wait;
+    out = FrameReadback{};
+    std::unordered_map<uint32_t, std::deque<PendingReadback>>::iterator found =
+      readbacks.find(stream);
+    if (found == readbacks.end() || found->second.empty()) {
+      out.error = "No readback is pending";
+      return false;
+    }
+    const PendingReadback copy = found->second.front();
+    found->second.pop_front();
+    out.width = copy.width;
+    out.height = copy.height;
+    out.pixels.resize(static_cast<size_t>(copy.width) *
+                      static_cast<size_t>(copy.height) * 4);
+    for (size_t index = 0; index < out.pixels.size(); index += 4) {
+      std::memcpy(out.pixels.data() + index, copy.color.data(), 4);
+    }
+    return true;
+  }
+
+  void releaseReadbackStream(std::uint32_t stream) override
+  {
+    readbacks.erase(stream);
+  }
+
+  int getReadbackRequestCount() const { return readbackRequestCount; }
+  size_t getPendingReadbackCount(std::uint32_t stream) const
+  {
+    std::unordered_map<uint32_t, std::deque<PendingReadback>>::const_iterator
+      found = readbacks.find(stream);
+    return found == readbacks.end() ? 0 : found->second.size();
   }
 
   bool wasInitialized() const { return initialized; }

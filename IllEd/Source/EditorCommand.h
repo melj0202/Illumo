@@ -1,0 +1,67 @@
+#pragma once
+
+// Every user-facing editor action. Menus, the panels and keyboard shortcuts
+// all produce these; EditorModule::handleCommand is the single dispatcher.
+enum class EditorCommand
+{
+  None,
+  NewDocument,
+  OpenDocument,
+  SaveDocument,
+  SaveDocumentAs,
+  // Project commands (--project): save into /project/scenes, import a file,
+  // pack the project into an .ilpk.
+  SaveToProject,
+  ImportAsset,
+  PackProject,
+  ExitEditor,
+  Undo,
+  Redo,
+  Cut,
+  Copy,
+  Paste,
+  Duplicate,
+  SelectAll,
+  DeselectAll,
+  Rename,
+  DeleteNode,
+  UnparentNode,
+  // Hierarchy context actions on the selection.
+  ToggleVisible,
+  ToggleEnabled,
+  CreateChild,
+  CreateEmpty,
+  CreateRect,
+  CreateEllipse,
+  CreateTriangle,
+  CreateCube,
+  CreatePyramid,
+  CreateSphere,
+  CreateWireCube,
+  CreateWireSphere,
+  // Placed immediately at the view center.
+  CreateLight,
+  CreateCamera,
+  SelectTool,
+  TranslateMode,
+  RotateMode,
+  ScaleMode,
+  ToggleGizmoSpace,
+  ToggleSnap,
+  SetMode2D,
+  SetMode3D,
+  CycleColor,
+  NudgeExtent,
+  ResetCamera,
+  FrameSelection,
+  // View > panels: show or hide, pop out or dock, and reset the layout.
+  ToggleHierarchyPanel,
+  ToggleAssetsPanel,
+  ToggleToolsPanel,
+  ToggleInspectorPanel,
+  PopOutHierarchyPanel,
+  PopOutAssetsPanel,
+  PopOutToolsPanel,
+  PopOutInspectorPanel,
+  ResetLayout
+};

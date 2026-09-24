@@ -2,6 +2,7 @@
 #include "Game/MainMenuModule.h"
 #include "Wasm/CatalogBootstrap.h"
 #include "Wasm/GuestPlatform.h"
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/ModuleApplication.h>
 #include <stdexcept>
 
@@ -42,6 +43,12 @@ protected:
     IllumoGameConfig::ApplyDefaults(&settings);
   }
 
+  // The render3dTest diagnostic scene, pinned in the asset cache.
+  std::vector<std::string> packageAssets() const override
+  {
+    return { "Scenes/render3d-test.ilsc" };
+  }
+
   bool bootstrap() override
   {
     m_catalog.pump();
@@ -52,6 +59,12 @@ protected:
       return false;
     }
     RuleSetRegistry::instance() = m_catalog.registry();
+    for (const std::string& path : m_catalog.merged()) {
+      Logger::LogInfo("Merged package catalog " + path);
+    }
+    for (const std::string& warning : m_catalog.warnings()) {
+      Logger::LogWarning(warning);
+    }
     return true;
   }
 

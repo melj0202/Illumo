@@ -99,6 +99,7 @@ add_library(Illumo STATIC
   Source/Services/CommandLineCore.cpp
   Source/Platform/AtomicFile.cpp
   Source/Platform/PixelWindow.cpp
+  Source/Platform/SurfaceWindow.cpp
   Source/Services/DebugAlloc.cpp
   Source/Services/EnvVars.cpp
   Source/Services/EnvVarsValues.cpp
@@ -135,6 +136,11 @@ add_library(Illumo STATIC
   Source/Gui/GuiDialog.cpp
   Source/Gui/GuiKit.cpp
   Source/Gui/GuiMenuShell.cpp
+  Source/Gui/GuiFileTree.cpp
+  Source/Gui/GuiPanelDock.cpp
+  Source/Gui/GuiPanelPointer.cpp
+  Source/Gui/GuiToolStyle.cpp
+  Source/Gui/GuiTextEdit.cpp
   ${ILLUMO_PLATFORM_SOURCES}
   thirdparty/tracy-0.13.1/public/TracyClient.cpp
 )
@@ -183,6 +189,35 @@ if(UNIX AND NOT APPLE)
     TRACY_NO_INVARIANT_CHECK)
 endif()
 
+# Optional content layer above the engine: virtual paths, package manifests,
+# the .ilsc scene format and the virtual file tree. Core Illumo never includes
+# <Illumo/Content/...>; nlohmann stays private to its sources.
+add_library(IllumoContent STATIC
+  Source/Content/IlscCodec.cpp
+  Source/Content/PackageArchive.cpp
+  Source/Content/PackageManifest.cpp
+  Source/Content/PackageMounts.cpp
+  Source/Content/SceneAssetRefs.cpp
+  Source/Content/SceneDocument.cpp
+  Source/Content/SceneInstance.cpp
+  Source/Content/ScenePrimitiveMeshes.cpp
+  Source/Content/VfsAssetSource.cpp
+  Source/Content/VfsConsole.cpp
+  Source/Content/VfsTreeSource.cpp
+  Source/Content/VirtualFileSystem.cpp
+  Source/Content/VirtualPath.cpp
+)
+add_library(Illumo::Content ALIAS IllumoContent)
+target_link_libraries(IllumoContent PUBLIC Illumo::Illumo)
+target_include_directories(IllumoContent SYSTEM PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/json/single_include")
+illumo_configure_runtime_target(IllumoContent)
+
+# Packs a package directory into an .ilpk, or verifies one.
+add_executable(IllumoPack tools/IllumoPack.cpp)
+target_link_libraries(IllumoPack PRIVATE Illumo::Content)
+illumo_configure_runtime_target(IllumoPack)
+
 add_library(IllumoPlatformEntry OBJECT ${ILLUMO_PLATFORM_ENTRY_SOURCE})
 add_library(Illumo::PlatformEntry ALIAS IllumoPlatformEntry)
 target_link_libraries(IllumoPlatformEntry PRIVATE Illumo::Illumo)
@@ -217,10 +252,21 @@ if(BUILD_TESTING)
     Tests/TestSceneBenchmarks.cpp
     Tests/TestShaderPreprocessor.cpp
     Tests/TestGuiKit.cpp
+    Tests/TestGuiFileTree.cpp
+    Tests/TestGuiPanelDock.cpp
+    Tests/TestGuiTextEdit.cpp
     Tests/TestFont.cpp
     Tests/TestFrameCapture.cpp
+    Tests/Content/TestIlscCodec.cpp
+    Tests/Content/TestPackageArchive.cpp
+    Tests/Content/TestPackageMounts.cpp
+    Tests/Content/TestPackageManifest.cpp
+    Tests/Content/TestSceneInstance.cpp
+    Tests/Content/TestVirtualFileSystem.cpp
+    Tests/Content/TestVirtualPath.cpp
   )
-  target_link_libraries(IllumoTests PRIVATE Illumo::TestSupport glfw)
+  target_link_libraries(IllumoTests PRIVATE Illumo::TestSupport Illumo::Content
+    glfw)
   target_include_directories(IllumoTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source")
   target_compile_definitions(IllumoTests PRIVATE ILLUMO_TESTING)
@@ -228,6 +274,26 @@ if(BUILD_TESTING)
   illumo_discover_test_runner(IllumoTests Illumo)
   illumo_stage_msvc_asan(IllumoTests)
   illumo_stage_shaders(IllumoTests "${CMAKE_CURRENT_SOURCE_DIR}/Shader")
+
+  # A zip written by CMake's libarchive, so the package reader is checked
+  # against an archiver other than its own writer.
+  set(_illumo_archive_fixture_dir
+    "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Content/Fixtures/archive")
+  set(_illumo_archive_fixture "${CMAKE_CURRENT_BINARY_DIR}/TestData/cmake-archive.zip")
+  file(GLOB_RECURSE _illumo_archive_fixture_inputs CONFIGURE_DEPENDS
+    "${_illumo_archive_fixture_dir}/*")
+  add_custom_command(OUTPUT "${_illumo_archive_fixture}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/TestData"
+    COMMAND ${CMAKE_COMMAND} -E tar cf "${_illumo_archive_fixture}" --format=zip
+      illumo.json docs scenes
+    WORKING_DIRECTORY "${_illumo_archive_fixture_dir}"
+    DEPENDS ${_illumo_archive_fixture_inputs}
+    COMMENT "Packing the CMake zip fixture"
+    VERBATIM)
+  add_custom_target(IllumoArchiveFixture DEPENDS "${_illumo_archive_fixture}")
+  add_dependencies(IllumoTests IllumoArchiveFixture)
+  target_compile_definitions(IllumoTests PRIVATE
+    ILLUMO_TEST_ARCHIVE_FIXTURE="${_illumo_archive_fixture}")
 
   add_executable(IllumoPublicHeaderSmoke Tests/PublicHeaderSmoke.cpp)
   target_link_libraries(IllumoPublicHeaderSmoke PRIVATE Illumo::Illumo)

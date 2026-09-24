@@ -1,3 +1,4 @@
+#include <Illumo/Content/PackageMounts.h>
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -5,12 +6,12 @@
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
-#include <Illumo/Wasm/AppManifest.h>
 #include <Illumo/Wasm/WasmGameModule.h>
 #include <IllumoGuest/Dialog.h>
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -107,24 +108,6 @@ readLimit(const std::string& value,
   return true;
 }
 
-// Package ids and application names share one conservative alphabet, so an
-// application name is always a single directory under apps/.
-static bool
-packageId(const std::string& id)
-{
-  if (id.empty() || id.size() > 64 || id == "." || id == "..") {
-    return false;
-  }
-  for (const char character : id) {
-    if (!((character >= 'a' && character <= 'z') ||
-          (character >= '0' && character <= '9') || character == '.' ||
-          character == '-' || character == '_')) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // Truncates at a UTF-8 boundary.
 static std::string
 boundedText(const std::string& text, std::size_t maximum)
@@ -139,10 +122,10 @@ boundedText(const std::string& text, std::size_t maximum)
   return text.substr(0, end);
 }
 
-static AppManifestCeilings
+static PackageCeilings
 manifestCeilings()
 {
-  AppManifestCeilings ceilings;
+  PackageCeilings ceilings;
   ceilings.memoryMiB = kMaximumMemoryMiB;
   ceilings.fuelPerCall = kMaximumFuelPerCall;
   ceilings.deadlineMilliseconds = kMaximumDeadlineMilliseconds;
@@ -154,35 +137,51 @@ manifestCeilings()
   return ceilings;
 }
 
-static bool
-readManifest(const std::filesystem::path& path, AppManifest& manifest)
+// A module named by the launched package, read through its /app view (a
+// directory or an .ilpk).
+static std::vector<std::byte>
+readPackageModule(const VirtualFileSystem& vfs, const std::string& member)
 {
-  std::ifstream input(path, std::ios::binary | std::ios::ate);
-  const std::streamoff size = input.tellg();
-  if (!input || size <= 0 || size > 64 * 1024) {
-    Logger::LogError("Missing or oversized package manifest app.json");
-    return false;
-  }
-  std::string text(static_cast<std::size_t>(size), '\0');
-  input.seekg(0);
-  if (!input.read(text.data(), size)) {
-    return false;
-  }
+  const std::string path = "/app/" + member;
+  VfsStat stat;
   std::string error;
-  if (!decodeAppManifest(text, manifestCeilings(), manifest, error)) {
-    Logger::LogError(error);
-    return false;
+  std::vector<uint8_t> data;
+  if (!vfs.stat(path, stat, error) || stat.kind != VfsKind::File ||
+      stat.size == 0 || stat.size > 64u * 1024u * 1024u ||
+      !vfs.read(path, data, error)) {
+    return {};
   }
-  return true;
+  std::vector<std::byte> bytes(data.size());
+  std::memcpy(bytes.data(), data.data(), data.size());
+  return bytes;
+}
+
+// Repeatable options arrive newline-separated.
+static std::vector<std::string>
+splitLines(const std::string& text)
+{
+  std::vector<std::string> lines;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) {
+      end = text.size();
+    }
+    if (end > start) {
+      lines.push_back(text.substr(start, end - start));
+    }
+    start = end + 1;
+  }
+  return lines;
 }
 
 static const char* const kLaunchOptions[] = {
-  "GuestModule",       "GuestMod",         "GuestWorker",
-  "GuestPackage",      "GuestStorage",     "GuestFuel",
-  "GuestMemoryMiB",    "GuestDeadline",    "GuestApp",
-  "GuestOpen",         "GuestCapture",     "GuestCaptureFrame",
-  "GuestBenchFrames",  "GuestBenchWarmup", "GuestBenchScript",
-  "GuestCaptureScript"
+  "GuestModule",        "GuestMod",         "GuestWorker",
+  "GuestPackage",       "GuestStorage",     "GuestFuel",
+  "GuestMemoryMiB",     "GuestDeadline",    "GuestApp",
+  "GuestOpen",          "GuestCapture",     "GuestCaptureFrame",
+  "GuestBenchFrames",   "GuestBenchWarmup", "GuestBenchScript",
+  "GuestCaptureScript", "GuestMount",       "GuestProject"
 };
 
 // --bench-frames: warm up, time a fixed number of frames, print one JSON line
@@ -685,29 +684,45 @@ createGuestModuleFrom(IEnvVars* environment)
                      "combined with --package or --game");
     return nullptr;
   }
+  std::vector<std::byte> game;
+  std::vector<std::byte> worker;
+  bool workerRequested = !workerPath.empty();
   if (gamePath.empty()) {
-    // Package launch: <exe>/apps/<name>, the game by default, unless
-    // --package names another package directory.
-    std::filesystem::path package;
+    // Package launch: <exe>/apps/<name> (a directory or <name>.ilpk), the
+    // game by default, unless --package names another package.
+    std::filesystem::path packagePath;
     if (packageOption.empty()) {
       application =
         applicationOption.empty() ? kDefaultApplication : applicationOption;
-      if (!packageId(application)) {
+      if (!validPackageId(application)) {
         Logger::LogError("Invalid application name: " + application);
         return nullptr;
       }
-      package = runtimeDirectory() / "apps" / application;
+      const std::filesystem::path apps = runtimeDirectory() / "apps";
       std::error_code error;
-      if (!std::filesystem::is_directory(package, error)) {
+      if (std::filesystem::is_directory(apps / application, error)) {
+        packagePath = apps / application;
+      } else if (std::filesystem::is_regular_file(
+                   apps / (application + ".ilpk"), error)) {
+        packagePath = apps / (application + ".ilpk");
+      } else {
         Logger::LogError("No installed application named '" + application +
-                         "' in " + (runtimeDirectory() / "apps").string());
+                         "' in " + apps.string());
         return nullptr;
       }
-    } else if (!readRoot(packageOption, package)) {
+    } else {
+      packagePath = optionPath(packageOption);
+    }
+    const PackageCeilings ceilings = manifestCeilings();
+    LoadedPackage package;
+    std::string error;
+    if (!PackageMounts::open(packagePath, ceilings, package, error)) {
+      Logger::LogError(error);
       return nullptr;
     }
-    AppManifest manifest;
-    if (!readManifest(package / "app.json", manifest)) {
+    const PackageManifest& manifest = package.manifest;
+    if (manifest.kind != PackageKind::App) {
+      Logger::LogError(package.origin + " is not an application package");
       return nullptr;
     }
     if (application.empty()) {
@@ -716,34 +731,82 @@ createGuestModuleFrom(IEnvVars* environment)
     if (!manifest.title.empty()) {
       title = manifest.title;
     }
-    gamePath = package / manifest.module;
-    if (workerPath.empty() && !manifest.worker.empty()) {
-      workerPath = package / manifest.worker;
+    // Every other package: those installed beside the runtime, then each
+    // --mount, which must exist and may not reuse an id.
+    std::vector<std::string> takenIds{ manifest.id };
+    std::vector<std::string> warnings;
+    std::vector<LoadedPackage> packages = PackageMounts::discover(
+      runtimeDirectory() / "packages", ceilings, takenIds, warnings);
+    for (const std::string& mountOption :
+         splitLines(environment->getVar("GuestMount").value)) {
+      LoadedPackage mounted;
+      if (!PackageMounts::open(
+            optionPath(mountOption), ceilings, mounted, error)) {
+        Logger::LogError("--mount " + mountOption + ": " + error);
+        return nullptr;
+      }
+      if (std::find(takenIds.begin(), takenIds.end(), mounted.manifest.id) !=
+          takenIds.end()) {
+        Logger::LogError("--mount " + mountOption + ": the package id '" +
+                         mounted.manifest.id + "' is already mounted");
+        return nullptr;
+      }
+      takenIds.push_back(mounted.manifest.id);
+      packages.push_back(std::move(mounted));
     }
-    files.package = std::filesystem::absolute(package);
-    files.launchEditable = manifest.launchEditable;
+    std::filesystem::path project;
+    if (!readRoot(environment->getVar("GuestProject").value, project)) {
+      Logger::LogError("--project names no directory");
+      return nullptr;
+    }
+    std::shared_ptr<VirtualFileSystem> vfs =
+      std::make_shared<VirtualFileSystem>();
+    if (!PackageMounts::mountAll(*vfs,
+                                 package,
+                                 packages,
+                                 runtimeDirectory() / "Assets",
+                                 project,
+                                 warnings,
+                                 error)) {
+      Logger::LogError("Cannot mount packages: " + error);
+      return nullptr;
+    }
+    for (const std::string& warning : warnings) {
+      Logger::LogWarning(warning);
+    }
+    game = readPackageModule(*vfs, manifest.app.module);
+    if (!workerRequested && !manifest.app.worker.empty()) {
+      workerRequested = true;
+      worker = readPackageModule(*vfs, manifest.app.worker);
+    }
+    files.packages = vfs;
+    files.launchEditable = manifest.app.launchEditable;
     if (storageOption.empty()) {
       // Default private storage beside the runtime, one directory per app.
-      std::error_code error;
+      std::error_code created;
       files.storage = runtimeDirectory() / "storage" / manifest.id;
-      std::filesystem::create_directories(files.storage, error);
-      if (error) {
+      std::filesystem::create_directories(files.storage, created);
+      if (created) {
         Logger::LogError("Cannot create the package storage directory");
         return nullptr;
       }
     } else if (!readRoot(storageOption, files.storage)) {
       return nullptr;
     }
-    limits.memoryBytes = manifest.memoryMiB * 1024u * 1024u;
-    limits.meterFuel = manifest.meterFuel;
-    limits.fuelPerCall = manifest.fuelPerCall;
+    limits.memoryBytes = manifest.app.memoryMiB * 1024u * 1024u;
+    limits.meterFuel = manifest.app.meterFuel;
+    limits.fuelPerCall = manifest.app.fuelPerCall;
     limits.deadlineMilliseconds =
-      static_cast<std::uint32_t>(manifest.deadlineMilliseconds);
-    workerLimits.memoryBytes = manifest.workerMemoryMiB * 1024u * 1024u;
-    workerLimits.meterFuel = manifest.meterFuel;
+      static_cast<std::uint32_t>(manifest.app.deadlineMilliseconds);
+    workerLimits.memoryBytes = manifest.app.workerMemoryMiB * 1024u * 1024u;
+    workerLimits.meterFuel = manifest.app.meterFuel;
     workerLimits.deadlineMilliseconds =
-      static_cast<std::uint32_t>(manifest.workerDeadlineMilliseconds);
-    workerLanes = static_cast<std::uint32_t>(manifest.workers);
+      static_cast<std::uint32_t>(manifest.app.workerDeadlineMilliseconds);
+    workerLanes = static_cast<std::uint32_t>(manifest.app.workers);
+  } else if (!environment->getVar("GuestMount").value.empty() ||
+             !environment->getVar("GuestProject").value.empty()) {
+    Logger::LogError("--mount and --project need a package launch, not --game");
+    return nullptr;
   } else if (!readRoot(packageOption, files.package) ||
              !readRoot(storageOption, files.storage)) {
     return nullptr;
@@ -806,7 +869,7 @@ createGuestModuleFrom(IEnvVars* environment)
   // base name only.
   std::vector<std::byte> startup;
   if (!openOption.empty()) {
-    if (files.package.empty() && files.storage.empty()) {
+    if (files.package.empty() && files.storage.empty() && !files.packages) {
       Logger::LogError("--open needs a package or storage root");
       return nullptr;
     }
@@ -839,11 +902,15 @@ createGuestModuleFrom(IEnvVars* environment)
       return nullptr;
     }
   }
-  std::vector<std::byte> game = readModule(gamePath);
+  if (game.empty()) {
+    game = readModule(gamePath);
+  }
   std::vector<std::byte> mod = readModule(modPath);
-  std::vector<std::byte> worker = readModule(workerPath);
+  if (!workerPath.empty()) {
+    worker = readModule(workerPath);
+  }
   if (game.empty() || (!modPath.empty() && mod.empty()) ||
-      (!workerPath.empty() && worker.empty())) {
+      (workerRequested && worker.empty())) {
     Logger::LogError("A requested WASM module is missing or unreadable");
     return nullptr;
   }
@@ -855,6 +922,11 @@ createGuestModuleFrom(IEnvVars* environment)
                                      std::move(worker),
                                      std::move(files));
   guest->setWorkerLimits(workerLimits, workerLanes);
+  // Captures and benchmarks measure the main window alone: panels stay
+  // docked there.
+  if (!capture.empty() || bench.frames != 0) {
+    guest->setSurfaceWindows(nullptr);
+  }
   return std::make_unique<RuntimeModule>(std::move(guest),
                                          std::move(title),
                                          std::move(application),
@@ -893,11 +965,12 @@ CreateIllumoApplication()
   application.commandLine.applicationName = "IllumoRuntime";
   application.commandLine.description =
     "Isolated WASM application host. Installed applications live in "
-    "apps/<name>/ beside the runtime; the game runs by default.";
+    "apps/<name>/ or apps/<name>.ilpk beside the runtime; the game runs by "
+    "default. Every package in packages/ is mounted too.";
   application.commandLine.usage =
     "IllumoRuntime.exe [--app name] [--open file] [--capture out.png "
-    "[--capture-frame n] [--capture-script file]] [--package dir] "
-    "[--storage dir] "
+    "[--capture-frame n] [--capture-script file]] [--package dir|file.ilpk] "
+    "[--mount dir|file.ilpk]... [--project dir] [--storage dir] "
     "[--game module.wasm] [--mod module.wasm] [--worker module.wasm] "
     "[--memory-mib n] [--fuel n] [--deadline-ms n] "
     "[--bench-frames n [--bench-warmup n] [--bench-script file]]";
@@ -928,7 +1001,16 @@ CreateIllumoApplication()
     { "--package",
       "path",
       "GuestPackage",
-      "Run the package in this directory instead of an installed application" },
+      "Run the package in this directory or .ilpk instead of an installed "
+      "application" },
+    { "--mount",
+      "paths",
+      "GuestMount",
+      "Also mount this package directory or .ilpk (repeatable)" },
+    { "--project",
+      "path",
+      "GuestProject",
+      "Mount this directory writable at /project (authoring)" },
     { "--storage",
       "path",
       "GuestStorage",

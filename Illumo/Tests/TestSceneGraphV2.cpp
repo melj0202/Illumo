@@ -358,9 +358,91 @@ testMeshSnapshotBoundsCache()
   return mesh.localQueries == 2 ? 0 : 2;
 }
 
+static std::string
+childOrder(const SceneGraph& graph, SceneNodeHandle parent)
+{
+  std::string order;
+  const size_t count =
+    parent.isNull() ? graph.getRootCount() : graph.getChildCount(parent);
+  for (size_t index = 0; index < count; ++index) {
+    const SceneNodeHandle child =
+      parent.isNull() ? graph.getRoot(index) : graph.getChild(parent, index);
+    order += std::string(graph.getName(child));
+  }
+  return order;
+}
+
+static int
+testSiblingInsertBefore()
+{
+  TestCounters counters;
+  SceneGraph graph;
+  SceneNodeDesc description;
+  description.name = "p";
+  const SceneNodeHandle parent = graph.createNode(description);
+  const char* names[] = { "a", "b", "c", "d" };
+  SceneNodeHandle children[4];
+  for (size_t index = 0; index < 4; ++index) {
+    description.parent = parent;
+    description.name = names[index];
+    children[index] = graph.createNode(description);
+  }
+  testEqStr(counters, childOrder(graph, parent), "abcd", "creation order");
+  const uint64_t sequence = graph.getChangeSequence();
+  testTrue(counters,
+           graph.setParent(children[3], parent, children[0]),
+           "move last before first");
+  testEqStr(counters, childOrder(graph, parent), "dabc", "moved to front");
+  testTrue(counters,
+           graph.setParent(children[3], parent, SceneNodeHandle{}),
+           "null insertBefore appends under the same parent");
+  testEqStr(counters, childOrder(graph, parent), "abcd", "moved to back");
+  testTrue(counters,
+           graph.setParent(children[0], parent, children[2]),
+           "move first before third");
+  testEqStr(counters, childOrder(graph, parent), "bacd", "moved into middle");
+  testTrue(counters,
+           graph.getPreviousSibling(children[2]) == children[0] &&
+             graph.getPreviousSibling(children[1]).isNull() &&
+             graph.getNextSibling(children[3]).isNull(),
+           "sibling links stay consistent");
+  const uint64_t before = graph.getChangeSequence();
+  testTrue(counters,
+           graph.setParent(children[0], parent, children[2]),
+           "unchanged position succeeds");
+  testTrue(counters,
+           graph.getChangeSequence() == before,
+           "unchanged position records nothing");
+  testTrue(
+    counters, graph.getChangeSequence() > sequence, "moves are journaled");
+  testTrue(counters,
+           !graph.setParent(children[1], parent, children[1]),
+           "a node cannot be placed before itself");
+  testTrue(counters,
+           !graph.setParent(children[1], SceneNodeHandle{}, children[2]),
+           "insertBefore must be a child of the new parent");
+  testTrue(counters,
+           !graph.setParent(parent, children[1], SceneNodeHandle{}),
+           "cycles are still rejected");
+  testTrue(counters,
+           graph.setParent(children[2], SceneNodeHandle{}, parent),
+           "reparent to the root before an existing root");
+  testEqStr(counters, childOrder(graph, SceneNodeHandle{}), "cp", "root order");
+  testEqStr(counters, childOrder(graph, parent), "bad", "old parent order");
+  std::string preorder;
+  for (SceneNodeHandle node = graph.firstNode(); !node.isNull();
+       node = graph.nextNode(node)) {
+    preorder += std::string(graph.getName(node));
+  }
+  testEqStr(counters, preorder, "cpbad", "preorder follows sibling order");
+  return counters.failures;
+}
+
 void
 registerSceneGraphV2Tests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.SceneGraph.SiblingInsertBefore",
+               []() { return testSiblingInsertBefore(); });
   registry.add("Illumo.SceneGraph.MeshBoundsRevision",
                testMeshSnapshotBoundsCache);
   registry.add("Illumo.SceneGraph.IdentityAndJournal", []() {

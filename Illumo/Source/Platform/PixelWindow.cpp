@@ -13,7 +13,7 @@ PixelWindow::create(const std::string& title,
 {
   if (!PixelWindowPresentationSupported()) {
     if (error != nullptr) {
-      *error = "Separate console windows are not supported on this platform";
+      *error = "Separate windows are not supported on this platform";
     }
     return nullptr;
   }
@@ -31,7 +31,7 @@ PixelWindow::create(const std::string& title,
   glfwDefaultWindowHints();
   if (handle == nullptr) {
     if (error != nullptr) {
-      *error = "Could not create the console window";
+      *error = "Could not create the window";
     }
     return nullptr;
   }
@@ -242,5 +242,61 @@ PixelWindow::focus()
 {
   if (m_window != nullptr) {
     glfwFocusWindow(m_window);
+  }
+}
+
+void
+PixelWindow::clientOrigin(int* x, int* y) const
+{
+  int left = 0;
+  int top = 0;
+  if (m_window != nullptr) {
+    glfwGetWindowPos(m_window, &left, &top);
+  }
+  if (x != nullptr) {
+    *x = left;
+  }
+  if (y != nullptr) {
+    *y = top;
+  }
+}
+
+void
+PixelWindow::setTitle(const std::string& title)
+{
+  if (m_window != nullptr) {
+    glfwSetWindowTitle(m_window, title.c_str());
+  }
+}
+
+bool
+PixelWindow::isFocused() const
+{
+  return m_window != nullptr &&
+         glfwGetWindowAttrib(m_window, GLFW_FOCUSED) == GLFW_TRUE;
+}
+
+void
+PixelWindow::cursor(double* x, double* y) const
+{
+  double left = 0.0;
+  double top = 0.0;
+  if (m_window != nullptr) {
+    glfwGetCursorPos(m_window, &left, &top);
+  }
+  if (x != nullptr) {
+    *x = left;
+  }
+  if (y != nullptr) {
+    *y = top;
+  }
+}
+
+void
+PixelWindow::setMinimumSize(int width, int height)
+{
+  if (m_window != nullptr) {
+    glfwSetWindowSizeLimits(
+      m_window, width, height, GLFW_DONT_CARE, GLFW_DONT_CARE);
   }
 }

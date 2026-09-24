@@ -1,12 +1,17 @@
 #include "MeshViewerModule.h"
 
+#include <Illumo/Content/IlscCodec.h>
+#include <Illumo/Content/SceneAssetRefs.h>
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Gui/GuiMenuShell.h>
+#include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/MeshLoader.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/CommandLine.h>
+#include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
@@ -108,6 +113,9 @@ MeshViewerModule::Start(IllumoContext* context)
   }
 
   m_ui = std::make_unique<MeshViewerUi>(ic->window, ic->renderer);
+  m_info = std::make_unique<MeshViewerInfoPanel>(ic->window, ic->renderer);
+  m_display =
+    std::make_unique<MeshViewerDisplayPanel>(ic->window, ic->renderer);
   applyLightingFromEnv();
   applyShadowsFromEnv();
   applyMotionBlurFromEnv();
@@ -131,11 +139,14 @@ MeshViewerModule::Start(IllumoContext* context)
   m_camera.reset();
   m_camera.applyTo(ic->camera);
   syncUiMetadata();
+  setupDock();
+  updateDock(false);
+  registerCommands();
   const MeshViewerLocation launch = MeshViewerPlatform::current().launchMesh();
   if (!m_initialMeshPath.empty()) {
-    loadMeshLocation({ m_initialMeshPath, baseName(m_initialMeshPath) });
+    openLocation({ m_initialMeshPath, baseName(m_initialMeshPath) });
   } else if (!launch.empty()) {
-    loadMeshLocation(launch);
+    openLocation(launch);
   }
 
   return true;
@@ -158,12 +169,7 @@ MeshViewerModule::loadMeshLocation(const MeshViewerLocation& location)
       const std::string error =
         success ? "Unreadable or empty mesh: " + name : readError;
       if (!loaded) {
-        if (ic != nullptr && ic->commandLine != nullptr) {
-          ic->commandLine->logError("Failed to load mesh: " + error);
-        }
-        if (m_ui) {
-          m_ui->showToast("Error: " + error, ColorRgba{ 245, 100, 110, 255 });
-        }
+        reportLoadFailure(error);
         return;
       }
       if (m_ui) {
@@ -172,11 +178,249 @@ MeshViewerModule::loadMeshLocation(const MeshViewerLocation& location)
     });
 }
 
+bool
+MeshViewerModule::isSceneLocation(const MeshViewerLocation& location)
+{
+  std::string name =
+    location.label.empty() ? baseName(location.location) : location.label;
+  for (char& character : name) {
+    if (character >= 'A' && character <= 'Z') {
+      character = static_cast<char>(character - 'A' + 'a');
+    }
+  }
+  return name.size() > 5 && name.compare(name.size() - 5, 5, ".ilsc") == 0;
+}
+
+void
+MeshViewerModule::openLocation(const MeshViewerLocation& location)
+{
+  if (isSceneLocation(location)) {
+    loadSceneLocation(location);
+  } else {
+    loadMeshLocation(location);
+  }
+}
+
+void
+MeshViewerModule::loadSceneLocation(const MeshViewerLocation& location)
+{
+  const std::weak_ptr<bool> alive = m_lifetime;
+  MeshViewerPlatform::current().read(
+    location.location,
+    [this, alive, location](
+      bool success, const std::string& text, const std::string& readError) {
+      if (alive.expired()) {
+        return;
+      }
+      const std::string name =
+        location.label.empty() ? baseName(location.location) : location.label;
+      SceneDocument parsed;
+      std::string error = readError;
+      if (!success || !IlscCodec::parse(text, parsed, error)) {
+        reportLoadFailure(error.empty() ? "Unreadable scene: " + name : error);
+        return;
+      }
+      std::string root = "/local";
+      if (MeshViewerPlatform::isTreeLocation(location.location) &&
+          !scenePackageRoot(MeshViewerPlatform::treePath(location.location),
+                            root)) {
+        root = "/local";
+      }
+      // Collect the scene's references and fetch them before it
+      // instantiates, so AssetManager finds every byte synchronously.
+      const SceneFetchList fetches = collectSceneFetches(parsed, root);
+      MeshViewerPlatform::current().releaseAssets();
+      MeshViewerPlatform::current().fetchAssets(
+        fetches.paths,
+        [this, alive, text, name, root, unresolved = fetches.unresolved](
+          std::vector<std::string> missing) {
+          if (alive.expired()) {
+            return;
+          }
+          missing.insert(missing.end(), unresolved.begin(), unresolved.end());
+          std::string loadError;
+          if (!loadSceneFromText(text, name, root, missing, &loadError)) {
+            reportLoadFailure(loadError);
+            return;
+          }
+          if (m_ui) {
+            m_ui->showToast(missing.empty() ? "Loaded: " + name
+                                            : "Loaded " + name + " with " +
+                                                std::to_string(missing.size()) +
+                                                " missing asset(s)",
+                            missing.empty() ? ColorRgba{ 60, 220, 120, 255 }
+                                            : ColorRgba{ 245, 180, 80, 255 });
+          }
+        });
+    });
+}
+
+bool
+MeshViewerModule::loadSceneFromText(const std::string& text,
+                                    const std::string& name,
+                                    const std::string& packageRoot,
+                                    const std::vector<std::string>& missing,
+                                    std::string* error)
+{
+  std::string failure;
+  if (ic == nullptr || ic->assetManager == nullptr || ic->renderer == nullptr) {
+    failure = "The viewer is not running";
+  }
+  SceneDocument document;
+  if (failure.empty()) {
+    IlscCodec::parse(text, document, failure);
+  }
+  std::unique_ptr<SceneInstance> instance;
+  if (failure.empty()) {
+    instance =
+      std::make_unique<SceneInstance>(ic->assetManager, SceneInstanceOptions{});
+    instance->setRenderer(ic->renderer);
+    instance->load(document, packageRoot, failure);
+  }
+  if (!failure.empty()) {
+    if (error != nullptr) {
+      *error = name + ": " + failure;
+    }
+    return false;
+  }
+  clearMesh();
+  m_scene = std::move(instance);
+  m_sceneMissing = missing.size();
+  m_meshPath = name;
+  if (ic->commandLine != nullptr) {
+    for (const std::string& path : missing) {
+      ic->commandLine->logError("Scene asset is missing: " + path);
+    }
+  }
+  frameScene();
+  rebuildWireframe();
+  syncUiMetadata();
+  return true;
+}
+
+void
+MeshViewerModule::clearMesh()
+{
+  const MeshHandle previousAsset = m_meshAsset;
+  m_meshData.clear();
+  rebuildMeshVisual();
+  rebuildWireframe();
+  m_meshAsset = MeshHandle{};
+  if (ic != nullptr && ic->assetManager != nullptr && previousAsset.isValid()) {
+    ic->assetManager->releaseMesh(previousAsset);
+  }
+}
+
+void
+MeshViewerModule::clearScene()
+{
+  m_scene.reset();
+  m_sceneMissing = 0;
+  m_sceneBounds = AxisAlignedBounds3{};
+}
+
+void
+MeshViewerModule::frameScene()
+{
+  if (!m_scene) {
+    return;
+  }
+  // World bounds: every node's local attachment bounds through its world
+  // matrix, corner by corner.
+  bool found = false;
+  AxisAlignedBounds3 bounds;
+  for (const SceneNode& node : m_scene->document().nodes) {
+    AxisAlignedBounds3 local;
+    if (!m_scene->localBounds(node.id, &local)) {
+      continue;
+    }
+    const Matrix4 world = m_scene->worldMatrix(node.id);
+    for (int corner = 0; corner < 8; ++corner) {
+      const Vector3 point((corner & 1) != 0 ? local.maximum.x : local.minimum.x,
+                          (corner & 2) != 0 ? local.maximum.y : local.minimum.y,
+                          (corner & 4) != 0 ? local.maximum.z
+                                            : local.minimum.z);
+      const Vector3 placed = Vector3(world * Vector4(point, 1.0f));
+      bounds.minimum = found ? glm::min(bounds.minimum, placed) : placed;
+      bounds.maximum = found ? glm::max(bounds.maximum, placed) : placed;
+      found = true;
+    }
+  }
+  m_sceneBounds = found ? bounds : AxisAlignedBounds3{};
+  if (found) {
+    m_camera.frameBounds(bounds.minimum, bounds.maximum);
+  } else {
+    m_camera.reset();
+  }
+  if (ic != nullptr && ic->camera != nullptr) {
+    m_camera.applyTo(ic->camera);
+  }
+}
+
+void
+MeshViewerModule::reportLoadFailure(const std::string& error)
+{
+  if (ic != nullptr && ic->commandLine != nullptr) {
+    ic->commandLine->logError("Failed to load: " + error);
+  }
+  if (m_ui) {
+    m_ui->showToast("Error: " + error, ColorRgba{ 245, 100, 110, 255 });
+  }
+}
+
+void
+MeshViewerModule::registerCommands()
+{
+  if (ic == nullptr || ic->commandRegistry == nullptr) {
+    return;
+  }
+  ic->commandRegistry->RegisterCommand(
+    "viewer_open",
+    [this](const std::vector<std::string>& args) {
+      if (args.empty() || args[0].empty() || args[0][0] != '/') {
+        reportLoadFailure("viewer_open needs a virtual path such as "
+                          "/packages/<id>/scene.ilsc");
+        return;
+      }
+      openLocation({ std::string(MeshViewerPlatform::kTreePrefix) + args[0],
+                     baseName(args[0]) });
+    },
+    "viewer_open <virtual path>",
+    "Open an .ilsc scene or .obj mesh from the file tree");
+}
+
+void
+MeshViewerModule::unregisterCommands()
+{
+  if (ic != nullptr && ic->commandRegistry != nullptr) {
+    ic->commandRegistry->UnregisterCommand("viewer_open");
+  }
+}
+
 void
 MeshViewerModule::Exit()
 {
+  unregisterCommands();
+  syncLayout();
+  if (ic != nullptr && ic->panelSurfaces != nullptr) {
+    // The saved layout reopens detached panels on the next start.
+    for (const GuiDockPanelSpec& spec : m_dock.panels()) {
+      const GuiDockMode mode = m_dock.mode(spec.id);
+      if (mode == GuiDockMode::Detached || mode == GuiDockMode::Opening) {
+        ic->panelSurfaces->close(spec.surface);
+      }
+    }
+  }
   m_lifetime.reset();
+  clearScene();
+  MeshViewerPlatform::current().releaseAssets();
   m_ui.reset();
+  m_info.reset();
+  m_display.reset();
+  m_dockVisual.reset();
+  for (std::unique_ptr<GameVisual>& chrome : m_detachedChrome) {
+    chrome.reset();
+  }
   m_wireframeVisual.reset();
   m_meshVisual.reset();
   m_gridVisual.reset();
@@ -225,6 +469,7 @@ MeshViewerModule::loadMesh(const std::string& path)
     return false;
   }
 
+  clearScene();
   const MeshHandle previousAsset = m_meshAsset;
   m_meshAsset = meshAsset;
   m_meshPath = path;
@@ -278,6 +523,7 @@ MeshViewerModule::loadMeshFromMemory(const std::string& content,
     return false;
   }
 
+  clearScene();
   const MeshHandle previousAsset = m_meshAsset;
   m_meshAsset = meshAsset;
   m_meshPath = name;
@@ -302,6 +548,7 @@ void
 MeshViewerModule::setShowGrid(bool show)
 {
   m_showGrid = show;
+  storeToggle("showGrid", show);
   rebuildGrid();
   if (m_ui) {
     m_ui->setDisplayOptions(
@@ -313,6 +560,7 @@ void
 MeshViewerModule::setShowWireframe(bool show)
 {
   m_showWireframe = show;
+  storeToggle("showWireframe", show);
   rebuildWireframe();
   if (m_ui) {
     m_ui->setDisplayOptions(
@@ -324,6 +572,7 @@ void
 MeshViewerModule::setShowAxes(bool show)
 {
   m_showAxes = show;
+  storeToggle("showAxes", show);
   rebuildGrid();
   if (m_ui) {
     m_ui->setDisplayOptions(
@@ -335,6 +584,7 @@ void
 MeshViewerModule::setShowSkybox(bool show)
 {
   m_showSkybox = show;
+  storeToggle("showSkybox", show);
   if (m_ui) {
     m_ui->setDisplayOptions(
       m_showGrid, m_showWireframe, m_showAxes, m_showSkybox);
@@ -344,7 +594,9 @@ MeshViewerModule::setShowSkybox(bool show)
 void
 MeshViewerModule::resetCamera()
 {
-  if (!m_meshData.isEmpty()) {
+  if (m_scene) {
+    frameScene();
+  } else if (!m_meshData.isEmpty()) {
     m_camera.frameBounds(m_meshData.minBounds, m_meshData.maxBounds);
   } else {
     m_camera.reset();
@@ -353,7 +605,7 @@ MeshViewerModule::resetCamera()
     m_camera.applyTo(ic->camera);
   }
   if (m_ui) {
-    m_ui->showToast("Camera reset", ColorRgba{ 66, 214, 210, 255 });
+    m_ui->showToast("Camera reset", GuiToolPalette::accent);
   }
 }
 
@@ -361,9 +613,9 @@ SaveLoadDialogSpec
 MeshViewerModule::dialogSpec() const
 {
   SaveLoadDialogSpec spec;
-  spec.fileDescription = "3D Wavefront Mesh (*.obj)";
+  spec.fileDescription = "Mesh or scene (*.obj, *.ilsc)";
   spec.defaultFilename = "model.obj";
-  spec.extensionPattern = "*.obj;*.OBJ";
+  spec.extensionPattern = "*.obj;*.OBJ;*.ilsc";
   return spec;
 }
 
@@ -374,7 +626,7 @@ MeshViewerModule::openMeshDialog()
   MeshViewerPlatform::current().chooseMesh(
     dialogSpec(), [this, alive](const MeshViewerLocation& chosen) {
       if (!alive.expired() && !chosen.empty()) {
-        loadMeshLocation(chosen);
+        openLocation(chosen);
       }
     });
   return true;
@@ -433,6 +685,14 @@ MeshViewerModule::rebuildWireframe()
   }
   m_wireframeVisual->clearPrimitives();
 
+  if (m_showWireframe && m_scene && m_sceneBounds.isValid()) {
+    // A scene has no single triangle list: outline its bounds.
+    m_wireframeVisual->addWireCube(
+      (m_sceneBounds.minimum + m_sceneBounds.maximum) * 0.5f,
+      (m_sceneBounds.maximum - m_sceneBounds.minimum) * 0.5f * 1.01f,
+      ColorRgba{ 255, 200, 50, 200 });
+    return;
+  }
   if (!m_showWireframe || m_meshData.isEmpty()) {
     return;
   }
@@ -652,7 +912,15 @@ MeshViewerModule::syncUiMetadata()
     return;
   }
   MeshMetadata meta;
-  if (!m_meshData.isEmpty()) {
+  if (m_scene) {
+    meta.hasMesh = true;
+    meta.isScene = true;
+    meta.filename = baseName(m_meshPath);
+    meta.nodeCount = m_scene->nodeCount();
+    meta.assetCount = m_scene->document().assets.size();
+    meta.missingCount = m_sceneMissing;
+    meta.dimensions = m_sceneBounds.maximum - m_sceneBounds.minimum;
+  } else if (!m_meshData.isEmpty()) {
     meta.hasMesh = true;
     meta.filename = m_meshPath.empty() ? "memory.obj" : baseName(m_meshPath);
     meta.vertexCount = m_meshData.vertices.size();
@@ -692,13 +960,15 @@ MeshViewerModule::handleAction(MeshViewerAction action)
       setShowSkybox(!m_showSkybox);
       break;
     case MeshViewerAction::None:
+      break;
     default:
+      handlePanelAction(action);
       break;
   }
 }
 
 void
-MeshViewerModule::updateCameraInput(double dt)
+MeshViewerModule::updateCameraInput(double dt, bool dragFree, bool wheelFree)
 {
   if (ic == nullptr || ic->camera == nullptr || ic->inputManager == nullptr ||
       ic->window == nullptr) {
@@ -710,11 +980,11 @@ MeshViewerModule::updateCameraInput(double dt)
   const double deltaMouseY = mouse[1] - m_lastMouseY;
 
   const bool leftMouse =
-    ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+    dragFree && ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
   const bool rightMouse =
-    ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
+    dragFree && ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
   const bool middleMouse =
-    ic->inputManager->isMouseButtonPressed(KeyCode::MouseMiddle);
+    dragFree && ic->inputManager->isMouseButtonPressed(KeyCode::MouseMiddle);
   const bool shift = ic->inputManager->isShiftPressed();
   const bool alt = ic->inputManager->isAltPressed();
   const bool ctrl = ic->inputManager->isControlPressed();
@@ -783,7 +1053,7 @@ MeshViewerModule::updateCameraInput(double dt)
 
   // Mouse Wheel Zoom
   double* scroll = ic->inputManager->getMouseScrollOffset();
-  if (scroll != nullptr && *scroll != 0.0) {
+  if (wheelFree && scroll != nullptr && *scroll != 0.0) {
     const float factor = *scroll > 0.0 ? 0.88f : 1.14f;
     m_camera.zoom(factor);
     *scroll = 0.0;
@@ -805,11 +1075,24 @@ MeshViewerModule::Update(double dt)
   applyShadowsFromEnv();
   applyMotionBlurFromEnv();
 
+  syncLayout();
+  updateDock(consoleOpen);
   if (m_ui) {
     action = m_ui->update(ic->inputManager, static_cast<float>(dt));
   }
-
   handleAction(action);
+  if (m_info) {
+    m_info->setMetadata(m_ui ? m_ui->meshMetadata() : MeshMetadata{});
+    m_info->update();
+  }
+  bool panelsConsumed = false;
+  if (m_display && !consoleOpen) {
+    m_display->setSettings(displaySettings());
+    applyDisplayEdits(
+      m_display->update(ic->inputManager, static_cast<float>(dt)));
+    m_display->setSettings(displaySettings());
+    panelsConsumed = m_display->consumedPress() || m_display->dragging();
+  }
 
   if (!consoleOpen && ic->inputManager != nullptr) {
     std::queue<InputManager::KeyPressEvent>& keys =
@@ -846,10 +1129,31 @@ MeshViewerModule::Update(double dt)
       }
     }
     keys.swap(remaining);
-    const bool uiConsumed = m_ui && m_ui->consumedPress();
-    if (!uiConsumed) {
-      updateCameraInput(dt);
+    // The viewport owns a drag only when it began there, and the wheel only
+    // over it.
+    const float scale =
+      GuiPanelLayout::viewport(ic->window, ic->renderer).layoutScale;
+    const std::array<double, 2> mouse = ic->window != nullptr
+                                          ? ic->window->getMouseCoords()
+                                          : std::array<double, 2>{ 0.0, 0.0 };
+    const float x = static_cast<float>(mouse[0]) / scale;
+    const float y = static_cast<float>(mouse[1]) / scale;
+    const bool overUi = (m_ui && m_ui->containsScreenPoint(x, y)) ||
+                        m_dock.overPanels(x, y) ||
+                        !m_dock.center().contains(x, y);
+    const bool anyButton =
+      ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft) ||
+      ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight) ||
+      ic->inputManager->isMouseButtonPressed(KeyCode::MouseMiddle);
+    if (anyButton && !m_cameraButtonsWereDown) {
+      m_dragOnUi = overUi || (m_ui && m_ui->consumedPress()) ||
+                   panelsConsumed || m_mainPanelsBlocked;
     }
+    if (!anyButton) {
+      m_dragOnUi = false;
+    }
+    m_cameraButtonsWereDown = anyButton;
+    updateCameraInput(dt, !m_dragOnUi && !m_dock.dragging(), !overUi);
   }
 
   m_camera.update(static_cast<float>(dt));
@@ -872,6 +1176,9 @@ MeshViewerModule::Update(double dt)
   if (m_skyboxVisual) {
     m_skyboxVisual->prepare(ic->renderer);
   }
+  if (m_scene) {
+    m_scene->update();
+  }
   if (m_gridVisual) {
     m_gridVisual->prepare(ic->renderer);
   }
@@ -884,6 +1191,20 @@ MeshViewerModule::Update(double dt)
   if (m_ui) {
     m_ui->getVisual().prepare(ic->renderer);
   }
+  if (m_info) {
+    m_info->getVisual().prepare(ic->renderer);
+  }
+  if (m_display) {
+    m_display->getVisual().prepare(ic->renderer);
+  }
+  if (m_dockVisual) {
+    m_dockVisual->prepare(ic->renderer);
+  }
+  for (std::unique_ptr<GameVisual>& chrome : m_detachedChrome) {
+    if (chrome) {
+      chrome->prepare(ic->renderer);
+    }
+  }
 }
 
 void
@@ -892,8 +1213,12 @@ MeshViewerModule::DispatchDrawables(Scene* scene)
   if (scene == nullptr) {
     return;
   }
-  if (m_showSkybox && m_skyboxVisual) {
-    scene->AddDrawable(m_skyboxVisual.get(), RenderLayerId::World);
+  // A scene's own environment sky replaces the default one.
+  SkyboxVisual* sky = m_scene && m_scene->skybox() != nullptr
+                        ? m_scene->skybox()
+                        : m_skyboxVisual.get();
+  if (m_showSkybox && sky != nullptr) {
+    scene->AddDrawable(sky, RenderLayerId::World);
   }
   if (m_showGrid && m_gridVisual) {
     scene->AddDrawable(m_gridVisual.get(), RenderLayerId::World);
@@ -901,8 +1226,37 @@ MeshViewerModule::DispatchDrawables(Scene* scene)
   if (m_meshVisual && !m_meshData.isEmpty()) {
     scene->AddDrawable(m_meshVisual.get(), RenderLayerId::World);
   }
+  if (m_scene) {
+    scene->AddDrawable(&m_scene->drawable(), RenderLayerId::World);
+  }
   if (m_showWireframe && m_wireframeVisual) {
     scene->AddDrawable(m_wireframeVisual.get(), RenderLayerId::World);
+  }
+  // Dock chrome and docked panels here; detached panels in their windows.
+  if (m_dockVisual) {
+    scene->AddDrawable(m_dockVisual.get(), RenderLayerId::UI);
+  }
+  const std::array<DrawableBase*, 2> content = { m_info.get(),
+                                                 m_display.get() };
+  const std::vector<GuiDockPanelSpec>& panels = m_dock.panels();
+  for (std::size_t index = 0; index < panels.size() && index < 2; ++index) {
+    const GuiDockView& view = m_dock.view(panels[index].id);
+    if (!view.visible || content[index] == nullptr) {
+      continue;
+    }
+    Scene* target = scene;
+    if (view.surface != IPanelSurfaces::kMainSurface) {
+      target = ic != nullptr && ic->panelSurfaces != nullptr
+                 ? ic->panelSurfaces->scene(view.surface)
+                 : nullptr;
+      if (target == nullptr) {
+        continue;
+      }
+      if (m_detachedChrome[index]) {
+        target->AddDrawable(m_detachedChrome[index].get(), RenderLayerId::UI);
+      }
+    }
+    target->AddDrawable(content[index], RenderLayerId::UI);
   }
   if (m_ui) {
     scene->AddDrawable(m_ui.get(), RenderLayerId::UI);

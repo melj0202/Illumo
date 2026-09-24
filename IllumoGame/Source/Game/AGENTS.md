@@ -32,8 +32,16 @@ sandbox grants bounded clocks only.
 Natively, `RuleCatalogLoader` owns catalog file reads, first-valid base-pair
 lookup across executable/current/product directories, and the
 working-directory `families.user.json` and `rulesets.user.json` overlays. In
-the package, `CSimCatalogBootstrap` reads the packaged pair and storage
-overlays. Both stage overlays through the portable `RuleCatalogOverlay`.
+the package, `CSimCatalogBootstrap` reads the packaged pair, then merges every
+`/packages/<id>/csim/*.json` (packages in id order, files in name order;
+`families*.json` add families, other names add rules; an invalid one is
+skipped with a warning), then the storage overlays, so a player's own edits
+still win. Both stage overlays through the portable `RuleCatalogOverlay`.
+
+The `render3dTest` diagnostic is data: `Scenes/render3d-test.ilsc` read through
+the AssetManager's source and instantiated with `SceneInstance`. Code only
+animates the `orbit` and `child` nodes by id; add geometry to the scene file,
+not to `CellGameModule`.
 `RuleSetRegistry` starts empty and owns text validation and data-backed
 factories; Rulesets has no filesystem or native platform dependencies.
 

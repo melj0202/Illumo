@@ -54,7 +54,16 @@ parseStringOption(int argc,
               << "' requires a string argument.\n";
     return { SysCmdLineAction::ExitFailure };
   }
-  environment->setVar(option.environmentVariable, argv[valueIndex]);
+  // A "paths" option repeats: each value is appended on its own line.
+  std::string value = argv[valueIndex];
+  if (option.valueName == "paths") {
+    const std::string previous =
+      environment->getVar(option.environmentVariable).value;
+    if (!previous.empty()) {
+      value = previous + "\n" + value;
+    }
+  }
+  environment->setVar(option.environmentVariable, value);
   *index = valueIndex;
   return {};
 }
@@ -161,8 +170,9 @@ SysCmdLine::ParseCommandLine(int argc,
                   << "' has no environment target.\n";
         return { SysCmdLineAction::ExitFailure };
       }
-      if (option->valueName == "path" || option->valueName == "string" ||
-          option->valueName == "file" || option->valueName == "name") {
+      if (option->valueName == "path" || option->valueName == "paths" ||
+          option->valueName == "string" || option->valueName == "file" ||
+          option->valueName == "name") {
         const SysCmdLineResult result =
           parseStringOption(argc, argv, &i, environment, *option);
         if (result.shouldExit()) {

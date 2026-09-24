@@ -55,7 +55,7 @@ WASM_CMAKE_MODULE = REPOSITORY_ROOT / "cmake" / "IllumoWasm.cmake"
 WASM_BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "tools" / "bootstrap-wasm.ps1"
 DEFAULT_WASM_TOOLS_DIRECTORY = REPOSITORY_ROOT / "build-wasm-tools"
 WASM_RUNTIME_APPLICATION = "IllumoRuntime"
-# Installed applications live in <runtime dir>/apps/<name>/ with app.json.
+# Installed applications live in <runtime dir>/apps/<name>/ with illumo.json.
 APPS_DIRECTORY = "apps"
 DEFAULT_APP = "game"
 APP_LABELS = {"game": "IllumoGame", "illed": "IllEd", "meshviewer": "Mesh Viewer"}
@@ -4531,8 +4531,8 @@ def runtime_outputs(
             folder = runtime.parent / APPS_DIRECTORY / package.name
             if (folder / package.module).is_file():
                 module = folder / package.module
-            if (folder / "app.json").is_file():
-                manifest = folder / "app.json"
+            if (folder / "illumo.json").is_file():
+                manifest = folder / "illumo.json"
         staged.append(AppOutput(package.name, module, manifest))
     retired: list[Path] = []
     for name in RETIRED_EXECUTABLES:

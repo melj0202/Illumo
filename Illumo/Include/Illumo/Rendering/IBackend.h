@@ -8,6 +8,7 @@
 #include <Illumo/Rendering/RenderLayerId.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,33 @@ public:
     (void)height;
     return { 0, 0, {}, "Backend does not support frame readback" };
   }
+  // Asynchronous colour readback of an offscreen framebuffer's first colour
+  // attachment, for surfaces presented outside the GPU window (detached panel
+  // windows). A caller-numbered stream keeps up to two copies in flight:
+  // request queues a copy of everything submitted so far; take returns the
+  // oldest completed copy as top-down RGBA8, blocking for it when wait is
+  // true. request fails when both copies are still pending. Main-thread only.
+  virtual bool requestFramebufferReadback(std::uint32_t stream,
+                                          FramebufferHandle framebuffer,
+                                          int width,
+                                          int height)
+  {
+    (void)stream;
+    (void)framebuffer;
+    (void)width;
+    (void)height;
+    return false;
+  }
+  virtual bool takeFramebufferReadback(std::uint32_t stream,
+                                       bool wait,
+                                       FrameReadback& out)
+  {
+    (void)stream;
+    (void)wait;
+    out = { 0, 0, {}, "Backend does not support framebuffer readback" };
+    return false;
+  }
+  virtual void releaseReadbackStream(std::uint32_t stream) { (void)stream; }
 
   virtual MeshHandle CreateMesh(const void* vertices,
                                 size_t vertexSize,

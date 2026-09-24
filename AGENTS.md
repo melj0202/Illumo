@@ -19,7 +19,11 @@ is a WASM package in `apps/<name>/` beside that one host: `game`, `illed`
 `IllMeshViewerCore` remain only as native test-oracle libraries. The supported product path is
 Windows, GLFW, OpenGL, and — for the simulator — the sparse infinite or
 finite-toroidal canvas. Illumo remains a reusable runtime and rendering
-foundation; application policy stays in the consuming product.
+foundation; application policy stays in the consuming product. The optional
+`Illumo::Content` layer owns the one scene format every program reads
+(`.ilsc` format 2, instantiated by `SceneInstance`), `.ilpk` packages, and
+the host virtual file tree on which apps, content packages and mods mount
+(`docs/content-packages-and-scenes-design.md`).
 
 The approved `SceneGraph` v2 uses graph-local handles, intrusive hierarchy,
 TRS state, a compiled preorder, revision-cached bounds, ordered borrowed
@@ -132,7 +136,11 @@ panel chrome; FPS and `SplashText` use that decorated-label path. `UiTheme` is
 shared value-only styling, and `Illumo/Gui` is the single home for reusable UI
 behavior: `GuiKit` drawing helpers, `GuiDialog` modals, and `GuiMenuShell`
 overlay easing, animation clocks, virtual-space fitting, row windows, and
-pointer edges. A new screen composes those rather than restating them.
+pointer edges. Tool apps (IllEd, IllMeshViewer) use the plain `GuiToolStyle`
+look and a `GuiPanelDock` of detachable panels whose content draws into a
+`GuiPanelPlacement` and reads `GuiPanelPointer` (D-UI7); extra windows come
+from `IllumoContext::panelSurfaces` and products must work fully docked
+without it. A new screen composes those rather than restating them.
 Preserve the existing drawable owners and Scene layers; do not introduce a
 retained UI tree for this surface.
 
@@ -257,7 +265,8 @@ Ruleset truth:
 | Host, services, modules | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers |
 | Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
 | CA modes and editor | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
-| World editor and `.ilsc` | `IllEd/Source/EditorModule.*`, `EditorDocument.*`, `IlscCodec.*`, `EditorToolbar.*` |
+| World editor | `IllEd/Source/EditorModule*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
+| Scene format, packages, virtual file tree | `Illumo/Include/Illumo/Content/*`, `Illumo/Source/Content/*`, `Illumo/tools/IllumoPack.cpp` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
 | Domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
 | Bounded view, fade, dirty upload | `IllumoGame/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
@@ -266,7 +275,8 @@ Ruleset truth:
 | Renderer and tokens | `Illumo/Include/Illumo/Rendering/*`, `Illumo/Source/Rendering/*` |
 | Resource handles and file assets | `Illumo/Include/Illumo/Rendering/ResourceHandle*`, `Illumo/Source/Rendering/AssetManager.cpp` |
 | World meshes, overlay primitives, animation | `Illumo/Source/Rendering/Primitives/*` (`MeshVisual`, `GameVisual`) |
-| GUI subsystem, dialogs, and atlas helpers | `Illumo/Include/Illumo/Gui/*`, `Illumo/Source/Gui/*` (`GuiKit`, `GuiDialog`, `GridAtlas`) |
+| GUI subsystem, dialogs, and atlas helpers | `Illumo/Include/Illumo/Gui/*`, `Illumo/Source/Gui/*` (`GuiKit`, `GuiDialog`, `GridAtlas`, `GuiToolStyle`, `GuiPanelDock`, `GuiPanelPointer`, `PanelSurfaces.h`) |
+| Detached panel windows (host) | `Illumo/Source/Wasm/WasmPanelWindows.*`, `Illumo/Include/Illumo/Platform/SurfaceWindow.h`, `IllumoGuest/Include/IllumoGuest/{Windows,PanelSurfaces}.h` |
 | Debug renderer atlas and shader | `Illumo/Assets/RendererDemo/*` |
 | Production backend factory | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*` (composed in `Engine/Illumo.cpp`) |
 | Real graphics execution | `Illumo/Source/Rendering/OpenGL/*` |
@@ -275,9 +285,9 @@ Ruleset truth:
 | OS entry and native save/load | `Illumo/Source/Platform/*` |
 | WASM host, ABI decoders, runtime | `Illumo/Source/Wasm/*`, `Illumo/Include/Illumo/Wasm/*`, `cmake/IllumoWasm.cmake` |
 | Guest SDK, guest-side engine, wire headers | `IllumoGuest/Include/IllumoGuest/*`, `IllumoGuest/Source/*` |
-| IllumoGame package entry and platform adapter | `IllumoGame/Source/Wasm/*`, `IllumoGame/app.json` |
-| IllEd package entry and platform seam | `IllEd/Source/Wasm/EditorApplication.cpp`, `IllEd/Source/IllEdPlatform.h`, `IllEd/app.json` |
-| IllMeshViewer package entry and platform seam | `IllMeshViewer/Source/Wasm/ViewerApplication.cpp`, `IllMeshViewer/Source/MeshViewerPlatform.h`, `IllMeshViewer/app.json` |
+| IllumoGame package entry and platform adapter | `IllumoGame/Source/Wasm/*`, `IllumoGame/illumo.json` |
+| IllEd package entry and platform seam | `IllEd/Source/Wasm/EditorApplication.cpp`, `IllEd/Source/IllEdPlatform.h`, `IllEd/illumo.json` |
+| IllMeshViewer package entry and platform seam | `IllMeshViewer/Source/Wasm/ViewerApplication.cpp`, `IllMeshViewer/Source/MeshViewerPlatform.h`, `IllMeshViewer/illumo.json` |
 | Runtime command line and capture mode | `Illumo/Source/Wasm/RuntimeApplication.cpp` |
 | Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*`, `IllMeshViewer/Tests/*` |
 | Canonical architecture | `docs/architecture-consensus.md` |
@@ -315,8 +325,12 @@ Package-level checks drive each real package through the generic host:
 `IllumoGame.Wasm.GamePackage` (menu, setup, edit, step, save/load, 3D mode),
 `IllumoGame.Wasm.GamePackageLanes` (real simulation lanes against a native
 serial reference), `IllEd.Wasm.Package` (launch scene, preloaded atlas,
-keyboard pan, Ctrl+S save in place) and `IllMeshViewer.Wasm.Package` (launch
-mesh as a retained host mesh, skybox cubemap). `IllumoGame.Wasm.LaneParity`
+keyboard pan, Ctrl+S save in place), `IllEd.Wasm.ProjectPackage` (project
+assets placed through the guest cache and saved into `/project`),
+`IllMeshViewer.Wasm.Package` (launch mesh as a retained host mesh, skybox
+cubemap), `IllMeshViewer.Wasm.ScenePackage` (a mounted package's scene opened
+with `viewer_open`) and `IllumoGame.Wasm.CatalogMerge` (package rule
+catalogs). `IllumoGame.Wasm.LaneParity`
 and `IllumoGame.Wasm.LaneProtocol` cover lane exactness and the CSL1
 decoders. The `Illumo.Wasm.*` cases cover the sandbox, engine modes, the
 manifest decoder, ABI decoders and host services; `Illumo.Runtime.Help`,
@@ -395,6 +409,18 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   lifetime, DebugModule composition, and the frame loop. IllEd supplies
   editor defaults/CLI metadata and its required editor-module factory.
   Illumo must not depend on Game, Rulesets, or IllEd.
+- Content layering: core `Illumo` never includes `<Illumo/Content/...>`;
+  `Illumo::Content` depends only on `Illumo::Illumo` (never on
+  `Illumo/Source/Wasm` or a product) and keeps nlohmann private. It is the only
+  owner of `.ilsc`, `illumo.json` and `.ilpk` code; guests link its mirror
+  `IllumoGuestContent`. `SceneGraph` still never serializes itself. Engine
+  tools reach the file tree only through `IFileTreeSource`.
+- Guests address files by virtual path (`/app`, `/engine`, `/packages/<id>`,
+  `/project`, guest-local `/local`) or opaque dialog grants; host paths never
+  cross the ABI. Package mounts are read-only; only `--project` is writable,
+  and it refuses `*.wasm` and `illumo.json`. Package manifests are
+  `illumo.json`. Scene asset references are package-relative or explicit
+  absolute virtual paths.
 - IllumoGame executes only inside `IllumoGame.wasm`; IllEd and IllMeshViewer
   likewise run only as `IllEd.wasm` and `IllMeshViewer.wasm`, reaching files
   and dialogs through their `IllEdPlatform` / `MeshViewerPlatform` seams.
@@ -406,7 +432,9 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   manifests request budgets; the runtime grants at most its ceilings, and
   launch options are never persisted. Frame schema changes, new capabilities
   or new imports require decoder/deny tests with the change.
-- `IllumoContext` is a non-owning pointer bag frozen after engine startup.
+- `IllumoContext` is a non-owning pointer bag frozen after engine startup;
+  the one exception is `fileTree`, which the module owning a file tree (the
+  WASM host) publishes during Start and withdraws on Exit.
   Failed optional modules remain inactive; a failed required module rolls back
   every accepted module and fails startup. Each product supplies one required
   module; `DebugModule` is optional.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Gui/GuiTextEdit.h>
 #include <Illumo/Gui/GuiTypes.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -236,6 +237,22 @@ public:
                                      float outlineWidth = 1.0f);
 
   // --- Form & Settings Controls ---
+  // A single-line field. With an active edit it draws the edit's text,
+  // selection and blinking caret (scrolled to keep the caret visible);
+  // otherwise the value, truncated to fit. Invalid edits get a red border;
+  // read-only fields are muted and borderless.
+  static void drawTextField(GameVisual& visual,
+                            float x,
+                            float y,
+                            float w,
+                            float h,
+                            const std::string& value,
+                            float fontSize,
+                            const GuiTextEdit* edit,
+                            bool invalid,
+                            bool hovered,
+                            bool readOnly);
+
   static void drawPropertyRow(GameVisual& visual,
                               float x,
                               float y,

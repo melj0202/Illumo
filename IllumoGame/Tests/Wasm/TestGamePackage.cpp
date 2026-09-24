@@ -1,6 +1,8 @@
 #include "../BenchWorlds.h"
 #include "Game/IllumoCodec.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include "Wasm/CatalogBootstrap.h"
+#include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
@@ -11,6 +13,7 @@
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
+#include <Illumo/Wasm/WasmFileServices.h>
 #include <Illumo/Wasm/WasmGameModule.h>
 #include <algorithm>
 #include <chrono>
@@ -228,6 +231,9 @@ gamePackage()
   std::filesystem::create_directories(files.storage);
   std::filesystem::copy_file(ILLUMO_FAMILIES, files.package / "families.json");
   std::filesystem::copy_file(ILLUMO_RULES, files.package / "rulesets.json");
+  std::filesystem::create_directories(files.package / "Scenes");
+  std::filesystem::copy_file(ILLUMO_RENDER3D_SCENE,
+                             files.package / "Scenes" / "render3d-test.ilsc");
   std::filesystem::copy_file(ILLUMO_GAME_DEFAULTS,
                              files.package / "envvars.json");
 
@@ -481,6 +487,9 @@ packageBench(bool meterFuel, std::uint32_t lanes)
   std::filesystem::create_directories(files.storage);
   std::filesystem::copy_file(ILLUMO_FAMILIES, files.package / "families.json");
   std::filesystem::copy_file(ILLUMO_RULES, files.package / "rulesets.json");
+  std::filesystem::create_directories(files.package / "Scenes");
+  std::filesystem::copy_file(ILLUMO_RENDER3D_SCENE,
+                             files.package / "Scenes" / "render3d-test.ilsc");
   std::filesystem::copy_file(ILLUMO_GAME_DEFAULTS,
                              files.package / "envvars.json");
   if (!writeBenchWorlds(files.storage)) {
@@ -701,6 +710,9 @@ gamePackageLanes()
   std::filesystem::create_directories(files.storage);
   std::filesystem::copy_file(ILLUMO_FAMILIES, files.package / "families.json");
   std::filesystem::copy_file(ILLUMO_RULES, files.package / "rulesets.json");
+  std::filesystem::create_directories(files.package / "Scenes");
+  std::filesystem::copy_file(ILLUMO_RENDER3D_SCENE,
+                             files.package / "Scenes" / "render3d-test.ilsc");
   std::filesystem::copy_file(ILLUMO_GAME_DEFAULTS,
                              files.package / "envvars.json");
   if (!writeBenchWorlds(files.storage)) {
@@ -813,11 +825,109 @@ gamePackageLanes()
   return counters.failures == 0;
 }
 
+// The catalog bootstrap against the host file service: package catalogs
+// under /packages/<id>/csim merge between the packaged pair and the user
+// overlays; an invalid one is skipped with a warning.
+static bool
+catalogMerge()
+{
+  TestCounters counters;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-catalogs-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(root / "app");
+  std::filesystem::create_directories(root / "storage");
+  std::filesystem::create_directories(root / "extra" / "csim");
+  std::filesystem::create_directories(root / "broken" / "csim");
+  std::filesystem::copy_file(ILLUMO_FAMILIES, root / "app" / "families.json");
+  std::filesystem::copy_file(ILLUMO_RULES, root / "app" / "rulesets.json");
+  std::ofstream(root / "extra" / "csim" / "rulesets.json")
+    << R"({"schema_version":3,"rules":[{"id":"PACKAGE_LIFE","name":"Package Life",)"
+       R"("family_id":"LIFE_LIKE_BINARY","birth":[3,6],"survive":[1,2,3]}]})";
+  std::ofstream(root / "broken" / "csim" / "rulesets.json") << "{ not json";
+  // The player's overlay still wins over a package's definition.
+  std::ofstream(root / "storage" / "rulesets.user.json")
+    << R"({"schema_version":3,"rules":[{"id":"PACKAGE_LIFE","name":"Player Life",)"
+       R"("family_id":"LIFE_LIKE_BINARY","birth":[3],"survive":[2,3]}]})";
+
+  std::shared_ptr<VirtualFileSystem> tree =
+    std::make_shared<VirtualFileSystem>();
+  std::string error;
+  const char* names[] = { "extra", "broken" };
+  VfsMount app;
+  app.point = "/app";
+  app.layers.push_back(
+    { DirectoryVfsBackend::open(root / "app", false, error), "csim" });
+  tree->mount(app, error);
+  for (const char* name : names) {
+    VfsMount mount;
+    mount.point = std::string("/packages/") + name;
+    mount.layers.push_back(
+      { DirectoryVfsBackend::open(root / name, false, error), name });
+    tree->mount(mount, error);
+  }
+  WasmFileServices service(
+    9,
+    static_cast<std::uint32_t>(GuestCapability::Assets) |
+      static_cast<std::uint32_t>(GuestCapability::Storage),
+    tree,
+    root / "storage");
+  GuestServiceQueue queue;
+  GuestFiles files(queue);
+  CSimCatalogBootstrap bootstrap(files);
+  for (int step = 0; step < 5000 && !bootstrap.ready() && !bootstrap.failed();
+       ++step) {
+    GuestServices completions = service.poll();
+    GuestWireWriter writer;
+    completions.write(writer);
+    std::vector<std::byte> outgoing;
+    GuestServices requests;
+    if (!queue.exchange(writer.data(), outgoing) ||
+        !GuestServices::read(outgoing, requests, true) ||
+        (!requests.records.empty() && !service.submit(requests))) {
+      testTrue(counters, false, "service exchange");
+      break;
+    }
+    files.pump();
+    bootstrap.pump();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  testTrue(counters,
+           bootstrap.ready(),
+           "the bootstrap completes with packages mounted");
+  const RuleSetDefinition* merged =
+    bootstrap.registry().getRuleSetDefinition("PACKAGE_LIFE");
+  testTrue(counters,
+           merged != nullptr && bootstrap.registry().getRuleSetDefinition(
+                                  "GAME_OF_LIFE") != nullptr,
+           "a package rule set joins the packaged catalog");
+  testTrue(counters,
+           merged != nullptr && merged->name == "Player Life",
+           "the user overlay applies after package catalogs");
+  testTrue(counters,
+           bootstrap.merged().size() == 1 &&
+             bootstrap.merged().front() == "/packages/extra/csim/rulesets.json",
+           "the merge reports what it took");
+  testTrue(counters,
+           bootstrap.warnings().size() == 1 &&
+             bootstrap.warnings().front().find("broken") != std::string::npos,
+           "an invalid package catalog is skipped with a warning");
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  if (counters.failures != 0) {
+    std::printf("catalog error: %s\n", bootstrap.error().c_str());
+  }
+  return counters.failures == 0;
+}
+
 int
 main(int argc, char** argv)
 {
   if (argc == 2 && std::string(argv[1]) == "--list") {
     std::puts("IllumoGame.Wasm.GamePackage");
+    std::puts("IllumoGame.Wasm.CatalogMerge");
     std::puts("IllumoGame.Wasm.GamePackageLanes");
     std::puts("IllumoGame.Wasm.PackageBench");
     return 0;
@@ -828,6 +938,9 @@ main(int argc, char** argv)
   }
   if (argc != 3 || std::string(argv[1]) != "--run") {
     return 2;
+  }
+  if (std::string(argv[2]) == "IllumoGame.Wasm.CatalogMerge") {
+    return catalogMerge() ? 0 : 1;
   }
   if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackage") {
     return gamePackage() ? 0 : 1;

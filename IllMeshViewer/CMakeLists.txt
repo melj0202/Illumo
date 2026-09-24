@@ -4,6 +4,8 @@ add_library(IllMeshViewerCore STATIC
   Source/MeshViewerCamera.cpp
   Source/MeshViewerConfig.cpp
   Source/MeshViewerModule.cpp
+  Source/MeshViewerModulePanels.cpp
+  Source/MeshViewerPanels.cpp
   Source/MeshViewerPlatformNative.cpp
   Source/MeshViewerUi.cpp
   Source/IllMeshViewerApplication.cpp
@@ -13,7 +15,7 @@ target_include_directories(IllMeshViewerCore PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_include_directories(IllMeshViewerCore SYSTEM PRIVATE
   "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
-target_link_libraries(IllMeshViewerCore PUBLIC Illumo::Illumo)
+target_link_libraries(IllMeshViewerCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllMeshViewerCore)
 
 # IllMeshViewer ships only as the WASM package apps/meshviewer
@@ -26,6 +28,7 @@ if(BUILD_TESTING)
     Tests/TestMeshViewerCamera.cpp
     Tests/TestMeshViewerConfig.cpp
     Tests/TestMeshViewerModule.cpp
+    Tests/TestMeshViewerPanels.cpp
     Tests/TestMeshViewerUi.cpp
   )
   target_compile_definitions(IllMeshViewerTests PRIVATE ILLUMO_TESTING)

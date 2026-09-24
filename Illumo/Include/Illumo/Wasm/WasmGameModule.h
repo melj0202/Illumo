@@ -2,9 +2,11 @@
 
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Foundation/RollingMetric.h>
+#include <Illumo/Services/FileTreeSource.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
 #include <Illumo/Wasm/WasmGameServices.h>
 #include <Illumo/Wasm/WasmGuest.h>
+#include <Illumo/Wasm/WasmPanelWindows.h>
 #include <Illumo/Wasm/WasmRenderServices.h>
 
 // Rolling host-side timings of one Update: each guest exchange plus frame
@@ -41,6 +43,15 @@ public:
   // Budgets for compute worker instances and the number of lanes granted.
   // Applies to workers created after Start; call before Start.
   void setWorkerLimits(const WasmLimits& limits, std::uint32_t lanes);
+  // Where surface windows (Windows capability) come from; the platform's by
+  // default. Null keeps every surface docked (capture, benchmarks). Call
+  // before Start.
+  void setSurfaceWindows(ISurfaceWindowFactory* factory)
+  {
+    m_surfaceWindows = factory;
+  }
+  // Null unless the guest was granted surface windows.
+  const WasmPanelWindows* panelWindows() const { return m_windows.get(); }
   bool Start(IllumoContext* context) override;
   void Update(double elapsed) override;
   void DispatchDrawables(Scene* scene) override;
@@ -65,10 +76,14 @@ private:
   std::vector<std::byte> m_modModule;
   std::vector<std::byte> m_workerModule;
   WasmFileRoots m_fileRoots;
+  // Published as IllumoContext::fileTree while the guest runs.
+  std::unique_ptr<IFileTreeSource> m_treeSource;
   WasmGuest m_guest;
   std::unique_ptr<WasmGuest> m_mod;
   std::unique_ptr<WasmFrameRenderer> m_frames;
   std::unique_ptr<WasmGameServices> m_services;
+  ISurfaceWindowFactory* m_surfaceWindows = &PlatformSurfaceWindows();
+  std::unique_ptr<WasmPanelWindows> m_windows;
   std::vector<std::byte> m_completions;
   std::string m_error;
   std::string m_modError;

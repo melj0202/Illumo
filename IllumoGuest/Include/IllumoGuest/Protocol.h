@@ -21,7 +21,13 @@ enum class GuestCapability : std::uint32_t
   Console = 1u << 5u,
   Display = 1u << 6u,
   Jobs = 1u << 7u,
-  Messages = 1u << 8u
+  Messages = 1u << 8u,
+  // Writes, Import and Pack in the writable /project mount; offered only when
+  // the host mounted a project.
+  ProjectFiles = 1u << 9u,
+  // Extra top-level windows showing guest-drawn surfaces (frame schema v5,
+  // input v2); offered only when the host can present them.
+  Windows = 1u << 10u
 };
 
 enum class GuestCall : std::uint32_t
@@ -51,7 +57,7 @@ struct GuestEnvelope
 {
   static constexpr std::uint32_t Magic = 0x31474c49u; // ILG1
   static constexpr std::uint32_t Version = 1;
-  static constexpr std::uint32_t KnownCapabilities = (1u << 9u) - 1u;
+  static constexpr std::uint32_t KnownCapabilities = (1u << 11u) - 1u;
   static constexpr std::size_t HeaderBytes = 32;
 
   GuestCall call = GuestCall::Init;

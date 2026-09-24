@@ -108,18 +108,135 @@ POSIX \texttt{rename} replaces on the same filesystem and fails with
 \texttt{EXDEV} across devices, with no copy fallback. Formats stay
 product-owned and unchanged. This is not a power-loss durability guarantee.
 
-The IllEd \texttt{.ilsc} parser validates numeric destination ranges before
-narrowing: float fields reject finite doubles outside the finite float range;
-integer fields check signed or unsigned JSON values before conversion to int.
+The shared \texttt{.ilsc} format 2 parser (\texttt{IlscCodec} in
+\texttt{Illumo::Content}) validates numeric destination ranges before
+narrowing: float fields reject non-finite values and finite doubles outside the
+float range; integer fields check their JSON type and range before conversion.
 Version and color validation therefore cannot be bypassed by integer wrapping.
-Rejected input preserves the destination document. Accepted float boundary
-values remain finite when stored and round-trip through scene serialization.
+Parsing is transactional: rejected input leaves the destination document
+untouched. Format 1 files are refused with an explicit message. Accepted float
+values are written back with the shortest round-trip form of the stored
+\texttt{float}, so encoding the same document twice is byte-identical.
 
-Imported node identifiers are opaque strings. New nodes search for an unused
-\texttt{n} plus decimal counter, starting at one after load and checking every
-candidate against existing IDs. The unsigned counter wraps explicitly to one;
-a complete occupied cycle returns failure without inserting a node. Existing
-IDs and parent references are preserved, including long numeric-looking IDs.
+Node identifiers are opaque strings of at most 128 bytes, unique within the
+document; existing ids and parent references are preserved, including long
+numeric-looking ids. New nodes take the first unused \texttt{n} plus decimal
+counter from \texttt{SceneInstance::uniqueId}, checked against every existing
+id. The node table is bounded (\texttt{SceneDocument::kMaximumNodes}), so the
+search always ends.
+
+\subsection{Packages and the virtual file tree (D-E20 to D-E23)}
+\texttt{IllumoRuntime} launches a package, not a loose module:
+\begin{itemize}
+  \item \texttt{--app <name>} resolves \pathref{apps/<name>/} (a directory)
+        or \pathref{apps/<name>.ilpk} beside the runtime; the game is the
+        default. \texttt{--package <dir|file.ilpk>} runs any other package.
+        The package must be of kind \texttt{app}; its \texttt{illumo.json}
+        title names the window, and its module and worker \texttt{.wasm}
+        bytes are read through the file tree.
+  \item Every package in \pathref{packages/} beside the runtime (directories
+        holding \texttt{illumo.json}, and \texttt{*.ilpk} files) is discovered
+        in file-name order; unreadable packages and duplicate ids are skipped
+        with warnings.
+  \item \texttt{--mount <dir|file.ilpk>} (repeatable) mounts one more package;
+        a missing path or an id already mounted refuses to start.
+  \item \texttt{--project <dir>} mounts a loose directory writable at
+        \texttt{/project}; a missing directory refuses to start.
+        \texttt{--mount} and \texttt{--project} are rejected with
+        \texttt{--game}.
+\end{itemize}
+\texttt{PackageMounts::mountAll} assembles the tree: \texttt{/engine} from the
+runtime \pathref{Assets/}, \texttt{/app} from the launched package under the
+overlays of every package that targets it (stacked by priority, dependency
+order, then id), \texttt{/packages/<id>} for every package whose dependencies
+resolve, and the optional \texttt{/project}. The mount table is an immutable
+snapshot swapped under a mutex; open files keep their backend alive after an
+unmount. Directory backends compare exact on-disk names, so lookups are
+case-sensitive everywhere and a link that leaves the root does not resolve.
+Writes reach only \texttt{/project}, through \texttt{AtomicFile}, and
+\texttt{*.wasm} and \texttt{illumo.json} are refused there.
+
+The host console command \texttt{vfs} (registered beside \texttt{wasm\_stats}
+when a tree exists) runs \texttt{VfsConsole}:
+\texttt{vfs mounts}, \texttt{vfs ls <path>}, \texttt{vfs tree <path> [depth]}
+(capped at 400 lines), \texttt{vfs stat <path>} (kind, size, supplying
+package), and \texttt{vfs cat <path> [bytes]} (text, or a hex dump for binary
+data, at most 64\,KiB). None of them prints a host path.
+
+The host also publishes the tree to engine tools as the core, read-only
+\symbolref{IFileTreeSource} \texttt{IllumoContext::fileTree}
+(\texttt{VfsTreeSource}, at most 4,096 entries per listing). In debug-tools
+builds, DebugModule's \texttt{files [path|off]} command opens a browser over
+it (\texttt{FileTreeOverlay}, drawn with \texttt{GuiFileTree}). It is driven by
+the keyboard and wheel only, and consumes that input before the product sees
+it; the footer shows the selection's size and supplying package.
+
+\subsection{Guest file protocol v2 (D-E23, D-E24)}
+\texttt{GuestFileRequest} version 2 adds the \texttt{Mounted} area (absolute
+virtual paths; \texttt{Package} remains an alias for \texttt{/app}) and the
+actions \texttt{List} (a cursor and a page of at most 256 entries),
+\texttt{Stat} (kind, size, package id), \texttt{Import} (copy a Selected grant
+into \texttt{/project/<path>}), and \texttt{Pack} (\texttt{/project} into an
+\texttt{.ilpk} at a writable Selected grant, on a dedicated host pack worker).
+Version 1 requests are refused; the host and guest SDK ship together. Mounted
+transfers use blocks up to 1\,MiB; Package, Storage and Selected files keep
+64\,KiB. \texttt{GuestFiles} holds 16 tasks in flight.
+
+Reading and listing mounted paths need the \texttt{Assets} capability. The new
+\texttt{ProjectFiles} capability (bit 9; \texttt{KnownCapabilities} is
+\texttt{(1 <{}< 10) - 1}) is offered only while \texttt{/project} is mounted;
+project writes, Import and Pack need it, and Import and Pack also need
+\texttt{SelectedFiles}. Project writes stage in memory and commit through the
+file tree under an incrementally maintained quota
+(\texttt{WasmFileLimits::projectBytes}). Pack requires a valid
+\texttt{illumo.json} at the project root; a replace that fails, for example
+because the target archive is mounted, reports \texttt{IoError}.
+
+The guest SDK wraps this as \texttt{GuestFileTree} (list, stat, read, write,
+import, pack with completion callbacks). \texttt{GuestVfsAssets} replaces
+\texttt{GuestPackageAssets} as AssetManager's guest byte source: pinned
+\texttt{packageAssets()} preloads, fetch sets held until released, a
+least-recently-used byte budget (256\,MiB by default), and app-supplied bytes
+under \texttt{/local/<name>}. \texttt{GuestSceneFetches} (in
+\texttt{IllumoGuestContent}) fetches a scene's references, then the MTL
+libraries its OBJ files declare, tolerating missing libraries.
+
+\subsection{Text entry and file-tree helpers (D-UI6)}
+\texttt{Illumo/Gui} gains two value-state helpers for native and guest code.
+\texttt{GuiTextEdit} is single-line UTF-8 editing: caret and selection at
+code-point boundaries, word jumps, a byte limit clipped at a code point, Enter
+or Tab commit, Escape cancel, and clipboard hand-off (copy and cut return text;
+paste raises a request the caller completes). While active it consumes the
+key and character queues it reads (\texttt{InputManager::getCharQueue}), so
+product shortcuts do not fire. \texttt{GuiKit::drawTextField} draws it.
+\texttt{GuiFileTree} holds expansion state and the listings received so far,
+names directories still to list (\texttt{takePendingListings}), and flattens
+rows depth first with an explicit stack (directories first, at most 20,000
+rows); \texttt{GuiKit::drawTreeRow} draws each row. Neither is a retained
+widget tree.
+
+\subsection{Plain tool look and detachable panels (D-UI7, D-E27)}
+IllEd and IllMeshViewer draw with \texttt{GuiToolStyle}: a neutral palette in
+the spirit of the console's, flat rectangles, lines and text, fixed tool
+metrics and no animation. Their panels live in one \texttt{GuiPanelDock} per
+app window, which stacks them in left and right columns with draggable
+splitters and gives each a title bar that hides it or pops it out; dragging a
+title past the window edge tears it off, and a detached panel docks back from
+its title bar, its close box or View \textgreater{} Reset Layout. The dock
+never draws content. Each panel draws into a \texttt{GuiPanelPlacement}
+(content rectangle and surface) and reads its pointer through
+\texttt{GuiPanelPointer}, which samples the main window or the panel's own
+window and ignores presses the menu bar or dock chrome took. The layout is
+saved in the \texttt{panelLayout} setting.
+
+Extra windows come from \texttt{IllumoContext::panelSurfaces}
+(\texttt{IPanelSurfaces}): surface 0 is the main window, other surfaces are
+opened by id and report size, screen origin, pointer and window events, and
+keys stay in the one input queue. Guests reach it through the
+\texttt{Windows} capability; the host renders a changed surface offscreen,
+reads it back asynchronously and presents it in a \texttt{GLFW\_NO\_API}
+window one frame late (D-R27). Hosts without windows omit it, and every panel
+stays docked.
 
 \subsection{Third-party and runtime data}
 Dependencies remain vendored under \pathref{Illumo/thirdparty/}. Illumo owns

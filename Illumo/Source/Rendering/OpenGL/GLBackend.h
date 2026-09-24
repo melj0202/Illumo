@@ -8,6 +8,8 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <unordered_map>
 
@@ -30,6 +32,23 @@ private:
   ResourceHandlePool<TextureHandle> textureHandles;
   ResourceHandlePool<FramebufferHandle> framebufferHandles;
 
+  // Two pixel-pack buffers per readback stream; a fence marks each copy.
+  struct ReadbackSlot
+  {
+    GLuint buffer = 0;
+    GLsync fence = nullptr;
+    int width = 0;
+    int height = 0;
+    std::uint64_t order = 0;
+  };
+  struct ReadbackStream
+  {
+    std::array<ReadbackSlot, 2> slots;
+  };
+  std::unordered_map<std::uint32_t, ReadbackStream> _readbackStreams;
+  std::uint64_t _readbackOrder = 0;
+  void releaseReadbackSlot(ReadbackSlot& slot);
+
 public:
   GLBackend(IRenderWindow* window);
   ~GLBackend();
@@ -51,6 +70,14 @@ public:
   }
   int getFPS() const override { return fps; }
   FrameReadback readBackbuffer(int width, int height) override;
+  bool requestFramebufferReadback(std::uint32_t stream,
+                                  FramebufferHandle framebuffer,
+                                  int width,
+                                  int height) override;
+  bool takeFramebufferReadback(std::uint32_t stream,
+                               bool wait,
+                               FrameReadback& out) override;
+  void releaseReadbackStream(std::uint32_t stream) override;
   std::string submissionError() const override { return device->frameError(); }
 
   MeshHandle CreateMesh(const void* vertices,

@@ -1,10 +1,11 @@
 #include <IllumoGuest/Files.h>
+#include <algorithm>
 #include <cstring>
 
 std::uint64_t
 GuestFiles::read(GuestFileArea area, std::string path, std::size_t maximum)
 {
-  if (m_tasks.size() >= 8 || m_next == UINT64_MAX ||
+  if (m_tasks.size() >= MaximumTasks || m_next == UINT64_MAX ||
       maximum > 512u * 1024u * 1024u || path.empty() || path.size() > 1024 ||
       path.find('\0') != std::string::npos) {
     return 0;
@@ -35,6 +36,64 @@ GuestFiles::write(GuestFileArea area,
     task.bytes = std::move(bytes);
   }
   return id;
+}
+std::uint64_t
+GuestFiles::addQuery(GuestFileRequest request)
+{
+  if (m_tasks.size() >= MaximumTasks || m_next == UINT64_MAX ||
+      request.path.empty() || request.path.size() > 1024 ||
+      request.target.size() > 1024 ||
+      request.path.find('\0') != std::string::npos ||
+      request.target.find('\0') != std::string::npos) {
+    return 0;
+  }
+  Task task;
+  task.query = true;
+  task.request = std::move(request);
+  const std::uint64_t id = m_next++;
+  m_tasks.emplace(id, std::move(task));
+  return id;
+}
+std::uint64_t
+GuestFiles::list(std::string path, std::uint32_t cursor, std::uint32_t limit)
+{
+  GuestFileRequest request;
+  request.action = GuestFileAction::List;
+  request.area = GuestFileArea::Mounted;
+  request.path = std::move(path);
+  request.offset = cursor;
+  request.size =
+    std::clamp<std::uint32_t>(limit, 1u, GuestFileRequest::MaximumListPage);
+  return addQuery(std::move(request));
+}
+std::uint64_t
+GuestFiles::stat(std::string path)
+{
+  GuestFileRequest request;
+  request.action = GuestFileAction::Stat;
+  request.area = GuestFileArea::Mounted;
+  request.path = std::move(path);
+  return addQuery(std::move(request));
+}
+std::uint64_t
+GuestFiles::importFile(std::string grant, std::string target)
+{
+  GuestFileRequest request;
+  request.action = GuestFileAction::Import;
+  request.area = GuestFileArea::Selected;
+  request.path = std::move(grant);
+  request.target = std::move(target);
+  return addQuery(std::move(request));
+}
+std::uint64_t
+GuestFiles::pack(std::string grant, std::string source)
+{
+  GuestFileRequest request;
+  request.action = GuestFileAction::Pack;
+  request.area = GuestFileArea::Selected;
+  request.path = std::move(grant);
+  request.target = std::move(source);
+  return addQuery(std::move(request));
 }
 bool
 GuestFiles::enqueue(Task& task, GuestFileRequest request, std::uint32_t count)
@@ -73,6 +132,12 @@ GuestFiles::complete(Task& task,
       task.file = {};
     }
     task.stage = task.file.owner != 0 ? Stage::Close : Stage::Done;
+    return;
+  }
+  if (task.query) {
+    const std::span<const std::byte> bytes = reader.bytes(reader.remaining());
+    task.bytes.assign(bytes.begin(), bytes.end());
+    task.stage = Stage::Done;
     return;
   }
   if (pending.action == GuestFileAction::Open) {
@@ -149,12 +214,12 @@ GuestFiles::pump()
       it = m_tasks.erase(it);
       continue;
     }
-    if (issued >= 8 || task.stage == Stage::Done) {
+    if (issued >= MaximumTasks || task.stage == Stage::Done) {
       ++it;
       continue;
     }
     if (task.stage == Stage::Transfer && !task.cancelled) {
-      while (issued < 8 && task.submitted < task.size) {
+      while (issued < MaximumTasks && task.submitted < task.size) {
         GuestFileRequest request;
         request.action =
           task.writing ? GuestFileAction::Write : GuestFileAction::Read;
@@ -162,7 +227,7 @@ GuestFiles::pump()
         request.offset = task.submitted;
         const std::uint32_t count =
           static_cast<std::uint32_t>(std::min<std::uint64_t>(
-            GuestFileRequest::MaximumBlock, task.size - task.submitted));
+            GuestFileRequest::blockFor(task.area), task.size - task.submitted));
         if (task.writing) {
           const std::span<const std::byte> bytes =
             std::span(task.bytes)
@@ -179,7 +244,9 @@ GuestFiles::pump()
       }
     } else if (task.pending.empty()) {
       GuestFileRequest request;
-      if (task.stage == Stage::Open) {
+      if (task.query) {
+        request = task.request;
+      } else if (task.stage == Stage::Open) {
         request.area = task.area;
         request.path = task.path;
         request.writing = task.writing;

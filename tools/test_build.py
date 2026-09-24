@@ -1004,7 +1004,7 @@ class WasmRuntimeTests(unittest.TestCase):
         (release / "apps" / "game").mkdir(parents=True)
         (release / f"IllumoRuntime{suffix}").write_bytes(b"")
         self.assertFalse(build.runtime_outputs(self.root, "Release", apps).playable("game"))
-        (release / "apps" / "game" / "app.json").write_text("{}")
+        (release / "apps" / "game" / "illumo.json").write_text("{}")
         (release / "apps" / "game" / "IllumoGame.wasm").write_bytes(b"\0" * 2048)
         (release / f"IllEd{suffix}").write_bytes(b"")
         (release / "game").mkdir()

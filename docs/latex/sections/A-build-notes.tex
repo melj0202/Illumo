@@ -10,8 +10,11 @@ cmake --build build --config Release
 ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 \end{lstlisting}
 The build produces the static \texttt{Illumo} library,
-three application cores and executables (IllumoGame, IllEd, IllMeshViewer),
-four test runners, and \texttt{IllumoPublicHeaderSmoke}. The aggregate
+the optional \texttt{Illumo::Content} layer, three native application cores used
+as test oracles (IllumoGame, IllEd, IllMeshViewer), the
+\texttt{IllumoRuntime} host with the three staged WASM app packages,
+four test runners, \texttt{IllumoPublicHeaderSmoke}, and the
+\texttt{IllumoPack} host tool. The aggregate
 \texttt{IllumoRunTests} target refreshes all per-configuration test inventories
 before running the workspace label. There is no compatibility executable named
 \texttt{Illumo}.
@@ -166,7 +169,9 @@ It builds the static library, \texttt{IllumoTests}, and the public-header
 consumer smoke without seeing IllumoGame sources.
 
 \subsection{Tests}
-\texttt{IllumoTests} owns \texttt{Illumo.*}; \texttt{IllumoGameTests} owns
+\texttt{IllumoTests} owns \texttt{Illumo.*}, including the
+\texttt{Illumo.Content.*} package, file-tree and scene cases;
+\texttt{IllumoGameTests} owns
 \texttt{IllumoGame.*}. The editor and mesh-viewer runners own their product
 cases. All support exact \texttt{--list} and \texttt{--run}.
 CTest runs each case in an isolated working directory and selects a runner path
@@ -222,6 +227,46 @@ consuming executables. Staging copies current inputs but does not prune stale
 output files. Shared copy stages are ordered. Product \texttt{envvars.json}
 seeds use a locked copy-if-missing operation so existing settings survive;
 the first successful seed wins when products share an output directory.
+
+\subsection{Packages and \texttt{IllumoPack}}
+\texttt{illumo\_stage\_app} (\pathref{cmake/IllumoWasm.cmake}) stages each
+installed application as a loose package directory
+\pathref{apps/<name>/} beside \texttt{IllumoRuntime}: the product's
+\pathref{illumo.json} manifest (which replaced \texttt{app.json}), its module,
+flat data files, and package-relative \texttt{ASSETS} pairs such as
+\pathref{Assets/IllEd/editor-ui-atlas.jpg} or IllumoGame's
+\pathref{Scenes/render3d-test.ilsc}. \pathref{build.py} reports an
+application as staged when \pathref{apps/<name>/} holds its module and
+\pathref{illumo.json}. Staging does not emit an \texttt{.ilpk}; pack a staged
+or project directory explicitly:
+\begin{lstlisting}[language={}]
+IllumoPack <package-dir> <out.ilpk>
+IllumoPack --verify <file.ilpk>
+\end{lstlisting}
+Packing requires a valid \texttt{illumo.json} at the directory root and is
+deterministic (sorted names, fixed 1980-01-01 timestamps); entries deflate
+through the engine's \texttt{stb\_image\_write} compressor, while PNG/JPEG
+data, archives, and data that deflate cannot shrink are stored. Symlinks and
+names that are not valid package names fail the pack. Verifying opens
+the manifest and reads every entry back with its CRC-32 checked. An archive
+placed at \pathref{apps/<name>.ilpk} or in \pathref{packages/} runs or mounts
+like the directory form.
+
+\texttt{Illumo.Pack.StagedApp} runs \pathref{cmake/IllumoPackCheck.cmake},
+which packs the staged \pathref{apps/illed} with \texttt{IllumoPack} into
+\pathref{Testing/illed.ilpk} under the build tree and verifies it;
+\texttt{IllumoRunTests} depends on \texttt{IllumoPack}.
+\texttt{Illumo.Runtime.MountMissingDir}, \texttt{.ProjectMissingDir}, and
+\texttt{.PackageMissing} check that a missing \texttt{--mount},
+\texttt{--project}, or \texttt{--package} refuses to start.
+
+The \texttt{IllumoArchiveFixture} target zips
+\pathref{Illumo/Tests/Content/Fixtures/archive} with
+\texttt{cmake -E tar cf ... --format=zip} (libarchive) into
+\pathref{TestData/cmake-archive.zip}; \texttt{IllumoTests} receives its path as
+\texttt{ILLUMO\_TEST\_ARCHIVE\_FIXTURE}, so
+\texttt{Illumo.Content.ArchiveReadsCMakeZip} checks the reader against an
+archiver other than its own writer.
 
 \subsection{Documentation}
 Run \texttt{python build.py docs} or \pathref{docs/build.ps1}. The script builds

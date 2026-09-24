@@ -32,10 +32,50 @@ GuestRecordingBackend::setLayer(GuestLayer layer)
   m_layer = layer;
 }
 void
+GuestRecordingBackend::beginSurface(std::uint32_t surface,
+                                    float width,
+                                    float height)
+{
+  GuestSurfaceFrame content;
+  content.surface = surface;
+  content.width = width;
+  content.height = height;
+  m_frame.surfaces.push_back(std::move(content));
+  m_surface = static_cast<std::ptrdiff_t>(m_frame.surfaces.size()) - 1;
+}
+void
+GuestRecordingBackend::endSurface()
+{
+  m_surface = -1;
+}
+std::vector<GuestBatch>&
+GuestRecordingBackend::targetBatches()
+{
+  return m_surface < 0
+           ? m_frame.batches
+           : m_frame.surfaces[static_cast<std::size_t>(m_surface)].batches;
+}
+float
+GuestRecordingBackend::targetWidth() const
+{
+  return m_surface < 0
+           ? m_frame.width
+           : m_frame.surfaces[static_cast<std::size_t>(m_surface)].width;
+}
+float
+GuestRecordingBackend::targetHeight() const
+{
+  return m_surface < 0
+           ? m_frame.height
+           : m_frame.surfaces[static_cast<std::size_t>(m_surface)].height;
+}
+void
 GuestRecordingBackend::BeginLayer(RenderLayerId layer)
 {
   m_layer = layer == RenderLayerId::World ? GuestLayer::World : GuestLayer::Ui;
-  if (layer != RenderLayerId::World || m_renderer == nullptr) {
+  // A surface's scene has no world: the frame's camera and casters stay.
+  if (layer != RenderLayerId::World || m_renderer == nullptr ||
+      m_surface >= 0) {
     return;
   }
   // The world camera and this frame's casters are final once RenderScene
@@ -91,6 +131,7 @@ void
 GuestRecordingBackend::BeginFrame()
 {
   m_frame.clear();
+  m_surface = -1;
   for (std::uint32_t slot : m_drawnDynamic) {
     std::map<std::uint32_t, Mesh>::iterator found = m_meshes.find(slot);
     if (found != m_meshes.end()) {
@@ -261,18 +302,24 @@ GuestRecordingBackend::emitMeshWrites()
 void
 GuestRecordingBackend::demoteDynamic(Mesh& mesh)
 {
-  for (GuestBatch& batch : m_frame.batches) {
-    if (!batch.retained() || batch.mesh.owner != mesh.id.owner ||
-        batch.mesh.slot != mesh.id.slot ||
-        batch.mesh.generation != mesh.id.generation) {
-      continue;
+  std::vector<std::vector<GuestBatch>*> lists{ &m_frame.batches };
+  for (GuestSurfaceFrame& surface : m_frame.surfaces) {
+    lists.push_back(&surface.batches);
+  }
+  for (std::vector<GuestBatch>* list : lists) {
+    for (GuestBatch& batch : *list) {
+      if (!batch.retained() || batch.mesh.owner != mesh.id.owner ||
+          batch.mesh.slot != mesh.id.slot ||
+          batch.mesh.generation != mesh.id.generation) {
+        continue;
+      }
+      const std::uint32_t first = batch.firstIndex;
+      const std::uint32_t count = batch.indexCount;
+      batch.mesh = {};
+      batch.firstIndex = 0;
+      batch.indexCount = 0;
+      extractInline(mesh, batch, first, count);
     }
-    const std::uint32_t first = batch.firstIndex;
-    const std::uint32_t count = batch.indexCount;
-    batch.mesh = {};
-    batch.firstIndex = 0;
-    batch.indexCount = 0;
-    extractInline(mesh, batch, first, count);
   }
   forgetRetained(mesh);
   mesh.dynamic = false;
@@ -903,6 +950,10 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
   if ((lit || sky) && m_layer != GuestLayer::World) {
     throw std::runtime_error("Lit meshes and skyboxes draw only in the world");
   }
+  if (m_surface >= 0 &&
+      (m_layer == GuestLayer::World || m_pipeline.depthTestEnabled)) {
+    throw std::runtime_error("Surfaces draw only flat UI");
+  }
   batch.primitive = lines ? GuestPrimitive::Lines : GuestPrimitive::Triangles;
   batch.depthTest = m_pipeline.depthTestEnabled;
   batch.blend = m_pipeline.blendEnabled;
@@ -937,7 +988,7 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
   batch.layer = m_layer;
   batch.clipped = m_clip.enabled;
   batch.clip = { static_cast<float>(m_clip.x),
-                 m_frame.height - m_clip.y - m_clip.height,
+                 targetHeight() - m_clip.y - m_clip.height,
                  static_cast<float>(m_clip.width),
                  static_cast<float>(m_clip.height) };
   if (mesh.retain && !mesh.failed && (mesh.ready || !mesh.dynamic)) {
@@ -951,12 +1002,12 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
       mesh.drawnThisFrame = true;
       m_drawnDynamic.push_back(m_mesh.slot);
     }
-    m_frame.batches.push_back(std::move(batch));
+    targetBatches().push_back(std::move(batch));
     return;
   }
   // Dynamic meshes draw inline until their host copy exists.
   extractInline(mesh, batch, first, count);
-  m_frame.batches.push_back(std::move(batch));
+  targetBatches().push_back(std::move(batch));
 }
 
 void
@@ -1247,8 +1298,8 @@ GuestRecordingBackend::consume(const RenderCommand& command)
     case CommandType::SetViewport:
       if (!m_shadowPass &&
           (command.viewport.x != 0 || command.viewport.y != 0 ||
-           command.viewport.width != m_frame.width ||
-           command.viewport.height != m_frame.height)) {
+           command.viewport.width != targetWidth() ||
+           command.viewport.height != targetHeight())) {
         throw std::runtime_error("Unsupported guest viewport");
       }
       break;
@@ -1280,7 +1331,7 @@ GuestRecordingBackend::consume(const RenderCommand& command)
     case CommandType::ClearColorBuffer:
     case CommandType::ClearStencilBuffer:
     case CommandType::ClearAll:
-      if (!m_shadowPass && !m_frame.batches.empty()) {
+      if (!m_shadowPass && !targetBatches().empty()) {
         throw std::runtime_error(
           "Mid-frame clears require a render-pass contract");
       }

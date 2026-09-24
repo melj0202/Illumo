@@ -119,6 +119,14 @@ subdirectory. It then layers the working-directory `families.user.json` and
 `rulesets.user.json` files as one validated pair, where matching IDs replace
 shipped entries. Invalid or unreadable base pairs fall through, and malformed
 overlays leave the published catalog unchanged.
+In the WASM package, `CSimCatalogBootstrap` also merges content packages:
+after the packaged pair and before the storage overlays it lists `/packages`,
+then reads every `/packages/<id>/csim/*.json` (packages in id order, files in
+name order, at most 64). Files named `families*.json` add families; any other
+name is a rule package. Each merges into a candidate copy, so a package
+catalog that does not validate is skipped with a logged warning instead of
+stopping the game. `IllumoGame.Wasm.CatalogMerge` covers the order and the
+skip.
 The required-module factory loads the catalog once before constructing the menu
 or direct game module. Rulesets does not call platform APIs or discover files.
 

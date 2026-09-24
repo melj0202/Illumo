@@ -7,6 +7,7 @@
 #include <vector>
 
 class IRenderWindow;
+class WasmPanelWindows;
 class IEnvVars;
 class CommandRegistry;
 class CommandLine;
@@ -54,6 +55,9 @@ public:
                std::vector<std::byte>& completions);
   void cancel();
   const std::string& error() const { return m_error; }
+  // Surface windows for the Window service (Windows capability); null
+  // rejects every window request.
+  void setWindows(WasmPanelWindows* windows) { m_windows = windows; }
   // Budgets for compute children: the Job worker, created on its first job,
   // and `lanes` LaneJob workers, created when the guest asks for its lanes.
   static WasmLimits defaultWorkerLimits();
@@ -69,6 +73,7 @@ private:
   bool completeClipboard(GuestServices& results);
   bool completeDialog(GuestServices& results);
   bool completeConsole(GuestServices& results);
+  void completeWindows(GuestServices& results);
   WasmRenderServices m_render;
   std::unique_ptr<WasmFileServices> m_files;
   IRenderWindow* m_window;
@@ -83,6 +88,8 @@ private:
   std::deque<GuestServiceRecord> m_clipboardRequests;
   std::deque<GuestServiceRecord> m_dialogRequests;
   std::deque<GuestServiceRecord> m_consoleRequests;
+  std::deque<GuestServiceRecord> m_windowRequests;
+  WasmPanelWindows* m_windows = nullptr;
   std::deque<GuestServiceRecord> m_listenRequests;
   std::vector<std::string> m_registered;
   struct Invocation

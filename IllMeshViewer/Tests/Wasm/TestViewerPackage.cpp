@@ -1,3 +1,4 @@
+#include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
@@ -176,7 +177,7 @@ viewerPackage()
 
   WasmLimits limits;
   limits.memoryBytes = 1024ull * 1024ull * 1024ull;
-  limits.meterFuel = false; // As shipped: app.json requests epoch metering.
+  limits.meterFuel = false; // As shipped: illumo.json requests epoch metering.
   limits.deadlineMilliseconds = 10000;
   WasmGameModule viewer(
     readBytes(ILLUMO_VIEWER_GUEST), startup.take(), limits, {}, {}, files);
@@ -235,15 +236,168 @@ viewerPackage()
   return counters.failures == 0;
 }
 
+// A content package mounted at /packages/demo holds a scene whose mesh is
+// package-relative. viewer_open reads the scene through the virtual file
+// tree, fetches the mesh into the guest asset cache, then instantiates it:
+// the torus arrives as one retained host mesh drawn every frame.
+static bool
+scenePackage()
+{
+  TestCounters counters;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-viewer-scene-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  const std::filesystem::path package = root / "package";
+  const std::filesystem::path demo = root / "demo";
+  std::filesystem::create_directories(package / "Assets" / "Skybox");
+  std::filesystem::create_directories(root / "storage");
+  std::filesystem::create_directories(demo / "meshes");
+  std::filesystem::create_directories(demo / "scenes");
+  std::filesystem::copy_file(ILLUMO_VIEWER_DEFAULTS, package / "envvars.json");
+  std::filesystem::copy_file(ILLUMO_VIEWER_SKYBOX,
+                             package / "Assets" / "Skybox" /
+                               "skybox-daylight.png");
+  std::ofstream(demo / "illumo.json")
+    << R"({"format":"ilpk","format_version":1,"id":"demo","kind":"content"})";
+  std::ofstream(demo / "meshes" / "torus.obj", std::ios::binary) << torusObj();
+  std::ofstream(demo / "scenes" / "demo.ilsc") << R"({
+  "format": "ilsc",
+  "format_version": [2, 0],
+  "settings": { "world_mode": "3d" },
+  "assets": [ { "id": "torus", "type": "mesh", "path": "meshes/torus.obj" } ],
+  "nodes": [
+    { "id": "torus", "components": [ { "type": "mesh", "asset": "torus" } ] },
+    { "id": "floor", "transform": { "position": [0, -1, 0] },
+      "components": [ { "type": "primitive", "shape": "cube",
+                        "extent": [3, 0.05, 3] } ] }
+  ]
+})";
+
+  std::shared_ptr<VirtualFileSystem> tree =
+    std::make_shared<VirtualFileSystem>();
+  std::string error;
+  VfsMount app;
+  app.point = "/app";
+  app.layers.push_back(
+    { DirectoryVfsBackend::open(package, false, error), "meshviewer" });
+  VfsMount content;
+  content.point = "/packages/demo";
+  content.layers.push_back(
+    { DirectoryVfsBackend::open(demo, false, error), "demo" });
+  tree->mount(app, error);
+  tree->mount(content, error);
+  WasmFileRoots files;
+  files.storage = root / "storage";
+  files.packages = tree;
+
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  env.setVar("fullscreen", false);
+  Camera camera(glm::vec2(0, 0), 1, &env);
+  ViewerObservingBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  CommandRegistry commands;
+  CommandLine console(&env, &commands, &window, &renderer, "Test");
+  Logger::setContext(&env, &console);
+  InputManager input(nullptr);
+  IllumoContext context;
+  context.renderer = &renderer;
+  context.window = &window;
+  context.inputManager = &input;
+  context.envVars = &env;
+  context.commandRegistry = &commands;
+  context.commandLine = &console;
+
+  WasmLimits limits;
+  limits.memoryBytes = 1024ull * 1024ull * 1024ull;
+  limits.meterFuel = false;
+  limits.deadlineMilliseconds = 10000;
+  WasmGameModule viewer(
+    readBytes(ILLUMO_VIEWER_GUEST), {}, limits, {}, {}, files);
+  const bool started = viewer.Start(&context);
+  testTrue(counters, started, "The viewer starts with a content package");
+  if (!started) {
+    std::printf("%s\n", viewer.error().c_str());
+    return false;
+  }
+  FileTreeStatus published;
+  testTrue(
+    counters,
+    context.fileTree != nullptr &&
+      context.fileTree->stat("/packages/demo/scenes/demo.ilsc", published) &&
+      published.packageId == "demo",
+    "The host publishes its file tree to engine tools");
+  const std::chrono::steady_clock::time_point deadline =
+    std::chrono::steady_clock::now() + std::chrono::seconds(60);
+  std::size_t frames = 0;
+  bool opened = false;
+  while (viewer.error().empty() &&
+         std::chrono::steady_clock::now() < deadline &&
+         (mock.retainedDraws < 3 || frames < 30)) {
+    if (!opened && commands.HasCommand("viewer_open")) {
+      commands.QueueCommand("viewer_open",
+                            { "/packages/demo/scenes/demo.ilsc" });
+      commands.ExecuteQueue();
+      opened = true;
+    }
+    viewer.Update(1.0 / 60.0);
+    Scene scene(&window, &camera);
+    viewer.DispatchDrawables(&scene);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+    ++frames;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  std::printf("viewer scene: %zu frames, %zu retained meshes, %zu retained "
+              "draws\n",
+              frames,
+              mock.retainedMeshes,
+              mock.retainedDraws);
+  testTrue(counters, opened, "The viewer registers viewer_open");
+  testTrue(counters,
+           mock.retainedMeshes == 1 && mock.retainedDraws >= 3,
+           "The scene's package mesh is fetched and drawn as a retained mesh");
+  testTrue(counters,
+           viewer.error().empty() && renderer.frameError().empty() &&
+             !historyContains(console, "Failed") &&
+             !historyContains(console, "missing"),
+           "The scene and its asset load without errors");
+  viewer.Exit();
+  testTrue(counters,
+           context.fileTree == nullptr,
+           "Exit withdraws the published file tree");
+  if (counters.failures != 0) {
+    for (const CommandLine::historyBuffer& entry : console.getHistory()) {
+      std::printf("console: %s\n", entry.content.c_str());
+    }
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return counters.failures == 0;
+}
+
 int
 main(int argc, char** argv)
 {
   if (argc == 2 && std::string(argv[1]) == "--list") {
     std::puts("IllMeshViewer.Wasm.Package");
+    std::puts("IllMeshViewer.Wasm.ScenePackage");
     return 0;
   }
-  if (argc != 3 || std::string(argv[1]) != "--run" ||
-      std::string(argv[2]) != "IllMeshViewer.Wasm.Package") {
+  if (argc != 3 || std::string(argv[1]) != "--run") {
+    return 2;
+  }
+  if (std::string(argv[2]) == "IllMeshViewer.Wasm.ScenePackage") {
+    return scenePackage() ? 0 : 1;
+  }
+  if (std::string(argv[2]) != "IllMeshViewer.Wasm.Package") {
     return 2;
   }
   return viewerPackage() ? 0 : 1;

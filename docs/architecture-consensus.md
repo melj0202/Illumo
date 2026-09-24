@@ -115,9 +115,12 @@ full footer height before it is removed. See [game controls](packages/game.md).
 applications. Illumo owns the generic application runner, platform
 entry/dialogs, BuildInfo, SysCmdLine, host, services, rendering, persistent
 scene hierarchy, assets, and module lifetime. `IllumoGame` owns CA policy and
-`.csim` persistence (with legacy `.illumo` loading). `IllEd` is the SceneGraph world editor that writes
-`.ilsc` documents so later Illumo applications can be bootstrapped from
-authored scenes. Production simulator state remains signed-coordinate
+`.csim` persistence (with legacy `.illumo` loading). The optional
+`Illumo::Content` layer owns the one scene format every program reads
+(`.ilsc` format 2, instantiated by `SceneInstance`), `.ilpk` packages, and the
+host virtual file tree on which apps, content packages and mods mount
+(D-E18 to D-E24). `IllEd` is the SceneGraph world editor that authors those
+scenes and packs projects into packages. Production simulator state remains signed-coordinate
 `SparseCellGrid`; `SceneGraph` is the retained world hierarchy consumed by
 IllEd, not CA cell storage; rendering remains an enroll-once token stream
 through `IBackend`; dense `CellGrid`/`Canvas` remain compatibility fixtures
@@ -320,8 +323,9 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **IllumoGame/Source/Game/** | CA definition/config, module factory, domain + presentation (`SparseCellGrid`, `CanvasView`, `CellGameModule`, `CellContext`); dense Canvas types are compatibility-only. |
 | **IllumoGame/Source/Rulesets/** | CA rules (GoL family, Wireworld, …). |
 | **Illumo/Source/Rendering/** | Reusable world-mesh and 2D front end, cubemaps, offscreen passes, managed assets, Scene list, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
-| **IllEd/Source/** | SceneGraph world editor, document model, `.ilsc` codec, and product UI; shipped as `IllEd.wasm` (`Wasm/`), with `IllEdCore` as native test oracle (D-E14). |
-| **IllMeshViewer/Source/** | Mesh-viewer application, camera, configuration, input, and product UI; shipped as `IllMeshViewer.wasm` (`Wasm/`), with `IllMeshViewerCore` as native test oracle (D-E14). |
+| **Illumo/Source/Content/** | Optional `Illumo::Content` layer above the engine: virtual paths, `illumo.json` manifests, `.ilpk` archives, the virtual file tree and its console/asset/tree adapters, package mounting, and the `.ilsc` format 2 codec plus `SceneInstance` (D-E18). Guests link the serial-safe mirror `IllumoGuestContent`. Core Illumo never includes it. |
+| **IllEd/Source/** | SceneGraph world editor over a `SceneInstance` document: patch history, selection set, shortcut table, gizmos, typed inspector, clipboard, hierarchy, asset browser and project commands (D-E25); shipped as `IllEd.wasm` (`Wasm/`), with `IllEdCore` as native test oracle (D-E14). |
+| **IllMeshViewer/Source/** | Mesh and scene viewer (`.obj`, `.ilsc` through `SceneInstance`), camera, configuration, input, and product UI; shipped as `IllMeshViewer.wasm` (`Wasm/`), with `IllMeshViewerCore` as native test oracle (D-E14). |
 | **Illumo/Source/Services/** | Generic log, env, input, system CLI, branded console UI, and allocators. |
 | **Illumo/Source/Foundation/** | BuildInfo, macros, and implementation support; public aliases/utilities are under `Illumo/Include/Illumo/Foundation`. |
 | **Illumo/Source/Platform/** | OS entry, public SaveLoad implementation boundary, and native dialogs. |
@@ -496,9 +500,10 @@ file IDs become graph names; recipe indices use user data. Render bindings
 persist across transform/recolor edits, journal overflow resynchronizes bindings,
 and serialization exports hierarchy order from the graph. Picking keeps the
 editor's exact transformed local-box narrow phase after graph broad-phase
-queries. `.ilsc` remains version 1. IllumoGame's diagnostic scene and capture
-fixtures use the same adapter; CA storage and primitive-composed UI stay
-separate. Generic `WorkerPool` is available without importing CA policy; scene
+queries. Since 2026-09-23 the document wraps a Content `SceneInstance` over
+`.ilsc` format 2 (D-E19, D-E25), and IllumoGame's `render3dTest` scene and
+IllMeshViewer scenes load through the same instance; CA storage and
+primitive-composed UI stay separate. Generic `WorkerPool` is available without importing CA policy; scene
 parallelism and a separate culling index remain measurement-gated.
 
 
@@ -531,7 +536,7 @@ IBackend::SubmitCommandQueue
 | **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Pixel-space rebuilds conservatively reject quads outside the logical viewport. An optional top-left logical-pixel clip rejects wholly excluded quads before upload and brackets partial content with a nested, intersected scissor that restores any outer clip (D-R23). Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
 | **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, managed immutable mesh handles, conservative attachment bounds, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, tint, caster distance, and motion blur are per-instance CPU state emitted as `WorldLook` uniforms. A node borrows an ordered list of attachments; several visuals/nodes may bind the same managed mesh without another upload. Procedural batches remain visual-owned dynamic buffers (D-R21/D-R24/D-E11). |
 | **SkyboxVisual** | World cubemap host and `ISceneRenderAttachment`: unit cube geometry rendered with `RenderStyleId::Skybox` at the far depth plane (`xyww`), translation-stripped view matrix `projection * mat4(mat3(view))`, seamless cubemap sampling (`IBackend::CreateCubemap`, `AssetManager::acquireCubemapFromCross`), and optional tint color. Consumed by 3D viewers (e.g. `IllMeshViewer`). |
-| **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, `GuiMenuShell`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, shared overlay behavior, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `GuiMenuShell` holds the behavior every overlay repeats: `GuiEasing` curves and approach helpers, `GuiMenuAnimator` reveal/selection/value-pulse/ambient/caret clocks with reduced motion, `GuiPanelLayout` virtual-resolution fitting (`fit` for centered panels, `viewport` for docked bars) plus row-window arithmetic, and `GuiPointerTracker` virtual-space pointer sampling with press and release edges. `CommandLine`, `GLString`, `ExitConfirmDialog`, `EditorConfirmDialog`, the IllumoGame menus, the IllEd toolbar/sidebar/scene-graph panels, and `MeshViewerUi` compose these primitives without introducing a retained widget hierarchy. |
+| **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, `GuiMenuShell`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, shared overlay behavior, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `GuiMenuShell` holds the behavior every overlay repeats: `GuiEasing` curves and approach helpers, `GuiMenuAnimator` reveal/selection/value-pulse/ambient/caret clocks with reduced motion, `GuiPanelLayout` virtual-resolution fitting (`fit` for centered panels, `viewport` for docked bars) plus row-window arithmetic, and `GuiPointerTracker` virtual-space pointer sampling with press and release edges. The tool apps add `GuiToolStyle` (the plain palette and flat tool widgets), `GuiPanelDock` (dock columns, splitters, title-bar pop-out and tear-off, saved layouts) and `GuiPanelPlacement`/`GuiPanelPointer` (a panel's rectangle, surface and pointer), D-UI7. `CommandLine`, `GLString`, `ExitConfirmDialog`, `EditorConfirmDialog`, the IllumoGame menus, the IllEd panels and the IllMeshViewer panels compose these primitives without introducing a retained widget hierarchy. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
 | **Renderer** | Backend-neutral: owns style table; frame setup; walk layers; submit. Depends only on `IBackend*` (D-R11). |
 | **IBackend** | Allocates typed slot+generation handles; validates create/replace/destroy/query operations; queues and submits. GPU objects live in backend registries. Supports 2D textures and 6-face cubemaps (`CreateCubemap`, optional `ReplaceCubemap`) with seamless filtering and clamp-to-edge wrap. Replacement preserves texture kind and publishes a complete resource before retiring the previous one. |
@@ -1270,29 +1275,36 @@ shipped layout is:
 ```text
 IllumoRuntime.exe              generic host: loop, window, GL, Wasmtime sandbox
   envvars.json                 runtime settings (window, vsync, fps, overlays)
-  apps/game/app.json           package manifest (see below)
+  apps/game/illumo.json        package manifest (see below)
   apps/game/IllumoGame.wasm    the whole product
   apps/game/CSimWorkerGuest.wasm  simulation lane worker (one store per lane)
   apps/game/families.json ...  packaged catalogs and first-run defaults
-  apps/illed/app.json          IllEd.wasm; launchAccess "edit"
+  apps/illed/illumo.json       IllEd.wasm; launchAccess "edit"
   apps/illed/Assets/IllEd/editor-ui-atlas.jpg      package-preloaded asset
-  apps/meshviewer/app.json     IllMeshViewer.wasm; launchAccess "read"
+  apps/meshviewer/illumo.json  IllMeshViewer.wasm; launchAccess "read"
   apps/meshviewer/Assets/Skybox/skybox-daylight.png  package-preloaded asset
+  packages/                    extra packages (directories or .ilpk), mounted at
+                               /packages/<id>
   storage/csim/                game settings, saves, user rule overlays
   storage/illed/               IllEd private storage
   storage/meshviewer/          IllMeshViewer private storage
 ```
 
-`app.json` carries `id`, `module`, optional `worker`, `title` (the window
-title), `launchAccess` (`"read"` or `"edit"`), `metering` (`"fuel"`, the
-default, or `"epoch"`) and requested `memoryMiB`, `fuelPerCall` (fuel only)
-and `deadlineMilliseconds`; with a `worker`, `workers` (lanes),
-`workerMemoryMiB` and `workerDeadlineMilliseconds`. Requests are clamped to
-host ceilings (lanes: at most 8 and two fewer than the hardware threads). The
-decoder is `decodeAppManifest` (`Illumo/Wasm/AppManifest.h`). The manifests
-live in the source tree as `IllumoGame/app.json`, `IllEd/app.json` and
-`IllMeshViewer/app.json`; all three are epoch-metered, and the game requests
-eight lanes. The old `game/` directory and `game.json` are gone.
+Each package's `illumo.json` (`format: "ilpk"`, `format_version: 1`)
+carries `id`, `version`, `title` (the window title) and `kind: "app"`; its
+`app` section names `module`, optional `worker`, `launchAccess` (`"read"` or
+`"edit"`), `metering` (`"fuel"`, the default, or `"epoch"`) and requested
+`memoryMiB`, `fuelPerCall` (fuel only) and `deadlineMilliseconds`; with a
+`worker`, `workers` (lanes), `workerMemoryMiB` and
+`workerDeadlineMilliseconds`. Requests are clamped to host ceilings (lanes:
+at most 8 and two fewer than the hardware threads). The decoder is
+`decodePackageManifest` (`Illumo/Content/PackageManifest.h`). The manifests
+live in the source tree as `IllumoGame/illumo.json`, `IllEd/illumo.json` and
+`IllMeshViewer/illumo.json`; all three are epoch-metered, and the game requests
+eight lanes. A package may be a directory or an `.ilpk` archive; the host
+mounts it at `/app` of its virtual file tree (with `packages/`, `--mount`
+and `--project` mounts beside it) and serves the guest's Package area and
+module bytes from there (`docs/content-packages-and-scenes-design.md`). The old `game/` directory and `game.json` are gone.
 
 - **Engine modes** (D-E15): compiled code depends on `WasmEngineOptions`
   (`meterFuel`, `explicitBounds`), which the host passes to the isolated
@@ -1369,9 +1381,22 @@ eight lanes. The old `game/` directory and `game.json` are gone.
   through their `IllEdPlatform` and `MeshViewerPlatform` seams. IllEd's
   save/open/close-confirm are asynchronous, its document keeps an opaque
   location plus a display label, and editing input is held while a transfer
-  is in flight; `.ilsc` is unchanged. The viewer reads mesh bytes and parses
-  them with `MeshLoader::loadFromMemory`. `IllEdCore` and
+  is in flight. Scenes load in three steps: collect references, fetch them
+  into the guest asset cache (`GuestSceneFetches`), then instantiate. The
+  viewer parses loose meshes with `MeshLoader::loadFromMemory` and opens
+  scenes from any mount (`viewer_open`). `IllEdCore` and
   `IllMeshViewerCore` remain only as native test oracles.
+- **Packages and files** (D-E20 to D-E24): the host mounts `/engine`, `/app`
+  (plus overlays), `/packages/<id>` (from `packages/` and `--mount`) and a
+  writable `/project` (`--project`) on one `VirtualFileSystem`. File protocol
+  v2 adds the `Mounted` area, `List`, `Stat`, `Import` and `Pack`, 1 MiB
+  mounted blocks and 16 guest tasks; `ProjectFiles` (bit 9) gates writes,
+  Import and Pack and is offered only with a project. The host `vfs` command
+  explores the tree, and in debug builds `files` browses it
+  (`IllumoContext::fileTree`). `GuestVfsAssets` serves guest asset bytes
+  from pinned preloads, held fetch sets and `/local` entries under an LRU
+  budget. IllumoGame merges `/packages/<id>/csim/*.json` catalogs before the
+  player's overlays.
 - **Frames**: schema version 2 adds the world camera, line and depth-tested
   batches, lit meshes (normals plus per-batch lighting) and shadow casters.
   The guest records its own shadow pass against a virtual depth target to
@@ -1433,7 +1458,10 @@ eight lanes. The old `game/` directory and `game.json` are gone.
   suites.
 - **Verification**: `IllumoGame.Wasm.GamePackage`, `IllEd.Wasm.Package` and
   `IllMeshViewer.Wasm.Package` drive the real packages through the generic
-  host, and `IllumoGame.Wasm.GamePackageLanes` runs the game on real lanes and
+  host; `IllEd.Wasm.ProjectPackage` places project assets and saves into
+  `/project`, `IllMeshViewer.Wasm.ScenePackage` opens a mounted package's
+  scene, and `IllumoGame.Wasm.CatalogMerge` merges package catalogs;
+  `IllumoGame.Wasm.GamePackageLanes` runs the game on real lanes and
   compares its save with a native serial reference;
   `IllumoGame.Wasm.LaneParity` checks every rule, both topologies and 1-3
   lanes (one-row bands, edits, retirement) plus large 4-lane worlds against
@@ -1477,6 +1505,8 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-UI3** | Console can be mounted or floating; floating mode supports title-bar drag and corner resize. |
 | **D-UI4** | Console is a plain tool with its own palette (not `UiTheme`), levelled/timestamped/collapsing output, view filters, scripts, log export, clipboard, and F-key bindings. |
 | **D-UI5** | Console can pop out into a separate `GLFW_NO_API` window drawn by `SoftwareCanvas` and presented by the platform; no second GL context. |
+| **D-UI6** | `GuiTextEdit` (UTF-8 caret, selection, clipboard) and `GuiFileTree` (non-recursive flattening of asynchronous listings) join `Illumo/Gui`; IllEd's inspector and asset browser and DebugModule's keyboard-only `files` browser use them. |
+| **D-UI7** | Tool UIs (IllEd, IllMeshViewer) use the plain `GuiToolStyle` look and one `GuiPanelDock` of detachable panels: left/right columns with splitters, title-bar hide/pop-out/dock, tear-off past the window edge, layout saved in the `panelLayout` setting. Panels are content renderers over a `GuiPanelPlacement` (rectangle plus surface) read through `GuiPanelPointer`, never knowing whether they are detached. Chrome keeps the tool metrics; `fontSize` scales panel content. No retained widget tree. |
 | **D-DOC1** | Established one first-party documentation tree; refined by D-DOC2. |
 | **D-DOC2** | Canonical technical documentation remains under `docs/`; `illumo.tex` is the prose book and `architecture-map.tex` the chart pack. Root/nested `AGENTS.md` and `.agent/` are operational-guidance exceptions. |
 | **D-T1** | Independent compile-efficient test runners expose exact cases; `IllumoWorkspace` aggregates all registered runners and combined Clang/LLVM coverage enforces at least 85% production line coverage across their linked production code. |
@@ -1513,6 +1543,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R24** | `AssetManager` reference-counts immutable static meshes and canonical file/options cache entries. `MeshVisual` borrows the managed `MeshHandle` and draw metadata, retaining only per-instance transform/tint/lighting state; procedural geometry remains visual-owned and dynamic. Automatic instancing remains a measured follow-up. |
 | **D-R25** | SceneGraphDrawable consumes one immutable graph-owned snapshot per renderer frame. Two reusable buffers, explicit invalidation, and per-callback validation protect borrowed content. Shared shadow relevance follows caster collection; token/backend contracts remain unchanged. |
 | **D-R26** | `GameVisual` adds `ShapeKind::GradientQuad`: convex, fan-ordered quads with one color per vertex (`addGradientQuad`/`addGradientRect`/`addGradientTriangle`), carried by the existing shape vertex format and shader. Soft UI chrome (gradients, glows, soft shadows, sheens, vignettes) is composed from these in `GuiKit`; no new shader, blur pass, or widget tree. Menu motion uses `GuiMenuShell` springs and curves. |
+| **D-R27** | Frame schema v5 adds up to eight UI-only surface batch lists with revisions (`same` when unchanged, one quota across the frame). The host replays a changed surface through `Renderer::renderOffscreen` into a per-window target and reads it back through a two-deep asynchronous stream (`IBackend::requestFramebufferReadback` / `takeFramebufferReadback`) for a `PixelWindow` present, one frame late. No second GL context (D-UI5). |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
 | **D-C2** | `CellGrid` domain + `Canvas` presentation; rulesets depend only on `CellGrid`. |
@@ -1553,9 +1584,10 @@ reuse one upload without introducing automatic instance aggregation. Overlay
 chrome stays on `GameVisual` with a screen ortho `uMVP` so HUD does not pan with
 the world camera.
 
-IllumoGame's persisted `render3dTest=1` flag replaces `CanvasView` with a
-`SceneGraph` of `MeshVisual` attachments and switches the product `Camera` to
-perspective look-at while the flag is on. It is a rendering smoke path only;
+IllumoGame's persisted `render3dTest=1` flag replaces `CanvasView` with the
+package scene `Scenes/render3d-test.ilsc`, instantiated through
+`SceneInstance` (the game animates its `orbit` and `child` nodes by id), and
+switches the product `Camera` to perspective look-at while the flag is on. It is a rendering smoke path only;
 simulation keeps running and the normal ortho canvas returns when the flag is
 disabled.
 
@@ -1609,7 +1641,7 @@ disabled.
 | **D-E7** | Illumo owns platform entry/dialogs, BuildInfo, SysCmdLine, logging lifetime, DebugModule composition, and the frame loop. IllumoGame contains only CA Game/Rulesets/configuration metadata and its required-module factory. |
 | **D-E8** | Illumo owns an additive persistent `SceneGraph` with generational graph-local handles, deterministic hierarchy/transform state, and borrowed token render attachments. |
 | **D-E9** | Debug `DebugModule` is a global overlay: optional modules update before the required product module and dispatch after it. Product input yields while the console is open. |
-| **D-E10** | `.ilsc` v1 is the editor-owned UTF-8 JSON scene interchange; SceneGraph does not serialize itself. |
+| **D-E10** | *Superseded by D-E18/D-E19.* `.ilsc` v1 was the editor-owned UTF-8 JSON scene interchange; SceneGraph does not serialize itself (still true). |
 | **D-E11** | Attachments may report conservative local AABBs; SceneGraph exposes world bounds and linearly camera-culls color extraction. Renderer retains and filters directional-shadow casters against a camera-frustum extrusion, failing open on invalid data. No spatial index or subtree cache is introduced. |
 | **D-E12** | SceneGraph v2 uses intrusive SoA/TRS state, lazy preorder, revision bounds, ordered attachments, interned names/payloads, a bounded journal, and derived query BVH. IllEd edits the graph incrementally. Supersedes the storage and linear-only limits of D-E8/D-E11; no ECS or persistence migration. |
 | **D-E13** | IllumoGame ships only as `IllumoGame.wasm`, hosted by the generic `IllumoRuntime.exe`. A guest-side `GuestModuleApplication` composes the `IllumoContext` inside the store; product I/O uses `CSimPlatform`; frame schema v2 carries the world camera, lit meshes and shadow casters. `IllumoGameCore` is only the native test oracle. Supersedes D-E7's IllumoGame seam (§5.12). |
@@ -1617,6 +1649,16 @@ disabled.
 | **D-E15** | Compiled WASM depends on `WasmEngineOptions` (fuel metering, explicit bounds) passed from the host to the isolated compiler; mismatched artifacts fail closed. Explicit guest bounds checks follow AddressSanitizer (`ILLUMO_ENABLE_ASAN`), not `_DEBUG`. Manifests choose `metering` `fuel` (default) or `epoch`; first-party packages are epoch-only, mods stay metered, `--fuel` forces metering. Build profiles `dev` (RelWithDebInfo) and `debug-noasan` sit beside the `debug` sanitizer profile (§5.12). |
 | **D-E16** | Frame schema v4: dynamic 2D meshes are host-retained, created ready and patched by per-frame `meshWrites` applied before the frame's batches; the guest sends only differing spans and falls back to inline geometry when a mesh changes after a by-reference draw in the same frame. Inline batches use per-style grow-only host slot pools. v1-v3 stay valid (§5.12). |
 | **D-E17** | IllumoGame generations run on up to eight isolated simulation lanes (`CSimWorkerGuest.wasm`, `LaneJob`/`JobLanes` services) owning interleaved eight-row chunk bands with one-row halos; the control store merges exact deltas, pipelines the next generation, and publishes through the unchanged path. Drains retire the outstanding generation instead of waiting (`SimulationRunner::canBlock()`). Lanes engage above 4 ms serial generations; elementary 1D rules, radii above 16 and failures stay serial. Completes milestone 6 of the game cutover (§5.12). |
+| **D-E18** | Optional `Illumo::Content` layer owns virtual paths, manifests, `.ilpk`, the virtual file tree, `.ilsc` and `SceneInstance`; core never includes it, it never depends on Wasm or a product; guests link `IllumoGuestContent`. Supersedes D-E10. |
+| **D-E19** | `.ilsc` format 2 is the one scene format (clean break from v1): settings with one environment, an asset table with package-relative or absolute virtual references, strict core components, verbatim namespaced data, canonical output; `SceneInstance` is the live incremental loader. |
+| **D-E20** | `.ilpk` is a bounded ZIP subset (stored/deflate, CRC-32, name and size checks); the host writer deflates through vendored `stb_image_write`. |
+| **D-E21** | One host `VirtualFileSystem`: `/engine`, `/app` with overlays, `/packages/<id>`, writable `/project`; immutable mount tables, case-exact lookups, no whiteouts, host paths never disclosed. |
+| **D-E22** | `illumo.json` (kinds `app`, `content`, `mod`) replaces `app.json`; `--app`/`--package` accept a directory or `.ilpk`. Refines D-E14. |
+| **D-E23** | File protocol v2: `Mounted` area, `List`, `Stat`, `Import`, `Pack`, 1 MiB mounted blocks, 16 guest tasks; `ProjectFiles` capability (bit 9) only with `--project`. |
+| **D-E24** | `GuestVfsAssets` replaces `GuestPackageAssets`: pinned preloads, held fetch sets, `/local` entries, LRU budget; `GuestSceneFetches` adds OBJ material libraries. |
+| **D-E25** | IllEd edits a format 2 document over `SceneInstance` with patch history (merged drags, count/byte caps, cursor-based dirty), a selection set, one shortcut table, gizmos, typed inspector, clipboard fragments, asset browser and project commands. |
+| **D-E26** | SceneGraph gains `setParent(node, parent, insertBefore)` for sibling order; nothing else in v2 changes. Refines D-E12. |
+| **D-E27** | `IPanelSurfaces` (`IllumoContext::panelSurfaces`) gives products extra top-level windows for detached panels: surface 0 is the main window, keys stay in one queue with `focused()`. Guests get it through the `Windows` capability (bit 10, granted opportunistically when the host can present windows), `GuestService::Window` (17) and input v2; `WasmPanelWindows` owns the windows. Hosts without windows (Linux, `--capture`, `--bench-*`, headless) omit it and products stay docked. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |

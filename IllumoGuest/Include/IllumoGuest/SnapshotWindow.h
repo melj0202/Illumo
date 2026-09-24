@@ -84,9 +84,18 @@ public:
   GLFWwindow* getWindowInstance() override { return nullptr; }
   std::array<int, 2> getWindowDimensions() override
   {
+    if (m_override[0] > 0 && m_override[1] > 0) {
+      return m_override;
+    }
     return { static_cast<int>(m_input.width),
              static_cast<int>(m_input.height) };
   }
+  // While a surface window records, the renderer lays out for its size.
+  void overrideDimensions(int width, int height)
+  {
+    m_override = { width, height };
+  }
+  void clearOverride() { m_override = { 0, 0 }; }
   bool shouldWindowClose() override { return m_close; }
   bool isFramePaced() const override { return false; }
   int getRefreshRate() const override { return 0; }
@@ -99,6 +108,7 @@ public:
 
 private:
   GuestInput m_input;
+  std::array<int, 2> m_override{ 0, 0 };
   bool m_close = false;
   GuestDisplay* m_display = nullptr;
   IEnvVars* m_environment = nullptr;

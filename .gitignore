@@ -1,6 +1,8 @@
 # Project runtime data
 *.illumo
 *.ilsc
+# Shipped product scenes are source, not runtime data.
+!IllumoGame/Scenes/*.ilsc
 
 
 # Compiler outputs

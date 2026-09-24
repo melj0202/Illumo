@@ -261,7 +261,8 @@ public:
     }
 
     tinyobj::ObjReader reader;
-    if (!reader.ParseFromString(fileContent, "", readerConfig)) {
+    if (!reader.ParseFromString(
+          fileContent, options.materialText, readerConfig)) {
       outResult->error = reader.Error();
       outResult->warning = reader.Warning();
       return false;
@@ -493,6 +494,46 @@ MeshLoader::loadFromMemory(const std::string& fileContent,
     result.error = "No active mesh loader backend";
   }
   return result;
+}
+
+std::vector<std::string>
+MeshLoader::materialLibraryNames(const std::string& objText)
+{
+  std::vector<std::string> names;
+  std::size_t start = 0;
+  while (start < objText.size()) {
+    std::size_t end = objText.find('\n', start);
+    if (end == std::string::npos) {
+      end = objText.size();
+    }
+    std::size_t first = start;
+    std::size_t last = end;
+    start = end + 1;
+    while (first < last && (objText[first] == ' ' || objText[first] == '\t')) {
+      ++first;
+    }
+    while (last > first &&
+           (objText[last - 1] == '\r' || objText[last - 1] == ' ' ||
+            objText[last - 1] == '\t')) {
+      --last;
+    }
+    if (last - first < 8 || objText.compare(first, 6, "mtllib") != 0 ||
+        (objText[first + 6] != ' ' && objText[first + 6] != '\t')) {
+      continue;
+    }
+    first += 7;
+    while (first < last && (objText[first] == ' ' || objText[first] == '\t')) {
+      ++first;
+    }
+    // OBJ files written on Windows commonly use '\'.
+    std::string name = objText.substr(first, last - first);
+    std::replace(name.begin(), name.end(), '\\', '/');
+    if (!name.empty() &&
+        std::find(names.begin(), names.end(), name) == names.end()) {
+      names.push_back(std::move(name));
+    }
+  }
+  return names;
 }
 
 void

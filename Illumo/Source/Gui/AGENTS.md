@@ -1,7 +1,10 @@
 # Illumo GUI Subsystem Guidance
 
 This directory contains the consolidated primitive-composed GUI toolkit for
-Illumo (`GuiKit`, `GuiDialog`, `GuiMenuShell`, `GridAtlas`, `GuiTypes`).
+Illumo (`GuiKit`, `GuiDialog`, `GuiMenuShell`, `GridAtlas`, `GuiTypes`,
+`GuiTextEdit`, `GuiFileTree`, `GuiToolStyle`, `GuiPanelDock`,
+`GuiPanelPointer`, `PanelSurfaces`). These sources also build into the guest
+engine.
 
 ## Invariants
 
@@ -35,5 +38,26 @@ Illumo (`GuiKit`, `GuiDialog`, `GuiMenuShell`, `GridAtlas`, `GuiTypes`).
   `GuiPanelLayout::viewport`.
 - `GuiMenuShell` owns no drawing, no input polling beyond pointer sampling, and
   no knowledge of product rows. Keep it that way.
+- Text entry goes through `GuiTextEdit` (UTF-8 caret and selection, clipboard
+  through the caller, characters from `InputManager::getCharQueue`) drawn by
+  `GuiKit::drawTextField`. Do not write another line editor.
+- Tree views go through `GuiFileTree`: it keeps expansion state and the
+  listings received so far and flattens them without recursion; the owner
+  lists directories itself (`takePendingListings`) from whatever source it
+  has. It never reads files.
+- Tool apps (IllEd, IllMeshViewer) draw with `GuiToolStyle`, the plain
+  tool look (D-UI7): its own neutral palette like the console's, flat
+  rectangles, lines and text only, fixed tool metrics, no animation. Do not
+  mix it with the glass `GuiKit` chrome in one window.
+- Tool panels live in a `GuiPanelDock`: it lays out the columns, splitters and
+  title bars, handles hide, pop-out, tear-off and dock, and serializes the
+  layout. It never draws content and keeps no widget tree. Panel content
+  draws into a `GuiPanelPlacement` and reads input through `GuiPanelPointer`,
+  which samples the main window or the placement's `IPanelSurfaces` window
+  and honours `inputBlocked`. Content code must not know whether it is
+  detached.
+- `IPanelSurfaces` (`PanelSurfaces.h`) is only an interface; implementations
+  live in the guest SDK (`GuestPanelSurfaces`) and `Illumo::TestSupport`
+  (`FakePanelSurfaces`). Products must work fully docked when it is absent.
 - Follow `docs/contributing.md`: avoid `auto`, avoid namespaces, keep ownership
   explicit, and format with Mozilla-style `clang-format`.

@@ -106,6 +106,7 @@ struct SceneGraph::Impl
   SceneNodeHandle handle(uint32_t slot) const;
   uint32_t nextSlot(uint32_t slot) const;
   void appendChild(uint32_t slot, uint32_t parentSlot);
+  void insertChildBefore(uint32_t slot, uint32_t parentSlot, uint32_t before);
   void detach(uint32_t slot);
   void record(SceneChangeKind kind, uint32_t slot);
   void structuralChange();
