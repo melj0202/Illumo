@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <array>
@@ -105,6 +106,10 @@ CanvasView::~CanvasView()
     renderer->destroyTexture(displayTextureHandle);
     displayTextureHandle = TextureHandle{};
   }
+  if (renderer != nullptr && cellQuadMesh.isValid()) {
+    renderer->destroyMesh(cellQuadMesh);
+    cellQuadMesh = MeshHandle{};
+  }
   gpuReady = false;
   delete[] texBuffer;
   delete[] displayRgb;
@@ -198,6 +203,13 @@ CanvasView::initializeGpuResources()
   textureOptions.filter = TextureFilter::Nearest;
   displayTextureHandle = renderer->enrollTexture(
     texBuffer, textureWidth, textureHeight, 3, textureOptions);
+  // One dynamic quad, rewritten in place when the cache moves, so it never
+  // waits on a fresh upload the way a re-enrolled static mesh would.
+  static const unsigned int kQuadIndices[6] = { 0, 1, 2, 2, 3, 0 };
+  cellQuadMesh = renderer->enrollDynamicMesh(sizeof(float) * 32u,
+                                             kQuadIndices,
+                                             sizeof(kQuadIndices),
+                                             MeshVertexLayout::Pos3Color3Uv2);
   gpuReady = true;
   if (displayTextureHandle.isValid()) {
     Logger::LogTrace(
@@ -429,16 +441,27 @@ CanvasView::rebuildWorldQuad()
   const float v0 =
     static_cast<float>(activeViewHeight) / static_cast<float>(textureHeight);
   visual.clearPrimitives();
-  visual.addSprite(displayTextureHandle,
-                   worldLeft,
-                   worldBottom,
-                   static_cast<float>(cacheCellWidth) * kCellSize,
-                   static_cast<float>(cacheCellHeight) * kCellSize,
-                   ColorRgba{ 255, 255, 255, 255 },
-                   0.0f,
-                   v0,
-                   u1,
-                   0.0f);
+  // Bottom-left, bottom-right, top-right, top-left: position, white, UV. The
+  // texture's first row is the top of the cache.
+  const float worldRight =
+    worldLeft + static_cast<float>(cacheCellWidth) * kCellSize;
+  const float corners[4][4] = { { worldLeft, worldBottom, 0.0f, v0 },
+                                { worldRight, worldBottom, u1, v0 },
+                                { worldRight, worldTop, u1, 0.0f },
+                                { worldLeft, worldTop, 0.0f, 0.0f } };
+  for (int corner = 0; corner < 4; ++corner) {
+    float* vertex = cellQuadVertices.data() + corner * 8;
+    vertex[0] = corners[corner][0];
+    vertex[1] = corners[corner][1];
+    vertex[2] = 0.0f;
+    vertex[3] = 1.0f;
+    vertex[4] = 1.0f;
+    vertex[5] = 1.0f;
+    vertex[6] = corners[corner][2];
+    vertex[7] = corners[corner][3];
+  }
+  cellQuadReady = true;
+  cellQuadDirty = true;
   if (worldChunkWidth > 0 && worldChunkHeight > 0) {
     const std::int64_t minimumCellX =
       -(worldChunkWidth / 2) * SparseCellGrid::kChunkDim;
@@ -1716,7 +1739,8 @@ CanvasView::AppendCommands(Renderer* activeRenderer)
   visual.setRenderer(activeRenderer);
   visual.setVisible(isVisible());
   if (bottomInsetPixels == 0 || window == nullptr) {
-    return visual.AppendCommands(activeRenderer);
+    const bool cellsAppended = emitCellQuad(activeRenderer);
+    return visual.AppendCommands(activeRenderer) && cellsAppended;
   }
   const std::array<int, 2> dimensions = window->getWindowDimensions();
   const std::array<int, 4> viewport = activeRenderer->getCurrentPassViewport();
@@ -1727,7 +1751,51 @@ CanvasView::AppendCommands(Renderer* activeRenderer)
     viewport[3]);
   activeRenderer->pushScissor(
     true, viewport[0], viewport[1] + inset, viewport[2], viewport[3] - inset);
+  const bool cellsAppended = emitCellQuad(activeRenderer);
   const bool appended = visual.AppendCommands(activeRenderer);
   activeRenderer->pushScissor(false, 0, 0, 0, 0);
-  return appended;
+  return appended && cellsAppended;
+}
+
+bool
+CanvasView::emitCellQuad(Renderer* activeRenderer)
+{
+  if (!cellQuadReady || !cellQuadMesh.isValid() ||
+      !displayTextureHandle.isValid()) {
+    return true;
+  }
+  if (cellQuadDirty) {
+    cellQuadDirty = !activeRenderer->pushUpdateBuffer(
+      cellQuadMesh,
+      0,
+      static_cast<unsigned int>(sizeof(float) * cellQuadVertices.size()),
+      cellQuadVertices.data());
+  }
+  if (!activeRenderer->bindStyle(RenderStyleId::Canvas)) {
+    return false;
+  }
+  // The world camera's matrix, as GameVisual computes it for world space.
+  float mvp[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+  const Renderer::FrameContext& frame = activeRenderer->getFrameContext();
+  if (frame.active && window != nullptr &&
+      window == activeRenderer->getWindow() && frame.hasWorldMvp &&
+      frame.worldCamera == camera) {
+    std::memcpy(mvp, frame.worldMvp.data(), sizeof(mvp));
+  } else if (camera != nullptr && window != nullptr) {
+    const std::array<int, 2> dimensions =
+      frame.active && window == activeRenderer->getWindow()
+        ? frame.windowDimensions
+        : window->getWindowDimensions();
+    const float aspect = static_cast<float>(dimensions[0]) /
+                         static_cast<float>(std::max(1, dimensions[1]));
+    const glm::mat4 matrix = camera->GetMVPMatrix(aspect);
+    std::memcpy(mvp, &matrix[0][0], sizeof(mvp));
+  }
+  activeRenderer->pushSetMesh(cellQuadMesh);
+  activeRenderer->pushUniformMat4(WorldLook::kMvpUniform, mvp);
+  activeRenderer->pushUniformInt(WorldLook::kTextureUniform,
+                                 WorldLook::kTextureUnit);
+  activeRenderer->pushSetTexture(displayTextureHandle, WorldLook::kTextureUnit);
+  activeRenderer->pushDrawIndexed(6u, 0u);
+  return true;
 }

@@ -5,6 +5,7 @@
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -84,6 +85,12 @@ public:
 
   GameVisual& getVisual() { return visual; }
   const GameVisual& getVisual() const { return visual; }
+  // The cell quad: bottom-left, bottom-right, top-right, top-left, each x, y,
+  // z, r, g, b, u, v (Pos3Color3Uv2).
+  const std::array<float, 32>& getCellQuadVertices() const
+  {
+    return cellQuadVertices;
+  }
 
   CellAddress getVisibleCell(int x, int y) const;
   const unsigned char* getDisplayTexBuffer() const { return texBuffer; }
@@ -176,6 +183,15 @@ private:
 
   GameVisual visual;
   TextureHandle displayTextureHandle{};
+  // The cells draw as one quad in the canvas layout through the Canvas style
+  // (its shader tiles and lights each cell); the visual keeps the world
+  // boundary. Vertices are position, white RGB and UV; they stay valid
+  // through submission.
+  MeshHandle cellQuadMesh{};
+  std::array<float, 32> cellQuadVertices{};
+  bool cellQuadDirty = false;
+  bool cellQuadReady = false;
+  bool emitCellQuad(Renderer* activeRenderer);
   bool gpuReady;
   bool fadeActive;
   bool textureUploadPending;

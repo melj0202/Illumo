@@ -2147,24 +2147,27 @@ testCanvasViewUsesWorldCellQuad()
              view.getVisual().shapeCount(),
              0u,
              "infinite canvas has no finite-world boundary");
-  SpritePrimitive* sprite = view.getVisual().getSprite(0);
-  testTrue(g, sprite != nullptr, "CanvasView owns one display sprite");
-  if (sprite != nullptr) {
+  testEqSize(g,
+             view.getVisual().spriteCount(),
+             0u,
+             "cells draw as the canvas-style quad, not a visual sprite");
+  const std::array<float, 32>& quad = view.getCellQuadVertices();
+  {
     const CellAddress cacheFirst = view.getCacheFirstCell();
     const float expectedX = static_cast<float>(cacheFirst.x) * 16.0f - 8.0f;
     const float expectedTop = static_cast<float>(cacheFirst.y) * 16.0f + 8.0f;
     const float expectedHeight =
       static_cast<float>(view.getCacheCellHeight()) * 16.0f;
+    const float expectedWidth =
+      static_cast<float>(view.getCacheCellWidth()) * 16.0f;
+    // Corners: bottom-left, bottom-right, top-right, top-left.
     testTrue(g,
-             sprite->rect.x == expectedX &&
-               sprite->rect.y == expectedTop - expectedHeight &&
-               sprite->rect.w ==
-                 static_cast<float>(view.getCacheCellWidth()) * 16.0f &&
-               sprite->rect.h == expectedHeight,
-             "display sprite follows padded cache cell boundaries");
+             quad[0] == expectedX && quad[1] == expectedTop - expectedHeight &&
+               quad[16] == expectedX + expectedWidth && quad[17] == expectedTop,
+             "cell quad follows padded cache cell boundaries");
     testTrue(g,
-             sprite->region.v0 == 1.0f && sprite->region.v1 == 0.0f,
-             "display sprite keeps world-up rows upright");
+             quad[7] == 1.0f && quad[31] == 0.0f,
+             "cell quad keeps world-up rows upright");
   }
 
   SparseCellGrid finiteGrid(4, 2);
