@@ -182,17 +182,18 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
   animator.restart();
   // Ignore a held click that opened the modal until its first release.
   pointer.reset(true);
+  tilt.level();
   openState = true;
   setVisible(true);
   updateLayout();
-  rowFocus.configure(3.0f, 0.7f);
+  rowFocus.configure(GuiMotion::kJelly);
   rowFocus.focusOnly(selectedRow, kRowCount);
   rowFocus.snapAll();
-  toggleKnobs.configure(3.4f, 0.62f);
+  toggleKnobs.configure(GuiMotion::kBoing);
   for (int row = 0; row < kRowCount; ++row) {
     toggleKnobs.snap(row, toggleValue(row) ? 1.0f : 0.0f);
   }
-  scrollThumb.configure(3.0f, 0.9f);
+  scrollThumb.configure(GuiMotion::kGlide);
   scrollThumb.snapTo(static_cast<float>(firstVisibleRow));
 }
 
@@ -236,6 +237,12 @@ ConfigurationMenu::updateSprings(float deltaSeconds)
   toggleKnobs.tick(deltaSeconds, still);
   scrollThumb.setTarget(static_cast<float>(firstVisibleRow));
   scrollThumb.tick(deltaSeconds, still);
+  tilt.aim(pointer.x(),
+           pointer.y(),
+           panelFit.virtualWidth,
+           panelFit.virtualHeight,
+           openState);
+  tilt.tick(deltaSeconds, still);
 }
 
 void
@@ -307,8 +314,12 @@ ConfigurationMenu::updateLayout()
   if (panelHeight > virtualHeight) {
     panelHeight = virtualHeight;
   }
-  panelX = std::max(0.0f, (virtualWidth - panelWidth) * 0.5f);
-  panelY = std::max(0.0f, (virtualHeight - panelHeight) * 0.5f);
+  // The layout origin swivels with the body layer, so hit testing and
+  // drawing agree while the panel tilts toward the pointer.
+  panelX =
+    std::max(0.0f, (virtualWidth - panelWidth) * 0.5f) + tilt.bodyShiftX();
+  panelY =
+    std::max(0.0f, (virtualHeight - panelHeight) * 0.5f) + tilt.bodyShiftY();
 
   const float headerHeight = panelHeight >= 400.0f
                                ? 104.0f
@@ -329,7 +340,8 @@ ConfigurationMenu::selectRow(int row)
 {
   const int nextRow = std::clamp(row, 0, kRowCount - 1);
   if (nextRow != selectedRow) {
-    animator.beginSelectionTravel(selectionRowPosition());
+    animator.beginSelectionTravel(static_cast<float>(selectedRow),
+                                  static_cast<float>(nextRow));
     selectedRow = nextRow;
     animator.resetCaret();
   }
@@ -527,7 +539,7 @@ ConfigurationMenu::cycleSelected(int direction)
     changed = true;
   }
   if (changed) {
-    animator.triggerValuePulse();
+    animator.triggerValuePulse(direction);
   }
   replaceFieldOnType = true;
   errorMessage.clear();
@@ -731,8 +743,14 @@ ConfigurationMenu::rebuildVisual()
   glass.ambientPhase = animator.ambientPhase();
   glass.glow = 0.35f + 0.3f * breathe;
   glass.accentReveal = reveal;
-  GuiKit::drawGlassPanel(
-    visual, panelX, animatedPanelY, panelWidth, panelHeight, glass);
+  tilt.applyTo(glass);
+  GuiKit::drawGlassPanel(visual,
+                         panelX + tilt.layerX(GuiPanelTilt::kGlassDepth),
+                         animatedPanelY +
+                           tilt.layerY(GuiPanelTilt::kGlassDepth),
+                         panelWidth,
+                         panelHeight,
+                         glass);
 
   // Header rule: a cyan-to-violet hairline that draws out on open.
   const float ruleWidth = (panelWidth - 40.0f) * reveal;
@@ -799,31 +817,35 @@ ConfigurationMenu::rebuildVisual()
                                : std::clamp(footerHeight * 0.30f, 9.0f, 13.0f);
 
   const float headerSlide = (1.0f - reveal) * 10.0f;
+  // The header floats nearer than the rows and swings further with the tilt.
+  const float headerX = panelX + tilt.layerX(GuiPanelTilt::kHeaderDepth);
+  const float headerY =
+    animatedPanelY + tilt.layerY(GuiPanelTilt::kHeaderDepth);
   if (headerHeight >= 90.0f) {
     visual.addText("M A K E   I T   Y O U R S",
-                   panelX + 28.0f - headerSlide,
-                   animatedPanelY + 16.0f,
+                   headerX + 28.0f - headerSlide,
+                   headerY + 16.0f,
                    10.0f,
                    UiTheme::applyOpacity(cyan, panelOpacity));
   }
   visual.addText("SIMULATOR SETTINGS",
-                 panelX + 28.0f - headerSlide * 0.6f,
-                 animatedPanelY + (panelHeight >= 400.0f
-                                     ? 34.0f
-                                     : std::max(4.0f, headerHeight * 0.10f)),
+                 headerX + 28.0f - headerSlide * 0.6f,
+                 headerY + (panelHeight >= 400.0f
+                              ? 34.0f
+                              : std::max(4.0f, headerHeight * 0.10f)),
                  titleFontSize,
                  UiTheme::applyOpacity(UiTheme::textPrimary(), panelOpacity));
   const ColorRgba secondaryText = UiTheme::textSecondary();
   if (headerHeight >= 60.0f) {
     visual.addText("UP/DOWN: select   LEFT/RIGHT: change   TYPE: edit",
-                   panelX + 28.0f,
-                   animatedPanelY +
+                   headerX + 28.0f,
+                   headerY +
                      (panelHeight >= 400.0f ? 65.0f : headerHeight * 0.48f),
                    subFontSize,
                    UiTheme::applyOpacity(secondaryText, panelOpacity));
     visual.addText("SCROLL / PGDN: more   ENTER: activate   ESC: discard",
-                   panelX + 28.0f,
-                   animatedPanelY +
+                   headerX + 28.0f,
+                   headerY +
                      (panelHeight >= 400.0f ? 82.0f : headerHeight * 0.72f),
                    subFontSize,
                    UiTheme::applyOpacity(UiTheme::textMuted(), panelOpacity));
@@ -928,64 +950,45 @@ ConfigurationMenu::rebuildVisual()
       UiTheme::applyOpacity(UiTheme::cardBottom(), rowOpacity));
   }
 
-  // The selection pill stretches between rows while travelling, clamped to
-  // the visible window, and sweeps a sheen when it lands.
+  // The selection pours between rows like a drop of liquid, clamped to the
+  // visible window, and sweeps a sheen when it lands.
   const float windowTop = static_cast<float>(firstVisibleRow);
   const float windowBottom =
     static_cast<float>(firstVisibleRow + visibleRows - 1);
   const GuiSelectionSpan span =
     animator.selectionSpan(static_cast<float>(selectedRow));
-  const float spanTop =
-    std::clamp(std::min(span.leading, span.trailing), windowTop, windowBottom);
-  const float spanBottom =
-    std::clamp(std::max(span.leading, span.trailing), windowTop, windowBottom);
-  const float selectionY =
-    animatedFirstRowY + rowHeight * (spanTop - windowTop);
-  const float selectionHeight = rowHeight * (spanBottom - spanTop) + cardHeight;
   const bool selectionVisible = selectedRow >= firstVisibleRow &&
                                 selectedRow < firstVisibleRow + visibleRows;
   const unsigned char selectionOpacity =
     selectionVisible
       ? static_cast<unsigned char>(std::round(rowReveal(selectedRow) * 255.0f))
       : 0;
-  GuiKit::drawRoundedBand(
-    visual,
-    cardX,
-    selectionY,
-    cardWidth,
-    selectionHeight,
-    8.0f,
-    0.0f,
-    9.0f + 3.0f * breathe,
-    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.18f + 0.1f * breathe),
-                          selectionOpacity),
-    UiTheme::transparentOf(cyan));
-  GuiKit::drawRoundedRect(
-    visual,
-    cardX,
-    selectionY,
-    cardWidth,
-    selectionHeight,
-    8.0f,
-    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), selectionOpacity));
-  GuiKit::drawRoundedGradientRect(
-    visual,
-    cardX + 1.0f,
-    selectionY + 1.0f,
-    cardWidth - 2.0f,
-    selectionHeight - 2.0f,
-    7.0f,
-    UiTheme::applyOpacity(UiTheme::selectionTop(), selectionOpacity),
-    UiTheme::applyOpacity(UiTheme::selectionBottom(), selectionOpacity));
-  GuiKit::drawSheen(
-    visual,
-    cardX,
-    selectionY,
-    cardWidth,
-    selectionHeight,
-    8.0f,
-    animator.selectionSheen(),
-    UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 38 }, selectionOpacity));
+  GuiLiquidSelection drop;
+  drop.crossStart = cardX;
+  drop.crossSize = cardWidth;
+  drop.headStart =
+    animatedFirstRowY +
+    rowHeight * (std::clamp(span.leading, windowTop, windowBottom) - windowTop);
+  drop.tailStart =
+    animatedFirstRowY +
+    rowHeight *
+      (std::clamp(span.trailing, windowTop, windowBottom) - windowTop);
+  drop.cellLength = cardHeight;
+  drop.radius = 8.0f;
+  drop.squash = span.squash;
+  drop.glowSpread = 9.0f + 3.0f * breathe;
+  drop.glow = UiTheme::applyOpacity(UiTheme::fade(cyan, 0.18f + 0.1f * breathe),
+                                    selectionOpacity);
+  drop.rim =
+    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), selectionOpacity);
+  drop.faceTop =
+    UiTheme::applyOpacity(UiTheme::selectionTop(), selectionOpacity);
+  drop.faceBottom =
+    UiTheme::applyOpacity(UiTheme::selectionBottom(), selectionOpacity);
+  drop.sheen = animator.selectionSheen();
+  drop.sheenColor =
+    UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 38 }, selectionOpacity);
+  GuiKit::drawLiquidSelection(visual, drop);
 
   for (int row = firstVisibleRow; row < firstVisibleRow + visibleRows; ++row) {
     const float y =
@@ -1027,10 +1030,13 @@ ConfigurationMenu::rebuildVisual()
           UiTheme::transparentOf(cyan));
       }
       if (isToggleRow(row)) {
-        // The track keeps its 36x16 pill; the knob glides on a spring and
-        // the track warms toward the accent as it travels.
-        const float knob = std::clamp(toggleKnobs.value(row), -0.1f, 1.1f);
+        // The track keeps its 36x16 pill; the knob boings across on a
+        // spring, stretching like a droplet while it moves, and the track
+        // warms toward the accent as it travels.
+        const float knob = std::clamp(toggleKnobs.value(row), -0.2f, 1.2f);
         const float lit = std::clamp(knob, 0.0f, 1.0f);
+        const float knobStretch =
+          std::min(7.0f, std::abs(toggleKnobs.velocity(row)) * 0.6f);
         const float toggleX = panelX + panelWidth - 75.0f;
         const float toggleY = y + (rowHeight - 20.0f) * 0.5f;
         if (lit > 0.01f) {
@@ -1057,10 +1063,10 @@ ConfigurationMenu::rebuildVisual()
                                 rowOpacity));
         GuiKit::drawRoundedRect(
           visual,
-          toggleX + 3.0f + 18.0f * knob,
-          toggleY + 3.0f,
-          10.0f,
-          10.0f,
+          toggleX + 3.0f + 18.0f * knob - knobStretch * 0.5f,
+          toggleY + 3.0f + knobStretch * 0.12f,
+          10.0f + knobStretch,
+          10.0f - knobStretch * 0.24f,
           5.0f,
           UiTheme::applyOpacity(UiTheme::textPrimary(), rowOpacity));
       }
@@ -1079,16 +1085,21 @@ ConfigurationMenu::rebuildVisual()
       : row == kCancelRow
         ? UiTheme::warning()
         : UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped);
+    // A stepped value springs a few pixels the way it moved and bounces back.
+    const float valueX =
+      valueColumnX + (selected && row < kApplyRow && !isToggleRow(row)
+                        ? 5.0f * animator.valueWobble()
+                        : 0.0f);
     visual.addText(values[row],
-                   valueColumnX,
+                   valueX,
                    textY,
                    rowFontSize,
                    UiTheme::applyOpacity(valueColor, rowOpacity));
     const bool caretVisible = animator.caretVisible();
     if (selected && textField && caretVisible) {
-      const float caretX = std::min(
-        GuiKit::caretOriginAfterText(values[row], valueColumnX, rowFontSize),
-        panelX + panelWidth - 31.0f);
+      const float caretX =
+        std::min(GuiKit::caretOriginAfterText(values[row], valueX, rowFontSize),
+                 panelX + panelWidth - 31.0f);
       visual.addText("|",
                      caretX,
                      textY,

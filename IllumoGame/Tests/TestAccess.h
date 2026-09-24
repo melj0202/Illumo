@@ -14,6 +14,14 @@ public:
   {
     return module.m_paintPaletteReveal;
   }
+  static ModeBadge& getModeBadge(CellGameModule& module)
+  {
+    return module.modeBadge;
+  }
+  static float getPaintPaletteWidthMorph(const CellGameModule& module)
+  {
+    return module.m_paintPaletteWidthMorph.value();
+  }
   static unsigned char getPaintBrush(const CellGameModule& module)
   {
     return module.m_paintBrush;

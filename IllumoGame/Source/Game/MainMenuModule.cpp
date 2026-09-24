@@ -78,13 +78,15 @@ MainMenuModule::Start(IllumoContext* context)
   }
   seedAmbientPattern();
 
-  m_rowEmphasis.configure(2.6f, 0.62f);
-  m_recede.configure(2.2f, 0.9f);
-  m_parallaxX.configure(0.9f, 1.0f);
-  m_parallaxY.configure(0.9f, 1.0f);
-  m_spotX.configure(2.4f, 0.85f);
-  m_spotY.configure(2.4f, 0.85f);
-  m_spotStrength.configure(1.2f, 1.0f);
+  m_rowEmphasis.configure(GuiMotion::kJelly);
+  m_recede.configure(GuiMotion::kSwell);
+  // The world and the spotlight follow the pointer like a current: lazily,
+  // with a little slosh when it stops.
+  m_parallaxX.configure(GuiMotion::kDrift);
+  m_parallaxY.configure(GuiMotion::kDrift);
+  m_spotX.configure(GuiMotion::kDrift);
+  m_spotY.configure(GuiMotion::kDrift);
+  m_spotStrength.configure(GuiMotion::kSwell);
   m_motif.resetGlider(7, 7, 1, 1);
 
   m_configurationMenu =
@@ -264,8 +266,10 @@ MainMenuModule::updateLayout()
   m_panelWidth = std::min(680.0f, virtualWidth - 100.0f);
   m_panelHeight = std::min(600.0f, virtualHeight - 24.0f);
   m_panelX = (virtualWidth - m_panelWidth) * 0.5f;
-  const float reveal = entranceReveal();
-  m_panelY = (virtualHeight - m_panelHeight) * 0.5f + 12.0f * (1.0f - reveal);
+  // The panel drops in on a spring, dipping just past center before it
+  // floats back up.
+  m_panelY =
+    (virtualHeight - m_panelHeight) * 0.5f + m_animator.panelOffsetY() * 0.6f;
   m_itemWidth = m_panelWidth - 56.0f;
   const float headerHeight =
     140.0f + 48.0f * std::clamp((m_panelHeight - 456.0f) / 144.0f, 0.0f, 1.0f);
@@ -289,12 +293,6 @@ MainMenuModule::reducedMotion() const
          ic->envVars->getVar("reducedUiMotion").valueAsBool;
 }
 
-float
-MainMenuModule::itemPosition() const
-{
-  return m_animator.selectionPosition(static_cast<float>(m_selectedItem));
-}
-
 void
 MainMenuModule::selectItem(int item)
 {
@@ -305,7 +303,8 @@ MainMenuModule::selectItem(int item)
     nextItem = 0;
   }
   if (nextItem != m_selectedItem) {
-    m_animator.beginSelectionTravel(itemPosition());
+    m_animator.beginSelectionTravel(static_cast<float>(m_selectedItem),
+                                    static_cast<float>(nextItem));
     m_selectedItem = nextItem;
   }
 }
@@ -360,6 +359,10 @@ MainMenuModule::updateMotion(float dt)
     m_parallaxY.setTarget(0.0f);
   }
   m_spotStrength.setTarget(pointerInside ? 1.0f : 0.0f);
+  // The panel swivels toward the pointer and swings back level when the
+  // pointer leaves or an overlay takes over.
+  m_tilt.aim(pointerX, pointerY, width, height, pointerInside);
+  m_tilt.tick(dt, still);
   m_parallaxX.tick(dt, still);
   m_parallaxY.tick(dt, still);
   m_spotX.tick(dt, still);
@@ -430,6 +433,18 @@ MainMenuModule::activateSelectedItem()
     default:
       break;
   }
+}
+
+std::array<float, 4>
+MainMenuModule::itemHitBoundsForTesting(int item) const
+{
+  return std::array<float, 4>{
+    m_panelX + m_tilt.shiftX(GuiPanelTilt::kBodyDepth) + 28.0f,
+    m_firstItemY + m_tilt.shiftY(GuiPanelTilt::kBodyDepth) +
+      static_cast<float>(item) * (m_itemHeight + 8.0f),
+    m_itemWidth,
+    m_itemHeight
+  };
 }
 
 void
@@ -642,9 +657,11 @@ MainMenuModule::Update(double dt)
                  event.key == KeyCode::Tab) {
         selectItem(m_selectedItem + 1);
       } else if (event.key == KeyCode::Enter || event.key == KeyCode::Space) {
-        const float rowY = m_firstItemY + static_cast<float>(m_selectedItem) *
-                                            (m_itemHeight + 8.0f);
-        pressItem(m_panelX + 28.0f + m_itemWidth * 0.5f,
+        const float rowY =
+          m_firstItemY + m_tilt.shiftY(GuiPanelTilt::kBodyDepth) +
+          static_cast<float>(m_selectedItem) * (m_itemHeight + 8.0f);
+        pressItem(m_panelX + m_tilt.shiftX(GuiPanelTilt::kBodyDepth) + 28.0f +
+                    m_itemWidth * 0.5f,
                   rowY + m_itemHeight * 0.5f);
         activateSelectedItem();
         activated = true;
@@ -669,11 +686,14 @@ MainMenuModule::Update(double dt)
     const float mouseX = m_pointer.x();
     const float mouseY = m_pointer.y();
 
-    const float itemX = m_panelX + 28.0f;
+    // Rows are hit where they are drawn, tilt included.
+    const float itemX =
+      m_panelX + m_tilt.shiftX(GuiPanelTilt::kBodyDepth) + 28.0f;
     const float itemGap = 8.0f;
     for (int i = 0; i < kItemCount; ++i) {
       const float currentItemY =
-        m_firstItemY + static_cast<float>(i) * (m_itemHeight + itemGap);
+        m_firstItemY + m_tilt.shiftY(GuiPanelTilt::kBodyDepth) +
+        static_cast<float>(i) * (m_itemHeight + itemGap);
       if ((m_pointer.moved() || m_pointer.clicked()) && mouseX >= itemX &&
           mouseX <= itemX + m_itemWidth && mouseY >= currentItemY &&
           mouseY <= currentItemY + m_itemHeight) {
@@ -771,8 +791,8 @@ MainMenuModule::drawBackground(float width, float height, float reveal)
 {
   const float ambient = m_animator.ambientPhase();
   const float phase = ambient * 0.52359877f;
-  const float leanX = m_parallaxX.value();
-  const float leanY = m_parallaxY.value();
+  const float leanX = std::clamp(m_parallaxX.value(), -1.3f, 1.3f);
+  const float leanY = std::clamp(m_parallaxY.value(), -1.3f, 1.3f);
 
   // The live Immigration world shows through a translucent tint; a radial
   // scrim darkens the corners so the panel sits in a pool of light.
@@ -785,8 +805,10 @@ MainMenuModule::drawBackground(float width, float height, float reveal)
                        ColorRgba{ 2, 4, 11, 232 },
                        0.34f);
 
-  // Three slow aurora glows drift on the ambient cycle and lean against the
-  // pointer at different depths.
+  // Three slow aurora glows drift like lava-lamp blobs: each squeezes along
+  // one axis while it swells along the other, and they lean against the
+  // pointer at different depths. Every rate is a whole number of cycles per
+  // ambient period, so nothing jumps when the cycle wraps.
   const ColorRgba tints[3] = { UiTheme::accentCool(),
                                UiTheme::accentViolet(),
                                ColorRgba{ 40, 120, 210, 255 } };
@@ -797,26 +819,33 @@ MainMenuModule::drawBackground(float width, float height, float reveal)
                      std::sin(phase + seed * 2.1f) * width * 0.06f -
                      leanX * depths[light];
     const float cy = height * (0.28f + 0.2f * static_cast<float>(light % 2)) +
-                     std::cos(phase * 0.8f + seed * 1.3f) * height * 0.08f -
+                     std::cos(phase + seed * 1.3f) * height * 0.08f -
                      leanY * depths[light];
-    const float swell = 1.0f + 0.08f * std::sin(phase * 1.7f + seed);
+    const float squeeze = std::sin(phase * 2.0f + seed * 1.9f);
+    const float swell = 1.0f + 0.06f * std::sin(phase * 3.0f + seed);
     GuiKit::drawSoftGlow(
       m_menuVisual,
       cx,
       cy,
-      width * 0.34f * swell,
-      height * 0.52f * swell,
+      width * 0.34f * swell * (1.0f + 0.12f * squeeze),
+      height * 0.52f * swell * (1.0f - 0.1f * squeeze),
       UiTheme::fade(tints[light], (light == 2 ? 0.12f : 0.16f) * reveal),
       20);
   }
 
-  const float spot = m_spotStrength.value();
+  const float spot = std::clamp(m_spotStrength.value(), 0.0f, 1.0f);
   if (spot > 0.01f) {
+    // The spotlight is a blob of light: it smears along its motion and
+    // thins across it, then rounds out again when the pointer rests.
+    const float smearX =
+      std::min(0.45f, std::abs(m_spotX.velocity()) / 1400.0f);
+    const float smearY =
+      std::min(0.45f, std::abs(m_spotY.velocity()) / 1400.0f);
     GuiKit::drawSoftGlow(m_menuVisual,
                          m_spotX.value(),
                          m_spotY.value(),
-                         150.0f,
-                         150.0f,
+                         150.0f * (1.0f + smearX - 0.4f * smearY),
+                         150.0f * (1.0f + smearY - 0.4f * smearX),
                          UiTheme::fade(UiTheme::accentCool(), 0.1f * spot),
                          20);
   }
@@ -828,12 +857,16 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
   const ColorRgba cyan = UiTheme::accentCool();
   const bool still = reducedMotion();
   const float ambient = m_animator.ambientPhase();
+  // The title floats nearer than the glass, so it swings further as the
+  // panel tilts toward the pointer.
+  const float panelX = m_panelX + m_tilt.shiftX(GuiPanelTilt::kHeaderDepth);
+  const float panelY = m_panelY + m_tilt.shiftY(GuiPanelTilt::kHeaderDepth);
   const float eyebrowReveal =
     still ? 1.0f : GuiEasing::outCubic(m_revealElapsed / 0.5f);
   m_menuVisual.addText(
     "C E L L U L A R   P L A Y G R O U N D",
-    m_panelX + 30.0f - 8.0f * (1.0f - eyebrowReveal),
-    m_panelY + 23.0f,
+    panelX + 30.0f - 8.0f * (1.0f - eyebrowReveal),
+    panelY + 23.0f,
     9.0f + room * 2.0f,
     UiTheme::applyOpacity(UiTheme::fade(cyan, eyebrowReveal), opacity));
 
@@ -856,24 +889,28 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
     }
     m_titleRasterSize = rasterSize;
   }
-  // Each letter drops in on its own overshooting curve, then breathes with
-  // a gentle bob that ripples across the word.
+  // Each letter falls in like a drop and bounces as it lands, then the word
+  // floats on a slow swell that ripples from letter to letter.
   const char* letters[4] = { "C", "S", "I", "M" };
-  const float titleX = m_panelX + 28.0f;
-  const float titleY = m_panelY + 43.0f;
+  const float titleX = panelX + 28.0f;
+  const float titleY = panelY + 43.0f;
   float advance = 0.0f;
   for (int letter = 0; letter < 4; ++letter) {
     const float start = kTitleLetterDelaySeconds +
                         static_cast<float>(letter) * kTitleLetterStaggerSeconds;
     const float progress =
       still ? 1.0f : (m_revealElapsed - start) / kTitleLetterSeconds;
-    const float landed = still ? 1.0f : GuiEasing::outBack(progress, 1.6f);
+    const float landed = still
+                           ? 1.0f
+                           : GuiEasing::springStep(m_revealElapsed - start,
+                                                   kTitleLetterBounceHz,
+                                                   kTitleLetterBounceDamping);
     const float fade = std::clamp(progress * 2.2f, 0.0f, 1.0f);
     const float bob =
       still
         ? 0.0f
         : std::sin(ambient * 2.0943951f - static_cast<float>(letter) * 0.9f) *
-            1.5f * std::clamp(progress - 1.0f, 0.0f, 1.0f);
+            2.2f * std::clamp(progress - 1.0f, 0.0f, 1.0f);
     const float size = titleSize * (0.82f + 0.18f * landed);
     const float letterWidth =
       m_titleFont != nullptr
@@ -915,8 +952,8 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
     still ? 1.0f : GuiEasing::outCubic((m_revealElapsed - 0.3f) / 0.45f);
   m_menuVisual.addText(
     "Small rules. Endless possibilities.",
-    m_panelX + 30.0f,
-    m_panelY + 98.0f + room * 20.0f + 6.0f * (1.0f - taglineReveal),
+    panelX + 30.0f,
+    panelY + 98.0f + room * 20.0f + 6.0f * (1.0f - taglineReveal),
     13.0f + room * 3.0f,
     UiTheme::applyOpacity(
       UiTheme::fade(UiTheme::textSecondary(), taglineReveal), opacity));
@@ -925,21 +962,23 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
       still ? 1.0f : GuiEasing::outCubic((m_revealElapsed - 0.4f) / 0.45f);
     m_menuVisual.addText(
       "Build a world. See what emerges.",
-      m_panelX + 30.0f,
-      m_panelY + 145.0f + 6.0f * (1.0f - secondReveal),
+      panelX + 30.0f,
+      panelY + 145.0f + 6.0f * (1.0f - secondReveal),
       12.0f,
       UiTheme::applyOpacity(UiTheme::fade(UiTheme::textMuted(), secondReveal),
                             opacity));
   }
 
-  // The motif is a real glider walking a 7x7 torus, leaning with the
-  // pointer like the background but less, so it floats between the layers.
+  // The motif is a real glider walking a 7x7 torus. It is the nearest layer,
+  // so it swings furthest as the panel tilts and seems to hover over the
+  // glass.
   const float cellSize = 7.0f + room * 5.0f;
   const float gap = 3.0f;
   const float motifWidth = m_motif.width(cellSize, gap);
-  const float motifX =
-    m_panelX + m_panelWidth - motifWidth - 33.0f + m_parallaxX.value() * 3.0f;
-  const float motifY = m_panelY + 35.0f + m_parallaxY.value() * 3.0f;
+  const float motifX = m_panelX + m_panelWidth - motifWidth - 33.0f +
+                       m_tilt.shiftX(GuiPanelTilt::kAccentDepth);
+  const float motifY =
+    m_panelY + 35.0f + m_tilt.shiftY(GuiPanelTilt::kAccentDepth);
   m_motif.draw(m_menuVisual,
                motifX,
                motifY,
@@ -965,11 +1004,19 @@ MainMenuModule::drawRows(float room, unsigned char opacity, float breathe)
     "Close CSim"
   };
   const bool still = reducedMotion();
-  const float itemX = m_panelX + 28.0f;
+  // Rows sit a little nearer than the glass and swing with the tilt; hit
+  // testing in Update applies the same shift.
+  const float itemX =
+    m_panelX + m_tilt.shiftX(GuiPanelTilt::kBodyDepth) + 28.0f;
+  const float firstItemY =
+    m_firstItemY + m_tilt.shiftY(GuiPanelTilt::kBodyDepth);
   const float stride = m_itemHeight + 8.0f;
   const float radius = 13.0f;
 
+  // Rows fade in on a stagger and drop into place on a spring, bouncing just
+  // past their slot before they settle.
   float rowReveal[kItemCount];
+  float rowY[kItemCount];
   for (int item = 0; item < kItemCount; ++item) {
     rowReveal[item] = still
                         ? 1.0f
@@ -977,13 +1024,14 @@ MainMenuModule::drawRows(float room, unsigned char opacity, float breathe)
                             (m_revealElapsed - static_cast<float>(item) *
                                                  kItemEntranceStaggerSeconds) /
                             kItemEntranceSeconds);
+    rowY[item] = firstItemY + static_cast<float>(item) * stride +
+                 m_animator.rowDrop(item, 0) * 12.0f;
   }
 
   // Cards: soft drop shadow, a rim that warms toward the accent with
   // emphasis, and a top-lit gradient face.
   for (int item = 0; item < kItemCount; ++item) {
-    const float y = m_firstItemY + static_cast<float>(item) * stride +
-                    (1.0f - rowReveal[item]) * 8.0f;
+    const float y = rowY[item];
     const unsigned char rowOpacity =
       static_cast<unsigned char>(static_cast<float>(opacity) * rowReveal[item]);
     const float e = std::clamp(m_rowEmphasis.value(item), 0.0f, 1.0f);
@@ -1018,74 +1066,42 @@ MainMenuModule::drawRows(float room, unsigned char opacity, float breathe)
       UiTheme::applyOpacity(UiTheme::cardBottom(), rowOpacity));
   }
 
-  // The selection pill stretches between rows while it travels, breathes a
-  // soft glow while it rests, and a sheen sweeps across when it lands.
+  // The selection is a drop of liquid: its head pours toward the new row and
+  // overshoots, its tail stretches, necks and snaps in behind it, and it
+  // wobbles like jelly when pressed. It breathes a soft glow while it rests
+  // and a sheen sweeps across when it lands.
   const GuiSelectionSpan span =
     m_animator.selectionSpan(static_cast<float>(m_selectedItem));
-  const float spanTop = std::min(span.leading, span.trailing);
-  const float spanBottom = std::max(span.leading, span.trailing);
-  const float press = m_animator.pressPulse();
-  const float squish = 3.0f * press * press;
-  const float pillX = itemX + squish;
-  const float pillY = m_firstItemY + spanTop * stride + squish * 0.5f;
-  const float pillWidth = m_itemWidth - squish * 2.0f;
-  const float pillHeight =
-    (spanBottom - spanTop) * stride + m_itemHeight - squish;
+  const float selectedDrop = rowY[m_selectedItem] - firstItemY -
+                             static_cast<float>(m_selectedItem) * stride;
   const unsigned char pillOpacity = static_cast<unsigned char>(
     static_cast<float>(opacity) * rowReveal[m_selectedItem]);
-  GuiKit::drawRoundedBand(
-    m_menuVisual,
-    pillX,
-    pillY,
-    pillWidth,
-    pillHeight,
-    radius,
-    0.0f,
-    16.0f + 4.0f * breathe,
-    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.2f + 0.12f * breathe),
-                          pillOpacity),
-    UiTheme::transparentOf(cyan));
-  GuiKit::drawRoundedRect(m_menuVisual,
-                          pillX,
-                          pillY,
-                          pillWidth,
-                          pillHeight,
-                          radius,
-                          UiTheme::applyOpacity(cyan, pillOpacity));
-  GuiKit::drawRoundedGradientRect(
-    m_menuVisual,
-    pillX + 1.0f,
-    pillY + 1.0f,
-    pillWidth - 2.0f,
-    pillHeight - 2.0f,
-    radius - 1.0f,
-    UiTheme::applyOpacity(UiTheme::selectionTop(), pillOpacity),
-    UiTheme::applyOpacity(UiTheme::selectionBottom(), pillOpacity));
-  GuiKit::drawSheen(
-    m_menuVisual,
-    pillX,
-    pillY,
-    pillWidth,
-    pillHeight,
-    radius,
-    m_animator.selectionSheen(),
-    UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 46 }, pillOpacity));
+  GuiLiquidSelection drop;
+  drop.crossStart = itemX;
+  drop.crossSize = m_itemWidth;
+  drop.headStart = firstItemY + span.leading * stride + selectedDrop;
+  drop.tailStart = firstItemY + span.trailing * stride + selectedDrop;
+  drop.cellLength = m_itemHeight;
+  drop.radius = radius;
+  drop.squash =
+    std::clamp(span.squash + 0.9f * m_animator.pressWobble(), -1.0f, 1.0f);
+  drop.glowSpread = 16.0f + 4.0f * breathe;
+  drop.glow = UiTheme::applyOpacity(UiTheme::fade(cyan, 0.2f + 0.12f * breathe),
+                                    pillOpacity);
+  drop.rim = UiTheme::applyOpacity(cyan, pillOpacity);
+  drop.faceTop = UiTheme::applyOpacity(UiTheme::selectionTop(), pillOpacity);
+  drop.faceBottom =
+    UiTheme::applyOpacity(UiTheme::selectionBottom(), pillOpacity);
+  drop.sheen = m_animator.selectionSheen();
+  drop.sheenColor =
+    UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 46 }, pillOpacity);
+  GuiKit::drawLiquidSelection(m_menuVisual, drop);
   const float pressProgress = m_animator.pressProgress();
   if (pressProgress >= 0.0f) {
-    // A ring ripples out of the pressed card and a flash blooms at the
-    // press point.
+    // A flash blooms at the press point and a splash leaps out of it:
+    // a ripple ring and teardrop droplets that arc back down.
     const float ring = GuiEasing::outCubic(pressProgress);
     const float fadeOut = 1.0f - pressProgress;
-    GuiKit::drawRoundedBand(m_menuVisual,
-                            pillX,
-                            pillY,
-                            pillWidth,
-                            pillHeight,
-                            radius,
-                            2.0f + 18.0f * ring,
-                            5.0f + 26.0f * ring,
-                            UiTheme::fade(cyan, 0.7f * fadeOut),
-                            UiTheme::transparentOf(cyan));
     GuiKit::drawSoftGlow(
       m_menuVisual,
       m_pressX,
@@ -1094,13 +1110,18 @@ MainMenuModule::drawRows(float room, unsigned char opacity, float breathe)
       30.0f + 60.0f * ring,
       UiTheme::fade(ColorRgba{ 190, 245, 255, 255 }, 0.35f * fadeOut),
       16);
+    GuiKit::drawSplash(m_menuVisual,
+                       m_pressX,
+                       m_pressY,
+                       pressProgress,
+                       1.0f,
+                       ColorRgba{ 170, 240, 255, 255 });
   }
 
   for (int item = 0; item < kItemCount; ++item) {
     const unsigned char rowOpacity =
       static_cast<unsigned char>(static_cast<float>(opacity) * rowReveal[item]);
-    const float y = m_firstItemY + static_cast<float>(item) * stride +
-                    (1.0f - rowReveal[item]) * 8.0f;
+    const float y = rowY[item];
     const float e = std::max(0.0f, m_rowEmphasis.value(item));
     const float eClamped = std::min(1.0f, e);
     const float slide = (1.0f - rowReveal[item]) * 10.0f + 6.0f * e;
@@ -1164,7 +1185,7 @@ MainMenuModule::drawRows(float room, unsigned char opacity, float breathe)
     // The chevron wakes up and leans toward the action.
     const float chevronBob =
       still ? 0.0f
-            : std::sin(m_animator.ambientPhase() * 6.2831853f / 1.6f) * 1.5f *
+            : std::sin(m_animator.ambientPhase() * 6.2831853f / 1.5f) * 1.5f *
                 eClamped;
     m_menuVisual.addText(
       ">",
@@ -1194,8 +1215,10 @@ MainMenuModule::drawFooter(unsigned char opacity)
     total += GuiKit::measureKeyHint(hint.key, hint.action, size);
   }
   total -= size * 1.6f;
-  float x = m_panelX + (m_panelWidth - total) * 0.5f;
-  const float y = m_panelY + m_panelHeight - 25.0f;
+  float x = m_panelX + m_tilt.shiftX(GuiPanelTilt::kFooterDepth) +
+            (m_panelWidth - total) * 0.5f;
+  const float y = m_panelY + m_tilt.shiftY(GuiPanelTilt::kFooterDepth) +
+                  m_panelHeight - 25.0f;
   for (const Hint& hint : hints) {
     x += GuiKit::drawKeyHint(
       m_menuVisual, x, y, hint.key, hint.action, size, opacity);
@@ -1227,8 +1250,15 @@ MainMenuModule::rebuildVisual()
   glass.glow = 0.45f + 0.35f * breathe;
   glass.accentReveal =
     reducedMotion() ? 1.0f : GuiEasing::outCubic(m_revealElapsed / 0.8f);
-  GuiKit::drawGlassPanel(
-    m_menuVisual, m_panelX, m_panelY, m_panelWidth, m_panelHeight, glass);
+  // The glass is the back layer of the swivel: it shifts least, its shadow
+  // slides away from the pointer and a glare follows it.
+  m_tilt.applyTo(glass);
+  GuiKit::drawGlassPanel(m_menuVisual,
+                         m_panelX + m_tilt.shiftX(GuiPanelTilt::kGlassDepth),
+                         m_panelY + m_tilt.shiftY(GuiPanelTilt::kGlassDepth),
+                         m_panelWidth,
+                         m_panelHeight,
+                         glass);
 
   drawTitle(room, opacity);
   drawRows(room, opacity, breathe);

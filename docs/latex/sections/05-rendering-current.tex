@@ -362,8 +362,9 @@ instead of treating thousands of CPU submissions as displayed frames (D-P32).
   \item \symbolref{GLString}: geometry cache --- skip VBO re-upload if
         content/style unchanged (FPS $\sim$1\,Hz rebuilds). Optional panel
         chrome adds a shadow, surface, border, and accent in the same batch.
-  \item \symbolref{SplashText}: fading EDIT/NORMAL label built on decorated
-        GLString chrome; the two modes use distinct shared theme accents.
+  \item \symbolref{SplashText}: fading corner notice label built on decorated
+        GLString chrome. The simulator now draws its EDIT/NORMAL badge itself
+        from GuiKit glass (\texttt{ModeBadge}); the engine class is retained.
   \item \texttt{UiTheme}: shared value-only colors and compact panel metrics;
         it is not a retained widget tree or layout engine.
   \item \symbolref{GameVisual} gradient quads (D-R26): convex, fan-ordered

@@ -2759,6 +2759,41 @@ readback. Versions 1--4 remain valid, and the frame quotas span the main frame
 and every surface.\\
 \textbf{Extends:} D-UI5 (no second GL context), D-R25
 \end{decisionbox}
+
+\subsection*{D-UI8 --- Liquid, bouncy menu motion}
+\begin{decisionbox}[title={D-UI8 \quad 2026-09-23}]
+\textbf{Decision:} The glass menus move like liquid. A travelling selection
+is a drop whose head and tail are two springs
+(\texttt{GuiMotion::kLiquidHead}, \texttt{kLiquidTail}) owned by
+\symbolref{GuiMenuAnimator}: from rest it leaves the old row, mid-flight it
+keeps its momentum, and \texttt{GuiSelectionSpan::squash} reports the jelly
+response from the closing speed between head and tail.
+\texttt{GuiKit::drawLiquidSelection} draws it as non-overlapping slices across
+the travel: the head cell keeps full width, the drop necks behind it and
+tapers toward the tail like a teardrop, and at rest it is exactly a rounded
+rectangle. Panels and rows drop in on springs
+(\texttt{GuiEasing::springStep}), presses and stepped values wobble
+(\texttt{GuiEasing::wobble}, \texttt{pressWobble}, \texttt{valueWobble}), and
+screens tune every spring from shared \texttt{GuiMotion} presets rather than
+literal frequencies. \texttt{GuiKit::drawSplash} adds a ripple and teardrop
+droplets for a press. Every glass panel swivels toward the pointer through
+\texttt{GuiPanelTilt} (a \texttt{GuiMotion::kSway} spring pair): its layers
+shift by depth and \texttt{GuiGlassStyle::tiltX}/\texttt{tiltY} slide the
+shadow away, draw a glare that follows the pointer and light the facing
+edges; each screen shifts its layout origin by the body layer so hit testing
+follows the drawing. The simulator's corner EDIT/NORMAL label becomes a
+product-drawn \texttt{ModeBadge} in the same glass (superseding D-OWN1's
+\symbolref{SplashText} member; the engine class stays).\\
+\textbf{Why:} The owner asked for menu animation that feels bouncier, more
+alive, and more like liquid and teardrops.\\
+\textbf{Consequences:} \texttt{beginSelectionTravel} takes the row left and
+the row targeted; a selection changed without a travel reads as its own row.
+Hit areas still never follow animated offsets beyond the entrance, reduced
+motion snaps every new spring and wobble, and the rounded
+\symbolref{GuiDialog} shares the same drop horizontally while its flat style
+is unchanged.\\
+\textbf{Extends:} D-UI1 (menu shell), D-R26 (living-glass chrome)
+\end{decisionbox}
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

@@ -64,6 +64,9 @@ private:
   // crossfade, both spring-driven.
   GuiSpringArray focus;
   GuiSpring modeBlend;
+  // The panel swivels toward the pointer; x and y carry the body shift, so
+  // rows are hit where they are drawn.
+  GuiPanelTilt tilt;
   CellMotif motif;
   float x = 0;
   float y = 0;

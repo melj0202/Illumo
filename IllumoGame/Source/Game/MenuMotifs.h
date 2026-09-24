@@ -14,6 +14,10 @@ class CellMotif
 public:
   static constexpr int kMaximumSide = 8;
   static constexpr float kStepSeconds = 0.45f;
+  // Newborn cells pop in on a bouncy spring that has rung out well before
+  // the next generation.
+  static constexpr float kPopHz = 4.5f;
+  static constexpr float kPopDamping = 0.42f;
 
   CellMotif();
 

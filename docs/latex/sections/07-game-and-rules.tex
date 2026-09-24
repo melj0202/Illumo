@@ -33,18 +33,24 @@ shadow pass with the guest camera.
 
 \subsection{CellGameModule}
 
-Edit mode includes a bottom \textbf{Cell paint} drawer, initially closed. A centered
-pull tab toggles an eased vertical slide and chevron; rounded GuiKit surfaces, UiTheme colors, and animated
-row emphasis match the other product menus. Reduced UI motion snaps transitions.
+Edit mode includes a bottom \textbf{Cell paint} drawer, initially closed as a
+round glass bubble peeking over the footer, with an up chevron and a
+paintbrush tipped in the current paint. Clicking the bubble morphs it into the
+drawer on two springs (the width leads, the height follows and bounces) and
+the drawer's header morphs it back; rounded GuiKit surfaces, UiTheme colors,
+and animated row emphasis match the other product menus. Reduced UI motion snaps transitions.
 Swatches read every declared active-rule state name and color; the drawer scrolls
 when a catalog defines more states than fit at once. Right-click remains erase
 and Wireworld shortcuts remain synchronized. Drawing and hit testing share a fitted UI scale;
 palette gestures capture pointer input until release. The drawer anchors above the controls-hint band,
 fits the remaining height, and leaves footer input to the hints. The opaque
-footer covers drawer overflow during its slide. Modal menus and the console
-take precedence. Entering Edit staggers the hint bar before the palette tab;
-leaving Edit staggers the tab before the bar. The canvas reservation follows
-the visible footer area. The tab travels by its own height plus the footer
+footer covers the bubble's lower half and any morph overflow. Modal menus and the console
+take precedence. Entering Edit staggers the hint bar before the palette bubble,
+and both pop up on springs that bounce past their slots while the canvas inset
+stays clamped;
+leaving Edit staggers the bubble before the bar, and both ease away without
+ringing. The canvas reservation follows the visible footer area. The bubble
+travels by its visible height plus the footer
 height before it is removed. Reduced UI motion snaps the transition. The module owns these ordinary
 GameVisuals on the existing UI layer.
 Camera navigation accepts finite world coordinates with absolute value at most
@@ -68,7 +74,10 @@ Primary gameplay module. Owns a \symbolref{CellContext} and an enum
 \begin{statusbox}
 Mode handling is an \textbf{enum + switch} inside the module, not the older
 class-per-state hierarchy (archived under \pathref{archive/old-states/}).
-\texttt{E} toggles EDIT/NORMAL and wakes \symbolref{SplashText}.
+\texttt{E} toggles EDIT/NORMAL and shows the corner \texttt{ModeBadge}: a glass
+pill mirroring the settings button that drops in as a bead, stretches into a
+pill with its label (warm amber for EDIT; cyan with a breathing status dot
+while running), holds, then melts back into the bead and floats away.
 Save/load, pause/run/step, canvas, ruleset, and camera behavior is exposed as
 registered console commands rather than artificial frame states.
 Simulation rate: env \texttt{tps} $\times$ \texttt{speedFactor}, with an
@@ -104,26 +113,42 @@ conversion share a fitted UI scale. Main-menu F1 opens the same overlay.
 
 All menus share a ``living glass'' language (D-R26): soft-shadowed glass
 panels and cards with lit rims, gradient faces, a breathing glow and a
-cyan-to-violet hairline with a travelling glint, set on a radial scrim. The
-selection pill stretches between rows (its leading edge overshoots, its
-trailing edge follows) and sweeps a sheen on arrival; rows lean in on
-spring-driven emphasis; toggle knobs, count chips, buttons and scroll thumbs
-travel on springs; changed values bloom; footers show keycap hints. The title
+cyan-to-violet hairline with a travelling glint, set on a radial scrim. Motion
+is liquid and a little bouncy (D-UI8). The selection is a drop of liquid: its
+head and tail are separate springs, so the head pours toward the new row and
+overshoots while the tail lags; the drop necks in the middle and tapers to a
+smaller tail like a teardrop, bulges as the tail catches up, keeps its
+momentum when redirected, and sweeps a sheen on arrival. Panels and rows drop
+in on springs and bounce just past their places; rows lean in on jelly-like
+emphasis; toggle knobs stretch like droplets as they travel; count chips,
+buttons and scroll thumbs travel on springs; changed values bloom and spring
+toward the change; footers show keycap hints. Every glass panel (title
+screen, settings, canvas setup, workshop and the rounded pause and exit
+dialogs) swivels toward the pointer through \texttt{GuiPanelTilt}: layers
+shift by depth, the glass shadow slides away while a glare follows the
+pointer, hit testing follows the drawing, and the panel swings level when it
+is not the pointer's target. The title
 screen runs Immigration Life behind the glass: a Gosper gun streams cyan
 gliders, coral acorns churn, and a deterministic generator launches gliders and
 spaceships from the edges. It never replaces the player's saved ruleset and is
 reseeded when it grows past 1,400 chunks or after 15 minutes. A vignette,
-drifting glows with pointer parallax, and a pointer spotlight frame the panel;
-the CSIM letters cascade in; a real glider walks the 7x7 motif torus
-(\symbolref{CellMotif}); icons animate with emphasis and pressed rows ripple.
+lava-lamp glows with lazy pointer parallax, and a spotlight that smears along
+the pointer's motion frame the panel, which swivels toward the pointer: its
+layers shift by depth, its shadow slides away, a glare follows the pointer,
+rows are hit where they are drawn, and it swings level behind an overlay; the
+CSIM letters fall in like drops and bounce; a real glider walks the 7x7 motif torus (\symbolref{CellMotif}) and
+its newborn cells pop in as bouncing beads; icons animate with emphasis; a
+pressed row wobbles like jelly while a splash of teardrop droplets leaps from
+the press.
 Actions are never delayed by feedback animation, and overlays close
 immediately. GuiKit composes this chrome from \symbolref{GameVisual} gradient
 quads; GuiDialog's rounded style is opt-in and fits drawing and pointer
 coordinates together, while its flat style is unchanged. Every menu screen
 draws its motion and layout arithmetic from the shared
-\symbolref{GuiMenuShell}: easing curves and damped springs; reveal, staggered
-row entrance, stretching selection, sheen, press, value pulse, ambient cycle,
-and caret blink from \symbolref{GuiMenuAnimator}; fitted virtual space,
+\symbolref{GuiMenuShell}: easing curves, spring shapes, and damped springs
+tuned from shared \texttt{GuiMotion} presets; reveal, springy row drops, the
+liquid selection span, sheen, press wobble, value pulse and nudge, ambient
+cycle, and caret blink from \symbolref{GuiMenuAnimator}; fitted virtual space,
 visible-row window, and wheel scrolling from \symbolref{GuiPanelLayout}; hover
 and press edges from \symbolref{GuiPointerTracker}. Each screen keeps only its
 own rows, layout constants, and drawing, so a new interface inherits the
@@ -158,8 +183,8 @@ the finite draft. Create passes validated canvas values to CellGameModule;
 Back or Escape discards the draft. Display and performance preferences are not
 part of this payload. The screen fits all rows, respects reduced menu motion,
 and consumes wheel input without changing selection or values. Glass cards,
-spring-driven focus lighting, a stretching selection pill, directional value
-pulses, a crossfading boundary badge, and a live glider on a 6x6 torus match
+spring-driven focus lighting, the liquid selection drop, springy directional
+value nudges, a crossfading boundary badge, and a live glider on a 6x6 torus match
 the main menu; reduced motion freezes the motif and snaps focus feedback.
 
 Entering a new or loaded cell canvas plays a 0.9-second cellular wave. A

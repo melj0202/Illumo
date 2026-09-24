@@ -44,14 +44,15 @@ NewSimulationMenu::open(const NewSimulationConfiguration& initial,
   animator.setReducedMotion(reducedMotion);
   animator.restart();
   selected = 0;
-  focus.configure(3.0f, 0.7f);
+  focus.configure(GuiMotion::kJelly);
   focus.focusOnly(selected, kRowCount);
   focus.snapAll();
-  modeBlend.configure(2.4f, 0.8f);
+  modeBlend.configure(GuiMotion::kSwell);
   modeBlend.snapTo(finite ? 1.0f : 0.0f);
   motif.resetGlider(6, 6, 1, 1);
   // Ignore the held click that opened the menu until its first release.
   pointer.reset(true);
+  tilt.level();
   openState = true;
   rebuild();
 }
@@ -79,6 +80,12 @@ NewSimulationMenu::tick(float dt)
     modeBlend.setTarget(finite ? 1.0f : 0.0f);
     modeBlend.tick(step, still);
     motif.tick(step, still);
+    tilt.aim(pointer.x(),
+             pointer.y(),
+             panelFit.virtualWidth,
+             panelFit.virtualHeight,
+             openState);
+    tilt.tick(step, still);
   }
   rebuild();
 }
@@ -89,8 +96,8 @@ NewSimulationMenu::selectRow(int row)
   if (row == selected) {
     return;
   }
-  animator.beginSelectionTravel(
-    animator.selectionPosition(static_cast<float>(selected)));
+  animator.beginSelectionTravel(static_cast<float>(selected),
+                                static_cast<float>(row));
   selected = row;
 }
 
@@ -244,8 +251,10 @@ NewSimulationMenu::rebuild()
   const float screenHeight = panelFit.virtualHeight;
   width = std::min(720.0f, screenWidth - 32);
   const float height = std::min(610.0f, screenHeight - 24);
-  x = (screenWidth - width) / 2;
-  y = (screenHeight - height) / 2 + animator.panelOffsetY();
+  // The layout origin swivels with the body layer, so hit testing and
+  // drawing agree while the panel tilts toward the pointer.
+  x = (screenWidth - width) / 2 + tilt.bodyShiftX();
+  y = (screenHeight - height) / 2 + animator.panelOffsetY() + tilt.bodyShiftY();
   rowHeight = (height - 164) / static_cast<float>(kRowCount);
   visual.clearPrimitives();
 
@@ -268,29 +277,39 @@ NewSimulationMenu::rebuild()
   glass.ambientPhase = ambient;
   glass.glow = 0.4f + 0.3f * breathe;
   glass.accentReveal = reveal;
-  GuiKit::drawGlassPanel(visual, x, y, width, height, glass);
+  tilt.applyTo(glass);
+  GuiKit::drawGlassPanel(visual,
+                         x + tilt.layerX(GuiPanelTilt::kGlassDepth),
+                         y + tilt.layerY(GuiPanelTilt::kGlassDepth),
+                         width,
+                         height,
+                         glass);
 
+  // The header floats nearer than the rows and swings further with the tilt.
+  const float headerX = x + tilt.layerX(GuiPanelTilt::kHeaderDepth);
+  const float headerY = y + tilt.layerY(GuiPanelTilt::kHeaderDepth);
   const float headerSlide = (1.0f - reveal) * 10.0f;
   visual.addText("A FRESH WORLD",
-                 x + 28 - headerSlide,
-                 y + 20,
+                 headerX + 28 - headerSlide,
+                 headerY + 20,
                  11,
                  UiTheme::applyOpacity(cyan, opacity));
   visual.addText("NEW CANVAS",
-                 x + 28 - headerSlide * 0.6f,
-                 y + 41,
+                 headerX + 28 - headerSlide * 0.6f,
+                 headerY + 41,
                  28,
                  UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
   visual.addText("Choose the space. Then see what emerges.",
-                 x + 28 - headerSlide * 0.3f,
-                 y + 80,
+                 headerX + 28 - headerSlide * 0.3f,
+                 headerY + 80,
                  13,
                  UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
 
-  // A live glider walks a 6x6 torus, echoing the title screen's motif.
+  // A live glider walks a 6x6 torus, echoing the title screen's motif; it is
+  // the nearest layer and swings furthest.
   motif.draw(visual,
-             x + width - 90,
-             y + 15,
+             x + width - 90 + tilt.layerX(GuiPanelTilt::kAccentDepth),
+             y + 15 + tilt.layerY(GuiPanelTilt::kAccentDepth),
              7.0f,
              3.0f,
              ColorRgba{ 104, 231, 241, 255 },
@@ -301,8 +320,8 @@ NewSimulationMenu::rebuild()
   // The boundary badge crossfades between infinite (cyan) and torus (violet).
   const float mode = std::clamp(modeBlend.value(), 0.0f, 1.0f);
   const ColorRgba modeColor = UiTheme::mix(cyan, violet, mode);
-  const float modeBadgeX = x + width - 164;
-  const float modeBadgeY = y + 79;
+  const float modeBadgeX = headerX + width - 164;
+  const float modeBadgeY = headerY + 79;
   GuiKit::drawRoundedRect(
     visual,
     modeBadgeX,
@@ -416,7 +435,7 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
     const unsigned char rowOpacity =
       static_cast<unsigned char>(static_cast<float>(opacity) * rowReveal);
     const float ry = firstRowY + static_cast<float>(row) * rowHeight +
-                     (1.0f - rowReveal) * 6.0f;
+                     animator.rowDrop(row, 0) * 10.0f;
     const float e = std::clamp(focus.value(row), 0.0f, 1.0f);
     const bool primary = row == 6;
     GuiKit::drawSoftShadow(
@@ -458,55 +477,35 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
                             rowOpacity));
   }
 
-  // The stretchy selection pill with a breathing glow and arrival sheen.
+  // The selection pours between rows like a drop of liquid, with a
+  // breathing glow and an arrival sheen.
   const GuiSelectionSpan span =
     animator.selectionSpan(static_cast<float>(selected));
-  const float spanTop = std::min(span.leading, span.trailing);
-  const float spanBottom = std::max(span.leading, span.trailing);
-  const float pillY = firstRowY + spanTop * rowHeight;
-  const float pillHeight = (spanBottom - spanTop) * rowHeight + cardHeight;
-  GuiKit::drawRoundedBand(
-    visual,
-    cardX,
-    pillY,
-    cardWidth,
-    pillHeight,
-    radius,
-    0,
-    12 + 3 * breathe,
-    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.16f + 0.1f * breathe), opacity),
-    UiTheme::transparentOf(cyan));
-  GuiKit::drawRoundedRect(
-    visual,
-    cardX,
-    pillY,
-    cardWidth,
-    pillHeight,
-    radius,
-    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), opacity));
-  GuiKit::drawRoundedGradientRect(
-    visual,
-    cardX + 1,
-    pillY + 1,
-    cardWidth - 2,
-    pillHeight - 2,
-    radius - 1,
-    UiTheme::applyOpacity(UiTheme::selectionTop(), opacity),
-    UiTheme::applyOpacity(UiTheme::selectionBottom(), opacity));
-  GuiKit::drawSheen(
-    visual,
-    cardX,
-    pillY,
-    cardWidth,
-    pillHeight,
-    radius,
-    animator.selectionSheen(),
-    UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 40 }, opacity));
+  const float selectedDrop = animator.rowDrop(selected, 0) * 10.0f;
+  GuiLiquidSelection drop;
+  drop.crossStart = cardX;
+  drop.crossSize = cardWidth;
+  drop.headStart = firstRowY + span.leading * rowHeight + selectedDrop;
+  drop.tailStart = firstRowY + span.trailing * rowHeight + selectedDrop;
+  drop.cellLength = cardHeight;
+  drop.radius = radius;
+  drop.squash = span.squash;
+  drop.glowSpread = 12 + 3 * breathe;
+  drop.glow =
+    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.16f + 0.1f * breathe), opacity);
+  drop.rim = UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), opacity);
+  drop.faceTop = UiTheme::applyOpacity(UiTheme::selectionTop(), opacity);
+  drop.faceBottom = UiTheme::applyOpacity(UiTheme::selectionBottom(), opacity);
+  drop.sheen = animator.selectionSheen();
+  drop.sheenColor =
+    UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 40 }, opacity);
+  GuiKit::drawLiquidSelection(visual, drop);
+  // The accent bar rides the head of the drop.
   GuiKit::drawRoundedRect(visual,
                           x + 31,
-                          pillY + 9,
+                          drop.headStart + 9,
                           3,
-                          std::max(4.0f, pillHeight - 18),
+                          std::max(4.0f, cardHeight - 18),
                           1.5f,
                           UiTheme::applyOpacity(cyan, opacity));
 
@@ -518,7 +517,7 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
     const unsigned char rowOpacity =
       static_cast<unsigned char>(static_cast<float>(opacity) * rowReveal);
     const float ry = firstRowY + static_cast<float>(row) * rowHeight +
-                     (1.0f - rowReveal) * 6.0f;
+                     animator.rowDrop(row, 0) * 10.0f;
     const float e = std::clamp(focus.value(row), 0.0f, 1.2f);
     const float eClamped = std::min(1.0f, e);
     const bool active = row == selected;
@@ -546,9 +545,10 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
                                 UiTheme::fade(cyan, 0.5f * pulse),
                                 UiTheme::transparentOf(cyan));
       }
-      // Arrows lean toward the direction the value just moved.
-      const float leftNudge = active && direction < 0 ? 4.0f * pulse : 0.0f;
-      const float rightNudge = active && direction > 0 ? 4.0f * pulse : 0.0f;
+      // The arrow on the side the value moved springs out and bounces back.
+      const float swing = direction * animator.valueWobble();
+      const float leftNudge = active && direction < 0 ? 5.0f * swing : 0.0f;
+      const float rightNudge = active && direction > 0 ? 5.0f * swing : 0.0f;
       const ColorRgba arrow = UiTheme::applyOpacity(
         UiTheme::fade(cyan, 0.45f + 0.55f * eClamped), rowOpacity);
       visual.addText(
@@ -567,8 +567,8 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
                    labelY,
                    16,
                    UiTheme::applyOpacity(labelColor, rowOpacity));
-    // A changed value slides in from the side it came from.
-    const float slide = active ? direction * pulse * 10.0f : 0.0f;
+    // A changed value lurches the way it moved and wobbles back into place.
+    const float slide = active ? animator.valueWobble() * 8.0f : 0.0f;
     const ColorRgba valueColor =
       disabled ? UiTheme::fade(UiTheme::textMuted(), 0.7f)
       : row == 6

@@ -374,6 +374,20 @@ testGuiGlassChrome()
              roundedPanel.shapeCount() + 2u,
              panel.shapeCount(),
              "the rounded panel is the glass panel before its glint travels");
+  GameVisual tiltedPanel(4096u);
+  GuiGlassStyle tiltedStyle = style;
+  tiltedStyle.tiltX = 0.8f;
+  tiltedStyle.tiltY = -0.5f;
+  GuiKit::drawGlassPanel(
+    tiltedPanel, 20.0f, 20.0f, 400.0f, 300.0f, tiltedStyle);
+  const ShapePrimitive* levelShadow = panel.getShape(0);
+  const ShapePrimitive* tiltedShadow = tiltedPanel.getShape(0);
+  testTrue(g,
+           tiltedPanel.shapeCount() > panel.shapeCount() &&
+             tiltedShadow->rect.x < levelShadow->rect.x &&
+             tiltedShadow->rect.y > levelShadow->rect.y,
+           "a tilted pane adds glare and edge light and throws its shadow "
+           "away from the pointer");
 
   GameVisual keys(256u);
   const float advance =
@@ -402,8 +416,98 @@ testGuiGlassChrome()
   GuiKit::drawSheen(idle, 0.0f, 0.0f, 200.0f, 40.0f, 10.0f, -1.0f, cyan);
   testEqSize(g, idle.shapeCount(), 0u, "an idle sheen draws nothing");
 
+  // Liquid selection: a rounded rect at rest; stretched, it necks in the
+  // middle and tapers toward its tail while the head keeps full width.
+  GuiLiquidSelection drop;
+  drop.crossStart = 10.0f;
+  drop.crossSize = 200.0f;
+  drop.headStart = 20.0f;
+  drop.tailStart = 20.0f;
+  drop.cellLength = 40.0f;
+  drop.radius = 8.0f;
+  drop.rim = cyan;
+  drop.faceTop = UiTheme::selectionTop();
+  drop.faceBottom = UiTheme::selectionBottom();
+  GameVisual resting(512u);
+  GuiKit::drawLiquidSelection(resting, drop);
+  bool restInside = resting.shapeCount() > 0u;
+  for (size_t i = 0; i < resting.shapeCount(); ++i) {
+    const ShapePrimitive* shape = resting.getShape(i);
+    const float xs[4] = { shape->x0, shape->x1, shape->x2, shape->x3 };
+    const float ys[4] = { shape->y0, shape->y1, shape->y2, shape->y3 };
+    for (int corner = 0; corner < 4; ++corner) {
+      restInside = restInside && xs[corner] >= 10.0f - 0.01f &&
+                   xs[corner] <= 210.0f + 0.01f &&
+                   ys[corner] >= 20.0f - 0.01f && ys[corner] <= 60.0f + 0.01f;
+    }
+  }
+  testTrue(g, restInside, "a resting drop fills exactly its cell");
+
+  drop.headStart = 100.0f;
+  GameVisual stretched(512u);
+  GuiKit::drawLiquidSelection(stretched, drop);
+  // The rim is drawn first; its slices report the width at each level.
+  const size_t rimSlices = stretched.shapeCount() / 2u;
+  float headWidth = 0.0f;
+  float neckWidth = 1000.0f;
+  float tailWidth = 1000.0f;
+  for (size_t i = 0; i < rimSlices; ++i) {
+    const ShapePrimitive* shape = stretched.getShape(i);
+    const float width = shape->x1 - shape->x0;
+    if (shape->y0 >= 110.0f && shape->y0 <= 130.0f) {
+      headWidth = std::max(headWidth, width);
+    } else if (shape->y0 >= 60.0f && shape->y0 <= 100.0f) {
+      neckWidth = std::min(neckWidth, width);
+    } else if (shape->y0 >= 28.0f && shape->y0 <= 50.0f) {
+      tailWidth = std::min(tailWidth, width);
+    }
+  }
+  testTrue(g,
+           std::abs(headWidth - 200.0f) < 0.01f && neckWidth < 185.0f &&
+             tailWidth < headWidth,
+           "a stretched drop necks and tapers behind a full-width head");
+
+  drop.horizontal = true;
+  drop.crossStart = 30.0f;
+  drop.crossSize = 50.0f;
+  drop.headStart = 10.0f;
+  drop.tailStart = 130.0f;
+  drop.cellLength = 100.0f;
+  drop.squash = 0.8f;
+  drop.glow = cyan;
+  drop.sheen = 0.5f;
+  drop.sheenColor = cyan;
+  GameVisual sideways(512u);
+  GuiKit::drawLiquidSelection(sideways, drop);
+  bool sidewaysFinite = sideways.shapeCount() > 0u;
+  for (size_t i = 0; i < sideways.shapeCount(); ++i) {
+    const ShapePrimitive* shape = sideways.getShape(i);
+    sidewaysFinite = sidewaysFinite && std::isfinite(shape->x0) &&
+                     std::isfinite(shape->y2) && shape->y0 > 0.0f &&
+                     shape->y2 < 110.0f;
+  }
+  testTrue(g,
+           sidewaysFinite,
+           "a squashed horizontal drop with glow and sheen stays near its row");
+
+  GameVisual splash(256u);
+  GuiKit::drawSplash(splash, 50.0f, 50.0f, 0.4f, 1.0f, cyan);
+  testTrue(g, splash.shapeCount() > 0u, "a splash in flight draws");
+  GameVisual splashDone(64u);
+  GuiKit::drawSplash(splashDone, 50.0f, 50.0f, 1.0f, 1.0f, cyan);
+  GuiKit::drawSplash(splashDone, 50.0f, 50.0f, 0.0f, 1.0f, cyan);
+  testEqSize(g,
+             splashDone.shapeCount(),
+             0u,
+             "a splash outside its flight draws nothing");
+
   GameVisual degenerate(64u);
   const float nan = std::numeric_limits<float>::quiet_NaN();
+  drop.crossStart = nan;
+  GuiKit::drawLiquidSelection(degenerate, drop);
+  drop.crossStart = 0.0f;
+  drop.cellLength = 0.0f;
+  GuiKit::drawLiquidSelection(degenerate, drop);
   GuiKit::drawRoundedGradientRect(
     degenerate, nan, 0.0f, 10.0f, 10.0f, 2.0f, cyan, cyan);
   GuiKit::drawRoundedBand(
@@ -484,56 +588,192 @@ testGuiMotionVocabulary()
   bank.snapAll();
   testTrue(g, bank.value(2) == 1.0f, "snapAll settles every row");
 
+  testTrue(g,
+           GuiEasing::springStep(0.0f, 3.0f, 0.5f) == 0.0f &&
+             GuiEasing::springStep(-1.0f, 3.0f, 0.5f) == 0.0f,
+           "a spring step rests at zero before release");
+  float stepPeak = 0.0f;
+  for (int frame = 1; frame <= 120; ++frame) {
+    stepPeak = std::max(
+      stepPeak,
+      GuiEasing::springStep(static_cast<float>(frame) / 120.0f, 3.0f, 0.5f));
+  }
+  testTrue(g,
+           stepPeak > 1.05f && stepPeak < 1.3f,
+           "an underdamped spring step bounces past one");
+  testTrue(g,
+           GuiEasing::springStep(3.0f, 3.0f, 0.5f) == 1.0f &&
+             GuiEasing::springStep(3.0f, 3.0f, 1.0f) == 1.0f,
+           "a spring step lands exactly on one");
+  testTrue(g,
+           GuiEasing::wobble(0.0f, 3.4f, 0.3f) == 1.0f &&
+             GuiEasing::wobble(-0.1f, 3.4f, 0.3f) == 0.0f &&
+             GuiEasing::wobble(3.0f, 3.4f, 0.3f) == 0.0f,
+           "a wobble starts at one and rings out to zero");
+  float wobbleLow = 0.0f;
+  for (int frame = 0; frame < 60; ++frame) {
+    wobbleLow = std::min(
+      wobbleLow,
+      GuiEasing::wobble(static_cast<float>(frame) / 120.0f, 3.4f, 0.3f));
+  }
+  testTrue(g, wobbleLow < -0.2f, "a wobble swings through the opposite sign");
+
+  GuiSpring tuned;
+  tuned.configure(GuiMotion::kJelly);
+  tuned.setTarget(1.0f);
+  float jellyPeak = 0.0f;
+  for (int frame = 0; frame < 120; ++frame) {
+    tuned.tick(1.0f / 60.0f, false);
+    jellyPeak = std::max(jellyPeak, tuned.value());
+  }
+  testTrue(g,
+           jellyPeak > 1.1f && tuned.settled(),
+           "the jelly preset overshoots visibly, then rests");
+
+  GuiPanelTilt tilt;
+  tilt.aim(620.0f, 60.0f, 640.0f, 480.0f, true);
+  for (int frame = 0; frame < 120; ++frame) {
+    tilt.tick(1.0f / 60.0f, false);
+  }
+  testTrue(g,
+           tilt.x() > 0.9f && tilt.y() < -0.7f,
+           "a panel tilts toward the pointer's corner");
+  testTrue(g,
+           std::abs(tilt.bodyShiftX() - tilt.x() * GuiPanelTilt::kBodyDepth) <
+               0.0001f &&
+             std::abs(tilt.layerX(GuiPanelTilt::kGlassDepth) -
+                      (tilt.shiftX(GuiPanelTilt::kGlassDepth) -
+                       tilt.bodyShiftX())) < 0.0001f &&
+             tilt.layerX(GuiPanelTilt::kHeaderDepth) > 0.0f &&
+             tilt.layerX(GuiPanelTilt::kGlassDepth) < 0.0f,
+           "layers nearer than the body swing further, the glass less");
+  GuiGlassStyle tiltedGlass;
+  tilt.applyTo(tiltedGlass);
+  testTrue(g,
+           tiltedGlass.tiltX > 0.9f && tiltedGlass.tiltX <= 1.0f,
+           "the glass takes the tilt for its shadow and glare");
+  tilt.aim(-1.0f, -1.0f, 640.0f, 480.0f, true);
+  for (int frame = 0; frame < 240; ++frame) {
+    tilt.tick(1.0f / 60.0f, false);
+  }
+  testTrue(g,
+           tilt.x() == 0.0f && tilt.y() == 0.0f,
+           "a panel with no pointer swings back exactly level");
+  tilt.aim(620.0f, 60.0f, 640.0f, 480.0f, false);
+  tilt.tick(0.1f, false);
+  testTrue(g, tilt.x() == 0.0f, "an inactive panel stays level");
+  tilt.aim(620.0f, 60.0f, 640.0f, 480.0f, true);
+  tilt.tick(0.1f, true);
+  testTrue(g,
+           tilt.x() == 0.0f && tilt.y() == 0.0f,
+           "reduced motion keeps the panel level");
+
   GuiMenuAnimator animator;
   animator.restart();
   testTrue(g,
-           animator.selectionSheen() < 0.0f && animator.pressPulse() == 0.0f,
-           "a fresh menu has no sheen or press");
-  animator.beginSelectionTravel(0.0f);
-  animator.tick(0.1f);
+           animator.selectionSheen() < 0.0f && animator.pressPulse() == 0.0f &&
+             animator.pressWobble() == 0.0f && animator.valueWobble() == 0.0f,
+           "a fresh menu has no sheen, press or wobble");
+  animator.beginSelectionTravel(0.0f, 2.0f);
+  const GuiSelectionSpan leaving = animator.selectionSpan(2.0f);
+  testTrue(g,
+           leaving.leading == 0.0f && leaving.trailing == 0.0f,
+           "a travel from rest starts on the row it leaves");
+  animator.tick(0.05f);
   const GuiSelectionSpan moving = animator.selectionSpan(2.0f);
   testTrue(g,
-           moving.leading > moving.trailing && moving.leading < 2.2f,
-           "the leading edge races ahead while travelling");
+           moving.leading > moving.trailing && moving.trailing > 0.0f &&
+             moving.squash < 0.0f,
+           "the head races ahead and the drop pulls thin");
   float overshoot = 0.0f;
+  float bulge = 0.0f;
   for (int frame = 0; frame < 30; ++frame) {
     animator.tick(0.01f);
-    overshoot = std::max(overshoot, animator.selectionSpan(2.0f).leading);
+    const GuiSelectionSpan frameSpan = animator.selectionSpan(2.0f);
+    overshoot = std::max(overshoot, frameSpan.leading);
+    bulge = std::max(bulge, frameSpan.squash);
   }
-  testTrue(g, overshoot > 2.0f, "the leading edge overshoots its row");
+  testTrue(g, overshoot > 2.2f, "the head overshoots its row");
+  testTrue(g, bulge > 0.0f, "the drop bulges as its tail catches up");
   testTrue(g,
            animator.selectionSheen() >= 0.0f,
            "a sheen sweeps once the highlight arrives");
   animator.tick(2.0f);
   const GuiSelectionSpan settled = animator.selectionSpan(2.0f);
   testTrue(g,
-           std::abs(settled.leading - 2.0f) < 0.0001f &&
-             std::abs(settled.trailing - 2.0f) < 0.0001f &&
-             animator.selectionSheen() < 0.0f,
+           settled.leading == 2.0f && settled.trailing == 2.0f &&
+             settled.squash == 0.0f && animator.selectionSheen() < 0.0f,
            "the span settles exactly on its row");
+
+  animator.beginSelectionTravel(2.0f, 12.0f);
+  float longPeak = 0.0f;
+  for (int frame = 0; frame < 60; ++frame) {
+    animator.tick(0.01f);
+    longPeak = std::max(longPeak, animator.selectionSpan(12.0f).leading);
+  }
+  testTrue(g,
+           longPeak > 12.0f &&
+             longPeak <= 12.0f + GuiMenuAnimator::kSelectionOvershootRows,
+           "a long jump splashes against its row within the soft limit");
+  animator.tick(2.0f);
+
+  animator.beginSelectionTravel(12.0f, 0.0f);
+  animator.tick(0.04f);
+  const float headBefore = animator.selectionSpan(0.0f).leading;
+  animator.beginSelectionTravel(0.0f, 3.0f);
+  const float headAfter = animator.selectionSpan(3.0f).leading;
+  testTrue(g,
+           headBefore < 12.0f && headAfter == headBefore,
+           "redirecting mid-flight keeps the drop where it is");
+  testTrue(g,
+           animator.selectionSpan(1.0f).leading == 1.0f,
+           "a row the drop is not travelling to reads as itself");
+  animator.tick(2.0f);
 
   animator.triggerPress();
   testTrue(g,
-           animator.pressPulse() == 1.0f && animator.pressProgress() == 0.0f,
-           "a press starts at full strength");
+           animator.pressPulse() == 1.0f && animator.pressProgress() == 0.0f &&
+             animator.pressWobble() == 1.0f,
+           "a press starts at full strength, fully squashed");
+  float pressLow = 0.0f;
+  for (int frame = 0; frame < 40; ++frame) {
+    animator.tick(0.01f);
+    pressLow = std::min(pressLow, animator.pressWobble());
+  }
+  testTrue(g, pressLow < -0.1f, "the pressed drop rebounds into a stretch");
   animator.tick(1.0f);
   testTrue(g,
-           animator.pressPulse() == 0.0f && animator.pressProgress() < 0.0f,
+           animator.pressPulse() == 0.0f && animator.pressProgress() < 0.0f &&
+             animator.pressWobble() == 0.0f,
            "the press decays away");
   animator.triggerValuePulse(-3);
   testEqInt(g, animator.valuePulseDirection(), -1, "value pulses keep a sign");
+  testTrue(g, animator.valueWobble() == 0.0f, "a value nudge starts from rest");
+  float nudgePeak = 0.0f;
+  for (int frame = 0; frame < 20; ++frame) {
+    animator.tick(0.005f);
+    nudgePeak = std::min(nudgePeak, animator.valueWobble());
+  }
+  testTrue(g,
+           nudgePeak < -0.9f && nudgePeak >= -1.001f,
+           "a value nudge leaps the way the value moved");
+  animator.tick(1.0f);
+  testTrue(g, animator.valueWobble() == 0.0f, "the value nudge rings out");
 
   GuiMenuAnimator still;
   still.setReducedMotion(true);
   still.restart();
-  still.beginSelectionTravel(0.0f);
+  still.beginSelectionTravel(0.0f, 3.0f);
   still.triggerPress();
+  still.triggerValuePulse(1);
   still.tick(0.01f);
   const GuiSelectionSpan snapped = still.selectionSpan(3.0f);
   testTrue(g,
            snapped.leading == 3.0f && snapped.trailing == 3.0f &&
-             still.selectionSheen() < 0.0f && still.pressPulse() == 0.0f,
-           "reduced motion snaps span, sheen and press");
+             snapped.squash == 0.0f && still.selectionSheen() < 0.0f &&
+             still.pressPulse() == 0.0f && still.pressWobble() == 0.0f &&
+             still.valueWobble() == 0.0f && still.rowDrop(5, 0) == 0.0f,
+           "reduced motion snaps span, sheen, press and wobbles");
 }
 
 static void
@@ -595,13 +835,28 @@ testGuiMenuShellClocksAndLayout()
   testTrue(g,
            animator.rowReveal(4, 4) == animator.rowReveal(0, 0),
            "the first visible row carries no stagger");
+  testTrue(g,
+           animator.rowDrop(4, 0) > animator.rowDrop(0, 0) &&
+             animator.rowDrop(4, 4) == animator.rowDrop(0, 0),
+           "later rows are still falling behind earlier ones");
+  float panelLow = 0.0f;
+  float rowLow = 0.0f;
+  for (int frame = 0; frame < 60; ++frame) {
+    animator.tick(0.02f);
+    panelLow = std::min(panelLow, animator.panelOffsetY());
+    rowLow = std::min(rowLow, animator.rowDrop(0, 0));
+  }
+  testTrue(g,
+           panelLow < 0.0f && rowLow < 0.0f,
+           "the panel and rows bounce just past their resting places");
   animator.tick(5.0f);
   testTrue(g, animator.openProgress() == 1.0f, "the reveal clamps at one");
   testTrue(g,
-           animator.panelReveal() == 1.0f && animator.panelOffsetY() == 0.0f,
+           animator.panelReveal() == 1.0f && animator.panelOffsetY() == 0.0f &&
+             animator.rowDrop(12, 0) == 0.0f,
            "a settled panel sits at its resting position");
 
-  animator.beginSelectionTravel(0.0f);
+  animator.beginSelectionTravel(0.0f, 1.0f);
   testTrue(g,
            animator.selectionPosition(1.0f) == 0.0f,
            "selection travel starts at the row it leaves");
@@ -629,7 +884,7 @@ testGuiMenuShellClocksAndLayout()
   GuiMenuAnimator still;
   still.setReducedMotion(true);
   still.restart();
-  still.beginSelectionTravel(0.0f);
+  still.beginSelectionTravel(0.0f, 3.0f);
   still.triggerValuePulse();
   still.tick(0.01f);
   testTrue(g,

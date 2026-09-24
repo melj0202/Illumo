@@ -114,6 +114,9 @@ private:
   GuiSpringArray rowFocus;
   GuiSpringArray toggleKnobs;
   GuiSpring scrollThumb;
+  // The panel swivels toward the pointer; its layout origin carries the body
+  // shift, so rows are hit where they are drawn.
+  GuiPanelTilt tilt;
 
   std::string family;
   std::string ruleSet;

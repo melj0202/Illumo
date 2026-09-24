@@ -151,6 +151,7 @@ illumo_add_guest(IllumoGame
   ../IllumoGame/Source/Game/IllumoGameConfig.cpp
   ../IllumoGame/Source/Game/MainMenuModule.cpp
   ../IllumoGame/Source/Game/MenuMotifs.cpp
+  ../IllumoGame/Source/Game/ModeBadge.cpp
   ../IllumoGame/Source/Game/NewSimulationMenu.cpp
   ../IllumoGame/Source/Game/RuleCatalogOverlay.cpp
   ../IllumoGame/Source/Game/RulesetWorkshopMenu.cpp

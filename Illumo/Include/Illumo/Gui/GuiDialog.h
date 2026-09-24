@@ -23,7 +23,8 @@ public:
   static constexpr float kDefaultPanelWidth = 420.0f;
   static constexpr float kDefaultPanelHeight = 160.0f;
   static constexpr float kOpenAnimationSeconds = 0.24f;
-  static constexpr float kSelectionAnimationSeconds = 0.14f;
+  // The rounded style's spring drop keeps ringing a little past the reveal.
+  static constexpr float kOpenSettleSeconds = 1.2f;
 
   GuiDialog(IRenderWindow* window, Renderer* renderer);
   ~GuiDialog() override = default;
@@ -56,7 +57,11 @@ public:
 
   // Rounded presentation fits the entire dialog to the viewport as one unit.
   void setRoundedStyle(bool enabled) { m_roundedStyle = enabled; }
-  void setReducedMotion(bool enabled) { m_reducedMotion = enabled; }
+  void setReducedMotion(bool enabled)
+  {
+    m_reducedMotion = enabled;
+    m_selectionMotion.setReducedMotion(enabled);
+  }
 
   void tick(float dt);
   int update(InputManager* inputManager, float dt = 0.016f);
@@ -103,12 +108,16 @@ private:
 
   int m_selectedButton;
   int m_hoveredButton;
-  float m_selectionFromButton;
-  float m_selectionAnimElapsed;
-  // Rounded style only: the stretching selection travel (with its arrival
-  // sheen), the ambient clock, and per-button focus springs.
-  float m_selectionTravelElapsed = 1.0f;
+  // The liquid selection travel between buttons (with its arrival sheen);
+  // only its selection clocks are used.
+  GuiMenuAnimator m_selectionMotion;
+  // Rounded style only: the ambient clock, per-button focus springs, and the
+  // panel's tilt toward the pointer (the layout carries its body shift, so
+  // buttons are hit where they are drawn).
   float m_ambientElapsed = 0.0f;
+  GuiPanelTilt m_tilt;
+  float m_virtualWidth = 0.0f;
+  float m_virtualHeight = 0.0f;
   GuiSpringArray m_buttonFocus;
 
   float m_panelX;

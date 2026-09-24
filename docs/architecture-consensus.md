@@ -99,17 +99,23 @@ a presented frame of a running app and prints one JSON result (D-E14, §5.12).
 ## 0. One-line summary
 
 The simulator's Edit-mode Cell paint drawer is a module-owned GameVisual using
-GuiKit rounded surfaces and UiTheme colors. Its bottom pull tab, vertical slide, chevron, and
-row emphasis follow reducedUiMotion. State swatches read the active family's
+GuiKit rounded surfaces and UiTheme colors. Closed, it is a round glass bubble
+peeking over the footer with an up chevron and a paintbrush whose bristles
+carry the current paint; hover swells it. Clicking the bubble morphs it into
+the drawer on two springs (the width leads, the height follows and bounces),
+and the drawer's labels fade in once it has formed; the drawer's header morphs
+it back. The morph, bubble hover and row emphasis follow reducedUiMotion. State swatches read the active family's
 palette and select the existing paint path; right-click remains erase. Fitted
 drawing and pointer coordinates agree, and palette gestures capture pointer
 input through release. The drawer anchors above the controls-hint band,
 fits the remaining height, and leaves footer input to the hints. The opaque
-footer covers drawer overflow during its slide. On entering Edit, the controls
-hint bar leads the palette tab by a short stagger; on exit, the tab leads the
-bar. The canvas inset tracks the visible portion of the moving footer. Reduced
-UI motion snaps this transition. The tab travels by its own height plus the
-full footer height before it is removed. See [game controls](packages/game.md).
+footer covers the bubble's lower half and any morph overflow. On entering
+Edit, the controls hint bar leads the palette by a short stagger and both pop
+up on jelly springs that bounce past their slots (the footer continues below
+the screen edge so a lifted bar never opens a gap); on exit, the palette leads
+the bar and both ease away without ringing. The canvas inset tracks the
+visible portion of the moving footer, clamped so it never bounces. Reduced UI motion snaps this transition. The palette travels by
+its visible height plus the full footer height before it is removed. See [game controls](packages/game.md).
 
 **The workspace separates the reusable `Illumo` static library from in-tree
 applications. Illumo owns the generic application runner, platform
@@ -1059,51 +1065,82 @@ scale. A held opening click is consumed until release.
 The menus share one "living glass" visual language (D-R26). Panels, cards and
 buttons are soft-shadowed glass: a lit rim over a vertical-gradient face, a
 breathing outer glow, and a cyan-to-violet accent hairline with a travelling
-glint. Overlays sit on a radial scrim rather than a flat backdrop. Selection is
-a pill whose leading edge races ahead with a slight overshoot while its trailing
-edge follows, so it stretches between rows and then settles; a sheen sweeps it
-on arrival. Rows lean in (label slide, tile growth, glow) on spring-driven
-emphasis; toggle knobs, count chips, footer buttons and scrollbar thumbs travel
-on springs; changed values bloom and stepper arrows nudge toward the change.
+glint. Overlays sit on a radial scrim rather than a flat backdrop. Motion is
+liquid and a little bouncy (D-UI8). Selection is a drop of liquid
+(`GuiKit::drawLiquidSelection`): its head and tail are two springs, so the head
+pours toward the new row and overshoots while the tail lags, the drop necks in
+the middle and tapers to a smaller tail like a teardrop, bulges as the tail
+catches up, and keeps its momentum when redirected mid-flight; at rest it is an
+ordinary rounded pill, and a sheen sweeps it on arrival. Panels and rows drop
+in on springs and bounce just past their resting places. Rows lean in (label
+slide, tile growth, glow) on jelly-like emphasis springs; toggle knobs stretch
+like droplets as they boing across; count chips, footer buttons and scrollbar
+thumbs travel on springs; changed values bloom and spring the way they moved.
+Every glass panel (title screen, settings, canvas setup, Ruleset Workshop and
+the rounded pause/exit dialogs) swivels toward the pointer through
+`GuiPanelTilt`: layers shift by depth (glass least, then footer, body, header,
+and accents such as the glider motifs most), the glass takes the tilt for its
+shadow, glare and edge light, the layout origin carries the body shift so hit
+testing follows the drawing, and a panel swings level when it is not the
+pointer's target.
 Footers use keycap hints. The title screen runs a real Immigration Life world
 behind the glass: a Gosper gun streams cyan gliders, coral acorns churn, and a
 deterministic generator launches gliders and spaceships in from the edges every
 few seconds. The world is reseeded when it grows past 1,400 chunks or after 15
 minutes, and it never replaces the player's saved ruleset preference. A radial
-vignette and three drifting soft glows lean against the pointer (parallax), a
-soft spotlight follows it, the panel dims while an overlay is open, the CSIM
-letters cascade in on an overshooting curve and then bob gently, a real glider
-walks the 7x7 motif torus (`CellMotif`, shared with canvas setup), menu icons
-animate with emphasis, and a ripple blooms from a pressed row. Actions are
+vignette and three drifting soft glows, which squeeze and swell like lava-lamp
+blobs, lean against the pointer (parallax), a soft spotlight follows it lazily
+and smears along its motion, the glass panel swivels toward the pointer (its
+layers shift by depth, from the glass up through the rows, title and the
+nearest glider motif; the shadow slides away, a glare follows the pointer and
+the facing edges catch the light via `GuiGlassStyle::tiltX`/`tiltY`; rows are
+hit where they are drawn, and the panel swings level behind an overlay), the
+panel dims while an overlay is open, the CSIM
+letters fall in like drops and bounce as they land, then float on a slow
+swell, a real glider walks the 7x7 motif torus (`CellMotif`, shared with canvas
+setup) whose newborn cells pop in as bouncing beads, menu icons animate with
+emphasis, and a pressed row wobbles like jelly while a splash (a ripple ring
+and teardrop droplets, `GuiKit::drawSplash`) leaps from the press. Actions are
 never delayed by feedback animation, and overlays close immediately (a closed
 overlay emits no commands). The pause dialog, the F2 workshop, the cell-paint
-drawer, the inspector card, the hamburger button and the edit-hint footer use
-the same chrome; the drawer and the hint footer stay opaque.
+drawer, the inspector card, the hamburger button, the edit-hint footer and the
+corner EDIT/NORMAL badge (`ModeBadge`, a glass pill mirroring the hamburger
+button that drops in as a bead, stretches into a pill, holds, then melts
+away; it replaced the simulator's `SplashText` label) use the same chrome; the
+drawer and the hint footer stay opaque.
 `GuiKit` supplies the chrome: `drawRoundedRect` (three rectangles plus packed
 two-wedge corner quads), `drawRoundedGradientRect`, `drawRoundedBand` (the
 shared core of outlines, soft shadows and glows), `drawSoftShadow`,
 `drawSoftGlow`, `drawVignette`, `drawSheen`, `drawGlassPanel`
-(`drawRoundedPanel` forwards to it) and keycap hints. Fades target the same
+(`drawRoundedPanel` forwards to it), `drawLiquidSelection` (non-overlapping
+slices across the travel, so translucent faces stay even), `drawSplash` and
+keycap hints. Fades target the same
 color at zero alpha (`UiTheme::transparentOf`) so straight-alpha blending never
 darkens an edge. `GuiDialog` provides opt-in rounded presentation with a fitted
 visual/pointer scale; its default flat presentation remains available to other
 apps unchanged.
 `MainMenuModule`, `ConfigurationMenu`, `NewSimulationMenu`, and
 `RulesetWorkshopMenu` share one motion and layout vocabulary through
-`GuiMenuShell` rather than repeating it: the reveal, staggered row entrance,
-gliding and stretching selection, arrival sheen, press pulse, directional value
-pulse, ambient cycle, and caret blink come from `GuiMenuAnimator`; physical
+`GuiMenuShell` rather than repeating it: the reveal, springy panel and row
+drops, the liquid selection span (head and tail springs with a squash
+response), arrival sheen, press pulse and jelly wobble, directional value pulse
+and nudge, ambient cycle, and caret blink come from `GuiMenuAnimator`; physical
 motion comes from `GuiSpring` and `GuiSpringArray` (closed-form damped springs
-that are stable at any frame time and snap exactly at rest); easing curves
-(`outCubic`, `outBack`, `inOutCubic`) come from `GuiEasing`; the fitted virtual
+that are stable at any frame time and snap exactly at rest) tuned from the
+shared `GuiMotion` presets (`kJelly`, `kBoing`, `kLiquidHead`, `kLiquidTail`,
+`kSwell`, `kGlide`, `kDrift`, `kSway`); the pointer tilt comes from
+`GuiPanelTilt`; easing curves (`outCubic`, `outBack`,
+`inOutCubic`) and clock-driven spring shapes (`springStep`, `wobble`) come from
+`GuiEasing`; the fitted virtual
 space, visible-row window, and wheel scrolling come from `GuiPanelLayout`; hover
 and press edges come from `GuiPointerTracker`. Each overlay still owns its own
 layout constants, rows, and `GameVisual` composition. The title screen keeps
 its own slower entrance clock. The game advances pause-dialog time once per
 frame, and submission refreshes the visual even while input yields to the
 console. `reducedUiMotion` snaps every clock and spring and disables decorative
-motion (sheen, ripple, title bob, parallax, spotlight, background visitors,
-motif crossfades, dialog breathing), including pause/exit transitions; it does
+motion (sheen, ripple, splash, wobbles, bounces, title bob, parallax,
+spotlight, background visitors, motif crossfades, dialog breathing), including
+pause/exit transitions; it does
 not change domain simulation or cell fading. `showInspector` loads at product
 startup and applies to the existing inspector drawable.
 
@@ -1120,8 +1157,8 @@ the finite draft. Create passes validated canvas values to CellGameModule;
 Back or Escape discards the draft. Display and performance preferences are not
 part of this payload. The screen fits all rows, respects reduced menu motion,
 and consumes wheel input without changing selection or values. Glass cards,
-spring-driven focus lighting, a stretching selection pill, directional value
-pulses, a crossfading boundary badge, and a live glider on a 6x6 torus match
+spring-driven focus lighting, the liquid selection drop, springy directional
+value nudges, a crossfading boundary badge, and a live glider on a 6x6 torus match
 the main menu; reduced motion freezes the motif and snaps focus feedback.
 
 Entering a new or loaded cell canvas plays a 0.9-second cellular wave. A
@@ -1507,6 +1544,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-UI5** | Console can pop out into a separate `GLFW_NO_API` window drawn by `SoftwareCanvas` and presented by the platform; no second GL context. |
 | **D-UI6** | `GuiTextEdit` (UTF-8 caret, selection, clipboard) and `GuiFileTree` (non-recursive flattening of asynchronous listings) join `Illumo/Gui`; IllEd's inspector and asset browser and DebugModule's keyboard-only `files` browser use them. |
 | **D-UI7** | Tool UIs (IllEd, IllMeshViewer) use the plain `GuiToolStyle` look and one `GuiPanelDock` of detachable panels: left/right columns with splitters, title-bar hide/pop-out/dock, tear-off past the window edge, layout saved in the `panelLayout` setting. Panels are content renderers over a `GuiPanelPlacement` (rectangle plus surface) read through `GuiPanelPointer`, never knowing whether they are detached. Chrome keeps the tool metrics; `fontSize` scales panel content. No retained widget tree. |
+| **D-UI8** | Glass menus move like liquid: the travelling selection is a drop with head and tail springs (`GuiMotion::kLiquidHead`/`kLiquidTail`) and a squash response, drawn by `GuiKit::drawLiquidSelection` (full-width head, neck, teardrop tail; a rounded rect at rest); panels and rows drop in on springs, presses and stepped values wobble, every glass panel swivels toward the pointer through `GuiPanelTilt` (depth-layered shift, `GuiGlassStyle` tilt shadow/glare/edge light, layout origin and hit testing shifted to match), and screens tune springs from `GuiMotion` presets. |
 | **D-DOC1** | Established one first-party documentation tree; refined by D-DOC2. |
 | **D-DOC2** | Canonical technical documentation remains under `docs/`; `illumo.tex` is the prose book and `architecture-map.tex` the chart pack. Root/nested `AGENTS.md` and `.agent/` are operational-guidance exceptions. |
 | **D-T1** | Independent compile-efficient test runners expose exact cases; `IllumoWorkspace` aggregates all registered runners and combined Clang/LLVM coverage enforces at least 85% production line coverage across their linked production code. |

@@ -1,5 +1,6 @@
 #include <Illumo/Gui/GuiMenuShell.h>
 
+#include <Illumo/Gui/GuiTypes.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -35,6 +36,55 @@ GuiEasing::inOutCubic(float progress)
   return 1.0f - remaining * remaining * remaining * 0.5f;
 }
 
+// Below this envelope a spring's remaining ringing is a small fraction of a
+// pixel even over a full panel lift, so clock-driven springs land exactly.
+static const float kRestEnvelope = 0.0005f;
+
+float
+GuiEasing::springStep(float seconds, float frequencyHz, float dampingRatio)
+{
+  if (!std::isfinite(seconds) || seconds <= 0.0f) {
+    return 0.0f;
+  }
+  if (!std::isfinite(frequencyHz) || frequencyHz <= 0.0f ||
+      !std::isfinite(dampingRatio) || dampingRatio <= 0.0f) {
+    return 1.0f;
+  }
+  const float omega = 6.28318531f * frequencyHz;
+  if (dampingRatio >= 1.0f) {
+    const float decay = std::exp(-omega * seconds);
+    if (decay * (1.0f + omega * seconds) < kRestEnvelope) {
+      return 1.0f;
+    }
+    return 1.0f - decay * (1.0f + omega * seconds);
+  }
+  const float zeta = dampingRatio;
+  const float damped = omega * std::sqrt(1.0f - zeta * zeta);
+  const float decay = std::exp(-zeta * omega * seconds);
+  if (decay < kRestEnvelope) {
+    return 1.0f;
+  }
+  return 1.0f - decay * (std::cos(damped * seconds) +
+                         (zeta * omega / damped) * std::sin(damped * seconds));
+}
+
+float
+GuiEasing::wobble(float seconds, float frequencyHz, float dampingRatio)
+{
+  if (!std::isfinite(seconds) || seconds < 0.0f ||
+      !std::isfinite(frequencyHz) || frequencyHz <= 0.0f ||
+      !std::isfinite(dampingRatio) || dampingRatio <= 0.0f) {
+    return 0.0f;
+  }
+  const float omega = 6.28318531f * frequencyHz;
+  const float zeta = std::min(dampingRatio, 0.99f);
+  const float decay = std::exp(-zeta * omega * seconds);
+  if (decay < kRestEnvelope * 4.0f) {
+    return 0.0f;
+  }
+  return decay * std::cos(omega * std::sqrt(1.0f - zeta * zeta) * seconds);
+}
+
 void
 GuiSpring::configure(float frequencyHz, float dampingRatio)
 {
@@ -44,6 +94,12 @@ GuiSpring::configure(float frequencyHz, float dampingRatio)
   if (std::isfinite(dampingRatio) && dampingRatio > 0.0f) {
     m_dampingRatio = dampingRatio;
   }
+}
+
+void
+GuiSpring::configure(const GuiSpringTuning& tuning)
+{
+  configure(tuning.frequencyHz, tuning.dampingRatio);
 }
 
 void
@@ -120,6 +176,12 @@ GuiSpringArray::configure(float frequencyHz, float dampingRatio)
 }
 
 void
+GuiSpringArray::configure(const GuiSpringTuning& tuning)
+{
+  configure(tuning.frequencyHz, tuning.dampingRatio);
+}
+
+void
 GuiSpringArray::setTarget(int index, float target)
 {
   if (index >= 0 && index < kCapacity) {
@@ -172,6 +234,78 @@ GuiSpringArray::value(int index) const
 }
 
 float
+GuiSpringArray::velocity(int index) const
+{
+  if (index < 0 || index >= kCapacity) {
+    return 0.0f;
+  }
+  return m_springs[static_cast<size_t>(index)].velocity();
+}
+
+GuiPanelTilt::GuiPanelTilt()
+{
+  m_x.configure(GuiMotion::kSway);
+  m_y.configure(GuiMotion::kSway);
+}
+
+void
+GuiPanelTilt::aim(float pointerX,
+                  float pointerY,
+                  float width,
+                  float height,
+                  bool active)
+{
+  const bool inside = active && std::isfinite(pointerX) &&
+                      std::isfinite(pointerY) && width > 0.0f &&
+                      height > 0.0f && pointerX >= 0.0f && pointerY >= 0.0f &&
+                      pointerX <= width && pointerY <= height;
+  if (!inside) {
+    m_x.setTarget(0.0f);
+    m_y.setTarget(0.0f);
+    return;
+  }
+  m_x.setTarget(std::clamp(pointerX / width * 2.0f - 1.0f, -1.0f, 1.0f));
+  m_y.setTarget(std::clamp(pointerY / height * 2.0f - 1.0f, -1.0f, 1.0f));
+}
+
+void
+GuiPanelTilt::tick(float deltaSeconds, bool reducedMotion)
+{
+  if (reducedMotion) {
+    m_x.setTarget(0.0f);
+    m_y.setTarget(0.0f);
+  }
+  m_x.tick(deltaSeconds, reducedMotion);
+  m_y.tick(deltaSeconds, reducedMotion);
+}
+
+void
+GuiPanelTilt::level()
+{
+  m_x.snapTo(0.0f);
+  m_y.snapTo(0.0f);
+}
+
+float
+GuiPanelTilt::x() const
+{
+  return std::clamp(m_x.value(), -kMaximumTilt, kMaximumTilt);
+}
+
+float
+GuiPanelTilt::y() const
+{
+  return std::clamp(m_y.value(), -kMaximumTilt, kMaximumTilt);
+}
+
+void
+GuiPanelTilt::applyTo(GuiGlassStyle& style) const
+{
+  style.tiltX = std::clamp(x(), -1.0f, 1.0f);
+  style.tiltY = std::clamp(y(), -1.0f, 1.0f);
+}
+
+float
 GuiEasing::approach(float current,
                     float target,
                     float responseRate,
@@ -204,14 +338,32 @@ GuiEasing::approachLinear(float current,
   return next;
 }
 
+// Entrance, press and value springs. The selection's head and tail take
+// their feel from GuiMotion; these clock-driven ones are tuned here once.
+static const float kPanelDropHz = 2.4f;
+static const float kPanelDropDamping = 0.52f;
+static const float kRowDropHz = 2.8f;
+static const float kRowDropDamping = 0.45f;
+static const float kPressWobbleHz = 3.4f;
+static const float kPressWobbleDamping = 0.3f;
+static const float kValueWobbleHz = 4.2f;
+static const float kValueWobbleDamping = 0.34f;
+
+GuiMenuAnimator::GuiMenuAnimator()
+{
+  m_selectionHead.configure(GuiMotion::kLiquidHead);
+  m_selectionTail.configure(GuiMotion::kLiquidTail);
+}
+
 void
 GuiMenuAnimator::restart()
 {
-  m_openElapsed = m_reducedMotion ? kOpenSeconds : 0.0f;
-  m_selectionFromRow = 0.0f;
+  m_openElapsed = m_reducedMotion ? kOpenSettleSeconds : 0.0f;
+  m_selectionHead.snapTo(m_selectionHead.target());
+  m_selectionTail.snapTo(m_selectionTail.target());
   m_selectionElapsed = kSelectionSettleSeconds;
-  m_pressElapsed = kPressSeconds;
-  m_valuePulseElapsed = kValuePulseSeconds;
+  m_pressElapsed = kPressWobbleSeconds;
+  m_valuePulseElapsed = kValueWobbleSeconds;
   m_valuePulseDirection = 0;
   m_ambientPhase = 0.0f;
   m_caretElapsed = 0.0f;
@@ -224,20 +376,31 @@ GuiMenuAnimator::tick(float deltaSeconds)
     return;
   }
   if (m_reducedMotion) {
-    m_openElapsed = kOpenSeconds;
+    m_openElapsed = kOpenSettleSeconds;
+    m_selectionHead.tick(deltaSeconds, true);
+    m_selectionTail.tick(deltaSeconds, true);
     m_selectionElapsed = kSelectionSettleSeconds;
-    m_pressElapsed = kPressSeconds;
-    m_valuePulseElapsed = kValuePulseSeconds;
+    m_pressElapsed = kPressWobbleSeconds;
+    m_valuePulseElapsed = kValueWobbleSeconds;
     m_ambientPhase = 0.0f;
     m_caretElapsed = 0.0f;
     return;
   }
-  m_openElapsed = std::min(kOpenSeconds, m_openElapsed + deltaSeconds);
+  m_openElapsed = std::min(kOpenSettleSeconds, m_openElapsed + deltaSeconds);
+  // A long stall integrates in spring-sized steps so the drop still lands.
+  float remaining = std::min(deltaSeconds, kMaximumSelectionStepSeconds);
+  while (remaining > 0.0f &&
+         (!m_selectionHead.settled() || !m_selectionTail.settled())) {
+    const float step = std::min(remaining, GuiSpring::kMaximumStepSeconds);
+    m_selectionHead.tick(step, false);
+    m_selectionTail.tick(step, false);
+    remaining -= step;
+  }
   m_selectionElapsed =
     std::min(kSelectionSettleSeconds, m_selectionElapsed + deltaSeconds);
-  m_pressElapsed = std::min(kPressSeconds, m_pressElapsed + deltaSeconds);
+  m_pressElapsed = std::min(kPressWobbleSeconds, m_pressElapsed + deltaSeconds);
   m_valuePulseElapsed =
-    std::min(kValuePulseSeconds, m_valuePulseElapsed + deltaSeconds);
+    std::min(kValueWobbleSeconds, m_valuePulseElapsed + deltaSeconds);
   m_ambientPhase = std::fmod(
     m_ambientPhase + std::min(deltaSeconds, kMaximumAmbientStepSeconds),
     kAmbientPeriodSeconds);
@@ -275,7 +438,12 @@ GuiMenuAnimator::panelReveal() const
 float
 GuiMenuAnimator::panelOffsetY() const
 {
-  return (1.0f - panelReveal()) * kPanelLiftPixels;
+  if (m_reducedMotion) {
+    return 0.0f;
+  }
+  return (1.0f - GuiEasing::springStep(
+                   m_openElapsed, kPanelDropHz, kPanelDropDamping)) *
+         kPanelLiftPixels;
 }
 
 float
@@ -290,35 +458,86 @@ GuiMenuAnimator::rowReveal(int row, int firstVisibleRow) const
     std::clamp((m_openElapsed - delay) / kRowRevealSeconds, 0.0f, 1.0f));
 }
 
-void
-GuiMenuAnimator::beginSelectionTravel(float fromPosition)
+float
+GuiMenuAnimator::rowDrop(int row, int firstVisibleRow) const
 {
-  m_selectionFromRow = fromPosition;
+  if (m_reducedMotion) {
+    return 0.0f;
+  }
+  const float delay = static_cast<float>(std::max(0, row - firstVisibleRow)) *
+                      kRowRevealStaggerSeconds;
+  return 1.0f - GuiEasing::springStep(
+                  m_openElapsed - delay, kRowDropHz, kRowDropDamping);
+}
+
+void
+GuiMenuAnimator::beginSelectionTravel(float fromRow, float toRow)
+{
+  if (!std::isfinite(fromRow) || !std::isfinite(toRow)) {
+    return;
+  }
+  // From rest the drop leaves the old row; mid-flight it keeps its momentum
+  // and simply pours toward the new row.
+  if (m_selectionHead.settled() && m_selectionTail.settled()) {
+    m_selectionHead.snapTo(fromRow);
+    m_selectionTail.snapTo(fromRow);
+  }
+  m_selectionHead.setTarget(toRow);
+  m_selectionTail.setTarget(toRow);
+  m_selectionDirection = toRow >= m_selectionHead.value() ? 1.0f : -1.0f;
   m_selectionElapsed = 0.0f;
+}
+
+float
+GuiMenuAnimator::softOvershoot(float edge) const
+{
+  const float target = m_selectionHead.target();
+  const float beyond = (edge - target) * m_selectionDirection;
+  if (beyond <= 0.0f) {
+    return edge;
+  }
+  return target + m_selectionDirection * kSelectionOvershootRows *
+                    std::tanh(beyond / kSelectionOvershootRows);
 }
 
 void
 GuiMenuAnimator::settleSelection()
 {
+  m_selectionHead.snapTo(m_selectionHead.target());
+  m_selectionTail.snapTo(m_selectionTail.target());
   m_selectionElapsed = kSelectionSettleSeconds;
+}
+
+bool
+GuiMenuAnimator::selectionMoving(float selectedRow) const
+{
+  // A selection changed without a travel (or already at rest) reads as its
+  // row, so callers never see a stale target.
+  return !m_reducedMotion &&
+         (!m_selectionHead.settled() || !m_selectionTail.settled()) &&
+         m_selectionHead.target() == selectedRow;
 }
 
 GuiSelectionSpan
 GuiMenuAnimator::selectionSpan(float selectedRow) const
 {
   GuiSelectionSpan span;
-  if (m_reducedMotion) {
-    span.leading = selectedRow;
-    span.trailing = selectedRow;
+  span.leading = selectedRow;
+  span.trailing = selectedRow;
+  if (!selectionMoving(selectedRow)) {
     return span;
   }
-  const float travel = selectedRow - m_selectionFromRow;
-  span.leading =
-    m_selectionFromRow +
-    travel * GuiEasing::outBack(m_selectionElapsed / kSelectionLeadSeconds);
-  span.trailing =
-    m_selectionFromRow +
-    travel * GuiEasing::outCubic(m_selectionElapsed / kSelectionTrailSeconds);
+  span.leading = softOvershoot(m_selectionHead.value());
+  span.trailing = softOvershoot(m_selectionTail.value());
+  // Closing speed along the drop: the tail catching the head bulges it, the
+  // head pulling away stretches it thin.
+  const float separation = span.leading - span.trailing;
+  const float direction = separation != 0.0f
+                            ? (separation > 0.0f ? 1.0f : -1.0f)
+                            : (selectedRow >= span.trailing ? 1.0f : -1.0f);
+  const float closing =
+    (m_selectionTail.velocity() - m_selectionHead.velocity()) * direction;
+  span.squash = std::clamp(closing * kSquashPerRowSpeed, -1.0f, 1.0f);
   return span;
 }
 
@@ -328,8 +547,8 @@ GuiMenuAnimator::selectionSheen() const
   if (m_reducedMotion) {
     return -1.0f;
   }
-  // The sweep starts as the leading edge lands on the new row.
-  const float elapsed = m_selectionElapsed - kSelectionLeadSeconds * 0.7f;
+  // The sweep starts as the head lands on the new row.
+  const float elapsed = m_selectionElapsed - kSheenDelaySeconds;
   if (elapsed <= 0.0f || elapsed >= kSheenSeconds) {
     return -1.0f;
   }
@@ -361,14 +580,23 @@ GuiMenuAnimator::pressProgress() const
 }
 
 float
+GuiMenuAnimator::pressWobble() const
+{
+  if (m_reducedMotion || m_pressElapsed >= kPressWobbleSeconds) {
+    return 0.0f;
+  }
+  return GuiEasing::wobble(m_pressElapsed, kPressWobbleHz, kPressWobbleDamping);
+}
+
+float
 GuiMenuAnimator::selectionPosition(float selectedRow) const
 {
-  if (m_reducedMotion) {
+  if (!selectionMoving(selectedRow)) {
     return selectedRow;
   }
-  const float progress = GuiEasing::outCubic(
-    std::clamp(m_selectionElapsed / kSelectionSeconds, 0.0f, 1.0f));
-  return m_selectionFromRow + (selectedRow - m_selectionFromRow) * progress;
+  return (softOvershoot(m_selectionHead.value()) +
+          softOvershoot(m_selectionTail.value())) *
+         0.5f;
 }
 
 void
@@ -393,6 +621,26 @@ GuiMenuAnimator::valuePulse() const
   }
   return 1.0f -
          std::clamp(m_valuePulseElapsed / kValuePulseSeconds, 0.0f, 1.0f);
+}
+
+float
+GuiMenuAnimator::valueWobble() const
+{
+  if (m_reducedMotion || m_valuePulseElapsed >= kValueWobbleSeconds) {
+    return 0.0f;
+  }
+  // Starts at rest and leaps out: the sine-phased swing of a kicked spring,
+  // normalized so its first peak reads 1.
+  const float omega = 6.28318531f * kValueWobbleHz;
+  const float decayRate = kValueWobbleDamping * omega;
+  const float damped =
+    omega * std::sqrt(1.0f - kValueWobbleDamping * kValueWobbleDamping);
+  const float peakSeconds = std::atan2(damped, decayRate) / damped;
+  const float peak =
+    std::exp(-decayRate * peakSeconds) * std::sin(damped * peakSeconds);
+  const float swing = std::exp(-decayRate * m_valuePulseElapsed) *
+                      std::sin(damped * m_valuePulseElapsed);
+  return static_cast<float>(m_valuePulseDirection) * swing / peak;
 }
 
 bool

@@ -247,10 +247,10 @@ RulesetWorkshopMenu::RulesetWorkshopMenu(IRenderWindow* targetWindow,
   visual.setRenderer(renderer);
   visual.prepare(renderer);
   setVisible(false);
-  rowFocus.configure(3.0f, 0.7f);
-  chipGlow.configure(3.2f, 0.65f);
-  footerFocus.configure(3.0f, 0.7f);
-  scrollThumb.configure(3.0f, 0.9f);
+  rowFocus.configure(GuiMotion::kJelly);
+  chipGlow.configure(GuiMotion::kBoing);
+  footerFocus.configure(GuiMotion::kJelly);
+  scrollThumb.configure(GuiMotion::kGlide);
 }
 
 void
@@ -305,6 +305,7 @@ RulesetWorkshopMenu::open(const RuleFamilyDefinition& currentFamily,
   animator.restart();
   // Ignore the held click that opened the workshop until its first release.
   pointer.reset(true);
+  tilt.level();
   errorMessage.clear();
   previewDirty = true;
   openState = true;
@@ -370,6 +371,12 @@ RulesetWorkshopMenu::tick(float deltaSeconds)
   }
   animator.tick(deltaSeconds);
   updateSprings(deltaSeconds, false);
+  tilt.aim(pointer.x(),
+           pointer.y(),
+           panelFit.virtualWidth,
+           panelFit.virtualHeight,
+           openState);
+  tilt.tick(deltaSeconds, animator.reducedMotion());
 }
 
 float
@@ -443,8 +450,12 @@ RulesetWorkshopMenu::updateLayout()
   panelHeight = std::min(700.0f, std::max(160.0f, virtualHeight - 20.0f));
   panelWidth = std::min(panelWidth, virtualWidth);
   panelHeight = std::min(panelHeight, virtualHeight);
-  panelX = std::max(0.0f, (virtualWidth - panelWidth) * 0.5f);
-  panelY = std::max(0.0f, (virtualHeight - panelHeight) * 0.5f);
+  // The layout origin swivels with the body layer, so hit testing and
+  // drawing agree while the panel tilts toward the pointer.
+  panelX =
+    std::max(0.0f, (virtualWidth - panelWidth) * 0.5f) + tilt.bodyShiftX();
+  panelY =
+    std::max(0.0f, (virtualHeight - panelHeight) * 0.5f) + tilt.bodyShiftY();
 
   headerHeight = panelHeight >= 500.0f
                    ? 102.0f
@@ -476,7 +487,8 @@ RulesetWorkshopMenu::selectRow(int row)
   const int nextBody = bodyIndexForRow(row);
   if (row != selectedRow) {
     if (previousBody >= 0 && nextBody >= 0) {
-      animator.beginSelectionTravel(selectionRowPosition());
+      animator.beginSelectionTravel(static_cast<float>(previousBody),
+                                    static_cast<float>(nextBody));
     } else {
       // Travel between the body list and the footer bar is not a glide.
       animator.settleSelection();
@@ -1446,8 +1458,14 @@ RulesetWorkshopMenu::rebuildVisual()
   glass.ambientPhase = animator.ambientPhase();
   glass.glow = 0.35f + 0.3f * breathe;
   glass.accentReveal = reveal;
-  GuiKit::drawGlassPanel(
-    visual, panelX, animatedPanelY, panelWidth, panelHeight, glass);
+  tilt.applyTo(glass);
+  GuiKit::drawGlassPanel(visual,
+                         panelX + tilt.layerX(GuiPanelTilt::kGlassDepth),
+                         animatedPanelY +
+                           tilt.layerY(GuiPanelTilt::kGlassDepth),
+                         panelWidth,
+                         panelHeight,
+                         glass);
   const float ruleWidth = (panelWidth - 40.0f) * reveal;
   const ColorRgba ruleCyan = UiTheme::applyOpacity(cyan, panelOpacity);
   const ColorRgba ruleViolet = UiTheme::applyOpacity(
@@ -1469,22 +1487,26 @@ RulesetWorkshopMenu::rebuildVisual()
                          UiTheme::transparentOf(ruleViolet),
                          ruleViolet);
 
+  // The header floats nearer than the rows and swings further with the tilt.
+  const float headerX = panelX + tilt.layerX(GuiPanelTilt::kHeaderDepth);
+  const float headerY =
+    animatedPanelY + tilt.layerY(GuiPanelTilt::kHeaderDepth);
   const float titleFont = std::clamp(panelWidth * 0.038f, 16.0f, 26.0f);
   const float smallFont = panelHeight >= 400.0f ? 12.0f : 10.0f;
   const float headerSlide = (1.0f - reveal) * 10.0f;
   visual.addText("F2  /  RULESET WORKSHOP",
-                 panelX + 28.0f - headerSlide,
-                 animatedPanelY + 14.0f,
+                 headerX + 28.0f - headerSlide,
+                 headerY + 14.0f,
                  11.0f,
                  UiTheme::applyOpacity(cyan, panelOpacity));
   visual.addText("RULESET WORKSHOP",
-                 panelX + 28.0f - headerSlide * 0.6f,
-                 animatedPanelY + 31.0f,
+                 headerX + 28.0f - headerSlide * 0.6f,
+                 headerY + 31.0f,
                  titleFont,
                  UiTheme::applyOpacity(UiTheme::textPrimary(), panelOpacity));
   visual.addText(draft.name,
-                 panelX + 30.0f,
-                 animatedPanelY + (headerHeight >= 90.0f ? 63.0f : 52.0f),
+                 headerX + 30.0f,
+                 headerY + (headerHeight >= 90.0f ? 63.0f : 52.0f),
                  14.0f,
                  UiTheme::applyOpacity(UiTheme::textSecondary(), panelOpacity));
 
@@ -1494,8 +1516,8 @@ RulesetWorkshopMenu::rebuildVisual()
   const float stateChipWidth = 88.0f;
   const float chipGap = 7.0f;
   const float chipGroupWidth = familyChipWidth + stateChipWidth + chipGap;
-  const float familyChipX = panelX + panelWidth - chipGroupWidth - 24.0f;
-  const float chipY = animatedPanelY + 18.0f;
+  const float familyChipX = headerX + panelWidth - chipGroupWidth - 24.0f;
+  const float chipY = headerY + 18.0f;
   if (panelWidth >= chipGroupWidth + 56.0f) {
     // Pill chips with a lit rim: family in cyan, state count in violet.
     const float chipXs[2] = { familyChipX,
@@ -1536,8 +1558,8 @@ RulesetWorkshopMenu::rebuildVisual()
   if (headerHeight >= 78.0f) {
     visual.addText(
       "ARROWS / W,S MOVE   LEFT / RIGHT CHANGE   ENTER SELECT   ESC CLOSE",
-      panelX + 30.0f,
-      animatedPanelY + headerHeight - 15.0f,
+      headerX + 30.0f,
+      headerY + headerHeight - 15.0f,
       smallFont,
       UiTheme::applyOpacity(UiTheme::textMuted(), panelOpacity));
   }
@@ -1611,68 +1633,47 @@ RulesetWorkshopMenu::rebuildVisual()
       UiTheme::applyOpacity(UiTheme::cardBottom(), rowOpacity));
   }
 
-  // The gliding, stretching selection pill (body rows only; footer actions
-  // light their own buttons).
+  // The selection pours between rows like a drop of liquid (body rows only;
+  // footer actions light their own buttons).
   const int selectedBody = bodyIndexForRow(selectedRow);
   if (selectedBody >= firstVisibleRow && selectedBody < lastVisibleRow) {
     const float windowTop = static_cast<float>(firstVisibleRow);
     const float windowBottom = static_cast<float>(lastVisibleRow - 1);
     const GuiSelectionSpan span =
       animator.selectionSpan(static_cast<float>(selectedBody));
-    const float spanTop = std::clamp(
-      std::min(span.leading, span.trailing), windowTop, windowBottom);
-    const float spanBottom = std::clamp(
-      std::max(span.leading, span.trailing), windowTop, windowBottom);
-    const float pillY =
-      animatedFirstRowY + rowHeight * (spanTop - windowTop) + 1.0f;
-    const float pillHeight =
-      rowHeight * (spanBottom - spanTop) + rowHeight - 5.0f;
     const unsigned char pillOpacity = static_cast<unsigned char>(
       std::round(rowReveal(selectedBody) * static_cast<float>(panelOpacity)));
-    GuiKit::drawRoundedBand(
-      visual,
-      cardX,
-      pillY,
-      cardWidth,
-      pillHeight,
-      8.0f,
-      0.0f,
-      9.0f + 3.0f * breathe,
-      UiTheme::applyOpacity(UiTheme::fade(cyan, 0.18f + 0.1f * breathe),
-                            pillOpacity),
-      UiTheme::transparentOf(cyan));
-    GuiKit::drawRoundedRect(
-      visual,
-      cardX,
-      pillY,
-      cardWidth,
-      pillHeight,
-      8.0f,
-      UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), pillOpacity));
-    GuiKit::drawRoundedGradientRect(
-      visual,
-      cardX + 1.0f,
-      pillY + 1.0f,
-      cardWidth - 2.0f,
-      pillHeight - 2.0f,
-      7.0f,
-      UiTheme::applyOpacity(UiTheme::selectionTop(), pillOpacity),
-      UiTheme::applyOpacity(UiTheme::selectionBottom(), pillOpacity));
-    GuiKit::drawSheen(
-      visual,
-      cardX,
-      pillY,
-      cardWidth,
-      pillHeight,
-      8.0f,
-      animator.selectionSheen(),
-      UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 38 }, pillOpacity));
+    GuiLiquidSelection drop;
+    drop.crossStart = cardX;
+    drop.crossSize = cardWidth;
+    drop.headStart =
+      animatedFirstRowY +
+      rowHeight *
+        (std::clamp(span.leading, windowTop, windowBottom) - windowTop) +
+      1.0f;
+    drop.tailStart =
+      animatedFirstRowY +
+      rowHeight *
+        (std::clamp(span.trailing, windowTop, windowBottom) - windowTop) +
+      1.0f;
+    drop.cellLength = rowHeight - 5.0f;
+    drop.radius = 8.0f;
+    drop.squash = span.squash;
+    drop.glowSpread = 9.0f + 3.0f * breathe;
+    drop.glow = UiTheme::applyOpacity(
+      UiTheme::fade(cyan, 0.18f + 0.1f * breathe), pillOpacity);
+    drop.rim = UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), pillOpacity);
+    drop.faceTop = UiTheme::applyOpacity(UiTheme::selectionTop(), pillOpacity);
+    drop.faceBottom =
+      UiTheme::applyOpacity(UiTheme::selectionBottom(), pillOpacity);
+    drop.sheen = animator.selectionSheen();
+    drop.sheenColor =
+      UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 38 }, pillOpacity);
+    GuiKit::drawLiquidSelection(visual, drop);
   }
 
   // Pass two: row contents.
   const float pulse = animator.valuePulse();
-  const float pulseDirection =
-    static_cast<float>(animator.valuePulseDirection());
   for (int bodyRow = firstVisibleRow; bodyRow < lastVisibleRow; ++bodyRow) {
     const MenuRow& row = rows[static_cast<std::size_t>(bodyRow)];
     const float rowY =
@@ -1765,7 +1766,9 @@ RulesetWorkshopMenu::rebuildVisual()
         UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity));
 
     const Control control = row.control;
-    const float nudge = selected ? pulseDirection * pulse : 0.0f;
+    // Stepped values spring the way they moved and wobble back.
+    const float nudge =
+      selected ? std::clamp(animator.valueWobble(), -1.0f, 1.0f) : 0.0f;
     if (control == Control::BirthCounts || control == Control::SurvivalCounts) {
       const int glowBase = control == Control::BirthCounts ? 0 : 9;
       const float gap = 3.0f;

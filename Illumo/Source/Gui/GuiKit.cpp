@@ -2,6 +2,7 @@
 #include <Illumo/Rendering/Font.h>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 float
 GuiKit::estimateTextWidth(const std::string& text, float sizePt)
@@ -595,10 +596,15 @@ GuiKit::drawGlassPanel(GameVisual& visual,
   }
   const unsigned char opacity = style.opacity;
   const float radius = clampedRadius(style.radius, width, height);
+  const float tiltX =
+    std::isfinite(style.tiltX) ? std::clamp(style.tiltX, -1.0f, 1.0f) : 0.0f;
+  const float tiltY =
+    std::isfinite(style.tiltY) ? std::clamp(style.tiltY, -1.0f, 1.0f) : 0.0f;
   if (style.shadow) {
+    // A pane turned toward the pointer throws its shadow the other way.
     drawSoftShadow(visual,
-                   x,
-                   y,
+                   x - 16.0f * tiltX,
+                   y - 10.0f * tiltY,
                    width,
                    height,
                    radius,
@@ -653,6 +659,73 @@ GuiKit::drawGlassPanel(GameVisual& visual,
                            clear,
                            clear,
                            lit);
+  }
+  const float tilt = std::max(std::abs(tiltX), std::abs(tiltY));
+  if (tilt > 0.0f) {
+    // Glare follows the pointer across the glass, and the edges turned
+    // toward it catch the light; both fade out as the pane levels.
+    drawSheen(
+      visual,
+      x,
+      y,
+      width,
+      height,
+      radius,
+      0.5f + 0.42f * tiltX,
+      UiTheme::applyOpacity(ColorRgba{ 200, 245, 255, 255 },
+                            static_cast<unsigned char>(
+                              static_cast<float>(opacity) * 0.07f * tilt)));
+    const float edgeLength = std::max(0.0f, height - 2.0f * radius);
+    const float edgeWidth = std::max(0.0f, width - 2.0f * radius);
+    const float edges[4] = { std::max(0.0f, -tiltX),
+                             std::max(0.0f, tiltX),
+                             std::max(0.0f, -tiltY),
+                             std::max(0.0f, tiltY) };
+    for (int edge = 0; edge < 4; ++edge) {
+      if (edges[edge] <= 0.0f) {
+        continue;
+      }
+      const ColorRgba shine = UiTheme::applyOpacity(
+        UiTheme::fade(UiTheme::glassRimLit(), 0.75f * edges[edge]), opacity);
+      const ColorRgba clear = UiTheme::transparentOf(shine);
+      if (edge < 2 && edgeLength > 0.0f) {
+        const float edgeX = edge == 0 ? x : x + width - 2.0f;
+        visual.addGradientRect(edgeX,
+                               y + radius,
+                               2.0f,
+                               edgeLength * 0.5f,
+                               clear,
+                               clear,
+                               shine,
+                               shine);
+        visual.addGradientRect(edgeX,
+                               y + radius + edgeLength * 0.5f,
+                               2.0f,
+                               edgeLength * 0.5f,
+                               shine,
+                               shine,
+                               clear,
+                               clear);
+      } else if (edge >= 2 && edgeWidth > 0.0f) {
+        const float edgeY = edge == 2 ? y : y + height - 2.0f;
+        visual.addGradientRect(x + radius,
+                               edgeY,
+                               edgeWidth * 0.5f,
+                               2.0f,
+                               clear,
+                               shine,
+                               shine,
+                               clear);
+        visual.addGradientRect(x + radius + edgeWidth * 0.5f,
+                               edgeY,
+                               edgeWidth * 0.5f,
+                               2.0f,
+                               shine,
+                               clear,
+                               clear,
+                               shine);
+      }
+    }
   }
   if (!style.accentLine) {
     return;
@@ -760,6 +833,325 @@ drawArrowLabel(GameVisual& visual,
     return false;
   }
   return true;
+}
+
+// A liquid drop is a stack of slices across its travel axis: a quarter-circle
+// cap at each end (the same 15-degree steps as a rounded rect) and evenly
+// spaced middle levels where the neck forms.
+static const int kLiquidMiddleLevels = 8;
+static const int kLiquidLevels = 2 * kCornerPoints + kLiquidMiddleLevels;
+
+struct LiquidProfile
+{
+  // Per level: position along the travel and the near/far cross edges.
+  float along[kLiquidLevels] = {};
+  float nearEdge[kLiquidLevels] = {};
+  float farEdge[kLiquidLevels] = {};
+};
+
+// Outline of the drop grown by `offset` (negative insets). The neck and taper
+// come from the unoffset shape, so bands between two offsets stay parallel.
+static bool
+liquidProfile(const GuiLiquidSelection& drop,
+              float offset,
+              LiquidProfile* profile)
+{
+  if (!std::isfinite(drop.crossStart) || !std::isfinite(drop.crossSize) ||
+      !std::isfinite(drop.headStart) || !std::isfinite(drop.tailStart) ||
+      !std::isfinite(drop.cellLength) || !std::isfinite(offset) ||
+      drop.crossSize <= 0.0f || drop.cellLength <= 0.0f) {
+    return false;
+  }
+  const float squash =
+    std::isfinite(drop.squash) ? std::clamp(drop.squash, -1.0f, 1.0f) : 0.0f;
+  // Jelly: a bulging drop spreads across the travel and shortens along it.
+  const float shrink = squash * std::min(4.0f, drop.cellLength * 0.07f);
+  const float grow = squash * std::min(5.0f, drop.crossSize * 0.05f);
+  const bool headFirst = drop.headStart <= drop.tailStart;
+  const float start =
+    std::min(drop.headStart, drop.tailStart) + shrink - offset;
+  const float end = std::max(drop.headStart, drop.tailStart) + drop.cellLength -
+                    shrink + offset;
+  const float crossLow = drop.crossStart - grow - offset;
+  const float crossHigh = drop.crossStart + drop.crossSize + grow + offset;
+  const float length = end - start;
+  const float half = (crossHigh - crossLow) * 0.5f;
+  if (!(length > 0.0f) || !(half > 0.0f)) {
+    return false;
+  }
+  const float center = crossLow + half;
+  const float baseRadius =
+    clampedRadius(drop.radius, drop.crossSize, drop.cellLength);
+  const float radius =
+    std::clamp(baseRadius + offset, 0.0f, std::min(half, length * 0.5f));
+  // The neck deepens as the drop stretches over one and a half cells.
+  const float stretch = std::clamp(std::abs(drop.headStart - drop.tailStart) /
+                                     (drop.cellLength * 1.5f),
+                                   0.0f,
+                                   1.0f);
+  const float baseHalf = drop.crossSize * 0.5f;
+  const float maxInset =
+    stretch *
+    std::min(std::max(0.0f, baseHalf - baseRadius - 1.0f), baseHalf * 0.16f);
+
+  float halfWidth[kLiquidLevels];
+  for (int step = 0; step < kCornerPoints; ++step) {
+    profile->along[step] = start + radius * (1.0f - kQuarterCos[step]);
+    halfWidth[step] = half - radius + radius * kQuarterSin[step];
+    const int endLevel = kCornerPoints + kLiquidMiddleLevels + step;
+    profile->along[endLevel] = end - radius + radius * kQuarterSin[step];
+    halfWidth[endLevel] = half - radius + radius * kQuarterCos[step];
+  }
+  for (int level = 0; level < kLiquidMiddleLevels; ++level) {
+    const float t = static_cast<float>(level + 1) /
+                    static_cast<float>(kLiquidMiddleLevels + 1);
+    profile->along[kCornerPoints + level] =
+      start + radius + (length - 2.0f * radius) * t;
+    halfWidth[kCornerPoints + level] = half;
+  }
+  // The head cell keeps its full width; behind it, u runs from the head (0)
+  // to the tail tip (1), necking in the middle and tapering the tail.
+  const float separation = std::abs(drop.headStart - drop.tailStart);
+  const float behindHead =
+    headFirst ? drop.headStart + drop.cellLength : drop.headStart;
+  for (int level = 0; level < kLiquidLevels; ++level) {
+    const float behind = headFirst ? profile->along[level] - behindHead
+                                   : behindHead - profile->along[level];
+    const float u =
+      separation > 0.0001f ? std::clamp(behind / separation, 0.0f, 1.0f) : 0.0f;
+    const float inset =
+      maxInset * (0.55f * std::sin(3.14159265f * u) + 0.45f * u * u);
+    const float width = std::max(0.0f, halfWidth[level] - inset);
+    profile->nearEdge[level] = center - width;
+    profile->farEdge[level] = center + width;
+  }
+  return true;
+}
+
+// Screen position of a profile point: along is y for vertical travel and x
+// for horizontal travel.
+static GuiPoint
+liquidPoint(bool horizontal, float along, float cross)
+{
+  return horizontal ? GuiPoint{ along, cross } : GuiPoint{ cross, along };
+}
+
+static void
+drawLiquidFill(GameVisual& visual,
+               const GuiLiquidSelection& drop,
+               const LiquidProfile& profile,
+               ColorRgba top,
+               ColorRgba bottom)
+{
+  if (top.a == 0 && bottom.a == 0) {
+    return;
+  }
+  float minY = 0.0f;
+  float maxY = 0.0f;
+  if (drop.horizontal) {
+    minY = profile.nearEdge[0];
+    maxY = profile.farEdge[0];
+    for (int level = 1; level < kLiquidLevels; ++level) {
+      minY = std::min(minY, profile.nearEdge[level]);
+      maxY = std::max(maxY, profile.farEdge[level]);
+    }
+  } else {
+    minY = profile.along[0];
+    maxY = profile.along[kLiquidLevels - 1];
+  }
+  const float span = std::max(0.0001f, maxY - minY);
+  for (int level = 0; level + 1 < kLiquidLevels; ++level) {
+    if (profile.along[level + 1] - profile.along[level] <= 0.0001f) {
+      continue;
+    }
+    GuiPoint corners[4] = {
+      liquidPoint(
+        drop.horizontal, profile.along[level], profile.nearEdge[level]),
+      liquidPoint(
+        drop.horizontal, profile.along[level], profile.farEdge[level]),
+      liquidPoint(
+        drop.horizontal, profile.along[level + 1], profile.farEdge[level + 1]),
+      liquidPoint(
+        drop.horizontal, profile.along[level + 1], profile.nearEdge[level + 1])
+    };
+    if (drop.horizontal) {
+      // Keep the clockwise screen winding of the vertical slices.
+      std::swap(corners[1], corners[3]);
+    }
+    ColorRgba colors[4];
+    for (int corner = 0; corner < 4; ++corner) {
+      colors[corner] =
+        UiTheme::mix(top, bottom, (corners[corner].y - minY) / span);
+    }
+    visual.addGradientQuad(corners[0].x,
+                           corners[0].y,
+                           corners[1].x,
+                           corners[1].y,
+                           corners[2].x,
+                           corners[2].y,
+                           corners[3].x,
+                           corners[3].y,
+                           colors[0],
+                           colors[1],
+                           colors[2],
+                           colors[3]);
+  }
+}
+
+// The closed outline: far edge head-to-tail, then near edge back again.
+static void
+liquidPerimeter(const GuiLiquidSelection& drop,
+                const LiquidProfile& profile,
+                GuiPoint* points)
+{
+  for (int level = 0; level < kLiquidLevels; ++level) {
+    points[level] = liquidPoint(
+      drop.horizontal, profile.along[level], profile.farEdge[level]);
+    const int back = kLiquidLevels - 1 - level;
+    points[kLiquidLevels + level] =
+      liquidPoint(drop.horizontal, profile.along[back], profile.nearEdge[back]);
+  }
+}
+
+void
+GuiKit::drawLiquidSelection(GameVisual& visual,
+                            const GuiLiquidSelection& selection)
+{
+  LiquidProfile shape;
+  if (!liquidProfile(selection, 0.0f, &shape)) {
+    return;
+  }
+  if (selection.glow.a != 0 && std::isfinite(selection.glowSpread) &&
+      selection.glowSpread > 0.0f) {
+    LiquidProfile halo;
+    if (liquidProfile(selection, selection.glowSpread, &halo)) {
+      GuiPoint inner[2 * kLiquidLevels];
+      GuiPoint outer[2 * kLiquidLevels];
+      liquidPerimeter(selection, shape, inner);
+      liquidPerimeter(selection, halo, outer);
+      const ColorRgba clear = UiTheme::transparentOf(selection.glow);
+      for (int index = 0; index < 2 * kLiquidLevels; ++index) {
+        const int next = (index + 1) % (2 * kLiquidLevels);
+        visual.addGradientQuad(inner[index].x,
+                               inner[index].y,
+                               outer[index].x,
+                               outer[index].y,
+                               outer[next].x,
+                               outer[next].y,
+                               inner[next].x,
+                               inner[next].y,
+                               selection.glow,
+                               clear,
+                               clear,
+                               selection.glow);
+      }
+    }
+  }
+  drawLiquidFill(visual, selection, shape, selection.rim, selection.rim);
+  LiquidProfile face;
+  if (liquidProfile(selection, -1.0f, &face)) {
+    drawLiquidFill(
+      visual, selection, face, selection.faceTop, selection.faceBottom);
+  }
+  if (selection.sheen >= 0.0f && selection.sheenColor.a != 0) {
+    const float alongStart = shape.along[0];
+    const float alongEnd = shape.along[kLiquidLevels - 1];
+    float crossLow = shape.nearEdge[0];
+    float crossHigh = shape.farEdge[0];
+    for (int level = 1; level < kLiquidLevels; ++level) {
+      crossLow = std::min(crossLow, shape.nearEdge[level]);
+      crossHigh = std::max(crossHigh, shape.farEdge[level]);
+    }
+    const GuiPoint origin =
+      liquidPoint(selection.horizontal, alongStart, crossLow);
+    const GuiPoint extent = liquidPoint(
+      selection.horizontal, alongEnd - alongStart, crossHigh - crossLow);
+    drawSheen(visual,
+              origin.x,
+              origin.y,
+              extent.x,
+              extent.y,
+              selection.radius,
+              selection.sheen,
+              selection.sheenColor);
+  }
+}
+
+void
+GuiKit::drawSplash(GameVisual& visual,
+                   float centerX,
+                   float centerY,
+                   float progress,
+                   float scale,
+                   ColorRgba color)
+{
+  if (!std::isfinite(centerX) || !std::isfinite(centerY) ||
+      !std::isfinite(progress) || !std::isfinite(scale) || progress <= 0.0f ||
+      progress >= 1.0f || scale <= 0.0f || color.a == 0) {
+    return;
+  }
+  const float fade = (1.0f - progress) * (1.0f - progress);
+  // The ring swells fast and thins as it spreads, like a ripple on water.
+  const float swell =
+    1.0f - (1.0f - progress) * (1.0f - progress) * (1.0f - progress);
+  const float ringRadius = scale * (6.0f + 38.0f * swell);
+  const float ringWidth = scale * (0.8f + 3.2f * (1.0f - progress));
+  const ColorRgba ring = UiTheme::fade(color, 0.7f * fade);
+  const int kRingSegments = 24;
+  const float step = 6.28318531f / static_cast<float>(kRingSegments);
+  for (int segment = 0; segment < kRingSegments; ++segment) {
+    const float a0 = step * static_cast<float>(segment);
+    const float a1 = a0 + step;
+    const float inner = ringRadius - ringWidth * 0.5f;
+    const float outer = ringRadius + ringWidth * 0.5f;
+    visual.addGradientQuad(centerX + std::cos(a0) * inner,
+                           centerY + std::sin(a0) * inner * 0.6f,
+                           centerX + std::cos(a0) * outer,
+                           centerY + std::sin(a0) * outer * 0.6f,
+                           centerX + std::cos(a1) * outer,
+                           centerY + std::sin(a1) * outer * 0.6f,
+                           centerX + std::cos(a1) * inner,
+                           centerY + std::sin(a1) * inner * 0.6f,
+                           ring,
+                           ring,
+                           ring,
+                           ring);
+  }
+  // Droplets leap up and out, arc back down under gravity and shrink. Each
+  // is a teardrop: a round head with a tail trailing along its velocity.
+  const int kDroplets = 7;
+  const float gravity = 130.0f * scale;
+  for (int droplet = 0; droplet < kDroplets; ++droplet) {
+    const float spread =
+      static_cast<float>(droplet) / static_cast<float>(kDroplets - 1);
+    const float angle = -2.75f + 2.36f * spread;
+    const float speed =
+      scale * (54.0f + 16.0f * static_cast<float>(droplet % 3));
+    const float time = progress * 0.62f;
+    const float x = centerX + std::cos(angle) * speed * time;
+    const float y =
+      centerY + std::sin(angle) * speed * time + 0.5f * gravity * time * time;
+    const float vx = std::cos(angle) * speed;
+    const float vy = std::sin(angle) * speed + gravity * time;
+    const float size =
+      scale * (3.4f - 2.4f * progress) * (droplet % 2 == 0 ? 1.0f : 0.75f);
+    if (size <= 0.2f) {
+      continue;
+    }
+    const ColorRgba tint = UiTheme::fade(color, 0.85f * (1.0f - progress));
+    const float speedLength = std::max(0.001f, std::sqrt(vx * vx + vy * vy));
+    const float dirX = vx / speedLength;
+    const float dirY = vy / speedLength;
+    const float tail = size * (1.4f + 1.2f * (1.0f - progress));
+    visual.addFilledTriangle(x - dirX * tail,
+                             y - dirY * tail,
+                             x - dirY * size * 0.5f,
+                             y + dirX * size * 0.5f,
+                             x + dirY * size * 0.5f,
+                             y - dirX * size * 0.5f,
+                             tint);
+    visual.addFilledEllipse(x - size * 0.5f, y - size * 0.5f, size, size, tint);
+  }
 }
 
 static float

@@ -7,6 +7,7 @@
 #include "ExitConfirmDialog.h"
 #include "Game/IllumoCodec.h"
 #include "Game/SimulationRunner.h"
+#include "ModeBadge.h"
 #include "NewSimulationMenu.h"
 #include "RulesetWorkshopMenu.h"
 #include <Illumo/Content/SceneInstance.h>
@@ -15,7 +16,6 @@
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Scene.h>
-#include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
 #include <array>
@@ -72,6 +72,7 @@ private:
   void updateEditorCursor();
   void updateHamburgerVisual(double dt);
   void updatePaintPalette(double dt);
+  void updateModeBadge(double dt);
   void advanceCanvasEntrance(double dt);
   void requestMainMenuReturn();
   void completeMainMenuReturn();
@@ -133,8 +134,8 @@ private:
   SparseGenerationDelta mirrorDelta;
   bool mirrorDeltaValid;
   bool simulationRetryPending = false;
-  // Module-owned mode label (EDIT/NORMAL); not a file-scope global.
-  std::unique_ptr<SplashText> modeSplash;
+  // Module-owned corner EDIT / NORMAL badge shown on each mode change.
+  ModeBadge modeBadge;
   std::unique_ptr<ConfigurationMenu> configurationMenu;
   std::unique_ptr<RulesetWorkshopMenu> rulesetWorkshopMenu;
   std::unique_ptr<ExitConfirmDialog> exitConfirmDialog;
@@ -151,9 +152,22 @@ private:
   bool m_paintPaletteMouseWasDown = false;
   bool m_paintPaletteCapturing = false;
   bool m_paintPaletteHovered = false;
+  // Height morph from the peeking bubble (0) to the open drawer (1); the
+  // width leads on its own springier morph, so the bubble stretches, then
+  // rises and bounces like a blob. Hover swells the collapsed bubble.
   float m_paintPaletteReveal = 0.0f;
+  GuiSpring m_paintPaletteHeightMorph;
+  GuiSpring m_paintPaletteWidthMorph;
+  GuiSpring m_paintPaletteBubbleHover;
+  // Edit chrome enters on springs: the lifts overshoot so the hint bar and
+  // paint bubble bounce past their slots; the reveals are the same values
+  // clamped to 0..1 for the canvas inset and visibility.
   float m_paintPaletteChromeReveal = 1.0f;
   float m_editChromeReveal = 1.0f;
+  float m_paintPaletteChromeLift = 1.0f;
+  float m_editChromeLift = 1.0f;
+  GuiSpring m_paintPaletteChromeSpring;
+  GuiSpring m_editChromeSpring;
   double m_paletteModeDelay = 0.0;
   double m_hintsModeDelay = 0.0;
   bool m_modeChromeTarget = true;

@@ -123,13 +123,20 @@ change partitioning, halos or `SparseCellGrid::applyChunkPatches` only with
   keyboard selection.
 - Menu screens take their motion, fitted virtual space, row windows, and
   pointer edges from `Illumo/Gui/GuiMenuShell` (`GuiEasing`, `GuiSpring`,
-  `GuiSpringArray`, `GuiMenuAnimator`, `GuiPanelLayout`, `GuiPointerTracker`)
-  and their chrome from `GuiKit`'s glass helpers. Do not restate easing curves,
-  spring integration, animation timings, UI-scale fitting, scroll clamping, or
+  `GuiSpringArray`, `GuiMotion`, `GuiMenuAnimator`, `GuiPanelLayout`,
+  `GuiPointerTracker`) and their chrome from `GuiKit`'s glass helpers,
+  including `drawLiquidSelection` for the travelling selection. Do not restate
+  easing curves, spring integration or tunings, animation timings, UI-scale
+  fitting, scroll clamping, or
   press-edge bookkeeping in a screen; add a new one by composing the shell and
   supplying only that screen's rows, layout constants, and drawing. Feedback
   animation never delays an action, and animated offsets never move a hit
   area: rows lean in horizontally only and lift at most a couple of pixels.
+  The one pointer-driven exception is every glass panel's tilt toward the
+  pointer (`GuiPanelTilt`): a screen shifts its layout origin by the body
+  shift so its hit testing follows the drawing, and offsets only its glass
+  and decorative layers relative to that, so a row is always hit where it is
+  drawn.
 - The title screen's ambient world is presentation only. It must never write
   the player's ruleset preference (restore `FamilyString`, `RuleSetString` and
   `ModeString` around its `CellContext`), and it must refresh its canvas

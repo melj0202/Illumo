@@ -6,6 +6,7 @@
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -36,6 +37,10 @@ public:
   {
     return m_newSimulationMenu && m_newSimulationMenu->isOpen();
   }
+  float tiltXForTesting() const { return m_tilt.x(); }
+  float tiltYForTesting() const { return m_tilt.y(); }
+  // The rectangle a pointer must hit for `item`: x, y, width, height.
+  std::array<float, 4> itemHitBoundsForTesting(int item) const;
   void selectItemForTesting(int item);
   void activateSelectedItemForTesting();
   const CellContext* ambientContextForTesting() const
@@ -52,12 +57,16 @@ private:
   // The shell's modal reveal is tuned for overlays; the title screen enters
   // more slowly behind its own clock, with the title letters cascading in.
   static constexpr float kEntranceSeconds = 0.45f;
-  static constexpr float kEntranceCeilingSeconds = 1.4f;
+  static constexpr float kEntranceCeilingSeconds = 1.8f;
   static constexpr float kItemEntranceSeconds = 0.32f;
   static constexpr float kItemEntranceStaggerSeconds = 0.035f;
   static constexpr float kTitleLetterDelaySeconds = 0.10f;
   static constexpr float kTitleLetterStaggerSeconds = 0.07f;
   static constexpr float kTitleLetterSeconds = 0.55f;
+  // Title letters land like drops: a bouncy spring that settles well inside
+  // the entrance ceiling.
+  static constexpr float kTitleLetterBounceHz = 2.6f;
+  static constexpr float kTitleLetterBounceDamping = 0.4f;
   // Background world: generations per second, the pause between visitors
   // (gliders and spaceships launched in from the edges), and the growth or
   // age at which the world is reseeded.
@@ -93,8 +102,6 @@ private:
   SimulatorConfiguration currentConfiguration() const;
   bool applyConfiguration(const SimulatorConfiguration& configuration);
 
-  float itemPosition() const;
-
   std::unique_ptr<CellContext> m_bgContext;
   std::unique_ptr<ConfigurationMenu> m_configurationMenu;
   std::unique_ptr<NewSimulationMenu> m_newSimulationMenu;
@@ -102,10 +109,13 @@ private:
   GuiMenuAnimator m_animator;
   GuiPointerTracker m_pointer;
   GuiPanelFit m_panelFit;
-  // Per-row hover/focus emphasis, the panel receding behind an overlay, and
-  // pointer-driven parallax and spotlight.
+  // Per-row hover/focus emphasis, the panel receding behind an overlay, the
+  // panel's tilt toward the pointer, and pointer-driven parallax and
+  // spotlight.
   GuiSpringArray m_rowEmphasis;
   GuiSpring m_recede;
+  // The panel swivels toward the pointer; rows are hit where they are drawn.
+  GuiPanelTilt m_tilt;
   GuiSpring m_parallaxX;
   GuiSpring m_parallaxY;
   GuiSpring m_spotX;

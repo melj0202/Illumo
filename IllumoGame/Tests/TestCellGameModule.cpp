@@ -1029,7 +1029,7 @@ openPaintDrawer(CellGameFixture& fixture)
   fixture.module.Update(0.016);
   testTrue(g,
            !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
-           "drawer starts closed with only the bottom pull tab");
+           "drawer starts closed as the peeking bubble");
   fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
   fixture.window.mouseY = static_cast<double>(fixture.window.height) - 1.0;
   InputManagerTestAccess::setAction(
@@ -1058,7 +1058,7 @@ openPaintDrawer(CellGameFixture& fixture)
   fixture.module.Update(0.016);
   testTrue(g,
            CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
-           "bottom pull tab opens the drawer");
+           "the peeking bubble opens the drawer");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
   fixture.module.Update(0.016);
@@ -1212,6 +1212,139 @@ testPaintPalette()
 }
 
 static void
+testPaintPaletteBubbleMorph()
+{
+  testSection("CellGameModule: the paint bubble morphs into the drawer");
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", false);
+  fixture.module.Update(0.016);
+  GameVisual& visual =
+    CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module);
+  testTrue(g,
+           visual.isVisible() && visual.textCount() == 0u,
+           "the collapsed palette is a wordless bubble");
+  const float scale =
+    fixture.renderer.getUiScale() * visual.getTransform().scaleX;
+  const double bottom =
+    static_cast<double>(fixture.window.height -
+                        CellGameModuleTestAccess::getCellContext(fixture.module)
+                          ->getCanvasView()
+                          ->getBottomInsetPixels());
+  // The bubble's bounding corner lies outside the circle.
+  fixture.window.mouseX =
+    static_cast<double>(fixture.window.width) * 0.5 + 26.0 * scale;
+  fixture.window.mouseY = bottom - 38.0 * scale;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           "the bubble is round: its bounding corner does not open it");
+
+  fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
+  fixture.window.mouseY = bottom - 16.0 * scale;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  testTrue(
+    g,
+    CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
+      CellGameModuleTestAccess::getPaintPaletteWidthMorph(fixture.module) >
+        CellGameModuleTestAccess::getPaintPaletteReveal(fixture.module),
+    "opening stretches the bubble wide before it rises");
+  testEqSize(g, visual.textCount(), 0u, "labels wait for the drawer to form");
+  float peak = 0.0f;
+  for (int frame = 0; frame < 90; ++frame) {
+    fixture.module.Update(1.0 / 60.0);
+    peak = std::max(
+      peak, CellGameModuleTestAccess::getPaintPaletteReveal(fixture.module));
+  }
+  testTrue(g,
+           peak > 1.02f && CellGameModuleTestAccess::getPaintPaletteReveal(
+                             fixture.module) == 1.0f,
+           "the drawer bounces past open and settles exactly");
+  testTrue(g,
+           visual.textCount() > 0u,
+           "the drawer's labels fade in once it has formed");
+}
+
+static void
+testModeBadge()
+{
+  testSection("ModeBadge: drops in, stretches into a pill, melts away");
+  ModeBadge badge;
+  testTrue(g, !badge.isVisible(), "the badge starts hidden");
+  badge.show("EDIT", ColorRgba{ 255, 204, 102, 255 }, false);
+  testTrue(g,
+           badge.isVisible() && badge.top() < 0.0f &&
+             std::abs(badge.width() - ModeBadge::kHeight) < 0.01f,
+           "a new badge starts as a bead above the screen");
+  float lowestTop = badge.top();
+  float widest = 0.0f;
+  for (int frame = 0; frame < 60; ++frame) {
+    badge.tick(1.0f / 60.0f, false);
+    lowestTop = std::max(lowestTop, badge.top());
+    widest = std::max(widest, badge.width());
+  }
+  const float restingWidth = badge.width();
+  testTrue(g,
+           badge.top() == ModeBadge::kMargin && lowestTop > ModeBadge::kMargin,
+           "it drops past its margin, bounces and rests at the margin");
+  testTrue(g,
+           restingWidth > ModeBadge::kHeight + 20.0f &&
+             widest > restingWidth + 1.0f &&
+             badge.getVisual().textCount() == 1u,
+           "it stretches past its pill width, settles, and shows its label");
+
+  badge.show("NORMAL", UiTheme::accentCool(), true);
+  badge.tick(1.0f / 60.0f, false);
+  testTrue(g,
+           badge.isVisible() && badge.label() == "NORMAL" &&
+             badge.top() > ModeBadge::kMargin - 1.0f,
+           "a mode change while showing keeps the badge in place");
+  for (int frame = 0; frame < 240; ++frame) {
+    badge.tick(1.0f / 60.0f, false);
+  }
+  testTrue(g, !badge.isVisible(), "after its hold it melts away and hides");
+
+  badge.show("EDIT", ColorRgba{ 255, 204, 102, 255 }, false);
+  badge.tick(0.01f, true);
+  testTrue(g,
+           badge.top() == ModeBadge::kMargin && badge.width() > 40.0f,
+           "reduced motion shows the finished pill at once");
+  for (int frame = 0; frame < 20; ++frame) {
+    badge.tick(0.1f, true);
+  }
+  testTrue(g, !badge.isVisible(), "reduced motion hides it at once too");
+
+  CellGameFixture fixture;
+  fixture.module.Update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Press);
+  fixture.module.Update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Release);
+  ModeBadge& moduleBadge =
+    CellGameModuleTestAccess::getModeBadge(fixture.module);
+  testTrue(g,
+           moduleBadge.isVisible() && !moduleBadge.label().empty(),
+           "toggling the mode shows the corner badge");
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  bool dispatched = false;
+  for (DrawableBase* drawable : fixture.scene.drawablesIn(RenderLayerId::UI)) {
+    dispatched = dispatched || drawable == &moduleBadge.getVisual();
+  }
+  testTrue(g, dispatched, "the badge is drawn in the UI layer");
+}
+
+static void
 testPaintPaletteFittedInput()
 {
   CellGameFixture fixture;
@@ -1250,8 +1383,8 @@ testPaintPaletteFittedInput()
   fixture.module.Update(0.016);
   testTrue(g,
            !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
-             visual.textCount() == 1u,
-           "fitted header collapses and removes body labels");
+             visual.textCount() == 0u,
+           "fitted header collapses into the wordless bubble");
   testTrue(g,
            grid->getRevision() == beforeClose,
            "snapping the tab closed cannot paint through its former position");
@@ -3201,6 +3334,11 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CellGame.PaintPalette",
                []() { return runCellGameModuleCase(testPaintPalette); });
+  registry.add("IllumoGame.CellGame.ModeBadge",
+               []() { return runCellGameModuleCase(testModeBadge); });
+  registry.add("IllumoGame.CellGame.PaintPaletteBubbleMorph", []() {
+    return runCellGameModuleCase(testPaintPaletteBubbleMorph);
+  });
   registry.add("IllumoGame.CellGame.PaintPaletteFittedInput", []() {
     return runCellGameModuleCase(testPaintPaletteFittedInput);
   });

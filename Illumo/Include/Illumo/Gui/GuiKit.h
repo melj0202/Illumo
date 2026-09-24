@@ -130,6 +130,19 @@ public:
                              float width,
                              float height,
                              const GuiGlassStyle& style);
+  // Liquid selection drop (see GuiLiquidSelection): glow, rim, gradient face
+  // and arrival sheen. Slices never overlap, so translucent faces stay even.
+  static void drawLiquidSelection(GameVisual& visual,
+                                  const GuiLiquidSelection& selection);
+  // Liquid splash for a press: a ring swells out of the point while a few
+  // droplets leap, arc under gravity and fade. progress 0..1; outside that
+  // range nothing is drawn.
+  static void drawSplash(GameVisual& visual,
+                         float centerX,
+                         float centerY,
+                         float progress,
+                         float scale,
+                         ColorRgba color);
   // Raised keyboard key chip. Labels UP, DOWN, LEFT, RIGHT, UPDOWN and
   // LEFTRIGHT draw arrow glyphs. Returns the chip width.
   static float drawKeycap(GameVisual& visual,

@@ -171,8 +171,9 @@ the finite draft. Create passes validated canvas values to CellGameModule;
 Back or Escape discards the draft. Display and performance preferences are not
 part of this payload. The screen fits all rows, respects reduced menu motion,
 and consumes wheel input without changing selection or values. Glass cards,
-spring-driven focus lighting, a stretching selection pill, directional value
-pulses (arrows lean toward the change), a spring crossfade on the boundary
+spring-driven focus lighting, the liquid selection drop, springy directional
+value nudges (the value and the arrow on its side spring toward the change and
+bounce back), a spring crossfade on the boundary
 badge, and a live glider walking a 6x6 torus (`CellMotif`) match the main
 menu; reduced motion freezes the motif and snaps focus feedback.
 
@@ -183,11 +184,17 @@ every 4.5 seconds (not under reduced motion). The world is reseeded past 1,400
 chunks or after 15 minutes. Its `CellContext` restores the saved family,
 ruleset and mode preferences it would otherwise overwrite, and the menu
 refreshes the canvas targets after each advance. Above it, a radial vignette,
-drifting soft glows with pointer parallax, and a pointer spotlight frame a
-glass panel whose title letters cascade in; the 7x7 motif runs a real glider;
-rows lean in with spring emphasis and animated icons; the selection pill
-stretches, sweeps a sheen, and ripples on press; keycaps form the footer. The
-panel dims while settings or canvas setup is open.
+drifting lava-lamp glows with lazy pointer parallax, and a spotlight that
+smears along the pointer's motion frame a glass panel that drops in on a
+spring and swivels toward the pointer (layers shift by depth, the shadow
+slides away and a glare follows the pointer; rows are hit where they are
+drawn); its title letters fall in like drops and bounce; the 7x7 motif runs a
+real glider whose newborn cells pop in as bouncing beads; rows drop into place
+and lean in with jelly emphasis and animated icons; the selection is a liquid
+drop that pours between rows, necks, tapers and sloshes back together, sweeps
+a sheen, and wobbles on press while a splash of teardrop droplets leaps from
+the press point; keycaps form the footer. The panel dims while settings or
+canvas setup is open.
 
 ## SparseCellGrid (simulation domain)
 
@@ -409,11 +416,14 @@ remains live during every transition.
 
 That behavior is not restated per screen. `MainMenuModule`,
 `ConfigurationMenu`, `NewSimulationMenu`, and `RulesetWorkshopMenu` share
-`Illumo/Gui/GuiMenuShell`: `GuiEasing` curves, `GuiSpring`/`GuiSpringArray`
-damped springs (row emphasis, toggle knobs, count chips, footer buttons,
-scroll thumbs), `GuiMenuAnimator`
-reveal/row-stagger/selection-span/sheen/press/value-pulse/ambient/caret clocks
-including `reducedUiMotion`, `GuiPanelLayout` virtual-resolution fitting plus visible-row
+`Illumo/Gui/GuiMenuShell`: `GuiEasing` curves and spring shapes,
+`GuiSpring`/`GuiSpringArray` damped springs tuned from the `GuiMotion` presets
+(row emphasis, toggle knobs, count chips, footer buttons, scroll thumbs,
+parallax), `GuiMenuAnimator`
+reveal/row-drop/liquid-selection/sheen/press-wobble/value-nudge/ambient/caret
+clocks including `reducedUiMotion`, `GuiPanelTilt` (every glass panel swivels
+toward the pointer; the layout origin carries the body shift so hit testing
+follows the drawing), `GuiPanelLayout` virtual-resolution fitting plus visible-row
 window and wheel scrolling, and `GuiPointerTracker` virtual-space pointer
 sampling with hover and press edges. Each screen supplies only its rows, layout
 constants, and `GameVisual` composition, so a new interface inherits the
@@ -504,13 +514,15 @@ Wireworld retains the sticky head/empty/tail/conductor brush (`1`/`H`, `2`,
 `3`/`T`, `4`).
 
 In Edit mode, the **Cell paint** drawer at the bottom selects the left-button
-brush. It starts closed. Click the centered pull tab to slide the drawer up;
-click it again to slide it below the bottom edge. Swatches use active rule
+brush. It starts closed as a round bubble peeking over the footer, with an up
+chevron and a paintbrush tipped in the current paint. Click the bubble and it
+morphs into the drawer (it stretches wide, rises, and bounces into place);
+click the drawer's header to morph it back into the bubble. Swatches use active rule
 metadata for every declared state and its actual catalog color; the drawer
 scrolls through larger state sets. Right-click always erases. A ruleset change
 resets the generic brush to state 0.
-The panel uses shared rounded GuiKit surfaces and UiTheme colors, an eased
-vertical slide and chevron, and animated hover/selection emphasis. Reduced UI
+The panel uses shared rounded GuiKit surfaces and UiTheme colors, a springy
+bubble-to-drawer morph, and animated hover/selection emphasis. Reduced UI
 motion snaps transitions. Drawing and hit testing share the fitted UI scale. Palette
 gestures capture input through mouse release, preventing paint-through and
 camera zoom; settings, confirmation dialogs, and the console take precedence.

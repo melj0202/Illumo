@@ -1,5 +1,6 @@
 #include "MenuMotifs.h"
 
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -170,14 +171,23 @@ CellMotif::draw(GameVisual& visual,
                                   opacity));
           continue;
         }
-        // Newborn cells pop in from a smaller square; dying cells shrink.
-        const float size = cellSize * (0.55f + 0.45f * intensity);
+        // Live cells are beads of light. Newborns pop in like a drop landing,
+        // swelling just past full size before they settle; dying cells shrink
+        // away.
+        const bool born = was == 0.0f && now == 1.0f;
+        const float pop =
+          born && !m_reducedMotion
+            ? GuiEasing::springStep(m_elapsed, kPopHz, kPopDamping)
+            : intensity;
+        const float size = cellSize * (0.55f + 0.45f * pop);
         const float inset = (cellSize - size) * 0.5f;
-        visual.addFilledRect(
+        GuiKit::drawRoundedRect(
+          visual,
           px + inset,
           py + inset,
           size,
           size,
+          size * 0.34f,
           UiTheme::applyOpacity(UiTheme::fade(lit, intensity), opacity));
       }
     }

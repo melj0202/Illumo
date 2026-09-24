@@ -1006,16 +1006,32 @@ testEditChromeModeTransition()
              hints.getTransform().y > 0.0f,
            "the hint bar starts its entry cascade before the palette");
   fixture.module.Update(0.10);
-  testTrue(g,
-           palette.isVisible() && canvas->getBottomInsetPixels() < fullInset,
-           "the palette follows the hint bar onto the screen");
+  testTrue(
+    g, palette.isVisible(), "the palette follows the hint bar onto the screen");
+  // Both spring up past their slots and bounce back, while the canvas inset
+  // stays within the footer's reservation.
+  float highestBar = hints.getTransform().y;
+  float highestBubble = palette.getShape(0)->rect.y;
+  bool insetBounded = canvas->getBottomInsetPixels() <= fullInset;
+  for (int frame = 0; frame < 40; ++frame) {
+    fixture.module.Update(0.016);
+    highestBar = std::min(highestBar, hints.getTransform().y);
+    highestBubble = std::min(highestBubble, palette.getShape(0)->rect.y);
+    insetBounded = insetBounded && canvas->getBottomInsetPixels() <= fullInset;
+  }
   for (int frame = 0; frame < 12; ++frame) {
     fixture.module.Update(0.05);
   }
   testTrue(g,
+           highestBar < -1.0f &&
+             highestBubble < palette.getShape(0)->rect.y - 1.0f,
+           "the hint bar and paint bubble bounce past their slots on entry");
+  testTrue(g, insetBounded, "the canvas inset never bounces past the footer");
+  testTrue(g,
            canvas->getBottomInsetPixels() == fullInset &&
-             std::abs(hints.getTransform().y) < 0.01f,
-           "the hint bar restores its full canvas reservation");
+             hints.getTransform().y == 0.0f &&
+             palette.getShape(0)->rect.y == editTabY,
+           "the hint bar and bubble settle exactly into place");
 }
 
 static int

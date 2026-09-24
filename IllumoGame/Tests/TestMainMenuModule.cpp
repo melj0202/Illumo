@@ -13,6 +13,8 @@
 #include <Illumo/Testing/TestAccess.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <array>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -615,9 +617,70 @@ runMainMenuCase(void (*testFunction)())
   return g.failures;
 }
 
+static void
+testMainMenuPanelTilt()
+{
+  testSection("MainMenuModule: the panel swivels toward the pointer");
+  MainMenuFixture fixture;
+  testTrue(g, fixture.started, "menu started");
+  // Centered pointer: the entrance settles and the panel stays level.
+  fixture.window.mouseX = 320.0;
+  fixture.window.mouseY = 240.0;
+  for (int frame = 0; frame < 150; ++frame) {
+    fixture.module.Update(1.0 / 60.0);
+  }
+  testTrue(g,
+           std::abs(fixture.module.tiltXForTesting()) < 0.01f &&
+             std::abs(fixture.module.tiltYForTesting()) < 0.01f,
+           "a centered pointer keeps the panel level");
+  const std::array<float, 4> level = fixture.module.itemHitBoundsForTesting(2);
+
+  // The bottom-right corner lies outside every row.
+  fixture.window.mouseX = 639.0;
+  fixture.window.mouseY = 479.0;
+  for (int frame = 0; frame < 120; ++frame) {
+    fixture.module.Update(1.0 / 60.0);
+  }
+  testTrue(g,
+           fixture.module.tiltXForTesting() > 0.9f &&
+             fixture.module.tiltYForTesting() > 0.9f,
+           "the panel tilts toward a pointer in the corner");
+  const std::array<float, 4> tilted = fixture.module.itemHitBoundsForTesting(2);
+  testTrue(g,
+           tilted[0] - level[0] > 5.0f && tilted[1] - level[1] > 5.0f,
+           "rows swing toward the pointer with the tilt");
+
+  // Just inside the tilted row's bottom edge is the gap below the level row,
+  // so only a hit test that follows the drawing selects row 2.
+  const float pointY = tilted[1] + tilted[3] - 2.0f;
+  testTrue(g,
+           pointY > level[1] + level[3],
+           "the probe lies below where the level row would be");
+  fixture.window.mouseX = static_cast<double>(tilted[0] + tilted[2] * 0.5f);
+  fixture.window.mouseY = static_cast<double>(pointY);
+  fixture.module.Update(1.0 / 60.0);
+  testEqInt(g,
+            fixture.module.getSelectedItemForTesting(),
+            2,
+            "a row is hit where it is drawn");
+
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::F1, InputAction::Press, 0 });
+  for (int frame = 0; frame < 150; ++frame) {
+    fixture.module.Update(1.0 / 60.0);
+  }
+  testTrue(g,
+           fixture.module.isSettingsOpenForTesting() &&
+             std::abs(fixture.module.tiltXForTesting()) < 0.01f &&
+             std::abs(fixture.module.tiltYForTesting()) < 0.01f,
+           "the panel swings level behind an open overlay");
+}
+
 void
 registerMainMenuTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.MainMenu.PanelTilt",
+               []() { return runMainMenuCase(testMainMenuPanelTilt); });
   registry.add("IllumoGame.MainMenu.CanvasSetupValidation",
                []() { return runMainMenuCase(testCanvasSetupValidation); });
   registry.add("IllumoGame.MainMenu.CanvasSetupDiscard",

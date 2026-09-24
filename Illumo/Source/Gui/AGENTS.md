@@ -21,13 +21,21 @@ engine.
   transparent black: blending is straight-alpha, so a black fade darkens the
   interpolated edge.
 - Soft chrome (glass panels, gradients, glows, soft shadows, sheens, vignettes,
-  keycaps) is composed in `GuiKit` from `GameVisual` gradient quads. Keep the
+  keycaps, the liquid selection drop and press splash) is composed in `GuiKit`
+  from `GameVisual` gradient quads. The glass menus' motion character is
+  liquid and a little bouncy (D-UI8): configure springs from `GuiMotion`
+  presets instead of literal frequencies, and draw a travelling selection with
+  `drawLiquidSelection` rather than restating pill layers. Keep the
   flat helpers (`drawPanel`, `drawCard`, `drawBackdrop`, `drawButton`, ...)
   byte-stable; tools and labels depend on their exact shapes.
 - Overlay behavior that more than one screen would repeat belongs in
-  `GuiMenuShell`: easing curves (`GuiEasing`), damped springs for physical
-  motion (`GuiSpring`, `GuiSpringArray`), reveal/selection/stretching-span/
-  sheen/press/value-pulse/ambient/caret clocks with reduced motion
+  `GuiMenuShell`: easing curves and clock-driven spring shapes (`GuiEasing`),
+  damped springs for physical motion (`GuiSpring`, `GuiSpringArray`) tuned
+  from the shared `GuiMotion` presets, the pointer tilt every glass panel
+  swivels by (`GuiPanelTilt`: shift the layout origin by the body layer so
+  hit testing follows, offset glass and decoration by depth relative to it),
+  reveal/row-drop/liquid-selection/
+  sheen/press/wobble/value-pulse/ambient/caret clocks with reduced motion
   (`GuiMenuAnimator`), fitted virtual
   space and row-window arithmetic (`GuiPanelLayout`), and virtual-space pointer
   sampling with press and release edges (`GuiPointerTracker`). A new screen

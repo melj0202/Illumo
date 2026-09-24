@@ -125,6 +125,9 @@ private:
   GuiSpringArray chipGlow;
   GuiSpringArray footerFocus;
   GuiSpring scrollThumb;
+  // The panel swivels toward the pointer; its layout origin carries the body
+  // shift, so rows and footer buttons are hit where they are drawn.
+  GuiPanelTilt tilt;
   GuiPanelFit panelFit;
   RuleFamilyDefinition familyDraft;
   RuleSetDefinition draft;

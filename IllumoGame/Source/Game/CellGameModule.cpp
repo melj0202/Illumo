@@ -69,14 +69,19 @@ seedHash(std::int64_t x, std::int64_t y, std::uint64_t salt)
   return value ^ (value >> 31u);
 }
 
-static float
-advanceModeChromeReveal(float reveal,
+// Advances one piece of edit chrome (hint bar or paint bubble) after its
+// stagger delay. Entering, it pops up on a jelly spring that overshoots its
+// slot and bounces back; leaving, it eases away without ringing, so a hidden
+// bar or bubble never peeks back into view.
+static void
+advanceModeChromeSpring(GuiSpring* spring,
                         double* delay,
                         bool targetVisible,
                         double dt)
 {
-  if (delay == nullptr || !std::isfinite(dt) || dt <= 0.0) {
-    return reveal;
+  if (spring == nullptr || delay == nullptr || !std::isfinite(dt) ||
+      dt <= 0.0) {
+    return;
   }
   double animationDt = std::min(dt, 0.25);
   if (*delay > 0.0) {
@@ -85,10 +90,15 @@ advanceModeChromeReveal(float reveal,
     animationDt -= delayedDt;
   }
   if (animationDt <= 0.0) {
-    return reveal;
+    return;
+  }
+  if (targetVisible) {
+    spring->setTarget(1.0f);
+    spring->tick(static_cast<float>(animationDt), false);
+    return;
   }
   const float blend = static_cast<float>(1.0 - std::exp(-14.0 * animationDt));
-  return reveal + ((targetVisible ? 1.0f : 0.0f) - reveal) * blend;
+  spring->snapTo(spring->value() - spring->value() * blend);
 }
 
 static bool
@@ -208,7 +218,6 @@ CellGameModule::CellGameModule(std::string initialSavePath)
   , simulationDebtDropped(false)
   , simulationBudgetLimited(false)
   , mirrorDeltaValid(false)
-  , modeSplash(nullptr)
   , configurationMenu(nullptr)
   , exitConfirmDialog(nullptr)
   , render3dLoadFailed(false)
@@ -351,13 +360,8 @@ CellGameModule::Start(IllumoContext* context)
   updateVisualTargets();
   registerConsoleCommands();
 
-  // Mode splash label (top-left corner). Shown briefly when toggling
-  // EDIT/NORMAL with E. Owned by this module (not a translation-unit global).
-  if (modeSplash == nullptr && ic->renderer != nullptr) {
-    modeSplash = std::make_unique<SplashText>(
-      "EDIT", 255, 230, 120, 255, 32, 16, 48, ic->renderer);
-    modeSplash->setVisible(false);
-  }
+  // Mode badge (top-left corner), shown briefly on each EDIT/NORMAL change.
+  modeBadge.prepare(ic->window, ic->renderer);
 
   editorCursor.init(ic->renderer, ic->window, ic->camera);
   editorCursor.setCellSize(16.0f);
@@ -408,6 +412,18 @@ CellGameModule::Start(IllumoContext* context)
   m_paintPaletteVisual.setVisible(false);
   m_paintPaletteExpanded = false;
   m_paintPaletteReveal = 0.0f;
+  m_editChromeSpring.configure(GuiMotion::kJelly);
+  m_paintPaletteChromeSpring.configure(GuiMotion::kJelly);
+  m_editChromeSpring.snapTo(m_editChromeReveal);
+  m_paintPaletteChromeSpring.snapTo(m_paintPaletteChromeReveal);
+  m_editChromeLift = m_editChromeReveal;
+  m_paintPaletteChromeLift = m_paintPaletteChromeReveal;
+  m_paintPaletteHeightMorph.configure(GuiMotion::kJelly);
+  m_paintPaletteWidthMorph.configure(GuiMotion::kBoing);
+  m_paintPaletteBubbleHover.configure(GuiMotion::kJelly);
+  m_paintPaletteHeightMorph.snapTo(0.0f);
+  m_paintPaletteWidthMorph.snapTo(0.0f);
+  m_paintPaletteBubbleHover.snapTo(0.0f);
   m_paintPaletteMouseWasDown = false;
   m_paintPaletteCapturing = false;
   m_paintPaletteHovered = false;
@@ -438,11 +454,23 @@ CellGameModule::Start(IllumoContext* context)
 void
 CellGameModule::showModeSplash(const char* label)
 {
-  if (modeSplash == nullptr || label == nullptr) {
+  if (label == nullptr) {
     return;
   }
-  modeSplash->setContent(label);
-  modeSplash->Wake();
+  // Editing is warm amber; a running simulation is cyan with a breathing dot.
+  const bool running = std::string(label) == "NORMAL";
+  modeBadge.show(label,
+                 running ? UiTheme::accentCool()
+                         : ColorRgba{ 255, 204, 102, 255 },
+                 running);
+}
+
+void
+CellGameModule::updateModeBadge(double dt)
+{
+  const bool reducedMotion = ic != nullptr && ic->envVars != nullptr &&
+                             ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  modeBadge.tick(static_cast<float>(dt), reducedMotion);
 }
 
 void
@@ -1842,6 +1870,7 @@ CellGameModule::Update(double dt)
     }
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
+    updateModeBadge(dt);
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -1881,6 +1910,7 @@ CellGameModule::Update(double dt)
     }
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
+    updateModeBadge(dt);
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -2031,6 +2061,7 @@ CellGameModule::Update(double dt)
     paintStrokeActive = false;
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
+    updateModeBadge(dt);
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -2050,6 +2081,7 @@ CellGameModule::Update(double dt)
     }
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
+    updateModeBadge(dt);
     updateEditorCursor();
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -2100,6 +2132,7 @@ CellGameModule::Update(double dt)
 
   updateEditHintsVisual(dt);
   updatePaintPalette(dt);
+  updateModeBadge(dt);
 
   // Palette gestures own pointer input until both mouse buttons are released.
   if (!ic->commandLine->isOpen && !m_paintPaletteHovered &&
@@ -2174,7 +2207,7 @@ CellGameModule::Exit()
   exitConfirmDialog.reset();
   rulesetWorkshopMenu.reset();
   configurationMenu.reset();
-  modeSplash.reset();
+  modeBadge.hide();
   render3dScene.reset();
   render3dLoadFailed = false;
   hamburgerVisual.clearPrimitives();
@@ -2500,19 +2533,22 @@ CellGameModule::updateEditHintsVisual(double dt)
     m_paletteModeDelay = editChromeActive ? 0.08 : 0.0;
   }
   if (overlaysOpen || reducedMotion) {
-    m_editChromeReveal = editChromeActive ? 1.0f : 0.0f;
-    m_paintPaletteChromeReveal = m_editChromeReveal;
+    m_editChromeSpring.snapTo(editChromeActive ? 1.0f : 0.0f);
+    m_paintPaletteChromeSpring.snapTo(editChromeActive ? 1.0f : 0.0f);
     m_hintsModeDelay = 0.0;
     m_paletteModeDelay = 0.0;
   } else {
-    m_editChromeReveal = advanceModeChromeReveal(
-      m_editChromeReveal, &m_hintsModeDelay, editChromeActive, dt);
-    m_paintPaletteChromeReveal = advanceModeChromeReveal(
-      m_paintPaletteChromeReveal, &m_paletteModeDelay, editChromeActive, dt);
+    advanceModeChromeSpring(
+      &m_editChromeSpring, &m_hintsModeDelay, editChromeActive, dt);
+    advanceModeChromeSpring(
+      &m_paintPaletteChromeSpring, &m_paletteModeDelay, editChromeActive, dt);
   }
-  m_editChromeReveal = std::clamp(m_editChromeReveal, 0.0f, 1.0f);
-  m_paintPaletteChromeReveal =
-    std::clamp(m_paintPaletteChromeReveal, 0.0f, 1.0f);
+  // The lifts overshoot for the bounce; the reveals stay within 0..1 because
+  // they also size the canvas inset, which must never bounce.
+  m_editChromeLift = m_editChromeSpring.value();
+  m_paintPaletteChromeLift = m_paintPaletteChromeSpring.value();
+  m_editChromeReveal = std::clamp(m_editChromeLift, 0.0f, 1.0f);
+  m_paintPaletteChromeReveal = std::clamp(m_paintPaletteChromeLift, 0.0f, 1.0f);
 
   bool hintsEnabled = true;
   if (ic->envVars != nullptr) {
@@ -2534,7 +2570,7 @@ CellGameModule::updateEditHintsVisual(double dt)
     editHintsInsetPixels = static_cast<int>(std::ceil(
       static_cast<float>(editHintsFullInsetPixels) * m_editChromeReveal));
     Transform2D transform;
-    transform.y = (1.0f - m_editChromeReveal) *
+    transform.y = (1.0f - m_editChromeLift) *
                   static_cast<float>(editHintsFullInsetPixels) / scale;
     editHintsVisual.setTransform(transform);
     const bool visible =
@@ -2652,6 +2688,10 @@ CellGameModule::updateEditHintsVisual(double dt)
                                   footerTop,
                                   footerBottom,
                                   footerBottom);
+  // The footer continues below the screen edge, so a bar that springs past
+  // its slot stretches upward instead of opening a gap beneath it.
+  editHintsVisual.addFilledRect(
+    0.0f, top + panelHeight, width, panelHeight, footerBottom);
   const ColorRgba cyan = UiTheme::accentCool();
   const ColorRgba violet = UiTheme::accentViolet();
   editHintsVisual.addGradientRect(0.0f,
@@ -2711,7 +2751,7 @@ CellGameModule::updateEditHintsVisual(double dt)
   editHintsInsetPixels = static_cast<int>(std::ceil(
     static_cast<float>(editHintsFullInsetPixels) * m_editChromeReveal));
   Transform2D transform;
-  transform.y = (1.0f - m_editChromeReveal) * panelHeight;
+  transform.y = (1.0f - m_editChromeLift) * panelHeight;
   editHintsVisual.setTransform(transform);
   editHintsVisual.setVisible(m_editChromeReveal > 0.001f);
   cellContext->getCanvasView()->setBottomInsetPixels(editHintsInsetPixels);
@@ -2980,6 +3020,55 @@ struct DrawerGradient
   }
 };
 
+// The collapsed palette is a glass bubble peeking over the footer: its
+// diameter, and how much of it shows above the footer.
+static const float kPaletteBubbleDiameter = 56.0f;
+static const float kPaletteBubblePeek = 40.0f;
+
+// One frame of the bubble-to-drawer morph, in palette space.
+struct PaletteMorph
+{
+  float left = 0.0f;
+  float top = 0.0f;
+  float width = 0.0f;
+  float height = 0.0f;
+  float radius = 0.0f;
+};
+
+// Interpolates the peeking bubble (morph 0) toward the open drawer (morph 1).
+// The springs overshoot, so the blob briefly stretches past either shape;
+// the corner radius eases from a full circle to the drawer's corners.
+static PaletteMorph
+paletteMorphBounds(float centerX,
+                   float screenHeight,
+                   float drawerWidth,
+                   float drawerTop,
+                   float drawerHeight,
+                   float widthMorph,
+                   float heightMorph,
+                   float hover)
+{
+  const float bubble = kPaletteBubbleDiameter * (1.0f + 0.08f * hover);
+  const float bubbleTop = screenHeight - kPaletteBubblePeek - 3.0f * hover;
+  const float bubbleBottom = bubbleTop + bubble;
+  const float drawerBottom = drawerTop + drawerHeight;
+  PaletteMorph morph;
+  morph.width =
+    std::max(bubble * 0.6f, bubble + (drawerWidth - bubble) * widthMorph);
+  morph.top = bubbleTop + (drawerTop - bubbleTop) * heightMorph;
+  const float bottom =
+    bubbleBottom + (drawerBottom - bubbleBottom) * heightMorph;
+  morph.height = std::max(bubble * 0.6f, bottom - morph.top);
+  morph.left = centerX - morph.width * 0.5f;
+  const float settled =
+    std::clamp(std::min(widthMorph, heightMorph), 0.0f, 1.0f);
+  const float radius = bubble * 0.5f + (12.0f - bubble * 0.5f) * settled;
+  // Stay just under a half-extent so the rounded rect keeps its core rect.
+  morph.radius = std::max(
+    0.0f, std::min(radius, std::min(morph.width, morph.height) * 0.5f - 0.5f));
+  return morph;
+}
+
 void
 CellGameModule::updatePaintPalette(double dt)
 {
@@ -3063,46 +3152,92 @@ CellGameModule::updatePaintPalette(double dt)
   const float screenWidth = static_cast<float>(dimensions[0]) / (scale * fit);
   const float screenHeight =
     static_cast<float>(availableHeight) / (scale * fit);
-  const float x = (screenWidth - width) * 0.5f;
-  const float tabWidth = 160.0f;
-  const float tabX = (screenWidth - tabWidth) * 0.5f;
+  const float centerX = screenWidth * 0.5f;
   const std::array<double, 2> mouse = ic->window->getMouseCoords();
   const float mx = static_cast<float>(mouse[0]) / (scale * fit);
   const float my = static_cast<float>(mouse[1]) / (scale * fit);
   const float footerHeight =
     static_cast<float>(editHintsFullInsetPixels) / (scale * fit);
-  const float modeSlide =
-    (1.0f - m_paintPaletteChromeReveal) *
-    (header + drawerTravel * m_paintPaletteReveal + footerHeight);
-  const float previousY =
-    screenHeight - header - drawerTravel * m_paintPaletteReveal + modeSlide;
+  const bool reducedMotion = ic->envVars != nullptr &&
+                             ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  const float drawerTop = screenHeight - header - drawerTravel;
+  const float drawerHeight = header + body + panelBottomExtension;
+  // Leaving edit mode slides whatever is showing down behind the footer.
+  const float chromeHide = 1.0f - m_paintPaletteChromeLift;
+  // Clicks test the shape as it was drawn last frame.
+  PaletteMorph previous = paletteMorphBounds(centerX,
+                                             screenHeight,
+                                             width,
+                                             drawerTop,
+                                             drawerHeight,
+                                             m_paintPaletteWidthMorph.value(),
+                                             m_paintPaletteHeightMorph.value(),
+                                             m_paintPaletteBubbleHover.value());
+  previous.top += chromeHide * (screenHeight - previous.top + footerHeight);
+  const float previousRadius = previous.width * 0.5f;
+  const float bubbleDx = mx - centerX;
+  const float bubbleDy = my - (previous.top + previousRadius);
+  const bool bubbleHovered =
+    paletteInteractive && !m_paintPaletteExpanded && my < screenHeight &&
+    bubbleDx * bubbleDx + bubbleDy * bubbleDy <=
+      (previousRadius + 2.0f) * (previousRadius + 2.0f);
   const bool headerHovered =
     paletteInteractive && my < screenHeight &&
-    GuiKit::isPointInRect(mx, my, tabX, previousY, tabWidth, header);
+    (m_paintPaletteExpanded
+       ? GuiKit::isPointInRect(
+           mx, my, previous.left, previous.top, previous.width, header)
+       : bubbleHovered);
   if (clicked && headerHovered) {
     m_paintPaletteExpanded = !m_paintPaletteExpanded;
   }
-  const bool reducedMotion = ic->envVars != nullptr &&
-                             ic->envVars->getVar("reducedUiMotion").valueAsBool;
   const float blend =
     reducedMotion
       ? 1.0f
       : (std::isfinite(dt) && dt > 0.0
            ? static_cast<float>(1.0 - std::exp(-14.0 * std::min(dt, 0.25)))
            : 0.0f);
-  m_paintPaletteReveal +=
-    ((m_paintPaletteExpanded ? 1.0f : 0.0f) - m_paintPaletteReveal) * blend;
-  const float y =
-    screenHeight - header - drawerTravel * m_paintPaletteReveal + modeSlide;
+  // Opening, the width leads on a springier morph so the bubble stretches
+  // wide, then rises and settles with a bounce; closing pours it back.
+  const float morphStep = std::isfinite(dt) && dt > 0.0
+                            ? static_cast<float>(std::min(dt, 0.1))
+                            : 0.0f;
+  const float target = m_paintPaletteExpanded ? 1.0f : 0.0f;
+  m_paintPaletteWidthMorph.setTarget(target);
+  m_paintPaletteHeightMorph.setTarget(target);
+  m_paintPaletteBubbleHover.setTarget(bubbleHovered ? 1.0f : 0.0f);
+  m_paintPaletteWidthMorph.tick(morphStep, reducedMotion);
+  m_paintPaletteHeightMorph.tick(morphStep, reducedMotion);
+  m_paintPaletteBubbleHover.tick(morphStep, reducedMotion);
+  m_paintPaletteReveal = m_paintPaletteHeightMorph.value();
+  const float widthMorph = m_paintPaletteWidthMorph.value();
+  const float heightMorph = m_paintPaletteHeightMorph.value();
+  const float hover = std::max(0.0f, m_paintPaletteBubbleHover.value());
+  PaletteMorph blob = paletteMorphBounds(centerX,
+                                         screenHeight,
+                                         width,
+                                         drawerTop,
+                                         drawerHeight,
+                                         widthMorph,
+                                         heightMorph,
+                                         hover);
+  blob.top += chromeHide * (screenHeight - blob.top + footerHeight);
+  // The drawer's content rides the blob and fades in as it settles; the
+  // bubble's icon fades out as soon as it starts to grow.
+  const float opened = std::min(widthMorph, heightMorph);
+  const float contentReveal = std::clamp((opened - 0.6f) / 0.35f, 0.0f, 1.0f);
+  const unsigned char contentOpacity =
+    static_cast<unsigned char>(std::round(255.0f * contentReveal));
+  const float iconReveal =
+    std::clamp(1.0f - std::max(widthMorph, heightMorph) * 3.0f, 0.0f, 1.0f);
+  const float y = blob.top;
+  const float bodyX = blob.left + (blob.width - width) * 0.5f;
   m_paintPaletteHovered =
     paletteInteractive && my < screenHeight &&
-    (GuiKit::isPointInRect(mx, my, tabX, y, tabWidth, header) ||
-     (m_paintPaletteReveal > 0.001f &&
-      GuiKit::isPointInRect(
-        mx, my, x, y + header, width, body + panelBottomExtension)));
+    (bubbleHovered || GuiKit::isPointInRect(
+                        mx, my, blob.left, blob.top, blob.width, blob.height));
   double* paletteScroll = ic->inputManager->getMouseScrollOffset();
   if (paletteScroll != nullptr && m_paintPaletteHovered &&
-      *paletteScroll != 0.0) {
+      contentReveal > 0.5f && *paletteScroll != 0.0) {
     const int direction = *paletteScroll > 0.0 ? -1 : 1;
     const int nextOffset =
       static_cast<int>(m_paintPaletteStateOffset) + direction;
@@ -3110,8 +3245,8 @@ CellGameModule::updatePaintPalette(double dt)
       std::clamp(nextOffset, 0, static_cast<int>(maximumOffset)));
     *paletteScroll = 0.0;
   }
-  // Capture before a reduced-motion toggle moves the tab away from the click.
-  // Keep the gesture captured when dragging off the drawer onto the world.
+  // Capture before a reduced-motion toggle moves the shape away from the
+  // click. Keep the gesture captured when dragging off onto the world.
   if ((m_paintPaletteHovered || (clicked && headerHovered)) &&
       (leftDown || rightDown)) {
     m_paintPaletteCapturing = true;
@@ -3120,94 +3255,189 @@ CellGameModule::updatePaintPalette(double dt)
       (m_paintPaletteHovered || m_paintPaletteCapturing)) {
     *paletteScroll = 0.0;
   }
-  // Draw one joined silhouette, then cover the shared edge with its surface.
-  // Opaque fills avoid darker seams where the tab and drawer meet. Every
-  // surface samples one vertical gradient by absolute y, so tab, joint and
-  // drawer blend continuously.
-  const float surfaceTop = y;
-  const float surfaceBottom = y + header + body + 21.0f;
+  // One opaque glass blob: a rim, then a face sampled from one vertical
+  // gradient by absolute y so every size of the morph shades the same way.
   ColorRgba glassTop = UiTheme::glassTop();
   glassTop.a = 255;
   ColorRgba glassBottom = UiTheme::glassBottom();
   glassBottom.a = 255;
-  const DrawerGradient surfaceAt{ glassTop,
-                                  glassBottom,
-                                  surfaceTop,
-                                  std::max(1.0f, surfaceBottom - surfaceTop) };
-  ColorRgba rim = UiTheme::mix(
-    UiTheme::glassRim(), UiTheme::accentCool(), headerHovered ? 0.45f : 0.0f);
+  const DrawerGradient surfaceAt{
+    glassTop, glassBottom, drawerTop, std::max(1.0f, drawerHeight)
+  };
+  ColorRgba rim = UiTheme::mix(UiTheme::glassRim(),
+                               UiTheme::accentCool(),
+                               headerHovered ? 0.45f : 0.25f * hover);
   rim.a = 255;
-  GuiKit::drawRoundedRect(
-    m_paintPaletteVisual, tabX, y, tabWidth, header + 16.0f, 12.0f, rim);
-  if (m_paintPaletteReveal > 0.001f) {
-    GuiKit::drawRoundedRect(
-      m_paintPaletteVisual, x, y + header, width, body + 20.0f, 12.0f, rim);
-    GuiKit::drawRoundedGradientRect(m_paintPaletteVisual,
-                                    x + 1.0f,
-                                    y + header + 1.0f,
-                                    width - 2.0f,
-                                    body + 20.0f,
-                                    11.0f,
-                                    surfaceAt(y + header + 1.0f),
-                                    surfaceAt(y + header + body + 21.0f));
+  GuiKit::drawRoundedRect(m_paintPaletteVisual,
+                          blob.left,
+                          blob.top,
+                          blob.width,
+                          blob.height,
+                          blob.radius,
+                          rim);
+  if (hover > 0.01f) {
+    // A hovered bubble glows as it swells.
+    GuiKit::drawRoundedBand(
+      m_paintPaletteVisual,
+      blob.left,
+      blob.top,
+      blob.width,
+      blob.height,
+      blob.radius,
+      0.0f,
+      10.0f,
+      UiTheme::fade(UiTheme::accentCool(), 0.3f * std::min(1.0f, hover)),
+      UiTheme::transparentOf(UiTheme::accentCool()));
   }
   GuiKit::drawRoundedGradientRect(m_paintPaletteVisual,
-                                  tabX + 1.0f,
-                                  y + 1.0f,
-                                  tabWidth - 2.0f,
-                                  header + 16.0f,
-                                  11.0f,
-                                  surfaceAt(y + 1.0f),
-                                  surfaceAt(y + header + 17.0f));
-  m_paintPaletteVisual.addGradientRect(tabX + 1.0f,
-                                       y + header - 1.0f,
-                                       tabWidth - 2.0f,
-                                       18.0f,
-                                       surfaceAt(y + header - 1.0f),
-                                       surfaceAt(y + header - 1.0f),
-                                       surfaceAt(y + header + 17.0f),
-                                       surfaceAt(y + header + 17.0f));
-  // A cyan-to-violet hairline crowns the tab.
-  m_paintPaletteVisual.addGradientRect(tabX + 14.0f,
-                                       y + 1.0f,
-                                       tabWidth - 28.0f,
-                                       1.5f,
-                                       UiTheme::accentCool(),
-                                       UiTheme::accentViolet(),
-                                       UiTheme::accentViolet(),
-                                       UiTheme::accentCool());
-  if (headerHovered) {
-    GuiKit::drawRoundedRect(m_paintPaletteVisual,
-                            tabX + 8.0f,
-                            y + 5.0f,
-                            tabWidth - 16.0f,
-                            header - 10.0f,
-                            6.0f,
-                            UiTheme::applyOpacity(UiTheme::accentSoft(), 40));
+                                  blob.left + 1.0f,
+                                  blob.top + 1.0f,
+                                  blob.width - 2.0f,
+                                  blob.height - 2.0f,
+                                  std::max(0.0f, blob.radius - 1.0f),
+                                  surfaceAt(blob.top + 1.0f),
+                                  surfaceAt(blob.top + blob.height - 1.0f));
+  // A cyan-to-violet hairline crowns the flat top of the blob.
+  const float crownInset = std::max(14.0f, blob.radius);
+  if (blob.width - 2.0f * crownInset > 4.0f) {
+    m_paintPaletteVisual.addGradientRect(blob.left + crownInset,
+                                         blob.top + 1.0f,
+                                         blob.width - 2.0f * crownInset,
+                                         1.5f,
+                                         UiTheme::accentCool(),
+                                         UiTheme::accentViolet(),
+                                         UiTheme::accentViolet(),
+                                         UiTheme::accentCool());
   }
-  m_paintPaletteVisual.addText(
-    "Cell paint", tabX + 16.0f, y + 10.0f, 12.0f, UiTheme::textPrimary());
-  const float arrowX = tabX + tabWidth - 23.0f;
-  const float arrowY = y + 16.0f;
-  const float direction = 2.0f * m_paintPaletteReveal - 1.0f;
-  m_paintPaletteVisual.addLine(arrowX - 5.0f,
-                               arrowY - 2.0f * direction,
-                               arrowX,
-                               arrowY + 3.0f * direction,
-                               UiTheme::accent(),
-                               2.0f);
-  m_paintPaletteVisual.addLine(arrowX,
-                               arrowY + 3.0f * direction,
-                               arrowX + 5.0f,
-                               arrowY - 2.0f * direction,
-                               UiTheme::accent(),
-                               2.0f);
+  unsigned char brushRgb[3]{};
+  rules->evalCell(m_paintBrush, brushRgb);
+  const ColorRgba brushColor{ brushRgb[0], brushRgb[1], brushRgb[2], 255 };
+  if (iconReveal > 0.01f) {
+    const unsigned char iconOpacity =
+      static_cast<unsigned char>(std::round(255.0f * iconReveal));
+    // Light catches the top of the bubble.
+    GuiKit::drawSoftGlow(
+      m_paintPaletteVisual,
+      centerX - blob.width * 0.18f,
+      blob.top + blob.width * 0.22f,
+      blob.width * 0.2f,
+      blob.width * 0.12f,
+      UiTheme::applyOpacity(ColorRgba{ 220, 248, 255, 70 }, iconOpacity),
+      12);
+    // An up chevron invites a click; it lifts a little on hover.
+    const ColorRgba arrow =
+      UiTheme::applyOpacity(UiTheme::accentCool(), iconOpacity);
+    const float arrowY = blob.top + 11.0f - 1.5f * hover;
+    m_paintPaletteVisual.addLine(
+      centerX - 5.0f, arrowY + 3.0f, centerX, arrowY - 2.0f, arrow, 2.0f);
+    m_paintPaletteVisual.addLine(
+      centerX, arrowY - 2.0f, centerX + 5.0f, arrowY + 3.0f, arrow, 2.0f);
+    // A hairline separates the chevron from the brush, fading at both ends.
+    const ColorRgba separator = UiTheme::applyOpacity(
+      UiTheme::fade(UiTheme::glassRimLit(), 0.7f), iconOpacity);
+    const ColorRgba separatorClear = UiTheme::transparentOf(separator);
+    const float separatorY = blob.top + 17.5f;
+    m_paintPaletteVisual.addGradientRect(centerX - 11.0f,
+                                         separatorY,
+                                         11.0f,
+                                         1.0f,
+                                         separatorClear,
+                                         separator,
+                                         separator,
+                                         separatorClear);
+    m_paintPaletteVisual.addGradientRect(centerX,
+                                         separatorY,
+                                         11.0f,
+                                         1.0f,
+                                         separator,
+                                         separatorClear,
+                                         separatorClear,
+                                         separator);
+    // A paintbrush whose bristles carry the current paint, with a drip. It
+    // is drawn at kBrushScale about its anchor, below the separator.
+    const float kBrushScale = 0.75f;
+    const float brushX = centerX + 1.5f;
+    const float brushY = blob.top + 26.0f;
+    m_paintPaletteVisual.addLine(
+      brushX + 7.0f * kBrushScale,
+      brushY - 7.0f * kBrushScale,
+      brushX - 1.0f * kBrushScale,
+      brushY + 1.0f * kBrushScale,
+      UiTheme::applyOpacity(UiTheme::textPrimary(), iconOpacity),
+      3.0f * kBrushScale);
+    m_paintPaletteVisual.addLine(
+      brushX - 1.0f * kBrushScale,
+      brushY + 1.0f * kBrushScale,
+      brushX - 3.5f * kBrushScale,
+      brushY + 3.5f * kBrushScale,
+      UiTheme::applyOpacity(UiTheme::textSecondary(), iconOpacity),
+      4.5f * kBrushScale);
+    const ColorRgba tipRim =
+      UiTheme::applyOpacity(UiTheme::accentCool(), iconOpacity);
+    const ColorRgba tip = UiTheme::applyOpacity(brushColor, iconOpacity);
+    m_paintPaletteVisual.addFilledEllipse(brushX - 9.5f * kBrushScale,
+                                          brushY + 1.5f * kBrushScale,
+                                          8.0f * kBrushScale,
+                                          8.0f * kBrushScale,
+                                          tipRim);
+    m_paintPaletteVisual.addFilledTriangle(brushX - 9.0f * kBrushScale,
+                                           brushY + 6.5f * kBrushScale,
+                                           brushX - 5.0f * kBrushScale,
+                                           brushY + 9.5f * kBrushScale,
+                                           brushX - 11.0f * kBrushScale,
+                                           brushY + 11.0f * kBrushScale,
+                                           tipRim);
+    m_paintPaletteVisual.addFilledEllipse(brushX - 8.5f * kBrushScale,
+                                          brushY + 2.5f * kBrushScale,
+                                          6.0f * kBrushScale,
+                                          6.0f * kBrushScale,
+                                          tip);
+    m_paintPaletteVisual.addFilledTriangle(brushX - 8.0f * kBrushScale,
+                                           brushY + 6.5f * kBrushScale,
+                                           brushX - 5.5f * kBrushScale,
+                                           brushY + 8.5f * kBrushScale,
+                                           brushX - 9.8f * kBrushScale,
+                                           brushY + 9.8f * kBrushScale,
+                                           tip);
+  }
+  if (contentReveal > 0.01f) {
+    if (headerHovered) {
+      GuiKit::drawRoundedRect(m_paintPaletteVisual,
+                              bodyX + 8.0f,
+                              y + 5.0f,
+                              width - 16.0f,
+                              header - 10.0f,
+                              6.0f,
+                              UiTheme::applyOpacity(UiTheme::accentSoft(),
+                                                    static_cast<unsigned char>(
+                                                      40.0f * contentReveal)));
+    }
+    m_paintPaletteVisual.addText(
+      "Cell paint",
+      bodyX + 16.0f,
+      y + 10.0f,
+      12.0f,
+      UiTheme::applyOpacity(UiTheme::textPrimary(), contentOpacity));
+    // A down chevron closes the drawer back into its bubble.
+    const float arrowX = bodyX + width - 23.0f;
+    const float arrowY = y + 16.0f;
+    const ColorRgba arrow =
+      UiTheme::applyOpacity(UiTheme::accent(), contentOpacity);
+    m_paintPaletteVisual.addLine(
+      arrowX - 5.0f, arrowY - 2.0f, arrowX, arrowY + 3.0f, arrow, 2.0f);
+    m_paintPaletteVisual.addLine(
+      arrowX, arrowY + 3.0f, arrowX + 5.0f, arrowY - 2.0f, arrow, 2.0f);
+  }
+  // Everything drawn from here on is drawer content; it fades with the morph.
+  const std::size_t contentShapeStart = m_paintPaletteVisual.shapeCount();
+  const std::size_t contentTextStart = m_paintPaletteVisual.textCount();
   for (unsigned int card = 0u; card < visibleStateCount; ++card) {
     const unsigned int state = m_paintPaletteStateOffset + card;
-    const float cardX = x + 12.0f + static_cast<float>(card) * 132.0f;
+    const float cardX = bodyX + 12.0f + static_cast<float>(card) * 132.0f;
     const float cardY = y + header + 12.0f;
     const bool hovered =
-      paletteInteractive && m_paintPaletteExpanded && my < screenHeight &&
+      paletteInteractive && m_paintPaletteExpanded && contentReveal > 0.5f &&
+      my < screenHeight &&
       GuiKit::isPointInRect(mx, my, cardX, cardY, 124.0f, 64.0f);
     if (hovered && clicked) {
       m_paintBrush = static_cast<unsigned char>(state);
@@ -3216,7 +3446,7 @@ CellGameModule::updatePaintPalette(double dt)
     emphasis +=
       ((m_paintBrush == state ? 1.0f : (hovered ? 0.5f : 0.0f)) - emphasis) *
       blend;
-    if (m_paintPaletteReveal <= 0.001f) {
+    if (contentReveal <= 0.01f) {
       continue;
     }
     // Cards warm toward the accent with emphasis; the chosen brush glows and
@@ -3301,10 +3531,10 @@ CellGameModule::updatePaintPalette(double dt)
         UiTheme::transparentOf(UiTheme::accentCool()));
     }
   }
-  if (m_paintPaletteReveal > 0.001f) {
+  if (contentReveal > 0.01f) {
     const float dividerWidth = width - 36.0f;
     const ColorRgba dividerColor = UiTheme::divider();
-    m_paintPaletteVisual.addGradientRect(x + 18.0f,
+    m_paintPaletteVisual.addGradientRect(bodyX + 18.0f,
                                          y + header + 82.0f,
                                          dividerWidth * 0.5f,
                                          1.0f,
@@ -3312,7 +3542,7 @@ CellGameModule::updatePaintPalette(double dt)
                                          dividerColor,
                                          dividerColor,
                                          UiTheme::transparentOf(dividerColor));
-    m_paintPaletteVisual.addGradientRect(x + 18.0f + dividerWidth * 0.5f,
+    m_paintPaletteVisual.addGradientRect(bodyX + 18.0f + dividerWidth * 0.5f,
                                          y + header + 82.0f,
                                          dividerWidth * 0.5f,
                                          1.0f,
@@ -3325,7 +3555,7 @@ CellGameModule::updatePaintPalette(double dt)
       "States " + std::to_string(m_paintPaletteStateOffset + 1u) + "-" +
         std::to_string(m_paintPaletteStateOffset + visibleStateCount) + " of " +
         std::to_string(stateCount),
-      screenWidth * 0.5f,
+      bodyX + width * 0.5f,
       y + header + 91.0f,
       9.5f,
       UiTheme::textMuted());
@@ -3344,16 +3574,31 @@ CellGameModule::updatePaintPalette(double dt)
         : instructionSize;
     GuiKit::drawTextCentered(m_paintPaletteVisual,
                              instructionText,
-                             screenWidth * 0.5f,
+                             bodyX + width * 0.5f,
                              y + header + 109.0f,
                              fittedInstructionSize,
                              UiTheme::textMuted());
   }
+  for (std::size_t index = contentShapeStart;
+       index < m_paintPaletteVisual.shapeCount();
+       ++index) {
+    ShapePrimitive* faded = m_paintPaletteVisual.getShape(index);
+    faded->color = UiTheme::applyOpacity(faded->color, contentOpacity);
+    for (ColorRgba& vertex : faded->vertexColors) {
+      vertex = UiTheme::applyOpacity(vertex, contentOpacity);
+    }
+  }
+  for (std::size_t index = contentTextStart;
+       index < m_paintPaletteVisual.textCount();
+       ++index) {
+    TextPrimitive* faded = m_paintPaletteVisual.getText(index);
+    faded->color = UiTheme::applyOpacity(faded->color, contentOpacity);
+  }
   // GameVisual scales about its content origin.
   // Cancel that pivot translation so pointer conversion uses screen-origin
   // scale.
-  float originX = tabX;
-  float originY = y;
+  float originX = blob.left;
+  float originY = blob.top;
   for (std::size_t index = 0; index < m_paintPaletteVisual.shapeCount();
        ++index) {
     const ShapePrimitive* shape = m_paintPaletteVisual.getShape(index);
@@ -4202,8 +4447,8 @@ CellGameModule::DispatchDrawables(Scene* scene)
   if (inspectorVisual.isVisible()) {
     scene->AddDrawable(&inspectorVisual, RenderLayerId::UI);
   }
-  if (modeSplash != nullptr && modeSplash->isVisible()) {
-    scene->AddDrawable(modeSplash.get(), RenderLayerId::UI);
+  if (modeBadge.isVisible()) {
+    scene->AddDrawable(&modeBadge.getVisual(), RenderLayerId::UI);
   }
   if (hamburgerVisual.isVisible()) {
     scene->AddDrawable(&hamburgerVisual, RenderLayerId::UI);
