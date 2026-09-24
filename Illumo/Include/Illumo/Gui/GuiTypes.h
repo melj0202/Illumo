@@ -22,6 +22,13 @@ enum class GuiAlignment
   Right
 };
 
+// A point in a visual's space, for stroked paths (GuiKit::drawPolyline).
+struct GuiPoint2
+{
+  float x = 0.0f;
+  float y = 0.0f;
+};
+
 // Chrome styling parameters for panels, cards, and windows.
 struct GuiPanelChrome
 {

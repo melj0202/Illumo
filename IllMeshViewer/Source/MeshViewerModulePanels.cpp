@@ -6,6 +6,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/InputManager.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 
 // The viewer's dock panels, both in the right column. Surface ids are the
@@ -205,9 +206,13 @@ MeshViewerModule::handlePanelAction(MeshViewerAction action)
     if (action == info.popOut) {
       if (mode == GuiDockMode::Detached || mode == GuiDockMode::Opening) {
         m_dock.dock(info.id);
-      } else if (!m_dock.detach(info.id) && m_ui) {
-        m_ui->showToast("Separate windows are not available here",
-                        GuiToolPalette::warning);
+      } else if (!m_dock.detach(info.id)) {
+        Logger::LogWarning(std::string("Panel windows are unavailable; the ") +
+                           info.title + " panel stays docked");
+        if (m_ui) {
+          m_ui->showToast("Separate windows are not available here",
+                          GuiToolPalette::warning);
+        }
       }
       layoutDock();
       return true;
@@ -242,6 +247,7 @@ MeshViewerModule::syncLayout()
     const std::string saved = ic->envVars->getVar("panelLayout").value;
     if (!saved.empty()) {
       m_dock.restore(decodeLayout(saved));
+      Logger::LogTrace("Restored the saved viewer panel layout");
       m_layoutLoaded = true;
       m_savedLayout = m_dock.serialize();
       return;

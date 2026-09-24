@@ -1,6 +1,7 @@
 #include <Illumo/Gui/GuiPanelDock.h>
 #include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cmath>
 #include <sstream>
@@ -266,6 +267,8 @@ GuiPanelDock::dock(const std::string& id)
        panel.mode == GuiDockMode::Opening) &&
       m_surfaces != nullptr) {
     m_surfaces->close(m_specs[static_cast<std::size_t>(index)].surface);
+    Logger::LogInfo(m_specs[static_cast<std::size_t>(index)].title +
+                    " panel docked");
   }
   panel.mode = GuiDockMode::Docked;
   panel.wantsWindow = false;
@@ -339,11 +342,16 @@ GuiPanelDock::handleEvents()
       case PanelSurfaceEvent::Kind::Opened:
         if (panel.mode == GuiDockMode::Opening) {
           panel.mode = GuiDockMode::Detached;
+          Logger::LogInfo(m_specs[static_cast<std::size_t>(index)].title +
+                          " panel detached into its own window");
         }
         break;
       case PanelSurfaceEvent::Kind::Failed:
         if (panel.mode == GuiDockMode::Opening) {
           panel.mode = GuiDockMode::Docked;
+          Logger::LogWarning("The host could not open a window for the " +
+                             m_specs[static_cast<std::size_t>(index)].title +
+                             " panel; it stays docked");
         }
         break;
       case PanelSurfaceEvent::Kind::CloseRequested:
@@ -368,6 +376,8 @@ GuiPanelDock::handleEvents()
     if (panel.mode == GuiDockMode::Detached &&
         state != PanelSurfaceState::Open) {
       panel.mode = GuiDockMode::Docked;
+      Logger::LogWarning(m_specs[index].title +
+                         " panel window was lost; the panel docked again");
     }
     if (panel.wantsWindow) {
       if (!canDetach() ||

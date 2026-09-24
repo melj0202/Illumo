@@ -277,6 +277,9 @@ clearLaunchOptions(IEnvVars* environment)
 static void
 prepareRuntime(IEnvVars* environment)
 {
+  // stdout carries only the --capture and --bench JSON results; terminal log
+  // lines go to stderr so callers can parse stdout as-is.
+  Logger::setConsoleToStderr(true);
   if (s_invocationDirectory.empty()) {
     std::error_code error;
     s_invocationDirectory = std::filesystem::current_path(error);
@@ -337,7 +340,9 @@ public:
       context->window->setTitle(m_title);
     }
     const bool started = m_guest->Start(context);
-    if (!started) {
+    if (started) {
+      Logger::LogInfo("The " + m_application + " package started");
+    } else {
       Logger::LogError("The " + m_application +
                        " package failed to start: " + m_guest->error());
       if (!m_capture.empty()) {
@@ -445,6 +450,7 @@ public:
       reportBench("The runtime closed before the benchmark finished");
     }
     m_guest->Exit();
+    Logger::LogInfo("The " + m_application + " package stopped");
   }
   bool OnCloseRequested() override
   {
@@ -730,6 +736,10 @@ createGuestModuleFrom(IEnvVars* environment)
       Logger::LogError(package.origin + " is not an application package");
       return nullptr;
     }
+    Logger::LogInfo(
+      "Application package: " + manifest.id +
+      (manifest.title.empty() ? std::string() : " (" + manifest.title + ")") +
+      " from " + package.origin);
     if (application.empty()) {
       application = manifest.id;
     }
@@ -778,6 +788,15 @@ createGuestModuleFrom(IEnvVars* environment)
     }
     for (const std::string& warning : warnings) {
       Logger::LogWarning(warning);
+    }
+    for (const LoadedPackage& mounted : packages) {
+      Logger::LogInfo("Mounted package " + mounted.manifest.id +
+                      " at /packages/" + mounted.manifest.id + " from " +
+                      mounted.origin);
+    }
+    if (!project.empty()) {
+      Logger::LogInfo("Project directory mounted writable at /project: " +
+                      project.string());
     }
     game = readPackageModule(*vfs, manifest.app.module);
     if (!workerRequested && !manifest.app.worker.empty()) {
@@ -919,6 +938,34 @@ createGuestModuleFrom(IEnvVars* environment)
     Logger::LogError("A requested WASM module is missing or unreadable");
     return nullptr;
   }
+  Logger::LogInfo(
+    "Guest module: " + std::to_string(game.size() / 1024) + " KiB" +
+    (worker.empty() ? std::string()
+                    : ", worker " + std::to_string(worker.size() / 1024) +
+                        " KiB x " + std::to_string(workerLanes) + " lanes") +
+    (mod.empty() ? std::string()
+                 : ", mod " + std::to_string(mod.size() / 1024) + " KiB"));
+  Logger::LogInfo(
+    "Guest budget: " + std::to_string(limits.memoryBytes / (1024u * 1024u)) +
+    " MiB memory, " + std::to_string(limits.deadlineMilliseconds) +
+    " ms deadline per call" +
+    (limits.meterFuel
+       ? ", " + std::to_string(limits.fuelPerCall) + " fuel per call"
+       : std::string(", fuel unmetered")));
+  if (!files.storage.empty()) {
+    Logger::LogInfo("Private storage: " + files.storage.string());
+  }
+  if (!files.launch.empty()) {
+    Logger::LogInfo("Opening " + files.launch.string());
+  }
+  if (!capture.empty()) {
+    Logger::LogInfo("Capture mode: frame " + std::to_string(captureFrame) +
+                    " to " + capture.string());
+  } else if (bench.frames != 0) {
+    Logger::LogInfo("Benchmark mode: " + std::to_string(bench.frames) +
+                    " frames after " + std::to_string(bench.warmup) +
+                    " warm-up frames");
+  }
   std::unique_ptr<WasmGameModule> guest =
     std::make_unique<WasmGameModule>(std::move(game),
                                      std::move(startup),
@@ -942,6 +989,8 @@ createGuestModuleFrom(IEnvVars* environment)
       Logger::LogWarning("Audio disabled: " + audioError);
     }
     guest->setAudio(audio.get());
+  } else {
+    Logger::LogTrace("Audio disabled for capture and benchmark runs");
   }
   return std::make_unique<RuntimeModule>(std::move(audio),
                                          std::move(guest),

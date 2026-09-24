@@ -1,4 +1,6 @@
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/FileTree.h>
+#include <string>
 
 bool
 GuestFileTree::start(Operation operation)
@@ -90,6 +92,8 @@ GuestFileTree::pump()
         result.outcome == GuestFileOutcome::Success) {
       GuestFileListing page;
       if (!GuestFileListing::read(result.bytes, page)) {
+        Logger::LogWarning("The host sent a malformed listing of " +
+                           operation.path);
         result.outcome = GuestFileOutcome::IoError;
       } else {
         for (GuestFileEntry& entry : page.entries) {
@@ -105,7 +109,15 @@ GuestFileTree::pump()
             ++index;
             continue;
           }
+          Logger::LogWarning("Listing of " + operation.path +
+                             " stopped early: too many file operations in "
+                             "flight");
           result.outcome = GuestFileOutcome::IoError;
+        } else if (operation.entries.size() >= MaximumListing &&
+                   operation.cursor < page.total) {
+          Logger::LogWarning("Listing of " + operation.path + " truncated at " +
+                             std::to_string(operation.entries.size()) + " of " +
+                             std::to_string(page.total) + " entries");
         }
       }
     }

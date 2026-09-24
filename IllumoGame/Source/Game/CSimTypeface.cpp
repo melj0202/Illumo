@@ -7,13 +7,14 @@
 static bool s_installed = false;
 
 // UI text is sampled from rest to past emphasis, so a spring's overshoot has
-// somewhere to go. The title spans thin (falling letters) to black.
+// somewhere to go. The title spans thin (falling letters) to black, sampled
+// densely where the resting word breathes (700 +/- 110): a weight between two
+// samples overlays the heavier on the lighter, and samples far apart read as
+// a soft double edge at title size. Eight samples per raster size keep all
+// three sizes within the guest's 32-font budget.
 static const float kUiWeights[4] = { 400.0f, 600.0f, 800.0f, 1000.0f };
-static const float kTitleWeights[5] = { 200.0f,
-                                        450.0f,
-                                        700.0f,
-                                        850.0f,
-                                        1000.0f };
+static const float kTitleWeights[8] = { 200.0f, 450.0f, 580.0f, 640.0f,
+                                        700.0f, 760.0f, 820.0f, 1000.0f };
 
 static std::string
 faceName(float weight, const std::string& glyphs)

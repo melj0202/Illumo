@@ -2,6 +2,7 @@
 
 #include <Illumo/Content/VirtualPath.h>
 #include <Illumo/Platform/AtomicFile.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <array>
 #include <climits>
@@ -450,6 +451,10 @@ PackageArchive::open(std::shared_ptr<const IPackageByteSource> source,
       return nullptr;
     }
   }
+  Logger::LogTrace(
+    "Opened package archive: " + std::to_string(archive->m_entries.size()) +
+    " files in " + std::to_string(archive->m_directories.size()) +
+    " directories, " + std::to_string(total) + " bytes uncompressed");
   return archive;
 }
 

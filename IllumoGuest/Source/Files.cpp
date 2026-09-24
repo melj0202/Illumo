@@ -1,3 +1,4 @@
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Files.h>
 #include <algorithm>
 #include <cstring>
@@ -151,6 +152,9 @@ GuestFiles::complete(Task& task,
     if (task.cancelled) {
       task.stage = Stage::Close;
     } else if (size > task.maximum) {
+      Logger::LogWarning("Refused to read " + task.path + ": " +
+                         std::to_string(size) + " bytes exceeds the " +
+                         std::to_string(task.maximum) + "-byte limit");
       task.outcome = GuestFileOutcome::Denied;
       task.stage = Stage::Close;
     } else {

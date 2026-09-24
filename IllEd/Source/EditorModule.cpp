@@ -76,6 +76,10 @@ EditorModule::Start(IllumoContext* context)
       m_toolbar->setAtlas(m_atlas);
       m_sceneGraphView->setAtlas(m_atlas);
       m_tools->setAtlas(m_atlas);
+    } else {
+      Logger::LogWarning(std::string("Editor UI atlas ") +
+                         EditorUiAtlas::relativePath() +
+                         " is unavailable; panels draw without icons");
     }
   }
   m_document.setAssetManager(ic->assetManager);
@@ -117,6 +121,9 @@ EditorModule::Start(IllumoContext* context)
   restoreCameraState();
   refreshView();
   updateStatus();
+  Logger::LogInfo(IllEdPlatform::current().hasProject()
+                    ? "Scene editor ready; new scenes belong to /project"
+                    : "Scene editor ready");
   return true;
 }
 
@@ -462,6 +469,8 @@ EditorModule::registerCommands()
         x = args.size() > 1 ? std::stof(args[1]) : 0.0f;
         y = args.size() > 2 ? std::stof(args[2]) : 0.0f;
       } catch (...) {
+        Logger::LogWarning("scene_place ignored: the coordinates are not "
+                           "numbers");
         return;
       }
       placeAssetAt(args[0], m_document.makeEditPlaneTransform(x, y));
@@ -593,6 +602,8 @@ EditorModule::syncFontSize()
     size = std::clamp(size, 8.0f, 48.0f);
     applyFontSize(size);
   } catch (...) {
+    Logger::LogWarning("Ignored the fontSize setting '" + fontVar +
+                       "': not a number");
   }
 }
 

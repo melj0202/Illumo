@@ -41,6 +41,8 @@ macOS is not targeted; its scaffold has been removed.
   on native Wayland can deadlock.
 - Process memory overlay stays on `UnsupportedProcessMemoryStats` and reports
   unavailable.
+- The startup machine report uses `UnsupportedSystemInfo`, which supplies only
+  the logical processor count.
 
 Not in this port: `.deb` / AppImage / Flatpak, native Wayland, aarch64,
 `gtkmm-4`, a second graphics API, XDG config directories, `/proc/self/statm`
@@ -225,6 +227,7 @@ in a nested session, say so rather than calling the port done.
 
 - Headless GitHub Actions on `ubuntu-24.04`
 - `QueryProcessMemoryStats` via `/proc/self/statm`
+- `QuerySystemInfo` via `uname`, `/proc/cpuinfo` and `sysinfo`
 - Native Wayland GLFW plus gtkmm re-smoke
 - HiDPI cursor mapping
 - Packaged tarball / `.deb`

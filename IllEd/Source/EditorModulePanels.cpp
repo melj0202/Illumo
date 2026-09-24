@@ -7,6 +7,7 @@
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/InputManager.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <memory>
 
@@ -255,6 +256,8 @@ EditorModule::handlePanelCommand(EditorCommand command)
       if (mode == GuiDockMode::Detached || mode == GuiDockMode::Opening) {
         m_dock.dock(info.id);
       } else if (!m_dock.detach(info.id)) {
+        Logger::LogWarning(std::string("Panel windows are unavailable; the ") +
+                           info.title + " panel stays docked");
         toast("Separate windows are not available here",
               GuiToolPalette::warning);
       }
@@ -277,6 +280,7 @@ EditorModule::syncLayout()
     const std::string saved = ic->envVars->getVar("panelLayout").value;
     if (!saved.empty()) {
       m_dock.restore(decodeLayout(saved));
+      Logger::LogTrace("Restored the saved editor panel layout");
       m_layoutLoaded = true;
       m_savedLayout = m_dock.serialize();
       return;

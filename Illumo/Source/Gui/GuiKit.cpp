@@ -163,7 +163,6 @@ static const float kQuarterSin[7] = { 0.0f,        0.25881905f, 0.5f,
                                       0.70710678f, 0.86602540f, 0.96592583f,
                                       1.0f };
 static const int kCornerPoints = 7;
-static const int kPerimeterPoints = 4 * kCornerPoints;
 
 struct GuiPoint
 {
@@ -178,13 +177,40 @@ finiteRect(float x, float y, float width, float height)
          std::isfinite(height) && width > 0.0f && height > 0.0f;
 }
 
-// Unit direction for step `step` of corner `corner` (0 top-left, 1 top-right,
-// 2 bottom-right, 3 bottom-left), walking the outline clockwise on screen.
-static GuiPoint
-cornerDirection(int corner, int step)
+// Rounded shapes subdivide each quarter by the corner's radius: 15-degree
+// steps (6 per quarter) through radius 15, then about four units of arc per
+// step so large radii (bubbles, pills) stay round instead of faceted. Always
+// even, since filled corners pack two wedges per quad.
+static const int kMaxCornerSteps = 24;
+static const int kMaxCornerPoints = kMaxCornerSteps + 1;
+static const int kMaxPerimeterPoints = 4 * kMaxCornerPoints;
+
+static int
+cornerSteps(float radius)
 {
-  const float c = kQuarterCos[step];
-  const float s = kQuarterSin[step];
+  const float arc = std::max(0.0f, radius) * 1.57079633f;
+  const int steps =
+    std::clamp(static_cast<int>(std::ceil(arc / 4.0f)), 6, kMaxCornerSteps);
+  return steps + (steps % 2);
+}
+
+// Unit direction for step `step` of `steps` in corner `corner` (0 top-left,
+// 1 top-right, 2 bottom-right, 3 bottom-left), walking the outline clockwise
+// on screen.
+static GuiPoint
+cornerDirection(int corner, int step, int steps)
+{
+  float c = 0.0f;
+  float s = 0.0f;
+  if (steps == 6) {
+    c = kQuarterCos[step];
+    s = kQuarterSin[step];
+  } else {
+    const float angle =
+      1.57079633f * static_cast<float>(step) / static_cast<float>(steps);
+    c = step == steps ? 0.0f : std::cos(angle);
+    s = step == steps ? 1.0f : std::sin(angle);
+  }
   if (corner == 0) {
     return GuiPoint{ -c, -s };
   }
@@ -197,9 +223,10 @@ cornerDirection(int corner, int step)
   return GuiPoint{ -s, c };
 }
 
-// Clockwise outline of the rounded rect grown by `offset` (negative insets).
-// The offset curve keeps the corner centers, so bands between two offsets are
-// exactly parallel; insets deeper than the radius collapse to sharp corners.
+// Clockwise outline of the rounded rect grown by `offset` (negative insets),
+// `steps + 1` points per corner. The offset curve keeps the corner centers,
+// so bands between two offsets are exactly parallel; insets deeper than the
+// radius collapse to sharp corners.
 static void
 roundedPerimeter(float x,
                  float y,
@@ -207,8 +234,10 @@ roundedPerimeter(float x,
                  float height,
                  float radius,
                  float offset,
+                 int steps,
                  GuiPoint* points)
 {
+  const int cornerPoints = steps + 1;
   const float grownRadius = std::max(0.0f, radius + offset);
   const float left = x - offset + grownRadius;
   const float right = x + width + offset - grownRadius;
@@ -217,9 +246,9 @@ roundedPerimeter(float x,
   const float centersX[4] = { left, right, right, left };
   const float centersY[4] = { top, top, bottom, bottom };
   for (int corner = 0; corner < 4; ++corner) {
-    for (int step = 0; step < kCornerPoints; ++step) {
-      const GuiPoint direction = cornerDirection(corner, step);
-      points[corner * kCornerPoints + step] =
+    for (int step = 0; step < cornerPoints; ++step) {
+      const GuiPoint direction = cornerDirection(corner, step, steps);
+      points[corner * cornerPoints + step] =
         GuiPoint{ centersX[corner] + direction.x * grownRadius,
                   centersY[corner] + direction.y * grownRadius };
     }
@@ -260,8 +289,10 @@ GuiKit::drawRoundedRect(GameVisual& visual,
   visual.addFilledRect(x, y + radius, radius, height - 2.0f * radius, color);
   visual.addFilledRect(
     x + width - radius, y + radius, radius, height - 2.0f * radius, color);
-  GuiPoint rim[kPerimeterPoints];
-  roundedPerimeter(x, y, width, height, radius, 0.0f, rim);
+  const int steps = cornerSteps(radius);
+  const int cornerPoints = steps + 1;
+  GuiPoint rim[kMaxPerimeterPoints];
+  roundedPerimeter(x, y, width, height, radius, 0.0f, steps, rim);
   const float centersX[4] = {
     x + radius, x + width - radius, x + width - radius, x + radius
   };
@@ -269,8 +300,8 @@ GuiKit::drawRoundedRect(GameVisual& visual,
     y + radius, y + radius, y + height - radius, y + height - radius
   };
   for (int corner = 0; corner < 4; ++corner) {
-    const int base = corner * kCornerPoints;
-    for (int step = 0; step + 2 < kCornerPoints; step += 2) {
+    const int base = corner * cornerPoints;
+    for (int step = 0; step + 2 < cornerPoints; step += 2) {
       const GuiPoint& r0 = rim[base + step];
       const GuiPoint& r1 = rim[base + step + 1];
       const GuiPoint& r2 = rim[base + step + 2];
@@ -319,19 +350,21 @@ GuiKit::drawRoundedGradientRect(GameVisual& visual,
     return;
   }
   radius = clampedRadius(radius, width, height);
-  GuiPoint rim[kPerimeterPoints];
-  roundedPerimeter(x, y, width, height, radius, 0.0f, rim);
+  const int steps = cornerSteps(radius);
+  const int cornerPoints = steps + 1;
+  GuiPoint rim[kMaxPerimeterPoints];
+  roundedPerimeter(x, y, width, height, radius, 0.0f, steps, rim);
   // Right side top to bottom: top-right corner then bottom-right corner.
-  GuiPoint rightSide[2 * kCornerPoints];
-  GuiPoint leftSide[2 * kCornerPoints];
-  for (int step = 0; step < kCornerPoints; ++step) {
-    rightSide[step] = rim[kCornerPoints + step];
-    rightSide[kCornerPoints + step] = rim[2 * kCornerPoints + step];
+  GuiPoint rightSide[2 * kMaxCornerPoints];
+  GuiPoint leftSide[2 * kMaxCornerPoints];
+  for (int step = 0; step < cornerPoints; ++step) {
+    rightSide[step] = rim[cornerPoints + step];
+    rightSide[cornerPoints + step] = rim[2 * cornerPoints + step];
     // Left mirrors: top-left walks up, bottom-left walks down, so reverse.
-    leftSide[step] = rim[kCornerPoints - 1 - step];
-    leftSide[kCornerPoints + step] = rim[4 * kCornerPoints - 1 - step];
+    leftSide[step] = rim[cornerPoints - 1 - step];
+    leftSide[cornerPoints + step] = rim[4 * cornerPoints - 1 - step];
   }
-  for (int level = 0; level + 1 < 2 * kCornerPoints; ++level) {
+  for (int level = 0; level + 1 < 2 * cornerPoints; ++level) {
     const GuiPoint& l0 = leftSide[level];
     const GuiPoint& r0 = rightSide[level];
     const GuiPoint& r1 = rightSide[level + 1];
@@ -374,12 +407,14 @@ GuiKit::drawRoundedBand(GameVisual& visual,
     return;
   }
   radius = clampedRadius(radius, width, height);
-  GuiPoint inner[kPerimeterPoints];
-  GuiPoint outer[kPerimeterPoints];
-  roundedPerimeter(x, y, width, height, radius, innerOffset, inner);
-  roundedPerimeter(x, y, width, height, radius, outerOffset, outer);
-  for (int index = 0; index < kPerimeterPoints; ++index) {
-    const int next = (index + 1) % kPerimeterPoints;
+  const int steps = cornerSteps(radius);
+  const int perimeterPoints = 4 * (steps + 1);
+  GuiPoint inner[kMaxPerimeterPoints];
+  GuiPoint outer[kMaxPerimeterPoints];
+  roundedPerimeter(x, y, width, height, radius, innerOffset, steps, inner);
+  roundedPerimeter(x, y, width, height, radius, outerOffset, steps, outer);
+  for (int index = 0; index < perimeterPoints; ++index) {
+    const int next = (index + 1) % perimeterPoints;
     visual.addGradientQuad(inner[index].x,
                            inner[index].y,
                            outer[index].x,
@@ -393,6 +428,177 @@ GuiKit::drawRoundedBand(GameVisual& visual,
                            outerColor,
                            innerColor);
   }
+}
+
+void
+GuiKit::drawPolyline(GameVisual& visual,
+                     const GuiPoint2* points,
+                     int pointCount,
+                     float thickness,
+                     ColorRgba color,
+                     bool closed,
+                     bool squareCaps)
+{
+  static const int kMaximumPoints = 32;
+  if (points == nullptr || pointCount < 2 || !std::isfinite(thickness) ||
+      thickness <= 0.0f || color.a == 0) {
+    return;
+  }
+  // Consecutive duplicates would have no direction; drop them.
+  GuiPoint2 path[kMaximumPoints];
+  int count = 0;
+  for (int index = 0; index < std::min(pointCount, kMaximumPoints); ++index) {
+    const GuiPoint2 point = points[index];
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+      return;
+    }
+    if (count > 0 && std::abs(point.x - path[count - 1].x) < 0.0001f &&
+        std::abs(point.y - path[count - 1].y) < 0.0001f) {
+      continue;
+    }
+    path[count++] = point;
+  }
+  if (closed && count > 2 &&
+      std::abs(path[0].x - path[count - 1].x) < 0.0001f &&
+      std::abs(path[0].y - path[count - 1].y) < 0.0001f) {
+    --count;
+  }
+  if (count < 2) {
+    return;
+  }
+  if (closed && count < 3) {
+    closed = false;
+  }
+  const float half = thickness * 0.5f;
+  const int segments = closed ? count : count - 1;
+  GuiPoint2 direction[kMaximumPoints];
+  for (int segment = 0; segment < segments; ++segment) {
+    const GuiPoint2 from = path[segment];
+    const GuiPoint2 to = path[(segment + 1) % count];
+    const float dx = to.x - from.x;
+    const float dy = to.y - from.y;
+    const float length = std::sqrt(dx * dx + dy * dy);
+    direction[segment] = GuiPoint2{ dx / length, dy / length };
+  }
+  // Each vertex gets one offset pair shared by the segments meeting there,
+  // which is what closes the joint.
+  GuiPoint2 sideA[kMaximumPoints];
+  GuiPoint2 sideB[kMaximumPoints];
+  for (int vertex = 0; vertex < count; ++vertex) {
+    const bool hasPrevious = closed || vertex > 0;
+    const bool hasNext = closed || vertex < count - 1;
+    GuiPoint2 point = path[vertex];
+    float offsetX = 0.0f;
+    float offsetY = 0.0f;
+    if (hasPrevious && hasNext) {
+      const GuiPoint2 in = direction[(vertex - 1 + segments) % segments];
+      const GuiPoint2 out = direction[vertex % segments];
+      const float normalInX = -in.y;
+      const float normalInY = in.x;
+      float miterX = normalInX - out.y;
+      float miterY = normalInY + out.x;
+      const float miterLength = std::sqrt(miterX * miterX + miterY * miterY);
+      if (miterLength < 0.0001f) {
+        // The path doubles back on itself: no joint to fill.
+        offsetX = normalInX * half;
+        offsetY = normalInY * half;
+      } else {
+        miterX /= miterLength;
+        miterY /= miterLength;
+        const float cosine = miterX * normalInX + miterY * normalInY;
+        const float reach =
+          std::min(half / std::max(cosine, 0.0001f), 4.0f * half);
+        offsetX = miterX * reach;
+        offsetY = miterY * reach;
+      }
+    } else {
+      const GuiPoint2 along = direction[hasNext ? vertex : vertex - 1];
+      offsetX = -along.y * half;
+      offsetY = along.x * half;
+      if (squareCaps) {
+        const float outward = hasNext ? -half : half;
+        point.x += along.x * outward;
+        point.y += along.y * outward;
+      }
+    }
+    sideA[vertex] = GuiPoint2{ point.x + offsetX, point.y + offsetY };
+    sideB[vertex] = GuiPoint2{ point.x - offsetX, point.y - offsetY };
+  }
+  for (int segment = 0; segment < segments; ++segment) {
+    const int from = segment;
+    const int to = (segment + 1) % count;
+    visual.addGradientQuad(sideA[from].x,
+                           sideA[from].y,
+                           sideB[from].x,
+                           sideB[from].y,
+                           sideB[to].x,
+                           sideB[to].y,
+                           sideA[to].x,
+                           sideA[to].y,
+                           color,
+                           color,
+                           color,
+                           color);
+  }
+}
+
+void
+GuiKit::drawChevron(GameVisual& visual,
+                    float centerX,
+                    float tipY,
+                    float halfWidth,
+                    float depth,
+                    float thickness,
+                    ColorRgba color)
+{
+  if (!std::isfinite(centerX) || !std::isfinite(tipY) ||
+      !std::isfinite(halfWidth) || !std::isfinite(depth) ||
+      !std::isfinite(thickness) || halfWidth <= 0.0f || depth == 0.0f ||
+      thickness <= 0.0f || color.a == 0) {
+    return;
+  }
+  const float half = thickness * 0.5f;
+  const float armLength = std::sqrt(halfWidth * halfWidth + depth * depth);
+  // Unit vector from the tip along the right arm; the left arm mirrors it.
+  const float ux = halfWidth / armLength;
+  const float uy = depth / armLength;
+  // The bisector runs straight along the depth axis into the V, and the
+  // offset edges of both arms cross on it: the miter. sin(half-angle) is
+  // the arm's horizontal share. Very sharp chevrons cap the miter.
+  const float miter = std::min(half / ux, 4.0f * half);
+  const float direction = depth > 0.0f ? 1.0f : -1.0f;
+  const float innerTipY = tipY + direction * miter;
+  const float outerTipY = tipY - direction * miter;
+  // The right arm's unit normal toward the V's inside.
+  const float nx = -uy * direction;
+  const float ny = ux * direction;
+  const float endY = tipY + depth;
+  const float rightX = centerX + halfWidth;
+  const float leftX = centerX - halfWidth;
+  visual.addGradientQuad(rightX + nx * half,
+                         endY + ny * half,
+                         rightX - nx * half,
+                         endY - ny * half,
+                         centerX,
+                         outerTipY,
+                         centerX,
+                         innerTipY,
+                         color,
+                         color,
+                         color,
+                         color);
+  visual.addGradientQuad(leftX - nx * half,
+                         endY + ny * half,
+                         leftX + nx * half,
+                         endY - ny * half,
+                         centerX,
+                         outerTipY,
+                         centerX,
+                         innerTipY,
+                         color,
+                         color,
+                         color,
+                         color);
 }
 
 void

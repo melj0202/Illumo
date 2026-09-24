@@ -1,4 +1,5 @@
 #include <Illumo/Services/EnvVars.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -40,6 +41,18 @@ EnvVars::ApplicationConfigPath()
   return std::filesystem::current_path() / "envvars.json";
 }
 
+// Settings load before, and save after, the logger's lifetime; without a
+// logger the problem still reaches stderr.
+static void
+reportSettingsProblem(const std::string& text)
+{
+  if (Logger::getLogFilePath().empty()) {
+    std::fputs(("EnvVars: " + text + "\n").c_str(), stderr);
+    return;
+  }
+  Logger::LogWarning(text);
+}
+
 void
 EnvVars::load()
 {
@@ -53,17 +66,16 @@ EnvVars::load()
     }
     std::ifstream file(m_filePath);
     if (error || !file.is_open()) {
-      std::fputs(
-        "EnvVars: configuration is unreadable; preserving original file\n",
-        stderr);
+      reportSettingsProblem("Settings file " + m_filePath.string() +
+                            " is unreadable; using defaults and preserving it");
       return;
     }
     std::ostringstream contents;
     contents << file.rdbuf();
     if (file.bad() || contents.bad() || !loadText(contents.str())) {
-      std::fputs(
-        "EnvVars: invalid configuration object; preserving original file\n",
-        stderr);
+      reportSettingsProblem("Settings file " + m_filePath.string() +
+                            " is not a valid settings object; using defaults "
+                            "and preserving it");
       return;
     }
     m_persistenceEligible = true;
@@ -85,9 +97,11 @@ EnvVars::save()
     file << serialized;
     file.close();
     if (!file) {
-      std::fputs("EnvVars: configuration save failed\n", stderr);
+      reportSettingsProblem("Settings could not be saved to " +
+                            m_filePath.string());
     }
   } catch (...) {
+    // Runs during teardown: nothing may escape.
     std::fputs("EnvVars: configuration save failed\n", stderr);
   }
 }

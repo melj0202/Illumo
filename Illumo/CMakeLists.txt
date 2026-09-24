@@ -31,8 +31,9 @@ if(WIN32)
     Source/Platform/Windows/WinClipboard.cpp
     Source/Platform/Windows/WinTimer.cpp
     Source/Platform/Windows/WinProcessMemoryStats.cpp
+    Source/Platform/Windows/WinSystemInfo.cpp
     Source/Platform/Windows/WinPixelWindowPresent.cpp)
-  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm Gdi32)
+  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm Gdi32 Advapi32)
 elseif(UNIX)
   find_package(PkgConfig REQUIRED)
   find_package(Threads REQUIRED)
@@ -45,7 +46,8 @@ elseif(UNIX)
     Source/Platform/Linux/LinuxClipboard.cpp
     Source/Platform/Linux/LinuxTimer.cpp
     Source/Platform/Linux/LinuxPixelWindowPresent.cpp
-    Source/Platform/UnsupportedProcessMemoryStats.cpp)
+    Source/Platform/UnsupportedProcessMemoryStats.cpp
+    Source/Platform/UnsupportedSystemInfo.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES
     PkgConfig::GTK Threads::Threads ${CMAKE_DL_LIBS})
 else()

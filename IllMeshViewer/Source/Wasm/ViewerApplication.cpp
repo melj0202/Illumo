@@ -1,6 +1,7 @@
 #include "MeshViewerConfig.h"
 #include "MeshViewerModule.h"
 #include "MeshViewerPlatform.h"
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Documents.h>
 #include <IllumoGuest/FileTree.h>
 #include <IllumoGuest/ModuleApplication.h>
@@ -138,6 +139,7 @@ protected:
     }
     if (launchFile() != nullptr) {
       m_platform.setLaunch(*launchFile());
+      Logger::LogTrace("Mesh viewer launch file: " + launchFile()->label);
     }
     return true;
   }

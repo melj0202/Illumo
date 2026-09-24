@@ -251,6 +251,13 @@ public:
 
   std::uint64_t getRevision() const { return revision; }
   std::size_t getAllocatedChunkCount() const { return chunks.size(); }
+  // Non-background cells in the world now, from the maintained aggregate
+  // (no chunk scan). Unlike getLastAdvanceStats(), it is current before any
+  // generation has run and after edits.
+  std::size_t getStoredCellCount() const
+  {
+    return m_chunkStatistics.activeCellCount;
+  }
   const SparseAdvanceStats& getLastAdvanceStats() const
   {
     return lastAdvanceStats;

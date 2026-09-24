@@ -1,9 +1,11 @@
 #include <Illumo/Services/WorkerPool.h>
 
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -84,7 +86,14 @@ WorkerPool::start(size_t workerCount)
     }
   } catch (...) {
     stop();
+    Logger::LogWarning("Worker pool could not start " +
+                       std::to_string(workerCount) +
+                       " threads; work runs serially");
     return false;
+  }
+  if (workerCount != 0) {
+    Logger::LogTrace("Worker pool started " + std::to_string(workerCount) +
+                     " threads");
   }
   return true;
 }

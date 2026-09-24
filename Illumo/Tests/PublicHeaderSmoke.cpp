@@ -32,6 +32,7 @@
 #include <Illumo/Platform/PlatformTimer.h>
 #include <Illumo/Platform/ProcessMemoryStats.h>
 #include <Illumo/Platform/SaveLoad.h>
+#include <Illumo/Platform/SystemInfo.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/CommandQueue.h>

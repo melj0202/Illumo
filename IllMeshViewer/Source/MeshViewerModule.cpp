@@ -109,6 +109,9 @@ MeshViewerModule::Start(IllumoContext* context)
     if (skyboxCubemap.isValid()) {
       m_skyboxVisual = std::make_unique<SkyboxVisual>(skyboxCubemap);
       m_skyboxVisual->prepare(ic->renderer);
+    } else {
+      Logger::LogWarning("Default skybox " + skyboxPath +
+                         " is unavailable; the viewer draws without it");
     }
   }
 
@@ -126,6 +129,8 @@ MeshViewerModule::Start(IllumoContext* context)
       try {
         m_ui->setFontSize(std::stof(fontSizeVar));
       } catch (...) {
+        Logger::LogWarning("Ignored the fontSize setting '" + fontSizeVar +
+                           "': not a number");
       }
     }
   }
@@ -149,6 +154,7 @@ MeshViewerModule::Start(IllumoContext* context)
     openLocation(launch);
   }
 
+  Logger::LogInfo("Mesh viewer ready");
   return true;
 }
 
@@ -172,6 +178,10 @@ MeshViewerModule::loadMeshLocation(const MeshViewerLocation& location)
         reportLoadFailure(error);
         return;
       }
+      Logger::LogInfo(
+        "Mesh viewer loaded " + name + ": " +
+        std::to_string(m_meshData.vertices.size()) + " vertices, " +
+        std::to_string(m_meshData.indices.size() / 3) + " triangles");
       if (m_ui) {
         m_ui->showToast("Loaded: " + name, ColorRgba{ 60, 220, 120, 255 });
       }
@@ -243,6 +253,13 @@ MeshViewerModule::loadSceneLocation(const MeshViewerLocation& location)
             reportLoadFailure(loadError);
             return;
           }
+          Logger::LogInfo(
+            "Mesh viewer opened scene " + name + " (" +
+            std::to_string(m_scene ? m_scene->nodeCount() : 0) + " nodes" +
+            (missing.empty() ? std::string()
+                             : ", " + std::to_string(missing.size()) +
+                                 " assets unavailable") +
+            ", root " + root + ")");
           if (m_ui) {
             m_ui->showToast(missing.empty() ? "Loaded: " + name
                                             : "Loaded " + name + " with " +
@@ -466,6 +483,8 @@ MeshViewerModule::loadMesh(const std::string& path)
   const MeshHandle meshAsset = ic->assetManager->acquireMesh(result.mesh);
   const MeshAssetInfo meshInfo = ic->assetManager->getMeshInfo(meshAsset);
   if (!meshInfo.isValid()) {
+    Logger::LogError("Mesh " + path +
+                     " parsed but could not be enrolled with the renderer");
     return false;
   }
 
@@ -488,6 +507,9 @@ MeshViewerModule::loadMesh(const std::string& path)
 
   syncUiMetadata();
 
+  Logger::LogInfo("Mesh viewer loaded " + baseName(path) + ": " +
+                  std::to_string(m_meshData.vertices.size()) + " vertices, " +
+                  std::to_string(m_meshData.indices.size() / 3) + " triangles");
   if (m_ui) {
     m_ui->showToast("Loaded: " + baseName(path),
                     ColorRgba{ 60, 220, 120, 255 });
@@ -511,6 +533,7 @@ MeshViewerModule::loadMeshFromMemory(const std::string& content,
   const MeshLoadResult result =
     MeshLoader::loadFromMemory(content, options, "");
   if (!result.success) {
+    Logger::LogWarning("Mesh parser rejected " + name + ": " + result.error);
     return false;
   }
 
@@ -520,6 +543,8 @@ MeshViewerModule::loadMeshFromMemory(const std::string& content,
   const MeshHandle meshAsset = ic->assetManager->acquireMesh(result.mesh);
   const MeshAssetInfo meshInfo = ic->assetManager->getMeshInfo(meshAsset);
   if (!meshInfo.isValid()) {
+    Logger::LogError("Mesh " + name +
+                     " parsed but could not be enrolled with the renderer");
     return false;
   }
 

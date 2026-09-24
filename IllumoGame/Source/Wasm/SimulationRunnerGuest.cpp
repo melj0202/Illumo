@@ -1,6 +1,9 @@
 #include "Game/CSimPlatform.h"
 #include "Game/SimulationRunner.h"
+#include "Rulesets/RuleSet.h"
 #include "SimulationLanes.h"
+#include <Illumo/Services/Logger.h>
+#include <string>
 #include <utility>
 
 // WASM guest runner. No thread exists in this store: with granted simulation
@@ -37,22 +40,47 @@ SimulationRunner::start(SparseCellGrid* workingGrid,
     CSimPlatform::current().simulationLanes();
   if (transport != nullptr && !lanes) {
     lanes = std::make_unique<SimulationLaneCoordinator>(*transport);
+    Logger::LogTrace("Simulation lane coordinator created");
   }
+  reportLaneFailure();
   if (lanes) {
     if (!preferLanes && serialCost.size() >= 8u &&
         serialCost.median() > kUseLanesAbove) {
       preferLanes = true;
+      Logger::LogTrace("Serial generations exceed 4 ms; preferring simulation "
+                       "lanes");
     } else if (preferLanes && lanes->laneWorkMetric().size() >= 32u &&
                lanes->laneWorkMetric().median() < kLeaveLanesBelow &&
                !lanes->busy()) {
       preferLanes = false;
       serialCost = RollingMetric{};
       lanes->retire(); // any speculative generation is dropped
+      Logger::LogTrace("Lane work is under 1 ms; generations return to the "
+                       "game store");
     }
   }
+  const SimulationLaneCoordinator::Availability availability =
+    lanes && preferLanes ? lanes->availability(*ruleSet)
+                         : SimulationLaneCoordinator::Availability::Unavailable;
   if (lanes && preferLanes &&
-      lanes->availability(*ruleSet) ==
-        SimulationLaneCoordinator::Availability::Available) {
+      availability == SimulationLaneCoordinator::Availability::Unavailable &&
+      !lanes->failed() && transport != nullptr && transport->laneCountKnown() &&
+      transport->laneCount() > 0u &&
+      reportedSerialRule != ruleSet->getRuleTag()) {
+    reportedSerialRule = ruleSet->getRuleTag();
+    Logger::LogTrace("Ruleset " + reportedSerialRule +
+                     " cannot be split across simulation lanes; it runs in "
+                     "the game store");
+  }
+  if (availability == SimulationLaneCoordinator::Availability::Available &&
+      reportedLaneCount != lanes->lanes()) {
+    reportedLaneCount = lanes->lanes();
+    Logger::LogInfo("Generations now run on " +
+                    std::to_string(reportedLaneCount) +
+                    " simulation lanes (serial cost over 4 ms)");
+  }
+  if (lanes && preferLanes &&
+      availability == SimulationLaneCoordinator::Availability::Available) {
     if (lanes->start(workingGrid,
                      publishedGrid,
                      ruleSet,
@@ -69,6 +97,7 @@ SimulationRunner::start(SparseCellGrid* workingGrid,
       // rather than as a slow serial one now.
       return false;
     }
+    reportLaneFailure();
   }
   SimulationRunnerTimings timings;
   SparseGenerationDelta completedDelta;
@@ -104,6 +133,7 @@ SimulationRunner::tryTakeCompleted(SparseCellGrid** completedGrid,
       laneRequestPending = false;
       return true;
     }
+    reportLaneFailure();
     if (laneRequestPending && lanes->failed()) {
       // A lane failed mid-generation: finish it here. The working grid was
       // already brought to the published state; copy again to be exact.
@@ -181,6 +211,18 @@ SimulationRunner::retire()
   if (lanes) {
     lanes->retire();
   }
+}
+
+void
+SimulationRunner::reportLaneFailure()
+{
+  if (!lanes || !lanes->failed() || laneFailureReported) {
+    return;
+  }
+  laneFailureReported = true;
+  Logger::LogWarning(
+    "Simulation lanes turned off; generations continue in the game store: " +
+    lanes->failure());
 }
 
 std::string

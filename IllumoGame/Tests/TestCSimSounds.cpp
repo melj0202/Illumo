@@ -47,8 +47,10 @@ testSoundBank()
   EnvVars settings;
   std::vector<std::string> problems;
   CSimSounds::install(&audio, &settings, read, problems);
+  // Every cue but the two broken above.
+  const std::size_t decodable = CSimSounds::fileNames().size() - 2u;
   testTrue(counters,
-           CSimSounds::installed() && audio.clips.size() == 5 &&
+           CSimSounds::installed() && audio.clips.size() == decodable &&
              problems.size() == 2,
            "each decodable file becomes a sound; the others are reported");
 
@@ -92,7 +94,7 @@ testSoundBank()
 
   CSimSounds::uninstall();
   testTrue(counters,
-           !CSimSounds::installed() && audio.destroyed.size() == 5,
+           !CSimSounds::installed() && audio.destroyed.size() == decodable,
            "uninstall releases every registered sound");
   CSimSounds::resetCounts();
   return counters.failures;

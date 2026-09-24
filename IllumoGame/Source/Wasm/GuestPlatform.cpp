@@ -1,6 +1,8 @@
 #include "GuestPlatform.h"
 #include "Game/RuleCatalogOverlay.h"
+#include <Illumo/Services/Logger.h>
 #include <stdexcept>
+#include <string>
 
 static GuestCSimPlatform* installedPlatform = nullptr;
 
@@ -49,6 +51,13 @@ GuestSimulationLanes::pump()
               : 0u;
   m_outstanding.assign(m_lanes, 0u);
   m_failed.assign(m_lanes, false);
+  if (m_lanes == 0u) {
+    Logger::LogInfo(
+      "No simulation lanes granted; generations run in the game store");
+  } else {
+    Logger::LogInfo("Simulation lanes granted: " + std::to_string(m_lanes) +
+                    " workers");
+  }
 }
 
 std::uint32_t
@@ -107,6 +116,8 @@ GuestSimulationLanes::poll(std::uint32_t lane, std::vector<std::byte>& reply)
   m_outstanding[lane] = 0;
   if (result.status != GuestServiceStatus::Complete) {
     m_failed[lane] = true;
+    Logger::LogError("Simulation lane " + std::to_string(lane) +
+                     " stopped answering; it will not be used again");
     return -1;
   }
   reply = std::move(result.payload);
@@ -281,6 +292,9 @@ GuestCSimPlatform::pump()
     const std::string location = result.outcome == GuestFileOutcome::Success
                                    ? kSelectedPrefix + result.name
                                    : std::string();
+    Logger::LogTrace(location.empty()
+                       ? std::string("File dialog closed without a selection")
+                       : "File dialog selected " + result.name);
     completions.push_back([finished, location]() { finished.done(location); });
   }
   if (!m_dialogActive && !m_dialogs.empty()) {
@@ -343,6 +357,8 @@ GuestCSimPlatform::pump()
             result.bytes.assign(
               reinterpret_cast<const char*>(file.bytes.data()),
               file.bytes.size());
+            Logger::LogTrace("Read " + location + " (" +
+                             std::to_string(file.bytes.size()) + " bytes)");
           } else {
             result.error = "Failed to read: " + location;
           }
@@ -383,6 +399,7 @@ GuestCSimPlatform::pump()
           error = "Failed to save: " + request.files[request.next].first;
           finished = true;
         } else {
+          Logger::LogTrace("Wrote " + request.files[request.next].first);
           ++request.next;
         }
       }

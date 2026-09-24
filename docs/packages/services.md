@@ -105,5 +105,9 @@ argument. Quoted paths may end with a separator. Empty quoted arguments survive.
 Logger retains its process-wide facade with unique ownership and explicit runner
 shutdown. Its default file is `log.txt` beside the executable; tests may supply an
 explicit filesystem path. File-open failure is reported rather than returning
-successful initialization. CLI default usage appends `.exe` only on Windows;
+successful initialization. Messages logged before the first console attaches
+are replayed into it once (bounded at `Logger::kStartupBacklogLimit`, with an
+omitted-count warning); background threads may log, reaching only the file and
+terminal (`Illumo.Logger.StartupBacklog`). `EnvVars` load and save problems go
+through Logger rather than raw stderr. CLI default usage appends `.exe` only on Windows;
 unknown options retain the existing compatibility behavior.

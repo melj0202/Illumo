@@ -1,5 +1,10 @@
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Audio.h>
 #include <algorithm>
+#include <string>
+
+// Reported once: a product that keeps creating sounds would repeat it.
+static bool soundLimitReported = false;
 
 static float
 clampedOr(float value, float minimum, float maximum, float fallback)
@@ -55,6 +60,12 @@ GuestAudio::createSound(const AudioClip& clip)
     slot.generation = slot.generation == UINT32_MAX ? 1 : slot.generation + 1;
     slot.wire = m_nextWire++;
     return { index, slot.generation };
+  }
+  if (!soundLimitReported) {
+    soundLimitReported = true;
+    Logger::LogWarning("Sound refused: all " +
+                       std::to_string(IAudio::kMaximumSounds) +
+                       " sound slots are in use");
   }
   return {};
 }

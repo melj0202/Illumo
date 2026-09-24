@@ -134,8 +134,16 @@ private:
   SparseGenerationDelta mirrorDelta;
   bool mirrorDeltaValid;
   bool simulationRetryPending = false;
+  // Frames that skipped overdue generations this running session; one warning
+  // is logged when the shortfall is sustained.
+  static constexpr int kSimulationDebtWarningFrames = 30;
+  int simulationDebtFrames = 0;
+  bool simulationDebtReported = false;
   // Module-owned corner EDIT / NORMAL badge shown on each mode change.
   ModeBadge modeBadge;
+  // The mode the switch cue last voiced. The badge is re-shown without a
+  // change (a step or pause while already editing); the cue is not.
+  CellState soundedState = CellState::EDIT;
   std::unique_ptr<ConfigurationMenu> configurationMenu;
   std::unique_ptr<RulesetWorkshopMenu> rulesetWorkshopMenu;
   std::unique_ptr<ExitConfirmDialog> exitConfirmDialog;
@@ -152,6 +160,21 @@ private:
   bool m_paintPaletteMouseWasDown = false;
   bool m_paintPaletteCapturing = false;
   bool m_paintPaletteHovered = false;
+  // The expand/collapse control (bubble or header) was under the pointer
+  // last frame; the hover cue plays as it first becomes hovered.
+  bool m_paintPaletteToggleHovered = false;
+  // The card slot (not state: the wheel scrolls states under a still
+  // pointer) hovered last frame, or -1. Cards that slide under the pointer
+  // as the drawer opens stay quiet until the pointer leaves them.
+  int m_paintPaletteHoveredCard = -1;
+  bool m_paintPaletteCardHoverQuiet = false;
+  // The chosen brush's liquid drop, in card slots: the head races to the new
+  // card and the tail sloshes after it, so the drop stretches between them.
+  GuiSpring m_paintSelectHead;
+  GuiSpring m_paintSelectTail;
+  bool m_paintSelectPlaced = false;
+  // Seconds the drawer has run, for the drop's slow breathing glow.
+  double m_paintPaletteBreath = 0.0;
   // Height morph from the peeking bubble (0) to the open drawer (1); the
   // width leads on its own springier morph, so the bubble stretches, then
   // rises and bounces like a blob. Hover swells the collapsed bubble.

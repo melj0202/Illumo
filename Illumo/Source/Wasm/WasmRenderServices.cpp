@@ -192,6 +192,8 @@ try {
         Logger::LogError(text);
       } else if (level == 2) {
         Logger::LogWarning(text);
+      } else if (level == 4) {
+        Logger::LogTrace(text);
       } else {
         Logger::LogInfo(text);
       }

@@ -1,4 +1,6 @@
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Documents.h>
+#include <string>
 
 static const std::string kSelectedPrefix = "selected:";
 
@@ -103,6 +105,13 @@ GuestDocuments::pump()
     if (result.outcome == GuestFileOutcome::Success) {
       chosen.location = kSelectedPrefix + result.name;
       chosen.label = result.label.empty() ? result.name : result.label;
+      Logger::LogTrace("File dialog chose " + chosen.label);
+    } else if (result.outcome != GuestFileOutcome::Cancelled) {
+      // The caller sees an empty choice, exactly like a cancel.
+      Logger::LogWarning("The host refused the file dialog selection "
+                         "(outcome " +
+                         std::to_string(static_cast<int>(result.outcome)) +
+                         ")");
     }
     completions.push_back([finished, chosen]() { finished.done(chosen); });
   }

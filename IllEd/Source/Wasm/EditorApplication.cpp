@@ -3,6 +3,7 @@
 #include "EditorUiAtlas.h"
 #include "IllEdConfig.h"
 #include "IllEdPlatform.h"
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Documents.h>
 #include <IllumoGuest/FileTree.h>
@@ -297,6 +298,11 @@ protected:
       m_platform.setLaunch(*launchFile());
     }
     m_platform.setProject(granted(GuestCapability::ProjectFiles));
+    Logger::LogTrace(granted(GuestCapability::ProjectFiles)
+                       ? "IllEd has project access: saves, imports and packs "
+                         "target /project"
+                       : "IllEd runs without a project; scenes save through "
+                         "file dialogs");
     return true;
   }
   void applyDefaults(IEnvVars& settings) override

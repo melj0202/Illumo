@@ -1,4 +1,6 @@
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Environment.h>
+#include <string>
 
 GuestEnvironment::GuestEnvironment(GuestFiles& files, std::string path)
   : m_files(files)
@@ -70,6 +72,9 @@ GuestEnvironment::pump()
       }
     } else if (result.outcome != GuestFileOutcome::Success) {
       m_error = "Settings save failed";
+      Logger::LogWarning(
+        "Settings could not be saved to " + m_path + " (outcome " +
+        std::to_string(static_cast<int>(result.outcome)) + ")");
     } else {
       m_error.clear();
     }
@@ -79,6 +84,9 @@ GuestEnvironment::pump()
     if (text.size() > 1024u * 1024u) {
       m_savePending = false;
       m_error = "Settings exceed the one MiB limit";
+      Logger::LogWarning(
+        "Settings were not saved: " + std::to_string(text.size()) +
+        " bytes exceeds the one MiB limit");
       return;
     }
     const std::span<const std::byte> bytes =

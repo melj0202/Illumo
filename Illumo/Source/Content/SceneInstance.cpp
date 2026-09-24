@@ -4,6 +4,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
+#include <Illumo/Services/Logger.h>
 
 #include "ScenePrimitiveMeshes.h"
 
@@ -56,6 +57,19 @@ struct SceneInstance::AssetSlot
 };
 
 static const ColorRgba kPlaceholderColor{ 255, 0, 255, 255 };
+
+// True while load() builds a whole scene: asset warnings are then reported
+// as one summary instead of one line each (guest log lines share a bounded
+// service queue). Scene instances are main-thread affine.
+static bool batchingAssetWarnings = false;
+
+static void
+reportAssetWarning(const std::string& warning)
+{
+  if (!batchingAssetWarnings) {
+    Logger::LogWarning(warning);
+  }
+}
 
 SceneInstance::SceneInstance(AssetManager* assets, SceneInstanceOptions options)
   : m_assets(assets)
@@ -151,15 +165,26 @@ SceneInstance::load(const SceneDocument& document,
     m_assetSlots.emplace(asset.id, std::move(slot));
   }
   m_records.reserve(document.nodes.size());
+  // Asset problems found while building are summarized once below rather
+  // than logged per asset.
+  batchingAssetWarnings = true;
+  std::size_t dropped = 0;
+  std::string firstDrop;
   for (const SceneNode& node : document.nodes) {
     const SceneNodeHandle parent =
       node.parentId.empty() ? SceneNodeHandle{} : handleOf(node.parentId);
     std::string ignored;
-    buildNode(node, parent, SceneNodeHandle{}, ignored);
+    if (!buildNode(node, parent, SceneNodeHandle{}, ignored)) {
+      if (dropped == 0) {
+        firstDrop = node.id + ": " + ignored;
+      }
+      ++dropped;
+    }
   }
   m_lighting = resolveLighting();
   m_lightingDirty = false;
   rebuildEnvironment();
+  batchingAssetWarnings = false;
   for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
        m_records) {
     for (size_t index = 0; index < entry.second->visuals.size(); ++index) {
@@ -169,6 +194,20 @@ SceneInstance::load(const SceneDocument& document,
   }
   touch();
   error.clear();
+  if (dropped > 0) {
+    Logger::LogWarning("Scene instance dropped " + std::to_string(dropped) +
+                       " node(s); first " + firstDrop);
+  }
+  if (!m_warnings.empty()) {
+    Logger::LogWarning("Scene under " + m_packageRoot + " draws " +
+                       std::to_string(m_warnings.size()) +
+                       " asset placeholder(s); first: " + m_warnings.front());
+  }
+  if (!document.nodes.empty()) {
+    Logger::LogTrace("Scene instantiated under " + m_packageRoot + ": " +
+                     std::to_string(m_records.size()) + " nodes, " +
+                     std::to_string(m_assetSlots.size()) + " assets");
+  }
   return true;
 }
 
@@ -495,6 +534,7 @@ SceneInstance::assetSlot(std::string_view id)
       slot.failed = true;
       m_warnings.push_back("Asset \"" + asset.id + "\": reference \"" +
                            reference + "\" does not resolve");
+      reportAssetWarning(m_warnings.back());
       return &slot;
     }
   }
@@ -502,6 +542,7 @@ SceneInstance::assetSlot(std::string_view id)
     slot.failed = true;
     m_warnings.push_back("Asset \"" + asset.id +
                          "\": no asset manager; drawing a placeholder");
+    reportAssetWarning(m_warnings.back());
     return &slot;
   }
   switch (asset.type) {
@@ -550,6 +591,7 @@ SceneInstance::assetSlot(std::string_view id)
   if (slot.failed) {
     m_warnings.push_back("Asset \"" + asset.id + "\" (" + resolved[0] +
                          ") failed to load; drawing a placeholder");
+    reportAssetWarning(m_warnings.back());
   }
   return &slot;
 }

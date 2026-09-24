@@ -151,8 +151,9 @@ endfunction()
 # Sound effects ship as Sounds/<file>.wav. Their sources in IllumoGame/Assets
 # are not tracked in git, so a checkout without them builds a silent package.
 set(_game_sounds)
-foreach(_sound canvas_enter canvas_exit csim_program_start ui_menu_back
-    ui_menu_error ui_menu_hover ui_menu_select)
+foreach(_sound canvas_enter canvas_exit canvas_mode_switch
+    canvas_paintmenu_collapse canvas_paintmenu_expand csim_program_start
+    ui_menu_back ui_menu_error ui_menu_hover ui_menu_select)
   if(EXISTS "${CMAKE_SOURCE_DIR}/IllumoGame/Assets/${_sound}.wav")
     list(APPEND _game_sounds
       "${CMAKE_SOURCE_DIR}/IllumoGame/Assets/${_sound}.wav" "Sounds/${_sound}.wav")

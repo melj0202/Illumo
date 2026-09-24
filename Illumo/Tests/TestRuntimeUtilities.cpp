@@ -2,6 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Engine/PresentationTiming.h>
+#include <Illumo/Platform/SystemInfo.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Services/InputContext.h>
@@ -297,6 +298,28 @@ testProcessMemoryQuery()
            stats.residentBytes == 0 && stats.peakResidentBytes == 0 &&
              stats.privateCommitBytes == 0,
            "unavailable query clears output");
+#endif
+}
+
+static void
+testSystemInfoQuery()
+{
+  const SystemInfo info = QuerySystemInfo();
+  testTrue(g, info.logicalProcessors > 0, "logical processors are reported");
+#ifdef _WIN32
+  testTrue(g,
+           info.operatingSystem.rfind("Windows", 0) == 0,
+           "Windows names its operating system");
+  testTrue(g, !info.architecture.empty(), "architecture is named");
+  testTrue(g, !info.cpuName.empty(), "processor name is read");
+  testTrue(g,
+           info.physicalCores > 0 &&
+             info.physicalCores <= info.logicalProcessors,
+           "physical cores are nonzero and at most the logical count");
+  testTrue(g,
+           info.totalMemoryBytes > 0 &&
+             info.availableMemoryBytes <= info.totalMemoryBytes,
+           "available memory is within total memory");
 #endif
 }
 
@@ -1171,6 +1194,8 @@ registerRuntimeUtilityTests(IllumoTestRegistry& registry)
                []() { return runRuntimeUtilityCase(testDebugOverlayMemory); });
   registry.add("Illumo.Platform.ProcessMemory",
                []() { return runRuntimeUtilityCase(testProcessMemoryQuery); });
+  registry.add("Illumo.Platform.SystemInfo",
+               []() { return runRuntimeUtilityCase(testSystemInfoQuery); });
   registry.add("Illumo.InputContext.Bindings", []() {
     return runRuntimeUtilityCase(testInputContextBindings);
   });

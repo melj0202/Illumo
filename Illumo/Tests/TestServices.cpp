@@ -16,6 +16,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 static TestCounters g;
@@ -659,6 +660,86 @@ testLoggerLevelsAndSinks()
 }
 
 static void
+testLoggerStartupBacklog()
+{
+  testSection("Logger: startup backlog replays into the first console");
+  Logger::shutdownLogger();
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  env.setVar("logLevel", 3);
+  Camera camera(glm::vec2(1.0f, 1.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  CommandRegistry registry;
+  CommandLine console(&env, &registry, &window, &renderer);
+
+  testTrue(g,
+           Logger::initLogger(&env, nullptr, "log.txt"),
+           "logger starts without a console");
+  testTrue(g,
+           Logger::getLogFilePath() == std::filesystem::path("log.txt"),
+           "logger reports its file");
+  Logger::LogInfo("early-info");
+  Logger::LogWarning("early-warning");
+  Logger::LogTrace("early-trace-filtered");
+  std::thread worker([]() { Logger::LogInfo("early-worker-info"); });
+  worker.join();
+  Logger::setContext(&env, &console);
+  testTrue(g,
+           historyContains(console, "early-info"),
+           "info logged before the console is replayed");
+  testTrue(g,
+           historyContains(console, "early-warning"),
+           "warning logged before the console is replayed");
+  testTrue(g,
+           historyContains(console, "early-worker-info"),
+           "a background thread's early message is replayed");
+  testTrue(g,
+           !historyContains(console, "early-trace-filtered"),
+           "the log level still filters the backlog");
+
+  std::thread lateWorker([]() { Logger::LogInfo("late-worker-info"); });
+  lateWorker.join();
+  testTrue(g,
+           !historyContains(console, "late-worker-info"),
+           "background threads never write to the attached console");
+
+  const size_t attachedHistory = console.getHistory().size();
+  Logger::setContext(&env, nullptr);
+  Logger::LogInfo("detached-info");
+  Logger::setContext(&env, &console);
+  testEqSize(g,
+             console.getHistory().size(),
+             attachedHistory,
+             "re-attaching a console does not replay again");
+  Logger::shutdownLogger();
+
+  Logger::initLogger(&env, nullptr, "log.txt");
+  for (size_t index = 0; index < Logger::kStartupBacklogLimit + 5; ++index) {
+    Logger::LogInfo("overflow-" + std::to_string(index));
+  }
+  CommandLine second(&env, &registry, &window, &renderer);
+  Logger::setContext(&env, &second);
+  testTrue(g,
+           historyContains(second, "5 earlier startup messages"),
+           "overflowing the backlog reports the omitted count");
+  Logger::shutdownLogger();
+
+  std::ifstream logFile("log.txt");
+  const std::string logContents((std::istreambuf_iterator<char>(logFile)),
+                                std::istreambuf_iterator<char>());
+  testTrue(g,
+           logContents.find("late-worker-info") != std::string::npos,
+           "background thread messages reach the file");
+  testTrue(g,
+           logContents.find("Session ") != std::string::npos,
+           "the file starts each session with a header");
+}
+
+static void
 testCommandLineCoreHeadless()
 {
   testSection(
@@ -918,6 +999,8 @@ registerServiceTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Logger.LevelsAndSinks",
                []() { return runServiceCase(testLoggerLevelsAndSinks); });
+  registry.add("Illumo.Logger.StartupBacklog",
+               []() { return runServiceCase(testLoggerStartupBacklog); });
   registry.add("Illumo.CommandLineCore.Headless",
                []() { return runServiceCase(testCommandLineCoreHeadless); });
   registry.add("Illumo.CommandLineCore.Clipboard",

@@ -31,10 +31,12 @@ GLBackend::Initialize()
   glewExperimental = true;
   const GLenum err = glewInit();
   if (GLEW_OK != err) {
-    Logger::LogError("Failed to initialize glew");
+    Logger::LogError(std::string("Failed to initialize GLEW: ") +
+                     reinterpret_cast<const char*>(glewGetErrorString(err)));
     return false;
   }
-  Logger::LogTrace("Glew initialized");
+  Logger::LogTrace(std::string("GLEW ") +
+                   reinterpret_cast<const char*>(glewGetString(GLEW_VERSION)));
   glEnable(GL_MULTISAMPLE);
   if (window != nullptr) {
     GLFWwindow* glfwWindow = window->getWindowInstance();
@@ -45,12 +47,58 @@ GLBackend::Initialize()
       glViewport(0, 0, framebufferWidth, framebufferHeight);
     }
   }
-  const GLubyte* versionGL = glGetString(GL_VERSION);
-  std::string versionStr =
-    versionGL ? reinterpret_cast<const char*>(versionGL) : "Unknown";
-  std::string fullGLString = "OpenGL Context: " + versionStr;
-  Logger::LogInfo(fullGLString.c_str());
+  logContextDescription();
   return true;
+}
+
+// glGetString may return null on a broken context; never build a string
+// from it directly.
+static std::string
+glText(GLenum name)
+{
+  const GLubyte* text = glGetString(name);
+  return text != nullptr ? reinterpret_cast<const char*>(text) : "unknown";
+}
+
+void
+GLBackend::logContextDescription()
+{
+  Logger::LogInfo("GPU: " + glText(GL_RENDERER) + " (" + glText(GL_VENDOR) +
+                  ")");
+  Logger::LogInfo("OpenGL context: " + glText(GL_VERSION) + ", GLSL " +
+                  glText(GL_SHADING_LANGUAGE_VERSION));
+  GLint maxTextureSize = 0;
+  GLint maxTextureUnits = 0;
+  GLint samples = 0;
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+  glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
+  glGetIntegerv(GL_SAMPLES, &samples);
+  Logger::LogTrace("GPU limits: " + std::to_string(maxTextureSize) +
+                   " px textures, " + std::to_string(maxTextureUnits) +
+                   " texture units, " + std::to_string(samples) +
+                   "x multisampling");
+  // Only query vendor memory extensions the driver advertises; an
+  // unsupported enum would leave a GL error for the first frame to trip on.
+  GLint memoryKiB = 0;
+  if (GLEW_NVX_gpu_memory_info) {
+    glGetIntegerv(GL_GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX, &memoryKiB);
+    if (memoryKiB > 0) {
+      Logger::LogInfo("Video memory: " + std::to_string(memoryKiB / 1024) +
+                      " MiB dedicated");
+    }
+  } else if (GLEW_ATI_meminfo) {
+    GLint freeMemoryKiB[4] = {};
+    glGetIntegerv(GL_TEXTURE_FREE_MEMORY_ATI, freeMemoryKiB);
+    if (freeMemoryKiB[0] > 0) {
+      Logger::LogInfo(
+        "Video memory: " + std::to_string(freeMemoryKiB[0] / 1024) +
+        " MiB free for textures");
+    }
+  }
+  // Bounded: a lost context can report errors indefinitely.
+  for (int drained = 0; drained < 16 && glGetError() != GL_NO_ERROR;
+       ++drained) {
+  }
 }
 
 void
@@ -334,6 +382,16 @@ GLBackend::ClearCommandQueue()
 void
 GLBackend::Shutdown()
 {
+  if (device != nullptr) {
+    try {
+      Logger::LogTrace(
+        "OpenGL backend releasing " +
+        std::to_string(_vaoRegistryLookup.size()) + " meshes, " +
+        std::to_string(_programRegistryLookup.size()) + " shaders, " +
+        std::to_string(_textureRegistryLookup.size()) + " textures");
+    } catch (...) {
+    }
+  }
   for (std::unordered_map<uint32_t, GLMeshResourceEntry>::iterator it =
          _vaoRegistryLookup.begin();
        it != _vaoRegistryLookup.end();
@@ -422,6 +480,9 @@ GLBackend::CreateMesh(const void* vertices,
   entry.resource = std::make_unique<GLMesh>(
     vertices, vertexSize, indices, indexSize, layout, dynamic);
   if (!entry.resource->isValid()) {
+    Logger::LogWarning("CreateMesh: the GPU mesh could not be created (" +
+                       std::to_string(vertexSize) + " vertex bytes, " +
+                       std::to_string(indexSize) + " index bytes)");
     meshHandles.release(handle);
     return {};
   }
@@ -448,6 +509,8 @@ GLBackend::ReplaceMesh(MeshHandle handle,
   std::unique_ptr<GLMesh> replacement = std::make_unique<GLMesh>(
     vertices, vertexSize, indices, indexSize, layout, dynamic);
   if (!replacement->isValid()) {
+    Logger::LogWarning(
+      "ReplaceMesh: the replacement mesh is invalid; keeping the old one");
     return false;
   }
   if (it->second.resource) {
@@ -491,9 +554,13 @@ GLBackend::CreateShaderProgram(const ShaderPaths& paths)
   entry.generation = handle.generation;
   entry.resource = std::make_unique<GLShaderProgram>(paths);
   if (!entry.resource->isValid()) {
+    Logger::LogError("Shader program " + paths.vertexPath + " + " +
+                     paths.fragmentPath + " is unusable");
     shaderHandles.release(handle);
     return ShaderHandle{};
   }
+  Logger::LogTrace("Shader program built from " + paths.vertexPath + " + " +
+                   paths.fragmentPath);
   _programRegistryLookup[handle.slot] = std::move(entry);
   return handle;
 }
@@ -527,6 +594,8 @@ GLBackend::ReplaceShaderProgram(ShaderHandle handle,
   std::unique_ptr<GLShaderProgram> replacement =
     std::make_unique<GLShaderProgram>(sources);
   if (!replacement->isValid()) {
+    Logger::LogWarning("ReplaceShaderProgram: the new program is unusable; "
+                       "keeping the previous one");
     replacement->Destroy();
     return false;
   }
@@ -582,6 +651,8 @@ GLBackend::CreateTexture(const unsigned char* data,
                          const TextureOptions& options)
 {
   if (data == nullptr || width <= 0 || height <= 0) {
+    Logger::LogWarning("CreateTexture: missing pixels or invalid size " +
+                       std::to_string(width) + "x" + std::to_string(height));
     return TextureHandle{};
   }
   TextureHandle handle = textureHandles.allocate();
@@ -590,6 +661,9 @@ GLBackend::CreateTexture(const unsigned char* data,
   entry.resource =
     std::make_unique<GLTexture>(data, width, height, channels, options);
   if (entry.resource->getID() == 0) {
+    Logger::LogWarning("CreateTexture: the GPU texture could not be created (" +
+                       std::to_string(width) + "x" + std::to_string(height) +
+                       ", " + std::to_string(channels) + " channels)");
     textureHandles.release(handle);
     return {};
   }
@@ -605,11 +679,17 @@ GLBackend::CreateCubemap(const std::array<const unsigned char*, 6>& facesData,
 {
   for (size_t i = 0; i < 6; ++i) {
     if (facesData[i] == nullptr) {
+      Logger::LogWarning("CreateCubemap: face " + std::to_string(i) +
+                         " has no pixels");
       return TextureHandle{};
     }
   }
   if (width <= 0 || height <= 0 || width != height ||
       (channels != 1 && channels != 3 && channels != 4)) {
+    Logger::LogWarning("CreateCubemap: faces must be square with 1, 3 or 4 "
+                       "channels (got " +
+                       std::to_string(width) + "x" + std::to_string(height) +
+                       ", " + std::to_string(channels) + " channels)");
     return TextureHandle{};
   }
   TextureHandle handle = textureHandles.allocate();
@@ -618,6 +698,7 @@ GLBackend::CreateCubemap(const std::array<const unsigned char*, 6>& facesData,
   entry.resource =
     std::make_unique<GLTexture>(facesData, width, height, channels);
   if (entry.resource->getID() == 0) {
+    Logger::LogWarning("CreateCubemap: the GPU cubemap could not be created");
     textureHandles.release(handle);
     return {};
   }

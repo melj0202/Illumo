@@ -24,6 +24,10 @@ constexpr std::array<Cue, kCueCount> kCues = { {
   { "Sounds/ui_menu_error.wav", 0.7f },
   { "Sounds/canvas_enter.wav", 0.8f },
   { "Sounds/canvas_exit.wav", 0.8f },
+  // The E key toggles often while editing, so it sits under the one-offs.
+  { "Sounds/canvas_mode_switch.wav", 0.6f },
+  { "Sounds/canvas_paintmenu_expand.wav", 0.6f },
+  { "Sounds/canvas_paintmenu_collapse.wav", 0.6f },
 } };
 
 struct Bank

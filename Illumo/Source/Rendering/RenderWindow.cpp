@@ -20,6 +20,16 @@ windowSizeCallback(GLFWwindow* window, int width, int height) noexcept
                    std::to_string(height));
 }
 
+static void
+glfwErrorCallback(int code, const char* description) noexcept
+{
+  try {
+    Logger::LogWarning("GLFW error " + std::to_string(code) + ": " +
+                       (description != nullptr ? description : "unknown"));
+  } catch (...) {
+  }
+}
+
 RenderWindow::RenderWindow(const int width,
                            const int height,
                            const std::string& title,
@@ -51,11 +61,17 @@ RenderWindow::RenderWindow(const int width,
 bool
 RenderWindow::initialize()
 {
+  glfwSetErrorCallback(glfwErrorCallback);
   if (!glfwInit()) {
-    Logger::LogError("Failed to initialize GLFW");
+    const char* description = nullptr;
+    glfwGetError(&description);
+    Logger::LogError(std::string("Failed to initialize GLFW") +
+                     (description != nullptr ? std::string(": ") + description
+                                             : std::string()));
     return false;
   }
   glfwInitialized = true;
+  Logger::LogTrace(std::string("GLFW ") + glfwGetVersionString());
   glfwDefaultWindowHints();
   glfwWindowHint(GLFW_VISIBLE, m_captureOnly ? GLFW_FALSE : GLFW_TRUE);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -92,13 +108,36 @@ RenderWindow::initialize()
       windowWidth, windowHeight, windowTitle.c_str(), nullptr, nullptr);
   }
   if (!window) {
-    Logger::LogError("Failed to create window");
+    const char* description = nullptr;
+    glfwGetError(&description);
+    Logger::LogError(std::string("Failed to create an OpenGL 3.3 core window") +
+                     (description != nullptr ? std::string(": ") + description
+                                             : std::string()));
     glfwTerminate();
     glfwInitialized = false;
     return false;
   }
-  Logger::LogTrace("Window created");
   glfwGetWindowSize(window, &windowWidth, &windowHeight);
+  if (!m_captureOnly) {
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode =
+      monitor != nullptr ? glfwGetVideoMode(monitor) : nullptr;
+    const char* monitorName =
+      monitor != nullptr ? glfwGetMonitorName(monitor) : nullptr;
+    if (mode != nullptr) {
+      Logger::LogInfo(
+        std::string("Display: ") +
+        (monitorName != nullptr ? monitorName : "primary monitor") + ", " +
+        std::to_string(mode->width) + "x" + std::to_string(mode->height) +
+        " at " + std::to_string(mode->refreshRate) + " Hz");
+    }
+  }
+  Logger::LogTrace(std::string("Window created: ") +
+                   std::to_string(windowWidth) + "x" +
+                   std::to_string(windowHeight) +
+                   (isFullScreen ? ", fullscreen" : ", windowed") +
+                   (m_captureOnly ? ", hidden for capture" : "") + ", " +
+                   std::to_string(samples) + "x MSAA");
   if (envVars) {
     envVars->setVar("WinX", std::to_string(windowWidth));
     envVars->setVar("WinY", std::to_string(windowHeight));
@@ -108,7 +147,6 @@ RenderWindow::initialize()
     glfwGetWindowPos(window, &windowedX, &windowedY);
     glfwGetWindowSize(window, &windowedWidth, &windowedHeight);
   }
-  Logger::LogTrace("Window centered");
 
   /* Make the window's context current. Do not issue GL calls here: GLEW has
      not loaded function pointers yet, and core-profile GLX can crash. */
@@ -126,7 +164,8 @@ RenderWindow::initialize()
       "Capture framebuffer size differs from requested dimensions");
     return false;
   }
-  Logger::LogTrace("Framebuffer size queried");
+  Logger::LogTrace("Framebuffer: " + std::to_string(fbWidth) + "x" +
+                   std::to_string(fbHeight));
 
   syncPresentationMode();
   return true;
@@ -157,6 +196,10 @@ RenderWindow::syncPresentationMode()
   glfwSwapInterval(requestedVsync ? 1 : 0);
   vsyncEnabled = requestedVsync;
   swapIntervalInitialized = true;
+  if (!m_captureOnly) {
+    Logger::LogInfo(requestedVsync ? "VSync on: presenting at the monitor rate"
+                                   : "VSync off: presentation is uncapped");
+  }
 }
 
 void
@@ -264,6 +307,10 @@ RenderWindow::toggleFullscreen()
   if (envVars != nullptr) {
     envVars->setVar("fullscreen", isFullScreen);
   }
+  // Callers (the F11 hotkey, the display service) report the change to the
+  // user; this records it.
+  Logger::LogTrace(isFullScreen ? "Window entered fullscreen"
+                                : "Window returned to windowed mode");
 }
 
 bool
@@ -311,6 +358,10 @@ RenderWindow::~RenderWindow()
   if (window != nullptr) {
     glfwDestroyWindow(window);
     window = nullptr;
+    try {
+      Logger::LogTrace("Render window destroyed");
+    } catch (...) {
+    }
   }
   if (glfwInitialized) {
     glfwTerminate();

@@ -1115,7 +1115,14 @@ shared core of outlines, soft shadows and glows), `drawSoftShadow`,
 `drawSoftGlow`, `drawVignette`, `drawSheen`, `drawGlassPanel`
 (`drawRoundedPanel` forwards to it), `drawLiquidSelection` (non-overlapping
 slices across the travel, so translucent faces stay even), `drawSplash` and
-keycap hints.
+keycap hints. Rounded corners subdivide by radius: 15-degree steps through
+radius 15, finer beyond (up to 24 per quarter), so large radii such as the
+paint bubble stay round. Line icons use `drawPolyline` (mitered joins and
+optional square caps, one quad per segment) and `drawChevron`, never
+separately drawn line segments, whose butt ends leave notches at corners.
+The canvas chrome (paint drawer, inspector, hamburger and its hint) follows
+the menus: card faces, the liquid drop for the chosen brush, keycap hints,
+spaced-caps eyebrows and label/value rows.
 
 CSim's type is Kikuta, a variable-weight face (D-UI9). The host font service
 resolves `kikuta:<weight>[:<glyphs>]` (weight 1..1000, an optional subset of
@@ -1134,7 +1141,10 @@ heavier through the jelly overshoot) in the title rows, settings, canvas setup,
 Ruleset Workshop rows and action buttons, and the glass dialogs; without an
 installed ramp (IllEd, the viewer, the native test oracle) they draw plain
 text. The CSIM title uses its own ramp rasterized for just those four glyphs
-at weights 200..1000, and each letter also squashes and stretches
+at eight weights from 200 to 1000, packed at 60-unit steps across the
+resting word's 590..810 breath so blended weights never show a soft double
+edge (eight per size keeps all three raster sizes inside the guest's 32-font
+budget), and each letter also squashes and stretches
 (`TextPrimitive::stretchX`/`stretchY`, scaled about the run's left edge and
 baseline so feet stay on the line). Letters fall thin and tall and splat heavy
 and squat on impact (the landing spring's overshoot carries them past their
@@ -1146,7 +1156,9 @@ it flexes black and squat, slims to a hairline and grows tall, or hops
 glow pooling on the underline beneath it), holds briefly and springs back
 while its neighbours get jostled; now and then a wave of hops ripples out from
 it across the word. Wider letters shoulder their neighbours
-aside. Clicking the word sends a staggered hop through it; poses rest while an
+aside, but a hop's own flight and impact weight and squash shape only the
+hopping letter about its cell's center; laid out, that ringing spring shook
+the word sideways. Clicking the word sends a staggered hop through it; poses rest while an
 overlay is open. Reduced motion holds the title still at rest weight. The developer console follows the default font.
 
 Fades target the same
@@ -1304,6 +1316,24 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
   `SUCCESS:` lines.
 - `Logger` may mirror output into the console while services are alive. The host
   clears that non-owning logger context before destroying the services.
+  `Illumo` hands the logger its settings as soon as they load, so the
+  configured `logLevel` (runtime default 3, info) applies from window and GPU
+  startup onward. Messages logged before the first console attaches are kept
+  (at most 256, then counted) and replayed into it once; later detach/attach
+  cycles never replay. Each session opens `log.txt` with its start time and
+  build, and each file line carries a wall-clock timestamp.
+- The logger is safe to call from background threads: file, terminal and
+  backlog writes are serialized, but only the owner (main) thread forwards to
+  the main-thread-affine console or reads the level from settings; other
+  threads reach the file and terminal with the last level the owner read.
+- Startup logs a report of the build and machine (`QuerySystemInfo`: OS,
+  architecture, CPU, core/thread counts, physical memory), then the display
+  mode, GPU, driver and context limits, audio output, package, mounts, guest
+  budgets and granted capabilities. Subsystems log lifecycle milestones at
+  info, behind-the-scenes detail at trace, and recoverable or silent failures
+  as warnings or errors. Guests' `LogTrace` stays trace on the host. The
+  runtime sends terminal log lines to stderr so stdout carries only the
+  `--capture`/`--bench` JSON.
 
 #### Process memory diagnostics
 
@@ -1327,6 +1357,13 @@ Win32 headers remain in Platform/Windows. Values cover the whole process and
 are formatted in MiB with one decimal place; private commit is not resident
 memory, and resident memory includes shared pages. GPU and system memory are
 outside this diagnostic's scope.
+
+The public platform value `SystemInfo` (operating system, architecture, CPU
+name, physical cores, logical processors, total and available physical
+memory) feeds the startup log. `QuerySystemInfo` never logs. Windows reads
+`RtlGetVersion`, the registry's processor name and release, processor
+relationships and `GlobalMemoryStatusEx`; other platforms report only the
+logical processor count until a native port is verified.
 
 ### 5.11 Window / platform boundaries
 
@@ -1595,8 +1632,10 @@ main-thread affine. It is published as `IllumoContext::audio` and, like
 - **Guest** (`IllumoGuest/Audio.h`): `GuestAudio` implements `IAudio` over the
   service with guest-local handles and never-reused wire ids;
   `GuestModuleApplication` publishes it when granted.
-- **CSim**: `CSimSounds` maps seven cues (program start, menu hover, select,
-  back and error, canvas enter and exit) to `Sounds/*.wav` in the package,
+- **CSim**: `CSimSounds` maps ten cues (program start, menu hover, select,
+  back and error, canvas enter and exit, the canvas EDIT/NORMAL mode switch,
+  voiced only when the mode actually changes, and the paint drawer's expand
+  and collapse) to `Sounds/*.wav` in the package,
   with per-cue mix levels scaled by the `soundVolume` setting (0-100,
   default 80, a F1 settings row that previews each step). Menus and dialogs
   without an `IllumoContext` fire cues through its installed bank, as they

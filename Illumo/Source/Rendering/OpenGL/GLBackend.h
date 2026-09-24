@@ -48,6 +48,8 @@ private:
   std::unordered_map<std::uint32_t, ReadbackStream> _readbackStreams;
   std::uint64_t _readbackOrder = 0;
   void releaseReadbackSlot(ReadbackSlot& slot);
+  // Logs the GPU, driver and context limits once after GLEW loads.
+  void logContextDescription();
 
 public:
   GLBackend(IRenderWindow* window);

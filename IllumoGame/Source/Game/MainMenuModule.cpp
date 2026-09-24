@@ -132,6 +132,7 @@ MainMenuModule::Start(IllumoContext* context)
   updateLayout();
   rebuildVisual();
 
+  Logger::LogInfo("Main menu ready");
   return true;
 }
 
@@ -250,6 +251,7 @@ MainMenuModule::advanceAmbientSimulation(double dt)
   m_worldElapsed += dt;
   if (m_bgContext->getGrid()->getAllocatedChunkCount() > kReseedChunkCount ||
       m_worldElapsed > kReseedSeconds) {
+    Logger::LogTrace("Ambient menu world reseeded");
     seedAmbientPattern();
   }
   if (!reducedMotion()) {
@@ -542,6 +544,7 @@ MainMenuModule::activateSelectedItem()
       break;
     }
     case kExitItem: {
+      Logger::LogTrace("Exit requested from the main menu");
       if (ic->window != nullptr) {
         ic->window->requestClose();
       }
@@ -733,7 +736,12 @@ MainMenuModule::Update(double dt)
           if (applyConfiguration(config)) {
             CSimSounds::play(CSimSound::MenuSelect);
             m_configurationMenu->close();
+            Logger::LogInfo("Settings applied; preferred ruleset " +
+                            config.ruleSet);
           } else {
+            Logger::LogWarning("Settings were rejected: the ruleset does not "
+                               "match its family or the frame cap is out of "
+                               "range");
             m_configurationMenu->setError("Unable to apply settings.");
           }
         } else {
@@ -887,15 +895,18 @@ drawMenuIcon(GameVisual& visual,
                            8.0f,
                            UiTheme::fade(color, 0.45f * emphasis));
     }
-    visual.addOutlineRect(x, y + 6.0f, 24.0f, 17.0f, color, 2.0f);
-    visual.addLine(x, y + 5.0f - lift, x, y + 1.0f - lift, color, 2.0f);
-    visual.addLine(x, y + 1.0f - lift, x + 10.0f, y + 1.0f - lift, color, 2.0f);
-    visual.addLine(x + 10.0f,
-                   y + 1.0f - lift,
-                   x + 15.0f,
-                   y + 6.0f - lift * 0.4f,
-                   color,
-                   2.0f);
+    // Strokes are centered on their paths, so the outlines sit one unit
+    // inside the 24-unit icon box, and each is one joined path: no notches.
+    const GuiPoint2 body[4] = { { x + 1.0f, y + 7.0f },
+                                { x + 23.0f, y + 7.0f },
+                                { x + 23.0f, y + 22.0f },
+                                { x + 1.0f, y + 22.0f } };
+    GuiKit::drawPolyline(visual, body, 4, 2.0f, color, true);
+    const GuiPoint2 lid[4] = { { x + 1.0f, y + 6.0f - lift },
+                               { x + 1.0f, y + 2.0f - lift },
+                               { x + 10.0f, y + 2.0f - lift },
+                               { x + 14.0f, y + 6.5f - lift * 0.4f } };
+    GuiKit::drawPolyline(visual, lid, 4, 2.0f, color);
   } else if (item == 2) {
     const float restKnob[3] = { 6.0f, 16.0f, 9.0f };
     const float focusKnob[3] = { 15.0f, 5.0f, 17.0f };
@@ -903,21 +914,29 @@ drawMenuIcon(GameVisual& visual,
       const float ly = y + 3.0f + static_cast<float>(line) * 8.0f;
       const float knob =
         restKnob[line] + (focusKnob[line] - restKnob[line]) * emphasis;
-      visual.addLine(x, ly, x + 24.0f, ly, UiTheme::fade(color, 0.55f), 2.0f);
-      visual.addLine(x, ly, x + knob + 2.0f, ly, color, 2.0f);
-      visual.addFilledRect(x + knob, ly - 3.0f, 4.0f, 6.0f, color);
+      // Rounded tracks and knobs, like the settings sliders they stand for.
+      GuiKit::drawRoundedRect(
+        visual, x, ly - 1.0f, 24.0f, 2.0f, 1.0f, UiTheme::fade(color, 0.55f));
+      GuiKit::drawRoundedRect(
+        visual, x, ly - 1.0f, knob + 2.0f, 2.0f, 1.0f, color);
+      GuiKit::drawRoundedRect(
+        visual, x + knob, ly - 3.5f, 4.0f, 7.0f, 2.0f, color);
     }
   } else {
     const float push = 4.0f * emphasis;
-    visual.addLine(x + 2.0f, y, x + 2.0f, y + 24.0f, color, 2.0f);
-    visual.addLine(x + 2.0f, y, x + 10.0f, y, color, 2.0f);
-    visual.addLine(x + 2.0f, y + 24.0f, x + 10.0f, y + 24.0f, color, 2.0f);
-    visual.addLine(
-      x + 8.0f + push, y + 12.0f, x + 25.0f + push, y + 12.0f, color, 2.0f);
-    visual.addLine(
-      x + 19.0f + push, y + 6.0f, x + 25.0f + push, y + 12.0f, color, 2.0f);
-    visual.addLine(
-      x + 19.0f + push, y + 18.0f, x + 25.0f + push, y + 12.0f, color, 2.0f);
+    const GuiPoint2 door[4] = { { x + 10.0f, y + 1.0f },
+                                { x + 2.0f, y + 1.0f },
+                                { x + 2.0f, y + 23.0f },
+                                { x + 10.0f, y + 23.0f } };
+    GuiKit::drawPolyline(visual, door, 4, 2.0f, color);
+    // The shaft stops inside the head's mitered tip, so they read as one.
+    const GuiPoint2 shaft[2] = { { x + 8.0f + push, y + 12.0f },
+                                 { x + 24.0f + push, y + 12.0f } };
+    GuiKit::drawPolyline(visual, shaft, 2, 2.0f, color);
+    const GuiPoint2 head[3] = { { x + 18.5f + push, y + 6.5f },
+                                { x + 24.5f + push, y + 12.0f },
+                                { x + 18.5f + push, y + 17.5f } };
+    GuiKit::drawPolyline(visual, head, 3, 2.0f, color);
   }
 }
 
@@ -1074,14 +1093,21 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
     float weight = CSimTypeface::kTitleRestWeight;
     // Squash: + squat and wide, - tall and narrow.
     float squash = 0.0f;
+    // A hop's own weight and squash (light in flight, heavy on impact) ring
+    // on a boingy spring; laid out, they would shove the neighbours back and
+    // forth every frame. They shape the hopping letter only, about its own
+    // cell, while held poses still shoulder the neighbours aside.
+    float hopWeight = 0.0f;
+    float hopSquash = 0.0f;
     if (!still) {
       // `landed` overshoots 1 at impact, so the letter lands heavier than it
       // rests; sinking letters are heavy and rising ones light.
       weight = kTitleFallWeight +
                (CSimTypeface::kTitleRestWeight - kTitleFallWeight) * landed +
-               kTitleBreathWeight * swell * settled + pose.weight.value() -
-               260.0f * flight + 280.0f * impact;
-      squash = pose.squash.value() - 0.7f * flight + 1.1f * impact;
+               kTitleBreathWeight * swell * settled + pose.weight.value();
+      squash = pose.squash.value();
+      hopWeight = -260.0f * flight + 280.0f * impact;
+      hopSquash = -0.7f * flight + 1.1f * impact;
       if (progress > 0.0f) {
         // Tall while falling, splatted on impact.
         squash += -0.8f * std::clamp(1.0f - landed, 0.0f, 1.0f) +
@@ -1103,14 +1129,17 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
         squash += 0.3f * closeness;
       }
     }
-    squash = std::clamp(squash, -1.4f, 1.4f);
+    const float layoutSquash = std::clamp(squash, -1.4f, 1.4f);
+    const float layoutWeight = weight;
+    squash = std::clamp(squash + hopSquash, -1.4f, 1.4f);
+    weight += hopWeight;
     const float stretchX = 1.0f + 0.2f * squash;
     const float stretchY = 1.0f - 0.17f * squash;
 
     float letterWidth =
       m_titleRamp.empty()
         ? -1.0f
-        : m_titleRamp.measure(letters[letter], titleSize, weight);
+        : m_titleRamp.measure(letters[letter], titleSize, layoutWeight);
     float drawnWidth = m_titleRamp.empty()
                          ? -1.0f
                          : m_titleRamp.measure(letters[letter], size, weight);
@@ -1123,7 +1152,7 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
                      ? m_titleFont->measureText(letters[letter], size).width
                      : size * 0.6f;
     }
-    const float cellWidth = letterWidth * stretchX;
+    const float cellWidth = letterWidth * (1.0f + 0.2f * layoutSquash);
     if (lift > 1.0f) {
       // A glow pools on the line under a hopping letter and shrinks as it
       // rises.
@@ -1138,9 +1167,11 @@ MainMenuModule::drawTitle(float room, unsigned char opacity)
                               opacity),
         12);
     }
+    // Centered in its cell, so a hop's squash grows the letter about its
+    // middle instead of pushing the letters after it.
     const size_t index = m_menuVisual.addText(
       letters[letter],
-      titleX + advance + (letterWidth - drawnWidth) * stretchX * 0.5f,
+      titleX + advance + (cellWidth - drawnWidth * stretchX) * 0.5f,
       titleY + (1.0f - landed) * 22.0f + (titleSize - size) * 0.5f + bob - lift,
       size,
       UiTheme::applyOpacity(UiTheme::fade(UiTheme::textPrimary(), fade),
@@ -1545,6 +1576,13 @@ MainMenuModule::unregisterConsoleCommands()
 void
 MainMenuModule::Exit()
 {
+  if (m_lifetime && ic != nullptr) {
+    try {
+      Logger::LogTrace("Main menu closed");
+    } catch (...) {
+      // Diagnostics never block shutdown.
+    }
+  }
   m_lifetime.reset();
   unregisterConsoleCommands();
   m_newSimulationMenu.reset();

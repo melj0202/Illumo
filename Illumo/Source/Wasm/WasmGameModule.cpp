@@ -1,12 +1,50 @@
 #include "WasmInputMapping.h"
 #include <Illumo/Content/VfsConsole.h>
 #include <Illumo/Content/VfsTreeSource.h>
+#include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmGameModule.h>
 #include <IllumoGuest/Input.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <tracy/Tracy.hpp>
+
+// Reaches the log file and, once, the console: directly when the logger does
+// not feed this console (tests, early startup), otherwise through the logger.
+static void
+reportError(CommandLine* console, const std::string& text)
+{
+  if (console != nullptr && Logger::getCommandLine() != console) {
+    console->logError(text);
+  }
+  Logger::LogError(text);
+}
+
+static std::string
+describeCapabilities(std::uint32_t granted)
+{
+  const std::pair<GuestCapability, const char*> names[] = {
+    { GuestCapability::Render, "render" },
+    { GuestCapability::Assets, "assets" },
+    { GuestCapability::Storage, "storage" },
+    { GuestCapability::SelectedFiles, "selected files" },
+    { GuestCapability::Clipboard, "clipboard" },
+    { GuestCapability::Console, "console" },
+    { GuestCapability::Display, "display" },
+    { GuestCapability::Jobs, "compute lanes" },
+    { GuestCapability::Messages, "messages" },
+    { GuestCapability::ProjectFiles, "project files" },
+    { GuestCapability::Windows, "panel windows" },
+    { GuestCapability::Audio, "audio" }
+  };
+  std::string text;
+  for (const std::pair<GuestCapability, const char*>& name : names) {
+    if ((granted & static_cast<std::uint32_t>(name.first)) != 0) {
+      text += text.empty() ? name.second : std::string(", ") + name.second;
+    }
+  }
+  return text.empty() ? std::string("none") : text;
+}
 
 static double
 millisecondsSince(std::chrono::steady_clock::time_point start)
@@ -170,6 +208,8 @@ try {
     fail("Guest startup rejected");
     return false;
   }
+  Logger::LogInfo("WASM guest instantiated; capabilities granted: " +
+                  describeCapabilities(m_guest.capabilities()));
   m_frames =
     std::make_unique<WasmFrameRenderer>(*ic->renderer, m_guest.session());
   std::unique_ptr<WasmFileServices> files;
@@ -244,8 +284,10 @@ try {
       m_modError = exception.what();
       m_mod.reset();
     }
-    if (!m_modError.empty() && ic->commandLine != nullptr) {
-      ic->commandLine->logError("Mod disabled: " + m_modError);
+    if (!m_modError.empty()) {
+      reportError(ic->commandLine, "Mod disabled: " + m_modError);
+    } else {
+      Logger::LogInfo("Mod reactor started");
     }
     m_modModule.clear();
     m_modModule.shrink_to_fit();
@@ -285,9 +327,7 @@ WasmGameModule::fail(std::string error)
     m_frames->retire();
   }
   if (ic != nullptr) {
-    if (ic->commandLine != nullptr) {
-      ic->commandLine->logError("WASM: " + m_error);
-    }
+    reportError(ic->commandLine, "WASM: " + m_error);
     if (ic->window != nullptr) {
       ic->window->requestClose();
     }
@@ -380,9 +420,7 @@ try {
         m_mod->error().empty() ? "Mod response exceeds quota" : m_mod->error();
       m_mod->retire(m_modError);
       m_mod.reset();
-      if (ic->commandLine != nullptr) {
-        ic->commandLine->logError("Mod disabled: " + m_modError);
-      }
+      reportError(ic->commandLine, "Mod disabled: " + m_modError);
     } else if (!m_guest.invoke(GuestCall::Receive, modReply, response)) {
       fail(m_guest.error());
       return;
@@ -445,6 +483,10 @@ WasmGameModule::OnCloseRequested()
 void
 WasmGameModule::Exit()
 {
+  if (m_guest.isAlive()) {
+    Logger::LogTrace("Shutting down the WASM guest after " +
+                     std::to_string(m_stats.updates) + " updates");
+  }
   m_guest.shutdown();
   if (m_mod) {
     m_mod->shutdown();

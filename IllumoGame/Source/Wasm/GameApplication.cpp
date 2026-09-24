@@ -8,6 +8,7 @@
 #include <IllumoGuest/ModuleApplication.h>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 // IllumoGame as a WASM package: the complete product (menus, canvas, editor,
 // console commands, persistence, workshop) runs in this store on top of the
@@ -50,6 +51,8 @@ protected:
   void applyDefaults(IEnvVars& settings) override
   {
     IllumoGameConfig::ApplyDefaults(&settings);
+    Logger::LogTrace("CSim settings ready; preferred ruleset " +
+                     settings.getVar("RuleSetString").value);
   }
 
   // The render3dTest diagnostic scene, pinned in the asset cache.
@@ -80,11 +83,24 @@ protected:
     for (const std::string& warning : m_catalog.warnings()) {
       Logger::LogWarning(warning);
     }
+    Logger::LogInfo(
+      "Rule catalogs ready: " +
+      std::to_string(RuleSetRegistry::instance().getKnownFamilies().size()) +
+      " families, " +
+      std::to_string(RuleSetRegistry::instance().getKnownRules().size()) +
+      " rulesets");
+    if (CSimTypeface::installed()) {
+      Logger::LogTrace("Kikuta typeface installed as the default font");
+    } else {
+      Logger::LogWarning(
+        "Kikuta typeface unavailable; using the engine default font");
+    }
     return true;
   }
 
   std::unique_ptr<IModule> createFirstModule() override
   {
+    Logger::LogTrace("CSim bootstrap complete; opening the main menu");
     CSimSounds::play(CSimSound::ProgramStart);
     return std::make_unique<MainMenuModule>();
   }
@@ -96,6 +112,10 @@ private:
   bool loadSounds()
   {
     IAudio* audio = context().audio;
+    if (audio == nullptr && !m_soundsLoaded && !m_audioAbsenceReported) {
+      m_audioAbsenceReported = true;
+      Logger::LogInfo("Audio is not granted to CSim; it plays silently");
+    }
     if (m_soundsLoaded || audio == nullptr) {
       return true;
     }
@@ -129,6 +149,15 @@ private:
         Logger::LogWarning("Sound unavailable: " + problem);
       }
     }
+    const std::size_t cueCount = CSimSounds::fileNames().size();
+    if (!CSimSounds::installed()) {
+      Logger::LogInfo("Audio output is unavailable; CSim plays silently");
+    } else if (missing.size() != cueCount) {
+      const std::size_t loaded =
+        problems.size() < cueCount ? cueCount - problems.size() : 0u;
+      Logger::LogInfo("Sound cues loaded: " + std::to_string(loaded) + " of " +
+                      std::to_string(cueCount));
+    }
     return true;
   }
 
@@ -136,6 +165,7 @@ private:
   CSimCatalogBootstrap m_catalog;
   std::uint64_t m_soundFetch = 0;
   bool m_soundsLoaded = false;
+  bool m_audioAbsenceReported = false;
 };
 
 std::unique_ptr<GuestApplication>

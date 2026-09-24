@@ -2,6 +2,7 @@
 
 #include <Illumo/Content/VirtualPath.h>
 #include <Illumo/Platform/AtomicFile.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <deque>
 #include <fstream>
@@ -609,39 +610,54 @@ VirtualFileSystem::mount(VfsMount mount, std::string& error)
   if (mount.layers.size() > 1) {
     findConflicts(mount);
   }
-  const std::lock_guard<std::mutex> lock(m_mutex);
-  for (const VfsMount& existing : m_table->mounts()) {
-    if (VirtualPath::isWithin(point, existing.point) ||
-        VirtualPath::isWithin(existing.point, point)) {
-      error = "Mount point " + point + " overlaps " + existing.point;
-      return false;
-    }
+  std::string layers;
+  for (const VfsLayer& layer : mount.layers) {
+    layers +=
+      (layers.empty() ? "" : ", ") +
+      (layer.packageId.empty() ? std::string("(unnamed)") : layer.packageId);
   }
-  std::shared_ptr<VfsMountTable> next =
-    std::make_shared<VfsMountTable>(*m_table);
-  next->m_mounts.push_back(std::move(mount));
-  std::sort(
-    next->m_mounts.begin(),
-    next->m_mounts.end(),
-    [](const VfsMount& a, const VfsMount& b) { return a.point < b.point; });
-  m_table = next;
+  const bool writable =
+    mount.layers.size() == 1 && mount.layers.front().backend->writable();
+  {
+    const std::lock_guard<std::mutex> lock(m_mutex);
+    for (const VfsMount& existing : m_table->mounts()) {
+      if (VirtualPath::isWithin(point, existing.point) ||
+          VirtualPath::isWithin(existing.point, point)) {
+        error = "Mount point " + point + " overlaps " + existing.point;
+        return false;
+      }
+    }
+    std::shared_ptr<VfsMountTable> next =
+      std::make_shared<VfsMountTable>(*m_table);
+    next->m_mounts.push_back(std::move(mount));
+    std::sort(
+      next->m_mounts.begin(),
+      next->m_mounts.end(),
+      [](const VfsMount& a, const VfsMount& b) { return a.point < b.point; });
+    m_table = next;
+  }
+  Logger::LogTrace("Virtual file tree mounted " + point +
+                   (writable ? " (writable)" : "") + " from " + layers);
   return true;
 }
 
 bool
 VirtualFileSystem::unmount(std::string_view point)
 {
-  const std::lock_guard<std::mutex> lock(m_mutex);
-  if (m_table->find(point) == nullptr) {
-    return false;
-  }
-  std::shared_ptr<VfsMountTable> next = std::make_shared<VfsMountTable>();
-  for (const VfsMount& mount : m_table->mounts()) {
-    if (mount.point != point) {
-      next->m_mounts.push_back(mount);
+  {
+    const std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_table->find(point) == nullptr) {
+      return false;
     }
+    std::shared_ptr<VfsMountTable> next = std::make_shared<VfsMountTable>();
+    for (const VfsMount& mount : m_table->mounts()) {
+      if (mount.point != point) {
+        next->m_mounts.push_back(mount);
+      }
+    }
+    m_table = next;
   }
-  m_table = next;
+  Logger::LogTrace("Virtual file tree unmounted " + std::string(point));
   return true;
 }
 

@@ -9,6 +9,18 @@
 #include <Illumo/Services/Logger.h>
 #include <cctype>
 #include <new>
+#include <string>
+
+// "an infinite world" or "a 8 x 8 chunk torus", for diagnostics.
+static std::string
+describeTopology(std::int64_t worldChunkWidth, std::int64_t worldChunkHeight)
+{
+  if (worldChunkWidth <= 0 || worldChunkHeight <= 0) {
+    return "an infinite world";
+  }
+  return "a " + std::to_string(worldChunkWidth) + " x " +
+         std::to_string(worldChunkHeight) + " chunk torus";
+}
 
 CellContext::CellContext(std::string modeString,
                          IEnvVars* envVars,
@@ -53,6 +65,10 @@ CellContext::CellContext(std::string modeString,
   ruleSet = nullptr;
   FamilyString = "";
   RuleSetString = "";
+  Logger::LogTrace("Cell world created: " +
+                   describeTopology(worldChunkWidth, worldChunkHeight) + ", " +
+                   std::to_string(cx) + " x " + std::to_string(cy) +
+                   " cell view");
   setRuleSet(modeString);
 }
 
@@ -181,6 +197,9 @@ CellContext::setRuleSetInternal(std::string familyString,
     envVars->setVar("RuleSetString", RuleSetString);
     envVars->setVar("ModeString", RuleSetString);
   }
+  Logger::LogTrace(
+    std::string(forceRefresh ? "Ruleset recompiled: " : "Ruleset compiled: ") +
+    RuleSetString + " (family " + FamilyString + ")");
   return true;
 }
 
@@ -201,6 +220,9 @@ CellContext::resetWorld(std::int64_t worldChunkWidth,
                         std::int64_t worldChunkHeight)
 {
   if (!SparseCellGrid::isValidTopology(worldChunkWidth, worldChunkHeight)) {
+    Logger::LogWarning("Rejected invalid world topology " +
+                       std::to_string(worldChunkWidth) + " x " +
+                       std::to_string(worldChunkHeight) + " chunks");
     return false;
   }
   SparseCellGrid* replacement =
@@ -210,6 +232,9 @@ CellContext::resetWorld(std::int64_t worldChunkWidth,
   if (replacement == nullptr || replacementSpare == nullptr) {
     delete replacement;
     delete replacementSpare;
+    Logger::LogError("Unable to allocate " +
+                     describeTopology(worldChunkWidth, worldChunkHeight) +
+                     "; the current world is kept");
     return false;
   }
 
@@ -230,6 +255,8 @@ CellContext::resetWorld(std::int64_t worldChunkWidth,
     envVars->setVar("WorldChunksX", static_cast<long>(worldChunkWidth));
     envVars->setVar("WorldChunksY", static_cast<long>(worldChunkHeight));
   }
+  Logger::LogTrace("World reset to " +
+                   describeTopology(worldChunkWidth, worldChunkHeight));
   return true;
 }
 

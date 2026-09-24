@@ -18,7 +18,11 @@ End state:
   wrapping the library;
 - guests (every product ships as WASM) reach it through a new optional
   capability and service, decoding their own files inside the sandbox;
-- CSim plays seven cues, with a persisted volume setting.
+- CSim plays seven cues, with a persisted volume setting. (Three more were
+  added later the same day: the canvas EDIT/NORMAL mode switch,
+  `canvas_mode_switch.wav`, `IllumoGame.CellGameModule.ModeSwitchSound`; and
+  the paint drawer's `canvas_paintmenu_expand.wav` /
+  `canvas_paintmenu_collapse.wav`, `IllumoGame.CellGame.PaintPaletteSounds`.)
 
 Non-goals: music streaming, positional (3D) audio, recording, a mixer bus
 hierarchy, audio in IllEd or IllMeshViewer (they are granted the capability

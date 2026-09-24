@@ -15,11 +15,18 @@
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
+#include <array>
 #include <exception>
 #include <filesystem>
 #include <glm/fwd.hpp>
 #include <tracy/Tracy.hpp>
 #include <utility>
+
+static const char*
+requirementName(ModuleRequirement requirement)
+{
+  return requirement == ModuleRequirement::Required ? "required" : "optional";
+}
 
 static void
 cleanupBackendAfterInitializationFailure(
@@ -60,6 +67,9 @@ Illumo::Illumo(IllumoConfig config)
       : std::filesystem::path(config.environmentPath);
   m_environment = std::make_unique<EnvVars>(environmentPath);
   applyHostDefaults();
+  // The configured log level applies from here, before the console exists,
+  // so window and GPU startup messages are not filtered by the fallback.
+  Logger::setContext(m_environment.get(), nullptr);
 }
 
 Illumo::~Illumo()
@@ -128,6 +138,10 @@ Illumo::initialize()
       releaseServices();
       return false;
     }
+    const std::array<int, 2> windowSize = m_window->getWindowDimensions();
+    Logger::LogInfo("Render window ready: " + std::to_string(windowSize[0]) +
+                    "x" + std::to_string(windowSize[1]) + ", monitor " +
+                    std::to_string(m_window->getRefreshRate()) + " Hz");
 
     m_camera = std::make_unique<Camera>(
       glm::vec2(0.0f, 0.0f), 1.0f, m_environment.get());
@@ -160,19 +174,25 @@ Illumo::initialize()
       releaseServices();
       return false;
     }
+    Logger::LogTrace("Rendering backend initialized");
     m_renderer = std::make_unique<Renderer>(
       m_window.get(), m_environment.get(), m_camera.get(), std::move(backend));
     m_renderer->ensureBuiltinStyles();
+    Logger::LogTrace("Renderer ready with built-in styles");
     m_assetManager = std::make_unique<AssetManager>(m_renderer.get());
+    Logger::LogTrace("Asset manager ready");
     m_commandRegistry = std::make_unique<CommandRegistry>();
     m_commandLine = std::make_unique<CommandLine>(m_environment.get(),
                                                   m_commandRegistry.get(),
                                                   m_window.get(),
                                                   m_renderer.get(),
                                                   m_applicationName);
+    // Attaching the console replays everything logged so far into it.
     Logger::setContext(m_environment.get(), m_commandLine.get());
+    Logger::LogTrace("Developer console attached");
     m_inputManager =
       std::make_unique<InputManager>(m_window->getWindowInstance());
+    Logger::LogTrace("Input manager ready");
     m_scene = std::make_unique<Scene>(m_window.get(), m_camera.get());
     m_motionBlurPipelineConfigured = false;
     GLString::setRenderWindow(m_window.get());
@@ -189,6 +209,8 @@ Illumo::initialize()
     m_context.moduleHost = this;
     m_initialized = true;
     m_terminalCloseRequested = false;
+    Logger::LogInfo("Engine services initialized (renderer, assets, console, "
+                    "input, scene)");
     return true;
   } catch (const std::exception& exception) {
     Logger::LogError(std::string("Illumo initialization failed: ") +
@@ -221,6 +243,8 @@ Illumo::addModule(std::unique_ptr<IModule> module,
   registration.module = std::move(module);
   registration.requirement = requirement;
   m_modules.push_back(std::move(registration));
+  Logger::LogTrace(std::string("Registered ") + requirementName(requirement) +
+                   " module");
 }
 
 bool
@@ -251,6 +275,8 @@ Illumo::startModules()
       startThrew = true;
     }
     if (accepted) {
+      Logger::LogTrace(std::string("Started ") +
+                       requirementName(registration->requirement) + " module");
       registration->started = true;
       ++registration;
       continue;
@@ -271,6 +297,8 @@ Illumo::startModules()
   }
 
   m_modulesStarted = true;
+  Logger::LogInfo("Modules started: " + std::to_string(m_modules.size()) +
+                  " active");
   return true;
 }
 
@@ -299,6 +327,7 @@ Illumo::applyPendingModuleTransition()
   }
 
   std::unique_ptr<IModule> nextModule = std::move(m_pendingModuleTransition);
+  Logger::LogTrace("Switching the required module");
 
   for (std::vector<RegisteredModule>::iterator it = m_modules.begin();
        it != m_modules.end();) {
@@ -367,6 +396,7 @@ Illumo::applyPendingModuleTransition()
   registration.requirement = ModuleRequirement::Required;
   registration.started = true;
   m_modules.insert(m_modules.begin(), std::move(registration));
+  Logger::LogTrace("Required module switched");
 }
 
 void
@@ -662,11 +692,18 @@ Illumo::rollbackStartedModules() noexcept
 void
 Illumo::shutdown() noexcept
 {
+  const bool wasRunning = m_initialized;
   m_pendingModuleTransition.reset();
   rollbackStartedModules();
   m_modules.clear();
   m_modulesStarted = false;
   releaseServices();
+  if (wasRunning) {
+    try {
+      Logger::LogTrace("Engine modules stopped and services released");
+    } catch (...) {
+    }
+  }
 }
 
 void

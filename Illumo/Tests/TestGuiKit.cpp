@@ -331,6 +331,78 @@ testGuiGlassChrome()
              std::abs(minY - 20.0f) < 0.01f && std::abs(maxY - 36.0f) < 0.01f,
            "the packed corners stay inside the rect bounds");
 
+  GameVisual bubble(256u);
+  GuiKit::drawRoundedRect(bubble, 0.0f, 0.0f, 60.0f, 56.0f, 27.0f, cyan);
+  testEqSize(g,
+             bubble.shapeCount(),
+             3u + 4u * 6u,
+             "a large radius subdivides each corner finer (12 wedges)");
+  bool onArc = true;
+  for (size_t i = 3; i < bubble.shapeCount(); ++i) {
+    const ShapePrimitive* wedge = bubble.getShape(i);
+    const float rimX[3] = { wedge->x1, wedge->x2, wedge->x3 };
+    const float rimY[3] = { wedge->y1, wedge->y2, wedge->y3 };
+    for (int vertex = 0; vertex < 3; ++vertex) {
+      const float dx = rimX[vertex] - wedge->x0;
+      const float dy = rimY[vertex] - wedge->y0;
+      onArc = onArc && std::abs(std::sqrt(dx * dx + dy * dy) - 27.0f) < 0.01f;
+    }
+  }
+  testTrue(g, onArc, "every finer wedge's rim lies on its corner's arc");
+
+  GameVisual chevron(16u);
+  GuiKit::drawChevron(chevron, 50.0f, 10.0f, 5.0f, 5.0f, 2.0f, cyan);
+  testEqSize(g, chevron.shapeCount(), 2u, "a chevron is two arm quads");
+  const ShapePrimitive* rightArm = chevron.getShape(0);
+  const ShapePrimitive* leftArm = chevron.getShape(1);
+  // Each arm is (inner end, outer end, outer tip, inner tip).
+  testTrue(g,
+           rightArm != nullptr && leftArm != nullptr &&
+             std::abs(rightArm->x2 - 50.0f) < 0.001f &&
+             std::abs(rightArm->x2 - leftArm->x2) < 0.001f &&
+             std::abs(rightArm->y2 - leftArm->y2) < 0.001f &&
+             std::abs(rightArm->y3 - leftArm->y3) < 0.001f &&
+             rightArm->y2 < 10.0f && rightArm->y3 > 10.0f,
+           "both arms share one mitered tip, so the point has no notch");
+  GameVisual square(16u);
+  const GuiPoint2 corners[4] = {
+    { 10.0f, 10.0f }, { 30.0f, 10.0f }, { 30.0f, 30.0f }, { 10.0f, 30.0f }
+  };
+  GuiKit::drawPolyline(square, corners, 4, 2.0f, cyan, true);
+  bool joined = square.shapeCount() == 4u;
+  for (std::size_t side = 0; joined && side < 4u; ++side) {
+    const ShapePrimitive* current = square.getShape(side);
+    const ShapePrimitive* next = square.getShape((side + 1u) % 4u);
+    // A side ends (x2..x3) exactly where the next begins (x1..x0).
+    joined = std::abs(current->x2 - next->x1) < 0.001f &&
+             std::abs(current->y2 - next->y1) < 0.001f &&
+             std::abs(current->x3 - next->x0) < 0.001f &&
+             std::abs(current->y3 - next->y0) < 0.001f;
+  }
+  testTrue(g, joined, "a closed polyline's sides share mitered corners");
+  const ShapePrimitive* top = square.getShape(0);
+  const float outerCornerX = std::min(top->x0, top->x1);
+  const float outerCornerY = std::min(top->y0, top->y1);
+  testTrue(g,
+           std::abs(outerCornerX - 9.0f) < 0.001f &&
+             std::abs(outerCornerY - 9.0f) < 0.001f,
+           "a square's outer corner sits half the stroke outside it");
+  GameVisual open(16u);
+  const GuiPoint2 line[2] = { { 0.0f, 5.0f }, { 10.0f, 5.0f } };
+  GuiKit::drawPolyline(open, line, 2, 2.0f, cyan, false, true);
+  testTrue(g,
+           open.shapeCount() == 1u &&
+             std::abs(std::min(open.getShape(0)->x0, open.getShape(0)->x1) +
+                      1.0f) < 0.001f,
+           "square caps extend an open stroke by half its width");
+
+  GameVisual downChevron(16u);
+  GuiKit::drawChevron(downChevron, 50.0f, 10.0f, 5.0f, -5.0f, 2.0f, cyan);
+  testTrue(g,
+           downChevron.shapeCount() == 2u &&
+             downChevron.getShape(0)->y2 > 10.0f,
+           "a negative depth points the chevron down");
+
   GameVisual band(256u);
   GuiKit::drawSoftShadow(
     band, 0.0f, 0.0f, 100.0f, 60.0f, 12.0f, 20.0f, 6.0f, UiTheme::glowShadow());

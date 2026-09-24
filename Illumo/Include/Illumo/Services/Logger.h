@@ -1,9 +1,11 @@
 #pragma once
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 /*
     This class describes a logger class that writes messages to a file,
@@ -17,6 +19,8 @@
         3 = Error, warning, and info logging
         4 = Error, warning, info, and trace logging
 
+    Messages logged before the first console attaches (platform, window and
+    GPU startup) are kept, bounded, and replayed into that console.
 */
 
 class IEnvVars;
@@ -78,12 +82,43 @@ public:
     return instance ? instance->commandLine : nullptr;
   }
 
+  // The file every message is appended to (empty before initLogger).
+  static std::filesystem::path getLogFilePath()
+  {
+    return instance ? instance->logFilePath : std::filesystem::path();
+  }
+
   std::ofstream logFileStream;
 
+  static constexpr std::size_t kStartupBacklogLimit = 256;
+
 private:
+  enum class Level
+  {
+    Error,
+    Warning,
+    Info,
+    Plain,
+    Trace
+  };
+  struct BacklogEntry
+  {
+    Level level;
+    std::string text;
+  };
+
   static inline bool consoleToStderr = false;
   static long getSafeLogLevel();
+  static void write(Level level, const char* message);
+  static void sendToConsole(CommandLine* console,
+                            Level level,
+                            const std::string& text);
+  void attachConsole(CommandLine* console);
   static std::unique_ptr<Logger> instance;
   IEnvVars* envVars;
   CommandLine* commandLine;
+  std::filesystem::path logFilePath;
+  bool consoleEverAttached = false;
+  std::vector<BacklogEntry> startupBacklog;
+  std::size_t startupBacklogDropped = 0;
 };

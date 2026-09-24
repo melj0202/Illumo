@@ -5,6 +5,7 @@
 #include <Illumo/Gui/GuiToolStyle.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/InputManager.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cmath>
 
@@ -101,6 +102,9 @@ EditorAssetBrowser::requestListings()
             children.push_back(
               { std::move(entry.name), entry.directory, entry.size });
           }
+        } else {
+          Logger::LogWarning("Asset browser could not list " + directory +
+                             "; it shows as empty");
         }
         m_tree.setChildren(directory, std::move(children));
       });

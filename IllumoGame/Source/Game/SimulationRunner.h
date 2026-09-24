@@ -89,6 +89,11 @@ private:
   // only while a serial generation would cost more than that.
   bool preferLanes = false;
   RollingMetric serialCost;
+  // Diagnostics only: each lane state change is logged once, never per frame.
+  void reportLaneFailure();
+  bool laneFailureReported = false;
+  std::uint32_t reportedLaneCount = 0;
+  std::string reportedSerialRule;
 #endif
   bool stopping = false;
   bool requestPending = false;

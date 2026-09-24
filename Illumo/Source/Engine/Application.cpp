@@ -6,15 +6,100 @@
 #include <Illumo/Engine/DebugModule.h>
 #endif
 #include <Illumo/Engine/PresentationTiming.h>
+#include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Platform/PlatformTimer.h>
+#include <Illumo/Platform/SystemInfo.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <chrono>
+#include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <tracy/Tracy.hpp>
 #include <utility>
+
+static const char*
+buildConfiguration()
+{
+#if !defined(NDEBUG)
+  return "Debug";
+#elif defined(ILLUMO_ENABLE_DEBUG_TOOLS)
+  return "RelWithDebInfo";
+#else
+  return "Release";
+#endif
+}
+
+static std::string
+compilerDescription()
+{
+#if defined(__clang__)
+  return std::string("Clang ") + __clang_version__;
+#elif defined(_MSC_VER)
+  // _MSC_FULL_VER is MMmmBBBBB: 195136257 reads as 19.51.36257.
+  return "MSVC " + std::to_string(_MSC_VER / 100) + "." +
+         std::to_string(_MSC_VER % 100) + "." +
+         std::to_string(_MSC_FULL_VER % 100000);
+#elif defined(__GNUC__)
+  return "GCC " + std::to_string(__GNUC__) + "." +
+         std::to_string(__GNUC_MINOR__);
+#else
+  return "an unknown compiler";
+#endif
+}
+
+static std::string
+gibibytes(std::uint64_t bytes)
+{
+  char text[32] = {};
+  std::snprintf(text,
+                sizeof(text),
+                "%.1f GiB",
+                static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0));
+  return text;
+}
+
+// One block at startup describing the build and the machine, so every log
+// and bug report starts with the environment it came from.
+static void
+logStartupReport(const std::string& applicationName)
+{
+  Logger::LogInfo(applicationName + " starting: Illumo " +
+                  BuildInfo::VersionNumber + ", " + buildConfiguration() +
+                  " build of " + __DATE__ + " " + __TIME__ + " (" +
+                  compilerDescription() + ")");
+  const SystemInfo system = QuerySystemInfo();
+  std::string machine = "Operating system: " + (system.operatingSystem.empty()
+                                                  ? std::string("unknown")
+                                                  : system.operatingSystem);
+  if (!system.architecture.empty()) {
+    machine += ", " + system.architecture;
+  }
+  Logger::LogInfo(machine);
+  std::string processor =
+    "CPU: " + (system.cpuName.empty() ? std::string("unknown processor")
+                                      : system.cpuName);
+  if (system.physicalCores != 0) {
+    processor += ", " + std::to_string(system.physicalCores) + " cores";
+  }
+  if (system.logicalProcessors != 0) {
+    processor += ", " + std::to_string(system.logicalProcessors) + " threads";
+  }
+  Logger::LogInfo(processor);
+  if (system.totalMemoryBytes != 0) {
+    Logger::LogInfo("Memory: " + gibibytes(system.totalMemoryBytes) +
+                    " total, " + gibibytes(system.availableMemoryBytes) +
+                    " available");
+  }
+  const std::filesystem::path logFile = Logger::getLogFilePath();
+  if (!logFile.empty()) {
+    Logger::LogInfo("Log file: " + logFile.string());
+  }
+  Logger::LogInfo("Settings file: " +
+                  EnvVars::ApplicationConfigPath().string());
+}
 
 class ApplicationLoggerLifetime
 {
@@ -34,6 +119,8 @@ RunIllumoApplication(int argc,
                      char** argv,
                      IllumoApplicationDefinition application)
 {
+  const std::chrono::steady_clock::time_point launched =
+    std::chrono::steady_clock::now();
   ApplicationLoggerLifetime loggerLifetime;
   PlatformTimerScope timerScope;
   try {
@@ -58,6 +145,7 @@ RunIllumoApplication(int argc,
     if (commandLineResult.shouldExit()) {
       return commandLineResult.exitCode();
     }
+    logStartupReport(application.applicationName);
 
     if (!illumo.initialize()) {
       Logger::LogError(application.applicationName +
@@ -89,6 +177,12 @@ RunIllumoApplication(int argc,
       illumo.shutdown();
       return 1;
     }
+    Logger::LogInfo(
+      application.applicationName + " ready in " +
+      std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - launched)
+                       .count()) +
+      " ms");
 
     FramePacer framePacer;
     std::chrono::steady_clock::time_point lastTime =
@@ -124,9 +218,13 @@ RunIllumoApplication(int argc,
       illumo.frameProfiler().endFrame();
     }
 
+    Logger::LogInfo(application.applicationName + " shutting down");
     illumo.shutdown();
-    Logger::LogTrace(application.applicationName + " main loop finished");
-    return application.exitCode != nullptr ? application.exitCode() : 0;
+    const int exitCode =
+      application.exitCode != nullptr ? application.exitCode() : 0;
+    Logger::LogInfo(application.applicationName + " exited with code " +
+                    std::to_string(exitCode));
+    return exitCode;
   } catch (const std::exception& exception) {
     Logger::LogError(std::string("Illumo application failed: ") +
                      exception.what());

@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -198,6 +199,14 @@ CanvasView::initializeGpuResources()
   displayTextureHandle = renderer->enrollTexture(
     texBuffer, textureWidth, textureHeight, 3, textureOptions);
   gpuReady = true;
+  if (displayTextureHandle.isValid()) {
+    Logger::LogTrace(
+      "Canvas texture enrolled: " + std::to_string(textureWidth) + " x " +
+      std::to_string(textureHeight) + " texels");
+  } else {
+    Logger::LogError("Canvas texture could not be enrolled; the canvas will "
+                     "not draw");
+  }
 }
 
 void
@@ -252,13 +261,19 @@ CanvasView::resizeBuffers(int width, int height)
   if (gpuReady && renderer != nullptr) {
     TextureOptions textureOptions;
     textureOptions.filter = TextureFilter::Nearest;
-    renderer->replaceTexture(displayTextureHandle,
-                             texBuffer,
-                             textureWidth,
-                             textureHeight,
-                             3,
-                             textureOptions);
+    if (!renderer->replaceTexture(displayTextureHandle,
+                                  texBuffer,
+                                  textureWidth,
+                                  textureHeight,
+                                  3,
+                                  textureOptions)) {
+      Logger::LogError("Canvas texture could not be resized to " +
+                       std::to_string(textureWidth) + " x " +
+                       std::to_string(textureHeight) + " texels");
+    }
   }
+  Logger::LogTrace("Canvas cache grew to " + std::to_string(textureWidth) +
+                   " x " + std::to_string(textureHeight) + " texels");
 }
 
 void

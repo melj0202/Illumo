@@ -175,10 +175,15 @@ private:
     if (linked == GL_FALSE) {
       int length = 0;
       glGetProgramiv(_programID, GL_INFO_LOG_LENGTH, &length);
-      std::vector<char> message(length);
-      glGetProgramInfoLog(_programID, length, &length, message.data());
-      std::cerr << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n"
-                << message.data() << std::endl;
+      std::vector<char> message(static_cast<size_t>(length > 0 ? length : 1),
+                                '\0');
+      glGetProgramInfoLog(_programID,
+                          static_cast<GLsizei>(message.size()),
+                          nullptr,
+                          message.data());
+      message.back() = '\0';
+      Logger::LogError(std::string("Shader program failed to link: ") +
+                       message.data());
       glDeleteProgram(_programID);
       _programID = 0;
       _valid = false;
@@ -201,13 +206,16 @@ private:
     int result;
     glGetShaderiv(id, GL_COMPILE_STATUS, &result);
     if (result == GL_FALSE) {
-      int length;
+      int length = 0;
       glGetShaderiv(id, GL_INFO_LOG_LENGTH, &length);
-      std::vector<char> message(length);
-      glGetShaderInfoLog(id, length, &length, message.data());
-      std::cerr << "ERROR::SHADER::COMPILATION_FAILED_FOR_"
-                << (type == GL_VERTEX_SHADER ? "VERTEX" : "FRAGMENT") << "\n"
-                << message.data() << std::endl;
+      std::vector<char> message(static_cast<size_t>(length > 0 ? length : 1),
+                                '\0');
+      glGetShaderInfoLog(
+        id, static_cast<GLsizei>(message.size()), nullptr, message.data());
+      message.back() = '\0';
+      Logger::LogError(
+        std::string(type == GL_VERTEX_SHADER ? "Vertex" : "Fragment") +
+        " shader failed to compile: " + message.data());
       glDeleteShader(id);
       return 0;
     }

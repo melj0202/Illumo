@@ -1,9 +1,11 @@
 #include <Illumo/Audio/AudioClip.h>
 #include <Illumo/Audio/AudioDevice.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <miniaudio.h>
+#include <string>
 #include <vector>
 
 namespace {
@@ -137,6 +139,16 @@ AudioDevice::create(const AudioDeviceOptions& options, std::string& error)
     return nullptr;
   }
   state->engineReady = true;
+  const ma_device* device = ma_engine_get_device(&state->engine);
+  const std::string outputName =
+    options.headless ? std::string("headless mixer")
+    : device != nullptr && device->playback.name[0] != '\0'
+      ? std::string(device->playback.name)
+      : std::string("default output");
+  Logger::LogInfo(
+    "Audio output: " + outputName + ", " +
+    std::to_string(ma_engine_get_sample_rate(&state->engine)) + " Hz, " +
+    std::to_string(ma_engine_get_channels(&state->engine)) + " channels");
   return std::unique_ptr<AudioDevice>(new AudioDevice(std::move(state)));
 }
 
@@ -160,6 +172,9 @@ AudioDevice::createSound(const AudioClip& clip)
     ++m_state->soundCount;
     return { slot, sound.generation };
   }
+  Logger::LogWarning("Audio: every sound slot is in use (" +
+                     std::to_string(IAudio::kMaximumSounds) +
+                     "); a sound was not loaded");
   return {};
 }
 

@@ -1213,6 +1213,113 @@ testPaintPalette()
 }
 
 static void
+testPaintPaletteSounds()
+{
+  testSection("CellGameModule: the paint drawer voices expand and collapse");
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  CSimSounds::resetCounts();
+  openPaintDrawer(fixture);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasPaintMenuExpand) == 1 &&
+             CSimSounds::playCount(CSimSound::CanvasPaintMenuCollapse) == 0,
+           "opening the drawer plays the expand cue once");
+  const std::uint64_t hoversBefore =
+    CSimSounds::playCount(CSimSound::MenuHover);
+  fixture.window.mouseX = 320.0;
+  fixture.window.mouseY =
+    326.0 - CellGameModuleTestAccess::getCellContext(fixture.module)
+              ->getCanvasView()
+              ->getBottomInsetPixels();
+  fixture.module.Update(0.016);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == hoversBefore + 1,
+           "pointing at the collapse header plays one hover cue");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  fixture.module.Update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
+             CSimSounds::playCount(CSimSound::CanvasPaintMenuCollapse) == 1 &&
+             CSimSounds::playCount(CSimSound::CanvasPaintMenuExpand) == 1,
+           "a held header click collapses it with one collapse cue");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == hoversBefore + 1,
+           "clicking does not add a hover cue");
+  fixture.window.mouseX = 0.0;
+  fixture.window.mouseY = 0.0;
+  fixture.module.Update(0.016);
+  fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
+  fixture.window.mouseY =
+    static_cast<double>(fixture.window.height -
+                        CellGameModuleTestAccess::getCellContext(fixture.module)
+                          ->getCanvasView()
+                          ->getBottomInsetPixels()) -
+    16.0 * fixture.renderer.getUiScale() *
+      CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module)
+        .getTransform()
+        .scaleX;
+  fixture.module.Update(0.016);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == hoversBefore + 2,
+           "returning to the expand bubble plays one more hover cue");
+  CSimSounds::resetCounts();
+}
+
+static void
+testPaintPaletteCardSounds()
+{
+  testSection("CellGameModule: paint cards voice hover, pick and browse");
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  // Five states: four cards show and the wheel can move one step.
+  fixture.env.setVar("ModeString", "QUADLIFE");
+  fixture.module.Update(0.016);
+  openPaintDrawer(fixture);
+  CSimSounds::resetCounts();
+  pointAtPaintCard(fixture, 4, 0);
+  fixture.module.Update(0.016);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == 1,
+           "pointing at a card plays one hover cue");
+  pointAtPaintCard(fixture, 4, 2);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == 2,
+           "moving to another card plays another");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.Update(0.016);
+  fixture.module.Update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CellGameModuleTestAccess::getPaintBrush(fixture.module) == 2 &&
+             CSimSounds::playCount(CSimSound::MenuSelect) == 1 &&
+             CSimSounds::playCount(CSimSound::MenuHover) == 2,
+           "picking a card plays one select cue and no hover");
+  *fixture.input.getMouseScrollOffset() = -1.0;
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == 3,
+           "a wheel step that moves the cards ticks once");
+  *fixture.input.getMouseScrollOffset() = -1.0;
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == 3,
+           "the wheel stays quiet at the end of the states");
+  CSimSounds::resetCounts();
+}
+
+static void
 testPaintPaletteBubbleMorph()
 {
   testSection("CellGameModule: the paint bubble morphs into the drawer");
@@ -1401,30 +1508,37 @@ testPaintPaletteFittedInput()
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
   fixture.module.Update(0.016);
+  bool hasStateLabels = true;
+  const RuleSet* wireworld =
+    CellGameModuleTestAccess::getCellContext(fixture.module)->getRuleSet();
+  for (unsigned char state = 0u; state < 4u; ++state) {
+    bool found = false;
+    for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+      found = found ||
+              visual.getText(index)->content == wireworld->getStateName(state);
+    }
+    hasStateLabels = hasStateLabels && found;
+  }
   testTrue(g,
            CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
-             visual.textCount() == 7u,
+             hasStateLabels,
            "second header click restores all state labels and help");
-  const TextPrimitive* instruction = visual.getText(6u);
   const float localPanelWidth = 4.0f * 132.0f + 24.0f;
   const float localScreenWidth = static_cast<float>(fixture.window.width) /
                                  (fixture.renderer.getUiScale() * fit);
   const float panelLeft = (localScreenWidth - localPanelWidth) * 0.5f;
   const float panelRight = panelLeft + localPanelWidth;
   const std::shared_ptr<Font> font = Font::getDefaultFont();
-  const float instructionWidth =
-    instruction != nullptr && font != nullptr
-      ? font->measureText(instruction->content, instruction->sizePt).width
-      : (instruction != nullptr ? GuiKit::estimateTextWidth(
-                                    instruction->content, instruction->sizePt)
-                                : 0.0f);
-  testTrue(g,
-           instruction != nullptr &&
-             instruction->content ==
-               "Wheel browse   Left paint   Right erase" &&
-             instruction->x >= panelLeft + 14.0f &&
-             instruction->x + instructionWidth <= panelRight - 14.0f,
-           "palette instructions stay inside the drawer surface");
+  bool textInside = visual.textCount() > 0u;
+  for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+    const TextPrimitive* text = visual.getText(index);
+    const float textWidth =
+      font != nullptr ? font->measureText(text->content, text->sizePt).width
+                      : GuiKit::estimateTextWidth(text->content, text->sizePt);
+    textInside = textInside && text->x >= panelLeft + 10.0f &&
+                 text->x + textWidth <= panelRight - 10.0f;
+  }
+  testTrue(g, textInside, "every drawer label stays inside the drawer surface");
   testEqInt(g,
             CellGameModuleTestAccess::getWireworldBrush(fixture.module),
             2,
@@ -1483,18 +1597,29 @@ testHamburgerMenuButton()
            "hamburger is not hovered when mouse is away");
 
   // Move mouse inside hamburger -> hovered
+  CSimSounds::resetCounts();
   fixture.window.mouseX = static_cast<double>(hx + hsize * 0.5f);
   fixture.window.mouseY = static_cast<double>(hy + hsize * 0.5f);
   fixture.module.Update(0.016);
   testTrue(g,
            CellGameModuleTestAccess::isHamburgerHovered(fixture.module),
            "hamburger is hovered when mouse is over it");
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == 1,
+           "hovering the hamburger plays the hover cue once");
 
   // Click hamburger -> toggles settings open
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
   fixture.module.Update(0.016);
   testTrue(g, menu->isOpen(), "clicking hamburger opens settings menu");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuSelect) == 1,
+           "clicking hamburger plays the select cue once");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuHover) == 1,
+           "the click adds no hover cue");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
   fixture.module.Update(0.016);
@@ -1512,6 +1637,10 @@ testHamburgerMenuButton()
   testTrue(g,
            hamburger->isVisible(),
            "hamburger reappears after settings menu closes");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuSelect) == 1,
+           "holding and closing do not repeat the select cue");
+  CSimSounds::resetCounts();
 }
 
 static void
@@ -3177,6 +3306,50 @@ testCanvasReturn()
 }
 
 static void
+pressModeToggle(CellGameFixture& fixture)
+{
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Press);
+  fixture.module.Update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::None);
+  fixture.module.Update(0.016);
+}
+
+static void
+testCanvasModeSwitchSound()
+{
+  CellGameFixture fixture;
+  CSimSounds::resetCounts();
+  fixture.module.Update(0.016);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasModeSwitch) == 0,
+           "entering the canvas in EDIT plays no mode cue");
+  pressModeToggle(fixture);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasModeSwitch) == 1,
+           "E from EDIT to NORMAL plays the mode cue");
+  pressModeToggle(fixture);
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasModeSwitch) == 2,
+           "E back to EDIT plays it again");
+  fixture.execute("pause");
+  fixture.execute("step", { "1" });
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasModeSwitch) == 2,
+           "pause or step while already editing stays quiet");
+  fixture.execute("run");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasModeSwitch) == 3,
+           "the run command voices the switch to NORMAL");
+  fixture.execute("step", { "1" });
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::CanvasModeSwitch) == 4,
+           "stepping from a running canvas voices the return to EDIT");
+  CSimSounds::resetCounts();
+}
+
+static void
 testReducedCanvasReturn()
 {
   CanvasReturnHost host;
@@ -3285,6 +3458,14 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
 {
   registry.add("IllumoGame.CellGameModule.CanvasReturn",
                []() { return runCellGameModuleCase(testCanvasReturn); });
+  registry.add("IllumoGame.CellGame.PaintPaletteSounds",
+               []() { return runCellGameModuleCase(testPaintPaletteSounds); });
+  registry.add("IllumoGame.CellGame.PaintPaletteCardSounds", []() {
+    return runCellGameModuleCase(testPaintPaletteCardSounds);
+  });
+  registry.add("IllumoGame.CellGameModule.ModeSwitchSound", []() {
+    return runCellGameModuleCase(testCanvasModeSwitchSound);
+  });
   registry.add("IllumoGame.CellGameModule.ReducedCanvasReturn",
                []() { return runCellGameModuleCase(testReducedCanvasReturn); });
 

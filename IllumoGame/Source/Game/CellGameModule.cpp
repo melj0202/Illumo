@@ -206,6 +206,64 @@ hasInvalidCellState(const SparseCellGrid& grid, unsigned int stateCount)
   return false;
 }
 
+// "an infinite world" or "a 8 x 8 chunk torus", for diagnostics.
+static std::string
+describeTopology(std::int64_t worldChunkWidth, std::int64_t worldChunkHeight)
+{
+  if (worldChunkWidth <= 0 || worldChunkHeight <= 0) {
+    return "an infinite world";
+  }
+  return "a " + std::to_string(worldChunkWidth) + " x " +
+         std::to_string(worldChunkHeight) + " chunk torus";
+}
+
+// The catalog's display name for a ruleset ID, or the ID itself.
+static std::string
+ruleDisplayName(const std::string& ruleId)
+{
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(ruleId);
+  return definition == nullptr || definition->name.empty() ? ruleId
+                                                           : definition->name;
+}
+
+// 1234567 as "1,234,567".
+static std::string
+groupDigits(std::uint64_t value)
+{
+  const std::string digits = std::to_string(value);
+  std::string grouped;
+  for (std::size_t index = 0; index < digits.size(); ++index) {
+    if (index > 0 && (digits.size() - index) % 3 == 0) {
+      grouped += ',';
+    }
+    grouped += digits[index];
+  }
+  return grouped;
+}
+
+// `text` as drawn at `sizePt` and `emphasis`, shortened with "..." until it
+// fits `width`.
+static std::string
+fitTextToWidth(const std::string& text,
+               float sizePt,
+               float emphasis,
+               float width)
+{
+  if (GuiKit::measureEmphasizedText(text, sizePt, emphasis) <= width) {
+    return text;
+  }
+  std::string shortened = text;
+  while (!shortened.empty()) {
+    shortened.pop_back();
+    const std::string candidate = shortened + "...";
+    if (GuiKit::measureEmphasizedText(candidate, sizePt, emphasis) <= width) {
+      return candidate;
+    }
+  }
+  return "...";
+}
+
 CellGameModule::CellGameModule(std::string initialSavePath)
   : cellContext(nullptr)
   , currentState(CellState::EDIT)
@@ -310,6 +368,7 @@ CellGameModule::Start(IllumoContext* context)
 
   inputContextId = ic->inputManager->registerInputContext(this->inputContext);
   if (inputContextId < 0) {
+    Logger::LogError("The canvas input context could not be registered");
     return false;
   }
   ic->inputManager->setActiveInputContext(inputContextId);
@@ -348,6 +407,7 @@ CellGameModule::Start(IllumoContext* context)
   syncSimRateFromEnv();
 
   currentState = CellState::EDIT;
+  soundedState = CellState::EDIT;
 
   if (!initialSaveFile.empty()) {
     LoadCellGame(initialSaveFile);
@@ -412,6 +472,10 @@ CellGameModule::Start(IllumoContext* context)
   m_paintPaletteVisual.prepare(ic->renderer);
   m_paintPaletteVisual.setVisible(false);
   m_paintPaletteExpanded = false;
+  m_paintPaletteToggleHovered = false;
+  m_paintSelectHead.configure(GuiMotion::kLiquidHead);
+  m_paintSelectTail.configure(GuiMotion::kLiquidTail);
+  m_paintSelectPlaced = false;
   m_paintPaletteReveal = 0.0f;
   m_editChromeSpring.configure(GuiMotion::kJelly);
   m_paintPaletteChromeSpring.configure(GuiMotion::kJelly);
@@ -450,6 +514,14 @@ CellGameModule::Start(IllumoContext* context)
   exitConfirmDialog =
     std::make_unique<ExitConfirmDialog>(ic->window, ic->renderer);
 
+  if (!initialSaveFile.empty()) {
+    Logger::LogInfo("Canvas opening " + initialSaveFile);
+  } else {
+    Logger::LogInfo("New canvas: " +
+                    ruleDisplayName(cellContext->getRuleSetString()) + " on " +
+                    describeTopology(cellContext->getWorldChunkWidth(),
+                                     cellContext->getWorldChunkHeight()));
+  }
   return true;
 }
 
@@ -465,6 +537,12 @@ CellGameModule::showModeSplash(const char* label)
                  running ? UiTheme::accentCool()
                          : ColorRgba{ 255, 204, 102, 255 },
                  running);
+  // Every EDIT/NORMAL change passes through here; voice actual changes only.
+  const CellState shown = running ? CellState::NORMAL : CellState::EDIT;
+  if (shown != soundedState) {
+    soundedState = shown;
+    CSimSounds::play(CSimSound::CanvasModeSwitch);
+  }
 }
 
 void
@@ -787,6 +865,10 @@ CellGameModule::drainSimulation()
     // Lane generations finish on a later frame and cannot be waited for:
     // the outstanding one is discarded, and the displayed (published) world
     // is what the caller mutates, saves or leaves.
+    if (simulationRunner.isBusy()) {
+      Logger::LogTrace("Outstanding lane generation retired; the displayed "
+                       "world is kept");
+    }
     simulationRunner.retire();
     mirrorDeltaValid = false;
     return;
@@ -949,6 +1031,17 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
     ic->window->toggleFullscreen();
   }
   ic->envVars->save();
+  if (rulesetChanged) {
+    Logger::LogInfo("Ruleset switched to " +
+                    ruleDisplayName(configuration.ruleSet));
+  }
+  if (topologyChanged) {
+    Logger::LogInfo("New world: " +
+                    describeTopology(configuration.worldChunkWidth,
+                                     configuration.worldChunkHeight));
+  }
+  Logger::LogTrace(
+    "Canvas settings applied: " + std::to_string(configuration.tps) + " tps");
   return true;
 }
 
@@ -1556,6 +1649,8 @@ CellGameModule::setRunning(bool running)
   lastSimulationFrameMilliseconds = 0.0;
   lastSimulationSteps = 0;
   simulationDebtDropped = false;
+  simulationDebtFrames = 0;
+  simulationDebtReported = false;
   simulationBudgetLimited = false;
   showModeSplash(running ? "NORMAL" : "EDIT");
   ic->commandLine->logSuccess(running ? "Simulation running"
@@ -1849,6 +1944,9 @@ CellGameModule::Update(double dt)
       configurationMenu != nullptr &&
       (ic->inputManager->isActionActive("ToggleSettings") ||
        hamburgerClicked)) {
+    if (hamburgerClicked) {
+      CSimSounds::play(CSimSound::MenuSelect);
+    }
     toggleSettingsMenu();
   }
 
@@ -1865,6 +1963,7 @@ CellGameModule::Update(double dt)
                   : exitConfirmDialog->update(ic->inputManager);
     if (action == ExitConfirmAction::Confirm) {
       exitConfirmDialog->close();
+      Logger::LogTrace("Exit confirmed from the canvas");
       ic->window->requestClose();
     } else if (action == ExitConfirmAction::MainMenu) {
       exitConfirmDialog->close();
@@ -1906,6 +2005,8 @@ CellGameModule::Update(double dt)
       if (!configurationMenu->readConfiguration(&configuration, &error)) {
         configurationMenu->setError(error);
       } else if (!applyConfiguration(configuration)) {
+        Logger::LogWarning("Canvas settings were rejected; the current world "
+                           "was preserved");
         configurationMenu->setError(
           "Settings could not be applied; the current world was preserved.");
       } else {
@@ -1943,6 +2044,7 @@ CellGameModule::Update(double dt)
         ic->envVars->getVar("reducedUiMotion").valueAsBool;
       rulesetWorkshopMenu->open(*family, *definition, reducedMotion);
       ic->inputManager->clearCharQueue();
+      Logger::LogTrace("Ruleset workshop opened on " + definition->id);
     }
   }
 
@@ -2003,11 +2105,17 @@ CellGameModule::Update(double dt)
       RuleSetRegistry staged = RuleSetRegistry::instance();
       if (!validFamilyId) {
         // The explanatory allocation error was set above.
+        Logger::LogWarning("Ruleset workshop change rejected: no free ID for "
+                           "the copied family");
       } else if (containsInvalidState) {
+        Logger::LogWarning("Ruleset workshop change rejected: the world holds "
+                           "states the rule would remove");
         rulesetWorkshopMenu->setError(
           "The current world contains states this rule would remove.");
       } else if (!staged.registerFamily(familyDraft) ||
                  !staged.registerRule(draft)) {
+        Logger::LogWarning("Ruleset workshop change rejected: " + draft.id +
+                           " is invalid or incompatible with its family");
         rulesetWorkshopMenu->setError(
           "This family and ruleset are invalid or incompatible.");
       } else {
@@ -2016,6 +2124,8 @@ CellGameModule::Update(double dt)
         const RuleFamilyDefinition* compiledFamily =
           staged.getFamilyDefinition(familyDraft.id);
         if (compiled == nullptr || compiledFamily == nullptr) {
+          Logger::LogError("Ruleset workshop could not stage " + draft.id +
+                           " for the user catalog");
           rulesetWorkshopMenu->setError("The user catalog could not be saved.");
         } else {
           std::vector<RuleFamilyDefinition> userFamilies;
@@ -2032,6 +2142,8 @@ CellGameModule::Update(double dt)
                 return;
               }
               if (!saved) {
+                Logger::LogError("User rule catalog was not saved: " +
+                                 (error.empty() ? draft.id : error));
                 rulesetWorkshopMenu->setError(
                   error.empty() ? "The user catalog could not be saved."
                                 : error);
@@ -2055,7 +2167,13 @@ CellGameModule::Update(double dt)
                 updateVisualTargets();
                 CSimSounds::play(CSimSound::MenuSelect);
                 rulesetWorkshopMenu->close();
+                Logger::LogInfo("Ruleset workshop saved and activated " +
+                                ruleDisplayName(draft.id) + " (family " +
+                                draft.familyId + ")");
               } else {
+                Logger::LogError("Saved rule " + draft.id +
+                                 " could not be activated; the world was "
+                                 "preserved");
                 rulesetWorkshopMenu->setError(
                   "The saved rule could not be "
                   "activated; the world was preserved.");
@@ -2133,6 +2251,8 @@ CellGameModule::Update(double dt)
     selectionVisual.setVisible(false);
     lastSimulationSteps = 0;
     simulationDebtDropped = false;
+    simulationDebtFrames = 0;
+    simulationDebtReported = false;
     simulationBudgetLimited = false;
   }
 
@@ -2201,6 +2321,13 @@ void
 CellGameModule::Exit()
 {
   // Late platform completions must not touch a module that has exited.
+  if (m_lifetime) {
+    try {
+      Logger::LogTrace("Canvas closed");
+    } catch (...) {
+      // Diagnostics never block shutdown.
+    }
+  }
   m_lifetime.reset();
   if (inputContextId >= 0 && ic != nullptr && ic->inputManager != nullptr) {
     ic->inputManager->unregisterInputContext(inputContextId);
@@ -2280,6 +2407,18 @@ CellGameModule::Normal(double dt)
     FrameMarkNamed("Sim.debtDropped");
     simAccum = std::fmod(simAccum, simStepSeconds);
     simulationDebtDropped = true;
+    // A sustained shortfall, not a single hitch, is worth one warning.
+    if (simulationDebtFrames < kSimulationDebtWarningFrames) {
+      simulationDebtFrames += 1;
+    }
+    if (simulationDebtFrames == kSimulationDebtWarningFrames &&
+        !simulationDebtReported) {
+      simulationDebtReported = true;
+      Logger::LogWarning("Simulation is behind its requested " +
+                         std::to_string(static_cast<long long>(
+                           std::llround(requestedSimulationTps))) +
+                         " tps; overdue generations are skipped");
+    }
   }
 }
 
@@ -2420,6 +2559,8 @@ CellGameModule::pasteAtCursor()
       }
       *outcome = 1;
       updateVisualTargets();
+      Logger::LogTrace("Pasted clipboard text at (" + std::to_string(originX) +
+                       ", " + std::to_string(originY) + ")");
     });
   return *outcome != 0;
 }
@@ -2489,10 +2630,14 @@ CellGameModule::handleEditorHotkeys()
   const bool deleteDown = ic->inputManager->isKeyPressed(KeyCode::Delete);
 
   if (currentState == CellState::EDIT && copyDown && !copyHeld) {
-    copySelection();
+    if (copySelection()) {
+      Logger::LogTrace("Selection copied to the clipboard");
+    }
   }
   if (currentState == CellState::EDIT && cutDown && !cutHeld) {
-    cutSelection();
+    if (cutSelection()) {
+      Logger::LogTrace("Selection cut to the clipboard");
+    }
   }
   if (currentState == CellState::EDIT && pasteDown && !pasteHeld) {
     pasteAtCursor();
@@ -2821,25 +2966,42 @@ CellGameModule::updateInspectorVisual()
     return;
   }
 
-  std::ostringstream text;
-  text << "gen " << simulationGeneration << "\n";
+  // Label/value rows; the rows stay fixed (a dash without a hovered cell) so
+  // the panel never jumps in size as the pointer moves.
+  std::vector<std::pair<std::string, std::string>> rows;
+  rows.push_back({ "Generation", groupDigits(simulationGeneration) });
   if (hoverValid && cellContext != nullptr) {
     const CellAddress address{ hoverX, hoverY };
     const unsigned char state = cellContext->getGrid()->getCell(address);
     const ChunkAddress chunk = SparseCellGrid::chunkAddressForCell(address);
     const bool inBounds = cellContext->getGrid()->isCellInWorldBounds(address);
-    text << "cell " << hoverX << "," << hoverY << " state "
-         << static_cast<int>(state) << "\n";
-    text << cellContext->getFamilyString() << " / "
-         << cellContext->getRuleSetString() << "\n";
-    text << "chunk " << chunk.x << "," << chunk.y
-         << (inBounds ? " in-bounds" : " outside") << "\n";
+    rows.push_back(
+      { "Cell", std::to_string(hoverX) + ", " + std::to_string(hoverY) });
+    rows.push_back({ "State",
+                     std::to_string(static_cast<int>(state)) + "  " +
+                       cellContext->getRuleSet()->getStateName(state) });
+    rows.push_back({ "Chunk",
+                     std::to_string(chunk.x) + ", " + std::to_string(chunk.y) +
+                       (inBounds ? "  in bounds" : "  outside the world") });
   } else {
-    text << "no hover\n";
+    rows.push_back({ "Cell", "-" });
+    rows.push_back({ "State", "-" });
+    rows.push_back({ "Chunk", "-" });
   }
-  const SparseAdvanceStats& stats =
-    cellContext->getGrid()->getLastAdvanceStats();
-  text << "cells " << stats.activeCellCount << " tps " << achievedSimulationTps;
+  const RuleFamilyDefinition* family =
+    RuleSetRegistry::instance().getFamilyDefinition(
+      cellContext->getFamilyString());
+  rows.push_back({ "Rule", ruleDisplayName(cellContext->getRuleSetString()) });
+  rows.push_back({ "Family",
+                   family != nullptr && !family->name.empty()
+                     ? family->name
+                     : cellContext->getFamilyString() });
+  rows.push_back(
+    { "Cells", groupDigits(cellContext->getGrid()->getStoredCellCount()) });
+  rows.push_back({ "Speed",
+                   std::to_string(static_cast<long long>(
+                     std::llround(std::max(0.0, achievedSimulationTps)))) +
+                     " tps" });
   inspectorVisual.setWindow(ic->window);
   inspectorVisual.setSpace(PrimitiveSpace::Pixels);
   inspectorVisual.setLayerHint(RenderLayerId::UI);
@@ -2852,60 +3014,91 @@ CellGameModule::updateInspectorVisual()
     static_cast<float>(winDims[0]) / (scale > 0.0f ? scale : 1.0f);
   const float virtHeight =
     static_cast<float>(winDims[1]) / (scale > 0.0f ? scale : 1.0f);
-  const float inspW = std::min(300.0f, std::max(100.0f, virtWidth - 24.0f));
-  const float inspH = std::min(128.0f, std::max(60.0f, virtHeight - 84.0f));
+  // A glass panel titled like the menus: a spaced-caps eyebrow over a
+  // cyan-to-violet crown, muted labels and bright values, sized to fit its
+  // values and ellipsizing any that still overflow the screen.
+  const float labelSize = 10.0f;
+  const float valueSize = 11.5f;
+  const float padding = 14.0f;
+  const float labelColumn = 78.0f;
+  const float rowHeight = 18.0f;
+  const float headerHeight = 30.0f;
+  float widestValue = 0.0f;
+  for (const std::pair<std::string, std::string>& row : rows) {
+    widestValue = std::max(
+      widestValue, GuiKit::measureEmphasizedText(row.second, valueSize, 0.2f));
+  }
+  const float maximumWidth = std::max(160.0f, virtWidth - 24.0f);
+  const float inspW = std::clamp(
+    padding * 2.0f + labelColumn + widestValue, 220.0f, maximumWidth);
+  const float valueRoom = inspW - padding * 2.0f - labelColumn;
+  const float inspH =
+    headerHeight + static_cast<float>(rows.size()) * rowHeight + 10.0f;
   const float inspX = 12.0f;
   const float inspY =
     std::clamp(72.0f, 0.0f, std::max(0.0f, virtHeight - inspH));
-  // A small glass card with a cyan-to-violet spine; the generation line
-  // leads in the accent color.
+  const float radius = 12.0f;
   GuiKit::drawSoftShadow(inspectorVisual,
                          inspX,
                          inspY,
                          inspW,
                          inspH,
-                         10.0f,
-                         14.0f,
-                         5.0f,
+                         radius,
+                         16.0f,
+                         6.0f,
                          UiTheme::glowShadow());
   GuiKit::drawRoundedRect(
-    inspectorVisual, inspX, inspY, inspW, inspH, 10.0f, UiTheme::glassRim());
+    inspectorVisual, inspX, inspY, inspW, inspH, radius, UiTheme::glassRim());
   GuiKit::drawRoundedGradientRect(inspectorVisual,
                                   inspX + 1.0f,
                                   inspY + 1.0f,
                                   inspW - 2.0f,
                                   inspH - 2.0f,
-                                  9.0f,
+                                  radius - 1.0f,
                                   UiTheme::glassTop(),
                                   UiTheme::glassBottom());
-  inspectorVisual.addGradientRect(inspX + 5.0f,
-                                  inspY + 10.0f,
-                                  2.0f,
-                                  inspH - 20.0f,
-                                  UiTheme::accentCool(),
+  inspectorVisual.addGradientRect(inspX + radius,
+                                  inspY + 1.0f,
+                                  inspW - 2.0f * radius,
+                                  1.5f,
                                   UiTheme::accentCool(),
                                   UiTheme::accentViolet(),
-                                  UiTheme::accentViolet());
-  std::string remaining = text.str();
-  float lineY = inspY + 8.0f;
-  bool firstLine = true;
-  while (!remaining.empty()) {
-    const std::size_t newline = remaining.find('\n');
-    std::string line = remaining;
-    if (newline != std::string::npos) {
-      line = remaining.substr(0, newline);
-      remaining = remaining.substr(newline + 1);
-    } else {
-      remaining.clear();
-    }
-    inspectorVisual.addText(line,
-                            inspX + 14.0f,
-                            lineY,
-                            16.0f,
-                            firstLine ? UiTheme::accentCool()
-                                      : UiTheme::textPrimary());
-    firstLine = false;
-    lineY += 18.0f;
+                                  UiTheme::accentViolet(),
+                                  UiTheme::accentCool());
+  inspectorVisual.addText("I N S P E C T O R",
+                          inspX + padding,
+                          inspY + 11.0f,
+                          9.0f,
+                          UiTheme::accentCool());
+  // A hairline under the eyebrow, fading out to the right.
+  inspectorVisual.addGradientRect(inspX + padding,
+                                  inspY + headerHeight - 4.0f,
+                                  inspW - padding * 2.0f,
+                                  1.0f,
+                                  UiTheme::divider(),
+                                  UiTheme::transparentOf(UiTheme::divider()),
+                                  UiTheme::transparentOf(UiTheme::divider()),
+                                  UiTheme::divider());
+  float rowY = inspY + headerHeight;
+  bool leading = true;
+  for (const std::pair<std::string, std::string>& row : rows) {
+    inspectorVisual.addText(row.first,
+                            inspX + padding,
+                            rowY + (valueSize - labelSize) * 0.5f + 1.0f,
+                            labelSize,
+                            UiTheme::textMuted());
+    // The generation leads in the accent, heavier than the rest.
+    const float emphasis = leading ? 0.8f : 0.2f;
+    GuiKit::drawEmphasizedText(
+      inspectorVisual,
+      fitTextToWidth(row.second, valueSize, emphasis, valueRoom),
+      inspX + padding + labelColumn,
+      rowY,
+      valueSize,
+      leading ? UiTheme::accentCool() : UiTheme::textPrimary(),
+      emphasis);
+    leading = false;
+    rowY += rowHeight;
   }
   inspectorVisual.setVisible(true);
 }
@@ -3081,6 +3274,11 @@ CellGameModule::updatePaintPalette(double dt)
   m_paintPaletteVisual.clearPrimitives();
   m_paintPaletteVisual.setVisible(false);
   m_paintPaletteHovered = false;
+  // Hidden or blocked frames leave the toggle unhovered.
+  const bool toggleWasHovered = m_paintPaletteToggleHovered;
+  m_paintPaletteToggleHovered = false;
+  const int previousHoveredCard = m_paintPaletteHoveredCard;
+  m_paintPaletteHoveredCard = -1;
   if (ic == nullptr || ic->window == nullptr || ic->inputManager == nullptr ||
       cellContext == nullptr) {
     return;
@@ -3115,6 +3313,7 @@ CellGameModule::updatePaintPalette(double dt)
     m_paintRuleTag = tag;
     m_paintBrush = 0;
     m_paintPaletteStateOffset = 0u;
+    m_paintSelectPlaced = false;
     for (unsigned int state = 0u; state < stateCount; ++state) {
       if (rules->getStateName(static_cast<unsigned char>(state)) ==
           "Conductor") {
@@ -3193,8 +3392,18 @@ CellGameModule::updatePaintPalette(double dt)
        ? GuiKit::isPointInRect(
            mx, my, previous.left, previous.top, previous.width, header)
        : bubbleHovered);
+  if (headerHovered && !toggleWasHovered && !clicked) {
+    CSimSounds::play(CSimSound::MenuHover);
+  }
+  m_paintPaletteToggleHovered = headerHovered;
   if (clicked && headerHovered) {
     m_paintPaletteExpanded = !m_paintPaletteExpanded;
+    CSimSounds::play(m_paintPaletteExpanded
+                       ? CSimSound::CanvasPaintMenuExpand
+                       : CSimSound::CanvasPaintMenuCollapse);
+    // The control reshapes under a still pointer; that is not a new hover.
+    m_paintPaletteToggleHovered = true;
+    m_paintPaletteCardHoverQuiet = true;
   }
   const float blend =
     reducedMotion
@@ -3247,8 +3456,13 @@ CellGameModule::updatePaintPalette(double dt)
     const int direction = *paletteScroll > 0.0 ? -1 : 1;
     const int nextOffset =
       static_cast<int>(m_paintPaletteStateOffset) + direction;
+    const unsigned int previousOffset = m_paintPaletteStateOffset;
     m_paintPaletteStateOffset = static_cast<unsigned int>(
       std::clamp(nextOffset, 0, static_cast<int>(maximumOffset)));
+    // Browsing ticks once per step that moves; the ends stay quiet.
+    if (m_paintPaletteStateOffset != previousOffset) {
+      CSimSounds::play(CSimSound::MenuHover);
+    }
     *paletteScroll = 0.0;
   }
   // Capture before a reduced-motion toggle moves the shape away from the
@@ -3334,10 +3548,8 @@ CellGameModule::updatePaintPalette(double dt)
     const ColorRgba arrow =
       UiTheme::applyOpacity(UiTheme::accentCool(), iconOpacity);
     const float arrowY = blob.top + 11.0f - 1.5f * hover;
-    m_paintPaletteVisual.addLine(
-      centerX - 5.0f, arrowY + 3.0f, centerX, arrowY - 2.0f, arrow, 2.0f);
-    m_paintPaletteVisual.addLine(
-      centerX, arrowY - 2.0f, centerX + 5.0f, arrowY + 3.0f, arrow, 2.0f);
+    GuiKit::drawChevron(
+      m_paintPaletteVisual, centerX, arrowY - 2.0f, 5.0f, 5.0f, 2.0f, arrow);
     // A hairline separates the chevron from the brush, fading at both ends.
     const ColorRgba separator = UiTheme::applyOpacity(
       UiTheme::fade(UiTheme::glassRimLit(), 0.7f), iconOpacity);
@@ -3360,10 +3572,19 @@ CellGameModule::updatePaintPalette(double dt)
                                          separatorClear,
                                          separator);
     // A paintbrush whose bristles carry the current paint, with a drip. It
-    // is drawn at kBrushScale about its anchor, below the separator.
+    // is drawn at kBrushScale about its anchor, below the separator. Its
+    // shapes reach about 6 above the anchor and 8.25 below, so the anchor
+    // centers it between the separator's lower edge and the footer's top
+    // (the resting bubble peeks kPaletteBubblePeek above the footer).
     const float kBrushScale = 0.75f;
+    const float kBrushAbove = 6.0f;
+    const float kBrushBelow = 8.25f;
+    const float brushGap =
+      (kPaletteBubblePeek - (separatorY + 1.0f - blob.top) - kBrushAbove -
+       kBrushBelow) *
+      0.5f;
     const float brushX = centerX + 1.5f;
-    const float brushY = blob.top + 26.0f;
+    const float brushY = separatorY + 1.0f + brushGap + kBrushAbove;
     m_paintPaletteVisual.addLine(
       brushX + 7.0f * kBrushScale,
       brushY - 7.0f * kBrushScale,
@@ -3418,21 +3639,62 @@ CellGameModule::updatePaintPalette(double dt)
                                                     static_cast<unsigned char>(
                                                       40.0f * contentReveal)));
     }
+    // A spaced-caps eyebrow, as the menus title their panels, and a chip
+    // naming the brush in hand beside the close chevron.
     m_paintPaletteVisual.addText(
-      "Cell paint",
+      "C E L L   P A I N T",
       bodyX + 16.0f,
-      y + 10.0f,
-      12.0f,
-      UiTheme::applyOpacity(UiTheme::textPrimary(), contentOpacity));
-    // A down chevron closes the drawer back into its bubble.
+      y + 11.5f,
+      9.5f,
+      UiTheme::applyOpacity(UiTheme::accentCool(), contentOpacity));
     const float arrowX = bodyX + width - 23.0f;
     const float arrowY = y + 16.0f;
+    const std::string brushName = rules->getStateName(m_paintBrush);
+    const float brushNameWidth =
+      GuiKit::measureEmphasizedText(brushName, 10.0f, 0.6f);
+    const float chipRight = arrowX - 16.0f;
+    const float chipWidth = brushNameWidth + 32.0f;
+    const float chipLeft = chipRight - chipWidth;
+    if (chipLeft > bodyX + 130.0f) {
+      GuiKit::drawRoundedRect(
+        m_paintPaletteVisual,
+        chipLeft,
+        y + 7.0f,
+        chipWidth,
+        18.0f,
+        9.0f,
+        UiTheme::applyOpacity(UiTheme::fade(UiTheme::glassRim(), 0.8f),
+                              contentOpacity));
+      GuiKit::drawRoundedRect(
+        m_paintPaletteVisual,
+        chipLeft + 1.0f,
+        y + 8.0f,
+        chipWidth - 2.0f,
+        16.0f,
+        8.0f,
+        UiTheme::applyOpacity(UiTheme::glassBottom(), contentOpacity));
+      GuiKit::drawRoundedRect(
+        m_paintPaletteVisual,
+        chipLeft + 5.0f,
+        y + 11.0f,
+        10.0f,
+        10.0f,
+        5.0f,
+        UiTheme::applyOpacity(brushColor, contentOpacity));
+      GuiKit::drawEmphasizedText(
+        m_paintPaletteVisual,
+        brushName,
+        chipLeft + 21.0f,
+        y + 11.0f,
+        10.0f,
+        UiTheme::applyOpacity(UiTheme::textPrimary(), contentOpacity),
+        0.6f);
+    }
+    // A down chevron closes the drawer back into its bubble.
     const ColorRgba arrow =
       UiTheme::applyOpacity(UiTheme::accent(), contentOpacity);
-    m_paintPaletteVisual.addLine(
-      arrowX - 5.0f, arrowY - 2.0f, arrowX, arrowY + 3.0f, arrow, 2.0f);
-    m_paintPaletteVisual.addLine(
-      arrowX, arrowY + 3.0f, arrowX + 5.0f, arrowY - 2.0f, arrow, 2.0f);
+    GuiKit::drawChevron(
+      m_paintPaletteVisual, arrowX, arrowY + 3.0f, 5.0f, -5.0f, 2.0f, arrow);
   }
   // Everything drawn from here on is drawer content; it fades with the morph.
   const std::size_t contentShapeStart = m_paintPaletteVisual.shapeCount();
@@ -3445,8 +3707,15 @@ CellGameModule::updatePaintPalette(double dt)
       paletteInteractive && m_paintPaletteExpanded && contentReveal > 0.5f &&
       my < screenHeight &&
       GuiKit::isPointInRect(mx, my, cardX, cardY, 124.0f, 64.0f);
-    if (hovered && clicked) {
-      m_paintBrush = static_cast<unsigned char>(state);
+    if (hovered) {
+      m_paintPaletteHoveredCard = static_cast<int>(card);
+      if (clicked) {
+        m_paintBrush = static_cast<unsigned char>(state);
+        CSimSounds::play(CSimSound::MenuSelect);
+      } else if (static_cast<int>(card) != previousHoveredCard &&
+                 !m_paintPaletteCardHoverQuiet) {
+        CSimSounds::play(CSimSound::MenuHover);
+      }
     }
     float& emphasis = m_paintPaletteEmphasis[static_cast<std::size_t>(state)];
     emphasis +=
@@ -3455,87 +3724,159 @@ CellGameModule::updatePaintPalette(double dt)
     if (contentReveal <= 0.01f) {
       continue;
     }
-    // Cards warm toward the accent with emphasis; the chosen brush glows and
-    // its swatch lifts off the card.
-    const float lit = std::clamp(emphasis, 0.0f, 1.0f);
-    if (lit > 0.02f) {
-      GuiKit::drawRoundedBand(m_paintPaletteVisual,
-                              cardX,
-                              cardY,
-                              124.0f,
-                              64.0f,
-                              8.0f,
-                              0.0f,
-                              7.0f,
-                              UiTheme::fade(UiTheme::accentCool(), 0.28f * lit),
-                              UiTheme::transparentOf(UiTheme::accentCool()));
-    }
-    GuiKit::drawRoundedRect(
-      m_paintPaletteVisual,
-      cardX,
-      cardY,
-      124.0f,
-      64.0f,
-      8.0f,
-      UiTheme::mix(UiTheme::cardRim(), UiTheme::accentCool(), 0.75f * lit));
-    GuiKit::drawRoundedGradientRect(
-      m_paintPaletteVisual,
-      cardX + 1.0f,
-      cardY + 1.0f,
-      122.0f,
-      62.0f,
-      7.0f,
-      UiTheme::mix(UiTheme::cardTop(), UiTheme::selectionTop(), 0.6f * lit),
-      UiTheme::mix(
-        UiTheme::cardBottom(), UiTheme::selectionBottom(), 0.6f * lit));
+    // Menu cards: a soft drop shadow, a rim that warms toward the accent on
+    // hover and a top-lit face. The chosen card is marked by the liquid drop
+    // poured over it below, not by tinting the card.
+    const float hoverLit = hovered && m_paintBrush != state ? 1.0f : 0.0f;
+    GuiKit::drawSoftShadow(m_paintPaletteVisual,
+                           cardX,
+                           cardY,
+                           124.0f,
+                           64.0f,
+                           9.0f,
+                           8.0f,
+                           3.0f,
+                           UiTheme::fade(UiTheme::glowShadow(), 0.7f));
+    GuiKit::drawRoundedRect(m_paintPaletteVisual,
+                            cardX,
+                            cardY,
+                            124.0f,
+                            64.0f,
+                            9.0f,
+                            UiTheme::mix(UiTheme::cardRim(),
+                                         ColorRgba{ 70, 140, 170, 255 },
+                                         hoverLit));
+    GuiKit::drawRoundedGradientRect(m_paintPaletteVisual,
+                                    cardX + 1.0f,
+                                    cardY + 1.0f,
+                                    122.0f,
+                                    62.0f,
+                                    8.0f,
+                                    UiTheme::cardTop(),
+                                    UiTheme::cardBottom());
+  }
+  // The chosen brush's drop: the head pours to the new card and the tail
+  // follows, so it stretches between them, then settles into a rounded card
+  // that breathes a soft glow. Scrolling the chosen card out of view lets it
+  // slide off and fade.
+  const float selectedSlot = static_cast<float>(m_paintBrush) -
+                             static_cast<float>(m_paintPaletteStateOffset);
+  if (!m_paintSelectPlaced || reducedMotion) {
+    m_paintSelectHead.snapTo(selectedSlot);
+    m_paintSelectTail.snapTo(selectedSlot);
+    m_paintSelectPlaced = true;
+  }
+  m_paintSelectHead.setTarget(selectedSlot);
+  m_paintSelectTail.setTarget(selectedSlot);
+  const float springStep =
+    std::isfinite(dt) && dt > 0.0 ? static_cast<float>(dt) : 0.0f;
+  m_paintPaletteBreath = std::fmod(m_paintPaletteBreath + springStep, 3.0);
+  m_paintSelectHead.tick(springStep, reducedMotion);
+  m_paintSelectTail.tick(springStep, reducedMotion);
+  const float lastSlot = static_cast<float>(visibleStateCount) - 1.0f;
+  const float dropSlot =
+    (m_paintSelectHead.value() + m_paintSelectTail.value()) * 0.5f;
+  const float dropFade =
+    std::clamp(1.0f - std::max(-dropSlot, dropSlot - lastSlot), 0.0f, 1.0f);
+  if (contentReveal > 0.01f && dropFade > 0.01f) {
+    const float slotX0 = bodyX + 12.0f;
+    const float head =
+      std::clamp(m_paintSelectHead.value(), -0.5f, lastSlot + 0.5f);
+    const float tail =
+      std::clamp(m_paintSelectTail.value(), -0.5f, lastSlot + 0.5f);
+    const unsigned char dropOpacity =
+      static_cast<unsigned char>(std::round(255.0f * dropFade));
+    const float breathe =
+      reducedMotion ? 0.5f
+                    : 0.5f + 0.5f * std::sin(static_cast<float>(
+                                      m_paintPaletteBreath * 6.2831853 / 3.0));
+    GuiLiquidSelection drop;
+    drop.horizontal = true;
+    drop.crossStart = y + header + 12.0f;
+    drop.crossSize = 64.0f;
+    drop.headStart = slotX0 + head * 132.0f;
+    drop.tailStart = slotX0 + tail * 132.0f;
+    drop.cellLength = 124.0f;
+    drop.radius = 9.0f;
+    drop.squash =
+      std::clamp((m_paintSelectHead.value() - m_paintSelectTail.value()) * 0.4f,
+                 -1.0f,
+                 1.0f);
+    drop.glowSpread = 12.0f + 3.0f * breathe;
+    drop.glow = UiTheme::applyOpacity(
+      UiTheme::fade(UiTheme::accentCool(), 0.2f + 0.1f * breathe), dropOpacity);
+    drop.rim = UiTheme::applyOpacity(UiTheme::accentCool(), dropOpacity);
+    drop.faceTop = UiTheme::applyOpacity(UiTheme::selectionTop(), dropOpacity);
+    drop.faceBottom =
+      UiTheme::applyOpacity(UiTheme::selectionBottom(), dropOpacity);
+    GuiKit::drawLiquidSelection(m_paintPaletteVisual, drop);
+  }
+  for (unsigned int card = 0u;
+       contentReveal > 0.01f && card < visibleStateCount;
+       ++card) {
+    const unsigned int state = m_paintPaletteStateOffset + card;
+    const float cardX = bodyX + 12.0f + static_cast<float>(card) * 132.0f;
+    const float cardY = y + header + 12.0f;
+    const float lit = std::clamp(
+      m_paintPaletteEmphasis[static_cast<std::size_t>(state)], 0.0f, 1.0f);
     unsigned char rgb[3]{};
     rules->evalCell(static_cast<unsigned char>(state), rgb);
     const ColorRgba swatch{ rgb[0], rgb[1], rgb[2], 255 };
+    // A round-cornered swatch with a glass gloss; the chosen one lifts off
+    // the card and glows in its own color.
     const float swatchLift = 3.0f * lit;
+    const float swatchX = cardX + 48.0f;
+    const float swatchY = cardY + 8.0f - swatchLift;
     if (lit > 0.02f) {
+      GuiKit::drawSoftGlow(m_paintPaletteVisual,
+                           swatchX + 14.0f,
+                           swatchY + 14.0f,
+                           26.0f,
+                           22.0f,
+                           UiTheme::fade(swatch, 0.35f * lit),
+                           16);
       GuiKit::drawSoftShadow(m_paintPaletteVisual,
-                             cardX + 49.0f,
-                             cardY + 8.0f - swatchLift,
-                             26.0f,
-                             26.0f,
-                             4.0f,
+                             swatchX,
+                             swatchY,
+                             28.0f,
+                             28.0f,
+                             8.0f,
                              6.0f,
                              2.0f + swatchLift,
                              UiTheme::fade(UiTheme::glowShadow(), lit));
     }
     GuiKit::drawRoundedRect(
       m_paintPaletteVisual,
-      cardX + 49.0f,
-      cardY + 8.0f - swatchLift,
-      26.0f,
-      26.0f,
-      4.0f,
-      UiTheme::mix(UiTheme::panelBorder(), swatch, 0.35f));
+      swatchX,
+      swatchY,
+      28.0f,
+      28.0f,
+      8.0f,
+      UiTheme::mix(UiTheme::panelBorder(), UiTheme::accentCool(), 0.5f * lit));
     GuiKit::drawRoundedRect(m_paintPaletteVisual,
-                            cardX + 50.0f,
-                            cardY + 9.0f - swatchLift,
-                            24.0f,
-                            24.0f,
-                            3.0f,
+                            swatchX + 1.5f,
+                            swatchY + 1.5f,
+                            25.0f,
+                            25.0f,
+                            6.5f,
                             swatch);
-    GuiKit::drawTextCentered(
+    GuiKit::drawRoundedGradientRect(m_paintPaletteVisual,
+                                    swatchX + 1.5f,
+                                    swatchY + 1.5f,
+                                    25.0f,
+                                    11.0f,
+                                    6.5f,
+                                    ColorRgba{ 255, 255, 255, 58 },
+                                    ColorRgba{ 255, 255, 255, 0 });
+    // The label thickens with emphasis, as the menu rows do.
+    GuiKit::drawEmphasizedTextCentered(
       m_paintPaletteVisual,
       rules->getStateName(static_cast<unsigned char>(state)),
       cardX + 62.0f,
-      cardY + 48.0f,
+      cardY + 49.0f,
       11.0f,
-      UiTheme::mix(UiTheme::textPrimary(), UiTheme::accentCool(), lit));
-    if (m_paintBrush == state) {
-      m_paintPaletteVisual.addGradientRect(
-        cardX + 38.0f,
-        cardY + 60.0f,
-        48.0f,
-        2.0f,
-        UiTheme::transparentOf(UiTheme::accentCool()),
-        UiTheme::accentCool(),
-        UiTheme::accentCool(),
-        UiTheme::transparentOf(UiTheme::accentCool()));
-    }
+      UiTheme::mix(UiTheme::textPrimary(), UiTheme::accentCool(), lit),
+      lit);
   }
   if (contentReveal > 0.01f) {
     const float dividerWidth = width - 36.0f;
@@ -3556,34 +3897,46 @@ CellGameModule::updatePaintPalette(double dt)
                                          UiTheme::transparentOf(dividerColor),
                                          UiTheme::transparentOf(dividerColor),
                                          dividerColor);
-    GuiKit::drawTextCentered(
-      m_paintPaletteVisual,
-      "States " + std::to_string(m_paintPaletteStateOffset + 1u) + "-" +
-        std::to_string(m_paintPaletteStateOffset + visibleStateCount) + " of " +
-        std::to_string(stateCount),
-      bodyX + width * 0.5f,
-      y + header + 91.0f,
-      9.5f,
-      UiTheme::textMuted());
-    const std::string instructionText =
-      "Wheel browse   Left paint   Right erase";
-    const float instructionSize = 9.0f;
-    const float instructionWidth = width - 28.0f;
-    const std::shared_ptr<Font> font = Font::getDefaultFont();
-    const float measuredInstructionWidth =
-      font != nullptr
-        ? font->measureText(instructionText, instructionSize).width
-        : GuiKit::estimateTextWidth(instructionText, instructionSize);
-    const float fittedInstructionSize =
-      measuredInstructionWidth > instructionWidth
-        ? instructionSize * instructionWidth / measuredInstructionWidth
-        : instructionSize;
-    GuiKit::drawTextCentered(m_paintPaletteVisual,
-                             instructionText,
-                             bodyX + width * 0.5f,
-                             y + header + 109.0f,
-                             fittedInstructionSize,
-                             UiTheme::textMuted());
+    // Keycap hints, as the menus' footers show them; browsing only appears
+    // when there are more states than cards, along with where the cards are.
+    const bool browsable = maximumOffset > 0u;
+    const float hintBaseSize = 8.5f;
+    const float hintsWidth =
+      (browsable ? GuiKit::measureKeyHint("WHEEL", "Browse", hintBaseSize)
+                 : 0.0f) +
+      GuiKit::measureKeyHint("LMB", "Paint", hintBaseSize) +
+      GuiKit::measureKeyHint("RMB", "Erase", hintBaseSize) -
+      hintBaseSize * 1.6f;
+    const float hintRoom = width - 28.0f;
+    const float hintSize = hintsWidth > hintRoom
+                             ? hintBaseSize * hintRoom / hintsWidth
+                             : hintBaseSize;
+    const float hintScale = hintSize / hintBaseSize;
+    float hintX = bodyX + (width - hintsWidth * hintScale) * 0.5f;
+    const float hintY = y + header + (browsable ? 100.0f : 91.0f);
+    if (browsable) {
+      GuiKit::drawTextCentered(
+        m_paintPaletteVisual,
+        std::to_string(m_paintPaletteStateOffset + 1u) + "-" +
+          std::to_string(m_paintPaletteStateOffset + visibleStateCount) +
+          " of " + std::to_string(stateCount) + " states",
+        bodyX + width * 0.5f,
+        y + header + 90.0f,
+        8.5f,
+        UiTheme::textMuted());
+      hintX += GuiKit::drawKeyHint(
+        m_paintPaletteVisual, hintX, hintY, "WHEEL", "Browse", hintSize);
+    }
+    hintX += GuiKit::drawKeyHint(
+      m_paintPaletteVisual, hintX, hintY, "LMB", "Paint", hintSize);
+    GuiKit::drawKeyHint(
+      m_paintPaletteVisual, hintX, hintY, "RMB", "Erase", hintSize);
+  }
+  // Once the pointer is off every card of a usable (or closed) drawer, the
+  // next card it reaches is a real hover.
+  if (m_paintPaletteHoveredCard < 0 &&
+      (!m_paintPaletteExpanded || contentReveal > 0.5f)) {
+    m_paintPaletteCardHoverQuiet = false;
   }
   for (std::size_t index = contentShapeStart;
        index < m_paintPaletteVisual.shapeCount();
@@ -3697,7 +4050,11 @@ CellGameModule::updateHamburgerVisual(double dt)
   hamburgerX = std::max(0.0f, virtWidth - hamburgerSize - 12.0f);
   hamburgerY = 12.0f;
 
+  const bool wasHovered = hamburgerHovered;
   hamburgerHovered = isHamburgerHovered();
+  if (hamburgerHovered && !wasHovered) {
+    CSimSounds::play(CSimSound::MenuHover);
+  }
   const bool isMouseDown =
     ic->inputManager != nullptr &&
     ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
@@ -3716,12 +4073,25 @@ CellGameModule::updateHamburgerVisual(double dt)
   const float hover = std::clamp(hamburgerHoverBlend, 0.0f, 1.0f);
   const ColorRgba cyan = UiTheme::accentCool();
 
-  // A glass tile that glows and warms toward the accent on hover.
-  const float radius = 9.0f;
+  // An opaque icon tile like the main menu's: a soft drop shadow, a rim and
+  // top-lit face that warm toward the accent on hover, and a glow around it.
+  // A press sinks it a pixel.
+  const float radius = 10.0f;
+  const float sink = isPressed ? 1.0f : 0.0f;
+  const float tileY = hamburgerY + sink;
+  GuiKit::drawSoftShadow(hamburgerVisual,
+                         hamburgerX,
+                         tileY,
+                         hamburgerSize,
+                         hamburgerSize,
+                         radius,
+                         10.0f,
+                         3.0f - 2.0f * sink,
+                         UiTheme::glowShadow());
   if (hover > 0.01f) {
     GuiKit::drawRoundedBand(hamburgerVisual,
                             hamburgerX,
-                            hamburgerY,
+                            tileY,
                             hamburgerSize,
                             hamburgerSize,
                             radius,
@@ -3733,70 +4103,103 @@ CellGameModule::updateHamburgerVisual(double dt)
   GuiKit::drawRoundedRect(
     hamburgerVisual,
     hamburgerX,
-    hamburgerY,
+    tileY,
     hamburgerSize,
     hamburgerSize,
     radius,
     isPressed ? cyan
-              : UiTheme::fade(UiTheme::mix(UiTheme::glassRim(), cyan, hover),
-                              0.6f + 0.4f * hover));
+              : UiTheme::mix(
+                  UiTheme::cardRim(), ColorRgba{ 70, 140, 170, 255 }, hover));
   GuiKit::drawRoundedGradientRect(
     hamburgerVisual,
     hamburgerX + 1.0f,
-    hamburgerY + 1.0f,
+    tileY + 1.0f,
     hamburgerSize - 2.0f,
     hamburgerSize - 2.0f,
     radius - 1.0f,
-    UiTheme::fade(UiTheme::mix(UiTheme::glassTop(), cyan, 0.15f * hover),
-                  0.55f + 0.4f * hover),
-    UiTheme::fade(UiTheme::glassBottom(), 0.55f + 0.4f * hover));
+    UiTheme::mix(
+      ColorRgba{ 44, 62, 88, 255 }, ColorRgba{ 58, 132, 154, 255 }, hover),
+    UiTheme::mix(
+      ColorRgba{ 30, 44, 66, 255 }, ColorRgba{ 36, 90, 112, 255 }, hover));
 
-  // Bars widen one after another as the pointer arrives.
+  // Rounded bars widen one after another as the pointer arrives.
   const ColorRgba barColor =
     isPressed ? cyan
-              : UiTheme::fade(UiTheme::mix(UiTheme::textPrimary(), cyan, hover),
-                              0.55f + 0.45f * hover);
-  const float barHeight = 2.0f;
-  const float startY = hamburgerY + 9.0f;
-  const float spacing = 5.0f;
+              : UiTheme::mix(ColorRgba{ 166, 186, 213, 255 }, cyan, hover);
+  const float barHeight = 2.5f;
+  const float startY = tileY + 9.25f;
+  const float spacing = 5.5f;
   for (int i = 0; i < 3; ++i) {
     const float stagger =
       std::clamp(hover * 1.5f - static_cast<float>(i) * 0.25f, 0.0f, 1.0f);
     const float barWidth = 14.0f + 6.0f * stagger;
     const float barX = hamburgerX + (hamburgerSize - barWidth) * 0.5f;
     const float y = startY + static_cast<float>(i) * spacing;
-    GuiKit::drawRoundedRect(
-      hamburgerVisual, barX, y, barWidth, barHeight, 1.0f, barColor);
+    GuiKit::drawRoundedRect(hamburgerVisual,
+                            barX,
+                            y,
+                            barWidth,
+                            barHeight,
+                            barHeight * 0.5f,
+                            barColor);
   }
 
   if (hover > 0.01f) {
-    // Tooltip pill slides in from the button.
+    // A glass hint slides out of the button: the action, then its key as a
+    // keycap, the way the menus' footers show shortcuts.
     const unsigned char opacity = static_cast<unsigned char>(255.0f * hover);
-    const float tipWidth = 108.0f;
+    const float labelSize = 11.0f;
+    const float keySize = 8.5f;
+    const float tipHeight = 26.0f;
+    const float labelWidth =
+      GuiKit::measureEmphasizedText("Settings", labelSize, 0.5f);
+    // The keycap alone: a hint with no action, less its spacing.
+    const float keyWidth =
+      GuiKit::measureKeyHint("F1", std::string(), keySize) - keySize * 2.2f;
+    const float tipWidth = 14.0f + labelWidth + 8.0f + keyWidth + 6.0f;
     const float tipX = hamburgerX - tipWidth - 8.0f + (1.0f - hover) * 12.0f;
-    const float tipY = hamburgerY + 4.0f;
+    const float tipY = hamburgerY + (hamburgerSize - tipHeight) * 0.5f;
+    GuiKit::drawSoftShadow(
+      hamburgerVisual,
+      tipX,
+      tipY,
+      tipWidth,
+      tipHeight,
+      tipHeight * 0.5f,
+      10.0f,
+      3.0f,
+      UiTheme::applyOpacity(UiTheme::glowShadow(), opacity));
     GuiKit::drawRoundedRect(
       hamburgerVisual,
       tipX,
       tipY,
       tipWidth,
-      24.0f,
-      12.0f,
-      UiTheme::applyOpacity(UiTheme::fade(UiTheme::glassRim(), 0.9f), opacity));
+      tipHeight,
+      tipHeight * 0.5f,
+      UiTheme::applyOpacity(UiTheme::glassRim(), opacity));
     GuiKit::drawRoundedGradientRect(
       hamburgerVisual,
       tipX + 1.0f,
       tipY + 1.0f,
       tipWidth - 2.0f,
-      22.0f,
-      11.0f,
+      tipHeight - 2.0f,
+      tipHeight * 0.5f - 1.0f,
       UiTheme::applyOpacity(UiTheme::glassTop(), opacity),
       UiTheme::applyOpacity(UiTheme::glassBottom(), opacity));
-    hamburgerVisual.addText("Settings  F1",
-                            tipX + 12.0f,
-                            tipY + 6.0f,
-                            12.0f,
-                            UiTheme::applyOpacity(cyan, opacity));
+    GuiKit::drawEmphasizedText(
+      hamburgerVisual,
+      "Settings",
+      tipX + 14.0f,
+      tipY + (tipHeight - labelSize) * 0.5f,
+      labelSize,
+      UiTheme::applyOpacity(UiTheme::textPrimary(), opacity),
+      0.5f);
+    GuiKit::drawKeycap(hamburgerVisual,
+                       tipX + 14.0f + labelWidth + 8.0f,
+                       tipY + (tipHeight - keySize * 1.75f) * 0.5f - 0.75f,
+                       "F1",
+                       keySize,
+                       opacity);
   }
 
   hamburgerVisual.setVisible(true);
@@ -3919,6 +4322,8 @@ CellGameModule::saveCellGameTo(std::string location, bool announce)
         ic->commandLine->logError(failure);
       } else if (announce) {
         ic->commandLine->logSuccess("Saved canvas to " + location);
+      } else {
+        Logger::LogInfo("Simulation saved to " + location);
       }
     });
   return *outcome != 0;
@@ -3956,6 +4361,8 @@ CellGameModule::loadCellGameFrom(std::vector<std::string> candidates,
       *outcome = 1;
       if (announce && ic->commandLine != nullptr) {
         ic->commandLine->logSuccess("Loaded canvas from " + read.location);
+      } else {
+        Logger::LogInfo("Simulation loaded from " + read.location);
       }
     });
   return *outcome != 0;
@@ -3966,7 +4373,7 @@ CellGameModule::importRuleCatalog(const std::string& location)
 {
   const std::weak_ptr<bool> alive = m_lifetime;
   CSimPlatform::current().readFirst(
-    { location }, [this, alive](const CSimReadResult& read) {
+    { location }, [this, alive, location](const CSimReadResult& read) {
       if (alive.expired() || rulesetWorkshopMenu == nullptr) {
         return;
       }
@@ -3974,6 +4381,8 @@ CellGameModule::importRuleCatalog(const std::string& location)
       if (!read.success || !imported.loadRulePackage(read.bytes) ||
           imported.getDefinitions().empty() ||
           imported.getFamilyDefinitions().empty()) {
+        Logger::LogWarning("Rule catalog import rejected: " + location +
+                           " is unreadable or not a rule package");
         rulesetWorkshopMenu->setError("The selected catalog is invalid.");
         return;
       }
@@ -4022,12 +4431,17 @@ CellGameModule::importRuleCatalog(const std::string& location)
         if (stagedActiveFamily != nullptr &&
             stagedActiveFamily->stateCount <
               currentActiveRule->getStateCount()) {
+          Logger::LogWarning("Rule catalog import rejected: it would remove "
+                             "states of the active ruleset");
           rulesetWorkshopMenu->setError(
             "The import would invalidate states of the active ruleset.");
           return;
         }
       }
       if (!valid) {
+        Logger::LogWarning("Rule catalog import rejected: " + location +
+                           " conflicts with built-in definitions or is "
+                           "invalid");
         rulesetWorkshopMenu->setError(
           "The selected catalog could not be imported.");
         return;
@@ -4041,18 +4455,22 @@ CellGameModule::importRuleCatalog(const std::string& location)
       CSimPlatform::current().saveUserCatalog(
         std::move(userFamilies),
         definitions,
-        [this, alive, staged, definitions](bool saved,
-                                           const std::string& error) mutable {
+        [this, alive, staged, definitions, location](
+          bool saved, const std::string& error) mutable {
           if (alive.expired() || rulesetWorkshopMenu == nullptr) {
             return;
           }
           if (!saved) {
+            Logger::LogError("User rule catalog was not saved: " +
+                             (error.empty() ? location : error));
             rulesetWorkshopMenu->setError(
               error.empty() ? "The selected catalog could not be imported."
                             : error);
             return;
           }
           RuleSetRegistry::instance() = std::move(staged);
+          Logger::LogInfo("Imported rule catalog " + location + ": " +
+                          std::to_string(definitions.size()) + " rulesets");
           const RuleSetDefinition* selected =
             RuleSetRegistry::instance().getRuleSetDefinition(
               definitions.front().id);
@@ -4091,15 +4509,24 @@ CellGameModule::exportRuleCatalog(const std::string& location)
   std::string text;
   std::string error;
   if (!RuleCatalogOverlay::packageText(familyDraft, ruleDraft, &text, &error)) {
+    Logger::LogWarning("Rule export rejected: " +
+                       (error.empty() ? ruleDraft.id : error));
     rulesetWorkshopMenu->setError(
       error.empty() ? "The rule could not be exported." : error);
     return;
   }
   const std::weak_ptr<bool> alive = m_lifetime;
+  const std::string ruleId = ruleDraft.id;
   CSimPlatform::current().writeFile(
     location,
     std::move(text),
-    [this, alive](bool written, const std::string& failure) {
+    [this, alive, location, ruleId](bool written, const std::string& failure) {
+      if (written) {
+        Logger::LogInfo("Exported rule " + ruleId + " to " + location);
+      } else {
+        Logger::LogError("Rule " + ruleId + " was not exported: " +
+                         (failure.empty() ? location : failure));
+      }
       if (!written && !alive.expired() && rulesetWorkshopMenu != nullptr) {
         rulesetWorkshopMenu->setError(
           failure.empty() ? "The rule could not be exported." : failure);
@@ -4144,6 +4571,11 @@ CellGameModule::applyLoadedDocument(IllumoDocument& doc)
   }
   updateVisualTargets();
   cellContext->getCanvasView()->snapVisualToTargets();
+  Logger::LogTrace("Restored world: " +
+                   ruleDisplayName(cellContext->getRuleSetString()) + " on " +
+                   describeTopology(cellContext->getWorldChunkWidth(),
+                                    cellContext->getWorldChunkHeight()) +
+                   " (format v" + std::to_string(doc.version) + ")");
   return true;
 }
 
@@ -4226,6 +4658,7 @@ CellGameModule::ensureRender3dTestDrawables()
   }
   render3dScene = std::move(instance);
   render3dLoadFailed = false;
+  Logger::LogInfo(std::string("render3dTest scene loaded from ") + kScenePath);
 }
 void
 CellGameModule::applyRender3dTestCamera()
@@ -4282,6 +4715,7 @@ CellGameModule::requestMainMenuReturn()
     return;
   }
   mainMenuReturnPending = true;
+  Logger::LogTrace("Returning to the main menu");
   CSimSounds::play(CSimSound::CanvasExit);
   configurationMenu->close();
   exitConfirmDialog->close();

@@ -102,6 +102,19 @@ out vec4 FragColor;
 void main() { FragColor = vec4(1.0, 0.0, 1.0, 1.0) * ourColor; }
 )";
 
+// Per-asset progress lines. Guests skip them: each guest log line takes a
+// slot in the bounded service queue, and a scene can load many assets in one
+// frame. Failures are still reported everywhere.
+static void
+traceAsset(const std::string& text)
+{
+#if defined(ILLUMO_SERIAL_GUEST)
+  (void)text;
+#else
+  Logger::LogTrace(text);
+#endif
+}
+
 static const char*
 assetStateName(AssetState state)
 {
@@ -134,6 +147,10 @@ AssetManager::AssetManager(Renderer* rendererValue,
     worker = std::thread(&AssetManager::workerMain, this);
   }
 #endif
+  traceAsset(
+    std::string("Asset manager ready: ") +
+    (workerEnabled ? "background decode worker" : "decodes on the caller") +
+    (hotReloadEnabled ? ", hot reload every 500 ms" : ""));
 }
 
 AssetManager::~AssetManager()
@@ -240,6 +257,8 @@ AssetManager::acquireTexture(const std::string& path,
   };
   TextureHandle handle = renderer->enrollTexture(fallback, 2, 2, 4, options);
   if (!handle.isValid()) {
+    Logger::LogError("The renderer refused a placeholder texture for " +
+                     canonical);
     return TextureHandle{};
   }
 
@@ -326,8 +345,14 @@ AssetManager::acquireCubemapSources(TextureSourceKind kind,
   const TextureHandle handle = renderer->enrollCubemap(
     faces, result.width, result.height, result.channels);
   if (!handle.isValid()) {
+    Logger::LogError("The renderer refused cubemap " + paths[0] + " (" +
+                     std::to_string(result.width) + "x" +
+                     std::to_string(result.height) + " faces)");
     return {};
   }
+  traceAsset("Loaded cubemap " + paths[0] + " (" +
+             std::to_string(result.width) + "x" +
+             std::to_string(result.height) + " faces)");
   TextureEntry entry;
   entry.handle = handle;
   entry.path = paths[0];
@@ -600,7 +625,17 @@ AssetManager::acquireMesh(const std::string& path,
     Logger::LogError(loaded.error.c_str());
     return MeshHandle{};
   }
-  return enrollMesh(loaded.mesh, canonical, key);
+  const MeshHandle handle = enrollMesh(loaded.mesh, canonical, key);
+  if (!handle.isValid()) {
+    Logger::LogError("Mesh " + canonical +
+                     " could not be enrolled: it is empty, too large or has "
+                     "out-of-range indices");
+    return handle;
+  }
+  traceAsset("Loaded mesh " + canonical + ": " +
+             std::to_string(loaded.mesh.vertices.size()) + " vertices, " +
+             std::to_string(loaded.mesh.indices.size() / 3) + " triangles");
+  return handle;
 }
 
 MeshHandle
@@ -1129,6 +1164,12 @@ AssetManager::processResult(LoadResult& result)
         result.error.empty() ? "Texture upload failed" : result.error;
       if (entry.revision == 0) {
         entry.state = AssetState::Failed;
+        Logger::LogError("Texture " + entry.path +
+                         " could not be loaded: " + entry.lastError);
+      } else {
+        Logger::LogWarning(
+          "Texture " + entry.path +
+          " reload kept the previous image: " + entry.lastError);
       }
       return;
     }
@@ -1136,6 +1177,13 @@ AssetManager::processResult(LoadResult& result)
     entry.revision += 1;
     entry.info = { result.width, result.height, result.channels };
     entry.lastError.clear();
+    if (entry.revision > 1) {
+      Logger::LogInfo("Reloaded texture " + entry.path);
+    } else {
+      traceAsset("Loaded texture " + entry.path + " (" +
+                 std::to_string(result.width) + "x" +
+                 std::to_string(result.height) + ")");
+    }
     return;
   }
 
@@ -1163,12 +1211,27 @@ AssetManager::processResult(LoadResult& result)
       result.error.empty() ? "Shader compile/link failed" : result.error;
     if (entry.revision == 0) {
       entry.state = AssetState::Failed;
+      Logger::LogError(
+        "Shader " + entry.paths.vertexPath + " | " + entry.paths.fragmentPath +
+        " could not be built; drawing with the fallback: " + entry.lastError);
+    } else {
+      Logger::LogWarning(
+        "Shader " + entry.paths.vertexPath + " | " + entry.paths.fragmentPath +
+        " reload kept the previous program: " + entry.lastError);
     }
     return;
   }
   entry.state = AssetState::Ready;
   entry.revision += 1;
   entry.lastError.clear();
+  if (entry.revision > 1) {
+    Logger::LogInfo("Reloaded shader " + entry.paths.vertexPath + " | " +
+                    entry.paths.fragmentPath);
+  } else {
+    traceAsset("Loaded shader " + entry.paths.vertexPath + " | " +
+               entry.paths.fragmentPath + " (" +
+               std::to_string(entry.dependencies.size()) + " dependencies)");
+  }
 }
 
 void
@@ -1198,6 +1261,8 @@ AssetManager::pollHotReload()
                   writeTime(entry.sourcePaths[i]) != entry.sourceWriteTimes[i];
       }
       if (changed && !entry.reloadPending) {
+        Logger::LogTrace("Hot reload: cubemap " + entry.path +
+                         " changed on disk");
         queueTexture(entry);
       }
       continue;
@@ -1205,6 +1270,8 @@ AssetManager::pollHotReload()
     const std::int64_t current = writeTime(entry.path);
     if (!entry.reloadPending && current != 0 &&
         current != entry.lastWriteTime) {
+      Logger::LogTrace("Hot reload: texture " + entry.path +
+                       " changed on disk");
       queueTexture(entry);
     }
   }
@@ -1233,6 +1300,8 @@ AssetManager::pollHotReload()
       }
     }
     if (!entry.reloadPending && needsReload) {
+      Logger::LogTrace("Hot reload: shader " + entry.paths.vertexPath + " | " +
+                       entry.paths.fragmentPath + " changed on disk");
       queueShader(entry);
     }
   }

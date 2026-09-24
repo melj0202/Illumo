@@ -3,6 +3,7 @@
 #include <Illumo/Content/SceneAssetRefs.h>
 
 #include <Illumo/Content/IlscCodec.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cmath>
 #include <glm/gtc/matrix_inverse.hpp>
@@ -64,7 +65,11 @@ EditorDocument::setAssetManager(AssetManager* assets)
   m_assets = assets;
   std::unique_ptr<SceneInstance> scene = makeScene();
   std::string ignored;
-  scene->load(current, root, ignored);
+  if (!scene->load(current, root, ignored)) {
+    Logger::LogWarning("The scene could not be rebuilt for the new asset "
+                       "manager and is now empty: " +
+                       ignored);
+  }
   m_scene = std::move(scene);
 }
 
@@ -79,6 +84,11 @@ EditorDocument::rebase(const std::string& packageRoot)
   std::string error;
   if (scene->load(current, packageRoot, error)) {
     m_scene = std::move(scene);
+    Logger::LogTrace("Scene assets now resolve against " + packageRoot);
+  } else {
+    Logger::LogWarning(
+      "The scene stays under " + std::string(m_scene->packageRoot()) +
+      "; rebasing onto " + packageRoot + " was refused: " + error);
   }
 }
 

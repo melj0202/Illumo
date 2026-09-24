@@ -79,7 +79,33 @@ public:
                                float height,
                                unsigned char opacity = 255);
 
+  // A stroked path through `points` whose segments meet in mitered joins, so
+  // corners are solid instead of notched like separately drawn lines. Open
+  // paths may extend their ends by half the thickness (square caps) so a
+  // stroke that ends on another reaches across it. Joins sharper than about
+  // 30 degrees cap their miter. One quad per segment; at most 32 points.
+  static void drawPolyline(GameVisual& visual,
+                           const GuiPoint2* points,
+                           int pointCount,
+                           float thickness,
+                           ColorRgba color,
+                           bool closed = false,
+                           bool squareCaps = false);
+  // A V-shaped chevron whose two arms meet in one mitered corner (no notch
+  // at the tip): the tip sits at (centerX, tipY) and the arm ends at
+  // centerX -/+ halfWidth, tipY + depth. A positive depth points it up, a
+  // negative one down. Two quads.
+  static void drawChevron(GameVisual& visual,
+                          float centerX,
+                          float tipY,
+                          float halfWidth,
+                          float depth,
+                          float thickness,
+                          ColorRgba color);
+
   // --- Living-glass chrome (per-vertex-color shapes) ---
+  // Rounded rects and bands subdivide each corner by its radius: 15-degree
+  // steps through radius 15 (the quad counts below), finer beyond it.
   // Rounded rect whose color blends from `top` to `bottom` (13 quads).
   static void drawRoundedGradientRect(GameVisual& visual,
                                       float x,

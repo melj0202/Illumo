@@ -1031,6 +1031,12 @@ gamePackageAudio()
            enterCanvas(game, commands, input) &&
              plays(CSimSound::CanvasEnter) == 1,
            "entering the canvas plays the enter cue");
+  execute(commands, "run");
+  frame = 0;
+  pumpUntil(game, [&]() { return ++frame > 3; });
+  testTrue(counters,
+           plays(CSimSound::CanvasModeSwitch) == 1,
+           "switching the canvas to NORMAL plays the mode cue");
   execute(commands, "menu");
   testTrue(counters,
            pumpUntil(game, [&]() { return commands.HasCommand("play"); }) &&

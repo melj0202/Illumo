@@ -10,6 +10,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Services/CommandLine.h>
+#include <Illumo/Services/Logger.h>
 #include <utility>
 
 static const ColorRgba kToastGood{ 60, 220, 120, 255 };
@@ -86,6 +87,8 @@ EditorModule::writeDocument(const IllEdLocation& location,
         // Input was held while the write was in flight, so nothing changed
         // since the encoded snapshot.
         m_document.markSaved(location.location, location.label);
+        Logger::LogInfo("Saved scene " + m_document.displayName() + " (" +
+                        std::to_string(m_document.nodeCount()) + " nodes)");
         toast("Saved scene: " + m_document.displayName(), kToastGood);
       } else {
         if (ic != nullptr && ic->commandLine != nullptr) {
@@ -183,6 +186,11 @@ EditorModule::finishLoad(const IllEdLocation& location,
     m_document.setLocation(location.location, location.label);
     m_selection.clear();
     restoreCameraState();
+    Logger::LogInfo(
+      "Opened scene " + m_document.displayName() + " (" +
+      std::to_string(m_document.nodeCount()) + " nodes, " +
+      std::to_string(m_document.scene().document().assets.size()) +
+      " assets, root " + packageRoot + ")");
     if (!missing.empty() && ic != nullptr && ic->commandLine != nullptr) {
       for (const std::string& path : missing) {
         ic->commandLine->logError("Scene asset is missing: " + path);
@@ -266,11 +274,13 @@ EditorModule::importAsset()
       }
       m_busy = false;
       if (imported) {
+        Logger::LogInfo("Imported " + path + " into the project");
         toast("Imported " + path, kToastGood);
         if (m_assetBrowser) {
           m_assetBrowser->refresh();
         }
       } else if (!error.empty()) {
+        Logger::LogError("Import into the project was refused: " + error);
         toast("Import failed: " + error, kToastBad);
       }
       finishBusy();
@@ -297,8 +307,10 @@ EditorModule::packProject()
       }
       m_busy = false;
       if (packed) {
+        Logger::LogInfo("Packed /project into an .ilpk package");
         toast("Packed the project", kToastGood);
       } else if (!error.empty()) {
+        Logger::LogError("Packing the project did not complete: " + error);
         toast("Pack failed: " + error, kToastBad);
       }
       finishBusy();
@@ -371,14 +383,17 @@ EditorModule::placeAssetAt(const std::string& path,
         return;
       }
       if (!missing.empty()) {
+        Logger::LogWarning("Asset to place could not be read: " + path);
         toast("Cannot read " + path, kToastBad);
         return;
       }
       const std::string id = m_document.placeAsset(path, transform);
       if (id.empty()) {
+        Logger::LogWarning("The scene refused to place " + path);
         toast("Cannot place " + path, kToastBad);
         return;
       }
+      Logger::LogTrace("Placed " + path + " as node " + id);
       m_selection.set(id);
       toast("Placed " + path, kToastGood);
       refreshView();
@@ -407,6 +422,7 @@ EditorModule::newDocument()
     ic->camera->SetZoom(32.0f);
   }
   m_cameraTargetY = 0.0f;
+  Logger::LogInfo("Created a new scene under " + m_document.packageRoot());
   toast("Created new scene", kToastInfo);
   refreshView();
   updateStatus();
@@ -488,6 +504,8 @@ EditorModule::copySelection(bool cut)
   }
   const std::string text = EditorClipboard::copy(m_document.scene(), roots);
   if (text.empty()) {
+    Logger::LogWarning("Copy refused: the selection exceeds the 4 MiB "
+                       "clipboard limit");
     toast("Selection is too large to copy (4 MiB limit)", kToastBad);
     return;
   }
@@ -527,6 +545,7 @@ EditorModule::pasteText(const std::string& text)
   SceneDocument fragment;
   std::string error;
   if (!EditorClipboard::read(text, fragment, error)) {
+    Logger::LogWarning("Paste refused: " + error);
     toast(error, kToastBad);
     return false;
   }
@@ -540,6 +559,8 @@ EditorModule::pasteText(const std::string& text)
   const std::vector<std::string> pasted =
     m_document.paste(fragment, parentId, insertBefore);
   if (pasted.empty()) {
+    Logger::LogWarning("Paste refused: the scene rejected the clipboard "
+                       "fragment");
     toast("Could not paste nodes", kToastBad);
     return false;
   }

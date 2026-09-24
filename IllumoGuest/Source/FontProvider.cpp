@@ -1,8 +1,10 @@
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/FontProvider.h>
 #include <stdexcept>
 
 static GuestFontProvider* activeProvider = nullptr;
 static std::shared_ptr<Font> defaultFont;
+static bool fontRefusalReported = false;
 const float Font::kDefaultPixelSize = 32;
 Font::Font() = default;
 Font::~Font() = default;
@@ -38,6 +40,13 @@ GuestFontProvider::acquire(const std::string& name, float pixelSize)
   }
   if (m_fonts.size() + m_retired.size() >= 32 || !std::isfinite(pixelSize) ||
       pixelSize < 8 || pixelSize > 256) {
+    // Callers may retry every frame; report the first refusal only.
+    if (!fontRefusalReported) {
+      fontRefusalReported = true;
+      Logger::LogWarning("Font " + key +
+                         " refused: 32 fonts are loaded or the size is "
+                         "outside 8-256 px");
+    }
     return nullptr;
   }
   GuestWireWriter request;

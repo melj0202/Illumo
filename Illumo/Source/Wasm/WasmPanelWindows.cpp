@@ -1,6 +1,7 @@
 #include "WasmInputMapping.h"
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
 #include <Illumo/Wasm/WasmPanelWindows.h>
 #include <algorithm>
@@ -95,6 +96,25 @@ WasmPanelWindows::closeAll()
   m_windows.clear();
 }
 
+// Guest window requests are answered with a bare rejection; the reason only
+// reaches the host log.
+static bool
+refuseWindow(const GuestWindowRequest& request,
+             std::string* reason,
+             const std::string& text)
+{
+  *reason = text;
+  const std::string message = "Panel window request for surface " +
+                              std::to_string(request.surface) +
+                              " refused: " + text;
+  if (request.action == GuestWindowAction::Open) {
+    Logger::LogWarning(message);
+  } else {
+    Logger::LogTrace(message);
+  }
+  return false;
+}
+
 bool
 WasmPanelWindows::handle(const GuestWindowRequest& request,
                          GuestWindowOpened* opened,
@@ -103,8 +123,7 @@ WasmPanelWindows::handle(const GuestWindowRequest& request,
   Window* existing = find(request.surface);
   if (request.action == GuestWindowAction::Close) {
     if (existing == nullptr) {
-      *reason = "No such window";
-      return false;
+      return refuseWindow(request, reason, "No such window");
     }
     release(*existing);
     for (std::size_t index = 0; index < m_windows.size(); ++index) {
@@ -113,27 +132,27 @@ WasmPanelWindows::handle(const GuestWindowRequest& request,
         break;
       }
     }
+    Logger::LogTrace("Closed the panel window for surface " +
+                     std::to_string(request.surface) + " (" +
+                     std::to_string(m_windows.size()) + " still open)");
     return true;
   }
   if (request.action == GuestWindowAction::SetTitle) {
     if (existing == nullptr) {
-      *reason = "No such window";
-      return false;
+      return refuseWindow(request, reason, "No such window");
     }
     existing->window->setTitle(request.title);
     return true;
   }
   if (!m_factory.available()) {
-    *reason = "Windows are unavailable on this host";
-    return false;
+    return refuseWindow(
+      request, reason, "Windows are unavailable on this host");
   }
   if (existing != nullptr) {
-    *reason = "The window is already open";
-    return false;
+    return refuseWindow(request, reason, "The window is already open");
   }
   if (m_windows.size() >= kMaximumWindows) {
-    *reason = "Too many windows are open";
-    return false;
+    return refuseWindow(request, reason, "Too many windows are open");
   }
   int originX = 0;
   int originY = 0;
@@ -149,9 +168,10 @@ WasmPanelWindows::handle(const GuestWindowRequest& request,
                      static_cast<int>(GuestWindowRequest::MinimumHeight),
                      &error);
   if (!created) {
-    *reason =
-      error.empty() ? std::string("The window could not be created") : error;
-    return false;
+    return refuseWindow(
+      request,
+      reason,
+      error.empty() ? std::string("The window could not be created") : error);
   }
   std::unique_ptr<Window> window = std::make_unique<Window>();
   window->surface = request.surface;
@@ -168,6 +188,9 @@ WasmPanelWindows::handle(const GuestWindowRequest& request,
   opened->height = static_cast<std::uint32_t>(
     std::clamp(height, 1, static_cast<int>(GuestWindowRequest::MaximumSize)));
   m_windows.push_back(std::move(window));
+  Logger::LogTrace("Opened panel window '" + request.title + "' for surface " +
+                   std::to_string(request.surface) + " at " +
+                   std::to_string(width) + "x" + std::to_string(height));
   return true;
 }
 

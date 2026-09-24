@@ -43,15 +43,24 @@ The registry and input manager are non-copyable and non-movable owners.
 Configuration loads are transactional. Invalid or unreadable input disables
 saving, including destruction-time saving, without overwriting the original
 file. Repair or remove the file and successfully reload to restore persistence.
-A missing file permits first-run creation. Failure diagnostics do not depend
-on logger lifetime.
+A missing file permits first-run creation. Failure diagnostics go through the
+logger while it exists and fall back to standard error otherwise, so they do
+not depend on logger lifetime.
 
 Input callbacks retain at most 256 pending characters and 256 key events, counting
 dropped new events. Release polling reports frame edges. Console execution and
 public parsing preserve drive and UNC paths, quoted trailing separators, and
 empty arguments. Console-owned command callbacks retire before destruction.
 Logger retains a unique process instance with explicit runner shutdown and an
-executable-adjacent default file; tests can select an explicit path.
+executable-adjacent default file; tests can select an explicit path. Each
+session header records its start time and build, and file lines carry
+wall-clock timestamps. Messages logged before the first console attaches are
+kept (bounded, with an omitted count) and replayed into it once. Background
+threads may log: file and terminal writes are serialized, while only the
+owner thread forwards to the main-thread-affine console. Startup logs a build
+and machine report from the platform \symbolref{SystemInfo} query, followed by
+display, GPU, audio, package and guest-budget descriptions; subsystems log
+lifecycle milestones at info and behind-the-scenes detail at trace.
 
 \subsection{IllumoGame policy}
 IllumoGame owns \pathref{IllumoGame/envvars.json}, CA defaults (canvas,

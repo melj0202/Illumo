@@ -488,6 +488,8 @@ WasmGameServices::completeConsole(GuestServices& results)
         Logger::LogError(text.c_str());
       } else if (request.level == 2) {
         Logger::LogWarning(text.c_str());
+      } else if (request.level == 4) {
+        Logger::LogTrace(text.c_str());
       } else {
         Logger::LogInfo(text.c_str());
       }

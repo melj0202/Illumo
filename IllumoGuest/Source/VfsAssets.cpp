@@ -238,6 +238,14 @@ GuestVfsAssets::finish(Load& load, GuestFileResult& result)
   }
   if (load.pinned && m_preloads > 0) {
     --m_preloads;
+    if (m_preloads == 0) {
+      // One summary rather than a line per asset: guest log lines share the
+      // bounded service queue with file requests.
+      Logger::LogTrace("Package asset preloads settled; the asset cache "
+                       "holds " +
+                       std::to_string(m_entries.size()) + " entries (" +
+                       std::to_string(m_bytes) + " bytes)");
+    }
   }
   for (std::uint64_t id : load.sets) {
     const std::map<std::uint64_t, Set>::iterator set = m_sets.find(id);
@@ -284,9 +292,15 @@ GuestVfsAssets::pump()
   }
 }
 
+// Whether the last eviction pass ended over budget with nothing evictable,
+// so that state is reported once rather than on every pass.
+static bool overBudgetReported = false;
+
 void
 GuestVfsAssets::evict()
 {
+  std::size_t evicted = 0;
+  std::size_t freed = 0;
   while (m_bytes > m_budget) {
     std::map<std::string, Entry>::iterator oldest = m_entries.end();
     for (std::map<std::string, Entry>::iterator it = m_entries.begin();
@@ -299,10 +313,25 @@ GuestVfsAssets::evict()
       }
     }
     if (oldest == m_entries.end()) {
-      return;
+      if (!overBudgetReported) {
+        overBudgetReported = true;
+        Logger::LogWarning("Asset cache holds " + std::to_string(m_bytes) +
+                           " bytes, over its " + std::to_string(m_budget) +
+                           "-byte budget; every entry is pinned or in use");
+      }
+      break;
     }
+    ++evicted;
+    freed += oldest->second.bytes.size();
     m_bytes -= oldest->second.bytes.size();
     m_entries.erase(oldest);
+  }
+  if (m_bytes <= m_budget) {
+    overBudgetReported = false;
+  }
+  if (evicted > 0) {
+    Logger::LogTrace("Asset cache evicted " + std::to_string(evicted) +
+                     " entries (" + std::to_string(freed) + " bytes)");
   }
 }
 

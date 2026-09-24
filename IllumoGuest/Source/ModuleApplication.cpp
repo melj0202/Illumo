@@ -160,6 +160,11 @@ GuestModuleApplication::applyPackagedDefaults()
   m_defaultsTask = 0;
   m_defaultsApplied = true;
   if (result.outcome != GuestFileOutcome::Success) {
+    if (result.outcome != GuestFileOutcome::NotFound) {
+      Logger::LogWarning("Packaged envvars.json was not readable (outcome " +
+                         std::to_string(static_cast<int>(result.outcome)) +
+                         "); first-run defaults skipped");
+    }
     return true; // packages without first-run defaults are valid
   }
   const nlohmann::json defaults = nlohmann::json::parse(
@@ -171,13 +176,17 @@ GuestModuleApplication::applyPackagedDefaults()
     Logger::LogWarning("Packaged envvars.json is not a JSON object");
     return true;
   }
+  std::size_t applied = 0;
   for (nlohmann::json::const_iterator it = defaults.begin();
        it != defaults.end();
        ++it) {
     if (it.value().is_string() && m_settings.getVar(it.key()).value.empty()) {
       m_settings.setVar(it.key(), it.value().get<std::string>());
+      ++applied;
     }
   }
+  Logger::LogTrace("Applied " + std::to_string(applied) +
+                   " first-run defaults from packaged envvars.json");
   return true;
 }
 
@@ -239,7 +248,12 @@ GuestModuleApplication::update(const GuestInput& input)
   }
   if (m_phase == Phase::Bootstrap) {
     if (!m_assetsRequested) {
-      m_assetCache.preload(packageAssets());
+      const std::vector<std::string> assets = packageAssets();
+      if (!assets.empty()) {
+        Logger::LogTrace("Preloading " + std::to_string(assets.size()) +
+                         " package asset(s)");
+      }
+      m_assetCache.preload(assets);
       m_assetsRequested = true;
     }
     if (!m_assetCache.ready() || !bootstrap()) {
@@ -385,6 +399,7 @@ GuestModuleApplication::applyPendingTransition()
     return;
   }
   std::unique_ptr<IModule> next = std::move(m_pending);
+  Logger::LogTrace("Switching to the next module");
   if (m_module) {
     m_module->Exit();
     m_module.reset();

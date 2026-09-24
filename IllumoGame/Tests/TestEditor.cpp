@@ -465,7 +465,7 @@ testInspectorTokens()
   bool foundGeneration = false;
   for (std::size_t i = 0; i < inspector->textCount(); ++i) {
     TextPrimitive* text = inspector->getText(i);
-    if (text != nullptr && text->content.find("gen ") != std::string::npos) {
+    if (text != nullptr && text->content == "Generation") {
       foundGeneration = true;
     }
   }

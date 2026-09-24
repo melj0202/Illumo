@@ -20,6 +20,11 @@ enum class CSimSound
   MenuError,
   CanvasEnter,
   CanvasExit,
+  // The canvas switched between EDIT and NORMAL (running).
+  CanvasModeSwitch,
+  // The paint drawer at the bottom of the canvas opened or closed.
+  CanvasPaintMenuExpand,
+  CanvasPaintMenuCollapse,
   Count
 };
 

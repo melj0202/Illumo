@@ -2,6 +2,7 @@
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/WorldLook.h>
+#include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
 #include <Illumo/Wasm/WasmResourceTable.h>
 
@@ -1224,7 +1225,25 @@ struct WasmFrameRenderer::State
     upload.indices.shrink_to_fit();
     upload.ready = valid;
     upload.failed = !valid;
+    if (valid) {
+      Logger::LogTrace(
+        "Retained guest mesh ready: " + std::to_string(vertexCount) +
+        " vertices, " + std::to_string(upload.indexCount / 3u) + " triangles");
+    } else {
+      warn("Retained guest mesh rejected: non-finite positions, out-of-range "
+           "indices or a renderer refusal");
+    }
     return valid;
+  }
+
+  // Resource refusals are logged once per distinct message, since a guest
+  // may retry the same request every frame.
+  void warn(const std::string& text)
+  {
+    if (text != lastWarning) {
+      lastWarning = text;
+      Logger::LogWarning(text);
+    }
   }
 
   Renderer& renderer;
@@ -1247,6 +1266,7 @@ struct WasmFrameRenderer::State
   std::uint64_t uploadedSerial = 0;
   std::map<std::uint32_t, RenderStyleHandle> derivedStyles;
   std::string error;
+  std::string lastWarning;
   WasmFrameCounters counters;
   bool retired = false;
   bool changingResources = false;
@@ -1279,6 +1299,10 @@ try {
       bytes > State::Budget::Maximum - state.budget->bytes ||
       !state.textures.hasCapacity()) {
     state.error = "Invalid or over-budget guest texture";
+    state.warn(state.error + " (" + std::to_string(width) + "x" +
+               std::to_string(height) + ", " + std::to_string(channels) +
+               " channels, " + std::to_string(state.budget->bytes) +
+               " bytes in use)");
     return {};
   }
   std::shared_ptr<State::Texture> texture =
@@ -1296,6 +1320,7 @@ try {
     options);
   if (!texture->handle.isValid()) {
     state.error = "Guest texture allocation failed";
+    state.warn(state.error);
     return {};
   }
   return state.textures.insert(std::move(texture));
@@ -1315,6 +1340,7 @@ try {
       bytes > State::Budget::Maximum - state.budget->bytes ||
       !state.textures.hasCapacity()) {
     state.error = "Invalid or over-budget guest cubemap";
+    state.warn(state.error + " (" + std::to_string(size) + " px faces)");
     return {};
   }
   std::shared_ptr<State::Texture> cubemap =
@@ -1333,8 +1359,11 @@ try {
     pointers, static_cast<int>(size), static_cast<int>(size), 4);
   if (!cubemap->handle.isValid()) {
     state.error = "Guest cubemap allocation failed";
+    state.warn(state.error);
     return {};
   }
+  Logger::LogTrace("Guest cubemap enrolled: " + std::to_string(size) +
+                   " px faces");
   return state.textures.insert(std::move(cubemap));
 } catch (const std::exception& exception) {
   m_state->error = exception.what();
@@ -1351,6 +1380,9 @@ try {
       bytes > State::Budget::Maximum - state.budget->bytes ||
       !state.retainedMeshes.hasCapacity()) {
     state.error = "Invalid or over-budget retained guest mesh";
+    state.warn(state.error + " (" + std::to_string(bytes) +
+               " bytes requested, " + std::to_string(state.budget->bytes) +
+               " in use)");
     return {};
   }
   std::shared_ptr<State::RetainedMesh> mesh =
@@ -1371,6 +1403,7 @@ try {
       State::layout(static_cast<GuestBatchStyle>(request.style)));
     if (!upload.handle.isValid()) {
       state.error = "Dynamic guest mesh allocation failed";
+      state.warn(state.error);
       return {};
     }
     upload.indexCount = request.indexBytes / 4u;
