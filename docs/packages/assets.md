@@ -36,7 +36,8 @@ the first successful seed creates the shared file.
 
 For `IllumoRuntime`, `illumo_stage_app` (`cmake/IllumoWasm.cmake`) stages each
 application as a loose package in `apps/<name>/`: its `illumo.json` (which
-replaced `app.json`), modules, `envvars.json` and package-relative data such
+replaced `app.json`; staging writes the build version into it, D-F2),
+modules, `envvars.json` and package-relative data such
 as `Scenes/render3d-test.ilsc` or `Assets/IllEd/editor-ui-atlas.jpg`. The
 runtime `Assets/` directory is mounted read-only at `/engine`.
 `IllumoPack` packs a staged directory into an `.ilpk`; `Illumo.Pack.StagedApp`

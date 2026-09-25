@@ -1,3 +1,4 @@
+#include "Game/CSimPlatform.h"
 #include "Game/CSimSounds.h"
 #include "Game/CellGameModule.h"
 #include "Game/MainMenuModule.h"
@@ -130,6 +131,55 @@ testMainMenuStartAndDrawables()
              fixture.scene.drawablesIn(RenderLayerId::UI).size(),
              1u,
              "menu visual is in UI layer");
+}
+
+// Every text the title screen draws this frame that starts with 'v' and a
+// digit: the build version and nothing else.
+static std::vector<TextPrimitive>
+versionTexts(MainMenuFixture& fixture)
+{
+  fixture.module.Update(1.0 / 60.0);
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  const GameVisual* visual = static_cast<const GameVisual*>(
+    fixture.scene.drawablesIn(RenderLayerId::UI).front());
+  std::vector<TextPrimitive> found;
+  for (size_t index = 0; index < visual->textCount(); ++index) {
+    const TextPrimitive* text = visual->getText(index);
+    if (text->content.size() > 1 && text->content[0] == 'v' &&
+        text->content[1] >= '0' && text->content[1] <= '9') {
+      found.push_back(*text);
+    }
+  }
+  return found;
+}
+
+static void
+testMainMenuShowsVersion()
+{
+  testSection("MainMenuModule: build version in the corner");
+  CSimPlatform& platform = CSimPlatform::current();
+  const std::string previous = platform.packageVersion();
+  {
+    MainMenuFixture fixture;
+    platform.setPackageVersion(std::string());
+    testTrue(g,
+             versionTexts(fixture).empty(),
+             "no version is drawn when the manifest supplied none");
+
+    platform.setPackageVersion("26.09_7");
+    const std::vector<TextPrimitive> texts = versionTexts(fixture);
+    testEqSize(g, texts.size(), 1u, "the version is drawn once");
+    if (!texts.empty()) {
+      testTrue(g,
+               texts.front().content == "v26.09_7",
+               "the menu shows v<release>_<build>");
+      testTrue(g,
+               texts.front().x > 320.0f && texts.front().y > 240.0f,
+               "the version sits in the lower right corner");
+    }
+  }
+  platform.setPackageVersion(previous);
 }
 
 static void
@@ -904,6 +954,8 @@ registerMainMenuTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.MainMenu.AmbientWorld",
                []() { return runMainMenuCase(testMainMenuAmbientWorld); });
+  registry.add("IllumoGame.MainMenu.ShowsVersion",
+               []() { return runMainMenuCase(testMainMenuShowsVersion); });
   registry.add("IllumoGame.MainMenu.PrimitiveBudget",
                []() { return runMainMenuCase(testMainMenuPrimitiveBudget); });
   registry.add("IllumoGame.MainMenu.MouseIsolation",

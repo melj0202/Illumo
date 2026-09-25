@@ -90,8 +90,8 @@ Logger::Logger(IEnvVars* ev,
   logFileStream << "\n"
                 << "========================" << '\n'
                 << "Session " << localTimestamp(true) << '\n'
-                << "Illumo " << BuildInfo::VersionNumber << ", built "
-                << __DATE__ << "  " << __TIME__ << '\n'
+                << "Illumo " << BuildInfo::FullVersion << ", built " << __DATE__
+                << "  " << __TIME__ << '\n'
                 << "========================" << std::endl;
   attachConsole(cl);
 }

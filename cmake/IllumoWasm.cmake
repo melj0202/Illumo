@@ -112,17 +112,23 @@ add_custom_command(TARGET IllumoRuntime POST_BUILD
   VERBATIM)
 
 # Stages one installed application: apps/<name>/ holds its manifest, module
-# and flat data files. ASSETS lists source/destination pairs whose
-# destinations are package-relative paths (package preloads such as
-# Assets/IllEd/editor-ui-atlas.jpg).
+# and flat data files. MANIFEST is the source illumo.json, staged with the
+# build's version (cmake/IllumoStageManifest.cmake). ASSETS lists
+# source/destination pairs whose destinations are package-relative paths
+# (package preloads such as Assets/IllEd/editor-ui-atlas.jpg).
 function(illumo_stage_app target name)
-  cmake_parse_arguments(PARSE_ARGV 2 _app "" "MODULE" "FILES;ASSETS")
+  cmake_parse_arguments(PARSE_ARGV 2 _app "" "MODULE;MANIFEST" "FILES;ASSETS")
   set(_package "$<TARGET_FILE_DIR:IllumoRuntime>/apps/${name}")
   set(_commands
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_package}"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${_guest_build}/${_app_MODULE}" ${_app_FILES} "${_package}")
-  set(_inputs ${_app_FILES})
+      "${_guest_build}/${_app_MODULE}" ${_app_FILES} "${_package}"
+    COMMAND ${CMAKE_COMMAND}
+      "-DSOURCE=${_app_MANIFEST}"
+      "-DDESTINATION=${_package}/illumo.json"
+      "-DVERSION_CMAKE=${ILLUMO_VERSION_CMAKE}"
+      -P "${CMAKE_SOURCE_DIR}/cmake/IllumoStageManifest.cmake")
+  set(_inputs ${_app_FILES} "${_app_MANIFEST}")
   list(LENGTH _app_ASSETS _asset_values)
   math(EXPR _asset_odd "${_asset_values} % 2")
   if(_asset_odd)
@@ -142,7 +148,7 @@ function(illumo_stage_app target name)
     VERBATIM
     COMMENT "Staging the ${name} application package")
   set_target_properties(${target} PROPERTIES FOLDER "staging")
-  add_dependencies(${target} IllumoGuestBuild)
+  add_dependencies(${target} IllumoGuestBuild IllumoVersionInfo)
   add_dependencies(IllumoRuntime ${target})
 endfunction()
 
@@ -161,9 +167,9 @@ foreach(_sound canvas_enter canvas_exit canvas_mode_switch
 endforeach()
 illumo_stage_app(IllumoGamePackage game
   MODULE IllumoGame.wasm
+  MANIFEST "${CMAKE_SOURCE_DIR}/IllumoGame/illumo.json"
   FILES
     "${_guest_build}/CSimWorkerGuest.wasm"
-    "${CMAKE_SOURCE_DIR}/IllumoGame/illumo.json"
     "${CMAKE_SOURCE_DIR}/IllumoGame/families.json"
     "${CMAKE_SOURCE_DIR}/IllumoGame/rulesets.json"
     "${CMAKE_SOURCE_DIR}/IllumoGame/envvars.json"
@@ -175,8 +181,8 @@ illumo_stage_app(IllumoGamePackage game
 # IllEd: the world editor; its UI atlas is preloaded from the package.
 illumo_stage_app(IllEdPackage illed
   MODULE IllEd.wasm
+  MANIFEST "${CMAKE_SOURCE_DIR}/IllEd/illumo.json"
   FILES
-    "${CMAKE_SOURCE_DIR}/IllEd/illumo.json"
     "${CMAKE_SOURCE_DIR}/IllEd/envvars.json"
   ASSETS
     "${CMAKE_SOURCE_DIR}/IllEd/Assets/editor-ui-atlas.jpg"
@@ -185,8 +191,8 @@ illumo_stage_app(IllEdPackage illed
 # IllMeshViewer: the mesh viewer; its skybox cross is preloaded.
 illumo_stage_app(IllMeshViewerPackage meshviewer
   MODULE IllMeshViewer.wasm
+  MANIFEST "${CMAKE_SOURCE_DIR}/IllMeshViewer/illumo.json"
   FILES
-    "${CMAKE_SOURCE_DIR}/IllMeshViewer/illumo.json"
     "${CMAKE_SOURCE_DIR}/IllMeshViewer/envvars.json"
   ASSETS
     "${CMAKE_SOURCE_DIR}/Illumo/Assets/Skybox/skybox-daylight.png"

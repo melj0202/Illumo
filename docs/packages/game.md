@@ -212,7 +212,10 @@ and lean in with jelly emphasis and animated icons; the selection is a liquid
 drop that pours between rows, necks, tapers and sloshes back together, sweeps
 a sheen, and wobbles on press while a splash of teardrop droplets leaps from
 the press point; keycaps form the footer. The panel dims while settings or
-canvas setup is open.
+canvas setup is open. The build version (`v26.09_12`, D-F2) sits small and
+muted in the screen's lower right corner: the guest reads it from its staged
+`illumo.json` during bootstrap (`CSimPlatform::packageVersion`), and the menu
+draws nothing where no manifest was read (the native test oracle).
 
 Type is Kikuta, a variable-weight face (`CSimTypeface`, D-UI9). Package
 bootstrap installs weight 400 as the default font and a 400/600/800/1000 UI

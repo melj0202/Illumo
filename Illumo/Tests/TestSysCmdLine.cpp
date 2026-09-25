@@ -5,6 +5,7 @@
 #include <Illumo/Testing/TestRegistry.h>
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -191,8 +192,10 @@ testHelpAndVersion()
       versionText = capture.text();
     }
     testTrue(g,
-             versionText.find(BuildInfo::VersionNumber) != std::string::npos,
-             "version output uses engine BuildInfo");
+             versionText.find(std::string("Version: ") +
+                              BuildInfo::FullVersion + "\n") !=
+               std::string::npos,
+             "version output shows the full engine version");
   }
   std::filesystem::remove(path, error);
 }
@@ -257,19 +260,46 @@ testStringOptionsAndPositionalArguments()
   std::filesystem::remove(path, error);
 }
 
+static bool
+isDigit(char character)
+{
+  return character >= '0' && character <= '9';
+}
+
 static void
 testBuildInfoMetadata()
 {
-  testSection("BuildInfo: engine-owned version metadata");
+  testSection("BuildInfo: generated vYY.MM_B version");
+  const std::string release = BuildInfo::Release;
   testTrue(g,
-           std::string(BuildInfo::VersionNumber) == "0.1",
-           "version number remains compatible");
+           release.size() == 5 && isDigit(release[0]) && isDigit(release[1]) &&
+             release[2] == '.' && isDigit(release[3]) && isDigit(release[4]),
+           "release is YY.MM");
+
+  // The build is stamped from the repository's VERSION.txt file.
+  std::ifstream versionFile(std::filesystem::path(ILLUMO_ENGINE_ASSETS) / ".." /
+                            ".." / "VERSION.txt");
+  std::string fileRelease;
+  versionFile >> fileRelease;
+  testTrue(g, fileRelease == release, "release matches the VERSION.txt file");
+
+  const std::string shortVersion = BuildInfo::VersionNumber;
   testTrue(g,
-           std::string(BuildInfo::BuildDateShort) == "9/13/24",
-           "build date remains compatible");
+           shortVersion ==
+             "v" + release + "_" + std::to_string(BuildInfo::BuildNumber),
+           "short version is v<release>_<build>");
+
+  const std::string commit = BuildInfo::Commit;
+  const std::string identity =
+    (commit.empty() ? std::string("unknown") : commit) +
+    (BuildInfo::Dirty ? ", dirty" : "");
   testTrue(g,
-           std::string(BuildInfo::BuildTimestamp) == "16:58",
-           "build timestamp remains compatible");
+           std::string(BuildInfo::FullVersion) ==
+             shortVersion + " (" + identity + ")",
+           "full version adds the commit and dirty state");
+  testTrue(g,
+           !commit.empty() || BuildInfo::BuildNumber == 0,
+           "a build number comes only from Git history");
 }
 
 static int

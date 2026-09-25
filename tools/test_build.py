@@ -1576,5 +1576,123 @@ class DashboardPolishTests(unittest.TestCase):
         self.assertIn("legacy log", build.run_history_label({"log": "old.log"}, build.ASCII_GLYPHS))
 
 
+@unittest.skipUnless(build.shutil.which("cmake") and build.shutil.which("git"),
+                     "requires CMake and Git")
+class VersionTests(unittest.TestCase):
+    """cmake/IllumoVersion.cmake against scratch repositories."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def init_repository(self):
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Version Test")
+        self.git("config", "user.email", "version@test.invalid")
+        self.git("config", "commit.gpgsign", "false")
+
+    def commit(self, name, text="x\n"):
+        (self.root / name).write_text(text, encoding="utf-8")
+        self.git("add", name)
+        self.git("commit", "-q", "-m", f"Change {name}")
+
+    def set_release(self, release, commit=True):
+        with contextlib.redirect_stdout(io.StringIO()):
+            build.set_release(release, self.root, commit)
+
+    def test_without_git_history_build_is_zero_and_commit_unknown(self):
+        (self.root / "VERSION.txt").write_text("26.09\n", encoding="utf-8")
+        fields = build.read_build_version(self.root)
+        self.assertEqual(fields["release"], "26.09")
+        self.assertEqual(fields["build"], "0")
+        self.assertEqual(fields["commit"], "")
+        self.assertEqual(fields["full"], "v26.09_0 (unknown)")
+
+    def test_build_counts_commits_since_version_changed(self):
+        self.init_repository()
+        self.commit("VERSION.txt", "26.09\n")
+        self.assertEqual(build.read_build_version(self.root)["short"], "v26.09_0")
+        self.commit("a.txt")
+        self.commit("b.txt")
+        fields = build.read_build_version(self.root)
+        commit = self.git("rev-parse", "--short=8", "HEAD")
+        self.assertEqual(fields["short"], "v26.09_2")
+        self.assertEqual(fields["full"], f"v26.09_2 ({commit})")
+
+        (self.root / "untracked.txt").write_text("scratch", encoding="utf-8")
+        self.assertEqual(build.read_build_version(self.root)["dirty"], "OFF")
+        (self.root / "a.txt").write_text("edited\n", encoding="utf-8")
+        fields = build.read_build_version(self.root)
+        self.assertEqual(fields["dirty"], "ON")
+        self.assertEqual(fields["full"], f"v26.09_2 ({commit}, dirty)")
+
+    def test_version_arriving_by_merge_starts_at_the_merge(self):
+        self.init_repository()
+        self.commit("VERSION.txt", "26.09\n")
+        self.git("branch", "next")
+        self.commit("main-1.txt")
+        self.commit("main-2.txt")
+        self.git("checkout", "-q", "next")
+        self.commit("VERSION.txt", "26.10\n")
+        self.git("checkout", "-q", "main")
+        self.git("merge", "-q", "--no-ff", "-m", "Merge next", "next")
+        self.assertEqual(build.read_build_version(self.root)["short"], "v26.10_0")
+        self.commit("after.txt")
+        self.assertEqual(build.read_build_version(self.root)["short"], "v26.10_1")
+
+    def test_set_release_commits_version_and_restarts_the_count(self):
+        self.init_repository()
+        self.commit("VERSION.txt", "26.09\n")
+        self.commit("a.txt")
+        (self.root / "a.txt").write_text("unrelated edit\n", encoding="utf-8")
+        self.set_release("26.10")
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "Start release v26.10")
+        self.assertEqual(self.git("show", "--name-only", "--format=", "HEAD"), "VERSION.txt")
+        fields = build.read_build_version(self.root)
+        self.assertEqual(fields["short"], "v26.10_0")
+        self.assertEqual(fields["dirty"], "ON", "the unrelated edit stays uncommitted")
+
+    def test_set_release_rejects_bad_or_earlier_releases(self):
+        (self.root / "VERSION.txt").write_text("26.09\n", encoding="utf-8")
+        for release in ("26.9", "2610", "26.13", "26.00", "26.09", "26.08"):
+            with self.assertRaises(build.BuildError, msg=release):
+                self.set_release(release, commit=False)
+        self.set_release("27.01", commit=False)
+        self.assertEqual((self.root / "VERSION.txt").read_text(encoding="utf-8"), "27.01\n")
+
+    def test_staged_manifest_takes_the_build_version(self):
+        versions = self.root / "IllumoVersion.cmake"
+        versions.write_text('set(ILLUMO_VERSION_PACKAGE "26.09_7")\n', encoding="utf-8")
+        source = self.root / "illumo.json"
+        destination = self.root / "staged.json"
+        script = build.REPOSITORY_ROOT / "cmake" / "IllumoStageManifest.cmake"
+
+        def stage():
+            return subprocess.run(
+                ["cmake", f"-DSOURCE={source.as_posix()}",
+                 f"-DDESTINATION={destination.as_posix()}",
+                 f"-DVERSION_CMAKE={versions.as_posix()}", "-P", str(script)],
+                capture_output=True, text=True, check=False)
+
+        source.write_text('{"format": "ilpk", "id": "demo"}', encoding="utf-8")
+        self.assertEqual(stage().returncode, 0)
+        staged = json.loads(destination.read_text(encoding="utf-8"))
+        self.assertEqual(staged, {"format": "ilpk", "id": "demo", "version": "26.09_7"})
+
+        source.write_text('{"id": "demo", "version": "1"}', encoding="utf-8")
+        self.assertNotEqual(stage().returncode, 0, "a source manifest may not set version")
+
+    def test_shipped_manifests_leave_version_to_the_build(self):
+        for app in ("IllumoGame", "IllEd", "IllMeshViewer"):
+            manifest = json.loads(
+                (build.REPOSITORY_ROOT / app / "illumo.json").read_text(encoding="utf-8"))
+            self.assertNotIn("version", manifest, app)
+
+
 if __name__ == "__main__":
     unittest.main()

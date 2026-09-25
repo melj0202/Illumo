@@ -22,7 +22,9 @@
 \path{Illumo/Source/Engine/DebugModule.cpp} & Optional Debug renderer/tooling module \\
 \path{Illumo/Include/Illumo/Scene/} & Public persistent hierarchy and generational node handles \\
 \path{Illumo/Source/Scene/SceneGraph.cpp} & Node ownership, deterministic traversal, transform cache, render extraction \\
-\path{Illumo/Include/Illumo/Foundation/BuildInfo.h} & Engine build/version metadata \\
+\path{Illumo/Include/Illumo/Foundation/BuildInfo.h} & Build version \texttt{vYY.MM\_B}, defined by a generated source (D-F2) \\
+\path{VERSION.txt} & The release \texttt{YY.MM}; changed only by \texttt{build.py version --set} \\
+\path{cmake/IllumoVersion.cmake} & Computes the build version from \path{VERSION.txt} and Git on every build \\
 \path{Illumo/Include/Illumo/Rendering/} & Supported backend-neutral render/token API \\
 \path{Illumo/Source/Rendering/OpenGL/} & Private production backend \\
 \path{Illumo/Include/Illumo/Services/} & Generic config, input, logging, console contracts \\

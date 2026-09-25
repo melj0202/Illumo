@@ -691,8 +691,22 @@ python build.py file-stats -n 25
 python build.py coverage
 python build.py tidy
 python build.py docs
+python build.py version
+python build.py version --set 26.10
 python build.py new-project ../MyNewGame --name MyNewGame
 ```
+
+Builds are versioned `vYY.MM_B` (D-F2). `YY.MM` is the release in
+`VERSION.txt`; `B` counts first-parent commits since that file last changed,
+so it restarts at 0 each release and a merged pull request counts once.
+Every build stamps it into `BuildInfo` and the staged `illumo.json` manifests
+without any manual step. Products show `v26.09_12`; the log, the startup
+report and `IllumoRuntime --version` show `v26.09_12 (1f709073, dirty)`, and
+a tree without Git history shows `v26.09_0 (unknown)`. `version` prints the
+current build's version (`--json` for every field). To cut a release, run
+`version --set YY.MM`: it writes `VERSION.txt` and commits that file alone,
+and that commit is build 0 of the new release. Release builds need a full
+clone, because a shallow one cannot count commits and builds as `_0`.
 
 `watch` configures once, builds, then polls first-party sources, shaders,
 CMake files and JSON manifests (build trees, `archive/`, `Illumo/thirdparty/`,

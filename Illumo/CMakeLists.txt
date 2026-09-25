@@ -165,6 +165,36 @@ target_sources(Illumo PRIVATE
   $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:${CMAKE_CURRENT_SOURCE_DIR}/Source/Engine/DebugModule.cpp>)
 add_library(Illumo::Illumo ALIAS Illumo)
 
+# Build version vYY.MM_B (cmake/IllumoVersion.cmake). Computed here for the
+# configure log, then again on every build so each commit is stamped without
+# reconfiguring; outputs are rewritten only when the version changes.
+# VERSION.txt sits at the repository root, beside cmake/.
+find_package(Git QUIET)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/IllumoVersion.cmake")
+get_filename_component(_illumo_version_root "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  ABSOLUTE)
+set(_illumo_version_source "${CMAKE_CURRENT_BINARY_DIR}/Generated/BuildInfo.cpp")
+set(ILLUMO_VERSION_CMAKE "${CMAKE_CURRENT_BINARY_DIR}/Generated/IllumoVersion.cmake"
+  CACHE INTERNAL "Per-build version values for staging scripts")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/Generated")
+illumo_write_version_outputs("${_illumo_version_root}" "${GIT_EXECUTABLE}"
+  "${_illumo_version_source}" "${ILLUMO_VERSION_CMAKE}")
+message(STATUS "Illumo version ${ILLUMO_VERSION_FULL}")
+add_custom_target(IllumoVersionInfo
+  COMMAND ${CMAKE_COMMAND}
+    "-DSOURCE_ROOT=${_illumo_version_root}"
+    "-DGIT=${GIT_EXECUTABLE}"
+    "-DOUTPUT_SOURCE=${_illumo_version_source}"
+    "-DOUTPUT_CMAKE=${ILLUMO_VERSION_CMAKE}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/IllumoVersion.cmake"
+  BYPRODUCTS "${_illumo_version_source}" "${ILLUMO_VERSION_CMAKE}"
+  COMMENT "Stamping the Illumo build version"
+  VERBATIM)
+target_sources(Illumo PRIVATE "${_illumo_version_source}")
+add_dependencies(Illumo IllumoVersionInfo)
+unset(_illumo_version_root)
+unset(_illumo_version_source)
+
 target_include_directories(Illumo
   PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Include>"

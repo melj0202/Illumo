@@ -1903,6 +1903,7 @@ disabled.
 | **D-GC5** | Cyclic families use full Moore neighbor-state histograms with threshold/coprime-step rules in an isolated serial sparse kernel. |
 | **D-GC10** | Histogram, directional, extended-range and Lenia kernels, and elementary 1D rows, evaluate on the grid worker pool with per-worker scratch and serial in-order publication (native builds; the guest pool stays serial). |
 | **D-F1** | MacroDefs / Windows.h include toxicity deferred until real pain. |
+| **D-F2** | Builds are versioned `vYY.MM_B`. `VERSION.txt` holds the release (`YY.MM`, changed only by `python build.py version --set`); `B` counts first-parent commits since it last changed. `cmake/IllumoVersion.cmake` stamps `BuildInfo` and the staged `illumo.json` manifests on every build; CSim's main menu shows `v26.09_12` from its manifest, and logs and `--version` add the commit and a dirty flag. |
 
 ---
 

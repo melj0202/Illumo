@@ -157,9 +157,7 @@ SysCmdLine::ParseCommandLine(int argc,
     if (std::strcmp(argv[i], "-v") == 0 ||
         std::strcmp(argv[i], "--version") == 0) {
       printIdentity(config);
-      std::cout << "Version: " << BuildInfo::VersionNumber
-                << "\nBuild Date: " << BuildInfo::BuildDateShort << ' '
-                << BuildInfo::BuildTimestamp << '\n';
+      std::cout << "Version: " << BuildInfo::FullVersion << '\n';
       return { SysCmdLineAction::ExitSuccess };
     }
 

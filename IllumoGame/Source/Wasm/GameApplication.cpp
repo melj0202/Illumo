@@ -7,6 +7,7 @@
 #include "Game/SoftwareCursor.h"
 #include "Wasm/CatalogBootstrap.h"
 #include "Wasm/GuestPlatform.h"
+#include <Illumo/Content/PackageManifest.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/CommandLine.h>
@@ -18,6 +19,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 // IllumoGame as a WASM package: the complete product (menus, canvas, editor,
 // console commands, persistence, workshop) runs in this store on top of the
@@ -140,7 +142,9 @@ protected:
       throw std::runtime_error(m_catalog.error());
     }
     const bool soundsReady = loadSounds();
-    if (!m_catalog.ready() || !CSimTypeface::ready() || !soundsReady) {
+    const bool versionReady = readPackageVersion();
+    if (!m_catalog.ready() || !CSimTypeface::ready() || !soundsReady ||
+        !versionReady) {
       return false;
     }
     RuleSetRegistry::instance() = m_catalog.registry();
@@ -173,6 +177,44 @@ protected:
   }
 
 private:
+  // The staged illumo.json carries the build version (D-F2) that the main
+  // menu shows. An unreadable manifest only leaves the menu without one.
+  bool readPackageVersion()
+  {
+    if (m_versionRead) {
+      return true;
+    }
+    if (m_versionTask == 0) {
+      m_versionTask = files().read(
+        GuestFileArea::Package, PackageManifest::kFileName, 64u * 1024u);
+      if (m_versionTask == 0) {
+        return false;
+      }
+    }
+    GuestFileResult result;
+    if (!files().take(m_versionTask, result)) {
+      return false;
+    }
+    m_versionTask = 0;
+    m_versionRead = true;
+    PackageManifest manifest;
+    std::string error;
+    const std::string_view text(
+      reinterpret_cast<const char*>(result.bytes.data()), result.bytes.size());
+    if (result.outcome != GuestFileOutcome::Success ||
+        !decodePackageManifest(text, PackageCeilings{}, manifest, error)) {
+      Logger::LogWarning("CSim cannot read its package manifest; the menu "
+                         "shows no version" +
+                         (error.empty() ? std::string() : ": " + error));
+      return true;
+    }
+    if (!manifest.version.empty()) {
+      Logger::LogInfo("CSim v" + manifest.version);
+    }
+    m_platform.setPackageVersion(manifest.version);
+    return true;
+  }
+
   // Sound files load beside the catalogs when the host can play sound; they
   // are decoded here, in the store, and only samples go to the host. A
   // missing or damaged file silences just its own cue.
@@ -230,6 +272,8 @@ private:
 
   GuestCSimPlatform m_platform;
   CSimCatalogBootstrap m_catalog;
+  std::uint64_t m_versionTask = 0;
+  bool m_versionRead = false;
   std::uint64_t m_soundFetch = 0;
   bool m_soundsLoaded = false;
   bool m_audioAbsenceReported = false;

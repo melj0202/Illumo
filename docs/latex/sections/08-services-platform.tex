@@ -73,7 +73,12 @@ Illumo services neither validate rulesets nor assume a game module exists.
 \subsection{Foundation}
 Supported lightweight headers include macros, \pathref{MathTypes.h},
 \pathref{ArrayQueue.h}, \pathref{RollingMetric.h}, and engine-owned
-\pathref{BuildInfo.h}.
+\pathref{BuildInfo.h}. Its values are defined by a source that
+\pathref{cmake/IllumoVersion.cmake} regenerates on every build (D-F2): the
+release from \pathref{VERSION.txt}, the first-parent commits since that file
+last changed, the commit and a dirty flag, giving \texttt{v26.09\_12} for
+display and \texttt{v26.09\_12 (1f709073, dirty)} for logs and
+\texttt{--version}.
 
 \begin{statusbox}
 \pathref{MacroDefs.h} still pulls Windows headers on \texttt{\_WIN32} for

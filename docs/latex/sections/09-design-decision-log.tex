@@ -3046,6 +3046,40 @@ relaunch uses \texttt{posix\_spawn} and is unverified, like the rest of the
 Linux platform.\\
 \textbf{Extends:} D-UI10, D-UI11, D-UI12
 \end{decisionbox}
+
+\subsection*{D-F2 --- Calendar build versions}
+\begin{decisionbox}[title={D-F2 \quad 2026-09-25}]
+\textbf{Decision:} A build's version is \texttt{vYY.MM\_B}, for example
+\texttt{v26.09\_12}. \texttt{YY.MM} is the release, held in
+\pathref{VERSION.txt} at the repository root and changed only when a release
+is cut (\texttt{python build.py version --set YY.MM} writes and commits it
+alone). \texttt{B} is the number of first-parent commits since the commit
+that last changed \pathref{VERSION.txt}, so each release starts at 0 and a
+merged pull request counts once. \pathref{cmake/IllumoVersion.cmake} computes
+it from Git on every build and regenerates the \symbolref{BuildInfo}
+definitions and the version of each staged \texttt{illumo.json}, rewriting
+them only when they change. The development watermark shows
+\texttt{VersionNumber}, and CSim's main menu shows the same form in its lower
+right corner, read by the guest from its staged manifest; logs, the
+startup report and \texttt{--version} show \texttt{FullVersion}, which adds
+the abbreviated commit and whether tracked files were modified
+(\texttt{v26.09\_12 (1f709073, dirty)}).\\
+\textbf{Why:} The previous \texttt{BuildInfo} was typed by hand and had not
+changed since 2024, and each app manifest repeated the release. Deriving the
+number from history needs no bookkeeping and cannot conflict between
+branches, which a counter kept in a file would on every merge. The release
+is not taken from the clock, so a September fix built in October stays in
+its release.\\
+\textbf{Consequences:} Two branches can reach the same \texttt{B}; the commit
+in the full version tells them apart. A tree without Git history or a
+shallow clone builds as \texttt{\_0} with commit \texttt{unknown} (or its
+commit), so release builds need a full clone. Source manifests no longer
+carry \texttt{version}; staging refuses one that does. The file is not named
+\texttt{VERSION} because the repository root is on include paths and on
+Windows \texttt{<version>} would resolve to it. \texttt{BuildDateShort} and
+\texttt{BuildTimestamp} are removed.
+\end{decisionbox}
+
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

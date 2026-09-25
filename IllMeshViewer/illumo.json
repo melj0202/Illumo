@@ -2,7 +2,6 @@
   "format": "ilpk",
   "format_version": 1,
   "id": "meshviewer",
-  "version": "26.09",
   "title": "Illumo Mesh Viewer",
   "kind": "app",
   "app": {

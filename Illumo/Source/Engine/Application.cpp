@@ -68,7 +68,7 @@ static void
 logStartupReport(const std::string& applicationName)
 {
   Logger::LogInfo(applicationName + " starting: Illumo " +
-                  BuildInfo::VersionNumber + ", " + buildConfiguration() +
+                  BuildInfo::FullVersion + ", " + buildConfiguration() +
                   " build of " + __DATE__ + " " + __TIME__ + " (" +
                   compilerDescription() + ")");
   const SystemInfo system = QuerySystemInfo();
