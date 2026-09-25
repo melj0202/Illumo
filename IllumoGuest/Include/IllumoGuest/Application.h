@@ -27,6 +27,8 @@ public:
   virtual std::vector<std::byte> extensionRequest() { return {}; }
   // Reported after each update; the host starts its close sequence.
   virtual bool closeRequested() { return false; }
+  // With closeRequested: the host relaunches after closing (Display only).
+  virtual bool restartRequested() { return false; }
   GuestServiceQueue& services() { return m_services; }
   // What the host granted at startup: the required capabilities plus any
   // optional ones it offers (for example ProjectFiles with --project).

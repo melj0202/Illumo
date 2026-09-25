@@ -1,6 +1,7 @@
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/IEnvVars.h>
@@ -16,6 +17,7 @@
 #include <IllumoGuest/Protocol.h>
 #include <IllumoGuest/Windows.h>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <filesystem>
 
@@ -233,7 +235,7 @@ WasmGameServices::completeDisplay(GuestServices& results)
       }
       m_environment->setVar("vsync", request.state.vsync);
       m_environment->setVar("fps", request.state.fps);
-      m_environment->setVar("uiScale", request.state.uiScale);
+      m_environment->setVar("uiScale", UiScale::text(request.state.uiScale));
       // A product drawing its own pointer hides the system cursor over the
       // main window; cancel() always gives it back. Version 1 requests do
       // not carry the field, so they leave the cursor as it is.
@@ -242,19 +244,44 @@ WasmGameServices::completeDisplay(GuestServices& results)
         m_systemCursorHidden = request.state.hideSystemCursor;
         m_window->setSystemCursorHidden(m_systemCursorHidden);
       }
+      // Saved for the next window; the running one keeps its samples.
+      if (request.version >= 4u) {
+        m_environment->setVar("msaa", static_cast<long>(request.state.msaa));
+      }
     }
     const EnvVar& fps = m_environment->getVar("fps");
     const EnvVar& scale = m_environment->getVar("uiScale");
     const EnvVar& vsync = m_environment->getVar("vsync");
-    GuestDisplayState actual{
-      m_environment->getVar("fullscreen").valueAsBool,
-      vsync.value.empty() || vsync.valueAsBool,
-      static_cast<std::uint32_t>(
-        std::clamp(fps.value.empty() ? 60L : fps.valueAsLong, 0L, 1000L)),
-      static_cast<std::uint32_t>(
-        std::clamp(scale.value.empty() ? 1L : scale.valueAsLong, 1L, 4L)),
-      m_systemCursorHidden
-    };
+    GuestDisplayState actual;
+    actual.fullscreen = m_environment->getVar("fullscreen").valueAsBool;
+    actual.vsync = vsync.value.empty() || vsync.valueAsBool;
+    actual.fps = static_cast<std::uint32_t>(
+      std::clamp(fps.value.empty() ? 60L : fps.valueAsLong, 0L, 1000L));
+    // Version 3 reports the preference (0 is automatic); earlier versions
+    // only know whole factors, so they get the scale in effect right now.
+    const std::array<int, 2> window = m_window->getWindowDimensions();
+    const float preference = UiScale::stored(scale);
+    actual.uiScale =
+      request.version >= 3u && preference == 0.0f
+        ? 0.0f
+        : std::clamp(request.version >= 3u
+                       ? preference
+                       : UiScale::resolve(scale, window[0], window[1]),
+                     1.0f,
+                     4.0f);
+    actual.hideSystemCursor = m_systemCursorHidden;
+    const EnvVar& msaa = m_environment->getVar("msaa");
+    const long savedMsaa = msaa.value.empty() ? 4L : msaa.valueAsLong;
+    actual.msaa =
+      savedMsaa >= 0L && savedMsaa <= 16L &&
+          GuestDisplayState::validMsaa(static_cast<std::uint32_t>(savedMsaa))
+        ? static_cast<std::uint32_t>(savedMsaa)
+        : 4u;
+    const int running = m_window->getMsaaSamples();
+    actual.activeMsaa = running >= 0 && GuestDisplayState::validMsaa(
+                                          static_cast<std::uint32_t>(running))
+                          ? static_cast<std::uint32_t>(running)
+                          : GuestDisplayState::kUnknownMsaa;
     // Each completion is written in its request's version, so a version 1
     // guest never sees the trailing field.
     GuestWireWriter payload;

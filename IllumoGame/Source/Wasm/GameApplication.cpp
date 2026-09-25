@@ -2,6 +2,8 @@
 #include "Game/CSimTypeface.h"
 #include "Game/IllumoGameConfig.h"
 #include "Game/MainMenuModule.h"
+#include "Game/PerformanceOverlay.h"
+#include "Game/SimulatorSettings.h"
 #include "Game/SoftwareCursor.h"
 #include "Wasm/CatalogBootstrap.h"
 #include "Wasm/GuestPlatform.h"
@@ -87,10 +89,26 @@ protected:
       engine.inputManager != nullptr &&
         engine.inputManager->isMouseButtonPressed(KeyCode::MouseLeft),
       settings().getVar("reducedUiMotion").valueAsBool);
+
+    // The corner performance readout (Video settings). Memory is this
+    // store's linear memory, which only grows.
+    if (!m_performancePrepared) {
+      m_performance.prepare(engine.window, engine.renderer);
+      m_performancePrepared = true;
+    }
+    m_performance.update(
+      static_cast<float>(elapsed),
+      SimulatorSettings::flag(&settings(), "showFPS", false),
+      SimulatorSettings::flag(&settings(), "showMemory", false),
+      static_cast<std::uint64_t>(__builtin_wasm_memory_size(0)) * 65536u);
   }
 
   void dispatchOverlay(Scene& scene) override
   {
+    // Under the pointer, so the cursor stays on top.
+    if (m_performance.isVisible()) {
+      scene.AddDrawable(&m_performance.getVisual(), RenderLayerId::UI);
+    }
     if (m_cursor.isVisible()) {
       scene.AddDrawable(&m_cursor.getVisual(), RenderLayerId::UI);
     }
@@ -218,6 +236,8 @@ private:
   // The software pointer; it outlives module transitions.
   SoftwareCursor m_cursor;
   bool m_cursorPrepared = false;
+  PerformanceOverlay m_performance;
+  bool m_performancePrepared = false;
 };
 
 std::unique_ptr<GuestApplication>

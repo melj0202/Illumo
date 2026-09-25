@@ -759,7 +759,9 @@ Illumo::processCloseRequest()
   if (m_modulesStarted) {
     for (RegisteredModule& registration : m_modules) {
       if (registration.started && !registration.module->OnCloseRequested()) {
+        // A deferred close also drops a restart that rode on it.
         m_window->cancelCloseRequest();
+        m_window->clearRestartRequest();
         return false;
       }
     }

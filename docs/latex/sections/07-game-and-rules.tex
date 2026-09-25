@@ -95,23 +95,39 @@ non-toroidal; positive chunk dimensions select a finite torus.
 \end{statusbox}
 
 F1 opens a Release-visible, primitive-composed \symbolref{ConfigurationMenu}.
-It configures the cell family and its filtered ruleset, world chunk width/height, TPS, simulation speed, fade
-speed, VSync, fullscreen, UI scale, restart-only MSAA, FPS cap, simulation
-inspector, and reduced menu motion. FPS presets include uncapped through 360;
-custom values accept 0--1000. Zero disables the existing engine software cap;
-VSync remains independent. Both main-menu and in-game Apply save preferences
-and apply fullscreen immediately. Both dimensions must be positive for a finite
-torus; \texttt{0}/\texttt{0} and \texttt{inf}/\texttt{inf} select the infinite
-canvas. Applying a topology change drains simulation and starts a fresh
-centered world. The overlay uses larger high-contrast labels, readable ruleset
-names, split keyboard instructions, and a short explanation for the selected
-setting. Pressing Q or activating Exit opens a confirmation overlay; confirming
-requests window closure and leaves normal engine shutdown to the App main loop. A short eased reveal, staggered row fade, gliding
-selection highlight, and value-change pulse are advanced from frame delta time;
-input remains active throughout. The mouse wheel scrolls the view without
-changing selection; an offscreen selection has no visible highlight. Keyboard
-navigation, including Page Up/Down and Home/End, brings selection into view.
-Rows retain readable height rather than shrinking text to fit the list. Rendering and mouse
+Its settings are grouped into six tabs: Simulation (cell family and its
+filtered ruleset, world chunk width/height, TPS, speed multiplier, start
+paused), Canvas (cell style as LED keys or flat pixels, cell glow, grid lines,
+cell fade speed, simulation inspector, edit hints), Video (fullscreen, VSync,
+FPS cap, restart-only MSAA, FPS counter, memory readout), Audio (sound
+volume), Controls (zoom sensitivity, invert zoom, arrow-key pan speed) and
+General (UI scale, reduced menu motion, software cursor, autosave interval,
+confirm clearing); see D-UI12. Tab/Shift+Tab, Page Up/Down or a click switch
+tabs; the menu reopens on the tab it closed on. Apply, Discard and Exit are
+footer buttons shared by every tab. Numeric settings are sliders that walk a
+list of stops with Left/Right or follow a pointer drag; typed digits remain an
+exact-entry shortcut and show a caret only while typing. UI scale is a slider
+whose far left is Auto (sized to the window, D-UI11), then 1x--4x in
+fractional steps; MSAA is a segmented picker; booleans are switches. MSAA is
+read only when the window is created, so applying a new value asks ``Restart
+CSim?'' and Restart now relaunches the runtime (D-UI13). The FPS cap slider runs 30--1000
+with uncapped at its far right (typed values accept 0--1000); zero disables
+the existing engine software cap and VSync remains independent. Both
+main-menu and in-game Apply save preferences and apply fullscreen
+immediately. Both dimensions must be positive for a finite torus;
+\texttt{0}/\texttt{0} and \texttt{inf}/\texttt{inf} select the infinite
+canvas. The world sliders put infinite at their far left and carry the other
+axis across that boundary, so they never produce a mixed pair. Applying a
+topology change drains simulation and starts a fresh centered world. The
+overlay uses larger high-contrast labels, readable ruleset names, keycap
+hints, and a short explanation for the selected setting. Pressing Q or
+activating Exit opens a confirmation overlay; confirming requests window
+closure and leaves normal engine shutdown to the App main loop. A short eased
+reveal, staggered row fade, gliding selection highlight and tab pill, and
+value-change pulse are advanced from frame delta time; input remains active
+throughout. Every tab fits the fitted panel at the release window size; in a
+smaller window the rows scroll, the wheel scrolls without changing selection,
+and keyboard navigation brings selection into view. Rendering and mouse
 conversion share a fitted UI scale. Main-menu F1 opens the same overlay.
 
 All menus share a ``living glass'' language (D-R26): soft-shadowed glass

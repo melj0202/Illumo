@@ -65,6 +65,9 @@ public:
     systemCursorHidden = hidden;
   }
   bool systemCursorHidden = false;
+  // The framebuffer's multisample count; -1 (unknown) by default.
+  int getMsaaSamples() const override { return msaaSamples; }
+  int msaaSamples = -1;
 };
 
 struct HeadlessRenderFixture

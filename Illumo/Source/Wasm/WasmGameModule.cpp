@@ -388,8 +388,23 @@ try {
     return;
   }
   if ((flags & GuestUpdateFlags::RequestClose) != 0) {
+    // A restart relaunches the runtime after the normal close; it needs the
+    // Display grant and a host that allows it, otherwise it simply closes.
+    const bool restart =
+      (flags & GuestUpdateFlags::RequestRestart) != 0 && m_restartAllowed &&
+      (m_guest.capabilities() &
+       static_cast<std::uint32_t>(GuestCapability::Display)) != 0;
+    if ((flags & GuestUpdateFlags::RequestRestart) != 0 && !restart) {
+      Logger::LogWarning("The application asked to restart; this host closes "
+                         "it instead");
+    }
     // The engine still asks the guest through OnCloseRequested/Close.
-    ic->window->requestClose();
+    if (restart) {
+      Logger::LogInfo("The application asked to restart");
+      ic->window->requestRestart();
+    } else {
+      ic->window->requestClose();
+    }
   }
   if ((flags & GuestUpdateFlags::ServicesPending) != 0) {
     // Requests queued by this update (compute lane jobs especially) start

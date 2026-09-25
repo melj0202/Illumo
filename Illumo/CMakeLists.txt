@@ -31,6 +31,7 @@ if(WIN32)
     Source/Platform/Windows/WinClipboard.cpp
     Source/Platform/Windows/WinTimer.cpp
     Source/Platform/Windows/WinProcessMemoryStats.cpp
+    Source/Platform/Windows/WinProcessRelaunch.cpp
     Source/Platform/Windows/WinSystemInfo.cpp
     Source/Platform/Windows/WinPixelWindowPresent.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm Gdi32 Advapi32)
@@ -46,6 +47,7 @@ elseif(UNIX)
     Source/Platform/Linux/LinuxClipboard.cpp
     Source/Platform/Linux/LinuxTimer.cpp
     Source/Platform/Linux/LinuxPixelWindowPresent.cpp
+    Source/Platform/Linux/LinuxProcessRelaunch.cpp
     Source/Platform/UnsupportedProcessMemoryStats.cpp
     Source/Platform/UnsupportedSystemInfo.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES

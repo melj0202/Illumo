@@ -270,6 +270,14 @@ testCloseNegotiation()
   testTrue(
     g, !host.processCloseRequest(), "deferred flag does not prompt again");
   testEqInt(g, product.closeRequests, 1, "one callback per native request");
+  host.context().window->requestRestart();
+  testTrue(g,
+           host.shouldClose() && host.context().window->restartRequested(),
+           "a restart request is a close request that remembers the restart");
+  testTrue(g,
+           !host.processCloseRequest() &&
+             !host.context().window->restartRequested(),
+           "deferring the close drops the restart");
   product.allowClose = true;
   host.context().window->requestClose();
   testTrue(g, host.processCloseRequest(), "approved request can terminate");
@@ -286,7 +294,7 @@ testCloseNegotiation()
            host.processCloseRequest(),
            "required transition failure is terminal despite veto");
   testEqInt(
-    g, product.closeRequests, 2, "retired product does not receive callbacks");
+    g, product.closeRequests, 3, "retired product does not receive callbacks");
   host.shutdown();
 }
 

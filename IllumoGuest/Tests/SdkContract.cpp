@@ -212,7 +212,7 @@ displayContract()
     cursorRequest.records.size() == 1 &&
       GuestDisplayRequest::read(cursorRequest.records[0].payload, decoded) &&
       decoded.version == kGuestDisplayVersion && decoded.state.hideSystemCursor,
-    "A system-cursor request travels as display version 2");
+    "A system-cursor request travels in the current display version");
 }
 
 static void

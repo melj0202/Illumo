@@ -53,7 +53,13 @@ struct GuestUpdateFlags
   // The update queued service requests; the host runs one more services
   // exchange before the frame so work (such as compute lanes) starts now.
   static constexpr std::uint32_t ServicesPending = 2u;
-  static constexpr std::uint32_t Known = RequestClose | ServicesPending;
+  // With RequestClose: once closed, start the application again with the same
+  // launch, so settings read only at startup (such as MSAA) take effect. Hosts
+  // honour it only for a guest granted Display, and never in capture or
+  // benchmark runs; otherwise it is an ordinary close.
+  static constexpr std::uint32_t RequestRestart = 4u;
+  static constexpr std::uint32_t Known =
+    RequestClose | ServicesPending | RequestRestart;
 };
 
 struct GuestEnvelope

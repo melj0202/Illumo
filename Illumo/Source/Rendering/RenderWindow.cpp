@@ -90,6 +90,7 @@ RenderWindow::initialize()
     samples = 0;
   }
   glfwWindowHint(GLFW_SAMPLES, samples);
+  m_createdSamples = samples;
   /* Create a windowed mode window and its OpenGL context */
 
   if (isFullScreen) {

@@ -166,6 +166,7 @@ illumo_add_guest(IllumoGame
   ../IllumoGame/Source/Game/ModeBadge.cpp
   ../IllumoGame/Source/Game/SoftwareCursor.cpp
   ../IllumoGame/Source/Game/NewSimulationMenu.cpp
+  ../IllumoGame/Source/Game/PerformanceOverlay.cpp
   ../IllumoGame/Source/Game/RuleCatalogOverlay.cpp
   ../IllumoGame/Source/Game/RulesetWorkshopMenu.cpp
   ../IllumoGame/Source/Game/SimulationRunnerGeneration.cpp

@@ -44,7 +44,10 @@ Engine must remain independent of Game and Rulesets.
 - Negotiate ordinary close through `processCloseRequest` and started modules'
   optional `OnCloseRequested`. Deferral clears the native close flag and keeps
   frames running. Failed required-module startup/transition remains terminal;
-  never let an optional module veto that failure shutdown.
+  never let an optional module veto that failure shutdown. A restart
+  (`IRenderWindow::requestRestart`) is a close that also relaunches: deferral
+  drops it, and `RunIllumoApplication` relaunches only after the engine and
+  logger have shut down (D-UI13).
 - Keep the `Renderer` backend-neutral. Engine composes
   `CreateOpenGLBackend`; modules see only the context/interface boundary.
 - Host pipeline configuration writes Scene default passes only. Preserve

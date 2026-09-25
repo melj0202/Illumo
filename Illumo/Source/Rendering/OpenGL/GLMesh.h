@@ -300,7 +300,8 @@ private:
       glVertexAttribPointer(
         0, 3, GL_FLOAT, GL_FALSE, kPos3StrideBytes, reinterpret_cast<void*>(0));
     } else {
-      // Canvas: location 0 pos3, location 2 uv2
+      // Canvas: location 0 pos3, location 1 color3, location 2 uv2. The
+      // canvas shader reads the colour as its cell look.
       glEnableVertexAttribArray(0);
       glVertexAttribPointer(0,
                             3,
@@ -308,6 +309,13 @@ private:
                             GL_FALSE,
                             kCanvasStrideBytes,
                             reinterpret_cast<void*>(0));
+      glEnableVertexAttribArray(1);
+      glVertexAttribPointer(1,
+                            3,
+                            GL_FLOAT,
+                            GL_FALSE,
+                            kCanvasStrideBytes,
+                            reinterpret_cast<void*>(3 * sizeof(float)));
       glEnableVertexAttribArray(2);
       glVertexAttribPointer(2,
                             2,

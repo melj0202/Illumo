@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/RenderLayerId.h>
 #include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <algorithm>
 #include <cmath>
@@ -142,10 +143,10 @@ Renderer::beginFrameContext(Camera* camera)
     const EnvVar& snapshotVar = envVars->getVar("sceneSnapshotExtraction");
     frameContext.sceneSnapshotExtraction =
       snapshotVar.value.empty() || snapshotVar.valueAsDouble != 0.0;
-    const EnvVar& scaleVar = envVars->getVar("uiScale");
-    if (!scaleVar.value.empty() && scaleVar.valueAsDouble > 0.0) {
-      frameContext.uiScale = static_cast<float>(scaleVar.valueAsDouble);
-    }
+    // Automatic scale follows this frame's window size.
+    frameContext.uiScale = UiScale::resolve(envVars->getVar("uiScale"),
+                                            frameContext.windowDimensions[0],
+                                            frameContext.windowDimensions[1]);
   }
   frameContext.active = true;
   if (m_hasNextWorldViewProjection) {
@@ -538,10 +539,12 @@ Renderer::getUiScale() const
     return frameContext.uiScale;
   }
   if (envVars != nullptr) {
-    const EnvVar& scaleVar = envVars->getVar("uiScale");
-    if (!scaleVar.value.empty() && scaleVar.valueAsDouble > 0.0) {
-      return static_cast<float>(scaleVar.valueAsDouble);
+    std::array<int, 2> dimensions{ 0, 0 };
+    if (_window != nullptr) {
+      dimensions = _window->getWindowDimensions();
     }
+    return UiScale::resolve(
+      envVars->getVar("uiScale"), dimensions[0], dimensions[1]);
   }
   return 1.0f;
 }

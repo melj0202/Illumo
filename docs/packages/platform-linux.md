@@ -43,6 +43,9 @@ macOS is not targeted; its scaffold has been removed.
   unavailable.
 - The startup machine report uses `UnsupportedSystemInfo`, which supplies only
   the logical processor count.
+- In-application restart (`RelaunchCurrentProcess`, D-UI13) uses
+  `posix_spawn` of `/proc/self/exe` with the original `argv`; like the rest of
+  this port it is unverified on Linux.
 
 Not in this port: `.deb` / AppImage / Flatpak, native Wayland, aarch64,
 `gtkmm-4`, a second graphics API, XDG config directories, `/proc/self/statm`

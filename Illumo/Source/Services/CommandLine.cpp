@@ -4,6 +4,7 @@
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
@@ -920,14 +921,12 @@ CommandLine::virtualScale() const
     // The separate window draws 1:1 in its own pixels.
     return 1.0f;
   }
-  float uiScale = 1.0f;
-  if (envVars != nullptr) {
-    const EnvVar& scaleVar = envVars->getVar("uiScale");
-    if (!scaleVar.value.empty() && scaleVar.valueAsDouble > 0.0) {
-      uiScale = static_cast<float>(scaleVar.valueAsDouble);
-    }
+  if (envVars == nullptr) {
+    return 1.0f;
   }
-  return uiScale;
+  // Automatic scale follows the window the console draws into.
+  const std::array<int, 2> dims = layoutDimensions();
+  return UiScale::resolve(envVars->getVar("uiScale"), dims[0], dims[1]);
 }
 
 void

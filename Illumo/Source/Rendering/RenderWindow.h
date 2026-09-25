@@ -39,8 +39,14 @@ public:
   void cancelCloseRequest() override;
   void setTitle(const std::string& title) override;
   void setSystemCursorHidden(bool hidden) override;
+  // Hidden capture windows report unknown: they never show a product's MSAA.
+  int getMsaaSamples() const override
+  {
+    return m_captureOnly ? -1 : m_createdSamples;
+  }
 
 private:
+  int m_createdSamples = -1;
   friend std::unique_ptr<IRenderWindow> CreateCaptureWindow(int width,
                                                             int height);
   bool m_captureOnly = false;
