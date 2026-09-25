@@ -132,6 +132,11 @@ void
 WasmGameServices::cancel()
 {
   m_cancelled = true;
+  // A stopped or failed guest no longer draws its pointer.
+  if (m_systemCursorHidden && m_window != nullptr) {
+    m_window->setSystemCursorHidden(false);
+  }
+  m_systemCursorHidden = false;
   m_displayRequests.clear();
   m_clipboardRequests.clear();
   m_windowRequests.clear();
@@ -229,6 +234,14 @@ WasmGameServices::completeDisplay(GuestServices& results)
       m_environment->setVar("vsync", request.state.vsync);
       m_environment->setVar("fps", request.state.fps);
       m_environment->setVar("uiScale", request.state.uiScale);
+      // A product drawing its own pointer hides the system cursor over the
+      // main window; cancel() always gives it back. Version 1 requests do
+      // not carry the field, so they leave the cursor as it is.
+      if (request.version >= 2u &&
+          request.state.hideSystemCursor != m_systemCursorHidden) {
+        m_systemCursorHidden = request.state.hideSystemCursor;
+        m_window->setSystemCursorHidden(m_systemCursorHidden);
+      }
     }
     const EnvVar& fps = m_environment->getVar("fps");
     const EnvVar& scale = m_environment->getVar("uiScale");
@@ -239,10 +252,13 @@ WasmGameServices::completeDisplay(GuestServices& results)
       static_cast<std::uint32_t>(
         std::clamp(fps.value.empty() ? 60L : fps.valueAsLong, 0L, 1000L)),
       static_cast<std::uint32_t>(
-        std::clamp(scale.value.empty() ? 1L : scale.valueAsLong, 1L, 4L))
+        std::clamp(scale.value.empty() ? 1L : scale.valueAsLong, 1L, 4L)),
+      m_systemCursorHidden
     };
+    // Each completion is written in its request's version, so a version 1
+    // guest never sees the trailing field.
     GuestWireWriter payload;
-    actual.write(payload);
+    actual.write(payload, request.version);
     response.status = GuestServiceStatus::Complete;
     response.payload = payload.take();
   }

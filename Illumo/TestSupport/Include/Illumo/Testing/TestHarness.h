@@ -59,6 +59,12 @@ public:
   void swapBuffers() override {}
   void requestClose() override { closeRequested = true; }
   void cancelCloseRequest() override { closeRequested = false; }
+  // Records the last system-cursor request, for host display tests.
+  void setSystemCursorHidden(bool hidden) override
+  {
+    systemCursorHidden = hidden;
+  }
+  bool systemCursorHidden = false;
 };
 
 struct HeadlessRenderFixture

@@ -95,6 +95,8 @@ private:
   std::unique_ptr<WasmFileServices> m_files;
   IRenderWindow* m_window;
   IEnvVars* m_environment;
+  // Whether the guest asked the host to hide the system cursor (Display).
+  bool m_systemCursorHidden = false;
   CommandRegistry* m_commands;
   CommandLine* m_console;
   std::unique_ptr<WasmHostClipboard> m_ownedClipboard;

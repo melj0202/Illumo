@@ -44,4 +44,8 @@ public:
   // Hosts that learn the product name after creation (a package runtime)
   // retitle the window. Windows without a title bar ignore it.
   virtual void setTitle(const std::string& title) { (void)title; }
+  // Products that draw their own (software) pointer hide the system cursor
+  // while it is over the window's content area. Windows without a system
+  // cursor ignore it.
+  virtual void setSystemCursorHidden(bool hidden) { (void)hidden; }
 };

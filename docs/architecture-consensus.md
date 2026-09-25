@@ -1426,8 +1426,9 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   fuel-metered. `--fuel n` forces metering for one launch.
 
 - **Host** (`Illumo/Source/Wasm`): `WasmGameModule` snapshots input, pumps
-  generic services (textures, fonts, files, dialogs, clipboard, display,
-  console trampolines, jobs, audio) and submits validated `IRF1` frames through
+  generic services (textures, fonts, files, dialogs, clipboard, display and
+  its system-cursor visibility, console trampolines, jobs, audio) and submits
+  validated `IRF1` frames through
   `WasmFrameRenderer`. It contains no Game/Rulesets includes and no CA
   opcodes. The manifest requests memory, metering, deadline and lane budgets;
   the runtime clamps them to its ceilings. Launch options are cleared before
@@ -1680,6 +1681,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-UI6** | `GuiTextEdit` (UTF-8 caret, selection, clipboard) and `GuiFileTree` (non-recursive flattening of asynchronous listings) join `Illumo/Gui`; IllEd's inspector and asset browser and DebugModule's keyboard-only `files` browser use them. |
 | **D-UI7** | Tool UIs (IllEd, IllMeshViewer) use the plain `GuiToolStyle` look and one `GuiPanelDock` of detachable panels: left/right columns with splitters, title-bar hide/pop-out/dock, tear-off past the window edge, layout saved in the `panelLayout` setting. Panels are content renderers over a `GuiPanelPlacement` (rectangle plus surface) read through `GuiPanelPointer`, never knowing whether they are detached. Chrome keeps the tool metrics; `fontSize` scales panel content. No retained widget tree. |
 | **D-UI8** | Glass menus move like liquid: the travelling selection is a drop with head and tail springs (`GuiMotion::kLiquidHead`/`kLiquidTail`) and a squash response, drawn by `GuiKit::drawLiquidSelection` (full-width head, neck, teardrop tail; a rounded rect at rest); panels and rows drop in on springs, presses and stepped values wobble, every glass panel swivels toward the pointer through `GuiPanelTilt` (depth-layered shift, `GuiGlassStyle` tilt shadow/glare/edge light, layout origin and hit testing shifted to match), and screens tune springs from `GuiMotion` presets. |
+| **D-UI10** | CSim draws its own mouse pointer (`SoftwareCursor`: exact tip, spring lean against sideways motion, holographic afterimage, press squish and splash, drawn in the menu glass palette with an edge glow) and hides the system cursor while it does; the persisted `softwareCursor` option is the F1 settings Software cursor toggle. Display wire version 2 appends `hideSystemCursor`; the host hides the main window's cursor (`IRenderWindow::setSystemCursorHidden`), still decodes version 1 (which leaves the cursor alone) and answers each request in its own version, and `WasmGameServices::cancel` restores it. `GuestModuleApplication::updateOverlay`/`dispatchOverlay` host overlays that outlive module transitions. |
 | **D-DOC1** | Established one first-party documentation tree; refined by D-DOC2. |
 | **D-DOC2** | Canonical technical documentation remains under `docs/`; `illumo.tex` is the prose book and `architecture-map.tex` the chart pack. Root/nested `AGENTS.md` and `.agent/` are operational-guidance exceptions. |
 | **D-T1** | Independent compile-efficient test runners expose exact cases; `IllumoWorkspace` aggregates all registered runners and combined Clang/LLVM coverage enforces at least 85% production line coverage across their linked production code. |

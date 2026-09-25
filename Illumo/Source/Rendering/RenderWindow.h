@@ -38,6 +38,7 @@ public:
   void requestClose() override;
   void cancelCloseRequest() override;
   void setTitle(const std::string& title) override;
+  void setSystemCursorHidden(bool hidden) override;
 
 private:
   friend std::unique_ptr<IRenderWindow> CreateCaptureWindow(int width,

@@ -720,6 +720,86 @@ run(const std::string& name)
                result.records.size() == 1 &&
                result.records.front().request == 3,
              "Queued display request completes on later frame");
+
+    // Version 2 carries the system-cursor request; version 1 still works
+    // and is answered in its own shape; cancel() gives the cursor back.
+    WasmGameServices cursorHost(
+      bridge,
+      static_cast<std::uint32_t>(GuestCapability::Display),
+      ILLUMO_ENGINE_ASSETS,
+      {},
+      {},
+      &window,
+      &env);
+    GuestDisplayRequest hide{ true, { false, true, 60, 1, true } };
+    GuestServices cursorBatch;
+    GuestWireWriter hidePayload;
+    hide.write(hidePayload);
+    cursorBatch.records.push_back({ 1,
+                                    GuestService::Display,
+                                    GuestServiceStatus::Request,
+                                    hidePayload.take() });
+    GuestWireWriter cursorBytes;
+    cursorBatch.write(cursorBytes);
+    GuestDisplayState reported;
+    bool reportedValid = false;
+    if (cursorHost.process(cursorBytes.data(), completion) &&
+        GuestServices::read(completion, result, false) &&
+        result.records.size() == 1) {
+      GuestWireReader reply(result.records.front().payload);
+      reportedValid =
+        GuestDisplayState::read(reply, reported) && reply.finished();
+    }
+    testTrue(counters,
+             window.systemCursorHidden && reportedValid &&
+               reported.hideSystemCursor,
+             "A version 2 request hides the system cursor and reports it");
+    GuestDisplayRequest legacy{ true, { false, true, 60, 1 } };
+    legacy.version = 1u;
+    GuestWireWriter legacyPayload;
+    legacy.write(legacyPayload);
+    cursorBatch.records.front().request = 2;
+    cursorBatch.records.front().payload = legacyPayload.take();
+    cursorBytes.clear();
+    cursorBatch.write(cursorBytes);
+    bool legacyShape = false;
+    if (cursorHost.process(cursorBytes.data(), completion) &&
+        GuestServices::read(completion, result, false) &&
+        result.records.size() == 1) {
+      GuestWireReader reply(result.records.front().payload);
+      GuestDisplayState legacyState;
+      legacyShape =
+        GuestDisplayState::read(reply, legacyState, 1u) && reply.finished();
+    }
+    testTrue(counters,
+             legacyShape && window.systemCursorHidden,
+             "A version 1 request completes in its own shape and leaves the "
+             "cursor alone");
+    cursorHost.cancel();
+    testTrue(counters,
+             !window.systemCursorHidden,
+             "Cancelling the guest gives the system cursor back");
+
+    GuestDisplayRequest decoded;
+    GuestWireWriter future;
+    future.u32(3u);
+    future.u32(0u);
+    GuestDisplayState{}.write(future);
+    GuestWireWriter badFlag;
+    badFlag.u32(2u);
+    badFlag.u32(1u);
+    GuestDisplayState{ false, true, 60, 1 }.write(badFlag, 1u);
+    badFlag.u32(2u);
+    GuestWireWriter legacyExtra;
+    legacyExtra.u32(1u);
+    legacyExtra.u32(1u);
+    GuestDisplayState{ false, true, 60, 1 }.write(legacyExtra, 2u);
+    testTrue(counters,
+             !GuestDisplayRequest::read(future.data(), decoded) &&
+               !GuestDisplayRequest::read(badFlag.data(), decoded) &&
+               !GuestDisplayRequest::read(legacyExtra.data(), decoded),
+             "Display decoding rejects unknown versions, bad cursor flags "
+             "and trailing version 1 bytes");
     return counters.failures == 0;
   }
   if (name == "ClipboardServices") {

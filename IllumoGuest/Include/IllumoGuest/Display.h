@@ -1,27 +1,46 @@
 #pragma once
 #include <IllumoGuest/Services.h>
 
+// Display wire version. Version 2 appends hideSystemCursor to the state;
+// hosts still accept version 1 and answer each request in its own version.
+inline constexpr std::uint32_t kGuestDisplayVersion = 2u;
+
 struct GuestDisplayState
 {
   bool fullscreen = false;
   bool vsync = true;
   std::uint32_t fps = 60;
   std::uint32_t uiScale = 1;
+  // The product draws its own pointer, so the host hides the system cursor
+  // over the main window. Runtime state, never persisted.
+  bool hideSystemCursor = false;
   bool operator==(const GuestDisplayState&) const = default;
-  void write(GuestWireWriter& writer) const
+  void write(GuestWireWriter& writer,
+             std::uint32_t version = kGuestDisplayVersion) const
   {
     writer.u32(fullscreen ? 1 : 0);
     writer.u32(vsync ? 1 : 0);
     writer.u32(fps);
     writer.u32(uiScale);
+    if (version >= 2u) {
+      writer.u32(hideSystemCursor ? 1 : 0);
+    }
   }
-  static bool read(GuestWireReader& reader, GuestDisplayState& state)
+  static bool read(GuestWireReader& reader,
+                   GuestDisplayState& state,
+                   std::uint32_t version = kGuestDisplayVersion)
   {
     const std::uint32_t fullscreen = reader.u32();
     const std::uint32_t vsync = reader.u32();
     state = { fullscreen != 0, vsync != 0, reader.u32(), reader.u32() };
+    std::uint32_t hideSystemCursor = 0u;
+    if (version >= 2u) {
+      hideSystemCursor = reader.u32();
+      state.hideSystemCursor = hideSystemCursor != 0u;
+    }
     return reader.valid() && fullscreen <= 1 && vsync <= 1 &&
-           state.fps <= 1000 && state.uiScale >= 1 && state.uiScale <= 4;
+           hideSystemCursor <= 1 && state.fps <= 1000 && state.uiScale >= 1 &&
+           state.uiScale <= 4;
   }
 };
 
@@ -29,11 +48,12 @@ struct GuestDisplayRequest
 {
   bool apply = false;
   GuestDisplayState state;
+  std::uint32_t version = kGuestDisplayVersion;
   void write(GuestWireWriter& writer) const
   {
-    writer.u32(1);
+    writer.u32(version);
     writer.u32(apply ? 1 : 0);
-    state.write(writer);
+    state.write(writer, version);
   }
   static bool read(std::span<const std::byte> bytes,
                    GuestDisplayRequest& output)
@@ -43,8 +63,10 @@ struct GuestDisplayRequest
     const std::uint32_t apply = reader.u32();
     GuestDisplayRequest candidate;
     candidate.apply = apply != 0;
-    if (!GuestDisplayState::read(reader, candidate.state) ||
-        !reader.finished() || version != 1 || apply > 1 ||
+    candidate.version = version;
+    if (version < 1u || version > kGuestDisplayVersion ||
+        !GuestDisplayState::read(reader, candidate.state, version) ||
+        !reader.finished() || apply > 1 ||
         (!candidate.apply && candidate.state != GuestDisplayState{})) {
       return false;
     }

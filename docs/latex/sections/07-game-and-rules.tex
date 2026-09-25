@@ -226,6 +226,9 @@ paint, selection, paste, pan, and zoom ignore pointer input there. The camera
 mapping stays fixed; hiding hints releases the band. Scissor state is restored
 before UI submission.
 Hints and selection outlines hide behind modal overlays and the console.
+CSim draws its own glass-themed mouse pointer and hides the system cursor
+(D-UI10); the persisted \texttt{softwareCursor} setting (Software cursor in F1
+settings) defaults on and returns the system cursor when off.
 Selection drags finish on mouse release, even if Shift is released first.
 Painting, erasing, and leaving EDIT clear the selection but preserve the
 copied pattern. Clipboard hotkeys act only in EDIT; explicit console pattern

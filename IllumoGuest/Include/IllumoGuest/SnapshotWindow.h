@@ -35,7 +35,8 @@ public:
       static_cast<std::uint32_t>(
         std::clamp(fps.value.empty() ? 60L : fps.valueAsLong, 0L, 1000L)),
       static_cast<std::uint32_t>(
-        std::clamp(scale.value.empty() ? 1L : scale.valueAsLong, 1L, 4L))
+        std::clamp(scale.value.empty() ? 1L : scale.valueAsLong, 1L, 4L)),
+      m_hideSystemCursor
     };
     if (!m_requestedDisplay || desired != m_desired) {
       m_display->apply(desired);
@@ -53,6 +54,12 @@ public:
     }
   }
   void accept(const GuestInput& input) { m_input = input; }
+  // Travels with the next display synchronization; not a persisted setting.
+  void setSystemCursorHidden(bool hidden) override
+  {
+    m_hideSystemCursor = hidden;
+  }
+  bool systemCursorHidden() const { return m_hideSystemCursor; }
   void updateWindow() override {}
   void toggleFullscreen() override
   {
@@ -114,4 +121,5 @@ private:
   IEnvVars* m_environment = nullptr;
   GuestDisplayState m_desired;
   bool m_requestedDisplay = false;
+  bool m_hideSystemCursor = false;
 };

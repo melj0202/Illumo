@@ -169,6 +169,7 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
   fadeText = decimalText(current.fadeSpeed);
   vsync = current.vsync;
   editHints = current.editHints;
+  softwareCursor = current.softwareCursor;
   fullscreen = current.fullscreen;
   uiScale = current.uiScale > 0 ? current.uiScale : 1;
   msaa = current.msaa;
@@ -203,7 +204,8 @@ bool
 ConfigurationMenu::isToggleRow(int row) const
 {
   return row == kVsyncRow || row == kFullscreenRow || row == kInspectorRow ||
-         row == kReducedMotionRow || row == kEditHintsRow;
+         row == kReducedMotionRow || row == kEditHintsRow ||
+         row == kSoftwareCursorRow;
 }
 
 bool
@@ -220,6 +222,8 @@ ConfigurationMenu::toggleValue(int row) const
       return reducedUiMotion;
     case kEditHintsRow:
       return editHints;
+    case kSoftwareCursorRow:
+      return softwareCursor;
     default:
       return false;
   }
@@ -506,6 +510,9 @@ ConfigurationMenu::cycleSelected(int direction)
   } else if (selectedRow == kEditHintsRow) {
     editHints = !editHints;
     changed = true;
+  } else if (selectedRow == kSoftwareCursorRow) {
+    softwareCursor = !softwareCursor;
+    changed = true;
   } else if (selectedRow == kSoundVolumeRow) {
     const long next = std::clamp(soundVolume + direction * 10L, 0L, 100L);
     if (next == soundVolume) {
@@ -590,7 +597,8 @@ ConfigurationMenu::activateSelected()
       selectedRow == kVsyncRow || selectedRow == kFullscreenRow ||
       selectedRow == kUiScaleRow || selectedRow == kMsaaRow ||
       selectedRow == kFpsCapRow || selectedRow == kInspectorRow ||
-      selectedRow == kReducedMotionRow || selectedRow == kEditHintsRow) {
+      selectedRow == kReducedMotionRow || selectedRow == kEditHintsRow ||
+      selectedRow == kSoftwareCursorRow) {
     cycleSelected(1);
   }
   return ConfigurationMenuAction::None;
@@ -739,6 +747,7 @@ ConfigurationMenu::readConfiguration(SimulatorConfiguration* configuration,
   parsed.reducedUiMotion = reducedUiMotion;
   parsed.vsync = vsync;
   parsed.editHints = editHints;
+  parsed.softwareCursor = softwareCursor;
   parsed.fullscreen = fullscreen;
   parsed.uiScale = uiScale > 0 ? uiScale : 1;
   parsed.msaa = msaa;
@@ -902,6 +911,7 @@ ConfigurationMenu::rebuildVisual()
                                           "Simulation inspector",
                                           "Reduced menu motion",
                                           "Edit control hints",
+                                          "Software cursor",
                                           "Sound volume",
                                           "Apply changes",
                                           "Discard changes",
@@ -924,6 +934,7 @@ ConfigurationMenu::rebuildVisual()
     showInspector ? "On" : "Off",
     reducedUiMotion ? "On" : "Off",
     editHints ? "On" : "Off",
+    softwareCursor ? "On" : "Off",
     soundVolume == 0 ? "Off" : std::to_string(soundVolume) + "%",
     "ENTER",
     "ENTER",
@@ -945,6 +956,7 @@ ConfigurationMenu::rebuildVisual()
     "Show generation, cell coordinates, and population in the simulation.",
     "Disable decorative motion and snap menu transitions.",
     "Show input hints at the bottom while editing.",
+    "Draw CSim's animated pointer in place of the system cursor.",
     "Sound effect volume, off to 100%; each step previews the new level.",
     "Validate, save, and apply the displayed settings.",
     "Close the menu without changing any settings.",

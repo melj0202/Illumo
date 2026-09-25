@@ -246,7 +246,7 @@ testConfigurationNavigationAndActions()
            fixture.menu.getValuePulseForTesting() == 0.0f,
            "value accent pulse fades to rest");
 
-  for (int row = 0; row < 16; ++row) {
+  for (int row = 0; row < 17; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -298,7 +298,23 @@ testConfigurationNavigationAndActions()
            "reopening preserves the hints setting");
 
   fixture.menu.open(defaultConfiguration());
-  for (int row = 0; row < 18; ++row) {
+  for (int row = 0; row < 15; ++row) {
+    fixture.press(KeyCode::Down);
+  }
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             !parsed.softwareCursor && parsed.editHints,
+           "Enter toggles the software cursor off");
+  fixture.menu.open(parsed);
+  testTrue(g,
+           fixture.menu.readConfiguration(&parsed, &error) &&
+             !parsed.softwareCursor,
+           "reopening preserves the software cursor setting");
+
+  fixture.menu.open(defaultConfiguration());
+  for (int row = 0; row < 19; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.press(KeyCode::Enter);
@@ -539,20 +555,21 @@ testDisplaySettingsAndScrolling()
   GameVisual& visual = fixture.menu.getVisual();
   const float fittedScale =
     visual.getTransform().scaleX * fixture.renderer.getUiScale();
-  bool foundCap = false;
+  bool foundInspector = false;
   for (std::size_t index = 0; index < visual.textCount(); ++index) {
     TextPrimitive* text = visual.getText(index);
     if (text == nullptr) {
       continue;
     }
-    foundCap = foundCap || text->content == "FPS cap";
+    foundInspector = foundInspector || text->content == "Simulation inspector";
     testTrue(
       g,
       text->y * fittedScale >= 0.0f &&
         (text->y + text->sizePt) * fittedScale <= 480.0f,
       "scrolled text stays within the small window at 4x preferred UI scale");
   }
-  testTrue(g, foundCap, "scrolling to actions retains nearby display controls");
+  testTrue(
+    g, foundInspector, "scrolling to actions retains nearby display controls");
 }
 
 static void
@@ -569,12 +586,12 @@ testSoundVolumeAndCues()
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == 0,
            "a selection that cannot move is silent");
-  for (int row = 0; row < 15; ++row) {
+  for (int row = 0; row < 16; ++row) {
     fixture.press(KeyCode::Down);
   }
   fixture.menu.update(&fixture.input);
   testTrue(g,
-           CSimSounds::playCount(CSimSound::MenuHover) == 15,
+           CSimSounds::playCount(CSimSound::MenuHover) == 16,
            "every selection change plays the hover cue");
 
   SimulatorConfiguration parsed;

@@ -21,6 +21,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/MainMenuModule.cpp
   Source/Game/MenuMotifs.cpp
   Source/Game/ModeBadge.cpp
+  Source/Game/SoftwareCursor.cpp
   Source/Game/NewSimulationMenu.cpp
   Source/Game/PatternCodec.cpp
   Source/Game/RuleCatalogLoader.cpp

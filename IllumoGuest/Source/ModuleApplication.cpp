@@ -201,6 +201,18 @@ GuestModuleApplication::pumpProduct()
 {
 }
 
+void
+GuestModuleApplication::updateOverlay(double elapsed)
+{
+  (void)elapsed;
+}
+
+void
+GuestModuleApplication::dispatchOverlay(Scene& scene)
+{
+  (void)scene;
+}
+
 bool
 GuestModuleApplication::start(std::span<const std::byte> startup)
 {
@@ -271,6 +283,7 @@ GuestModuleApplication::update(const GuestInput& input)
   if (m_module) {
     m_module->Update(input.elapsed);
   }
+  updateOverlay(input.elapsed);
   // Key and character queues are per-frame events, as in the native loop.
   m_input.clearKeyQueue();
   m_input.clearCharQueue();
@@ -291,6 +304,9 @@ GuestModuleApplication::frame()
     m_panels.clearScenes();
     if (m_module) {
       m_module->DispatchDrawables(&m_scene);
+    }
+    if (m_phase == Phase::Running) {
+      dispatchOverlay(m_scene);
     }
     // As the native host: queued asset loads complete before submission.
     m_assets.pump();

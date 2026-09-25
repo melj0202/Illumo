@@ -489,7 +489,7 @@ testMainMenuSettingsApply()
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
-  for (int row = 0; row < 5; ++row) {
+  for (int row = 0; row < 6; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
@@ -530,7 +530,7 @@ testSettingsMouseIsolation()
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
-  for (int row = 0; row < 5; ++row) {
+  for (int row = 0; row < 6; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.module.Update(0.016);

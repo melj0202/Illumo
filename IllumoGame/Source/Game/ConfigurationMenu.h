@@ -27,6 +27,8 @@ struct SimulatorConfiguration
   long fpsCap = 60;
   bool showInspector = false;
   bool reducedUiMotion = false;
+  // CSim draws its own pointer and hides the system cursor.
+  bool softwareCursor = true;
   // Sound effect volume, 0 (off) to 100 percent.
   long soundVolume = 80;
 };
@@ -89,11 +91,12 @@ private:
   static const int kInspectorRow = 12;
   static const int kReducedMotionRow = 13;
   static const int kEditHintsRow = 14;
-  static const int kSoundVolumeRow = 15;
-  static const int kApplyRow = 16;
-  static const int kCancelRow = 17;
-  static const int kExitRow = 18;
-  static const int kRowCount = 19;
+  static const int kSoftwareCursorRow = 15;
+  static const int kSoundVolumeRow = 16;
+  static const int kApplyRow = 17;
+  static const int kCancelRow = 18;
+  static const int kExitRow = 19;
+  static const int kRowCount = 20;
 
   IRenderWindow* window;
   Renderer* renderer;
@@ -130,6 +133,7 @@ private:
   std::string fadeText;
   bool vsync;
   bool editHints = true;
+  bool softwareCursor = true;
   bool fullscreen;
   long uiScale;
   long msaa;

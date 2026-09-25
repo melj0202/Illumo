@@ -201,6 +201,18 @@ displayContract()
   display.pump();
   require(display.idle() && !display.error().empty(),
           "Display denial is observable");
+
+  GuestServiceQueue cursorQueue;
+  GuestDisplay cursorDisplay(cursorQueue);
+  cursorDisplay.apply({ false, true, 60, 1, true });
+  cursorDisplay.pump();
+  GuestServices cursorRequest = exchange(cursorQueue);
+  GuestDisplayRequest decoded;
+  require(
+    cursorRequest.records.size() == 1 &&
+      GuestDisplayRequest::read(cursorRequest.records[0].payload, decoded) &&
+      decoded.version == kGuestDisplayVersion && decoded.state.hideSystemCursor,
+    "A system-cursor request travels as display version 2");
 }
 
 static void

@@ -270,6 +270,17 @@ RenderWindow::setTitle(const std::string& title)
 }
 
 void
+RenderWindow::setSystemCursorHidden(bool hidden)
+{
+  // Hidden applies only over the content area, so the title bar, other
+  // windows and native dialogs keep the system cursor.
+  if (window != nullptr && !m_captureOnly) {
+    glfwSetInputMode(
+      window, GLFW_CURSOR, hidden ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
+  }
+}
+
+void
 RenderWindow::reinitializeWindow()
 {
   // glfwDestroyWindow(window);

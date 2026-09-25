@@ -913,6 +913,9 @@ CellGameModule::currentConfiguration() const
   }
   const EnvVar& hintsVar = ic->envVars->getVar("editHints");
   configuration.editHints = hintsVar.value.empty() || hintsVar.valueAsBool;
+  const EnvVar& cursorVar = ic->envVars->getVar("softwareCursor");
+  configuration.softwareCursor =
+    cursorVar.value.empty() || cursorVar.valueAsBool;
   configuration.vsync = ic->envVars->getVar("vsync").valueAsBool;
   configuration.fullscreen = ic->envVars->getVar("fullscreen").valueAsBool;
   const EnvVar& uiScaleVar = ic->envVars->getVar("uiScale");
@@ -1001,6 +1004,7 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
   ic->envVars->setVar("showInspector", configuration.showInspector);
   ic->envVars->setVar("reducedUiMotion", configuration.reducedUiMotion);
   ic->envVars->setVar("editHints", configuration.editHints);
+  ic->envVars->setVar("softwareCursor", configuration.softwareCursor);
   ic->envVars->setVar("vsync", configuration.vsync);
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
   ic->envVars->setVar("uiScale", configuration.uiScale);

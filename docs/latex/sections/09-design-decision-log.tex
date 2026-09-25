@@ -2851,6 +2851,35 @@ against the guest's 32-font budget (CSim uses at most 20). Kikuta's B and S
 resemble 8 and 5, which rule strings such as B3/S23 inherit.\\
 \textbf{Extends:} D-UI8 (menu motion), D-R26 (living-glass chrome)
 \end{decisionbox}
+
+\subsection*{D-UI10 --- CSim's software pointer}
+\begin{decisionbox}[title={D-UI10 \quad 2026-09-24}]
+\textbf{Decision:} CSim draws its own mouse pointer (\texttt{SoftwareCursor})
+and hides the system cursor while it does. Display wire version 2 appends
+\texttt{hideSystemCursor} to \texttt{GuestDisplayState}; the host applies it
+with GLFW's hidden-cursor mode on the main window only
+(\texttt{IRenderWindow::setSystemCursorHidden}), still decodes version 1 and
+answers each request in its own version, and a version 1 request leaves the
+cursor alone. \texttt{WasmGameServices::cancel} restores the system cursor, so
+a stopped or failed guest never leaves it hidden.
+\texttt{GuestModuleApplication} gains \texttt{updateOverlay} and
+\texttt{dispatchOverlay} for product overlays that outlive module transitions
+and draw above them. The pointer's tip sits exactly on the pointer; its body
+leans against sideways motion on a spring, a faint holographic afterimage
+follows movement, and a press squishes it and throws a splash. It takes the menu
+glass palette: a dark halo, a rim lit cyan at the tip and violet at the tail,
+a deep glass body, and a soft glow around the edge.\\
+\textbf{Why:} The owner asked for a software cursor with sway and
+movement-driven animation.\\
+\textbf{Consequences:} The system cursor returns while the host console is
+open (it draws above the game) and outside the window's content area.
+The Software cursor toggle in F1 settings (the persisted
+\texttt{softwareCursor} option, also \texttt{toggle softwareCursor}) turns it
+off.
+IllEd and the viewer never set the field. The drawn pointer follows the last
+input snapshot, so it can trail the hardware pointer by a frame.\\
+\textbf{Extends:} D-UI8 (menu motion), D-E23 (capabilities)
+\end{decisionbox}
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

@@ -467,6 +467,17 @@ constants, and `GameVisual` composition, so a new interface inherits the
 existing theming and animation. The title screen keeps its own slower entrance
 clock and per-item stagger.
 
+CSim draws its own mouse pointer (`SoftwareCursor`, owned by the guest
+`GameApplication` overlay so it survives module transitions) and hides the
+system cursor through Display wire version 2. The arrow is built like the menu
+glass: a thin dark halo, a lit rim that runs cyan at the tip to violet at the
+tail, a deep glass body, and a soft glow around the whole edge. It leans against
+sideways motion on a spring, leaves a faint holographic afterimage (ghost
+arrows split into cyan and magenta-violet, shimmering) while moving, and
+squishes with a splash on press. The persisted `softwareCursor` option
+(Software cursor in F1 settings) defaults on; turning it off returns the system
+cursor. The system cursor also returns while the host console is open or the
+pointer leaves the window.
 The inactive mirror does not retain a second copy of the outgoing delta.
 Incremental catch-up uses its existing changed-address journal and skips prior
 states replaced by an incoming record. Broad full replacements carry no chunk

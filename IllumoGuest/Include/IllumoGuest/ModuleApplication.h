@@ -94,6 +94,12 @@ protected:
   virtual std::unique_ptr<IModule> createFirstModule() = 0;
   // Product service adapters pumped every update before modules run.
   virtual void pumpProduct();
+  // A product overlay that outlives module transitions (a software pointer):
+  // updated after the module each running frame, before display settings
+  // synchronize, and dispatched after the module's drawables so it draws on
+  // top. Neither runs before the first module starts.
+  virtual void updateOverlay(double elapsed);
+  virtual void dispatchOverlay(Scene& scene);
   GuestFiles& files() { return m_files; }
   // AssetManager's byte source: pinned preloads, fetch sets and /local bytes.
   GuestVfsAssets& assetCache() { return m_assetCache; }

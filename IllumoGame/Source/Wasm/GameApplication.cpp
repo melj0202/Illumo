@@ -2,10 +2,17 @@
 #include "Game/CSimTypeface.h"
 #include "Game/IllumoGameConfig.h"
 #include "Game/MainMenuModule.h"
+#include "Game/SoftwareCursor.h"
 #include "Wasm/CatalogBootstrap.h"
 #include "Wasm/GuestPlatform.h"
+#include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Services/CommandLine.h>
+#include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/ModuleApplication.h>
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -46,6 +53,48 @@ public:
 
 protected:
   void pumpProduct() override { m_platform.pump(); }
+
+  // CSim draws its own pointer over every screen and hides the system
+  // cursor while it does. The host console draws above the game, so while it
+  // is open the system cursor returns. `softwareCursor 0` turns it off.
+  void updateOverlay(double elapsed) override
+  {
+    const IllumoContext& engine = context();
+    if (engine.window == nullptr || engine.renderer == nullptr) {
+      return;
+    }
+    if (!m_cursorPrepared) {
+      m_cursor.prepare(engine.window, engine.renderer);
+      m_cursorPrepared = true;
+    }
+    const EnvVar& enabled = settings().getVar("softwareCursor");
+    const bool consoleOpen =
+      engine.commandLine != nullptr && engine.commandLine->isOpen;
+    const bool active =
+      (enabled.value.empty() || enabled.valueAsBool) && !consoleOpen;
+    engine.window->setSystemCursorHidden(active);
+    const std::array<double, 2> mouse = engine.window->getMouseCoords();
+    const std::array<int, 2> size = engine.window->getWindowDimensions();
+    const bool inside = mouse[0] >= 0.0 && mouse[1] >= 0.0 &&
+                        mouse[0] < static_cast<double>(size[0]) &&
+                        mouse[1] < static_cast<double>(size[1]);
+    const float scale = std::max(0.01f, engine.renderer->getUiScale());
+    m_cursor.update(
+      static_cast<float>(elapsed),
+      static_cast<float>(mouse[0]) / scale,
+      static_cast<float>(mouse[1]) / scale,
+      active && inside,
+      engine.inputManager != nullptr &&
+        engine.inputManager->isMouseButtonPressed(KeyCode::MouseLeft),
+      settings().getVar("reducedUiMotion").valueAsBool);
+  }
+
+  void dispatchOverlay(Scene& scene) override
+  {
+    if (m_cursor.isVisible()) {
+      scene.AddDrawable(&m_cursor.getVisual(), RenderLayerId::UI);
+    }
+  }
 
   // The package's envvars.json has already filled first-run values.
   void applyDefaults(IEnvVars& settings) override
@@ -166,6 +215,9 @@ private:
   std::uint64_t m_soundFetch = 0;
   bool m_soundsLoaded = false;
   bool m_audioAbsenceReported = false;
+  // The software pointer; it outlives module transitions.
+  SoftwareCursor m_cursor;
+  bool m_cursorPrepared = false;
 };
 
 std::unique_ptr<GuestApplication>

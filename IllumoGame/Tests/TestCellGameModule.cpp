@@ -2,6 +2,7 @@
 #include "Game/CanvasCoordinatePolicy.h"
 #include "Game/CellGameModule.h"
 #include "Game/RuleCatalogLoader.h"
+#include "Game/SoftwareCursor.h"
 #include "Rulesets/RuleSet.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "Rulesets/WireworldRuleSet.h"
@@ -962,6 +963,7 @@ testReleaseConfigurationWorkflow()
   configuration.fpsCap = 144;
   configuration.showInspector = true;
   configuration.reducedUiMotion = true;
+  configuration.softwareCursor = false;
   testTrue(
     g,
     CellGameModuleTestAccess::applyConfiguration(fixture.module, configuration),
@@ -994,7 +996,8 @@ testReleaseConfigurationWorkflow()
   testTrue(
     g,
     applied.fpsCap == 144 && applied.showInspector && applied.reducedUiMotion &&
-      fixture.env.getVar("fps").valueAsLong == 144,
+      !applied.softwareCursor && fixture.env.getVar("fps").valueAsLong == 144 &&
+      !fixture.env.getVar("softwareCursor").valueAsBool,
     "new display preferences round trip through runtime and environment");
   configuration.fpsCap = -1;
   testTrue(g,
@@ -1003,7 +1006,7 @@ testReleaseConfigurationWorkflow()
              fixture.env.getVar("fps").valueAsLong == 144,
            "invalid FPS cap leaves applied preferences intact");
   menu->open(applied);
-  for (int row = 0; row < 18; ++row) {
+  for (int row = 0; row < 19; ++row) {
     fixture.input.getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
   }
@@ -1450,6 +1453,68 @@ testModeBadge()
     dispatched = dispatched || drawable == &moduleBadge.getVisual();
   }
   testTrue(g, dispatched, "the badge is drawn in the UI layer");
+}
+
+static void
+testSoftwareCursor()
+{
+  testSection("SoftwareCursor: exact tip, swaying body, afterimage, press");
+  SoftwareCursor cursor;
+  testTrue(g, !cursor.isVisible(), "the software cursor starts hidden");
+  cursor.update(1.0f / 60.0f, 100.0f, 100.0f, true, false, false);
+  testTrue(g,
+           cursor.isVisible() && cursor.tipX() == 100.0f &&
+             cursor.tipY() == 100.0f && cursor.lean() == 0.0f,
+           "it appears still, with its tip on the pointer");
+  float furthestLean = 0.0f;
+  for (int frame = 1; frame <= 12; ++frame) {
+    cursor.update(1.0f / 60.0f,
+                  100.0f + 12.0f * static_cast<float>(frame),
+                  100.0f,
+                  true,
+                  false,
+                  false);
+    furthestLean = std::max(furthestLean, cursor.lean());
+  }
+  testTrue(g,
+           furthestLean > 0.1f && cursor.tipX() == 244.0f,
+           "moving right swings the body while the tip tracks exactly");
+  const std::size_t movingShapes = cursor.getVisual().shapeCount();
+  float swingBack = 0.0f;
+  for (int frame = 0; frame < 90; ++frame) {
+    cursor.update(1.0f / 60.0f, 244.0f, 100.0f, true, false, false);
+    swingBack = std::min(swingBack, cursor.lean());
+  }
+  testTrue(g,
+           swingBack < 0.0f && std::abs(cursor.lean()) < 0.001f,
+           "stopping swings it past upright before it settles");
+  const std::size_t stillShapes = cursor.getVisual().shapeCount();
+  testTrue(g,
+           movingShapes > stillShapes,
+           "moving leaves a holographic afterimage that a still pointer drops");
+  cursor.update(1.0f / 60.0f, 244.0f, 100.0f, true, true, false);
+  for (int frame = 0; frame < 20; ++frame) {
+    cursor.update(1.0f / 60.0f, 244.0f, 100.0f, true, true, false);
+  }
+  const float pressed = cursor.pressScale();
+  float rebound = 0.0f;
+  for (int frame = 0; frame < 30; ++frame) {
+    cursor.update(1.0f / 60.0f, 244.0f, 100.0f, true, false, false);
+    rebound = std::max(rebound, cursor.pressScale());
+  }
+  testTrue(g,
+           pressed < 0.9f && rebound > 1.0f,
+           "a press squishes it and releasing boings it back");
+  cursor.update(1.0f / 60.0f, 244.0f, 100.0f, false, false, false);
+  testTrue(g,
+           !cursor.isVisible() && cursor.lean() == 0.0f,
+           "hiding clears it and forgets its motion");
+  cursor.update(1.0f / 60.0f, 50.0f, 50.0f, true, false, true);
+  cursor.update(1.0f / 60.0f, 400.0f, 50.0f, true, false, true);
+  testTrue(g,
+           cursor.lean() == 0.0f && cursor.tipX() == 400.0f &&
+             cursor.getVisual().shapeCount() <= stillShapes,
+           "reduced motion keeps it upright, without an afterimage");
 }
 
 static void
@@ -3527,6 +3592,8 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CellGame.PaintPalette",
                []() { return runCellGameModuleCase(testPaintPalette); });
+  registry.add("IllumoGame.CellGame.SoftwareCursor",
+               []() { return runCellGameModuleCase(testSoftwareCursor); });
   registry.add("IllumoGame.CellGame.ModeBadge",
                []() { return runCellGameModuleCase(testModeBadge); });
   registry.add("IllumoGame.CellGame.PaintPaletteBubbleMorph", []() {
