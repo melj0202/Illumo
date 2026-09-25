@@ -341,7 +341,12 @@ no typeface and keeps the engine default font.
   backend destroys its prior GL texture, PBOs, and fences; view destruction
   explicitly releases the texture.
 - Uses nearest filtering so discrete cell colors stay sharp; the editor cursor
-  uses the same centered cell bounds.
+  uses the same centered cell bounds. It hugs the hovered LED key with a soft
+  glow, a thin rounded rim, breathing viewfinder corner brackets and a small
+  centre cross, and glides between cells on a `GuiMotion::kTrack` spring
+  (stretching along its travel, landing with a small bounce while its
+  brackets pop out); a cursor that was hidden snaps into place, and reduced
+  motion snaps every move.
 - Finite worlds add a screen-thickness-stable, theme-accented outline around
   the centered canonical rectangle so all four wrap edges remain visible while
   panning and zooming. Infinite worlds do not emit this boundary.

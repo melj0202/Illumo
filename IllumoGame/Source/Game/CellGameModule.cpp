@@ -1974,7 +1974,7 @@ CellGameModule::Update(double dt)
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
     updateModeBadge(dt);
-    updateEditorCursor();
+    updateEditorCursor(dt);
     updateHamburgerVisual(dt);
     updateSelectionVisual();
     updateInspectorVisual();
@@ -2017,7 +2017,7 @@ CellGameModule::Update(double dt)
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
     updateModeBadge(dt);
-    updateEditorCursor();
+    updateEditorCursor(dt);
     updateHamburgerVisual(dt);
     updateSelectionVisual();
     updateInspectorVisual();
@@ -2186,7 +2186,7 @@ CellGameModule::Update(double dt)
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
     updateModeBadge(dt);
-    updateEditorCursor();
+    updateEditorCursor(dt);
     updateHamburgerVisual(dt);
     updateSelectionVisual();
     updateInspectorVisual();
@@ -2206,7 +2206,7 @@ CellGameModule::Update(double dt)
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
     updateModeBadge(dt);
-    updateEditorCursor();
+    updateEditorCursor(dt);
     updateHamburgerVisual(dt);
     updateSelectionVisual();
     updateInspectorVisual();
@@ -2307,7 +2307,7 @@ CellGameModule::Update(double dt)
   if (ic->commandLine == nullptr || !ic->commandLine->isOpen) {
     handleEditorHotkeys();
   }
-  updateEditorCursor();
+  updateEditorCursor(dt);
   updateHamburgerVisual(dt);
   updateSelectionVisual();
   updateInspectorVisual();
@@ -4206,8 +4206,13 @@ CellGameModule::updateHamburgerVisual(double dt)
 }
 
 void
-CellGameModule::updateEditorCursor()
+CellGameModule::updateEditorCursor(double dt)
 {
+  // Advance the glide first: a cursor hidden last frame snaps to wherever it
+  // is placed below instead of gliding in from its old cell.
+  editorCursor.tick(static_cast<float>(dt),
+                    ic != nullptr && ic->envVars != nullptr &&
+                      ic->envVars->getVar("reducedUiMotion").valueAsBool);
   if (isPointerOverEditHints()) {
     hoverValid = false;
     editorCursor.setVisible(false);

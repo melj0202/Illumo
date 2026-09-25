@@ -69,7 +69,7 @@ private:
   void seedInitialPattern();
   void updatePaintBrushFromInput();
   void showModeSplash(const char* label);
-  void updateEditorCursor();
+  void updateEditorCursor(double dt);
   void updateHamburgerVisual(double dt);
   void updatePaintPalette(double dt);
   void updateModeBadge(double dt);

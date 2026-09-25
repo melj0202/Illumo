@@ -14,6 +14,7 @@
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -3262,15 +3263,41 @@ testCursorUsesCellBounds()
   Cursor cursor;
   cursor.init(&renderer, &window, &camera);
   cursor.setFromCell(0, 0);
+  testTrue(g,
+           cursor.displayX() == -8.0f && cursor.displayY() == -8.0f &&
+             cursor.getVisual().shapeCount() > 0u,
+           "the first placement snaps onto its selected cell");
 
-  ShapePrimitive* outline = cursor.getVisual().getShape(0);
-  testTrue(g, outline != nullptr, "cursor creates a cell outline");
-  if (outline != nullptr) {
-    testTrue(g,
-             outline->rect.x == -8.0f && outline->rect.y == -8.0f &&
-               outline->rect.w == 16.0f && outline->rect.h == 16.0f,
-             "cursor outline is centered on its selected cell");
+  // Moving glides there on a spring: it passes the cell, bounces back and
+  // settles exactly.
+  cursor.setFromCell(3, 0);
+  cursor.tick(0.02f, false);
+  testTrue(g,
+           cursor.targetX() == 40.0f && cursor.displayX() > -8.0f &&
+             cursor.displayX() < 40.0f,
+           "the cursor glides toward the new cell");
+  float furthest = cursor.displayX();
+  for (int frame = 0; frame < 60; ++frame) {
+    cursor.tick(1.0f / 60.0f, false);
+    furthest = std::max(furthest, cursor.displayX());
   }
+  testTrue(g,
+           furthest > 40.0f && cursor.displayX() == 40.0f &&
+             cursor.displayY() == -8.0f,
+           "it bounces past the cell and settles exactly on it");
+
+  cursor.setVisible(false);
+  cursor.tick(1.0f / 60.0f, false);
+  cursor.setVisible(true);
+  cursor.setFromCell(10, 0);
+  testTrue(g,
+           cursor.displayX() == 152.0f,
+           "a cursor that was hidden reappears in place");
+  cursor.tick(1.0f / 60.0f, true);
+  cursor.setFromCell(0, 0);
+  testTrue(g,
+           cursor.displayX() == -8.0f && cursor.displayY() == -8.0f,
+           "reduced motion snaps the cursor between cells");
   mock.resetCounters();
   testTrue(g,
            cursor.AppendCommands(&renderer),

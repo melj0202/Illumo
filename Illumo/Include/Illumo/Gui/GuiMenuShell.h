@@ -80,6 +80,9 @@ public:
   // A whole panel swivelling toward the pointer: responsive, settling with
   // a gentle sway.
   static constexpr GuiSpringTuning kSway{ 1.8f, 0.5f };
+  // A marker that follows the pointer from cell to cell: quick enough to
+  // keep up, with one small bounce as it lands.
+  static constexpr GuiSpringTuning kTrack{ 7.0f, 0.5f };
 };
 
 // Damped spring toward a target, for hover emphasis, knob travel and other
