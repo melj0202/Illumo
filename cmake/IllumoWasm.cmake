@@ -436,6 +436,11 @@ if(BUILD_TESTING)
   set_tests_properties(IllumoGame.Wasm.GamePackageAudio PROPERTIES
     LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
+  add_test(NAME IllumoGame.Wasm.GamePackageRestart
+    COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.GamePackageRestart)
+  set_tests_properties(IllumoGame.Wasm.GamePackageRestart PROPERTIES
+    LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
   add_test(NAME IllumoGame.Wasm.CatalogMerge
     COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.CatalogMerge)
   set_tests_properties(IllumoGame.Wasm.CatalogMerge PROPERTIES

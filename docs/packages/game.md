@@ -452,13 +452,33 @@ presentation is clipped to the centered canonical rectangle; camera space
 outside it remains blank even though generation neighbors wrap at its edges. A
 contrasting accent outline marks those wrap edges without repeating the world.
 
-F1 opens a primitive-composed settings overlay in both Release and Debug. It
-edits family and its ruleset, world chunk dimensions, TPS, simulation speed, fade speed,
-VSync, and fullscreen. Applying a topology change drains the worker and starts
-a fresh centered world; other valid settings update the live runtime and the
-persisted environment. The overlay uses larger high-contrast setting text,
-human-readable ruleset names, split control help, and a selected-row
-description. Q and the settings Exit action open a primitive-composed
+F1 opens a primitive-composed settings overlay in both Release and Debug. Its
+settings are grouped into tabs (Simulation, Canvas, Video, Audio, Controls,
+General; Tab, Page Up/Down or a click switch them) above shared Apply,
+Discard and Exit footer buttons. D-UI12 added start paused, cell style (LED
+keys or flat), cell glow, grid lines, the corner FPS counter and memory
+readout (`PerformanceOverlay`, drawn by the guest over every screen), zoom
+sensitivity, invert zoom, arrow-key pan speed, autosave (`autosave.csim` in
+private storage; `load autosave` restores it) and confirm clearing
+(`clear_canvas` asks; `clear_canvas yes` skips it); `SimulatorSettings` owns
+their keys, defaults and ranges. Numeric settings (world width/height, TPS,
+speed multiplier, FPS cap, fade speed, sound volume, UI scale, glow, zoom
+step, pan speed, autosave) are sliders over fixed stops,
+stepped with Left/Right or dragged; typing digits still enters an exact value
+where the setting is text-backed. The UI scale slider starts at Auto, which
+sizes the interface to the window (D-UI11; the default for new settings) and
+shows the factor it picked, then runs 1x to 4x in fractional steps. MSAA and
+cell style are segmented pickers and booleans are switches. MSAA is read
+only when the host window is created: Display wire version 4 saves it for
+the next window, and after Apply, when it differs from the running window's
+samples, the canvas and main menu ask "Restart CSim?" (Later / Restart now,
+`ExitConfirmDialog::openRestart`); Restart now relaunches the runtime
+(D-UI13). The world sliders keep
+both axes finite or both infinite. Applying a topology change drains the
+worker and starts a fresh centered world; other valid settings update the
+live runtime and the persisted environment. The overlay uses larger
+high-contrast setting text, human-readable ruleset names, keycap hints, and a
+selected-row description. Q and the settings Exit action open a primitive-composed
 confirmation overlay; confirming requests window closure through
 `IRenderWindow` so the Illumo application runner can perform normal shutdown.
 Frame-delta-driven scalar state provides an eased reveal, staggered rows, a
@@ -483,8 +503,8 @@ That behavior is not restated per screen. `MainMenuModule`,
 `ConfigurationMenu`, `NewSimulationMenu`, and `RulesetWorkshopMenu` share
 `Illumo/Gui/GuiMenuShell`: `GuiEasing` curves and spring shapes,
 `GuiSpring`/`GuiSpringArray` damped springs tuned from the `GuiMotion` presets
-(row emphasis, toggle knobs, count chips, footer buttons, scroll thumbs,
-parallax), `GuiMenuAnimator`
+(row emphasis, toggle knobs, slider knobs, segment and tab pills, count
+chips, footer buttons, scroll thumbs, parallax), `GuiMenuAnimator`
 reveal/row-drop/liquid-selection/sheen/press-wobble/value-nudge/ambient/caret
 clocks including `reducedUiMotion`, `GuiPanelTilt` (every glass panel swivels
 toward the pointer; the layout origin carries the body shift so hit testing

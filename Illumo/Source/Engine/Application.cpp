@@ -8,6 +8,7 @@
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Platform/PlatformTimer.h>
+#include <Illumo/Platform/ProcessRelaunch.h>
 #include <Illumo/Platform/SystemInfo.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
@@ -114,11 +115,15 @@ public:
   ApplicationLoggerLifetime& operator=(ApplicationLoggerLifetime&&) = delete;
 };
 
-int
-RunIllumoApplication(int argc,
-                     char** argv,
-                     IllumoApplicationDefinition application)
+// The whole run, logger lifetime included. *restart reports that the
+// application asked to start again after this normal shutdown.
+static int
+runApplication(int argc,
+               char** argv,
+               IllumoApplicationDefinition application,
+               bool* restart)
 {
+  *restart = false;
   const std::chrono::steady_clock::time_point launched =
     std::chrono::steady_clock::now();
   ApplicationLoggerLifetime loggerLifetime;
@@ -218,7 +223,11 @@ RunIllumoApplication(int argc,
       illumo.frameProfiler().endFrame();
     }
 
-    Logger::LogInfo(application.applicationName + " shutting down");
+    *restart = illumo.context().window != nullptr &&
+               illumo.context().window->restartRequested();
+    Logger::LogInfo(
+      application.applicationName +
+      (*restart ? " shutting down to restart" : " shutting down"));
     illumo.shutdown();
     const int exitCode =
       application.exitCode != nullptr ? application.exitCode() : 0;
@@ -231,5 +240,25 @@ RunIllumoApplication(int argc,
   } catch (...) {
     Logger::LogError("Illumo application failed with an unknown error");
   }
+  *restart = false;
   return 1;
+}
+
+int
+RunIllumoApplication(int argc,
+                     char** argv,
+                     IllumoApplicationDefinition application)
+{
+  bool restart = false;
+  const int exitCode =
+    runApplication(argc, argv, std::move(application), &restart);
+  // The new copy starts only once this one has released its window, logger
+  // and settings file.
+  if (restart) {
+    std::string error;
+    if (!RelaunchCurrentProcess(argc, argv, &error)) {
+      std::fprintf(stderr, "Restart failed: %s\n", error.c_str());
+    }
+  }
+  return exitCode;
 }

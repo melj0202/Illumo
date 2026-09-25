@@ -8,6 +8,7 @@
 #include "PatternCodec.h"
 #include "RuleCatalogOverlay.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include "SimulatorSettings.h"
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/PresentationTiming.h>
@@ -19,6 +20,7 @@
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
+#include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
@@ -405,9 +407,15 @@ CellGameModule::Start(IllumoContext* context)
   // Canvas-dependent settings are applied only after domain construction.
   simAccum = 0.0;
   syncSimRateFromEnv();
+  syncCanvasLookFromEnv();
+  autosaveElapsed = 0.0;
 
-  currentState = CellState::EDIT;
-  soundedState = CellState::EDIT;
+  // Canvases open paused in EDIT unless the player chose to start running;
+  // the mode cue is not played for the opening state.
+  currentState = SimulatorSettings::flag(ic->envVars, "startPaused", true)
+                   ? CellState::EDIT
+                   : CellState::NORMAL;
+  soundedState = currentState;
 
   if (!initialSaveFile.empty()) {
     LoadCellGame(initialSaveFile);
@@ -926,10 +934,11 @@ CellGameModule::currentConfiguration() const
     cursorVar.value.empty() || cursorVar.valueAsBool;
   configuration.vsync = ic->envVars->getVar("vsync").valueAsBool;
   configuration.fullscreen = ic->envVars->getVar("fullscreen").valueAsBool;
-  const EnvVar& uiScaleVar = ic->envVars->getVar("uiScale");
-  configuration.uiScale = uiScaleVar.value.empty() ? 1 : uiScaleVar.valueAsLong;
-  if (configuration.uiScale < 1 || configuration.uiScale > 8) {
-    configuration.uiScale = 1;
+  // 0 is automatic; explicit factors outside the menu's range read as 1x.
+  configuration.uiScale = UiScale::stored(ic->envVars->getVar("uiScale"));
+  if (configuration.uiScale != 0.0 &&
+      (configuration.uiScale < 1.0 || configuration.uiScale > 8.0)) {
+    configuration.uiScale = 1.0;
   }
   const EnvVar& msaaVar = ic->envVars->getVar("msaa");
   configuration.msaa = msaaVar.value.empty() ? 4 : msaaVar.valueAsLong;
@@ -939,6 +948,7 @@ CellGameModule::currentConfiguration() const
   configuration.reducedUiMotion =
     ic->envVars->getVar("reducedUiMotion").valueAsBool;
   configuration.soundVolume = CSimSounds::volumeSetting(ic->envVars);
+  SimulatorSettings::read(ic->envVars, &configuration);
   return configuration;
 }
 
@@ -955,8 +965,11 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
       configuration.speedFactor <= 0.0 || configuration.speedFactor > 100.0 ||
       !std::isfinite(configuration.fadeSpeed) ||
       configuration.fadeSpeed < 0.0 || configuration.fadeSpeed > 100.0 ||
-      configuration.uiScale < 1 || configuration.uiScale > 8 ||
-      configuration.fpsCap < 0 || configuration.fpsCap > 1000) {
+      !std::isfinite(configuration.uiScale) ||
+      (configuration.uiScale != 0.0 &&
+       (configuration.uiScale < 1.0 || configuration.uiScale > 8.0)) ||
+      configuration.fpsCap < 0 || configuration.fpsCap > 1000 ||
+      !SimulatorSettings::valid(configuration)) {
     return false;
   }
 
@@ -1015,14 +1028,18 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
   ic->envVars->setVar("softwareCursor", configuration.softwareCursor);
   ic->envVars->setVar("vsync", configuration.vsync);
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
-  ic->envVars->setVar("uiScale", configuration.uiScale);
+  ic->envVars->setVar("uiScale",
+                      UiScale::text(static_cast<float>(configuration.uiScale)));
   ic->envVars->setVar("msaa", configuration.msaa);
   ic->envVars->setVar("soundVolume", configuration.soundVolume);
+  SimulatorSettings::write(ic->envVars, configuration);
+  syncCanvasLookFromEnv();
+  // A changed interval counts from now.
+  autosaveElapsed = 0.0;
 
   if (msaaChanged && ic->commandLine != nullptr) {
-    ic->commandLine->logWarning(
-      "Note: Restart CSim for Anti-Aliasing (MSAA) changes to take "
-      "effect.");
+    ic->commandLine->logNormal(
+      "Anti-aliasing (MSAA) changes apply after CSim restarts.");
   }
 
   if (topologyChanged) {
@@ -1316,19 +1333,23 @@ CellGameModule::registerConsoleCommands()
   ic->commandRegistry->RegisterCommand(
     "clear_canvas",
     [this](const std::vector<std::string>& args) {
-      if (!args.empty()) {
-        ic->commandLine->logError("Usage: clear_canvas");
+      const bool confirmed = args.size() == 1u && args[0] == "yes";
+      if (!args.empty() && !confirmed) {
+        ic->commandLine->logError("Usage: clear_canvas [yes]");
         return;
       }
-      prepareGridMutation();
-      cellContext->getGrid()->clear();
-      simulationGeneration = 0;
-      updateVisualTargets();
-      cellContext->getCanvasView()->snapVisualToTargets();
-      ic->commandLine->logSuccess("Canvas cleared");
+      // With Confirm clearing on, the canvas asks first; "yes" skips it.
+      if (!confirmed && exitConfirmDialog != nullptr &&
+          SimulatorSettings::flag(ic->envVars, "confirmClear", true)) {
+        exitConfirmDialog->openClearCanvas();
+        ic->commandLine->logNormal(
+          "Confirm in the dialog to clear the canvas (or: clear_canvas yes)");
+        return;
+      }
+      clearCanvas();
     },
-    "clear_canvas",
-    "Set every cell to the empty state");
+    "clear_canvas [yes]",
+    "Set every cell to the empty state (asks first unless yes is given)");
 
   ic->commandRegistry->RegisterCommand(
     "randomize",
@@ -1980,6 +2001,13 @@ CellGameModule::Update(double dt)
     } else if (action == ExitConfirmAction::MainMenu) {
       exitConfirmDialog->close();
       requestMainMenuReturn();
+    } else if (action == ExitConfirmAction::ClearCanvas) {
+      exitConfirmDialog->close();
+      clearCanvas();
+    } else if (action == ExitConfirmAction::Restart) {
+      exitConfirmDialog->close();
+      Logger::LogInfo("Restarting to apply settings read at startup");
+      ic->window->requestRestart();
     } else if (action == ExitConfirmAction::Cancel) {
       exitConfirmDialog->close();
     }
@@ -2024,6 +2052,13 @@ CellGameModule::Update(double dt)
       } else {
         CSimSounds::play(CSimSound::MenuSelect);
         configurationMenu->close();
+        // Settings only a restart applies: offer to restart now.
+        if (exitConfirmDialog != nullptr &&
+            SimulatorSettings::restartNeeded(configuration, ic->window)) {
+          ic->inputManager->clearCharQueue();
+          exitConfirmDialog->openRestart(true);
+          exitConfirmDialog->tick(static_cast<float>(dt));
+        }
       }
     }
     updateEditHintsVisual(dt);
@@ -2281,9 +2316,21 @@ CellGameModule::Update(double dt)
     std::array<double, 2> mouseCoords = ic->window->getMouseCoords();
     glm::dvec2 worldMouse = ic->camera->ScreenToWorldPrecise(
       glm::dvec2(mouseCoords[0], mouseCoords[1]));
+    keyboardPan(dt);
     double* scroll = ic->inputManager->getMouseScrollOffset();
     if (*scroll != 0.0f && !isPointerOverEditHints()) {
-      double zoomFactor = (*scroll > 0.0f) ? 1.15 : 0.85;
+      // One notch zooms by the persisted step (15% by default); invert
+      // reverses the wheel.
+      const double step =
+        SimulatorSettings::number(ic->envVars,
+                                  "zoomStep",
+                                  0.15,
+                                  SimulatorSettings::kMinimumZoomStep,
+                                  SimulatorSettings::kMaximumZoomStep);
+      const bool zoomIn =
+        (*scroll > 0.0f) !=
+        SimulatorSettings::flag(ic->envVars, "invertZoom", false);
+      const double zoomFactor = zoomIn ? 1.0 + step : 1.0 - step;
       const glm::dvec2 target = ic->camera->GetTargetPositionPrecise();
       const float oldZoom = ic->camera->GetTargetZoom();
       const float newZoom =
@@ -2299,6 +2346,8 @@ CellGameModule::Update(double dt)
       *scroll = 0.0;
     }
   }
+
+  updateAutosave(dt);
 
   // State dependent behavior
   switch (currentState) {
@@ -4626,6 +4675,100 @@ CellGameModule::CameraPan()
     wasPressed = false;
   }
   lastMousePos = worldMouse;
+}
+
+void
+CellGameModule::keyboardPan(double dt)
+{
+  if (ic == nullptr || ic->inputManager == nullptr || ic->camera == nullptr ||
+      !(dt > 0.0)) {
+    return;
+  }
+  // Screen pixels per second; Camera::Pan divides by zoom, so the speed on
+  // screen is the same at every zoom.
+  const double speed = SimulatorSettings::number(
+    ic->envVars,
+    "panSpeed",
+    600.0,
+    0.0,
+    static_cast<double>(SimulatorSettings::kMaximumPanSpeed));
+  if (speed <= 0.0 || ic->inputManager->isControlPressed() ||
+      ic->inputManager->isAltPressed()) {
+    return;
+  }
+  glm::dvec2 direction(0.0, 0.0);
+  if (ic->inputManager->isKeyPressed(KeyCode::Left)) {
+    direction.x -= 1.0;
+  }
+  if (ic->inputManager->isKeyPressed(KeyCode::Right)) {
+    direction.x += 1.0;
+  }
+  if (ic->inputManager->isKeyPressed(KeyCode::Up)) {
+    direction.y += 1.0;
+  }
+  if (ic->inputManager->isKeyPressed(KeyCode::Down)) {
+    direction.y -= 1.0;
+  }
+  if (direction.x == 0.0 && direction.y == 0.0) {
+    return;
+  }
+  const glm::dvec2 offset = glm::normalize(direction) * (speed * dt);
+  const glm::dvec2 next =
+    ic->camera->GetTargetPositionPrecise() +
+    offset / static_cast<double>(ic->camera->GetTargetZoom());
+  if (CanvasCoordinatePolicy::validPosition(next.x, next.y)) {
+    ic->camera->Pan(offset);
+  }
+}
+
+void
+CellGameModule::updateAutosave(double dt)
+{
+  if (ic == nullptr || ic->envVars == nullptr || !(dt > 0.0)) {
+    return;
+  }
+  const double minutes = SimulatorSettings::number(
+    ic->envVars,
+    "autosaveMinutes",
+    0.0,
+    0.0,
+    static_cast<double>(SimulatorSettings::kMaximumAutosaveMinutes));
+  if (minutes <= 0.0) {
+    autosaveElapsed = 0.0;
+    return;
+  }
+  autosaveElapsed += dt;
+  if (autosaveElapsed < minutes * 60.0) {
+    return;
+  }
+  autosaveElapsed = 0.0;
+  // Quiet: the console only logs it. The write completes asynchronously.
+  if (!saveCellGameTo(SimulatorSettings::kAutosaveFile, false)) {
+    Logger::LogWarning("Autosave could not start");
+  }
+}
+
+void
+CellGameModule::syncCanvasLookFromEnv()
+{
+  if (cellContext == nullptr || cellContext->getCanvasView() == nullptr) {
+    return;
+  }
+  SimulatorConfiguration look;
+  SimulatorSettings::read(ic == nullptr ? nullptr : ic->envVars, &look);
+  cellContext->getCanvasView()->setCellLook(
+    static_cast<float>(look.cellGlow), look.ledCells, look.gridLines);
+}
+
+void
+CellGameModule::clearCanvas()
+{
+  prepareGridMutation();
+  cellContext->getGrid()->clear();
+  simulationGeneration = 0;
+  updateVisualTargets();
+  cellContext->getCanvasView()->snapVisualToTargets();
+  ic->commandLine->logSuccess("Canvas cleared");
 }
 
 void

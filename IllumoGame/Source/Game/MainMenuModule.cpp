@@ -9,6 +9,7 @@
 #include "CellGameModule.h"
 #include "PatternCodec.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include "SimulatorSettings.h"
 #include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
@@ -16,6 +17,7 @@
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
+#include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
@@ -25,6 +27,19 @@
 #include <cmath>
 #include <cstdlib>
 #include <queue>
+
+// The ambient world wears the player's chosen cell look too.
+static void
+applyAmbientCellLook(IEnvVars* environment, CellContext* context)
+{
+  if (context == nullptr || context->getCanvasView() == nullptr) {
+    return;
+  }
+  SimulatorConfiguration look;
+  SimulatorSettings::read(environment, &look);
+  context->getCanvasView()->setCellLook(
+    static_cast<float>(look.cellGlow), look.ledCells, look.gridLines);
+}
 
 MainMenuModule::MainMenuModule()
   : m_menuVisual(4096u)
@@ -79,6 +94,7 @@ MainMenuModule::Start(IllumoContext* context)
   if (m_bgContext->getCanvasView() != nullptr) {
     m_bgContext->getCanvasView()->rebuildPalette(m_bgContext->getRuleSet());
   }
+  applyAmbientCellLook(ic->envVars, m_bgContext.get());
   seedAmbientPattern();
 
   m_rowEmphasis.configure(GuiMotion::kJelly);
@@ -107,6 +123,8 @@ MainMenuModule::Start(IllumoContext* context)
 
   m_configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
+  m_restartDialog =
+    std::make_unique<ExitConfirmDialog>(ic->window, ic->renderer);
 
   m_newSimulationMenu =
     std::make_unique<NewSimulationMenu>(ic->window, ic->renderer);
@@ -348,7 +366,8 @@ MainMenuModule::updateMotion(float dt)
 
   const bool overlayOpen =
     (m_configurationMenu != nullptr && m_configurationMenu->isOpen()) ||
-    (m_newSimulationMenu != nullptr && m_newSimulationMenu->isOpen());
+    (m_newSimulationMenu != nullptr && m_newSimulationMenu->isOpen()) ||
+    (m_restartDialog != nullptr && m_restartDialog->isOpen());
   m_recede.setTarget(overlayOpen ? 1.0f : 0.0f);
   m_recede.tick(dt, still);
 
@@ -625,14 +644,14 @@ MainMenuModule::currentConfiguration() const
   config.softwareCursor = cursorVar.value.empty() || cursorVar.valueAsBool;
   config.vsync = ic->envVars->getVar("vsync").valueAsBool;
   config.fullscreen = ic->envVars->getVar("fullscreen").valueAsBool;
-  const EnvVar& scaleVar = ic->envVars->getVar("uiScale");
-  config.uiScale = scaleVar.value.empty() ? 1 : scaleVar.valueAsLong;
+  config.uiScale = UiScale::stored(ic->envVars->getVar("uiScale"));
   const EnvVar& msaaVar = ic->envVars->getVar("msaa");
   config.msaa = msaaVar.value.empty() ? 4 : msaaVar.valueAsLong;
   config.fpsCap = getTargetFps(ic->envVars);
   config.showInspector = ic->envVars->getVar("showInspector").valueAsBool;
   config.reducedUiMotion = ic->envVars->getVar("reducedUiMotion").valueAsBool;
   config.soundVolume = CSimSounds::volumeSetting(ic->envVars);
+  SimulatorSettings::read(ic->envVars, &config);
   return config;
 }
 
@@ -642,7 +661,8 @@ MainMenuModule::applyConfiguration(const SimulatorConfiguration& configuration)
   if (ic == nullptr || ic->envVars == nullptr) {
     return false;
   }
-  if (configuration.fpsCap < 0 || configuration.fpsCap > 1000) {
+  if (configuration.fpsCap < 0 || configuration.fpsCap > 1000 ||
+      !SimulatorSettings::valid(configuration)) {
     return false;
   }
   const RuleSetDefinition* rule =
@@ -669,9 +689,12 @@ MainMenuModule::applyConfiguration(const SimulatorConfiguration& configuration)
   ic->envVars->setVar("softwareCursor", configuration.softwareCursor);
   ic->envVars->setVar("vsync", configuration.vsync);
   ic->envVars->setVar("fullscreen", configuration.fullscreen);
-  ic->envVars->setVar("uiScale", configuration.uiScale);
+  ic->envVars->setVar("uiScale",
+                      UiScale::text(static_cast<float>(configuration.uiScale)));
   ic->envVars->setVar("msaa", configuration.msaa);
   ic->envVars->setVar("soundVolume", configuration.soundVolume);
+  SimulatorSettings::write(ic->envVars, configuration);
+  applyAmbientCellLook(ic->envVars, m_bgContext.get());
   if (fullscreenChanged && ic->window != nullptr) {
     ic->window->toggleFullscreen();
   }
@@ -700,6 +723,28 @@ MainMenuModule::Update(double dt)
 
   const bool consoleOpen =
     ic->commandLine != nullptr && ic->commandLine->isOpen;
+
+  // The restart prompt after applying settings only a restart applies.
+  if (m_restartDialog != nullptr && m_restartDialog->isOpen()) {
+    m_pointer.adoptPressed(
+      ic->inputManager != nullptr &&
+      ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft));
+    m_restartDialog->setReducedMotion(reducedMotion());
+    m_restartDialog->tick(static_cast<float>(dt));
+    if (!consoleOpen) {
+      const ExitConfirmAction action =
+        m_restartDialog->update(ic->inputManager);
+      if (action == ExitConfirmAction::Restart) {
+        m_restartDialog->close();
+        Logger::LogInfo("Restarting to apply settings read at startup");
+        ic->window->requestRestart();
+      } else if (action != ExitConfirmAction::None) {
+        m_restartDialog->close();
+      }
+    }
+    rebuildVisual();
+    return;
+  }
 
   if (m_newSimulationMenu->isOpen()) {
     m_pointer.adoptPressed(
@@ -741,6 +786,13 @@ MainMenuModule::Update(double dt)
             m_configurationMenu->close();
             Logger::LogInfo("Settings applied; preferred ruleset " +
                             config.ruleSet);
+            // Settings only a restart applies: offer to restart now.
+            if (m_restartDialog != nullptr &&
+                SimulatorSettings::restartNeeded(config, ic->window)) {
+              ic->inputManager->clearCharQueue();
+              m_restartDialog->openRestart(false);
+              m_restartDialog->tick(static_cast<float>(dt));
+            }
           } else {
             Logger::LogWarning("Settings were rejected: the ruleset does not "
                                "match its family or the frame cap is out of "
@@ -1542,6 +1594,9 @@ MainMenuModule::DispatchDrawables(Scene* scene)
   if (m_configurationMenu != nullptr && m_configurationMenu->isOpen()) {
     scene->AddDrawable(m_configurationMenu.get(), RenderLayerId::UI);
   }
+  if (m_restartDialog != nullptr && m_restartDialog->isOpen()) {
+    scene->AddDrawable(m_restartDialog.get(), RenderLayerId::UI);
+  }
 }
 
 void
@@ -1590,5 +1645,6 @@ MainMenuModule::Exit()
   unregisterConsoleCommands();
   m_newSimulationMenu.reset();
   m_configurationMenu.reset();
+  m_restartDialog.reset();
   m_bgContext.reset();
 }

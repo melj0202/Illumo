@@ -278,7 +278,7 @@ gamePackage()
            !commands.HasCommand("play"),
            "Menu commands retire with their module");
 
-  execute(commands, "clear_canvas");
+  execute(commands, "clear_canvas", { "yes" });
   for (const char* x : { "0", "1", "2" }) {
     execute(commands, "setcell", { x, "0", "0" });
   }
@@ -313,7 +313,7 @@ gamePackage()
              worldHash(*document.grid) == expectedHash,
            "Guest generation matches the native reference");
 
-  execute(commands, "clear_canvas");
+  execute(commands, "clear_canvas", { "yes" });
   execute(commands, "load", { "smoke" });
   testTrue(counters,
            pumpUntil(game,
@@ -1052,12 +1052,121 @@ gamePackageAudio()
   return counters.failures == 0;
 }
 
+// Changes MSAA in the real package's settings, answers its restart prompt
+// with Y, and reports what the host saw. `allowed` is the host's policy
+// (setRestartAllowed): off, the request is only a close.
+static bool
+restartThroughSettings(bool allowed, TestCounters& counters)
+{
+  RuleSetRegistry registry;
+  if (!registry.loadFromCatalogTexts(readText(ILLUMO_FAMILIES),
+                                     readText(ILLUMO_RULES))) {
+    return false;
+  }
+  RuleSetRegistry::instance() = registry;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-game-restart-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  WasmFileRoots files{ root / "package", root / "storage" };
+  std::filesystem::create_directories(files.package / "Scenes");
+  std::filesystem::create_directories(files.storage);
+  std::filesystem::copy_file(ILLUMO_FAMILIES, files.package / "families.json");
+  std::filesystem::copy_file(ILLUMO_RULES, files.package / "rulesets.json");
+  std::filesystem::copy_file(ILLUMO_RENDER3D_SCENE,
+                             files.package / "Scenes" / "render3d-test.ilsc");
+  std::filesystem::copy_file(ILLUMO_GAME_DEFAULTS,
+                             files.package / "envvars.json");
+
+  NullRenderWindow window(640, 480);
+  // The running window was created with 4x MSAA.
+  window.msaaSamples = 4;
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  env.setVar("fullscreen", false);
+  env.setVar("msaa", 4);
+  Camera camera(glm::vec2(0, 0), 1, &env);
+  CanvasObservingBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  CommandRegistry commands;
+  CommandLine console(&env, &commands, &window, &renderer, "Test");
+  Logger::setContext(&env, &console);
+  InputManager input(nullptr);
+  IllumoContext context;
+  context.renderer = &renderer;
+  context.window = &window;
+  context.inputManager = &input;
+  context.envVars = &env;
+  context.commandRegistry = &commands;
+  context.commandLine = &console;
+
+  WasmGameModule game(
+    readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(), {}, {}, files);
+  game.setRestartAllowed(allowed);
+  bool reached = game.Start(&context) &&
+                 pumpUntil(game, [&]() { return commands.HasCommand("play"); });
+  const std::function<void(KeyCode)> press = [&](KeyCode key) {
+    input.getKeyQueue().push({ key, InputAction::Press, 0 });
+    int frames = 0;
+    pumpUntil(game, [&]() { return ++frames > 3; });
+  };
+  // Settings: VIDEO (third tab), Anti-aliasing (fourth row) 4x -> 8x, Apply.
+  if (reached) {
+    press(KeyCode::F1);
+    press(KeyCode::Tab);
+    press(KeyCode::Tab);
+    for (int row = 0; row < 3; ++row) {
+      press(KeyCode::Down);
+    }
+    press(KeyCode::Right);
+    for (int row = 0; row < 8; ++row) {
+      press(KeyCode::Down);
+    }
+    press(KeyCode::Enter);
+    reached =
+      pumpUntil(game, [&]() { return env.getVar("msaa").valueAsLong == 8; });
+  }
+  testTrue(counters,
+           reached && !window.closeRequested && !window.restartRequested(),
+           "applying a new MSAA saves it for the next window without closing");
+  press(KeyCode::Y);
+  const bool closing = pumpUntil(game, [&]() { return window.closeRequested; });
+  if (allowed) {
+    testTrue(counters,
+             closing && window.restartRequested(),
+             "answering the restart prompt asks the host to relaunch");
+  } else {
+    testTrue(counters,
+             closing && !window.restartRequested(),
+             "a host that disallows restarts only closes");
+  }
+  game.Exit();
+  Logger::setContext(nullptr, nullptr);
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return true;
+}
+
+static bool
+gamePackageRestart()
+{
+  TestCounters counters;
+  const bool allowed = restartThroughSettings(true, counters);
+  const bool refused = restartThroughSettings(false, counters);
+  return allowed && refused && counters.failures == 0;
+}
+
 int
 main(int argc, char** argv)
 {
   if (argc == 2 && std::string(argv[1]) == "--list") {
     std::puts("IllumoGame.Wasm.GamePackage");
     std::puts("IllumoGame.Wasm.GamePackageAudio");
+    std::puts("IllumoGame.Wasm.GamePackageRestart");
     std::puts("IllumoGame.Wasm.CatalogMerge");
     std::puts("IllumoGame.Wasm.GamePackageLanes");
     std::puts("IllumoGame.Wasm.PackageBench");
@@ -1075,6 +1184,9 @@ main(int argc, char** argv)
   }
   if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackage") {
     return gamePackage() ? 0 : 1;
+  }
+  if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackageRestart") {
+    return gamePackageRestart() ? 0 : 1;
   }
   if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackageAudio") {
     return gamePackageAudio() ? 0 : 1;

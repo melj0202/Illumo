@@ -6,6 +6,7 @@
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -1088,6 +1089,81 @@ testGuiMenuShellClocksAndLayout()
            "closing an overlay forgets the last pointer position");
 }
 
+static EnvVar
+scaleSetting(EnvVars& env, const std::string& text)
+{
+  env.setVar("uiScale", text);
+  return env.getVar("uiScale");
+}
+
+static void
+testUiScaleSetting()
+{
+  testSection("UiScale: fractional and automatic interface scale");
+  EnvVars env;
+  const EnvVar automatic = scaleSetting(env, "auto");
+  testTrue(g,
+           UiScale::isAutomatic(automatic) &&
+             UiScale::isAutomatic(scaleSetting(env, "AUTO")) &&
+             UiScale::isAutomatic(scaleSetting(env, "0")),
+           "\"auto\" and 0 select automatic scale");
+  testTrue(g,
+           !UiScale::isAutomatic(scaleSetting(env, "1.5")) &&
+             !UiScale::isAutomatic(EnvVar{}),
+           "a factor or an unset setting is not automatic");
+  testTrue(g,
+           UiScale::resolve(automatic, 1280, 720) == 1.0f &&
+             UiScale::resolve(automatic, 1600, 900) == 1.25f &&
+             UiScale::resolve(automatic, 1920, 1080) == 1.5f &&
+             UiScale::resolve(automatic, 2560, 1440) == 2.0f &&
+             UiScale::resolve(automatic, 3840, 2160) == 3.0f,
+           "automatic scale steps by a quarter with the window");
+  testTrue(g,
+           UiScale::resolve(automatic, 3440, 1440) == 2.0f &&
+             UiScale::resolve(automatic, 1920, 600) == 1.0f,
+           "automatic scale follows the tighter axis");
+  testTrue(g,
+           UiScale::resolve(automatic, 640, 480) == 1.0f &&
+             UiScale::resolve(automatic, 0, 0) == 1.0f &&
+             UiScale::resolve(automatic, 7680, 4320) == 4.0f,
+           "automatic scale stays within 1x to 4x");
+  testTrue(g,
+           UiScale::resolve(scaleSetting(env, "1.25"), 3840, 2160) == 1.25f &&
+             UiScale::resolve(scaleSetting(env, "0.5"), 3840, 2160) == 0.5f &&
+             UiScale::resolve(EnvVar{}, 3840, 2160) == 1.0f &&
+             UiScale::resolve(scaleSetting(env, "junk"), 3840, 2160) == 1.0f,
+           "explicit factors pass through; unset or junk reads as 1x");
+  testTrue(g,
+           UiScale::stored(automatic) == 0.0f &&
+             UiScale::stored(scaleSetting(env, "1.75")) == 1.75f &&
+             UiScale::text(0.0f) == "auto" && UiScale::text(1.25f) == "1.25" &&
+             UiScale::text(2.0f) == "2" && UiScale::text(1.5f) == "1.5",
+           "preferences round trip through their persisted text");
+
+  // The renderer re-resolves automatic scale for each frame's window.
+  NullRenderWindow window(1280, 720);
+  env.setVar("uiScale", "auto");
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  testTrue(g,
+           renderer.getUiScale() == 1.0f,
+           "automatic scale is 1x at the reference window");
+  window.width = 1920;
+  window.height = 1080;
+  testTrue(g,
+           renderer.getUiScale() == 1.5f,
+           "resizing the window changes the automatic scale");
+  renderer.BeginFrame();
+  const float framed = renderer.getUiScale();
+  renderer.EndFrame();
+  testTrue(g, framed == 1.5f, "a frame uses the scale for its window size");
+  env.setVar("uiScale", "1.75");
+  testTrue(
+    g, renderer.getUiScale() == 1.75f, "a fractional factor applies as set");
+}
+
 static int
 runGuiKitCase(void (*fn)())
 {
@@ -1113,4 +1189,6 @@ registerGuiKitTests(IllumoTestRegistry& registry)
                []() { return runGuiKitCase(testGuiMotionVocabulary); });
   registry.add("Illumo.GuiKit.GlassChrome",
                []() { return runGuiKitCase(testGuiGlassChrome); });
+  registry.add("Illumo.GuiKit.UiScale",
+               []() { return runGuiKitCase(testUiScaleSetting); });
 }

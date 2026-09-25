@@ -992,6 +992,9 @@ createGuestModuleFrom(IEnvVars* environment)
   } else {
     Logger::LogTrace("Audio disabled for capture and benchmark runs");
   }
+  // An application may ask to relaunch (settings read at startup); a capture
+  // or benchmark run closes instead so its caller sees one process.
+  guest->setRestartAllowed(capture.empty() && bench.frames == 0);
   return std::make_unique<RuntimeModule>(std::move(audio),
                                          std::move(guest),
                                          std::move(title),

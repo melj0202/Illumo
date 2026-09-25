@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ConfigurationMenu.h"
+#include "ExitConfirmDialog.h"
 #include "MenuMotifs.h"
 #include "NewSimulationMenu.h"
 #include <Illumo/Engine/IModule.h>
@@ -34,6 +35,14 @@ public:
 
   int getSelectedItemForTesting() const { return m_selectedItem; }
   bool isSettingsOpenForTesting() const;
+  const ConfigurationMenu* settingsMenuForTesting() const
+  {
+    return m_configurationMenu.get();
+  }
+  bool isRestartPromptOpenForTesting() const
+  {
+    return m_restartDialog != nullptr && m_restartDialog->isOpen();
+  }
   bool isCanvasSetupOpenForTesting() const
   {
     return m_newSimulationMenu && m_newSimulationMenu->isOpen();
@@ -128,6 +137,8 @@ private:
 
   std::unique_ptr<CellContext> m_bgContext;
   std::unique_ptr<ConfigurationMenu> m_configurationMenu;
+  // Asks to restart after applying settings only a restart applies.
+  std::unique_ptr<ExitConfirmDialog> m_restartDialog;
   std::unique_ptr<NewSimulationMenu> m_newSimulationMenu;
   GameVisual m_menuVisual;
   GuiMenuAnimator m_animator;

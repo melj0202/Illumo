@@ -4,6 +4,9 @@ layout (location = 0) out vec4 FragColor;
 layout (location = 1) out vec2 FragVelocity;
 
 in vec2 TexCoord;
+// The player's cell look (see canvas_vertex.glsl): glow / 2, LED keys amount
+// (0 draws flat pixels up close too) and grid lines.
+flat in vec3 vLook;
 
 // Faded display colors (RGB), one texel per cell at the exact LOD. Domain
 // state stays on the CPU as lifeCanvas.
@@ -66,14 +69,20 @@ void main()
 	// Screen pixels per cell. Derivatives are taken before any branch.
 	vec2 perPixel = fwidth(cellPos);
 	float cellPixels = 1.0 / max(max(perPixel.x, perPixel.y), 1e-5);
-	float detail = smoothstep(4.0, 12.0, cellPixels);
+	float glowScale = vLook.r * 2.0;
+	float detail = smoothstep(4.0, 12.0, cellPixels) * vLook.g;
+	// Grid lines fade in once a cell is big enough to frame.
+	float gridShow = vLook.b * smoothstep(6.0, 14.0, cellPixels);
+	// Cell-local position, -0.5..0.5; y grows downward on screen.
+	vec2 local = fract(cellPos) - 0.5;
+	// A one-pixel dark line on every cell border.
+	float borderPixels = (0.5 - max(abs(local.x), abs(local.y))) * cellPixels;
+	float gridLine = gridShow * (1.0 - smoothstep(0.0, 1.0, borderPixels));
 	if (detail <= 0.0) {
-		FragColor = vec4(own, 1.0);
+		FragColor = vec4(mix(own, own * 0.3, gridLine * 0.8), 1.0);
 		return;
 	}
 
-	// Cell-local position, -0.5..0.5; y grows downward on screen.
-	vec2 local = fract(cellPos) - 0.5;
 	float edgeWidth = 0.75 / cellPixels;
 	// Each LED is a raised rounded-square key.
 	const vec2 kKeyHalf = vec2(0.43);
@@ -150,8 +159,9 @@ void main()
 	  roundedBox(local - vec2(0.025, 0.03), kKeyHalf, kKeyCorner);
 	float shadow = 1.0 - smoothstep(-0.02, 0.05, shadowD);
 	housing *= 1.0 - 0.3 * shadow;
-	housing += glow * 0.42;
-	vec3 styled = mix(housing, face + spill * 0.34, key);
+	housing += glow * 0.42 * glowScale;
+	vec3 styled = mix(housing, face + spill * 0.34 * glowScale, key);
 
-	FragColor = vec4(clamp(mix(own, styled, detail), 0.0, 1.0), 1.0);
+	vec3 color = clamp(mix(own, styled, detail), 0.0, 1.0);
+	FragColor = vec4(mix(color, color * 0.3, gridLine * 0.8), 1.0);
 }

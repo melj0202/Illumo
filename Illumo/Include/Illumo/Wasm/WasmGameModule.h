@@ -56,6 +56,11 @@ public:
   // this module. Null, the default, withholds the capability (tests,
   // capture, benchmarks). Call before Start.
   void setAudio(IAudio* audio) { m_audio = audio; }
+  // Whether a guest's restart request (GuestUpdateFlags::RequestRestart,
+  // Display grant required) relaunches the application after it closes.
+  // Off by default (tests, capture, benchmarks): the request then only
+  // closes.
+  void setRestartAllowed(bool allowed) { m_restartAllowed = allowed; }
   bool Start(IllumoContext* context) override;
   void Update(double elapsed) override;
   void DispatchDrawables(Scene* scene) override;
@@ -89,6 +94,7 @@ private:
   ISurfaceWindowFactory* m_surfaceWindows = &PlatformSurfaceWindows();
   std::unique_ptr<WasmPanelWindows> m_windows;
   IAudio* m_audio = nullptr;
+  bool m_restartAllowed = false;
   std::vector<std::byte> m_completions;
   std::string m_error;
   std::string m_modError;

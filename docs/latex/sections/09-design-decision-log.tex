@@ -2968,6 +2968,84 @@ IllEd and the viewer never set the field. The drawn pointer follows the last
 input snapshot, so it can trail the hardware pointer by a frame.\\
 \textbf{Extends:} D-UI8 (menu motion), D-E23 (capabilities)
 \end{decisionbox}
+
+\subsection*{D-UI11 --- Fractional and automatic UI scale}
+\begin{decisionbox}[title={D-UI11 \quad 2026-09-25}]
+\textbf{Decision:} The persisted \texttt{uiScale} setting accepts fractional
+factors (for example 1.25) and \texttt{auto} (or 0). The header-only
+\texttt{UiScale} helper resolves it against the window being laid out:
+automatic scale is 1x at 1280$\times$720 and grows in 0.25 steps with the
+smaller of the two axis ratios, clamped to 1x--4x; explicit positive factors
+pass through unchanged and an unset or unreadable value is 1x.
+\texttt{Renderer} resolves it for every frame, so resizing the window changes
+the automatic scale on the next frame, and the console uses the same rule.
+Display wire version 3 carries the scale in hundredths (0 for automatic,
+otherwise 100--400); the host still decodes versions 1 and 2 and answers
+them with the whole factor currently in effect. CSim's F1 UI scale becomes a
+slider (Auto, then 1x to 4x) and new CSim settings default to
+\texttt{auto}.\\
+\textbf{Why:} The owner asked for fractional UI scaling and an automatic mode
+that picks a scale as the window is resized.\\
+\textbf{Consequences:} Existing settings files keep their stored factor.
+IllEd and the viewer accept the same values without changes of their own.
+Automatic scale follows window size, not monitor DPI. The glass menus still
+fit oversized scales down to their design space.\\
+\textbf{Extends:} D-UI10 (display wire version 2), D-E23 (capabilities)
+\end{decisionbox}
+
+\subsection*{D-UI12 --- Canvas, control and behaviour settings}
+\begin{decisionbox}[title={D-UI12 \quad 2026-09-25}]
+\textbf{Decision:} CSim's F1 settings gain Canvas and Controls tabs.
+\texttt{SimulatorSettings} owns the new keys, defaults and ranges for both the
+canvas and the main menu: \texttt{startPaused}, \texttt{cellStyle}
+(\texttt{led}/\texttt{flat}), \texttt{cellGlow} (0--2), \texttt{gridLines},
+\texttt{showFPS}/\texttt{showMemory}, \texttt{zoomStep} (wheel zoom per notch),
+\texttt{invertZoom}, \texttt{panSpeed} (arrow keys, screen pixels per second,
+0 off), \texttt{autosaveMinutes} (\texttt{autosave.csim} in private storage, 0
+off) and \texttt{confirmClear} (\texttt{clear\_canvas} asks in the
+confirmation dialog; \texttt{clear\_canvas yes} skips it). The cell look
+reaches the host's Canvas shader through the cell quad's colour attribute as
+(glow / 2, LED keys, grid lines); \texttt{GLMesh} now binds that attribute for
+\texttt{Pos3Color3Uv2}. The FPS and memory readout is CSim's own
+\texttt{PerformanceOverlay}, drawn by the guest over every screen.\\
+\textbf{Why:} The owner asked for more engine and game settings: camera
+controls, canvas appearance, a performance overlay and simulation behaviour.
+The engine's \texttt{DebugModule} overlay is compiled only into development
+builds, so a toggle for it would do nothing in Release.\\
+\textbf{Consequences:} No uniform, frame schema or ABI change: the colour
+attribute was already carried guest to host (quantized to 8 bits on the inline
+path, which the look tolerates). The memory line reports the store's linear
+memory, which only grows. The engine's F3 overlay is unchanged. Autosave drains
+the simulation briefly on each write, like a manual save.\\
+\textbf{Extends:} D-UI10, D-UI11
+\end{decisionbox}
+
+\subsection*{D-UI13 --- Restart from inside the application}
+\begin{decisionbox}[title={D-UI13 \quad 2026-09-25}]
+\textbf{Decision:} Settings read only when the window is created (today
+MSAA) can be applied by restarting from inside the application.
+\texttt{IRenderWindow::requestRestart} is a close request that remembers a
+relaunch; a deferred close drops it, and \texttt{RunIllumoApplication}
+relaunches the program with its original command line only after the engine
+and logger have shut down (\texttt{RelaunchCurrentProcess}). A guest asks with
+the new update flag \texttt{GuestUpdateFlags::RequestRestart} beside
+\texttt{RequestClose}; \texttt{WasmGameModule} honours it only for a guest
+granted Display and only when the runtime allows restarts (never for
+captures, benchmarks or tests), otherwise it is an ordinary close. Display
+wire version 4 appends the MSAA preference, which the host saves for its next
+window, and the running window's samples. After Apply, CSim asks ``Restart
+CSim?'' (Later / Restart now) whenever the applied MSAA differs from the
+running window's.\\
+\textbf{Why:} The owner asked that settings needing a restart offer one from
+inside the application. CSim's MSAA setting also never reached the host
+before version 4, so it had no effect at all.\\
+\textbf{Consequences:} A restart closes the canvas; the prompt warns that
+unsaved world changes are lost. MSAA lives in the host's settings, so apps
+sharing a runtime share it and each sends its own on start. The Linux
+relaunch uses \texttt{posix\_spawn} and is unverified, like the rest of the
+Linux platform.\\
+\textbf{Extends:} D-UI10, D-UI11, D-UI12
+\end{decisionbox}
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

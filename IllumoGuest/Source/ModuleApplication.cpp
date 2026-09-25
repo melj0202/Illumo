@@ -352,6 +352,12 @@ GuestModuleApplication::closeRequested()
   return m_window.shouldWindowClose();
 }
 
+bool
+GuestModuleApplication::restartRequested()
+{
+  return m_window.restartRequested();
+}
+
 void
 GuestModuleApplication::shutdown()
 {

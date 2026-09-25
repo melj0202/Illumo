@@ -780,9 +780,133 @@ run(const std::string& name)
              !window.systemCursorHidden,
              "Cancelling the guest gives the system cursor back");
 
+    // Version 3 carries fractional and automatic UI scale; the reply to an
+    // earlier version reports the whole factor in effect instead.
+    const std::function<bool(
+      const GuestDisplayRequest&, std::uint64_t, GuestDisplayState*)>
+      displayRoundTrip = [&](const GuestDisplayRequest& request,
+                             std::uint64_t id,
+                             GuestDisplayState* reported) {
+        GuestServices batch;
+        GuestWireWriter bytes;
+        request.write(bytes);
+        batch.records.push_back({ id,
+                                  GuestService::Display,
+                                  GuestServiceStatus::Request,
+                                  bytes.take() });
+        GuestWireWriter frame;
+        batch.write(frame);
+        if (!permitted.process(frame.data(), completion) ||
+            !GuestServices::read(completion, result, false) ||
+            result.records.size() != 1 ||
+            result.records.front().status != GuestServiceStatus::Complete) {
+          return false;
+        }
+        GuestWireReader reply(result.records.front().payload);
+        return GuestDisplayState::read(reply, *reported, request.version) &&
+               reply.finished();
+      };
+    GuestDisplayState fractionalState;
+    fractionalState.uiScale = 1.25f;
+    GuestDisplayState fractionalReply;
+    testTrue(counters,
+             displayRoundTrip({ true, fractionalState }, 4, &fractionalReply) &&
+               env.getVar("uiScale").value == "1.25" &&
+               fractionalReply.uiScale == 1.25f,
+             "A version 3 request applies and reports a fractional UI scale");
+    GuestDisplayState automaticState;
+    automaticState.uiScale = 0.0f;
+    GuestDisplayState automaticReply;
+    testTrue(counters,
+             displayRoundTrip({ true, automaticState }, 5, &automaticReply) &&
+               env.getVar("uiScale").value == "auto" &&
+               automaticReply.uiScale == 0.0f,
+             "A version 3 request selects and reports automatic UI scale");
+    GuestDisplayRequest legacyQuery{ false, {} };
+    legacyQuery.version = 2u;
+    window.width = 2560;
+    window.height = 1440;
+    GuestDisplayState legacyReply;
+    testTrue(counters,
+             displayRoundTrip(legacyQuery, 6, &legacyReply) &&
+               legacyReply.uiScale == 2.0f &&
+               env.getVar("uiScale").value == "auto",
+             "A version 2 query sees the whole automatic factor in effect");
+    window.width = 640;
+    window.height = 480;
+    const std::function<bool(std::uint32_t, std::uint32_t)> scaleDecodes =
+      [](std::uint32_t version, std::uint32_t scale) {
+        GuestWireWriter bytes;
+        bytes.u32(version);
+        bytes.u32(1u);
+        bytes.u32(0u);
+        bytes.u32(1u);
+        bytes.u32(60u);
+        bytes.u32(scale);
+        if (version >= 2u) {
+          bytes.u32(0u);
+        }
+        if (version >= 4u) {
+          bytes.u32(4u);
+          bytes.u32(GuestDisplayState::kUnknownMsaa);
+        }
+        GuestDisplayRequest request;
+        return GuestDisplayRequest::read(bytes.data(), request);
+      };
+    testTrue(counters,
+             scaleDecodes(3u, 0u) && scaleDecodes(3u, 100u) &&
+               scaleDecodes(3u, 175u) && scaleDecodes(3u, 400u) &&
+               !scaleDecodes(3u, 99u) && !scaleDecodes(3u, 401u) &&
+               scaleDecodes(4u, 125u) && !scaleDecodes(4u, 401u) &&
+               scaleDecodes(2u, 4u) && !scaleDecodes(2u, 0u) &&
+               !scaleDecodes(2u, 150u),
+             "UI scale decoding bounds each version's encoding");
+
+    // Version 4: MSAA is saved for the next window; the report names the
+    // running window's samples. Older versions leave the saved value alone.
+    const std::function<bool(std::uint32_t, std::uint32_t)> msaaDecodes =
+      [](std::uint32_t msaa, std::uint32_t active) {
+        GuestDisplayState state;
+        state.msaa = msaa;
+        state.activeMsaa = active;
+        GuestWireWriter bytes;
+        GuestDisplayRequest{ true, state }.write(bytes);
+        GuestDisplayRequest request;
+        return GuestDisplayRequest::read(bytes.data(), request);
+      };
+    testTrue(counters,
+             msaaDecodes(0u, 4u) && msaaDecodes(8u, 16u) &&
+               msaaDecodes(2u, GuestDisplayState::kUnknownMsaa) &&
+               !msaaDecodes(3u, 4u) && !msaaDecodes(32u, 4u) &&
+               !msaaDecodes(4u, 6u),
+             "MSAA decoding accepts off or a power of two up to 16");
+    window.msaaSamples = 4;
+    env.setVar("msaa", 4);
+    GuestDisplayState msaaState;
+    msaaState.msaa = 8u;
+    GuestDisplayState msaaReply;
+    testTrue(counters,
+             displayRoundTrip({ true, msaaState }, 7, &msaaReply) &&
+               env.getVar("msaa").valueAsLong == 8 && msaaReply.msaa == 8u &&
+               msaaReply.activeMsaa == 4u,
+             "A version 4 request saves MSAA and reports the running window's");
+    GuestDisplayRequest olderApply{ true, {} };
+    olderApply.version = 3u;
+    GuestDisplayState olderReply;
+    testTrue(counters,
+             displayRoundTrip(olderApply, 8, &olderReply) &&
+               env.getVar("msaa").valueAsLong == 8,
+             "A version 3 request leaves the saved MSAA alone");
+    window.msaaSamples = -1;
+    GuestDisplayState unknownReply;
+    testTrue(counters,
+             displayRoundTrip({ false, {} }, 9, &unknownReply) &&
+               unknownReply.activeMsaa == GuestDisplayState::kUnknownMsaa,
+             "A window that cannot tell reports unknown samples");
+
     GuestDisplayRequest decoded;
     GuestWireWriter future;
-    future.u32(3u);
+    future.u32(kGuestDisplayVersion + 1u);
     future.u32(0u);
     GuestDisplayState{}.write(future);
     GuestWireWriter badFlag;

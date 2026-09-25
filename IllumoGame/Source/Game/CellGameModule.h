@@ -50,6 +50,13 @@ private:
   void Edit(double dt);
   void updateVisualTargets();
   void syncSimRateFromEnv();
+  // Pushes the persisted cell look (style, glow, grid lines) to the view.
+  void syncCanvasLookFromEnv();
+  // Arrow keys pan the camera at the persisted speed.
+  void keyboardPan(double dt);
+  // Saves to private storage once the persisted interval has elapsed.
+  void updateAutosave(double dt);
+  void clearCanvas();
   void registerConsoleCommands();
   void unregisterConsoleCommands();
   bool SaveCellGame(std::string filename);
@@ -117,6 +124,8 @@ private:
   InputContext inputContext;
   long inputContextId = -1;
   double simAccum;
+  // Seconds since the last autosave (or since it was configured).
+  double autosaveElapsed = 0.0;
   double simStepSeconds;
   double requestedSimulationTps;
   double achievedSimulationTps;

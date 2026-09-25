@@ -41,6 +41,18 @@ public:
   virtual void requestClose() = 0;
   // Custom windows used with modules that defer close must clear their flag.
   virtual void cancelCloseRequest() {}
+  // Close, then start the application again with the same command line
+  // (settings read only at startup, such as MSAA, take effect). The runner
+  // relaunches after a normal shutdown; a deferred close drops the restart.
+  void requestRestart()
+  {
+    m_restartRequested = true;
+    requestClose();
+  }
+  bool restartRequested() const { return m_restartRequested; }
+  void clearRestartRequest() { m_restartRequested = false; }
+  // Multisample count the framebuffer was created with, or -1 when unknown.
+  virtual int getMsaaSamples() const { return -1; }
   // Hosts that learn the product name after creation (a package runtime)
   // retitle the window. Windows without a title bar ignore it.
   virtual void setTitle(const std::string& title) { (void)title; }
@@ -48,4 +60,7 @@ public:
   // while it is over the window's content area. Windows without a system
   // cursor ignore it.
   virtual void setSystemCursorHidden(bool hidden) { (void)hidden; }
+
+private:
+  bool m_restartRequested = false;
 };

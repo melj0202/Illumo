@@ -67,6 +67,7 @@
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Rendering/SplashText.h>
+#include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>

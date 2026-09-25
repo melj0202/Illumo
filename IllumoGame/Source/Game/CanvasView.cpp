@@ -441,8 +441,8 @@ CanvasView::rebuildWorldQuad()
   const float v0 =
     static_cast<float>(activeViewHeight) / static_cast<float>(textureHeight);
   visual.clearPrimitives();
-  // Bottom-left, bottom-right, top-right, top-left: position, white, UV. The
-  // texture's first row is the top of the cache.
+  // Bottom-left, bottom-right, top-right, top-left: position, cell look, UV.
+  // The texture's first row is the top of the cache.
   const float worldRight =
     worldLeft + static_cast<float>(cacheCellWidth) * kCellSize;
   const float corners[4][4] = { { worldLeft, worldBottom, 0.0f, v0 },
@@ -454,9 +454,9 @@ CanvasView::rebuildWorldQuad()
     vertex[0] = corners[corner][0];
     vertex[1] = corners[corner][1];
     vertex[2] = 0.0f;
-    vertex[3] = 1.0f;
-    vertex[4] = 1.0f;
-    vertex[5] = 1.0f;
+    vertex[3] = cellLook[0];
+    vertex[4] = cellLook[1];
+    vertex[5] = cellLook[2];
     vertex[6] = corners[corner][2];
     vertex[7] = corners[corner][3];
   }
@@ -1617,6 +1617,30 @@ CanvasView::setFadeSpeed(float speed)
   if (fadeSpeed <= 0.0f && fadeActive) {
     snapVisualToTargets();
   }
+}
+
+void
+CanvasView::setCellLook(float glow, bool ledKeys, bool gridLines)
+{
+  const std::array<float, 3> next = { std::isfinite(glow)
+                                        ? std::clamp(glow, 0.0f, 2.0f) * 0.5f
+                                        : 0.5f,
+                                      ledKeys ? 1.0f : 0.0f,
+                                      gridLines ? 1.0f : 0.0f };
+  if (next == cellLook) {
+    return;
+  }
+  cellLook = next;
+  if (!cellQuadReady) {
+    return;
+  }
+  for (int corner = 0; corner < 4; ++corner) {
+    float* vertex = cellQuadVertices.data() + corner * 8;
+    vertex[3] = cellLook[0];
+    vertex[4] = cellLook[1];
+    vertex[5] = cellLook[2];
+  }
+  cellQuadDirty = true;
 }
 
 void

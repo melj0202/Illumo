@@ -24,6 +24,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/SoftwareCursor.cpp
   Source/Game/NewSimulationMenu.cpp
   Source/Game/PatternCodec.cpp
+  Source/Game/PerformanceOverlay.cpp
   Source/Game/RuleCatalogLoader.cpp
   Source/Game/RuleCatalogOverlay.cpp
   Source/Game/RulesetWorkshopMenu.cpp

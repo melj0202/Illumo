@@ -82,6 +82,15 @@ struct MainMenuFixture
     env.setVar("RuleSetString", "GAME_OF_LIFE");
     env.setVar("ModeString", "GAME_OF_LIFE");
     env.setVar("tps", 30);
+    env.setVar("startPaused", true);
+    env.setVar("cellStyle", "led");
+    env.setVar("cellGlow", 1.0);
+    env.setVar("gridLines", false);
+    env.setVar("zoomStep", 0.15);
+    env.setVar("invertZoom", false);
+    env.setVar("panSpeed", 600);
+    env.setVar("autosaveMinutes", 0);
+    env.setVar("confirmClear", true);
     mock.Initialize();
     started = module.Start(&context);
   }
@@ -485,11 +494,15 @@ testMainMenuSettingsApply()
   testTrue(g,
            fixture.module.isSettingsOpenForTesting(),
            "F1 opens settings on the main menu");
-  for (int row = 0; row < 11; ++row) {
+  // VIDEO tab (third), FPS cap row (third), one stop up, then down to Apply.
+  fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 0 });
+  for (int row = 0; row < 2; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
-  for (int row = 0; row < 6; ++row) {
+  // Down past the tab's last row lands on Apply.
+  for (int row = 0; row < 8; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
@@ -507,7 +520,8 @@ testMainMenuSettingsApply()
            "Apply preserves existing display and zero-fade preferences");
   fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
   fixture.module.Update(0.016);
-  for (int row = 0; row < 11; ++row) {
+  // The menu reopens on the VIDEO tab it closed on.
+  for (int row = 0; row < 2; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
@@ -519,6 +533,57 @@ testMainMenuSettingsApply()
 }
 
 static void
+testMainMenuRestartPrompt()
+{
+  MainMenuFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  fixture.env.setVar("msaa", 4);
+  fixture.window.msaaSamples = 4;
+  std::queue<InputManager::KeyPressEvent>& keys = fixture.input.getKeyQueue();
+  keys.push({ KeyCode::F1, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  // VIDEO tab (third), Anti-aliasing row (fourth) 4x -> 8x, then Apply.
+  keys.push({ KeyCode::Tab, InputAction::Press, 0 });
+  keys.push({ KeyCode::Tab, InputAction::Press, 0 });
+  for (int row = 0; row < 3; ++row) {
+    keys.push({ KeyCode::Down, InputAction::Press, 0 });
+  }
+  keys.push({ KeyCode::Right, InputAction::Press, 0 });
+  for (int row = 0; row < 8; ++row) {
+    keys.push({ KeyCode::Down, InputAction::Press, 0 });
+  }
+  keys.push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.module.isSettingsOpenForTesting() &&
+             fixture.module.isRestartPromptOpenForTesting() &&
+             fixture.env.getVar("msaa").valueAsLong == 8,
+           "applying a new MSAA from the main menu offers to restart");
+  // Escape answers Later; on the main menu behind it, it would quit.
+  keys.push({ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !fixture.module.isRestartPromptOpenForTesting() &&
+             !fixture.window.closeRequested &&
+             !fixture.window.restartRequested(),
+           "Escape answers Later without reaching the menu behind it");
+
+  // Applying again (MSAA still differs from the window) asks again.
+  keys.push({ KeyCode::F1, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  keys.push({ KeyCode::End, InputAction::Press, 0 });
+  keys.push({ KeyCode::Left, InputAction::Press, 0 });
+  keys.push({ KeyCode::Left, InputAction::Press, 0 });
+  keys.push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  keys.push({ KeyCode::Y, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           fixture.window.restartRequested() && fixture.window.closeRequested,
+           "Restart now asks the host to close and relaunch");
+}
+
+static void
 testSettingsMouseIsolation()
 {
   MainMenuFixture fixture;
@@ -526,24 +591,30 @@ testSettingsMouseIsolation()
   fixture.env.setVar("fps", 60);
   fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
   fixture.module.Update(0.016);
-  for (int row = 0; row < 11; ++row) {
+  // VIDEO tab (third), FPS cap row, one stop up (60 -> 75).
+  fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 0 });
+  for (int row = 0; row < 2; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
-  for (int row = 0; row < 6; ++row) {
-    fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
-  }
   fixture.module.Update(0.016);
-  // In the 640x480 viewport Apply overlaps the underlying main-menu Exit card.
-  fixture.window.mouseX = 390.0;
-  fixture.window.mouseY = 390.0;
+  // The Apply footer button sits over the underlying main-menu cards.
+  const ConfigurationMenu* settings = fixture.module.settingsMenuForTesting();
+  const std::array<float, 4> apply =
+    settings->getFooterButtonBoundsForTesting(ConfigurationMenu::kApplyButton);
+  const float scale = settings->getLayoutScaleForTesting();
+  fixture.window.mouseX =
+    static_cast<double>((apply[0] + apply[2] * 0.5f) * scale);
+  fixture.window.mouseY =
+    static_cast<double>((apply[1] + apply[3] * 0.5f) * scale);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
   fixture.module.Update(0.016);
   testTrue(g,
            !fixture.module.isSettingsOpenForTesting() &&
-             fixture.env.getVar("fps").valueAsLong == 90,
-           "clicking the scrolled Apply row commits the draft");
+             fixture.env.getVar("fps").valueAsLong == 75,
+           "clicking the Apply button commits the draft");
   fixture.module.Update(0.016);
   testTrue(g,
            !fixture.window.closeRequested &&
@@ -837,6 +908,8 @@ registerMainMenuTests(IllumoTestRegistry& registry)
                []() { return runMainMenuCase(testMainMenuPrimitiveBudget); });
   registry.add("IllumoGame.MainMenu.MouseIsolation",
                []() { return runMainMenuCase(testSettingsMouseIsolation); });
+  registry.add("IllumoGame.MainMenu.RestartPrompt",
+               []() { return runMainMenuCase(testMainMenuRestartPrompt); });
   registry.add("IllumoGame.MainMenu.SettingsApply",
                []() { return runMainMenuCase(testMainMenuSettingsApply); });
   registry.add("IllumoGame.MainMenu.StartAndDrawables",

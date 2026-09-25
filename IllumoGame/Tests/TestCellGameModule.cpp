@@ -2,6 +2,7 @@
 #include "Game/CanvasCoordinatePolicy.h"
 #include "Game/CellGameModule.h"
 #include "Game/RuleCatalogLoader.h"
+#include "Game/SimulatorSettings.h"
 #include "Game/SoftwareCursor.h"
 #include "Rulesets/RuleSet.h"
 #include "Rulesets/RuleSetRegistry.h"
@@ -231,6 +232,15 @@ struct CellGameFixture
     env.setVar("vsync", true);
     env.setVar("fullscreen", false);
     env.setVar("render3dTest", false);
+    env.setVar("startPaused", true);
+    env.setVar("cellStyle", "led");
+    env.setVar("cellGlow", 1.0);
+    env.setVar("gridLines", false);
+    env.setVar("zoomStep", 0.15);
+    env.setVar("invertZoom", false);
+    env.setVar("panSpeed", 600);
+    env.setVar("autosaveMinutes", 0);
+    env.setVar("confirmClear", true);
     mock.Initialize();
     module.Start(&context);
     started = CellGameModuleTestAccess::getCellContext(module) != nullptr;
@@ -291,6 +301,204 @@ readFileBytes(const std::filesystem::path& path)
   std::ifstream input(path, std::ios::binary);
   return std::vector<char>(std::istreambuf_iterator<char>(input),
                            std::istreambuf_iterator<char>());
+}
+
+static void
+testCanvasPreferences()
+{
+  testSection("CellGameModule: camera, look, start and autosave settings");
+  CellGameFixture fixture;
+
+  // Zoom sensitivity and direction.
+  fixture.env.setVar("zoomStep", 0.5);
+  fixture.camera.SetZoom(1.0f);
+  InputManager::scrollCallback(nullptr, 0.0, 1.0);
+  fixture.module.Update(-1.0);
+  testTrue(g,
+           std::abs(fixture.camera.GetTargetZoom() - 1.5f) < 0.001f,
+           "one wheel notch zooms by the persisted step");
+  fixture.env.setVar("invertZoom", true);
+  InputManager::scrollCallback(nullptr, 0.0, 1.0);
+  fixture.module.Update(-1.0);
+  testTrue(g,
+           std::abs(fixture.camera.GetTargetZoom() - 0.75f) < 0.001f,
+           "inverted zoom turns a wheel-up notch into a zoom out");
+  fixture.env.setVar("invertZoom", false);
+  fixture.env.setVar("zoomStep", 0.15);
+  // Nothing drains the headless wheel between frames.
+  *fixture.input.getMouseScrollOffset() = 0.0;
+  fixture.camera.SetZoom(1.0f);
+
+  // Arrow keys pan at the persisted speed in screen pixels per second.
+  fixture.env.setVar("panSpeed", 600);
+  const glm::dvec2 before = fixture.camera.GetTargetPositionPrecise();
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::Right, InputAction::Press);
+  fixture.module.Update(0.5);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::Right, InputAction::Release);
+  const glm::dvec2 panned = fixture.camera.GetTargetPositionPrecise();
+  testTrue(g,
+           std::abs(panned.x - before.x - 300.0) < 0.01 && panned.y == before.y,
+           "a held arrow key pans at the persisted speed");
+  fixture.env.setVar("panSpeed", 0);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::Up, InputAction::Press);
+  fixture.module.Update(0.5);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::Up, InputAction::Release);
+  testTrue(g,
+           fixture.camera.GetTargetPositionPrecise() == panned,
+           "a pan speed of zero turns keyboard panning off");
+
+  // The cell look travels in the cell quad's colour channel.
+  SimulatorConfiguration look =
+    CellGameModuleTestAccess::currentConfiguration(fixture.module);
+  look.ledCells = false;
+  look.cellGlow = 2.0;
+  look.gridLines = true;
+  testTrue(g,
+           CellGameModuleTestAccess::applyConfiguration(fixture.module, look),
+           "canvas look settings apply");
+  fixture.scene.ClearDrawables();
+  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  const std::array<float, 32>& quad =
+    CellGameModuleTestAccess::getCellContext(fixture.module)
+      ->getCanvasView()
+      ->getCellQuadVertices();
+  testTrue(g,
+           quad[3] == 1.0f && quad[4] == 0.0f && quad[5] == 1.0f &&
+             quad[27] == 1.0f && quad[28] == 0.0f && quad[29] == 1.0f,
+           "flat cells, double glow and grid lines reach the cell quad");
+  testTrue(g,
+           fixture.env.getVar("cellStyle").value == "flat" &&
+             fixture.env.getVar("gridLines").valueAsBool,
+           "canvas look settings persist");
+  SimulatorConfiguration invalid = look;
+  invalid.zoomStep = 3.0;
+  testTrue(
+    g,
+    !CellGameModuleTestAccess::applyConfiguration(fixture.module, invalid),
+    "out-of-range new settings are rejected");
+
+  // Autosave writes to private storage once the interval elapses.
+  const std::filesystem::path autosave = SimulatorSettings::kAutosaveFile;
+  std::error_code ignored;
+  std::filesystem::remove(autosave, ignored);
+  fixture.env.setVar("autosaveMinutes", 1);
+  fixture.module.Update(30.0);
+  testTrue(
+    g, !std::filesystem::exists(autosave), "autosave waits for its interval");
+  fixture.module.Update(31.0);
+  testTrue(g,
+           std::filesystem::exists(autosave),
+           "autosave writes once the interval elapses");
+  std::filesystem::remove(autosave, ignored);
+
+  // Start paused off opens the next canvas running.
+  fixture.module.Exit();
+  fixture.started = false;
+  fixture.env.setVar("startPaused", false);
+  CellGameModule running;
+  testTrue(g,
+           running.Start(&fixture.context) &&
+             CellGameModuleTestAccess::getState(running) == CellState::NORMAL,
+           "with start paused off a canvas opens running");
+  running.Exit();
+}
+
+static void
+openCanvasSettings(CellGameFixture& fixture)
+{
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::F1, InputAction::Press);
+  fixture.module.Update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::F1, InputAction::Release);
+}
+
+// VIDEO tab, Anti-aliasing row (fourth), one step, then Apply.
+static void
+applyMsaaStep(CellGameFixture& fixture, KeyCode step)
+{
+  CellGameModuleTestAccess::getConfigurationMenu(fixture.module)
+    ->selectTabForTesting(ConfigurationTab::Video);
+  std::queue<InputManager::KeyPressEvent>& keys = fixture.input.getKeyQueue();
+  for (int row = 0; row < 3; ++row) {
+    keys.push({ KeyCode::Down, InputAction::Press, 0 });
+  }
+  keys.push({ step, InputAction::Press, 0 });
+  for (int row = 0; row < 8; ++row) {
+    keys.push({ KeyCode::Down, InputAction::Press, 0 });
+  }
+  keys.push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+}
+
+static void
+testRestartPrompt()
+{
+  testSection("CellGameModule: restart prompt for restart-only settings");
+  CellGameFixture fixture;
+  fixture.env.setVar("msaa", 4);
+  fixture.window.msaaSamples = 4;
+  ConfigurationMenu* menu =
+    CellGameModuleTestAccess::getConfigurationMenu(fixture.module);
+  ExitConfirmDialog* prompt =
+    CellGameModuleTestAccess::getExitConfirmDialog(fixture.module);
+
+  // Unchanged MSAA: Apply closes the menu and asks nothing.
+  openCanvasSettings(fixture);
+  fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Left, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Left, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !menu->isOpen() && !prompt->isOpen(),
+           "applying without a restart-only change asks nothing");
+
+  // A new MSAA asks; Later keeps running with the saved choice.
+  openCanvasSettings(fixture);
+  applyMsaaStep(fixture, KeyCode::Right);
+  testTrue(g,
+           !menu->isOpen() && prompt->isOpen() &&
+             fixture.env.getVar("msaa").valueAsLong == 8,
+           "applying a new MSAA saves it and offers to restart");
+  fixture.input.getKeyQueue().push({ KeyCode::N, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !prompt->isOpen() && !fixture.window.closeRequested &&
+             !fixture.window.restartRequested(),
+           "Later keeps the canvas running");
+
+  // Asked again (still differs from the window); Restart now relaunches.
+  openCanvasSettings(fixture);
+  fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Left, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Left, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g, prompt->isOpen(), "the prompt returns while MSAA still differs");
+  fixture.input.getKeyQueue().push({ KeyCode::Y, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !prompt->isOpen() && fixture.window.closeRequested &&
+             fixture.window.restartRequested(),
+           "Restart now asks the host to close and relaunch");
+  fixture.window.cancelCloseRequest();
+  fixture.window.clearRestartRequest();
+
+  // Unknown window samples (hosts that cannot tell) never ask.
+  fixture.window.msaaSamples = -1;
+  openCanvasSettings(fixture);
+  applyMsaaStep(fixture, KeyCode::Left);
+  testTrue(g,
+           !menu->isOpen() && !prompt->isOpen(),
+           "a window that cannot report its samples never asks");
 }
 
 static void
@@ -1006,10 +1214,9 @@ testReleaseConfigurationWorkflow()
              fixture.env.getVar("fps").valueAsLong == 144,
            "invalid FPS cap leaves applied preferences intact");
   menu->open(applied);
-  for (int row = 0; row < 19; ++row) {
-    fixture.input.getKeyQueue().push(
-      InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
-  }
+  // End lands on the Exit footer button.
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::End, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
   fixture.module.Update(0.016);
@@ -1978,9 +2185,33 @@ testConsoleSimulationCommands()
            historyContains(fixture.console, "Usage: setcell"),
            "setcell state validation is reported");
 
+  // Confirm clearing is on by default: the command asks first.
+  const unsigned char beforeClear = canvas->getCanvasPixel(1, 2);
   fixture.execute("clear_canvas");
-  testEqUChar(
-    g, canvas->getCanvasPixel(1, 2), 1, "clear command empties cells");
+  ExitConfirmDialog* clearConfirm =
+    CellGameModuleTestAccess::getExitConfirmDialog(fixture.module);
+  testTrue(g,
+           clearConfirm != nullptr && clearConfirm->isOpen() &&
+             canvas->getCanvasPixel(1, 2) == beforeClear,
+           "clear command asks before emptying cells");
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Y, InputAction::Press, 0 });
+  fixture.module.Update(0.016);
+  testTrue(g,
+           !clearConfirm->isOpen() && canvas->getCanvasPixel(1, 2) == 1,
+           "confirming the dialog empties cells");
+  fixture.execute("setcell", { "1", "2", "0" });
+  fixture.execute("clear_canvas", { "yes" });
+  testEqUChar(g,
+              canvas->getCanvasPixel(1, 2),
+              1,
+              "clear_canvas yes empties cells without asking");
+  fixture.env.setVar("confirmClear", false);
+  fixture.execute("setcell", { "1", "2", "0" });
+  fixture.execute("clear_canvas");
+  testTrue(g,
+           !clearConfirm->isOpen() && canvas->getCanvasPixel(1, 2) == 1,
+           "with confirmation off the command clears at once");
   fixture.execute("randomize", { "100" });
   const CellAddress visibleOrigin = canvas->getVisibleCell(0, 0);
   testEqUChar(g,
@@ -3565,6 +3796,10 @@ registerCellGameModuleTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CellGame.StartAndRegistration", []() {
     return runCellGameModuleCase(testStartRegistersGameFeatures);
   });
+  registry.add("IllumoGame.CellGame.Preferences",
+               []() { return runCellGameModuleCase(testCanvasPreferences); });
+  registry.add("IllumoGame.CellGame.RestartPrompt",
+               []() { return runCellGameModuleCase(testRestartPrompt); });
   registry.add("IllumoGame.CellGame.InvalidContext", []() {
     return runCellGameModuleCase(testInvalidContextStartIsContained);
   });

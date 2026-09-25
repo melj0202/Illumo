@@ -70,6 +70,7 @@ public:
   bool close() final;
   void shutdown() final;
   bool closeRequested() final;
+  bool restartRequested() final;
   void RequestTransition(std::unique_ptr<IModule> nextModule) final;
   bool HasPendingTransition() const final;
 

@@ -77,6 +77,11 @@ public:
   void rebuildDefaultPalette();
   void setFadeSpeed(float speed);
   float getFadeSpeed() const { return fadeSpeed; }
+  // Up-close cell look (see canvas_frag.glsl): glow strength 0-2 (1 is the
+  // standard look), LED keys or flat pixels, and grid lines between cells.
+  // It travels to the Canvas shader in the cell quad's colour channel as
+  // (glow / 2, LED keys, grid lines), so it needs no extra uniforms.
+  void setCellLook(float glow, bool ledKeys, bool gridLines);
   void tickVisual(float dt);
   void snapVisualToTargets();
 
@@ -185,10 +190,11 @@ private:
   TextureHandle displayTextureHandle{};
   // The cells draw as one quad in the canvas layout through the Canvas style
   // (its shader tiles and lights each cell); the visual keeps the world
-  // boundary. Vertices are position, white RGB and UV; they stay valid
-  // through submission.
+  // boundary. Vertices are position, the encoded cell look and UV; they stay
+  // valid through submission.
   MeshHandle cellQuadMesh{};
   std::array<float, 32> cellQuadVertices{};
+  std::array<float, 3> cellLook{ 0.5f, 1.0f, 0.0f };
   bool cellQuadDirty = false;
   bool cellQuadReady = false;
   bool emitCellQuad(Renderer* activeRenderer);
