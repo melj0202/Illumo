@@ -49,6 +49,14 @@ public:
   unsigned char nextStateFromExtendedCount(
     unsigned char cell,
     unsigned int aliveCount) const override;
+  const std::vector<KernelTap>& getKernelTaps() const override
+  {
+    return definition.leniaKernelTaps;
+  }
+  std::uint32_t getKernelLevel(unsigned char state) const override;
+  unsigned char nextStateFromPotential(
+    unsigned char cell,
+    std::uint64_t weightedSum) const override;
   void evalCell(const unsigned char& target,
                 unsigned char dest[3]) const override;
 

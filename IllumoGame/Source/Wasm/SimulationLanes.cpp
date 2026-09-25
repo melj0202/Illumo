@@ -4,12 +4,13 @@
 #include <bit>
 #include <chrono>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
-// Largest neighborhood radius a one-chunk-row halo can serve.
+// Largest neighborhood radius a one-chunk-line halo can serve.
 static constexpr unsigned int kMaximumLaneRadius = 16u;
 // Sync patches per message: about 2.2 MiB, so several lanes' parts fit one
 // service exchange.
@@ -28,12 +29,14 @@ SimulationLanePartition::canonicalRow(std::int64_t row) const
   if (worldChunkWidth <= 0 || worldChunkHeight <= 0) {
     return row;
   }
-  // Matches SparseCellGrid::canonicalizeChunk for the y axis.
-  const std::int64_t minimum = -(worldChunkHeight / 2);
-  const std::int64_t offset = SparseCellGrid::floorModulo(
-    SparseCellGrid::floorModulo(row, worldChunkHeight) -
-      SparseCellGrid::floorModulo(minimum, worldChunkHeight),
-    worldChunkHeight);
+  // Matches SparseCellGrid::canonicalizeChunk for the partition axis.
+  const std::int64_t extent =
+    axis == Axis::Columns ? worldChunkWidth : worldChunkHeight;
+  const std::int64_t minimum = -(extent / 2);
+  const std::int64_t offset =
+    SparseCellGrid::floorModulo(SparseCellGrid::floorModulo(row, extent) -
+                                  SparseCellGrid::floorModulo(minimum, extent),
+                                extent);
   return minimum + offset;
 }
 
@@ -59,7 +62,44 @@ SimulationLanePartition::valid() const
 {
   return laneCount >= 1u && laneCount <= 64u && lane < laneCount &&
          bandRows >= 1u && bandRows <= 1024u &&
+         (axis == Axis::Rows || axis == Axis::Columns) &&
          SparseCellGrid::isValidTopology(worldChunkWidth, worldChunkHeight);
+}
+
+static void
+writeElementaryRow(GuestWireWriter& output,
+                   bool present,
+                   const SparseElementaryRow& row)
+{
+  output.u32(!present ? 0u : (row.found ? 2u : 1u));
+  if (present && row.found) {
+    output.u64(std::bit_cast<std::uint64_t>(row.sourceY));
+    output.u64(std::bit_cast<std::uint64_t>(row.minX));
+    output.u64(std::bit_cast<std::uint64_t>(row.maxX));
+  }
+}
+
+static bool
+readElementaryRow(GuestWireReader& reader,
+                  bool& present,
+                  SparseElementaryRow& row)
+{
+  const std::uint32_t flag = reader.u32();
+  if (!reader.valid() || flag > 2u) {
+    return false;
+  }
+  present = flag != 0u;
+  row = SparseElementaryRow{};
+  row.found = flag == 2u;
+  if (row.found) {
+    row.sourceY = std::bit_cast<std::int64_t>(reader.u64());
+    row.minX = std::bit_cast<std::int64_t>(reader.u64());
+    row.maxX = std::bit_cast<std::int64_t>(reader.u64());
+    if (!reader.valid() || row.minX > row.maxX) {
+      return false;
+    }
+  }
+  return true;
 }
 
 static void
@@ -115,7 +155,7 @@ void
 SimulationLaneRequest::write(GuestWireWriter& output) const
 {
   output.u32(Magic);
-  output.u32(1);
+  output.u32(Version);
   output.u32(static_cast<std::uint32_t>(kind));
   output.u64(session);
   output.u64(epoch);
@@ -126,11 +166,15 @@ SimulationLaneRequest::write(GuestWireWriter& output) const
     output.u32(partition.bandRows);
     output.u64(std::bit_cast<std::uint64_t>(partition.worldChunkWidth));
     output.u64(std::bit_cast<std::uint64_t>(partition.worldChunkHeight));
+    output.u32(static_cast<std::uint32_t>(partition.axis));
     output.text(ruleId);
     output.text(rulePackage);
     return;
   }
   writePatches(output, patches);
+  if (kind == SimulationLaneMessage::Advance) {
+    writeElementaryRow(output, hasElementaryRow, elementaryRow);
+  }
 }
 
 bool
@@ -145,7 +189,7 @@ SimulationLaneRequest::read(std::span<const std::byte> bytes,
   request.session = reader.u64();
   request.epoch = reader.u64();
   request.generation = reader.u64();
-  if (!reader.valid() || magic != Magic || version != 1 || kind < 1 ||
+  if (!reader.valid() || magic != Magic || version != Version || kind < 1 ||
       kind > 3 || request.session == 0 || request.epoch == 0 ||
       request.generation == std::numeric_limits<std::uint64_t>::max()) {
     return false;
@@ -159,13 +203,22 @@ SimulationLaneRequest::read(std::span<const std::byte> bytes,
       std::bit_cast<std::int64_t>(reader.u64());
     request.partition.worldChunkHeight =
       std::bit_cast<std::int64_t>(reader.u64());
+    const std::uint32_t axis = reader.u32();
+    if (axis > 1u) {
+      return false;
+    }
+    request.partition.axis = static_cast<SimulationLanePartition::Axis>(axis);
     request.ruleId = reader.text(256);
     request.rulePackage = reader.text(1024u * 1024u);
     if (!reader.finished() || !request.partition.valid() ||
         request.ruleId.empty() || request.rulePackage.empty()) {
       return false;
     }
-  } else if (!readPatches(reader, request.patches) || !reader.finished()) {
+  } else if (!readPatches(reader, request.patches) ||
+             (request.kind == SimulationLaneMessage::Advance &&
+              !readElementaryRow(
+                reader, request.hasElementaryRow, request.elementaryRow)) ||
+             !reader.finished()) {
     return false;
   }
   output = std::move(request);
@@ -176,7 +229,7 @@ void
 SimulationLaneReply::write(GuestWireWriter& output) const
 {
   output.u32(SimulationLaneRequest::Magic);
-  output.u32(1);
+  output.u32(SimulationLaneRequest::Version);
   output.u32(static_cast<std::uint32_t>(kind));
   output.u64(session);
   output.u64(epoch);
@@ -185,6 +238,9 @@ SimulationLaneReply::write(GuestWireWriter& output) const
   output.f64(patchMilliseconds);
   output.f64(collectMilliseconds);
   writePatches(output, changes);
+  if (kind == SimulationLaneMessage::Advanced) {
+    writeElementaryRow(output, hasElementaryRow, elementaryRow);
+  }
 }
 
 bool
@@ -203,9 +259,11 @@ SimulationLaneReply::read(std::span<const std::byte> bytes,
   reply.patchMilliseconds = reader.f64();
   reply.collectMilliseconds = reader.f64();
   if (!reader.valid() || magic != SimulationLaneRequest::Magic ||
-      version != 1 || kind < 4 || kind > 6 ||
-      !readPatches(reader, reply.changes) || !reader.finished() ||
-      !(reply.advanceMilliseconds >= 0.0) ||
+      version != SimulationLaneRequest::Version || kind < 4 || kind > 6 ||
+      !readPatches(reader, reply.changes) ||
+      (kind == 5 && !readElementaryRow(
+                      reader, reply.hasElementaryRow, reply.elementaryRow)) ||
+      !reader.finished() || !(reply.advanceMilliseconds >= 0.0) ||
       !(reply.patchMilliseconds >= 0.0) ||
       !(reply.collectMilliseconds >= 0.0) ||
       (kind != 5 && !reply.changes.empty())) {
@@ -217,11 +275,17 @@ SimulationLaneReply::read(std::span<const std::byte> bytes,
 }
 
 static bool
+isElementary(const RuleSet& rule)
+{
+  return rule.getNeighborhoodKind() == RuleSet::NeighborhoodKind::Elementary1D;
+}
+
+// Every rule within the halo radius partitions: elementary 1D rules by chunk
+// column (their one active row spans columns), all others by chunk row.
+static bool
 supportsLanes(const RuleSet& rule)
 {
-  return rule.getNeighborhoodKind() !=
-           RuleSet::NeighborhoodKind::Elementary1D &&
-         rule.getNeighborhoodRadius() <= kMaximumLaneRadius;
+  return rule.getNeighborhoodRadius() <= kMaximumLaneRadius;
 }
 
 bool
@@ -248,7 +312,9 @@ try {
       return false;
     }
     std::unique_ptr<RuleSet> rule = registry.createRuleSet(request.ruleId);
-    if (!rule || !supportsLanes(*rule)) {
+    if (!rule || !supportsLanes(*rule) ||
+        isElementary(*rule) !=
+          (request.partition.axis == SimulationLanePartition::Axis::Columns)) {
       error = "Lane rule is missing or not partitionable";
       return false;
     }
@@ -270,7 +336,7 @@ try {
     }
     for (const SparseChunkPatch& patch : request.patches) {
       if (!(m_grid->canonicalizeChunk(patch.address) == patch.address) ||
-          !m_partition.isRelevant(patch.address.y)) {
+          !m_partition.isRelevantChunk(patch.address)) {
         error = "Lane patch outside its owned and halo rows";
         return false;
       }
@@ -282,6 +348,11 @@ try {
           }
         }
       }
+    }
+    if (request.kind == SimulationLaneMessage::Advance &&
+        request.hasElementaryRow != isElementary(*m_rule)) {
+      error = "Lane advance does not match the rule's partition";
+      return false;
     }
     if (request.kind == SimulationLaneMessage::SyncChunks) {
       if (!m_grid->applyChunkPatches(request.patches)) {
@@ -334,7 +405,7 @@ SimulationLaneWorker::advance(const SimulationLaneRequest& request,
     halo;
   m_grid->visitChunks(
     [&](const ChunkAddress& address, const SparseCellGrid::ChunkCells& cells) {
-      if (m_partition.isHalo(address.y)) {
+      if (m_partition.isHaloChunk(address)) {
         halo.emplace(address, cells);
       }
     });
@@ -342,7 +413,16 @@ SimulationLaneWorker::advance(const SimulationLaneRequest& request,
   const std::chrono::steady_clock::time_point started =
     std::chrono::steady_clock::now();
   reply.patchMilliseconds = millisecondsBetween(patchStart, started);
-  if (!m_grid->advance(*m_rule)) {
+  // Elementary lanes receive the global source row and write only the row
+  // cells in their own columns.
+  const bool elementary = isElementary(*m_rule);
+  const std::function<bool(std::int64_t)> ownsColumn =
+    [this](std::int64_t column) { return m_partition.owns(column); };
+  const bool advancedOk =
+    elementary
+      ? m_grid->advanceElementaryRow(*m_rule, request.elementaryRow, ownsColumn)
+      : m_grid->advance(*m_rule);
+  if (!advancedOk) {
     error = "Lane generation failed";
     return false;
   }
@@ -358,7 +438,7 @@ SimulationLaneWorker::advance(const SimulationLaneRequest& request,
         patch.address = address;
         patch.present = cells != nullptr;
         patch.cells.fill(SparseCellGrid::BackgroundState);
-        if (m_partition.owns(address.y)) {
+        if (m_partition.ownsChunk(address)) {
           if (cells != nullptr) {
             patch.cells = *cells;
           }
@@ -386,6 +466,10 @@ SimulationLaneWorker::advance(const SimulationLaneRequest& request,
   m_generation += 1;
   reply.kind = SimulationLaneMessage::Advanced;
   reply.generation = m_generation;
+  if (elementary) {
+    reply.hasElementaryRow = true;
+    reply.elementaryRow = m_grid->findElementarySourceRow(ownsColumn);
+  }
   reply.collectMilliseconds =
     millisecondsBetween(advanced, std::chrono::steady_clock::now());
   return true;
@@ -456,6 +540,7 @@ SimulationLaneCoordinator::partitionFor(std::uint32_t lane) const
   partition.bandRows = m_bandRows;
   partition.worldChunkWidth = m_syncedWidth;
   partition.worldChunkHeight = m_syncedHeight;
+  partition.axis = m_axis;
   return partition;
 }
 
@@ -476,6 +561,8 @@ SimulationLaneCoordinator::queueSync(const SparseCellGrid& published,
   ++m_resyncs;
   m_syncedWidth = published.getWorldChunkWidth();
   m_syncedHeight = published.getWorldChunkHeight();
+  m_axis = isElementary(rule) ? SimulationLanePartition::Axis::Columns
+                              : SimulationLanePartition::Axis::Rows;
   std::vector<std::vector<SparseChunkPatch>> relevant(m_laneCount);
   std::vector<SimulationLanePartition> partitions;
   for (std::uint32_t lane = 0; lane < m_laneCount; ++lane) {
@@ -484,7 +571,7 @@ SimulationLaneCoordinator::queueSync(const SparseCellGrid& published,
   published.visitChunks(
     [&](const ChunkAddress& address, const SparseCellGrid::ChunkCells& cells) {
       for (std::uint32_t lane = 0; lane < m_laneCount; ++lane) {
-        if (partitions[lane].isRelevant(address.y)) {
+        if (partitions[lane].isRelevantChunk(address)) {
           relevant[lane].push_back({ address, true, cells });
         }
       }
@@ -551,6 +638,15 @@ SimulationLaneCoordinator::start(SparseCellGrid* working,
   if (!m_ahead && lanesOutstanding()) {
     return false; // stale replies still draining; try on a later frame
   }
+  if (!m_ahead && isElementary(*rule)) {
+    // Lanes see only their columns; the source row is found globally here.
+    m_nextRow = published->findElementarySourceRow({});
+    if (m_nextRow.found &&
+        m_nextRow.sourceY == std::numeric_limits<std::int64_t>::max()) {
+      fail("The elementary row reached the coordinate limit");
+      return false;
+    }
+  }
   if (!consistent && !queueSync(*published, *rule)) {
     fail("The active rule has no catalog definition for lanes");
     return false;
@@ -599,6 +695,8 @@ SimulationLaneCoordinator::queueAdvance()
     advance.generation = m_generation;
     advance.patches = std::move(lane.haloUpdates);
     lane.haloUpdates.clear();
+    advance.hasElementaryRow = elementary();
+    advance.elementaryRow = m_nextRow;
     GuestWireWriter writer;
     advance.write(writer);
     lane.queue.push_back(writer.take());
@@ -645,7 +743,8 @@ SimulationLaneCoordinator::pump()
             return;
           }
           if (reply.kind == SimulationLaneMessage::Advanced) {
-            if (!lane.awaitingAdvance || reply.generation != m_generation + 1) {
+            if (!lane.awaitingAdvance || reply.generation != m_generation + 1 ||
+                reply.hasElementaryRow != elementary()) {
               fail("Unexpected simulation lane generation");
               return;
             }
@@ -677,6 +776,8 @@ SimulationLaneCoordinator::collectReplies()
   }
   {
     m_merged.clear();
+    // The next elementary source row: every lane's owned-column row combined.
+    m_nextRow = SparseElementaryRow{};
     m_slowestAdvance = 0.0;
     m_slowestPatch = 0.0;
     m_slowestCollect = 0.0;
@@ -691,16 +792,18 @@ SimulationLaneCoordinator::collectReplies()
         std::max(m_slowestCollect, lane.reply.collectMilliseconds);
       m_merged.insert(
         m_merged.end(), lane.reply.changes.begin(), lane.reply.changes.end());
+      SparseCellGrid::mergeElementaryRow(&m_nextRow, lane.reply.elementaryRow);
       lane.reply.changes.clear();
+      lane.reply.elementaryRow = SparseElementaryRow{};
       lane.replied = false;
     }
-    // Each lane's next halo: the rows it borders that other lanes changed.
+    // Each lane's next halo: the lines it borders that other lanes changed.
     for (std::uint32_t index = 0; index < m_lanes.size(); ++index) {
       const SimulationLanePartition partition = partitionFor(index);
       std::vector<SparseChunkPatch>& updates = m_lanes[index].haloUpdates;
       updates.clear();
       for (const SparseChunkPatch& patch : m_merged) {
-        if (partition.isHalo(patch.address.y)) {
+        if (partition.isHaloChunk(patch.address)) {
           updates.push_back(patch);
         }
       }
@@ -708,9 +811,15 @@ SimulationLaneCoordinator::collectReplies()
     m_generation += 1;
     // The lanes need only their halos to continue: the next generation
     // starts as soon as this store returns, overlapping the merge (next
-    // poll) and the caller's publication.
-    queueAdvance();
-    m_ahead = true;
+    // poll) and the caller's publication. An elementary row at the coordinate
+    // limit is left to start(), which turns lanes off before advancing it.
+    const bool rowAtLimit =
+      elementary() && m_nextRow.found &&
+      m_nextRow.sourceY == std::numeric_limits<std::int64_t>::max();
+    if (!rowAtLimit) {
+      queueAdvance();
+    }
+    m_ahead = !rowAtLimit;
     m_mergeReady = true;
     pump();
   }

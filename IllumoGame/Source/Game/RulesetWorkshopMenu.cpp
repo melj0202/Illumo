@@ -55,6 +55,8 @@ familyLabel(RuleFamily family)
       return "VON NEUMANN TABLE";
     case RuleFamily::Sandpile:
       return "ABELIAN SANDPILE";
+    case RuleFamily::Lenia:
+      return "LENIA CONTINUOUS";
     default:
       return "UNKNOWN FAMILY";
   }
@@ -600,6 +602,12 @@ RulesetWorkshopMenu::rebuildRows()
                       draft.rule.empty()
                         ? "Edit range and thresholds in JSON, then import."
                         : draft.rule);
+  } else if (familyDraft.kind == RuleFamily::Lenia) {
+    appendInformation(Control::TableInformation,
+                      "Kernel and growth",
+                      draft.rule.empty()
+                        ? "Edit mu, sigma and kernel in JSON, then import."
+                        : draft.rule);
   } else if (familyDraft.kind == RuleFamily::Hodgepodge ||
              familyDraft.kind == RuleFamily::Turmite ||
              familyDraft.kind == RuleFamily::LatticeGas ||
@@ -622,7 +630,10 @@ RulesetWorkshopMenu::rebuildRows()
     appendControl(Control::PreviewNeighborhood, "Example neighborhood");
   } else {
     appendControl(Control::PreviewState, "Example cell state");
-    appendControl(Control::PreviewNeighbors, "Live neighbors (0-8)");
+    appendControl(Control::PreviewNeighbors,
+                  familyDraft.kind == RuleFamily::Lenia
+                    ? "Kernel potential (eighths)"
+                    : "Live neighbors (0-8)");
   }
   appendInformation(Control::PreviewResult, "Next state", {});
 
@@ -1272,6 +1283,21 @@ RulesetWorkshopMenu::refreshPreview()
   } else if (familyDraft.kind == RuleFamily::LargerThanLife) {
     next = rule->nextStateFromExtendedCount(
       static_cast<unsigned char>(previewState), previewNeighborCount);
+  } else if (familyDraft.kind == RuleFamily::Lenia) {
+    // The neighbor control reads as the kernel potential in eighths.
+    std::uint64_t fullPotential = 0u;
+    for (const RuleSet::KernelTap& tap : rule->getKernelTaps()) {
+      fullPotential += tap.weight;
+    }
+    fullPotential *= familyDraft.stateCount - 1u;
+    next =
+      rule->nextStateFromPotential(static_cast<unsigned char>(previewState),
+                                   fullPotential * previewNeighborCount / 8u);
+    previewOutputState = next;
+    previewText = stateLabel(familyDraft, previewState) + " at potential " +
+                  std::to_string(previewNeighborCount) + "/8 -> " +
+                  stateLabel(familyDraft, next);
+    return;
   } else if (familyDraft.kind == RuleFamily::Hodgepodge ||
              familyDraft.kind == RuleFamily::Dominance) {
     RuleSet::NeighborStateCounts counts{};

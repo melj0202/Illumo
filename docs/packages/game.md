@@ -12,9 +12,10 @@ defines each rule's stable identity, required `family_id`, and transition data.
 The current rules schema is version 3; it supports Life-like B/S, Generations,
 explicit Moore tables, cyclic interaction, colorized Life, Larger-than-Life,
 Hodgepodge chemistry, directional Turmites, HPP lattice gas, five-species
-dominance, Golly von Neumann rule tables, Abelian sandpiles, and Wolfram
-elementary 1D. Rules can also select a deterministic starter strategy and soup
-radius/density, or an exact Golly-RLE starter. The reader retains
+dominance, Golly von Neumann rule tables, Abelian sandpiles, quantized Lenia,
+and Wolfram elementary 1D. Rules can also select a deterministic starter
+strategy and soup radius/density, an exact Golly-RLE starter, or a Lenia-RLE
+starter. The reader retains
 unversioned and schema-v1/v2 rule-catalog compatibility. Stable built-in IDs
 remain unchanged for saved worlds.
 
@@ -47,9 +48,10 @@ evaluate the full Moore state histogram.
 `LARGER_THAN_LIFE_BINARY` adds range 1..16 square or circular neighborhoods,
 optional center counting, and inclusive birth/survival intervals. The shipped
 Bosco/Bugs, Bugsmovie, and Globe parameters follow Golly's official
-Larger-than-Life documentation. These rules use an isolated serial sparse
-evaluator that expands occupied source chunks by the required chunk radius;
-the optimized radius-one candidate/halo paths remain unchanged.
+Larger-than-Life documentation. These rules use an isolated sparse evaluator
+that expands occupied source chunks by the required chunk radius and evaluates
+target chunks on the worker pool (D-GC10); the optimized radius-one
+candidate/halo paths remain unchanged.
 
 The Generations catalog also includes the documented Banners and Transers
 five-state rules and Fireworks with twenty-one visible phases. Model-appropriate
@@ -113,6 +115,22 @@ SDSR (1998) and Evoloop (1999) papers; Bak--Tang--Wiesenfeld,
 [Self-organized criticality](https://doi.org/10.1103/PhysRevLett.59.381); and
 Fisch--Gravner--Griffeath's cyclic automata paper above.
 
+`LENIA_256_LEVEL` (D-GC9) adds Bert Chan's continuous Lenia as 256 intensity
+levels: state 1 is empty, states 2..255 are levels 1..254, and state 0 is full,
+drawn on a navy-to-cyan-to-amber ramp. `lenia` rules carry radius (1..16),
+`time_steps`, `mu`, `sigma`, ring `peaks`, and `kernel_core`/`growth` shapes
+(`polynomial`, `exponential`, `step`); they compile to integer kernel taps and a
+fixed-point growth table and run on the chunk-parallel `WeightedKernel` sparse
+path.
+Orbium, Orbium bicaudatus, Gyrorbium, Scutium, Discutium, and Paraptera start
+from their `lenia_rle` species cells; the paint brush's first state paints full
+intensity, and custom Lenia rules default to a random-intensity soup. The F2
+workshop shows the compiled `LENIA/...` contract and previews the next level at
+a chosen potential in eighths. Parameters and cells are from Chan's
+MIT-licensed [Lenia repository](https://github.com/Chakazul/Lenia)
+(`Python/animals.json`); see also [Lenia](https://en.wikipedia.org/wiki/Lenia)
+and B. W.-C. Chan, *Lenia: Biology of Artificial Life*, Complex Systems 28
+(2019).
 `RuleCatalogLoader` owns file reads and selects the first valid base catalog
 pair beside the executable, in the working directory, or in its `IllumoGame`
 subdirectory. It then layers the working-directory `families.user.json` and
@@ -141,8 +159,8 @@ B/S count chips, Generations adds its state count, elementary rules show their
 Wolfram number, cyclic rules expose successor threshold and cycle step, and
 Moore tables explain that transitions are edited in JSON. Larger-than-Life
 shows its canonical range/threshold summary and uses JSON import for parameter
-editing. Hodgepodge, Turmite, lattice-gas, dominance, rule-table, and sandpile
-definitions show their compiled interaction contract and retain their
+editing. Hodgepodge, Turmite, lattice-gas, dominance, rule-table, sandpile, and
+Lenia definitions show their compiled interaction contract and retain their
 parameters through JSON import/export.
 Rule settings and a configurable transition example come first; state labels
 and colors plus JSON import/export are lower sections in the same scrollable
@@ -312,15 +330,19 @@ no typeface and keeps the engine default font.
   Rule 184 are elementary 1D space-time rules: the source row is the maximum
   counted Y, the destination is Y+1, and older rows remain history (D-G2).
   Cyclic rules request a full 256-state Moore histogram. Their correctness-first
-  serial sparse evaluator expands each occupied source chunk by one, reuses the
+  sparse evaluator expands each occupied source chunk by one, reuses the
   transactional output and change-journal machinery, and leaves optimized
   count-table kernels unchanged. Dense `calcGeneration` retains a compatible
   histogram path for tests and legacy consumers.
-  Larger-than-Life rules use a separate serial extended-range evaluator. It
+  Larger-than-Life rules use a separate extended-range evaluator. It
   builds the exact affected chunk band, counts square or circular neighborhoods
   through authoritative lookup (including torus wrapping), and reuses the
   transactional result/change-journal machinery. Range is capped at 16 and B0
   is rejected so infinite sparse backgrounds remain quiescent.
+  Histogram, directional, extended-range and Lenia targets, and elementary 1D
+  rows, evaluate on the grid worker pool with per-worker halo windows and serial
+  in-order publication (D-GC10); `IllumoGame.Rules.WorkerPoolParity` checks every
+  shipped rule against one worker.
   `CellGrid`/`Canvas` remain compatibility coverage.
 
 ## CanvasView (presentation)
@@ -385,11 +407,15 @@ are dropped while fractional time is retained. Pause, edit, save/load, ruleset
 changes, manual stepping, and shutdown drain first.
 
 In the package (D-E17) the guest runner measures its serial generations and,
-once they exceed 4 ms, runs generations on up to eight simulation lanes
+once they exceed 1 ms, runs generations on up to eight simulation lanes
 (`IllumoGame/Source/Wasm/SimulationLanes.*`): isolated
 `CSimWorkerGuest.wasm` stores that own interleaved bands of eight chunk rows
 plus a one-row halo, advance them with the same kernels, and return their
-owned changes. The control store merges them into the spare grid as one exact
+owned changes. Elementary 1D rules, whose single active row spans columns,
+partition by chunk column instead: the coordinator finds the global source
+row (lane protocol version 2 carries it), each lane writes only the row
+cells in its own columns, and the lanes' owned-column rows combine into the
+next generation's source row. The control store merges them into the spare grid as one exact
 delta (explicit changed chunks, never the replacement marker), publishes it as
 above, and launches the next generation from the halos before merging. Lanes
 resynchronize after any change to the published world, rule or topology.
@@ -397,8 +423,10 @@ Their generations finish on a later frame, so the runner reports
 `canBlock()` false and a drain retires the outstanding generation: at most
 one generation is discarded, and pause, save, load, edits and exit act on the
 displayed world. Lanes stop for small or settled worlds (all lanes together
-under 1 ms), and never run elementary 1D rules, radii above 16 or after a
-lane failure. `status` reports the execution mode, round trip, slowest lane,
+under 0.5 ms), and never run radii above 16 or after a lane failure. The
+1 ms entry comes from `IllumoGame.Wasm.PackageBench`: at about 1 ms a lane
+generation costs the store only its 0.3-0.4 ms merge, at the price of some
+uncapped peak TPS. `status` reports the execution mode, round trip, slowest lane,
 merge time, resynchronizations and retirements. Painting, Bresenham strokes, rectangular selection, copy/cut/paste, built-in
 stamps, RLE/plaintext import, `setcell`,
 randomization, and clearing operate directly on signed world coordinates.

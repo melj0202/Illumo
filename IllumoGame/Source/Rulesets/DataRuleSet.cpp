@@ -1,4 +1,6 @@
 #include "DataRuleSet.h"
+#include <algorithm>
+#include <cstdint>
 
 namespace {
 
@@ -99,6 +101,9 @@ DataRuleSet::getNeighborhoodKind() const
   }
   if (family.kind == RuleFamily::LargerThanLife) {
     return NeighborhoodKind::ExtendedRange;
+  }
+  if (family.kind == RuleFamily::Lenia) {
+    return NeighborhoodKind::WeightedKernel;
   }
   return NeighborhoodKind::MooreCount;
 }
@@ -415,6 +420,47 @@ DataRuleSet::nextStateFromExtendedCount(unsigned char cell,
     return 0u;
   }
   return active && family.stateCount > 2u ? 2u : 1u;
+}
+
+std::uint32_t
+DataRuleSet::getKernelLevel(unsigned char state) const
+{
+  if (family.kind != RuleFamily::Lenia) {
+    return 0u;
+  }
+  return RuleSetRegistry::leniaLevel(state, family.stateCount);
+}
+
+unsigned char
+DataRuleSet::nextStateFromPotential(unsigned char cell,
+                                    std::uint64_t weightedSum) const
+{
+  if (family.kind != RuleFamily::Lenia ||
+      static_cast<unsigned int>(cell) >= family.stateCount ||
+      definition.leniaGrowthDeltas.size() != kLeniaPotentialBins + 1u ||
+      definition.leniaKernelWeightTotal == 0u) {
+    return 1u;
+  }
+  // A' = clip(A + G(U) / T) rounded to the nearest level, where U is the
+  // normalized potential: weightedSum / (kernel total * full level).
+  const std::uint64_t maximumLevel = family.stateCount - 1u;
+  const std::uint64_t fullPotential =
+    definition.leniaKernelWeightTotal * maximumLevel;
+  const std::uint64_t bin =
+    std::min(weightedSum, fullPotential) * kLeniaPotentialBins / fullPotential;
+  const std::int64_t level =
+    RuleSetRegistry::leniaLevel(cell, family.stateCount);
+  const std::int64_t scaled =
+    level * kLeniaDeltaScale +
+    definition.leniaGrowthDeltas[static_cast<std::size_t>(bin)] +
+    kLeniaDeltaScale / 2;
+  if (scaled < kLeniaDeltaScale) {
+    return 1u;
+  }
+  const std::uint64_t nextLevel = std::min(
+    static_cast<std::uint64_t>(scaled / kLeniaDeltaScale), maximumLevel);
+  return RuleSetRegistry::leniaState(static_cast<unsigned int>(nextLevel),
+                                     family.stateCount);
 }
 
 unsigned char

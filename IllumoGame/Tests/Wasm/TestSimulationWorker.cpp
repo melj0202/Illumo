@@ -165,14 +165,11 @@ laneParity(const std::string& families, const std::string& rules)
         LoopbackLanes transport(laneCount);
         SimulationLaneCoordinator lanes(transport);
         lanes.setBandRowsForTesting(1u);
+        // Every rule partitions: elementary 1D by chunk column.
         if (lanes.availability(rule) !=
             SimulationLaneCoordinator::Availability::Available) {
-          if (rule.getNeighborhoodKind() !=
-              RuleSet::NeighborhoodKind::Elementary1D) {
-            std::fprintf(stderr, "Rule %d refused lanes\n", ruleIndex);
-            return false;
-          }
-          continue; // global-row rules stay serial by design
+          std::fprintf(stderr, "Rule %d refused lanes\n", ruleIndex);
+          return false;
         }
         const std::int64_t size = topology == 0 ? 0 : 4;
         SparseCellGrid serial(size, size);
@@ -281,8 +278,59 @@ laneParity(const std::string& families, const std::string& rules)
       }
     }
   }
-  std::printf("%d rule/topology/lane-count combinations and large worlds "
-              "match serial generations\n",
+  // Elementary rows wide enough to cross many column bands, including a torus
+  // narrower than the row so it wraps, and a user edit below the active row.
+  for (const char* id : { "RULE_90", "RULE_184" }) {
+    std::unique_ptr<RuleSet> elementary =
+      RuleSetRegistry::instance().createRuleSet(id);
+    if (!elementary) {
+      return false;
+    }
+    for (std::int64_t size : { std::int64_t{ 0 }, std::int64_t{ 12 } }) {
+      for (std::uint32_t bandRows : { 1u, 3u }) {
+        SparseCellGrid serial(size, size);
+        std::uint32_t state = 777u;
+        for (std::int64_t x = -1500; x < 1500; ++x) {
+          state = state * 1664525u + 1013904223u;
+          if ((state >> 24) < 100u) {
+            serial.setCell({ x, 0 }, 0);
+          }
+        }
+        LoopbackLanes transport(4);
+        SimulationLaneCoordinator lanes(transport);
+        lanes.setBandRowsForTesting(bandRows);
+        SparseCellGrid first(size, size);
+        SparseCellGrid second(size, size);
+        first.copyStateFrom(serial);
+        SparseCellGrid* published = &first;
+        SparseCellGrid* spare = &second;
+        SparseGenerationDelta mirror;
+        bool mirrorValid = false;
+        for (int step = 0; step < 30; ++step) {
+          if (step == 12) {
+            published->setCell({ 40, -3 }, 0);
+            serial.setCell({ 40, -3 }, 0);
+            mirrorValid = false;
+          }
+          if (!laneGeneration(
+                lanes, published, spare, *elementary, mirror, mirrorValid) ||
+              !serial.advance(*elementary) ||
+              gridHash(serial) != gridHash(*published)) {
+            std::fprintf(stderr,
+                         "Elementary lane mismatch: rule=%s size=%lld "
+                         "bands=%u step=%d\n",
+                         id,
+                         static_cast<long long>(size),
+                         bandRows,
+                         step);
+            return false;
+          }
+        }
+      }
+    }
+  }
+  std::printf("%d rule/topology/lane-count combinations, large worlds and "
+              "wide elementary rows match serial generations\n",
               partitioned);
   return partitioned > 0;
 }
@@ -439,6 +487,73 @@ laneProtocol(const std::string& families, const std::string& rules)
     std::puts("An acknowledgement carried changes");
     return false;
   }
+  // Version 2: the partition axis and the elementary source row round-trip,
+  // and a worker refuses an axis or a row that does not match its rule.
+  SimulationLaneRequest columns = begin;
+  columns.partition.axis = SimulationLanePartition::Axis::Columns;
+  writer.clear();
+  columns.write(writer);
+  SimulationLaneRequest decodedColumns;
+  SimulationLaneWorker mismatched;
+  if (!SimulationLaneRequest::read(writer.data(), decodedColumns) ||
+      decodedColumns.partition.axis != SimulationLanePartition::Axis::Columns ||
+      mismatched.execute(writer.data(), output, error)) {
+    std::puts("A Life rule accepted a column partition");
+    return false;
+  }
+  SimulationLaneRequest rowAdvance = advance;
+  rowAdvance.hasElementaryRow = true;
+  rowAdvance.elementaryRow = SparseElementaryRow{ true, -9, -4, 12 };
+  GuestWireWriter rowWriter;
+  rowAdvance.write(rowWriter);
+  SimulationLaneRequest decodedRow;
+  if (!SimulationLaneRequest::read(rowWriter.data(), decodedRow) ||
+      !decodedRow.hasElementaryRow || !decodedRow.elementaryRow.found ||
+      decodedRow.elementaryRow.sourceY != -9 ||
+      decodedRow.elementaryRow.minX != -4 ||
+      decodedRow.elementaryRow.maxX != 12) {
+    std::puts("An elementary source row did not round-trip");
+    return false;
+  }
+  SimulationLaneRequest backwardsRow = rowAdvance;
+  backwardsRow.elementaryRow.minX = 13;
+  rowWriter.clear();
+  backwardsRow.write(rowWriter);
+  if (SimulationLaneRequest::read(rowWriter.data(), decodedRow)) {
+    std::puts("An inverted elementary row was accepted");
+    return false;
+  }
+  SimulationLaneWorker lifeLane;
+  writer.clear();
+  begin.partition.laneCount = 2;
+  begin.partition.bandRows = 1;
+  begin.write(writer);
+  rowWriter.clear();
+  rowAdvance.write(rowWriter);
+  if (!lifeLane.execute(writer.data(), output, error) ||
+      lifeLane.execute(rowWriter.data(), output, error)) {
+    std::puts("A Life lane accepted an elementary source row");
+    return false;
+  }
+  SimulationLaneReply rowReply;
+  rowReply.kind = SimulationLaneMessage::Advanced;
+  rowReply.session = 3;
+  rowReply.epoch = 1;
+  rowReply.hasElementaryRow = true;
+  rowReply.elementaryRow = SparseElementaryRow{ true, 5, 0, 0 };
+  GuestWireWriter rowReplyWriter;
+  rowReply.write(rowReplyWriter);
+  SimulationLaneReply decodedRowReply;
+  std::vector<std::byte> oldVersion = rowReplyWriter.data();
+  oldVersion[4] = std::byte{ 1 };
+  if (!SimulationLaneReply::read(rowReplyWriter.data(), decodedRowReply) ||
+      !decodedRowReply.hasElementaryRow ||
+      decodedRowReply.elementaryRow.sourceY != 5 ||
+      SimulationLaneReply::read(oldVersion, decodedRowReply)) {
+    std::puts("Elementary replies did not round-trip or version 1 was read");
+    return false;
+  }
+
   // Informational: cost of building a merge delta for 1,024 changed chunks.
   SparseCellGrid timed;
   std::vector<SparseChunkPatch> patches;

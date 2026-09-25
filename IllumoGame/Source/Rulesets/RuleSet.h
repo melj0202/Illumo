@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 constexpr auto MAX_RULETAG_SIZE = 128;
 
@@ -26,7 +27,19 @@ public:
     MooreStateCounts,
     VonNeumannDirectional,
     ExtendedRange,
-    Elementary1D
+    Elementary1D,
+    // Continuous-valued (Lenia-style) rules: every cell carries an intensity
+    // level, and a weighted kernel sum of neighbor levels drives the update.
+    WeightedKernel
+  };
+
+  // One weighted kernel cell relative to the target. Weights are integers so
+  // every evaluator, lane and platform accumulates the exact same potential.
+  struct KernelTap
+  {
+    int offsetX = 0;
+    int offsetY = 0;
+    std::uint32_t weight = 0u;
   };
 
   enum class ExtendedNeighborhoodShape
@@ -146,6 +159,30 @@ public:
     unsigned int aliveCount) const
   {
     return nextState(cell, static_cast<unsigned char>(aliveCount));
+  }
+
+  // WeightedKernel contract. The potential of a target is the sum of
+  // tap weight times getKernelLevel(neighbor state) over getKernelTaps();
+  // nextStateFromPotential maps that exact integer sum to the next state.
+  // The background state must have level zero and stay background at zero
+  // potential, so empty space never comes alive.
+  virtual const std::vector<KernelTap>& getKernelTaps() const
+  {
+    static const std::vector<KernelTap> noTaps;
+    return noTaps;
+  }
+
+  virtual std::uint32_t getKernelLevel(unsigned char state) const
+  {
+    (void)state;
+    return 0u;
+  }
+
+  virtual unsigned char nextStateFromPotential(unsigned char cell,
+                                               std::uint64_t weightedSum) const
+  {
+    (void)weightedSum;
+    return cell;
   }
 
   virtual unsigned char nextElementary(unsigned char left,

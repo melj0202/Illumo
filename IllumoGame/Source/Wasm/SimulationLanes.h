@@ -15,23 +15,48 @@
 
 class RuleSet;
 
-// Row-band partition of the chunk plane across simulation lanes. A lane owns
-// every chunk row whose band maps to it and keeps a one-row halo of the rows
-// around its bands. Its owned rows depend only on owned and halo rows, so it
+// Band partition of the chunk plane across simulation lanes. A lane owns every
+// chunk line (a row, or a column for elementary 1D rules, whose single active
+// row spans columns) whose band maps to it and keeps a one-line halo around
+// its bands. Its owned lines depend only on owned and halo lines, so it
 // advances them exactly; everything else it computes is discarded.
 struct SimulationLanePartition
 {
+  enum class Axis : std::uint32_t
+  {
+    Rows = 0,
+    Columns = 1
+  };
   std::uint32_t lane = 0;
   std::uint32_t laneCount = 1;
+  // Band height in chunk lines (rows or columns).
   std::uint32_t bandRows = 8;
   std::int64_t worldChunkWidth = 0;
   std::int64_t worldChunkHeight = 0;
+  Axis axis = Axis::Rows;
 
+  // The chunk line a chunk address lies on along the partition axis.
+  std::int64_t lineOf(const ChunkAddress& address) const
+  {
+    return axis == Axis::Columns ? address.x : address.y;
+  }
   std::int64_t canonicalRow(std::int64_t row) const;
   std::uint32_t ownerOf(std::int64_t row) const;
   bool owns(std::int64_t row) const { return ownerOf(row) == lane; }
   bool isHalo(std::int64_t row) const;
   bool isRelevant(std::int64_t row) const { return owns(row) || isHalo(row); }
+  bool ownsChunk(const ChunkAddress& address) const
+  {
+    return owns(lineOf(address));
+  }
+  bool isHaloChunk(const ChunkAddress& address) const
+  {
+    return isHalo(lineOf(address));
+  }
+  bool isRelevantChunk(const ChunkAddress& address) const
+  {
+    return isRelevant(lineOf(address));
+  }
   bool valid() const;
 };
 
@@ -50,6 +75,9 @@ enum class SimulationLaneMessage : std::uint32_t
 struct SimulationLaneRequest
 {
   static constexpr std::uint32_t Magic = 0x314C5343u; // CSL1
+  // 2: SyncBegin carries the partition axis; Advance and Advanced carry the
+  // elementary 1D source row.
+  static constexpr std::uint32_t Version = 2u;
   static constexpr std::uint32_t MaximumPatches = 60000u;
   SimulationLaneMessage kind = SimulationLaneMessage::Advance;
   std::uint64_t session = 0;
@@ -61,6 +89,10 @@ struct SimulationLaneRequest
   std::string rulePackage;
   // SyncChunks and Advance: owned or halo chunks to replace.
   std::vector<SparseChunkPatch> patches;
+  // Advance of an elementary 1D rule: the global source row. A lane sees only
+  // its columns, so the coordinator supplies it.
+  bool hasElementaryRow = false;
+  SparseElementaryRow elementaryRow;
 
   void write(GuestWireWriter& output) const;
   static bool read(std::span<const std::byte> bytes,
@@ -79,6 +111,10 @@ struct SimulationLaneReply
   double collectMilliseconds = 0.0;
   // Advanced: every owned chunk the generation changed.
   std::vector<SparseChunkPatch> changes;
+  // Advanced, elementary 1D: the source row found in this lane's owned
+  // columns after the generation; the coordinator merges every lane's.
+  bool hasElementaryRow = false;
+  SparseElementaryRow elementaryRow;
 
   void write(GuestWireWriter& output) const;
   static bool read(std::span<const std::byte> bytes,
@@ -198,6 +234,10 @@ private:
   bool queueSync(const SparseCellGrid& published, const RuleSet& rule);
   // Queues the next Advance on every lane with its pending halo updates.
   void queueAdvance();
+  bool elementary() const
+  {
+    return m_axis == SimulationLanePartition::Axis::Columns;
+  }
   // Once every lane answered the in-flight generation: keeps the owned
   // changes for the merge, derives halos and launches the next generation.
   void collectReplies();
@@ -209,6 +249,9 @@ private:
   std::vector<Lane> m_lanes;
   std::uint32_t m_laneCount = 0;
   std::uint32_t m_bandRows = 8;
+  SimulationLanePartition::Axis m_axis = SimulationLanePartition::Axis::Rows;
+  // Elementary 1D: the source row of the generation queued next.
+  SparseElementaryRow m_nextRow;
   std::uint64_t m_session = 0;
   std::uint64_t m_epoch = 0;
   std::uint64_t m_generation = 0;

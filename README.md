@@ -418,9 +418,10 @@ restore the orthographic CA view. Its lit meshes cast into the runtime's
 shared shadow pass through frame schema version 2.
 
 Simulation publishes at most one generation per frame. Once a generation
-costs more than 4 ms, it runs on up to eight isolated simulation lanes
-(`CSimWorkerGuest.wasm` stores, each owning bands of chunk rows) while frames
-keep rendering; smaller worlds and elementary 1D rules run in the game store.
+costs more than 1 ms, it runs on up to eight isolated simulation lanes
+(`CSimWorkerGuest.wasm` stores, each owning bands of chunk rows, or chunk
+columns for elementary 1D rules) while frames keep rendering; smaller worlds
+run in the game store.
 Editing, loading or saving while running discards at most the one generation
 in flight. `status` shows where generations execute. Overdue whole steps are
 dropped. The visible viewport is a padded, integer-LOD

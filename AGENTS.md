@@ -177,6 +177,9 @@ Canvas truth (verify here before trusting older notes):
   counted-neighbor contribution work; Wireworld conductors are stored but only
   heads contribute. All-dense counted chunks bypass scratch construction. At
   32 or more halo targets, a grid-owned reusable pool uses up to eight workers.
+  Histogram, directional, extended-range and Lenia kernels share one
+  chunk-parallel driver on that pool (per-worker halo windows, serial in-order
+  journal and publication), and elementary 1D rows split into pool ranges.
   Complete-halo targets use a retained generation-stamped flat index and
   retained result storage instead of a local hash set, sorting, and disposable
   vectors. All evaluators index a per-ruleset 256x9 transition table; dense
@@ -189,7 +192,7 @@ Canvas truth (verify here before trusting older notes):
   consumes the delta before reuse. Only one generation
   may be outstanding, overdue whole steps are dropped, and state mutations,
   persistence, ruleset changes, manual stepping, and shutdown drain first.
-  In the package, generations costing more than 4 ms run on up to eight
+  In the package, generations costing more than 1 ms run on up to eight
   isolated simulation lanes (`CSimWorkerGuest.wasm` stores owning interleaved
   eight-row chunk bands with one-row halos; D-E17) and the control store
   merges one exact delta per generation; there a drain retires the outstanding
@@ -235,9 +238,12 @@ Ruleset truth:
   cyclic/CCA (including long-range Griffeath rules), colorized Life,
   Larger-than-Life (with decay trails), Hodgepodge chemistry, directional
   Turmites, HPP lattice gas, five-species dominance, Golly-table
-  self-replicating loops, and Abelian sandpile rules.
+  self-replicating loops, Abelian sandpile rules, and quantized Lenia.
 - Binary rules encode `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, conductor `3`.
+- Lenia encodes intensity levels: `1` is level 0, `2..n-1` are levels
+  1..n-2, `0` is the full level. Its tables must compile bit-identically on
+  every platform (integer taps, deterministic exp).
 - Rule 90 and Rule 184 are elementary 1D space-time diagrams: source row is the
   maximum counted Y, destination is Y+1, older rows stay history.
 - Count-based `RuleSet` transitions (`nextState`) build a cached 256x9 table;

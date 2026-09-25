@@ -21,7 +21,8 @@ enum class RuleFamily
   Dominance,
   Elementary1D,
   VonNeumannTable,
-  Sandpile
+  Sandpile,
+  Lenia
 };
 
 enum class RuleSeedPattern
@@ -37,8 +38,27 @@ enum class RuleSeedPattern
   TurmiteSwarm,
   ParticleCloud,
   // Exact starter stamped from `seedRle` (Golly multistate RLE).
-  Rle
+  Rle,
+  // Lenia starter from `seedRle` in Lenia's RLE, whose cell values 0..255
+  // scale onto the family's intensity levels (Lenia families only).
+  LeniaRle
 };
+
+// Radial kernel shell core and growth mapping shapes from Bert Chan's Lenia:
+// polynomial (4r(1-r))^4 and (1-(u-mu)^2/9sigma^2)^4, exponential bumps, and
+// rectangular steps.
+enum class LeniaFunction
+{
+  Polynomial,
+  Exponential,
+  Step
+};
+
+// Resolution of the normalized potential in [0, 1] that indexes a Lenia
+// rule's compiled growth table (kLeniaPotentialBins + 1 entries).
+constexpr std::uint64_t kLeniaPotentialBins = 16384u;
+// Fixed-point scale of compiled growth deltas, in 1/256 of a level.
+constexpr int kLeniaDeltaScale = 256;
 
 struct RuleSeedCell
 {
@@ -82,6 +102,14 @@ struct RuleSetDefinition
   // the quiescent state; the compiler swaps 0 and 1 into Illumo's encoding.
   std::string tableSymmetry = "none";
   std::vector<std::string> ruleTable;
+  // Lenia: kernel radius is neighborhoodRadius; one update advances time by
+  // 1/leniaTimeSteps. Peaks are the kernel ring heights (Lenia's beta).
+  double leniaMu = 0.15;
+  double leniaSigma = 0.015;
+  unsigned int leniaTimeSteps = 10u;
+  std::vector<double> leniaPeaks{ 1.0 };
+  LeniaFunction leniaKernelCore = LeniaFunction::Polynomial;
+  LeniaFunction leniaGrowth = LeniaFunction::Polynomial;
   RuleSeedPattern seedPattern = RuleSeedPattern::Automatic;
   unsigned int seedRadius = 18u;
   unsigned int seedDensity = 42u;
@@ -95,6 +123,11 @@ struct RuleSetDefinition
   // Dense stateCount^5 lookup indexed by center, north, east, south, west in
   // Illumo encoding.
   std::vector<unsigned char> vonNeumannTransitions;
+  // Lenia integer kernel, its weight total, and the growth delta per
+  // potential bin in 1/kLeniaDeltaScale levels.
+  std::vector<RuleSet::KernelTap> leniaKernelTaps;
+  std::uint64_t leniaKernelWeightTotal = 0u;
+  std::vector<std::int32_t> leniaGrowthDeltas;
 };
 
 struct RuleFamilyDefinition
@@ -127,6 +160,19 @@ public:
   static bool decodeSeedRle(const std::string& text,
                             unsigned int stateCount,
                             std::vector<RuleSeedCell>& cells);
+  // Decodes Lenia RLE ('.' = 0, 'A'..'X' = 1..24, 'p'..'y' prefixes add
+  // 24-value pages up to 255) and rounds each value onto the family's
+  // levels, returning non-background cells in Illumo encoding.
+  static bool decodeLeniaSeedRle(const std::string& text,
+                                 unsigned int stateCount,
+                                 std::vector<RuleSeedCell>& cells);
+  // Lenia intensity encoding: background state 1 is level 0, states
+  // 2..n-1 are levels 1..n-2, and state 0 is the full level n-1.
+  static unsigned int leniaLevel(unsigned char state, unsigned int stateCount);
+  static unsigned char leniaState(unsigned int level, unsigned int stateCount);
+  static bool parseLeniaFunction(const std::string& value,
+                                 LeniaFunction& function);
+  static const char* leniaFunctionName(LeniaFunction function);
 
   RuleSetRegistry();
   RuleSetRegistry(const RuleSetRegistry&) = default;

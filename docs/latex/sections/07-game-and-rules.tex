@@ -17,8 +17,8 @@ package is described by \pathref{IllumoGame/illumo.json} (\texttt{kind}
 D-E22) and runs mounted at \texttt{/app} of the host file tree; other
 installed packages are visible at \texttt{/packages/<id>}.
 Inside the package, \symbolref{SimulationRunner} fans each generation out to
-up to eight isolated simulation lanes (D-E17) once serial generations exceed
-4\,ms. Each lane is a \texttt{CSimWorkerGuest.wasm} store owning interleaved
+up to eight isolated simulation lanes (D-E17, D-E29) once serial generations
+exceed 1\,ms. Each lane is a \texttt{CSimWorkerGuest.wasm} store owning interleaved
 bands of eight chunk rows plus a one-row halo; it advances its rows exactly
 with the same sparse kernels, and the control store merges the owned changes
 into the spare grid as one exact delta and publishes it through the native
@@ -26,8 +26,11 @@ publication path. The next generation starts from the halos before the merge,
 so lanes compute while the control store merges and renders. Because a lane
 generation completes on a later frame, drains retire it instead of waiting:
 edits, loads, ruleset changes, saves and exit act on the displayed world.
-Small worlds, elementary 1D rules, radii above 16 and lane failures use the
-serial kernels inside the update call. The 3D diagnostic records lit meshes
+Elementary 1D rules, whose single active row spans columns, partition by chunk
+column instead: the coordinator supplies the global source row, each lane writes
+only its own columns of the next row, and the lanes' owned-column rows combine
+into the next source row. Small worlds (under 0.5\,ms of summed lane work),
+radii above 16 and lane failures use the serial kernels inside the update call. The 3D diagnostic records lit meshes
 and shadow casters into frame schema version 2; the host re-runs the shared
 shadow pass with the guest camera.
 
@@ -239,10 +242,11 @@ Schema v3 supports \texttt{life\_like}, \texttt{generations},
 \texttt{moore\_table}, \texttt{cyclic}, \texttt{species\_life},
 \texttt{larger\_than\_life}, \texttt{hodgepodge}, \texttt{turmite},
 \texttt{lattice\_gas}, \texttt{dominance}, \texttt{von\_neumann\_table},
-\texttt{sandpile}, and \texttt{elementary\_1d}.
+\texttt{sandpile}, \texttt{lenia}, and \texttt{elementary\_1d}.
 Legacy schema-v1/v2 catalogs remain readable. These compile to DataRuleSet;
 count-based Moore rules use the cached 256-by-9 table, while full-state
-histogram, extended-range, directional, and elementary history rules use their
+histogram, extended-range, weighted-kernel, directional, and elementary history
+rules use their
 respective neighborhood contracts. Production RuleSet has no dense-grid pointer
 or worker policy. Dense generation and reference implementations live in the
 test-only compatibility evaluator, including toroidal Elementary 1D advancement.
@@ -471,7 +475,7 @@ and Griffeath.
 Larger-than-Life definitions carry range, optional center counting, inclusive
 birth/survival intervals, and square, circular, or diamond neighborhood shape.
 Range is bounded to 16 and B0 is rejected. Bosco/Bugs, Bugsmovie, and Globe use
-the parameters documented by Golly. Their serial sparse kernel expands occupied
+the parameters documented by Golly. Their sparse kernel expands occupied
 chunks by the required chunk radius and reads each target's canonical halo
 window before transactional output publication; it does not alter the
 optimized radius-one paths.
@@ -534,6 +538,28 @@ directional kernels read each target chunk and its margin into a halo window
 once rather than hashing every neighbor lookup. Forty-five further classic
 Life-like and Generations rules from Golly and MCell complete the catalog.
 
+The \texttt{lenia} model (D-GC9) brings Bert Chan's continuous Lenia onto the
+byte domain as quantized intensity. A family of $n$ states holds levels
+$0..n-1$: background state 1 is level 0, states $2..n-1$ are levels
+$1..n-2$, and state 0 is the full level, so a cell's value is
+$A = \ell/(n-1)$. Each rule carries the kernel radius $R \le 16$, the time
+resolution $T$, the growth centre $\mu$ and width $\sigma$, ring peaks
+$\beta_1..\beta_B$ ($B \le 4$), and polynomial, exponential, or step shapes for
+the kernel core $K_C$ and growth mapping $G$. The kernel is
+$K(r) = \beta_{\lfloor Br \rfloor} K_C(Br \bmod 1)$ for $r = \lVert n \rVert/R < 1$,
+quantized to integer tap weights. One generation computes the exact integer
+potential $\sum w_i \ell_i$, normalizes it to $u \in [0,1]$ in one of 16,384
+bins, and sets
+\[
+\ell' = \operatorname{round}\bigl(\operatorname{clip}(\ell + (n-1)\,G(u)/T,\;0,\;n-1)\bigr),
+\]
+which is Lenia's $P$-quantized update with $P = n-1$. The growth deltas are
+tabulated once per rule with a deterministic exponential so every lane and
+the native oracle compile identical tables, and a rule whose growth would raise
+empty space is rejected. Orbium, Orbium bicaudatus, Gyrorbium, Scutium,
+Discutium, and Paraptera ship with \texttt{lenia\_rle} starters taken from
+Chan's MIT-licensed species catalogue; Orbium's quantized evolution matches an
+independent numpy model exactly.
 Game's \texttt{RuleCatalogLoader} selects the first valid base family/rule
 catalog pair beside the executable, in the working directory, or in its
 \texttt{IllumoGame} subdirectory. It then transactionally layers the
@@ -636,14 +662,25 @@ use the optimized path below.
 Before worker dispatch, the active ruleset lazily builds its 2,304-entry
 transition table. Candidate, halo, and compatibility dense loops index this
 immutable table rather than invoking virtual transitions for every cell.
-Cyclic rules instead use an isolated serial sparse kernel that expands occupied
+Cyclic rules instead use an isolated sparse kernel that expands occupied
 chunks by one, counts all byte-valued neighbor states, and reuses the existing
 transactional output and change journal. The optimized count-table paths remain
 unchanged. Dense compatibility evaluation uses the same histogram contract.
 Colorized-Life shares that histogram kernel. Larger-than-Life uses a separate
-serial extended-range kernel and the same transactional result/change-journal
+extended-range kernel and the same transactional result/change-journal
 machinery. Hodgepodge and dominance share the histogram kernel; Turmites,
-HPP, rule tables, and sandpiles share the serial direction-preserving kernel.
+HPP, rule tables, and sandpiles share the direction-preserving kernel.
+Lenia uses its own weighted-kernel path: a radius-$R$ halo window of levels
+per target chunk and the same transactional publication.
+
+These four models share one chunk-parallel driver (D-GC10). Target discovery
+is serial; every target chunk is then evaluated independently from a
+per-worker halo window on the grid's worker pool, up to eight workers once the
+work (target cells times per-cell neighbor reads) reaches 131,072, and the
+change journal and publication run serially in target order, so the worker
+count never changes a generation. Elementary 1D computes its next row in
+bounded blocks split across the pool and writes it serially. The WASM guest
+compiles the pool serially; there, simulation lanes provide the parallelism.
 
 \begin{decisionbox}[title={Keep rules pure}]
 Rulesets stay free of rendering and input. They read/write cell buffers only

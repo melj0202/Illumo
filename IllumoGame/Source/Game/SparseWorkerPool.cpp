@@ -42,6 +42,7 @@ SparseWorkerPool::evaluate(const SparseCellGrid* grid,
     activeCandidatePreparationRanges = nullptr;
     activeCandidateScratch = nullptr;
     activeCandidateRanges = nullptr;
+    activeJob = nullptr;
     nextWorkItem.store(0u);
     availableWorkerSlots.store(workerThreads);
     completedWorkers = 0u;
@@ -85,6 +86,7 @@ SparseWorkerPool::evaluateCandidates(
     activeCandidateScratch = scratch;
     activeCandidateRanges = ranges;
     activeResults = results;
+    activeJob = nullptr;
     nextWorkItem.store(0u);
     availableWorkerSlots.store(workerThreads);
     completedWorkers = 0u;
@@ -125,6 +127,7 @@ SparseWorkerPool::prepareCandidates(
     activeCandidateScratch = nullptr;
     activeCandidateRanges = nullptr;
     activeResults = nullptr;
+    activeJob = nullptr;
     nextWorkItem.store(0u);
     availableWorkerSlots.store(workerThreads);
     completedWorkers = 0u;
@@ -138,6 +141,52 @@ SparseWorkerPool::prepareCandidates(
   std::unique_lock<std::mutex> lock(mutex);
   workComplete.wait(lock,
                     [this]() { return completedWorkers >= requiredWorkers; });
+}
+
+void
+SparseWorkerPool::run(std::size_t itemCount,
+                      unsigned int workerCount,
+                      const Job& job)
+{
+  if (itemCount == 0u) {
+    return;
+  }
+  if (workerCount <= 1u) {
+    for (std::size_t index = 0u; index < itemCount; ++index) {
+      job(index, 0u);
+    }
+    return;
+  }
+
+  const unsigned int workerThreads = workerCount - 1u;
+  ensureWorkerCount(workerThreads);
+
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    activeGrid = nullptr;
+    activeTransitions = nullptr;
+    activeTargets = nullptr;
+    activeCandidatePreparationScratch = nullptr;
+    activeCandidatePreparationRanges = nullptr;
+    activeCandidateScratch = nullptr;
+    activeCandidateRanges = nullptr;
+    activeResults = nullptr;
+    activeJob = &job;
+    activeJobCount = itemCount;
+    nextWorkItem.store(0u);
+    availableWorkerSlots.store(workerThreads);
+    completedWorkers = 0u;
+    requiredWorkers = workerThreads;
+    workGeneration += 1;
+  }
+  workReady.notify_all();
+
+  executeAvailableWork(0u);
+
+  std::unique_lock<std::mutex> lock(mutex);
+  workComplete.wait(lock,
+                    [this]() { return completedWorkers >= requiredWorkers; });
+  activeJob = nullptr;
 }
 
 void
@@ -167,6 +216,13 @@ SparseWorkerPool::executeAvailableWork(unsigned int memoShardIndex)
 {
   for (;;) {
     const std::size_t index = nextWorkItem.fetch_add(1u);
+    if (activeJob != nullptr) {
+      if (index >= activeJobCount) {
+        return;
+      }
+      (*activeJob)(index, memoShardIndex);
+      continue;
+    }
     if (activeGrid == nullptr) {
       return;
     }
@@ -210,8 +266,10 @@ SparseWorkerPool::executeAvailableWork(unsigned int memoShardIndex)
     if (activeTargets == nullptr || index >= activeTargets->size()) {
       return;
     }
-    activeGrid->evaluateTargetChunk(
-      (*activeTargets)[index], activeTransitions, &(*activeResults)[index], memoShardIndex);
+    activeGrid->evaluateTargetChunk((*activeTargets)[index],
+                                    activeTransitions,
+                                    &(*activeResults)[index],
+                                    memoShardIndex);
   }
 }
 

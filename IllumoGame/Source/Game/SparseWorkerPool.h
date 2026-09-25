@@ -9,11 +9,20 @@
 #include <mutex>
 #include <thread>
 #endif
+#include <cstddef>
+#include <functional>
 #include <vector>
 
 class SparseWorkerPool
 {
 public:
+  // Runs job(item, slot) for every item in [0, itemCount) on up to
+  // workerCount threads, including the caller, and returns when all finish.
+  // Slots are stable per participating thread and stay below
+  // SparseCellGrid::kMaxParallelWorkers + 1, so callers can index per-slot
+  // scratch. Jobs must not throw.
+  using Job = std::function<void(std::size_t, unsigned int)>;
+
   SparseWorkerPool();
   ~SparseWorkerPool();
 
@@ -40,6 +49,8 @@ public:
     const std::vector<SparseCellGrid::CandidateWorkRange>* ranges,
     unsigned int workerCount);
 
+  void run(std::size_t itemCount, unsigned int workerCount, const Job& job);
+
 private:
 #ifndef ILLUMO_SERIAL_GUEST
   void ensureWorkerCount(unsigned int requiredCount);
@@ -65,6 +76,8 @@ private:
   std::vector<SparseCellGrid::CandidateWorkRange>* activeCandidateRanges =
     nullptr;
   std::vector<SparseCellGrid::TargetResult>* activeResults = nullptr;
+  const Job* activeJob = nullptr;
+  std::size_t activeJobCount = 0u;
   std::size_t workGeneration = 0u;
   unsigned int requiredWorkers = 0u;
   unsigned int completedWorkers = 0u;

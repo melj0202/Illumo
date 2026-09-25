@@ -22,6 +22,9 @@ inline constexpr BenchWorld kBenchWorlds[] = {
   { "bench-dense32", 32, 32, 35, 11u },
   { "bench-dense64", 64, 64, 35, 12u },
   { "bench-sparse128", 128, 128, 4, 13u },
+  // Light worlds near the lane entry threshold.
+  { "bench-dense16", 16, 16, 35, 14u },
+  { "bench-sparse64", 64, 64, 4, 15u },
 };
 
 // Live cells use state 0 (binary rules encode 0 as alive), centred on the

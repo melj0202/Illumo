@@ -11,6 +11,8 @@
 #include "TestHarness.h"
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 
@@ -2491,6 +2493,442 @@ testLongRangeCyclicAndTrails()
            "seed RLE rejects out-of-family states and missing terminators");
 }
 
+struct LeniaMass
+{
+  std::uint64_t mass = 0u;
+  double centroidX = 0.0;
+  double centroidY = 0.0;
+};
+
+static LeniaMass
+measureLenia(const SparseCellGrid& grid, const RuleSet& rules)
+{
+  LeniaMass result;
+  double weightedX = 0.0;
+  double weightedY = 0.0;
+  grid.visitChunks(
+    [&](const ChunkAddress& address, const SparseCellGrid::ChunkCells& cells) {
+      for (int index = 0; index < static_cast<int>(cells.size()); ++index) {
+        const std::uint32_t level =
+          rules.getKernelLevel(cells[static_cast<std::size_t>(index)]);
+        result.mass += level;
+        weightedX += static_cast<double>(level) *
+                     static_cast<double>(address.x * SparseCellGrid::kChunkDim +
+                                         index % SparseCellGrid::kChunkDim);
+        weightedY += static_cast<double>(level) *
+                     static_cast<double>(address.y * SparseCellGrid::kChunkDim +
+                                         index / SparseCellGrid::kChunkDim);
+      }
+    });
+  if (result.mass != 0u) {
+    result.centroidX = weightedX / static_cast<double>(result.mass);
+    result.centroidY = weightedY / static_cast<double>(result.mass);
+  }
+  return result;
+}
+
+// Direct per-cell kernel evaluation over getCell, independent of the sparse
+// halo windows, target discovery and chunk publication.
+static bool
+leniaReferenceMatches(const SparseCellGrid& before,
+                      const SparseCellGrid& after,
+                      const RuleSet& rules,
+                      int minimum,
+                      int maximum)
+{
+  for (int y = minimum; y <= maximum; ++y) {
+    for (int x = minimum; x <= maximum; ++x) {
+      std::uint64_t sum = 0u;
+      for (const RuleSet::KernelTap& tap : rules.getKernelTaps()) {
+        sum += static_cast<std::uint64_t>(tap.weight) *
+               rules.getKernelLevel(before.getCell(
+                 CellAddress{ x + tap.offsetX, y + tap.offsetY }));
+      }
+      const unsigned char expected =
+        rules.nextStateFromPotential(before.getCell(CellAddress{ x, y }), sum);
+      if (after.getCell(CellAddress{ x, y }) != expected) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+static void
+testLeniaFamily()
+{
+  testSection("RuleSetRegistry: Lenia continuous family");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "catalog with Lenia loads");
+  const RuleFamilyDefinition* family =
+    registry.getFamilyDefinition("LENIA_256_LEVEL");
+  testTrue(g,
+           family != nullptr && family->kind == RuleFamily::Lenia &&
+             family->stateCount == 256u,
+           "Lenia family declares 256 intensity levels");
+
+  testEqInt(g,
+            static_cast<int>(RuleSetRegistry::leniaLevel(1u, 256u)),
+            0,
+            "background is level zero");
+  testEqInt(g,
+            static_cast<int>(RuleSetRegistry::leniaLevel(0u, 256u)),
+            255,
+            "state zero is the full level");
+  testEqInt(g,
+            static_cast<int>(RuleSetRegistry::leniaLevel(2u, 256u)),
+            1,
+            "state two is the lowest nonzero level");
+  bool encodingRoundTrips = true;
+  for (unsigned int level = 0u; level < 256u; ++level) {
+    encodingRoundTrips =
+      encodingRoundTrips &&
+      RuleSetRegistry::leniaLevel(RuleSetRegistry::leniaState(level, 256u),
+                                  256u) == level;
+  }
+  testTrue(g, encodingRoundTrips, "every level encodes to a unique state");
+
+  const std::vector<std::string> shipped = {
+    "LENIA_ORBIUM",  "LENIA_ORBIUM_BICAUDATUS", "LENIA_GYRORBIUM",
+    "LENIA_SCUTIUM", "LENIA_DISCUTIUM",         "LENIA_PARAPTERA"
+  };
+  for (const std::string& id : shipped) {
+    const RuleSetDefinition* definition = registry.getRuleSetDefinition(id);
+    std::unique_ptr<RuleSet> rule = registry.createRuleSet(id);
+    testTrue(g,
+             definition != nullptr && rule != nullptr &&
+               rule->getNeighborhoodKind() ==
+                 RuleSet::NeighborhoodKind::WeightedKernel &&
+               !rule->getKernelTaps().empty() &&
+               definition->seedPattern == RuleSeedPattern::LeniaRle &&
+               rule->nextStateFromPotential(1u, 0u) == 1u,
+             "shipped Lenia species compiles with a quiescent background");
+  }
+
+  std::unique_ptr<RuleSet> orbium = registry.createRuleSet("LENIA_ORBIUM");
+  const RuleSetDefinition* orbiumDefinition =
+    registry.getRuleSetDefinition("LENIA_ORBIUM");
+  if (orbium == nullptr || orbiumDefinition == nullptr) {
+    testTrue(g, false, "Orbium rule is available");
+    return;
+  }
+  testTrue(g,
+           orbiumDefinition->rule ==
+             "LENIA/R13/T10/M0.15/S0.015/B1/Kpolynomial/Gpolynomial",
+           "Orbium compiles to its canonical Lenia parameters");
+  testTrue(g,
+           orbium->getNeighborhoodRadius() == 13u,
+           "Orbium kernel radius is thirteen");
+  // Zero potential gives G = -1: a full cell loses (255/10) levels and rounds
+  // from 229.5 up to 230, which is state 231.
+  testEqUChar(g,
+              orbium->nextStateFromPotential(0u, 0u),
+              231u,
+              "isolated full cell decays by one tenth of the range");
+  std::uint64_t fullPotential = 0u;
+  for (const RuleSet::KernelTap& tap : orbium->getKernelTaps()) {
+    fullPotential += tap.weight;
+  }
+  fullPotential *= 255u;
+  testEqUChar(g,
+              orbium->nextStateFromPotential(0u, fullPotential),
+              231u,
+              "saturated potential also decays");
+  testEqUChar(g,
+              orbium->nextStateFromPotential(1u, fullPotential * 3u / 20u),
+              27u,
+              "potential at mu grows empty space by a tenth of the range");
+
+  std::vector<RuleSeedCell> seed;
+  testTrue(g,
+           RuleSetRegistry::decodeLeniaSeedRle(
+             orbiumDefinition->seedRle, 256u, seed) &&
+             !seed.empty(),
+           "Orbium Lenia RLE decodes");
+  testTrue(g,
+           RuleSetRegistry::decodeLeniaSeedRle("pAyO.o!", 256u, seed) &&
+             seed.size() == 3u && seed[0].state == 26u && seed[1].state == 0u &&
+             seed[2].x == 3 && seed[2].state == 0u,
+           "Lenia RLE pages decode onto levels");
+  testTrue(g,
+           !RuleSetRegistry::decodeLeniaSeedRle("zA!", 256u, seed) &&
+             !RuleSetRegistry::decodeLeniaSeedRle("pA", 256u, seed) &&
+             !RuleSetRegistry::decodeLeniaSeedRle("yP!", 256u, seed) &&
+             !RuleSetRegistry::decodeLeniaSeedRle("p!", 256u, seed),
+           "Lenia RLE rejects bad pages, overflow and missing terminators");
+  RuleSetRegistry::decodeLeniaSeedRle(orbiumDefinition->seedRle, 256u, seed);
+
+  // Independent numpy model of the same quantized update: Orbium stamped at
+  // (10, 10) on a 128-cell torus holds 19600 levels, and 18728 after 50
+  // generations.
+  SparseCellGrid torus(8, 8);
+  SparseCellGrid infinite;
+  for (const RuleSeedCell& cell : seed) {
+    torus.setCell(CellAddress{ 10 + cell.x, 10 + cell.y }, cell.state);
+    infinite.setCell(CellAddress{ 10 + cell.x, 10 + cell.y }, cell.state);
+  }
+  const LeniaMass initial = measureLenia(infinite, *orbium);
+  testTrue(g, initial.mass == 19600u, "Orbium seed holds its reference mass");
+
+  SparseCellGrid before;
+  before.copyStateFrom(infinite);
+  testTrue(g, infinite.advance(*orbium), "Orbium advances sparsely");
+  testTrue(g,
+           leniaReferenceMatches(before, infinite, *orbium, -20, 50),
+           "sparse kernel matches direct per-cell evaluation");
+
+  bool advanced = true;
+  for (int generation = 1; generation < 50; ++generation) {
+    advanced = advanced && infinite.advance(*orbium);
+  }
+  for (int generation = 0; generation < 50; ++generation) {
+    advanced = advanced && torus.advance(*orbium);
+  }
+  const LeniaMass later = measureLenia(infinite, *orbium);
+  const LeniaMass wrapped = measureLenia(torus, *orbium);
+  testTrue(g, advanced, "fifty Orbium generations advance");
+  testTrue(g,
+           later.mass == 18728u,
+           "Orbium mass matches the independent reference at generation 50");
+  testTrue(g,
+           wrapped.mass == later.mass,
+           "toroidal and infinite Lenia evolve identically");
+  const double travelX = later.centroidX - initial.centroidX;
+  const double travelY = later.centroidY - initial.centroidY;
+  testTrue(g,
+           travelX * travelX + travelY * travelY > 100.0,
+           "Orbium glides across the canvas");
+
+  RuleSetRegistry customRegistry;
+  testTrue(g,
+           family != nullptr && customRegistry.registerFamily(*family),
+           "Lenia family registers independently");
+  RuleSetDefinition custom = *orbiumDefinition;
+  custom.id = "LENIA_CUSTOM";
+  custom.leniaPeaks = { 0.5, 1.0 };
+  custom.leniaKernelCore = LeniaFunction::Exponential;
+  custom.leniaGrowth = LeniaFunction::Exponential;
+  custom.seedPattern = RuleSeedPattern::Automatic;
+  testTrue(g,
+           customRegistry.registerRule(custom),
+           "two-ring exponential Lenia rule registers");
+  RuleSetDefinition invalid = custom;
+  invalid.id = "LENIA_FILLS_SPACE";
+  invalid.leniaMu = 0.001;
+  invalid.leniaSigma = 0.5;
+  testTrue(g,
+           !customRegistry.registerRule(invalid),
+           "growth that births from empty space is rejected");
+  invalid = custom;
+  invalid.id = "LENIA_TOO_WIDE";
+  invalid.neighborhoodRadius = 17u;
+  testTrue(g,
+           !customRegistry.registerRule(invalid),
+           "kernel radius above the lane halo bound is rejected");
+  invalid = custom;
+  invalid.id = "LENIA_NO_PEAKS";
+  invalid.leniaPeaks = { 0.0 };
+  testTrue(
+    g, !customRegistry.registerRule(invalid), "an empty kernel is rejected");
+
+  RuleSetRegistry roundTrip;
+  testTrue(
+    g,
+    roundTrip.loadFromCatalogTexts(
+      RuleSetRegistry::serializeFamilies(customRegistry.getFamilyDefinitions()),
+      RuleSetRegistry::serializeCatalog(customRegistry.getFamilyDefinitions(),
+                                        customRegistry.getDefinitions())),
+    "Lenia catalog round-trips");
+  const RuleSetDefinition* reloaded =
+    roundTrip.getRuleSetDefinition("LENIA_CUSTOM");
+  const RuleSetDefinition* compiled =
+    customRegistry.getRuleSetDefinition("LENIA_CUSTOM");
+  testTrue(g,
+           reloaded != nullptr && compiled != nullptr &&
+             reloaded->rule == compiled->rule &&
+             reloaded->leniaGrowthDeltas == compiled->leniaGrowthDeltas &&
+             reloaded->leniaKernelWeightTotal ==
+               compiled->leniaKernelWeightTotal &&
+             reloaded->leniaKernelCore == LeniaFunction::Exponential,
+           "Lenia parameters and compiled tables survive serialization");
+  RuleSetRegistry packaged;
+  testTrue(g,
+           packaged.loadRulePackage(RuleSetRegistry::serializeRulePackage(
+             *family, *orbiumDefinition)) &&
+             packaged.getRuleSetDefinition("LENIA_ORBIUM") != nullptr &&
+             packaged.getRuleSetDefinition("LENIA_ORBIUM")->leniaGrowthDeltas ==
+               orbiumDefinition->leniaGrowthDeltas,
+           "lane rule packages rebuild identical Lenia tables");
+}
+
+static std::vector<SparseChunkRecord>
+sortedRecords(const SparseCellGrid& grid)
+{
+  std::vector<SparseChunkRecord> records = grid.collectChunkRecords();
+  std::sort(records.begin(),
+            records.end(),
+            [](const SparseChunkRecord& left, const SparseChunkRecord& right) {
+              return left.chunkY != right.chunkY ? left.chunkY < right.chunkY
+                                                 : left.chunkX < right.chunkX;
+            });
+  return records;
+}
+
+static bool
+sameRecords(const SparseCellGrid& left, const SparseCellGrid& right)
+{
+  const std::vector<SparseChunkRecord> first = sortedRecords(left);
+  const std::vector<SparseChunkRecord> second = sortedRecords(right);
+  if (first.size() != second.size()) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < first.size(); ++index) {
+    if (first[index].chunkX != second[index].chunkX ||
+        first[index].chunkY != second[index].chunkY ||
+        first[index].cells != second[index].cells) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Every shipped rule, whatever its kernel, publishes byte-identical
+// generations with one worker and with a forced multi-worker pool.
+static void
+testEveryFamilyWorkerPoolParity()
+{
+  testSection("SparseCellGrid: every family on the worker pool");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "catalog loads for worker parity");
+  std::vector<RuleSet::NeighborhoodKind> parallelKinds;
+  bool allIdentical = true;
+  for (const RuleSetDefinition& definition : registry.getDefinitions()) {
+    std::unique_ptr<RuleSet> rule = registry.createRuleSet(definition.id);
+    if (rule == nullptr) {
+      allIdentical = false;
+      continue;
+    }
+    const bool elementary =
+      rule->getNeighborhoodKind() == RuleSet::NeighborhoodKind::Elementary1D;
+    const unsigned int stateCount = rule->getStateCount();
+    for (std::int64_t size : { std::int64_t{ 0 }, std::int64_t{ 6 } }) {
+      SparseCellGrid serial(size, size);
+      SparseCellGrid parallel(size, size);
+      std::uint32_t seed = 2463534242u;
+      if (elementary) {
+        // A row wide enough to split into several work ranges.
+        const int width = size == 0 ? 20000 : 96;
+        for (int x = 0; x < width; ++x) {
+          seed = seed * 1664525u + 1013904223u;
+          if ((seed >> 28) < 6u) {
+            serial.setCell(CellAddress{ x, 0 }, 0u);
+            parallel.setCell(CellAddress{ x, 0 }, 0u);
+          }
+        }
+      } else {
+        for (int y = -40; y < 40; ++y) {
+          for (int x = -40; x < 40; ++x) {
+            seed = seed * 1664525u + 1013904223u;
+            if ((seed >> 24) >= 100u) {
+              continue;
+            }
+            const unsigned char state =
+              static_cast<unsigned char>((seed >> 8) % stateCount);
+            if (state != SparseCellGrid::BackgroundState) {
+              serial.setCell(CellAddress{ x, y }, state);
+              parallel.setCell(CellAddress{ x, y }, state);
+            }
+          }
+        }
+      }
+      bool advanced = true;
+      SparseCellGrid::setWorkerOverrideForTesting(1);
+      for (int generation = 0; generation < 5; ++generation) {
+        advanced = advanced && serial.advance(*rule);
+      }
+      SparseCellGrid::setWorkerOverrideForTesting(4);
+      unsigned int workers = 1u;
+      for (int generation = 0; generation < 5; ++generation) {
+        advanced = advanced && parallel.advance(*rule);
+        workers = std::max(workers, parallel.getLastAdvanceStats().workerCount);
+      }
+      SparseCellGrid::setWorkerOverrideForTesting(0);
+      if (!advanced || !sameRecords(serial, parallel)) {
+        std::printf("Worker parity mismatch: rule=%s size=%lld\n",
+                    definition.id.c_str(),
+                    static_cast<long long>(size));
+        allIdentical = false;
+      }
+      if (workers > 1u) {
+        parallelKinds.push_back(rule->getNeighborhoodKind());
+      }
+    }
+  }
+  testTrue(g,
+           allIdentical,
+           "every shipped rule matches its serial generations in parallel");
+  for (RuleSet::NeighborhoodKind kind :
+       { RuleSet::NeighborhoodKind::MooreCount,
+         RuleSet::NeighborhoodKind::MooreStateCounts,
+         RuleSet::NeighborhoodKind::VonNeumannDirectional,
+         RuleSet::NeighborhoodKind::ExtendedRange,
+         RuleSet::NeighborhoodKind::Elementary1D,
+         RuleSet::NeighborhoodKind::WeightedKernel }) {
+    testTrue(g,
+             std::find(parallelKinds.begin(), parallelKinds.end(), kind) !=
+               parallelKinds.end(),
+             "each neighborhood kind dispatched more than one worker");
+  }
+
+  // Informational: one worker against the automatic pool on dense soups.
+  for (const char* id : { "LENIA_ORBIUM", "BOSCO", "QUADLIFE", "HPP_GAS" }) {
+    std::unique_ptr<RuleSet> rule = registry.createRuleSet(id);
+    if (rule == nullptr) {
+      continue;
+    }
+    double milliseconds[2] = { 0.0, 0.0 };
+    unsigned int automaticWorkers = 1u;
+    for (int pass = 0; pass < 2; ++pass) {
+      SparseCellGrid grid;
+      std::uint32_t seed = 88172645u;
+      for (int y = -96; y < 96; ++y) {
+        for (int x = -96; x < 96; ++x) {
+          seed = seed * 1664525u + 1013904223u;
+          const unsigned char state =
+            static_cast<unsigned char>((seed >> 8) % rule->getStateCount());
+          if ((seed >> 24) < 128u && state != SparseCellGrid::BackgroundState) {
+            grid.setCell(CellAddress{ x, y }, state);
+          }
+        }
+      }
+      SparseCellGrid::setWorkerOverrideForTesting(pass == 0 ? 1 : 0);
+      const std::chrono::steady_clock::time_point start =
+        std::chrono::steady_clock::now();
+      for (int generation = 0; generation < 3; ++generation) {
+        grid.advance(*rule);
+      }
+      milliseconds[pass] = std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - start)
+                             .count() /
+                           3.0;
+      if (pass == 1) {
+        automaticWorkers = grid.getLastAdvanceStats().workerCount;
+      }
+    }
+    SparseCellGrid::setWorkerOverrideForTesting(0);
+    std::printf("BENCH: %s 192x192 soup: %.2f ms/gen serial, %.2f ms/gen with "
+                "%u workers\n",
+                id,
+                milliseconds[0],
+                milliseconds[1],
+                automaticWorkers);
+  }
+}
+
 static int
 runRuleSetCase(void (*testFunction)())
 {
@@ -2521,6 +2959,11 @@ registerRuleSetTests(IllumoTestRegistry& registry)
                []() { return runRuleSetCase(testVonNeumannTableFamilies); });
   registry.add("IllumoGame.Rules.SandpileFamily",
                []() { return runRuleSetCase(testSandpileFamily); });
+  registry.add("IllumoGame.Rules.LeniaFamily",
+               []() { return runRuleSetCase(testLeniaFamily); });
+  registry.add("IllumoGame.Rules.WorkerPoolParity", []() {
+    return runRuleSetCase(testEveryFamilyWorkerPoolParity);
+  });
   registry.add("IllumoGame.Rules.LongRangeCyclicAndTrails",
                []() { return runRuleSetCase(testLongRangeCyclicAndTrails); });
   registry.add("IllumoGame.Rules.TransitionTable", []() {

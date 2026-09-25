@@ -38,6 +38,16 @@ struct ChunkAddress
 
 using SparseChunkMask = std::array<std::uint64_t, (16 * 16) / 64>;
 
+// The elementary 1D source row: the maximum Y holding a counted cell and the
+// counted X extent on that row. `found` is false for an empty world.
+struct SparseElementaryRow
+{
+  bool found = false;
+  std::int64_t sourceY = 0;
+  std::int64_t minX = 0;
+  std::int64_t maxX = 0;
+};
+
 struct SparseChunkRecord
 {
   std::int64_t chunkX = 0;
@@ -172,6 +182,19 @@ public:
   void clear();
   bool advance(const RuleSet& ruleSet);
   bool advanceFrom(const SparseCellGrid& source, const RuleSet& ruleSet);
+  // Elementary 1D in parts, for simulation lanes: the source row of this grid
+  // (only chunk columns `includeColumn` accepts, when given), the combination
+  // of partial rows, and one generation from a known source row that writes
+  // only destination chunk columns `writesColumn` accepts. advance() equals
+  // advanceElementaryRow(rule, findElementarySourceRow({}), {}).
+  SparseElementaryRow findElementarySourceRow(
+    const std::function<bool(std::int64_t)>& includeColumn) const;
+  static void mergeElementaryRow(SparseElementaryRow* row,
+                                 const SparseElementaryRow& part);
+  bool advanceElementaryRow(
+    const RuleSet& ruleSet,
+    const SparseElementaryRow& row,
+    const std::function<bool(std::int64_t)>& writesColumn);
   void copyStateFrom(const SparseCellGrid& source);
   bool captureGenerationDelta(std::uint64_t previousRevision,
                               SparseGenerationDelta* delta,
@@ -377,6 +400,32 @@ private:
   };
   struct ChunkMemoState;
 
+  // Full-state histogram, directional, extended-range and weighted-kernel
+  // rules share one chunk-parallel driver: targets evaluate independently from
+  // per-slot halo windows, then journal and publish serially in target order.
+  enum class IsolatedKernel
+  {
+    StateHistogram,
+    Directional,
+    ExtendedRange,
+    WeightedKernel
+  };
+  struct IsolatedKernelPlan
+  {
+    IsolatedKernel kind = IsolatedKernel::StateHistogram;
+    const RuleSet* ruleSet = nullptr;
+    const SparseCellGrid* source = nullptr;
+    int radius = 1;
+    std::vector<std::ptrdiff_t> offsets;
+    std::vector<std::uint32_t> weights;
+    std::array<std::uint32_t, 256> levels{};
+  };
+  struct IsolatedKernelScratch
+  {
+    std::vector<unsigned char> window;
+    std::vector<std::uint32_t> levels;
+  };
+
   static constexpr std::size_t kParallelTargetThreshold = 32u;
   static constexpr unsigned int kMaxParallelWorkers = 8u;
   static constexpr unsigned int kMaxCandidateWorkers = 4u;
@@ -384,6 +433,10 @@ private:
   static constexpr std::size_t kCandidateNeighborContributionThreshold =
     kCandidateCellsPerChunkThreshold * 8u;
   static constexpr std::size_t kParallelCandidateCellThreshold = 16384u;
+  // Neighbor reads (target cells times per-cell kernel work) above which the
+  // isolated kernels and elementary rows use the worker pool.
+  static constexpr std::size_t kParallelKernelWorkThreshold = 131072u;
+  static constexpr std::size_t kElementaryRowBlock = 65536u;
   static constexpr std::size_t kCandidateCellsPerWorkRange = 2048u;
   static constexpr std::size_t kFrontierScratchPreferredDivisor = 4u;
   static constexpr std::size_t kFrontierScratchTargetLimit = 2048u;
@@ -422,7 +475,8 @@ private:
   std::vector<AddressIndexSlot> m_completeTargetIndex;
   std::uint64_t m_completeTargetGeneration = 0u;
   std::vector<TargetResult> m_completeResults;
-  std::vector<unsigned char> m_haloWindow;
+  std::vector<IsolatedKernelScratch> m_kernelScratch;
+  std::vector<unsigned char> m_elementaryRow;
   std::uint64_t m_candidateIndexGeneration = 0u;
   std::uint64_t m_directOutputGeneration = 0u;
   std::uint64_t m_candidateTopologyRevision = 1u;
@@ -550,15 +604,32 @@ private:
   bool advanceImpl(const RuleSet& ruleSet, bool allowFrontier);
   bool advanceStateHistogram(const RuleSet& ruleSet);
   bool advanceExtendedRange(const RuleSet& ruleSet);
+  bool advanceWeightedKernel(const RuleSet& ruleSet);
   bool advanceDirectionalNeighborhood(const RuleSet& ruleSet);
-  // Copies a target chunk plus a `radius`-cell margin into m_haloWindow
+  bool advanceIsolatedKernel(const RuleSet& ruleSet, IsolatedKernel kind);
+  void evaluateIsolatedTarget(const IsolatedKernelPlan& plan,
+                              IsolatedKernelScratch* scratch,
+                              TargetResult* result) const;
+  unsigned int resolveKernelWorkerCount(std::size_t targetCount,
+                                        std::size_t workPerCell) const;
+  unsigned int resolveElementaryWorkerCount(std::size_t cellCount) const;
+  static void storeKernelResultCell(TargetResult* result,
+                                    std::size_t cellIndex,
+                                    unsigned char current,
+                                    unsigned char next);
+  // Copies a target chunk plus a `radius`-cell margin into `window`
   // (row-major, side kChunkDim + 2 * radius) so full-neighborhood evaluators
   // index neighbors directly instead of hashing every neighbor lookup.
-  void fillHaloWindow(const SparseCellGrid& source,
-                      const ChunkAddress& target,
-                      int radius);
+  static void fillHaloWindow(const SparseCellGrid& source,
+                             const ChunkAddress& target,
+                             int radius,
+                             std::vector<unsigned char>* window);
   bool advanceToroidal(const RuleSet& ruleSet);
   bool advanceElementarySpaceTime(const RuleSet& ruleSet);
+  bool advanceElementaryFromRow(
+    const RuleSet& ruleSet,
+    const SparseElementaryRow& row,
+    const std::function<bool(std::int64_t)>& writesColumn);
   void enrollToroidalCandidate(const CellAddress& address,
                                bool addNeighborContribution);
   static std::size_t saturatingAdd(std::size_t left, std::size_t right);

@@ -28,6 +28,11 @@ Rendering, Services, Engine, platform APIs, and OpenGL.
   `getExtendedCountedState`; neighborhood shape membership comes only from
   `RuleSet::extendedNeighborhoodContains`.
 - Binary rules encode state `0` as alive and `1` as dead.
+- `WeightedKernel` (Lenia) rules sum integer tap weights times
+  `getKernelLevel` exactly and map that potential through a compiled growth
+  table. Compile Lenia tables only from correctly rounded IEEE operations (no
+  platform `exp`/`pow`) so lanes, the control store and the native oracle
+  agree bit for bit, and reject growth that raises empty space.
 - Wireworld encodes head `0`, empty `1`, tail `2`, and conductor `3`; only
   states declared by its counting mask contribute to neighbors.
 - `evalCell` supplies a stable palette for every valid state. A palette change
@@ -46,7 +51,7 @@ state metadata. The staged `IllumoGame/families.json` and
 `IllumoGame/rulesets.json` are the source of truth for shipped definitions.
 Family models include `life_like`, `generations`, `moore_table`, `cyclic`,
 `species_life`, `larger_than_life`, `hodgepodge`, `turmite`, `lattice_gas`,
-`dominance`, `von_neumann_table`, `sandpile`, and `elementary_1d`. Family catalogs use schema 1 and ruleset
+`dominance`, `von_neumann_table`, `sandpile`, `lenia`, and `elementary_1d`. Family catalogs use schema 1 and ruleset
 catalogs schema 3;
 unversioned and schema-v1/v2 legacy rule catalogs normalize into separated
 definitions in memory. Validation must be transactional and preserve state `1`

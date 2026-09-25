@@ -756,8 +756,8 @@ simulation models, state counts, state labels, and colors. The separate
 `family_id`, transition parameters, and an optional deterministic starter
 strategy. Life-like, Generations, Moore-table, cyclic, colorized-Life,
 Larger-than-Life, Hodgepodge, Turmite, lattice-gas, dominance, von Neumann
-rule-table, sandpile, and elementary 1D definitions compile to the existing
-`DataRuleSet`;
+rule-table, sandpile, Lenia, and elementary 1D definitions compile to the
+existing `DataRuleSet`;
 the elementary rules retain their separate history path. Older unversioned,
 schema-v1, and schema-v2 rules catalogs are normalized into compatible family
 and rule definitions in memory.
@@ -796,15 +796,16 @@ Squarish Spirals, Cyclic Spirals, and Turbulent Phase; Comet Rockets, Rainbow
 Tides, Neon Coral, and Bubble Swarm trailing Larger-than-Life rules; and 45
 classic Golly/MCell Life-like and Generations rules (Maze, Coral, Anneal,
 Diamoeba, Replicator, Frogs, Lava, Swirl, Bombers, Xtasy, Thrill Grill, and
-others). They compile to the common `DataRuleSet`;
+others); and six Lenia species (Orbium, Orbium bicaudatus, Gyrorbium,
+Scutium, Discutium, Paraptera). They compile to the common `DataRuleSet`;
 life-like and Generations definitions use neighbor masks, while Wireworld and
 the five-phase excitable-media family use explicit Moore transition tables.
 The twelve-state Prismatic Ecology and nine-state Elemental Court use cyclic
 interaction: a cell advances by a coprime cycle step when enough neighbors hold
-that successor state. Their serial histogram kernel expands occupied chunks by
-one, counts every byte-valued neighbor state, and reuses the transactional
-sparse output/change-journal machinery without altering optimized binary paths
-(D-GC5). A multi-state medallion seed gives every kind immediate interaction.
+that successor state. Their histogram kernel expands occupied chunks by one,
+counts every byte-valued neighbor state, and reuses the transactional sparse
+output/change-journal machinery without altering optimized binary paths
+(D-GC5, D-GC10). A multi-state medallion seed gives every kind immediate interaction.
 The classic cyclic rule follows Fisch, Gravner, and Griffeath's 14-color,
 random-initial-condition experiment. Immigration and QuadLife use the same
 B3/S23 population geometry as Life while inspecting all parent colors;
@@ -821,9 +822,9 @@ neither count nor accept births. The correctness-first sparse evaluator
 expands each occupied chunk by the necessary chunk radius, copies each target
 chunk plus its margin into a canonical halo window once, counts the state named
 by `RuleSet::getExtendedCountedState` (state 0 for Larger than Life), and
-commits through the existing transactional output/change journal. It
-intentionally does not enter the radius-one candidate, halo, memo, or worker
-fast paths (D-GC6). Shipped parameters match Golly's documented Bosco/Bugs,
+commits through the existing transactional output/change journal. It does not
+enter the radius-one candidate, halo, or memo fast paths (D-GC6), but its
+target chunks share the worker pool (D-GC10). Shipped parameters match Golly's documented Bosco/Bugs,
 Bugsmovie, and Globe examples.
 
 Cyclic rules accept an optional `radius` (1..16) and `neighborhood`
@@ -849,6 +850,27 @@ background-zero form followed by pulsed grain-source phases; a cell holding
 four or more grains topples one to each von Neumann neighbor, and the phase-0
 source emits four without depleting (D-GC8).
 
+`lenia` families (3..256 states) carry Bert Chan's continuous Lenia as
+quantized intensity levels: background state 1 is level 0, states 2..n-1 are
+levels 1..n-2, and state 0 is the full level n-1, so the value of a cell is
+level/(n-1). Rules carry kernel radius R (1..16), time steps T, growth centre
+mu and width sigma, one to four kernel ring peaks (beta), and polynomial,
+exponential, or step kernel core and growth shapes. Compilation quantizes the
+normalized ring kernel to integer tap weights (4096 per unit) and G(u)/T to a
+fixed-point level delta per potential bin (16,384 bins, 1/256 level), using
+only correctly rounded IEEE operations (a deterministic exp), so the control
+store, every simulation lane, and the native oracle build bit-identical tables.
+`NeighborhoodKind::WeightedKernel` evaluates the exact integer potential
+sum of weight times level; the next level is
+clip(level + delta, 0, n-1) rounded to nearest, matching Lenia's P-quantized
+update. Growth that would raise empty space at zero potential is rejected so
+the infinite canvas stays sparse. The sparse evaluator expands source
+chunks by one chunk, reads each target through a radius-R halo window of
+levels, and publishes through the same transactional journal as the other
+correctness kernels; lanes partition it like any radius-16 rule. Species
+starters use `lenia_rle` (Lenia's RLE, values 0..255 scaled onto levels);
+parameters and cells come from Chan's MIT-licensed `animals.json` (D-GC9).
+
 Hodgepodge rules expose 101 visible chemical levels. Healthy state 1 is the
 sparse background; state 0 encodes infection level one, and numeric states
 2..100 retain their conceptual levels. The Moore histogram supplies infected
@@ -863,10 +885,22 @@ entries retain north/east/south/west identity rather than collapsing neighbors
 into counts. Turmite state is `n` tape colors plus `4n` agent states;
 simultaneous arrivals annihilate deterministically. HPP's 16 states encode four
 particle-direction bits. Opposing pairs collide into the perpendicular axis
-before all particles stream. The serial sparse evaluator expands source chunks
-by one, reads each target through a one-cell halo window, and publishes through
-the same transactional map and change journal as the histogram and
-extended-range paths.
+before all particles stream. The sparse evaluator expands source chunks by one,
+reads each target through a one-cell halo window, and publishes through the
+same transactional map and change journal as the histogram and extended-range
+paths.
+
+The histogram, directional, extended-range, and weighted-kernel (Lenia) models
+share one chunk-parallel driver (D-GC10). Target discovery stays serial; each
+target chunk is then evaluated independently from a per-worker halo window on
+the grid's worker pool (up to eight workers once target cells times per-cell
+neighbor reads reach 131,072, so wide kernels parallelize from two targets);
+the change journal and the inactive-map publication then run serially in target
+order, so the worker count never changes a generation. Elementary 1D computes
+its next row in 65,536-cell blocks, splitting a block into 2,048-cell ranges
+across the pool when it holds at least 16,384 cells, and writes the row
+serially. The WASM control store and lanes compile the pool serially
+(`ILLUMO_SERIAL_GUEST`); in the package, lanes supply the parallelism.
 
 Rules may request deterministic glider, single-cell, wire, active-soup,
 phase-soup, species-soup, excitable-break, Turmite-swarm, particle-cloud, or
@@ -919,6 +953,12 @@ class RuleSet {
   virtual unsigned char nextStateFromExtendedCount(
     unsigned char cell,
     unsigned int aliveCount) const;
+  // Lenia: integer taps, per-state levels, exact potential -> next state.
+  virtual const std::vector<KernelTap>& getKernelTaps() const;
+  virtual std::uint32_t getKernelLevel(unsigned char state) const;
+  virtual unsigned char nextStateFromPotential(
+    unsigned char cell,
+    std::uint64_t weightedSum) const;
   virtual void evalCell(const unsigned char& target,
                         unsigned char dest[3]) const; // palette colors
 };
@@ -939,12 +979,13 @@ class RuleSet {
 | Turmite | `n` tape states followed by `4n` directional agent states |
 | HPP gas | remapped 4-bit north/east/south/west particle occupancy; `1` vacuum |
 | Dominance | `1` empty; all other states are competing species |
+| Lenia | `1` level 0 (empty); `2..n-1` levels 1..n-2; `0` full level n-1; value = level/(n-1) |
 
 **Generation path:**
 
-1. Route full-state histograms, directional von Neumann, and extended-range
-   rules to their isolated correctness kernels. Standard radius-one count
-   rules continue below.
+1. Route full-state histograms, directional von Neumann, extended-range, and
+   weighted-kernel (Lenia) rules to their isolated correctness kernels.
+   Standard radius-one count rules continue below.
 2. Read the cached stored/counting totals and candidate-preferred chunk count.
    If the retained changed frontier is empty, return immediately without
    visiting allocated chunks. Otherwise enroll each changed chunk and only the
@@ -1558,10 +1599,13 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   frame: `SimulationRunner::canBlock()` is false with lanes, so edits, loads,
   ruleset changes, saves and exit retire the outstanding generation (the
   displayed world is what they act on) and stale replies are dropped by
-  session and epoch. Lanes are used once serial generations exceed 4 ms and
-  dropped for small or settled worlds; elementary 1D rules (a global source
-  row) and radii above 16 stay serial, as does everything after a lane
-  failure. The legacy whole-world `CSW1` worker remains for parity tests in
+  session and epoch. Lanes are used once serial generations exceed 1 ms and
+  dropped when all lanes together work under 0.5 ms; radii above 16 stay
+  serial, as does everything after a lane failure. Elementary 1D rules
+  partition by chunk column: the coordinator supplies the global source row
+  (CSL1 version 2), lanes write only their own columns of the next row, and
+  the lanes' owned-column source rows merge into the next one (D-E29).
+  The legacy whole-world `CSW1` worker remains for parity tests in
   the same worker module.
 - **Limits**: the pinned runtime is Windows x64 only, so Linux has no
   runnable applications; it builds the engine libraries and native test
@@ -1824,6 +1868,7 @@ disabled.
 | **D-E15** | Compiled WASM depends on `WasmEngineOptions` (fuel metering, explicit bounds) passed from the host to the isolated compiler; mismatched artifacts fail closed. Explicit guest bounds checks follow AddressSanitizer (`ILLUMO_ENABLE_ASAN`), not `_DEBUG`. Manifests choose `metering` `fuel` (default) or `epoch`; first-party packages are epoch-only, mods stay metered, `--fuel` forces metering. Build profiles `dev` (RelWithDebInfo) and `debug-noasan` sit beside the `debug` sanitizer profile (§5.12). |
 | **D-E16** | Frame schema v4: dynamic 2D meshes are host-retained, created ready and patched by per-frame `meshWrites` applied before the frame's batches; the guest sends only differing spans and falls back to inline geometry when a mesh changes after a by-reference draw in the same frame. Inline batches use per-style grow-only host slot pools. v1-v3 stay valid (§5.12). |
 | **D-E17** | IllumoGame generations run on up to eight isolated simulation lanes (`CSimWorkerGuest.wasm`, `LaneJob`/`JobLanes` services) owning interleaved eight-row chunk bands with one-row halos; the control store merges exact deltas, pipelines the next generation, and publishes through the unchanged path. Drains retire the outstanding generation instead of waiting (`SimulationRunner::canBlock()`). Lanes engage above 4 ms serial generations; elementary 1D rules, radii above 16 and failures stay serial. Completes milestone 6 of the game cutover (§5.12). |
+| **D-E29** | Lanes engage above 1 ms serial generations and leave under 0.5 ms of summed lane work (measured by `IllumoGame.Wasm.PackageBench`); elementary 1D rules take lanes partitioned by chunk column with a coordinator-supplied source row (CSL1 version 2). Supersedes the threshold and elementary exclusion of D-E17. |
 | **D-E18** | Optional `Illumo::Content` layer owns virtual paths, manifests, `.ilpk`, the virtual file tree, `.ilsc` and `SceneInstance`; core never includes it, it never depends on Wasm or a product; guests link `IllumoGuestContent`. Supersedes D-E10. |
 | **D-E19** | `.ilsc` format 2 is the one scene format (clean break from v1): settings with one environment, an asset table with package-relative or absolute virtual references, strict core components, verbatim namespaced data, canonical output; `SceneInstance` is the live incremental loader. |
 | **D-E20** | `.ilpk` is a bounded ZIP subset (stored/deflate, CRC-32, name and size checks); the host writer deflates through vendored `stb_image_write`. |
@@ -1843,6 +1888,7 @@ disabled.
 | **D-GC2** | Shipped and custom rules compile from versioned data; F2 edits staged drafts (catalog layering and save version are updated by D-GC4). |
 | **D-GC4** | Families own cell schemas and palettes; every ruleset references one family; F1/runtime/saves carry both IDs, with v4 writes and legacy derivation. |
 | **D-GC5** | Cyclic families use full Moore neighbor-state histograms with threshold/coprime-step rules in an isolated serial sparse kernel. |
+| **D-GC10** | Histogram, directional, extended-range and Lenia kernels, and elementary 1D rows, evaluate on the grid worker pool with per-worker scratch and serial in-order publication (native builds; the guest pool stays serial). |
 | **D-F1** | MacroDefs / Windows.h include toxicity deferred until real pain. |
 
 ---

@@ -590,6 +590,8 @@ CellGameModule::seedInitialPattern()
           seedPattern = RuleSeedPattern::SpeciesSoup;
           break;
         case RuleFamily::Hodgepodge:
+        case RuleFamily::Lenia:
+          // A disk of random intensities is Lenia's classic soup.
           seedPattern = RuleSeedPattern::PhaseSoup;
           break;
         case RuleFamily::Turmite:
@@ -639,11 +641,17 @@ CellGameModule::seedInitialPattern()
     return;
   }
 
-  if (seedPattern == RuleSeedPattern::Rle && definition != nullptr) {
+  if ((seedPattern == RuleSeedPattern::Rle ||
+       seedPattern == RuleSeedPattern::LeniaRle) &&
+      definition != nullptr) {
     std::vector<RuleSeedCell> cells;
-    if (RuleSetRegistry::decodeSeedRle(
-          definition->seedRle, rules->getStateCount(), cells) &&
-        !cells.empty()) {
+    const bool decoded =
+      seedPattern == RuleSeedPattern::LeniaRle
+        ? RuleSetRegistry::decodeLeniaSeedRle(
+            definition->seedRle, rules->getStateCount(), cells)
+        : RuleSetRegistry::decodeSeedRle(
+            definition->seedRle, rules->getStateCount(), cells);
+    if (decoded && !cells.empty()) {
       int maximumX = 0;
       int maximumY = 0;
       for (const RuleSeedCell& cell : cells) {

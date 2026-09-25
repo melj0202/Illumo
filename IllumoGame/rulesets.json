@@ -1956,6 +1956,84 @@
       "birth": [3, 4],
       "survive": [4, 5, 6],
       "seed": { "pattern": "active_soup", "radius": 24, "density": 38 }
+    },
+    {
+      "id": "LENIA_ORBIUM",
+      "name": "Lenia: Orbium",
+      "family_id": "LENIA_256_LEVEL",
+      "radius": 13,
+      "time_steps": 10,
+      "mu": 0.15,
+      "sigma": 0.015,
+      "peaks": [1.0],
+      "kernel_core": "polynomial",
+      "growth": "polynomial",
+      "seed": { "pattern": "lenia_rle", "rle": "7.MD6.qL$6.pKqEqFURpApBRAqQ$5.VqTrSsBrOpXpWpTpWpUpCrQ$4.CQrQsTsWsApITNPpGqGvL$3.IpIpWrOsGsBqXpJ4.LsFrL$A.DpKpSpJpDqOqUqSqE5.ExD$qL.pBpTT2.qCrGrVrWqM5.sTpP$.pGpWpD3.qUsMtItQtJ6.tL$.uFqGH3.pXtOuR2vFsK5.sM$.tUqL4.GuNwAwVxBwNpC4.qXpA$2.uH5.vBxGyEyMyHtW4.qIpL$2.wV5.tIyG3yOxQqW2.FqHpJ$2.tUS4.rM2yOyJyOyHtVpPMpFqNV$2.HsR4.pUxAyOxLxDxEuVrMqBqGqKJ$3.sLpE3.pEuNxHwRwGvUuLsHrCqTpR$3.TrMS2.pFsLvDvPvEuPtNsGrGqIP$4.pRqRpNpFpTrNtGtVtStGsMrNqNpF$5.pMqKqLqRrIsCsLsIrTrFqJpHE$6.RpSqJqPqVqWqRqKpRXE$8.OpBpIpJpFTK!" }
+    },
+    {
+      "id": "LENIA_ORBIUM_BICAUDATUS",
+      "name": "Lenia: Orbium bicaudatus",
+      "family_id": "LENIA_256_LEVEL",
+      "radius": 13,
+      "time_steps": 10,
+      "mu": 0.15,
+      "sigma": 0.014,
+      "peaks": [1.0],
+      "kernel_core": "polynomial",
+      "growth": "polynomial",
+      "seed": { "pattern": "lenia_rle", "rle": "13.pK$14.qV$6.VpA.MpEpKpITqV$4.BpPpNrIrEqDpWpOpLpUqNvT$4.IqRrNsPsKqHJ3.GqOuC$4.TrLsTrPrLpS6.uUD$3.SpWqNrBqLpRqPqE6.vA$2.FpTpMLpHqPqHrVsPrS5.qUqA$K.pCpRG.ErFsRsVuSuPqN4.CrR$pA.pTU3.rWuBuRvXwTwKpF4.rCH$.tPqHH3.qFvAwUwVyJyKwNL2.DqLR$.pGsGA4.vPxSyDxE2yOuHS.XqJT$2.xIE4.sCyHyOvLvRyFxCsGpVpXqGP$2.VsU4.DxQyOvVuSwDwQuBrMqSqCF$3.vG5.tEyKwVvIvKvMtVrXqTpM$4.sU4.qFvDwMvNuUuDsUrKqDO$4.qCrDJ2.pPsKuGuHtOsQrNqKpC$5.pTqTpVpNqFrJsGsKrVrDqFpFD$6.QqCqJqPqVqXqRqHpOTC$8.LWpFpEXPG!" }
+    },
+    {
+      "id": "LENIA_GYRORBIUM",
+      "name": "Lenia: Gyrorbium",
+      "family_id": "LENIA_256_LEVEL",
+      "radius": 13,
+      "time_steps": 10,
+      "mu": 0.156,
+      "sigma": 0.0224,
+      "peaks": [1.0],
+      "kernel_core": "polynomial",
+      "growth": "polynomial",
+      "seed": { "pattern": "lenia_rle", "rle": "10.EL2QLE$7.TpU2qHqCpXpUpNpFL$4.JrVtTuKuPuKtLrXqTqHqCpPpDG$3.qWtDqRpKqEsMuXvBtGrApXpUpSpIO$2.rQrN4.pAuAvRtTrIpUpIpKpFO$.pSsM6.tJwFuNsPsFrVpPpDL$.uFB6.tJ2yO2yLyOyDsKL$pDuC6.pFxW3yOwIwD2xPqH$rNtV5.EsMxCyIyOwXtJsMtJwFuX$sHuSV3.EpDvOwFxEwQsRqR2qHsFvWE$rQvJsWpPQpKpSqCvEvBuCpD3.BpDtGrQ$pXuKvMuPtLsWsCrIuCtBrS6.qWrQ$EsKvEwXyBwLtVrVsCrDqH6.pXrG$.qHtVxJyOwQrQpNqJpPV6.qJqE$.JsUxMyOrX10.pFqRJ$2.rQxPwIpI9.pKqJT$2.qJxEuPpKB7.qCpP$2.EvOvMpPO5.TrGqH$3.sCyOqEpIOEBOqHqEsRtG$4.xMsMqJqCpXqJqRpIqOuCtBsF$5.xPrAqTqMpSE.rSsMrLqRqHV.TpS$6.vErDE2.VpPB$7.pIrNqHpKQ!" }
+    },
+    {
+      "id": "LENIA_SCUTIUM",
+      "name": "Lenia: Scutium (two rings)",
+      "family_id": "LENIA_256_LEVEL",
+      "radius": 15,
+      "time_steps": 10,
+      "mu": 0.31,
+      "sigma": 0.0575,
+      "peaks": [0.5, 1.0],
+      "kernel_core": "polynomial",
+      "growth": "polynomial",
+      "seed": { "pattern": "lenia_rle", "rle": "15.2BA$13.DQpCpFpCSJC$13.UpWqRrCqXqLpTpCLC$12.JpUrHsMtDtEsPrSqRpSWJC$11.DpQrItCuNvKvNvAtXsRrLqJpMVKC$9.DpFqOsEuBvWxLyHyGxNwHuVtJsCrAqFpMUF$7.pAqRsFtOuXwNyJ6yOxEvLtWsRrSqVpXpBG$6.qTtWwO12yOxPvUuKtHsIrHqCXD$5.rEwLyH14yOxRwCuTtPsMrEpTN$4.pXvIxQ16yOxMwBuStMsCqOpCD$4.tLwGyE9yOyLyM6yOxCvQuGsRrDpNI$3.rJuDwPyI5yOyJyBxQxExDxSyK5yOxXwKuTtErLpUM$2.pPrVuHwTyL3yOwKvCuRuMuCuAuWwMxVyN5yOxDvGtJrOpWO$.HqCsCuNxF2yOyAsApWpTqBqCqFrAsRvAxByH5yOxWvQtOrPpWN$.RqLsQvLyByOwKD6.OqUtLvVxQyL5yOwEtSrQpVM$.pGrLuEwXyOuRS8.pBrUuMwRyC5yOwRuCrTpVL$.qJtDvVyAsXqKE9.qItEvRxOyM4yOxFuKsApWL$WrUuOuHsOrVpRD9.pNsMvJxMyM4yOxMuQsEqAL$qAsFpQrGsDrQpUG9.qBtIwJyE5yOxLuRsFqAL$2.pFqUrXrWqLR8.IrUvOyA6yOwXuKsBpVJ$2.NqIrUsLrOpQF7.qCuFxO6yOyKvXtTrPpPG$3.pQrMsTsPqWXA6.sIwR7yOwHuKsSqWpDB$3.UqTsJsUrVqCP5.rCwF6yOyKvOtTsPrKpXO$4.pPrHsHsFrHqCpBKEDtFyI6yOyEuPsMrKqSqApAC$4.JpXrGrXsCrUrNrMvF9yOuDrHpVpIpCSE$5.QqDrFsAsRwI10yOuKqRP$6.VqCtHwTwSwRwUxIxXyJ3yOyNuTqQA$7.tPtVtR2tMtXuWvXwVxKxQxOuDqL$6.qCqNqPqOqPrArRsPtOuIuTuErPpG$9.HSpFpSqGqDS!" }
+    },
+    {
+      "id": "LENIA_DISCUTIUM",
+      "name": "Lenia: Discutium",
+      "family_id": "LENIA_256_LEVEL",
+      "radius": 13,
+      "time_steps": 10,
+      "mu": 0.356,
+      "sigma": 0.063,
+      "peaks": [1.0],
+      "kernel_core": "polynomial",
+      "growth": "polynomial",
+      "seed": { "pattern": "lenia_rle", "rle": "8.AEG2JHFB$6.HUpKpWqGqKqLqHpXpOpCOE$4.FpCqGrGsCsQtBtEtDsUsMrXrIqNpRVF$3.MqArPtDuHvDvPvUvVvSvMvAuMtTsWrWqUpRQA$2.MqMsSuSwIxKyDyKyMyKyFxUxKwUwCvGuGtCrTqKpBD$.DqKtHvWyC10yOyHxLwLvHtXsMqUpHE$.pMsWwG14yOyMxJwBuOsVrBpHD$.rLvM6yOyLyDyByGyL6yOyAwOuVsXqVX$VtMxS5yOyGwR2vXwJxCxTyI5yOyLwTuUsOqHM$qGvDyM5yOvWtRtDtHtWuTvSwRxNyEyN4yOwRuJrUpKB$rKwFxXyK3yOxRsJqNqIqSrMsJtIuIvHwIxJyH3yOyMwDtJqOL$sCwLwWxU3yOuRT2.GpBqAqXrXsXuBvIwWyH3yOxTuVrSpB$sHuSvLxAyK2yOrO6.OpOqPrTtFvDxJ4yOwGsUpRA$rXsStVvVxW2yOpO8.IpOrEtJwM4yOxLtSqGC$qBqQsFuPxByLxWqWV9.pFrWwD4yOyJuIqOD$.NqOtGvTxPuLsDqUpKJ8.rDxD5yOuOqOB$2.WrRuFwDrP2rTrHqLpJL6.sK6yOuIqE$3.qBsIrPpKqAqOrBrIrFqOpTXJCBKxI5yOxXtMpI$3.HqJ3.HpBpVqQrGrKrEqQqHqGuE4yOyMyNwNsBB$11.NpNqLrFrTsDsO2yOyNyE2xSyCuLqA$13.GpLqNrPuKyDxUxDwJwCwLvUrV$15.NpTwDwCvMuPtXuCvAsVS$16.GtNtIsPrTrLsDsTpL$16.pEqSqIpNVpBqFpH$16.A5.G!" }
+    },
+    {
+      "id": "LENIA_PARAPTERA",
+      "name": "Lenia: Paraptera arcus",
+      "family_id": "LENIA_256_LEVEL",
+      "radius": 13,
+      "time_steps": 10,
+      "mu": 0.347,
+      "sigma": 0.057,
+      "peaks": [1.0],
+      "kernel_core": "polynomial",
+      "growth": "polynomial",
+      "seed": { "pattern": "lenia_rle", "rle": "10.C2DC$7.KpBpOpXqDqCpUpMpAMD$5.JpOqVrWsQtAtBsVsMrXrGqMpPTE$4.TqTsUuLvLvXwAvSvIuUuFtOsSrTqRpOPA$3.SrPuKwSyH2yOyJxRxEwPwDvNuTtUsSrMqGpCH$3.rOvFyJ6yOyMyGxXxLwRvTuQtLsEqWpRQA$2.qMuU13yOxRwNvHuCsUrOqGpCG$.JtGxX6yO2yDyL5yOyGxAvTuPtKsDqVpON$.qOvQxQyM4yOwRwBwMxLyI5yOyHxBvXuWtWsSrKqBVD$.sMvLwXyI3yOvNtJtLuLvUxGyH4yOyLxHwLvVvHuKtFrWqMpFG$VsOuHwIyF2yOwKrFqJrGsOuCvRxAxTyCyBxWwUwCvXwDwEvSuXtSsHqUpMJ$pLrCtHvUyB2yOrL.BpIqUsLtVvCvRvTvNuNtTtUuOvSwRxBwOvLuCsPrDpRN$.pXsOvKxTyOvJK3.pEqQrWsRsVsPrSqVqTrOtCvFxGyJyExEvVuJsWrKpVP$.pDsAuVxIyDrSpF4.SpQpWpQW2.JpTsAuWxX3yOxNwCuPtDrOqAQ$.MrKuDwNsUrUqMpAD10.NrLvGxV4yOxNwBuRtFrQqBR$2.qRtEqUqMrJrNqWqDpKpBMC7.rQvHxR4yOyIxAvTuPtFrRqAQ$2.pSK.RpWqUrJrNrOrHqSpRN6.sFvPxRyKyN2yOxWwXwHvOuPtGrQqAQ$7.UpPqGqRrCrHrEqKpFH3.pXtXwRxSxUxOxHwUwAvUwBwDvRuRtGrPpXP$10.FUpOqMrCrAqKpVpNqTuTxPyJxPwGvDuLtMtJuDvIwKwRwBuTtFrOpVM$13.QpUqSrFrMsEwO3yOwQtKrUqOqIrBsLuOwRxSxKwHuUtDrLpRH$15.SpOqEuTxUyI2yOuPpW3.pDrHuDxF2yOxUwHuRtArDpHB$17.rCuWvRwXyHyGrT5.qOuFxT3yOxUwDuJsOqPS$17.rTsMtSvLxMvBpW5.qNuRxN4yOxKvQtVrWpSD$16.FpIqLsDuGtVrOqMG4.rAuKxF4yOyMwQuXtBqTQ$18.TqUrFpHqXrDpD4.qWuAwNyD4yOxLvUuBrTpI$19.K2.qArFqJN3.qNtHvJwXyC3yOyDwQuXsQpXD$22.TqLrBqDM2.pWsDtUvHwPxTyM2yOxLvTtKqNH$23.pCqQrDqBI.VqPsCtMuVwKxV2yOyHwPuArAM$24.pJrDrFpH2.VqHrQtFvExI3yOxJuMrEO$24.DqGrPqIF2.KpXrWuLxJ3yOxXuPrDM$25.pIrJrDV3.NrEvAyL3yOyGuLqSH$25.JqQrNqCJ2.FsQxX4yOxVtTqCB$26.pQrHrFpWUJrWyI5yOwTsOpE$26.KqIrMrNrDtN7yOuXqWF$27.pAqPrTuF7yOwQsMpA$28.pCrNxMxSxTxRxPxSyCxGtIpQ$29.uHvD3vJvOwFwOtFpQ$28.qDsBsIsKsLsStMuPrXV$28.WpHpKpLpRqKrQqA$33.L!" }
     }
   ]
 }

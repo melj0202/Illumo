@@ -2256,6 +2256,64 @@ Margolus partitioning remain out of scope.\\
 \textbf{Extends:} D-GC6, D-GC7
 \end{decisionbox}
 
+\subsection*{D-GC9 --- Lenia as quantized weighted-kernel rules}
+\begin{decisionbox}[title={D-GC9 \quad 2026-09-25}]
+\textbf{Decision:} Add a typed \texttt{lenia} family model on a new
+\texttt{WeightedKernel} neighborhood contract instead of a floating-point cell
+domain. Cells stay bytes: a family of $n \le 256$ states holds intensity
+levels $0..n-1$ (background state 1 is level 0, states $2..n-1$ are levels
+$1..n-2$, state 0 is the full level). Rules carry Lenia's radius $R \le 16$,
+time steps $T$, growth centre $\mu$ and width $\sigma$, one to four kernel
+ring peaks $\beta$, and polynomial, exponential, or step core and growth
+shapes. Compilation quantizes the normalized kernel to integer tap weights and
+$G(u)/T$ to a fixed-point level delta per potential bin, evaluating
+exponentials with a deterministic series rather than the platform
+\texttt{exp}. The evaluator sums weight $\times$ level exactly in integers and
+rounds the clipped update to the nearest level, which is Lenia's own
+$P$-quantized update with $P = n-1$.\\
+\textbf{Why:} Lenia's continuous state fits the sparse byte domain once it is
+quantized, and Chan defines state resolution $P$ as part of the model. Keeping
+bytes reuses storage, saves, presentation, editing, and simulation lanes
+unchanged. Exact integer potentials and platform-independent tables keep the
+control store, WASM lanes, and native oracle bit-identical, which lane parity
+requires.\\
+\textbf{Consequences:} A 256-level family and six species (Orbium, Orbium
+bicaudatus, Gyrorbium, Scutium, Discutium, Paraptera) ship with
+\texttt{lenia\_rle} starters from Chan's MIT-licensed catalogue; Orbium's
+quantized evolution matches an independent numpy model exactly and glides.
+Growth that raises empty space is rejected so the infinite canvas stays sparse.
+The kernel is serial and direct ($O(R^2)$ taps per cell); larger worlds rely
+on simulation lanes. Species with $R > 16$, FFT convolution, multi-channel and
+multi-kernel Lenia, and exact floating-point states remain out of scope.\\
+\textbf{Extends:} D-GC6, D-GC8
+\end{decisionbox}
+
+\subsection*{D-GC10 --- Every cell family on the worker pool}
+\begin{decisionbox}[title={D-GC10 \quad 2026-09-25}]
+\textbf{Decision:} The full-state histogram, directional, extended-range, and
+weighted-kernel models share one chunk-parallel driver on the grid's worker
+pool. Target discovery is serial; each target chunk is evaluated from its own
+per-worker halo window (the grid-wide window is gone); the change journal and
+inactive-map publication run serially in target order. Work above 131,072
+neighbor reads (target cells times per-cell kernel work) uses up to eight
+workers, so wide kernels parallelize from two targets. Elementary 1D computes
+its next row in bounded blocks split across the pool and writes it serially.
+The pool gains a generic indexed-job entry point with stable per-thread slots.\\
+\textbf{Why:} Only the radius-one count-table paths used the pool, leaving
+colorized Life, cyclic, Hodgepodge, dominance, Turmites, HPP, rule tables,
+sandpiles, Larger than Life, and Lenia on one thread. Their targets were already
+independent reads of a frozen source, so parallel evaluation needs no change to
+rule contracts or results.\\
+\textbf{Consequences:} Every shipped rule is checked to publish byte-identical
+generations with one and four workers on infinite and toroidal worlds, and each
+neighborhood kind is checked to dispatch more than one worker. The histogram
+kernel now reads a one-cell halo window instead of hashing each neighbor. The
+WASM guest still compiles the pool serially; in the package, simulation lanes
+remain the parallelism (for every rule since D-E29). The optimized
+radius-one candidate, frontier, and memo paths are unchanged.\\
+\textbf{Extends:} D-GC5, D-GC6, D-GC8, D-GC9
+\end{decisionbox}
+
 \subsection*{D-DEP1 --- Narrow public math dependency exposure}
 \begin{decisionbox}[title={D-DEP1 \quad 2026-09-14}]
 \textbf{Decision:} Illumo exports its public headers and a CMake-managed GLM-only
@@ -2767,6 +2825,36 @@ rejected without retiring the guest. The host releases a guest's sounds and
 restores the master volume when it retires. Products must also work
 silently. CSim plays seven cues scaled by its \texttt{soundVolume} setting.\\
 \textbf{Extends:} D-E27 (capability pattern)
+\end{decisionbox}
+
+\subsection*{D-E29 --- Lanes for every rule from 1\,ms}
+\begin{decisionbox}[title={D-E29 \quad 2026-09-25}]
+\textbf{Decision:} The guest runner moves generations to simulation lanes once
+serial generations exceed 1\,ms (previously 4\,ms) and returns them to the game
+store when all lanes together work under 0.5\,ms (previously 1\,ms).
+Elementary 1D rules also take lanes: their partition runs along chunk columns,
+the coordinator finds the global source row (the highest row with a counted
+cell and its counted extent) and sends it with each Advance, each lane writes
+only its own columns of the next row, and every lane reports the source row of
+its owned columns so the coordinator combines the next one without the merged
+grid. The lane protocol becomes CSL1 version 2: SyncBegin carries the axis;
+Advance and Advanced carry the row; decoders reject version 1, an inverted row
+extent, and an axis or row that does not match the rule.\\
+\textbf{Why:} \texttt{IllumoGame.Wasm.PackageBench} shows that at about 1\,ms
+a lane generation costs the game store only its merge (0.30--0.41\,ms on 1\,ms
+worlds, median frame 1.36\,ms to 0.55\,ms), so the old threshold left
+frames carrying work lanes could take. Elementary 1D was excluded only because
+a row band cannot see the global source row; supplying the row removes the
+reason, and each lane then also copies only its own columns of the growing
+history.\\
+\textbf{Consequences:} Uncapped peak TPS on light worlds drops by roughly a
+fifth (the round trip, about 1.3\,ms), which normal speeds never reach; frame
+time falls instead. \texttt{IllumoGame.Wasm.LaneParity} now requires lanes for
+every catalog rule and adds wide elementary rows on infinite and wrapping
+worlds with an edit; \texttt{IllumoGame.Wasm.LaneProtocol} covers version 2.
+Two light benchmark worlds (\texttt{bench-dense16}, \texttt{bench-sparse64})
+cover the threshold region.\\
+\textbf{Supersedes:} the 4\,ms entry and the elementary exclusion of D-E17
 \end{decisionbox}
 
 \subsection*{D-R27 --- Surface frames and offscreen readback}

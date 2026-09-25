@@ -52,3 +52,11 @@ SparseWorkerPool::prepareCandidates(
     }
   }
 }
+
+void
+SparseWorkerPool::run(std::size_t itemCount, unsigned int, const Job& job)
+{
+  for (std::size_t index = 0u; index < itemCount; ++index) {
+    job(index, 0u);
+  }
+}

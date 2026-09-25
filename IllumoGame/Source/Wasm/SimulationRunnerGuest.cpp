@@ -10,13 +10,14 @@
 // lanes each generation is fanned out to isolated worker stores and taken by
 // a later try call; otherwise (no grant, pending grant, a failed lane or an
 // unpartitionable rule) start() completes the generation before returning.
-// Lanes are used once serial generations exceed kUseLanesAbove (a quarter of
-// a 60 Hz frame) and dropped when all lanes together work less than
-// kLeaveLanesBelow (a small or settled world). Summed lane work includes
-// per-lane overhead, so the exit threshold is deliberately low: frames stay
-// light on lanes even where serial throughput would be similar.
-static constexpr double kUseLanesAbove = 4.0;
-static constexpr double kLeaveLanesBelow = 1.0;
+// Lanes are used once serial generations exceed kUseLanesAbove and dropped when
+// all lanes together work less than kLeaveLanesBelow (a small or settled
+// world). Measured with IllumoGame.Wasm.PackageBench: from about 1 ms a lane
+// generation costs the store only its merge (0.3-0.4 ms against 1 ms serial),
+// trading some uncapped peak TPS for the round trip. Summed lane work includes
+// per-lane overhead, so the exit threshold sits well below the entry one.
+static constexpr double kUseLanesAbove = 1.0;
+static constexpr double kLeaveLanesBelow = 0.5;
 
 SimulationRunner::SimulationRunner() = default;
 
@@ -47,7 +48,7 @@ SimulationRunner::start(SparseCellGrid* workingGrid,
     if (!preferLanes && serialCost.size() >= 8u &&
         serialCost.median() > kUseLanesAbove) {
       preferLanes = true;
-      Logger::LogTrace("Serial generations exceed 4 ms; preferring simulation "
+      Logger::LogTrace("Serial generations exceed 1 ms; preferring simulation "
                        "lanes");
     } else if (preferLanes && lanes->laneWorkMetric().size() >= 32u &&
                lanes->laneWorkMetric().median() < kLeaveLanesBelow &&
@@ -55,7 +56,7 @@ SimulationRunner::start(SparseCellGrid* workingGrid,
       preferLanes = false;
       serialCost = RollingMetric{};
       lanes->retire(); // any speculative generation is dropped
-      Logger::LogTrace("Lane work is under 1 ms; generations return to the "
+      Logger::LogTrace("Lane work is under 0.5 ms; generations return to the "
                        "game store");
     }
   }
@@ -77,7 +78,7 @@ SimulationRunner::start(SparseCellGrid* workingGrid,
     reportedLaneCount = lanes->lanes();
     Logger::LogInfo("Generations now run on " +
                     std::to_string(reportedLaneCount) +
-                    " simulation lanes (serial cost over 4 ms)");
+                    " simulation lanes (serial cost over 1 ms)");
   }
   if (lanes && preferLanes &&
       availability == SimulationLaneCoordinator::Availability::Available) {

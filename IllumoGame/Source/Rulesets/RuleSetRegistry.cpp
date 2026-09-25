@@ -2,8 +2,10 @@
 #include "DataRuleSet.h"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <locale>
 #include <nlohmann/json.hpp>
 #include <numeric>
 #include <sstream>
@@ -181,6 +183,164 @@ isCyclicExtended(const RuleSetDefinition& definition)
   return definition.neighborhoodRadius > 1u ||
          definition.extendedNeighborhoodShape !=
            RuleSet::ExtendedNeighborhoodShape::Square;
+}
+
+// Lenia tables are compiled independently by the control store, every
+// simulation lane and the native test oracle, so they must agree bit for bit.
+// Platform exp() may differ in its last bit; this uses only correctly rounded
+// IEEE operations: k*ln2 range reduction and a degree-13 Taylor series.
+double
+deterministicExp(double value)
+{
+  if (value < -700.0) {
+    return 0.0;
+  }
+  if (value > 700.0) {
+    value = 700.0;
+  }
+  const double inverseLn2 = 1.4426950408889634;
+  const double ln2High = 0.693147180369123816490;
+  const double ln2Low = 1.90821492927058770002e-10;
+  const double scaled = std::floor(value * inverseLn2 + 0.5);
+  const double reduced = (value - scaled * ln2High) - scaled * ln2Low;
+  double term = 1.0;
+  double sum = 1.0;
+  for (int order = 1; order <= 13; ++order) {
+    term = term * reduced / static_cast<double>(order);
+    sum += term;
+  }
+  return std::ldexp(sum, static_cast<int>(scaled));
+}
+
+double
+leniaKernelCore(LeniaFunction function, double radius)
+{
+  if (radius <= 0.0 || radius >= 1.0) {
+    return 0.0;
+  }
+  if (function == LeniaFunction::Exponential) {
+    return deterministicExp(4.0 - 1.0 / (radius * (1.0 - radius)));
+  }
+  if (function == LeniaFunction::Step) {
+    return radius >= 0.25 && radius <= 0.75 ? 1.0 : 0.0;
+  }
+  const double base = 4.0 * radius * (1.0 - radius);
+  const double squared = base * base;
+  return squared * squared;
+}
+
+double
+leniaGrowth(LeniaFunction function, double potential, double mu, double sigma)
+{
+  const double distance = potential - mu;
+  if (function == LeniaFunction::Exponential) {
+    return 2.0 *
+             deterministicExp(-(distance * distance) / (2.0 * sigma * sigma)) -
+           1.0;
+  }
+  if (function == LeniaFunction::Step) {
+    return std::fabs(distance) <= sigma ? 1.0 : -1.0;
+  }
+  const double base =
+    std::max(0.0, 1.0 - (distance * distance) / (9.0 * sigma * sigma));
+  const double squared = base * base;
+  return 2.0 * squared * squared - 1.0;
+}
+
+bool
+finiteFraction(double value)
+{
+  return std::isfinite(value) && value >= 0.0 && value <= 1.0;
+}
+
+// Quantizes Lenia's normalized kernel K_S(r; beta) to integer weights and its
+// growth mapping G(u) to per-bin level deltas.
+bool
+compileLeniaTables(RuleSetDefinition& definition, unsigned int stateCount)
+{
+  const unsigned int kMaximumLeniaTimeSteps = 10000u;
+  const std::size_t kMaximumLeniaPeaks = 4u;
+  const double kWeightScale = 4096.0;
+  if (stateCount < 3u || definition.neighborhoodRadius < 1u ||
+      definition.neighborhoodRadius > kMaximumExtendedRadius ||
+      definition.leniaTimeSteps < 1u ||
+      definition.leniaTimeSteps > kMaximumLeniaTimeSteps ||
+      !finiteFraction(definition.leniaMu) || definition.leniaMu <= 0.0 ||
+      !finiteFraction(definition.leniaSigma) || definition.leniaSigma <= 0.0 ||
+      definition.leniaPeaks.empty() ||
+      definition.leniaPeaks.size() > kMaximumLeniaPeaks) {
+    return false;
+  }
+  bool anyPeak = false;
+  for (double peak : definition.leniaPeaks) {
+    if (!finiteFraction(peak)) {
+      return false;
+    }
+    anyPeak = anyPeak || peak > 0.0;
+  }
+  if (!anyPeak) {
+    return false;
+  }
+
+  const int radius = static_cast<int>(definition.neighborhoodRadius);
+  const double ringCount = static_cast<double>(definition.leniaPeaks.size());
+  definition.leniaKernelTaps.clear();
+  definition.leniaKernelWeightTotal = 0u;
+  for (int offsetY = -radius; offsetY <= radius; ++offsetY) {
+    for (int offsetX = -radius; offsetX <= radius; ++offsetX) {
+      const double distance =
+        std::sqrt(static_cast<double>(offsetX * offsetX + offsetY * offsetY)) /
+        static_cast<double>(radius);
+      if (distance >= 1.0) {
+        continue;
+      }
+      const double ringPosition = ringCount * distance;
+      const double ringFloor = std::floor(ringPosition);
+      const std::size_t ring = std::min(static_cast<std::size_t>(ringFloor),
+                                        definition.leniaPeaks.size() - 1u);
+      const double shell =
+        definition.leniaPeaks[ring] *
+        leniaKernelCore(definition.leniaKernelCore, ringPosition - ringFloor);
+      const double weight = std::floor(shell * kWeightScale + 0.5);
+      if (weight < 1.0) {
+        continue;
+      }
+      definition.leniaKernelTaps.push_back(RuleSet::KernelTap{
+        offsetX, offsetY, static_cast<std::uint32_t>(weight) });
+      definition.leniaKernelWeightTotal += static_cast<std::uint64_t>(weight);
+    }
+  }
+  if (definition.leniaKernelTaps.empty()) {
+    return false;
+  }
+
+  // One update moves a level by (n-1) * G(u) / T, held in fixed point.
+  const double maximumLevel = static_cast<double>(stateCount - 1u);
+  const double levelsPerUpdate =
+    maximumLevel / static_cast<double>(definition.leniaTimeSteps);
+  definition.leniaGrowthDeltas.assign(
+    static_cast<std::size_t>(kLeniaPotentialBins) + 1u, 0);
+  for (std::size_t bin = 0u; bin <= kLeniaPotentialBins; ++bin) {
+    const double potential =
+      static_cast<double>(bin) / static_cast<double>(kLeniaPotentialBins);
+    const double growth = leniaGrowth(definition.leniaGrowth,
+                                      potential,
+                                      definition.leniaMu,
+                                      definition.leniaSigma);
+    definition.leniaGrowthDeltas[bin] = static_cast<std::int32_t>(std::floor(
+      growth * levelsPerUpdate * static_cast<double>(kLeniaDeltaScale) + 0.5));
+  }
+  // Empty space must stay empty on an infinite sparse canvas.
+  return definition.leniaGrowthDeltas[0] < kLeniaDeltaScale / 2;
+}
+
+std::string
+leniaNumberText(double value)
+{
+  std::ostringstream text;
+  text.imbue(std::locale::classic());
+  text << std::setprecision(6) << value;
+  return text.str();
 }
 
 std::string
@@ -936,6 +1096,7 @@ validateFamily(RuleFamilyDefinition& definition)
        definition.stateCount != 16u) ||
       (definition.kind == RuleFamily::Dominance &&
        definition.stateCount < 4u) ||
+      (definition.kind == RuleFamily::Lenia && definition.stateCount < 3u) ||
       (definition.kind == RuleFamily::Elementary1D &&
        definition.stateCount != 2u)) {
     return false;
@@ -1229,6 +1390,28 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
       "SANDPILE/P" + std::to_string(stateCount - kSandpileHeightCount);
     definition.transitionTable.fill(kBackgroundState);
     definition.hasTransitionTable = false;
+  } else if (family.kind == RuleFamily::Lenia) {
+    if (!compileLeniaTables(definition, stateCount)) {
+      return false;
+    }
+    definition.includeCenter = true;
+    definition.extendedNeighborhoodShape =
+      RuleSet::ExtendedNeighborhoodShape::Circular;
+    definition.rule = "LENIA/R" +
+                      std::to_string(definition.neighborhoodRadius) + "/T" +
+                      std::to_string(definition.leniaTimeSteps) + "/M" +
+                      leniaNumberText(definition.leniaMu) + "/S" +
+                      leniaNumberText(definition.leniaSigma) + "/B";
+    for (std::size_t peak = 0u; peak < definition.leniaPeaks.size(); ++peak) {
+      definition.rule +=
+        (peak == 0u ? "" : ",") + leniaNumberText(definition.leniaPeaks[peak]);
+    }
+    definition.rule +=
+      std::string("/K") +
+      RuleSetRegistry::leniaFunctionName(definition.leniaKernelCore) + "/G" +
+      RuleSetRegistry::leniaFunctionName(definition.leniaGrowth);
+    definition.transitionTable.fill(kBackgroundState);
+    definition.hasTransitionTable = false;
   } else if (family.kind == RuleFamily::Elementary1D) {
     if (stateCount != 2u || definition.ruleNumber > 255u ||
         (definition.ruleNumber & 1u) != 0u) {
@@ -1247,7 +1430,20 @@ compileRule(RuleSetDefinition& definition, const RuleFamilyDefinition& family)
   if (family.kind != RuleFamily::VonNeumannTable) {
     definition.vonNeumannTransitions.clear();
   }
-  if (definition.seedPattern == RuleSeedPattern::Rle) {
+  if (family.kind != RuleFamily::Lenia) {
+    definition.leniaKernelTaps.clear();
+    definition.leniaKernelWeightTotal = 0u;
+    definition.leniaGrowthDeltas.clear();
+  }
+  if (definition.seedPattern == RuleSeedPattern::LeniaRle) {
+    std::vector<RuleSeedCell> seedCells;
+    if (family.kind != RuleFamily::Lenia ||
+        !RuleSetRegistry::decodeLeniaSeedRle(
+          definition.seedRle, stateCount, seedCells) ||
+        seedCells.empty()) {
+      return false;
+    }
+  } else if (definition.seedPattern == RuleSeedPattern::Rle) {
     std::vector<RuleSeedCell> seedCells;
     if (!RuleSetRegistry::decodeSeedRle(
           definition.seedRle, stateCount, seedCells) ||
@@ -1465,6 +1661,41 @@ parseModernRule(const nlohmann::json& item,
     }
   } else if (family.kind == RuleFamily::Sandpile) {
     // The sandpile is fixed by its family: heights plus source phases.
+  } else if (family.kind == RuleFamily::Lenia) {
+    if (!item.contains("radius") || !item.contains("time_steps") ||
+        !item.contains("mu") || !item["mu"].is_number() ||
+        !item.contains("sigma") || !item["sigma"].is_number() ||
+        !item.contains("peaks") || !item["peaks"].is_array() ||
+        !readUnsigned(item["radius"],
+                      kMaximumExtendedRadius,
+                      definition.neighborhoodRadius) ||
+        !readUnsigned(item["time_steps"], 10000u, definition.leniaTimeSteps)) {
+      return false;
+    }
+    definition.leniaMu = item["mu"].get<double>();
+    definition.leniaSigma = item["sigma"].get<double>();
+    definition.leniaPeaks.clear();
+    for (const nlohmann::json& peak : item["peaks"]) {
+      if (!peak.is_number()) {
+        return false;
+      }
+      definition.leniaPeaks.push_back(peak.get<double>());
+    }
+    for (const char* key : { "kernel_core", "growth" }) {
+      if (!item.contains(key)) {
+        continue;
+      }
+      LeniaFunction function = LeniaFunction::Polynomial;
+      if (!item[key].is_string() || !RuleSetRegistry::parseLeniaFunction(
+                                      item[key].get<std::string>(), function)) {
+        return false;
+      }
+      if (std::string(key) == "growth") {
+        definition.leniaGrowth = function;
+      } else {
+        definition.leniaKernelCore = function;
+      }
+    }
   } else if (family.kind == RuleFamily::Elementary1D) {
     if (!item.contains("rule_number") ||
         !readUnsigned(item["rule_number"], 255u, definition.ruleNumber)) {
@@ -1492,7 +1723,8 @@ parseModernRule(const nlohmann::json& item,
          definition.seedDensity < 1u)) {
       return false;
     }
-    if (definition.seedPattern == RuleSeedPattern::Rle) {
+    if (definition.seedPattern == RuleSeedPattern::Rle ||
+        definition.seedPattern == RuleSeedPattern::LeniaRle) {
       if (!seed.contains("rle") || !seed["rle"].is_string()) {
         return false;
       }
@@ -1577,6 +1809,15 @@ ruleToJson(const RuleSetDefinition& definition,
   } else if (family.kind == RuleFamily::VonNeumannTable) {
     item["symmetries"] = definition.tableSymmetry;
     item["rule_table"] = definition.ruleTable;
+  } else if (family.kind == RuleFamily::Lenia) {
+    item["radius"] = definition.neighborhoodRadius;
+    item["time_steps"] = definition.leniaTimeSteps;
+    item["mu"] = definition.leniaMu;
+    item["sigma"] = definition.leniaSigma;
+    item["peaks"] = definition.leniaPeaks;
+    item["kernel_core"] =
+      RuleSetRegistry::leniaFunctionName(definition.leniaKernelCore);
+    item["growth"] = RuleSetRegistry::leniaFunctionName(definition.leniaGrowth);
   } else if (family.kind == RuleFamily::Elementary1D) {
     item["rule_number"] = definition.ruleNumber;
   }
@@ -1586,7 +1827,8 @@ ruleToJson(const RuleSetDefinition& definition,
       { "radius", definition.seedRadius },
       { "density", definition.seedDensity }
     };
-    if (definition.seedPattern == RuleSeedPattern::Rle) {
+    if (definition.seedPattern == RuleSeedPattern::Rle ||
+        definition.seedPattern == RuleSeedPattern::LeniaRle) {
       item["seed"]["rle"] = definition.seedRle;
     }
   }
@@ -1640,6 +1882,8 @@ RuleSetRegistry::parseFamily(const std::string& value, RuleFamily& family)
     family = RuleFamily::VonNeumannTable;
   } else if (value == "sandpile") {
     family = RuleFamily::Sandpile;
+  } else if (value == "lenia") {
+    family = RuleFamily::Lenia;
   } else {
     return false;
   }
@@ -1676,6 +1920,8 @@ RuleSetRegistry::familyName(RuleFamily family)
       return "von_neumann_table";
     case RuleFamily::Sandpile:
       return "sandpile";
+    case RuleFamily::Lenia:
+      return "lenia";
     default:
       return nullptr;
   }
@@ -1707,6 +1953,8 @@ RuleSetRegistry::parseSeedPattern(const std::string& value,
     pattern = RuleSeedPattern::ParticleCloud;
   } else if (value == "rle") {
     pattern = RuleSeedPattern::Rle;
+  } else if (value == "lenia_rle") {
+    pattern = RuleSeedPattern::LeniaRle;
   } else {
     return false;
   }
@@ -1739,9 +1987,147 @@ RuleSetRegistry::seedPatternName(RuleSeedPattern pattern)
       return "particle_cloud";
     case RuleSeedPattern::Rle:
       return "rle";
+    case RuleSeedPattern::LeniaRle:
+      return "lenia_rle";
     default:
       return nullptr;
   }
+}
+
+bool
+RuleSetRegistry::parseLeniaFunction(const std::string& value,
+                                    LeniaFunction& function)
+{
+  if (value == "polynomial") {
+    function = LeniaFunction::Polynomial;
+  } else if (value == "exponential") {
+    function = LeniaFunction::Exponential;
+  } else if (value == "step") {
+    function = LeniaFunction::Step;
+  } else {
+    return false;
+  }
+  return true;
+}
+
+const char*
+RuleSetRegistry::leniaFunctionName(LeniaFunction function)
+{
+  switch (function) {
+    case LeniaFunction::Exponential:
+      return "exponential";
+    case LeniaFunction::Step:
+      return "step";
+    case LeniaFunction::Polynomial:
+    default:
+      return "polynomial";
+  }
+}
+
+unsigned int
+RuleSetRegistry::leniaLevel(unsigned char state, unsigned int stateCount)
+{
+  if (state == kBackgroundState ||
+      static_cast<unsigned int>(state) >= stateCount) {
+    return 0u;
+  }
+  if (state == kCountedState) {
+    return stateCount - 1u;
+  }
+  return static_cast<unsigned int>(state) - 1u;
+}
+
+unsigned char
+RuleSetRegistry::leniaState(unsigned int level, unsigned int stateCount)
+{
+  if (level == 0u || stateCount < 3u) {
+    return kBackgroundState;
+  }
+  if (level >= stateCount - 1u) {
+    return kCountedState;
+  }
+  return static_cast<unsigned char>(level + 1u);
+}
+
+bool
+RuleSetRegistry::decodeLeniaSeedRle(const std::string& text,
+                                    unsigned int stateCount,
+                                    std::vector<RuleSeedCell>& cells)
+{
+  const int kMaximumExtent = 256;
+  const unsigned int kMaximumValue = 255u;
+  cells.clear();
+  if (stateCount < 3u || stateCount > kMaximumStateCount) {
+    return false;
+  }
+  int x = 0;
+  int y = 0;
+  unsigned int run = 0u;
+  unsigned int page = 0u;
+  bool paged = false;
+  bool terminated = false;
+  for (std::size_t index = 0u; index < text.size() && !terminated; ++index) {
+    const char character = text[index];
+    if (std::isspace(static_cast<unsigned char>(character)) != 0) {
+      continue;
+    }
+    if (paged && (character < 'A' || character > 'X')) {
+      return false;
+    }
+    if (character >= '0' && character <= '9') {
+      run = run * 10u + static_cast<unsigned int>(character - '0');
+      if (run > static_cast<unsigned int>(kMaximumExtent)) {
+        return false;
+      }
+      continue;
+    }
+    if (character >= 'p' && character <= 'y') {
+      page = static_cast<unsigned int>(character - 'p') + 1u;
+      paged = true;
+      continue;
+    }
+    const int count = run == 0u ? 1 : static_cast<int>(run);
+    run = 0u;
+    if (character == '!') {
+      terminated = true;
+      continue;
+    }
+    if (character == '$') {
+      y += count;
+      x = 0;
+      if (y >= kMaximumExtent) {
+        return false;
+      }
+      continue;
+    }
+    unsigned int value = 0u;
+    if (character == '.' || character == 'b') {
+      value = 0u;
+    } else if (character == 'o') {
+      value = kMaximumValue;
+    } else if (character >= 'A' && character <= 'X') {
+      value = page * 24u + static_cast<unsigned int>(character - 'A') + 1u;
+    } else {
+      return false;
+    }
+    page = 0u;
+    paged = false;
+    if (value > kMaximumValue || x + count > kMaximumExtent) {
+      return false;
+    }
+    // Round value/255 onto levels 0..n-1 with integer arithmetic.
+    const unsigned int maximumLevel = stateCount - 1u;
+    const unsigned int level =
+      (value * maximumLevel * 2u + kMaximumValue) / (kMaximumValue * 2u);
+    if (level != 0u) {
+      const unsigned char state = leniaState(level, stateCount);
+      for (int step = 0; step < count; ++step) {
+        cells.push_back(RuleSeedCell{ x + step, y, state });
+      }
+    }
+    x += count;
+  }
+  return terminated && !paged;
 }
 
 bool
