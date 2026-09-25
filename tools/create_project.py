@@ -443,6 +443,8 @@ def create_project(
     # 4. Copy build and formatting tools and licensing notices
     print("  [4/6] Copying build.py front end, notices, and configuration files...")
     shutil.copy2(REPOSITORY_ROOT / "build.py", destination / "build.py")
+    # The engine release; cmake/IllumoVersion.cmake stamps BuildInfo from it.
+    shutil.copy2(REPOSITORY_ROOT / "VERSION.txt", destination / "VERSION.txt")
     if (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").is_file():
         shutil.copy2(
             REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md",

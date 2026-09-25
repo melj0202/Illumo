@@ -127,6 +127,7 @@ private:
   void drawTitle(float room, unsigned char opacity);
   void drawRows(float room, unsigned char opacity, float breathe);
   void drawFooter(unsigned char opacity);
+  void drawVersion(float width, float height, unsigned char opacity);
   void selectItem(int item);
   void activateSelectedItem();
   void pressItem(float originX, float originY);

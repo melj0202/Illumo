@@ -324,6 +324,10 @@ outputs (`IllumoGame.exe`, `IllEd.exe`, `IllMeshViewer.exe`,
 --app game|illed|meshviewer [-- runtime args]` builds the runtime and runs
 one app (`--no-build` skips building). `python build.py test` builds every
 executable CTest runs; `tools/test_build.py` covers the orchestrator.
+Builds are versioned `vYY.MM_B` (D-F2): every build stamps `BuildInfo` and
+the staged `illumo.json` manifests from `VERSION.txt` and Git, so never edit
+the version by hand or add `version` to a source manifest. `python build.py
+version` prints it; `python build.py version --set YY.MM` cuts a release.
 Debug is the AddressSanitizer profile (`ILLUMO_ENABLE_ASAN`, default ON),
 whose WASM guests also use explicit bounds checks; play and measure with the
 `dev` profile (RelWithDebInfo) or `debug-noasan`, not Debug.

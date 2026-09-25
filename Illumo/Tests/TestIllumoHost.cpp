@@ -3,6 +3,7 @@
 #endif
 #include <Illumo/Engine/IModule.h>
 #include <Illumo/Engine/Illumo.h>
+#include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Testing/IllumoTestAccess.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -777,7 +778,9 @@ testDebugOverlayWatermarkDispatched()
     bool watermarkFound = false;
     for (DrawableBase* drawable : debugDrawables) {
       GLString* str = dynamic_cast<GLString*>(drawable);
-      if (str != nullptr && str->getContent() == "development build") {
+      if (str != nullptr &&
+          str->getContent() ==
+            std::string("development build ") + BuildInfo::VersionNumber) {
         watermarkFound = true;
         testTrue(g, str->getR() == 245, "watermark is red");
         testTrue(g, str->getA() == 140, "watermark is translucent");

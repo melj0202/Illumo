@@ -248,6 +248,11 @@ class TestProjectCreation(unittest.TestCase):
         self.assertTrue((dest / "THIRD_PARTY_NOTICES.md").is_file())
         self.assertTrue((dest / "cmake" / "IllumoBuild.cmake").is_file())
         self.assertTrue((dest / "cmake" / "RunWorkspaceTidy.py").is_file())
+        self.assertTrue((dest / "cmake" / "IllumoVersion.cmake").is_file())
+        self.assertEqual(
+            (dest / "VERSION.txt").read_text(encoding="utf-8"),
+            (ROOT_DIR / "VERSION.txt").read_text(encoding="utf-8"),
+        )
 
         # Engine framework files
         self.assertTrue((dest / "Illumo" / "CMakeLists.txt").is_file())

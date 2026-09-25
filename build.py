@@ -3815,6 +3815,79 @@ def existing_tool(name: str, dry_run: bool) -> str:
     )
 
 
+RELEASE_PATTERN = re.compile(r"\d{2}\.(0[1-9]|1[0-2])")
+
+
+def read_build_version(root: Path = REPOSITORY_ROOT) -> dict[str, str]:
+    """Return the build version fields of the tree at root.
+
+    cmake/IllumoVersion.cmake is the one definition (the build stamps
+    BuildInfo with it), so this runs it rather than restating the rules.
+    """
+    cmake = existing_tool("cmake", False)
+    script = REPOSITORY_ROOT / "cmake" / "IllumoVersion.cmake"
+    result = subprocess.run(
+        [cmake, f"-DSOURCE_ROOT={root.as_posix()}", "-DPRINT=ON", "-P", str(script)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        raise BuildError(
+            "Could not compute the build version:\n"
+            + (result.stderr or result.stdout).strip()
+        )
+    fields: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            fields[key.strip()] = value.strip()
+    return fields
+
+
+def set_release(release: str, root: Path = REPOSITORY_ROOT, commit: bool = True) -> None:
+    """Start release YY.MM: write VERSION.txt and commit it on its own.
+
+    Build numbers count first-parent commits after the commit that last
+    changed VERSION.txt, so that commit is build _0 of the new release.
+    """
+    if not RELEASE_PATTERN.fullmatch(release):
+        raise BuildError(f"A release is YY.MM (for example 26.10), not '{release}'.")
+    version_file = root / "VERSION.txt"
+    current = (
+        version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else ""
+    )
+    # Zero-padded YY.MM compares correctly as text.
+    if RELEASE_PATTERN.fullmatch(current) and release <= current:
+        raise BuildError(f"Release {release} is not after the current release {current}.")
+    version_file.write_text(release + "\n", encoding="utf-8", newline="\n")
+    print(f"VERSION.txt: {current or '(none)'} -> {release}")
+    if not commit:
+        print("Commit VERSION.txt to start the release; its build numbers count from that commit.")
+        return
+    git = existing_tool("git", False)
+    result = subprocess.run(
+        [git, "commit", "--only", "-m", f"Start release v{release}", "--", "VERSION.txt"],
+        cwd=root, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=False,
+    )
+    if result.returncode != 0:
+        raise BuildError(
+            "VERSION.txt was written but could not be committed:\n"
+            + (result.stderr or result.stdout).strip()
+        )
+    print(f"Committed 'Start release v{release}'; this commit is build 0.")
+
+
+def run_version(arguments: argparse.Namespace) -> None:
+    if arguments.set:
+        set_release(arguments.set, commit=not arguments.no_commit)
+    fields = read_build_version()
+    if arguments.json:
+        print(json.dumps(fields, indent=2))
+    else:
+        print(fields.get("full", ""))
+
+
 def git_output(root: Path, arguments: Sequence[str]) -> str | None:
     git = shutil.which("git")
     if git is None:
@@ -5115,6 +5188,25 @@ def create_parser(
         action="store_true",
         help="print commands without executing them",
     )
+    version_parser = subparsers.add_parser(
+        "version",
+        help="show the build version vYY.MM_B, or start a release with --set",
+    )
+    version_parser.add_argument(
+        "--set",
+        metavar="YY.MM",
+        help="start a release: write VERSION.txt and commit it (build numbers restart at 0)",
+    )
+    version_parser.add_argument(
+        "--no-commit",
+        action="store_true",
+        help="with --set, write VERSION.txt without committing it",
+    )
+    version_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit every version field as JSON",
+    )
     stats_parser = subparsers.add_parser(
         "stats", help="show Git state and first-party repository statistics"
     )
@@ -6089,6 +6181,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "coverage": run_coverage,
         "tidy": run_tidy,
         "docs": run_docs,
+        "version": run_version,
         "stats": run_repository_statistics,
         "file-stats": run_source_file_statistics,
         "source-stats": run_source_file_statistics,

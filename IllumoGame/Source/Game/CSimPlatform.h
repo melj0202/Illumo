@@ -5,6 +5,7 @@
 #include <Illumo/Platform/SaveLoad.h>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct CSimReadResult
@@ -63,6 +64,18 @@ public:
   // simulation runner's own thread.
   virtual SimulationLaneTransport* simulationLanes() { return nullptr; }
 
+  // The build version from the package's illumo.json, "26.09_12" (D-F2),
+  // which the main menu shows as v26.09_12. The guest sets it during
+  // bootstrap; it stays empty where no manifest was read.
+  const std::string& packageVersion() const { return m_packageVersion; }
+  void setPackageVersion(std::string version)
+  {
+    m_packageVersion = std::move(version);
+  }
+
   // Defined once per link: the native oracle or the guest service adapter.
   static CSimPlatform& current();
+
+private:
+  std::string m_packageVersion;
 };

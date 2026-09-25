@@ -7,6 +7,7 @@
 #include "ProfilerOverlay.h"
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/DebugModule.h>
+#include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
 #include <Illumo/Services/CommandLine.h>
@@ -65,7 +66,15 @@ DebugModule::Start(IllumoContext* context)
 
   // Translucent watermark in bottom-right corner for debug compilation builds
   watermarkLabel =
-    new GLString("development build", 245, 80, 80, 140, 18, 0, 0, ic->renderer);
+    new GLString(std::string("development build ") + BuildInfo::VersionNumber,
+                 245,
+                 80,
+                 80,
+                 140,
+                 18,
+                 0,
+                 0,
+                 ic->renderer);
   updateWatermarkPosition();
   watermarkLabel->setVisible(true);
 

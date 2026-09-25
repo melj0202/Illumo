@@ -1537,6 +1537,26 @@ MainMenuModule::drawFooter(unsigned char opacity)
   }
 }
 
+// The build version (D-F2) sits quietly in the screen's lower right corner,
+// outside the glass, so it never competes with the menu.
+void
+MainMenuModule::drawVersion(float width, float height, unsigned char opacity)
+{
+  const std::string& version = CSimPlatform::current().packageVersion();
+  if (version.empty()) {
+    return;
+  }
+  const std::string text = "v" + version;
+  const float size = 10.0f;
+  const float margin = 14.0f;
+  m_menuVisual.addText(text,
+                       width - margin -
+                         GuiKit::measureEmphasizedText(text, size, 0.0f),
+                       height - margin - size,
+                       size,
+                       UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+}
+
 void
 MainMenuModule::rebuildVisual()
 {
@@ -1575,6 +1595,7 @@ MainMenuModule::rebuildVisual()
   drawTitle(room, opacity);
   drawRows(room, opacity, breathe);
   drawFooter(opacity);
+  drawVersion(width, height, opacity);
   m_menuVisual.setVisible(true);
 }
 
