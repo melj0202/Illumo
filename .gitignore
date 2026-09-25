@@ -3,6 +3,8 @@
 *.ilsc
 # Shipped product scenes are source, not runtime data.
 !IllumoGame/Scenes/*.ilsc
+# So is the scene packed into the CMake zip test fixture.
+!Illumo/Tests/Content/Fixtures/archive/scenes/*.ilsc
 
 
 # Compiler outputs

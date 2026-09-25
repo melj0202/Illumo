@@ -1,0 +1,8 @@
+{
+  "format": "ilsc",
+  "format_version": [2, 0],
+  "nodes": [
+    { "id": "box", "name": "Box",
+      "components": [ { "type": "primitive", "shape": "rect" } ] }
+  ]
+}
