@@ -46,6 +46,11 @@ public:
   static constexpr float kHomeZoom = 0.5f;
 
   bool start(IllumoContext& context) override;
+  // Leaving for the title keeps the canvas frozen: no generation is left
+  // running, its commands and input context are withdrawn and its overlays
+  // close. Resuming restores them and replays the entrance.
+  void enter() override;
+  void leave() override;
   void update(double dt) override;
   void dispatch(Scene& frame) override;
   void stop() override;
@@ -133,6 +138,8 @@ private:
   CellClipboard& getClipboard() { return clipboard; }
   const CellClipboard& getClipboard() const { return clipboard; }
   IllumoContext* ic{ nullptr };
+  // Left for the title and not yet resumed.
+  bool m_suspended = false;
   CellContext* cellContext;
   CellState currentState;
   InputContext inputContext;

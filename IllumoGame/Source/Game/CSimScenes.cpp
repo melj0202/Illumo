@@ -35,17 +35,17 @@ CSimScenes::returnToTitle(SceneDirector& scenes)
   return openTitle(scenes);
 }
 
-void
-CSimScenes::settle(SceneDirector& scenes)
+bool
+CSimScenes::canResume(const SceneDirector& scenes)
 {
-  if (scenes.hasPendingSwitch()) {
-    return;
-  }
-  for (const char* name : { kTitle, kCanvas }) {
-    if (scenes.has(name) && scenes.activeName() != name) {
-      scenes.release(name);
-    }
-  }
+  return scenes.has(kCanvas) && scenes.activeName() != kCanvas;
+}
+
+bool
+CSimScenes::resumeCanvas(SceneDirector& scenes)
+{
+  return !scenes.hasPendingSwitch() && canResume(scenes) &&
+         scenes.switchTo(kCanvas);
 }
 
 bool

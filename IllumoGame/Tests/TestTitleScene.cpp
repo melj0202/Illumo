@@ -42,7 +42,8 @@ struct MainMenuFixture
   TitleScene module;
   bool started;
 
-  MainMenuFixture()
+  // startTitle false leaves the title to the director (CSimScenes flows).
+  explicit MainMenuFixture(bool startTitle = true)
     : window(640, 480)
     , env()
     , camera(glm::vec2(0.0f, 0.0f), 1.0f, &env)
@@ -81,7 +82,7 @@ struct MainMenuFixture
     env.setVar("confirmClear", true);
     mock.Initialize();
     context.scenes = &director;
-    started = module.start(context);
+    started = startTitle && module.start(context);
   }
 
   ~MainMenuFixture()
@@ -873,6 +874,119 @@ testCanvasSetupCreatesConfiguredWorld()
   game->stop();
 }
 
+// The program's flow (D-E31): returning to the title keeps the canvas, the
+// title offers to resume it, and a new simulation replaces it.
+static void
+testSceneFlowKeepsCanvas()
+{
+  testSection("CSimScenes: a kept canvas resumes where it was left");
+  MainMenuFixture fixture(false);
+  SceneDirector& director = fixture.director;
+  testTrue(g,
+           CSimScenes::openTitle(director) && director.applyPending() &&
+             director.activeName() == CSimScenes::kTitle,
+           "the title is the first scene");
+  TitleScene* title =
+    static_cast<TitleScene*>(director.find(CSimScenes::kTitle));
+  testTrue(g,
+           title->rowCountForTesting() == 4 &&
+             !CSimScenes::canResume(director),
+           "without a canvas the title shows its four rows");
+
+  NewSimulationConfiguration configuration;
+  configuration.starterPattern = false;
+  testTrue(g,
+           CSimScenes::newSimulation(director, configuration) &&
+             director.applyPending() &&
+             director.activeName() == CSimScenes::kCanvas,
+           "a new simulation switches to its canvas");
+  CanvasScene* canvas =
+    static_cast<CanvasScene*>(director.find(CSimScenes::kCanvas));
+  CellContext* cells = CanvasSceneTestAccess::getCellContext(*canvas);
+  // A block is a still life, so it survives the running simulation.
+  const unsigned char live = SparseCellGrid::BackgroundState == 0 ? 1 : 0;
+  const CellAddress marked{ 5, 7 };
+  for (const CellAddress& cell : { marked,
+                                   CellAddress{ 6, 7 },
+                                   CellAddress{ 5, 8 },
+                                   CellAddress{ 6, 8 } }) {
+    cells->getGrid()->setCell(cell, live);
+  }
+  testTrue(g,
+           fixture.camera.GetZoom() == CanvasScene::kHomeZoom,
+           "the canvas opens at its home zoom");
+  fixture.camera.SetZoom(2.0f);
+  fixture.camera.SetPositionPrecise(30.0, 40.0);
+  fixture.registry.QueueCommand("run", {});
+  fixture.registry.ExecuteQueue();
+  for (int frame = 0; frame < 5; ++frame) {
+    canvas->update(0.05);
+  }
+  testTrue(g,
+           fixture.registry.HasCommand("pause") &&
+             !fixture.registry.HasCommand("play"),
+           "the canvas's commands are registered while it is active");
+
+  testTrue(g,
+           CSimScenes::returnToTitle(director) && director.applyPending() &&
+             director.activeName() == CSimScenes::kTitle &&
+             director.find(CSimScenes::kCanvas) == canvas,
+           "returning to the title keeps the canvas");
+  testTrue(g,
+           !CanvasSceneTestAccess::isSimulationBusy(*canvas) &&
+             !fixture.registry.HasCommand("pause") &&
+             fixture.registry.HasCommand("play"),
+           "the kept canvas has no generation running and its commands are "
+           "withdrawn");
+  testTrue(g,
+           title->rowCountForTesting() == 5 &&
+             title->rowKindForTesting(0) == TitleScene::kResumeItem &&
+             title->getSelectedItemForTesting() == 0,
+           "the title offers to resume the canvas, selected first");
+  // Leaving finished the generation in flight; nothing runs after that.
+  const std::uint64_t generation =
+    CanvasSceneTestAccess::getSimulationGeneration(*canvas);
+  director.update(0.5);
+  director.update(0.5);
+  testTrue(g,
+           CanvasSceneTestAccess::getSimulationGeneration(*canvas) ==
+             generation,
+           "a kept canvas does not simulate");
+
+  title->activateSelectedItemForTesting();
+  testTrue(g,
+           director.applyPending() &&
+             director.activeName() == CSimScenes::kCanvas &&
+             director.find(CSimScenes::kCanvas) == canvas,
+           "Resume switches back to the same canvas");
+  testTrue(g,
+           cells->getGrid()->getCell(marked) == live &&
+             fixture.camera.GetZoom() == 2.0f &&
+             fixture.camera.GetPositionPrecise() == glm::dvec2(30.0, 40.0) &&
+             fixture.registry.HasCommand("pause"),
+           "the resumed canvas has its world, camera and commands back");
+
+  CSimScenes::returnToTitle(director);
+  director.applyPending();
+  testTrue(g,
+           CSimScenes::newSimulation(director, configuration) &&
+             director.applyPending() &&
+             director.activeName() == CSimScenes::kCanvas,
+           "a new simulation from the title starts a canvas");
+  CanvasScene* fresh =
+    static_cast<CanvasScene*>(director.find(CSimScenes::kCanvas));
+  testTrue(g,
+           CanvasSceneTestAccess::getCellContext(*fresh)->getGrid()->getCell(
+             marked) != live &&
+             fixture.camera.GetZoom() == CanvasScene::kHomeZoom,
+           "it replaces the kept canvas with a fresh world on its home view");
+  CSimScenes::returnToTitle(director);
+  director.applyPending();
+  testTrue(g,
+           title->rowCountForTesting() == 5,
+           "the replacement is kept for resuming in turn");
+}
+
 static int
 runMainMenuCase(void (*testFunction)())
 {
@@ -943,6 +1057,8 @@ testMainMenuPanelTilt()
 void
 registerMainMenuTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.MainMenu.SceneFlowKeepsCanvas",
+               []() { return runMainMenuCase(testSceneFlowKeepsCanvas); });
   registry.add("IllumoGame.MainMenu.PanelTilt",
                []() { return runMainMenuCase(testMainMenuPanelTilt); });
   registry.add("IllumoGame.MainMenu.CanvasSetupValidation",

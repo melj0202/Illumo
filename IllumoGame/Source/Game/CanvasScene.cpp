@@ -5355,6 +5355,53 @@ CanvasScene::updateRender3dTestMatrices()
   render3dScene->update();
 }
 void
+CanvasScene::enter()
+{
+  if (!m_suspended || ic == nullptr || cellContext == nullptr) {
+    return;
+  }
+  m_suspended = false;
+  if (ic->inputManager != nullptr) {
+    inputContextId = ic->inputManager->registerInputContext(inputContext);
+    if (inputContextId >= 0) {
+      ic->inputManager->setActiveInputContext(inputContextId);
+    }
+  }
+  registerConsoleCommands();
+  // The canvas comes back as it first came in, under a dissolving veil.
+  canvasEntranceElapsed = 0.0;
+  mainMenuReturnPending = false;
+  mainMenuReturnSubmitted = false;
+  advanceCanvasEntrance(0.0);
+  CSimSounds::play(CSimSound::CanvasEnter);
+  Logger::LogTrace("Canvas resumed");
+}
+
+void
+CanvasScene::leave()
+{
+  if (ic == nullptr) {
+    return;
+  }
+  m_suspended = true;
+  drainSimulation();
+  unregisterConsoleCommands();
+  if (inputContextId >= 0 && ic->inputManager != nullptr) {
+    ic->inputManager->unregisterInputContext(inputContextId);
+    inputContextId = -1;
+  }
+  if (configurationMenu != nullptr) {
+    configurationMenu->close();
+  }
+  if (exitConfirmDialog != nullptr) {
+    exitConfirmDialog->close();
+  }
+  if (rulesetWorkshopMenu != nullptr) {
+    rulesetWorkshopMenu->close();
+  }
+}
+
+void
 CanvasScene::resetCameraToHome()
 {
   if (ic != nullptr && ic->camera != nullptr) {

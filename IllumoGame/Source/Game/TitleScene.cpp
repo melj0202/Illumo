@@ -140,24 +140,87 @@ TitleScene::start(IllumoContext& startContext)
     key.clear();
   }
 
-  m_selectedItem = kPlayItem;
+  m_bgSimAccum = 0.0;
+  // Started directly (tests) the title works without enter(), so it
+  // registers its commands here too; enter() registers them again after a
+  // leave.
+  registerConsoleCommands();
+  beginPresentation();
+
+  Logger::LogInfo("Main menu ready");
+  return true;
+}
+
+void
+TitleScene::enter()
+{
+  if (!m_suspended) {
+    return;
+  }
+  m_suspended = false;
+  registerConsoleCommands();
+  beginPresentation();
+  Logger::LogTrace("Back on the main menu");
+}
+
+void
+TitleScene::leave()
+{
+  m_suspended = true;
+  unregisterConsoleCommands();
+  if (m_configurationMenu != nullptr) {
+    m_configurationMenu->close();
+  }
+  if (m_newSimulationMenu != nullptr) {
+    m_newSimulationMenu->close();
+  }
+  if (m_restartDialog != nullptr) {
+    m_restartDialog->close();
+  }
+}
+
+void
+TitleScene::rebuildRows()
+{
+  m_rowCount = 0;
+  if (ic != nullptr && ic->scenes != nullptr &&
+      CSimScenes::canResume(*ic->scenes)) {
+    m_rows[static_cast<std::size_t>(m_rowCount++)] = kResumeItem;
+  }
+  for (int kind : { kPlayItem, kLoadItem, kSettingsItem, kExitItem }) {
+    m_rows[static_cast<std::size_t>(m_rowCount++)] = kind;
+  }
+}
+
+void
+TitleScene::beginPresentation()
+{
+  rebuildRows();
+  // The word lands again before its first pose.
+  for (TitleLetterPose& pose : m_letterPoses) {
+    pose.weight.snapTo(0.0f);
+    pose.squash.snapTo(0.0f);
+    pose.hop.snapTo(0.0f);
+    pose.hold = 0.0f;
+    pose.hopDelay = -1.0f;
+  }
+  m_poseCountdown = kTitlePoseStartSeconds + kTitlePoseMinPauseSeconds;
+  m_lastPosedLetter = -1;
+  for (std::vector<float>& key : m_layerKeys) {
+    key.clear();
+  }
+  m_selectedItem = 0;
   m_animator.setReducedMotion(reducedMotion());
   m_animator.restart();
-  m_rowEmphasis.focusOnly(m_selectedItem, kItemCount);
+  m_rowEmphasis.focusOnly(m_selectedItem, m_rowCount);
   m_rowEmphasis.snapAll();
   m_revealElapsed = 0.0f;
-  m_bgSimAccum = 0.0;
   // Preserve the press edge so a click that left another screen is not
   // re-delivered to the first menu item.
   m_pointer.reset(ic->inputManager != nullptr &&
                   ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft));
-
-  registerConsoleCommands();
   updateLayout();
   rebuildVisual();
-
-  Logger::LogInfo("Main menu ready");
-  return true;
 }
 
 // Immigration Life states: coral 0, background 1, cyan 2.
@@ -319,7 +382,11 @@ TitleScene::updateLayout()
   m_itemWidth = m_panelWidth - 56.0f;
   const float headerHeight =
     140.0f + 48.0f * std::clamp((m_panelHeight - 456.0f) / 144.0f, 0.0f, 1.0f);
-  m_itemHeight = (m_panelHeight - headerHeight - 56.0f) / 4.0f;
+  // Rows share what the header and footer leave; a fifth row (Resume) also
+  // takes its gap from the rows, so the footer keeps its room.
+  const float rows = static_cast<float>(m_rowCount);
+  m_itemHeight =
+    (m_panelHeight - headerHeight - 56.0f - 8.0f * (rows - 4.0f)) / rows;
   m_firstItemY = m_panelY + headerHeight;
 }
 
@@ -344,8 +411,8 @@ TitleScene::selectItem(int item)
 {
   int nextItem = item;
   if (nextItem < 0) {
-    nextItem = kItemCount - 1;
-  } else if (nextItem >= kItemCount) {
+    nextItem = m_rowCount - 1;
+  } else if (nextItem >= m_rowCount) {
     nextItem = 0;
   }
   if (nextItem != m_selectedItem) {
@@ -371,7 +438,7 @@ void
 TitleScene::updateMotion(float dt)
 {
   const bool still = reducedMotion();
-  m_rowEmphasis.focusOnly(m_selectedItem, kItemCount);
+  m_rowEmphasis.focusOnly(m_selectedItem, m_rowCount);
   m_rowEmphasis.tick(dt, still);
 
   const bool overlayOpen =
@@ -545,7 +612,11 @@ TitleScene::activateSelectedItem()
   }
 
   CSimSounds::play(CSimSound::MenuSelect);
-  switch (m_selectedItem) {
+  switch (m_rows[static_cast<std::size_t>(m_selectedItem)]) {
+    case kResumeItem: {
+      CSimScenes::resumeCanvas(*ic->scenes);
+      break;
+    }
     case kPlayItem: {
       openCanvasSetup();
       break;
@@ -897,7 +968,7 @@ TitleScene::update(double dt)
     const float itemX =
       m_panelX + m_tilt.shiftX(GuiPanelTilt::kBodyDepth) + 28.0f;
     const float itemGap = 8.0f;
-    for (int i = 0; i < kItemCount; ++i) {
+    for (int i = 0; i < m_rowCount; ++i) {
       const float currentItemY =
         m_firstItemY + m_tilt.shiftY(GuiPanelTilt::kBodyDepth) +
         static_cast<float>(i) * (m_itemHeight + itemGap);
@@ -986,6 +1057,17 @@ drawMenuIcon(GameVisual& visual,
       GuiKit::drawRoundedRect(
         visual, x + knob, ly - 3.5f, 4.0f, 7.0f, 2.0f, color);
     }
+  } else if (item == 4) {
+    // Resume: a bar, then a play triangle that nudges ahead with emphasis.
+    const float nudge = 2.5f * emphasis;
+    GuiKit::drawRoundedRect(visual, x + 2.0f, y + 1.0f, 4.0f, 22.0f, 2.0f, color);
+    visual.addFilledTriangle(x + 9.0f + nudge,
+                             y + 1.0f,
+                             x + 9.0f + nudge,
+                             y + 23.0f,
+                             x + 24.0f + nudge,
+                             y + 12.0f,
+                             color);
   } else {
     const float push = 4.0f * emphasis;
     const GuiPoint2 door[4] = { { x + 10.0f, y + 1.0f },
@@ -1325,7 +1407,7 @@ TitleScene::rowGeometry(unsigned char opacity) const
   rows.stride = m_itemHeight + 8.0f;
   // Rows fade in on a stagger and drop into place on a spring, bouncing just
   // past their slot before they settle.
-  for (int item = 0; item < kItemCount; ++item) {
+  for (int item = 0; item < m_rowCount; ++item) {
     const std::size_t slot = static_cast<std::size_t>(item);
     rows.reveal[slot] =
       still ? 1.0f
@@ -1346,7 +1428,7 @@ TitleScene::drawRowCards(GameVisual& visual, const RowGeometry& rows)
 {
   // Cards: soft drop shadow, a rim that warms toward the accent with
   // emphasis, and a top-lit gradient face.
-  for (int item = 0; item < kItemCount; ++item) {
+  for (int item = 0; item < m_rowCount; ++item) {
     const std::size_t slot = static_cast<std::size_t>(item);
     const float y = rows.y[slot];
     const unsigned char rowOpacity = rows.opacity[slot];
@@ -1450,17 +1532,22 @@ TitleScene::drawRowContent(GameVisual& visual,
                                float room)
 {
   const ColorRgba cyan = UiTheme::accentCool();
-  const char* labels[kItemCount] = {
-    "New simulation", "Load simulation", "Settings", "Exit to desktop"
-  };
-  const char* descriptions[kItemCount] = {
+  // By item kind.
+  const char* labels[kItemKinds] = { "New simulation",
+                                     "Load simulation",
+                                     "Settings",
+                                     "Exit to desktop",
+                                     "Resume simulation" };
+  const char* descriptions[kItemKinds] = {
     "Create, experiment, and watch patterns evolve",
     "Continue exploring a saved world",
     "Tune simulation, display, and motion",
-    "Close CSim"
+    "Close CSim",
+    "Return to the canvas you left"
   };
-  for (int item = 0; item < kItemCount; ++item) {
+  for (int item = 0; item < m_rowCount; ++item) {
     const std::size_t slot = static_cast<std::size_t>(item);
+    const int kind = m_rows[slot];
     const unsigned char rowOpacity = rows.opacity[slot];
     const float y = rows.y[slot];
     const float e = std::max(0.0f, m_rowEmphasis.value(item));
@@ -1501,7 +1588,7 @@ TitleScene::drawRowContent(GameVisual& visual,
                             rowOpacity));
     drawMenuIcon(
       visual,
-      item,
+      kind,
       tileCenterX - 12.0f,
       tileCenterY - 12.0f,
       UiTheme::applyOpacity(
@@ -1513,7 +1600,7 @@ TitleScene::drawRowContent(GameVisual& visual,
     // jelly spring's overshoot before it settles.
     GuiKit::drawEmphasizedText(
       visual,
-      labels[item],
+      labels[kind],
       rows.itemX + 80.0f + slide,
       y + 12.0f + room * 7.0f,
       19.0f + room * 2.0f,
@@ -1521,7 +1608,7 @@ TitleScene::drawRowContent(GameVisual& visual,
         UiTheme::mix(UiTheme::textPrimary(), cyan, eClamped), rowOpacity),
       std::min(e, 1.3f));
     visual.addText(
-      descriptions[item],
+      descriptions[kind],
       rows.itemX + 80.0f + slide,
       y + 37.0f + room * 8.0f,
       10.0f + room * 2.0f,
@@ -1536,7 +1623,7 @@ TitleScene::drawChevrons(GameVisual& visual, const RowGeometry& rows)
 {
   const ColorRgba cyan = UiTheme::accentCool();
   const bool still = reducedMotion();
-  for (int item = 0; item < kItemCount; ++item) {
+  for (int item = 0; item < m_rowCount; ++item) {
     const std::size_t slot = static_cast<std::size_t>(item);
     const float e = std::max(0.0f, m_rowEmphasis.value(item));
     const float eClamped = std::min(1.0f, e);
@@ -1672,8 +1759,9 @@ TitleScene::rebuildVisual()
   // The row layers' inputs: placement, fade and each row's emphasis.
   const auto rowKey = [&](float extra) {
     m_keyScratch.assign({ rows.itemX, m_itemWidth, m_itemHeight, extra });
-    for (int item = 0; item < kItemCount; ++item) {
+    for (int item = 0; item < m_rowCount; ++item) {
       const std::size_t slot = static_cast<std::size_t>(item);
+      m_keyScratch.push_back(static_cast<float>(m_rows[slot]));
       m_keyScratch.push_back(rows.y[slot]);
       m_keyScratch.push_back(rows.reveal[slot]);
       m_keyScratch.push_back(static_cast<float>(rows.opacity[slot]));

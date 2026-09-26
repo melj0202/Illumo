@@ -12,7 +12,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 | M1 | done | `ProgramScene`, `SceneDirector` in `Illumo::Content`; 7 tests |
 | M2 | done, `a3d55795` | `GuestProgram`; viewer and IllEd are scenes; CSim through a temporary adapter |
 | M3 | done | Frame v8 `SelectWorld`, `ShowWorld`, `DestroyWorld`; `GuestSceneWorlds` |
-| M4 | in progress | M4a done: `TitleScene`, `CanvasScene`, `CSimScenes`, home zoom 0.5; M4b keep-alive and Resume; M4c one Settings menu |
+| M4 | in progress | M4a, M4b done (scenes, home zoom, kept canvas, Resume row); M4c one Settings menu |
 | M5 | not started | Host: modules removed |
 | M6 | not started | Leftovers, template, optional `Scene` rename |
 | M7 | not started | Optional crossfade |
@@ -239,3 +239,28 @@ returns nothing outside `docs/history` and archives.
   - A switch hitch is about 1 ms above M0 (6-7 ms): each switch also creates
     and destroys a host world.
   - Full suite 677 of 677.
+- 2026-09-26, M4b:
+  - Returning to the title keeps the canvas, and the title leads with a
+    "Resume simulation" row while one is kept (O7). A new or loaded
+    simulation replaces the kept canvas.
+  - The canvas's leave finishes the generation in flight and withdraws its
+    console commands and input context. It also closes its overlays; the
+    frozen canvas does not simulate (O3). Its enter restores those and
+    replays the entrance veil.
+  - The title's leave withdraws its commands and closes its overlays. Its
+    enter rebuilds the rows and replays the entrance. Both scenes still
+    register commands in start, so tests can start them directly.
+  - The title's rows became a list of 4 or 5. A fifth row takes its gap from
+    the rows, so the footer keeps its room.
+  - Switch costs, 3 runs each:
+    - returning to the title: 1.9-2.1 ms worst frame (was 5.2-5.8);
+    - resuming: 1.8-2.1 ms;
+    - a canvas's first start: about 6 ms, as before.
+  - The kept scene's visuals stay on the host undrawn: 27-28 retained
+    visuals, against 11.
+  - New tests:
+    - `IllumoGame.MainMenu.SceneFlowKeepsCanvas`: keep, resume with world,
+      camera and commands, no simulation while kept, replacement.
+    - `IllumoGame.Wasm.PackageFrameAllocations` adds a round trip to the
+      title and back, which settles to 0 allocations per frame.
+  - Full suite 678 of 678.

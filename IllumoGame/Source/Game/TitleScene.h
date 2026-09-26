@@ -23,6 +23,15 @@ class CellContext;
 class TitleScene : public ProgramScene
 {
 public:
+  // Item kinds. Rows list them in order; Resume leads while a canvas is kept.
+  static const int kPlayItem = 0;
+  static const int kLoadItem = 1;
+  static const int kSettingsItem = 2;
+  static const int kExitItem = 3;
+  static const int kResumeItem = 4;
+  static const int kItemKinds = 5;
+  static const int kMaxRows = 5;
+
   TitleScene();
   ~TitleScene() override;
 
@@ -32,12 +41,19 @@ public:
   TitleScene& operator=(TitleScene&&) = delete;
 
   bool start(IllumoContext& context) override;
+  // Coming back from a kept canvas replays the entrance; leaving withdraws the
+  // title's commands and closes its overlays.
+  void enter() override;
+  void leave() override;
   void update(double dt) override;
   void dispatch(Scene& frame) override;
   // Idempotent: the destructor stops a scene that is destroyed running.
   void stop() override;
 
   int getSelectedItemForTesting() const { return m_selectedItem; }
+  int rowCountForTesting() const { return m_rowCount; }
+  // The item kind a row shows (kPlayItem, ..., kResumeItem).
+  int rowKindForTesting(int row) const { return m_rows[static_cast<std::size_t>(row)]; }
   // The title screen's UI drawables (its layers), dispatched first in order.
   static constexpr std::size_t menuLayerCountForTesting()
   {
@@ -72,11 +88,6 @@ public:
   }
 
 private:
-  static const int kPlayItem = 0;
-  static const int kLoadItem = 1;
-  static const int kSettingsItem = 2;
-  static const int kExitItem = 3;
-  static const int kItemCount = 4;
   // The shell's modal reveal is tuned for overlays; the title screen enters
   // more slowly behind its own clock, with the title letters cascading in.
   static constexpr float kEntranceSeconds = 0.45f;
@@ -130,6 +141,10 @@ private:
   void updateTitlePoses(float dt);
   void strikeTitlePose(int letter);
   void hopTitleLetter(int letter);
+  // Lists the rows: Resume first while CSimScenes keeps a canvas.
+  void rebuildRows();
+  // Starts the screen's presentation: selection, entrance and pointer.
+  void beginPresentation();
   void updateLayout();
   void rebuildVisual();
   // The menu draws in layers, back to front, grouped by how often they
@@ -157,9 +172,9 @@ private:
     float firstItemY = 0.0f;
     float stride = 0.0f;
     float radius = 13.0f;
-    std::array<float, kItemCount> reveal{};
-    std::array<float, kItemCount> y{};
-    std::array<unsigned char, kItemCount> opacity{};
+    std::array<float, kMaxRows> reveal{};
+    std::array<float, kMaxRows> y{};
+    std::array<unsigned char, kMaxRows> opacity{};
   };
   RowGeometry rowGeometry(unsigned char opacity) const;
   // Redraws `layer` when `m_keyScratch` (the inputs it draws from) differs
@@ -239,7 +254,12 @@ private:
   int m_lastPosedLetter = -1;
   // Where the word was last drawn (x, y, width, height), for clicks on it.
   std::array<float, 4> m_titleBounds{};
+  // The selected row, the rows' item kinds, and how many there are.
   int m_selectedItem;
+  std::array<int, kMaxRows> m_rows{ kPlayItem, kLoadItem, kSettingsItem, kExitItem, kExitItem };
+  int m_rowCount = 4;
+  // Left for a canvas and not yet re-entered.
+  bool m_suspended = false;
   double m_bgSimAccum;
   double m_worldElapsed = 0.0;
   float m_visitorElapsed = 0.0f;

@@ -1406,6 +1406,26 @@ packageFrameAllocations()
     testTrue(counters,
              running < 12,
              "Running package frames allocate only on high-water growth");
+
+    // Scene programs (D-E31): the canvas is kept on a trip to the title, the
+    // title's first row resumes it, and its frames settle back to none.
+    execute(commands, "menu");
+    bool resumed = pumpUntil(game, [&]() {
+      return commands.HasCommand("play") && !commands.HasCommand("pause");
+    });
+    if (resumed) {
+      int frames = 0;
+      pumpUntil(game, [&]() { return ++frames > 20; });
+      input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+      resumed = pumpUntil(game, [&]() { return commands.HasCommand("pause"); });
+    }
+    testTrue(counters, resumed, "The kept canvas resumes from the title");
+    execute(commands, "pause");
+    const std::size_t roundTrip = resumed ? measure(120) : 0u;
+    std::printf("After a round trip to the title: %zu\n", roundTrip);
+    testTrue(counters,
+             roundTrip == 0,
+             "Paused frames after a round trip to the title allocate nothing");
     testTrue(counters, game.error().empty(), "The package ran without error");
     game.Exit();
     if (counters.failures != 0) {

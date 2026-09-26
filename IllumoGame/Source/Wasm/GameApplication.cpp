@@ -179,14 +179,6 @@ protected:
     return CSimScenes::openTitle(scenes);
   }
 
-  // The screen a switch left is released once the switch has applied.
-  void updateProgram(double elapsed) override
-  {
-    (void)elapsed;
-    if (scenes() != nullptr) {
-      CSimScenes::settle(*scenes());
-    }
-  }
 
 private:
   // The staged illumo.json carries the build version (D-F2) that the main
