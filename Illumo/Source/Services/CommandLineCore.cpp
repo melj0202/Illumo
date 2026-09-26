@@ -88,7 +88,7 @@ const BuiltInCommandHelp kBuiltInCommands[] = {
 const char* const kFunctionKeys[] = { "F1", "F2", "F3", "F4",  "F5",  "F6",
                                       "F7", "F8", "F9", "F10", "F11", "F12" };
 
-// Keys the host or DebugModule consume before bindings run: F3 (FPS), F5
+// Keys the host or DebugOverlay consume before bindings run: F3 (FPS), F5
 // (asset reload), F6 (profiler), F11 (fullscreen).
 const char* const kReservedKeys[] = { "F3", "F5", "F6", "F11" };
 

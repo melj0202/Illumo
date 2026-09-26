@@ -6,7 +6,7 @@
 #include "Platform/PixelWindow.h"
 #include "ProfilerOverlay.h"
 #include <GLFW/glfw3.h>
-#include <Illumo/Engine/DebugModule.h>
+#include <Illumo/Engine/DebugOverlay.h>
 #include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
@@ -19,7 +19,7 @@
 #include <tracy/Tracy.hpp>
 #include <vector>
 
-DebugModule::DebugModule(FrameProfiler* profiler)
+DebugOverlay::DebugOverlay(FrameProfiler* profiler)
   : m_profiler(profiler)
   , diagnosticsLabel(nullptr)
   , diagnostics(std::make_unique<DebugOverlayState>())
@@ -32,21 +32,21 @@ DebugModule::DebugModule(FrameProfiler* profiler)
 {
 }
 
-DebugModule::~DebugModule() = default;
+DebugOverlay::~DebugOverlay() = default;
 
 bool
-DebugModule::Start(IllumoContext* context)
+DebugOverlay::start(IllumoContext& context)
 {
   // D-E5: fail loud if the frozen service bag is incomplete.
-  if (!IllumoContextHasDebugCore(context)) {
+  if (!IllumoContextHasDebugCore(&context)) {
     Logger::LogError(
-      "DebugModule::Start: IllumoContext missing required services "
+      "DebugOverlay::start: IllumoContext missing required services "
       "(envVars, window, renderer, inputManager, commandLine, "
       "commandRegistry, assetManager)");
-    ic = context;
+    ic = &context;
     return false;
   }
-  ic = context;
+  ic = &context;
 
   if (m_profiler != nullptr) {
     m_profilerOverlay = std::make_unique<ProfilerOverlay>(*m_profiler);
@@ -88,7 +88,7 @@ DebugModule::Start(IllumoContext* context)
 }
 
 void
-DebugModule::createRendererDemo()
+DebugOverlay::createRendererDemo()
 {
   rendererDemoTexture =
     ic->assetManager->acquireTexture("Assets/RendererDemo/showcase-atlas.ppm",
@@ -175,7 +175,7 @@ DebugModule::createRendererDemo()
 }
 
 void
-DebugModule::registerRendererCommands()
+DebugOverlay::registerRendererCommands()
 {
   if (m_profilerOverlay != nullptr) {
     ic->commandRegistry->RegisterCommand(
@@ -288,7 +288,7 @@ DebugModule::registerRendererCommands()
 }
 
 void
-DebugModule::unregisterRendererCommands()
+DebugOverlay::unregisterRendererCommands()
 {
   if (ic == nullptr || ic->commandRegistry == nullptr) {
     return;
@@ -303,7 +303,7 @@ DebugModule::unregisterRendererCommands()
 }
 
 void
-DebugModule::updateDiagnostics(double dt)
+DebugOverlay::updateDiagnostics(double dt)
 {
   if (diagnosticsLabel == nullptr || ic == nullptr || ic->envVars == nullptr) {
     return;
@@ -320,7 +320,7 @@ DebugModule::updateDiagnostics(double dt)
 }
 
 void
-DebugModule::updateWatermarkPosition()
+DebugOverlay::updateWatermarkPosition()
 {
   if (!watermarkLabel || !ic || !ic->window) {
     return;
@@ -347,11 +347,12 @@ DebugModule::updateWatermarkPosition()
 }
 
 void
-DebugModule::Update(double dt)
+DebugOverlay::update(double dt)
 {
-  ZoneNamed(DebugModuleUpdateZone, "DebugModule Update");
+  ZoneNamed(DebugOverlayUpdateZone, "DebugOverlay Update");
 
-  // Host erases modules that fail Start; still guard for incomplete fixtures.
+  // The runtime drops an overlay that fails to start; still guard for
+  // incomplete fixtures.
   if (ic == nullptr || ic->inputManager == nullptr ||
       ic->commandLine == nullptr) {
     return;
@@ -510,7 +511,7 @@ DebugModule::Update(double dt)
 }
 
 void
-DebugModule::routeConsoleKey(KeyCode key, InputAction action, int modifiers)
+DebugOverlay::routeConsoleKey(KeyCode key, InputAction action, int modifiers)
 {
   const bool controlPressed = (modifiers & GLFW_MOD_CONTROL) != 0;
   const bool shiftPressed = (modifiers & GLFW_MOD_SHIFT) != 0;
@@ -574,7 +575,7 @@ DebugModule::routeConsoleKey(KeyCode key, InputAction action, int modifiers)
 }
 
 void
-DebugModule::processConsoleWindowRequest()
+DebugOverlay::processConsoleWindowRequest()
 {
   const CommandLine::WindowRequest request =
     ic->commandLine->takeWindowRequest();
@@ -596,7 +597,7 @@ DebugModule::processConsoleWindowRequest()
 }
 
 void
-DebugModule::detachConsole(int originX, int originY, int width, int height)
+DebugOverlay::detachConsole(int originX, int originY, int width, int height)
 {
   if (m_consoleWindow != nullptr) {
     m_consoleWindow->focus();
@@ -636,7 +637,7 @@ DebugModule::detachConsole(int originX, int originY, int width, int height)
 }
 
 void
-DebugModule::closeDetachedConsole(bool reopenInGame)
+DebugOverlay::closeDetachedConsole(bool reopenInGame)
 {
   if (m_consoleWindow == nullptr && !ic->commandLine->isDetached()) {
     return;
@@ -654,7 +655,7 @@ DebugModule::closeDetachedConsole(bool reopenInGame)
 }
 
 void
-DebugModule::updateDetachedConsole()
+DebugOverlay::updateDetachedConsole()
 {
   if (m_consoleWindow == nullptr) {
     return;
@@ -743,7 +744,7 @@ DebugModule::updateDetachedConsole()
 }
 
 void
-DebugModule::Exit()
+DebugOverlay::stop()
 {
   if (ic != nullptr && ic->commandLine != nullptr) {
     closeDetachedConsole(false);
@@ -786,29 +787,29 @@ DebugModule::Exit()
 }
 
 void
-DebugModule::DispatchDrawables(Scene* scene)
+DebugOverlay::dispatch(Scene& scene)
 {
-  if (ic == nullptr || scene == nullptr) {
+  if (ic == nullptr) {
     return;
   }
   // Skip fully closed console (no anim) — avoids chrono/lerp + empty token
   // work. Owners rebuild GameVisual primitives inside AppendCommands.
   if (ic->commandLine && ic->commandLine->wantsDraw()) {
-    scene->AddDrawable(ic->commandLine, RenderLayerId::UI);
+    scene.AddDrawable(ic->commandLine, RenderLayerId::UI);
   }
   if (diagnosticsLabel && diagnosticsLabel->isVisible()) {
-    scene->AddDrawable(diagnosticsLabel, RenderLayerId::Debug);
+    scene.AddDrawable(diagnosticsLabel, RenderLayerId::Debug);
   }
   if (m_profilerOverlay != nullptr && m_profiler->enabled()) {
-    scene->AddDrawable(&m_profilerOverlay->visual(), RenderLayerId::Debug);
+    scene.AddDrawable(&m_profilerOverlay->visual(), RenderLayerId::Debug);
   }
   if (m_fileTreeOverlay != nullptr && m_fileTreeOverlay->visible()) {
-    scene->AddDrawable(&m_fileTreeOverlay->visual(), RenderLayerId::Debug);
+    scene.AddDrawable(&m_fileTreeOverlay->visual(), RenderLayerId::Debug);
   }
   if (watermarkLabel && watermarkLabel->isVisible()) {
-    scene->AddDrawable(watermarkLabel, RenderLayerId::Debug);
+    scene.AddDrawable(watermarkLabel, RenderLayerId::Debug);
   }
   if (rendererDemo != nullptr && rendererDemoEnabled) {
-    scene->AddDrawable(rendererDemo, RenderLayerId::Debug);
+    scene.AddDrawable(rendererDemo, RenderLayerId::Debug);
   }
 }

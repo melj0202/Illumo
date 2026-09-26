@@ -10,9 +10,7 @@
 #endif
 
 #include <Illumo/Engine/Application.h>
-#include <Illumo/Engine/DebugModule.h>
-#include <Illumo/Engine/IModule.h>
-#include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Engine/DebugOverlay.h>
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Engine/PresentationTiming.h>
@@ -111,7 +109,7 @@ main()
   static_assert(!std::is_move_constructible_v<CommandRegistry>);
   static_assert(std::is_destructible_v<IllumoConfig>);
   static_assert(std::is_destructible_v<IllumoApplicationDefinition>);
-  static_assert(std::has_virtual_destructor_v<IModuleHost>);
+  static_assert(!std::is_copy_constructible_v<DebugOverlay>);
   static_assert(std::is_destructible_v<FramePacer>);
   static_assert(std::is_destructible_v<PlatformTimerScope>);
   static_assert(std::has_virtual_destructor_v<IEnvVars>);

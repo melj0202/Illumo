@@ -4,7 +4,7 @@
 #include <Illumo/Services/FileTreeSource.h>
 #include <memory>
 
-// Publishes a VirtualFileSystem to engine tools (the DebugModule file tree)
+// Publishes a VirtualFileSystem to engine tools (the DebugOverlay file tree)
 // as a read-only IFileTreeSource. Listings stop at kMaximumEntries per
 // directory.
 class VfsTreeSource final : public IFileTreeSource

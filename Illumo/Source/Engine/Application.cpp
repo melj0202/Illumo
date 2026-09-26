@@ -1,11 +1,6 @@
 #include <Illumo/Engine/Application.h>
 
-#include <Illumo/Engine/IModule.h>
 #include <Illumo/Engine/Illumo.h>
-#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-#include <Illumo/Engine/DebugModule.h>
-#endif
-#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Platform/PlatformTimer.h>
 #include <Illumo/Platform/ProcessRelaunch.h>
@@ -16,9 +11,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
-#include <memory>
 #include <string>
-#include <tracy/Tracy.hpp>
 #include <utility>
 
 static const char*
@@ -157,71 +150,12 @@ runApplication(int argc,
                        " could not initialize Illumo");
       return 1;
     }
-    if (application.createRequiredModule == nullptr) {
-      Logger::LogError(application.applicationName +
-                       " did not provide a required module factory");
+    if (application.run == nullptr) {
+      Logger::LogError(application.applicationName + " has no run loop");
       illumo.shutdown();
       return 1;
     }
-    std::unique_ptr<IModule> requiredModule =
-      application.createRequiredModule(&illumo.environment());
-    if (!requiredModule) {
-      Logger::LogError(application.applicationName +
-                       " returned an empty required module");
-      illumo.shutdown();
-      return 1;
-    }
-    illumo.addModule(std::move(requiredModule), ModuleRequirement::Required);
-#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-    illumo.addModule(std::make_unique<DebugModule>(&illumo.frameProfiler()),
-                     ModuleRequirement::Optional);
-#endif
-    if (!illumo.startModules()) {
-      Logger::LogError(application.applicationName +
-                       " could not start its required module");
-      illumo.shutdown();
-      return 1;
-    }
-    Logger::LogInfo(
-      application.applicationName + " ready in " +
-      std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - launched)
-                       .count()) +
-      " ms");
-
-    FramePacer framePacer;
-    std::chrono::steady_clock::time_point lastTime =
-      std::chrono::steady_clock::now();
-    while (!illumo.processCloseRequest()) {
-      illumo.frameProfiler().beginFrame();
-      FrameMark;
-      const std::chrono::steady_clock::time_point currentTime =
-        std::chrono::steady_clock::now();
-      const double dt =
-        std::chrono::duration<double>(currentTime - lastTime).count();
-      lastTime = currentTime;
-
-      {
-        ZoneScopedN("Frame.Update");
-        illumo.update(dt);
-      }
-      {
-        ZoneScopedN("Frame.Render");
-        illumo.render();
-      }
-
-      {
-        ZoneScopedN("Frame.Pacing");
-        illumo.frameProfiler().mark(FramePhase::Pacing);
-        const long targetFps = getTargetFps(&illumo.environment());
-        const bool vsyncEnabled = isVsyncRequested(&illumo.environment());
-        const int refreshRate = illumo.context().window != nullptr
-                                  ? illumo.context().window->getRefreshRate()
-                                  : 60;
-        framePacer.pace(targetFps, vsyncEnabled, refreshRate);
-      }
-      illumo.frameProfiler().endFrame();
-    }
+    const int exitCode = application.run(illumo, launched);
 
     *restart = illumo.context().window != nullptr &&
                illumo.context().window->restartRequested();
@@ -229,8 +163,6 @@ runApplication(int argc,
       application.applicationName +
       (*restart ? " shutting down to restart" : " shutting down"));
     illumo.shutdown();
-    const int exitCode =
-      application.exitCode != nullptr ? application.exitCode() : 0;
     Logger::LogInfo(application.applicationName + " exited with code " +
                     std::to_string(exitCode));
     return exitCode;

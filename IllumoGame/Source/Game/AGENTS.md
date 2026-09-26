@@ -117,7 +117,7 @@ change partitioning, halos or `SparseCellGrid::applyChunkPatches` only with
   `CommandRegistry`; usage, descriptions, validation, and completion data move
   with the command.
 - Product input (menu, settings, confirm dialogs, camera, editor) yields while
-  `CommandLine` is open. Do not drain `KeyCode::Grave`; `DebugModule` owns the
+  `CommandLine` is open. Do not drain `KeyCode::Grave`; `DebugOverlay` owns the
   global console toggle.
 - F1 settings and F2 Ruleset Workshop remain separate. F1 and New Simulation
   select an explicit family/ruleset pair; each ruleset is bound to exactly one

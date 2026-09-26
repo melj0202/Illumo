@@ -1,5 +1,5 @@
 #pragma once
-#include <Illumo/Engine/IModule.h>
+#include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
@@ -14,21 +14,28 @@ class PixelWindow;
 class ProfilerOverlay;
 class SoftwareCanvas;
 
-class DebugModule : public IModule
+// The developer overlay of debug-tool builds (ILLUMO_ENABLE_DEBUG_TOOLS): the
+// console and its detached window, the diagnostics and profiler overlays, the
+// `files` browser, the watermark and the renderer demo. The runtime updates it
+// before the program, so console keys come first, and dispatches it after the
+// program, so it draws on top.
+class DebugOverlay
 {
 public:
-  explicit DebugModule(FrameProfiler* profiler = nullptr);
-  ~DebugModule();
-  DebugModule(const DebugModule&) = delete;
-  DebugModule& operator=(const DebugModule&) = delete;
-  DebugModule(DebugModule&&) = delete;
-  DebugModule& operator=(DebugModule&&) = delete;
-  virtual bool Start(IllumoContext* context) override;
-  void Update(double dt) override;
-  void DispatchDrawables(Scene* scene) override;
-  void Exit() override;
+  explicit DebugOverlay(FrameProfiler* profiler = nullptr);
+  ~DebugOverlay();
+  DebugOverlay(const DebugOverlay&) = delete;
+  DebugOverlay& operator=(const DebugOverlay&) = delete;
+  DebugOverlay(DebugOverlay&&) = delete;
+  DebugOverlay& operator=(DebugOverlay&&) = delete;
+  // False when the context lacks the services it needs (D-E5).
+  bool start(IllumoContext& context);
+  void update(double dt);
+  void dispatch(Scene& scene);
+  void stop();
 
 private:
+  IllumoContext* ic{ nullptr };
   FrameProfiler* m_profiler;
   std::unique_ptr<ProfilerOverlay> m_profilerOverlay;
   // The `files` browser over IllumoContext::fileTree.

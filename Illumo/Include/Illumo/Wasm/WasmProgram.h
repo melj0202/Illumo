@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Illumo/Engine/IModule.h>
+#include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Services/FileTreeSource.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
@@ -23,29 +23,32 @@ struct WasmFrameStats
   std::uint64_t updates = 0;
 };
 
-// Generic native shell. Product update, UI and geometry are supplied by a
-// GuestApplication reactor. This adapter grants rendering and bounded messages.
-class WasmGameModule : public IModule
+// The one WASM program the runtime runs (D-E31): the guest store, its
+// services, frame renderer and render worlds. Product update, UI and geometry
+// come from a GuestProgram reactor; the host grants rendering and bounded
+// messages. The runtime starts it once, updates it after the debug overlay,
+// dispatches it before the overlay and asks it before the window closes.
+class WasmProgram
 {
 public:
-  explicit WasmGameModule(std::vector<std::byte> module,
-                          std::vector<std::byte> startup = {},
-                          WasmLimits limits = {},
-                          std::vector<std::byte> mod = {},
-                          std::vector<std::byte> worker = {},
-                          WasmFileRoots files = {});
-  ~WasmGameModule() override;
-  WasmGameModule(const WasmGameModule&) = delete;
-  WasmGameModule& operator=(const WasmGameModule&) = delete;
-  WasmGameModule(WasmGameModule&&) = delete;
-  WasmGameModule& operator=(WasmGameModule&&) = delete;
+  explicit WasmProgram(std::vector<std::byte> module,
+                       std::vector<std::byte> startup = {},
+                       WasmLimits limits = {},
+                       std::vector<std::byte> mod = {},
+                       std::vector<std::byte> worker = {},
+                       WasmFileRoots files = {});
+  ~WasmProgram();
+  WasmProgram(const WasmProgram&) = delete;
+  WasmProgram& operator=(const WasmProgram&) = delete;
+  WasmProgram(WasmProgram&&) = delete;
+  WasmProgram& operator=(WasmProgram&&) = delete;
 
   // Budgets for compute worker instances and the number of lanes granted.
-  // Applies to workers created after Start; call before Start.
+  // Applies to workers created after start; call before start.
   void setWorkerLimits(const WasmLimits& limits, std::uint32_t lanes);
   // Where surface windows (Windows capability) come from; the platform's by
   // default. Null keeps every surface docked (capture, benchmarks). Call
-  // before Start.
+  // before start.
   void setSurfaceWindows(ISurfaceWindowFactory* factory)
   {
     m_surfaceWindows = factory;
@@ -53,24 +56,27 @@ public:
   // Null unless the guest was granted surface windows.
   const WasmPanelWindows* panelWindows() const { return m_windows.get(); }
   // Sound output for the guest (Audio capability), borrowed; it must outlive
-  // this module. Null, the default, withholds the capability (tests,
-  // capture, benchmarks). Call before Start.
+  // this program. Null, the default, withholds the capability (tests,
+  // capture, benchmarks). Call before start.
   void setAudio(IAudio* audio) { m_audio = audio; }
   // Whether a guest's restart request (GuestUpdateFlags::RequestRestart,
   // Display grant required) relaunches the application after it closes.
   // Off by default (tests, capture, benchmarks): the request then only
   // closes.
   void setRestartAllowed(bool allowed) { m_restartAllowed = allowed; }
-  bool Start(IllumoContext* context) override;
-  void Update(double elapsed) override;
-  void DispatchDrawables(Scene* scene) override;
-  void Exit() override;
-  bool OnCloseRequested() override;
+  // False when the services are incomplete or the guest fails to start;
+  // error() says why.
+  bool start(IllumoContext& context);
+  void update(double elapsed);
+  void dispatch(Scene& scene);
+  void stop();
+  // Whether the guest agrees to close; a failed guest always does.
+  bool closeRequested();
   const std::string& error() const;
   const std::string& modError() const;
   bool hasActiveMod() const;
   const WasmFrameStats& stats() const;
-  // Null before Start and after Exit.
+  // Null before start and after stop.
   const WasmFrameCounters* frameCounters() const;
   // One human-readable summary of stats() and frameCounters().
   std::string describeStats() const;
@@ -84,6 +90,7 @@ private:
   std::vector<std::byte> m_startup;
   std::vector<std::byte> m_modModule;
   std::vector<std::byte> m_workerModule;
+  IllumoContext* ic = nullptr;
   WasmFileRoots m_fileRoots;
   // Published as IllumoContext::fileTree while the guest runs.
   std::unique_ptr<IFileTreeSource> m_treeSource;

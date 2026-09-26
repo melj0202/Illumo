@@ -551,7 +551,7 @@ testOpenConsoleBlocksEditorInput()
   testTrue(g,
            !fixture.input.getKeyQueue().empty() &&
              fixture.input.getKeyQueue().front().key == KeyCode::Grave,
-           "Grave key remains in queue for DebugModule overlay");
+           "Grave key remains in queue for DebugOverlay overlay");
 
   // 2. When console is open, toolbar and panel input yield
   fixture.console.Toggle();
@@ -568,7 +568,7 @@ testOpenConsoleBlocksEditorInput()
 static void
 testEditorSceneDoesNotDispatchConsole()
 {
-  testSection("EditorScene: does not dispatch console drawable (DebugModule "
+  testSection("EditorScene: does not dispatch console drawable (DebugOverlay "
               "responsibility)");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");

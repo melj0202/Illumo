@@ -16,7 +16,7 @@
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Wasm/WasmFileServices.h>
-#include <Illumo/Wasm/WasmGameModule.h>
+#include <Illumo/Wasm/WasmProgram.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -288,12 +288,12 @@ gameLimits(bool meterFuel = false)
 }
 
 static bool
-pumpUntil(WasmGameModule& game, const std::function<bool()>& reached)
+pumpUntil(WasmProgram& game, const std::function<bool()>& reached)
 {
   const std::chrono::steady_clock::time_point deadline =
     std::chrono::steady_clock::now() + std::chrono::seconds(60);
   while (game.error().empty() && std::chrono::steady_clock::now() < deadline) {
-    game.Update(1.0 / 60.0);
+    game.update(1.0 / 60.0);
     if (reached()) {
       return true;
     }
@@ -315,7 +315,7 @@ execute(CommandRegistry& commands,
 // Opens canvas setup through the menu's console command, then selects and
 // confirms Create with the keyboard, as a player would.
 static bool
-enterCanvas(WasmGameModule& game,
+enterCanvas(WasmProgram& game,
             CommandRegistry& commands,
             InputManager& input)
 {
@@ -406,9 +406,9 @@ gamePackage()
   context.commandRegistry = &commands;
   context.commandLine = &console;
 
-  WasmGameModule game(
+  WasmProgram game(
     readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(), {}, {}, files);
-  const bool started = game.Start(&context);
+  const bool started = game.start(context);
   testTrue(counters, started, "Generic host starts the IllumoGame package");
   if (!started) {
     std::printf("%s\n", game.error().c_str());
@@ -467,7 +467,7 @@ gamePackage()
            "Guest reloads its own save through storage");
 
   Scene scene(&window, &camera);
-  game.DispatchDrawables(&scene);
+  game.dispatch(scene);
   mock.canvasDrawn = false;
   renderer.BeginFrame();
   renderer.RenderScene(&scene, &camera);
@@ -479,9 +479,9 @@ gamePackage()
            !historyContains(console, "Frame dropped"),
            "Every menu, setup and canvas frame recorded without rejection");
   testTrue(counters,
-           game.error().empty() && game.OnCloseRequested(),
+           game.error().empty() && game.closeRequested(),
            "Guest accepts a host close request");
-  game.Exit();
+  game.stop();
 
   // 3D render test mode: persisted guest settings enable it. The scene's
   // meshes are host render world instances (HostRender, frame schema v6):
@@ -491,10 +491,10 @@ gamePackage()
   mock.litShader = renderer.getStyle(RenderStyleId::LitMesh)->shaderHandle;
   mock.worldShader =
     renderer.getStyle(RenderStyleId::LitMeshInstanced)->shaderHandle;
-  WasmGameModule world(
+  WasmProgram world(
     readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(), {}, {}, files);
   testTrue(counters,
-           world.Start(&context) && enterCanvas(world, commands, input),
+           world.start(context) && enterCanvas(world, commands, input),
            "The 3D test mode starts from persisted guest settings");
   int frames = 0;
   pumpUntil(world, [&]() { return ++frames > 30; });
@@ -502,9 +502,9 @@ gamePackage()
   mock.litDraws = 0;
   mock.worldDraws = 0;
   for (int pass = 0; pass < 2; ++pass) {
-    world.Update(1.0 / 60.0);
+    world.update(1.0 / 60.0);
     Scene worldScene(&window, &camera);
-    world.DispatchDrawables(&worldScene);
+    world.dispatch(worldScene);
     renderer.BeginFrame();
     renderer.RenderScene(&worldScene, &camera);
     renderer.EndFrame();
@@ -523,7 +523,7 @@ gamePackage()
   testTrue(counters,
            world.error().empty() && !historyContains(console, "Frame dropped"),
            "Every 3D frame records without rejection");
-  world.Exit();
+  world.stop();
   if (counters.failures != 0) {
     for (const CommandLine::historyBuffer& entry : console.getHistory()) {
       std::printf("console: %s\n", entry.content.c_str());
@@ -588,7 +588,7 @@ lastGeneration(const CommandLine& console, std::size_t* reports = nullptr)
 // Guest commands run when the guest next polls its services, so a status
 // report arrives a frame or two later; pump (with rendering) until it does.
 static std::int64_t
-requestGeneration(WasmGameModule& game,
+requestGeneration(WasmProgram& game,
                   CommandRegistry& commands,
                   const CommandLine& console,
                   const std::function<void()>& frame)
@@ -597,7 +597,7 @@ requestGeneration(WasmGameModule& game,
   lastGeneration(console, &before);
   execute(commands, "status");
   for (int attempt = 0; attempt < 600 && game.error().empty(); ++attempt) {
-    game.Update(1.0 / 60.0);
+    game.update(1.0 / 60.0);
     frame();
     std::size_t after = 0;
     const std::int64_t generation = lastGeneration(console, &after);
@@ -668,18 +668,18 @@ packageBench(bool meterFuel, std::uint32_t lanes)
   context.commandRegistry = &commands;
   context.commandLine = &console;
 
-  WasmGameModule game(readBytes(ILLUMO_GAME_GUEST),
-                      {},
-                      gameLimits(meterFuel),
-                      {},
-                      lanes == 0u ? std::vector<std::byte>{}
-                                  : readBytes(ILLUMO_SIMULATION_WORKER),
-                      files);
+  WasmProgram game(readBytes(ILLUMO_GAME_GUEST),
+                   {},
+                   gameLimits(meterFuel),
+                   {},
+                   lanes == 0u ? std::vector<std::byte>{}
+                               : readBytes(ILLUMO_SIMULATION_WORKER),
+                   files);
   WasmLimits laneLimits = gameLimits(meterFuel);
   laneLimits.fuelPerCall = 1000000000u;
   game.setWorkerLimits(laneLimits, lanes == 0u ? 1u : lanes);
   const bool started =
-    game.Start(&context) && enterCanvas(game, commands, input);
+    game.start(context) && enterCanvas(game, commands, input);
   testTrue(counters, started, "Benchmark package reaches the canvas");
   if (!started) {
     std::printf("%s\n", game.error().c_str());
@@ -687,7 +687,7 @@ packageBench(bool meterFuel, std::uint32_t lanes)
   }
   const std::function<void()> frame = [&]() {
     Scene scene(&window, &camera);
-    game.DispatchDrawables(&scene);
+    game.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
     renderer.EndFrame();
@@ -706,7 +706,7 @@ packageBench(bool meterFuel, std::uint32_t lanes)
     execute(commands, "tps", { "1000" });
     execute(commands, "run");
     for (int warmup = 0; warmup < 20 && game.error().empty(); ++warmup) {
-      game.Update(1.0 / 60.0);
+      game.update(1.0 / 60.0);
       frame();
     }
     // Lane stores compile in parallel while serial generations run; time
@@ -735,7 +735,7 @@ packageBench(bool meterFuel, std::uint32_t lanes)
                                       std::chrono::seconds(2))) {
       const std::chrono::steady_clock::time_point before =
         std::chrono::steady_clock::now();
-      game.Update(1.0 / 60.0);
+      game.update(1.0 / 60.0);
       updates.push_back(std::chrono::duration<double, std::milli>(
                           std::chrono::steady_clock::now() - before)
                           .count());
@@ -825,7 +825,7 @@ packageBench(bool meterFuel, std::uint32_t lanes)
              game.error().empty() && generations > 0,
              "Benchmark world advances in the guest");
   }
-  game.Exit();
+  game.stop();
   if (counters.failures != 0) {
     for (const CommandLine::historyBuffer& entry : console.getHistory()) {
       std::printf("console: %s\n", entry.content.c_str());
@@ -889,23 +889,23 @@ gamePackageLanes()
   context.envVars = &env;
   context.commandRegistry = &commands;
   context.commandLine = &console;
-  WasmGameModule game(readBytes(ILLUMO_GAME_GUEST),
-                      {},
-                      gameLimits(),
-                      {},
-                      readBytes(ILLUMO_SIMULATION_WORKER),
-                      files);
+  WasmProgram game(readBytes(ILLUMO_GAME_GUEST),
+                   {},
+                   gameLimits(),
+                   {},
+                   readBytes(ILLUMO_SIMULATION_WORKER),
+                   files);
   WasmLimits laneLimits = gameLimits();
   game.setWorkerLimits(laneLimits, 4u);
   const std::function<void()> frame = [&]() {
     Scene scene(&window, &camera);
-    game.DispatchDrawables(&scene);
+    game.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
     renderer.EndFrame();
   };
   testTrue(counters,
-           game.Start(&context) && enterCanvas(game, commands, input),
+           game.start(context) && enterCanvas(game, commands, input),
            "Package with simulation lanes reaches the canvas");
   execute(commands, "load", { "bench-dense32" });
   testTrue(counters,
@@ -924,7 +924,7 @@ gamePackageLanes()
   while (game.error().empty() && std::chrono::steady_clock::now() < deadline &&
          !(lanesActive && generation >= 60)) {
     for (int step = 0; step < 20; ++step) {
-      game.Update(1.0 / 60.0);
+      game.update(1.0 / 60.0);
       frame();
     }
     generation = requestGeneration(game, commands, console, frame);
@@ -964,7 +964,7 @@ gamePackageLanes()
   testTrue(counters,
            game.error().empty() && !historyContains(console, "Frame dropped"),
            "Every lane frame recorded without rejection");
-  game.Exit();
+  game.stop();
   if (counters.failures != 0) {
     for (const CommandLine::historyBuffer& entry : console.getHistory()) {
       std::printf("console: %s\n", entry.content.c_str());
@@ -1147,10 +1147,10 @@ gamePackageAudio()
     return count;
   };
 
-  WasmGameModule game(
+  WasmProgram game(
     readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(), {}, {}, files);
   game.setAudio(&audio);
-  testTrue(counters, game.Start(&context), "the package starts with audio");
+  testTrue(counters, game.start(context), "the package starts with audio");
   testTrue(counters,
            pumpUntil(game, [&]() { return commands.HasCommand("play"); }),
            "the main menu comes up");
@@ -1190,7 +1190,7 @@ gamePackageAudio()
            pumpUntil(game, [&]() { return commands.HasCommand("play"); }) &&
              plays(CSimSound::CanvasExit) == 1,
            "returning to the menu plays the exit cue");
-  game.Exit();
+  game.stop();
   testTrue(counters,
            audio.destroyed.size() == sounds.size() && audio.stops >= 1,
            "the host releases the guest's sounds when it exits");
@@ -1252,10 +1252,10 @@ restartThroughSettings(bool allowed, TestCounters& counters)
   context.commandRegistry = &commands;
   context.commandLine = &console;
 
-  WasmGameModule game(
+  WasmProgram game(
     readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(), {}, {}, files);
   game.setRestartAllowed(allowed);
-  bool reached = game.Start(&context) &&
+  bool reached = game.start(context) &&
                  pumpUntil(game, [&]() { return commands.HasCommand("play"); });
   const std::function<void(KeyCode)> press = [&](KeyCode key) {
     input.getKeyQueue().push({ key, InputAction::Press, 0 });
@@ -1292,7 +1292,7 @@ restartThroughSettings(bool allowed, TestCounters& counters)
              closing && !window.restartRequested(),
              "a host that disallows restarts only closes");
   }
-  game.Exit();
+  game.stop();
   Logger::setContext(nullptr, nullptr);
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
@@ -1349,10 +1349,10 @@ packageFrameAllocations()
     context.envVars = &env;
     context.commandRegistry = &commands;
     context.commandLine = &console;
-    WasmGameModule game(
+    WasmProgram game(
       readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(false), {}, {}, files);
     const bool started =
-      game.Start(&context) && enterCanvas(game, commands, input);
+      game.start(context) && enterCanvas(game, commands, input);
     testTrue(counters, started, "Allocation package reaches the canvas");
     if (!started) {
       std::printf("%s\n", game.error().c_str());
@@ -1360,7 +1360,7 @@ packageFrameAllocations()
     }
     const std::function<void()> frame = [&]() {
       Scene scene(&window, &camera);
-      game.DispatchDrawables(&scene);
+      game.dispatch(scene);
       renderer.BeginFrame();
       renderer.RenderScene(&scene, &camera);
       renderer.EndFrame();
@@ -1376,14 +1376,14 @@ packageFrameAllocations()
     // Counts host allocations made by Update alone; the mock render stays out.
     const std::function<std::size_t(int)> measure = [&](int frames) {
       for (int warmup = 0; warmup < 120 && game.error().empty(); ++warmup) {
-        game.Update(1.0 / 60.0);
+        game.update(1.0 / 60.0);
         frame();
       }
       std::size_t total = 0;
       for (int index = 0; index < frames && game.error().empty(); ++index) {
         g_allocations = 0;
         g_countAllocations = true;
-        game.Update(1.0 / 60.0);
+        game.update(1.0 / 60.0);
         g_countAllocations = false;
         total += g_allocations;
         frame();
@@ -1427,7 +1427,7 @@ packageFrameAllocations()
              roundTrip == 0,
              "Paused frames after a round trip to the title allocate nothing");
     testTrue(counters, game.error().empty(), "The package ran without error");
-    game.Exit();
+    game.stop();
     if (counters.failures != 0) {
       for (const CommandLine::historyBuffer& entry : console.getHistory()) {
         std::printf("console: %s\n", entry.content.c_str());

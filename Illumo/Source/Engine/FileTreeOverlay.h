@@ -9,12 +9,12 @@
 #include <string>
 #include <vector>
 
-// DebugModule's browser over the host's mounted file tree (the `files`
+// DebugOverlay's browser over the host's mounted file tree (the `files`
 // command). Listings are read synchronously from the IFileTreeSource when a
 // directory expands; GuiFileTree flattens and draws the rows. Input is the
 // keyboard (Up/Down/PageUp/PageDown/Home/End select, Right or Enter expands,
 // Left collapses or selects the parent, Escape closes) and the mouse wheel,
-// all of which DebugModule consumes before the product sees them.
+// all of which DebugOverlay consumes before the product sees them.
 class FileTreeOverlay
 {
 public:

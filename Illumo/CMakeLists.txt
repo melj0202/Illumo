@@ -164,7 +164,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.27")
     PROPERTIES SKIP_LINTING ON)
 endif()
 target_sources(Illumo PRIVATE
-  $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:${CMAKE_CURRENT_SOURCE_DIR}/Source/Engine/DebugModule.cpp>)
+  $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:${CMAKE_CURRENT_SOURCE_DIR}/Source/Engine/DebugOverlay.cpp>)
 add_library(Illumo::Illumo ALIAS Illumo)
 
 # Build version vYY.MM_B (cmake/IllumoVersion.cmake). Computed here for the

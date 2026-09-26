@@ -2,7 +2,7 @@
 #include <Illumo/Content/VfsConsole.h>
 #include <Illumo/Content/VfsTreeSource.h>
 #include <Illumo/Services/Logger.h>
-#include <Illumo/Wasm/WasmGameModule.h>
+#include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Input.h>
 #include <algorithm>
 #include <chrono>
@@ -104,12 +104,12 @@ snapshot(IllumoContext& context, double elapsed)
   return input;
 }
 
-WasmGameModule::WasmGameModule(std::vector<std::byte> module,
-                               std::vector<std::byte> startup,
-                               WasmLimits limits,
-                               std::vector<std::byte> mod,
-                               std::vector<std::byte> worker,
-                               WasmFileRoots files)
+WasmProgram::WasmProgram(std::vector<std::byte> module,
+                         std::vector<std::byte> startup,
+                         WasmLimits limits,
+                         std::vector<std::byte> mod,
+                         std::vector<std::byte> worker,
+                         WasmFileRoots files)
   : m_module(std::move(module))
   , m_startup(std::move(startup))
   , m_modModule(std::move(mod))
@@ -118,19 +118,20 @@ WasmGameModule::WasmGameModule(std::vector<std::byte> module,
   , m_guest(limits)
 {
 }
-WasmGameModule::~WasmGameModule() = default;
+WasmProgram::~WasmProgram() = default;
 
 void
-WasmGameModule::setWorkerLimits(const WasmLimits& limits, std::uint32_t lanes)
+WasmProgram::setWorkerLimits(const WasmLimits& limits, std::uint32_t lanes)
 {
   m_workerLimits = limits;
   m_workerLanes = lanes == 0u ? 1u : lanes;
 }
 
 bool
-WasmGameModule::Start(IllumoContext* context)
+WasmProgram::start(IllumoContext& host)
 try {
-  if (context == nullptr || context->renderer == nullptr ||
+  IllumoContext* const context = &host;
+  if (context->renderer == nullptr ||
       context->window == nullptr || context->inputManager == nullptr) {
     m_error = "WASM host services are incomplete";
     return false;
@@ -297,7 +298,7 @@ try {
   m_module.clear();
   m_module.shrink_to_fit();
   m_startup.clear();
-  Update(0);
+  update(0);
   if (m_guest.isAlive() && m_fileRoots.packages) {
     // Engine tools (the debug `files` browser) see the same tree as `vfs`.
     m_treeSource = std::make_unique<VfsTreeSource>(m_fileRoots.packages);
@@ -310,7 +311,7 @@ try {
 }
 
 void
-WasmGameModule::fail(std::string error)
+WasmProgram::fail(std::string error)
 {
   if (m_services) {
     m_services->cancel();
@@ -337,7 +338,7 @@ WasmGameModule::fail(std::string error)
 }
 
 void
-WasmGameModule::Update(double elapsed)
+WasmProgram::update(double elapsed)
 try {
   if (!m_guest.isAlive()) {
     return;
@@ -400,7 +401,7 @@ try {
       Logger::LogWarning("The application asked to restart; this host closes "
                          "it instead");
     }
-    // The engine still asks the guest through OnCloseRequested/Close.
+    // The runtime still asks the guest through closeRequested (Close).
     if (restart) {
       Logger::LogInfo("The application asked to restart");
       ic->window->requestRestart();
@@ -469,15 +470,15 @@ try {
 }
 
 void
-WasmGameModule::DispatchDrawables(Scene* scene)
+WasmProgram::dispatch(Scene& scene)
 {
-  if (scene != nullptr && m_frames) {
-    m_frames->dispatch(*scene);
+  if (m_frames) {
+    m_frames->dispatch(scene);
   }
 }
 
 bool
-WasmGameModule::OnCloseRequested()
+WasmProgram::closeRequested()
 {
   if (!m_guest.isAlive()) {
     return true;
@@ -497,7 +498,7 @@ WasmGameModule::OnCloseRequested()
 }
 
 void
-WasmGameModule::Exit()
+WasmProgram::stop()
 {
   if (m_guest.isAlive()) {
     Logger::LogTrace("Shutting down the WASM guest after " +
@@ -527,19 +528,19 @@ WasmGameModule::Exit()
 }
 
 const WasmFrameStats&
-WasmGameModule::stats() const
+WasmProgram::stats() const
 {
   return m_stats;
 }
 
 const WasmFrameCounters*
-WasmGameModule::frameCounters() const
+WasmProgram::frameCounters() const
 {
   return m_frames ? &m_frames->counters() : nullptr;
 }
 
 std::string
-WasmGameModule::describeStats() const
+WasmProgram::describeStats() const
 {
   const std::pair<const char*, const RollingMetric*> rows[] = {
     { "total", &m_stats.totalMilliseconds },
@@ -594,17 +595,17 @@ WasmGameModule::describeStats() const
   return text;
 }
 const std::string&
-WasmGameModule::error() const
+WasmProgram::error() const
 {
   return m_error;
 }
 const std::string&
-WasmGameModule::modError() const
+WasmProgram::modError() const
 {
   return m_modError;
 }
 bool
-WasmGameModule::hasActiveMod() const
+WasmProgram::hasActiveMod() const
 {
   return m_mod && m_mod->isAlive();
 }

@@ -9,7 +9,7 @@
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
-#include <Illumo/Wasm/WasmGameModule.h>
+#include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Dialog.h>
 #include <chrono>
 #include <cmath>
@@ -198,9 +198,9 @@ viewerPackage()
   limits.memoryBytes = 1024ull * 1024ull * 1024ull;
   limits.meterFuel = false; // As shipped: illumo.json requests epoch metering.
   limits.deadlineMilliseconds = 10000;
-  WasmGameModule viewer(
+  WasmProgram viewer(
     readBytes(ILLUMO_VIEWER_GUEST), startup.take(), limits, {}, {}, files);
-  const bool started = viewer.Start(&context);
+  const bool started = viewer.start(context);
   testTrue(counters, started, "Generic host starts the IllMeshViewer package");
   if (!started) {
     std::printf("%s\n", viewer.error().c_str());
@@ -212,9 +212,9 @@ viewerPackage()
   while (viewer.error().empty() &&
          std::chrono::steady_clock::now() < deadline &&
          (mock.retainedDraws < 3 || frames < 30)) {
-    viewer.Update(1.0 / 60.0);
+    viewer.update(1.0 / 60.0);
     Scene scene(&window, &camera);
-    viewer.DispatchDrawables(&scene);
+    viewer.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
     renderer.EndFrame();
@@ -242,9 +242,9 @@ viewerPackage()
              !historyContains(console, "Failed"),
            "Every viewer frame and transfer completed without rejection");
   testTrue(counters,
-           viewer.OnCloseRequested(),
+           viewer.closeRequested(),
            "The viewer accepts a host close request");
-  viewer.Exit();
+  viewer.stop();
   if (counters.failures != 0) {
     for (const CommandLine::historyBuffer& entry : console.getHistory()) {
       std::printf("console: %s\n", entry.content.c_str());
@@ -337,9 +337,9 @@ scenePackage()
   limits.memoryBytes = 1024ull * 1024ull * 1024ull;
   limits.meterFuel = false;
   limits.deadlineMilliseconds = 10000;
-  WasmGameModule viewer(
+  WasmProgram viewer(
     readBytes(ILLUMO_VIEWER_GUEST), {}, limits, {}, {}, files);
-  const bool started = viewer.Start(&context);
+  const bool started = viewer.start(context);
   testTrue(counters, started, "The viewer starts with a content package");
   if (!started) {
     std::printf("%s\n", viewer.error().c_str());
@@ -365,9 +365,9 @@ scenePackage()
       commands.ExecuteQueue();
       opened = true;
     }
-    viewer.Update(1.0 / 60.0);
+    viewer.update(1.0 / 60.0);
     Scene scene(&window, &camera);
-    viewer.DispatchDrawables(&scene);
+    viewer.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
     renderer.EndFrame();
@@ -390,7 +390,7 @@ scenePackage()
              !historyContains(console, "Failed") &&
              !historyContains(console, "missing"),
            "The scene and its asset load without errors");
-  viewer.Exit();
+  viewer.stop();
   testTrue(counters,
            context.fileTree == nullptr,
            "Exit withdraws the published file tree");

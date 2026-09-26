@@ -13,7 +13,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 | M2 | done, `a3d55795` | `GuestProgram`; viewer and IllEd are scenes; CSim through a temporary adapter |
 | M3 | done | Frame v8 `SelectWorld`, `ShowWorld`, `DestroyWorld`; `GuestSceneWorlds` |
 | M4 | done | M4a scenes and home zoom; M4b kept canvas and Resume row; M4c shared settings |
-| M5 | not started | Host: modules removed |
+| M5 | done | `RuntimeShell`, `WasmProgram`, `DebugOverlay`; engine frame phases; modules deleted |
 | M6 | not started | Leftovers, template, optional `Scene` rename |
 | M7 | not started | Optional crossfade |
 | M8 | not started | Decisions and documentation |
@@ -282,3 +282,23 @@ returns nothing outside `docs/history` and archives.
   - Deviation: each scene keeps its own `ConfigurationMenu`; see design 6.8.
   - New test: `IllumoGame.MainMenu.SettingsShared`.
   - Full suite 679 of 679.
+- 2026-09-26, M5:
+  - The module registry is gone. `Illumo` runs a frame in phases, and
+    `RuntimeShell` puts the debug overlay and the one `WasmProgram` between
+    them, in the order of design section 3. The shell also owns capture and
+    bench.
+  - Where the shell lives, and why `Application.cpp` stays as the process
+    wrapper with a `run` callback: design section 13, M5.
+  - `TestIllumoHost` lost its 7 module-mechanics cases and gained
+    `FramePhases`; `Illumo.Wasm.RuntimeShell` is new.
+  - Benches and screenshots are within noise of M0 and M4. The Debug runtime
+    starts and stops with the overlay.
+  - Found: the registry used to destroy modules inside `Illumo::shutdown`.
+    Now whatever owns a program or a director must destroy it before
+    shutdown, since scene content holds engine assets. IllEd's native close
+    tool destroyed its director late, a use-after-free that AddressSanitizer
+    caught. It is fixed, and the engine's AGENTS guidance states the rule. The
+    runtime already destroys its shell first.
+  - `Templates/SpinningCube` still implements `IModule`; nothing in the
+    workspace builds it, and M6 converts it.
+  - Full suite 674 of 674.

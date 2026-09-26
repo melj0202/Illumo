@@ -12,9 +12,9 @@ class IRenderWindow;
 // FrameRenderList (kept as type name Scene for source stability).
 //
 // Role: ordered, non-owning layered list of drawables rebuilt every frame by
-// modules via IModule::DispatchDrawables (World → UI → Debug). Each layer can
-// define an ordered sequence of RenderPass descriptors (defaults to a single
-// DrawPass to the main backbuffer if unspecified).
+// the program and the debug overlay as they dispatch (World → UI → Debug). Each
+// layer can define an ordered sequence of RenderPass descriptors (defaults to
+// a single DrawPass to the main backbuffer if unspecified).
 class Scene
 {
 public:

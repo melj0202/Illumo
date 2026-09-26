@@ -380,6 +380,10 @@ drawing two scenes' worlds at once (O5).
   runtime is the only host executable. The platform entry calls the runtime
   directly.
 
+*As built (M5):* `RuntimeShell` moved into the Wasm library so it can be
+tested with a real guest. `Application.cpp` kept the process wrapper, and the
+definition's `run` callback is the runtime's loop (section 13, M5).
+
 ### 6.8 Products
 
 **CSim** (`IllumoGame/Source/Wasm/GameApplication.cpp` becomes
@@ -678,3 +682,42 @@ off, uncapped), CSim storage with the frame cap off.
   - CSim's paused canvas matches M0 as at M2, and the return to the title
     works.
 - Full Release suite 681 of 681.
+
+### M5 (2026-09-26, branch `scene-programs`)
+
+- **Host without modules:** `IModule`, `IModuleHost`,
+  `IllumoContext::moduleHost` and `Illumo`'s registry, transitions and
+  rollback are gone. `Illumo` exposes a frame as phases (`beginUpdate`,
+  `endUpdate`, `beginRender`, `endRender`) and close as `shouldClose` and
+  `deferClose`. `WasmProgram` and `DebugOverlay` are concrete classes.
+- **Deviations from section 6.7:**
+  - `RuntimeShell` lives in the Wasm library (`Illumo/Wasm/RuntimeShell.h`),
+    not in `RuntimeApplication.cpp`, so a test can drive it with a real guest.
+    `RuntimeApplication.cpp` keeps the launch options and builds the shell.
+  - `Application.cpp` stays as the process wrapper (logger, settings, command
+    line, startup report, relaunch). `IllumoApplicationDefinition` trades
+    `createRequiredModule` and `exitCode` for `run`, the runtime's loop, and
+    the platform entry is unchanged.
+- **Tests:**
+  - `TestIllumoHost`: the 7 module-mechanics cases are deleted. Close
+    negotiation, global hotkeys and both pipeline cases run on the phases, and
+    `Illumo.Host.FramePhases` is new. The debug overlay cases drive
+    `DebugOverlay` directly (Debug: 19 of 19 host and scene tests).
+  - New `Illumo.Wasm.RuntimeShell`: a real guest through `start`, whole
+    frames, close and `stop`; a program that fails to start fails the run.
+  - IllEd's native close tool drives `EditorScene` through a director.
+- **Benches** (cap-off storage, 3 runs each):
+  - settled title: 1,054-1,360 FPS;
+  - paused canvas: 1,813-1,819 FPS (1,852 at M0);
+  - return to the title: 1.8-2.7 ms worst frame, 1.0-1.1 ms worst update.
+- **Parity:**
+  - CSim's paused canvas matches M4 apart from the pointer and the menu
+    button's halo;
+  - IllEd matches M0 apart from the status bar's pointer coordinates;
+  - IllMeshViewer differs by 231 pixels, none by more than 52.
+  - The Debug runtime starts CSim with the overlay on top and shuts down
+    cleanly.
+- Full Release suite 674 of 674 (679, less the 7 deleted cases, plus
+  `FramePhases` and `RuntimeShell`).
+- Still to go: `Templates/SpinningCube` implements `IModule` and is converted
+  in M6; documents are M8.

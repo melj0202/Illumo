@@ -10,7 +10,7 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Wasm/WasmFileServices.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
-#include <Illumo/Wasm/WasmGameModule.h>
+#include <Illumo/Wasm/WasmProgram.h>
 #include <Illumo/Wasm/WasmGameServices.h>
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Console.h>
@@ -35,6 +35,9 @@ runWasmAudioTest(const std::string& name);
 // TestWasmWorld.cpp: frame schema v6 world operations.
 bool
 runWasmWorldTest(const std::string& name);
+// TestRuntimeShell.cpp: the runtime's frame around a program (D-E31).
+bool
+runRuntimeShellTest(const std::string& name);
 // TestWasmVisuals.cpp: frame schema v7 visuals and compositions.
 bool
 runWasmVisualTest(const std::string& name);
@@ -1362,13 +1365,13 @@ run(const std::string& name)
         };
         std::vector<std::byte> mod(modCharacters.size());
         std::memcpy(mod.data(), modCharacters.data(), modCharacters.size());
-        WasmGameModule modded(module, {}, {}, std::move(mod));
+        WasmProgram modded(module, {}, {}, std::move(mod));
         testTrue(counters,
-                 modded.Start(&context),
+                 modded.start(context),
                  "Optional mod cannot prevent base game startup");
-        modded.Update(1.0 / 60.0);
+        modded.update(1.0 / 60.0);
         Scene modScene(&window, &camera);
-        modded.DispatchDrawables(&modScene);
+        modded.dispatch(modScene);
         mock.sawModColor = false;
         renderer.BeginFrame();
         renderer.RenderScene(&modScene, &camera);
@@ -1383,9 +1386,9 @@ run(const std::string& name)
           mock.sawModColor == valid,
           "Separate mod message changes guest-generated paddle geometry");
         testTrue(counters,
-                 modded.error().empty() && modded.OnCloseRequested(),
+                 modded.error().empty() && modded.closeRequested(),
                  "Base game continues after optional mod failure");
-        modded.Exit();
+        modded.stop();
       }
       return counters.failures == 0;
     }
@@ -1413,26 +1416,26 @@ run(const std::string& name)
       std::filesystem::create_directory(files.storage);
       std::ofstream(files.package / "asset.txt", std::ios::binary) << "abc";
     }
-    WasmGameModule game(
+    WasmProgram game(
       std::move(module), {}, {}, {}, std::move(worker), files);
     testTrue(counters,
-             game.Start(&context),
+             game.start(context),
              "Generic host starts actual independent WASM game");
     std::printf("%s\n", game.error().c_str());
     for (int tick = 0; tick < 10; ++tick) {
-      game.Update(1.0 / 60.0);
+      game.update(1.0 / 60.0);
     }
     if (name == "GameJobs" || name == "GameFiles") {
       const std::chrono::steady_clock::time_point deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(10);
-      while (!game.OnCloseRequested() && game.error().empty() &&
+      while (!game.closeRequested() && game.error().empty() &&
              std::chrono::steady_clock::now() < deadline) {
-        game.Update(1.0 / 60.0);
+        game.update(1.0 / 60.0);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
     Scene scene(&window, &camera);
-    game.DispatchDrawables(&scene);
+    game.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
     renderer.EndFrame();
@@ -1442,9 +1445,9 @@ run(const std::string& name)
                "Guest-owned game geometry reaches native token backend");
     testTrue(counters,
              game.error().empty() && renderer.frameError().empty() &&
-               game.OnCloseRequested(),
+               game.closeRequested(),
              "Guest update/render/close lifecycle succeeds");
-    game.Exit();
+    game.stop();
     if (!fileTestRoot.empty()) {
       std::printf("%s\n", game.error().c_str());
       std::error_code fileError;
@@ -1455,9 +1458,9 @@ run(const std::string& name)
                "Actual guest streams a multi-block atomic save");
       std::filesystem::remove_all(fileTestRoot);
     }
-    WasmGameModule missing({});
+    WasmProgram missing({});
     testTrue(counters,
-             !missing.Start(&context),
+             !missing.start(context),
              "Missing guest fails without native fallback");
     return counters.failures == 0;
   }
@@ -1663,7 +1666,8 @@ main(int argc, char** argv)
               "Wasm.AudioServices\nIllumo.Wasm.GuestAudio\nIllumo.Wasm."
               "WorldFrameValidation\nIllumo.Wasm.WorldOperations\nIllumo.Wasm."
               "WorldAddressingValidation\nIllumo.Wasm.WorldsPerScene\nIllumo.Wasm."
-              "VisualFrameValidation\nIllumo.Wasm.VisualOperations");
+              "VisualFrameValidation\nIllumo.Wasm.VisualOperations\nIllumo.Wasm."
+              "RuntimeShell");
     return 0;
   }
   if (argc != 3 || std::string(argv[1]) != "--run") {
@@ -1681,6 +1685,9 @@ main(int argc, char** argv)
   }
   if (name.starts_with("Illumo.Wasm.World")) {
     return runWasmWorldTest(name.substr(12)) ? 0 : 1;
+  }
+  if (name == "Illumo.Wasm.RuntimeShell") {
+    return runRuntimeShellTest(name.substr(12)) ? 0 : 1;
   }
   return run(name.substr(12)) ? 0 : 1;
 }

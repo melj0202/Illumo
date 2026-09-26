@@ -1,13 +1,11 @@
 #pragma once
 
 #include <Illumo/Engine/FrameProfiler.h>
-#include <Illumo/Engine/IModuleHost.h>
 #include <Illumo/Engine/IllumoContext.h>
 
 #include <functional>
 #include <memory>
 #include <string>
-#include <vector>
 
 class AssetManager;
 class Camera;
@@ -16,7 +14,6 @@ class CommandRegistry;
 class EnvVars;
 class IBackend;
 class IEnvVars;
-class IModule;
 class InputManager;
 class Renderer;
 class Scene;
@@ -29,17 +26,21 @@ struct IllumoConfig
 
 class IllumoTestAccess;
 
-enum class ModuleRequirement
-{
-  Optional,
-  Required
-};
-
-class Illumo : public IModuleHost
+// The engine's services (window, renderer, assets, console, input, scene) and
+// the fixed parts of a frame. The runtime (D-E31) drives a frame in phases,
+// with its debug overlay and program in between:
+//   1. beginUpdate: input, global hotkeys (F11, F3, F5) and the camera;
+//   2. the debug overlay's update, then the program's;
+//   3. endUpdate: key and character events nobody read are dropped;
+//   4. beginRender: the frame's drawables are cleared;
+//   5. the program dispatches, then the debug overlay (drawn on top);
+//   6. endRender: assets are pumped and the frame is rendered and presented.
+// Every phase does nothing before initialize or after shutdown.
+class Illumo
 {
 public:
   explicit Illumo(IllumoConfig config = {});
-  ~Illumo() override;
+  ~Illumo();
 
   Illumo(const Illumo&) = delete;
   Illumo& operator=(const Illumo&) = delete;
@@ -52,20 +53,22 @@ public:
   FrameProfiler& frameProfiler() { return m_frameProfiler; }
 
   bool initialize();
-  void addModule(std::unique_ptr<IModule> module,
-                 ModuleRequirement requirement = ModuleRequirement::Optional);
-  bool startModules();
-  void update(double dt);
-  void render();
+  void beginUpdate(double dt);
+  void endUpdate();
+  // The frame's scene, emptied for this frame's drawables. Null before
+  // initialize.
+  Scene* beginRender();
+  void endRender();
+  // Releases every service. The program must have stopped first.
   void shutdown() noexcept;
-
-  void RequestTransition(std::unique_ptr<IModule> nextModule) override;
-  bool HasPendingTransition() const override;
 
   IllumoContext& context();
   const IllumoContext& context() const;
+  // The window asked to close (or restart), or there is no window.
   bool shouldClose() const;
-  bool processCloseRequest();
+  // Keeps the window open after a close request the program declined; a
+  // restart that rode on the request is dropped too.
+  void deferClose();
 
 private:
   friend class IllumoTestAccess;
@@ -75,20 +78,8 @@ private:
   using BackendFactory =
     std::function<std::unique_ptr<IBackend>(IRenderWindow*)>;
 
-  struct RegisteredModule
-  {
-    std::unique_ptr<IModule> module;
-    ModuleRequirement requirement{ ModuleRequirement::Optional };
-    bool started{ false };
-  };
-
   void applyHostDefaults();
   void clearContext();
-  void stopModule(RegisteredModule& registration, bool force) noexcept;
-  void rollbackStartedModules() noexcept;
-  void applyPendingModuleTransition();
-  void updateStartedModules(ModuleRequirement requirement, double dt);
-  void dispatchStartedModules(ModuleRequirement requirement);
   void processGlobalHotkeys();
   void configureScenePipeline();
   void releaseServices();
@@ -107,11 +98,7 @@ private:
   std::unique_ptr<InputManager> m_inputManager;
   std::unique_ptr<Scene> m_scene;
   IllumoContext m_context{};
-  std::vector<RegisteredModule> m_modules;
-  std::unique_ptr<IModule> m_pendingModuleTransition;
   bool m_initialized{ false };
-  bool m_modulesStarted{ false };
-  bool m_terminalCloseRequested{ false };
   bool m_motionBlurPipelineConfigured{ false };
   float m_configuredBlurAmount{ 0.0f };
   float m_configuredBlurMax{ 0.0f };

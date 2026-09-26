@@ -275,10 +275,10 @@ Ruleset truth:
 |---|---|
 | Application runner and main loop | `Illumo/Source/Engine/Application.cpp` |
 | Public library API | `Illumo/Include/Illumo/*` |
-| Host, services, modules | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers |
+| Host, services, frame phases | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers, `Illumo/Source/Wasm/RuntimeShell.cpp` |
 | Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
-| CA modes and editor | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
-| World editor | `IllEd/Source/EditorModule*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
+| CA modes and editor | `IllumoGame/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
+| World editor | `IllEd/Source/EditorScene*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
 | Scene format, packages, virtual file tree | `Illumo/Include/Illumo/Content/*`, `Illumo/Source/Content/*`, `Illumo/tools/IllumoPack.cpp` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
 | Sound effects (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `IllumoGame/Source/Game/CSimSounds.*` |
@@ -385,7 +385,7 @@ Clang/LLVM coverage:
 Headless tests cover typed/generational MockBackend resources,
 Renderer/token/style/asset flow, retained scene hierarchy, painter-correct
 primitives and animation, rulesets,
-CellContext, CellGameModule commands and file-backed save/load, Canvas
+CellContext, CanvasScene commands and file-backed save/load, Canvas
 domain/fade/dirty behavior, input, environment/logging, SysCmdLine, and
 CommandLine/GLString/SplashText tokens. `ILLUMO_ENABLE_COVERAGE=ON` adds the
 Clang/LLVM `IllumoCoverage` target, an 85% production-line gate, and an HTML
@@ -428,8 +428,9 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 ## Project-wide invariants
 
 - Illumo owns process entry, platform services, BuildInfo, SysCmdLine, logging
-  lifetime, DebugModule composition, and the frame loop. IllEd supplies
-  editor defaults/CLI metadata and its required editor-module factory.
+  lifetime and the frame phases. `IllumoRuntime`'s `RuntimeShell` runs the
+  frame loop around its one `WasmProgram` and, in debug-tool builds, the
+  `DebugOverlay` (D-E31). There is no module registry and no native product.
   Illumo must not depend on Game, Rulesets, or IllEd.
 - Content layering: core `Illumo` never includes `<Illumo/Content/...>`;
   `Illumo::Content` depends only on `Illumo::Illumo` (never on
@@ -455,14 +456,14 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   launch options are never persisted. Frame schema changes, new capabilities
   or new imports require decoder/deny tests with the change.
 - `IllumoContext` is a non-owning pointer bag frozen after engine startup;
-  the one exception is `fileTree`, which the module owning a file tree (the
-  WASM host) publishes during Start and withdraws on Exit.
-  Failed optional modules remain inactive; a failed required module rolls back
-  every accepted module and fails startup. Each product supplies one required
-  module; `DebugModule` is optional.
+  the one exception is `fileTree`, which the program owning a file tree (the
+  WASM host) publishes when it starts and withdraws when it stops.
+  A program that fails to start fails the launch; a debug overlay that fails
+  to start is dropped. Inside a program, scenes are managed by its
+  `SceneDirector`, and a failed first scene closes the product.
 - Production consumers include only `<Illumo/...>` headers. Test-only support
   is exposed separately by `Illumo::TestSupport`.
-- Runtime window, input, module, rendering, and OpenGL work is main-thread
+- Runtime window, input, program, rendering, and OpenGL work is main-thread
   affine unless a documented subsystem contract explicitly provides workers.
 - Game and Rulesets do not issue raw OpenGL calls or depend on OpenGL types.
 - Production drawables append `RenderCommand` tokens to the backend-neutral

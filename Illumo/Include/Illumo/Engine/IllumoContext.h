@@ -15,11 +15,11 @@
 #include <Illumo/Services/FileTreeSource.h>
 #include <Illumo/Services/InputManager.h>
 
-class IModuleHost;
 class FrameProfiler;
 class SceneDirector;
 
-// Non-owning service bag passed to IModule::Start.
+// Non-owning service bag passed to a program, its scenes and the debug overlay
+// when they start.
 struct IllumoContext
 {
   Scene* scene{ nullptr };
@@ -31,13 +31,12 @@ struct IllumoContext
   IEnvVars* envVars{ nullptr };
   Camera* camera{ nullptr };
   CommandRegistry* commandRegistry{ nullptr };
-  IModuleHost* moduleHost{ nullptr };
   // The program's scenes (D-E31), when the product runs as a scene program.
   // camera and renderWorld follow the active scene.
   SceneDirector* scenes{ nullptr };
   // The host's mounted file tree, when it has one (IllumoRuntime). Published
-  // by the module that owns the tree during Start and withdrawn on Exit;
-  // tools read it at use time, never cache it.
+  // by the program that owns the tree when it starts and withdrawn when it
+  // stops; tools read it at use time, never cache it.
   const IFileTreeSource* fileTree{ nullptr };
   // Extra windows for detached tool panels, when the host can show them
   // (IllumoRuntime guests granted the Windows capability). Composed by the
@@ -56,7 +55,7 @@ struct IllumoContext
   FrameProfiler* frameProfiler{ nullptr };
 };
 
-// Required wiring for DebugModule (console, FPS overlay, env flags).
+// Required wiring for DebugOverlay (console, FPS overlay, env flags).
 inline bool
 IllumoContextHasDebugCore(const IllumoContext* c)
 {

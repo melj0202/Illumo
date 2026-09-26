@@ -66,12 +66,15 @@ add_library(IllumoWasmRendering STATIC
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmRenderServices.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGameServices.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmFileServices.cpp"
-  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGameModule.cpp"
-  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmPanelWindows.cpp")
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmProgram.cpp"
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmPanelWindows.cpp"
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/RuntimeShell.cpp")
 target_link_libraries(IllumoWasmRendering PUBLIC Illumo::WasmRuntime Illumo::Illumo Illumo::Content)
 # Tracy zones around guest exchanges; the client itself is compiled by Illumo.
+# The runtime shell prints its capture and benchmark results as JSON.
 target_include_directories(IllumoWasmRendering SYSTEM PRIVATE
-  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/tracy-0.13.1/public")
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/tracy-0.13.1/public"
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include")
 illumo_configure_runtime_target(IllumoWasmRendering)
 
 include(ExternalProject)
@@ -268,6 +271,7 @@ if(BUILD_TESTING)
     "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmAudio.cpp"
     "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmWorld.cpp"
     "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmVisuals.cpp"
+    "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestRuntimeShell.cpp"
     "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/Audio.cpp")
   target_link_libraries(IllumoWasmFrameTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
   target_compile_definitions(IllumoWasmFrameTests PRIVATE "ILLUMO_PADDLE_GUEST=\"${_guest_build}/PaddleGuest.wasm\"")
@@ -283,7 +287,7 @@ if(BUILD_TESTING)
   add_dependencies(IllumoWasmFrameTests IllumoGuestBuild)
   illumo_configure_runtime_target(IllumoWasmFrameTests)
   illumo_stage_msvc_asan(IllumoWasmFrameTests)
-  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices RetainedResources AudioServiceDecoder AudioServices GuestAudio WorldFrameValidation WorldOperations WorldAddressingValidation WorldsPerScene VisualFrameValidation VisualOperations)
+  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices RetainedResources AudioServiceDecoder AudioServices GuestAudio WorldFrameValidation WorldOperations WorldAddressingValidation WorldsPerScene VisualFrameValidation VisualOperations RuntimeShell)
     add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmFrameTests --run "Illumo.Wasm.${_case}")
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20 WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmFrameTests>")
   endforeach()
