@@ -180,6 +180,7 @@ illumo_add_guest(IllumoGame
   ../IllumoGame/Source/Game/RuleCatalogOverlay.cpp
   ../IllumoGame/Source/Game/RulesetWorkshopMenu.cpp
   ../IllumoGame/Source/Game/SimulationRunnerGeneration.cpp
+  ../IllumoGame/Source/Game/SimulatorSettings.cpp
   ../IllumoGame/Source/Wasm/SimulationLanes.cpp
   ../IllumoGame/Source/Wasm/SimulationRunnerGuest.cpp)
 target_include_directories(IllumoGame SYSTEM PRIVATE

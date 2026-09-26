@@ -17,9 +17,9 @@ struct SimulatorConfiguration
   std::string ruleSet = "GAME_OF_LIFE";
   std::int64_t worldChunkWidth = 0;
   std::int64_t worldChunkHeight = 0;
-  long tps = 12;
+  long tps = 30;
   double speedFactor = 1.0;
-  double fadeSpeed = 6.0;
+  double fadeSpeed = 8.0;
   bool vsync = true;
   bool editHints = true;
   bool fullscreen = false;

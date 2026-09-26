@@ -4,6 +4,7 @@
 #include "Game/CSimScenes.h"
 #include "Game/TitleScene.h"
 #include "Game/RuleCatalogLoader.h"
+#include "Game/SimulatorSettings.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
@@ -771,6 +772,97 @@ testMainMenuConsoleCommands()
            "play command opens canvas setup");
 }
 
+// The title and the canvas keep CSim's settings through SimulatorSettings
+// (D-E31 M4c): stored values out of range read as the product defaults on
+// either screen, and both refuse the same configurations.
+static void
+testSettingsShared()
+{
+  testSection("TitleScene: settings read and check like the canvas's");
+  MainMenuFixture fixture;
+  testTrue(g, fixture.started, "menu started");
+  fixture.env.setVar("tps", 5000);
+  fixture.env.setVar("speedFactor", 0.0);
+  fixture.env.setVar("cellFadeSpeed", -1.0);
+  fixture.env.setVar("uiScale", 0.5);
+  fixture.env.setVar("WorldChunksX", 4);
+  fixture.env.setVar("WorldChunksY", 0);
+  fixture.env.setVar("RuleSetString", "NOT_A_RULE");
+
+  SimulatorConfiguration stored;
+  SimulatorSettings::read(&fixture.env, &stored);
+  testTrue(g,
+           stored.tps == SimulatorSettings::kDefaultTps &&
+             stored.speedFactor == 1.0 &&
+             stored.fadeSpeed == SimulatorSettings::kDefaultFadeSpeed &&
+             stored.uiScale == 1.0 && stored.worldChunkWidth == 0 &&
+             stored.worldChunkHeight == 0 && stored.ruleSet == "GAME_OF_LIFE" &&
+             stored.family == "LIFE_LIKE_BINARY",
+           "settings out of range read as the product defaults");
+  testTrue(g, SimulatorSettings::valid(stored), "what is read can be applied");
+
+  fixture.module.selectItemForTesting(2);
+  fixture.module.activateSelectedItemForTesting();
+  const ConfigurationMenu* menu = fixture.module.settingsMenuForTesting();
+  SimulatorConfiguration shown;
+  testTrue(g,
+           fixture.module.isSettingsOpenForTesting() && menu != nullptr &&
+             menu->readConfiguration(&shown, nullptr) &&
+             shown.tps == stored.tps && shown.fadeSpeed == stored.fadeSpeed &&
+             shown.ruleSet == stored.ruleSet &&
+             shown.worldChunkWidth == 0 && shown.worldChunkHeight == 0,
+           "the title's Settings menu opens on the shared read");
+
+  SimulatorConfiguration refused = stored;
+  refused.tps = 0;
+  bool anyAccepted = SimulatorSettings::valid(refused);
+  refused = stored;
+  refused.uiScale = 0.5;
+  anyAccepted = anyAccepted || SimulatorSettings::valid(refused);
+  refused = stored;
+  refused.worldChunkWidth = 4;
+  anyAccepted = anyAccepted || SimulatorSettings::valid(refused);
+  refused = stored;
+  refused.family = "WIREWORLD_FAMILY";
+  anyAccepted = anyAccepted || SimulatorSettings::valid(refused);
+  testTrue(g, !anyAccepted, "out-of-range and mismatched settings are refused");
+
+  SimulatorConfiguration changed = stored;
+  changed.tps = 120;
+  changed.fadeSpeed = 2.5;
+  changed.worldChunkWidth = 3;
+  changed.worldChunkHeight = 5;
+  changed.panSpeed = 900;
+  SimulatorSettings::write(&fixture.env, changed);
+  SimulatorConfiguration reread;
+  SimulatorSettings::read(&fixture.env, &reread);
+  testTrue(g,
+           reread.tps == 120 && reread.fadeSpeed == 2.5 &&
+             reread.worldChunkWidth == 3 && reread.worldChunkHeight == 5 &&
+             reread.panSpeed == 900 && reread.ruleSet == "GAME_OF_LIFE",
+           "written settings read back");
+
+  // The canvas reads the same settings over its live world, and refuses what
+  // the title refuses.
+  fixture.module.stop();
+  fixture.started = false;
+  fixture.env.setVar("tps", 5000);
+  CanvasScene canvas{ NewSimulationConfiguration() };
+  testTrue(g, canvas.start(fixture.context), "canvas started");
+  const SimulatorConfiguration live =
+    CanvasSceneTestAccess::currentConfiguration(canvas);
+  testTrue(g,
+           live.tps == SimulatorSettings::kDefaultTps &&
+             live.fadeSpeed == 2.5 && live.panSpeed == 900,
+           "the canvas reads the shared settings");
+  refused = live;
+  refused.tps = 0;
+  testTrue(g,
+           !CanvasSceneTestAccess::applyConfiguration(canvas, refused),
+           "the canvas refuses what the title refuses");
+  canvas.stop();
+}
+
 static void
 testCanvasSetupValidation()
 {
@@ -1087,6 +1179,8 @@ registerMainMenuTests(IllumoTestRegistry& registry)
                []() { return runMainMenuCase(testSettingsMouseIsolation); });
   registry.add("IllumoGame.MainMenu.RestartPrompt",
                []() { return runMainMenuCase(testMainMenuRestartPrompt); });
+  registry.add("IllumoGame.MainMenu.SettingsShared",
+               []() { return runMainMenuCase(testSettingsShared); });
   registry.add("IllumoGame.MainMenu.SettingsApply",
                []() { return runMainMenuCase(testMainMenuSettingsApply); });
   registry.add("IllumoGame.MainMenu.StartAndDrawables",

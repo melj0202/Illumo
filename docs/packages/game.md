@@ -463,8 +463,9 @@ keys or flat), cell glow, grid lines, the corner FPS counter and memory
 readout (`PerformanceOverlay`, drawn by the guest over every screen), zoom
 sensitivity, invert zoom, arrow-key pan speed, autosave (`autosave.csim` in
 private storage; `load autosave` restores it) and confirm clearing
-(`clear_canvas` asks; `clear_canvas yes` skips it); `SimulatorSettings` owns
-their keys, defaults and ranges. Numeric settings (world width/height, TPS,
+(`clear_canvas` asks; `clear_canvas yes` skips it). `SimulatorSettings` owns
+every setting's key, default and range; the title and the canvas read, check
+and write through it (D-E31). Numeric settings (world width/height, TPS,
 speed multiplier, FPS cap, fade speed, sound volume, UI scale, glow, zoom
 step, pan speed, autosave) are sliders over fixed stops,
 stepped with Left/Right or dragged; typing digits still enters an exact value

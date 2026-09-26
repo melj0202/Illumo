@@ -107,7 +107,8 @@ Open questions for the owner are in section 11.
 - **CSim:**
   - One program, `CSimProgram`, with two scenes: `TitleScene` and
     `CanvasScene`.
-  - There is one Settings menu, owned by the program.
+  - There is one Settings menu, owned by the program. (As built, one
+    settings implementation serves a menu per scene; see section 6.8.)
   - Returning to the title keeps the canvas; creating or loading a simulation
     replaces it.
 - **IllEd and IllMeshViewer:** one program with one scene each.
@@ -396,6 +397,18 @@ drawing two scenes' worlds at once (O5).
 
   This replaces today's two copies of `currentConfiguration` and
   `applyConfiguration`.
+
+  *As built (M4c):* the two copies are gone, but each scene keeps its own
+  `ConfigurationMenu` and restart prompt. `SimulatorSettings` holds the one
+  read, check and write of every stored setting, with the product defaults
+  and the canvas's ranges. The title applies it as the defaults for the next
+  world. The canvas reads it over its live world and applies world changes
+  live. A program-owned menu would need a channel from the program to the
+  active scene for the live world and the restart prompt, and about 30
+  native settings tests reach the menu through its scene. With the code
+  shared, the two instances behave the same. Only one can be open, because a
+  scene's `leave` closes its overlays. The program here is `IllumoGameGuest`
+  (a `GuestProgram`), with the flow in `CSimScenes`.
 - **`TitleScene`** (from `MainMenuModule`) keeps:
   - the background Immigration world (a `CellContext`);
   - the title UI layers;

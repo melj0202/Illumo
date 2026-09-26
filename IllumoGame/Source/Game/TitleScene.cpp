@@ -12,13 +12,11 @@
 #include "Rulesets/RuleSetRegistry.h"
 #include "SimulatorSettings.h"
 #include <Illumo/Content/SceneDirector.h>
-#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
-#include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
@@ -688,91 +686,21 @@ SimulatorConfiguration
 TitleScene::currentConfiguration() const
 {
   SimulatorConfiguration config;
-  if (ic == nullptr || ic->envVars == nullptr) {
-    return config;
+  if (ic != nullptr) {
+    SimulatorSettings::read(ic->envVars, &config);
   }
-  config.ruleSet = ic->envVars->getVar("RuleSetString").value;
-  if (config.ruleSet.empty()) {
-    config.ruleSet = ic->envVars->getVar("ModeString").value;
-  }
-  if (config.ruleSet.empty()) {
-    config.ruleSet = "GAME_OF_LIFE";
-  }
-  config.family = ic->envVars->getVar("FamilyString").value;
-  const RuleSetDefinition* rule =
-    RuleSetRegistry::instance().getRuleSetDefinition(config.ruleSet);
-  if (rule != nullptr && config.family != rule->familyId) {
-    config.family = rule->familyId;
-  }
-  config.worldChunkWidth = ic->envVars->getVar("WorldChunksX").valueAsLong;
-  config.worldChunkHeight = ic->envVars->getVar("WorldChunksY").valueAsLong;
-  config.tps = ic->envVars->getVar("tps").valueAsLong;
-  if (config.tps <= 0) {
-    config.tps = 30;
-  }
-  config.speedFactor = ic->envVars->getVar("speedFactor").valueAsDouble;
-  if (config.speedFactor <= 0.0) {
-    config.speedFactor = 1.0;
-  }
-  config.fadeSpeed = ic->envVars->getVar("cellFadeSpeed").valueAsDouble;
-  if (config.fadeSpeed < 0.0) {
-    config.fadeSpeed = 8.0;
-  }
-  const EnvVar& hintsVar = ic->envVars->getVar("editHints");
-  config.editHints = hintsVar.value.empty() || hintsVar.valueAsBool;
-  const EnvVar& cursorVar = ic->envVars->getVar("softwareCursor");
-  config.softwareCursor = cursorVar.value.empty() || cursorVar.valueAsBool;
-  config.vsync = ic->envVars->getVar("vsync").valueAsBool;
-  config.fullscreen = ic->envVars->getVar("fullscreen").valueAsBool;
-  config.uiScale = UiScale::stored(ic->envVars->getVar("uiScale"));
-  const EnvVar& msaaVar = ic->envVars->getVar("msaa");
-  config.msaa = msaaVar.value.empty() ? 4 : msaaVar.valueAsLong;
-  config.fpsCap = getTargetFps(ic->envVars);
-  config.showInspector = ic->envVars->getVar("showInspector").valueAsBool;
-  config.reducedUiMotion = ic->envVars->getVar("reducedUiMotion").valueAsBool;
-  config.soundVolume = CSimSounds::volumeSetting(ic->envVars);
-  SimulatorSettings::read(ic->envVars, &config);
   return config;
 }
 
 bool
 TitleScene::applyConfiguration(const SimulatorConfiguration& configuration)
 {
-  if (ic == nullptr || ic->envVars == nullptr) {
-    return false;
-  }
-  if (configuration.fpsCap < 0 || configuration.fpsCap > 1000 ||
+  if (ic == nullptr || ic->envVars == nullptr ||
       !SimulatorSettings::valid(configuration)) {
-    return false;
-  }
-  const RuleSetDefinition* rule =
-    RuleSetRegistry::instance().getRuleSetDefinition(configuration.ruleSet);
-  if (rule == nullptr || rule->familyId != configuration.family) {
     return false;
   }
   const bool fullscreenChanged =
     configuration.fullscreen != ic->envVars->getVar("fullscreen").valueAsBool;
-  ic->envVars->setVar("FamilyString", configuration.family);
-  ic->envVars->setVar("RuleSetString", configuration.ruleSet);
-  ic->envVars->setVar("ModeString", configuration.ruleSet);
-  ic->envVars->setVar("WorldChunksX",
-                      static_cast<long>(configuration.worldChunkWidth));
-  ic->envVars->setVar("WorldChunksY",
-                      static_cast<long>(configuration.worldChunkHeight));
-  ic->envVars->setVar("tps", configuration.tps);
-  ic->envVars->setVar("speedFactor", configuration.speedFactor);
-  ic->envVars->setVar("cellFadeSpeed", configuration.fadeSpeed);
-  ic->envVars->setVar("fps", configuration.fpsCap);
-  ic->envVars->setVar("showInspector", configuration.showInspector);
-  ic->envVars->setVar("reducedUiMotion", configuration.reducedUiMotion);
-  ic->envVars->setVar("editHints", configuration.editHints);
-  ic->envVars->setVar("softwareCursor", configuration.softwareCursor);
-  ic->envVars->setVar("vsync", configuration.vsync);
-  ic->envVars->setVar("fullscreen", configuration.fullscreen);
-  ic->envVars->setVar("uiScale",
-                      UiScale::text(static_cast<float>(configuration.uiScale)));
-  ic->envVars->setVar("msaa", configuration.msaa);
-  ic->envVars->setVar("soundVolume", configuration.soundVolume);
   SimulatorSettings::write(ic->envVars, configuration);
   applyAmbientCellLook(ic->envVars, m_bgContext.get());
   if (fullscreenChanged && ic->window != nullptr) {

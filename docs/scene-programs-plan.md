@@ -12,7 +12,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 | M1 | done | `ProgramScene`, `SceneDirector` in `Illumo::Content`; 7 tests |
 | M2 | done, `a3d55795` | `GuestProgram`; viewer and IllEd are scenes; CSim through a temporary adapter |
 | M3 | done | Frame v8 `SelectWorld`, `ShowWorld`, `DestroyWorld`; `GuestSceneWorlds` |
-| M4 | in progress | M4a, M4b done (scenes, home zoom, kept canvas, Resume row); M4c one Settings menu |
+| M4 | done | M4a scenes and home zoom; M4b kept canvas and Resume row; M4c shared settings |
 | M5 | not started | Host: modules removed |
 | M6 | not started | Leftovers, template, optional `Scene` rename |
 | M7 | not started | Optional crossfade |
@@ -264,3 +264,21 @@ returns nothing outside `docs/history` and archives.
     - `IllumoGame.Wasm.PackageFrameAllocations` adds a round trip to the
       title and back, which settles to 0 allocations per frame.
   - Full suite 678 of 678.
+- 2026-09-26, M4c:
+  - `SimulatorSettings` (now with a `.cpp`) reads, checks and writes every
+    stored setting. The title's and the canvas's copies of
+    `currentConfiguration` and `applyConfiguration` shrink to calls into it.
+  - Drift it removes:
+    - the fallback for a missing or out-of-range tps was 30 on the title
+      and 12 on the canvas;
+    - the fade speed fallback was 8 on the title and 6 on the canvas;
+    - the title applied speeds, fades, UI scales and world sizes the canvas
+      refused.
+  - Both now use the product defaults (30 tps, fade 8, as in
+    `IllumoGameConfig`) and the canvas's ranges. `SimulatorConfiguration`'s
+    own defaults match. An unknown stored ruleset reads as Game of Life, and
+    an invalid stored world size reads as infinite, so the title's menu can
+    always apply.
+  - Deviation: each scene keeps its own `ConfigurationMenu`; see design 6.8.
+  - New test: `IllumoGame.MainMenu.SettingsShared`.
+  - Full suite 679 of 679.

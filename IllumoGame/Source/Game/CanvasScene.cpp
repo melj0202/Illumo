@@ -12,7 +12,6 @@
 #include "SimulatorSettings.h"
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Content/SceneDirector.h>
-#include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -21,7 +20,6 @@
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
-#include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
@@ -950,44 +948,12 @@ CanvasScene::currentConfiguration() const
   if (cellContext == nullptr || ic == nullptr || ic->envVars == nullptr) {
     return configuration;
   }
+  SimulatorSettings::read(ic->envVars, &configuration);
+  // The menu shows the world this canvas runs, not the one new canvases get.
   configuration.family = cellContext->getFamilyString();
   configuration.ruleSet = cellContext->getRuleSetString();
   configuration.worldChunkWidth = cellContext->getWorldChunkWidth();
   configuration.worldChunkHeight = cellContext->getWorldChunkHeight();
-  configuration.tps = ic->envVars->getVar("tps").valueAsLong;
-  if (configuration.tps < 1 || configuration.tps > 1000) {
-    configuration.tps = 12;
-  }
-  configuration.speedFactor = ic->envVars->getVar("speedFactor").valueAsDouble;
-  if (configuration.speedFactor <= 0.0 || configuration.speedFactor > 100.0) {
-    configuration.speedFactor = 1.0;
-  }
-  configuration.fadeSpeed = ic->envVars->getVar("cellFadeSpeed").valueAsDouble;
-  if (configuration.fadeSpeed < 0.0 || configuration.fadeSpeed > 100.0) {
-    configuration.fadeSpeed = 6.0;
-  }
-  const EnvVar& hintsVar = ic->envVars->getVar("editHints");
-  configuration.editHints = hintsVar.value.empty() || hintsVar.valueAsBool;
-  const EnvVar& cursorVar = ic->envVars->getVar("softwareCursor");
-  configuration.softwareCursor =
-    cursorVar.value.empty() || cursorVar.valueAsBool;
-  configuration.vsync = ic->envVars->getVar("vsync").valueAsBool;
-  configuration.fullscreen = ic->envVars->getVar("fullscreen").valueAsBool;
-  // 0 is automatic; explicit factors outside the menu's range read as 1x.
-  configuration.uiScale = UiScale::stored(ic->envVars->getVar("uiScale"));
-  if (configuration.uiScale != 0.0 &&
-      (configuration.uiScale < 1.0 || configuration.uiScale > 8.0)) {
-    configuration.uiScale = 1.0;
-  }
-  const EnvVar& msaaVar = ic->envVars->getVar("msaa");
-  configuration.msaa = msaaVar.value.empty() ? 4 : msaaVar.valueAsLong;
-  configuration.fpsCap = getTargetFps(ic->envVars);
-  configuration.showInspector =
-    ic->envVars->getVar("showInspector").valueAsBool;
-  configuration.reducedUiMotion =
-    ic->envVars->getVar("reducedUiMotion").valueAsBool;
-  configuration.soundVolume = CSimSounds::volumeSetting(ic->envVars);
-  SimulatorSettings::read(ic->envVars, &configuration);
   return configuration;
 }
 
@@ -995,27 +961,7 @@ bool
 CanvasScene::applyConfiguration(const SimulatorConfiguration& configuration)
 {
   if (cellContext == nullptr || ic == nullptr || ic->envVars == nullptr ||
-      !CellContext::IsKnownFamilyString(configuration.family) ||
-      !CellContext::IsKnownModeString(configuration.ruleSet) ||
-      !SparseCellGrid::isValidTopology(configuration.worldChunkWidth,
-                                       configuration.worldChunkHeight) ||
-      configuration.tps < 1 || configuration.tps > 1000 ||
-      !std::isfinite(configuration.speedFactor) ||
-      configuration.speedFactor <= 0.0 || configuration.speedFactor > 100.0 ||
-      !std::isfinite(configuration.fadeSpeed) ||
-      configuration.fadeSpeed < 0.0 || configuration.fadeSpeed > 100.0 ||
-      !std::isfinite(configuration.uiScale) ||
-      (configuration.uiScale != 0.0 &&
-       (configuration.uiScale < 1.0 || configuration.uiScale > 8.0)) ||
-      configuration.fpsCap < 0 || configuration.fpsCap > 1000 ||
       !SimulatorSettings::valid(configuration)) {
-    return false;
-  }
-
-  const RuleSetDefinition* requestedRule =
-    RuleSetRegistry::instance().getRuleSetDefinition(configuration.ruleSet);
-  if (requestedRule == nullptr ||
-      requestedRule->familyId != configuration.family) {
     return false;
   }
 
@@ -1028,9 +974,7 @@ CanvasScene::applyConfiguration(const SimulatorConfiguration& configuration)
   const bool fullscreenChanged =
     configuration.fullscreen != ic->envVars->getVar("fullscreen").valueAsBool;
   const bool msaaChanged =
-    configuration.msaa != (ic->envVars->getVar("msaa").value.empty()
-                             ? 4
-                             : ic->envVars->getVar("msaa").valueAsLong);
+    configuration.msaa != SimulatorSettings::msaa(ic->envVars);
 
   if (topologyChanged || rulesetChanged) {
     prepareGridMutation();
@@ -1049,28 +993,7 @@ CanvasScene::applyConfiguration(const SimulatorConfiguration& configuration)
     }
   }
 
-  ic->envVars->setVar("WorldChunksX",
-                      static_cast<long>(configuration.worldChunkWidth));
-  ic->envVars->setVar("WorldChunksY",
-                      static_cast<long>(configuration.worldChunkHeight));
-  ic->envVars->setVar("FamilyString", configuration.family);
-  ic->envVars->setVar("RuleSetString", configuration.ruleSet);
-  ic->envVars->setVar("ModeString", configuration.ruleSet);
-  ic->envVars->setVar("tps", configuration.tps);
-  ic->envVars->setVar("speedFactor", configuration.speedFactor);
-  ic->envVars->setVar("cellFadeSpeed", configuration.fadeSpeed);
-  ic->envVars->setVar("fps", configuration.fpsCap);
   inspectorEnabled = configuration.showInspector;
-  ic->envVars->setVar("showInspector", configuration.showInspector);
-  ic->envVars->setVar("reducedUiMotion", configuration.reducedUiMotion);
-  ic->envVars->setVar("editHints", configuration.editHints);
-  ic->envVars->setVar("softwareCursor", configuration.softwareCursor);
-  ic->envVars->setVar("vsync", configuration.vsync);
-  ic->envVars->setVar("fullscreen", configuration.fullscreen);
-  ic->envVars->setVar("uiScale",
-                      UiScale::text(static_cast<float>(configuration.uiScale)));
-  ic->envVars->setVar("msaa", configuration.msaa);
-  ic->envVars->setVar("soundVolume", configuration.soundVolume);
   SimulatorSettings::write(ic->envVars, configuration);
   syncCanvasLookFromEnv();
   // A changed interval counts from now.

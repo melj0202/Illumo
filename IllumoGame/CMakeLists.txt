@@ -30,6 +30,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/RulesetWorkshopMenu.cpp
   Source/Game/SimulationRunner.cpp
   Source/Game/SimulationRunnerGeneration.cpp
+  Source/Game/SimulatorSettings.cpp
   Source/Game/SparseCellGrid.cpp
   Source/Game/SparseWorkerPool.cpp
   Source/Rulesets/DataRuleSet.cpp
