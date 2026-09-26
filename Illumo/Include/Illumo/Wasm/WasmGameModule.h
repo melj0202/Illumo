@@ -96,6 +96,11 @@ private:
   IAudio* m_audio = nullptr;
   bool m_restartAllowed = false;
   std::vector<std::byte> m_completions;
+  // Per-frame exchange buffers, retained so steady frames reuse capacity.
+  GuestWireWriter m_input;
+  std::vector<std::byte> m_response;
+  std::vector<std::byte> m_queued;
+  std::vector<std::byte> m_modReply;
   std::string m_error;
   std::string m_modError;
 };

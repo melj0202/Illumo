@@ -189,6 +189,7 @@ CellContext::setRuleSetInternal(std::string familyString,
 
   delete ruleSet;
   ruleSet = newRuleSet.release();
+  ruleSetRevision += 1;
 
   FamilyString = familyString;
   RuleSetString = ruleSetString;

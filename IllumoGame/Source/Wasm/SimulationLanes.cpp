@@ -6,8 +6,6 @@
 #include <cstring>
 #include <functional>
 #include <limits>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 // Largest neighborhood radius a one-chunk-line halo can serve.
@@ -181,8 +179,27 @@ bool
 SimulationLaneRequest::read(std::span<const std::byte> bytes,
                             SimulationLaneRequest& output)
 {
-  GuestWireReader reader(bytes);
   SimulationLaneRequest request;
+  if (!decode(bytes, request)) {
+    return false;
+  }
+  output = std::move(request);
+  return true;
+}
+
+bool
+SimulationLaneRequest::decode(std::span<const std::byte> bytes,
+                              SimulationLaneRequest& request)
+{
+  // Fields a message kind does not carry return to their defaults; reused
+  // strings and patches keep their capacity.
+  request.partition = SimulationLanePartition{};
+  request.ruleId.clear();
+  request.rulePackage.clear();
+  request.patches.clear();
+  request.hasElementaryRow = false;
+  request.elementaryRow = SparseElementaryRow{};
+  GuestWireReader reader(bytes);
   const std::uint32_t magic = reader.u32();
   const std::uint32_t version = reader.u32();
   const std::uint32_t kind = reader.u32();
@@ -221,7 +238,6 @@ SimulationLaneRequest::read(std::span<const std::byte> bytes,
              !reader.finished()) {
     return false;
   }
-  output = std::move(request);
   return true;
 }
 
@@ -247,8 +263,22 @@ bool
 SimulationLaneReply::read(std::span<const std::byte> bytes,
                           SimulationLaneReply& output)
 {
-  GuestWireReader reader(bytes);
   SimulationLaneReply reply;
+  if (!decode(bytes, reply)) {
+    return false;
+  }
+  output = std::move(reply);
+  return true;
+}
+
+bool
+SimulationLaneReply::decode(std::span<const std::byte> bytes,
+                            SimulationLaneReply& reply)
+{
+  reply.changes.clear();
+  reply.hasElementaryRow = false;
+  reply.elementaryRow = SparseElementaryRow{};
+  GuestWireReader reader(bytes);
   const std::uint32_t magic = reader.u32();
   const std::uint32_t version = reader.u32();
   const std::uint32_t kind = reader.u32();
@@ -270,7 +300,6 @@ SimulationLaneReply::read(std::span<const std::byte> bytes,
     return false;
   }
   reply.kind = static_cast<SimulationLaneMessage>(kind);
-  output = std::move(reply);
   return true;
 }
 
@@ -295,16 +324,22 @@ SimulationLaneWorker::execute(std::span<const std::byte> bytes,
 try {
   output.clear();
   error.clear();
-  SimulationLaneRequest request;
-  if (!SimulationLaneRequest::read(bytes, request)) {
+  SimulationLaneRequest& request = m_request;
+  if (!SimulationLaneRequest::decode(bytes, request)) {
     error = "Malformed simulation lane request";
     return false;
   }
-  SimulationLaneReply reply;
+  SimulationLaneReply& reply = m_reply;
   reply.kind = SimulationLaneMessage::Ack;
   reply.session = request.session;
   reply.epoch = request.epoch;
   reply.generation = request.generation;
+  reply.advanceMilliseconds = 0.0;
+  reply.patchMilliseconds = 0.0;
+  reply.collectMilliseconds = 0.0;
+  reply.changes.clear();
+  reply.hasElementaryRow = false;
+  reply.elementaryRow = SparseElementaryRow{};
   if (request.kind == SimulationLaneMessage::SyncBegin) {
     RuleSetRegistry registry;
     if (!registry.loadRulePackage(request.rulePackage)) {
@@ -363,14 +398,20 @@ try {
       return false;
     }
   }
-  GuestWireWriter writer;
-  reply.write(writer);
-  output = writer.take();
+  m_writer.clear();
+  reply.write(m_writer);
+  output.assign(m_writer.data().begin(), m_writer.data().end());
   return true;
 } catch (const std::exception& exception) {
   output.clear();
   error = exception.what();
   return false;
+}
+
+static bool
+chunkAddressLess(const ChunkAddress& left, const ChunkAddress& right)
+{
+  return left.y < right.y || (left.y == right.y && left.x < right.x);
 }
 
 bool
@@ -380,35 +421,41 @@ SimulationLaneWorker::advance(const SimulationLaneRequest& request,
 {
   // Rows this lane computed but does not own return to their previous
   // contents, unless the coordinator sent their new truth.
-  std::vector<SparseChunkPatch> patches = request.patches;
-  std::unordered_set<ChunkAddress, ChunkAddressHash> sent;
-  sent.reserve(patches.size());
-  for (const SparseChunkPatch& patch : patches) {
-    if (!sent.insert(patch.address).second) {
-      error = "Duplicate lane patch";
-      return false;
-    }
+  m_patches.assign(request.patches.begin(), request.patches.end());
+  m_sent.clear();
+  for (const SparseChunkPatch& patch : m_patches) {
+    m_sent.push_back(patch.address);
+  }
+  std::sort(m_sent.begin(), m_sent.end(), chunkAddressLess);
+  if (std::adjacent_find(m_sent.begin(), m_sent.end()) != m_sent.end()) {
+    error = "Duplicate lane patch";
+    return false;
   }
   for (const SparseChunkPatch& restore : m_restore) {
-    if (!sent.contains(restore.address)) {
-      patches.push_back(restore);
+    if (!std::binary_search(
+          m_sent.begin(), m_sent.end(), restore.address, chunkAddressLess)) {
+      m_patches.push_back(restore);
     }
   }
   m_restore.clear();
   const std::chrono::steady_clock::time_point patchStart =
     std::chrono::steady_clock::now();
-  if (!m_grid->applyChunkPatches(patches)) {
+  if (!m_grid->applyChunkPatches(m_patches)) {
     error = "Lane patch failed";
     return false;
   }
-  std::unordered_map<ChunkAddress, SparseCellGrid::ChunkCells, ChunkAddressHash>
-    halo;
-  m_grid->visitChunks(
-    [&](const ChunkAddress& address, const SparseCellGrid::ChunkCells& cells) {
-      if (m_partition.isHaloChunk(address)) {
-        halo.emplace(address, cells);
-      }
-    });
+  m_halo.clear();
+  m_grid->visitChunks([this](const ChunkAddress& address,
+                             const SparseCellGrid::ChunkCells& cells) {
+    if (m_partition.isHaloChunk(address)) {
+      m_halo.push_back({ address, cells });
+    }
+  });
+  std::sort(m_halo.begin(),
+            m_halo.end(),
+            [](const HaloChunk& left, const HaloChunk& right) {
+              return chunkAddressLess(left.address, right.address);
+            });
   const std::uint64_t before = m_grid->getRevision();
   const std::chrono::steady_clock::time_point started =
     std::chrono::steady_clock::now();
@@ -429,6 +476,15 @@ SimulationLaneWorker::advance(const SimulationLaneRequest& request,
   const std::chrono::steady_clock::time_point advanced =
     std::chrono::steady_clock::now();
   reply.advanceMilliseconds = millisecondsBetween(started, advanced);
+  // As the native runner does after a self-advance: the inactive map catches
+  // up from this generation's journal when the next patches apply, instead
+  // of copying every chunk. Elementary rows write the inactive map directly,
+  // so those lanes keep the full copy.
+  if (!elementary &&
+      m_grid->captureGenerationDelta(before, &m_generationDelta, false) &&
+      !m_generationDelta.fullReplacement) {
+    m_grid->rememberInactiveGenerationDelta(m_generationDelta);
+  }
   if (m_grid->getRevision() != before) {
     const bool journaled = m_grid->visitChangedChunksSince(
       before,
@@ -445,13 +501,17 @@ SimulationLaneWorker::advance(const SimulationLaneRequest& request,
           reply.changes.push_back(patch);
           return;
         }
-        const std::unordered_map<ChunkAddress,
-                                 SparseCellGrid::ChunkCells,
-                                 ChunkAddressHash>::const_iterator previous =
-          halo.find(address);
-        patch.present = previous != halo.end();
+        const std::vector<HaloChunk>::const_iterator previous =
+          std::lower_bound(m_halo.begin(),
+                           m_halo.end(),
+                           address,
+                           [](const HaloChunk& chunk, const ChunkAddress& key) {
+                             return chunkAddressLess(chunk.address, key);
+                           });
+        patch.present =
+          previous != m_halo.end() && previous->address == address;
         if (patch.present) {
-          patch.cells = previous->second;
+          patch.cells = previous->cells;
         }
         m_restore.push_back(patch);
       });
@@ -592,7 +652,7 @@ SimulationLaneCoordinator::queueSync(const SparseCellGrid& published,
     begin.rulePackage = package;
     GuestWireWriter writer;
     begin.write(writer);
-    state.queue.push_back(writer.take());
+    state.queue.push_back(writer.data());
     std::vector<SparseChunkPatch>& chunks = relevant[lane];
     for (std::size_t first = 0; first < chunks.size();
          first += kSyncPatchesPerMessage) {
@@ -607,7 +667,7 @@ SimulationLaneCoordinator::queueSync(const SparseCellGrid& published,
                           chunks.begin() + static_cast<std::ptrdiff_t>(last));
       writer.clear();
       part.write(writer);
-      state.queue.push_back(writer.take());
+      state.queue.push_back(writer.data());
     }
   }
   m_synced = true;
@@ -687,19 +747,22 @@ SimulationLaneCoordinator::start(SparseCellGrid* working,
 void
 SimulationLaneCoordinator::queueAdvance()
 {
+  SimulationLaneRequest& advance = m_advance;
+  advance.kind = SimulationLaneMessage::Advance;
+  advance.session = m_session;
+  advance.epoch = m_epoch;
+  advance.generation = m_generation;
+  advance.hasElementaryRow = elementary();
+  advance.elementaryRow = m_nextRow;
   for (Lane& lane : m_lanes) {
-    SimulationLaneRequest advance;
-    advance.kind = SimulationLaneMessage::Advance;
-    advance.session = m_session;
-    advance.epoch = m_epoch;
-    advance.generation = m_generation;
-    advance.patches = std::move(lane.haloUpdates);
+    // Borrow the lane's halo updates for the write, then hand them back
+    // empty so both vectors keep their capacity.
+    advance.patches.swap(lane.haloUpdates);
+    m_writer.clear();
+    advance.write(m_writer);
+    advance.patches.swap(lane.haloUpdates);
     lane.haloUpdates.clear();
-    advance.hasElementaryRow = elementary();
-    advance.elementaryRow = m_nextRow;
-    GuestWireWriter writer;
-    advance.write(writer);
-    lane.queue.push_back(writer.take());
+    lane.queue.push_back(m_writer.data());
     lane.awaitingAdvance = true;
     lane.replied = false;
   }
@@ -724,16 +787,15 @@ SimulationLaneCoordinator::pump()
     // A busy lane this coordinator did not submit to still carries an
     // earlier session's request; its reply is drained and dropped.
     if (lane.outstanding || m_transport.busy(index)) {
-      std::vector<std::byte> bytes;
-      const int status = m_transport.poll(index, bytes);
+      const int status = m_transport.poll(index, m_pollBytes);
       if (status < 0) {
         fail("A simulation lane failed");
         return;
       }
       if (status > 0) {
         lane.outstanding = false;
-        SimulationLaneReply reply;
-        if (!SimulationLaneReply::read(bytes, reply)) {
+        SimulationLaneReply& reply = m_replyScratch;
+        if (!SimulationLaneReply::decode(m_pollBytes, reply)) {
           fail("Invalid simulation lane reply");
           return;
         }
@@ -748,7 +810,8 @@ SimulationLaneCoordinator::pump()
               fail("Unexpected simulation lane generation");
               return;
             }
-            lane.reply = std::move(reply);
+            // Swapped: the lane's previous reply becomes the next scratch.
+            std::swap(lane.reply, reply);
             lane.replied = true;
             lane.awaitingAdvance = false;
           }
@@ -856,12 +919,14 @@ SimulationLaneCoordinator::poll(SparseCellGrid** completedGrid,
   m_mergeReady = false;
   const std::chrono::steady_clock::time_point mergeStart =
     std::chrono::steady_clock::now();
-  const std::vector<SparseChunkPatch> merged = std::move(m_merged);
+  // Swapped with a retained drain so both keep their capacity.
+  m_mergedDrain.swap(m_merged);
   m_merged.clear();
+  const std::vector<SparseChunkPatch>& merged = m_mergedDrain;
   const double slowestLane = m_slowestAdvance;
   const double slowestPatch = m_slowestPatch;
   const double slowestCollect = m_slowestCollect;
-  SparseGenerationDelta result;
+  SparseGenerationDelta& result = m_resultDelta;
   if (!m_working->buildPatchDelta(merged, &result)) {
     fail("Simulation lane results could not be merged");
     return false;
@@ -894,7 +959,8 @@ SimulationLaneCoordinator::poll(SparseCellGrid** completedGrid,
     *completedGrid = m_working;
   }
   if (delta != nullptr) {
-    *delta = std::move(result);
+    // The caller's previous delta becomes the next result's storage.
+    std::swap(*delta, result);
   }
   if (elapsedMilliseconds != nullptr) {
     *elapsedMilliseconds = total;

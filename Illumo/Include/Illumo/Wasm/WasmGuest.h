@@ -42,9 +42,21 @@ private:
                   std::vector<std::byte>& output,
                   std::uint32_t maximum);
   bool fail(std::string reason);
+  // Copies a request into guest memory. A guest transfer buffer up to
+  // RetainedTransferBytes is kept for later calls; larger ones are freed
+  // after their call so a rare large request does not pin guest memory.
+  bool transfer(std::span<const std::byte> request,
+                std::int32_t& address,
+                bool& retained);
+  static constexpr std::uint32_t RetainedTransferBytes = 1024u * 1024u;
   WasmLimits m_limits;
   std::uint32_t m_messageLimit;
   std::unique_ptr<WasmInstance> m_instance;
+  // Retained between calls so steady frames reuse their capacity.
+  GuestWireWriter m_request;
+  std::vector<std::byte> m_reply;
+  std::int32_t m_transfer = 0;
+  std::uint32_t m_transferCapacity = 0;
   GuestDescriptor m_descriptor;
   std::string m_error;
   std::uint64_t m_session = 0;

@@ -88,6 +88,13 @@ private:
   void toggleSettingsMenu();
   void updateSelectionVisual();
   void updateEditHintsVisual(double dt);
+  // Lays out the hint footer's primitives; updateEditHintsVisual calls it
+  // only when the footer's inputs (m_editHintsLayout) change.
+  void buildEditHints(float width,
+                      float height,
+                      float scale,
+                      int windowHeight,
+                      const std::shared_ptr<Font>& font);
   bool isPointerOverEditHints() const;
   void updateInspectorVisual();
   void normalizeSelection(std::int64_t* x0,
@@ -222,6 +229,22 @@ private:
   GameVisual editHintsVisual;
   int editHintsInsetPixels = 0;
   int editHintsFullInsetPixels = 0;
+  // Inputs of the built hint footer. While they are unchanged the footer's
+  // primitives (and their strings) are kept instead of rebuilt each frame.
+  struct EditHintsLayout
+  {
+    int windowWidth = 0;
+    int windowHeight = 0;
+    float scale = 0.0f;
+    bool selection = false;
+    bool buffer = false;
+    std::uint64_t ruleSetRevision = 0;
+    const Font* font = nullptr;
+    bool built = false;
+    bool operator==(const EditHintsLayout&) const = default;
+  };
+  EditHintsLayout m_editHintsLayout;
+  float m_editHintsPanelHeight = 0.0f;
   bool paintStrokeActive = false;
   std::int64_t lastPaintX = 0;
   std::int64_t lastPaintY = 0;

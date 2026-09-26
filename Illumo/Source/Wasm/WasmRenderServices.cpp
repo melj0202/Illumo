@@ -306,9 +306,9 @@ try {
     results.records.push_back(std::move(result));
   }
   m_lastRequest = last;
-  GuestWireWriter writer;
-  results.write(writer);
-  completions = writer.take();
+  m_writer.clear();
+  results.write(m_writer);
+  completions.assign(m_writer.data().begin(), m_writer.data().end());
   return true;
 } catch (const std::exception& exception) {
   m_error = exception.what();

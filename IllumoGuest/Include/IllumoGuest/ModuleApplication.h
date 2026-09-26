@@ -67,6 +67,7 @@ public:
   bool start(std::span<const std::byte> startup) final;
   void update(const GuestInput& input) final;
   GuestFrame frame() final;
+  void recordFrame(GuestFrame& output) final;
   bool close() final;
   void shutdown() final;
   bool closeRequested() final;

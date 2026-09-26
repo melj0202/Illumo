@@ -47,6 +47,9 @@ public:
   bool resetWorld(std::int64_t worldChunkWidth, std::int64_t worldChunkHeight);
   void publishSpareGrid(const SparseGenerationDelta& delta);
   RuleSet* getRuleSet() const { return ruleSet; }
+  // Advances whenever the active ruleset instance is replaced, so views can
+  // cache what they derive from it (state names, colors).
+  std::uint64_t getRuleSetRevision() const { return ruleSetRevision; }
   std::string getModeString() const { return RuleSetString; }
   const std::string& getRuleSetString() const { return RuleSetString; }
   const std::string& getFamilyString() const { return FamilyString; }
@@ -58,6 +61,7 @@ private:
                           bool forceRefresh);
 
   RuleSet* ruleSet;
+  std::uint64_t ruleSetRevision = 0;
   SparseCellGrid* grid;
   SparseCellGrid* spareGrid;
   CanvasView* canvasView;

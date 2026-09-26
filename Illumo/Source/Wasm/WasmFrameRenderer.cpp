@@ -263,11 +263,11 @@ struct WasmFrameRenderer::State
 
   // Inline batches take the next slot of their style's pool, so a slot's
   // layout never changes and it is only replaced to grow.
-  static std::vector<Slot> assignSlots(
-    const std::vector<GuestBatch>& batches,
-    std::array<std::uint32_t, kStylePools>& used)
+  static void assignSlots(const std::vector<GuestBatch>& batches,
+                          std::array<std::uint32_t, kStylePools>& used,
+                          std::vector<Slot>& slots)
   {
-    std::vector<Slot> slots(batches.size());
+    slots.assign(batches.size(), Slot{});
     for (std::size_t index = 0; index < batches.size(); ++index) {
       if (!batches[index].retained()) {
         const std::uint32_t pool =
@@ -275,7 +275,6 @@ struct WasmFrameRenderer::State
         slots[index] = { pool, used[pool]++ };
       }
     }
-    return slots;
   }
 
   // Bytes the pools grow by to hold the inline batches, and the largest
@@ -374,6 +373,11 @@ struct WasmFrameRenderer::State
     for (std::size_t index = 0; index < batches.size(); ++index) {
       const GuestBatch& batch = batches[index];
       PreparedBatch& ready = prepared[index];
+      // A reused entry keeps only its vertex capacity.
+      ready.vertices.clear();
+      ready.texture.reset();
+      ready.retained.reset();
+      ready.worldBounds = AxisAlignedBounds3{};
       if (batch.style != GuestBatchStyle::Shape &&
           batch.style != GuestBatchStyle::LitMesh) {
         ready.texture = textures.resolve(batch.texture);
@@ -669,12 +673,29 @@ struct WasmFrameRenderer::State
       error = "Renderer authority retired";
       return false;
     }
-    GuestFrame proposed;
-    if (!GuestFrame::read(packet, proposed, limits)) {
+    // Drops the scratch's resource references on every exit, successful or
+    // not, so the swapped-out live state releases them as before.
+    struct ScratchRelease
+    {
+      explicit ScratchRelease(State& value)
+        : state(value)
+      {
+      }
+      State& state;
+      ~ScratchRelease() { state.releaseScratch(); }
+      ScratchRelease(const ScratchRelease&) = delete;
+      ScratchRelease& operator=(const ScratchRelease&) = delete;
+      ScratchRelease(ScratchRelease&&) = delete;
+      ScratchRelease& operator=(ScratchRelease&&) = delete;
+    } release{ *this };
+    GuestFrame& proposed = proposedFrame;
+    if (!GuestFrame::decode(packet, proposed, limits)) {
       error = "Malformed or over-budget guest frame";
       return false;
     }
-    std::vector<std::shared_ptr<const RetainedMesh>> writeTargets;
+    std::vector<PreparedBatch>& prepared = preparedScratch;
+    std::vector<std::shared_ptr<const Texture>>& preparedWrites = writesScratch;
+    std::vector<Slot>& slots = slotsScratch;
     writeTargets.reserve(proposed.meshWrites.size());
     for (const GuestFrameMeshWrite& write : proposed.meshWrites) {
       std::shared_ptr<const RetainedMesh> mesh =
@@ -685,8 +706,6 @@ struct WasmFrameRenderer::State
       }
       writeTargets.push_back(std::move(mesh));
     }
-    std::vector<PreparedBatch> prepared;
-    std::vector<std::shared_ptr<const Texture>> preparedWrites;
     for (const GuestTextureWrite& write : proposed.textureWrites) {
       std::shared_ptr<const Texture> texture = textures.resolve(write.texture);
       if (!texture || texture->cubemap || texture->channels != write.channels ||
@@ -702,7 +721,7 @@ struct WasmFrameRenderer::State
       return false;
     }
     std::array<std::uint32_t, kStylePools> used{};
-    std::vector<Slot> slots = assignSlots(proposed.batches, used);
+    assignSlots(proposed.batches, used, slots);
     // Surfaces (frame v5): unchanged ones keep their content; changed ones
     // are prepared against their own pools, so validation of every surface
     // finishes before anything is mutated.
@@ -737,7 +756,7 @@ struct WasmFrameRenderer::State
       if (!prepareBatches(surface.batches, plan.prepared)) {
         return false;
       }
-      plan.slots = assignSlots(surface.batches, plan.used);
+      assignSlots(surface.batches, plan.used, plan.slots);
       static const std::array<std::vector<Mesh>, kStylePools> empty{};
       growth +=
         slotGrowth(surface.batches,
@@ -806,14 +825,27 @@ struct WasmFrameRenderer::State
     }
     surfaces = std::move(nextSurfaces);
     applyMeshWrites(proposed, writeTargets);
-    frame = std::move(proposed);
-    payloads = std::move(prepared);
-    batchSlots = std::move(slots);
-    uploadTextures = std::move(preparedWrites);
+    // Swap rather than move: the replaced live state becomes next frame's
+    // scratch and keeps its capacity (its references drop on release).
+    std::swap(frame, proposed);
+    std::swap(payloads, prepared);
+    std::swap(batchSlots, slots);
+    std::swap(uploadTextures, preparedWrites);
     changingResources = false;
     error.clear();
     count();
     return true;
+  }
+
+  // Drops the accept scratch's resource references, keeping its capacity.
+  void releaseScratch()
+  {
+    for (PreparedBatch& ready : preparedScratch) {
+      ready.texture.reset();
+      ready.retained.reset();
+    }
+    writesScratch.clear();
+    writeTargets.clear();
   }
 
   void count()
@@ -1262,6 +1294,14 @@ struct WasmFrameRenderer::State
   GuestFrame frame;
   std::vector<PreparedBatch> payloads;
   std::vector<std::shared_ptr<const Texture>> uploadTextures;
+  // Accept scratch, swapped with the live frame state on success so steady
+  // frames reuse capacity. Resource references are released at the end of
+  // every accept, exactly when the replaced live state used to be destroyed.
+  GuestFrame proposedFrame;
+  std::vector<PreparedBatch> preparedScratch;
+  std::vector<Slot> slotsScratch;
+  std::vector<std::shared_ptr<const Texture>> writesScratch;
+  std::vector<std::shared_ptr<const RetainedMesh>> writeTargets;
   std::size_t nextWrite = 0;
   std::uint64_t uploadedSerial = 0;
   std::map<std::uint32_t, RenderStyleHandle> derivedStyles;

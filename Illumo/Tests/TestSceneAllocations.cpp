@@ -1,8 +1,11 @@
+#include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <new>
+#include <string>
 #ifdef _WIN32
 #include <malloc.h>
 #endif
@@ -236,9 +239,49 @@ testSceneAllocationFallbacks()
   return 0;
 }
 
+// UI rebuilt every frame (clear, then add the same labels) reuses the text
+// strings it cleared instead of allocating them again.
+static int
+testSteadyGameVisualText()
+{
+  GameVisual visual(256u);
+  const std::string label =
+    "a label long enough to need heap storage in any std::string";
+  const std::function<void()> rebuild = [&visual, &label]() {
+    visual.clearPrimitives();
+    for (int index = 0; index < 32; ++index) {
+      visual.addText(label,
+                     4.0f,
+                     4.0f + static_cast<float>(index) * 12.0f,
+                     12.0f,
+                     ColorRgba{});
+      visual.addFilledRect(0.0f, 0.0f, 10.0f, 10.0f, ColorRgba{});
+    }
+  };
+  rebuild();
+  rebuild();
+  g_sceneAllocations = 0;
+  g_countSceneAllocations = true;
+  try {
+    for (int frame = 0; frame < 100; ++frame) {
+      rebuild();
+    }
+  } catch (...) {
+    g_countSceneAllocations = false;
+    throw;
+  }
+  g_countSceneAllocations = false;
+  std::printf("GameVisual steady-state heap allocations over 100 rebuilds of "
+              "32 labels: %zu\n",
+              g_sceneAllocations);
+  return g_sceneAllocations == 0 ? 0 : 1;
+}
+
 void
 registerSceneAllocationTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.GameVisual.SteadyTextAllocations",
+               testSteadyGameVisualText);
   registry.add("Illumo.SceneGraph.SteadyStateAllocations",
                testSteadySceneAllocations);
   registry.add("Illumo.SceneGraph.AllocationFallbacks",

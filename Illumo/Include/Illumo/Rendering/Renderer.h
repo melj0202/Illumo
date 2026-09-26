@@ -7,7 +7,6 @@
 #include <Illumo/Rendering/RenderStyle.h>
 #include <Illumo/Rendering/RenderTargetPool.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
-#include <Illumo/Services/ArenaAlloc.h>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -110,10 +109,10 @@ private:
   ScissorState currentScissorState;
   std::vector<ScissorState> scissorStateStack;
 
-  // Per-frame scratch (immediate-draw pointer list, etc.). Cleared at the
-  // start of RenderScene and again after submission so token payload pointers
-  // that live only for the frame never outlive the submit window by design.
-  ArenaAlloc frameArena{ 8 * 1024 };
+  // Drawables that fell back to immediate Draw() this frame, drawn after
+  // token submission. Retained so steady frames reuse its capacity; unlike
+  // the former fixed 8 KiB arena it holds any number of drawables.
+  std::vector<DrawableBase*> immediateDrawables;
   static constexpr size_t UNIFORM_MATRICES_PER_CHUNK = 128;
   static constexpr size_t MAX_UNIFORM_MATRICES = 65536;
   using UniformMatrix = std::array<float, 16>;

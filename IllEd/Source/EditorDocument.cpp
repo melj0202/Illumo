@@ -71,6 +71,7 @@ EditorDocument::setAssetManager(AssetManager* assets)
                        ignored);
   }
   m_scene = std::move(scene);
+  ++m_sceneGeneration;
 }
 
 void
@@ -84,6 +85,7 @@ EditorDocument::rebase(const std::string& packageRoot)
   std::string error;
   if (scene->load(current, packageRoot, error)) {
     m_scene = std::move(scene);
+    ++m_sceneGeneration;
     Logger::LogTrace("Scene assets now resolve against " + packageRoot);
   } else {
     Logger::LogWarning(
@@ -103,6 +105,7 @@ void
 EditorDocument::clear()
 {
   m_scene = makeScene();
+  ++m_sceneGeneration;
   m_history.clear();
   m_savedUid = 0;
   m_path.clear();
@@ -133,6 +136,7 @@ EditorDocument::loadFromText(const std::string& text,
     return false;
   }
   m_scene = std::move(scene);
+  ++m_sceneGeneration;
   m_history.clear();
   m_savedUid = 0;
   return true;

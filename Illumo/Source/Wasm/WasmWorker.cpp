@@ -1,5 +1,6 @@
 #include <Illumo/Wasm/WasmWorker.h>
 
+#include <algorithm>
 #include <array>
 #include <condition_variable>
 #include <exception>
@@ -33,19 +34,50 @@ struct WasmWorker::State
     wake.notify_one();
   }
 
+  // A guest transfer buffer up to RetainedTransferBytes is kept for later
+  // jobs (lanes submit one every generation); larger requests get a one-off
+  // buffer freed after their job. Worker thread only.
+  static constexpr std::uint32_t RetainedTransferBytes = 1024u * 1024u;
+
   bool execute(WasmInstance& instance,
                std::span<const std::byte> request,
                std::vector<std::byte>& output)
   {
-    std::int32_t address = 0;
-    const std::array<std::int32_t, 1> size{ static_cast<std::int32_t>(
-      request.size()) };
-    if (!instance.call("illumo_guest_alloc", size, address) || address == 0 ||
-        !instance.copyToMemory(static_cast<std::uint32_t>(address), request)) {
+    const std::uint32_t size = static_cast<std::uint32_t>(request.size());
+    const std::uint32_t previousCapacity = transferCapacity;
+    const bool retained = size <= RetainedTransferBytes;
+    std::int32_t ignored = 0;
+    if (retained && size > transferCapacity && transfer != 0) {
+      const std::array<std::int32_t, 1> release{ transfer };
+      transfer = 0;
+      transferCapacity = 0;
+      if (!instance.call("illumo_guest_free", release, ignored)) {
+        return false;
+      }
+    }
+    std::int32_t address = transfer;
+    if (!retained || transfer == 0) {
+      const std::uint32_t capacity =
+        retained ? std::min(RetainedTransferBytes,
+                            std::max({ size, 4096u, previousCapacity * 2u }))
+                 : size;
+      const std::array<std::int32_t, 1> allocation{ static_cast<std::int32_t>(
+        capacity) };
+      if (!instance.call("illumo_guest_alloc", allocation, address) ||
+          address == 0) {
+        return false;
+      }
+      if (retained) {
+        transfer = address;
+        transferCapacity = capacity;
+      }
+    }
+    if (!instance.copyToMemory(static_cast<std::uint32_t>(address), request)) {
       return false;
     }
     std::int32_t response = 0;
-    const std::array<std::int32_t, 2> args{ address, size[0] };
+    const std::array<std::int32_t, 2> args{ address,
+                                            static_cast<std::int32_t>(size) };
     std::int32_t responseSize = 0;
     if (!instance.call("illumo_guest_job", args, response) ||
         !instance.call("illumo_guest_result_size", {}, responseSize) ||
@@ -58,8 +90,10 @@ struct WasmWorker::State
                                  output)) {
       return false;
     }
+    if (retained) {
+      return true;
+    }
     const std::array<std::int32_t, 1> release{ address };
-    std::int32_t ignored = 0;
     return instance.call("illumo_guest_free", release, ignored);
   }
 
@@ -81,8 +115,10 @@ struct WasmWorker::State
         std::lock_guard<std::mutex> lock(mutex);
         current = WasmWorkerStatus::Idle;
       }
+      // Swapped with `input` for each job, so the two buffers alternate and
+      // submit() copies into retained capacity.
+      std::vector<std::byte> request;
       for (;;) {
-        std::vector<std::byte> request;
         std::uint64_t id = 0;
         {
           std::unique_lock<std::mutex> lock(mutex);
@@ -132,6 +168,8 @@ struct WasmWorker::State
   std::vector<std::byte> module;
   WasmLimits limits;
   std::uint32_t messageLimit;
+  std::int32_t transfer = 0;
+  std::uint32_t transferCapacity = 0;
   std::vector<std::byte> input;
   WasmJobResult result;
   WasmWorkerStatus current = WasmWorkerStatus::Loading;

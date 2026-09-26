@@ -2,7 +2,12 @@
 #include <cstdlib>
 
 static std::unique_ptr<GuestApplication> application;
-static std::vector<std::byte> response;
+// Retained between calls so steady frames reuse their capacity: the result
+// the host reads, the call payload, the recorded frame and service messages.
+static GuestWireWriter response;
+static GuestWireWriter payload;
+static GuestFrame recorded;
+static std::vector<std::byte> messages;
 static std::uint64_t session = 0;
 static std::uint64_t sequence = 0;
 static bool started = false;
@@ -15,7 +20,7 @@ illumo_guest_describe()
 extern "C" std::int32_t
 illumo_guest_result_size()
 {
-  return static_cast<std::int32_t>(response.size());
+  return static_cast<std::int32_t>(response.data().size());
 }
 extern "C" void*
 illumo_guest_alloc(std::uint32_t size)
@@ -39,10 +44,9 @@ illumo_guest_manifest()
   if (!application) {
     __builtin_trap();
   }
-  GuestWireWriter writer;
-  application->describe().write(writer);
-  response = writer.take();
-  return response.data();
+  response.clear();
+  application->describe().write(response);
+  return response.data().data();
 }
 
 static const void*
@@ -58,7 +62,7 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
   }
   sequence = request.sequence;
   session = request.session;
-  GuestWireWriter payload;
+  payload.clear();
   if (expected == GuestCall::Init) {
     if (started) {
       __builtin_trap();
@@ -100,7 +104,8 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
       if (!request.payload.empty()) {
         __builtin_trap();
       }
-      application->frame().write(payload);
+      application->recordFrame(recorded);
+      recorded.write(payload);
     } else if (expected == GuestCall::Close) {
       if (!request.payload.empty()) {
         __builtin_trap();
@@ -112,9 +117,9 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
       }
       application->shutdown();
       application.reset();
+      recorded = GuestFrame{};
       started = false;
     } else if (expected == GuestCall::Services) {
-      std::vector<std::byte> messages;
       if (!application->services().exchange(request.payload, messages)) {
         __builtin_trap();
       }
@@ -134,10 +139,9 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
     }
   }
   request.payload = payload.data();
-  GuestWireWriter packet;
-  request.write(packet);
-  response = packet.take();
-  return response.data();
+  response.clear();
+  request.write(response);
+  return response.data().data();
 }
 
 extern "C" const void*

@@ -1627,10 +1627,16 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   scene, and `IllumoGame.Wasm.CatalogMerge` merges package catalogs;
   `IllumoGame.Wasm.GamePackageLanes` runs the game on real lanes and
   compares its save with a native serial reference;
+  `IllumoGame.Wasm.PackageFrameAllocations` gates host heap allocations of
+  warmed control frames (the exchange, decode and accept buffers are
+  retained and swapped, never rebuilt per frame);
   `IllumoGame.Wasm.LaneParity` checks every rule, both topologies and 1-3
   lanes (one-row bands, edits, retirement) plus large 4-lane worlds against
   serial generations, and `IllumoGame.Wasm.LaneProtocol` the CSL1 decoders and
-  lane rejections; `Illumo.Wasm.RetainedResources`,
+  lane rejections; `IllumoGame.Wasm.LaneAllocations` gates heap allocations
+  of warmed lane generations (retained coordinator, lane and delta scratch;
+  lanes catch their inactive map up from the generation journal, as the
+  native runner does); `Illumo.Wasm.RetainedResources`,
   `Illumo.Wasm.FrameValidation`, `Illumo.Wasm.FrameFailures` and the guest
   `Illumo.Wasm.SdkContract` cover retained, dynamic and pooled meshes;
   `Illumo.Wasm.EngineModes` and `Illumo.Wasm.Manifest` cover engine options

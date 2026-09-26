@@ -9,6 +9,7 @@ struct GLFWwindow;
 #include <array>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #define MAX_INPUT_EVENTS 256
@@ -201,7 +202,7 @@ public:
 
   InputContext* getActiveInputContext() { return activeInputContext; }
 
-  [[nodiscard]] bool isActionActive(std::string actionTag);
+  [[nodiscard]] bool isActionActive(std::string_view actionTag);
 
   [[nodiscard]] long registerInputContext(InputContext inputContext);
 

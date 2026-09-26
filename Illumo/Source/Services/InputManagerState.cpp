@@ -85,12 +85,14 @@ InputManager::unregisterInputContext(long inputContext)
 }
 
 [[nodiscard]] bool
-InputManager::isActionActive(std::string actionTag)
+InputManager::isActionActive(std::string_view actionTag)
 {
-  if (!activeInputContext->getActions().contains(actionTag)) {
+  const InputContext::ActionMap& actions = activeInputContext->getActions();
+  const InputContext::ActionMap::const_iterator found = actions.find(actionTag);
+  if (found == actions.end()) {
     return false;
   }
-  InputEvent ie = activeInputContext->getActionTag(actionTag);
+  const InputEvent& ie = found->second;
   if (isKeySuppressed(ie.keyCode)) {
     return false;
   }

@@ -9,7 +9,129 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <new>
 #include <thread>
+#ifdef _WIN32
+#include <malloc.h>
+#endif
+
+// Heap allocations made by the counting thread while a bounded check runs.
+// Loopback lanes execute on that thread, so coordinator, lane workers and
+// grid delta application are all counted; grid worker-pool threads are not.
+static thread_local bool g_countAllocations = false;
+static thread_local std::size_t g_allocations = 0;
+
+void*
+operator new(std::size_t size)
+{
+  if (g_countAllocations) {
+    ++g_allocations;
+  }
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer == nullptr) {
+    throw std::bad_alloc();
+  }
+  return pointer;
+}
+void*
+operator new[](std::size_t size)
+{
+  return ::operator new(size);
+}
+void
+operator delete(void* pointer) noexcept
+{
+  std::free(pointer);
+}
+void
+operator delete[](void* pointer) noexcept
+{
+  std::free(pointer);
+}
+void
+operator delete(void* pointer, std::size_t) noexcept
+{
+  std::free(pointer);
+}
+void
+operator delete[](void* pointer, std::size_t) noexcept
+{
+  std::free(pointer);
+}
+void*
+operator new(std::size_t size, const std::nothrow_t&) noexcept
+{
+  try {
+    return ::operator new(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+void*
+operator new[](std::size_t size, const std::nothrow_t&) noexcept
+{
+  return ::operator new(size, std::nothrow);
+}
+void
+operator delete(void* pointer, const std::nothrow_t&) noexcept
+{
+  ::operator delete(pointer);
+}
+void
+operator delete[](void* pointer, const std::nothrow_t&) noexcept
+{
+  ::operator delete[](pointer);
+}
+void*
+operator new(std::size_t size, std::align_val_t alignment)
+{
+  if (g_countAllocations) {
+    ++g_allocations;
+  }
+  const std::size_t align = static_cast<std::size_t>(alignment);
+#ifdef _WIN32
+  void* pointer = _aligned_malloc(size == 0 ? 1 : size, align);
+#else
+  const std::size_t rounded =
+    ((size == 0 ? 1 : size) + align - 1) / align * align;
+  void* pointer = std::aligned_alloc(align, rounded);
+#endif
+  if (pointer == nullptr) {
+    throw std::bad_alloc();
+  }
+  return pointer;
+}
+void*
+operator new[](std::size_t size, std::align_val_t alignment)
+{
+  return ::operator new(size, alignment);
+}
+void
+operator delete(void* pointer, std::align_val_t) noexcept
+{
+#ifdef _WIN32
+  _aligned_free(pointer);
+#else
+  std::free(pointer);
+#endif
+}
+void
+operator delete[](void* pointer, std::align_val_t alignment) noexcept
+{
+  ::operator delete(pointer, alignment);
+}
+void
+operator delete(void* pointer, std::size_t, std::align_val_t alignment) noexcept
+{
+  ::operator delete(pointer, alignment);
+}
+void
+operator delete[](void* pointer,
+                  std::size_t,
+                  std::align_val_t alignment) noexcept
+{
+  ::operator delete(pointer, alignment);
+}
 
 // In-process lanes: each owns one SimulationLaneWorker and answers on the
 // poll after its submission, as the asynchronous host transport would.
@@ -52,7 +174,8 @@ public:
     if (m_failed[lane]) {
       return -1;
     }
-    reply = std::move(m_replies[lane]);
+    // Swapped, as a retaining transport would: both buffers keep capacity.
+    reply.swap(m_replies[lane]);
     return 1;
   }
   bool busy(std::uint32_t lane) const override
@@ -772,6 +895,93 @@ protocolCases(const std::string& families, const std::string& rules)
   return true;
 }
 
+// Warmed lane generations allocate (almost) nothing on the control thread:
+// the coordinator, the lane workers and grid delta application reuse
+// retained scratch and recycled chunk nodes
+// (docs/plans/hot-loop-allocations.md).
+static bool
+laneAllocations(const std::string& families, const std::string& rules)
+{
+  DomainFixture reference;
+  if (!reference.initialize(families, rules)) {
+    return false;
+  }
+  std::unique_ptr<RuleSet> life =
+    RuleSetRegistry::instance().createRuleSet("GAME_OF_LIFE");
+  if (!life) {
+    return false;
+  }
+  // A finite torus keeps the chunk count bounded, so steady generations
+  // need no new chunk nodes.
+  const std::int64_t size = 12;
+  SparseCellGrid first(size, size);
+  SparseCellGrid second(size, size);
+  std::uint32_t state = 12345u;
+  for (std::int64_t y = -96; y < 96; ++y) {
+    for (std::int64_t x = -96; x < 96; ++x) {
+      state = state * 1664525u + 1013904223u;
+      if ((state >> 24) < 90u) {
+        first.setCell({ x, y }, 0);
+      }
+    }
+  }
+  LoopbackLanes transport(4);
+  SimulationLaneCoordinator lanes(transport);
+  lanes.setBandRowsForTesting(2u);
+  SparseCellGrid* published = &first;
+  SparseCellGrid* spare = &second;
+  SparseGenerationDelta mirror;
+  SparseGenerationDelta delta;
+  bool mirrorValid = false;
+  const std::function<bool()> generation = [&]() {
+    if (!startLanes(lanes, published, spare, *life, mirror, mirrorValid)) {
+      return false;
+    }
+    for (int attempt = 0; attempt < 10000; ++attempt) {
+      SparseCellGrid* completed = nullptr;
+      bool succeeded = false;
+      if (lanes.poll(&completed, &delta, nullptr, &succeeded, nullptr)) {
+        if (!succeeded || completed != spare) {
+          return false;
+        }
+        std::swap(published, spare);
+        std::swap(mirror, delta);
+        mirrorValid = true;
+        return true;
+      }
+      if (lanes.failed()) {
+        return false;
+      }
+    }
+    return false;
+  };
+  for (int warmup = 0; warmup < 60; ++warmup) {
+    if (!generation()) {
+      std::fprintf(stderr, "Lane warm-up generation failed\n");
+      return false;
+    }
+  }
+  const int generations = 60;
+  bool advanced = true;
+  g_allocations = 0;
+  g_countAllocations = true;
+  for (int step = 0; step < generations && advanced; ++step) {
+    advanced = generation();
+  }
+  g_countAllocations = false;
+  std::printf("Heap allocations over %d warmed lane generations: %zu\n",
+              generations,
+              g_allocations);
+  // Before retained lane scratch this was about 667 per generation (40,009
+  // over 60). What remains is high-water growth of retained buffers; one
+  // allocation per lane per generation would already count 240.
+  if (g_allocations >= 30u) {
+    std::fprintf(stderr, "Warmed lane generations still allocate\n");
+    return false;
+  }
+  return advanced;
+}
+
 static std::string
 readText(const char* path)
 {
@@ -799,7 +1009,8 @@ main(int argc, char** argv)
 {
   if (argc == 2 && std::string(argv[1]) == "--list") {
     std::puts("IllumoGame.Wasm.WorkerParity\nIllumoGame.Wasm.SimulationProtocol"
-              "\nIllumoGame.Wasm.LaneParity\nIllumoGame.Wasm.LaneProtocol");
+              "\nIllumoGame.Wasm.LaneParity\nIllumoGame.Wasm.LaneProtocol"
+              "\nIllumoGame.Wasm.LaneAllocations");
     return 0;
   }
   const std::string name = argc == 3 ? argv[2] : "";
@@ -807,11 +1018,15 @@ main(int argc, char** argv)
       (name != "IllumoGame.Wasm.WorkerParity" &&
        name != "IllumoGame.Wasm.SimulationProtocol" &&
        name != "IllumoGame.Wasm.LaneParity" &&
-       name != "IllumoGame.Wasm.LaneProtocol")) {
+       name != "IllumoGame.Wasm.LaneProtocol" &&
+       name != "IllumoGame.Wasm.LaneAllocations")) {
     return 2;
   }
   const std::string families = readText(ILLUMO_FAMILIES);
   const std::string rules = readText(ILLUMO_RULES);
+  if (name == "IllumoGame.Wasm.LaneAllocations") {
+    return laneAllocations(families, rules) ? 0 : 1;
+  }
   if (name == "IllumoGame.Wasm.SimulationProtocol") {
     return protocolCases(families, rules) ? 0 : 1;
   }

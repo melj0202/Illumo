@@ -165,6 +165,16 @@ GameVisual::clearPrimitives()
 {
   shapes.clear();
   sprites.clear();
+  // Text is usually rebuilt every frame: keep the cleared strings so the
+  // next addText calls reuse their capacity instead of allocating.
+  for (TextPrimitive& text : texts) {
+    if (spareTextContent.size() >= kSpareTextContent) {
+      break;
+    }
+    if (text.content.capacity() > std::string().capacity()) {
+      spareTextContent.push_back(std::move(text.content));
+    }
+  }
   texts.clear();
   items.clear();
   nextSequence = 0;
@@ -420,13 +430,16 @@ GameVisual::addText(const std::string& content,
                     float sizePt,
                     ColorRgba color)
 {
-  TextPrimitive text;
-  text.content = content;
+  TextPrimitive& text = texts.emplace_back();
+  if (!spareTextContent.empty()) {
+    text.content = std::move(spareTextContent.back());
+    spareTextContent.pop_back();
+  }
+  text.content.assign(content);
   text.x = x;
   text.y = y;
   text.sizePt = sizePt;
   text.color = color;
-  texts.push_back(text);
   VisualItem item;
   item.kind = VisualItemKind::Text;
   item.index = texts.size() - 1;
@@ -1075,15 +1088,18 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
     geometryCullRect = *cullRect;
   }
   const Rect2 hostBounds = contentBounds();
-  std::vector<VisualItem> ordered = items;
-  std::stable_sort(ordered.begin(),
-                   ordered.end(),
-                   [this](const VisualItem& a, const VisualItem& b) {
-                     const int leftOrder = drawOrder(a);
-                     const int rightOrder = drawOrder(b);
-                     return leftOrder == rightOrder ? a.sequence < b.sequence
-                                                    : leftOrder < rightOrder;
-                   });
+  // Sequences are unique, so (draw order, sequence) is a strict total order:
+  // an unstable sort gives the stable order without a temporary buffer.
+  std::vector<VisualItem>& ordered = orderedItems;
+  ordered.assign(items.begin(), items.end());
+  std::sort(ordered.begin(),
+            ordered.end(),
+            [this](const VisualItem& a, const VisualItem& b) {
+              const int leftOrder = drawOrder(a);
+              const int rightOrder = drawOrder(b);
+              return leftOrder == rightOrder ? a.sequence < b.sequence
+                                             : leftOrder < rightOrder;
+            });
 
   for (size_t itemIndex = 0; itemIndex < ordered.size(); ++itemIndex) {
     const VisualItem& item = ordered[itemIndex];

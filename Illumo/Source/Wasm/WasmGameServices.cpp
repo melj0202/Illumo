@@ -699,15 +699,14 @@ try {
     m_error = "At most one console listen may be outstanding";
     return false;
   }
-  GuestWireWriter renderRequests;
-  rendering.write(renderRequests);
-  std::vector<std::byte> renderResponses;
-  if (!m_render.process(renderRequests.data(), renderResponses)) {
+  m_renderRequests.clear();
+  rendering.write(m_renderRequests);
+  if (!m_render.process(m_renderRequests.data(), m_renderResponses)) {
     m_error = m_render.error();
     return false;
   }
   GuestServices results;
-  if (!GuestServices::read(renderResponses, results, false)) {
+  if (!GuestServices::read(m_renderResponses, results, false)) {
     m_error = "Invalid host resource completion";
     return false;
   }
@@ -878,26 +877,27 @@ try {
     }
   }
   if (m_files) {
-    GuestWireWriter measured;
-    results.write(measured);
-    if (measured.data().size() > GuestServices::MaximumBytes) {
+    // Measured with the same retained writer that serializes the reply.
+    m_response.clear();
+    results.write(m_response);
+    if (m_response.data().size() > GuestServices::MaximumBytes) {
       m_error = "Completion budget exceeded";
       return false;
     }
     GuestServices ready =
-      m_files->poll(GuestServices::MaximumBytes - measured.data().size());
+      m_files->poll(GuestServices::MaximumBytes - m_response.data().size());
     for (GuestServiceRecord& result : ready.records) {
       results.records.push_back(std::move(result));
     }
   }
-  GuestWireWriter response;
-  results.write(response);
+  m_response.clear();
+  results.write(m_response);
   if (results.records.size() > GuestServices::MaximumRecords ||
-      response.data().size() > GuestServices::MaximumBytes) {
+      m_response.data().size() > GuestServices::MaximumBytes) {
     m_error = "Service completion budget exceeded";
     return false;
   }
-  completions = response.take();
+  completions.assign(m_response.data().begin(), m_response.data().end());
   m_lastRequest = last;
   return true;
 } catch (const std::exception& exception) {

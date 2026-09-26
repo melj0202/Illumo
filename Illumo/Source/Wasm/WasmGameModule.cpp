@@ -353,9 +353,9 @@ try {
   if (m_windows) {
     m_windows->collectInput(snapshotInput);
   }
-  GuestWireWriter input;
-  snapshotInput.write(input);
-  std::vector<std::byte> response;
+  m_input.clear();
+  snapshotInput.write(m_input);
+  std::vector<std::byte>& response = m_response;
   std::chrono::steady_clock::time_point stageStart = updateStart;
   {
     ZoneScopedN("Wasm.Services");
@@ -372,7 +372,7 @@ try {
   stageStart = std::chrono::steady_clock::now();
   {
     ZoneScopedN("Wasm.GuestUpdate");
-    if (!m_guest.invoke(GuestCall::Update, input.data(), response)) {
+    if (!m_guest.invoke(GuestCall::Update, m_input.data(), response)) {
       fail(m_guest.error());
       return;
     }
@@ -412,12 +412,11 @@ try {
     ZoneScopedN("Wasm.ServicesPending");
     const std::chrono::steady_clock::time_point pendingStart =
       std::chrono::steady_clock::now();
-    std::vector<std::byte> queued;
-    if (!m_guest.invoke(GuestCall::Services, m_completions, queued)) {
+    if (!m_guest.invoke(GuestCall::Services, m_completions, m_queued)) {
       fail(m_guest.error());
       return;
     }
-    if (!m_services->process(queued, m_completions)) {
+    if (!m_services->process(m_queued, m_completions)) {
       fail(m_services->error());
       return;
     }
@@ -428,7 +427,7 @@ try {
   stageStart = std::chrono::steady_clock::now();
   if (m_mod && !message.empty()) {
     ZoneScopedN("Wasm.Receive");
-    std::vector<std::byte> modReply;
+    std::vector<std::byte>& modReply = m_modReply;
     if (!m_mod->invoke(GuestCall::Receive, message, modReply) ||
         modReply.size() > 65536) {
       m_modError =

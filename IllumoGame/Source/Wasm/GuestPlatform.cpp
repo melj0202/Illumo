@@ -1,6 +1,7 @@
 #include "GuestPlatform.h"
 #include "Game/RuleCatalogOverlay.h"
 #include <Illumo/Services/Logger.h>
+#include <array>
 #include <stdexcept>
 #include <string>
 
@@ -86,12 +87,18 @@ GuestSimulationLanes::submit(std::uint32_t lane,
       request.size() > GuestServices::MaximumJobBytes - 4u) {
     return false;
   }
-  GuestWireWriter payload;
-  payload.u32(lane);
-  payload.bytes(request);
+  // The lane prefix (little-endian u32) is written in front of the request
+  // itself, which then moves into the service record: no second copy.
+  std::array<std::byte, 4> prefix{};
+  for (unsigned int index = 0; index < 4u; ++index) {
+    prefix[index] = static_cast<std::byte>(lane >> (index * 8u));
+  }
+  request.insert(request.begin(), prefix.begin(), prefix.end());
   const std::uint64_t id =
-    m_services.enqueue(GuestService::LaneJob, payload.take());
+    m_services.tryEnqueue(GuestService::LaneJob, request);
   if (id == 0) {
+    // Refused without taking the bytes: restore the untouched request.
+    request.erase(request.begin(), request.begin() + 4);
     return false;
   }
   m_outstanding[lane] = id;

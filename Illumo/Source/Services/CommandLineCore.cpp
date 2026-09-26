@@ -232,7 +232,7 @@ findEnvironmentKey(IEnvVars* envVars, const std::string& requested)
     return "";
   }
   const std::string loweredRequested = lowerCopy(requested);
-  const std::unordered_map<std::string, EnvVar>& variables = envVars->getVars();
+  const EnvVarMap& variables = envVars->getVars();
   for (const std::pair<const std::string, EnvVar>& variable : variables) {
     if (lowerCopy(variable.first) == loweredRequested) {
       return variable.first;
@@ -1383,7 +1383,7 @@ CommandLineCore::getCompletionCandidates(const std::string& leadingText) const
         candidates.end(), registeredCommands.begin(), registeredCommands.end());
     }
     if (envVars != nullptr) {
-      const std::unordered_map<std::string, EnvVar>& vars = envVars->getVars();
+      const EnvVarMap& vars = envVars->getVars();
       for (const std::pair<const std::string, EnvVar>& variable : vars) {
         candidates.push_back(variable.first);
       }
@@ -1409,8 +1409,7 @@ CommandLineCore::getCompletionCandidates(const std::string& leadingText) const
     } else if (command == "get" || command == "set" || command == "toggle" ||
                command == "vars") {
       if (envVars != nullptr) {
-        const std::unordered_map<std::string, EnvVar>& vars =
-          envVars->getVars();
+        const EnvVarMap& vars = envVars->getVars();
         for (const std::pair<const std::string, EnvVar>& variable : vars) {
           candidates.push_back(variable.first);
         }
@@ -1889,8 +1888,7 @@ CommandLineCore::ExecuteSingleCommand(const std::string& singleCmd,
     const std::string filter = args.empty() ? "" : lowerCopy(args[0]);
     std::vector<std::string> variableLines;
     if (envVars != nullptr) {
-      const std::unordered_map<std::string, EnvVar>& variables =
-        envVars->getVars();
+      const EnvVarMap& variables = envVars->getVars();
       for (const std::pair<const std::string, EnvVar>& variable : variables) {
         if (filter.empty() ||
             lowerCopy(variable.first).find(filter) != std::string::npos) {

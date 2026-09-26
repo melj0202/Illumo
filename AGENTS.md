@@ -337,7 +337,8 @@ Package-level checks drive each real package through the generic host:
 `IllumoGame.Wasm.GamePackageAudio` (packaged sound cues reach a recording
 audio output),
 `IllumoGame.Wasm.GamePackageLanes` (real simulation lanes against a native
-serial reference), `IllEd.Wasm.Package` (launch scene, preloaded atlas,
+serial reference), `IllumoGame.Wasm.PackageFrameAllocations` (warmed control
+frames make no host heap allocations), `IllEd.Wasm.Package` (launch scene, preloaded atlas,
 keyboard pan, Ctrl+S save in place), `IllEd.Wasm.ProjectPackage` (project
 assets placed through the guest cache and saved into `/project`),
 `IllMeshViewer.Wasm.Package` (launch mesh as a retained host mesh, skybox
@@ -345,7 +346,8 @@ cubemap), `IllMeshViewer.Wasm.ScenePackage` (a mounted package's scene opened
 with `viewer_open`) and `IllumoGame.Wasm.CatalogMerge` (package rule
 catalogs). `IllumoGame.Wasm.LaneParity`
 and `IllumoGame.Wasm.LaneProtocol` cover lane exactness and the CSL1
-decoders. The `Illumo.Wasm.*` cases cover the sandbox, engine modes, the
+decoders; `IllumoGame.Wasm.LaneAllocations` gates heap allocations of warmed
+lane generations. The `Illumo.Wasm.*` cases cover the sandbox, engine modes, the
 manifest decoder, ABI decoders and host services; `Illumo.Runtime.Help`,
 `Illumo.Runtime.InvalidCaptureFrame`, `Illumo.Runtime.InvalidBenchFrames` and
 `Illumo.Runtime.CaptureScriptNeedsCapture` cover the runtime command line.
