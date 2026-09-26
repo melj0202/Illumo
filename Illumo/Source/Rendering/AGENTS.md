@@ -56,6 +56,25 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
   matrices or texture-space sampling implicitly.
 - Renderer and backend calls are main-thread affine with the active graphics
   context unless an authorized design introduces synchronization.
+- Instancing (D-R28): instance attributes use locations 4-12
+  (`InstanceLayout::LitModelTint`, 144 B); mesh attributes keep 0-3. A
+  backend accepts `DrawIndexedInstanced` only after `SetInstanceStream`
+  attached a large enough Instance buffer to the bound mesh in the same
+  submission. A `WriteBuffer` at offset zero may discard the buffer first.
+- `Renderer::useFrameUniforms()` writes the `FrameUniforms` block at most once
+  per `RenderScene`, and only when called, so frames without instanced draws
+  emit nothing new. Shaders declaring the block read it from
+  `FrameUniformsBindingPoint`; keep `Renderer::FrameUniforms` and every
+  shader's std140 declaration identical (`Illumo.Instancing.StylesRegistered`
+  checks the text).
+- A `RecordedCommandList` is recorded with the ordinary push helpers between
+  `beginRecording` and `endRecording`, owns its matrices, and runs in place by
+  `ExecuteList`. Never record `useFrameUniforms`, framebuffer or viewport
+  changes, or anything that varies per frame; patch counts in place instead.
+- `RenderWorld` is a World drawable that owns persistent instances. Its
+  shadow commands rebind the shared `ShadowDepth` style afterwards, because
+  later drawables expect it. Call `releaseResources()` before its renderer is
+  destroyed.
 
 ## Compatibility and errors
 
@@ -84,4 +103,6 @@ failure must be observable and must not leave a partially usable backend.
 
 Use MockBackend for deterministic contract tests. Use a live OpenGL smoke for
 context, shader, state, upload, and visual behavior; headless success is not
-pixel validation. Update this file only for durable Rendering contracts.
+pixel validation. `IllumoGpuTests` (CTest label `IllumoGpu`, skipped with 77
+without a context) compares real-GPU images, for example
+`Illumo.Gpu.RenderWorldParity`; run it for shader or instancing changes. Update this file only for durable Rendering contracts.

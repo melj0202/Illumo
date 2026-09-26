@@ -42,7 +42,7 @@ illumo_add_guest(PaddleFaultyMod Examples/Paddle/PaletteMod.cpp)
 target_compile_definitions(PaddleFaultyMod PRIVATE ILLUMO_FAULTY_MOD)
 
 add_library(IllumoGuestRendering STATIC
-  Source/RecordingBackend.cpp Source/FontProvider.cpp Source/Diagnostics.cpp Source/InputProvider.cpp Source/Files.cpp Source/FileTree.cpp Source/Environment.cpp Source/Display.cpp Source/Clipboard.cpp Source/Console.cpp Source/Dialog.cpp Source/Audio.cpp
+  Source/RecordingBackend.cpp Source/RenderWorld.cpp Source/FontProvider.cpp Source/Diagnostics.cpp Source/InputProvider.cpp Source/Files.cpp Source/FileTree.cpp Source/Environment.cpp Source/Display.cpp Source/Clipboard.cpp Source/Console.cpp Source/Dialog.cpp Source/Audio.cpp
   ../Illumo/Source/Audio/AudioDecoder.cpp
   ../Illumo/Source/Rendering/Renderer.cpp
   ../Illumo/Source/Rendering/RendererStyles.cpp

@@ -1,6 +1,7 @@
 #pragma once
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/IBackend.h>
+#include <Illumo/Rendering/RecordedCommandList.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
 #include <array>
 #include <cstdint>
@@ -31,7 +32,9 @@ public:
       ReplaceCubemap,
       DestroyMesh,
       DestroyShader,
-      DestroyTexture
+      DestroyTexture,
+      CreateBuffer,
+      DestroyBuffer
     };
     Kind kind = Kind::Mesh;
     uint32_t slot = 0;
@@ -55,10 +58,12 @@ private:
   std::vector<RenderCommand> lastNonEmptySubmitted;
   std::vector<std::vector<RenderCommand>> submittedFrames;
   std::deque<std::array<float, 16>> submittedUniformMatrices;
+  std::deque<std::vector<unsigned char>> submittedBufferWrites;
   std::vector<CreateRecord> creates;
   int beginFrameCount = 0;
   int endFrameCount = 0;
   int submitCount = 0;
+  size_t executedListCount = 0;
   int fps = 0;
   bool initialized = false;
   bool shutDown = false;
@@ -69,6 +74,14 @@ private:
   ResourceHandlePool<ShaderHandle> shaderHandles;
   ResourceHandlePool<TextureHandle> textureHandles;
   ResourceHandlePool<FramebufferHandle> framebufferHandles;
+  ResourceHandlePool<BufferHandle> bufferHandles;
+  struct BufferRecord
+  {
+    uint32_t generation = 0;
+    BufferUsage usage = BufferUsage::Instance;
+    size_t capacity = 0;
+  };
+  std::unordered_map<uint32_t, BufferRecord> liveBuffers;
   std::unordered_map<uint32_t, uint32_t> liveMeshes;
   std::unordered_map<uint32_t, uint32_t> liveShaders;
   std::unordered_map<uint32_t, uint32_t> liveTextures;
@@ -126,9 +139,62 @@ private:
         return IsMeshValid(command.updateIndexBuffer.handle);
       case CommandType::UpdateTexture:
         return IsTextureValid(command.updateTexture.handle);
+      case CommandType::WriteBuffer: {
+        const BufferRecord* buffer = findBuffer(command.writeBuffer.handle);
+        const CmdWriteBuffer& write = command.writeBuffer;
+        return buffer != nullptr && write.data != nullptr &&
+               write.sizeBytes != 0 && write.offsetBytes <= buffer->capacity &&
+               write.sizeBytes <= buffer->capacity - write.offsetBytes;
+      }
+      case CommandType::BindUniformBuffer: {
+        const BufferRecord* buffer =
+          findBuffer(command.bindUniformBuffer.handle);
+        return buffer != nullptr && buffer->usage == BufferUsage::Uniform;
+      }
+      case CommandType::SetInstanceStream: {
+        const BufferRecord* buffer = findBuffer(command.instanceStream.handle);
+        return buffer != nullptr && buffer->usage == BufferUsage::Instance &&
+               instanceLayoutStride(command.instanceStream.layout) != 0 &&
+               command.instanceStream.offsetBytes < buffer->capacity;
+      }
       default:
         return true;
     }
+  }
+  void recordSubmitted(const RenderCommand& command)
+  {
+    if (!isCommandResourceValid(command)) {
+      rejectedStaleCommands++;
+      return;
+    }
+    RenderCommand snapshot = command;
+    if (snapshot.commandType == CommandType::SetUniformMat4 &&
+        snapshot.uniformMat4.value != nullptr) {
+      submittedUniformMatrices.emplace_back();
+      std::array<float, 16>& retained = submittedUniformMatrices.back();
+      std::memcpy(retained.data(),
+                  snapshot.uniformMat4.value,
+                  retained.size() * sizeof(float));
+      snapshot.uniformMat4.value = retained.data();
+    } else if (snapshot.commandType == CommandType::WriteBuffer) {
+      const unsigned char* bytes =
+        static_cast<const unsigned char*>(snapshot.writeBuffer.data);
+      submittedBufferWrites.emplace_back(
+        bytes, bytes + snapshot.writeBuffer.sizeBytes);
+      snapshot.writeBuffer.data = submittedBufferWrites.back().data();
+    }
+    lastSubmitted.push_back(snapshot);
+    trackSubmitted(snapshot);
+  }
+  const BufferRecord* findBuffer(BufferHandle handle) const
+  {
+    std::unordered_map<uint32_t, BufferRecord>::const_iterator it =
+      liveBuffers.find(handle.slot);
+    if (!bufferHandles.isCurrent(handle) || it == liveBuffers.end() ||
+        it->second.generation != handle.generation) {
+      return nullptr;
+    }
+    return &it->second;
   }
 
 public:
@@ -149,7 +215,10 @@ public:
     lastNonEmptySubmitted.clear();
     submittedFrames.clear();
     submittedUniformMatrices.clear();
+    submittedBufferWrites.clear();
     creates.clear();
+    liveBuffers.clear();
+    bufferHandles.clear();
     liveMeshes.clear();
     liveShaders.clear();
     liveTextures.clear();
@@ -171,21 +240,20 @@ public:
     const size_t n = commandQueue.GetCommandCount();
     for (size_t i = 0; i < n; ++i) {
       const RenderCommand& command = commandQueue.GetCommand(i);
-      if (isCommandResourceValid(command)) {
-        RenderCommand snapshot = command;
-        if (snapshot.commandType == CommandType::SetUniformMat4 &&
-            snapshot.uniformMat4.value != nullptr) {
-          submittedUniformMatrices.emplace_back();
-          std::array<float, 16>& retained = submittedUniformMatrices.back();
-          std::memcpy(retained.data(),
-                      snapshot.uniformMat4.value,
-                      retained.size() * sizeof(float));
-          snapshot.uniformMat4.value = retained.data();
-        }
-        lastSubmitted.push_back(snapshot);
-        trackSubmitted(snapshot);
-      } else {
+      if (command.commandType != CommandType::ExecuteList) {
+        recordSubmitted(command);
+        continue;
+      }
+      // The list token itself, then its tokens flattened as the GPU runs them.
+      const RecordedCommandList* list = command.executeList.list;
+      if (list == nullptr || list->failed()) {
         rejectedStaleCommands++;
+        continue;
+      }
+      lastSubmitted.push_back(command);
+      ++executedListCount;
+      for (size_t index = 0; index < list->size(); ++index) {
+        recordSubmitted(list->at(index));
       }
     }
     if (!lastSubmitted.empty()) {
@@ -605,6 +673,46 @@ public:
            it != liveFramebuffers.end() && it->second == handle.generation;
   }
 
+  BufferHandle CreateBuffer(BufferUsage usage, size_t capacityBytes) override
+  {
+    if (capacityBytes == 0) {
+      return {};
+    }
+    const BufferHandle handle = bufferHandles.allocate();
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::CreateBuffer;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    rec.vertexSize = capacityBytes;
+    rec.pathOrNote = usage == BufferUsage::Uniform ? "uniform" : "instance";
+    creates.push_back(rec);
+    BufferRecord buffer;
+    buffer.generation = handle.generation;
+    buffer.usage = usage;
+    buffer.capacity = capacityBytes;
+    liveBuffers[handle.slot] = buffer;
+    return handle;
+  }
+
+  bool DestroyBuffer(BufferHandle handle) override
+  {
+    if (findBuffer(handle) == nullptr) {
+      return false;
+    }
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::DestroyBuffer;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    creates.push_back(rec);
+    liveBuffers.erase(handle.slot);
+    return bufferHandles.release(handle);
+  }
+
+  bool IsBufferValid(BufferHandle handle) const override
+  {
+    return findBuffer(handle) != nullptr;
+  }
+
   bool requestFramebufferReadback(std::uint32_t stream,
                                   FramebufferHandle framebuffer,
                                   int width,
@@ -670,6 +778,7 @@ public:
   int getBeginFrameCount() const { return beginFrameCount; }
   int getEndFrameCount() const { return endFrameCount; }
   int getSubmitCount() const { return submitCount; }
+  size_t getExecutedListCount() const { return executedListCount; }
   size_t getRejectedStaleCommandCount() const { return rejectedStaleCommands; }
 
   void setRejectNextShaderReplacement(bool reject)
@@ -778,10 +887,12 @@ public:
     beginFrameCount = 0;
     endFrameCount = 0;
     submitCount = 0;
+    executedListCount = 0;
     lastSubmitted.clear();
     lastNonEmptySubmitted.clear();
     submittedFrames.clear();
     submittedUniformMatrices.clear();
+    submittedBufferWrites.clear();
     commandQueue.Reset();
     creates.clear();
     rejectedStaleCommands = 0;

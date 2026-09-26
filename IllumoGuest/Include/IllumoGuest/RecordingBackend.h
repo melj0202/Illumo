@@ -101,9 +101,24 @@ public:
   bool DestroyFramebuffer(FramebufferHandle) override;
   bool IsFramebufferValid(FramebufferHandle) const override;
 
-  // Static meshes at least this large are uploaded once to a retained host
-  // mesh (frame schema v3) instead of travelling inline every frame.
+  // Every shaped static mesh is uploaded once to a retained host mesh (frame
+  // schema v3). Smaller ones draw inline until that copy is ready; at least
+  // this large, they skip drawing instead so a frame never carries them.
   static constexpr std::size_t RetainedMeshBytes = 64u * 1024u;
+
+  // Whether a mesh can back host render world instances (frame schema v6):
+  // only static lit meshes, once their host copy is complete. Ready reports
+  // the host id and the mesh's index count.
+  enum class HostMeshState
+  {
+    Missing,
+    Pending,
+    Ready,
+    Unusable
+  };
+  HostMeshState hostMeshState(MeshHandle handle,
+                              GuestResourceId* id,
+                              std::uint32_t* indexCount) const;
   // Diagnostics: bytes of dynamic mesh writes in the last recorded frame.
   std::size_t lastMeshWriteBytes() const { return m_lastMeshWriteBytes; }
 
@@ -113,8 +128,8 @@ private:
     MeshVertexLayout layout = MeshVertexLayout::Pos3Color4U8;
     std::vector<std::byte> vertices;
     std::vector<std::byte> indices;
-    // Retained upload state. Draws skip a static mesh until the host copy is
-    // complete, and fall back to inline geometry if the upload fails.
+    // Retained upload state. Until the host copy is complete, small static
+    // meshes draw inline and large ones skip; a failed upload draws inline.
     bool retain = false;
     GuestResourceId id;
     std::uint64_t create = 0;
@@ -168,6 +183,7 @@ private:
                         std::size_t size);
   void emitMeshWrites();
   void pumpMeshes();
+  void mergeShadowCaster(const GuestShadowCaster& caster);
   // Empties m_frame, keeping its texture pixel and mesh write byte buffers
   // as spares for the next frame's writes.
   void recycleFrame();

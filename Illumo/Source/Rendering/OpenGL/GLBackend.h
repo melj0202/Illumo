@@ -27,10 +27,12 @@ private:
   std::unordered_map<uint32_t, GLTextureResourceEntry> _textureRegistryLookup;
   std::unordered_map<uint32_t, GLFramebufferResourceEntry>
     _framebufferRegistryLookup;
+  std::unordered_map<uint32_t, GLBufferResourceEntry> _bufferRegistryLookup;
   ResourceHandlePool<MeshHandle> meshHandles;
   ResourceHandlePool<ShaderHandle> shaderHandles;
   ResourceHandlePool<TextureHandle> textureHandles;
   ResourceHandlePool<FramebufferHandle> framebufferHandles;
+  ResourceHandlePool<BufferHandle> bufferHandles;
 
   // Two pixel-pack buffers per readback stream; a fence marks each copy.
   struct ReadbackSlot
@@ -146,4 +148,8 @@ public:
     TextureHandle* outDepthTexture) override;
   bool DestroyFramebuffer(FramebufferHandle handle) override;
   bool IsFramebufferValid(FramebufferHandle handle) const override;
+
+  BufferHandle CreateBuffer(BufferUsage usage, size_t capacityBytes) override;
+  bool DestroyBuffer(BufferHandle handle) override;
+  bool IsBufferValid(BufferHandle handle) const override;
 };

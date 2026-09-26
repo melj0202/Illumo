@@ -86,9 +86,6 @@ GuestRecordingBackend::BeginLayer(RenderLayerId layer)
   m_frame.shadowCasters.clear();
   for (const Renderer::ShadowCasterDesc& source :
        m_renderer->getShadowCasters()) {
-    if (m_frame.shadowCasters.size() == GuestFrameLimits{}.shadowCasters) {
-      break;
-    }
     GuestShadowCaster caster;
     caster.boundsMin = source.boundsMin;
     caster.boundsMax = source.boundsMax;
@@ -98,7 +95,49 @@ GuestRecordingBackend::BeginLayer(RenderLayerId layer)
     caster.minimumRadius = source.minimumRadius;
     caster.lightDistance = source.lightDistance;
     caster.casterDistance = source.casterDistance;
-    m_frame.shadowCasters.push_back(caster);
+    if (m_frame.shadowCasters.size() < GuestFrameLimits{}.shadowCasters) {
+      m_frame.shadowCasters.push_back(caster);
+    } else {
+      mergeShadowCaster(caster);
+    }
+  }
+}
+// Past the host's caster limit, the nearest caster lit the same way grows to
+// cover this one, so the shared shadow fit still includes its bounds.
+void
+GuestRecordingBackend::mergeShadowCaster(const GuestShadowCaster& caster)
+{
+  GuestShadowCaster* nearest = nullptr;
+  float nearestDistance = 0.0f;
+  for (GuestShadowCaster& existing : m_frame.shadowCasters) {
+    if (existing.lightDirection != caster.lightDirection ||
+        existing.mapSize != caster.mapSize ||
+        existing.minimumRadius != caster.minimumRadius ||
+        existing.lightDistance != caster.lightDistance ||
+        existing.casterDistance != caster.casterDistance) {
+      continue;
+    }
+    float distance = 0.0f;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      const float offset =
+        (existing.boundsMin[axis] + existing.boundsMax[axis] -
+         caster.boundsMin[axis] - caster.boundsMax[axis]) *
+        0.5f;
+      distance += offset * offset;
+    }
+    if (nearest == nullptr || distance < nearestDistance) {
+      nearest = &existing;
+      nearestDistance = distance;
+    }
+  }
+  if (nearest == nullptr) {
+    return;
+  }
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    nearest->boundsMin[axis] =
+      std::min(nearest->boundsMin[axis], caster.boundsMin[axis]);
+    nearest->boundsMax[axis] =
+      std::max(nearest->boundsMax[axis], caster.boundsMax[axis]);
   }
 }
 bool
@@ -217,8 +256,11 @@ GuestRecordingBackend::takeFrame()
 void
 GuestRecordingBackend::takeFrame(GuestFrame& output)
 {
-  if (m_commands.GetTotalRejected() != m_frameRejections ||
-      (m_renderer && !m_renderer->frameError().empty())) {
+  if (m_commands.GetTotalRejected() != m_frameRejections) {
+    throw std::runtime_error(
+      "the frame recorded more render commands than the guest ceiling");
+  }
+  if (m_renderer && !m_renderer->frameError().empty()) {
     throw std::runtime_error("Guest frame submission failed");
   }
   if (!m_error.empty()) {
@@ -444,7 +486,7 @@ GuestRecordingBackend::ReplaceMesh(MeshHandle handle,
     std::memcpy(candidate.indices.data(), indices, indexBytes);
   }
   const std::uint32_t style = retainedStyle(layout);
-  // Large immutable geometry (loaded models) is uploaded to the host once.
+  // Immutable geometry of any size is uploaded to the host once.
   const bool shaped = style != 0 && indexBytes > 0 && vertexBytes > 0 &&
                       vertexBytes % GuestMeshRequest::stride(style) == 0 &&
                       indexBytes % 4 == 0;
@@ -455,9 +497,9 @@ GuestRecordingBackend::ReplaceMesh(MeshHandle handle,
     style != static_cast<std::uint32_t>(GuestBatchStyle::LitMesh) &&
     vertexBytes <= GuestMeshRequest::MaximumDynamicBytes &&
     indexBytes <= GuestMeshRequest::MaximumDynamicBytes;
-  candidate.retain = candidate.dynamic ||
-                     (!dynamic && shaped && vertices != nullptr &&
-                      indices != nullptr && vertexBytes >= RetainedMeshBytes);
+  candidate.retain =
+    candidate.dynamic ||
+    (!dynamic && shaped && vertices != nullptr && indices != nullptr);
   Mesh& target = m_meshes.at(handle.slot);
   forgetRetained(target);
   target = std::move(candidate);
@@ -498,6 +540,30 @@ bool
 GuestRecordingBackend::IsMeshValid(MeshHandle handle) const
 {
   return m_meshHandles.isCurrent(handle) && m_meshes.contains(handle.slot);
+}
+GuestRecordingBackend::HostMeshState
+GuestRecordingBackend::hostMeshState(MeshHandle handle,
+                                     GuestResourceId* id,
+                                     std::uint32_t* indexCount) const
+{
+  if (!IsMeshValid(handle)) {
+    return HostMeshState::Missing;
+  }
+  const Mesh& mesh = m_meshes.at(handle.slot);
+  if (mesh.layout != MeshVertexLayout::Pos3Norm3Color4U8Uv2 || !mesh.retain ||
+      mesh.dynamic || mesh.failed) {
+    return HostMeshState::Unusable;
+  }
+  if (!mesh.ready) {
+    return HostMeshState::Pending;
+  }
+  if (id != nullptr) {
+    *id = mesh.id;
+  }
+  if (indexCount != nullptr) {
+    *indexCount = static_cast<std::uint32_t>(mesh.indices.size() / 4);
+  }
+  return HostMeshState::Ready;
 }
 ShaderHandle
 GuestRecordingBackend::CreateShaderProgram(const ShaderPaths&)
@@ -1035,10 +1101,11 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
                  targetHeight() - m_clip.y - m_clip.height,
                  static_cast<float>(m_clip.width),
                  static_cast<float>(m_clip.height) };
-  if (mesh.retain && !mesh.failed && (mesh.ready || !mesh.dynamic)) {
-    if (!mesh.ready) {
-      return; // a static host copy is still uploading
-    }
+  if (mesh.retain && !mesh.failed && !mesh.ready && !mesh.dynamic &&
+      mesh.vertices.size() >= RetainedMeshBytes) {
+    return; // a large static host copy is still uploading
+  }
+  if (mesh.retain && !mesh.failed && mesh.ready) {
     batch.mesh = mesh.id;
     batch.firstIndex = first;
     batch.indexCount = count;
@@ -1049,7 +1116,7 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
     targetBatches().push_back(std::move(batch));
     return;
   }
-  // Dynamic meshes draw inline until their host copy exists.
+  // Dynamic and small static meshes draw inline until their host copy exists.
   extractInline(mesh, batch, first, count);
   targetBatches().push_back(std::move(batch));
 }

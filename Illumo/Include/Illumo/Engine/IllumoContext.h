@@ -6,6 +6,7 @@
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Rendering/IRenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/CommandLine.h>
@@ -41,6 +42,10 @@ struct IllumoContext
   // granted the Audio capability). Composed by the guest application;
   // products must also work silently without it.
   IAudio* audio{ nullptr };
+  // Host-owned world render objects (D-E30), when the host keeps them
+  // (IllumoRuntime guests granted HostRender). Composed by the guest
+  // application; products must also work without it.
+  IRenderWorld* renderWorld{ nullptr };
 };
 
 // Required wiring for DebugModule (console, FPS overlay, env flags).

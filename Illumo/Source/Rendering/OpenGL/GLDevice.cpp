@@ -85,361 +85,486 @@ GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
   _viewportW = -1;
   _viewportH = -1;
   _activeProgram = nullptr;
+  _instanceVao = 0;
+  _instanceCapacity = 0;
 
   for (size_t i = 0; i < commandQueue.GetCommandCount(); ++i) {
-    RenderCommand& cmd = commandQueue.GetCommand(i);
+    const RenderCommand& cmd = commandQueue.GetCommand(i);
+    if (cmd.commandType == CommandType::ExecuteList) {
+      executeList(cmd.executeList.list, tables);
+    } else {
+      executeCommand(cmd, tables);
+    }
+  }
+}
 
-    switch (cmd.commandType) {
-      case CommandType::SetPipelineState:
-        ApplyPipelineState(cmd.pipelineState);
-        break;
+void
+GLDevice::executeList(const RecordedCommandList* list,
+                      const GLResourceTables& tables)
+{
+  if (list == nullptr || list->failed()) {
+    reportFrameError("ExecuteList: missing or failed recorded list");
+    return;
+  }
+  // RecordedCommandList refuses nested ExecuteList tokens, so this loop never
+  // recurses.
+  for (size_t index = 0; index < list->size(); ++index) {
+    executeCommand(list->at(index), tables);
+  }
+}
 
-      case CommandType::SetViewport:
-        if (cmd.viewport.x != _viewportX || cmd.viewport.y != _viewportY ||
-            cmd.viewport.width != _viewportW ||
-            cmd.viewport.height != _viewportH) {
-          glViewport(cmd.viewport.x,
-                     cmd.viewport.y,
-                     cmd.viewport.width,
-                     cmd.viewport.height);
-          _viewportX = cmd.viewport.x;
-          _viewportY = cmd.viewport.y;
-          _viewportW = cmd.viewport.width;
-          _viewportH = cmd.viewport.height;
-        }
-        break;
+void
+GLDevice::executeCommand(const RenderCommand& cmd,
+                         const GLResourceTables& tables)
+{
+  switch (cmd.commandType) {
+    case CommandType::SetPipelineState:
+      ApplyPipelineState(cmd.pipelineState);
+      break;
 
-      case CommandType::SetScissorState:
-        if (cmd.scissor.enabled) {
-          glEnable(GL_SCISSOR_TEST);
-          glScissor(cmd.scissor.x,
-                    cmd.scissor.y,
-                    cmd.scissor.width,
-                    cmd.scissor.height);
-        } else {
-          glDisable(GL_SCISSOR_TEST);
-        }
-        break;
+    case CommandType::SetViewport:
+      if (cmd.viewport.x != _viewportX || cmd.viewport.y != _viewportY ||
+          cmd.viewport.width != _viewportW ||
+          cmd.viewport.height != _viewportH) {
+        glViewport(cmd.viewport.x,
+                   cmd.viewport.y,
+                   cmd.viewport.width,
+                   cmd.viewport.height);
+        _viewportX = cmd.viewport.x;
+        _viewportY = cmd.viewport.y;
+        _viewportW = cmd.viewport.width;
+        _viewportH = cmd.viewport.height;
+      }
+      break;
 
-      case CommandType::SetFramebuffer: {
-        if (!cmd.bindFramebuffer.handle.isValid()) {
-          if (!_boundFboKnown || _boundFbo != 0) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            _boundFbo = 0;
-          }
-          _boundFboHandle = FramebufferHandle{};
-          _boundFboKnown = true;
-          break;
-        }
-        const GLFramebufferResourceEntry* fb =
-          resolveFramebuffer(tables, cmd.bindFramebuffer.handle);
-        if (!fb) {
-          reportFrameError("SetFramebuffer: unknown framebuffer handle");
+    case CommandType::SetScissorState:
+      if (cmd.scissor.enabled) {
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(
+          cmd.scissor.x, cmd.scissor.y, cmd.scissor.width, cmd.scissor.height);
+      } else {
+        glDisable(GL_SCISSOR_TEST);
+      }
+      break;
+
+    case CommandType::SetFramebuffer: {
+      if (!cmd.bindFramebuffer.handle.isValid()) {
+        if (!_boundFboKnown || _boundFbo != 0) {
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           _boundFbo = 0;
-          _boundFboKnown = true;
-          _boundFboHandle = FramebufferHandle{};
-          break;
         }
-        if (!_boundFboKnown || fb->fboId != _boundFbo) {
-          glBindFramebuffer(GL_FRAMEBUFFER, fb->fboId);
-          _boundFbo = fb->fboId;
-        }
-        _boundFboHandle = cmd.bindFramebuffer.handle;
+        _boundFboHandle = FramebufferHandle{};
         _boundFboKnown = true;
         break;
       }
-
-      case CommandType::SetShader: {
-        GLShaderProgram* program =
-          resolveProgram(tables, cmd.bindShader.handle);
-        if (!program) {
-          reportFrameError("SetShader: unknown shader handle");
-          glUseProgram(0);
-          _boundProgram = 0;
-          _activeProgram = nullptr;
-          break;
-        }
-        GLuint id = static_cast<GLuint>(program->GetID());
-        if (id != _boundProgram) {
-          glUseProgram(id);
-          _boundProgram = id;
-        }
-        _activeProgram = program;
+      const GLFramebufferResourceEntry* fb =
+        resolveFramebuffer(tables, cmd.bindFramebuffer.handle);
+      if (!fb) {
+        reportFrameError("SetFramebuffer: unknown framebuffer handle");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        _boundFbo = 0;
+        _boundFboKnown = true;
+        _boundFboHandle = FramebufferHandle{};
         break;
       }
-
-      case CommandType::SetMesh: {
-        GLMesh* mesh = resolveMesh(tables, cmd.bindMesh.handle);
-        if (!mesh) {
-          reportFrameError("SetMesh: unknown mesh handle");
-          glBindVertexArray(0);
-          _boundVao = 0;
-          break;
-        }
-        const GLuint vao = mesh->getVAOID();
-        if (vao != _boundVao) {
-          mesh->Bind();
-          _boundVao = vao;
-        }
-        break;
+      if (!_boundFboKnown || fb->fboId != _boundFbo) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fb->fboId);
+        _boundFbo = fb->fboId;
       }
-
-      case CommandType::SetTexture: {
-        GLTexture* texture = resolveTexture(tables, cmd.bindTexture.handle);
-        if (!texture) {
-          reportFrameError("SetTexture: unknown texture handle");
-          break;
-        }
-        const unsigned int slot = cmd.bindTexture.slot;
-        const GLuint texId = static_cast<GLuint>(texture->getID());
-        if (slot < 8 && _boundTexture[slot] == texId) {
-          break;
-        }
-        texture->Bind(slot);
-        if (slot < 8) {
-          _boundTexture[slot] = texId;
-        }
-        break;
-      }
-
-      case CommandType::SetUniformInt: {
-        GLint loc = getUniformLocation(cmd.uniformInt.name);
-        if (loc >= 0) {
-          glUniform1i(loc, cmd.uniformInt.value);
-        }
-        break;
-      }
-
-      case CommandType::SetUniformFloat: {
-        GLint loc = getUniformLocation(cmd.uniformFloat.name);
-        if (loc >= 0) {
-          glUniform1f(loc, cmd.uniformFloat.value);
-        }
-        break;
-      }
-
-      case CommandType::SetUniformVec2: {
-        GLint loc = getUniformLocation(cmd.uniformVec2.name);
-        if (loc >= 0) {
-          glUniform2f(loc, cmd.uniformVec2.x, cmd.uniformVec2.y);
-        }
-        break;
-      }
-
-      case CommandType::SetUniformVec3: {
-        GLint loc = getUniformLocation(cmd.uniformVec3.name);
-        if (loc >= 0) {
-          glUniform3f(
-            loc, cmd.uniformVec3.x, cmd.uniformVec3.y, cmd.uniformVec3.z);
-        }
-        break;
-      }
-
-      case CommandType::SetUniformVec4: {
-        GLint loc = getUniformLocation(cmd.uniformVec4.name);
-        if (loc >= 0) {
-          glUniform4f(loc,
-                      cmd.uniformVec4.x,
-                      cmd.uniformVec4.y,
-                      cmd.uniformVec4.z,
-                      cmd.uniformVec4.w);
-        }
-        break;
-      }
-
-      case CommandType::SetUniformMat4: {
-        GLint loc = getUniformLocation(cmd.uniformMat4.name);
-        if (loc >= 0 && cmd.uniformMat4.value != nullptr) {
-          glUniformMatrix4fv(loc, 1, GL_FALSE, cmd.uniformMat4.value);
-        } else if (cmd.uniformMat4.value == nullptr) {
-          reportFrameError("SetUniformMat4: null matrix value");
-        }
-        break;
-      }
-
-      case CommandType::UpdateTexture: {
-        GLTexture* texture = resolveTexture(tables, cmd.updateTexture.handle);
-        if (!texture || !cmd.updateTexture.data) {
-          reportFrameError("UpdateTexture: invalid handle or null data");
-          break;
-        }
-        // PBO ping-pong + dirty-rect copy lives on GLTexture (P4).
-        if (!texture->UpdateSubImage(cmd.updateTexture.x,
-                                     cmd.updateTexture.y,
-                                     cmd.updateTexture.width,
-                                     cmd.updateTexture.height,
-                                     cmd.updateTexture.channels,
-                                     cmd.updateTexture.data,
-                                     cmd.updateTexture.srcRowStride)) {
-          reportFrameError(
-            "UpdateTexture: invalid rectangle, channels, or stride");
-          break;
-        }
-        // Texture bind may have changed inside UpdateSubImage.
-        _boundTexture[0] = static_cast<GLuint>(texture->getID());
-        break;
-      }
-
-      case CommandType::ClearScreen: {
-        glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
-        const GLFramebufferResourceEntry* fb =
-          _boundFboHandle.isValid()
-            ? resolveFramebuffer(tables, _boundFboHandle)
-            : nullptr;
-        if (fb && fb->colorTextures.size() > 1) {
-          const float clearColor[4] = {
-            cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a
-          };
-          glClearBufferfv(GL_COLOR, 0, clearColor);
-          const float zeroColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-          for (size_t c = 1; c < fb->colorTextures.size(); ++c) {
-            glClearBufferfv(GL_COLOR, static_cast<GLint>(c), zeroColor);
-          }
-          glClear(GL_DEPTH_BUFFER_BIT);
-        } else {
-          if (cmd.clear.a > 0.0f || cmd.clear.r > 0.0f || cmd.clear.g > 0.0f ||
-              cmd.clear.b > 0.0f ||
-              (cmd.clear.r == 0.0f && cmd.clear.g == 0.0f &&
-               cmd.clear.b == 0.0f)) {
-            // Always apply clear color when ClearScreen is issued.
-            glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
-          }
-          glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        }
-        break;
-      }
-
-      case CommandType::ClearDepthBuffer:
-        glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
-        glClear(GL_DEPTH_BUFFER_BIT);
-        break;
-
-      case CommandType::ClearColorBuffer: {
-        const GLFramebufferResourceEntry* fb =
-          _boundFboHandle.isValid()
-            ? resolveFramebuffer(tables, _boundFboHandle)
-            : nullptr;
-        if (fb && fb->colorTextures.size() > 1) {
-          const float clearColor[4] = {
-            cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a
-          };
-          glClearBufferfv(GL_COLOR, 0, clearColor);
-          const float zeroColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-          for (size_t c = 1; c < fb->colorTextures.size(); ++c) {
-            glClearBufferfv(GL_COLOR, static_cast<GLint>(c), zeroColor);
-          }
-        } else {
-          glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
-          glClear(GL_COLOR_BUFFER_BIT);
-        }
-        break;
-      }
-
-      case CommandType::ClearStencilBuffer:
-        glClear(GL_STENCIL_BUFFER_BIT);
-        break;
-
-      case CommandType::ClearAll: {
-        glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
-        const GLFramebufferResourceEntry* fb =
-          _boundFboHandle.isValid()
-            ? resolveFramebuffer(tables, _boundFboHandle)
-            : nullptr;
-        if (fb && fb->colorTextures.size() > 1) {
-          const float clearColor[4] = {
-            cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a
-          };
-          glClearBufferfv(GL_COLOR, 0, clearColor);
-          const float zeroColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-          for (size_t c = 1; c < fb->colorTextures.size(); ++c) {
-            glClearBufferfv(GL_COLOR, static_cast<GLint>(c), zeroColor);
-          }
-          glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        } else {
-          glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
-          glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
-                  GL_STENCIL_BUFFER_BIT);
-        }
-        break;
-      }
-
-      case CommandType::Draw: {
-        if (_activeProgram == nullptr || _boundVao == 0) {
-          reportFrameError("Draw: missing valid shader or mesh; ignored");
-          break;
-        }
-        GLenum mode = mapPrimitives(_currentGLState.primitives);
-        glDrawArrays(mode,
-                     static_cast<GLint>(cmd.draw.first),
-                     static_cast<GLsizei>(cmd.draw.elementCount));
-        break;
-      }
-
-      case CommandType::DrawIndexed: {
-        if (_activeProgram == nullptr || _boundVao == 0) {
-          reportFrameError(
-            "DrawIndexed: missing valid shader or mesh; ignored");
-          break;
-        }
-        GLenum mode = mapPrimitives(_currentGLState.primitives);
-        const void* offset = reinterpret_cast<const void*>(
-          static_cast<uintptr_t>(cmd.drawIndexed.firstIndex) *
-          sizeof(unsigned int));
-        glDrawElements(mode,
-                       static_cast<GLsizei>(cmd.drawIndexed.elementCount),
-                       GL_UNSIGNED_INT,
-                       offset);
-        break;
-      }
-
-      case CommandType::DrawInstanced: {
-        if (_activeProgram == nullptr || _boundVao == 0) {
-          reportFrameError(
-            "DrawInstanced: missing valid shader or mesh; ignored");
-          break;
-        }
-        GLenum mode = mapPrimitives(_currentGLState.primitives);
-        glDrawArraysInstanced(
-          mode,
-          0,
-          static_cast<GLsizei>(cmd.drawInstanced.elementCount),
-          static_cast<GLsizei>(cmd.drawInstanced.instanceCount));
-        break;
-      }
-
-      case CommandType::UpdateBuffer: {
-        GLMesh* mesh = resolveMesh(tables, cmd.updateBuffer.handle);
-        if (!mesh || !cmd.updateBuffer.data) {
-          reportFrameError("UpdateBuffer: invalid handle or null data");
-          break;
-        }
-        if (!mesh->UpdateVertexData(cmd.updateBuffer.data,
-                                    cmd.updateBuffer.sizeBytes,
-                                    cmd.updateBuffer.offsetBytes)) {
-          reportFrameError(
-            "UpdateBuffer: range exceeds enrolled vertex capacity");
-        }
-        break;
-      }
-
-      case CommandType::UpdateIndexBuffer: {
-        GLMesh* mesh = resolveMesh(tables, cmd.updateIndexBuffer.handle);
-        if (!mesh || !cmd.updateIndexBuffer.data) {
-          reportFrameError("UpdateIndexBuffer: invalid handle or null data");
-          break;
-        }
-        if (!mesh->UpdateIndexData(cmd.updateIndexBuffer.data,
-                                   cmd.updateIndexBuffer.sizeBytes,
-                                   cmd.updateIndexBuffer.offsetBytes)) {
-          reportFrameError("UpdateIndexBuffer: range exceeds index capacity");
-        }
-        break;
-      }
-
-      default:
-        break;
+      _boundFboHandle = cmd.bindFramebuffer.handle;
+      _boundFboKnown = true;
+      break;
     }
+
+    case CommandType::SetShader: {
+      GLShaderProgram* program = resolveProgram(tables, cmd.bindShader.handle);
+      if (!program) {
+        reportFrameError("SetShader: unknown shader handle");
+        glUseProgram(0);
+        _boundProgram = 0;
+        _activeProgram = nullptr;
+        break;
+      }
+      GLuint id = static_cast<GLuint>(program->GetID());
+      if (id != _boundProgram) {
+        glUseProgram(id);
+        _boundProgram = id;
+      }
+      _activeProgram = program;
+      break;
+    }
+
+    case CommandType::SetMesh: {
+      GLMesh* mesh = resolveMesh(tables, cmd.bindMesh.handle);
+      if (!mesh) {
+        reportFrameError("SetMesh: unknown mesh handle");
+        glBindVertexArray(0);
+        _boundVao = 0;
+        break;
+      }
+      const GLuint vao = mesh->getVAOID();
+      if (vao != _boundVao) {
+        mesh->Bind();
+        _boundVao = vao;
+      }
+      break;
+    }
+
+    case CommandType::SetTexture: {
+      GLTexture* texture = resolveTexture(tables, cmd.bindTexture.handle);
+      if (!texture) {
+        reportFrameError("SetTexture: unknown texture handle");
+        break;
+      }
+      const unsigned int slot = cmd.bindTexture.slot;
+      const GLuint texId = static_cast<GLuint>(texture->getID());
+      if (slot < 8 && _boundTexture[slot] == texId) {
+        break;
+      }
+      texture->Bind(slot);
+      if (slot < 8) {
+        _boundTexture[slot] = texId;
+      }
+      break;
+    }
+
+    case CommandType::SetUniformInt: {
+      GLint loc = getUniformLocation(cmd.uniformInt.name);
+      if (loc >= 0) {
+        glUniform1i(loc, cmd.uniformInt.value);
+      }
+      break;
+    }
+
+    case CommandType::SetUniformFloat: {
+      GLint loc = getUniformLocation(cmd.uniformFloat.name);
+      if (loc >= 0) {
+        glUniform1f(loc, cmd.uniformFloat.value);
+      }
+      break;
+    }
+
+    case CommandType::SetUniformVec2: {
+      GLint loc = getUniformLocation(cmd.uniformVec2.name);
+      if (loc >= 0) {
+        glUniform2f(loc, cmd.uniformVec2.x, cmd.uniformVec2.y);
+      }
+      break;
+    }
+
+    case CommandType::SetUniformVec3: {
+      GLint loc = getUniformLocation(cmd.uniformVec3.name);
+      if (loc >= 0) {
+        glUniform3f(
+          loc, cmd.uniformVec3.x, cmd.uniformVec3.y, cmd.uniformVec3.z);
+      }
+      break;
+    }
+
+    case CommandType::SetUniformVec4: {
+      GLint loc = getUniformLocation(cmd.uniformVec4.name);
+      if (loc >= 0) {
+        glUniform4f(loc,
+                    cmd.uniformVec4.x,
+                    cmd.uniformVec4.y,
+                    cmd.uniformVec4.z,
+                    cmd.uniformVec4.w);
+      }
+      break;
+    }
+
+    case CommandType::SetUniformMat4: {
+      GLint loc = getUniformLocation(cmd.uniformMat4.name);
+      if (loc >= 0 && cmd.uniformMat4.value != nullptr) {
+        glUniformMatrix4fv(loc, 1, GL_FALSE, cmd.uniformMat4.value);
+      } else if (cmd.uniformMat4.value == nullptr) {
+        reportFrameError("SetUniformMat4: null matrix value");
+      }
+      break;
+    }
+
+    case CommandType::UpdateTexture: {
+      GLTexture* texture = resolveTexture(tables, cmd.updateTexture.handle);
+      if (!texture || !cmd.updateTexture.data) {
+        reportFrameError("UpdateTexture: invalid handle or null data");
+        break;
+      }
+      // PBO ping-pong + dirty-rect copy lives on GLTexture (P4).
+      if (!texture->UpdateSubImage(cmd.updateTexture.x,
+                                   cmd.updateTexture.y,
+                                   cmd.updateTexture.width,
+                                   cmd.updateTexture.height,
+                                   cmd.updateTexture.channels,
+                                   cmd.updateTexture.data,
+                                   cmd.updateTexture.srcRowStride)) {
+        reportFrameError(
+          "UpdateTexture: invalid rectangle, channels, or stride");
+        break;
+      }
+      // Texture bind may have changed inside UpdateSubImage.
+      _boundTexture[0] = static_cast<GLuint>(texture->getID());
+      break;
+    }
+
+    case CommandType::ClearScreen: {
+      glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
+      const GLFramebufferResourceEntry* fb =
+        _boundFboHandle.isValid() ? resolveFramebuffer(tables, _boundFboHandle)
+                                  : nullptr;
+      if (fb && fb->colorTextures.size() > 1) {
+        const float clearColor[4] = {
+          cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a
+        };
+        glClearBufferfv(GL_COLOR, 0, clearColor);
+        const float zeroColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        for (size_t c = 1; c < fb->colorTextures.size(); ++c) {
+          glClearBufferfv(GL_COLOR, static_cast<GLint>(c), zeroColor);
+        }
+        glClear(GL_DEPTH_BUFFER_BIT);
+      } else {
+        if (cmd.clear.a > 0.0f || cmd.clear.r > 0.0f || cmd.clear.g > 0.0f ||
+            cmd.clear.b > 0.0f ||
+            (cmd.clear.r == 0.0f && cmd.clear.g == 0.0f &&
+             cmd.clear.b == 0.0f)) {
+          // Always apply clear color when ClearScreen is issued.
+          glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
+        }
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+      }
+      break;
+    }
+
+    case CommandType::ClearDepthBuffer:
+      glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
+      glClear(GL_DEPTH_BUFFER_BIT);
+      break;
+
+    case CommandType::ClearColorBuffer: {
+      const GLFramebufferResourceEntry* fb =
+        _boundFboHandle.isValid() ? resolveFramebuffer(tables, _boundFboHandle)
+                                  : nullptr;
+      if (fb && fb->colorTextures.size() > 1) {
+        const float clearColor[4] = {
+          cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a
+        };
+        glClearBufferfv(GL_COLOR, 0, clearColor);
+        const float zeroColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        for (size_t c = 1; c < fb->colorTextures.size(); ++c) {
+          glClearBufferfv(GL_COLOR, static_cast<GLint>(c), zeroColor);
+        }
+      } else {
+        glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
+        glClear(GL_COLOR_BUFFER_BIT);
+      }
+      break;
+    }
+
+    case CommandType::ClearStencilBuffer:
+      glClear(GL_STENCIL_BUFFER_BIT);
+      break;
+
+    case CommandType::ClearAll: {
+      glClearDepth(static_cast<GLdouble>(cmd.clearDepthValue));
+      const GLFramebufferResourceEntry* fb =
+        _boundFboHandle.isValid() ? resolveFramebuffer(tables, _boundFboHandle)
+                                  : nullptr;
+      if (fb && fb->colorTextures.size() > 1) {
+        const float clearColor[4] = {
+          cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a
+        };
+        glClearBufferfv(GL_COLOR, 0, clearColor);
+        const float zeroColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        for (size_t c = 1; c < fb->colorTextures.size(); ++c) {
+          glClearBufferfv(GL_COLOR, static_cast<GLint>(c), zeroColor);
+        }
+        glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+      } else {
+        glClearColor(cmd.clear.r, cmd.clear.g, cmd.clear.b, cmd.clear.a);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+                GL_STENCIL_BUFFER_BIT);
+      }
+      break;
+    }
+
+    case CommandType::Draw: {
+      if (_activeProgram == nullptr || _boundVao == 0) {
+        reportFrameError("Draw: missing valid shader or mesh; ignored");
+        break;
+      }
+      GLenum mode = mapPrimitives(_currentGLState.primitives);
+      glDrawArrays(mode,
+                   static_cast<GLint>(cmd.draw.first),
+                   static_cast<GLsizei>(cmd.draw.elementCount));
+      break;
+    }
+
+    case CommandType::DrawIndexed: {
+      if (_activeProgram == nullptr || _boundVao == 0) {
+        reportFrameError("DrawIndexed: missing valid shader or mesh; ignored");
+        break;
+      }
+      GLenum mode = mapPrimitives(_currentGLState.primitives);
+      const void* offset = reinterpret_cast<const void*>(
+        static_cast<uintptr_t>(cmd.drawIndexed.firstIndex) *
+        sizeof(unsigned int));
+      glDrawElements(mode,
+                     static_cast<GLsizei>(cmd.drawIndexed.elementCount),
+                     GL_UNSIGNED_INT,
+                     offset);
+      break;
+    }
+
+    case CommandType::DrawInstanced: {
+      if (_activeProgram == nullptr || _boundVao == 0) {
+        reportFrameError(
+          "DrawInstanced: missing valid shader or mesh; ignored");
+        break;
+      }
+      GLenum mode = mapPrimitives(_currentGLState.primitives);
+      glDrawArraysInstanced(
+        mode,
+        0,
+        static_cast<GLsizei>(cmd.drawInstanced.elementCount),
+        static_cast<GLsizei>(cmd.drawInstanced.instanceCount));
+      break;
+    }
+
+    case CommandType::UpdateBuffer: {
+      GLMesh* mesh = resolveMesh(tables, cmd.updateBuffer.handle);
+      if (!mesh || !cmd.updateBuffer.data) {
+        reportFrameError("UpdateBuffer: invalid handle or null data");
+        break;
+      }
+      if (!mesh->UpdateVertexData(cmd.updateBuffer.data,
+                                  cmd.updateBuffer.sizeBytes,
+                                  cmd.updateBuffer.offsetBytes)) {
+        reportFrameError(
+          "UpdateBuffer: range exceeds enrolled vertex capacity");
+      }
+      break;
+    }
+
+    case CommandType::UpdateIndexBuffer: {
+      GLMesh* mesh = resolveMesh(tables, cmd.updateIndexBuffer.handle);
+      if (!mesh || !cmd.updateIndexBuffer.data) {
+        reportFrameError("UpdateIndexBuffer: invalid handle or null data");
+        break;
+      }
+      if (!mesh->UpdateIndexData(cmd.updateIndexBuffer.data,
+                                 cmd.updateIndexBuffer.sizeBytes,
+                                 cmd.updateIndexBuffer.offsetBytes)) {
+        reportFrameError("UpdateIndexBuffer: range exceeds index capacity");
+      }
+      break;
+    }
+
+    case CommandType::WriteBuffer: {
+      const CmdWriteBuffer& write = cmd.writeBuffer;
+      const GLBufferResourceEntry* buffer = resolveBuffer(tables, write.handle);
+      if (!buffer || !write.data || write.sizeBytes == 0 ||
+          write.offsetBytes > buffer->capacity ||
+          write.sizeBytes > buffer->capacity - write.offsetBytes) {
+        reportFrameError(
+          "WriteBuffer: invalid handle, null data, or range beyond capacity");
+        break;
+      }
+      const GLenum target = buffer->usage == BufferUsage::Uniform
+                              ? GL_UNIFORM_BUFFER
+                              : GL_ARRAY_BUFFER;
+      glBindBuffer(target, buffer->bufferId);
+      if (write.offsetBytes == 0) {
+        // Orphan: storage the GPU may still read from an earlier frame is
+        // replaced rather than waited on.
+        glBufferData(target,
+                     static_cast<GLsizeiptr>(buffer->capacity),
+                     nullptr,
+                     GL_DYNAMIC_DRAW);
+      }
+      glBufferSubData(target,
+                      static_cast<GLintptr>(write.offsetBytes),
+                      static_cast<GLsizeiptr>(write.sizeBytes),
+                      write.data);
+      glBindBuffer(target, 0);
+      break;
+    }
+
+    case CommandType::BindUniformBuffer: {
+      const GLBufferResourceEntry* buffer =
+        resolveBuffer(tables, cmd.bindUniformBuffer.handle);
+      // GL 3.3 guarantees at least 36 uniform buffer binding points.
+      if (!buffer || buffer->usage != BufferUsage::Uniform ||
+          cmd.bindUniformBuffer.binding >= 36) {
+        reportFrameError(
+          "BindUniformBuffer: unknown or non-uniform buffer, or bad binding");
+        break;
+      }
+      glBindBufferBase(
+        GL_UNIFORM_BUFFER, cmd.bindUniformBuffer.binding, buffer->bufferId);
+      break;
+    }
+
+    case CommandType::SetInstanceStream: {
+      const CmdInstanceStream& stream = cmd.instanceStream;
+      const GLBufferResourceEntry* buffer =
+        resolveBuffer(tables, stream.handle);
+      const unsigned int stride = instanceLayoutStride(stream.layout);
+      if (!buffer || buffer->usage != BufferUsage::Instance || stride == 0 ||
+          _boundVao == 0 || stream.offsetBytes >= buffer->capacity) {
+        reportFrameError("SetInstanceStream: unknown or non-instance buffer, "
+                         "bad layout, or no mesh bound");
+        _instanceVao = 0;
+        _instanceCapacity = 0;
+        break;
+      }
+      // LitModelTint is nine contiguous vec4 columns at locations 4-12.
+      glBindBuffer(GL_ARRAY_BUFFER, buffer->bufferId);
+      for (GLuint column = 0; column < 9; ++column) {
+        const GLuint location = 4 + column;
+        glEnableVertexAttribArray(location);
+        glVertexAttribPointer(
+          location,
+          4,
+          GL_FLOAT,
+          GL_FALSE,
+          static_cast<GLsizei>(stride),
+          reinterpret_cast<const void*>(
+            static_cast<uintptr_t>(stream.offsetBytes + column * 16u)));
+        glVertexAttribDivisor(location, 1);
+      }
+      glBindBuffer(GL_ARRAY_BUFFER, 0);
+      _instanceVao = _boundVao;
+      _instanceCapacity = (buffer->capacity - stream.offsetBytes) / stride;
+      break;
+    }
+
+    case CommandType::DrawIndexedInstanced: {
+      const CmdDrawIndexedInstanced& draw = cmd.drawIndexedInstanced;
+      if (_activeProgram == nullptr || _boundVao == 0) {
+        reportFrameError(
+          "DrawIndexedInstanced: missing valid shader or mesh; ignored");
+        break;
+      }
+      if (_instanceVao != _boundVao || draw.instanceCount > _instanceCapacity) {
+        reportFrameError("DrawIndexedInstanced: no instance stream on this "
+                         "mesh, or more instances than it holds; ignored");
+        break;
+      }
+      if (draw.instanceCount == 0) {
+        break;
+      }
+      GLenum mode = mapPrimitives(_currentGLState.primitives);
+      const void* offset = reinterpret_cast<const void*>(
+        static_cast<uintptr_t>(draw.firstIndex) * sizeof(unsigned int));
+      glDrawElementsInstanced(mode,
+                              static_cast<GLsizei>(draw.elementCount),
+                              GL_UNSIGNED_INT,
+                              offset,
+                              static_cast<GLsizei>(draw.instanceCount));
+      break;
+    }
+
+    default:
+      break;
   }
 }
 

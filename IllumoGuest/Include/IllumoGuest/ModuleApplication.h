@@ -21,6 +21,7 @@
 #include <IllumoGuest/FontProvider.h>
 #include <IllumoGuest/PanelSurfaces.h>
 #include <IllumoGuest/RecordingBackend.h>
+#include <IllumoGuest/RenderWorld.h>
 #include <IllumoGuest/SnapshotWindow.h>
 #include <IllumoGuest/VfsAssets.h>
 #include <optional>
@@ -149,6 +150,9 @@ private:
   // Sound effects (Audio capability); published as IllumoContext::audio only
   // when granted.
   GuestAudio m_audio;
+  // Host-owned world objects (HostRender capability); published as
+  // IllumoContext::renderWorld only when granted.
+  std::unique_ptr<GuestRenderWorld> m_renderWorld;
   CommandRegistry m_commands;
   CommandRegistry m_consoleBuiltins;
   GuestCommandLine m_commandLine;

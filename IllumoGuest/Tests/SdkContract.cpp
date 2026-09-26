@@ -5,6 +5,7 @@
 #include <IllumoGuest/Dialog.h>
 #include <IllumoGuest/FontProvider.h>
 #include <IllumoGuest/InputProvider.h>
+#include <IllumoGuest/RenderWorld.h>
 #include <IllumoGuest/SnapshotWindow.h>
 #include <array>
 #include <functional>
@@ -384,6 +385,224 @@ dynamicMeshContract()
   backend.Shutdown();
 }
 
+// Every shaped static mesh gets one host copy, however small: it draws inline
+// while that copy uploads, then by reference with no geometry in the frame.
+static void
+staticMeshContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  renderer.ensureBuiltinStyles();
+  const std::array<float, 12> vertices{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0 };
+  const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+  const MeshHandle mesh = renderer.enrollMesh(vertices.data(),
+                                              sizeof(vertices),
+                                              indices.data(),
+                                              sizeof(indices),
+                                              MeshVertexLayout::Pos3Color4U8,
+                                              false);
+  require(mesh.isValid(), "Static mesh enrollment");
+  const std::function<GuestFrame()> record = [&]() {
+    renderer.BeginFrame();
+    backend.setFrame(1280, 720);
+    backend.pump();
+    renderer.bindStyle(RenderStyleId::Shape);
+    renderer.pushSetMesh(mesh);
+    renderer.pushDrawIndexed(3, 0);
+    renderer.EndFrame();
+    return backend.takeFrame();
+  };
+  const GuestFrame before = record();
+  require(before.batches.size() == 1 && !before.batches[0].retained() &&
+            before.batches[0].vertices.size() == 3,
+          "Small static mesh draws inline before its host copy exists");
+  GuestServices pending = exchange(queue);
+  GuestMeshRequest request;
+  require(pending.records.size() == 1 &&
+            pending.records[0].operation == GuestService::CreateMesh &&
+            GuestMeshRequest::read(pending.records[0].payload, request) &&
+            !request.dynamic && request.vertexBytes == sizeof(vertices),
+          "Small static mesh requests one host copy");
+  const GuestResourceId host{ 7, GuestResourceKind::Mesh, 1, 1 };
+  GuestWireWriter created;
+  host.write(created);
+  pending.records[0].payload = created.take();
+  pending.records[0].status = GuestServiceStatus::Complete;
+  exchange(queue, pending);
+  const GuestFrame uploading = record();
+  require(uploading.batches.size() == 1 && !uploading.batches[0].retained(),
+          "Small static mesh stays inline while its bytes upload");
+  pending = exchange(queue);
+  require(pending.records.size() == 2 &&
+            pending.records[0].operation == GuestService::WriteMesh &&
+            pending.records[1].operation == GuestService::WriteMesh,
+          "Vertices and indices upload once");
+  for (GuestServiceRecord& entry : pending.records) {
+    entry.payload.clear();
+    entry.status = GuestServiceStatus::Complete;
+  }
+  exchange(queue, pending);
+  const GuestFrame referenced = record();
+  require(referenced.batches.size() == 1 && referenced.batches[0].retained() &&
+            referenced.batches[0].vertices.empty() &&
+            referenced.batches[0].mesh.slot == host.slot,
+          "Uploaded static mesh draws by reference");
+  backend.Shutdown();
+}
+
+// Past the host's shadow caster limit, extra casters grow the nearest
+// compatible caster instead of vanishing from the shared shadow fit.
+static void
+shadowCasterContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  renderer.BeginFrame();
+  backend.setFrame(1280, 720);
+  const std::size_t limit = GuestFrameLimits{}.shadowCasters;
+  for (std::size_t index = 0; index <= limit; ++index) {
+    Renderer::ShadowCasterDesc caster;
+    const float x = static_cast<float>(index) * 4.0f;
+    caster.boundsMin = { x, 0, 0 };
+    caster.boundsMax = { x + 1, 1, 1 };
+    renderer.registerShadowCaster(caster);
+  }
+  backend.BeginLayer(RenderLayerId::World);
+  renderer.EndFrame();
+  const GuestFrame frame = backend.takeFrame();
+  const float last = static_cast<float>(limit) * 4.0f;
+  require(frame.shadowCasters.size() == limit &&
+            frame.shadowCasters.back().boundsMin[0] == last - 4.0f &&
+            frame.shadowCasters.back().boundsMax[0] == last + 1.0f,
+          "Overflow caster merges into its nearest compatible caster");
+  backend.Shutdown();
+}
+
+// Guests find over-quota frames before sending them; unchanged surfaces do
+// not count against the batch quota.
+static void
+frameLimitContract()
+{
+  GuestFrame frame;
+  frame.batches.resize(2);
+  require(frame.exceededLimit() == nullptr, "A small frame is within quota");
+  GuestSurfaceFrame unchanged;
+  unchanged.same = true;
+  unchanged.batches.resize(GuestFrameLimits{}.batches);
+  frame.surfaces.push_back(unchanged);
+  require(frame.exceededLimit() == nullptr,
+          "Unchanged surfaces do not count against the batch quota");
+  frame.batches.resize(GuestFrameLimits{}.batches + 1);
+  require(frame.exceededLimit() != nullptr,
+          "A frame over the batch quota is reported");
+}
+
+// Frame schema v6: GuestRenderWorld holds an instance until its mesh's host
+// copy exists, folds later changes into the waiting create, and never emits
+// an operation the host would refuse.
+static void
+renderWorldContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  const std::array<float, 27> vertices{};
+  const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+  const MeshHandle mesh =
+    renderer.enrollMesh(vertices.data(),
+                        sizeof(vertices),
+                        indices.data(),
+                        sizeof(indices),
+                        MeshVertexLayout::Pos3Norm3Color4U8Uv2,
+                        false);
+  const MeshHandle shape = renderer.enrollDynamicMesh(
+    3 * 16, indices.data(), sizeof(indices), MeshVertexLayout::Pos3Color4U8);
+  GuestRenderWorld world(backend);
+  std::vector<GuestWorldOperation> operations;
+
+  RenderInstanceDesc desc;
+  desc.mesh = mesh;
+  desc.indexCount = 3;
+  desc.material = 1;
+  RenderInstanceDesc unusable = desc;
+  unusable.mesh = shape;
+  require(world.createMaterial(1, RenderMaterialDesc{}) &&
+            !world.createMaterial(1, RenderMaterialDesc{}) &&
+            !world.createInstance(9, unusable) &&
+            world.createInstance(10, desc) && world.waitingInstances() == 1,
+          "An instance waits for its mesh; unusable meshes are refused");
+  std::array<float, 16> moved{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+  moved[12] = 4.0f;
+  require(world.setInstanceTransform(10, moved) &&
+            world.queuedOperations() == 1,
+          "Changes to a waiting instance do not travel");
+  world.takeOperations(operations, 64);
+  require(operations.size() == 1 &&
+            operations[0].op == GuestWorldOp::MaterialCreate &&
+            world.waitingInstances() == 1,
+          "Only the material reaches the host before the mesh is ready");
+
+  // Complete the mesh's host copy: create, then its vertex and index bytes.
+  backend.pump();
+  GuestServices pending = exchange(queue);
+  const GuestResourceId host{ 7, GuestResourceKind::Mesh, 4, 1 };
+  GuestWireWriter created;
+  host.write(created);
+  const std::vector<std::byte> hostBytes = created.take();
+  for (GuestServiceRecord& record : pending.records) {
+    record.payload = record.operation == GuestService::CreateMesh
+                       ? hostBytes
+                       : std::vector<std::byte>{};
+    record.status = GuestServiceStatus::Complete;
+  }
+  exchange(queue, pending);
+  backend.pump();
+  pending = exchange(queue);
+  for (GuestServiceRecord& record : pending.records) {
+    record.payload.clear();
+    record.status = GuestServiceStatus::Complete;
+  }
+  exchange(queue, pending);
+  backend.pump();
+
+  operations.clear();
+  world.takeOperations(operations, 64);
+  require(operations.size() == 1 &&
+            operations[0].op == GuestWorldOp::InstanceCreate &&
+            operations[0].id == 10 && operations[0].mesh.slot == host.slot &&
+            operations[0].transform[12] == 4.0f &&
+            world.waitingInstances() == 0,
+          "The ready instance is created with its host mesh and latest "
+          "transform");
+  require(!world.destroyMaterial(1) && world.destroyInstance(10) &&
+            world.destroyMaterial(1),
+          "A material is destroyed only once unused");
+  operations.clear();
+  world.takeOperations(operations, 64);
+  require(operations.size() == 2 &&
+            operations[0].op == GuestWorldOp::InstanceDestroy &&
+            operations[1].op == GuestWorldOp::MaterialDestroy,
+          "Destruction travels in order");
+
+  for (RenderMaterialId id = 20; id < 25; ++id) {
+    world.createMaterial(id, RenderMaterialDesc{});
+  }
+  operations.clear();
+  world.takeOperations(operations, 2);
+  require(operations.size() == 2 && operations[0].id == 20 &&
+            world.queuedOperations() == 3,
+          "The per-frame quota keeps the rest queued in order");
+  backend.Shutdown();
+}
+
 class SdkContract final : public GuestApplication
 {
 public:
@@ -403,6 +622,10 @@ public:
     dialogContract();
     recordingContract();
     dynamicMeshContract();
+    staticMeshContract();
+    shadowCasterContract();
+    frameLimitContract();
+    renderWorldContract();
     return true;
   }
   void update(const GuestInput&) override {}

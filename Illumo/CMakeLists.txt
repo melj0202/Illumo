@@ -130,6 +130,7 @@ add_library(Illumo STATIC
   Source/Rendering/GLString.cpp
   Source/Rendering/MeshLoader.cpp
   Source/Rendering/Renderer.cpp
+  Source/Rendering/RenderWorld.cpp
   Source/Rendering/RendererStyles.cpp
   Source/Rendering/RenderWindow.cpp
   Source/Rendering/ShaderPreprocessor.cpp
@@ -298,6 +299,8 @@ if(BUILD_TESTING)
     Tests/TestSceneGraphV2.cpp
     Tests/TestSceneAllocations.cpp
     Tests/TestSceneBenchmarks.cpp
+    Tests/TestInstancing.cpp
+    Tests/TestRenderWorld.cpp
     Tests/TestShaderPreprocessor.cpp
     Tests/TestGuiKit.cpp
     Tests/TestGuiFileTree.cpp
@@ -320,7 +323,8 @@ if(BUILD_TESTING)
   # Font tests load engine fonts from source; each case runs in its own
   # working directory.
   target_compile_definitions(IllumoTests PRIVATE ILLUMO_TESTING
-    "ILLUMO_ENGINE_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/Assets\"")
+    "ILLUMO_ENGINE_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/Assets\""
+    "ILLUMO_ENGINE_SHADERS=\"${CMAKE_CURRENT_SOURCE_DIR}/Shader\"")
   illumo_configure_runtime_target(IllumoTests)
   illumo_discover_test_runner(IllumoTests Illumo)
   illumo_stage_msvc_asan(IllumoTests)
@@ -345,6 +349,22 @@ if(BUILD_TESTING)
   add_dependencies(IllumoTests IllumoArchiveFixture)
   target_compile_definitions(IllumoTests PRIVATE
     ILLUMO_TEST_ARCHIVE_FIXTURE="${_illumo_archive_fixture}")
+
+  # Real-GPU checks. They need an OpenGL 3.3 context, so they carry their own
+  # label instead of IllumoWorkspace; exit code 77 reports a missing context.
+  add_executable(IllumoGpuTests Tests/Gpu/GpuInstancing.cpp)
+  target_link_libraries(IllumoGpuTests PRIVATE Illumo::TestSupport glfw)
+  target_include_directories(IllumoGpuTests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+  illumo_configure_runtime_target(IllumoGpuTests)
+  illumo_stage_msvc_asan(IllumoGpuTests)
+  illumo_stage_shaders(IllumoGpuTests "${CMAKE_CURRENT_SOURCE_DIR}/Shader")
+  add_test(NAME Illumo.Gpu.InstancingParity COMMAND IllumoGpuTests instancing
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+  add_test(NAME Illumo.Gpu.RenderWorldParity COMMAND IllumoGpuTests renderworld
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+  set_tests_properties(Illumo.Gpu.InstancingParity Illumo.Gpu.RenderWorldParity
+    PROPERTIES LABELS "IllumoGpu" SKIP_RETURN_CODE 77 TIMEOUT 60)
 
   add_executable(IllumoPublicHeaderSmoke Tests/PublicHeaderSmoke.cpp)
   target_link_libraries(IllumoPublicHeaderSmoke PRIVATE Illumo::Illumo)

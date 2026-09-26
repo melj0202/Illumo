@@ -74,6 +74,10 @@ void
 registerSceneInstanceTests(IllumoTestRegistry& registry);
 void
 registerAudioTests(IllumoTestRegistry& registry);
+void
+registerInstancingTests(IllumoTestRegistry& registry);
+void
+registerRenderWorldTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -112,6 +116,8 @@ createRegistry()
   registerShaderPreprocessorTests(registry);
   registerFontTests(registry);
   registerAudioTests(registry);
+  registerInstancingTests(registry);
+  registerRenderWorldTests(registry);
   return registry;
 }
 

@@ -35,7 +35,8 @@ describeCapabilities(std::uint32_t granted)
     { GuestCapability::Messages, "messages" },
     { GuestCapability::ProjectFiles, "project files" },
     { GuestCapability::Windows, "panel windows" },
-    { GuestCapability::Audio, "audio" }
+    { GuestCapability::Audio, "audio" },
+    { GuestCapability::HostRender, "host render world" }
   };
   std::string text;
   for (const std::pair<GuestCapability, const char*>& name : names) {
@@ -169,6 +170,7 @@ try {
         m_module,
         GuestRole::Game,
         static_cast<std::uint32_t>(GuestCapability::Render) |
+          static_cast<std::uint32_t>(GuestCapability::HostRender) |
           static_cast<std::uint32_t>(GuestCapability::Assets) |
           static_cast<std::uint32_t>(GuestCapability::Clipboard) |
           (context->envVars

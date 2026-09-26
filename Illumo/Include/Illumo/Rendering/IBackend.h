@@ -34,6 +34,17 @@ struct FramebufferAttachments
   TextureHandle depthStencilTexture{};
 };
 
+enum class BufferUsage : unsigned char
+{
+  Instance, // per-instance vertex attributes (SetInstanceStream)
+  Uniform,  // uniform blocks (BindUniformBuffer)
+};
+
+// Shaders that declare this uniform block read it from this binding point;
+// backends bind it when a program links. Renderer owns its contents.
+inline constexpr const char* FrameUniformsBlockName = "FrameUniforms";
+inline constexpr unsigned int FrameUniformsBindingPoint = 0;
+
 class IBackend
 {
 public:
@@ -170,4 +181,23 @@ public:
     TextureHandle* outDepthTexture) = 0;
   virtual bool DestroyFramebuffer(FramebufferHandle handle) = 0;
   virtual bool IsFramebufferValid(FramebufferHandle handle) const = 0;
+
+  // Instance and uniform buffers of a fixed capacity, filled by WriteBuffer.
+  // Backends without them return an invalid handle; callers fall back.
+  virtual BufferHandle CreateBuffer(BufferUsage usage, size_t capacityBytes)
+  {
+    (void)usage;
+    (void)capacityBytes;
+    return {};
+  }
+  virtual bool DestroyBuffer(BufferHandle handle)
+  {
+    (void)handle;
+    return false;
+  }
+  virtual bool IsBufferValid(BufferHandle handle) const
+  {
+    (void)handle;
+    return false;
+  }
 };

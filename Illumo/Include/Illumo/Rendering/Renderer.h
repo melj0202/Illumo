@@ -2,6 +2,7 @@
 #include <Illumo/Foundation/AxisAlignedBounds3.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/IShaderProgram.h>
+#include <Illumo/Rendering/RecordedCommandList.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/RenderPass.h>
 #include <Illumo/Rendering/RenderStyle.h>
@@ -51,6 +52,23 @@ public:
     float minimumRadius = 2.5f;
     float lightDistance = 8.0f;
     float casterDistance = 100.0f;
+  };
+
+  // Mirrors the std140 `FrameUniforms` block read by instanced styles.
+  struct FrameUniforms
+  {
+    std::array<float, 16> viewProjection{ 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+                                          0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+                                          0.0f, 0.0f, 0.0f, 1.0f };
+    std::array<float, 16> previousViewProjection{ 1.0f, 0.0f, 0.0f, 0.0f,
+                                                  0.0f, 1.0f, 0.0f, 0.0f,
+                                                  0.0f, 0.0f, 1.0f, 0.0f,
+                                                  0.0f, 0.0f, 0.0f, 1.0f };
+    std::array<float, 16> lightSpace{ 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+                                      0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+                                      0.0f, 0.0f, 0.0f, 1.0f };
+    // x: 1 when this frame's shared shadow map is active.
+    std::array<float, 4> shadowState{ 0.0f, 0.0f, 0.0f, 0.0f };
   };
 
   struct ShadowFrameContext
@@ -154,6 +172,27 @@ private:
   ShadowFrameContext shadowFrameContext;
   std::array<float, 16> m_nextWorldViewProjection{};
   bool m_hasNextWorldViewProjection = false;
+  // The frame block is created on first use and written at most once per
+  // RenderScene; its storage stays unchanged until the next frame's write.
+  BufferHandle m_frameUniformBuffer{};
+  bool m_frameUniformBufferAttempted = false;
+  FrameUniforms m_frameUniforms;
+  uint64_t m_frameUniformsSerial = 0;
+  std::array<float, 16> m_viewProjection{};
+  std::array<float, 16> m_previousViewProjection{};
+  bool m_hasViewProjection = false;
+  RecordedCommandList* m_recording = nullptr;
+
+public:
+  // Recorded lists executed this frame, next to the queue's own metrics.
+  struct RecordedListStats
+  {
+    size_t lists = 0;
+    size_t tokens = 0;
+  };
+
+private:
+  RecordedListStats m_recordedStats;
 
   void beginFrameContext(Camera* camera);
   void endFrameContext();
@@ -166,6 +205,10 @@ private:
   void releaseShadowResources();
   const float* retainUniformMatrix(const float* value);
   void clearCommandQueue();
+  // Every push helper emits through these: into the frame queue, or into the
+  // list being recorded.
+  void emitCommand(const RenderCommand& command);
+  bool emitCheckedCommand(const RenderCommand& command);
 
 public:
   // Composition-root path: ownership transferred via unique_ptr (D-R11).
@@ -295,6 +338,29 @@ public:
 
   TextureInfo getTextureInfo(TextureHandle handle) const;
 
+  // Invalid when the backend has no instance or uniform buffers.
+  BufferHandle enrollBuffer(BufferUsage usage, size_t capacityBytes);
+  bool destroyBuffer(BufferHandle handle);
+
+  // Writes (once per RenderScene) and binds the FrameUniforms block that
+  // instanced styles read. Call in each pass before their draws, after
+  // shadow fitting. False when the backend has no uniform buffers.
+  bool useFrameUniforms();
+  const FrameUniforms& getFrameUniforms() const { return m_frameUniforms; }
+
+  // Between these, push helpers append to `list` instead of the frame queue
+  // (bindStyle included). Matrices are copied into the list. Record outside
+  // any other recording; the list is cleared by its owner beforehand.
+  void beginRecording(RecordedCommandList* list);
+  void endRecording();
+  bool isRecording() const { return m_recording != nullptr; }
+  // Queues one token that runs `list` in place at this point of the frame.
+  bool pushExecuteList(const RecordedCommandList* list);
+  const RecordedListStats& getRecordedListStats() const
+  {
+    return m_recordedStats;
+  }
+
   // Built-in styles: enroll shaders once; bind emits pipeline + SetShader.
   // Implemented in RendererStyles.cpp.
   void ensureBuiltinStyles();
@@ -389,6 +455,17 @@ public:
                              unsigned int offsetBytes,
                              unsigned int sizeBytes,
                              const void* data);
+  bool pushWriteBuffer(BufferHandle handle,
+                       unsigned int offsetBytes,
+                       unsigned int sizeBytes,
+                       const void* data);
+  void pushBindUniformBuffer(BufferHandle handle, unsigned int binding);
+  void pushInstanceStream(BufferHandle handle,
+                          unsigned int offsetBytes,
+                          InstanceLayout layout);
+  void pushDrawIndexedInstanced(unsigned int elementCount,
+                                unsigned int firstIndex,
+                                unsigned int instanceCount);
 
   // =========================================================================
   // Render targets & pass execution helpers

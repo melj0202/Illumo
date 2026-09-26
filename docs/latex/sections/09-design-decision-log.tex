@@ -2018,7 +2018,8 @@ main-thread affine in this milestone. Materials, mesh hot reload, and automatic
 instance aggregation remain deferred until a measured workload justifies their
 additional contracts.\\
 \textbf{Refines:} D-R17's earlier texture/shader-only managed scope and D-R21's
-world-mesh host.
+world-mesh host.\\
+\textbf{Superseded in part by:} D-R28 (instance aggregation)
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -2036,7 +2037,8 @@ changes, destruction, ring reuse, and teardown retire views. Already emitted
 payloads still outlive submission. Shared light fitting follows collection,
 so shadow relevance uses snapshot bounds in the depth pass; off-camera casters
 remain present. A one-release sceneSnapshotExtraction switch retains direct
-traversal. Recorded payloads and GL-context migration require a separate decision.
+traversal. Recorded payloads and GL-context migration require a separate decision.\\
+\textbf{Refined by:} D-R28 (host-owned recorded lists; the GL context stays)
 \end{decisionbox}
 
 \subsection*{D-CAP1 --- Bounded standalone rendering and charter baseline}
@@ -2873,6 +2875,71 @@ ellipses, text) without a second GL context or a CPU rasterizer.\\
 readback. Versions 1--4 remain valid, and the frame quotas span the main frame
 and every surface.\\
 \textbf{Extends:} D-UI5 (no second GL context), D-R25
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-E30 --- The host owns render and media objects}
+\begin{decisionbox}[title={D-E30 \quad 2026-09-26}]
+\textbf{Decision:} A WASM guest manages its game state and makes presentation
+decisions (layout, hit testing, animation, painter order). Every render and
+media object lives on the native host, and the guest manages it through host
+calls rather than copying geometry or draw state every frame. World objects,
+materials and the environment move first (frame schema v6 world operations
+behind a \texttt{HostRender} capability), then 2D visuals and composition
+lists. The guest SDK checks every frame against the host's count quotas
+before sending it.\\
+\textbf{Why:} IllMeshViewer with 2,000 primitive cubes ran at 41 FPS: 20.6 of
+23.9\,ms per frame went to guest recording plus host validation and copying
+(3.4\,MB per frame). Keeping small static meshes on the host roughly doubled
+that to 85 FPS, but the guest still recorded about 22 tokens and a batch per
+object.\\
+\textbf{Consequences:} Guests keep today's decisions and tools. Frame versions
+1--5 and the batch path stay for older packages. Design and milestones:
+\texttt{docs/host-render-world-design.md}.\\
+\textbf{Refines:} the guest-side presentation model of
+\texttt{docs/wasm-game-runtime-design.md} section 7; \textbf{Extends:} D-E14,
+D-E16, D-E28
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R28 --- Instancing, recorded lists and RenderWorld}
+\begin{decisionbox}[title={D-R28 \quad 2026-09-26}]
+\textbf{Decision:}
+\begin{itemize}
+  \item Backends gain generational instance and uniform buffers
+    (\texttt{BufferHandle}) and the tokens \texttt{WriteBuffer},
+    \texttt{BindUniformBuffer}, \texttt{SetInstanceStream} and
+    \texttt{DrawIndexedInstanced}.
+  \item \symbolref{Renderer} owns a per-frame \texttt{FrameUniforms} block
+    (camera, previous camera, light space, shadow state), written once per
+    \texttt{RenderScene} on first use. The instanced styles
+    \texttt{LitMeshInstanced} and \texttt{ShadowDepthInstanced} read it, so
+    recorded tokens never carry camera- or light-dependent values.
+  \item A \texttt{RecordedCommandList} is recorded once through the ordinary
+    push helpers (\texttt{Renderer::beginRecording}) and executed in place by
+    an \texttt{ExecuteList} token. It owns its matrices, refuses nested
+    lists, has its own ceiling, and is counted in
+    \texttt{Renderer::getRecordedListStats}.
+  \item \texttt{RenderWorld} is the engine owner of persistent world objects
+    behind \texttt{IRenderWorld}. Instances sharing a mesh range and
+    material form a bucket that draws with one instanced call per pass. Its
+    lists re-record only when its buffers, material or the environment
+    change; per frame it culls, streams visible instances from host memory
+    and patches instance counts.
+\end{itemize}
+\textbf{Why:} The measured workload that D-R24 waited for exists (D-E30).
+With a mock backend, 2,000 objects cost 3.8\,ms and 50,017 tokens per frame
+as one MeshVisual each, and 0.11\,ms and 30 tokens in one RenderWorld; 50,000
+objects cost 2.4\,ms. On a real GPU both paths produce bit-identical images,
+shadows included (\texttt{Illumo.Gpu.RenderWorldParity}).\\
+\textbf{Consequences:} Recorded payloads are host-owned and main-thread only;
+the GL context does not move. The frame queue keeps its ceiling and
+rejection metrics, and the list ceiling and statistics sit beside them.
+MeshVisual and SceneGraphDrawable are unchanged. Real-GPU checks carry the
+\texttt{IllumoGpu} label.\\
+\textbf{Supersedes:} D-R24's deferral of instance aggregation, and D-R25's
+requirement of a separate decision for recorded payloads (for host-owned
+lists)
 \end{decisionbox}
 
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}

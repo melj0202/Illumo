@@ -226,6 +226,10 @@ GuestModuleApplication::start(std::span<const std::byte> startup)
     granted(GuestCapability::Windows) ? &m_panels : nullptr;
   m_audio.setGranted(granted(GuestCapability::Audio));
   m_context.audio = granted(GuestCapability::Audio) ? &m_audio : nullptr;
+  if (granted(GuestCapability::HostRender)) {
+    m_renderWorld = std::make_unique<GuestRenderWorld>(m_backend);
+  }
+  m_context.renderWorld = m_renderWorld.get();
   Font::getDefaultFont();
   m_settings.load();
   return true;
@@ -328,6 +332,16 @@ GuestModuleApplication::recordFrame(GuestFrame& output)
     }
     m_backend.takeFrame(output);
     m_panels.finish(output);
+    const char* exceeded = output.exceededLimit();
+    if (exceeded != nullptr) {
+      throw std::runtime_error(exceeded);
+    }
+    // Only a frame that will be delivered takes world operations; a dropped
+    // frame leaves them queued for the next one.
+    if (m_renderWorld) {
+      m_renderWorld->takeOperations(output.worldOperations,
+                                    GuestFrameLimits{}.worldOperations);
+    }
     if (!m_lastFrameError.empty()) {
       m_lastFrameError.clear();
     }

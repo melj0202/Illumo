@@ -47,6 +47,9 @@ editing. Route detail to these canonical sources:
 - WASM runtime design, ABI and cutover: `docs/wasm-game-runtime-design.md`,
   `docs/wasm-game-runtime-plan.md`, `docs/wasm-game-cutover-plan.md`, and
   `docs/wasm-apps-cutover-plan.md`;
+- host-owned rendering (D-E30, D-R28), instancing, recorded lists and
+  `RenderWorld`: `docs/host-render-world-design.md` and its tracker
+  `docs/host-render-world-plan.md`;
 - persistent scene hierarchy contract: `docs/scene-graph-v2-design.md`;
 - scene implementation and verification record: `docs/scene-graph-v2-plan.md`;
 - long-form design book and chart-only map: `docs/latex/illumo.tex` and
@@ -460,7 +463,12 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 - Game and Rulesets do not issue raw OpenGL calls or depend on OpenGL types.
 - Production drawables append `RenderCommand` tokens to the backend-neutral
   `Renderer`; `IBackend` executes them. Any pointer carried by a command must
-  remain valid until synchronous queue submission returns.
+  remain valid until synchronous queue submission returns. Tokens recorded
+  into a `RecordedCommandList` point at storage the list owns, and the list
+  must stay alive and unchanged until any submission that runs it (through
+  `ExecuteList`) returns. Lists never contain `ExecuteList`, never carry
+  per-frame camera or light values (those come from Renderer's
+  `FrameUniforms` block), and are recorded and run on the main thread.
 - Directional shadows use one Renderer-owned depth pass over camera-relevant
   World casters before color rendering. Direct `MeshVisual` drawables and
   SceneGraph attachments contribute bounds and depth tokens to the same fitted
@@ -499,7 +507,9 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   licensing, maintenance, build, and deployment assessment.
 - `CommandQueue` reserves 2,048 commands, grows to a configurable 65,536
   default ceiling, and reports high-water/rejected counts. Do not remove the
-  ceiling or hide rejection metrics.
+  ceiling or hide rejection metrics. `RecordedCommandList` has its own
+  ceiling (65,536 by default); recording past it fails the list, and
+  executed lists and tokens are reported by `Renderer::getRecordedListStats`.
 - Product UI remains primitive-composed through `GameVisual`; do not introduce
   a separate retained widget tree for the current console and labels.
 

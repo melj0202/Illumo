@@ -23,6 +23,9 @@ struct WasmFrameCounters
   std::uint64_t meshWriteBytes = 0;
   std::uint64_t meshEnrollments = 0;
   std::uint64_t meshReplacements = 0;
+  // Frame schema v6: the last frame's world operations and live instances.
+  std::uint64_t worldOperations = 0;
+  std::uint64_t worldInstances = 0;
 };
 
 // Frame schema v5: the latest accepted content of one surface window.

@@ -169,7 +169,8 @@ current or credible downstream consumers, not a fantasy feature checklist.
 - Second real graphics API (Vulkan/Metal) as a near-term deliverable  
 - Linux parity before Windows remains solid; macOS is not targeted
 - SYCL or a second compute backend before the sparse product path is correct and documented  
-- Aggressive batching/instancing/render graphs without profiling evidence  
+- Aggressive batching/instancing/render graphs without profiling evidence
+  (instancing now has that evidence: D-R28)  
 
 ### 1.4 Allocators (from CA design PDF — retained policy)
 
@@ -542,6 +543,8 @@ IBackend::SubmitCommandQueue
 | **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. Read-only pending position/zoom access lets products validate interpolated navigation targets. CA navigation and sparse camera metadata reserve a `2^32`-cell endpoint margin: finite world axes satisfy `abs(axis) <= 16 * (2^63 - 2^32)`. This protects view arithmetic without restricting sparse storage. |
 | **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Pixel-space rebuilds conservatively reject quads outside the logical viewport. An optional top-left logical-pixel clip rejects wholly excluded quads before upload and brackets partial content with a nested, intersected scissor that restores any outer clip (D-R23). Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
 | **MeshVisual** | World mesh host and `ISceneRenderAttachment`: colored lines/triangles, textured quads (sprites), optional billboard facing, managed immutable mesh handles, conservative attachment bounds, and optional directional lighting plus a depth-only shadow pass and object motion blur. Lighting, shadows, tint, caster distance, and motion blur are per-instance CPU state emitted as `WorldLook` uniforms. A node borrows an ordered list of attachments; several visuals/nodes may bind the same managed mesh without another upload. Procedural batches remain visual-owned dynamic buffers (D-R21/D-R24/D-E11). |
+| **RenderWorld** | Persistent flat world objects behind `IRenderWorld`: caller-chosen material and instance ids, one environment. Instances sharing a mesh range and material form a bucket drawn with one instanced call per pass (`LitMeshInstanced`, `ShadowDepthInstanced`), from a `RecordedCommandList` recorded once and re-recorded only when the bucket's buffers, material or the environment change. Per frame it culls against the camera and shadow volume, streams visible instances (`InstanceLayout::LitModelTint`, 144 B) from host memory, patches instance counts and queues one `ExecuteList` per bucket and pass. Camera and shadow state come from Renderer's `FrameUniforms` block. Not yet used by products (D-R28, `docs/host-render-world-design.md`). |
+| **RecordedCommandList** | Tokens recorded through the ordinary push helpers between `Renderer::beginRecording` and `endRecording`, then run in place by `ExecuteList`. The list owns its matrices, refuses nested lists, has its own ceiling, and is counted in `Renderer::getRecordedListStats` beside the frame queue's metrics. |
 | **SkyboxVisual** | World cubemap host and `ISceneRenderAttachment`: unit cube geometry rendered with `RenderStyleId::Skybox` at the far depth plane (`xyww`), translation-stripped view matrix `projection * mat4(mat3(view))`, seamless cubemap sampling (`IBackend::CreateCubemap`, `AssetManager::acquireCubemapFromCross`), and optional tint color. Consumed by 3D viewers (e.g. `IllMeshViewer`). |
 | **Primitive UI & GUI Kit** | `GuiKit`, `GuiDialog`, `GuiMenuShell`, and `GridAtlas` (`Illumo/Include/Illumo/Gui/`) supply stateless drawing/layout helpers, reusable modal dialogs, shared overlay behavior, and atlas UV mapping on top of `GameVisual` and `UiTheme`. `GuiMenuShell` holds the behavior every overlay repeats: `GuiEasing` curves and approach helpers, `GuiMenuAnimator` reveal/selection/value-pulse/ambient/caret clocks with reduced motion, `GuiPanelLayout` virtual-resolution fitting (`fit` for centered panels, `viewport` for docked bars) plus row-window arithmetic, and `GuiPointerTracker` virtual-space pointer sampling with press and release edges. The tool apps add `GuiToolStyle` (the plain palette and flat tool widgets), `GuiPanelDock` (dock columns, splitters, title-bar pop-out and tear-off, saved layouts) and `GuiPanelPlacement`/`GuiPanelPointer` (a panel's rectangle, surface and pointer), D-UI7. `CommandLine`, `GLString`, `ExitConfirmDialog`, `EditorConfirmDialog`, the IllumoGame menus, the IllEd panels and the IllMeshViewer panels compose these primitives without introducing a retained widget hierarchy. |
 | **Drawable** | Content handles; `bindStyle` then content tokens via `AppendCommands`. Immediate `Draw()` only if AppendCommands returns false (tests/stubs). |
@@ -1613,6 +1616,25 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   the same frame. Remaining inline batches use one grow-only host mesh slot
   pool per style, so batch reordering no longer rebuilds GPU meshes. Lit
   meshes stay inline or static-retained. Version 1 to 3 packets remain valid.
+- **Frame schema v6** (D-E30, `HostRender` capability bit 12, offered with
+  Render): a trailing section of at most 65,536 world operations.
+  - **Operations:** material create/update/destroy, instance
+    create/update/destroy/transform, and the environment. Ids are
+    guest-chosen.
+  - **Host binding:** each guest has one host `RenderWorld` (D-R28), drawn
+    before the frame's world batches. Instances use static lit retained
+    meshes, cull with the host's mesh bounds, and keep their mesh alive even
+    after the guest releases it.
+  - **Validation:** the host checks the whole sequence against the live world
+    before applying anything. Duplicate or unknown ids, busy materials,
+    unusable meshes and out-of-range index spans reject the frame, and the
+    guest is retired.
+  - **Guest side:** `GuestRenderWorld` (published as
+    `IllumoContext::renderWorld`) validates with the same rules, holds
+    instances until their mesh's host copy is ready, and drains operations
+    only into frames that will be delivered. The SDK also checks every frame
+    against the host's count quotas before sending (`GuestFrame::exceededLimit`).
+  - **Compatibility:** versions 1 to 5 remain valid.
 - **Simulation lanes** (D-E17): with a `worker` and the Jobs grant the game
   asks `JobLanes` once at startup; the host compiles one isolated worker
   store per lane (in parallel, while menus run) and answers only when all are
@@ -1803,6 +1825,8 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R24** | `AssetManager` reference-counts immutable static meshes and canonical file/options cache entries. `MeshVisual` borrows the managed `MeshHandle` and draw metadata, retaining only per-instance transform/tint/lighting state; procedural geometry remains visual-owned and dynamic. Automatic instancing remains a measured follow-up. |
 | **D-R25** | SceneGraphDrawable consumes one immutable graph-owned snapshot per renderer frame. Two reusable buffers, explicit invalidation, and per-callback validation protect borrowed content. Shared shadow relevance follows caster collection; token/backend contracts remain unchanged. |
 | **D-R26** | `GameVisual` adds `ShapeKind::GradientQuad`: convex, fan-ordered quads with one color per vertex (`addGradientQuad`/`addGradientRect`/`addGradientTriangle`), carried by the existing shape vertex format and shader. Soft UI chrome (gradients, glows, soft shadows, sheens, vignettes) is composed from these in `GuiKit`; no new shader, blur pass, or widget tree. Menu motion uses `GuiMenuShell` springs and curves. |
+| **D-E30** | A WASM guest keeps its game state and presentation decisions; the host owns every render and media object and the guest manages them through host calls, not per-frame copies. The guest SDK checks frame quotas before sending. World operations (frame schema v6) come first, then 2D visuals (`docs/host-render-world-design.md`). |
+| **D-R28** | Instance and uniform buffers (`BufferHandle`), `WriteBuffer`/`BindUniformBuffer`/`SetInstanceStream`/`DrawIndexedInstanced`, Renderer's per-frame `FrameUniforms` block, `RecordedCommandList` executed in place by `ExecuteList`, and the engine `RenderWorld`. Supersedes D-R24's instancing deferral and D-R25's recorded-payload clause for host-owned lists; the GL context stays put. |
 | **D-R27** | Frame schema v5 adds up to eight UI-only surface batch lists with revisions (`same` when unchanged, one quota across the frame). The host replays a changed surface through `Renderer::renderOffscreen` into a per-window target and reads it back through a two-deep asynchronous stream (`IBackend::requestFramebufferReadback` / `takeFramebufferReadback`) for a `PixelWindow` present, one frame late. No second GL context (D-UI5). |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
@@ -2069,6 +2093,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 
 - SceneGraph ECS components, serialization, update callbacks, retained UI,
   parallel scene stages without a measured gate, and render-thread payloads
+  (host-owned, main-thread recorded lists are allowed: D-R28)
 - Render graphs, multi-backend, global transparent texture sorting
 - Multithreaded command generation  
 

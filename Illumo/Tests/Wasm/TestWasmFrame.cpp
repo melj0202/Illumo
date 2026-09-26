@@ -32,6 +32,9 @@
 // TestWasmAudio.cpp: the Audio capability cases.
 bool
 runWasmAudioTest(const std::string& name);
+// TestWasmWorld.cpp: frame schema v6 world operations.
+bool
+runWasmWorldTest(const std::string& name);
 
 class MemoryClipboard final : public WasmHostClipboard
 {
@@ -575,9 +578,10 @@ run(const std::string& name)
     GuestWireWriter version3Wire;
     version3.write(version3Wire);
     std::vector<std::byte> version3Bytes = version3Wire.take();
-    // Rewrite as version 3: drop the empty v4 write and v5 surface sections.
+    // Rewrite as version 3: drop the empty v4 write, v5 surface and v6 world
+    // sections.
     version3Bytes[4] = std::byte{ 3 };
-    version3Bytes.resize(version3Bytes.size() - 8);
+    version3Bytes.resize(version3Bytes.size() - 12);
     testTrue(counters,
              bridge.accept(version3Bytes),
              "Version 3 frames without mesh writes remain accepted");
@@ -1653,7 +1657,8 @@ main(int argc, char** argv)
               "DisplayServices\nIllumo.Wasm.ClipboardServices\nIllumo.Wasm."
               "ConsoleServices\nIllumo.Wasm.DialogServices\nIllumo.Wasm."
               "RetainedResources\nIllumo.Wasm.AudioServiceDecoder\nIllumo."
-              "Wasm.AudioServices\nIllumo.Wasm.GuestAudio");
+              "Wasm.AudioServices\nIllumo.Wasm.GuestAudio\nIllumo.Wasm."
+              "WorldFrameValidation\nIllumo.Wasm.WorldOperations");
     return 0;
   }
   if (argc != 3 || std::string(argv[1]) != "--run") {
@@ -1665,6 +1670,9 @@ main(int argc, char** argv)
   }
   if (name.find("Audio", 12) != std::string::npos) {
     return runWasmAudioTest(name.substr(12)) ? 0 : 1;
+  }
+  if (name.starts_with("Illumo.Wasm.World")) {
+    return runWasmWorldTest(name.substr(12)) ? 0 : 1;
   }
   return run(name.substr(12)) ? 0 : 1;
 }

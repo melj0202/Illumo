@@ -1,4 +1,5 @@
 #include <Illumo/Foundation/AxisAlignedBounds3.h>
+#include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
 #include <Illumo/Rendering/WorldLook.h>
@@ -13,6 +14,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <map>
+#include <unordered_map>
+#include <unordered_set>
 
 struct WasmFrameRenderer::State
 {
@@ -210,6 +213,7 @@ struct WasmFrameRenderer::State
   ~State()
   {
     if (!lifetime.expired()) {
+      renderWorld->releaseResources();
       destroyPools(pools);
       for (const std::unique_ptr<Surface>& surface : surfaces) {
         destroyPools(surface->pools);
@@ -667,6 +671,236 @@ struct WasmFrameRenderer::State
     }
   }
 
+  // Frame schema v6: the guest's host render world. Each instance keeps its
+  // retained mesh alive, so a guest releasing a mesh never pulls geometry out
+  // from under instances that still draw it.
+  struct WorldInstance
+  {
+    std::uint32_t material = 0;
+    std::shared_ptr<const RetainedMesh> mesh;
+  };
+  static constexpr std::size_t kWorldInstances = 262144;
+  static constexpr std::size_t kWorldMaterials = 4096;
+
+  // The effect of this frame's operations so far, over the live world.
+  struct WorldPlan
+  {
+    std::unordered_map<std::uint32_t, bool> materials;
+    std::unordered_map<std::uint32_t, long long> userDelta;
+    std::unordered_map<std::uint32_t, WorldInstance> created;
+    std::unordered_set<std::uint32_t> destroyed;
+    std::size_t instances = 0;
+    std::size_t materialCount = 0;
+  };
+
+  bool plannedMaterial(const WorldPlan& plan, std::uint32_t id) const
+  {
+    std::unordered_map<std::uint32_t, bool>::const_iterator found =
+      plan.materials.find(id);
+    return found != plan.materials.end() ? found->second
+                                         : worldMaterialUsers.contains(id);
+  }
+
+  // The material of a live or planned instance, or zero when there is none.
+  std::uint32_t plannedInstance(const WorldPlan& plan, std::uint32_t id) const
+  {
+    std::unordered_map<std::uint32_t, WorldInstance>::const_iterator created =
+      plan.created.find(id);
+    if (created != plan.created.end()) {
+      return created->second.material;
+    }
+    if (plan.destroyed.contains(id)) {
+      return 0;
+    }
+    std::unordered_map<std::uint32_t, WorldInstance>::const_iterator live =
+      worldInstances.find(id);
+    return live != worldInstances.end() ? live->second.material : 0;
+  }
+
+  // Validates every operation against the live world before anything is
+  // applied; resolves each created instance's mesh into `meshes`.
+  bool planWorld(const std::vector<GuestWorldOperation>& operations,
+                 std::vector<std::shared_ptr<const RetainedMesh>>& meshes)
+  {
+    meshes.clear();
+    // Steady frames carry no world operations and must not allocate.
+    if (operations.empty()) {
+      return true;
+    }
+    // Retained across frames: clearing keeps the containers' buckets.
+    WorldPlan& plan = worldPlan;
+    plan.materials.clear();
+    plan.userDelta.clear();
+    plan.created.clear();
+    plan.destroyed.clear();
+    plan.instances = worldInstances.size();
+    plan.materialCount = worldMaterialUsers.size();
+    meshes.assign(operations.size(), nullptr);
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+      const GuestWorldOperation& operation = operations[index];
+      const std::uint32_t id = operation.id;
+      bool valid = true;
+      switch (operation.op) {
+        case GuestWorldOp::MaterialCreate:
+          valid =
+            !plannedMaterial(plan, id) && plan.materialCount < kWorldMaterials;
+          plan.materials[id] = true;
+          plan.materialCount += 1;
+          break;
+        case GuestWorldOp::MaterialUpdate:
+          valid = plannedMaterial(plan, id);
+          break;
+        case GuestWorldOp::MaterialDestroy: {
+          std::unordered_map<std::uint32_t, std::size_t>::const_iterator live =
+            worldMaterialUsers.find(id);
+          const long long users = (live != worldMaterialUsers.end()
+                                     ? static_cast<long long>(live->second)
+                                     : 0) +
+                                  plan.userDelta[id];
+          valid = plannedMaterial(plan, id) && users == 0;
+          plan.materials[id] = false;
+          plan.materialCount -= 1;
+          break;
+        }
+        case GuestWorldOp::InstanceCreate: {
+          std::shared_ptr<const RetainedMesh> mesh =
+            retainedMeshes.resolve(operation.mesh);
+          valid = plannedInstance(plan, id) == 0 &&
+                  plannedMaterial(plan, operation.materialId) &&
+                  plan.instances < kWorldInstances && mesh &&
+                  mesh->style == GuestBatchStyle::LitMesh &&
+                  mesh->upload->ready && !mesh->upload->failed &&
+                  !mesh->upload->dynamic &&
+                  operation.firstIndex <= mesh->upload->indexCount &&
+                  operation.indexCount <=
+                    mesh->upload->indexCount - operation.firstIndex;
+          plan.destroyed.erase(id);
+          plan.created[id] = WorldInstance{ operation.materialId, mesh };
+          plan.userDelta[operation.materialId] += 1;
+          plan.instances += 1;
+          meshes[index] = std::move(mesh);
+          break;
+        }
+        case GuestWorldOp::InstanceUpdate:
+        case GuestWorldOp::InstanceTransform:
+          valid = plannedInstance(plan, id) != 0;
+          break;
+        case GuestWorldOp::InstanceDestroy: {
+          const std::uint32_t material = plannedInstance(plan, id);
+          valid = material != 0;
+          plan.userDelta[material] -= 1;
+          plan.created.erase(id);
+          plan.destroyed.insert(id);
+          plan.instances -= 1;
+          break;
+        }
+        case GuestWorldOp::Environment:
+          break;
+      }
+      if (!valid) {
+        error = "Invalid guest world operation " + std::to_string(index) +
+                ": unknown, duplicate or busy id, or an unusable mesh";
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static RenderMaterialDesc worldMaterial(const GuestWorldMaterial& material)
+  {
+    RenderMaterialDesc desc;
+    desc.tint = material.tint;
+    desc.receivesShadow = material.receivesShadow;
+    desc.castsShadow = material.castsShadow;
+    desc.blend = material.blend;
+    return desc;
+  }
+
+  // Applies operations planWorld accepted. Nothing here can be refused.
+  void applyWorld(
+    const std::vector<GuestWorldOperation>& operations,
+    const std::vector<std::shared_ptr<const RetainedMesh>>& meshes)
+  {
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+      const GuestWorldOperation& operation = operations[index];
+      const std::uint32_t id = operation.id;
+      bool applied = true;
+      switch (operation.op) {
+        case GuestWorldOp::MaterialCreate:
+          applied =
+            renderWorld->createMaterial(id, worldMaterial(operation.material));
+          worldMaterialUsers[id] = 0;
+          break;
+        case GuestWorldOp::MaterialUpdate:
+          applied =
+            renderWorld->updateMaterial(id, worldMaterial(operation.material));
+          break;
+        case GuestWorldOp::MaterialDestroy:
+          applied = renderWorld->destroyMaterial(id);
+          worldMaterialUsers.erase(id);
+          break;
+        case GuestWorldOp::InstanceCreate: {
+          const RetainedMesh::Upload& upload = *meshes[index]->upload;
+          RenderInstanceDesc desc;
+          desc.mesh = upload.handle;
+          desc.firstIndex = operation.firstIndex;
+          desc.indexCount = operation.indexCount;
+          desc.material = operation.materialId;
+          desc.world = operation.transform;
+          desc.tint = operation.tint;
+          desc.visible = operation.visible;
+          desc.hasBounds = true;
+          desc.localBounds = upload.bounds;
+          applied = renderWorld->createInstance(id, desc);
+          worldInstances[id] =
+            WorldInstance{ operation.materialId, meshes[index] };
+          worldMaterialUsers[operation.materialId] += 1;
+          break;
+        }
+        case GuestWorldOp::InstanceUpdate:
+          applied = renderWorld->setInstanceTint(id, operation.tint) &&
+                    renderWorld->setInstanceVisible(id, operation.visible);
+          break;
+        case GuestWorldOp::InstanceTransform:
+          applied = renderWorld->setInstanceTransform(id, operation.transform);
+          break;
+        case GuestWorldOp::InstanceDestroy: {
+          applied = renderWorld->destroyInstance(id);
+          std::unordered_map<std::uint32_t, WorldInstance>::iterator found =
+            worldInstances.find(id);
+          if (found != worldInstances.end()) {
+            worldMaterialUsers[found->second.material] -= 1;
+            worldInstances.erase(found);
+          }
+          break;
+        }
+        case GuestWorldOp::Environment: {
+          const GuestWorldEnvironment& source = operation.environment;
+          RenderEnvironment environment;
+          environment.lightDirection = source.lightDirection;
+          environment.lightColor = source.lightColor;
+          environment.ambientColor = source.ambientColor;
+          environment.shadowsEnabled = source.shadowsEnabled;
+          environment.shadowPcf = source.shadowPcf;
+          environment.shadowBias = source.shadowBias;
+          environment.shadowSlopeScale = source.shadowSlopeScale;
+          environment.shadowNormalOffset = source.shadowNormalOffset;
+          environment.shadowMapSize = static_cast<int>(source.shadowMapSize);
+          environment.shadowMinimumRadius = source.shadowMinimumRadius;
+          environment.shadowLightDistance = source.shadowLightDistance;
+          environment.shadowCasterDistance = source.shadowCasterDistance;
+          renderWorld->setEnvironment(environment);
+          break;
+        }
+      }
+      if (!applied) {
+        // planWorld mirrors RenderWorld's rules; reaching this is a host bug.
+        warn("Guest world operation " + std::to_string(index) +
+             " was refused after validation");
+      }
+    }
+  }
+
   bool accept(std::span<const std::byte> packet)
   {
     if (retired || lifetime.expired()) {
@@ -765,6 +999,9 @@ struct WasmFrameRenderer::State
                    plan.existing != nullptr ? plan.existing->pools : empty,
                    replacementPeak);
     }
+    if (!planWorld(proposed.worldOperations, worldMeshesScratch)) {
+      return false;
+    }
     // Validation/lease acquisition completes before mutating renderer state.
     if (growth > Budget::Maximum - budget->bytes ||
         replacementPeak > Budget::Maximum - budget->bytes - growth) {
@@ -825,6 +1062,7 @@ struct WasmFrameRenderer::State
     }
     surfaces = std::move(nextSurfaces);
     applyMeshWrites(proposed, writeTargets);
+    applyWorld(proposed.worldOperations, worldMeshesScratch);
     // Swap rather than move: the replaced live state becomes next frame's
     // scratch and keeps its capacity (its references drop on release).
     std::swap(frame, proposed);
@@ -846,6 +1084,7 @@ struct WasmFrameRenderer::State
     }
     writesScratch.clear();
     writeTargets.clear();
+    worldMeshesScratch.clear();
   }
 
   void count()
@@ -872,6 +1111,8 @@ struct WasmFrameRenderer::State
     for (const GuestFrameMeshWrite& write : frame.meshWrites) {
       counters.meshWriteBytes += write.bytes.size();
     }
+    counters.worldOperations = frame.worldOperations.size();
+    counters.worldInstances = worldInstances.size();
   }
 
   // The mesh a batch draws from: its retained mesh or its per-frame slot.
@@ -1302,6 +1543,12 @@ struct WasmFrameRenderer::State
   std::vector<Slot> slotsScratch;
   std::vector<std::shared_ptr<const Texture>> writesScratch;
   std::vector<std::shared_ptr<const RetainedMesh>> writeTargets;
+  std::vector<std::shared_ptr<const RetainedMesh>> worldMeshesScratch;
+  // The host render world and the bookkeeping planWorld validates against.
+  std::unique_ptr<RenderWorld> renderWorld = std::make_unique<RenderWorld>();
+  std::unordered_map<std::uint32_t, WorldInstance> worldInstances;
+  std::unordered_map<std::uint32_t, std::size_t> worldMaterialUsers;
+  WorldPlan worldPlan;
   std::size_t nextWrite = 0;
   std::uint64_t uploadedSerial = 0;
   std::map<std::uint32_t, RenderStyleHandle> derivedStyles;
@@ -1529,6 +1776,11 @@ WasmFrameRenderer::dispatch(Scene& scene)
       !m_state->lifetime.expired()) {
     m_state->renderer.setNextWorldViewProjection(m_state->frame.camera);
   }
+  // Host-owned world objects draw before the frame's world batches, which
+  // keep today's overlay order on top of them.
+  if (!m_state->retired && !m_state->lifetime.expired()) {
+    scene.AddDrawable(m_state->renderWorld.get(), RenderLayerId::World);
+  }
   scene.AddDrawable(&m_state->world, RenderLayerId::World);
   scene.AddDrawable(&m_state->ui, RenderLayerId::UI);
 }
@@ -1555,6 +1807,13 @@ WasmFrameRenderer::retire()
   m_state->textures.retire();
   m_state->retainedMeshes.retire();
   m_state->dirtyMeshes.clear();
+  // Retirement revokes the world at once; its GPU buffers go with it.
+  if (!m_state->lifetime.expired()) {
+    m_state->renderWorld->releaseResources();
+  }
+  m_state->renderWorld = std::make_unique<RenderWorld>();
+  m_state->worldInstances.clear();
+  m_state->worldMaterialUsers.clear();
 }
 const std::string&
 WasmFrameRenderer::error() const

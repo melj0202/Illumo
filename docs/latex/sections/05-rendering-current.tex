@@ -296,6 +296,40 @@ during replacement.
         \pathref{docs/architecture-consensus.md} \S5.6.
 \end{itemize}
 
+\subsection{Instancing, recorded lists and RenderWorld (D-R28)}
+\begin{itemize}
+  \item Buffers: backends may create generational instance and uniform
+        buffers (\texttt{BufferHandle}, \texttt{IBackend::CreateBuffer}); the
+        defaults return an invalid handle so recording and test backends need
+        no change. Tokens \texttt{WriteBuffer}, \texttt{BindUniformBuffer},
+        \texttt{SetInstanceStream} and \texttt{DrawIndexedInstanced} fill and
+        use them. Instance attributes occupy locations 4--12
+        (\texttt{InstanceLayout::LitModelTint}: model, previous model, tint;
+        144 bytes).
+  \item Frame block: \symbolref{Renderer} writes one std140
+        \texttt{FrameUniforms} block (view-projection, previous
+        view-projection, light space, shadow state) the first time a drawable
+        calls \texttt{useFrameUniforms()} in a \texttt{RenderScene}. The
+        instanced styles \texttt{LitMeshInstanced} and
+        \texttt{ShadowDepthInstanced} (\pathref{Shader/mesh\_lit\_instanced\_*.glsl},
+        \pathref{Shader/shadow\_depth\_instanced\_vertex.glsl}) read it and
+        otherwise match the lit and shadow-depth math.
+  \item Recorded lists: \texttt{RecordedCommandList} tokens are recorded once
+        through the ordinary push helpers and run in place by one
+        \texttt{ExecuteList} token per list. A list owns its matrices, refuses
+        nested lists, has its own ceiling, and is counted per frame.
+  \item \texttt{RenderWorld}: a World drawable owning persistent instances,
+        materials and one environment behind \texttt{IRenderWorld}. Instances
+        sharing a mesh range and material draw with one instanced call per
+        pass. Per frame it culls against the camera and shadow volume,
+        streams visible instances and patches counts; its lists re-record only
+        when buffers, materials or the environment change. With a mock
+        backend, 2,000 objects cost 0.11\,ms and 30 tokens per frame against
+        3.8\,ms and 50,017 tokens as one MeshVisual each. On a real GPU its
+        images are bit-identical to MeshVisual's, shadows included. Products
+        do not use it yet (\pathref{docs/host-render-world-design.md}).
+\end{itemize}
+
 \subsection{Backend surface}
 \symbolref{IBackend}: lifecycle and command-queue push/submit/clear. Resource
 creation returns non-convertible slot+generation \texttt{MeshHandle},

@@ -98,6 +98,63 @@ struct GuestShadowCaster
   float casterDistance = 100.0f;
 };
 
+// Frame schema v6 (HostRender): one change to the guest's host render world.
+// Ids are guest-chosen and nonzero, except Environment, whose id is zero.
+enum class GuestWorldOp : std::uint32_t
+{
+  MaterialCreate = 1,
+  MaterialUpdate = 2,
+  MaterialDestroy = 3,
+  InstanceCreate = 4,
+  // Tint and visibility; mesh and material stay as created.
+  InstanceUpdate = 5,
+  InstanceDestroy = 6,
+  InstanceTransform = 7,
+  Environment = 8
+};
+
+struct GuestWorldMaterial
+{
+  std::array<float, 4> tint{ 1.0f, 1.0f, 1.0f, 1.0f };
+  bool receivesShadow = true;
+  bool castsShadow = true;
+  bool blend = false;
+};
+
+struct GuestWorldEnvironment
+{
+  std::array<float, 3> lightDirection{ 0.5f, 1.0f, 0.3f };
+  std::array<float, 3> lightColor{ 1.0f, 1.0f, 1.0f };
+  std::array<float, 3> ambientColor{ 0.2f, 0.2f, 0.2f };
+  bool shadowsEnabled = false;
+  bool shadowPcf = false;
+  float shadowBias = 0.002f;
+  float shadowSlopeScale = 0.01f;
+  float shadowNormalOffset = 0.02f;
+  std::uint32_t shadowMapSize = 1024;
+  float shadowMinimumRadius = 2.5f;
+  float shadowLightDistance = 8.0f;
+  float shadowCasterDistance = 100.0f;
+};
+
+// Fields beyond an operation's own are ignored when encoding and default
+// after decoding. An instance culls with its retained mesh's host bounds.
+struct GuestWorldOperation
+{
+  GuestWorldOp op = GuestWorldOp::MaterialCreate;
+  std::uint32_t id = 0;
+  GuestWorldMaterial material;  // MaterialCreate/Update
+  GuestResourceId mesh;         // InstanceCreate: a lit mesh
+  std::uint32_t firstIndex = 0; // InstanceCreate
+  std::uint32_t indexCount = 0; // InstanceCreate
+  std::uint32_t materialId = 0; // InstanceCreate
+  std::array<float, 16> transform{ 1, 0, 0, 0, 0, 1, 0, 0,
+                                   0, 0, 1, 0, 0, 0, 0, 1 }; // Create/Transform
+  std::array<float, 4> tint{ 1.0f, 1.0f, 1.0f, 1.0f };       // Create/Update
+  bool visible = true;                                       // Create/Update
+  GuestWorldEnvironment environment;                         // Environment
+};
+
 struct GuestFrameLimits
 {
   std::uint32_t bytes = 64u * 1024u * 1024u;
@@ -111,6 +168,7 @@ struct GuestFrameLimits
   std::uint32_t shadowCasters = 256;
   std::uint32_t meshWrites = 4096;
   std::uint32_t meshWriteBytes = 32u * 1024u * 1024u;
+  std::uint32_t worldOperations = 65536; // version 6
 };
 
 // Version 4: a byte range written into a dynamic retained host mesh. Every
@@ -156,8 +214,9 @@ struct GuestFrame
   // primitive/depth flags, lit meshes and shadow casters. Version 3 adds the
   // blend flag, retained host meshes and the cubemap skybox. Version 4 adds
   // in-place writes to dynamic retained meshes. Version 5 adds surface
-  // windows. The host accepts all five.
-  static constexpr std::uint32_t Version = 5;
+  // windows. Version 6 adds host render world operations (HostRender). The
+  // host accepts all six.
+  static constexpr std::uint32_t Version = 6;
   static constexpr std::uint32_t MaximumSurfaces = 8;
   static constexpr std::uint32_t MaximumSurfaceId = 0x7fffffffu;
   float width = 1280;
@@ -172,6 +231,7 @@ struct GuestFrame
   std::vector<GuestShadowCaster> shadowCasters;
   std::vector<GuestFrameMeshWrite> meshWrites;
   std::vector<GuestSurfaceFrame> surfaces;
+  std::vector<GuestWorldOperation> worldOperations;
 
   // Empties the frame but keeps every container's capacity for reuse.
   void clear()
@@ -181,7 +241,210 @@ struct GuestFrame
     shadowCasters.clear();
     meshWrites.clear();
     surfaces.clear();
+    worldOperations.clear();
     hasCamera = false;
+  }
+
+  static void countInline(const std::vector<GuestBatch>& list,
+                          std::uint64_t& vertices,
+                          std::uint64_t& indices)
+  {
+    for (const GuestBatch& batch : list) {
+      if (!batch.retained()) {
+        vertices += batch.vertices.size();
+        indices += batch.indices.size();
+      }
+    }
+  }
+
+  // The first count quota `decode` would reject this frame for, or nullptr.
+  // Guests check before sending, because the host retires a guest whose frame
+  // breaks its quotas. The encoded byte total is not estimated here.
+  const char* exceededLimit(const GuestFrameLimits& limits = {}) const
+  {
+    std::uint64_t batchCount = batches.size();
+    std::uint64_t vertexCount = 0;
+    std::uint64_t indexCount = 0;
+    countInline(batches, vertexCount, indexCount);
+    for (const GuestSurfaceFrame& surface : surfaces) {
+      if (!surface.same) {
+        batchCount += surface.batches.size();
+        countInline(surface.batches, vertexCount, indexCount);
+      }
+    }
+    std::uint64_t uploadBytes = 0;
+    for (const GuestTextureWrite& write : textureWrites) {
+      uploadBytes += write.pixels.size();
+    }
+    std::uint64_t meshWriteBytes = 0;
+    for (const GuestFrameMeshWrite& write : meshWrites) {
+      meshWriteBytes += write.bytes.size();
+    }
+    if (batchCount > limits.batches) {
+      return "the frame has more batches than the host accepts";
+    }
+    if (vertexCount > limits.vertices || indexCount > limits.indices) {
+      return "the frame has more inline geometry than the host accepts";
+    }
+    if (textureWrites.size() > limits.textureWrites ||
+        uploadBytes > limits.uploadBytes) {
+      return "the frame has more texture uploads than the host accepts";
+    }
+    if (shadowCasters.size() > limits.shadowCasters) {
+      return "the frame has more shadow casters than the host accepts";
+    }
+    if (meshWrites.size() > limits.meshWrites ||
+        meshWriteBytes > limits.meshWriteBytes) {
+      return "the frame has more mesh writes than the host accepts";
+    }
+    if (worldOperations.size() > limits.worldOperations) {
+      return "the frame has more world operations than the host accepts";
+    }
+    return nullptr;
+  }
+
+  static void writeWorldOperation(GuestWireWriter& output,
+                                  const GuestWorldOperation& operation)
+  {
+    output.u32(static_cast<std::uint32_t>(operation.op));
+    output.u32(operation.id);
+    switch (operation.op) {
+      case GuestWorldOp::MaterialCreate:
+      case GuestWorldOp::MaterialUpdate:
+        writeFloats(output, operation.material.tint.data(), 4);
+        output.u32((operation.material.receivesShadow ? 1u : 0u) |
+                   (operation.material.castsShadow ? 2u : 0u) |
+                   (operation.material.blend ? 4u : 0u));
+        break;
+      case GuestWorldOp::InstanceCreate:
+        operation.mesh.write(output);
+        output.u32(operation.firstIndex);
+        output.u32(operation.indexCount);
+        output.u32(operation.materialId);
+        writeFloats(output, operation.transform.data(), 16);
+        writeFloats(output, operation.tint.data(), 4);
+        output.u32(operation.visible ? 1u : 0u);
+        break;
+      case GuestWorldOp::InstanceUpdate:
+        writeFloats(output, operation.tint.data(), 4);
+        output.u32(operation.visible ? 1u : 0u);
+        break;
+      case GuestWorldOp::InstanceTransform:
+        writeFloats(output, operation.transform.data(), 16);
+        break;
+      case GuestWorldOp::Environment: {
+        const GuestWorldEnvironment& environment = operation.environment;
+        writeFloats(output, environment.lightDirection.data(), 3);
+        writeFloats(output, environment.lightColor.data(), 3);
+        writeFloats(output, environment.ambientColor.data(), 3);
+        output.u32((environment.shadowsEnabled ? 1u : 0u) |
+                   (environment.shadowPcf ? 2u : 0u));
+        output.f32(environment.shadowBias);
+        output.f32(environment.shadowSlopeScale);
+        output.f32(environment.shadowNormalOffset);
+        output.u32(environment.shadowMapSize);
+        output.f32(environment.shadowMinimumRadius);
+        output.f32(environment.shadowLightDistance);
+        output.f32(environment.shadowCasterDistance);
+        break;
+      }
+      case GuestWorldOp::MaterialDestroy:
+      case GuestWorldOp::InstanceDestroy:
+        break;
+    }
+  }
+
+  // Structure and values only; ids and meshes are checked against the host's
+  // world before anything is applied.
+  static bool readWorldOperation(GuestWireReader& reader,
+                                 GuestWorldOperation& operation)
+  {
+    operation = GuestWorldOperation{};
+    const std::uint32_t op = reader.u32();
+    operation.id = reader.u32();
+    if (!reader.valid() ||
+        op < static_cast<std::uint32_t>(GuestWorldOp::MaterialCreate) ||
+        op > static_cast<std::uint32_t>(GuestWorldOp::Environment)) {
+      return false;
+    }
+    operation.op = static_cast<GuestWorldOp>(op);
+    if ((operation.op == GuestWorldOp::Environment) != (operation.id == 0)) {
+      return false;
+    }
+    std::uint32_t flags = 0;
+    switch (operation.op) {
+      case GuestWorldOp::MaterialCreate:
+      case GuestWorldOp::MaterialUpdate:
+        if (!readFloats(reader, operation.material.tint.data(), 4)) {
+          return false;
+        }
+        flags = reader.u32();
+        operation.material.receivesShadow = (flags & 1u) != 0;
+        operation.material.castsShadow = (flags & 2u) != 0;
+        operation.material.blend = (flags & 4u) != 0;
+        return reader.valid() && flags <= 7u;
+      case GuestWorldOp::InstanceCreate:
+        operation.mesh = GuestResourceId::read(reader);
+        operation.firstIndex = reader.u32();
+        operation.indexCount = reader.u32();
+        operation.materialId = reader.u32();
+        if (!reader.valid() || operation.mesh.owner == 0 ||
+            operation.mesh.slot == 0 || operation.mesh.generation == 0 ||
+            operation.mesh.kind != GuestResourceKind::Mesh ||
+            operation.indexCount == 0 || operation.indexCount % 3u != 0 ||
+            operation.materialId == 0 ||
+            !readFloats(reader, operation.transform.data(), 16) ||
+            !readFloats(reader, operation.tint.data(), 4)) {
+          return false;
+        }
+        flags = reader.u32();
+        operation.visible = flags != 0;
+        return reader.valid() && flags <= 1u;
+      case GuestWorldOp::InstanceUpdate:
+        if (!readFloats(reader, operation.tint.data(), 4)) {
+          return false;
+        }
+        flags = reader.u32();
+        operation.visible = flags != 0;
+        return reader.valid() && flags <= 1u;
+      case GuestWorldOp::InstanceTransform:
+        return readFloats(reader, operation.transform.data(), 16);
+      case GuestWorldOp::Environment: {
+        GuestWorldEnvironment& environment = operation.environment;
+        if (!readFloats(reader, environment.lightDirection.data(), 3) ||
+            !readFloats(reader, environment.lightColor.data(), 3) ||
+            !readFloats(reader, environment.ambientColor.data(), 3)) {
+          return false;
+        }
+        flags = reader.u32();
+        environment.shadowsEnabled = (flags & 1u) != 0;
+        environment.shadowPcf = (flags & 2u) != 0;
+        environment.shadowBias = reader.f32();
+        environment.shadowSlopeScale = reader.f32();
+        environment.shadowNormalOffset = reader.f32();
+        environment.shadowMapSize = reader.u32();
+        environment.shadowMinimumRadius = reader.f32();
+        environment.shadowLightDistance = reader.f32();
+        environment.shadowCasterDistance = reader.f32();
+        const float scalars[] = {
+          environment.shadowBias,          environment.shadowSlopeScale,
+          environment.shadowNormalOffset,  environment.shadowMinimumRadius,
+          environment.shadowLightDistance, environment.shadowCasterDistance
+        };
+        for (float value : scalars) {
+          if (!std::isfinite(value)) {
+            return false;
+          }
+        }
+        return reader.valid() && flags <= 3u &&
+               environment.shadowMapSize >= 64 &&
+               environment.shadowMapSize <= 8192;
+      }
+      case GuestWorldOp::MaterialDestroy:
+      case GuestWorldOp::InstanceDestroy:
+        return true;
+    }
+    return false;
   }
 
   static void writeFloats(GuestWireWriter& output, const float* values, int n)
@@ -324,6 +587,13 @@ struct GuestFrame
       for (const GuestBatch& batch : surface.batches) {
         writeBatch(output, batch);
       }
+    }
+    if (worldOperations.size() > UINT32_MAX) {
+      throw std::length_error("Too many guest world operations");
+    }
+    output.u32(static_cast<std::uint32_t>(worldOperations.size()));
+    for (const GuestWorldOperation& operation : worldOperations) {
+      writeWorldOperation(output, operation);
     }
   }
 
@@ -720,6 +990,21 @@ struct GuestFrame
     }
     if (version >= 5 && !readSurfaces(reader, limits, totals, frame)) {
       return false;
+    }
+    frame.worldOperations.clear();
+    if (version >= 6) {
+      // Minimum encoded operation: op and id (8 bytes).
+      const std::uint32_t operations = reader.u32();
+      if (!reader.valid() || operations > limits.worldOperations ||
+          operations > reader.remaining() / 8u) {
+        return false;
+      }
+      frame.worldOperations.resize(operations);
+      for (GuestWorldOperation& operation : frame.worldOperations) {
+        if (!readWorldOperation(reader, operation)) {
+          return false;
+        }
+      }
     }
     return reader.finished();
   }

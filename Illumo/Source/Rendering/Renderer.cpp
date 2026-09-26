@@ -525,6 +525,9 @@ Renderer::~Renderer()
 {
   _lifetimeIdentity.reset();
   _renderTargetPool.releaseAll();
+  if (_backend != nullptr && m_frameUniformBuffer.isValid()) {
+    _backend->DestroyBuffer(m_frameUniformBuffer);
+  }
   if (_ownedBackend) {
     _ownedBackend->Shutdown();
     _ownedBackend.reset();
@@ -706,11 +709,63 @@ Renderer::getTextureInfo(TextureHandle handle) const
   return _backend->GetTextureInfo(handle);
 }
 
+BufferHandle
+Renderer::enrollBuffer(BufferUsage usage, size_t capacityBytes)
+{
+  return _backend->CreateBuffer(usage, capacityBytes);
+}
+
+bool
+Renderer::destroyBuffer(BufferHandle handle)
+{
+  return _backend->DestroyBuffer(handle);
+}
+
+bool
+Renderer::useFrameUniforms()
+{
+  // The block changes every frame, so it never belongs in a recorded list.
+  if (_backend == nullptr || m_recording != nullptr) {
+    return false;
+  }
+  if (!m_frameUniformBufferAttempted) {
+    m_frameUniformBufferAttempted = true;
+    m_frameUniformBuffer =
+      _backend->CreateBuffer(BufferUsage::Uniform, sizeof(FrameUniforms));
+  }
+  if (!m_frameUniformBuffer.isValid()) {
+    return false;
+  }
+  if (m_frameUniformsSerial != frameSerial) {
+    m_frameUniformsSerial = frameSerial;
+    const FrameUniforms defaults;
+    m_frameUniforms.viewProjection = frameContext.hasWorldMvp
+                                       ? frameContext.worldMvp
+                                       : defaults.viewProjection;
+    m_frameUniforms.previousViewProjection = frameContext.hasWorldMvp
+                                               ? m_previousViewProjection
+                                               : defaults.viewProjection;
+    m_frameUniforms.lightSpace = shadowFrameContext.lightSpaceMatrix;
+    m_frameUniforms.shadowState = {
+      shadowFrameContext.active ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f
+    };
+    if (!pushWriteBuffer(m_frameUniformBuffer,
+                         0,
+                         static_cast<unsigned int>(sizeof(FrameUniforms)),
+                         &m_frameUniforms)) {
+      return false;
+    }
+  }
+  pushBindUniformBuffer(m_frameUniformBuffer, FrameUniformsBindingPoint);
+  return true;
+}
+
 void
 Renderer::BeginFrame()
 {
   m_frameError.clear();
   m_frameRejectedBaseline = _backend->rejectedCommandCount();
+  m_recordedStats = RecordedListStats{};
   _backend->BeginFrame();
   clearCommandQueue();
   _currentPassFbo = FramebufferHandle{};
@@ -819,6 +874,60 @@ Renderer::checkCommandRejections()
 }
 
 void
+Renderer::emitCommand(const RenderCommand& command)
+{
+  if (m_recording != nullptr) {
+    m_recording->append(command);
+    return;
+  }
+  _backend->PushToCommandQueue(command);
+}
+
+bool
+Renderer::emitCheckedCommand(const RenderCommand& command)
+{
+  if (m_recording != nullptr) {
+    return m_recording->append(command);
+  }
+  const size_t before = _backend->rejectedCommandCount();
+  _backend->PushToCommandQueue(command);
+  const bool accepted = _backend->rejectedCommandCount() == before;
+  checkCommandRejections();
+  return accepted;
+}
+
+void
+Renderer::beginRecording(RecordedCommandList* list)
+{
+  m_recording = list;
+}
+
+void
+Renderer::endRecording()
+{
+  m_recording = nullptr;
+}
+
+bool
+Renderer::pushExecuteList(const RecordedCommandList* list)
+{
+  if (list == nullptr || list->failed() || m_recording != nullptr) {
+    reportFrameError("ExecuteList: missing or failed list, or nested in a "
+                     "recording");
+    return false;
+  }
+  RenderCommand cmd;
+  cmd.commandType = CommandType::ExecuteList;
+  cmd.executeList.list = list;
+  if (!emitCheckedCommand(cmd)) {
+    return false;
+  }
+  m_recordedStats.lists += 1;
+  m_recordedStats.tokens += list->size();
+  return true;
+}
+
+void
 Renderer::pushClearColor(float r, float g, float b, float a)
 {
   RenderCommand cmd;
@@ -827,7 +936,7 @@ Renderer::pushClearColor(float r, float g, float b, float a)
   cmd.clear.g = g;
   cmd.clear.b = b;
   cmd.clear.a = a;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -839,7 +948,7 @@ Renderer::pushClearScreen(float r, float g, float b, float a)
   cmd.clear.g = g;
   cmd.clear.b = b;
   cmd.clear.a = a;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -854,7 +963,7 @@ Renderer::pushClearDepth(float value)
   RenderCommand cmd;
   cmd.commandType = CommandType::ClearDepthBuffer;
   cmd.clearDepthValue = value;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -866,7 +975,7 @@ Renderer::pushViewport(int x, int y, int width, int height)
   cmd.viewport.y = y;
   cmd.viewport.width = width;
   cmd.viewport.height = height;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -875,7 +984,7 @@ Renderer::pushPipelineState(const PipelineState& state)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetPipelineState;
   cmd.pipelineState = state;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -884,7 +993,7 @@ Renderer::pushSetShader(ShaderHandle handle)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetShader;
   cmd.bindShader.handle = handle;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -893,7 +1002,7 @@ Renderer::pushSetMesh(MeshHandle handle)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetMesh;
   cmd.bindMesh.handle = handle;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -903,7 +1012,7 @@ Renderer::pushSetTexture(TextureHandle handle, unsigned int slot)
   cmd.commandType = CommandType::SetTexture;
   cmd.bindTexture.handle = handle;
   cmd.bindTexture.slot = slot;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -912,7 +1021,7 @@ Renderer::pushFramebuffer(FramebufferHandle handle)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetFramebuffer;
   cmd.bindFramebuffer.handle = handle;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -922,7 +1031,7 @@ Renderer::pushUniformInt(const char* name, int value)
   cmd.commandType = CommandType::SetUniformInt;
   copyUniformName(cmd.uniformInt.name, sizeof(cmd.uniformInt.name), name);
   cmd.uniformInt.value = value;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -932,7 +1041,7 @@ Renderer::pushUniformFloat(const char* name, float value)
   cmd.commandType = CommandType::SetUniformFloat;
   copyUniformName(cmd.uniformFloat.name, sizeof(cmd.uniformFloat.name), name);
   cmd.uniformFloat.value = value;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -943,7 +1052,7 @@ Renderer::pushUniformVec2(const char* name, float x, float y)
   copyUniformName(cmd.uniformVec2.name, sizeof(cmd.uniformVec2.name), name);
   cmd.uniformVec2.x = x;
   cmd.uniformVec2.y = y;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -955,7 +1064,7 @@ Renderer::pushUniformVec3(const char* name, float x, float y, float z)
   cmd.uniformVec3.x = x;
   cmd.uniformVec3.y = y;
   cmd.uniformVec3.z = z;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -968,7 +1077,7 @@ Renderer::pushUniformVec4(const char* name, float x, float y, float z, float w)
   cmd.uniformVec4.y = y;
   cmd.uniformVec4.z = z;
   cmd.uniformVec4.w = w;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -978,7 +1087,9 @@ Renderer::pushUniformMat4(const char* name, const float* m16)
     reportFrameError("SetUniformMat4: null matrix value");
     return;
   }
-  const float* retained = retainUniformMatrix(m16);
+  const float* retained = m_recording != nullptr
+                            ? m_recording->retainMatrix(m16)
+                            : retainUniformMatrix(m16);
   if (retained == nullptr) {
     reportFrameError("SetUniformMat4: retained matrix ceiling reached");
     return;
@@ -987,7 +1098,7 @@ Renderer::pushUniformMat4(const char* name, const float* m16)
   cmd.commandType = CommandType::SetUniformMat4;
   copyUniformName(cmd.uniformMat4.name, sizeof(cmd.uniformMat4.name), name);
   cmd.uniformMat4.value = retained;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -997,7 +1108,7 @@ Renderer::pushDrawIndexed(unsigned int elementCount, unsigned int firstIndex)
   cmd.commandType = CommandType::DrawIndexed;
   cmd.drawIndexed.elementCount = elementCount;
   cmd.drawIndexed.firstIndex = firstIndex;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -1015,7 +1126,7 @@ Renderer::pushScissor(bool enabled, int x, int y, int width, int height)
   cmd.scissor.y = y;
   cmd.scissor.width = currentScissorState.width;
   cmd.scissor.height = currentScissorState.height;
-  _backend->PushToCommandQueue(cmd);
+  emitCommand(cmd);
 }
 
 void
@@ -1080,11 +1191,7 @@ Renderer::pushUpdateTexture(TextureHandle handle,
   cmd.updateTexture.channels = channels;
   cmd.updateTexture.srcRowStride = srcRowStride;
   cmd.updateTexture.data = data;
-  const size_t before = _backend->rejectedCommandCount();
-  _backend->PushToCommandQueue(cmd);
-  const bool accepted = _backend->rejectedCommandCount() == before;
-  checkCommandRejections();
-  return accepted;
+  return emitCheckedCommand(cmd);
 }
 
 bool
@@ -1099,11 +1206,7 @@ Renderer::pushUpdateBuffer(MeshHandle meshHandle,
   cmd.updateBuffer.offsetBytes = offsetBytes;
   cmd.updateBuffer.sizeBytes = sizeBytes;
   cmd.updateBuffer.data = data;
-  const size_t before = _backend->rejectedCommandCount();
-  _backend->PushToCommandQueue(cmd);
-  const bool accepted = _backend->rejectedCommandCount() == before;
-  checkCommandRejections();
-  return accepted;
+  return emitCheckedCommand(cmd);
 }
 
 bool
@@ -1118,11 +1221,58 @@ Renderer::pushUpdateIndexBuffer(MeshHandle meshHandle,
   cmd.updateIndexBuffer.offsetBytes = offsetBytes;
   cmd.updateIndexBuffer.sizeBytes = sizeBytes;
   cmd.updateIndexBuffer.data = data;
-  const size_t before = _backend->rejectedCommandCount();
-  _backend->PushToCommandQueue(cmd);
-  const bool accepted = _backend->rejectedCommandCount() == before;
-  checkCommandRejections();
-  return accepted;
+  return emitCheckedCommand(cmd);
+}
+
+bool
+Renderer::pushWriteBuffer(BufferHandle handle,
+                          unsigned int offsetBytes,
+                          unsigned int sizeBytes,
+                          const void* data)
+{
+  RenderCommand cmd;
+  cmd.commandType = CommandType::WriteBuffer;
+  cmd.writeBuffer.handle = handle;
+  cmd.writeBuffer.offsetBytes = offsetBytes;
+  cmd.writeBuffer.sizeBytes = sizeBytes;
+  cmd.writeBuffer.data = data;
+  return emitCheckedCommand(cmd);
+}
+
+void
+Renderer::pushBindUniformBuffer(BufferHandle handle, unsigned int binding)
+{
+  RenderCommand cmd;
+  cmd.commandType = CommandType::BindUniformBuffer;
+  cmd.bindUniformBuffer.handle = handle;
+  cmd.bindUniformBuffer.binding = binding;
+  emitCommand(cmd);
+}
+
+void
+Renderer::pushInstanceStream(BufferHandle handle,
+                             unsigned int offsetBytes,
+                             InstanceLayout layout)
+{
+  RenderCommand cmd;
+  cmd.commandType = CommandType::SetInstanceStream;
+  cmd.instanceStream.handle = handle;
+  cmd.instanceStream.offsetBytes = offsetBytes;
+  cmd.instanceStream.layout = layout;
+  emitCommand(cmd);
+}
+
+void
+Renderer::pushDrawIndexedInstanced(unsigned int elementCount,
+                                   unsigned int firstIndex,
+                                   unsigned int instanceCount)
+{
+  RenderCommand cmd;
+  cmd.commandType = CommandType::DrawIndexedInstanced;
+  cmd.drawIndexedInstanced.elementCount = elementCount;
+  cmd.drawIndexedInstanced.firstIndex = firstIndex;
+  cmd.drawIndexedInstanced.instanceCount = instanceCount;
+  emitCommand(cmd);
 }
 
 PooledRenderTarget
@@ -1232,6 +1382,12 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
   }
 
   beginFrameContext(_camera);
+  if (frameContext.hasWorldMvp) {
+    m_previousViewProjection =
+      m_hasViewProjection ? m_viewProjection : frameContext.worldMvp;
+    m_viewProjection = frameContext.worldMvp;
+    m_hasViewProjection = true;
+  }
   resetShadowFrame();
   _currentPassFbo = FramebufferHandle{};
   _currentPassViewport = {

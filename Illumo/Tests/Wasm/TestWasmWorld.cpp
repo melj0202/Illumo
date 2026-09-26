@@ -1,0 +1,333 @@
+// Frame schema v6: host render world operations (HostRender, D-E30).
+
+#include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Services/EnvVars.h>
+#include <Illumo/Testing/MockBackend.h>
+#include <Illumo/Testing/TestHarness.h>
+#include <Illumo/Testing/TestHelpers.h>
+#include <Illumo/Wasm/WasmFrameRenderer.h>
+#include <array>
+#include <cstring>
+#include <functional>
+#include <limits>
+#include <string>
+#include <vector>
+
+static GuestFrame
+worldFrame(std::vector<GuestWorldOperation> operations)
+{
+  GuestFrame frame;
+  frame.width = 640;
+  frame.height = 480;
+  // An identity camera sees the [-1, 1] cube, where the test mesh sits.
+  frame.hasCamera = true;
+  frame.worldOperations = std::move(operations);
+  return frame;
+}
+
+static std::vector<std::byte>
+encode(const GuestFrame& frame)
+{
+  GuestWireWriter wire;
+  frame.write(wire);
+  return wire.take();
+}
+
+static GuestWorldOperation
+materialCreate(std::uint32_t id)
+{
+  GuestWorldOperation operation;
+  operation.op = GuestWorldOp::MaterialCreate;
+  operation.id = id;
+  operation.material.tint = { 0.5f, 0.6f, 0.7f, 1.0f };
+  operation.material.blend = true;
+  return operation;
+}
+
+static GuestWorldOperation
+instanceCreate(std::uint32_t id,
+               const GuestResourceId& mesh,
+               std::uint32_t material)
+{
+  GuestWorldOperation operation;
+  operation.op = GuestWorldOp::InstanceCreate;
+  operation.id = id;
+  operation.mesh = mesh;
+  operation.indexCount = 3;
+  operation.materialId = material;
+  operation.transform[12] = 0.25f;
+  operation.tint = { 1.0f, 0.5f, 0.25f, 1.0f };
+  return operation;
+}
+
+static GuestWorldOperation
+simple(GuestWorldOp op, std::uint32_t id)
+{
+  GuestWorldOperation operation;
+  operation.op = op;
+  operation.id = id;
+  return operation;
+}
+
+static bool
+worldFrameValidation()
+{
+  TestCounters counters;
+  const GuestResourceId mesh{ 700, GuestResourceKind::Mesh, 3, 1 };
+  GuestWorldOperation update = simple(GuestWorldOp::InstanceUpdate, 10);
+  update.visible = false;
+  update.tint = { 0.1f, 0.2f, 0.3f, 0.4f };
+  GuestWorldOperation moved = simple(GuestWorldOp::InstanceTransform, 10);
+  moved.transform[13] = 2.0f;
+  GuestWorldOperation environment = simple(GuestWorldOp::Environment, 0);
+  environment.environment.shadowsEnabled = true;
+  environment.environment.shadowPcf = true;
+  environment.environment.shadowMapSize = 2048;
+  environment.environment.lightColor = { 0.9f, 0.8f, 0.7f };
+  const GuestFrame frame =
+    worldFrame({ materialCreate(1),
+                 simple(GuestWorldOp::MaterialUpdate, 1),
+                 instanceCreate(10, mesh, 1),
+                 update,
+                 moved,
+                 environment,
+                 simple(GuestWorldOp::InstanceDestroy, 10),
+                 simple(GuestWorldOp::MaterialDestroy, 1) });
+  const std::vector<std::byte> bytes = encode(frame);
+  GuestFrame decoded;
+  const bool read = GuestFrame::read(bytes, decoded);
+  const std::vector<GuestWorldOperation>& ops = decoded.worldOperations;
+  testTrue(counters,
+           read && ops.size() == 8 &&
+             ops[0].material.tint == frame.worldOperations[0].material.tint &&
+             ops[0].material.blend && ops[0].material.castsShadow &&
+             ops[2].mesh.slot == 3 && ops[2].materialId == 1 &&
+             ops[2].indexCount == 3 && ops[2].transform[12] == 0.25f &&
+             ops[2].tint[1] == 0.5f && ops[3].tint[3] == 0.4f &&
+             !ops[3].visible && ops[4].transform[13] == 2.0f &&
+             ops[5].environment.shadowsEnabled &&
+             ops[5].environment.shadowPcf &&
+             ops[5].environment.shadowMapSize == 2048 &&
+             ops[5].environment.lightColor[2] == 0.7f &&
+             ops[7].op == GuestWorldOp::MaterialDestroy,
+           "Every world operation round-trips");
+
+  bool truncations = true;
+  for (std::size_t size = 0; size < bytes.size(); ++size) {
+    GuestFrame ignored;
+    truncations =
+      truncations && !GuestFrame::read(std::span(bytes).first(size), ignored);
+  }
+  testTrue(counters, truncations, "Every truncated v6 frame is rejected");
+
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  GuestWorldOperation unknown = simple(static_cast<GuestWorldOp>(9), 4);
+  GuestWorldOperation zeroId = materialCreate(0);
+  GuestWorldOperation environmentWithId = environment;
+  environmentWithId.id = 5;
+  GuestWorldOperation tinyShadowMap = environment;
+  tinyShadowMap.environment.shadowMapSize = 32;
+  GuestWorldOperation nanEnvironment = environment;
+  nanEnvironment.environment.shadowBias = nan;
+  GuestWorldOperation nanTransform = moved;
+  nanTransform.transform[0] = nan;
+  GuestWorldOperation ragged = instanceCreate(11, mesh, 1);
+  ragged.indexCount = 4;
+  GuestWorldOperation textureMesh = instanceCreate(11, mesh, 1);
+  textureMesh.mesh.kind = GuestResourceKind::Texture;
+  GuestWorldOperation noMaterial = instanceCreate(11, mesh, 0);
+  bool denied = true;
+  for (const GuestWorldOperation& invalid : { unknown,
+                                              zeroId,
+                                              environmentWithId,
+                                              tinyShadowMap,
+                                              nanEnvironment,
+                                              nanTransform,
+                                              ragged,
+                                              textureMesh,
+                                              noMaterial }) {
+    GuestFrame ignored;
+    denied =
+      denied && !GuestFrame::read(encode(worldFrame({ invalid })), ignored);
+  }
+  testTrue(counters,
+           denied,
+           "Unknown operations, bad ids, non-finite values, ragged index "
+           "counts and non-mesh resources are denied");
+
+  GuestFrameLimits oneOperation;
+  oneOperation.worldOperations = 1;
+  GuestFrame ignored;
+  const GuestFrame two = worldFrame({ materialCreate(1), materialCreate(2) });
+  testTrue(counters,
+           !GuestFrame::read(encode(two), ignored, oneOperation) &&
+             two.exceededLimit(oneOperation) != nullptr &&
+             two.exceededLimit() == nullptr,
+           "The world operation quota is enforced and reported to guests");
+
+  // Version 5: no world section, nothing to apply.
+  std::vector<std::byte> version5 = encode(worldFrame({}));
+  version5[4] = std::byte{ 5 };
+  version5.resize(version5.size() - 4);
+  testTrue(counters,
+           GuestFrame::read(version5, ignored) &&
+             ignored.worldOperations.empty(),
+           "Version 5 frames remain accepted without world operations");
+  return counters.failures == 0;
+}
+
+struct LitVertex
+{
+  float position[3];
+  float normal[3];
+  std::uint32_t rgba;
+  float uv[2];
+};
+
+static bool
+worldOperations()
+{
+  TestCounters counters;
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0, 0), 1, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  WasmFrameRenderer bridge(renderer, 700);
+
+  // A retained lit triangle inside the unit cube.
+  const std::array<LitVertex, 3> vertices{
+    { { { 0.0f, 0.0f, 0.0f }, { 0, 0, 1 }, 0xffffffffu, { 0, 0 } },
+      { { 0.5f, 0.0f, 0.0f }, { 0, 0, 1 }, 0xffffffffu, { 1, 0 } },
+      { { 0.0f, 0.5f, 0.0f }, { 0, 0, 1 }, 0xffffffffu, { 0, 1 } } }
+  };
+  const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+  GuestMeshRequest request;
+  request.style = static_cast<std::uint32_t>(GuestBatchStyle::LitMesh);
+  request.vertexBytes = sizeof(vertices);
+  request.indexBytes = sizeof(indices);
+  const GuestResourceId pending = bridge.createMesh(request);
+  const GuestResourceId mesh = bridge.createMesh(request);
+  GuestMeshWrite vertexWrite;
+  vertexWrite.mesh = mesh;
+  vertexWrite.bytes.assign(reinterpret_cast<const std::byte*>(vertices.data()),
+                           reinterpret_cast<const std::byte*>(vertices.data()) +
+                             sizeof(vertices));
+  GuestMeshWrite indexWrite;
+  indexWrite.mesh = mesh;
+  indexWrite.indices = true;
+  indexWrite.bytes.assign(reinterpret_cast<const std::byte*>(indices.data()),
+                          reinterpret_cast<const std::byte*>(indices.data()) +
+                            sizeof(indices));
+  testTrue(counters,
+           bridge.writeMesh(vertexWrite) && bridge.writeMesh(indexWrite),
+           "A retained lit mesh completes");
+
+  const std::function<std::vector<unsigned int>()> render = [&]() {
+    Scene scene(&window, &camera);
+    bridge.dispatch(scene);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+    std::vector<unsigned int> counts;
+    for (std::size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+         ++index) {
+      const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+      if (command.commandType == CommandType::DrawIndexedInstanced) {
+        counts.push_back(command.drawIndexedInstanced.instanceCount);
+      }
+    }
+    return counts;
+  };
+
+  GuestWorldOperation opaque = materialCreate(1);
+  opaque.material.blend = false;
+  testTrue(
+    counters,
+    bridge.accept(encode(worldFrame(
+      { opaque, instanceCreate(10, mesh, 1), instanceCreate(11, mesh, 1) }))) &&
+      bridge.counters().worldInstances == 2 &&
+      bridge.counters().worldOperations == 3,
+    "Materials and instances are created on the host");
+  testTrue(counters,
+           render() == std::vector<unsigned int>{ 2 } &&
+             renderer.frameError().empty(),
+           "Both instances draw in one instanced call");
+
+  // Rejections leave the world exactly as it was.
+  const GuestFrame partial =
+    worldFrame({ materialCreate(2), instanceCreate(12, mesh, 99) });
+  testTrue(counters,
+           !bridge.accept(encode(partial)) &&
+             bridge.accept(encode(worldFrame({ materialCreate(2) }))),
+           "A rejected frame applies none of its operations");
+  GuestWorldOperation shapeInstance = instanceCreate(13, mesh, 1);
+  const GuestResourceId shape = bridge.createMesh([] {
+    GuestMeshRequest shapeRequest;
+    shapeRequest.style = static_cast<std::uint32_t>(GuestBatchStyle::Shape);
+    shapeRequest.vertexBytes = 48;
+    shapeRequest.indexBytes = 12;
+    return shapeRequest;
+  }());
+  shapeInstance.mesh = shape;
+  GuestWorldOperation incomplete = instanceCreate(13, pending, 1);
+  GuestWorldOperation outside = instanceCreate(13, mesh, 1);
+  outside.firstIndex = 3;
+  bool denied = true;
+  for (const GuestFrame& invalid :
+       { worldFrame({ simple(GuestWorldOp::MaterialDestroy, 1) }),
+         worldFrame({ instanceCreate(10, mesh, 1) }),
+         worldFrame({ simple(GuestWorldOp::InstanceTransform, 99) }),
+         worldFrame({ simple(GuestWorldOp::InstanceUpdate, 99) }),
+         worldFrame({ materialCreate(1) }),
+         worldFrame({ shapeInstance }),
+         worldFrame({ incomplete }),
+         worldFrame({ outside }),
+         worldFrame({ simple(GuestWorldOp::InstanceDestroy, 11),
+                      simple(GuestWorldOp::MaterialDestroy, 1) }) }) {
+    denied = denied && !bridge.accept(encode(invalid));
+  }
+  testTrue(counters,
+           denied && bridge.counters().worldInstances == 2,
+           "Busy materials, duplicate or unknown ids, and unusable meshes "
+           "are denied");
+
+  testTrue(counters,
+           bridge.accept(encode(
+             worldFrame({ simple(GuestWorldOp::InstanceDestroy, 10),
+                          simple(GuestWorldOp::InstanceDestroy, 11),
+                          simple(GuestWorldOp::MaterialDestroy, 1) }))) &&
+             bridge.counters().worldInstances == 0 && render().empty(),
+           "Instances and then their material are destroyed in one frame");
+
+  // Instances keep their mesh after the guest releases it.
+  testTrue(counters,
+           bridge.accept(encode(worldFrame({ instanceCreate(20, mesh, 2) }))) &&
+             bridge.releaseMesh(mesh) &&
+             render() == std::vector<unsigned int>{ 1 } &&
+             renderer.frameError().empty(),
+           "A released mesh keeps drawing for its instances");
+
+  bridge.retire();
+  testTrue(counters,
+           render().empty() && bridge.counters().worldInstances == 1,
+           "Retirement stops the world at once");
+  return counters.failures == 0;
+}
+
+bool
+runWasmWorldTest(const std::string& name)
+{
+  if (name == "WorldFrameValidation") {
+    return worldFrameValidation();
+  }
+  if (name == "WorldOperations") {
+    return worldOperations();
+  }
+  return false;
+}
