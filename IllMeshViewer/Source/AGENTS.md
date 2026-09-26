@@ -57,7 +57,7 @@ the platform seam. `IllMeshViewerCore` stays a native library for the
   detached. The layout is saved in `panelLayout`. Do not restate UI-scale
   conversion or press-edge bookkeeping.
 - The Display panel edits nothing itself: it returns edits (a display
-  toggle, or an env var and its value) and the module applies them, so the
+  toggle, or an env var and its value) and the scene applies them, so the
   env vars below stay the only source of those settings. Display toggles
   are stored in `showGrid`, `showAxes`, `showSkybox` and `showWireframe`. A
   camera drag belongs to the viewport only when it began there.

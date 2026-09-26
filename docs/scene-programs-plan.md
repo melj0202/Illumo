@@ -15,8 +15,8 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 | M4 | done | M4a scenes and home zoom; M4b kept canvas and Resume row; M4c shared settings |
 | M5 | done | `RuntimeShell`, `WasmProgram`, `DebugOverlay`; engine frame phases; modules deleted |
 | M6 | done | M6a IllEd document borrows `content()`; M6b template is a WASM scene program, WASM build names no product; M6c `Scene` is `DrawList` (O1) |
-| M7 | not started | Optional crossfade |
-| M8 | not started | Decisions and documentation |
+| M7 | deferred | Optional crossfade; O4 says later, so it is not part of this effort |
+| M8 | done | D-E31 and D-R30 logged; reference documents, AGENTS guidance and the PDF updated |
 
 ## Prerequisite (done)
 
@@ -352,3 +352,18 @@ returns nothing outside `docs/history` and archives.
     Renaming them is a separate, larger churn, not required by O1.
   - Release and Debug build, including the IllEd close tool. Full suite 675
     of 675.
+- 2026-09-26: M7 (crossfades) deferred; O4 answered "later".
+- 2026-09-26, M8:
+  - The decision log has D-E31 and D-R30. D-004 and D-E1 are marked
+    superseded; D-E4, D-E5, D-E9 and D-B1 carry refinement notes.
+  - Updated for the present:
+    - `docs/architecture-consensus.md`;
+    - the LaTeX notes: runtime loop, game, rendering, services, how to use,
+      open questions, glossary, file map and the architecture map;
+    - the package pages, `docs/wasm-game-runtime-design.md` (dated notes),
+      `docs/frame-profiler.md`, `docs/contributing.md` and README;
+    - the AGENTS guidance.
+  - Plans, sessions and designs of finished efforts stay as history.
+  - Both PDFs build through `docs/build.ps1`, with no undefined references.
+  - The old module names now appear only in history, dated rename notes and
+    decision records.

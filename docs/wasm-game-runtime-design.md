@@ -91,10 +91,18 @@ Three independent contracts:
   expose patterns, rules and editing actions; another game can expose entirely
   different concepts without adding imports to Illumo.
 
-The native `WasmGameModule` adapts the existing required-module lifecycle to
-the runtime. It owns no game-domain object. Native `IModule` continues serving
-IllEd, IllMeshViewer and DebugModule. Menu/game transitions happen inside the
-guest, rather than replacing the native required module for each screen.
+The native `WasmProgram` runs the guest for the runtime and owns no
+game-domain object. `IllumoRuntime`'s `RuntimeShell` runs exactly one program
+between the engine's frame phases, with the `DebugOverlay` in debug-tool
+builds. Screen changes happen inside the guest: a `GuestProgram` switches its
+scenes through a `SceneDirector`, and the host only launches complete
+packages.
+
+Note (2026-09-26): D-E31 removes the host module registry this paragraph
+first described. `WasmGameModule` became `WasmProgram`, `DebugModule` became
+`DebugOverlay` and `GuestModuleApplication` became `GuestProgram`; IllEd and
+IllMeshViewer no longer have native `IModule` versions. See
+`docs/scene-programs-design.md`.
 
 ## 4. Runtime and toolchain proposal
 
@@ -318,6 +326,16 @@ visuals, per-target compositions and the world's sky (D-R29,
 It remains valid for frame versions 1 to 6, and for what still records batches:
 the canvas quad, `MeshVisual` line overlays, and visuals that can't travel.
 
+Note (2026-09-26): frame schema v8 (D-R30) gives each scene its own host
+render world. The world operations `SelectWorld` (10), `ShowWorld` (11; id 0
+shows none) and `DestroyWorld` (12) address worlds, and the host creates a
+world on first selection. A v7 frame is exactly "world 1, shown". A guest
+keeps at most 8 worlds; material and instance ids are per world, and the
+shown world draws with the frame camera. `GuestSceneWorlds`
+(`IllumoGuest/SceneWorlds.h`) gives each scene a `GuestRenderWorld` when
+`HostRender` is granted, and steady frames send nothing
+(`docs/scene-programs-design.md` section 6.5).
+
 Keep product presentation decisions in WASM. CanvasView continues to sample the
 world, select LOD, fade colors and find dirty uploads there. UI layout, hit tests,
 animation and painter ordering also execute there.
@@ -534,7 +552,7 @@ Proposed source homes; final file subdivision follows implementation pressure:
 | `Illumo/Source/Wasm/` | Private Wasmtime provider, runtime, host imports, capability/handle tables, jobs and lifecycle |
 | `Illumo/Include/Illumo/Wasm/` | Native package/runtime API without Wasmtime or product types |
 | `IllumoGuest/Include/IllumoGuest/`, `IllumoGuest/Source/` | Public wire contract and guest-compiled SDK |
-| `Illumo/Source/Engine/` | Generic WasmGameModule and package-launch path; preserve native-tool runner |
+| `Illumo/Source/Engine/` | Generic runner and frame phases; the package-launch path (`RuntimeShell`, `WasmProgram`) lives in `Illumo/Source/Wasm/` |
 | Rendering/GUI | Shared value/geometry helpers and native copied-packet adapters |
 | `IllumoGame/Source/Game`, `Rulesets` | Guest services, lifecycle, data I/O, worker messages and all product behavior |
 | `IllumoGame/CMakeLists.txt` and new guest build entry | Cross-compiled package; native product code limited to reference tests |

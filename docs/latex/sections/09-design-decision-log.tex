@@ -44,7 +44,10 @@ fallback.
 \symbolref{DispatchDrawables}/\symbolref{Exit}.\\
 \textbf{Why:} Separate simulation tick from draw contribution.\\
 \textbf{Consequences:} Draw list is rebuilt or contributed each frame through
-dispatch. Module ownership/composition was later closed by D-E1.
+dispatch. Module ownership/composition was later closed by D-E1.\\
+\textbf{Status:} Superseded by D-E31. Program scenes keep the split
+(\texttt{update} and \texttt{dispatch}) inside a program; the engine has no
+modules.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -308,7 +311,9 @@ the optional Debug module before \texttt{startModules}.\\
 \textbf{Why:} Engine must not depend on Game headers; product composition
 belongs at the application boundary.\\
 \textbf{Consequences:} New products/tests can register different module sets;
-Engine only knows \symbolref{IModule}.
+Engine only knows \symbolref{IModule}.\\
+\textbf{Status:} Superseded by D-E31. The engine still never includes product
+code, but there is nothing to register: IllumoRuntime runs one WASM program.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -344,7 +349,9 @@ feature needs it; document that cells are not entities.
 and \symbolref{CommandLine} no longer inherit a node graph.\\
 \textbf{Why:} Architecture review (dead graph scaffolding); production never
 used parent/child transforms for cells or UI.\\
-\textbf{Consequences:} Frame contribution model is explicit and small.
+\textbf{Consequences:} Frame contribution model is explicit and small.\\
+\textbf{Status:} Refined by D-E31: the type is now \texttt{DrawList}
+(\pathref{Illumo/Include/Illumo/Rendering/DrawList.h}).
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -358,7 +365,10 @@ constructor dependencies if its subset differs.\\
 \textbf{Why:} Architecture review --- bag cost is zero at $N=2$ but becomes a
 de-facto global API as $N$ grows.\\
 \textbf{Consequences:} \texttt{IllumoContextHasGameCore} /
-\texttt{IllumoContextHasDebugCore} helpers; freeze note on the struct.
+\texttt{IllumoContextHasDebugCore} helpers; freeze note on the struct.\\
+\textbf{Status:} Refined by D-E31. The bag stays frozen, minus
+\texttt{moduleHost} and plus \texttt{scenes}; the program, each scene's
+\texttt{start} and \texttt{DebugOverlay::start} check what they need.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -578,7 +588,10 @@ Debug configuration.\\
 and instrumentation are development tools, not Release product behavior.\\
 \textbf{Consequences:} Shared command/logging service code may remain available
 to tests or non-UI systems, but Release must contain no DebugModule object or
-module registration. Audit this boundary after CMake/composition changes.
+module registration. Audit this boundary after CMake/composition changes.\\
+\textbf{Status:} Still in force. Since D-E31 the overlay is
+\texttt{DebugOverlay}, which \texttt{RuntimeShell} creates only in debug-tool
+builds.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -1849,7 +1862,11 @@ canvas.\\
 \textbf{Consequences:} Console, FPS, and renderer-demo remain available across
 module transitions. Release still neither compiles nor registers
 \symbolref{DebugModule}. The former Debug-only leftover Escape-to-close-window
-path is removed; confirmed shutdown stays on the product Q/Exit surfaces.
+path is removed; confirmed shutdown stays on the product Q/Exit surfaces.\\
+\textbf{Status:} Refined by D-E31. The order stands with
+\texttt{DebugOverlay}: \texttt{RuntimeShell} updates it before the program and
+dispatches it after, and \texttt{Illumo::endUpdate} discards unconsumed
+events.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -2985,6 +3002,72 @@ per frame. The batch path therefore remains for these, for visuals that cannot
 travel, and for packages built against frame versions 1--6. Guest settings
 \texttt{hostRenderWorld=0} and \texttt{hostVisuals=0} are the rollbacks.\\
 \textbf{Refines:} D-E30; \textbf{Extends:} D-R27 (surface revisions), D-R28
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-E31 --- Programs own scenes; modules are gone}
+\begin{decisionbox}[title={D-E31 \quad 2026-09-26}]
+\textbf{Decision:}
+\begin{itemize}
+  \item Each package is one WASM program that manages scenes. The engine has
+    no module registry: \texttt{IModule}, \texttt{IModuleHost},
+    \texttt{IllumoContext::moduleHost}, required and optional registration,
+    transitions and rollback are removed.
+  \item \symbolref{Illumo} runs a frame in phases (\texttt{beginUpdate},
+    \texttt{endUpdate}, \texttt{beginRender}, \texttt{endRender}). IllumoRuntime's
+    \texttt{RuntimeShell} puts the debug overlay (debug-tool builds) and the
+    one \texttt{WasmProgram} between them: input and global hotkeys, the
+    overlay, the program, then render, where the program dispatches before the
+    overlay. \texttt{DebugModule} is now \texttt{DebugOverlay}.
+  \item In a guest, a \texttt{GuestProgram} owns a \texttt{SceneDirector}. A
+    \texttt{ProgramScene} (\texttt{Illumo::Content}, mirrored in
+    \texttt{IllumoGuestContent}) owns its \symbolref{SceneInstance}, its camera
+    state, its render world and its scene-scoped commands. It starts once,
+    enters and leaves any number of times, and stops once.
+  \item Switches happen at a frame boundary (cut or cover). The scene left is
+    kept, frozen, and resumes where it was unless the program releases it.
+  \item The engine's per-frame drawable list \texttt{Scene} is renamed
+    \texttt{DrawList}.
+\end{itemize}
+\textbf{Why:} CSim's title screen and canvas were two modules: each switch
+destroyed one and rebuilt the other (a 4.4--5.2\,ms guest update each way),
+and there was no way back to a canvas. ``Module'' also meant two unrelated
+things, a host registration and a product screen. Since the WASM cutover every
+product is a program, so the host needs exactly one program slot.\\
+\textbf{Consequences:} CSim keeps its canvas across trips to the title and
+offers to resume it; returning costs about 2\,ms instead of 5.2--5.8\,ms.
+IllEd's document is its scene's content. Each program describes its WASM
+module and package (\texttt{GuestTargets.cmake},
+\texttt{PackageTargets.cmake}, listed in \texttt{ILLUMO\_PROGRAMS}), which is
+also how generated projects build; \texttt{Templates/SpinningCube} is a scene
+program. Whoever owns a program or director destroys it before
+\texttt{Illumo::shutdown}. Crossfades wait. Design and milestones:
+\texttt{docs/scene-programs-design.md}.\\
+\textbf{Supersedes:} D-004, D-E1; \textbf{Refines:} D-E4 (the type is
+\texttt{DrawList}), D-E5 (the audit moves to each scene's start), D-E9, D-B1
+(both now name \texttt{DebugOverlay})
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R30 --- A render world per scene (frame schema v8)}
+\begin{decisionbox}[title={D-R30 \quad 2026-09-26}]
+\textbf{Decision:} Frame schema v8 addresses host render worlds.
+\texttt{SelectWorld(id)} sends the world operations after it to world
+\texttt{id}, created on first use; \texttt{ShowWorld(id)} picks the world that
+draws (0: none); \texttt{DestroyWorld(id)} releases one and everything in it.
+A version 7 frame is exactly ``world 1, shown''. A guest has at most 8 worlds;
+material and instance ids are per world; the shown world draws with the frame
+camera. The SDK's \texttt{GuestSceneWorlds} gives every scene of a program its
+own \texttt{GuestRenderWorld} through the director and merges their
+operations, so steady frames send nothing.\\
+\textbf{Why:} A kept scene (D-E31) must neither draw nor lose its host objects.
+One shared world would need a visibility sweep on every switch and rules out
+drawing two scenes at once.\\
+\textbf{Consequences:} A hidden world costs host memory and nothing per frame.
+IllMeshViewer's 2,000-cube scene is the new reference at 619--648\,FPS. Guest
+setting \texttt{hostRenderWorld=0} still gives scenes no world. A camera per
+world waits for crossfades.\\
+\textbf{Extends:} D-E30, D-R29
 \end{decisionbox}
 
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}

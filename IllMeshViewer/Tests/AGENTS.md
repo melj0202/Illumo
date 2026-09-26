@@ -14,8 +14,9 @@ skybox cubemap.
 - Follow the CTest single-case discovery pattern via `TestRegistry`.
 - Verify camera math, config defaults, lighting, shadow, and motion-blur
   EnvVars, the menus, the Info and Display panels docked and detached
-  (through `FakePanelSurfaces`), and module lifecycle.
-- `EnvVars` loads and saves `envvars.json` in the working directory, so module
+  (through `FakePanelSurfaces`), and the scene lifecycle through a
+  `SceneDirector`.
+- `EnvVars` loads and saves `envvars.json` in the working directory, so scene
   fixtures give it a fresh file in the temp directory: display toggles,
   Display panel edits and panel layouts must never leak between cases.
 - Follow `docs/contributing.md`: avoid `auto`, avoid namespaces, keep ownership

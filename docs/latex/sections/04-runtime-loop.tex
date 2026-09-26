@@ -1,67 +1,80 @@
-\section{Runtime loop and modules}
+\section{Runtime loop and program scenes}
 \label{sec:runtime}
 
 \subsection{In-game frame profiler}
 \symbolref{FrameProfiler} is a main-thread, engine-owned 120-frame timing ring.
 Sequential steady-clock marks partition each measured loop body into input,
-camera, optional and required updates, scene preparation, asset pumping, command
-generation/submission, backend presentation, frame limiting, and remaining time.
+camera, debug-overlay and program updates, draw-list preparation, asset
+pumping, command generation/submission, backend presentation, frame limiting,
+and remaining time.
 The renderer can return the timestamp between submission and presentation;
 ordinary untimed calls keep their previous behavior. GPU execution and concurrent
 simulation workers are excluded. Disabled sampling performs no clock queries.
 
-DebugModule borrows the collector explicitly and owns a bounded GameVisual pie
-with text. F6 or \texttt{profiler on} enables it; keys 1--3 drill into groups and
-0 returns to Frame. Values refresh four times per second, including resize and
-navigation updates. The console takes priority. Visible profiler navigation
-captures both number events and held-key polling before the product update.
-FPS and memory visibility remain independent. See
+\symbolref{DebugOverlay} borrows the collector explicitly and owns a bounded
+GameVisual pie with text. F6 or \texttt{profiler on} enables it; keys 1--3
+drill into groups and 0 returns to Frame. Values refresh four times per second,
+including resize and navigation updates. The console takes priority. Visible
+profiler navigation captures both number events and held-key polling before
+the program update. FPS and memory visibility remain independent. See
 \pathref{docs/frame-profiler.md} and decision D-PROF1.
 
 \subsection{Illumo application runtime}
-\pathref{Illumo/Source/Engine/Application.cpp} owns logger lifetime, argument
-parsing mechanics, module registration, the frame loop, and the explicit
-process exit code. IllumoGame, IllEd, and IllMeshViewer supply declarative product metadata and
-callbacks through \symbolref{IllumoApplicationDefinition}:
+\pathref{Illumo/Source/Engine/Application.cpp} owns the process around the
+application: logger lifetime, the settings file, argument parsing mechanics,
+the startup report, engine initialization and, when the window asks for it,
+the relaunch. IllumoRuntime is the one application. Its definition in
+\pathref{Illumo/Source/Wasm/RuntimeApplication.cpp} supplies declarative
+metadata, a defaults callback and a \texttt{run} callback through
+\symbolref{IllumoApplicationDefinition}:
 \begin{lstlisting}
 int RunIllumoApplication(int argc, char** argv,
                          IllumoApplicationDefinition application) {
   LoggerLifetime logger;
-  Illumo illumo(/* application name + environment path */);
+  Illumo illumo(/* application name + settings path */);
   application.applyDefaults(&illumo.environment());
   if (SysCmdLine::ParseCommandLine(argc, argv, &illumo.environment(),
                                    application.commandLine).shouldExit())
     return /* requested exit code */;
   if (!illumo.initialize()) return 1;
-  illumo.addModule(application.createRequiredModule(&illumo.environment()), Required);
-  illumo.addModule(make_unique<DebugModule>(), Optional); // Debug / RelWithDebInfo
-  if (!illumo.startModules()) return 1;
-  while (!illumo.shouldClose()) {
-    illumo.update(/* steady_clock delta */);
-    illumo.render();
-  }
+  const int exitCode = application.run(illumo, launched);
   illumo.shutdown();
-  return 0;
+  return exitCode; // relaunched afterwards if the window asked to restart
 }
 \end{lstlisting}
-The engine-owned platform entry obtains the product definition from
+The engine-owned platform entry obtains the definition from
 \symbolref{CreateIllumoApplication} and invokes this runner. No loop decision
 depends directly on GLFW. Help/version and validation may return before
 graphics initialization.
 
-The definition in
-\pathref{IllumoGame/Source/Game/IllumoGameApplication.cpp} names the product,
-describes its CA options/help, supplies its defaults callback, and creates the
-initial required module (\symbolref{MainMenuModule} by default, or
-\symbolref{CellGameModule} if direct launch was configured). It does not perform system work.
+IllumoRuntime's \texttt{run} callback reads the launch options, mounts the
+packages, builds one \symbolref{WasmProgram} for the launched package and
+hands it to a \symbolref{RuntimeShell}
+(\pathref{Illumo/Source/Wasm/RuntimeShell.cpp}). The shell owns the program,
+the audio device the program borrows, the debug overlay, the paced loop, and
+the \texttt{--capture} and \texttt{--bench-frames} runs:
+\begin{lstlisting}
+int RuntimeShell::run(std::chrono::steady_clock::time_point launched) {
+  if (!start()) return exitCode(); // the program, then the overlay
+  while (!closing()) {
+    frame(/* steady_clock delta */);
+    framePacer.pace(/* FPS cap, VSync, refresh rate */);
+  }
+  stop();                          // the overlay, then the program
+  return exitCode();
+}
+\end{lstlisting}
+No product supplies a native definition: IllumoGame, IllEd and IllMeshViewer
+are WASM packages, and each is one program (\cref{sec:runtime-programs}).
 
 \subsection{Illumo host ownership}
 \symbolref{Illumo} owns the long-lived generic services
 (\symbolref{EnvVars}, \symbolref{RenderWindow}, \symbolref{Camera},
 \symbolref{Renderer}, \symbolref{AssetManager}, \symbolref{CommandRegistry},
-\symbolref{CommandLine}, \symbolref{InputManager}, \symbolref{Scene}) and its
-registered modules. \symbolref{IllumoConfig} carries only the application name,
-configuration-file path. Test-only access injects the host's private window and backend factories.
+\symbolref{CommandLine}, \symbolref{InputManager}, \symbolref{DrawList}) and
+the fixed parts of a frame. It owns no program. \symbolref{IllumoConfig}
+carries only the application name and configuration-file path. Test-only
+access injects the host's private window and backend factories.
 
 Construction loads generic host defaults. The runner then invokes the product's
 defaults callback and feeds its option descriptors to engine-owned
@@ -71,51 +84,135 @@ and transfers the resulting \texttt{std::unique\_ptr<IBackend>} to the renderer.
 Library code logs and returns failures rather than calling \texttt{std::exit}.
 
 \symbolref{IllumoContext} is a non-owning pointer bag frozen after successful
-host initialization and passed to modules at \symbolref{Start}. It exposes
-\symbolref{IModuleHost} allowing active modules to request deferred transitions
-at frame boundaries. It contains no game validation helpers or product assumptions.
+host initialization and passed to the program, its scenes and the debug
+overlay when they start; each checks there that the fields it needs are set
+(D-E5). \texttt{fileTree} is the one exception to the freeze: the program that
+owns a file tree publishes it when it starts and withdraws it when it stops.
+\texttt{scenes} points at a guest program's \symbolref{SceneDirector}; the
+host leaves it null. The bag contains no game validation helpers or product
+assumptions.
 
-\subsection{IModule contract and failure policy}
+\subsection{Frame order, start and close (D-E31)}
+\symbolref{Illumo} runs a frame in phases, and \symbolref{RuntimeShell} puts
+the debug overlay and the one program between them:
+\begin{enumerate}
+  \item \texttt{Illumo::beginUpdate}: input, global hotkeys (F11, F3, F5) and
+        the camera.
+  \item \texttt{DebugOverlay::update}, in debug-tool builds only. It reads
+        console keys before the program can drain them.
+  \item \texttt{WasmProgram::update}.
+  \item \texttt{Illumo::endUpdate}: unread key and character events are
+        dropped, so they do not retrigger on the next update.
+  \item \texttt{Illumo::beginRender}: the World-layer pipeline (motion blur)
+        is configured and the drawables of the frame's \symbolref{DrawList}
+        are cleared.
+  \item \texttt{WasmProgram::dispatch}, then \texttt{DebugOverlay::dispatch},
+        so console, diagnostics and renderer-demo drawables sit on top.
+  \item \texttt{Illumo::endRender}: assets are pumped and the frame is
+        rendered and presented.
+\end{enumerate}
+Every phase does nothing before \texttt{initialize} or after
+\texttt{shutdown}.
+
+\texttt{RuntimeShell::start} starts the program first, then the overlay, which
+only debug-tool builds (Debug and RelWithDebInfo) compile (D-B1). A program
+that fails to start fails the launch with exit code 1, and a capture or
+benchmark caller still receives its JSON result. An overlay that fails to
+start is logged and dropped. \texttt{RuntimeShell::stop} stops the overlay,
+then the program. Whoever owns a program or a \symbolref{SceneDirector}
+destroys it before \texttt{Illumo::shutdown}, because scene content holds
+engine assets.
+
+When the window asks to close, \texttt{RuntimeShell::closing} asks the program
+(\texttt{WasmProgram::closeRequested}); inside the guest the question reaches
+the active scene's \texttt{closeRequested}. A declined request calls
+\texttt{Illumo::deferClose}, which cancels the window's close flag and drops a
+restart riding on it, and the loop continues. A failed guest always agrees, and
+a finished capture or benchmark closes without asking. IllEd shares its
+Save/Discard/Cancel flow with native close and records approved discard so a
+dirty document does not prompt repeatedly. Render windows implement close-flag
+cancellation (\texttt{cancelCloseRequest}); the const
+\texttt{Illumo::shouldClose} query has no callbacks.
+
+\subsection{Programs and scenes (D-E31, D-R30)}
+\label{sec:runtime-programs}
+Each package is one WASM program that manages scenes; the engine has no module
+registry. Inside the guest, a \symbolref{GuestProgram}
+(\pathref{IllumoGuest/Include/IllumoGuest/Program.h}, in
+\texttt{IllumoGuestContent}) composes a guest-local \symbolref{IllumoContext}
+and lives as long as the WASM store. It owns what every scene shares
+(settings, fonts, the product's catalogs and program-wide UI) and a
+\symbolref{SceneDirector}. \texttt{createScenes(SceneDirector\&)} runs once
+after bootstrap: it adds the program's scenes and switches to the first.
+Returning false, or a first scene that fails to start, closes the product.
+\texttt{updateProgram} and \texttt{dispatchProgram} carry program UI shared by
+every scene: it updates before the active scene, so it takes input first, and
+dispatches after it, so it draws on top. \texttt{updateOverlay} and
+\texttt{dispatchOverlay} carry an overlay above everything, such as CSim's
+software pointer. Each guest update applies a pending switch, runs queued
+console commands, updates the camera, then the program UI, the active scene
+and the overlay, and drops unread key and character events. Each guest frame
+dispatches the active scene, then the program UI, then the overlay.
+
+A \symbolref{ProgramScene}
+(\pathref{Illumo/Include/Illumo/Content/ProgramScene.h}, also built into
+\texttt{IllumoGuestContent}) is one screen of a program: its own logic, UI and
+console commands, backed by a \symbolref{SceneInstance}:
 \begin{lstlisting}
-class IModule {
+class ProgramScene {
 public:
-  virtual bool Start(IllumoContext* context) = 0;
-  virtual void Update(double dt) = 0;
-  virtual void DispatchDrawables(Scene* scene) = 0;
-  virtual void Exit() = 0;
-  virtual bool OnCloseRequested() { return true; }
+  virtual bool start(IllumoContext& context) = 0; // once, before first enter
+  virtual void enter() {}                         // each time it is activated
+  virtual void leave() {}                         // each time it is left
+  virtual void update(double elapsed) = 0;        // only while active
+  virtual void dispatch(DrawList& frame) = 0;     // only while active
+  virtual void stop() = 0;                        // once
+  virtual bool closeRequested() { return true; }
+  virtual SceneInstanceOptions contentOptions() const { return {}; }
+  SceneInstance& content();    // empty unless it loads a document
+  IRenderWorld* world() const; // its render world, or null
 };
 \end{lstlisting}
+\texttt{command(...)} registers a scene-scoped console command, withdrawn when
+the scene leaves or stops. \texttt{dispatchContent} updates the content and
+adds its drawable and sky to the World layer.
 
-\begin{itemize}
-  \item \textbf{Start} binds services and allocates module state.
-  \item \textbf{Update} advances simulation and input behavior.
-  \item \textbf{DispatchDrawables} contributes this frame's non-owning draw list.
-  \item \textbf{Exit} releases module-owned state.
-  \item \textbf{OnCloseRequested} may defer native close for product confirmation.
-\end{itemize}
+The \symbolref{SceneDirector}
+(\pathref{Illumo/Include/Illumo/Content/SceneDirector.h}) owns a program's
+scenes by name (\texttt{add}, \texttt{emplace}, \texttt{has}, \texttt{find},
+\texttt{active}, \texttt{activeName}) and switches between them.
+\texttt{switchTo(name, Cut)} applies at the next frame boundary; \texttt{Cover}
+waits until the program reports its transition cover fully drawn
+(\texttt{coverComplete}). A switch (\texttt{applyPending}) drains the key and
+character queues and resets the frame's passes and drawables. The old scene
+leaves: its camera is saved and its commands are withdrawn. The target starts
+if it has not yet (content, render world, the camera the director was created
+with), its saved camera is restored, and it enters. A target that fails to
+start is logged and the previous scene re-entered. The scene left is kept,
+frozen, and resumes where it was until the program releases it;
+\texttt{release} refuses the active scene and a pending target. Only the
+active scene updates, receives input and draws. \texttt{stopAll}, like the
+destructor, stops the active scene first, then the others in reverse order of
+adding.
 
-The runner invokes \texttt{processCloseRequest} explicitly before termination.
-Only started modules participate; acceptance is the default. Deferral clears the
-native close flag and continues updating/rendering. IllEd shares its existing
-Save/Discard/Cancel flow with native close and records approved discard so a
-dirty document does not prompt repeatedly. Required transition failure remains
-terminal. Custom windows used with deferring modules implement close-flag
-cancellation. The const \texttt{shouldClose} query has no callbacks.
+With the \texttt{HostRender} capability, \texttt{GuestSceneWorlds}
+(\pathref{IllumoGuest/Include/IllumoGuest/SceneWorlds.h}) gives each scene its
+own \texttt{GuestRenderWorld} on the host (frame schema v8, D-R30), and
+\texttt{IllumoContext::camera} and \texttt{renderWorld} follow the active
+scene. A kept scene's world stays on the host, intact and undrawn, and steady
+frames send nothing. A guest has at most 8 worlds; a scene started beyond that
+has none and draws its lit meshes as \symbolref{MeshVisual}s, as every scene
+does with \texttt{hostRenderWorld=0}. Crossfades between scenes are deferred,
+and a camera per world waits for them.
 
-Each registration is \texttt{Required} or \texttt{Optional}. A rejected optional
-module is destroyed immediately and never receives update/draw/exit. Required
-startup failure rolls back all accepted modules in reverse order and fails
-startup. Exceptions from Start or Exit are contained, logged, and do not stop
-remaining rollback attempts. At runtime, the active required module can request
-transition to another module via \symbolref{IModuleHost::RequestTransition}, which
-exits the current module, purges input event queues, clears scene drawables, and
-starts the incoming module. The engine runner registers the product-supplied initial
-module as required and engine-owned Debug/RelWithDebInfo \symbolref{DebugModule} as optional.
-Optional overlays update before the required product module so console input is
-global, then dispatch after it so console, FPS, and renderer-demo drawables sit
-on top. Unconsumed key and character events are discarded at the end of each
-host update.
+CSim's program has two scenes, the title screen and the canvas, and keeps the
+canvas across trips to the title (\cref{sec:game}). IllEd is one
+\texttt{EditorScene} whose \texttt{EditorDocument} edits the scene's content.
+IllMeshViewer is one \texttt{MeshViewerScene} whose content is the opened
+document. \pathref{Templates/SpinningCube}, the template for new projects, is a
+\texttt{GuestProgram} with one \texttt{SpinningCubeScene} and a
+\texttt{cube\_speed} scene command. Design and milestones:
+\pathref{docs/scene-programs-design.md}.
 
 \subsection{Frame flow (conceptual)}
 \begin{center}
@@ -125,13 +222,13 @@ host update.
   flowstep/.style={draw, rounded corners, align=center, fill=blue!6, minimum width=4.2cm},
   arr/.style={-{Latex}}
 ]
-  \node[flowstep] (1) {InputManager::update};
+  \node[flowstep] (1) {beginUpdate: InputManager::update + hotkeys};
   \node[flowstep, below=of 1] (2) {Camera::Update};
-  \node[flowstep, below=of 2] (3) {optional overlays: Update(dt)};
-  \node[flowstep, below=of 3] (4) {required module: Update(dt)};
-  \node[flowstep, below=of 4] (5) {discard leftover key/char events};
-  \node[flowstep, below=of 5] (6) {Scene clear + required then overlay draw};
-  \node[flowstep, below=of 6] (7) {Renderer::RenderScene (tokens + submit)};
+  \node[flowstep, below=of 2] (3) {DebugOverlay::update (debug-tool builds)};
+  \node[flowstep, below=of 3] (4) {WasmProgram::update (guest: switch, program UI, scene)};
+  \node[flowstep, below=of 4] (5) {endUpdate: discard leftover key/char events};
+  \node[flowstep, below=of 5] (6) {beginRender: DrawList clear; program then overlay dispatch};
+  \node[flowstep, below=of 6] (7) {endRender: assets, Renderer::RenderScene (tokens + submit)};
   \node[flowstep, below=of 7] (8) {IBackend::EndFrame (swap)};
   \foreach \a/\b in {1/2,2/3,3/4,4/5,5/6,6/7,7/8} \draw[arr] (\a) -- (\b);
 \end{tikzpicture}
@@ -167,7 +264,7 @@ need not intersect the ground plane.
 
 
 \subsection{Process memory diagnostics}
-The optional Debug/RelWithDebInfo module composes FPS and memory in one
+In debug-tool builds, \symbolref{DebugOverlay} composes FPS and memory in one
 \texttt{GLString} status panel. F3 and \texttt{fps} control only FPS;
 \texttt{memory [on|off|toggle]} controls the persisted \texttt{showMemory}
 flag, initially off. Each section may be visible independently. The memory
@@ -194,3 +291,9 @@ Registration accepts at most one required module and closes when startup complet
 The first pending non-null transition is retained; later requests log rejection.
 Destructors do not invoke module lifecycle callbacks. Dense compatibility tests
 are independent of this product-neutral runtime.
+
+Note (2026-09-26): D-E31 removed module registration and transitions, so the
+second paragraph above is history. \texttt{CanvasScene} registers its input
+context in \texttt{start}, still rejecting exhaustion before allocating domain
+state, releases it when it leaves or stops, and registers it again when it
+enters.

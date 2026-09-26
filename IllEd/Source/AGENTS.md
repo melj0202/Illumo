@@ -48,7 +48,7 @@ oracle suite.
   rename conflicting) as one command. Never paste untagged text.
 - The hierarchy panel draws and hits only rows inside its row window; fold,
   eye, drop-before/into/after and the context menu live in
-  `EditorSceneGraphView`, which hands menu choices to the module through
+  `EditorSceneGraphView`, which hands menu choices to the scene through
   `takeCommand()` rather than editing beyond drops and visibility itself.
 - The asset browser (`EditorAssetBrowser`, over `GuiFileTree`) lists the
   virtual file tree through `IllEdPlatform::listDirectory`; dropping a mesh or

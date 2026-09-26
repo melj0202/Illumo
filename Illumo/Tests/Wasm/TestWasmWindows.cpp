@@ -733,7 +733,7 @@ testPanelWindowsLifecycle()
 }
 
 // The guest side, compiled natively: its own window, recording renderer and
-// service queue, as GuestModuleApplication composes them.
+// service queue, as GuestProgram composes them.
 struct GuestSide
 {
   GuestServiceQueue queue;
@@ -767,7 +767,7 @@ exchangeServices(GuestSide& guest,
   }
 }
 
-// Records one frame the way GuestModuleApplication::frame does.
+// Records one frame the way GuestProgram::frame does.
 static GuestFrame
 recordFrame(GuestSide& guest, GameVisual* panel)
 {

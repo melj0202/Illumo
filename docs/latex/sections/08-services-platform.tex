@@ -63,12 +63,14 @@ display, GPU, audio, package and guest-budget descriptions; subsystems log
 lifecycle milestones at info and behind-the-scenes detail at trace.
 
 \subsection{IllumoGame policy}
-IllumoGame owns \pathref{IllumoGame/envvars.json}, CA defaults (canvas,
-topology, ruleset, TPS, speed, and fade), CA option/help descriptors, and its
-required-module factory. \symbolref{CellGameModule} registers simulation,
-canvas, camera, ruleset, persistence, TPS, speed, and fade commands. The
-Release-visible F1 settings surface updates the same product variables. Generic
-Illumo services neither validate rulesets nor assume a game module exists.
+IllumoGame owns \pathref{IllumoGame/envvars.json} and its CA defaults (canvas,
+topology, ruleset, TPS, speed, and fade; \texttt{IllumoGameConfig::ApplyDefaults},
+which its program applies once settings load). \symbolref{CanvasScene}
+registers simulation, canvas, camera, ruleset, persistence, TPS, speed, and
+fade commands while it is active. The Release-visible F1 settings surface (one
+menu per scene, sharing \symbolref{SimulatorSettings}) updates the same product
+variables. Generic Illumo services neither validate rulesets nor assume a game
+program exists.
 
 \subsection{Foundation}
 Supported lightweight headers include macros, \pathref{MathTypes.h},
@@ -180,7 +182,7 @@ data, at most 64\,KiB). None of them prints a host path.
 The host also publishes the tree to engine tools as the core, read-only
 \symbolref{IFileTreeSource} \texttt{IllumoContext::fileTree}
 (\texttt{VfsTreeSource}, at most 4,096 entries per listing). In debug-tools
-builds, DebugModule's \texttt{files [path|off]} command opens a browser over
+builds, \symbolref{DebugOverlay}'s \texttt{files [path|off]} command opens a browser over
 it (\texttt{FileTreeOverlay}, drawn with \texttt{GuiFileTree}). It is driven by
 the keyboard and wheel only, and consumes that input before the product sees
 it; the footer shows the selection's size and supplying package.

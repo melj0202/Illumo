@@ -1,8 +1,9 @@
 # Scene programs: one program per package, scenes instead of modules
 
-**Status:** accepted 2026-09-26. The owner approved proceeding ("go for it"),
-so the recommended answers to O1-O7 stand; each can still be revisited before
-the milestone that depends on it. Work is on branch `scene-programs`.
+**Status:** accepted 2026-09-26 and implemented (M0-M6, M8; decisions D-E31
+and D-R30). The owner approved proceeding ("go for it"), so the recommended
+answers to O1-O7 stand. Crossfades (M7, O4) are deferred. Work is on branch
+`scene-programs`; section 13 records what was measured.
 **Tracker:** `docs/scene-programs-plan.md`.
 **Baseline:** `28b10125` on `host-render-world` (host rendering complete,
 including M9 and the UI performance work).

@@ -13,7 +13,7 @@ yet participate in hot reload.
 (`assetSource()`). Natively the default is the file system; a tool or test can
 supply `VfsAssetSource` (`Illumo::Content`), whose canonical names are
 normalized absolute virtual paths with relative names joined to `/app`. Every
-WASM guest uses the SDK's `GuestVfsAssets` (`GuestModuleApplication::
+WASM guest uses the SDK's `GuestVfsAssets` (`GuestProgram::
 assetCache()`), which replaced `GuestPackageAssets`: `packageAssets()` names
 pinned preloads read before `bootstrap()`, fetch sets load a scene's
 references on demand (collect, fetch, then instantiate), unpinned and unheld

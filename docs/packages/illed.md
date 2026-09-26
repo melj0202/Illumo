@@ -1,7 +1,7 @@
 # IllEd world editor
 
-IllEd is the second in-tree Illumo application. It shares the host, renderer,
-and `CreateIllumoApplication` seam with IllumoGame, but it does not simulate
+IllEd is the second in-tree Illumo application. It shares the host
+(`IllumoRuntime`) and renderer with IllumoGame, but it does not simulate
 cellular automata. It authors `.ilsc` format 2 scenes, the one scene format
 every Illumo program loads (D-E19), so later Illumo applications can load the
 same worlds.
@@ -11,7 +11,9 @@ and IllumoGame as the first runtime product.
 
 IllEd ships only as the `IllEd.wasm` package (`apps/illed/`, manifest
 `IllEd/illumo.json`, `launchAccess: "edit"`) run by
-`IllumoRuntime --app illed [--open scene.ilsc] [--project <dir>]`.
+`IllumoRuntime --app illed [--open scene.ilsc] [--project <dir>]`. The
+package is one program (`IllEdGuest` in `IllEd/Source/Wasm/EditorApplication.cpp`,
+a `GuestProgram`) with one `EditorScene` (D-E31).
 `IllEdCore` stays a native library for the `IllEdTests` oracle suite. The
 guest requires the Render, Assets, Storage, SelectedFiles, Clipboard, Console
 and Display capabilities, and enables its project commands only when the host
@@ -23,13 +25,15 @@ also grants `ProjectFiles` (offered with `--project`).
 |---|---|
 | Window, tokens, SceneGraph, dialogs, console host, `GuiTextEdit`, `GuiFileTree` | Illumo |
 | `.ilsc` format 2 (`IlscCodec`, `SceneDocument`), `SceneInstance`, virtual file tree, `.ilpk` | Illumo::Content |
-| Editor document, history, selection, shortcuts, gizmo, inspector, clipboard, asset browser, toolbar, module factory | IllEd |
+| Editor program and `EditorScene`, document, history, selection, shortcuts, gizmo, inspector, clipboard, asset browser, toolbar | IllEd |
 | CA grid, rulesets, `.csim` | IllumoGame (untouched) |
 
 `SceneGraph` remains a runtime hierarchy and never serializes itself.
-`EditorDocument` wraps one `SceneInstance` (with pick proxies, so empty, light
+`EditorDocument` edits one `SceneInstance` (with pick proxies, so empty, light
 and camera nodes are selectable) plus `EditorHistory`, and is the only
-mutation gateway. `SceneInstance` draws every node; the editor adds no
+mutation gateway. In the editor that instance is the `EditorScene`'s
+`content()`, which the document borrows (`attach`); tools and tests give the
+document its own. `SceneInstance` draws every node; the editor adds no
 per-node attachments. Stable ids are graph node names; handles are never
 persisted. IllEd has no private codec: its format 1 `IlscCodec` and
 `EditorAttachment` were deleted (D-E25, superseding D-E10).
@@ -111,7 +115,7 @@ cleared on load.
 - **Shortcuts** (`EditorShortcuts`) are one table: menus show `labelFor()` and
   key handling uses `match()`, so every shortcut shown in a menu works
   (`IllEd.Module.ShortcutsMatchMenus`). Every action is an `EditorCommand`
-  dispatched by `EditorModule::handleCommand`.
+  dispatched by `EditorScene::handleCommand`.
 - **Creation** places new nodes at the root. The hierarchy's Add Child creates
   a child of the primary node.
 - **Picking** uses `SceneInstance::pickRay` in 2D and 3D, which tests
@@ -140,7 +144,7 @@ keys and characters, so no shortcut fires.
 
 ## Transform tools
 
-`EditorGizmo` holds gizmo geometry, hit testing and drag math; the module turns
+`EditorGizmo` holds gizmo geometry, hit testing and drag math; `EditorScene` turns
 pointer positions into rays and deltas into transforms.
 
 - Translate (axes, planes, center), rotate (three rings; only the Z ring in
@@ -183,7 +187,7 @@ pointer positions into rays and deltas into transforms.
   `SceneGraph::setParent(node, parent, insertBefore)` (D-E26). Double-click
   renames. The right-click menu offers Rename, Duplicate, Copy, Cut, Paste,
   Add Child, Show/Hide, Enable/Disable, Unparent and Delete; the panel hands
-  its choice to the module through `takeCommand()`.
+  its choice to `EditorScene` through `takeCommand()`.
 
 ## Inspector
 
@@ -281,10 +285,10 @@ package, so icons draw identically in detached windows. The document's world
 mode (2D or 3D) sets presentation and picking. The editor grid, gizmo and
 selection wireframes are not saved.
 
-`EditorModule` is split by concern: `EditorModule.cpp` (lifetime, frame,
-drawables), `EditorModulePanels.cpp` (dock, placements, saved layout),
-`EditorModuleCommands.cpp` (dispatch, files, node commands) and
-`EditorModuleViewport.cpp` (camera, grid, picking, gizmo, selection input).
+`EditorScene` is split by concern: `EditorScene.cpp` (lifetime, frame,
+drawables), `EditorScenePanels.cpp` (dock, placements, saved layout),
+`EditorSceneCommands.cpp` (dispatch, files, node commands) and
+`EditorSceneViewport.cpp` (camera, grid, picking, gizmo, selection input).
 Files, dialogs, the clipboard and the file tree go through `IllEdPlatform`:
 `IllEdPlatformNative.cpp` for the native oracle (with `IllEdNativeTree`
 serving a test's virtual file tree) and `Wasm/EditorApplication.cpp` for the

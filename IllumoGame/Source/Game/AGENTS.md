@@ -17,7 +17,7 @@ one program whose scenes are `TitleScene` and `CanvasScene`; `CSimScenes`
 switches between them through the program's `SceneDirector` (reached as
 `IllumoContext::scenes`), and a canvas opens on its home view (zoom 0.5). The
 same Game sources also build natively into `IllumoGameCore`, which is only the
-test oracle; `IllumoGameApplication.cpp` remains for those tests. Do not add a
+test oracle. Do not add a
 process entry point, frame loop, logger lifetime, SysCmdLine implementation,
 BuildInfo, native SDK code, or platform implementation under IllumoGame, and
 do not reintroduce a native game executable.

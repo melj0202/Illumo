@@ -1,14 +1,14 @@
 # Illumo
 
 Illumo is a reusable C++23 static runtime and rendering library. This
-repository is a source workspace: the library and the in-tree applications
-that consume it through `CreateIllumoApplication`. It is not an installable
-SDK or a stable DLL ABI. Moving a product to a downstream repository is a
-separate packaging step.
+repository is a source workspace: the library, the `IllumoRuntime` host built
+on it, and the in-tree applications, which run on that host as WASM programs.
+It is not an installable SDK or a stable DLL ABI. Moving a product to a
+downstream repository is a separate packaging step.
 
 Illumo owns the generic application runner, platform entry and native
 dialogs, BuildInfo, SysCmdLine, host, services, persistent `SceneGraph`,
-token renderer, assets, and module lifetime. It does not depend on Game,
+token renderer, assets, and the frame phases. It does not depend on Game,
 Rulesets, or IllEd. Application policy stays in the consuming product.
 
 ## What this repository is
@@ -363,7 +363,7 @@ Host-wide shortcuts (yield while the developer console is open):
 - **F3** — FPS overlay (`showFPS`)
 - **F5** — reload managed textures and shaders
 - **Grave / tilde** — developer console (Debug and RelWithDebInfo;
-  `DebugModule`)
+  `DebugOverlay`)
 
 Applications also honor the window-manager close button. **Q** is not a
 global quit key: IllumoGame uses it to request exit; IllEd and IllMeshViewer
@@ -503,7 +503,7 @@ command shows the same exchange statistics. See
 
 ### Developer console
 
-Available in Debug and RelWithDebInfo (`DebugModule`). Type `help` or
+Available in Debug and RelWithDebInfo (`DebugOverlay`). Type `help` or
 `help <command>`. The table is IllumoGame-oriented; other apps share the
 host overlay.
 

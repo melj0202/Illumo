@@ -1,7 +1,7 @@
 # Illumo — Architecture consensus (unified)
 
 **Status:** Single living document — **authoritative for later sessions**  
-**Last updated:** 2026-09-15
+**Last updated:** 2026-09-26
 
 This file **merges and supersedes** scattered design memory into one coherent story. Read this first; treat external PDFs and old agenda notes as **history** (§2).
 
@@ -51,10 +51,10 @@ Optional deeper reading (not required to resume work):
 ## Charter milestones (2026-09-11)
 
 The optional [frame profiler](frame-profiler.md) adds an engine-owned,
-bounded 120-frame main-thread timing collector and a DebugModule pie overlay.
+bounded 120-frame main-thread timing collector and a DebugOverlay pie overlay.
 Update, rendering, presentation, limiter, and remaining time partition each
 sampled loop body. CPU submission is separated from backend presentation;
-GPU and asynchronous worker execution are excluded. DebugModule borrows the
+GPU and asynchronous worker execution are excluded. DebugOverlay borrows the
 collector explicitly and emits ordinary GameVisual tokens. See decision D-PROF1.
 
 IllEd 3D body selection uses nearest forward ray intersections with transformed
@@ -66,15 +66,17 @@ unchanged. Empty nodes retain a small proxy and picking remains bounds-based.
 Scene pass precedence is explicit: nonempty application `SetLayerPasses`
 overrides win over host `SetDefaultLayerPasses` fallbacks. Clearing or resetting
 overrides restores current host defaults. Motion-blur configuration updates
-fallbacks only, preserving passes installed in Start, Update, and dispatch.
+fallbacks only, preserving passes installed in start, update, and dispatch.
 See decision D-RP1.
 
-Audit repairs add explicit close negotiation: the runner calls
-`Illumo::processCloseRequest()`, and started modules may defer through optional
-`OnCloseRequested()`. The window flag is cleared on deferral so editor Cancel
-continues normally. Default acceptance preserves other products; failed required
-module transitions remain terminal. IllEd reuses Save/Discard/Cancel for native
-and toolbar exit. Product saves use `AtomicFile` sibling staging and verified
+Audit repairs add explicit close negotiation: when the window asks to close,
+`RuntimeShell` asks its program (`WasmProgram::closeRequested`), and the guest
+program asks its active scene (`ProgramScene::closeRequested`, which accepts by
+default). A declined request calls `Illumo::deferClose`, which clears the
+window flag and drops a restart riding on it, so editor Cancel continues
+normally. A finished capture or benchmark closes without asking, and a first
+scene that fails to start closes the product (D-E31). IllEd reuses
+Save/Discard/Cancel for native and toolbar exit. Product saves use `AtomicFile` sibling staging and verified
 write/flush/close before replacement; formats remain unchanged. See decisions
 D-L1 and D-IO1 and the [remediation ledger](codebase-audit-remediation-plan.md).
 
@@ -85,8 +87,8 @@ exclude those concrete consumers.
 
 InputManager now validates non-reused manager-local IDs, reuses retired storage
 among 32 live slots and selects neutral input after active retirement.
-CellGameModule releases its registration on Exit and rejects exhausted startup
-before domain allocation. Generated standalone projects record source provenance
+CanvasScene releases its registration when it leaves or stops and rejects
+exhausted startup before domain allocation. Generated standalone projects record source provenance
 in engine-provenance.json, distinguishing clean, dirty and unknown identity.
 
 [FrameCapture](frame-capture.md) provides bounded hidden-context OpenGL
@@ -98,7 +100,7 @@ a presented frame of a running app and prints one JSON result (D-E14, §5.12).
 
 ## 0. One-line summary
 
-The simulator's Edit-mode Cell paint drawer is a module-owned GameVisual using
+The simulator's Edit-mode Cell paint drawer is a scene-owned GameVisual using
 GuiKit rounded surfaces and UiTheme colors. Closed, it is a round glass bubble
 peeking over the footer with an up chevron and a paintbrush whose bristles
 carry the current paint; hover swells it. Clicking the bubble morphs it into
@@ -120,7 +122,9 @@ its visible height plus the full footer height before it is removed. See [game c
 **The workspace separates the reusable `Illumo` static library from in-tree
 applications. Illumo owns the generic application runner, platform
 entry/dialogs, BuildInfo, SysCmdLine, host, services, rendering, persistent
-scene hierarchy, assets, and module lifetime. `IllumoGame` owns CA policy and
+scene hierarchy, assets, and the frame phases; `IllumoRuntime` runs each
+package as one WASM program that manages its own scenes (D-E31). `IllumoGame`
+owns CA policy and
 `.csim` persistence (with legacy `.illumo` loading). The optional
 `Illumo::Content` layer owns the one scene format every program reads
 (`.ilsc` format 2, instantiated by `SceneInstance`), `.ilpk` packages, and the
@@ -193,7 +197,7 @@ Live consumers:
 | `CommandLine` parse / complete / dispatch | `ArenaAlloc parseArena` | Token and chain staging for one command session |
 | Nested alias expansion | `ChainedStackAlloc aliasExpandStack` | LIFO expanded text frames |
 | `Renderer::RenderScene` | `ArenaAlloc frameArena` | Immediate-drawable pointer list per frame |
-| `CellGameModule::LoadCellGame` | standard temporary vectors | Validated sparse/legacy load state |
+| `CanvasScene::LoadCellGame` | standard temporary vectors | Validated sparse/legacy load state |
 | `SparseCellGrid` | standard authoritative hash map + retained inactive map, node handles, flat index/vector | Unbounded 16×16 chunks plus allocation-reusing generation output, separate stored/counting masks, and per-target candidate/halo selection |
 
 Arena and stack allocations align actual addresses and use aligned backing
@@ -253,7 +257,7 @@ Aspirational **general 2D engine** design (July 2026). Valuable as boundary thin
 |----------|----------------|
 | Illumo owns services; context as view | **Kept** |
 | Backend owns GPU resources + ID tables | **Kept** (IBackend / GL registries) |
-| Modules as subsystems | **Kept** |
+| Modules as subsystems | **Replaced** by one WASM program per package that manages scenes (D-E31) |
 | RenderPipeline with Opaque / Transparent / UI / Debug **passes** | **Not built** |
 | MeshDrawCommand-style typed pass queues | **Not built** — we use tagged-union `RenderCommand` stream |
 | Minimal EntityTable (transform, mesh, texture) | **Archived** (D-E3) |
@@ -287,12 +291,13 @@ Illumo is a **coherent reusable library currently consumed by one sibling
 product**:
 
 ```
-Illumo Platform/Runner    (entry, system CLI, chrono loop, Debug module)
-  → IllumoGame definition (CA defaults/CLI metadata + module factory)
+Illumo Platform/Runner    (entry, logger, system CLI, relaunch)
+  → IllumoRuntime         (RuntimeShell: paced loop, DebugOverlay, one WasmProgram)
+  → program package       (GuestProgram + SceneDirector: CSim, IllEd, IllMeshViewer)
   → IllumoGameCore        (Game, Rulesets, persistence policy)
-  → Illumo::Illumo        (generic services + module lifetime)
+  → Illumo::Illumo        (generic services + frame phases)
   → Illumo Scene          (persistent hierarchy + transform extraction)
-  → Illumo Rendering      (frame list, drawables, tokens, OpenGL)
+  → Illumo Rendering      (DrawList, drawables, tokens, OpenGL)
   → IBackend              (GLBackend | test-only MockBackend)
 ```
 
@@ -309,8 +314,8 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 
 | Area | Consensus |
 |------|-----------|
-| **Declarative composition seam** | Illumo's runner owns process/system sequencing; `CreateIllumoApplication` supplies CA defaults/CLI data and a required-module factory without creating an Illumo-to-Game dependency (D-E7). |
-| **Module lifecycle** | `Start` / `Update` / `DispatchDrawables` / `Exit` is clear. |
+| **Declarative composition seam** | Illumo's runner owns process/system sequencing; IllumoRuntime's `CreateIllumoApplication` supplies defaults, command-line options and the `run` callback, and products reach the engine only as WASM programs, so there is no Illumo-to-Game dependency (D-E7, D-E13, D-E31). |
+| **Scene lifecycle** | `start` / `enter` / `update` / `dispatch` / `leave` / `stop` is clear; the program owns its scenes and switches between them at frame boundaries (D-E31). |
 | **Render split** | Enroll once; emit tokens per frame; backend executes (D-R1–D-R8, D-R10). |
 | **Rulesets** | Strategy hierarchy; pure `nextState` + `evalCell`; double-buffered generation (D-P3). |
 | **Scene model** | Persistent SoA SceneGraph, compiled preorder and bounds, incremental identity/journal and query BVH (D-E12); SceneGraphDrawable consumes immutable snapshots in the unchanged frame list (D-R25). |
@@ -325,12 +330,12 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 
 | Package | Role |
 |---------|------|
-| **Illumo/Source/Engine/** | Generic application runner, host, modules, and frozen `IllumoContext`; supported contracts are under `Illumo/Include/Illumo/Engine`. |
+| **Illumo/Source/Engine/** | Generic application runner, host services and frame phases, the debug-tool `DebugOverlay`, and frozen `IllumoContext`; supported contracts are under `Illumo/Include/Illumo/Engine`. |
 | **Illumo/Source/Scene/** | Persistent nodes, hierarchy, cached transforms, subtree state, and render attachment extraction; supported contracts are under `Illumo/Include/Illumo/Scene`. |
-| **IllumoGame/Source/Game/** | CA definition/config, module factory, domain + presentation (`SparseCellGrid`, `CanvasView`, `CellGameModule`, `CellContext`); dense Canvas types are compatibility-only. |
+| **IllumoGame/Source/Game/** | CA configuration, scenes (`TitleScene`, `CanvasScene`, `CSimScenes`), domain + presentation (`SparseCellGrid`, `CanvasView`, `CellContext`); dense Canvas types are compatibility-only. |
 | **IllumoGame/Source/Rulesets/** | CA rules (GoL family, Wireworld, …). |
-| **Illumo/Source/Rendering/** | Reusable world-mesh and 2D front end, cubemaps, offscreen passes, managed assets, Scene list, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
-| **Illumo/Source/Content/** | Optional `Illumo::Content` layer above the engine: virtual paths, `illumo.json` manifests, `.ilpk` archives, the virtual file tree and its console/asset/tree adapters, package mounting, and the `.ilsc` format 2 codec plus `SceneInstance` (D-E18). Guests link the serial-safe mirror `IllumoGuestContent`. Core Illumo never includes it. |
+| **Illumo/Source/Rendering/** | Reusable world-mesh and 2D front end, cubemaps, offscreen passes, managed assets, the per-frame `DrawList`, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
+| **Illumo/Source/Content/** | Optional `Illumo::Content` layer above the engine: virtual paths, `illumo.json` manifests, `.ilpk` archives, the virtual file tree and its console/asset/tree adapters, package mounting, the `.ilsc` format 2 codec plus `SceneInstance` (D-E18), and program scenes (`ProgramScene`, `SceneDirector`; D-E31). Guests link the serial-safe mirror `IllumoGuestContent`. Core Illumo never includes it. |
 | **IllEd/Source/** | SceneGraph world editor over a `SceneInstance` document: patch history, selection set, shortcut table, gizmos, typed inspector, clipboard, hierarchy, asset browser and project commands (D-E25); shipped as `IllEd.wasm` (`Wasm/`), with `IllEdCore` as native test oracle (D-E14). |
 | **IllMeshViewer/Source/** | Mesh and scene viewer (`.obj`, `.ilsc` through `SceneInstance`), camera, configuration, input, and product UI; shipped as `IllMeshViewer.wasm` (`Wasm/`), with `IllMeshViewerCore` as native test oracle (D-E14). |
 | **Illumo/Source/Audio/** | Sound effects (D-E28): the `IAudio` seam, `AudioDecoder` (WAV/FLAC/MP3 to float clips) and the native `AudioDevice` mixer, all over vendored miniaudio kept private here; supported contracts are under `Illumo/Include/Illumo/Audio`. Guests compile only `AudioDecoder`. |
@@ -351,95 +356,148 @@ House style (D-008 / `docs/contributing.md`): avoid `auto`; avoid namespaces (pr
 
 ### 5.2 Ownership and lifetime
 
-- **Illumo** owns long-lived services with `unique_ptr` (window, renderer, camera, env, input, scene, command line, …).  
+- **Illumo** owns long-lived services with `unique_ptr` (window, renderer, camera, env, input, draw list, command line, …).  
 - **SceneGraph** owns node slots, hierarchy links, and transform caches. It
   borrows render attachments, which remain consumer-owned. Detach/invalidate
   snapshots before changing or retiring their content; emitted payloads outlive
   synchronous queue submission.
 - **IllumoContext** is a **non-owning** pointer bag frozen as a public source
-  contract (D-E5/D-E6); modules validate their required fields at `Start`.
-- **Illumo's runner** registers DebugModule and invokes the consumer-supplied
-  required-module factory. The factory definition remains in IllumoGame.
-- Do not grow the bag for convenience; a third module with different needs should take **explicit constructor dependencies**.  
+  contract (D-E5/D-E6, refined by D-E31): `moduleHost` is gone and `scenes`
+  (`SceneDirector*`) is added; `camera` and `renderWorld` follow the active
+  scene. The program, each scene's `start` and `DebugOverlay::start` check the
+  fields they need.
+- **IllumoRuntime's `RuntimeShell`** owns the one `WasmProgram`, the
+  `DebugOverlay` in debug-tool builds, and the audio device, which it declares
+  before the program so it outlives it. Whoever owns a program or
+  `SceneDirector` destroys it before `Illumo::shutdown`, because scene content
+  holds engine assets.
+- Do not grow the bag for convenience; a consumer with different needs should take **explicit constructor dependencies**.  
 - Prefer explicit references for domain logic over “look up everything from the bag.”
 
-### 5.3 Module contract
+### 5.3 Program and scene contract (D-E31)
+
+Each package is one WASM program that manages scenes. The engine has no module
+registry.
 
 ```
-class IModule {
-  virtual bool Start(IllumoContext* context) = 0;
-  virtual void Update(double dt) = 0;
-  virtual void DispatchDrawables(Scene* scene) = 0;
-  virtual void Exit() = 0;
+class WasmProgram {        // host: IllumoRuntime's one program
+  bool start(IllumoContext& context);
+  void update(double elapsed);
+  void dispatch(DrawList& scene);
+  void stop();
+  bool closeRequested();
+};
+
+class ProgramScene {       // Illumo::Content, mirrored in IllumoGuestContent
+  virtual bool start(IllumoContext& context) = 0;
+  virtual void enter() {}
+  virtual void leave() {}
+  virtual void update(double elapsed) = 0;
+  virtual void dispatch(DrawList& frame) = 0;
+  virtual void stop() = 0;
+  virtual bool closeRequested() { return true; }
+  virtual SceneInstanceOptions contentOptions() const;
 };
 ```
 
 | Hook | Responsibility |
 |------|----------------|
-| Start | Bind inputs and allocate game state; return `false` if initialization is incomplete |
-| Update | Simulation / input |
-| DispatchDrawables | Contribute what should draw this frame |
-| Exit | Teardown module-owned state |
+| start | Once, the first time the scene is entered: bind services, allocate state, load content; `false` (or a throw) fails the switch |
+| enter | Each time the scene becomes active: register scene commands with `command(...)`, resume workers |
+| update | Active scene only: simulation / input |
+| dispatch | Active scene only: contribute what should draw this frame |
+| leave | Each time it stops being active: park workers and timers; scene commands are withdrawn |
+| stop | Once, when the program releases the scene or stops |
+| closeRequested | Close negotiation for the active scene |
 
-`IllumoContext` exposes `IModuleHost*` allowing active modules to request deferred
-runtime module transitions (`RequestTransition`). Transitions take place at frame
-boundaries, safely tearing down the outgoing module via `Exit()`, draining
-input/char queues to prevent click/key bleed, clearing `Scene` drawables, and invoking
-`Start()` on the incoming module.
+**Host.** `RuntimeShell` (`Illumo/Include/Illumo/Wasm/RuntimeShell.h`) runs
+IllumoRuntime's frame around its one `WasmProgram` in a fixed order (§5.4) and
+owns the `--capture` and `--bench-frames` runs. `WasmProgram` holds the guest
+store, its services, frame renderer and render worlds. `DebugOverlay`
+(`Illumo/Include/Illumo/Engine/DebugOverlay.h`: `start`, `update`,
+`dispatch`, `stop`) exists only in debug-tool builds. It updates before the
+program, so console keys come first, and dispatches after it, so it draws on
+top (D-B1, D-E9). Start runs the program first, then the overlay: a program
+that fails to start fails the launch, and an overlay that fails to start is
+dropped. Stop runs the overlay, then the program. Startup exceptions are
+contained and logged.
 
-The application definition supplies `createRequiredModule` (creating `MainMenuModule`
-by default, or `CellGameModule` if direct launch was requested via environment/CLI);
-the engine runner registers `DebugModule` as optional in Debug. Optional overlay
-modules update before the required product module so console/FPS/demo input is
-global across the main menu, settings, and cell canvas; they still dispatch
-after it so overlays draw on top. A required
-failure rolls back every accepted module and fails startup; an optional failure
-remains inactive. Startup and rollback exceptions are contained and logged
-(D-B1/D-E7/D-E9).
+**Guest program.** A product derives from `GuestProgram`
+(`IllumoGuest/Include/IllumoGuest/Program.h`, in `IllumoGuestContent`). It
+lives as long as the WASM store and owns what every scene shares.
+`createScenes(SceneDirector&)` runs once after bootstrap, adds the scenes and
+switches to the first; `false`, or a first scene that fails to start, closes
+the product. Each frame the program runs `updateProgram` (program UI such as
+an open menu, which takes input first), the active scene's `update`, then
+`updateOverlay`. It dispatches the scene, then `dispatchProgram`, then
+`dispatchOverlay`, so program UI draws on top. `scenes()` and
+`programContext()` expose the director and the context.
+
+**Scenes.** A `ProgramScene` (`Illumo/Include/Illumo/Content/ProgramScene.h`)
+owns its `SceneInstance` (`content()`, empty unless it loads a document), its
+camera state, its render world (`world()`) and its scene-scoped console
+commands. A `SceneDirector` (`SceneDirector.h`: `add`, `emplace<T>`, `has`,
+`find`, `active`, `activeName`, `switchTo(name, Cut | Cover)`,
+`applyPending`, `release`, `update`, `dispatch`, `closeRequested`, `stopAll`)
+owns the scenes; only the active scene updates, receives input and draws. A
+`Cover` switch waits until the program reports its transition cover drawn
+(`coverComplete`). Switches happen at a frame boundary: input is drained,
+passes and drawables are reset, the old scene leaves (camera saved, commands
+withdrawn), the target starts if needed (content, world, initial camera), its
+camera is restored, and it enters. A failed start re-enters the previous
+scene. The scene left is kept, frozen, until the program releases it. With
+`HostRender`, each scene draws through its own host render world (D-R30).
 
 ### 5.4 Frame loop (production)
 
 ```
 Illumo Platform::main
-  → CreateIllumoApplication()         // consuming product definition
-  → RunIllumoApplication(argc, argv)  // engine logger/CLI/loop ownership
+  → CreateIllumoApplication()         // IllumoRuntime's definition (RuntimeApplication.cpp)
+  → RunIllumoApplication(argc, argv)  // Application.cpp: logger, settings, CLI, relaunch
   → Illumo(IllumoConfig{application name, config path})
-  → application.applyDefaults()       // product defaults
-  → SysCmdLine::ParseCommandLine      // engine parser + product option metadata
+  → application.applyDefaults()       // runtime defaults
+  → SysCmdLine::ParseCommandLine      // engine parser + runtime option metadata
+  → startup report
   → Illumo::initialize()              // fallible window/backend factories
        backend = CreateOpenGLBackend(window)
        backend->Initialize()          // exactly once, owned by Illumo
        renderer = Renderer(..., unique_ptr<IBackend>)
-  → application.createRequiredModule(&environment) → product module
-  → addModule(required module, Required)
-  → addModule(DebugModule, Optional)  // Debug / RelWithDebInfo
-  → startModules()                    // rollback on required failure
-  loop:
-    update(dt)   // applyPendingModuleTransition → InputManager → Camera
-                 // → optional overlays.Update → required.Update
-                 // → discard leftover key/char events
-    render()                            // single production path (D-R13)
-      scene.ClearDrawables()          // Scene = per-frame FrameRenderList (D-E4)
-      required.DispatchDrawables then optional overlays
-
-      renderer.BeginFrame()
-      renderer.RenderScene(scene, camera)   // tokens, then optional immediate fallback
-      renderer.EndFrame()                   // swap (GL)
+  → application.run(illumo, launched) // the runtime's loop (D-E31)
+      prepare the package → RuntimeShell(illumo, audio, WasmProgram, options)
+      RuntimeShell::run:
+        start()                        // program, then DebugOverlay (debug-tool builds)
+        loop until closing():          // window asked to close and the program agreed
+          Illumo::beginUpdate(dt)      // InputManager → hotkeys (F11, F3, F5) → Camera
+          DebugOverlay::update         // reads console keys before the program
+          WasmProgram::update
+          Illumo::endUpdate()          // discard leftover key/char events
+          Illumo::beginRender()        // pipeline configured; DrawList cleared (D-E4)
+          WasmProgram::dispatch, then DebugOverlay::dispatch (on top)
+          Illumo::endRender()          // single production path (D-R13)
+            assetManager.pump()
+            renderer.BeginFrame()
+            renderer.RenderScene(drawList, camera)  // tokens, then optional immediate fallback
+            renderer.EndFrame()                     // swap (GL)
+          FramePacer::pace
+        stop()                         // overlay, then program
+  → Illumo::shutdown()
+  → RelaunchCurrentProcess            // only when the window asked to restart
 ```
 
 There is **no** env-gated alternate product frame path. `Renderer::RenderProofQuad`
 remains for headless token e2e tests only.
 
 Illumo construction loads only generic host defaults. The engine runner invokes
-the product defaults callback, then its own parser consumes standard window
-flags plus product-provided option/help descriptors before host initialization.
+the application's defaults callback, then its own parser consumes standard
+window flags plus the application's option/help descriptors before host
+initialization.
 `--help` and `--version` return explicit process results; library code does not
 call `std::exit`.
 
 Typical combined draw order: an optional Renderer-owned directional-shadow
 depth pass over camera-relevant World casters, then configured World color passes,
 followed by UI splash + console + editor cursor + selection outline + optional
-inspector HUD, then Debug FPS (Debug/RelWithDebInfo via DebugModule).
+inspector HUD, then Debug FPS (Debug/RelWithDebInfo via DebugOverlay).
 
 At the start of `RenderScene`, `Renderer` captures the active window dimensions
 and primary camera MVP once for that extraction. Matching `GameVisual` instances
@@ -537,8 +595,8 @@ IBackend::SubmitCommandQueue
 
 | Piece | Job |
 |-------|-----|
-| **Modules** | Choose what should appear this frame; place drawables into Scene layers. |
-| **Scene** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug), with ordinary screen rendering or effective custom pass sequences per layer. |
+| **Programs and scenes** | Choose what should appear this frame; place drawables into `DrawList` layers. |
+| **DrawList** | Per-frame non-owning drawable pointers in ordered layers (World → UI → Debug), with ordinary screen rendering or effective custom pass sequences per layer. |
 | **RenderStyle** | Generational registry on `Renderer`: shader handle + `PipelineState` defaults. Canvas, UiText, Console, Shape, Sprite, and Skybox are registered built-ins. Canonical Shape/Sprite programs position with `uMVP` only (`WorldLook`); overlay chrome supplies a Y-down screen ortho, world objects supply camera view-projection times node world; Skybox positions at the far plane with translation-stripped view-projection. |
 | **Camera** | Default orthographic vec2 pan/zoom for CA XY picking; `ProjectionType::Perspective` plus `lookAt` for 3D views. Restoring orthographic preserves 2D pan/zoom/`ScreenToWorld`. Read-only pending position/zoom access lets products validate interpolated navigation targets. CA navigation and sparse camera metadata reserve a `2^32`-cell endpoint margin: finite world axes satisfy `abs(axis) <= 16 * (2^63 - 2^32)`. This protects view arithmetic without restricting sparse storage. |
 | **Primitives / GameVisual** | Value-type shapes/sprites/text on a `GameVisual` host for overlay/painter UI and the CanvasView world quad. Parent + local `Transform2D`, atlas regions/flips, integer draw order, stable insertion order, and adjacent-only batching preserve painter semantics. Pixel-space rebuilds conservatively reject quads outside the logical viewport. An optional top-left logical-pixel clip rejects wholly excluded quads before upload and brackets partial content with a nested, intersected scissor that restores any outer clip (D-R23). Dynamic quad buffers start at 1,024 and grow to a configurable 65,536 default ceiling. |
@@ -768,8 +826,9 @@ and rule definitions in memory.
 Game's `RuleCatalogLoader` selects a valid base catalog pair beside the
 executable, in the working directory, or in its `IllumoGame` subdirectory. It
 then layers the working-directory `families.user.json` and
-`rulesets.user.json` overlays as one validated pair. The required-module factory
-loads the shared catalog once before menu/direct-game construction. Engine-owned
+`rulesets.user.json` overlays as one validated pair. In the package,
+`CSimCatalogBootstrap` loads the shared catalog once during bootstrap, before
+`createScenes` opens the title scene. Engine-owned
 configuration-path discovery supplies the executable directory. Independent
 registries require explicit text/file loading; Rulesets has no filesystem or
 native API dependency (D-GC1, D-GC2, D-GC4).
@@ -1049,7 +1108,7 @@ JSON describes **data**, not executable behavior. Multi-state (Wireworld, Brian'
 2. Rendering runs every frame.  
 3. Double-buffer prevents reading a half-written generation.  
 4. Visual fade is **presentation**, not simulation state.  
-5. Modes in `CellGameModule`: `NORMAL | EDIT | EXIT` (enum + switch; save/load are registered commands, not frame states).
+5. Modes in `CanvasScene`: `NORMAL | EDIT | EXIT` (enum + switch; save/load are registered commands, not frame states).
 6. F1 opens the Release-visible `ConfigurationMenu`; while open it owns product
    input and blocks simulation/editor mutation.
 
@@ -1060,12 +1119,12 @@ Fixed-tick **mesh transform interpolation** (engine PDF) is **not** required for
 Intended flow:
 
 ```
-GLFW callbacks / poll → InputManager → module / controller logic
+GLFW callbacks / poll → InputManager → program / active scene / controller logic
 ```
 
-**Today:** InputManager holds key/mouse state and contexts. `DebugModule` consumes Grave and open-console editing first as a global Debug overlay; product modules then read remaining events and yield while the console is open. Unconsumed key/char events are discarded at the end of the host update. Not every behavior is extracted into tiny controller classes—acceptable.
+**Today:** InputManager holds key/mouse state and contexts. `DebugOverlay` consumes Grave and open-console editing first as a global Debug overlay; the program and its active scene then read remaining events and yield while the console is open. A kept scene sees no input, and a scene switch drains the key and character queues. Unconsumed key/char events are discarded by `Illumo::endUpdate`. Not every behavior is extracted into tiny controller classes—acceptable.
 
-`CellGameModule` owns a primitive-composed F1 settings overlay in every build.
+`CanvasScene` owns a primitive-composed F1 settings overlay in every build.
 Its persisted `editHints` option defaults on and controls a wrapping bottom
 legend in Edit mode, including Wireworld brush keys. The flat menu-themed footer uses muted text
 and shows selection actions only when selected. Its opaque bottom band is
@@ -1092,7 +1151,9 @@ typed digits as an exact-entry shortcut); UI scale is a slider from Auto
 frame pacer: 0 (the slider's far right) disables software limiting and VSync
 remains independent.
 Both main-menu and in-game Apply persist display preferences and apply fullscreen
-immediately. Main-menu F1 opens the same settings overlay. Positive dimensions apply finite toroidal topology;
+immediately. Main-menu F1 opens the same settings overlay: each scene keeps its
+own `ConfigurationMenu`, and `SimulatorSettings` reads, checks and writes every
+setting for both. Positive dimensions apply finite toroidal topology;
 `0`/`0` or `inf`/`inf` applies infinite topology. Topology changes drain the
 worker and intentionally start a fresh centered world before persisting values.
 Larger high-contrast labels, readable ruleset names, keycap hints, and a
@@ -1242,7 +1303,7 @@ color at zero alpha (`UiTheme::transparentOf`) so straight-alpha blending never
 darkens an edge. `GuiDialog` provides opt-in rounded presentation with a fitted
 visual/pointer scale; its default flat presentation remains available to other
 apps unchanged.
-`MainMenuModule`, `ConfigurationMenu`, `NewSimulationMenu`, and
+`TitleScene`, `ConfigurationMenu`, `NewSimulationMenu`, and
 `RulesetWorkshopMenu` share one motion and layout vocabulary through
 `GuiMenuShell` rather than repeating it: the reveal, springy panel and row
 drops, the liquid selection span (head and tail springs with a squash
@@ -1276,16 +1337,17 @@ New simulation and the menu console command `play` open a dedicated canvas
 setup screen, independent of F1 configuration. It offers the rules catalog,
 infinite or wrapping boundaries, width and height in 16-cell increments, and
 empty or starter contents. Infinite mode disables dimensions while retaining
-the finite draft. Create passes validated canvas values to CellGameModule;
-Back or Escape discards the draft. Display and performance preferences are not
+the finite draft. Create passes validated canvas values to a new `CanvasScene`
+(`CSimScenes::newSimulation`, which replaces any kept canvas); Back or Escape
+discards the draft. Display and performance preferences are not
 part of this payload. The screen fits all rows, respects reduced menu motion,
 and consumes wheel input without changing selection or values. Glass cards,
 spring-driven focus lighting, the liquid selection drop, springy directional
 value nudges, a crossfading boundary badge, and a live glider on a 6x6 torus match
 the main menu; reduced motion freezes the motif and snaps focus feedback.
 
-Entering a new or loaded cell canvas plays a 0.9-second cellular wave. A
-module-owned, screen-space GameVisual veil tiles the viewport with cells of
+Entering a new, loaded or resumed cell canvas plays a 0.9-second cellular
+wave. A scene-owned, screen-space GameVisual veil tiles the viewport with cells of
 roughly 44 virtual pixels, opaque and dark at first. A wave spreads from the
 center with a deterministic, per-cell ragged front: each cell fires cyan as the
 wave reaches it (with a soft halo), cools to violet, then shrinks to a dot and
@@ -1295,10 +1357,20 @@ settings and confirmation dialogs. The transition never changes camera or
 simulation state and does not block input. Reduced menu motion and the 3D
 diagnostic view skip it from the first frame. Returning to the main menu runs
 the wave backwards over 0.48 seconds (cells regrow from the edges inward, fire,
-and darken until the canvas is covered), then submits one module transition. Repeated return
+and darken until the canvas is covered), then requests one scene switch to the
+title (`CSimScenes::returnToTitle`). Repeated return
 requests do not restart it; product input is consumed during the accepted exit,
 while the global console retains its input. Reduced motion returns immediately.
 Both the pause-menu action and the console menu command use this path.
+
+CSim is one program (`IllumoGameGuest`, a `GuestProgram`) with two scenes,
+`TitleScene` and `CanvasScene` (D-E31). `CSimScenes`, a static helper over
+`IllumoContext::scenes`, opens the title, starts a new or loaded canvas
+(replacing a kept one), returns to the title and resumes. Returning to the
+title keeps the canvas, and the title then leads with a "Resume simulation"
+row. A kept canvas does not simulate. The canvas opens at home zoom 0.5.
+Returning or resuming costs about 2 ms; returning cost 5.2-5.8 ms when each
+switch rebuilt the screen.
 
 **D-E2:** InputManager must not depend on Game types.  
 Callbacks should record events/state, not own game policy long-term (CA design PDF — still the direction of travel).
@@ -1310,9 +1382,10 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
 
 - `CommandLine` owns help, environment-variable inspection/editing, validated
   finite timing/display settings, console history, alias macro management, multi-command chaining, and application exit.
-- `CellGameModule` registers simulation, canvas, camera, ruleset, and save/load
-  commands through `CommandRegistry`; registry metadata drives help and Tab
-  completion.
+- `CanvasScene` registers simulation, canvas, camera, ruleset, and save/load
+  commands through `CommandRegistry` and withdraws them when it leaves, so a
+  kept canvas's commands disappear from the console; registry metadata drives
+  help and Tab completion.
 - Registered commands execute in a detached batch. Reentrant enqueue is deferred
   to the next top-level dispatch; retirement cancels unstarted callbacks and
   clearing cancels the batch remainder. The non-copyable registry and input
@@ -1350,7 +1423,7 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
   and `!<prefix>` recall history; `help <word>` searches names and
   descriptions. `bind <F1-F12> <command>` runs a command on a function key
   whether or not the console is open (F3, F5, F6, F11 stay host-reserved);
-  `DebugModule` consumes only bound keys. `add <var> <n>` and
+  `DebugOverlay` consumes only bound keys. `add <var> <n>` and
   `cycle <var> <values...>` adjust settings (useful behind binds);
   `watch`/`unwatch` pin up to eight variables to a live strip under the
   header; `writeconfig <file>` saves aliases, binds, watches, and view
@@ -1381,7 +1454,7 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
   `pop out` button, `console_mode detached`, or dragging the floating title bar
   past the game window's edge. `dock`, closing the window, or `` ` `` from
   either window brings it back (dock reopens it in-game; the others return it
-  closed). `DebugModule` owns the `GLFW_NO_API` `PixelWindow`, routes its
+  closed). `DebugOverlay` owns the `GLFW_NO_API` `PixelWindow`, routes its
   keyboard/mouse events to the console, and presents a `SoftwareCanvas` raster
   of the console's `GameVisual` primitives (Windows GDI; Linux reports it
   unavailable). No second OpenGL context exists; while detached the console is
@@ -1413,7 +1486,7 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
 
 #### Process memory diagnostics
 
-The optional Debug/RelWithDebInfo `DebugModule` owns one top-left `GLString`
+The optional Debug/RelWithDebInfo `DebugOverlay` owns one top-left `GLString`
 diagnostics panel. `showFPS` / F3 / `fps` retain FPS-only control;
 `showMemory` (default off) / `memory [on|off|toggle]` independently control
 memory rows. Both settings persist through the existing environment service.
@@ -1501,7 +1574,8 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   instrumentation and are bounded by their per-call deadline; mods stay
   fuel-metered. `--fuel n` forces metering for one launch.
 
-- **Host** (`Illumo/Source/Wasm`): `WasmGameModule` snapshots input, pumps
+- **Host** (`Illumo/Source/Wasm`): `WasmProgram`, the runtime's one program
+  (D-E31), run by `RuntimeShell` (§5.3, §5.4), snapshots input, pumps
   generic services (textures, fonts, files, dialogs, clipboard, display and
   its system-cursor visibility, console trampolines, jobs, audio) and submits
   validated `IRF1` frames through
@@ -1523,7 +1597,8 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   manifest says `launchAccess: "edit"`. `--capture <new .png>` renders until
   `--capture-frame <n>` (default 60), reads back the presented backbuffer
   through a `Renderer::setBeforePresent` hook, writes the PNG, prints one JSON
-  line and exits 0/1 through `IllumoApplicationDefinition::exitCode`; it
+  line and exits 0/1 (`RuntimeShell::exitCode`, returned by the definition's
+  `run` callback); it
   replaces the removed `IllumoCapture` executable ([frame-capture.md](frame-capture.md)).
   `--capture-script <file>` runs bench-script steps first so a capture can
   reach a later screen; the capture frame counts from the script's end, and the
@@ -1534,19 +1609,20 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   The runtime works from its own directory wherever it is started, relative
   command-line paths resolve against the invocation directory, and the window
   title comes from the manifest through `IRenderWindow::setTitle`.
-- **Guest engine** (`IllumoGuest`): `GuestModuleApplication` builds a
+- **Guest engine** (`IllumoGuest`): `GuestProgram` builds a
   guest-local `IllumoContext` (snapshot window, `InputManager` fed from the
   snapshot, storage-backed `GuestEnvironment`, `Camera`, `Renderer` on
-  `GuestRecordingBackend`, `Scene`, a `CommandRegistry` mirrored to host
+  `GuestRecordingBackend`, `DrawList`, a `CommandRegistry` mirrored to host
   console trampolines, a `CommandLine` whose lines forward to the host
-  console, and a module host applying transitions at frame boundaries). It
+  console, and a `SceneDirector` switching the product's scenes at frame
+  boundaries, D-E31). It
   renders with `Renderer::RenderScene`; `IBackend::BeginLayer` tags World and
   UI batches. Product close requests travel as update flag bit 0; the host
   still asks `illumo_guest_close`. It also sets `context.assetManager`:
   `AssetManager` reads bytes through an `IAssetSource`
   (`Illumo/Rendering/AssetSource.h`), served in the guest by
-  `GuestPackageAssets` from the files a product lists in `packageAssets()`
-  (preloaded before bootstrap). Under `ILLUMO_SERIAL_GUEST` (defined for all
+  `GuestVfsAssets` (D-E24): the files a product lists in `packageAssets()` are
+  pinned before bootstrap, and scene assets are fetched on demand. Under `ILLUMO_SERIAL_GUEST` (defined for all
   guest code) `AssetManager` has no worker thread, completes loads in
   `pump()`, and shader files are unavailable (shaders are host policy);
   natively `FileAssetSource` keeps filesystem behaviour and hot reload. Every
@@ -1556,15 +1632,20 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   open/edit/save dialogs and read/write by opaque location. Dialog requests
   are version 2 (adds `edit`, an open whose selection stays writable for
   save-in-place); results add a base-name-only `label`.
-- **Product** (`IllumoGame/Source/Wasm`): the package application bootstraps
+- **Product** (`IllumoGame/Source/Wasm`): the package program
+  (`IllumoGameGuest`, a `GuestProgram`) bootstraps
   storage settings plus packaged defaults, reads catalogs through
   `CSimCatalogBootstrap`, installs `GuestCSimPlatform`, loads its sound cues
-  when granted `Audio` (section 5.13), and starts `MainMenuModule`. Shared Game sources use `CSimPlatform` for dialogs, file
+  when granted `Audio` (section 5.13), and its `createScenes` opens the title
+  scene (`CSimScenes::openTitle`). Shared Game sources use `CSimPlatform` for dialogs, file
   transfers, clipboard and user-catalog writes; the native oracle completes
   synchronously, the guest on a later update. IllEd
   (`IllEd/Source/Wasm/EditorApplication.cpp`) and IllMeshViewer
   (`IllMeshViewer/Source/Wasm/ViewerApplication.cpp`) follow the same shape
-  through their `IllEdPlatform` and `MeshViewerPlatform` seams. IllEd's
+  through their `IllEdPlatform` and `MeshViewerPlatform` seams, each with one
+  scene: IllEd's `EditorScene`, whose `EditorDocument` edits the scene's
+  `content()` (`attach`), and IllMeshViewer's `MeshViewerScene`, whose content
+  is the opened document. IllEd's
   save/open/close-confirm are asynchronous, its document keeps an opaque
   location plus a display label, and editing input is held while a transfer
   is in flight. Scenes load in three steps: collect references, fetch them
@@ -1621,8 +1702,8 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   - **Operations:** material create/update/destroy, instance
     create/update/destroy/transform, and the environment. Ids are
     guest-chosen.
-  - **Host binding:** each guest has one host `RenderWorld` (D-R28), drawn
-    before the frame's world batches. Instances use static lit retained
+  - **Host binding:** each guest has one host `RenderWorld` (D-R28; one per
+    scene since frame schema v8), drawn before the frame's world batches. Instances use static lit retained
     meshes, cull with the host's mesh bounds, and keep their mesh alive even
     after the guest releases it.
   - **Validation:** the host checks the whole sequence against the live world
@@ -1630,7 +1711,8 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
     unusable meshes and out-of-range index spans reject the frame, and the
     guest is retired.
   - **Guest side:** `GuestRenderWorld` (published as
-    `IllumoContext::renderWorld`) validates with the same rules, holds
+    `IllumoContext::renderWorld`, which follows the active scene) validates
+    with the same rules, holds
     instances until their mesh's host copy is ready, and drains operations
     only into frames that will be delivered. The SDK also checks every frame
     against the host's count quotas before sending (`GuestFrame::exceededLimit`).
@@ -1673,6 +1755,27 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
     the rotation-only view projection from the frame camera. A guest's
     `SkyboxVisual` becomes that sky, shown only in frames that draw it, and
     an operation travels only on change.
+- **Frame schema v8** (D-R30, same `HostRender` capability): a render world
+  per scene, so a kept scene (D-E31) neither draws nor loses its host
+  objects.
+  - **World operations:** `SelectWorld` (10) sends the world operations after
+    it to world `id`, which the host creates on first use; `ShowWorld` (11)
+    picks the world that draws from then on (0: none); `DestroyWorld` (12)
+    releases a world and everything in it.
+  - **Limits:** at most 8 worlds per guest. Material and instance ids are per
+    world. The shown world draws with the frame camera; a hidden world costs
+    host memory and nothing per frame.
+  - **Compatibility:** a version 7 frame is exactly "world 1, shown";
+    versions 1 to 7 remain valid.
+  - **Guest side:** when `HostRender` is granted, `GuestSceneWorlds`
+    (`IllumoGuest/Include/IllumoGuest/SceneWorlds.h`) gives each scene its
+    own `GuestRenderWorld` through the `SceneDirector` and merges their
+    operations: destroyed worlds first, then each world with changes behind
+    its `SelectWorld`, then a `ShowWorld` when the active scene's world
+    changed. Steady frames send nothing. A scene started beyond the limit gets
+    no world and draws its lit meshes as `MeshVisual`s.
+  - **Rollback:** `hostRenderWorld=0` still gives scenes no world. A camera
+    per world waits for crossfades.
 - **Simulation lanes** (D-E17): with a `worker` and the Jobs grant the game
   asks `JobLanes` once at startup; the host compiles one isolated worker
   store per lane (in parallel, while menus run) and answers only when all are
@@ -1770,11 +1873,12 @@ main-thread affine. It is published as `IllumoContext::audio` and, like
   graph code disabled, and the game module's imports are unchanged.
 - **Host ownership**: `RuntimeApplication` creates one `AudioDevice` unless
   the launch is `--capture` or `--bench-*`; a machine without an output logs
-  `Audio disabled` and runs silently. `WasmGameModule::setAudio` borrows it;
-  `RuntimeModule` declares it first so it outlives the guest.
+  `Audio disabled` and runs silently. `WasmProgram::setAudio` borrows it;
+  `RuntimeShell` holds it and declares it before the program so it outlives
+  the guest.
 - **Guest** (`IllumoGuest/Audio.h`): `GuestAudio` implements `IAudio` over the
   service with guest-local handles and never-reused wire ids;
-  `GuestModuleApplication` publishes it when granted.
+  `GuestProgram` publishes it when granted.
 - **CSim**: `CSimSounds` maps ten cues (program start, menu hover, select,
   back and error, canvas enter and exit, the canvas EDIT/NORMAL mode switch,
   voiced only when the mode actually changes, and the paint drawer's expand
@@ -1805,7 +1909,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 |----|----------|
 | **D-001** | Package rename: Core→Game, System→{App,Engine,Services}, Init+Util→Foundation, AssetLoaders→Assets. |
 | **D-002** | Math aliases in `MathTypes.h` (not `Math.h` — Windows CRT collision). |
-| **D-004** | Modules: Start / Update / DispatchDrawables / Exit. |
+| **D-004** | Modules: Start / Update / DispatchDrawables / Exit. Superseded by D-E31: program scenes keep the update/dispatch split; the engine has no modules. |
 | **D-005** | Each CA variant is a `RuleSet` subclass (factory in CellContext; registry later optional). |
 | **D-006** | Modes = `CellState` enum in module (not archived State class hierarchy). |
 | **D-008** | House style: avoid `auto`; no namespaces; no recursion; third-party via PR. |
@@ -1813,7 +1917,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-N2** | Historical `IllumoGame` simulator identity; superseded for product-visible branding by D-N4 while retained for technical targets and test namespaces. |
 | **D-N3** | `IllEd` is the in-tree world-editor application identity (`IllEd.exe`, `.ilsc`, `IllEd.*` tests). The `IllEd.exe` executable identity is superseded by D-E14 (`IllEd.wasm` in `apps/illed`). |
 | **D-N4** | CSim is the simulator's product-visible identity and `.csim` is the canonical save extension; technical `IllumoGame` identifiers and legacy `.illumo` loading remain. |
-| **D-B1** | `DebugModule` is composed by the engine runner in Debug and RelWithDebInfo; Release must neither compile nor register it. Refined by D-E7. |
+| **D-B1** | `DebugModule` is composed by the engine runner in Debug and RelWithDebInfo; Release must neither compile nor register it. Refined by D-E7. Refined by D-E31: the overlay is now `DebugOverlay`, which `RuntimeShell` creates only in debug-tool builds. |
 | **D-CLI1** | Services own generic console mechanics; `CellGameModule` registers domain commands and help/completion metadata. |
 | **D-UI1** | Console editing and caret placement use measured text geometry; one enlarged batch must fit a full help page. |
 | **D-UI2** | Console history wraps and scrolls by visual lines using shared mounted/floating layout metrics. |
@@ -1866,6 +1970,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-E30** | A WASM guest keeps its game state and presentation decisions; the host owns every render and media object and the guest manages them through host calls, not per-frame copies. The guest SDK checks frame quotas before sending. World operations (frame schema v6) come first, then 2D visuals (`docs/host-render-world-design.md`). |
 | **D-R28** | Instance and uniform buffers (`BufferHandle`), `WriteBuffer`/`BindUniformBuffer`/`SetInstanceStream`/`DrawIndexedInstanced`, Renderer's per-frame `FrameUniforms` block, `RecordedCommandList` executed in place by `ExecuteList`, and the engine `RenderWorld`. Supersedes D-R24's instancing deferral and D-R25's recorded-payload clause for host-owned lists; the GL context stays put. |
 | **D-R29** | `VisualStore` keeps 2D visuals on the host (`GameVisual` edited in place, recorded once, replayed until changed). Frame v7 adds visual operations, per-target compositions and a `Skybox` world operation. Guest `GameVisual`s and `SkyboxVisual`s go through `IBackend::AppendVisual`/`AppendSkybox`, and only unconfirmed changes travel. By owner decision the canvas quad, the `MeshVisual` line overlays and visuals that can't travel stay retained batches. |
+| **D-R30** | Frame schema v8 gives each scene its own host render world. `SelectWorld` (10) sends the world operations after it to world `id`, created on first use; `ShowWorld` (11) picks the world that draws (0: none); `DestroyWorld` (12) releases one and everything in it. A v7 frame is exactly "world 1, shown". A guest has at most 8 worlds; material and instance ids are per world; the shown world draws with the frame camera. `GuestSceneWorlds` gives every scene its own `GuestRenderWorld` when `HostRender` is granted and merges their operations, so steady frames send nothing. `hostRenderWorld=0` still gives scenes no world; a camera per world waits for crossfades. Extends D-E30 and D-R29. |
 | **D-R27** | Frame schema v5 adds up to eight UI-only surface batch lists with revisions (`same` when unchanged, one quota across the frame). The host replays a changed surface through `Renderer::renderOffscreen` into a per-window target and reads it back through a two-deep asynchronous stream (`IBackend::requestFramebufferReadback` / `takeFramebufferReadback`) for a `PixelWindow` present, one frame late. No second GL context (D-UI5). |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |
 | **D-WW1** | Wireworld: ruleset-aware seed + sticky head/tail/conductor brush keys. |
@@ -1955,15 +2060,15 @@ disabled.
 
 | ID | Decision |
 |----|----------|
-| **D-E1** | Historical App-owned module registration; refined by D-E7 while Engine still knows only `IModule`. |
+| **D-E1** | Historical App-owned module registration; refined by D-E7 while Engine still knows only `IModule`. Superseded by D-E31: there is nothing to register; IllumoRuntime runs one WASM program. |
 | **D-E2** | InputManager has no Game types. |
 | **D-E3** | EntityTable archived; cells are not entities. |
-| **D-E4** | Rendering `Scene` remains a non-owning per-frame drawable list; D-E8 adds a separate retained graph rather than changing this type. |
-| **D-E5** | Freeze IllumoContext; validate at Start; third module → explicit deps. |
+| **D-E4** | Rendering `Scene` remains a non-owning per-frame drawable list; D-E8 adds a separate retained graph rather than changing this type. Refined by D-E31: the type is now `DrawList`. |
+| **D-E5** | Freeze IllumoContext; validate at Start; third module → explicit deps. Refined by D-E31: the bag stays frozen, minus `moduleHost` and plus `scenes`; the program, each scene's `start` and `DebugOverlay::start` check what they need. |
 | **D-E6** | One repository contains the `Illumo` static library and sibling `IllumoGame` product. Public headers live under `Illumo/Include/Illumo`; no install package, DLL ABI, or second repository is implied. Its App/Platform ownership clause is superseded by D-E7. |
 | **D-E7** | Illumo owns platform entry/dialogs, BuildInfo, SysCmdLine, logging lifetime, DebugModule composition, and the frame loop. IllumoGame contains only CA Game/Rulesets/configuration metadata and its required-module factory. |
 | **D-E8** | Illumo owns an additive persistent `SceneGraph` with generational graph-local handles, deterministic hierarchy/transform state, and borrowed token render attachments. |
-| **D-E9** | Debug `DebugModule` is a global overlay: optional modules update before the required product module and dispatch after it. Product input yields while the console is open. |
+| **D-E9** | Debug `DebugModule` is a global overlay: optional modules update before the required product module and dispatch after it. Product input yields while the console is open. Refined by D-E31: `RuntimeShell` updates `DebugOverlay` before the program and dispatches it after, and `Illumo::endUpdate` discards unconsumed events. |
 | **D-E10** | *Superseded by D-E18/D-E19.* `.ilsc` v1 was the editor-owned UTF-8 JSON scene interchange; SceneGraph does not serialize itself (still true). |
 | **D-E11** | Attachments may report conservative local AABBs; SceneGraph exposes world bounds and linearly camera-culls color extraction. Renderer retains and filters directional-shadow casters against a camera-frustum extrusion, failing open on invalid data. No spatial index or subtree cache is introduced. |
 | **D-E12** | SceneGraph v2 uses intrusive SoA/TRS state, lazy preorder, revision bounds, ordered attachments, interned names/payloads, a bounded journal, and derived query BVH. IllEd edits the graph incrementally. Supersedes the storage and linear-only limits of D-E8/D-E11; no ECS or persistence migration. |
@@ -1984,6 +2089,7 @@ disabled.
 | **D-E26** | SceneGraph gains `setParent(node, parent, insertBefore)` for sibling order; nothing else in v2 changes. Refines D-E12. |
 | **D-E27** | `IPanelSurfaces` (`IllumoContext::panelSurfaces`) gives products extra top-level windows for detached panels: surface 0 is the main window, keys stay in one queue with `focused()`. Guests get it through the `Windows` capability (bit 10, granted opportunistically when the host can present windows), `GuestService::Window` (17) and input v2; `WasmPanelWindows` owns the windows. Hosts without windows (Linux, `--capture`, `--bench-*`, headless) omit it and products stay docked. |
 | **D-E28** | Sound effects through `IAudio` (`IllumoContext::audio`), implemented natively by `AudioDevice` over vendored miniaudio 0.11.25 (private to `Source/Audio`). Guests get it through the `Audio` capability (bit 11, granted only with an output; never for `--capture`/`--bench-*`) and `GuestService::Audio` (18, fire-and-forget, completions discarded); guests decode their own files with `AudioDecoder` and send only float samples, bounded per clip and per guest. Extends D-E27's capability pattern. |
+| **D-E31** | Programs own scenes; modules are gone. Each package is one WASM program that manages scenes; the engine has no module registry (`IModule`, `IModuleHost`, `IllumoContext::moduleHost`, required and optional registration, transitions and rollback are removed). `Illumo` runs a frame in phases (`beginUpdate`, `endUpdate`, `beginRender`, `endRender`), and IllumoRuntime's `RuntimeShell` puts the `DebugOverlay` (debug-tool builds; was `DebugModule`) and the one `WasmProgram` between them. In a guest, a `GuestProgram` owns a `SceneDirector` of `ProgramScene`s (`Illumo::Content`, mirrored in `IllumoGuestContent`), each with its own `SceneInstance`, camera state, render world and scene commands. Switches happen at a frame boundary (cut or cover) and keep the scene left, frozen, until the program releases it. The engine's per-frame `Scene` is renamed `DrawList`. Supersedes D-004 and D-E1; refines D-E4, D-E5, D-E9 and D-B1 (`docs/scene-programs-design.md`). |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |
@@ -2003,7 +2109,7 @@ disabled.
 | Agenda item | Status |
 |-------------|--------|
 | Render text / fonts | **Done** (FreeType + GLString / SplashText) |
-| Command line | **Done** (validated built-ins plus module-registered simulation, canvas, camera, ruleset, and file commands) |
+| Command line | **Done** (validated built-ins plus scene-registered simulation, canvas, camera, ruleset, and file commands) |
 | Console on GL screen | **Done** (token UI, advanced editing, measured caret, scrolling, full-help capacity test) |
 | More rulesets | **Done** — Wireworld live; 90/184 space-time |
 | Infinite 16×16 chunk canvas | **Done** — sparse signed-coordinate chunks with separate stored/counting masks, per-target candidates or dense 18×18 halos, bounded view, editing, camera, persistence, and tests |
@@ -2025,7 +2131,7 @@ From local code review / `docs/current-issues.md` (fix when touching related cod
 
 | # | Severity | Issue |
 |---|----------|--------|
-| 1 | ~~bug~~ | **Resolved and strengthened by D-E6:** optional rejection destroys the module immediately; required rejection rolls back accepted modules and fails startup; exceptions are contained. |
+| 1 | ~~bug~~ | **Resolved and strengthened by D-E6:** optional rejection destroys the module immediately; required rejection rolls back accepted modules and fails startup; exceptions are contained. (Modules are gone since D-E31: a program that fails to start fails the launch, and a debug overlay that fails is dropped.) |
 | 2 | ~~bug~~ | **Resolved 2026-08-06:** Wireworld left-paint uses a sticky brush selected with `1`/`H` (head), `2` (empty), `3`/`T` (tail), `4` (conductor); right-click still clears to empty. |
 | 3 | ~~bug~~ | **Resolved 2026-08-06:** Startup seed is ruleset-aware — GoL-family glider for binary rules; Wireworld plants a horizontal conductor with a head+tail electron. |
 
@@ -2064,9 +2170,9 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 - Native file dialogs and live OpenGL/fullscreen behavior still require manual
   smoke tests; headless MockBackend coverage does not prove them.
 - Deferred boundary work (do when it hurts): further CanvasView presentation/
-  upload separation, capability-oriented module contexts instead of the frozen bag
-  (D-E5), rename `Scene` → `FrameRenderList` only if the name causes real
-  confusion, logger global removal, and further capability-oriented contexts.
+  upload separation, capability-oriented contexts instead of the frozen bag
+  (D-E5), and logger global removal. The per-frame list's rename is done: it
+  is `DrawList` since D-E31.
 
 ### 8.4 Looks fine (do not “fix” as bugs)
 
@@ -2089,7 +2195,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 | Renderer ↔ backend | **D-R11:** `CreateOpenGLBackend` at composition; Renderer is `IBackend*`-only; Mock inject for tests |
 | Sparse sim + bounded view memory | Sparse simulation scales with stored and counted cells; mixed targets independently use candidates or halos, dense counted chunks use at most eight reusable workers, and presentation scales with the configured visible view |
 | MacroDefs + Windows.h | D-F1 deferred |
-| IllumoContext growth | Frozen; third module = explicit deps |
+| IllumoContext growth | Frozen (D-E5, refined by D-E31); a program or scene with different needs takes explicit deps |
 | Additional rule families | Add only when current Moore/elementary data forms cannot express a needed rule |
 | GPU/SYCL acceleration | Optional after bounded CPU parallel benchmark / product need; CPU sparse stepping is the production baseline |
 | File asset formats | `MeshLoader` imports OBJ to CPU `MeshData` behind a replaceable loader. `AssetManager` synchronously caches/enrolls immutable mesh resources by canonical path plus geometry options, while `MeshVisual` borrows handles; material binding, mesh hot reload, and game-object persistence remain future work. |
@@ -2126,7 +2232,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
     shared-library ABI work only for a real distribution requirement.
 14. Non-string uniforms / second real backend (OpenGL factory already at composition).
 15. ~~Data-driven rules and the F2 Ruleset Workshop — D-GC2; typed family and ruleset identity separation — D-GC3.~~
-16. Narrow `IllumoContext` into capability bags only when a third module needs different deps (D-E5).
+16. Narrow `IllumoContext` into capability bags only when a program or scene needs different deps (D-E5).
 
 ### Explicitly deferred (engine PDF + consensus)
 
@@ -2143,8 +2249,8 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
 1. **Reusable foundation, concrete consumers** — generalize Illumo around
    demonstrated project needs while keeping product policy downstream.
 2. **Ownership explicit** — Illumo owns system/runtime behavior; IllumoGame owns
-   only CA policy and supplies its module through a declarative factory; context
-   does not own.
+   only CA policy and runs as a WASM program that owns its scenes (D-E31);
+   context does not own.
 3. **Boundaries over cleverness** — abstract volatility (GLFW, GL, future compute); keep the stable sparse-domain/bounded-view split explicit.
 4. **Sim produces complete state; render observes** — double-buffer; no draw mid-generation.  
 5. **Tokens for draw submission** — enroll once, emit commands, backend executes.  
@@ -2176,7 +2282,7 @@ Resolved highlights (do not re-open without a new decision ID):
 - Token payload shape → D-R1  
 - Handles → D-R3  
 - Who emits tokens → D-R2  
-- Per-frame render-list role → D-E4; persistent scene hierarchy → D-E8
+- Per-frame render-list role → D-E4 (`DrawList` since D-E31); persistent scene hierarchy → D-E8
 - IllumoContext growth → D-E5  
 - Canvas domain vs view → D-C1/D-C2 superseded for production by D-C3
   (`SparseCellGrid` + bounded `CanvasView`); dense types are compatibility-only
@@ -2185,7 +2291,7 @@ Resolved highlights (do not re-open without a new decision ID):
 - Command queue overflow → D-R12  
 - Single production frame path → D-R13  
 - Canvas upload dirty rects → D-P1 / PBO path  
-- Module registration → D-E1  
+- Module registration → D-E1, superseded by D-E31 (programs own scenes)  
 - InputManager Game deps → D-E2  
 - EntityTable → D-E3 archived  
 - CPU color fade → **restored** (RGB display)  
@@ -2215,12 +2321,15 @@ Resolved highlights (do not re-open without a new decision ID):
 
 | Concern | Typical location |
 |---------|------------------|
-| Application runner / frame loop | `Illumo/Source/Engine/Application.cpp` |
-| Game definition / required module factory | `IllumoGame/Source/Game/IllumoGameApplication.cpp` |
+| Application runner (process, logger, CLI, relaunch) | `Illumo/Source/Engine/Application.cpp` |
+| Runtime frame loop, capture and bench | `Illumo/Source/Wasm/RuntimeShell.cpp`, `Illumo/Source/Wasm/RuntimeApplication.cpp` |
+| The runtime's program | `Illumo/Include/Illumo/Wasm/WasmProgram.h`, `Illumo/Source/Wasm/WasmProgram.cpp` |
 | Public library API | `Illumo/Include/Illumo/*` |
-| Host / services / modules | `Illumo/Source/Engine/Illumo.cpp` plus public Engine headers |
+| Host / services / frame phases / debug overlay | `Illumo/Source/Engine/Illumo.cpp`, `DebugOverlay.cpp` plus public Engine headers |
+| Programs and scenes | `Illumo/Include/Illumo/Content/ProgramScene.h`, `SceneDirector.h`, `IllumoGuest/Include/IllumoGuest/Program.h`, `SceneWorlds.h` |
+| CSim program (package entry) | `IllumoGame/Source/Wasm/GameApplication.cpp` |
 | Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
-| CA module / modes | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h` |
+| CA scenes / modes | `IllumoGame/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h` |
 | Sparse domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
 | Bounded world-space view + fade | `IllumoGame/Source/Game/CanvasView.*` |
 | Compatibility dense storage | `IllumoGame/Source/Game/CellGrid.*`, `Canvas.*` |
@@ -2244,7 +2353,9 @@ Resolved highlights (do not re-open without a new decision ID):
 - Do not make SYCL a hard dependency of Illumo or Game.  
 - Do not document R8-only presentation as current without verifying
   `CanvasView.cpp`, `RendererStyles.cpp`, and the active style binding.
-- Do not expand IllumoContext casually for a third module.  
+- Do not expand IllumoContext casually for one program or scene.  
+- Do not bring back a module registry or native products: each package is one
+  WASM program that manages its scenes (D-E31).
 
 ---
 
@@ -2256,6 +2367,9 @@ the first non-null request and log competing requests. Input callback queues are
 bounded and release polling uses frame edges. Console parsing preserves Windows
 paths on execution and callbacks detach before console destruction. Logger's
 unique process instance defaults to an executable-adjacent file.
+
+Note (2026-09-26): D-E31 removed the module registry. The runtime runs one
+program, and a program's `SceneDirector` keeps only the latest pending switch.
 
 GameVisual resources remain bound to their first renderer lifetime; foreign
 emission fails explicitly. Geometry truncation and command rejection mark the

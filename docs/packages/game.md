@@ -145,8 +145,8 @@ name is a rule package. Each merges into a candidate copy, so a package
 catalog that does not validate is skipped with a logged warning instead of
 stopping the game. `IllumoGame.Wasm.CatalogMerge` covers the order and the
 skip.
-The required-module factory loads the catalog once before constructing the menu
-or direct game module. Rulesets does not call platform APIs or discover files.
+The program's bootstrap loads the catalog once, before `createScenes` opens
+the title scene. Rulesets does not call platform APIs or discover files.
 
 F2 opens the separate in-game Ruleset Workshop; F1 remains the display and
 simulation settings menu. Both menus carry a family/ruleset pair; the rule
@@ -185,7 +185,7 @@ New simulation and the menu console command `play` open a dedicated canvas
 setup screen, independent of F1 configuration. It offers the rules catalog,
 infinite or wrapping boundaries, width and height in 16-cell increments, and
 empty or starter contents. Infinite mode disables dimensions while retaining
-the finite draft. Create passes validated canvas values to CellGameModule;
+the finite draft. Create passes validated canvas values to a new `CanvasScene`;
 Back or Escape discards the draft. Display and performance preferences are not
 part of this payload. The screen fits all rows, respects reduced menu motion,
 and consumes wheel input without changing selection or values. Glass cards,
@@ -195,7 +195,15 @@ bounce back), a spring crossfade on the boundary
 badge, and a live glider walking a 6x6 torus (`CellMotif`) match the main
 menu; reduced motion freezes the motif and snaps focus feedback.
 
-The title screen (`MainMenuModule`) runs Immigration Life behind its glass
+CSim is one program (`IllumoGameGuest` in
+`IllumoGame/Source/Wasm/GameApplication.cpp`, a `GuestProgram`) with two
+scenes (D-E31): "title" (`TitleScene`) and "canvas" (`CanvasScene`).
+`CSimScenes` opens the title, starts a new or loaded canvas (replacing a kept
+one), returns to the title and resumes. Returning to the title keeps the
+canvas, which does not simulate while kept, and the title then leads with a
+"Resume simulation" row. A new canvas opens at home zoom 0.5.
+
+The title screen (`TitleScene`) runs Immigration Life behind its glass
 panel at half zoom: a Gosper gun streams cyan gliders, coral acorns churn, and
 a deterministic generator launches gliders and spaceships in from the edges
 every 4.5 seconds (not under reduced motion). The world is reseeded past 1,400
@@ -395,10 +403,10 @@ no typeface and keeps the engine default font.
   hash probes. Overview snaps convert the sampled RGB in one pass instead of
   per-texel fade enrollment.
   The visual texel budget does not limit stored chunks or world cells.
-- `CellGameModule` dispatches the view on the World layer and the cursor,
+- `CanvasScene` dispatches the view on the World layer and the cursor,
   selection outline, inspector, splash, and configuration overlay on UI.
 
-## CellGameModule
+## CanvasScene
 
 EDIT / NORMAL; simulation uses `tps` x `speedFactor` and keeps at most one
 generation in flight on a persistent runner. The published grid is immutable
@@ -503,7 +511,7 @@ without it cues are silent but counted for tests. The WAV sources in
 `IllumoGame/Assets` are not tracked in git; a package staged without them is
 silent.
 
-That behavior is not restated per screen. `MainMenuModule`,
+That behavior is not restated per screen. `TitleScene`,
 `ConfigurationMenu`, `NewSimulationMenu`, and `RulesetWorkshopMenu` share
 `Illumo/Gui/GuiMenuShell`: `GuiEasing` curves and spring shapes,
 `GuiSpring`/`GuiSpringArray` damped springs tuned from the `GuiMotion` presets
@@ -519,8 +527,8 @@ constants, and `GameVisual` composition, so a new interface inherits the
 existing theming and animation. The title screen keeps its own slower entrance
 clock and per-item stagger.
 
-CSim draws its own mouse pointer (`SoftwareCursor`, owned by the guest
-`GameApplication` overlay so it survives module transitions) and hides the
+CSim draws its own mouse pointer (`SoftwareCursor`, owned by the program and
+drawn in its overlay, so it survives scene switches) and hides the
 system cursor through Display wire version 2. The arrow is built like the menu
 glass: a thin dark halo, a lit rim that runs cyan at the tip to violet at the
 tail, a deep glass body, and a soft glow around the whole edge. It leans against

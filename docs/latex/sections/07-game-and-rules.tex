@@ -5,10 +5,12 @@
 
 IllumoGame ships only as \texttt{IllumoGame.wasm}, played by the generic
 \texttt{IllumoRuntime.exe}. The whole product described in this chapter runs in
-that store: \symbolref{GuestModuleApplication} composes a guest-local
-\symbolref{IllumoContext}, so \symbolref{MainMenuModule},
-\symbolref{CellGameModule}, the menus and the workshop run unchanged. Product
-dialogs, file transfers, clipboard access and user-catalog writes go through
+that store as one program (D-E31): \texttt{IllumoGameGuest}
+(\pathref{IllumoGame/Source/Wasm/GameApplication.cpp}), a
+\symbolref{GuestProgram}, composes a guest-local \symbolref{IllumoContext} and
+runs two scenes, \texttt{title} (\symbolref{TitleScene}) and \texttt{canvas}
+(\symbolref{CanvasScene}), which hold the menus, the canvas and the workshop.
+Product dialogs, file transfers, clipboard access and user-catalog writes go through
 \symbolref{CSimPlatform}; a native implementation completes synchronously for
 the test oracle and the guest implementation completes on a later update.
 Saves, settings and user overlays live in the package storage directory. The
@@ -34,7 +36,24 @@ radii above 16 and lane failures use the serial kernels inside the update call. 
 and shadow casters into frame schema version 2; the host re-runs the shared
 shadow pass with the guest camera.
 
-\subsection{CellGameModule}
+\subsection{Title and canvas scenes (D-E31)}
+
+\symbolref{CSimScenes} (\pathref{IllumoGame/Source/Game/CSimScenes.*}) is
+CSim's scene flow over \texttt{IllumoContext::scenes}: it opens the title,
+starts a new or loaded canvas (releasing a kept one first), returns to the
+title and resumes. Returning to the title keeps the canvas, frozen:
+\texttt{CanvasScene::leave} drains the simulation, withdraws its console
+commands and input context and closes its overlays, so a kept canvas does not
+simulate. The title then leads with a \textbf{Resume simulation} row; resuming
+re-enters the canvas where it was and replays its entrance veil. A new canvas
+opens on its home view, centered at zoom 0.5. Returning to the title or
+resuming costs about 2\,ms; returning cost 5.2--5.8\,ms when each trip rebuilt
+the other screen.
+\symbolref{SimulatorSettings} reads, checks and writes every setting for both
+scenes. Each scene keeps its own Settings menu, and only one can be open
+because a scene's \texttt{leave} closes its overlays.
+
+\subsection{CanvasScene}
 
 Edit mode includes a bottom \textbf{Cell paint} drawer, initially closed as a
 round glass bubble peeking over the footer, with an up chevron and a
@@ -54,7 +73,7 @@ stays clamped;
 leaving Edit staggers the bubble before the bar, and both ease away without
 ringing. The canvas reservation follows the visible footer area. The bubble
 travels by its visible height plus the footer
-height before it is removed. Reduced UI motion snaps the transition. The module owns these ordinary
+height before it is removed. Reduced UI motion snaps the transition. The scene owns these ordinary
 GameVisuals on the existing UI layer.
 Camera navigation accepts finite world coordinates with absolute value at most
 $16(2^{63}-2^{32})$ per axis, reserving space for bounded cache arithmetic.
@@ -68,14 +87,14 @@ Elementary rules use background beyond representable X coordinates and omit
 unrepresentable children; a source row at maximum signed Y rejects advancement
 before changing cells or revision.
 
-Primary gameplay module. Owns a \symbolref{CellContext} and an enum
+The canvas scene. Owns a \symbolref{CellContext} and an enum
 \symbolref{CellState}:
 \begin{center}
 \texttt{NORMAL} $\mid$ \texttt{EDIT} $\mid$ \texttt{EXIT}
 \end{center}
 
 \begin{statusbox}
-Mode handling is an \textbf{enum + switch} inside the module, not the older
+Mode handling is an \textbf{enum + switch} inside the scene, not the older
 class-per-state hierarchy (archived under \pathref{archive/old-states/}).
 \texttt{E} toggles EDIT/NORMAL and shows the corner \texttt{ModeBadge}: a glass
 pill mirroring the settings button that drops in as a bead, stretches into a
@@ -122,13 +141,14 @@ topology change drains simulation and starts a fresh centered world. The
 overlay uses larger high-contrast labels, readable ruleset names, keycap
 hints, and a short explanation for the selected setting. Pressing Q or
 activating Exit opens a confirmation overlay; confirming requests window
-closure and leaves normal engine shutdown to the App main loop. A short eased
+closure and leaves normal engine shutdown to the runtime loop. A short eased
 reveal, staggered row fade, gliding selection highlight and tab pill, and
 value-change pulse are advanced from frame delta time; input remains active
 throughout. Every tab fits the fitted panel at the release window size; in a
 smaller window the rows scroll, the wheel scrolls without changing selection,
 and keyboard navigation brings selection into view. Rendering and mouse
-conversion share a fitted UI scale. Main-menu F1 opens the same overlay.
+conversion share a fitted UI scale. The title screen's F1 opens its own
+instance of the same menu.
 
 All menus share a ``living glass'' language (D-R26): soft-shadowed glass
 panels and cards with lit rims, gradient faces, a breathing glow and a
@@ -207,16 +227,18 @@ New simulation and the menu console command \texttt{play} open a dedicated canva
 setup screen, independent of F1 configuration. It offers the rules catalog,
 infinite or wrapping boundaries, width and height in 16-cell increments, and
 empty or starter contents. Infinite mode disables dimensions while retaining
-the finite draft. Create passes validated canvas values to CellGameModule;
-Back or Escape discards the draft. Display and performance preferences are not
+the finite draft. Create starts a new \symbolref{CanvasScene} with the
+validated canvas values, replacing any kept canvas; Back or Escape discards the
+draft. Display and performance preferences are not
 part of this payload. The screen fits all rows, respects reduced menu motion,
 and consumes wheel input without changing selection or values. Glass cards,
 spring-driven focus lighting, the liquid selection drop, springy directional
 value nudges, a crossfading boundary badge, and a live glider on a 6x6 torus match
 the main menu; reduced motion freezes the motif and snaps focus feedback.
 
-Entering a new or loaded cell canvas plays a 0.9-second cellular wave. A
-module-owned, screen-space GameVisual veil tiles the viewport with cells of
+Entering a new or loaded cell canvas, or resuming a kept one, plays a
+0.9-second cellular wave. A scene-owned, screen-space GameVisual veil tiles the
+viewport with cells of
 roughly 44 virtual pixels, opaque and dark at first. A wave spreads from the
 center with a deterministic, per-cell ragged front: each cell fires cyan as the
 wave reaches it (with a soft halo), cools to violet, then shrinks to a dot and
@@ -226,7 +248,8 @@ settings and confirmation dialogs. The transition never changes camera or
 simulation state and does not block input. Reduced menu motion and the 3D
 diagnostic view skip it from the first frame. Returning to the main menu runs
 the wave backwards over 0.48 seconds (cells regrow from the edges inward, fire,
-and darken until the canvas is covered), then submits one module transition. Repeated return
+and darken until the canvas is covered), then asks \symbolref{CSimScenes} to
+return to the title, which keeps the canvas. Repeated return
 requests do not restart it; product input is consumed during the accepted exit,
 while the global console retains its input. Reduced motion returns immediately.
 Both the pause-menu action and the console menu command use this path.
@@ -252,7 +275,7 @@ Selection drags finish on mouse release, even if Shift is released first.
 Painting, erasing, and leaving EDIT clear the selection but preserve the
 copied pattern. Clipboard hotkeys act only in EDIT; explicit console pattern
 commands remain available independently of mode. Paint strokes belong to
-the module and stop across mode changes and modal input interruptions.
+the scene and stop across mode changes and modal input interruptions.
 The versioned JSON catalog describes every shipped transition and palette.
 Schema v3 supports \texttt{life\_like}, \texttt{generations},
 \texttt{moore\_table}, \texttt{cyclic}, \texttt{species\_life},
@@ -299,17 +322,18 @@ data: \pathref{IllumoGame/Scenes/render3d-test.ilsc}, an \texttt{.ilsc} format 2
 document (ground, three axes, an orbiting cube with a wire frame and a child)
 staged into the package as \pathref{Scenes/render3d-test.ilsc} and preloaded
 by the guest; the native oracle stages it beside \texttt{IllumoGameTests}.
-\symbolref{CellGameModule} reads it through
+\symbolref{CanvasScene} reads it through
 \texttt{AssetManager::assetSource()}, instantiates it with
 \symbolref{SceneInstance}, and animates only the \texttt{orbit} and
 \texttt{child} nodes by id; new geometry belongs in the scene file, not in the
-module. \texttt{IllumoGameCore} links \texttt{Illumo::Content} and the guest
+scene's code. \texttt{IllumoGameCore} links \texttt{Illumo::Content} and the guest
 links \texttt{IllumoGuestContent}. Simulation and UI continue normally;
 disabling the flag restores the canvas immediately.
 
 \subsection{Domain console commands and persistence}
-\symbolref{CellGameModule} registers domain commands through
-\symbolref{CommandRegistry}; Services remains free of Game types. Save always
+\symbolref{CanvasScene} registers domain commands through
+\symbolref{CommandRegistry} while it is active and withdraws them when it
+leaves for the title; Services remains free of Game types. Save always
 writes version 4 sparse files with magic/version, family, ruleset, camera, topology,
 and sorted 16$\times$16 canonical chunk records. Load validates temporary
 state before mutation, accepts versions 4, 3, and 2 plus the prior dense format,
@@ -582,8 +606,9 @@ catalog pair beside the executable, in the working directory, or in its
 working-directory \pathref{families.user.json} and
 \pathref{rulesets.user.json}; later matching IDs replace earlier definitions.
 Invalid or unreadable base files fall through, and malformed overlays preserve
-the active catalog. The module factory loads the catalog once before
-menu/direct-game construction. The engine's configuration path supplies
+the active catalog. Only the native test oracle loads catalogs this way; the
+package's program loads them in its bootstrap, before it creates its scenes
+(below). The engine's configuration path supplies
 executable location; Rulesets has no filesystem or native API dependency.
 Callers use the loader for files and \texttt{loadFromText} for text (D-GC1,
 D-GC2, D-GC4).
