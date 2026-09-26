@@ -490,11 +490,14 @@ public:
 private:
   bool scriptFinished() const
   {
-    return m_benchScriptLine >= m_bench.script.size() && m_benchWaitFrames == 0;
+    return m_scriptBegun ||
+           (m_benchScriptLine >= m_bench.script.size() && m_benchWaitFrames == 0);
   }
   // Runs script lines in order: "@wait n" pauses n frames, "@key Name"
-  // presses one key, and any other line is a console command queued once it
-  // exists. An unknown key or directive fails the run (false with *error).
+  // presses one key, "@begin" starts counting (warm-up, timed or capture
+  // frames) while the lines after it keep running, so a benchmark can time a
+  // transition; any other line is a console command queued once it exists.
+  // An unknown key or directive fails the run (false with *error).
   bool feedScript(std::string* error)
   {
     if (ic == nullptr || ic->commandRegistry == nullptr ||
@@ -532,6 +535,11 @@ private:
         ++m_benchScriptLine;
         m_benchWaitFrames = 2;
         break;
+      }
+      if (words.front() == "@begin") {
+        m_scriptBegun = true;
+        ++m_benchScriptLine;
+        continue;
       }
       if (words.front().starts_with("@")) {
         *error = "Unknown script directive " + words.front();
@@ -706,6 +714,8 @@ private:
   std::uint64_t m_scriptCommandWaitFrames = 0;
   std::uint64_t m_benchUpdates = 0;
   std::vector<double> m_benchFrameIntervals;
+  // The script reached @begin: counting started while later lines still run.
+  bool m_scriptBegun = false;
   std::vector<double> m_benchUpdateMilliseconds;
   std::vector<double> m_benchRenderMilliseconds;
   std::vector<double> m_benchPresentMilliseconds;
@@ -1119,7 +1129,8 @@ CreateIllumoApplication()
     { "--capture-script",
       "file",
       "GuestCaptureScript",
-      "Console lines, @key and @wait run before --capture-frame counts" },
+      "Console lines, @key and @wait run before --capture-frame counts "
+      "(from @begin, if present)" },
     { "--package",
       "path",
       "GuestPackage",
@@ -1166,7 +1177,8 @@ CreateIllumoApplication()
     { "--bench-script",
       "file",
       "GuestBenchScript",
-      "Console lines queued in order before timing starts" }
+      "Console lines, @key and @wait run before warm-up and timing start "
+      "(from @begin, if present, with later lines still running)" }
   };
   application.applyDefaults = prepareRuntime;
   application.createRequiredModule = createGuestModule;

@@ -8,7 +8,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 
 | M | State | Notes |
 |---|---|---|
-| M0 | not started | Baseline and branch |
+| M0 | done | Baseline in design section 13; `@begin` bench directive |
 | M1 | not started | Engine `ProgramScene`, `SceneDirector` |
 | M2 | not started | Guest `GuestProgram`; IllMeshViewer and IllEd ported |
 | M3 | not started | Frame schema v8: a world per scene |
@@ -186,3 +186,7 @@ returns nothing outside `docs/history` and archives.
 - 2026-09-26: the owner said to commit and go ahead. Pending work committed on
   `host-render-world`; branch `scene-programs` created; the recommended
   answers to O1-O7 stand.
+- 2026-09-26, M0: baseline recorded (design section 13). Switching modules
+  costs one 4.4-5.2 ms guest update each way, and a kept canvas would cost
+  under 10 MB. Bench and capture scripts gained `@begin`, so a switch can be
+  timed.

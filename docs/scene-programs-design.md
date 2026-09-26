@@ -473,3 +473,54 @@ These are summarised here; the tracker has the detail.
   bounded by the world limit. M0 measures the baseline.
 - **Uncommitted work on the current branch** (M9 docs, UI performance) must
   land or be shelved before M1, so the refactor starts from a clean baseline.
+
+## 13. Validation results
+
+### M0 (2026-09-26, branch `scene-programs` at `51a3b635`)
+
+Release `IllumoRuntime`, the owner's host settings (1552x877, MSAA 4, vsync
+off, uncapped), CSim storage with the frame cap off.
+
+- **Harness:** a bench or capture script may now contain `@begin`. Counting
+  (warm-up, timed or capture frames) starts there while the lines after it
+  keep running, so a benchmark can time a transition.
+- **Transition hitch, 5 runs each:** a 3,000-frame window opened just before
+  the switch; frame interval maximum, with the host's longest guest update in
+  brackets.
+
+  | Switch | Worst frame | Guest update |
+  |---|---|---|
+  | Title to canvas (Create) | 5.1-5.4 ms | 4.4-4.9 ms |
+  | Canvas to title (`menu`) | 5.2-5.8 ms | 4.4-5.2 ms |
+
+  The p50 frame is 0.5-0.75 ms. Nearly all of each hitch is the module
+  change inside the guest update: the old module's `Exit` and the new one's
+  `Start`, including the title's background world.
+- **Memory** (private bytes, one run; working set in brackets):
+
+  | Point | Private | Working set |
+  |---|---|---|
+  | Title screen | 326 MB | 221 MB |
+  | Canvas | 331 MB | 224 MB |
+  | Back on the title | 322 MB | 219 MB |
+
+  WASM linear memory never shrinks, so the return figure is the high-water
+  mark less what the host released. The canvas costs under 10 MB, so keeping
+  one alive is cheap.
+- **Frame benches** (the interleaved A/B from the UI performance work, 5 runs,
+  medians, this build):
+
+  | Scene | FPS | Guest frame |
+  |---|---|---|
+  | Paused canvas | 1,852 | 0.07 ms |
+  | Settled main menu | 899 | 0.15 ms |
+  | New Simulation | 1,041 | 0.30 ms |
+  | Settings overlay | 645 | 0.32 ms |
+  | Ruleset Workshop | 1,508 | 0.17 ms |
+
+- **Allocation gates:** `IllumoGame.Wasm.PackageFrameAllocations` (paused 0,
+  running 1), `IllumoGame.Wasm.LaneAllocations`, `SteadyTextAllocations` and
+  the scene graph gates all pass (17 of 17 `Alloc` tests).
+- **Screenshots:** references of IllEd and IllMeshViewer at frame 600, and
+  of CSim's settled title and paused canvas at frame 4,000. They are kept
+  with the session's measurement files, not in the repository.
