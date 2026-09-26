@@ -78,6 +78,8 @@ void
 registerInstancingTests(IllumoTestRegistry& registry);
 void
 registerRenderWorldTests(IllumoTestRegistry& registry);
+void
+registerVisualStoreTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -118,6 +120,7 @@ createRegistry()
   registerAudioTests(registry);
   registerInstancingTests(registry);
   registerRenderWorldTests(registry);
+  registerVisualStoreTests(registry);
   return registry;
 }
 

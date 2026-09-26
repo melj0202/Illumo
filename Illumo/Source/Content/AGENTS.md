@@ -39,6 +39,13 @@ D-E24 and D-E26.
   calls `invalidateSnapshots()` before reconfiguring attachments, and shares
   one immutable unit mesh per primitive kind. Missing assets become
   placeholders with a warning, never a failed load.
+- With `setRenderWorld` bound (D-E30; products pass
+  `IllumoContext::renderWorld`), every mesh-asset visual is also an
+  `IRenderWorld` instance and its `MeshVisual` stays attached but hidden, for
+  bounds, picking and the fallback. `Record::world` runs parallel to
+  `Record::visuals`: anything that rebuilds visuals must unbind and rebind
+  their instances. Ids come from `nextRenderWorldId()` because scenes share
+  a world. `update()` sends only changed transforms and visibility.
 - Loads collect references (`collectSceneFetches`), make them readable, then
   instantiate: `IAssetSource` reads stay synchronous.
 - No recursion: tree walks, dependency order (Kahn) and flattening are

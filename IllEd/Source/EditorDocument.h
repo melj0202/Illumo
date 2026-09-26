@@ -54,6 +54,9 @@ public:
   // placeholders), keeping the document and its history.
   void setAssetManager(AssetManager* assets);
   void setRenderer(Renderer* renderer);
+  // Scene meshes draw through `world` when the host keeps one (nullptr
+  // draws them as MeshVisuals); kept across scene rebuilds.
+  void setRenderWorld(IRenderWorld* world);
 
   // An empty, clean document with no location and no history.
   void clear();
@@ -199,6 +202,7 @@ public:
 private:
   AssetManager* m_assets = nullptr;
   Renderer* m_renderer = nullptr;
+  IRenderWorld* m_renderWorld = nullptr;
   std::unique_ptr<SceneInstance> m_scene;
   uint64_t m_sceneGeneration = 0;
   EditorHistory m_history;

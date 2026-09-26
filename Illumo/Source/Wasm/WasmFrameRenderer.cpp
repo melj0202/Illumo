@@ -1,4 +1,6 @@
+#include "WasmVisuals.h"
 #include <Illumo/Foundation/AxisAlignedBounds3.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
@@ -57,6 +59,8 @@ struct WasmFrameRenderer::State
     // Cubemaps are sampled only by Skybox batches and never written.
     bool cubemap = false;
     TextureHandle handle{};
+    // LoadFont atlases: the font whose glyphs host visuals lay out.
+    std::shared_ptr<Font> font;
   };
   // A retained host mesh. The table shares it as const; its upload state
   // changes while bytes arrive, so that state lives behind an owned pointer.
@@ -194,6 +198,9 @@ struct WasmFrameRenderer::State
     float width = 0.0f;
     float height = 0.0f;
     std::uint64_t revision = 0;
+    // What panel windows compare: advances with the guest revision and with
+    // changes to the visuals its composition lists (frame v7).
+    std::uint64_t presented = 0;
     std::vector<GuestBatch> batches;
     std::vector<PreparedBatch> payloads;
     std::vector<Slot> slots;
@@ -209,6 +216,11 @@ struct WasmFrameRenderer::State
     , world(*this, GuestLayer::World)
     , ui(*this, GuestLayer::Ui)
   {
+    // Frame v7 decode reuses these; typical frames never grow them.
+    for (GuestFrame* reused : { &frame, &proposedFrame }) {
+      reused->visualOperations.reserve(64);
+      reused->compositions.reserve(GuestFrame::MaximumSurfaces + 1u);
+    }
   }
   ~State()
   {
@@ -1002,6 +1014,50 @@ struct WasmFrameRenderer::State
     if (!planWorld(proposed.worldOperations, worldMeshesScratch)) {
       return false;
     }
+    // Frame v7: visuals and compositions, checked against this frame's
+    // batches and surfaces before anything changes.
+    struct VisualHost final : WasmVisuals::Host
+    {
+      VisualHost(State& value, const GuestFrame& frame)
+        : state(value)
+        , proposed(frame)
+      {
+      }
+      bool resolveTexture(const GuestResourceId& id,
+                          WasmVisuals::Texture& out) override
+      {
+        std::shared_ptr<const Texture> texture = state.textures.resolve(id);
+        if (!texture || texture->cubemap) {
+          return false;
+        }
+        out.handle = texture->handle;
+        out.font = texture->font;
+        out.lease = std::move(texture);
+        return true;
+      }
+      const std::vector<GuestBatch>* targetBatches(
+        std::uint32_t target) override
+      {
+        if (target == 0) {
+          return &proposed.batches;
+        }
+        for (const GuestSurfaceFrame& surface : proposed.surfaces) {
+          if (surface.surface == target) {
+            if (!surface.same) {
+              return &surface.batches;
+            }
+            const Surface* existing = state.findSurface(target);
+            return existing != nullptr ? &existing->batches : nullptr;
+          }
+        }
+        return nullptr;
+      }
+      State& state;
+      const GuestFrame& proposed;
+    } visualHost(*this, proposed);
+    if (!visuals.plan(proposed, visualHost, error)) {
+      return false;
+    }
     // Validation/lease acquisition completes before mutating renderer state.
     if (growth > Budget::Maximum - budget->bytes ||
         replacementPeak > Budget::Maximum - budget->bytes - growth) {
@@ -1050,6 +1106,7 @@ struct WasmFrameRenderer::State
         content->width = surface.width;
         content->height = surface.height;
         content->revision = surface.revision;
+        content->presented += 1;
         content->batches = std::move(surface.batches);
         content->payloads = std::move(plan.prepared);
         content->slots = std::move(plan.slots);
@@ -1063,6 +1120,21 @@ struct WasmFrameRenderer::State
     surfaces = std::move(nextSurfaces);
     applyMeshWrites(proposed, writeTargets);
     applyWorld(proposed.worldOperations, worldMeshesScratch);
+    visuals.apply(proposed);
+    worldComposed = visuals.compositionHasWorld();
+    // A surface replays when its composition or a listed visual changed, or
+    // when this frame writes a texture one of those visuals draws.
+    for (const std::unique_ptr<Surface>& surface : surfaces) {
+      bool changed = visuals.targetChanged(surface->id);
+      for (std::size_t index = 0; !changed && index < preparedWrites.size();
+           ++index) {
+        changed =
+          visuals.targetUsesTexture(surface->id, preparedWrites[index].get());
+      }
+      if (changed) {
+        surface->presented += 1;
+      }
+    }
     // Swap rather than move: the replaced live state becomes next frame's
     // scratch and keeps its capacity (its references drop on release).
     std::swap(frame, proposed);
@@ -1113,6 +1185,8 @@ struct WasmFrameRenderer::State
     }
     counters.worldOperations = frame.worldOperations.size();
     counters.worldInstances = worldInstances.size();
+    counters.visualOperations = frame.visualOperations.size();
+    counters.visuals = visuals.visualCount();
   }
 
   // The mesh a batch draws from: its retained mesh or its per-frame slot.
@@ -1213,6 +1287,11 @@ struct WasmFrameRenderer::State
     if (target != &renderer || lifetime.expired()) {
       return;
     }
+    // A composition that places the world draws it from this layer instead
+    // of as its own drawable, so its shadow work comes through here too.
+    if (worldComposed && !retired) {
+      renderWorld->CollectShadowCasters(target);
+    }
     for (const GuestShadowCaster& caster : frame.shadowCasters) {
       Renderer::ShadowCasterDesc desc;
       desc.boundsMin = caster.boundsMin;
@@ -1233,6 +1312,9 @@ struct WasmFrameRenderer::State
     if (target != &renderer || lifetime.expired() || !shadow.active ||
         !ensureUploads()) {
       return;
+    }
+    if (worldComposed && !retired) {
+      renderWorld->AppendShadowCommands(target);
     }
     glm::mat4 lightSpace(1.0f);
     std::memcpy(glm::value_ptr(lightSpace),
@@ -1393,19 +1475,72 @@ struct WasmFrameRenderer::State
         return true;
       }
     }
+    if (visuals.hasComposition(surface.id)) {
+      // Frame v7: the surface's visuals and batch ranges, in order.
+      struct SurfacePainter final : WasmVisuals::Painter
+      {
+        SurfacePainter(State& value, Surface& owner)
+          : state(value)
+          , surface(owner)
+        {
+        }
+        void batches(std::uint32_t first, std::uint32_t count) override
+        {
+          for (std::uint32_t index = first; !failed && index < first + count;
+               ++index) {
+            failed = !state.drawSurfaceBatch(surface, index);
+          }
+        }
+        void world() override {}
+        State& state;
+        Surface& surface;
+        bool failed = false;
+      } painter(*this, surface);
+      visuals.draw(renderer, surface.id, GuestLayer::Ui, nullptr, painter);
+      return true;
+    }
     for (std::size_t index = 0; index < surface.batches.size(); ++index) {
-      const GuestBatch& batch = surface.batches[index];
-      const PreparedBatch& payload = surface.payloads[index];
-      const MeshHandle mesh =
-        payload.retained
-          ? payload.retained->upload->handle
-          : surface.pools[surface.slots[index].pool][surface.slots[index].index]
-              .handle;
-      if (!bindBatchStyle(batch)) {
-        renderer.reportFrameError("Guest surface style rejected");
+      if (!drawSurfaceBatch(surface, index)) {
         return true;
       }
-      appendFlat(batch, payload, mesh, surface.width, surface.height);
+    }
+    return true;
+  }
+
+  bool drawSurfaceBatch(Surface& surface, std::size_t index)
+  {
+    const GuestBatch& batch = surface.batches[index];
+    const PreparedBatch& payload = surface.payloads[index];
+    const MeshHandle mesh =
+      payload.retained
+        ? payload.retained->upload->handle
+        : surface.pools[surface.slots[index].pool][surface.slots[index].index]
+            .handle;
+    if (!bindBatchStyle(batch)) {
+      renderer.reportFrameError("Guest surface style rejected");
+      return false;
+    }
+    appendFlat(batch, payload, mesh, surface.width, surface.height);
+    return true;
+  }
+
+  // Draws one main-frame batch after the texture writes ordered before it.
+  bool drawBatch(std::size_t index)
+  {
+    const GuestBatch& batch = frame.batches[index];
+    appendWrites(index);
+    const PreparedBatch& payload = payloads[index];
+    const MeshHandle mesh = batchMesh(index);
+    if (!bindBatchStyle(batch)) {
+      renderer.reportFrameError("Guest frame style rejected");
+      return false;
+    }
+    if (batch.style == GuestBatchStyle::LitMesh) {
+      appendLitMesh(batch, mesh);
+    } else if (batch.style == GuestBatchStyle::Skybox) {
+      appendSkybox(batch, payload, mesh);
+    } else {
+      appendFlat(batch, payload, mesh, frame.width, frame.height);
     }
     return true;
   }
@@ -1421,27 +1556,40 @@ struct WasmFrameRenderer::State
     if (!ensureUploads()) {
       return true;
     }
-    for (std::size_t index = 0; index < frame.batches.size(); ++index) {
-      const GuestBatch& batch = frame.batches[index];
-      if (batch.layer != layer) {
-        continue;
+    if (visuals.hasComposition(0) && !retired) {
+      // Frame v7: this layer's visuals, batch ranges and world, in order.
+      struct MainPainter final : WasmVisuals::Painter
+      {
+        MainPainter(State& value, GuestLayer drawn)
+          : state(value)
+          , layer(drawn)
+        {
+        }
+        void batches(std::uint32_t first, std::uint32_t count) override
+        {
+          for (std::uint32_t index = first; !failed && index < first + count;
+               ++index) {
+            if (state.frame.batches[index].layer == layer) {
+              failed = !state.drawBatch(index);
+            }
+          }
+        }
+        void world() override
+        {
+          state.renderWorld->AppendCommands(&state.renderer);
+        }
+        State& state;
+        GuestLayer layer;
+        bool failed = false;
+      } painter(*this, layer);
+      visuals.draw(
+        renderer, 0, layer, frame.hasCamera ? &frame.camera : nullptr, painter);
+    } else {
+      for (std::size_t index = 0; index < frame.batches.size(); ++index) {
+        if (frame.batches[index].layer == layer && !drawBatch(index)) {
+          return true;
+        }
       }
-      appendWrites(index);
-      const PreparedBatch& payload = payloads[index];
-      const MeshHandle mesh = batchMesh(index);
-      if (!bindBatchStyle(batch)) {
-        renderer.reportFrameError("Guest frame style rejected");
-        return true;
-      }
-      if (batch.style == GuestBatchStyle::LitMesh) {
-        appendLitMesh(batch, mesh);
-        continue;
-      }
-      if (batch.style == GuestBatchStyle::Skybox) {
-        appendSkybox(batch, payload, mesh);
-        continue;
-      }
-      appendFlat(batch, payload, mesh, frame.width, frame.height);
     }
     if (layer == GuestLayer::Ui) {
       appendWrites(frame.batches.size());
@@ -1549,6 +1697,10 @@ struct WasmFrameRenderer::State
   std::unordered_map<std::uint32_t, WorldInstance> worldInstances;
   std::unordered_map<std::uint32_t, std::size_t> worldMaterialUsers;
   WorldPlan worldPlan;
+  // Frame v7: host-retained visuals, and whether the main composition places
+  // the render world (which then draws from the World layer, not on its own).
+  WasmVisuals visuals{ renderer };
+  bool worldComposed = false;
   std::size_t nextWrite = 0;
   std::uint64_t uploadedSerial = 0;
   std::map<std::uint32_t, RenderStyleHandle> derivedStyles;
@@ -1575,6 +1727,31 @@ WasmFrameRenderer::createTexture(std::span<const std::byte> pixels,
                                  std::uint32_t height,
                                  std::uint32_t channels,
                                  bool linear)
+{
+  return createTexture(pixels, width, height, channels, linear, nullptr);
+}
+
+GuestResourceId
+WasmFrameRenderer::createFontAtlas(const std::shared_ptr<Font>& font)
+{
+  if (!font || !font->isValid()) {
+    return {};
+  }
+  return createTexture(std::as_bytes(std::span(font->getAtlasPixels())),
+                       static_cast<std::uint32_t>(font->getAtlasWidth()),
+                       static_cast<std::uint32_t>(font->getAtlasHeight()),
+                       4,
+                       true,
+                       font);
+}
+
+GuestResourceId
+WasmFrameRenderer::createTexture(std::span<const std::byte> pixels,
+                                 std::uint32_t width,
+                                 std::uint32_t height,
+                                 std::uint32_t channels,
+                                 bool linear,
+                                 std::shared_ptr<Font> font)
 try {
   State& state = *m_state;
   const std::uint64_t bytes =
@@ -1609,6 +1786,10 @@ try {
     state.error = "Guest texture allocation failed";
     state.warn(state.error);
     return {};
+  }
+  if (font) {
+    font->adoptTextureHandle(&state.renderer, texture->handle);
+    texture->font = std::move(font);
   }
   return state.textures.insert(std::move(texture));
 } catch (const std::exception& exception) {
@@ -1777,8 +1958,10 @@ WasmFrameRenderer::dispatch(Scene& scene)
     m_state->renderer.setNextWorldViewProjection(m_state->frame.camera);
   }
   // Host-owned world objects draw before the frame's world batches, which
-  // keep today's overlay order on top of them.
-  if (!m_state->retired && !m_state->lifetime.expired()) {
+  // keep today's overlay order on top of them, unless a composition places
+  // them (frame v7).
+  if (!m_state->retired && !m_state->lifetime.expired() &&
+      !m_state->worldComposed) {
     scene.AddDrawable(m_state->renderWorld.get(), RenderLayerId::World);
   }
   scene.AddDrawable(&m_state->world, RenderLayerId::World);
@@ -1790,7 +1973,7 @@ WasmFrameRenderer::surfaces() const
   std::vector<WasmSurfaceContent> result;
   for (const std::unique_ptr<State::Surface>& surface : m_state->surfaces) {
     result.push_back(
-      { surface->id, surface->width, surface->height, surface->revision });
+      { surface->id, surface->width, surface->height, surface->presented });
   }
   return result;
 }
@@ -1814,6 +1997,8 @@ WasmFrameRenderer::retire()
   m_state->renderWorld = std::make_unique<RenderWorld>();
   m_state->worldInstances.clear();
   m_state->worldMaterialUsers.clear();
+  m_state->visuals.clear();
+  m_state->worldComposed = false;
 }
 const std::string&
 WasmFrameRenderer::error() const

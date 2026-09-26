@@ -25,11 +25,12 @@ public:
   RecordedCommandList(RecordedCommandList&&) = delete;
   RecordedCommandList& operator=(RecordedCommandList&&) = delete;
 
-  // Empties the list for a new recording.
+  // Empties the list for a new recording. Matrix slots are kept for reuse,
+  // so re-recording a list of the same shape allocates nothing.
   void clear()
   {
     m_commands.clear();
-    m_matrices.clear();
+    m_matrixCount = 0;
     m_failed = false;
     ++m_revision;
   }
@@ -50,7 +51,11 @@ public:
   // A copy of a 4x4 matrix whose address stays valid until clear().
   const float* retainMatrix(const float* value)
   {
-    std::array<float, 16>& retained = m_matrices.emplace_back();
+    // A deque never moves its elements, so earlier addresses stay valid.
+    if (m_matrixCount == m_matrices.size()) {
+      m_matrices.emplace_back();
+    }
+    std::array<float, 16>& retained = m_matrices[m_matrixCount++];
     for (size_t index = 0; index < retained.size(); ++index) {
       retained[index] = value[index];
     }
@@ -67,6 +72,7 @@ public:
 private:
   std::vector<RenderCommand> m_commands;
   std::deque<std::array<float, 16>> m_matrices;
+  size_t m_matrixCount = 0;
   size_t m_ceiling;
   bool m_failed = false;
   uint64_t m_revision = 0;

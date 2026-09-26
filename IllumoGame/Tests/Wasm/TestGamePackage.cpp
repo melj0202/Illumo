@@ -36,7 +36,6 @@
 // lane workers run on other threads, so neither is counted here.
 static thread_local bool g_countAllocations = false;
 static thread_local std::size_t g_allocations = 0;
-
 void*
 operator new(std::size_t size)
 {
@@ -158,10 +157,13 @@ class CanvasObservingBackend final : public MockBackend
 {
 public:
   bool canvasDrawn = false;
-  // 3D test mode: draws inside the shared shadow pass and lit-mesh draws.
+  // 3D test mode: draws inside the shared shadow pass, lit-mesh draws, and
+  // instanced draws of the host render world (inside executed lists).
   ShaderHandle litShader{};
+  ShaderHandle worldShader{};
   std::size_t shadowDraws = 0;
   std::size_t litDraws = 0;
+  std::size_t worldDraws = 0;
   TextureHandle CreateTexture(const unsigned char* data,
                               int width,
                               int height,
@@ -177,6 +179,21 @@ public:
   }
   void PushToCommandQueue(RenderCommand command) override
   {
+    if (command.commandType == CommandType::ExecuteList &&
+        command.executeList.list != nullptr) {
+      for (std::size_t index = 0; index < command.executeList.list->size();
+           ++index) {
+        observe(command.executeList.list->at(index));
+      }
+    } else {
+      observe(command);
+    }
+    MockBackend::PushToCommandQueue(command);
+  }
+
+private:
+  void observe(const RenderCommand& command)
+  {
     if (command.commandType == CommandType::SetTexture &&
         command.bindTexture.slot == 0) {
       m_bound = command.bindTexture.handle;
@@ -184,6 +201,12 @@ public:
       m_shader = command.bindShader.handle;
     } else if (command.commandType == CommandType::SetFramebuffer) {
       m_offscreen = command.bindFramebuffer.handle.isValid();
+    } else if (command.commandType == CommandType::DrawIndexedInstanced) {
+      if (m_offscreen) {
+        ++shadowDraws;
+      } else if (m_shader == worldShader) {
+        ++worldDraws;
+      }
     } else if (command.commandType == CommandType::DrawIndexed) {
       if (m_offscreen) {
         ++shadowDraws;
@@ -195,10 +218,8 @@ public:
         canvasDrawn = true;
       }
     }
-    MockBackend::PushToCommandQueue(command);
   }
 
-private:
   TextureHandle m_canvas{};
   TextureHandle m_bound{};
   ShaderHandle m_shader{};
@@ -462,12 +483,14 @@ gamePackage()
            "Guest accepts a host close request");
   game.Exit();
 
-  // 3D render test mode: persisted guest settings enable it. SceneGraph and
-  // MeshVisual run in the guest; the host re-runs the shared shadow pass from
-  // the frame's casters and world camera, then draws the lit meshes.
+  // 3D render test mode: persisted guest settings enable it. The scene's
+  // meshes are host render world instances (HostRender, frame schema v6):
+  // the host fits the shared shadow pass to them and draws them instanced.
   std::ofstream(files.storage / "envvars.json", std::ios::binary)
     << "{\n \"render3dTest\": \"1\"\n}\n";
   mock.litShader = renderer.getStyle(RenderStyleId::LitMesh)->shaderHandle;
+  mock.worldShader =
+    renderer.getStyle(RenderStyleId::LitMeshInstanced)->shaderHandle;
   WasmGameModule world(
     readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(), {}, {}, files);
   testTrue(counters,
@@ -477,6 +500,7 @@ gamePackage()
   pumpUntil(world, [&]() { return ++frames > 30; });
   mock.shadowDraws = 0;
   mock.litDraws = 0;
+  mock.worldDraws = 0;
   for (int pass = 0; pass < 2; ++pass) {
     world.Update(1.0 / 60.0);
     Scene worldScene(&window, &camera);
@@ -485,15 +509,17 @@ gamePackage()
     renderer.RenderScene(&worldScene, &camera);
     renderer.EndFrame();
   }
-  std::printf("3D frame: %zu shadow draws, %zu lit draws\n",
+  std::printf("3D frame: %zu shadow draws, %zu lit draws, %zu world draws\n",
               mock.shadowDraws,
-              mock.litDraws);
+              mock.litDraws,
+              mock.worldDraws);
   testTrue(counters,
            mock.shadowDraws > 0 && renderer.frameError().empty(),
-           "Guest lit meshes cast into the host's shared shadow pass");
+           "Scene meshes cast into the host's shared shadow pass");
   testTrue(counters,
-           mock.litDraws > 0,
-           "Guest lit meshes draw through the host LitMesh style");
+           mock.worldDraws > 0 && mock.litDraws == 0,
+           "Scene meshes draw instanced from the host render world, not as "
+           "guest batches");
   testTrue(counters,
            world.error().empty() && !historyContains(console, "Frame dropped"),
            "Every 3D frame records without rejection");

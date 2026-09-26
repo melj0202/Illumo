@@ -47,7 +47,24 @@ public:
     }
     return handle;
   }
+  // Direct draws, and the draws of host visuals inside executed lists
+  // (frame schema v7).
   void PushToCommandQueue(RenderCommand command) override
+  {
+    if (command.commandType == CommandType::ExecuteList &&
+        command.executeList.list != nullptr) {
+      for (std::size_t index = 0; index < command.executeList.list->size();
+           ++index) {
+        observe(command.executeList.list->at(index));
+      }
+    } else {
+      observe(command);
+    }
+    MockBackend::PushToCommandQueue(command);
+  }
+
+private:
+  void observe(const RenderCommand& command)
   {
     if (command.commandType == CommandType::SetTexture &&
         command.bindTexture.slot == 0) {
@@ -57,10 +74,8 @@ public:
                m_bound.generation == m_atlas.generation) {
       atlasDrawn = true;
     }
-    MockBackend::PushToCommandQueue(command);
   }
 
-private:
   TextureHandle m_atlas{};
   TextureHandle m_bound{};
 };

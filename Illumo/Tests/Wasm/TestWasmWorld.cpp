@@ -166,10 +166,10 @@ worldFrameValidation()
              two.exceededLimit() == nullptr,
            "The world operation quota is enforced and reported to guests");
 
-  // Version 5: no world section, nothing to apply.
+  // Version 5: no world section (nor the v7 sections), nothing to apply.
   std::vector<std::byte> version5 = encode(worldFrame({}));
   version5[4] = std::byte{ 5 };
-  version5.resize(version5.size() - 4);
+  version5.resize(version5.size() - 12);
   testTrue(counters,
            GuestFrame::read(version5, ignored) &&
              ignored.worldOperations.empty(),

@@ -290,12 +290,9 @@ try {
                 glyph->visible });
           }
         }
-        description.atlas = m_frames.createTexture(
-          std::as_bytes(std::span(font->getAtlasPixels())),
-          static_cast<std::uint32_t>(font->getAtlasWidth()),
-          static_cast<std::uint32_t>(font->getAtlasHeight()),
-          4,
-          true);
+        // The host keeps the font with its atlas, so host visuals (frame
+        // v7) can lay out text items that name the atlas.
+        description.atlas = m_frames.createFontAtlas(font);
         if (description.atlas.owner != 0) {
           description.write(payload);
           result.status = GuestServiceStatus::Complete;

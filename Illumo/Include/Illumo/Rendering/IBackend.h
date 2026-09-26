@@ -45,6 +45,8 @@ enum class BufferUsage : unsigned char
 inline constexpr const char* FrameUniformsBlockName = "FrameUniforms";
 inline constexpr unsigned int FrameUniformsBindingPoint = 0;
 
+class GameVisual;
+
 class IBackend
 {
 public:
@@ -62,6 +64,16 @@ public:
   // drawables. Recording backends use it to tag subsequent commands; GPU
   // backends need no action.
   virtual void BeginLayer(RenderLayerId layer) { (void)layer; }
+  // Backends whose host keeps 2D visuals (the guest recorder under frame
+  // schema v7) take a GameVisual whole, at this point of the frame, instead
+  // of its tokens. False: the visual emits its own tokens as usual.
+  virtual bool AppendVisual(GameVisual& visual)
+  {
+    (void)visual;
+    return false;
+  }
+  // A visual AppendVisual took is being destroyed.
+  virtual void ForgetVisual(const GameVisual& visual) { (void)visual; }
   // Cumulative metrics survive intermediate pass queue resets.
   virtual size_t rejectedCommandCount() const { return 0; }
   virtual size_t commandHighWaterMark() const { return 0; }

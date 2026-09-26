@@ -603,6 +603,130 @@ renderWorldContract()
   backend.Shutdown();
 }
 
+// Frame schema v7: GameVisuals travel as host visuals placed by a
+// composition. Only changes travel, a dropped frame's changes are sent again,
+// and visuals that cannot travel record their own batches in painter order.
+static void
+visualProxyContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  renderer.ensureBuiltinStyles();
+  backend.setVisuals(true, true);
+  auto first = std::make_unique<GameVisual>();
+  auto styled = std::make_unique<GameVisual>();
+  auto last = std::make_unique<GameVisual>();
+  for (GameVisual* visual : { first.get(), styled.get(), last.get() }) {
+    visual->setWindow(&window);
+  }
+  first->addFilledRect(10, 10, 40, 20, { 200, 0, 0, 255 });
+  first->addFilledRect(60, 10, 40, 20, { 0, 200, 0, 255 });
+  styled->addFilledRect(0, 40, 10, 10, { 9, 9, 9, 255 });
+  styled->getShape(0)->styleHandle =
+    renderer.getBuiltinStyleHandle(RenderStyleId::Shape);
+  last->addLine(0, 0, 50, 50, { 1, 2, 3, 255 }, 2.0f);
+  GuestFrame frame;
+  const auto record = [&](std::initializer_list<GameVisual*> visuals) {
+    renderer.BeginFrame();
+    backend.setFrame(1280, 720);
+    for (GameVisual* visual : visuals) {
+      visual->AppendCommands(&renderer);
+    }
+    renderer.EndFrame();
+    backend.takeFrame(frame);
+  };
+  const auto ops = [&](GuestVisualOp op) {
+    return std::count_if(frame.visualOperations.begin(),
+                         frame.visualOperations.end(),
+                         [op](const GuestVisualOperation& operation) {
+                           return operation.op == op;
+                         });
+  };
+
+  record({ first.get() });
+  require(
+    frame.batches.empty() && frame.visualOperations.size() == 4 &&
+      ops(GuestVisualOp::Create) == 1 && ops(GuestVisualOp::Set) == 1 &&
+      ops(GuestVisualOp::ItemSet) == 2 && frame.compositions.size() == 1 &&
+      frame.compositions[0].entries.size() == 2 &&
+      frame.compositions[0].entries[0].kind == GuestCompositionKind::World &&
+      frame.compositions[0].entries[1].kind == GuestCompositionKind::Visual &&
+      frame.compositions[0].width == 1280.0f &&
+      frame.exceededLimit() == nullptr,
+    "A new visual is created with its items and placed after the world");
+  const std::uint32_t firstId = frame.compositions[0].entries[1].first;
+  backend.commitVisuals();
+
+  record({ first.get() });
+  require(frame.visualOperations.empty() && frame.compositions.size() == 1 &&
+            frame.compositions[0].same,
+          "An unchanged visual sends nothing and a `same` composition");
+  backend.commitVisuals();
+
+  first->getShape(1)->color = { 0, 0, 200, 255 };
+  record({ first.get() });
+  require(frame.visualOperations.size() == 1 &&
+            frame.visualOperations[0].op == GuestVisualOp::ItemSet &&
+            frame.visualOperations[0].index == 1,
+          "One changed item sends one ItemSet");
+  backend.dropVisuals();
+  record({ first.get() });
+  require(frame.visualOperations.size() == 1 &&
+            frame.visualOperations[0].index == 1,
+          "A dropped frame's change is sent again");
+  backend.commitVisuals();
+
+  // Immediate-mode rebuild: identical items travel as nothing, a shorter
+  // list as one removal.
+  first->clearPrimitives();
+  first->addFilledRect(10, 10, 40, 20, { 200, 0, 0, 255 });
+  record({ first.get() });
+  require(frame.visualOperations.size() == 1 &&
+            frame.visualOperations[0].op == GuestVisualOp::ItemRemove &&
+            frame.visualOperations[0].index == 1 &&
+            frame.visualOperations[0].count == 1,
+          "A rebuilt visual sends only its shortened tail");
+  backend.commitVisuals();
+
+  record({ first.get(), styled.get(), last.get() });
+  const std::vector<GuestCompositionEntry>& entries =
+    frame.compositions[0].entries;
+  require(frame.batches.size() == 1 && entries.size() == 4 &&
+            entries[1].kind == GuestCompositionKind::Visual &&
+            entries[1].first == firstId &&
+            entries[2].kind == GuestCompositionKind::Batches &&
+            entries[2].first == 0 && entries[2].count == 1 &&
+            entries[3].kind == GuestCompositionKind::Visual &&
+            entries[3].first != firstId,
+          "A custom-styled visual records its batch between the proxied ones");
+  const std::uint32_t lastId = entries[3].first;
+  backend.commitVisuals();
+
+  last.reset();
+  record({ first.get() });
+  require(ops(GuestVisualOp::Destroy) == 1 &&
+            frame.visualOperations[0].id == lastId,
+          "A destroyed visual is destroyed on the host");
+  backend.dropVisuals();
+  record({ first.get() });
+  require(ops(GuestVisualOp::Destroy) == 1, "An undelivered destroy is resent");
+  backend.commitVisuals();
+  record({ first.get() });
+  require(ops(GuestVisualOp::Destroy) == 0,
+          "A delivered destroy is not resent");
+
+  backend.setVisuals(false, true);
+  record({ first.get() });
+  require(frame.compositions.empty() && frame.batches.size() == 1,
+          "Disabled visuals record their own batches");
+  first.reset();
+  styled.reset();
+  backend.Shutdown();
+}
+
 class SdkContract final : public GuestApplication
 {
 public:
@@ -626,6 +750,7 @@ public:
     shadowCasterContract();
     frameLimitContract();
     renderWorldContract();
+    visualProxyContract();
     return true;
   }
   void update(const GuestInput&) override {}

@@ -1,7 +1,7 @@
 # Host rendering: host-owned render objects, instancing and recorded command lists
 
-**Status:** authorized by the owner 2026-09-26 (Tier 3). M0-M3 done; M4
-(products on `IRenderWorld`) next. Baseline `release/v26.09` at `bb113a9c`.
+**Status:** authorized by the owner 2026-09-26 (Tier 3). M0-M7 done; M8
+(canvas, skybox and overlay migration) next. Baseline `release/v26.09` at `bb113a9c`.
 **Tracker:** `docs/host-render-world-plan.md`.
 **Supersedes (on acceptance):** D-R24 (instance aggregation deferred), the
 recorded-payload clause of D-R25, and the guest-side presentation model of
@@ -683,6 +683,256 @@ against frame versions 1-5.
   IllMeshViewer at 86 FPS with 2,000 cubes and 1,821 empty; IllumoGame at
   651 FPS; IllEd at 1,627 FPS; no log errors or warnings. No product uses
   the world yet (M4).
+- **Not run:** `IllumoTidy` and the ASan Debug profile.
+
+### M4 (2026-09-26, branch `host-render-world`, uncommitted)
+
+- **Changes:**
+  - `SceneInstance::setRenderWorld(IRenderWorld*)`. With a world bound,
+    every visual backed by a mesh asset becomes a world instance: package
+    meshes, and primitives that resolve to a shared primitive mesh. Its
+    `MeshVisual` is kept hidden for bounds, picking and the fallback.
+    Generated geometry without an asset (placeholders, wire proxies) stays
+    on `MeshVisual`.
+  - Two shared white materials, shadow-casting and not. Colour travels in
+    the instance tint, which reproduces `MeshVisual`'s vertex colour times
+    tint.
+  - `update()` sends only transforms and visibility that changed since the
+    last frame. A reconfigured component replaces its instances; removing a
+    node destroys them. Unbinding the world (or destroying the instance)
+    removes every instance and both materials.
+  - The world environment copies the `MeshVisual` lighting and shadow
+    defaults, and follows the scene's light nodes.
+  - `nextRenderWorldId()` hands out process-wide ids, so several scenes can
+    share one world.
+  - Products: IllMeshViewer and the IllumoGame 3D test mode bind
+    `IllumoContext::renderWorld`; IllEd binds it through
+    `EditorDocument::setRenderWorld`, set at Start and cleared at Exit.
+  - Rollback: the guest setting `hostRenderWorld=0` leaves
+    `IllumoContext::renderWorld` null, so every product falls back to the
+    `MeshVisual` path.
+- **Deviation:** transforms still come from a per-frame comparison against
+  the last sent matrix, not from `SceneGraph` revisions. It's cheap at
+  these sizes (0.37 ms guest update at 2,000 cubes), and revisions can
+  replace it if a profile shows the comparison.
+- **Tests:**
+  - New `Illumo.Content.InstanceRenderWorld`: 20 cubes become instances
+    in one bucket while a wire cube draws itself; picking still works
+    through the hidden visuals; moves and visibility don't re-record; edits
+    replace instances and removal destroys them; unbinding hands drawing
+    back to the visuals and rebinding restores every instance.
+  - `IllumoGame.Wasm.GamePackage` (3D mode) and
+    `IllMeshViewer.Wasm.ScenePackage` now look inside executed recorded
+    lists. The scene draws only as instanced render world draws, casts into
+    the shared shadow pass, and the package mesh is fetched once.
+  - Full Release `IllumoWorkspace` plus `IllumoGpu`, run together with
+    M5: 669 of 669 pass.
+- **Runtime smoke:**
+  - IllumoGame menus at 1,460 FPS, and 1,432 FPS with the 3D test setting.
+  - IllEd at 1,749 FPS.
+  - No log errors. The 3D scene itself is covered by the package test,
+    because the bench stays in the menus.
+- **Benchmark** (IllMeshViewer, same method as section 1):
+
+  | Cubes | FPS | Frame p50 | Guest frame | Guest update | Host accept | Packet |
+  |---|---|---|---|---|---|---|
+  | 0 | 1,874 | 0.53 ms | 0.10 ms | 0.07 ms | 0.01 ms | 6.5 KB |
+  | 500 | 1,622 | 0.60 ms | 0.17 ms | 0.14 ms | 0.01 ms | 6.5 KB |
+  | 2,000 | 757 | 1.30 ms | 0.41 ms | 0.37 ms | 0.01 ms | 6.5 KB |
+  | 8,000 | 177 | 5.53 ms | 1.61 ms | 2.31 ms | 0.01 ms | 6.2 KB |
+
+  Against the section 1 baseline at 2,000 cubes: 41 to 757 FPS, 23.9 to
+  1.3 ms, and 3,396 KB to 6.5 KB per frame. 8,000 cubes, which drew
+  nothing before, now run at 177 FPS. The packet no longer grows with the
+  scene: after the first frames it holds only UI batches.
+- **Parity:** IllMeshViewer `--capture` of the 500-cube scene with
+  `hostRenderWorld` on and off (vsync on and a 420-frame wait, because the
+  viewer's camera easing depends on frame timing). 56-64 pixels differ by
+  more than 2, all on cube silhouettes: sub-pixel edge flips from matrices
+  multiplied on the GPU instead of the CPU. That's 0.3%, inside the 0.5%
+  capture tolerance.
+
+### M5 (2026-09-26, branch `host-render-world`, uncommitted)
+
+- **Changes:**
+  - `GameVisual` gains the operations a host store needs:
+    - `setItem(index, GameVisualItem)` and `removeItems(first, count)` edit
+      items by insertion index. `GameVisualItem` is a variant of the shape,
+      sprite and text primitives. Replaced primitives stay hidden until they
+      outnumber the live items, then compact.
+    - `setOpacity` scales vertex alpha. At 1 the bytes are unchanged.
+    - `AppendCommands` is now `prepareFrame` plus `emitDraws`. `prepareFrame`
+      rebuilds, grows and uploads directly, and fills a `FrameState`:
+      resolution, MVP, clip, enclosing clip and geometry revision.
+      `emitDraws` pushes only the clip and batch tokens, so it can run inside
+      a recording.
+  - `Renderer::getClipState()` exposes the enclosing scissor, because a
+    recorded clip push and pop is only valid under the clip it was recorded
+    in.
+  - `VisualStore` (`Rendering/Primitives/VisualStore.h`): visuals by id,
+    each a `GameVisual` plus `VisualProperties` (space, layer, transform,
+    opacity, clip, visibility) and one `RecordedCommandList`. `append`
+    uploads changed geometry, re-records only when the `FrameState`
+    changes, and otherwise queues one `ExecuteList`. It uses the 6.9
+    budgets: 4,096 visuals and 65,536 items per visual.
+- **Deviations from 6.9:**
+  - The store wraps `GameVisual` rather than a new class holding its
+    internals. That's the same code with far less churn, and native
+    behavior is untouched.
+  - The visual transform stays baked into vertices, because existing tests
+    pin those vertices and it keeps pixel parity. A transform change
+    re-tessellates on the host, which costs host CPU but no wire bytes. A
+    GPU-side visual matrix is a later optimization.
+- **Tests:**
+  - New `Illumo.VisualStore.*`:
+    - `RecordsMatchNativeOutput`: items set by record give the same vertex
+      bytes and draw tokens as the `add*` calls.
+    - `RecordsOnlyOnChange`: unchanged frames replay without uploads; item
+      edits, clips and resizes re-record; hidden visuals queue nothing.
+    - `EditsAndBudgets`: ids, budgets, kind changes, range removal and
+      compaction.
+    - `OpacityScalesAlpha`.
+    - `Bench`.
+  - Every existing `GameVisual`, `GLString`, `GuiKit` and `CommandLine` test
+    passes unchanged.
+  - Full Release `IllumoWorkspace` plus `IllumoGpu`: 669 of 669 pass.
+- **Bench** (`Illumo.VisualStore.Bench`, 200 unchanged 50-item panels,
+  median frame): native re-emission 81.5 us (1,200 tokens), store replay
+  70.8 us. The host-side saving is small by design. The 2D win comes in
+  M6-M7, when the guest stops tessellating, recording and sending batches.
+
+### M6 (2026-09-26, branch `host-render-world`, uncommitted)
+
+- **Changes:**
+  - Frame schema v7, still gated by `HostRender`. Two trailing sections
+    follow the world operations:
+    - **Visual operations** (`GuestVisualOp`: `Create`, `Destroy`, `Set`,
+      `ItemSet`, `ItemRemove`, `ItemsClear`) with `GuestVisualItem`
+      records: shapes, sprites by texture id, and text by font atlas id with
+      an optional heavy font.
+    - **Compositions** (`GuestComposition`): one per target, 0 for the main
+      frame or a surface id. Each carries the logical size that pixel-space
+      visuals lay out in (the guest window over its UI scale, or the
+      surface size). Entries are `Visual`, `Batches first count` and
+      `World`, or the composition is sent as `same`.
+  - **Budgets:** world and visual operations share one 65,536 quota. Text
+    is capped at 1 MiB per frame and 64 KiB per item, entries at 16,384
+    per target, and compositions at nine per frame. The SDK's
+    `exceededLimit` reports all of them.
+  - **Fonts:** `WasmFrameRenderer::createFontAtlas` keeps the LoadFont
+    `Font` with its atlas texture, and `Font::adoptTextureHandle` makes it
+    lay out against that texture. A text item names the atlas texture id,
+    so no new resource kind is needed.
+  - **Host binding** (`Illumo/Source/Wasm/WasmVisuals`):
+    - `plan` checks operations against the live visuals plus this frame's
+      effects: ids, item indices, textures, fonts and budgets. It then
+      checks every composition against the target's batches: ranges cover
+      them once and in order, World-layer entries come first, surfaces take
+      only UI visuals, and there is at most one `World`. `apply` runs after
+      every fallible step.
+    - With a main composition, the World and UI layer drawables walk its
+      entries. Visuals go through `VisualStore::append`, with the guest
+      frame's logical size and camera as the new
+      `GameVisual::FrameOverride`. A `World` entry draws the render world,
+      and its shadow work, from the World layer.
+    - A surface composition replays offscreen. The surface's reported
+      revision now advances when a listed visual changes, not only when its
+      batches do.
+  - **Deviation:** a composition applies only to the frame that carries it
+    (or repeats it with `same`), rather than persisting. A frame without
+    one draws exactly as v6 did.
+- **Tests:**
+  - New `Illumo.Wasm.VisualFrameValidation`: round trip, truncation, 11
+    deny cases for operations and 6 for compositions, the shared quotas,
+    and v6 compatibility.
+  - New `Illumo.Wasm.VisualOperations` covers:
+    - Host creation and drawing from one executed list.
+    - `same`, and a frame without a composition.
+    - Painter order between two batches.
+    - 13 rejections that apply nothing.
+    - Recovery afterwards.
+    - Surface replay only on new content or listed-visual edits.
+    - Retirement.
+  - Existing trimmed-version tests (v3, v5) now drop the two new counts.
+  - Full Release `IllumoWorkspace` plus `IllumoGpu`: 671 of 671 pass.
+
+### M7 (2026-09-26, branch `host-render-world`, uncommitted)
+
+- **Changes:**
+  - `IBackend::AppendVisual` and `ForgetVisual` are virtuals whose default
+    is off. `GameVisual::AppendCommands` offers the visual whole to its
+    backend first. When taken, the guest builds and uploads no geometry
+    and records no tokens. A proxied visual tells the backend when it is
+    destroyed.
+  - `GuestVisualProxies` (guest SDK) diffs each appended visual's items
+    and properties against what the host last confirmed. Only changes
+    travel: `Create`, `Set`, `ItemSet` per changed index, and `ItemRemove`
+    for a shortened tail. Changes are confirmed only when the frame is
+    delivered (`commitVisuals`). A dropped frame's changes and destroys are
+    sent again, and a destroy whose create never arrived is withheld.
+  - `GuestRecordingBackend` records a marker at each taken visual's command
+    position. At submission it builds each target's composition (render
+    world first, batch ranges, visuals in painter order) and sends `same`
+    when it matches the last delivered one. Each composition's logical size
+    is the visuals' pixel resolution.
+  - `GuestModuleApplication` enables proxying with `HostRender`. It commits
+    or drops around delivery and gives world operations what visual
+    operations leave of the shared quota. The guest setting `hostVisuals=0`
+    is the rollback.
+  - **Fallbacks:** a visual records its own tokens when it can't travel:
+    custom styles, a texture or font not yet on the host, world space off
+    the frame camera, a pixel size different from its target's, or no
+    budget left this frame (32,768 operations, 512 KiB of text).
+  - **Churn:** a visual that changes at least half its items (32 or more)
+    for three consecutive frames records batches instead. It is rechecked
+    every 30 frames and returns once settled. The game's menu chrome
+    animates about 1,225 of its 1,259 items every frame. As item operations
+    that was 159 KB and 747 FPS, against 111 KB and 1,449 FPS as batches.
+  - **Host allocation fixes:**
+    - Decode reuses operation text and composition entry buffers,
+      including across frames that carry fewer of them.
+    - The plan scratch is a sorted vector.
+    - `GameVisual` reuses free slots of a kind instead of orphaning and
+      compacting.
+    - Typed `setItem` overloads avoid variant copies.
+    - `RecordedCommandList::clear` keeps its matrix slots.
+  - Surfaces also replay when a frame writes a texture that one of their
+    listed visuals draws.
+- **Deviation:** `GameVisual` quad caps (the panels' `GameVisual(256u)`)
+  don't travel. The host applies its store's cap, and exceeding a guest cap
+  was already a frame error.
+- **Tests:**
+  - New SDK `visualProxyContract`:
+    - Creation and placement after the world.
+    - Unchanged frames send nothing plus `same`.
+    - A single-item change, and a resend after a drop.
+    - A rebuilt, shorter list sends one removal.
+    - A custom-styled visual's batch between two proxied visuals.
+    - Destroys, including resend after a drop.
+    - Disabling.
+  - Updated observers in `IllEd.Wasm.Package`, `IllumoGame.Wasm.GamePackage`
+    and `IllMeshViewer.Wasm.ScenePackage` walk executed lists.
+  - `IllumoGame.Wasm.PackageFrameAllocations` is back to its baseline:
+    paused 0, running 1.
+  - Full Release `IllumoWorkspace` plus `IllumoGpu`: 671 of 671 pass.
+- **Benchmark** (`--bench-frames 300`, idle, proxy on and off):
+
+  | App | Frame bytes | Batches | Guest frame | Host accept | FPS |
+  |---|---|---|---|---|---|
+  | IllEd | 0.27 KB, 9.25 KB | 1, 60 | 0.034, 0.127 ms | 0.003, 0.009 ms | 1,800, 1,738 |
+  | IllMeshViewer | 0.77 KB, 6.55 KB | 2, 40 | 0.032, 0.102 ms | 0.004, 0.008 ms | 1,824, 1,856 |
+  | IllumoGame menus | 110.8 KB, 110.8 KB | 29, 29 | 0.205, 0.203 ms | 0.026, 0.025 ms | 1,444, 1,491 |
+
+  Both tool UIs are under the 1 KB/frame target. The game is unchanged:
+  its animated chrome churns, and the rest is canvas texture and mesh
+  writes.
+- **Parity:** captures at frame 200, proxy on against off:
+  - IllEd is bit-identical.
+  - IllMeshViewer differs in 2 pixels; two runs with it off already
+    differ in 20.
+  - The game menus animate with time, so its run-to-run noise (272,499
+    pixels) swamps any comparison. Its visuals draw through batches anyway
+    while they churn.
 - **Not run:** `IllumoTidy` and the ASan Debug profile.
 
 ## 13. Documentation changes and follow-ups

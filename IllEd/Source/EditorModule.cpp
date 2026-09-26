@@ -84,6 +84,7 @@ EditorModule::Start(IllumoContext* context)
   }
   m_document.setAssetManager(ic->assetManager);
   m_document.setRenderer(ic->renderer);
+  m_document.setRenderWorld(ic->renderWorld);
   // New documents belong to the mounted project, when there is one.
   m_document.rebase(documentRoot({}));
   m_grid = std::make_unique<MeshVisual>();
@@ -142,6 +143,7 @@ EditorModule::Exit()
   }
   // The document keeps its nodes and history; only render bindings are
   // released, so a stopped module can restart with the same document.
+  m_document.setRenderWorld(nullptr);
   m_document.setRenderer(nullptr);
   m_gridBuilt = false;
   m_selectionOverlay.reset();

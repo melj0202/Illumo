@@ -551,3 +551,14 @@ Font::getTextureHandle(Renderer* renderer)
   textureHandle = cached;
   return textureHandle;
 }
+
+void
+Font::adoptTextureHandle(Renderer* renderer, TextureHandle handle)
+{
+  if (renderer == nullptr) {
+    return;
+  }
+  lastRendererLifetime = renderer->getLifetimeIdentity();
+  rendererTextures[lastRendererLifetime] = handle;
+  textureHandle = handle;
+}

@@ -57,18 +57,37 @@ public:
     ++cubemaps;
     return MockBackend::CreateCubemap(faces, width, height, channels);
   }
+  // Direct draws and instanced draws inside executed render world lists.
+  std::size_t instancedDraws = 0;
   void PushToCommandQueue(RenderCommand command) override
   {
-    if (command.commandType == CommandType::SetMesh) {
-      m_bound = command.bindMesh.handle;
-    } else if (command.commandType == CommandType::DrawIndexed &&
-               m_retained.isValid() && m_bound == m_retained) {
-      ++retainedDraws;
+    if (command.commandType == CommandType::ExecuteList &&
+        command.executeList.list != nullptr) {
+      for (std::size_t index = 0; index < command.executeList.list->size();
+           ++index) {
+        observe(command.executeList.list->at(index));
+      }
+    } else {
+      observe(command);
     }
     MockBackend::PushToCommandQueue(command);
   }
 
 private:
+  void observe(const RenderCommand& command)
+  {
+    const bool retained = m_retained.isValid() && m_bound == m_retained;
+    if (command.commandType == CommandType::SetMesh) {
+      m_bound = command.bindMesh.handle;
+    } else if (command.commandType == CommandType::DrawIndexed && retained) {
+      ++retainedDraws;
+    } else if (command.commandType == CommandType::DrawIndexedInstanced &&
+               retained) {
+      ++retainedDraws;
+      ++instancedDraws;
+    }
+  }
+
   MeshHandle m_retained{};
   MeshHandle m_bound{};
 };
@@ -362,8 +381,10 @@ scenePackage()
               mock.retainedDraws);
   testTrue(counters, opened, "The viewer registers viewer_open");
   testTrue(counters,
-           mock.retainedMeshes == 1 && mock.retainedDraws >= 3,
-           "The scene's package mesh is fetched and drawn as a retained mesh");
+           mock.retainedMeshes == 1 && mock.retainedDraws >= 3 &&
+             mock.instancedDraws == mock.retainedDraws,
+           "The scene's package mesh is fetched once and drawn by host render "
+           "world instances");
   testTrue(counters,
            viewer.error().empty() && renderer.frameError().empty() &&
              !historyContains(console, "Failed") &&

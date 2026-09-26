@@ -6,14 +6,20 @@
 #include <Illumo/Rendering/Primitives/SpritePrimitive.h>
 #include <Illumo/Rendering/Primitives/TextPrimitive.h>
 #include <Illumo/Rendering/RenderLayerId.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 class Camera;
 class Renderer;
+
+// One item of a GameVisual by value, as VisualStore operations carry it.
+using GameVisualItem =
+  std::variant<ShapePrimitive, SpritePrimitive, TextPrimitive>;
 
 // Painter-correct host for composed 2D primitives. Items are ordered by
 // drawOrder then stable insertion sequence; only adjacent compatible items are
@@ -164,6 +170,64 @@ public:
     size_t index = 0;
   };
   std::vector<PrimitiveRef> paintOrder() const;
+  // The item at insertion index `index` (index < itemCount()).
+  PrimitiveRef itemAt(size_t index) const;
+  const SpritePrimitive* getSprite(size_t index) const;
+  Camera* getCamera() const { return camera; }
+  // The logical size Pixels-space geometry lays out in on `renderer` this
+  // frame (window over UI scale), as AppendCommands computes it.
+  std::array<float, 2> pixelResolution(Renderer* renderer) const;
+  // Whether World-space geometry would use the renderer's frame camera.
+  bool drawsWithFrameCamera(Renderer* renderer) const;
+
+  // Items by insertion index, for owners that edit a visual in place
+  // (VisualStore). setItem at itemCount() appends; an index past it fails.
+  // Replaced and removed primitives stay in the per-kind lists, hidden, as
+  // free slots for later items of their kind, so the per-kind counts above
+  // include them.
+  size_t itemCount() const { return items.size(); }
+  bool setItem(size_t index, const GameVisualItem& value);
+  // Typed forms: replacing an item of the same kind reuses its storage.
+  bool setItem(size_t index, const ShapePrimitive& value);
+  bool setItem(size_t index, const SpritePrimitive& value);
+  bool setItem(size_t index, const TextPrimitive& value);
+  void removeItems(size_t first, size_t count);
+
+  // Scales every vertex alpha; 1 leaves geometry bit-identical.
+  void setOpacity(float value);
+  float getOpacity() const { return opacity; }
+
+  // Everything the draw tokens of one frame depend on. Equal states emit
+  // identical draw tokens, so a recording of them can be replayed.
+  struct FrameState
+  {
+    float resolutionX = 0.0f;
+    float resolutionY = 0.0f;
+    std::array<float, 16> mvp{};
+    bool clip = false;
+    std::array<int, 4> clipRect{};
+    std::array<int, 5> enclosingClip{};
+    uint64_t geometryRevision = 0;
+    bool operator==(const FrameState&) const = default;
+  };
+  // Replaces the window and camera for one frame: Pixels space uses this
+  // logical size as-is (no UI scale), World space this view projection.
+  // Host visuals drawn for a guest use the guest frame's values.
+  struct FrameOverride
+  {
+    float width = 0.0f;
+    float height = 0.0f;
+    bool hasWorldMvp = false;
+    std::array<float, 16> worldMvp{};
+  };
+  // AppendCommands in two steps. prepareFrame rebuilds geometry when needed,
+  // grows and uploads the meshes (direct tokens, never recorded) and fills
+  // `state`. emitDraws pushes the clip and the batches, and may run inside a
+  // Renderer recording.
+  bool prepareFrame(Renderer* renderer,
+                    FrameState* state,
+                    const FrameOverride* frame = nullptr);
+  bool emitDraws(Renderer* renderer, const FrameState& state);
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
@@ -234,6 +298,15 @@ private:
   std::vector<TextPrimitive> texts;
   std::vector<VisualItem> items;
   uint64_t nextSequence = 0;
+  // Free slots of the per-kind lists left by setItem and removeItems.
+  std::vector<size_t> freeShapes;
+  std::vector<size_t> freeSprites;
+  std::vector<size_t> freeTexts;
+  // A backend took this visual whole (IBackend::AppendVisual) at least once,
+  // so it must hear of its destruction.
+  bool proxied = false;
+  float opacity = 1.0f;
+  uint64_t geometryRevision = 0;
   // Retained scratch: cleared text strings reused by addText (bounded) and
   // the draw-ordered item list rebuilt with the geometry.
   static constexpr size_t kSpareTextContent = 256;
@@ -261,6 +334,15 @@ private:
   unsigned int maxQuadCount;
 
   void markDirty() { geometryDirty = true; }
+  ColorRgba faded(ColorRgba color) const;
+  template<typename Primitive>
+  bool placeItem(size_t index,
+                 VisualItemKind kind,
+                 std::vector<Primitive>& list,
+                 std::vector<size_t>& freeSlots,
+                 const Primitive& value);
+  std::array<int, 2> frameDimensions(Renderer* renderer, bool* fromFrame) const;
+  void orphan(const VisualItem& item);
   void enrollGpuResources();
   void rebuildGeometry(const Rect2* cullRect);
   bool ensureCpuCapacity(unsigned int required);

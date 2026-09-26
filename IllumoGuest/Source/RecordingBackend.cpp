@@ -1,5 +1,7 @@
+#include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <IllumoGuest/RecordingBackend.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 
@@ -10,6 +12,7 @@ GuestRecordingBackend::GuestRecordingBackend(GuestServiceQueue& services,
                                              std::size_t commandCeiling)
   : m_services(services)
   , m_commands(commandCeiling)
+  , m_visuals([this](TextureHandle handle) { return hostTexture(handle); })
 {
   m_retirements.reserve(4096);
   m_releases.reserve(GuestServices::MaximumRecords);
@@ -171,6 +174,13 @@ GuestRecordingBackend::BeginFrame()
 {
   recycleFrame();
   m_surface = -1;
+  // A frame recorded but never delivered or dropped counts as dropped.
+  m_visuals.drop();
+  m_markers.clear();
+  m_compositionCursors.clear();
+  if (m_visualsEnabled) {
+    m_visuals.beginFrame(m_frame.visualOperations);
+  }
   for (std::uint32_t slot : m_drawnDynamic) {
     std::map<std::uint32_t, Mesh>::iterator found = m_meshes.find(slot);
     if (found != m_meshes.end()) {
@@ -208,6 +218,7 @@ GuestRecordingBackend::ClearCommandQueue()
 {
   m_commands.Reset();
   m_commandLayers.clear();
+  m_markers.clear();
 }
 std::size_t
 GuestRecordingBackend::rejectedCommandCount() const
@@ -237,14 +248,197 @@ GuestRecordingBackend::SubmitCommandQueue()
     if (m_commandLayers.size() != m_commands.GetCommandCount()) {
       throw std::runtime_error("Guest command layer journal mismatch");
     }
+    std::size_t marker = 0;
     for (std::size_t index = 0; index < m_commands.GetCommandCount(); ++index) {
+      while (marker < m_markers.size() && m_markers[marker].command == index) {
+        placeVisual(m_markers[marker++].visual);
+      }
       m_layer = m_commandLayers[index];
       consume(m_commands.GetCommand(index));
+    }
+    while (marker < m_markers.size()) {
+      placeVisual(m_markers[marker++].visual);
     }
   } catch (const std::exception& exception) {
     m_error = exception.what();
   }
+  m_markers.clear();
   m_layer = current;
+}
+
+void
+GuestRecordingBackend::setVisuals(bool enabled, bool composeWorld)
+{
+  m_visualsEnabled = enabled;
+  m_composeWorld = composeWorld;
+}
+
+GuestResourceId
+GuestRecordingBackend::hostTexture(TextureHandle handle) const
+{
+  if (!IsTextureValid(handle)) {
+    return {};
+  }
+  const Texture& texture = m_textures.at(handle.slot);
+  if (texture.cubemap || texture.depthOnly || texture.pending != 0) {
+    return {};
+  }
+  return texture.id;
+}
+
+std::uint32_t
+GuestRecordingBackend::currentTarget() const
+{
+  return m_surface < 0
+           ? 0u
+           : m_frame.surfaces[static_cast<std::size_t>(m_surface)].surface;
+}
+
+bool
+GuestRecordingBackend::AppendVisual(GameVisual& visual)
+{
+  if (!m_visualsEnabled || m_renderer == nullptr || m_shadowPass) {
+    return false;
+  }
+  const std::uint32_t target = currentTarget();
+  const bool world = visual.getSpace() == PrimitiveSpace::World;
+  // Surfaces draw only flat UI; world-space visuals follow the frame camera.
+  if ((m_surface >= 0 && (m_layer != GuestLayer::Ui || world)) ||
+      (world && !visual.drawsWithFrameCamera(m_renderer))) {
+    return false;
+  }
+  const std::array<float, 2> size = visual.pixelResolution(m_renderer);
+  if (!std::isfinite(size[0]) || !std::isfinite(size[1]) || size[0] < 1.0f ||
+      size[1] < 1.0f || size[0] > 65536.0f || size[1] > 65536.0f) {
+    return false;
+  }
+  std::size_t slot = m_frame.compositions.size();
+  for (std::size_t index = 0; index < m_frame.compositions.size(); ++index) {
+    if (m_frame.compositions[index].target == target) {
+      slot = index;
+    }
+  }
+  // Pixel-space visuals of one target share its logical size.
+  if (slot < m_frame.compositions.size() && !world &&
+      (m_frame.compositions[slot].width != size[0] ||
+       m_frame.compositions[slot].height != size[1])) {
+    return false;
+  }
+  const std::uint32_t id =
+    m_visuals.sync(visual, *m_renderer, m_layer, m_frame.visualOperations);
+  if (id == 0) {
+    return false;
+  }
+  if (slot == m_frame.compositions.size()) {
+    GuestComposition& composition = m_frame.compositions.emplace_back();
+    composition.target = target;
+    composition.width = size[0];
+    composition.height = size[1];
+    if (target == 0 && m_composeWorld) {
+      composition.entries.push_back({ GuestCompositionKind::World, 0, 0 });
+    }
+    m_compositionCursors.push_back(0);
+  }
+  m_markers.push_back({ m_commands.GetCommandCount(), id });
+  return true;
+}
+
+void
+GuestRecordingBackend::ForgetVisual(const GameVisual& visual)
+{
+  m_visuals.forget(visual);
+}
+
+void
+GuestRecordingBackend::placeVisual(std::uint32_t visual)
+{
+  const std::uint32_t target = currentTarget();
+  for (std::size_t index = 0; index < m_frame.compositions.size(); ++index) {
+    GuestComposition& composition = m_frame.compositions[index];
+    if (composition.target != target) {
+      continue;
+    }
+    const std::uint32_t batches =
+      static_cast<std::uint32_t>(targetBatches().size());
+    std::uint32_t& cursor = m_compositionCursors[index];
+    if (batches > cursor) {
+      composition.entries.push_back(
+        { GuestCompositionKind::Batches, cursor, batches - cursor });
+    }
+    composition.entries.push_back({ GuestCompositionKind::Visual, visual, 0 });
+    cursor = batches;
+    return;
+  }
+  throw std::runtime_error("Guest visual placed outside its composition");
+}
+
+static bool
+sameComposition(const GuestComposition& left, const GuestComposition& right)
+{
+  if (left.target != right.target || left.width != right.width ||
+      left.height != right.height ||
+      left.entries.size() != right.entries.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.entries.size(); ++index) {
+    const GuestCompositionEntry& a = left.entries[index];
+    const GuestCompositionEntry& b = right.entries[index];
+    if (a.kind != b.kind || a.first != b.first || a.count != b.count) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void
+GuestRecordingBackend::finishCompositions()
+{
+  m_takenCompositions.resize(m_frame.compositions.size());
+  for (std::size_t index = 0; index < m_frame.compositions.size(); ++index) {
+    GuestComposition& composition = m_frame.compositions[index];
+    std::uint32_t batches = 0;
+    if (composition.target == 0) {
+      batches = static_cast<std::uint32_t>(m_frame.batches.size());
+    } else {
+      for (const GuestSurfaceFrame& surface : m_frame.surfaces) {
+        if (surface.surface == composition.target) {
+          batches = static_cast<std::uint32_t>(surface.batches.size());
+        }
+      }
+    }
+    const std::uint32_t cursor = m_compositionCursors[index];
+    if (batches > cursor) {
+      composition.entries.push_back(
+        { GuestCompositionKind::Batches, cursor, batches - cursor });
+    }
+    GuestComposition& taken = m_takenCompositions[index];
+    taken.target = composition.target;
+    taken.same = false;
+    taken.width = composition.width;
+    taken.height = composition.height;
+    taken.entries.assign(composition.entries.begin(),
+                         composition.entries.end());
+    for (const GuestComposition& delivered : m_deliveredCompositions) {
+      if (sameComposition(delivered, composition)) {
+        composition.same = true;
+        composition.entries.clear();
+        break;
+      }
+    }
+  }
+}
+
+void
+GuestRecordingBackend::commitVisuals()
+{
+  m_visuals.commit();
+  std::swap(m_deliveredCompositions, m_takenCompositions);
+}
+
+void
+GuestRecordingBackend::dropVisuals()
+{
+  m_visuals.drop();
 }
 GuestFrame
 GuestRecordingBackend::takeFrame()
@@ -268,6 +462,7 @@ GuestRecordingBackend::takeFrame(GuestFrame& output)
   }
   // Only a frame that will be delivered consumes the dirty ranges.
   emitMeshWrites();
+  finishCompositions();
   std::swap(output, m_frame);
   // As before, a take leaves a default frame: nothing recorded remains.
   recycleFrame();

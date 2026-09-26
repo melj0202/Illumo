@@ -12,6 +12,15 @@
 using RenderMaterialId = uint32_t;
 using RenderInstanceId = uint32_t;
 
+// An id no other caller in this process has taken, for callers that share one
+// world (one guest world serves every scene of its modules). Main-thread only.
+inline uint32_t
+nextRenderWorldId()
+{
+  static uint32_t next = 0;
+  return ++next;
+}
+
 struct RenderMaterialDesc
 {
   std::array<float, 4> tint{ 1.0f, 1.0f, 1.0f, 1.0f };

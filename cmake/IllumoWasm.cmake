@@ -62,6 +62,7 @@ add_dependencies(IllumoWasmRuntime IllumoWasmCompiler)
 
 add_library(IllumoWasmRendering STATIC
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmFrameRenderer.cpp"
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmVisuals.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmRenderServices.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGameServices.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmFileServices.cpp"
@@ -266,6 +267,7 @@ if(BUILD_TESTING)
   add_executable(IllumoWasmFrameTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmFrame.cpp"
     "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmAudio.cpp"
     "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmWorld.cpp"
+    "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmVisuals.cpp"
     "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/Audio.cpp")
   target_link_libraries(IllumoWasmFrameTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
   target_compile_definitions(IllumoWasmFrameTests PRIVATE "ILLUMO_PADDLE_GUEST=\"${_guest_build}/PaddleGuest.wasm\"")
@@ -281,7 +283,7 @@ if(BUILD_TESTING)
   add_dependencies(IllumoWasmFrameTests IllumoGuestBuild)
   illumo_configure_runtime_target(IllumoWasmFrameTests)
   illumo_stage_msvc_asan(IllumoWasmFrameTests)
-  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices RetainedResources AudioServiceDecoder AudioServices GuestAudio WorldFrameValidation WorldOperations)
+  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices RetainedResources AudioServiceDecoder AudioServices GuestAudio WorldFrameValidation WorldOperations VisualFrameValidation VisualOperations)
     add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmFrameTests --run "Illumo.Wasm.${_case}")
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20 WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmFrameTests>")
   endforeach()
@@ -291,6 +293,7 @@ if(BUILD_TESTING)
   add_executable(IllumoWasmWindowTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmWindows.cpp"
     "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/PanelSurfaces.cpp"
     "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/RecordingBackend.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/VisualProxies.cpp"
     "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/Display.cpp")
   target_link_libraries(IllumoWasmWindowTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
   target_compile_definitions(IllumoWasmWindowTests PRIVATE

@@ -138,6 +138,7 @@ add_library(Illumo STATIC
   Source/Rendering/Primitives/MeshVisual.cpp
   Source/Rendering/Primitives/SkyboxVisual.cpp
   Source/Rendering/Primitives/GameVisual.cpp
+  Source/Rendering/Primitives/VisualStore.cpp
   Source/Rendering/Primitives/SoftwareCanvas.cpp
   Source/Rendering/Primitives/SpriteAnimation.cpp
   Source/Rendering/OpenGL/CreateOpenGLBackend.cpp
@@ -301,6 +302,7 @@ if(BUILD_TESTING)
     Tests/TestSceneBenchmarks.cpp
     Tests/TestInstancing.cpp
     Tests/TestRenderWorld.cpp
+    Tests/TestVisualStore.cpp
     Tests/TestShaderPreprocessor.cpp
     Tests/TestGuiKit.cpp
     Tests/TestGuiFileTree.cpp

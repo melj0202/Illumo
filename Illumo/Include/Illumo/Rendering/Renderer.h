@@ -487,6 +487,16 @@ public:
   {
     return _currentPassViewport;
   }
+  // The enclosing clip as { enabled, x, y, width, height }. A recording that
+  // pushes and pops clips is only valid under the clip it was recorded in.
+  std::array<int, 5> getClipState() const
+  {
+    return { currentScissorState.enabled ? 1 : 0,
+             currentScissorState.x,
+             currentScissorState.y,
+             currentScissorState.width,
+             currentScissorState.height };
+  }
   void ensureFullscreenQuadMesh();
   void executePostProcessPass(const RenderPassDesc& pass,
                               const std::array<int, 2>& targetDims);

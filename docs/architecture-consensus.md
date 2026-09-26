@@ -1635,6 +1635,39 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
     only into frames that will be delivered. The SDK also checks every frame
     against the host's count quotas before sending (`GuestFrame::exceededLimit`).
   - **Compatibility:** versions 1 to 5 remain valid.
+  - **Products:** `SceneInstance::setRenderWorld` turns every mesh-asset
+    visual into an instance, with its `MeshVisual` hidden for picking and
+    fallback. IllMeshViewer, IllEd and the IllumoGame 3D test mode bind it.
+    The guest setting `hostRenderWorld=0` withholds `renderWorld` and brings
+    back the batch path.
+- **Frame schema v7** (D-E30, same `HostRender` capability): host-retained
+  2D visuals and compositions.
+  - **Visual operations:** create, destroy, set properties, and set,
+    remove or clear items. They share the operation quota with world
+    operations. Items are shapes, sprites by texture id, or text by LoadFont
+    atlas id; the host keeps each atlas's `Font`.
+  - **Visual store:** the host's `VisualStore` is `GameVisual` code,
+    re-recorded only on change.
+  - **Compositions:** one per target (main frame or surface). Each is a
+    list of visuals, batch ranges and the render world. World-layer
+    entries come first, and batch ranges cover the target's batches once,
+    in order. `same` repeats the previous list, and a composition lasts
+    only for its own frame.
+  - **Validation:** the host checks operations and compositions against
+    its live visuals, textures and this frame's batches before applying
+    anything.
+  - **Compatibility:** versions 1 to 6 remain valid.
+  - **Guest side:** `GameVisual::AppendCommands` offers the visual to
+    `IBackend::AppendVisual`. The guest recorder's `GuestVisualProxies`
+    sends only item and property changes against what the host confirmed,
+    and confirms them only for delivered frames. The recorder places each
+    visual among its batches in the target's composition.
+  - **Fallback:** visuals that can't travel still record batches. That
+    covers custom styles, textures or fonts not on the host yet, world
+    space off the frame camera, and a spent per-frame budget. So do visuals
+    that change most of their items frame after frame; they are rechecked
+    every 30 frames.
+  - **Rollback:** the guest setting `hostVisuals=0`.
 - **Simulation lanes** (D-E17): with a `worker` and the Jobs grant the game
   asks `JobLanes` once at startup; the host compiles one isolated worker
   store per lane (in parallel, while menus run) and answers only when all are

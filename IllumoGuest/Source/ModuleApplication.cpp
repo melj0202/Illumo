@@ -336,17 +336,22 @@ GuestModuleApplication::recordFrame(GuestFrame& output)
     if (exceeded != nullptr) {
       throw std::runtime_error(exceeded);
     }
-    // Only a frame that will be delivered takes world operations; a dropped
-    // frame leaves them queued for the next one.
+    // Only a frame that will be delivered takes world operations, in what
+    // the visual operations leave of the shared quota; a dropped frame
+    // leaves them queued for the next one. Its visual changes are confirmed.
     if (m_renderWorld) {
       m_renderWorld->takeOperations(output.worldOperations,
-                                    GuestFrameLimits{}.worldOperations);
+                                    GuestFrameLimits{}.worldOperations -
+                                      output.visualOperations.size());
     }
+    m_backend.commitVisuals();
     if (!m_lastFrameError.empty()) {
       m_lastFrameError.clear();
     }
   } catch (const std::runtime_error& error) {
     // A rejected recording drops this frame only; product state is intact.
+    // Its visual changes are sent again with the next frame.
+    m_backend.dropVisuals();
     // Report each distinct failure once so a persistent fault stays visible.
     if (m_lastFrameError != error.what()) {
       m_lastFrameError = error.what();
@@ -416,6 +421,19 @@ GuestModuleApplication::startModule(std::unique_ptr<IModule> module)
   m_input.clearCharQueue();
   m_scene.ResetDefaultPasses();
   m_scene.ClearDrawables();
+  // Settings are loaded by now. hostRenderWorld=0 keeps scenes on
+  // MeshVisuals, for comparison captures and as a rollback switch.
+  const EnvVar& hostWorld = m_settings.getVar("hostRenderWorld");
+  m_context.renderWorld =
+    hostWorld.value.empty() || hostWorld.valueAsDouble != 0.0
+      ? m_renderWorld.get()
+      : nullptr;
+  // hostVisuals=0 keeps GameVisuals recording their own batches, likewise.
+  const EnvVar& hostVisuals = m_settings.getVar("hostVisuals");
+  m_backend.setVisuals(
+    m_renderWorld != nullptr &&
+      (hostVisuals.value.empty() || hostVisuals.valueAsDouble != 0.0),
+    m_renderWorld != nullptr);
   bool accepted = false;
   try {
     accepted = module && module->Start(&m_context);

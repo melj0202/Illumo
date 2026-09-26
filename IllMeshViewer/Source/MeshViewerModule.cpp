@@ -292,6 +292,7 @@ MeshViewerModule::loadSceneFromText(const std::string& text,
     instance =
       std::make_unique<SceneInstance>(ic->assetManager, SceneInstanceOptions{});
     instance->setRenderer(ic->renderer);
+    instance->setRenderWorld(ic->renderWorld);
     instance->load(document, packageRoot, failure);
   }
   if (!failure.empty()) {

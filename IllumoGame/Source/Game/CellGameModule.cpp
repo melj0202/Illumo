@@ -5137,6 +5137,7 @@ CellGameModule::ensureRender3dTestDrawables()
   std::unique_ptr<SceneInstance> instance =
     std::make_unique<SceneInstance>(ic->assetManager, SceneInstanceOptions{});
   instance->setRenderer(ic->renderer);
+  instance->setRenderWorld(ic->renderWorld);
   if (!instance->load(document, "/app", error)) {
     Logger::LogError("render3dTest: " + error);
     return;

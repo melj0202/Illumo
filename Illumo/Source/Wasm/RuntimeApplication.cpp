@@ -583,6 +583,10 @@ private:
       frame["meshWriteBytes"] = counters->meshWriteBytes;
       frame["meshEnrollments"] = counters->meshEnrollments;
       frame["meshReplacements"] = counters->meshReplacements;
+      frame["worldOperations"] = counters->worldOperations;
+      frame["worldInstances"] = counters->worldInstances;
+      frame["visualOperations"] = counters->visualOperations;
+      frame["visuals"] = counters->visuals;
       result["lastFrame"] = frame;
     }
     if (!m_guest->error().empty()) {

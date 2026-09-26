@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/ResourceHandlePool.h>
 #include <IllumoGuest/Frame.h>
 #include <IllumoGuest/Services.h>
+#include <IllumoGuest/VisualProxies.h>
 #include <map>
 #include <set>
 
@@ -122,6 +123,19 @@ public:
   // Diagnostics: bytes of dynamic mesh writes in the last recorded frame.
   std::size_t lastMeshWriteBytes() const { return m_lastMeshWriteBytes; }
 
+  // Frame schema v7: while enabled, GameVisuals become host visuals, placed
+  // by per-target compositions, instead of recording their tokens.
+  // `composeWorld` puts the host render world first in the main composition.
+  void setVisuals(bool enabled, bool composeWorld);
+  bool visualsEnabled() const { return m_visualsEnabled; }
+  bool AppendVisual(GameVisual& visual) override;
+  void ForgetVisual(const GameVisual& visual) override;
+  // The last taken frame was delivered, or dropped: confirms or discards
+  // its visual changes.
+  void commitVisuals();
+  void dropVisuals();
+  std::size_t visualCount() const { return m_visuals.proxyCount(); }
+
 private:
   struct Mesh
   {
@@ -184,6 +198,14 @@ private:
   void emitMeshWrites();
   void pumpMeshes();
   void mergeShadowCaster(const GuestShadowCaster& caster);
+  // A host texture id for a proxied item, or empty while not on the host.
+  GuestResourceId hostTexture(TextureHandle handle) const;
+  std::uint32_t currentTarget() const;
+  // Closes the target's batch range at this point and places a visual.
+  void placeVisual(std::uint32_t visual);
+  // Covers each composition's remaining batches and replaces compositions
+  // equal to the last delivered ones with `same`.
+  void finishCompositions();
   // Empties m_frame, keeping its texture pixel and mesh write byte buffers
   // as spares for the next frame's writes.
   void recycleFrame();
@@ -235,4 +257,20 @@ private:
   PipelineState m_pipeline{};
   std::string m_error;
   std::size_t m_lastMeshWriteBytes = 0;
+
+  GuestVisualProxies m_visuals;
+  bool m_visualsEnabled = false;
+  bool m_composeWorld = false;
+  // Visuals taken at command positions of the current queue.
+  struct VisualMarker
+  {
+    std::size_t command = 0;
+    std::uint32_t visual = 0;
+  };
+  std::vector<VisualMarker> m_markers;
+  // Per m_frame.compositions entry: batches already covered.
+  std::vector<std::uint32_t> m_compositionCursors;
+  // Full compositions of the last delivered frame, and of the taken one.
+  std::vector<GuestComposition> m_deliveredCompositions;
+  std::vector<GuestComposition> m_takenCompositions;
 };

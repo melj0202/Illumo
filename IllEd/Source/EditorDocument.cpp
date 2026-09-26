@@ -49,6 +49,7 @@ EditorDocument::makeScene() const
   std::unique_ptr<SceneInstance> scene =
     std::make_unique<SceneInstance>(m_assets, options);
   scene->setRenderer(m_renderer);
+  scene->setRenderWorld(m_renderWorld);
   std::string ignored;
   scene->load(SceneDocument{}, kLocalPackageRoot, ignored);
   return scene;
@@ -99,6 +100,13 @@ EditorDocument::setRenderer(Renderer* renderer)
 {
   m_renderer = renderer;
   m_scene->setRenderer(renderer);
+}
+
+void
+EditorDocument::setRenderWorld(IRenderWorld* world)
+{
+  m_renderWorld = world;
+  m_scene->setRenderWorld(world);
 }
 
 void
