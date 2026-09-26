@@ -276,9 +276,12 @@ the program to close.
 
 ### 6.4 `GuestProgram`
 
-`GuestModuleApplication` loses `IModuleHost`, `createFirstModule`,
-`RequestTransition`, `m_module` and `m_pending`, and gains:
-- `SceneDirector& scenes()`.
+`GuestModuleApplication` (`IllumoGuest/ModuleApplication.h`) becomes
+`GuestProgram` (`IllumoGuest/Program.h`). It moves from `IllumoGuestEngine` to
+`IllumoGuestContent`, since it runs content scenes. It loses `IModuleHost`,
+`createFirstModule`, `RequestTransition`, `m_module` and `m_pending`, and gains:
+- `scenes()` (the director, null until running) and `programContext()` (for a
+  product that publishes extra services).
 - `virtual bool createScenes(SceneDirector&)`. It runs once after bootstrap,
   adds the program's scenes and switches to the first one.
 - Program-level update and dispatch around the active scene:
@@ -400,8 +403,10 @@ drawing two scenes' worlds at once (O5).
 - **Direct launch** (`LaunchDirect`) starts on the canvas.
 
 **IllEd:** `EditorApplication` becomes `EditorProgram`, with one
-`EditorScene` from `EditorModule`. The edited document becomes the scene's
-`SceneInstance`.
+`EditorScene` from `EditorModule`. The edited document is meant to become the
+scene's `SceneInstance`. Since M2, though, `EditorDocument` still owns its own
+instance: it swaps in a fresh one on new, open and undo paths, and borrowing
+`content()` is a document refactor (tracked in the plan).
 
 **IllMeshViewer:** `ViewerApplication` becomes `ViewerProgram`, with one
 `ViewerScene` from `MeshViewerModule`. The viewed document becomes the
@@ -582,3 +587,35 @@ off, uncapped), CSim storage with the frame cap off.
     without one.
   - **Shutdown order.**
 - Full Release suite 679 of 679 (672 plus the 7 new cases).
+
+### M2 (2026-09-26, branch `scene-programs`)
+
+- **Guest SDK:** `GuestProgram` replaces `GuestModuleApplication` (section
+  6.4). `SceneDirector::emplace<T>` returns the added scene.
+- **IllMeshViewer:** `MeshViewerModule` becomes `MeshViewerScene`, and the
+  opened scene document is its `content()`. The viewer's tests drive it
+  through a real `SceneDirector`.
+- **IllEd:** `EditorModule` becomes `EditorScene`, with its own document
+  instance for now (section 6.8). Its tests call the scene directly, since it
+  doesn't use `content()` yet.
+- **CSim:** its modules run as scenes through a temporary adapter
+  (`ModuleScene` in `GameApplication.cpp`, removed in M4). A module exits when
+  its scene leaves, before the next starts, exactly as a transition did. The
+  camera is handed from module to module, because the modules shared one
+  camera.
+- **Finding:** the canvas relied on inheriting the title's background zoom
+  (0.5). Without the handoff it opened at zoom 1, with cells twice the size,
+  as `LaunchDirect` already does today. M4 must set the canvas zoom
+  deliberately.
+- **Native leftovers deleted early:** `IllMeshViewerApplication.cpp` and
+  `IllEdApplication.cpp` no longer compiled against scenes. The IllEd config
+  test keeps its defaults checks.
+- **Parity against M0:**
+  - IllEd's first frame is identical.
+  - IllMeshViewer differs by 53 isolated grid pixels (motion-blur noise).
+  - CSim's paused canvas differs only around the cursor and glider.
+  - The title differs only where the live background and the real pointer's
+    hover position differ.
+  - Both transitions still work. The worst frames are 5.6 ms entering and
+    6.1 ms returning, against 5.1-5.8 ms at M0.
+- Full Release suite 679 of 679, allocation gates included.

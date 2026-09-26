@@ -18,7 +18,7 @@ Rulesets, or IllEd. Application policy stays in the consuming product.
 | `Illumo/` | Static library: runner, platform, services, SceneGraph, OpenGL token renderer, assets |
 | `IllumoGame/` | Cellular-automata sandbox, shipped only as the isolated `IllumoGame.wasm` package. Saves write sparse `.csim` version 4; loads versions 4, 3, and 2 plus legacy dense / `.illumo` |
 | `IllumoRuntime` | Generic native host (Windows x64): window, OpenGL, services and a Wasmtime sandbox. Runs every interactive client program as a WASM package staged beside it in `apps/<name>/`, and captures PNG frames with `--capture` ([docs/wasm-game-runtime-design.md](docs/wasm-game-runtime-design.md), [docs/frame-capture.md](docs/frame-capture.md)) |
-| `IllumoGuest/` | Guest SDK and WASI build tree: ABI wire headers, guest-side engine (`GuestModuleApplication`), recording backend |
+| `IllumoGuest/` | Guest SDK and WASI build tree: ABI wire headers, guest-side engine and program (`GuestProgram`), recording backend |
 | `IllEd/` | SceneGraph world editor, shipped as the `IllEd.wasm` package (`--app illed`). Writes `.ilsc` format 2 scenes for later Illumo applications; its Hierarchy, Assets, Tools and Inspector panels dock or pop out into their own windows |
 | `IllMeshViewer/` | `.obj` mesh and `.ilsc` scene viewer with orbit, pan, zoom, and rotate, and detachable Info and Display panels, shipped as the `IllMeshViewer.wasm` package (`--app meshviewer`) |
 | `build.py` | Standard-library Python 3.10+ front end for the CMake build |

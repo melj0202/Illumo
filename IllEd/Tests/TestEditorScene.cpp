@@ -1,5 +1,5 @@
 #include "EditorClipboard.h"
-#include "EditorModule.h"
+#include "EditorScene.h"
 #include "EditorShortcuts.h"
 #include "EditorUiAtlas.h"
 #include "TestAccess.h"
@@ -122,7 +122,7 @@ struct EditorFixture
   InputManager input;
   Scene scene;
   IllumoContext context;
-  EditorModule module;
+  EditorScene module;
   bool started;
 
   EditorFixture()
@@ -146,13 +146,13 @@ struct EditorFixture
     env.setVar("fontSize", "13");
     mock.Initialize();
     seedShippedAtlas();
-    started = module.Start(&context);
+    started = module.start(context);
   }
 
   ~EditorFixture()
   {
     if (started) {
-      module.Exit();
+      module.stop();
     }
   }
 };
@@ -160,98 +160,98 @@ struct EditorFixture
 static void
 testCloseConfirmation()
 {
-  testSection("EditorModule: native close shares unsaved confirmation");
+  testSection("EditorScene: native close shares unsaved confirmation");
   EditorFixture fixture;
   testTrue(g, fixture.started, "editor starts");
   testTrue(g,
-           fixture.module.OnCloseRequested(),
+           fixture.module.closeRequested(),
            "clean document accepts native close");
-  EditorModuleTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
+  EditorSceneTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
   testTrue(
-    g, !fixture.module.OnCloseRequested(), "dirty native close is deferred");
+    g, !fixture.module.closeRequested(), "dirty native close is deferred");
   testTrue(g,
-           EditorModuleTestAccess::confirmationOpen(fixture.module),
+           EditorSceneTestAccess::confirmationOpen(fixture.module),
            "native close opens confirmation");
   testTrue(g,
-           !fixture.module.OnCloseRequested(),
+           !fixture.module.closeRequested(),
            "repeated request keeps pending confirmation");
   fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.01);
+  fixture.module.update(0.01);
   testTrue(g,
            !fixture.window.shouldWindowClose() &&
-             !EditorModuleTestAccess::confirmationOpen(fixture.module),
+             !EditorSceneTestAccess::confirmationOpen(fixture.module),
            "cancel leaves editor open");
 
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   document.setPath("missing-close-parent/document.ilsc");
   testTrue(g,
-           !fixture.module.OnCloseRequested(),
+           !fixture.module.closeRequested(),
            "new close request reopens confirmation");
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.01);
+  fixture.module.update(0.01);
   testTrue(g,
            document.isDirty() && !fixture.window.shouldWindowClose(),
            "failed save leaves document dirty and open");
 
   const std::string path = "test-close-saved.ilsc";
   document.setPath(path);
-  testTrue(g, !fixture.module.OnCloseRequested(), "save can be retried");
+  testTrue(g, !fixture.module.closeRequested(), "save can be retried");
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.01);
+  fixture.module.update(0.01);
   testTrue(g,
            !document.isDirty() && fixture.window.shouldWindowClose() &&
-             fixture.module.OnCloseRequested(),
+             fixture.module.closeRequested(),
            "successful save permits close");
   testTrue(g, std::filesystem::exists(path), "successful close writes scene");
   std::filesystem::remove(path);
 
   EditorFixture discard;
-  EditorModuleTestAccess::createNode(discard.module, EditorCommand::CreateCube);
-  EditorModuleTestAccess::handleCommand(discard.module,
+  EditorSceneTestAccess::createNode(discard.module, EditorCommand::CreateCube);
+  EditorSceneTestAccess::handleCommand(discard.module,
                                         EditorCommand::ExitEditor);
   testTrue(g,
-           EditorModuleTestAccess::confirmationOpen(discard.module),
+           EditorSceneTestAccess::confirmationOpen(discard.module),
            "toolbar exit shares confirmation");
   discard.input.getKeyQueue().push({ KeyCode::N, InputAction::Press, 0 });
-  discard.module.Update(0.01);
+  discard.module.update(0.01);
   testTrue(g,
-           EditorModuleTestAccess::document(discard.module).isDirty() &&
+           EditorSceneTestAccess::document(discard.module).isDirty() &&
              discard.window.shouldWindowClose() &&
-             discard.module.OnCloseRequested(),
+             discard.module.closeRequested(),
            "discard closes without re-prompting on dirty document");
   discard.window.cancelCloseRequest();
-  EditorModuleTestAccess::createNode(discard.module, EditorCommand::CreateCube);
+  EditorSceneTestAccess::createNode(discard.module, EditorCommand::CreateCube);
   testTrue(g,
-           !discard.module.OnCloseRequested() &&
-             EditorModuleTestAccess::confirmationOpen(discard.module),
+           !discard.module.closeRequested() &&
+             EditorSceneTestAccess::confirmationOpen(discard.module),
            "approval is consumed if another module vetoes and editing resumes");
   discard.input.getKeyQueue().push({ KeyCode::N, InputAction::Press, 0 });
-  discard.module.Update(0.01);
+  discard.module.update(0.01);
   discard.window.cancelCloseRequest();
-  discard.module.Update(0.01);
+  discard.module.update(0.01);
   testTrue(
     g,
-    !discard.module.OnCloseRequested() &&
-      EditorModuleTestAccess::confirmationOpen(discard.module),
+    !discard.module.closeRequested() &&
+      EditorSceneTestAccess::confirmationOpen(discard.module),
     "approval expires when an earlier module vetoes before consultation");
 }
 
 static void
 testUiAtlasSpritesFromStart()
 {
-  testSection("EditorModule: shipped atlas draws the Tools panel sprites");
+  testSection("EditorScene: shipped atlas draws the Tools panel sprites");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
   testTrue(
     g,
     fixture.assets
-        .getState(EditorModuleTestAccess::toolbar(fixture.module)->atlas())
+        .getState(EditorSceneTestAccess::toolbar(fixture.module)->atlas())
         .state == AssetState::Ready,
     "module loaded the shipped atlas");
-  EditorToolsPanel* tools = EditorModuleTestAccess::tools(fixture.module);
-  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(fixture.module);
+  EditorToolsPanel* tools = EditorSceneTestAccess::tools(fixture.module);
+  EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(fixture.module);
   testTrue(g, tools != nullptr && toolbar != nullptr, "chrome exists");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            tools->getVisual().spriteCount() >= 8u,
            "the Tools panel draws its Create tool icons");
@@ -271,31 +271,31 @@ testUiAtlasSpritesFromStart()
 static void
 testCreateCubeAndGraph()
 {
-  testSection("EditorModule: create cube and attach graph");
+  testSection("EditorScene: create cube and attach graph");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
-  EditorModuleTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
+  EditorSceneTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
   testEqSize(g,
-             EditorModuleTestAccess::document(fixture.module).nodeCount(),
+             EditorSceneTestAccess::document(fixture.module).nodeCount(),
              1u,
              "document has one node");
   testEqSize(g,
-             EditorModuleTestAccess::graph(fixture.module).getNodeCount(),
+             EditorSceneTestAccess::graph(fixture.module).getNodeCount(),
              1u,
              "graph has one node");
   testTrue(g,
-           !EditorModuleTestAccess::selectedId(fixture.module).empty(),
+           !EditorSceneTestAccess::selectedId(fixture.module).empty(),
            "new cube is selected");
 }
 
 static void
 testSaveLoadThroughDocument()
 {
-  testSection("EditorModule: scene file round trip");
+  testSection("EditorScene: scene file round trip");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
-  EditorModuleTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorSceneTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   const std::filesystem::path path =
     std::filesystem::temp_directory_path() / "module-roundtrip.ilsc";
   struct TempFileGuard
@@ -335,19 +335,19 @@ testSaveLoadThroughDocument()
 static void
 testModeCreateSelectProperties()
 {
-  testSection("EditorModule: 2D/3D mode, create, select, properties");
+  testSection("EditorScene: 2D/3D mode, create, select, properties");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::SetMode3D);
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   testTrue(g,
            document.worldMode() == SceneWorldMode::World3D,
            "module switches to 3D");
-  EditorModuleTestAccess::createNode(fixture.module,
+  EditorSceneTestAccess::createNode(fixture.module,
                                      EditorCommand::CreateEllipse);
   const std::string ellipseId =
-    EditorModuleTestAccess::selectedId(fixture.module);
+    EditorSceneTestAccess::selectedId(fixture.module);
   testTrue(g, !ellipseId.empty(), "ellipse selected");
   testTrue(g,
            document.setExtent(ellipseId, Vector3(1.25f, 0.8f, 0.5f)),
@@ -355,20 +355,20 @@ testModeCreateSelectProperties()
   testTrue(g,
            document.setColor(ellipseId, ColorRgba{ 4, 5, 6, 255 }),
            "property color via document");
-  EditorModuleTestAccess::refreshView(fixture.module);
+  EditorSceneTestAccess::refreshView(fixture.module);
 
   const size_t beforeArm = document.nodeCount();
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::CreatePyramid);
   testEqSize(
     g, document.nodeCount(), beforeArm, "CreatePyramid arms without inserting");
   testTrue(g,
-           EditorModuleTestAccess::activeTool(fixture.module) ==
+           EditorSceneTestAccess::activeTool(fixture.module) ==
              EditorCommand::CreatePyramid,
            "pyramid tool is armed");
-  EditorModuleTestAccess::applyActiveToolAt(fixture.module, 1.0f, 2.0f);
+  EditorSceneTestAccess::applyActiveToolAt(fixture.module, 1.0f, 2.0f);
   testTrue(g,
-           EditorModuleTestAccess::activeTool(fixture.module) ==
+           EditorSceneTestAccess::activeTool(fixture.module) ==
              EditorCommand::SelectTool,
            "place disarms the tool");
   const EditorSceneDetail detail = fixture.module.sceneDetail();
@@ -378,14 +378,14 @@ testModeCreateSelectProperties()
   testTrue(g,
            detail.kindLabel == "Pyramid" || detail.kindLabel == "Ellipse",
            "selected kind is a created primitive");
-  EditorToolsPanel* tools = EditorModuleTestAccess::tools(fixture.module);
+  EditorToolsPanel* tools = EditorSceneTestAccess::tools(fixture.module);
   testTrue(g, tools != nullptr, "the Tools panel exists");
   float modeX = 0.0f;
   float modeY = 0.0f;
   tools->controlCenterForTesting(EditorCommand::SetMode2D, &modeX, &modeY);
   const EditorCommand mode2d = tools->clickAtForTesting(modeX, modeY);
   testTrue(g, mode2d == EditorCommand::SetMode2D, "Tools 2D hit");
-  EditorModuleTestAccess::handleCommand(fixture.module, mode2d);
+  EditorSceneTestAccess::handleCommand(fixture.module, mode2d);
   testTrue(
     g, document.worldMode() == SceneWorldMode::World2D, "Tools mode applied");
 }
@@ -393,26 +393,26 @@ testModeCreateSelectProperties()
 static void
 testCreateToolArmsOnly()
 {
-  testSection("EditorModule: Create command arms, canvas place inserts once");
+  testSection("EditorScene: Create command arms, canvas place inserts once");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   const size_t before = document.nodeCount();
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::CreateCube);
   testEqSize(g, document.nodeCount(), before, "no node on tool select");
   testTrue(g,
-           EditorModuleTestAccess::activeTool(fixture.module) ==
+           EditorSceneTestAccess::activeTool(fixture.module) ==
              EditorCommand::CreateCube,
            "cube tool armed");
-  EditorModuleTestAccess::applyActiveToolAt(fixture.module, 3.0f, -1.5f);
+  EditorSceneTestAccess::applyActiveToolAt(fixture.module, 3.0f, -1.5f);
   testEqSize(g, document.nodeCount(), before + 1u, "one node on canvas place");
   testTrue(g,
-           EditorModuleTestAccess::activeTool(fixture.module) ==
+           EditorSceneTestAccess::activeTool(fixture.module) ==
              EditorCommand::SelectTool,
            "tool returns to select after place");
   const SceneNode* node =
-    document.findNode(EditorModuleTestAccess::selectedId(fixture.module));
+    document.findNode(EditorSceneTestAccess::selectedId(fixture.module));
   testTrue(g, isShape(node, ScenePrimitiveShape::Cube), "placed cube");
   testTrue(g,
            node != nullptr && node->transform.position.x == 3.0f &&
@@ -424,25 +424,25 @@ testCreateToolArmsOnly()
 static void
 testPlaceOn3DGround()
 {
-  testSection("EditorModule: 3D pick/place lands on Y=0 XZ grid");
+  testSection("EditorScene: 3D pick/place lands on Y=0 XZ grid");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::SetMode3D);
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   testTrue(
     g, document.worldMode() == SceneWorldMode::World3D, "3D mode active");
   float planeX = 0.0f;
   float planeZ = 0.0f;
   testTrue(g,
-           EditorModuleTestAccess::screenToWorld(
+           EditorSceneTestAccess::screenToWorld(
              fixture.module, 960.0f, 360.0f, &planeX, &planeZ),
            "3D unproject of off-center pixel");
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::CreateCube);
-  EditorModuleTestAccess::applyActiveToolAt(fixture.module, planeX, planeZ);
+  EditorSceneTestAccess::applyActiveToolAt(fixture.module, planeX, planeZ);
   const SceneNode* node =
-    document.findNode(EditorModuleTestAccess::selectedId(fixture.module));
+    document.findNode(EditorSceneTestAccess::selectedId(fixture.module));
   testTrue(g, node != nullptr, "placed a node");
   testTrue(g,
            node != nullptr && std::fabs(node->transform.position.y) < 0.001f,
@@ -474,10 +474,10 @@ static void
 testToolbarCreateClickDoesNotInsertOnUpdate()
 {
   testSection(
-    "EditorModule: toolbar Create click arms through Update without placing");
+    "EditorScene: toolbar Create click arms through Update without placing");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
-  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(fixture.module);
+  EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(fixture.module);
   testTrue(g, toolbar != nullptr, "toolbar exists");
 
   float createX = -1.0f;
@@ -508,25 +508,25 @@ testToolbarCreateClickDoesNotInsertOnUpdate()
   testTrue(g, cubeY >= 0.0f, "found Solid Cube item");
   toolbar->closeMenus();
 
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   const size_t before = document.nodeCount();
   fixture.window.mouseX = static_cast<double>(createX);
   fixture.window.mouseY = 8.0;
   pressLeft(fixture, true);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, toolbar->isMenuOpen(), "Update opens Create menu");
   testEqSize(g, document.nodeCount(), before, "opening menu does not insert");
   pressLeft(fixture, false);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   fixture.window.mouseX = static_cast<double>(createX);
   fixture.window.mouseY = static_cast<double>(cubeY);
   pressLeft(fixture, true);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqSize(
     g, document.nodeCount(), before, "Create Cube menu click does not insert");
   testTrue(g,
-           EditorModuleTestAccess::activeTool(fixture.module) ==
+           EditorSceneTestAccess::activeTool(fixture.module) ==
              EditorCommand::CreateCube,
            "Create Cube is armed after Update");
 }
@@ -535,19 +535,19 @@ static void
 testOpenConsoleBlocksEditorInput()
 {
   testSection(
-    "EditorModule: open console blocks editor input and grave is unconsumed");
+    "EditorScene: open console blocks editor input and grave is unconsumed");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
 
   // 1. When console is closed, Grave key is not consumed or toggled by
-  // EditorModule
+  // EditorScene
   fixture.input.clearKeyQueue();
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Grave, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.console.isOpen,
-           "EditorModule does not toggle console on Grave");
+           "EditorScene does not toggle console on Grave");
   testTrue(g,
            !fixture.input.getKeyQueue().empty() &&
              fixture.input.getKeyQueue().front().key == KeyCode::Grave,
@@ -556,19 +556,19 @@ testOpenConsoleBlocksEditorInput()
   // 2. When console is open, toolbar and panel input yield
   fixture.console.Toggle();
   testTrue(g, fixture.console.isOpen, "console is open");
-  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(fixture.module);
+  EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(fixture.module);
   testTrue(g, toolbar != nullptr, "toolbar exists");
   fixture.window.mouseX = 20.0;
   fixture.window.mouseY = 8.0;
   pressLeft(fixture, true);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, !toolbar->isMenuOpen(), "open console blocks toolbar clicks");
 }
 
 static void
-testEditorModuleDoesNotDispatchConsole()
+testEditorSceneDoesNotDispatchConsole()
 {
-  testSection("EditorModule: does not dispatch console drawable (DebugModule "
+  testSection("EditorScene: does not dispatch console drawable (DebugModule "
               "responsibility)");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
@@ -578,7 +578,7 @@ testEditorModuleDoesNotDispatchConsole()
   testTrue(g, fixture.console.wantsDraw(), "console wants draw");
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
 
   const std::vector<DrawableBase*>& uiDrawables =
     fixture.scene.drawablesIn(RenderLayerId::UI);
@@ -591,28 +591,28 @@ testEditorModuleDoesNotDispatchConsole()
   }
   testTrue(g,
            !consoleFoundInScene,
-           "EditorModule does not add CommandLine to Scene drawables");
+           "EditorScene does not add CommandLine to Scene drawables");
 }
 
 static void
 testUiDrawOrder()
 {
-  testSection("EditorModule: UI draw order ensures toolbar and dropdowns draw "
+  testSection("EditorScene: UI draw order ensures toolbar and dropdowns draw "
               "above side panels");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
 
   const std::vector<DrawableBase*>& uiDrawables =
     fixture.scene.drawablesIn(RenderLayerId::UI);
   testTrue(g, uiDrawables.size() >= 3u, "at least 3 UI drawables in scene");
 
   EditorSceneGraphView* sceneGraphView =
-    EditorModuleTestAccess::sceneGraphView(fixture.module);
-  EditorToolsPanel* tools = EditorModuleTestAccess::tools(fixture.module);
-  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(fixture.module);
+    EditorSceneTestAccess::sceneGraphView(fixture.module);
+  EditorToolsPanel* tools = EditorSceneTestAccess::tools(fixture.module);
+  EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(fixture.module);
 
   int sgvIndex = -1;
   int toolsIndex = -1;
@@ -642,23 +642,23 @@ testUiDrawOrder()
 static void
 test2dModeNodeRenderingEmitsTokens()
 {
-  testSection("EditorModule: 2D nodes (Rect, Ellipse, Triangle) emit render "
+  testSection("EditorScene: 2D nodes (Rect, Ellipse, Triangle) emit render "
               "tokens in 2D mode");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
   testTrue(g,
-           EditorModuleTestAccess::document(fixture.module).worldMode() ==
+           EditorSceneTestAccess::document(fixture.module).worldMode() ==
              SceneWorldMode::World2D,
            "starts in 2D mode");
 
-  EditorModuleTestAccess::createNode(fixture.module, EditorCommand::CreateRect);
-  EditorModuleTestAccess::createNode(fixture.module,
+  EditorSceneTestAccess::createNode(fixture.module, EditorCommand::CreateRect);
+  EditorSceneTestAccess::createNode(fixture.module,
                                      EditorCommand::CreateEllipse);
-  EditorModuleTestAccess::createNode(fixture.module,
+  EditorSceneTestAccess::createNode(fixture.module,
                                      EditorCommand::CreateTriangle);
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
 
   fixture.mock.resetCounters();
   fixture.renderer.BeginFrame();
@@ -679,7 +679,7 @@ test2dModeNodeRenderingEmitsTokens()
 static void
 testFontSizeConfiguredFromEnvVars()
 {
-  testSection("EditorModule: fontSize configured from IEnvVars");
+  testSection("EditorScene: fontSize configured from IEnvVars");
   NullRenderWindow window(1280, 720);
   EnvVars env;
   env.setVar("fontSize", "20");
@@ -693,16 +693,16 @@ testFontSizeConfiguredFromEnvVars()
   Scene scene(&window, &camera);
   IllumoContext context{ &scene,  &window, &console, &input,   &renderer,
                          &assets, &env,    &camera,  &registry };
-  EditorModule module;
+  EditorScene module;
   mock.Initialize();
   seedShippedAtlas();
-  const bool started = module.Start(&context);
+  const bool started = module.start(context);
   testTrue(g, started, "module started with fontSize 20");
 
-  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(module);
-  EditorToolsPanel* tools = EditorModuleTestAccess::tools(module);
+  EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(module);
+  EditorToolsPanel* tools = EditorSceneTestAccess::tools(module);
   EditorSceneGraphView* sceneGraphView =
-    EditorModuleTestAccess::sceneGraphView(module);
+    EditorSceneTestAccess::sceneGraphView(module);
 
   testTrue(g, toolbar != nullptr, "toolbar exists");
   testTrue(g, tools != nullptr, "tools exists");
@@ -716,14 +716,14 @@ testFontSizeConfiguredFromEnvVars()
            std::abs(sceneGraphView->fontSize() - 20.0f) < 0.001f,
            "sceneGraphView fontSize 20");
 
-  module.Exit();
+  module.stop();
 }
 
 static void
 testFontSizeImmediateRuntimeChange()
 {
   testSection(
-    "EditorModule: runtime fontSize change takes effect immediately on Update");
+    "EditorScene: runtime fontSize change takes effect immediately on Update");
   NullRenderWindow window(1280, 720);
   EnvVars env;
   env.setVar("fontSize", "13");
@@ -737,16 +737,16 @@ testFontSizeImmediateRuntimeChange()
   Scene scene(&window, &camera);
   IllumoContext context{ &scene,  &window, &console, &input,   &renderer,
                          &assets, &env,    &camera,  &registry };
-  EditorModule module;
+  EditorScene module;
   mock.Initialize();
   seedShippedAtlas();
-  const bool started = module.Start(&context);
+  const bool started = module.start(context);
   testTrue(g, started, "module started");
 
-  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(module);
-  EditorToolsPanel* tools = EditorModuleTestAccess::tools(module);
+  EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(module);
+  EditorToolsPanel* tools = EditorSceneTestAccess::tools(module);
   EditorSceneGraphView* sceneGraphView =
-    EditorModuleTestAccess::sceneGraphView(module);
+    EditorSceneTestAccess::sceneGraphView(module);
 
   testTrue(g,
            toolbar != nullptr && tools != nullptr && sceneGraphView != nullptr,
@@ -760,7 +760,7 @@ testFontSizeImmediateRuntimeChange()
 
   // Change variable at runtime
   env.setVar("fontSize", "24");
-  module.Update(0.016);
+  module.update(0.016);
 
   testTrue(g,
            std::abs(toolbar->fontSize() - 24.0f) < 0.001f,
@@ -779,7 +779,7 @@ testFontSizeImmediateRuntimeChange()
 
   // Change variable again at runtime (e.g. via multiplier or smaller size)
   env.setVar("fontSize", "16");
-  module.Update(0.016);
+  module.update(0.016);
 
   testTrue(g,
            std::abs(toolbar->fontSize() - 16.0f) < 0.001f,
@@ -788,14 +788,14 @@ testFontSizeImmediateRuntimeChange()
            std::abs(tools->fontSize() - 16.0f) < 0.001f,
            "tools resized to 16 immediately");
 
-  module.Exit();
+  module.stop();
 }
 
 static void
 testMousePanningMovesCameraNaturalDirection()
 {
   testSection(
-    "EditorModule: mouse panning moves camera in natural drag direction");
+    "EditorScene: mouse panning moves camera in natural drag direction");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
 
@@ -804,16 +804,16 @@ testMousePanningMovesCameraNaturalDirection()
   fixture.camera.SetZoom(1.0f);
   fixture.window.mouseX = 500.0;
   fixture.window.mouseY = 300.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   // Press middle mouse button and drag right (500 -> 550) and down (300 -> 350)
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseMiddle, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   fixture.window.mouseX = 550.0;
   fixture.window.mouseY = 350.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   // Dragging right (dx > 0) should shift camera target left (targetPosition.x <
   // 0) Dragging down (dy > 0 in screen space) should shift camera target up
@@ -829,17 +829,17 @@ static void
 test3DMousePanningRespectsCameraOrientation()
 {
   testSection(
-    "EditorModule: 3D mouse panning moves target along camera orientation");
+    "EditorScene: 3D mouse panning moves target along camera orientation");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
 
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::SetMode3D);
   fixture.camera.SetPositionPrecise(0.0, 0.0);
   fixture.camera.SetZoom(1.0f);
   fixture.window.mouseX = 500.0;
   fixture.window.mouseY = 300.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   // Default camera yaw is 0.0. Looking down -Z, right vector is (+1, 0, 0).
   // Dragging right (mouse 500 -> 550) should shift target left (-X).
@@ -847,11 +847,11 @@ test3DMousePanningRespectsCameraOrientation()
   // position.y < 0).
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseMiddle, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   fixture.window.mouseX = 550.0;
   fixture.window.mouseY = 350.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   fixture.camera.Update(1.0f);
   const glm::dvec2 pos = fixture.camera.GetPositionPrecise();
@@ -862,13 +862,13 @@ test3DMousePanningRespectsCameraOrientation()
 static void
 test3DCameraElevationKeys()
 {
-  testSection("EditorModule: 3D camera elevation via PageUp and PageDown");
+  testSection("EditorScene: 3D camera elevation via PageUp and PageDown");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
 
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::SetMode3D);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   const glm::vec3 initialEye = fixture.camera.getEye();
   const glm::vec3 initialTarget = fixture.camera.getTarget();
@@ -876,7 +876,7 @@ test3DCameraElevationKeys()
   // Press E to elevate camera Up
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::PageUp, InputAction::Press);
-  fixture.module.Update(0.1);
+  fixture.module.update(0.1);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::PageUp, InputAction::Release);
 
@@ -889,7 +889,7 @@ test3DCameraElevationKeys()
   // Press Q to lower camera Down
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::PageDown, InputAction::Press);
-  fixture.module.Update(0.2);
+  fixture.module.update(0.2);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::PageDown, InputAction::Release);
 
@@ -904,27 +904,27 @@ static void
 testTransformGizmoHitAndConstraints()
 {
   testSection(
-    "EditorModule: Transform gizmo hit testing and constraint dragging");
+    "EditorScene: Transform gizmo hit testing and constraint dragging");
   EditorFixture fixture;
   testTrue(g, fixture.started, "module starts");
 
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::SetMode3D);
-  EditorModuleTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
-  const std::string id = EditorModuleTestAccess::selectedId(fixture.module);
+  EditorSceneTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
+  const std::string id = EditorSceneTestAccess::selectedId(fixture.module);
   testTrue(g, !id.empty(), "cube created and selected");
 
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   document.setTransform(id,
                         Transform3D::fromPosition(Vector3(0.0f, 0.0f, 0.0f)));
   fixture.camera.SetPositionPrecise(0.0, 0.0);
   fixture.camera.SetZoom(32.0f);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   // Gizmo is centered at world (0, 0, 0)
   const glm::vec3 gizmoOrigin(0.0f, 0.0f, 0.0f);
   const float initialScale =
-    EditorModuleTestAccess::gizmoScale(fixture.module, gizmoOrigin);
+    EditorSceneTestAccess::gizmoScale(fixture.module, gizmoOrigin);
   testTrue(g,
            initialScale > 0.3f && initialScale < 2.0f,
            "initial gizmo scale is well-proportioned");
@@ -933,9 +933,9 @@ testTransformGizmoHitAndConstraints()
   // proportionally so that screen-space visual size remains stable rather than
   // wildly blowing up or shrinking
   fixture.camera.SetZoom(8.0f);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   const float zoomedOutScale =
-    EditorModuleTestAccess::gizmoScale(fixture.module, gizmoOrigin);
+    EditorSceneTestAccess::gizmoScale(fixture.module, gizmoOrigin);
   testTrue(g,
            zoomedOutScale > initialScale,
            "zoomed out camera increases world scale for screen stability");
@@ -944,7 +944,7 @@ testTransformGizmoHitAndConstraints()
   const float centerX = 640.0f;
   const float centerY = 360.0f;
 
-  const GizmoPart centerHit = EditorModuleTestAccess::hitTestGizmo(
+  const GizmoPart centerHit = EditorSceneTestAccess::hitTestGizmo(
     fixture.module, centerX, centerY, gizmoOrigin, zoomedOutScale);
   testTrue(
     g, centerHit == GizmoPart::Center, "center of gizmo hits Center part");
@@ -972,25 +972,25 @@ testTransformGizmoHitAndConstraints()
   fixture.window.mouseY = 360.0;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           EditorModuleTestAccess::isDragging(fixture.module),
+           EditorSceneTestAccess::isDragging(fixture.module),
            "drag started on center click");
 
   // Move the mouse over a docked panel (x=20, y=100 is in the Hierarchy)
   fixture.window.mouseX = 20.0;
   fixture.window.mouseY = 100.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           EditorModuleTestAccess::isDragging(fixture.module),
+           EditorSceneTestAccess::isDragging(fixture.module),
            "drag persists when cursor moves over UI");
 
   // Re-enter world area
   fixture.window.mouseX = 700.0;
   fixture.window.mouseY = 360.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           EditorModuleTestAccess::isDragging(fixture.module),
+           EditorSceneTestAccess::isDragging(fixture.module),
            "drag still active when cursor re-enters");
   const SceneNode* movedNode = document.findNode(id);
   testTrue(g,
@@ -1000,9 +1000,9 @@ testTransformGizmoHitAndConstraints()
   // Releasing mouse terminates the drag
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !EditorModuleTestAccess::isDragging(fixture.module),
+           !EditorSceneTestAccess::isDragging(fixture.module),
            "drag terminates on mouse release");
 }
 
@@ -1011,23 +1011,23 @@ testCameraDoesNotDirty()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   testTrue(counters, !document.isDirty(), "fresh document is clean");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::Right, InputAction::Press);
   for (int frame = 0; frame < 10; ++frame) {
-    fixture.module.Update(0.05);
+    fixture.module.update(0.05);
   }
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::Right, InputAction::Release);
   fixture.camera.SetZoom(12.0f);
-  fixture.module.Update(0.05);
+  fixture.module.update(0.05);
   testTrue(counters,
            fixture.camera.GetTargetPositionPrecise().x > 1.0,
            "arrow keys pan the camera");
   testTrue(counters, !document.isDirty(), "camera motion never dirties");
   testTrue(counters,
-           fixture.module.OnCloseRequested(),
+           fixture.module.closeRequested(),
            "a view-only session closes without asking to save");
   testTrue(counters,
            document.encode().find("\"zoom\": 12.0") != std::string::npos,
@@ -1040,14 +1040,14 @@ testNewNodeParentsToRoot()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
-  const std::string first = EditorModuleTestAccess::createNode(
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
+  const std::string first = EditorSceneTestAccess::createNode(
     fixture.module, EditorCommand::CreateCube);
   testEqStr(counters,
-            EditorModuleTestAccess::selectedId(fixture.module),
+            EditorSceneTestAccess::selectedId(fixture.module),
             first,
             "the new node is selected");
-  const std::string second = EditorModuleTestAccess::createNode(
+  const std::string second = EditorSceneTestAccess::createNode(
     fixture.module, EditorCommand::CreateRect);
   testTrue(counters,
            parentOf(document, second).empty() &&
@@ -1061,7 +1061,7 @@ testShortcutsMatchMenus()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorToolbar* toolbar = EditorModuleTestAccess::toolbar(fixture.module);
+  EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(fixture.module);
   for (const EditorShortcut& shortcut : EditorShortcuts::all()) {
     const std::string hint = toolbar->menuHintForTesting(shortcut.command);
     if (!hint.empty() && hint != EditorShortcuts::labelFor(shortcut.command)) {
@@ -1106,37 +1106,37 @@ testKeyboardUndoRedo()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
-  EditorModuleTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
+  EditorSceneTestAccess::createNode(fixture.module, EditorCommand::CreateCube);
   testEqSize(counters, document.nodeCount(), 1, "one node");
   fixture.input.getKeyQueue().push({ KeyCode::Z, InputAction::Press, 0x2 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqSize(counters, document.nodeCount(), 0, "Ctrl+Z undoes the create");
   testTrue(counters,
-           EditorModuleTestAccess::selectedId(fixture.module).empty(),
+           EditorSceneTestAccess::selectedId(fixture.module).empty(),
            "the removed node leaves the selection");
   fixture.input.getKeyQueue().push({ KeyCode::Y, InputAction::Press, 0x2 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqSize(counters, document.nodeCount(), 1, "Ctrl+Y redoes it");
   const std::string id(document.graph().getName(document.graph().getRoot(0)));
-  EditorModuleTestAccess::setSelectedId(fixture.module, id);
+  EditorSceneTestAccess::setSelectedId(fixture.module, id);
   fixture.input.getKeyQueue().push({ KeyCode::D, InputAction::Press, 0x2 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqSize(counters, document.nodeCount(), 2, "Ctrl+D duplicates");
   testTrue(counters,
-           EditorModuleTestAccess::selectedId(fixture.module) != id,
+           EditorSceneTestAccess::selectedId(fixture.module) != id,
            "the duplicate becomes the selection");
   fixture.input.getKeyQueue().push({ KeyCode::A, InputAction::Press, 0x2 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqSize(counters,
-             EditorModuleTestAccess::selection(fixture.module).size(),
+             EditorSceneTestAccess::selection(fixture.module).size(),
              2,
              "Ctrl+A selects everything");
   fixture.input.getKeyQueue().push({ KeyCode::Delete, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqSize(counters, document.nodeCount(), 0, "Delete removes the selection");
   fixture.input.getKeyQueue().push({ KeyCode::Z, InputAction::Press, 0x2 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqSize(
     counters, document.nodeCount(), 2, "one undo restores a multi-node delete");
   return counters.failures;
@@ -1154,9 +1154,9 @@ worldToScreen2D(EditorFixture& fixture,
   float oy = 0.0f;
   float px = 0.0f;
   float py = 0.0f;
-  EditorModuleTestAccess::screenToWorld(
+  EditorSceneTestAccess::screenToWorld(
     fixture.module, 640.0f, 360.0f, &ox, &oy);
-  EditorModuleTestAccess::screenToWorld(
+  EditorSceneTestAccess::screenToWorld(
     fixture.module, 740.0f, 260.0f, &px, &py);
   const double unitX = 100.0 / static_cast<double>(px - ox);
   const double unitY = 100.0 / static_cast<double>(py - oy);
@@ -1173,21 +1173,21 @@ dragMouse(EditorFixture& fixture,
 {
   fixture.window.mouseX = fromX;
   fixture.window.mouseY = fromY;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   for (int step = 1; step <= 4; ++step) {
     fixture.window.mouseX = fromX + (toX - fromX) * step / 4.0;
     fixture.window.mouseY = fromY + (toY - fromY) * step / 4.0;
-    fixture.module.Update(0.016);
+    fixture.module.update(0.016);
   }
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::None);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 }
 
 static int
@@ -1195,17 +1195,17 @@ testGizmoRotateAndScaleDrags()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
-  const std::string id = EditorModuleTestAccess::createNode(
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
+  const std::string id = EditorSceneTestAccess::createNode(
     fixture.module, EditorCommand::CreateRect);
   document.setTransform(id, Transform3D{});
   fixture.camera.SetPositionPrecise(0.0, 0.0);
   fixture.camera.SetZoom(32.0f);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.input.getKeyQueue().push({ KeyCode::E, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   const float scale =
-    EditorModuleTestAccess::gizmoScale(fixture.module, glm::vec3(0.0f));
+    EditorSceneTestAccess::gizmoScale(fixture.module, glm::vec3(0.0f));
   const float radius = EditorGizmo::kRingRadius * scale;
   double ax = 0, ay = 0, bx = 0, by = 0;
   worldToScreen2D(fixture, radius, 0.0f, &ax, &ay);
@@ -1223,9 +1223,9 @@ testGizmoRotateAndScaleDrags()
              "a rotate drag is one undo step");
 
   fixture.input.getKeyQueue().push({ KeyCode::R, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   document.setTransform(id, Transform3D{});
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   const float axis = EditorGizmo::kAxisLength * scale;
   worldToScreen2D(fixture, axis * 0.6f, 0.0f, &ax, &ay);
   worldToScreen2D(fixture, axis * 1.2f, 0.0f, &bx, &by);
@@ -1247,7 +1247,7 @@ testGizmoLocalSpaceAndSnap()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   const std::string parent = document.createPrimitive(
     true, ScenePrimitiveShape::Cube, {}, Transform3D{});
   Transform3D turned;
@@ -1256,14 +1256,14 @@ testGizmoLocalSpaceAndSnap()
   document.setTransform(parent, turned);
   const std::string child = document.createPrimitive(
     false, ScenePrimitiveShape::Rect, parent, Transform3D{});
-  EditorModuleTestAccess::setSelectedId(fixture.module, child);
+  EditorSceneTestAccess::setSelectedId(fixture.module, child);
   fixture.camera.SetPositionPrecise(0.0, 0.0);
   fixture.camera.SetZoom(32.0f);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.input.getKeyQueue().push({ KeyCode::X, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   const float scale =
-    EditorModuleTestAccess::gizmoScale(fixture.module, glm::vec3(0.0f));
+    EditorSceneTestAccess::gizmoScale(fixture.module, glm::vec3(0.0f));
   // In local space the child's X handle points along world +Y.
   double ax = 0, ay = 0, bx = 0, by = 0;
   worldToScreen2D(
@@ -1282,13 +1282,13 @@ testGizmoLocalSpaceAndSnap()
            "which is the child's own local X");
 
   fixture.input.getKeyQueue().push({ KeyCode::G, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(counters, document.editorState().snapEnabled, "G turns snapping on");
   testTrue(counters,
            !document.isDirty() || document.history().size() > 0,
            "snapping is view state");
   fixture.input.getKeyQueue().push({ KeyCode::X, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   const Vector3 start(world[3]);
   worldToScreen2D(fixture,
                   start.x + 0.6f * EditorGizmo::kAxisLength * scale,
@@ -1313,7 +1313,7 @@ testFrameSelectionFitsBounds()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   const std::string id = document.createPrimitive(
     false,
     ScenePrimitiveShape::Cube,
@@ -1322,9 +1322,9 @@ testFrameSelectionFitsBounds()
   Transform3D big = document.findNode(id)->transform;
   big.scale = Vector3(10.0f);
   document.setTransform(id, big);
-  EditorModuleTestAccess::setSelectedId(fixture.module, id);
+  EditorSceneTestAccess::setSelectedId(fixture.module, id);
   fixture.input.getKeyQueue().push({ KeyCode::F, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   const glm::dvec2 target = fixture.camera.GetTargetPositionPrecise();
   testTrue(counters,
            std::fabs(target.x - 50.0) < 1e-3 &&
@@ -1332,9 +1332,9 @@ testFrameSelectionFitsBounds()
            "F centers the camera on the selection");
   float left = 0.0f, top = 0.0f, right = 0.0f, bottom = 0.0f;
   fixture.camera.Update(10.0f);
-  EditorModuleTestAccess::screenToWorld(
+  EditorSceneTestAccess::screenToWorld(
     fixture.module, 0.0f, 0.0f, &left, &top);
-  EditorModuleTestAccess::screenToWorld(
+  EditorSceneTestAccess::screenToWorld(
     fixture.module, 1280.0f, 720.0f, &right, &bottom);
   testTrue(counters,
            left < 45.0f && right > 55.0f && bottom < -25.0f && top > -15.0f,
@@ -1350,9 +1350,9 @@ testBoxSelect2D()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   EditorSelection& selection =
-    EditorModuleTestAccess::selection(fixture.module);
+    EditorSceneTestAccess::selection(fixture.module);
   const std::string left = document.createPrimitive(
     false,
     ScenePrimitiveShape::Rect,
@@ -1370,7 +1370,7 @@ testBoxSelect2D()
     Transform3D::fromPosition(Vector3(0.0f, 4.0f, 0.0f)));
   fixture.camera.SetPositionPrecise(0.0, 0.0);
   fixture.camera.SetZoom(32.0f);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   const size_t commands = document.history().size();
 
   double ax = 0, ay = 0, bx = 0, by = 0;
@@ -1382,22 +1382,22 @@ testBoxSelect2D()
              selection.contains(right) && !selection.contains(top),
            "a marquee drag from empty space selects the nodes inside it");
   testTrue(counters,
-           !EditorModuleTestAccess::boxSelecting(fixture.module),
+           !EditorSceneTestAccess::boxSelecting(fixture.module),
            "the marquee ends with the button");
   testEqSize(
     counters, document.history().size(), commands, "box selection never edits");
 
   float sx = 0.0f;
   float sy = 0.0f;
-  EditorModuleTestAccess::worldToScreen(
+  EditorSceneTestAccess::worldToScreen(
     fixture.module, Vector3(0.0f, 4.0f, 0.0f), &sx, &sy);
-  EditorModuleTestAccess::boxSelect(
+  EditorSceneTestAccess::boxSelect(
     fixture.module, sx - 10.0f, sy - 10.0f, sx + 10.0f, sy + 10.0f, true);
   testEqSize(counters, selection.size(), 3, "an additive box adds to it");
 
   document.setVisible(right, false);
   worldToScreen2D(fixture, 3.2f, -2.4f, &bx, &by);
-  EditorModuleTestAccess::boxSelect(fixture.module,
+  EditorSceneTestAccess::boxSelect(fixture.module,
                                     static_cast<float>(ax),
                                     static_cast<float>(ay),
                                     static_cast<float>(bx),
@@ -1418,10 +1418,10 @@ testBoxSelect3D()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   EditorSelection& selection =
-    EditorModuleTestAccess::selection(fixture.module);
-  EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::selection(fixture.module);
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::SetMode3D);
   const Vector3 nearPoint(-1.5f, 0.0f, 1.0f);
   const Vector3 farPoint(1.5f, 0.0f, -2.0f);
@@ -1429,18 +1429,18 @@ testBoxSelect3D()
     false, ScenePrimitiveShape::Cube, {}, Transform3D::fromPosition(nearPoint));
   const std::string farId = document.createPrimitive(
     false, ScenePrimitiveShape::Cube, {}, Transform3D::fromPosition(farPoint));
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   float nx = 0.0f, ny = 0.0f, fx = 0.0f, fy = 0.0f;
   testTrue(
     counters,
-    EditorModuleTestAccess::worldToScreen(
+    EditorSceneTestAccess::worldToScreen(
       fixture.module, nearPoint, &nx, &ny) &&
-      EditorModuleTestAccess::worldToScreen(fixture.module, farPoint, &fx, &fy),
+      EditorSceneTestAccess::worldToScreen(fixture.module, farPoint, &fx, &fy),
     "both nodes project onto the screen");
   glm::vec3 origin(0.0f);
   glm::vec3 direction(0.0f);
-  EditorModuleTestAccess::screenToWorldRay(
+  EditorSceneTestAccess::screenToWorldRay(
     fixture.module, nx, ny, &origin, &direction);
   const glm::vec3 toNode = nearPoint - origin;
   const float offAxis =
@@ -1449,12 +1449,12 @@ testBoxSelect3D()
            offAxis < 0.01f,
            "the projection inverts the picking ray exactly");
 
-  EditorModuleTestAccess::boxSelect(
+  EditorSceneTestAccess::boxSelect(
     fixture.module, nx - 12.0f, ny - 12.0f, nx + 12.0f, ny + 12.0f, false);
   testTrue(counters,
            selection.size() == 1 && selection.contains(nearId),
            "a box around one projected node selects only it");
-  EditorModuleTestAccess::boxSelect(
+  EditorSceneTestAccess::boxSelect(
     fixture.module, 0.0f, 0.0f, 1280.0f, 720.0f, false);
   testTrue(counters,
            selection.size() == 2 && selection.contains(farId),
@@ -1467,9 +1467,9 @@ testPastePlacesAfterSelection()
 {
   TestCounters counters;
   EditorFixture fixture;
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   EditorSelection& selection =
-    EditorModuleTestAccess::selection(fixture.module);
+    EditorSceneTestAccess::selection(fixture.module);
   const std::string a = document.createPrimitive(
     false, ScenePrimitiveShape::Rect, {}, Transform3D{});
   const std::string b = document.createPrimitive(
@@ -1479,7 +1479,7 @@ testPastePlacesAfterSelection()
   const std::string text = EditorClipboard::copy(document.scene(), { a });
   selection.set(b);
   testTrue(counters,
-           EditorModuleTestAccess::pasteText(fixture.module, text),
+           EditorSceneTestAccess::pasteText(fixture.module, text),
            "clipboard text pastes");
   const std::vector<std::string> order = document.scene().childIds("");
   testTrue(counters,
@@ -1487,7 +1487,7 @@ testPastePlacesAfterSelection()
              order[3] == c && order[2] == selection.primary(),
            "the paste lands after the primary selection and is selected");
   testTrue(counters,
-           !EditorModuleTestAccess::pasteText(fixture.module, "not a scene"),
+           !EditorSceneTestAccess::pasteText(fixture.module, "not a scene"),
            "foreign clipboard text is refused");
   testEqSize(counters, document.nodeCount(), 4, "and pastes nothing");
   return counters.failures;
@@ -1520,20 +1520,20 @@ testAssetsProjectFlow()
   IllEdNativeTree::install(tree);
   {
     EditorFixture fixture;
-    EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+    EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
     testEqStr(counters,
               document.packageRoot(),
               "/project",
               "new documents belong to the mounted project");
-    fixture.module.Update(0.016);
+    fixture.module.update(0.016);
     testTrue(counters,
-             EditorModuleTestAccess::assetBrowser(fixture.module) != nullptr &&
-               EditorModuleTestAccess::assetBrowser(fixture.module)->visible(),
+             EditorSceneTestAccess::assetBrowser(fixture.module) != nullptr &&
+               EditorSceneTestAccess::assetBrowser(fixture.module)->visible(),
              "the asset browser docks below the hierarchy");
 
-    EditorModuleTestAccess::placeDroppedAsset(
+    EditorSceneTestAccess::placeDroppedAsset(
       fixture.module, "/project/meshes/tri.obj", 640.0f, 360.0f);
-    const std::string mesh = EditorModuleTestAccess::selectedId(fixture.module);
+    const std::string mesh = EditorSceneTestAccess::selectedId(fixture.module);
     const SceneNode* meshNode = document.findNode(mesh);
     const SceneAsset* meshAsset = document.scene().document().findAsset("tri");
     testTrue(counters,
@@ -1542,24 +1542,24 @@ testAssetsProjectFlow()
                meshAsset->type == SceneAssetType::Mesh &&
                meshAsset->path == "meshes/tri.obj",
              "a dropped mesh becomes a node and a package-relative asset");
-    EditorModuleTestAccess::placeDroppedAsset(
+    EditorSceneTestAccess::placeDroppedAsset(
       fixture.module, "/project/textures/leaf.png", 700.0f, 360.0f);
     const SceneNode* sprite =
-      document.findNode(EditorModuleTestAccess::selectedId(fixture.module));
+      document.findNode(EditorSceneTestAccess::selectedId(fixture.module));
     testTrue(counters,
              sprite != nullptr && sprite->find(SceneComponentType::Sprite) &&
                document.scene().document().findAsset("leaf") != nullptr,
              "a dropped texture becomes a sprite");
-    EditorModuleTestAccess::placeDroppedAsset(
+    EditorSceneTestAccess::placeDroppedAsset(
       fixture.module, "/project/meshes/tri.obj", 600.0f, 300.0f);
     testEqSize(counters,
                document.scene().document().assets.size(),
                2,
                "dropping the same file again reuses its asset");
     const std::size_t nodes = document.nodeCount();
-    EditorModuleTestAccess::placeDroppedAsset(
+    EditorSceneTestAccess::placeDroppedAsset(
       fixture.module, "/project/notes.txt", 640.0f, 360.0f);
-    EditorModuleTestAccess::placeDroppedAsset(
+    EditorSceneTestAccess::placeDroppedAsset(
       fixture.module, "/project/meshes/tri.obj", 10.0f, 360.0f);
     testEqSize(counters,
                document.nodeCount(),
@@ -1571,20 +1571,20 @@ testAssetsProjectFlow()
                nodes - 1,
                "a placement is one undo step");
 
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::CreateLight);
     const SceneNode* light =
-      document.findNode(EditorModuleTestAccess::selectedId(fixture.module));
-    EditorModuleTestAccess::handleCommand(fixture.module,
+      document.findNode(EditorSceneTestAccess::selectedId(fixture.module));
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::CreateCamera);
     const SceneNode* camera =
-      document.findNode(EditorModuleTestAccess::selectedId(fixture.module));
+      document.findNode(EditorSceneTestAccess::selectedId(fixture.module));
     testTrue(counters,
              light != nullptr && light->find(SceneComponentType::Light) &&
                camera != nullptr && camera->find(SceneComponentType::Camera),
              "Create adds light and camera nodes");
 
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::SaveToProject);
     std::vector<uint8_t> saved;
     testTrue(counters,
@@ -1593,9 +1593,9 @@ testAssetsProjectFlow()
                document.path() == "vfs:/project/scenes/Untitled.ilsc",
              "Save to Project writes into /project/scenes");
     const std::size_t savedNodes = document.nodeCount();
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::NewDocument);
-    EditorModuleTestAccess::openLocation(
+    EditorSceneTestAccess::openLocation(
       fixture.module, { "vfs:/project/scenes/Untitled.ilsc", "Untitled.ilsc" });
     testTrue(counters,
              document.nodeCount() == savedNodes &&
@@ -1609,7 +1609,7 @@ testAssetsProjectFlow()
 }
 
 void
-registerEditorModuleTests(IllumoTestRegistry& registry)
+registerEditorSceneTests(IllumoTestRegistry& registry)
 {
   registry.add("IllEd.Assets.ProjectFlow",
                []() { return testAssetsProjectFlow(); });
@@ -1639,7 +1639,7 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
       g = {};
       EditorFixture fixture;
       EditorDocument& document =
-        EditorModuleTestAccess::document(fixture.module);
+        EditorSceneTestAccess::document(fixture.module);
       std::string selected;
       const size_t count = 2000;
       for (size_t i = 0; i < count; ++i) {
@@ -1657,13 +1657,13 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
         "scene-v2-benchmark.ilsc", document.encode(), &error);
       IllEdNativeFiles::readText("scene-v2-benchmark.ilsc", &text, &error);
       document.loadFromText(text, &error);
-      EditorModuleTestAccess::setSelectedId(fixture.module, selected);
-      EditorModuleTestAccess::refreshView(fixture.module);
+      EditorSceneTestAccess::setSelectedId(fixture.module, selected);
+      EditorSceneTestAccess::refreshView(fixture.module);
       const size_t repeats = 30;
       const std::chrono::steady_clock::time_point start =
         std::chrono::steady_clock::now();
       for (size_t i = 0; i < repeats; ++i) {
-        EditorModuleTestAccess::handleCommand(fixture.module,
+        EditorSceneTestAccess::handleCommand(fixture.module,
                                               EditorCommand::CycleColor);
       }
       const double edit = std::chrono::duration<double, std::micro>(
@@ -1783,10 +1783,10 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.IncrementalGraph", []() {
     g = {};
     EditorFixture fixture;
-    EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
-    EditorModuleTestAccess::createNode(fixture.module,
+    EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
+    EditorSceneTestAccess::createNode(fixture.module,
                                        EditorCommand::CreateCube);
-    const std::string id = EditorModuleTestAccess::selectedId(fixture.module);
+    const std::string id = EditorSceneTestAccess::selectedId(fixture.module);
     SceneGraph& graph = document.graph();
     const SceneNodeHandle retained = document.nodeHandle(id);
     ISceneRenderAttachment* visual = graph.getAttachment(retained, 0);
@@ -1795,9 +1795,9 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
              "geometry has one persistent render attachment");
     const uint64_t structure = graph.getStructuralRevision();
     const SceneSnapshotView snapshot = graph.extract(nullptr);
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::CycleColor);
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::NudgeExtent);
     testTrue(g,
              document.nodeHandle(id) == retained &&
@@ -1807,7 +1807,7 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
     testTrue(
       g, !snapshot.get(), "visual reconfiguration retires old snapshots");
     document.translate(id, Vector3(1, 2, 3));
-    EditorModuleTestAccess::refreshView(fixture.module);
+    EditorSceneTestAccess::refreshView(fixture.module);
     Matrix4 world(1.0f);
     graph.getWorldTransform(retained, &world);
     testTrue(g,
@@ -1817,22 +1817,22 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
     for (size_t i = 0; i < 4200; ++i) {
       document.setColor(id, ColorRgba{ 80, 90, 100, 255 });
     }
-    EditorModuleTestAccess::refreshView(fixture.module);
+    EditorSceneTestAccess::refreshView(fixture.module);
     testTrue(g,
              document.nodeHandle(id) == retained &&
                graph.getAttachment(retained, 0) == visual,
              "journal overflow resync preserves graph and visual identity");
-    fixture.module.Exit();
+    fixture.module.stop();
     testTrue(g,
              document.nodeHandle(id) == retained &&
                graph.getAttachmentCount(retained) == 1,
              "stop preserves document nodes");
     testTrue(g,
-             fixture.module.Start(&fixture.context) &&
+             fixture.module.start(fixture.context) &&
                document.nodeHandle(id) == retained &&
                graph.getAttachmentCount(retained) == 1,
              "restart rebinds render resources without rebuilding nodes");
-    EditorModuleTestAccess::deleteSelection(fixture.module);
+    EditorSceneTestAccess::deleteSelection(fixture.module);
     testTrue(g,
              !graph.isNodeValid(retained),
              "deletion invalidates the original generational handle");
@@ -1842,15 +1842,15 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
     g = {};
     EditorFixture fixture;
     testTrue(g, fixture.started, "editor starts");
-    EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
-    EditorModuleTestAccess::createNode(fixture.module,
+    EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
+    EditorSceneTestAccess::createNode(fixture.module,
                                        EditorCommand::CreateEmpty);
     const std::string parent =
-      EditorModuleTestAccess::selectedId(fixture.module);
-    EditorModuleTestAccess::createNode(fixture.module,
+      EditorSceneTestAccess::selectedId(fixture.module);
+    EditorSceneTestAccess::createNode(fixture.module,
                                        EditorCommand::CreateCube);
     const std::string child =
-      EditorModuleTestAccess::selectedId(fixture.module);
+      EditorSceneTestAccess::selectedId(fixture.module);
     testTrue(g,
              parentOf(document, child).empty(),
              "created nodes go to the root, not under the selection");
@@ -1860,7 +1860,7 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
     testTrue(g,
              document.loadFromText(document.encode(), nullptr),
              "reload clean property baseline");
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::NudgeExtent);
     testTrue(g,
              glm::length(primitiveOf(document.findNode(child)).extent -
@@ -1871,7 +1871,7 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
                                  { 70, 140, 220, 255 },
                                  { 210, 90, 70, 255 } };
     for (const ColorRgba& expected : colors) {
-      EditorModuleTestAccess::handleCommand(fixture.module,
+      EditorSceneTestAccess::handleCommand(fixture.module,
                                             EditorCommand::CycleColor);
       const ColorRgba actual = primitiveOf(document.findNode(child)).color;
       testTrue(g,
@@ -1880,11 +1880,11 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
                "color command advances through the full palette cycle");
     }
     testEqStr(g, parentOf(document, child), parent, "child starts parented");
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::UnparentNode);
     testTrue(
       g, parentOf(document, child).empty(), "unparent command detaches child");
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::DeleteNode);
     testTrue(g,
              document.findNode(child) == nullptr &&
@@ -1897,7 +1897,7 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
     for (EditorCommand command : { EditorCommand::NudgeExtent,
                                    EditorCommand::CycleColor,
                                    EditorCommand::UnparentNode }) {
-      EditorModuleTestAccess::handleCommand(fixture.module, command);
+      EditorSceneTestAccess::handleCommand(fixture.module, command);
     }
     testEqStr(g,
               document.encode(),
@@ -1909,17 +1909,17 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.PanelCommands", []() {
     g = {};
     EditorFixture fixture;
-    GuiPanelDock& dock = EditorModuleTestAccess::dock(fixture.module);
+    GuiPanelDock& dock = EditorSceneTestAccess::dock(fixture.module);
     // A frame stores the view state first; panels must add nothing to it.
-    fixture.module.Update(0.016);
+    fixture.module.update(0.016);
     const std::string document =
-      EditorModuleTestAccess::document(fixture.module).encode();
+      EditorSceneTestAccess::document(fixture.module).encode();
     for (int iteration = 0; iteration < 2; ++iteration) {
-      EditorModuleTestAccess::handleCommand(
+      EditorSceneTestAccess::handleCommand(
         fixture.module, EditorCommand::ToggleHierarchyPanel);
-      EditorModuleTestAccess::handleCommand(
+      EditorSceneTestAccess::handleCommand(
         fixture.module, EditorCommand::ToggleInspectorPanel);
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       const GuiDockMode expected =
         iteration == 0 ? GuiDockMode::Hidden : GuiDockMode::Docked;
       testTrue(g,
@@ -1927,25 +1927,25 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
                  dock.mode("inspector") == expected,
                "panel toggles are reversible");
       testTrue(g,
-               EditorModuleTestAccess::sceneGraphView(fixture.module)
+               EditorSceneTestAccess::sceneGraphView(fixture.module)
                    ->placement()
                    .visible == (iteration != 0),
                "a hidden panel's content is not placed");
     }
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::PopOutToolsPanel);
     testTrue(g,
              dock.mode("tools") == GuiDockMode::Docked,
              "without window support a pop-out stays docked");
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::ToggleAssetsPanel);
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::ResetLayout);
     testTrue(g,
              dock.mode("assets") == GuiDockMode::Docked,
              "reset brings every panel back");
     testEqStr(g,
-              EditorModuleTestAccess::document(fixture.module).encode(),
+              EditorSceneTestAccess::document(fixture.module).encode(),
               document,
               "panel commands preserve scene data");
     return g.failures;
@@ -1953,32 +1953,32 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.NewDocumentCommand", []() {
     g = {};
     EditorFixture fixture;
-    EditorModuleTestAccess::createNode(fixture.module,
+    EditorSceneTestAccess::createNode(fixture.module,
                                        EditorCommand::CreateCube);
-    EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+    EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
     document.setPath("previous-scene.ilsc");
     testTrue(g,
              document.loadFromText(document.encode(), nullptr),
              "reload clean reset baseline");
     fixture.camera.SetPositionPrecise(15.0, -7.0);
     fixture.camera.SetZoom(8.0f);
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::ResetCamera);
     testTrue(g,
              glm::length(fixture.camera.GetPositionPrecise()) < 0.0001 &&
                fixture.camera.GetZoom() == 32.0f,
              "reset command restores camera origin and zoom");
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::NewDocument);
     testEqSize(g, document.nodeCount(), 0u, "new document clears nodes");
     testTrue(g,
              document.path().empty() && !document.isDirty(),
              "new document is clean and untitled");
     testTrue(g,
-             EditorModuleTestAccess::selectedId(fixture.module).empty(),
+             EditorSceneTestAccess::selectedId(fixture.module).empty(),
              "new document clears selection");
     testTrue(g,
-             !EditorModuleTestAccess::confirmationOpen(fixture.module),
+             !EditorSceneTestAccess::confirmationOpen(fixture.module),
              "clean document needs no confirmation");
     return g.failures;
   });
@@ -1986,25 +1986,25 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
     g = {};
     for (float pitch : { 0.0f, 0.45f }) {
       EditorFixture fixture;
-      EditorModuleTestAccess::handleCommand(fixture.module,
+      EditorSceneTestAccess::handleCommand(fixture.module,
                                             EditorCommand::SetMode3D);
       EditorDocument& document =
-        EditorModuleTestAccess::document(fixture.module);
+        EditorSceneTestAccess::document(fixture.module);
       SceneEditorState cameraState = document.editorState();
       cameraState.pitch = pitch;
       document.setEditorState(cameraState);
-      EditorModuleTestAccess::setCameraTargetHeight(
+      EditorSceneTestAccess::setCameraTargetHeight(
         fixture.module, pitch == 0.0f ? 0.0f : 6.0f);
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       glm::vec3 origin{ 0.0f }, direction{ 0.0f };
       testTrue(g,
-               EditorModuleTestAccess::screenToWorldRay(
+               EditorSceneTestAccess::screenToWorldRay(
                  fixture.module, 640, 360, &origin, &direction),
                "perspective screen ray available");
       if (pitch == 0.0f) {
         float groundX = 0, groundY = 0;
         testTrue(g,
-                 !EditorModuleTestAccess::screenToWorld(
+                 !EditorSceneTestAccess::screenToWorld(
                    fixture.module, 640, 360, &groundX, &groundY),
                  "horizontal screen ray misses ground plane");
       }
@@ -2017,15 +2017,15 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
       document.setTransform(nearId, nearTransform);
       document.setTransform(
         farId, Transform3D::fromPosition(origin + direction * 8.0f));
-      EditorModuleTestAccess::refreshView(fixture.module);
-      EditorModuleTestAccess::setSelectedId(fixture.module, "");
+      EditorSceneTestAccess::refreshView(fixture.module);
+      EditorSceneTestAccess::setSelectedId(fixture.module, "");
       fixture.window.mouseX = 640;
       fixture.window.mouseY = 360;
       InputManagerTestAccess::setAction(
         fixture.input, KeyCode::MouseLeft, InputAction::Press);
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       testEqStr(g,
-                EditorModuleTestAccess::selectedId(fixture.module),
+                EditorSceneTestAccess::selectedId(fixture.module),
                 nearId,
                 "screen click selects nearest elevated rotated body");
     }
@@ -2036,37 +2036,37 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
     for (bool world3D : { false, true }) {
       EditorFixture fixture;
       if (world3D) {
-        EditorModuleTestAccess::handleCommand(fixture.module,
+        EditorSceneTestAccess::handleCommand(fixture.module,
                                               EditorCommand::SetMode3D);
       }
-      EditorModuleTestAccess::createNode(fixture.module,
+      EditorSceneTestAccess::createNode(fixture.module,
                                          world3D ? EditorCommand::CreateCube
                                                  : EditorCommand::CreateRect);
-      const std::string id = EditorModuleTestAccess::selectedId(fixture.module);
+      const std::string id = EditorSceneTestAccess::selectedId(fixture.module);
       EditorDocument& document =
-        EditorModuleTestAccess::document(fixture.module);
+        EditorSceneTestAccess::document(fixture.module);
       document.setTransform(id, Transform3D::fromPosition(Vector3(0.0f)));
       document.setExtent(id, Vector3(10.0f));
       std::string error;
       testTrue(g,
                document.loadFromText(document.encode(), &error),
                "reload clean scene");
-      EditorModuleTestAccess::refreshView(fixture.module);
-      EditorModuleTestAccess::setSelectedId(fixture.module, "");
+      EditorSceneTestAccess::refreshView(fixture.module);
+      EditorSceneTestAccess::setSelectedId(fixture.module, "");
       fixture.camera.SetPositionPrecise(0.0, 0.0);
       fixture.camera.SetZoom(32.0f);
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       fixture.window.mouseX = 650.0;
       fixture.window.mouseY = 365.0;
       InputManagerTestAccess::setAction(
         fixture.input, KeyCode::MouseLeft, InputAction::Press);
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       testEqStr(g,
-                EditorModuleTestAccess::selectedId(fixture.module),
+                EditorSceneTestAccess::selectedId(fixture.module),
                 id,
                 "body selected off center");
       for (int held = 0; held < 3; ++held) {
-        fixture.module.Update(0.016);
+        fixture.module.update(0.016);
       }
       const Vector3 position = document.findNode(id)->transform.position;
       testTrue(g,
@@ -2076,23 +2076,23 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
         g, !document.isDirty(), "stationary selection keeps document clean");
       InputManagerTestAccess::setAction(
         fixture.input, KeyCode::MouseLeft, InputAction::Release);
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       testTrue(g, !document.isDirty(), "stationary click release stays clean");
-      EditorModuleTestAccess::setSelectedId(fixture.module, "");
+      EditorSceneTestAccess::setSelectedId(fixture.module, "");
       InputManagerTestAccess::setAction(
         fixture.input, KeyCode::MouseLeft, InputAction::Press);
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       fixture.window.mouseX += 30.0;
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       testTrue(g,
                glm::length(document.findNode(id)->transform.position) > 0.001f,
                "actual pointer movement drags object");
       testTrue(g, document.isDirty(), "actual drag marks document dirty");
       InputManagerTestAccess::setAction(
         fixture.input, KeyCode::MouseLeft, InputAction::Release);
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       testTrue(g,
-               !EditorModuleTestAccess::isDragging(fixture.module),
+               !EditorSceneTestAccess::isDragging(fixture.module),
                "release ends body drag");
     }
     return g.failures;
@@ -2169,7 +2169,7 @@ registerEditorModuleTests(IllumoTestRegistry& registry)
   });
   registry.add("IllEd.Module.ConsoleNotDispatchedByModule", []() {
     g = {};
-    testEditorModuleDoesNotDispatchConsole();
+    testEditorSceneDoesNotDispatchConsole();
     return g.failures;
   });
   registry.add("IllEd.Module.UiDrawOrder", []() {

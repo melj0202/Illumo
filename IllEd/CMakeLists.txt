@@ -9,17 +9,16 @@ add_library(IllEdCore STATIC
   Source/EditorGizmo.cpp
   Source/EditorHistory.cpp
   Source/EditorInspector.cpp
-  Source/EditorModule.cpp
-  Source/EditorModuleCommands.cpp
-  Source/EditorModulePanels.cpp
-  Source/EditorModuleViewport.cpp
+  Source/EditorScene.cpp
+  Source/EditorSceneCommands.cpp
+  Source/EditorScenePanels.cpp
+  Source/EditorSceneViewport.cpp
   Source/EditorSceneGraphView.cpp
   Source/EditorSelection.cpp
   Source/EditorShortcuts.cpp
   Source/EditorToolbar.cpp
   Source/EditorToolsPanel.cpp
   Source/EditorUiAtlas.cpp
-  Source/IllEdApplication.cpp
   Source/IllEdConfig.cpp
   Source/IllEdPlatformNative.cpp
 )
@@ -61,7 +60,7 @@ if(BUILD_TESTING)
     Tests/TestEditorGizmo.cpp
     Tests/TestEditorHistory.cpp
     Tests/TestEditorInspector.cpp
-    Tests/TestEditorModule.cpp
+    Tests/TestEditorScene.cpp
     Tests/TestEditorPanels.cpp
     Tests/TestEditorSceneGraphView.cpp
     Tests/TestEditorToolbar.cpp

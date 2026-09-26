@@ -13,22 +13,98 @@
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
-#include <IllumoGuest/ModuleApplication.h>
+#include <Illumo/Engine/IModuleHost.h>
+#include <IllumoGuest/Program.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
+
+// Temporary (scene programs M2 to M4): CSim's title and canvas are still
+// IModules, so each runs as a scene until they become TitleScene and
+// CanvasScene. The module exits when its scene leaves, before the next one
+// starts, exactly as a module transition did, and its scene is released
+// right after. A module cannot resume, so re-entering one that exited (after
+// the next failed to start) closes the product, as a failed transition did.
+// Modules shared one camera, and the canvas relies on inheriting the title's
+// zoom, so the camera is handed from each module to the next.
+class ModuleScene final : public ProgramScene
+{
+public:
+  ModuleScene(std::unique_ptr<IModule> module, std::optional<Camera>& handoff)
+    : m_module(std::move(module))
+    , m_handoff(handoff)
+  {
+  }
+  bool start(IllumoContext& context) override
+  {
+    m_context = &context;
+    if (m_handoff && context.camera != nullptr) {
+      *context.camera = *m_handoff;
+    }
+    m_running = m_module != nullptr && m_module->Start(&context);
+    return m_running;
+  }
+  void enter() override
+  {
+    if (!m_running && m_context != nullptr && m_context->window != nullptr) {
+      Logger::LogError("The next screen failed to start; closing");
+      m_context->window->requestClose();
+    }
+  }
+  void leave() override
+  {
+    exitModule();
+    if (m_context != nullptr && m_context->camera != nullptr) {
+      m_handoff = *m_context->camera;
+    }
+  }
+  void update(double elapsed) override
+  {
+    if (m_running) {
+      m_module->Update(elapsed);
+    }
+  }
+  void dispatch(Scene& frame) override
+  {
+    if (m_running) {
+      m_module->DispatchDrawables(&frame);
+    }
+  }
+  void stop() override { exitModule(); }
+  bool closeRequested() override
+  {
+    return !m_running || m_module->OnCloseRequested();
+  }
+
+private:
+  void exitModule()
+  {
+    if (m_running) {
+      m_running = false;
+      m_module->Exit();
+    }
+  }
+  std::unique_ptr<IModule> m_module;
+  std::optional<Camera>& m_handoff;
+  IllumoContext* m_context = nullptr;
+  bool m_running = false;
+};
 
 // IllumoGame as a WASM package: the complete product (menus, canvas, editor,
 // console commands, persistence, workshop) runs in this store on top of the
 // guest-side engine. The host provides only generic services and frames.
-class IllumoGameGuest final : public GuestModuleApplication
+class IllumoGameGuest final
+  : public GuestProgram
+  , public IModuleHost
 {
 public:
   IllumoGameGuest()
-    : GuestModuleApplication("CSim")
+    : GuestProgram("CSim")
     , m_platform(services(), files())
     , m_catalog(files())
   {
@@ -169,14 +245,68 @@ protected:
     return true;
   }
 
-  std::unique_ptr<IModule> createFirstModule() override
+  bool createScenes(SceneDirector& scenes) override
   {
+    (void)scenes;
     Logger::LogTrace("CSim bootstrap complete; opening the main menu");
     CSimSounds::play(CSimSound::ProgramStart);
-    return std::make_unique<MainMenuModule>();
+    programContext().moduleHost = this;
+    return addModuleScene(std::make_unique<MainMenuModule>());
+  }
+
+  // A module that has left is released once the switch has applied.
+  void updateProgram(double elapsed) override
+  {
+    (void)elapsed;
+    SceneDirector* director = scenes();
+    if (director == nullptr) {
+      return;
+    }
+    for (std::vector<std::string>::iterator it = m_retired.begin();
+         it != m_retired.end();) {
+      if (director->activeName() == *it || director->hasPendingSwitch()) {
+        ++it;
+        continue;
+      }
+      director->release(*it);
+      it = m_retired.erase(it);
+    }
+  }
+
+public:
+  void RequestTransition(std::unique_ptr<IModule> nextModule) override
+  {
+    if (nextModule == nullptr || HasPendingTransition()) {
+      Logger::LogWarning("Module transition rejected: empty request or "
+                         "transition already pending");
+      return;
+    }
+    addModuleScene(std::move(nextModule));
+  }
+  bool HasPendingTransition() const override
+  {
+    return scenes() != nullptr && scenes()->hasPendingSwitch();
   }
 
 private:
+  bool addModuleScene(std::unique_ptr<IModule> module)
+  {
+    SceneDirector* director = scenes();
+    if (director == nullptr) {
+      return false;
+    }
+    const std::string name = "module-" + std::to_string(++m_moduleScenes);
+    director->emplace<ModuleScene>(name, std::move(module), m_cameraHandoff);
+    if (!director->switchTo(name)) {
+      return false;
+    }
+    if (!m_current.empty()) {
+      m_retired.push_back(m_current);
+    }
+    m_current = name;
+    return true;
+  }
+
   // The staged illumo.json carries the build version (D-F2) that the main
   // menu shows. An unreadable manifest only leaves the menu without one.
   bool readPackageVersion()
@@ -273,6 +403,13 @@ private:
   GuestCSimPlatform m_platform;
   CSimCatalogBootstrap m_catalog;
   std::uint64_t m_versionTask = 0;
+  // The module scene now running, those waiting to be released, and a
+  // counter that keeps scene names unique.
+  std::string m_current;
+  std::vector<std::string> m_retired;
+  // The camera as the last module left it.
+  std::optional<Camera> m_cameraHandoff;
+  unsigned m_moduleScenes = 0;
   bool m_versionRead = false;
   std::uint64_t m_soundFetch = 0;
   bool m_soundsLoaded = false;

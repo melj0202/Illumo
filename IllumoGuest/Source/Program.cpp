@@ -1,7 +1,7 @@
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/InputProvider.h>
-#include <IllumoGuest/ModuleApplication.h>
+#include <IllumoGuest/Program.h>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
@@ -77,7 +77,7 @@ GuestCommandLine::forward(const historyBuffer& item)
   }
 }
 
-GuestModuleApplication::GuestModuleApplication(std::string applicationName,
+GuestProgram::GuestProgram(std::string applicationName,
                                                std::string settingsPath)
   : m_applicationName(std::move(applicationName))
   , m_diagnostics(services())
@@ -110,14 +110,13 @@ GuestModuleApplication::GuestModuleApplication(std::string applicationName,
   m_context.envVars = &m_settings;
   m_context.camera = &m_camera;
   m_context.commandRegistry = &m_commands;
-  m_context.moduleHost = this;
   m_context.assetManager = &m_assets;
 }
 
-GuestModuleApplication::~GuestModuleApplication() = default;
+GuestProgram::~GuestProgram() = default;
 
 bool
-GuestModuleApplication::acceptStartup(std::span<const std::byte> startup)
+GuestProgram::acceptStartup(std::span<const std::byte> startup)
 {
   if (startup.empty()) {
     return true;
@@ -131,19 +130,19 @@ GuestModuleApplication::acceptStartup(std::span<const std::byte> startup)
 }
 
 void
-GuestModuleApplication::applyDefaults(IEnvVars& settings)
+GuestProgram::applyDefaults(IEnvVars& settings)
 {
   (void)settings;
 }
 
 std::vector<std::string>
-GuestModuleApplication::packageAssets() const
+GuestProgram::packageAssets() const
 {
   return {};
 }
 
 bool
-GuestModuleApplication::applyPackagedDefaults()
+GuestProgram::applyPackagedDefaults()
 {
   if (m_defaultsApplied) {
     return true;
@@ -191,30 +190,42 @@ GuestModuleApplication::applyPackagedDefaults()
 }
 
 bool
-GuestModuleApplication::bootstrap()
+GuestProgram::bootstrap()
 {
   return true;
 }
 
 void
-GuestModuleApplication::pumpProduct()
+GuestProgram::pumpProduct()
 {
 }
 
 void
-GuestModuleApplication::updateOverlay(double elapsed)
+GuestProgram::updateProgram(double elapsed)
 {
   (void)elapsed;
 }
 
 void
-GuestModuleApplication::dispatchOverlay(Scene& scene)
+GuestProgram::dispatchProgram(Scene& frame)
+{
+  (void)frame;
+}
+
+void
+GuestProgram::updateOverlay(double elapsed)
+{
+  (void)elapsed;
+}
+
+void
+GuestProgram::dispatchOverlay(Scene& scene)
 {
   (void)scene;
 }
 
 bool
-GuestModuleApplication::start(std::span<const std::byte> startup)
+GuestProgram::start(std::span<const std::byte> startup)
 {
   if (!acceptStartup(startup)) {
     return false;
@@ -236,7 +247,7 @@ GuestModuleApplication::start(std::span<const std::byte> startup)
 }
 
 void
-GuestModuleApplication::update(const GuestInput& input)
+GuestProgram::update(const GuestInput& input)
 {
   m_window.accept(input);
   m_panels.accept(input);
@@ -276,19 +287,22 @@ GuestModuleApplication::update(const GuestInput& input)
       return;
     }
     m_phase = Phase::Running;
-    startModule(createFirstModule());
+    startScenes();
   }
-  if (m_phase != Phase::Running) {
+  if (m_phase != Phase::Running || !m_scenes) {
     return;
   }
-  applyPendingTransition();
+  if (!m_scenes->applyPending()) {
+    // As a failed required module did: a first scene that cannot start
+    // closes the product.
+    Logger::LogError("The program's first scene failed to start; closing");
+    m_window.requestClose();
+  }
   runConsoleInvocations();
   m_camera.Update(static_cast<float>(input.elapsed));
-  if (m_module) {
-    m_module->Update(input.elapsed);
-  }
-  updateOverlay(input.elapsed);
-  // Key and character queues are per-frame events, as in the native loop.
+  updateProgram(input.elapsed);
+  m_scenes->update(input.elapsed);
+  updateOverlay(input.elapsed);  // Key and character queues are per-frame events, as in the native loop.
   m_input.clearKeyQueue();
   m_input.clearCharQueue();
   synchronizeCommands();
@@ -296,7 +310,7 @@ GuestModuleApplication::update(const GuestInput& input)
 }
 
 GuestFrame
-GuestModuleApplication::frame()
+GuestProgram::frame()
 {
   GuestFrame recorded;
   recordFrame(recorded);
@@ -304,7 +318,7 @@ GuestModuleApplication::frame()
 }
 
 void
-GuestModuleApplication::recordFrame(GuestFrame& output)
+GuestProgram::recordFrame(GuestFrame& output)
 {
   const std::array<int, 2> dimensions = m_window.getWindowDimensions();
   try {
@@ -317,10 +331,11 @@ GuestModuleApplication::recordFrame(GuestFrame& output)
     m_backend.pump();
     m_scene.ClearDrawables();
     m_panels.clearScenes();
-    if (m_module) {
-      m_module->DispatchDrawables(&m_scene);
+    if (m_scenes) {
+      m_scenes->dispatch(m_scene);
     }
     if (m_phase == Phase::Running) {
+      dispatchProgram(m_scene);
       dispatchOverlay(m_scene);
     }
     // As the native host: queued asset loads complete before submission.
@@ -367,58 +382,41 @@ GuestModuleApplication::recordFrame(GuestFrame& output)
 }
 
 bool
-GuestModuleApplication::close()
+GuestProgram::close()
 {
   // A product-initiated close already ran its own confirmation.
-  if (!m_module || m_window.shouldWindowClose()) {
+  if (!m_scenes || m_window.shouldWindowClose()) {
     return true;
   }
-  return m_module->OnCloseRequested();
+  return m_scenes->closeRequested();
 }
 
 bool
-GuestModuleApplication::closeRequested()
+GuestProgram::closeRequested()
 {
   return m_window.shouldWindowClose();
 }
 
 bool
-GuestModuleApplication::restartRequested()
+GuestProgram::restartRequested()
 {
   return m_window.restartRequested();
 }
 
 void
-GuestModuleApplication::shutdown()
+GuestProgram::shutdown()
 {
-  m_pending.reset();
-  if (m_module) {
-    m_module->Exit();
-    m_module.reset();
+  if (m_scenes) {
+    m_scenes->stopAll();
+    m_context.scenes = nullptr;
+    m_scenes.reset();
   }
   m_scene.ClearDrawables();
   m_phase = Phase::Stopped;
 }
 
 void
-GuestModuleApplication::RequestTransition(std::unique_ptr<IModule> nextModule)
-{
-  if (nextModule == nullptr || m_pending != nullptr) {
-    Logger::LogWarning("Module transition rejected: empty request or "
-                       "transition already pending");
-    return;
-  }
-  m_pending = std::move(nextModule);
-}
-
-bool
-GuestModuleApplication::HasPendingTransition() const
-{
-  return m_pending != nullptr;
-}
-
-void
-GuestModuleApplication::startModule(std::unique_ptr<IModule> module)
+GuestProgram::startScenes()
 {
   m_input.clearKeyQueue();
   m_input.clearCharQueue();
@@ -440,43 +438,25 @@ GuestModuleApplication::startModule(std::unique_ptr<IModule> module)
     m_renderWorld != nullptr &&
       (hostVisuals.value.empty() || hostVisuals.valueAsDouble != 0.0),
     m_renderWorld != nullptr);
-  bool accepted = false;
+  // Every scene starts from this camera and shares this world until scenes
+  // get worlds of their own (frame schema v8).
+  m_scenes = std::make_unique<SceneDirector>(m_context);
+  m_context.scenes = m_scenes.get();
+  bool created = false;
   try {
-    accepted = module && module->Start(&m_context);
+    created = createScenes(*m_scenes);
   } catch (const std::exception& exception) {
-    Logger::LogError(std::string("A module threw during startup: ") +
+    Logger::LogError(std::string("The program threw while creating its "
+                                 "scenes: ") +
                      exception.what());
-    if (module) {
-      module->Exit();
-    }
   }
-  if (!accepted) {
-    // Mirror the native host: a failed required module closes the product.
-    Logger::LogError("The product module failed to start; closing");
-    m_module.reset();
+  if (!created || !m_scenes->hasPendingSwitch()) {
+    Logger::LogError("The program created no first scene; closing");
     m_window.requestClose();
-    return;
   }
-  m_module = std::move(module);
 }
-
 void
-GuestModuleApplication::applyPendingTransition()
-{
-  if (!m_pending) {
-    return;
-  }
-  std::unique_ptr<IModule> next = std::move(m_pending);
-  Logger::LogTrace("Switching to the next module");
-  if (m_module) {
-    m_module->Exit();
-    m_module.reset();
-  }
-  startModule(std::move(next));
-}
-
-void
-GuestModuleApplication::runConsoleInvocations()
+GuestProgram::runConsoleInvocations()
 {
   GuestConsoleRequest invocation;
   while (m_console.take(invocation)) {
@@ -486,7 +466,7 @@ GuestModuleApplication::runConsoleInvocations()
 }
 
 void
-GuestModuleApplication::synchronizeCommands()
+GuestProgram::synchronizeCommands()
 {
   const std::vector<std::string> names = m_commands.GetCommandNames();
   const std::set<std::string> current(names.begin(), names.end());

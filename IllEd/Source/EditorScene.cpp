@@ -1,4 +1,4 @@
-#include "EditorModule.h"
+#include "EditorScene.h"
 
 #include "EditorAssets.h"
 #include "EditorUiAtlas.h"
@@ -30,7 +30,7 @@ editorContextComplete(const IllumoContext* context)
          context->commandLine != nullptr && context->scene != nullptr;
 }
 
-EditorModule::EditorModule(std::string initialScenePath)
+EditorScene::EditorScene(std::string initialScenePath)
   : m_activeTool(EditorCommand::SelectTool)
   , m_initialScenePath(std::move(initialScenePath))
   , m_dragging(false)
@@ -43,13 +43,14 @@ EditorModule::EditorModule(std::string initialScenePath)
 {
 }
 
-EditorModule::~EditorModule() = default;
+EditorScene::~EditorScene() = default;
 
 bool
-EditorModule::Start(IllumoContext* context)
+EditorScene::start(IllumoContext& startContext)
 {
+  IllumoContext* context = &startContext;
   if (!editorContextComplete(context)) {
-    Logger::LogError("EditorModule::Start: IllumoContext missing services");
+    Logger::LogError("EditorScene::start: IllumoContext missing services");
     ic = context;
     return false;
   }
@@ -129,7 +130,7 @@ EditorModule::Start(IllumoContext* context)
 }
 
 void
-EditorModule::Exit()
+EditorScene::stop()
 {
   unregisterCommands();
   syncLayout();
@@ -162,7 +163,7 @@ EditorModule::Exit()
 }
 
 void
-EditorModule::refreshView()
+EditorScene::refreshView()
 {
   m_selection.prune(m_document.scene());
   applyWorldCamera();
@@ -175,7 +176,7 @@ EditorModule::refreshView()
 }
 
 void
-EditorModule::storeCameraState()
+EditorScene::storeCameraState()
 {
   if (ic == nullptr || ic->camera == nullptr) {
     return;
@@ -196,7 +197,7 @@ EditorModule::storeCameraState()
 }
 
 void
-EditorModule::restoreCameraState()
+EditorScene::restoreCameraState()
 {
   if (ic == nullptr || ic->camera == nullptr) {
     return;
@@ -208,7 +209,7 @@ EditorModule::restoreCameraState()
 }
 
 void
-EditorModule::updateStatus()
+EditorScene::updateStatus()
 {
   if (!m_toolbar) {
     return;
@@ -262,7 +263,7 @@ EditorModule::updateStatus()
 }
 
 bool
-EditorModule::uiBlocksWorld(float screenX, float screenY) const
+EditorScene::uiBlocksWorld(float screenX, float screenY) const
 {
   if ((m_confirm && m_confirm->isOpen()) || m_busy) {
     return true;
@@ -277,7 +278,7 @@ EditorModule::uiBlocksWorld(float screenX, float screenY) const
   return !m_dock.center().contains(screenX, screenY);
 }
 void
-EditorModule::Update(double dt)
+EditorScene::update(double dt)
 {
   // Resuming a frame means close negotiation was canceled, possibly before
   // this module was consulted. Approval cannot survive further editing.
@@ -441,7 +442,7 @@ EditorModule::Update(double dt)
 }
 
 void
-EditorModule::registerCommands()
+EditorScene::registerCommands()
 {
   if (ic == nullptr || ic->commandRegistry == nullptr) {
     return;
@@ -508,7 +509,7 @@ EditorModule::registerCommands()
 }
 
 void
-EditorModule::unregisterCommands()
+EditorScene::unregisterCommands()
 {
   if (ic == nullptr || ic->commandRegistry == nullptr) {
     return;
@@ -524,7 +525,7 @@ EditorModule::unregisterCommands()
 }
 
 void
-EditorModule::updateInspector(float dt)
+EditorScene::updateInspector(float dt)
 {
   if (!m_inspector || ic == nullptr) {
     return;
@@ -546,11 +547,9 @@ EditorModule::updateInspector(float dt)
 }
 
 void
-EditorModule::DispatchDrawables(Scene* scene)
+EditorScene::dispatch(Scene& frame)
 {
-  if (scene == nullptr) {
-    return;
-  }
+  Scene* scene = &frame;
   if (m_document.worldMode() == SceneWorldMode::World3D &&
       m_document.scene().skybox() != nullptr) {
     scene->AddDrawable(m_document.scene().skybox(), RenderLayerId::World);
@@ -576,13 +575,13 @@ EditorModule::DispatchDrawables(Scene* scene)
 }
 
 EditorSceneDetail
-EditorModule::sceneDetail() const
+EditorScene::sceneDetail() const
 {
   return m_document.sceneDetail(m_selection);
 }
 
 void
-EditorModule::syncFontSize()
+EditorScene::syncFontSize()
 {
   if (ic == nullptr) {
     return;
@@ -610,7 +609,7 @@ EditorModule::syncFontSize()
 }
 
 void
-EditorModule::applyFontSize(float size)
+EditorScene::applyFontSize(float size)
 {
   if (m_toolbar) {
     m_toolbar->setFontSize(size);

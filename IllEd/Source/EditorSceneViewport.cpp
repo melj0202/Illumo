@@ -1,4 +1,4 @@
-#include "EditorModule.h"
+#include "EditorScene.h"
 
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Gui/GuiMenuShell.h>
@@ -13,7 +13,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 glm::mat4
-EditorModule::currentViewProjection() const
+EditorScene::currentViewProjection() const
 {
   float aspect = 1.0f;
   if (ic != nullptr && ic->window != nullptr) {
@@ -30,7 +30,7 @@ EditorModule::currentViewProjection() const
 }
 
 void
-EditorModule::applyWorldCamera()
+EditorScene::applyWorldCamera()
 {
   if (ic == nullptr || ic->camera == nullptr) {
     return;
@@ -56,7 +56,7 @@ EditorModule::applyWorldCamera()
 }
 
 void
-EditorModule::rebuildGrid()
+EditorScene::rebuildGrid()
 {
   if (!m_grid || ic == nullptr || ic->renderer == nullptr) {
     return;
@@ -121,7 +121,7 @@ EditorModule::rebuildGrid()
 }
 
 void
-EditorModule::updateCamera(double dt)
+EditorScene::updateCamera(double dt)
 {
   if (ic == nullptr || ic->camera == nullptr || ic->inputManager == nullptr ||
       ic->window == nullptr) {
@@ -243,7 +243,7 @@ EditorModule::updateCamera(double dt)
 }
 
 void
-EditorModule::frameSelection()
+EditorScene::frameSelection()
 {
   if (ic == nullptr || ic->camera == nullptr || ic->window == nullptr) {
     return;
@@ -324,7 +324,7 @@ addOrientedBox(MeshVisual& visual,
 }
 
 void
-EditorModule::rebuildSelectionOverlay()
+EditorScene::rebuildSelectionOverlay()
 {
   if (!m_selectionOverlay) {
     return;
@@ -370,13 +370,13 @@ EditorModule::rebuildSelectionOverlay()
 }
 
 std::string
-EditorModule::dragMergeKey() const
+EditorScene::dragMergeKey() const
 {
   return "drag:" + std::to_string(m_dragSerial);
 }
 
 GizmoFrame
-EditorModule::gizmoFrame(const std::string& id) const
+EditorScene::gizmoFrame(const std::string& id) const
 {
   GizmoFrame frame;
   const Matrix4 world = m_document.worldMatrix(id);
@@ -396,7 +396,7 @@ EditorModule::gizmoFrame(const std::string& id) const
 }
 
 GizmoSnap
-EditorModule::snapSettings() const
+EditorScene::snapSettings() const
 {
   const SceneEditorState& state = m_document.editorState();
   GizmoSnap snap;
@@ -411,7 +411,7 @@ EditorModule::snapSettings() const
 }
 
 void
-EditorModule::beginDrag(GizmoPart part,
+EditorScene::beginDrag(GizmoPart part,
                         const Vector3& rayOrigin,
                         const Vector3& rayDirection,
                         GizmoMode mode)
@@ -434,7 +434,7 @@ EditorModule::beginDrag(GizmoPart part,
 }
 
 void
-EditorModule::applyDrag(const Vector3& rayOrigin, const Vector3& rayDirection)
+EditorScene::applyDrag(const Vector3& rayOrigin, const Vector3& rayDirection)
 {
   const GizmoDelta delta =
     m_gizmo.drag(rayOrigin, rayDirection, snapSettings());
@@ -486,7 +486,7 @@ EditorModule::applyDrag(const Vector3& rayOrigin, const Vector3& rayDirection)
 }
 
 bool
-EditorModule::worldToScreen(const Vector3& world,
+EditorScene::worldToScreen(const Vector3& world,
                             float* screenX,
                             float* screenY) const
 {
@@ -522,7 +522,7 @@ EditorModule::worldToScreen(const Vector3& world,
 }
 
 void
-EditorModule::boxSelect(float x0, float y0, float x1, float y1, bool additive)
+EditorScene::boxSelect(float x0, float y0, float x1, float y1, bool additive)
 {
   const float left = std::min(x0, x1);
   const float right = std::max(x0, x1);
@@ -563,7 +563,7 @@ EditorModule::boxSelect(float x0, float y0, float x1, float y1, bool additive)
 }
 
 void
-EditorModule::rebuildMarquee()
+EditorScene::rebuildMarquee()
 {
   if (!m_marquee || ic == nullptr) {
     return;
@@ -580,7 +580,7 @@ EditorModule::rebuildMarquee()
 }
 
 void
-EditorModule::updateSelection(double dt)
+EditorScene::updateSelection(double dt)
 {
   (void)dt;
   if (ic == nullptr || ic->inputManager == nullptr || ic->camera == nullptr ||
@@ -756,7 +756,7 @@ createShapeFor(EditorCommand command, bool* empty, ScenePrimitiveShape* shape)
 }
 
 void
-EditorModule::applyActiveToolAt(float worldX, float worldY)
+EditorScene::applyActiveToolAt(float worldX, float worldY)
 {
   bool empty = false;
   ScenePrimitiveShape shape = ScenePrimitiveShape::Cube;
@@ -779,7 +779,7 @@ EditorModule::applyActiveToolAt(float worldX, float worldY)
 }
 
 bool
-EditorModule::screenToWorld(float screenX,
+EditorScene::screenToWorld(float screenX,
                             float screenY,
                             float* worldX,
                             float* worldY) const
@@ -808,7 +808,7 @@ EditorModule::screenToWorld(float screenX,
 }
 
 bool
-EditorModule::screenToWorldRay(float screenX,
+EditorScene::screenToWorldRay(float screenX,
                                float screenY,
                                glm::vec3* rayOrigin,
                                glm::vec3* rayDir) const
@@ -852,7 +852,7 @@ EditorModule::screenToWorldRay(float screenX,
 }
 
 float
-EditorModule::gizmoScale(const glm::vec3& worldPos) const
+EditorScene::gizmoScale(const glm::vec3& worldPos) const
 {
   if (ic == nullptr || ic->camera == nullptr) {
     return 1.0f;
@@ -868,7 +868,7 @@ EditorModule::gizmoScale(const glm::vec3& worldPos) const
 }
 
 GizmoPart
-EditorModule::hitTestGizmo(float screenX,
+EditorScene::hitTestGizmo(float screenX,
                            float screenY,
                            const glm::vec3& gizmoOrigin,
                            float scale) const

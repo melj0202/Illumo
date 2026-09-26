@@ -1,5 +1,6 @@
-#include "MeshViewerModule.h"
+#include "MeshViewerScene.h"
 #include "TestAccess.h"
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Content/VfsAssetSource.h>
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Engine/IllumoContext.h>
@@ -76,7 +77,9 @@ struct ModuleFixture
   InputManager input;
   Scene scene;
   IllumoContext context;
-  MeshViewerModule module;
+  // The viewer runs as a real program scene would, through a director.
+  SceneDirector director;
+  MeshViewerScene& module;
   bool started;
 
   explicit ModuleFixture(IAssetSource* source = nullptr)
@@ -92,27 +95,24 @@ struct ModuleFixture
     , scene(&window, &camera)
     , context{ &scene,  &window, &console, &input,   &renderer,
                &assets, &env,    &camera,  &registry }
-    , module()
+    , director(context)
+    , module(director.emplace<MeshViewerScene>("viewer"))
     , started(false)
   {
     env.setVar("WinX", 1280);
     env.setVar("WinY", 720);
     mock.Initialize();
-    started = module.Start(&context);
+    director.switchTo("viewer");
+    started = director.applyPending() && director.active() == &module;
   }
 
-  ~ModuleFixture()
-  {
-    if (started) {
-      module.Exit();
-    }
-  }
+  ~ModuleFixture() { director.stopAll(); }
 };
 
 static void
 testModuleStartupAndLifecycle()
 {
-  testSection("MeshViewerModule: startup and clean lifecycle");
+  testSection("MeshViewerScene: startup and clean lifecycle");
   ModuleFixture fixture;
   testTrue(g, fixture.started, "module started successfully");
   testTrue(g, fixture.module.showGrid(), "grid enabled by default");
@@ -124,8 +124,8 @@ testModuleStartupAndLifecycle()
   fixture.module.setShowSkybox(true);
   testTrue(g, fixture.module.showSkybox(), "skybox re-enabled via setter");
 
-  fixture.module.Update(0.016);
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.update(0.016);
+  fixture.module.dispatch(fixture.scene);
   testTrue(
     g, fixture.scene.drawableCount() >= 2u, "grid and UI drawables registered");
 }
@@ -133,7 +133,7 @@ testModuleStartupAndLifecycle()
 static void
 testModuleMeshLoading()
 {
-  testSection("MeshViewerModule: load mesh from memory and frame camera");
+  testSection("MeshViewerScene: load mesh from memory and frame camera");
   ModuleFixture fixture;
   testTrue(g, fixture.started, "module started");
 
@@ -146,8 +146,8 @@ testModuleMeshLoading()
   testEqSize(
     g, fixture.module.meshData().indices.size(), 36u, "cube has 36 indices");
 
-  fixture.module.Update(0.016);
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.update(0.016);
+  fixture.module.dispatch(fixture.scene);
   testTrue(g,
            fixture.scene.drawableCount() >= 3u,
            "grid, mesh, and UI drawables registered");
@@ -155,7 +155,7 @@ testModuleMeshLoading()
   // Toggle wireframe
   fixture.module.setShowWireframe(true);
   testTrue(g, fixture.module.showWireframe(), "wireframe enabled");
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   testTrue(g,
            fixture.scene.drawableCount() >= 4u,
            "grid, mesh, wireframe, and UI drawables registered");
@@ -170,7 +170,7 @@ testModuleMeshLoading()
 static void
 testModuleLightingFromEnvVars()
 {
-  testSection("MeshViewerModule: lighting EnvVars update MeshVisual");
+  testSection("MeshViewerScene: lighting EnvVars update MeshVisual");
   ModuleFixture fixture;
   testTrue(g, fixture.started, "module started");
   testTrue(g,
@@ -187,7 +187,7 @@ testModuleLightingFromEnvVars()
   fixture.env.setVar("ambientColorR", 0.1);
   fixture.env.setVar("ambientColorG", 0.2);
   fixture.env.setVar("ambientColorB", 0.3);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   MeshVisual* visual = fixture.module.meshVisual();
   testTrue(g, visual != nullptr, "mesh visual exists");
@@ -209,7 +209,7 @@ testModuleLightingFromEnvVars()
            "ambient color from EnvVars");
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   fixture.renderer.BeginFrame();
   fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
   fixture.renderer.EndFrame();
@@ -229,7 +229,7 @@ testModuleLightingFromEnvVars()
     g, sawConfiguredLightDir, "configured light direction reaches uLightDir");
 
   fixture.env.setVar("lightingEnabled", "0");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(
     g, !visual->isLightingEnabled(), "lightingEnabled 0 disables lighting");
 }
@@ -237,7 +237,7 @@ testModuleLightingFromEnvVars()
 static void
 testModuleShadowFromEnvVars()
 {
-  testSection("MeshViewerModule: shadow EnvVars update MeshVisual");
+  testSection("MeshViewerScene: shadow EnvVars update MeshVisual");
   ModuleFixture fixture;
   testTrue(g, fixture.started, "module started");
   testTrue(g,
@@ -253,7 +253,7 @@ testModuleShadowFromEnvVars()
   fixture.env.setVar("shadowSlopeScale", 0.01);
   fixture.env.setVar("shadowNormalOffset", 0.02);
   fixture.env.setVar("shadowPcf", "0");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   MeshVisual* visual = fixture.module.meshVisual();
   testTrue(g, visual != nullptr, "mesh visual exists");
@@ -277,7 +277,7 @@ testModuleShadowFromEnvVars()
   testTrue(g, !visual->isShadowPcfEnabled(), "shadowPcf 0 disables PCF");
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   fixture.renderer.BeginFrame();
   fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
   fixture.renderer.EndFrame();
@@ -308,14 +308,14 @@ testModuleShadowFromEnvVars()
   testTrue(g, sawConfiguredBias, "configured shadow bias reaches uShadowBias");
 
   fixture.env.setVar("shadowsEnabled", "0");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, !visual->isShadowsEnabled(), "shadowsEnabled 0 disables shadows");
 }
 
 static void
 testModuleMotionBlurFromEnvVars()
 {
-  testSection("MeshViewerModule: motion blur EnvVars update MeshVisual");
+  testSection("MeshViewerScene: motion blur EnvVars update MeshVisual");
   ModuleFixture fixture;
   testTrue(g, fixture.started, "module started");
   testTrue(g,
@@ -326,7 +326,7 @@ testModuleMotionBlurFromEnvVars()
   fixture.env.setVar("motionBlurEnabled", "1");
   fixture.env.setVar("motionBlurAmount", 0.75);
   fixture.env.setVar("motionBlurMax", 0.15);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   MeshVisual* visual = fixture.module.meshVisual();
   testTrue(g, visual != nullptr, "mesh visual exists");
@@ -356,7 +356,7 @@ testModuleMotionBlurFromEnvVars()
            "configured motion blur amount reaches uMotionBlurAmount");
 
   fixture.env.setVar("motionBlurEnabled", "0");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !visual->isMotionBlurEnabled(),
            "motionBlurEnabled 0 disables motion blur");
@@ -374,7 +374,7 @@ static void
 sendShortcut(ModuleFixture& fixture, KeyCode key, InputAction action)
 {
   fixture.input.getKeyQueue().push({ key, action, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 }
 
 static void
@@ -423,7 +423,7 @@ testRepeatedShortcuts()
   testTrue(
     g, fixture.module.showGrid() != grid, "shortcut works after console");
   fixture.input.getKeyQueue().push({ KeyCode::A, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqSize(
     g, fixture.input.getKeyQueue().size(), 1u, "unrelated key preserved");
   ModuleFixture second;
@@ -497,7 +497,7 @@ drawsLayerDrawable(Scene& scene, const DrawableBase* drawable)
 static void
 testSceneFromTree()
 {
-  testSection("MeshViewerModule: opens an .ilsc scene from the file tree");
+  testSection("MeshViewerScene: opens an .ilsc scene from the file tree");
   const std::filesystem::path root =
     std::filesystem::temp_directory_path() / "IllMeshViewerSceneTest";
   std::shared_ptr<VirtualFileSystem> tree = mountDemoPackage(root);
@@ -508,7 +508,7 @@ testSceneFromTree()
     testTrue(g, fixture.started, "module started over the tree");
     fixture.module.loadMeshFromMemory(g_testCubeObj, "cube.obj");
     for (int step = 0; step < 60; ++step) {
-      fixture.module.Update(0.1);
+      fixture.module.update(0.1);
     }
     const float meshDistance = fixture.module.cameraController().distance();
 
@@ -531,7 +531,7 @@ testSceneFromTree()
                opened->packageRoot() == "/packages/demo",
                "the scene's package root is its mount");
       const MeshMetadata& meta =
-        MeshViewerModuleTestAccess::ui(fixture.module)->meshMetadata();
+        MeshViewerSceneTestAccess::ui(fixture.module)->meshMetadata();
       testTrue(g, meta.isScene && meta.hasMesh, "the card describes a scene");
       testEqSize(g, meta.nodeCount, 3u, "the card counts nodes");
       testEqSize(g, meta.assetCount, 1u, "the card counts assets");
@@ -541,7 +541,7 @@ testSceneFromTree()
                "bounds span the floor and the offset model");
       // The orbit camera eases toward its framing target.
       for (int step = 0; step < 60; ++step) {
-        fixture.module.Update(0.1);
+        fixture.module.update(0.1);
       }
       testTrue(g,
                fixture.module.cameraController().distance() >
@@ -549,21 +549,21 @@ testSceneFromTree()
                "the camera frames the larger scene bounds");
 
       fixture.module.setShowWireframe(true);
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
       fixture.scene.ClearDrawables();
-      fixture.module.DispatchDrawables(&fixture.scene);
+      fixture.module.dispatch(fixture.scene);
       testTrue(g,
                drawsLayerDrawable(fixture.scene, &opened->drawable()),
                "the scene draws in the World layer");
       testTrue(g,
                !drawsLayerDrawable(
                  fixture.scene,
-                 MeshViewerModuleTestAccess::meshVisual(fixture.module)),
+                 MeshViewerSceneTestAccess::meshVisual(fixture.module)),
                "the empty mesh visual is not drawn");
       testTrue(g,
                drawsLayerDrawable(
                  fixture.scene,
-                 MeshViewerModuleTestAccess::wireframeVisual(fixture.module)),
+                 MeshViewerSceneTestAccess::wireframeVisual(fixture.module)),
                "wireframe outlines the scene bounds");
     }
 
@@ -608,7 +608,7 @@ testSceneFromTree()
 static void
 testSceneFromTextRejectsInvalid()
 {
-  testSection("MeshViewerModule: invalid scene text keeps the current view");
+  testSection("MeshViewerScene: invalid scene text keeps the current view");
   ModuleFixture fixture;
   fixture.module.loadMeshFromMemory(g_testCubeObj, "cube.obj");
   std::string error;
@@ -626,14 +626,14 @@ testSceneFromTextRejectsInvalid()
              !fixture.module.meshData().isEmpty(),
            "the mesh stays open");
   testTrue(g,
-           MeshViewerModule::isSceneLocation({ "x", "Forest.ILSC" }) &&
-             !MeshViewerModule::isSceneLocation({ "x", "forest.obj" }) &&
-             MeshViewerModule::isSceneLocation({ "vfs:/app/a.ilsc", "" }),
+           MeshViewerScene::isSceneLocation({ "x", "Forest.ILSC" }) &&
+             !MeshViewerScene::isSceneLocation({ "x", "forest.obj" }) &&
+             MeshViewerScene::isSceneLocation({ "vfs:/app/a.ilsc", "" }),
            "scene locations are recognized by extension");
 }
 
 void
-registerMeshViewerModuleTests(IllumoTestRegistry& registry)
+registerMeshViewerSceneTests(IllumoTestRegistry& registry)
 {
   registry.add("IllMeshViewer.Module.SceneFromTree",
                []() { return runModuleCase(testSceneFromTree); });

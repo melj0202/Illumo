@@ -3,12 +3,11 @@ cmake_minimum_required(VERSION 3.25)
 add_library(IllMeshViewerCore STATIC
   Source/MeshViewerCamera.cpp
   Source/MeshViewerConfig.cpp
-  Source/MeshViewerModule.cpp
-  Source/MeshViewerModulePanels.cpp
+  Source/MeshViewerScene.cpp
+  Source/MeshViewerScenePanels.cpp
   Source/MeshViewerPanels.cpp
   Source/MeshViewerPlatformNative.cpp
   Source/MeshViewerUi.cpp
-  Source/IllMeshViewerApplication.cpp
 )
 
 target_include_directories(IllMeshViewerCore PUBLIC
@@ -27,7 +26,7 @@ if(BUILD_TESTING)
     Tests/TestMain.cpp
     Tests/TestMeshViewerCamera.cpp
     Tests/TestMeshViewerConfig.cpp
-    Tests/TestMeshViewerModule.cpp
+    Tests/TestMeshViewerScene.cpp
     Tests/TestMeshViewerPanels.cpp
     Tests/TestMeshViewerUi.cpp
   )

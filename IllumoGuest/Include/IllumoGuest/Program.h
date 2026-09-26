@@ -1,7 +1,6 @@
 #pragma once
 
-#include <Illumo/Engine/IModule.h>
-#include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
@@ -24,6 +23,7 @@
 #include <IllumoGuest/RenderWorld.h>
 #include <IllumoGuest/SnapshotWindow.h>
 #include <IllumoGuest/VfsAssets.h>
+#include <memory>
 #include <optional>
 #include <set>
 
@@ -48,22 +48,23 @@ private:
   GuestConsole& m_console;
 };
 
-// Guest-side engine: composes an IllumoContext entirely from guest objects and
-// runs IModule products inside one WASM store. Nothing here crosses the ABI;
-// the host sees only input snapshots, copied services and IRF1 frames.
-// Products implement bootstrap readiness and their first module.
-class GuestModuleApplication
-  : public GuestApplication
-  , public IModuleHost
+// Guest-side engine and program (D-E31): composes an IllumoContext entirely
+// from guest objects and runs the product's scenes inside one WASM store.
+// The program lives as long as the store and owns what every scene shares;
+// its SceneDirector holds the scenes and switches between them at frame
+// boundaries. Nothing here crosses the ABI; the host sees only input
+// snapshots, copied services and IRF1 frames. Products implement bootstrap
+// readiness and add their scenes in createScenes.
+class GuestProgram : public GuestApplication
 {
 public:
-  GuestModuleApplication(std::string applicationName,
-                         std::string settingsPath = "envvars.json");
-  ~GuestModuleApplication() override;
-  GuestModuleApplication(const GuestModuleApplication&) = delete;
-  GuestModuleApplication& operator=(const GuestModuleApplication&) = delete;
-  GuestModuleApplication(GuestModuleApplication&&) = delete;
-  GuestModuleApplication& operator=(GuestModuleApplication&&) = delete;
+  GuestProgram(std::string applicationName,
+               std::string settingsPath = "envvars.json");
+  ~GuestProgram() override;
+  GuestProgram(const GuestProgram&) = delete;
+  GuestProgram& operator=(const GuestProgram&) = delete;
+  GuestProgram(GuestProgram&&) = delete;
+  GuestProgram& operator=(GuestProgram&&) = delete;
 
   bool start(std::span<const std::byte> startup) final;
   void update(const GuestInput& input) final;
@@ -73,8 +74,6 @@ public:
   void shutdown() final;
   bool closeRequested() final;
   bool restartRequested() final;
-  void RequestTransition(std::unique_ptr<IModule> nextModule) final;
-  bool HasPendingTransition() const final;
 
 protected:
   // Startup bytes are product configuration. The default accepts none or a
@@ -88,19 +87,25 @@ protected:
   // Runs once after persisted settings load (or are found absent) and the
   // package's first-run envvars.json has filled any values still unset.
   virtual void applyDefaults(IEnvVars& settings);
-  // Package files AssetManager serves to modules (textures, cubemap crosses,
+  // Package files AssetManager serves to scenes (textures, cubemap crosses,
   // meshes by name), relative to /app or absolute virtual paths. All are read
   // and pinned before bootstrap() first runs.
   virtual std::vector<std::string> packageAssets() const;
   // Pumped every update until true; throw to fail startup visibly.
   virtual bool bootstrap();
-  virtual std::unique_ptr<IModule> createFirstModule() = 0;
-  // Product service adapters pumped every update before modules run.
+  // Runs once after bootstrap: add the program's scenes and switch to the
+  // first. False, or a first scene that fails to start, closes the product.
+  virtual bool createScenes(SceneDirector& scenes) = 0;
+  // Product service adapters pumped every update before scenes run.
   virtual void pumpProduct();
-  // A product overlay that outlives module transitions (a software pointer):
-  // updated after the module each running frame, before display settings
-  // synchronize, and dispatched after the module's drawables so it draws on
-  // top. Neither runs before the first module starts.
+  // Program UI shared by every scene (a Settings menu): updated before the
+  // active scene, so it takes input first, and dispatched after it, so it
+  // draws on top. Neither runs before the first scene starts.
+  virtual void updateProgram(double elapsed);
+  virtual void dispatchProgram(Scene& frame);
+  // A product overlay above everything (a software pointer, a transition
+  // cover): updated after the scene each running frame, before display
+  // settings synchronize, and dispatched last.
   virtual void updateOverlay(double elapsed);
   virtual void dispatchOverlay(Scene& scene);
   GuestFiles& files() { return m_files; }
@@ -108,6 +113,11 @@ protected:
   GuestVfsAssets& assetCache() { return m_assetCache; }
   GuestEnvironment& settings() { return m_settings; }
   const IllumoContext& context() const { return m_context; }
+  // The product may publish extra services through the context.
+  IllumoContext& programContext() { return m_context; }
+  // Null until the program is running.
+  SceneDirector* scenes() { return m_scenes.get(); }
+  const SceneDirector* scenes() const { return m_scenes.get(); }
   bool running() const { return m_phase == Phase::Running; }
 
 private:
@@ -118,10 +128,10 @@ private:
     Running,
     Stopped
   };
-  void startModule(std::unique_ptr<IModule> module);
+  // Applies the rendering switches and creates the program's scenes.
+  void startScenes();
   // Reads the package's envvars.json once; true when done (or absent).
   bool applyPackagedDefaults();
-  void applyPendingTransition();
   void runConsoleInvocations();
   void synchronizeCommands();
 
@@ -157,8 +167,8 @@ private:
   CommandRegistry m_consoleBuiltins;
   GuestCommandLine m_commandLine;
   IllumoContext m_context;
-  std::unique_ptr<IModule> m_module;
-  std::unique_ptr<IModule> m_pending;
+  // After m_context and every service: scenes stop before they go.
+  std::unique_ptr<SceneDirector> m_scenes;
   std::set<std::string> m_forwarded;
   std::string m_lastFrameError;
   std::optional<GuestLaunch> m_launch;

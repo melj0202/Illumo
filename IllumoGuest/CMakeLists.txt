@@ -91,11 +91,10 @@ target_include_directories(CSimGuestDomain SYSTEM PRIVATE
   "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
 target_link_libraries(CSimGuestDomain PUBLIC IllumoGuestOptions)
 
-# Guest-side engine: a guest-local IllumoContext (window, input, settings,
-# camera, renderer, scene, console bridge, module host) for IModule products.
+# Guest-side engine: the engine UI, scene graph and asset sources a guest-local
+# IllumoContext is composed from.
 # Engine UI and scene sources compile unchanged against the recording backend.
 add_library(IllumoGuestEngine STATIC
-  Source/ModuleApplication.cpp
   Source/PanelSurfaces.cpp
   Source/GuestAssetSource.cpp
   Source/VfsAssets.cpp
@@ -129,8 +128,10 @@ target_include_directories(IllumoGuestEngine SYSTEM PRIVATE
 target_link_libraries(IllumoGuestEngine PUBLIC IllumoGuestRendering)
 
 # Guest mirror of Illumo::Content: the serial-safe subset (virtual paths,
-# package manifests, the .ilsc scene format). Archives and the virtual file
-# tree stay host-side; guests reach them through file services.
+# package manifests, the .ilsc scene format, program scenes) and GuestProgram,
+# which composes the guest-local IllumoContext and runs a product's scenes.
+# Archives and the virtual file tree stay host-side; guests reach them through
+# file services.
 add_library(IllumoGuestContent STATIC
   ../Illumo/Source/Content/IlscCodec.cpp
   ../Illumo/Source/Content/PackageManifest.cpp
@@ -141,9 +142,13 @@ add_library(IllumoGuestContent STATIC
   ../Illumo/Source/Content/SceneInstance.cpp
   ../Illumo/Source/Content/ScenePrimitiveMeshes.cpp
   ../Illumo/Source/Content/VirtualPath.cpp
+  Source/Program.cpp
   Source/SceneFetches.cpp)
 target_include_directories(IllumoGuestContent SYSTEM PRIVATE
-  "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include")
+  "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
+  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public"
+  "${ILLUMO_ROOT}/Illumo"
+  "${ILLUMO_ROOT}/Illumo/thirdparty")
 target_link_libraries(IllumoGuestContent PUBLIC IllumoGuestEngine)
 
 # IllumoGame itself: the complete product as a WASM package module. Native
@@ -214,10 +219,10 @@ illumo_add_guest(IllEd
   ../IllEd/Source/EditorGizmo.cpp
   ../IllEd/Source/EditorHistory.cpp
   ../IllEd/Source/EditorInspector.cpp
-  ../IllEd/Source/EditorModule.cpp
-  ../IllEd/Source/EditorModuleCommands.cpp
-  ../IllEd/Source/EditorModulePanels.cpp
-  ../IllEd/Source/EditorModuleViewport.cpp
+  ../IllEd/Source/EditorScene.cpp
+  ../IllEd/Source/EditorSceneCommands.cpp
+  ../IllEd/Source/EditorScenePanels.cpp
+  ../IllEd/Source/EditorSceneViewport.cpp
   ../IllEd/Source/EditorSceneGraphView.cpp
   ../IllEd/Source/EditorSelection.cpp
   ../IllEd/Source/EditorShortcuts.cpp
@@ -236,8 +241,8 @@ illumo_add_guest(IllMeshViewer
   ../IllMeshViewer/Source/Wasm/ViewerApplication.cpp
   ../IllMeshViewer/Source/MeshViewerCamera.cpp
   ../IllMeshViewer/Source/MeshViewerConfig.cpp
-  ../IllMeshViewer/Source/MeshViewerModule.cpp
-  ../IllMeshViewer/Source/MeshViewerModulePanels.cpp
+  ../IllMeshViewer/Source/MeshViewerScene.cpp
+  ../IllMeshViewer/Source/MeshViewerScenePanels.cpp
   ../IllMeshViewer/Source/MeshViewerPanels.cpp
   ../IllMeshViewer/Source/MeshViewerUi.cpp)
 target_include_directories(IllMeshViewer PRIVATE

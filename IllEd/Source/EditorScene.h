@@ -10,7 +10,7 @@
 #include "EditorToolbar.h"
 #include "EditorToolsPanel.h"
 #include "IllEdPlatform.h"
-#include <Illumo/Engine/IModule.h>
+#include <Illumo/Content/ProgramScene.h>
 #include <Illumo/Gui/GuiPanelDock.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -31,33 +31,35 @@ enum class EditorPendingAction
   ExitEditor
 };
 
-// The editor module: panels, viewport input, gizmo and file flows around one
+// The editor, as the IllEd program's one scene: panels, viewport input, gizmo and file flows around one
 // EditorDocument. The Hierarchy, Assets, Tools and Inspector panels live in a
 // GuiPanelDock (D-UI7): docked in the left and right columns or popped out
 // into their own windows. Implementation is split by concern:
-//   EditorModule.cpp          lifetime, per-frame update, dock, drawables
-//   EditorModulePanels.cpp    dock layout, panel placement, layout saving
-//   EditorModuleCommands.cpp  command dispatch, file flows, node commands
-//   EditorModuleViewport.cpp  camera, grid, picking, gizmo and selection input
-class EditorModule : public IModule
+//   EditorScene.cpp          lifetime, per-frame update, dock, drawables
+//   EditorScenePanels.cpp    dock layout, panel placement, layout saving
+//   EditorSceneCommands.cpp  command dispatch, file flows, node commands
+//   EditorSceneViewport.cpp  camera, grid, picking, gizmo and selection input
+class EditorScene : public ProgramScene
 {
-  friend class EditorModuleTestAccess;
+  friend class EditorSceneTestAccess;
 
 public:
-  explicit EditorModule(std::string initialScenePath = {});
-  ~EditorModule() override;
+  explicit EditorScene(std::string initialScenePath = {});
+  ~EditorScene() override;
 
-  EditorModule(const EditorModule&) = delete;
-  EditorModule& operator=(const EditorModule&) = delete;
+  EditorScene(const EditorScene&) = delete;
+  EditorScene& operator=(const EditorScene&) = delete;
 
-  bool Start(IllumoContext* context) override;
-  void Update(double dt) override;
-  void DispatchDrawables(Scene* scene) override;
-  void Exit() override;
-  bool OnCloseRequested() override;
+  bool start(IllumoContext& context) override;
+  void update(double dt) override;
+  void dispatch(Scene& frame) override;
+  void stop() override;
+  bool closeRequested() override;
   EditorSceneDetail sceneDetail() const;
 
 private:
+  // The services this scene started with.
+  IllumoContext* ic{ nullptr };
   EditorDocument m_document;
   EditorSelection m_selection;
   std::unique_ptr<EditorToolbar> m_toolbar;
@@ -124,7 +126,7 @@ private:
   // module.
   std::shared_ptr<bool> m_lifetime;
 
-  // EditorModule.cpp
+  // EditorScene.cpp
   void syncFontSize();
   void applyFontSize(float size);
   // Refreshes view state that depends on the document: camera projection,
@@ -141,7 +143,7 @@ private:
   void updateInspector(float dt);
   void restoreCameraState();
 
-  // EditorModuleCommands.cpp
+  // EditorSceneCommands.cpp
   // Dispatches and then refreshes view state if the document changed.
   void handleCommand(EditorCommand command);
   void dispatchCommand(EditorCommand command);
@@ -194,7 +196,7 @@ private:
   SaveLoadDialogSpec dialogSpec() const;
   void toast(const std::string& message, ColorRgba color);
 
-  // EditorModulePanels.cpp
+  // EditorScenePanels.cpp
   void setupDock();
   // Lays out the dock, runs its chrome input (splitters, title bars, window
   // events) and places each panel in its rectangle and surface.
@@ -213,7 +215,7 @@ private:
   void dispatchPanels(Scene* scene);
   void closePanelWindows();
 
-  // EditorModuleViewport.cpp
+  // EditorSceneViewport.cpp
   void applyWorldCamera();
   void updateCamera(double dt);
   void updateSelection(double dt);

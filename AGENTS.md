@@ -449,7 +449,7 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   `IllumoRuntime` and `Illumo/Source/Wasm` stay product-agnostic: no Game,
   Rulesets, IllEd or IllMeshViewer includes, no product-specific imports or
   opcodes, no native product fallback. The guest composes
-  its own `IllumoContext` (`GuestModuleApplication`); nothing about it crosses
+  its own `IllumoContext` (`GuestProgram`, which runs the product's scenes); nothing about it crosses
   the ABI, which carries only copied envelopes, services and frames. Package
   manifests request budgets; the runtime grants at most its ceilings, and
   launch options are never persisted. Frame schema changes, new capabilities

@@ -11,8 +11,10 @@ types. It must not depend on OpenGL or native platform APIs.
 
 IllumoGame ships only as the `IllumoGame.wasm` package hosted by
 `IllumoRuntime`. Its application seam is `IllumoGame/Source/Wasm/
-GameApplication.cpp`, a `GuestModuleApplication` that bootstraps settings and
-catalogs, installs the guest `CSimPlatform`, and starts `MainMenuModule`. The
+GameApplication.cpp`, a `GuestProgram` that bootstraps settings and
+catalogs, installs the guest `CSimPlatform`, and starts `MainMenuModule`. Until
+scene programs M4 the two modules run as scenes through a temporary adapter
+there (`ModuleScene`). The
 same Game sources also build natively into `IllumoGameCore`, which is only the
 test oracle; `IllumoGameApplication.cpp` remains for those tests. Do not add a
 process entry point, frame loop, logger lifetime, SysCmdLine implementation,

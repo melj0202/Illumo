@@ -1,4 +1,4 @@
-#include "MeshViewerModule.h"
+#include "MeshViewerScene.h"
 
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Gui/GuiMenuShell.h>
@@ -55,7 +55,7 @@ makeChromeVisual(IRenderWindow* window, Renderer* renderer)
 }
 
 void
-MeshViewerModule::setupDock()
+MeshViewerScene::setupDock()
 {
   m_dock = GuiPanelDock{};
   for (const MeshViewerPanelInfo& info : kPanels) {
@@ -83,7 +83,7 @@ MeshViewerModule::setupDock()
 }
 
 void
-MeshViewerModule::layoutDock()
+MeshViewerScene::layoutDock()
 {
   if (ic == nullptr) {
     return;
@@ -98,7 +98,7 @@ MeshViewerModule::layoutDock()
 }
 
 GuiPanelPlacement
-MeshViewerModule::placementFor(const std::string& id) const
+MeshViewerScene::placementFor(const std::string& id) const
 {
   const GuiDockView& view = m_dock.view(id);
   GuiPanelPlacement placement;
@@ -114,7 +114,7 @@ MeshViewerModule::placementFor(const std::string& id) const
 }
 
 void
-MeshViewerModule::updateDock(bool modal)
+MeshViewerScene::updateDock(bool modal)
 {
   if (ic == nullptr || ic->window == nullptr || !m_ui) {
     return;
@@ -168,7 +168,7 @@ MeshViewerModule::updateDock(bool modal)
 }
 
 std::vector<MeshViewerPanelMenuEntry>
-MeshViewerModule::panelMenu() const
+MeshViewerScene::panelMenu() const
 {
   std::vector<MeshViewerPanelMenuEntry> entries;
   for (const MeshViewerPanelInfo& info : kPanels) {
@@ -186,7 +186,7 @@ MeshViewerModule::panelMenu() const
 }
 
 bool
-MeshViewerModule::handlePanelAction(MeshViewerAction action)
+MeshViewerScene::handlePanelAction(MeshViewerAction action)
 {
   if (action == MeshViewerAction::ResetLayout) {
     m_dock.reset();
@@ -238,7 +238,7 @@ decodeLayout(const std::string& value)
 }
 
 void
-MeshViewerModule::syncLayout()
+MeshViewerScene::syncLayout()
 {
   if (ic == nullptr || ic->envVars == nullptr) {
     return;
@@ -270,7 +270,7 @@ MeshViewerModule::syncLayout()
 }
 
 MeshViewerDisplaySettings
-MeshViewerModule::displaySettings() const
+MeshViewerScene::displaySettings() const
 {
   MeshViewerDisplaySettings settings;
   settings.grid = m_showGrid;
@@ -305,7 +305,7 @@ MeshViewerModule::displaySettings() const
 }
 
 void
-MeshViewerModule::applyDisplayEdits(
+MeshViewerScene::applyDisplayEdits(
   const std::vector<MeshViewerDisplayEdit>& edits)
 {
   bool settingsChanged = false;
@@ -326,7 +326,7 @@ MeshViewerModule::applyDisplayEdits(
 }
 
 void
-MeshViewerModule::storeToggle(const char* key, bool value)
+MeshViewerScene::storeToggle(const char* key, bool value)
 {
   if (ic != nullptr && ic->envVars != nullptr) {
     ic->envVars->setVar(key, value ? "1" : "0");

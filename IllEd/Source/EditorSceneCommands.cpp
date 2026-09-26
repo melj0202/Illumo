@@ -1,5 +1,5 @@
 #include "EditorClipboard.h"
-#include "EditorModule.h"
+#include "EditorScene.h"
 
 #include "EditorAssets.h"
 #include <Illumo/Content/IlscCodec.h>
@@ -18,7 +18,7 @@ static const ColorRgba kToastInfo{ 66, 214, 210, 255 };
 static const ColorRgba kToastBad{ 245, 100, 110, 255 };
 
 void
-EditorModule::toast(const std::string& message, ColorRgba color)
+EditorScene::toast(const std::string& message, ColorRgba color)
 {
   if (m_toolbar) {
     m_toolbar->showToast(message, color);
@@ -26,7 +26,7 @@ EditorModule::toast(const std::string& message, ColorRgba color)
 }
 
 SaveLoadDialogSpec
-EditorModule::dialogSpec() const
+EditorScene::dialogSpec() const
 {
   SaveLoadDialogSpec specification;
   specification.fileDescription = "Illumo Scene";
@@ -36,7 +36,7 @@ EditorModule::dialogSpec() const
 }
 
 void
-EditorModule::saveDocument(bool saveAs, std::function<void(bool saved)> done)
+EditorScene::saveDocument(bool saveAs, std::function<void(bool saved)> done)
 {
   if (m_busy) {
     if (done) {
@@ -69,7 +69,7 @@ EditorModule::saveDocument(bool saveAs, std::function<void(bool saved)> done)
 }
 
 void
-EditorModule::writeDocument(const IllEdLocation& location,
+EditorScene::writeDocument(const IllEdLocation& location,
                             std::function<void(bool saved)> done)
 {
   m_busy = true;
@@ -105,7 +105,7 @@ EditorModule::writeDocument(const IllEdLocation& location,
 }
 
 void
-EditorModule::openDocument()
+EditorScene::openDocument()
 {
   if (m_busy) {
     return;
@@ -127,7 +127,7 @@ EditorModule::openDocument()
 }
 
 std::string
-EditorModule::documentRoot(const std::string& location) const
+EditorScene::documentRoot(const std::string& location) const
 {
   std::string root;
   if (IllEdPlatform::isTreeLocation(location) &&
@@ -140,7 +140,7 @@ EditorModule::documentRoot(const std::string& location) const
 }
 
 void
-EditorModule::loadDocument(const IllEdLocation& location, bool initial)
+EditorScene::loadDocument(const IllEdLocation& location, bool initial)
 {
   m_busy = true;
   const std::weak_ptr<bool> alive = m_lifetime;
@@ -174,7 +174,7 @@ EditorModule::loadDocument(const IllEdLocation& location, bool initial)
 }
 
 void
-EditorModule::finishLoad(const IllEdLocation& location,
+EditorScene::finishLoad(const IllEdLocation& location,
                          bool initial,
                          const std::string& text,
                          const std::string& packageRoot,
@@ -223,7 +223,7 @@ EditorModule::finishLoad(const IllEdLocation& location,
 }
 
 void
-EditorModule::saveToProject()
+EditorScene::saveToProject()
 {
   if (!IllEdPlatform::current().hasProject()) {
     toast("Start IllEd with --project <dir> to save into a project", kToastBad);
@@ -252,7 +252,7 @@ EditorModule::saveToProject()
 }
 
 void
-EditorModule::importAsset()
+EditorScene::importAsset()
 {
   if (!IllEdPlatform::current().hasProject()) {
     toast("Start IllEd with --project <dir> to import files", kToastBad);
@@ -288,7 +288,7 @@ EditorModule::importAsset()
 }
 
 void
-EditorModule::packProject()
+EditorScene::packProject()
 {
   if (!IllEdPlatform::current().hasProject()) {
     toast("Start IllEd with --project <dir> to pack a project", kToastBad);
@@ -318,7 +318,7 @@ EditorModule::packProject()
 }
 
 void
-EditorModule::createLightOrCamera(bool light)
+EditorScene::createLightOrCamera(bool light)
 {
   SceneNode node;
   SceneComponent component;
@@ -345,7 +345,7 @@ EditorModule::createLightOrCamera(bool light)
 }
 
 void
-EditorModule::placeDroppedAsset(const std::string& path,
+EditorScene::placeDroppedAsset(const std::string& path,
                                 float screenX,
                                 float screenY)
 {
@@ -368,7 +368,7 @@ EditorModule::placeDroppedAsset(const std::string& path,
 }
 
 void
-EditorModule::placeAssetAt(const std::string& path,
+EditorScene::placeAssetAt(const std::string& path,
                            const Transform3D& transform)
 {
   const EditorAssetKind kind = EditorAssets::kindFor(path);
@@ -400,7 +400,7 @@ EditorModule::placeAssetAt(const std::string& path,
     });
 }
 void
-EditorModule::finishBusy()
+EditorScene::finishBusy()
 {
   // A window close that arrived mid-operation is negotiated once the
   // operation has settled.
@@ -412,7 +412,7 @@ EditorModule::finishBusy()
 }
 
 void
-EditorModule::newDocument()
+EditorScene::newDocument()
 {
   m_document.clear();
   m_document.rebase(documentRoot({}));
@@ -429,7 +429,7 @@ EditorModule::newDocument()
 }
 
 void
-EditorModule::undo()
+EditorScene::undo()
 {
   std::string label;
   if (m_document.undo(&label)) {
@@ -439,7 +439,7 @@ EditorModule::undo()
 }
 
 void
-EditorModule::redo()
+EditorScene::redo()
 {
   std::string label;
   if (m_document.redo(&label)) {
@@ -449,7 +449,7 @@ EditorModule::redo()
 }
 
 void
-EditorModule::duplicateSelection()
+EditorScene::duplicateSelection()
 {
   const std::vector<std::string> roots =
     m_selection.topLevel(m_document.scene());
@@ -467,7 +467,7 @@ EditorModule::duplicateSelection()
 }
 
 void
-EditorModule::deleteSelection()
+EditorScene::deleteSelection()
 {
   const std::vector<std::string> roots =
     m_selection.topLevel(m_document.scene());
@@ -483,7 +483,7 @@ EditorModule::deleteSelection()
 }
 
 void
-EditorModule::unparentSelection()
+EditorScene::unparentSelection()
 {
   bool changed = false;
   for (const std::string& id : m_selection.topLevel(m_document.scene())) {
@@ -495,7 +495,7 @@ EditorModule::unparentSelection()
 }
 
 void
-EditorModule::copySelection(bool cut)
+EditorScene::copySelection(bool cut)
 {
   const std::vector<std::string> roots =
     m_selection.topLevel(m_document.scene());
@@ -523,7 +523,7 @@ EditorModule::copySelection(bool cut)
 }
 
 void
-EditorModule::pasteClipboard()
+EditorScene::pasteClipboard()
 {
   const std::weak_ptr<bool> alive = m_lifetime;
   IllEdPlatform::current().requestClipboardText(
@@ -540,7 +540,7 @@ EditorModule::pasteClipboard()
 }
 
 bool
-EditorModule::pasteText(const std::string& text)
+EditorScene::pasteText(const std::string& text)
 {
   SceneDocument fragment;
   std::string error;
@@ -573,7 +573,7 @@ EditorModule::pasteText(const std::string& text)
 }
 
 void
-EditorModule::toggleSelectionFlag(bool visibility)
+EditorScene::toggleSelectionFlag(bool visibility)
 {
   const std::vector<std::string>& ids = m_selection.ids();
   if (ids.empty()) {
@@ -600,7 +600,7 @@ EditorModule::toggleSelectionFlag(bool visibility)
 }
 
 void
-EditorModule::createChildOfPrimary()
+EditorScene::createChildOfPrimary()
 {
   const std::string parent = m_selection.primary();
   const std::string id = m_document.createPrimitive(
@@ -614,7 +614,7 @@ EditorModule::createChildOfPrimary()
 }
 
 void
-EditorModule::selectAll()
+EditorScene::selectAll()
 {
   std::vector<std::string> ids;
   const SceneGraph& graph = m_document.graph();
@@ -626,7 +626,7 @@ EditorModule::selectAll()
 }
 
 void
-EditorModule::nudgeSelectedExtent()
+EditorScene::nudgeSelectedExtent()
 {
   const SceneNode* node = m_document.findNode(m_selection.primary());
   const SceneComponent* component =
@@ -642,7 +642,7 @@ EditorModule::nudgeSelectedExtent()
 }
 
 void
-EditorModule::cycleSelectedColor()
+EditorScene::cycleSelectedColor()
 {
   const SceneNode* node = m_document.findNode(m_selection.primary());
   const SceneComponent* component =
@@ -664,7 +664,7 @@ EditorModule::cycleSelectedColor()
 }
 
 void
-EditorModule::requestAction(EditorPendingAction action)
+EditorScene::requestAction(EditorPendingAction action)
 {
   if (m_document.isDirty()) {
     m_pendingAction = action;
@@ -678,7 +678,7 @@ EditorModule::requestAction(EditorPendingAction action)
 }
 
 bool
-EditorModule::OnCloseRequested()
+EditorScene::closeRequested()
 {
   if (m_exitApproved) {
     // Another started module may veto this attempt after the editor accepts.
@@ -700,7 +700,7 @@ EditorModule::OnCloseRequested()
 }
 
 void
-EditorModule::performPendingAction()
+EditorScene::performPendingAction()
 {
   const EditorPendingAction action = m_pendingAction;
   m_pendingAction = EditorPendingAction::None;
@@ -733,7 +733,7 @@ isCreateTool(EditorCommand command)
 }
 
 void
-EditorModule::handleCommand(EditorCommand command)
+EditorScene::handleCommand(EditorCommand command)
 {
   const uint64_t revision = m_document.revision();
   dispatchCommand(command);
@@ -743,7 +743,7 @@ EditorModule::handleCommand(EditorCommand command)
 }
 
 void
-EditorModule::dispatchCommand(EditorCommand command)
+EditorScene::dispatchCommand(EditorCommand command)
 {
   switch (command) {
     case EditorCommand::None:

@@ -10,7 +10,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 |---|---|---|
 | M0 | done | Baseline in design section 13; `@begin` bench directive |
 | M1 | done | `ProgramScene`, `SceneDirector` in `Illumo::Content`; 7 tests |
-| M2 | not started | Guest `GuestProgram`; IllMeshViewer and IllEd ported |
+| M2 | done, awaiting review | `GuestProgram`; viewer and IllEd are scenes; CSim through a temporary adapter |
 | M3 | not started | Frame schema v8: a world per scene |
 | M4 | not started | CSim: `CSimProgram`, `TitleScene`, `CanvasScene` |
 | M5 | not started | Host: modules removed |
@@ -151,7 +151,10 @@ returns nothing outside `docs/history` and archives.
 ## M6: leftovers
 
 - Native product definitions deleted, and their config tests moved to the
-  programs.
+  programs. The viewer and IllEd ones went in M2; `IllumoGameApplication.cpp`
+  remains.
+- IllEd: `EditorDocument` borrows `EditorScene::content()` instead of owning
+  its `SceneInstance` (it reuses one instance across new, open and undo).
 - `Templates/SpinningCube` converted or deleted (O2).
 - Engine `Scene` renamed if O1 is accepted, in a mechanical commit of its own.
 
@@ -197,3 +200,16 @@ returns nothing outside `docs/history` and archives.
   saves and restores its state per scene, since visuals hold camera pointers.
   Scene commands are scoped through `ProgramScene::command`, and per-scene
   worlds plug in through `ISceneWorlds` (M3). Full suite 679 of 679.
+- 2026-09-26, M2:
+  - `GuestProgram` runs scenes. IllMeshViewer (content is the opened
+    document) and IllEd are single scenes, and CSim's modules run through a
+    temporary `ModuleScene` adapter.
+  - Parity with M0 holds (design section 13).
+  - Found: the canvas inherited the title's 0.5 zoom through the shared
+    camera. The adapter preserves this; `CanvasScene` must choose a zoom in
+    M4, and `LaunchDirect` opens at 1 today.
+  - Deferred: IllEd's document still owns its `SceneInstance`; making it
+    borrow `content()` needs `EditorDocument` to reuse one instance across
+    new, open and undo. Scheduled with M6.
+  - The native viewer and IllEd definitions were deleted early.
+  - Full suite 679 of 679. Stopped for owner review.

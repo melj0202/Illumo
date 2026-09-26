@@ -1,4 +1,4 @@
-#include "EditorModule.h"
+#include "EditorScene.h"
 
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Gui/GuiMenuShell.h>
@@ -95,7 +95,7 @@ makeChromeVisual(IRenderWindow* window, Renderer* renderer)
 }
 
 void
-EditorModule::setupDock()
+EditorScene::setupDock()
 {
   m_dock = GuiPanelDock{};
   for (const EditorPanelInfo& info : kPanels) {
@@ -123,7 +123,7 @@ EditorModule::setupDock()
 }
 
 void
-EditorModule::layoutDock()
+EditorScene::layoutDock()
 {
   if (ic == nullptr || !m_toolbar) {
     return;
@@ -138,7 +138,7 @@ EditorModule::layoutDock()
 }
 
 GuiPanelPlacement
-EditorModule::placementFor(const std::string& id) const
+EditorScene::placementFor(const std::string& id) const
 {
   const GuiDockView& view = m_dock.view(id);
   GuiPanelPlacement placement;
@@ -154,7 +154,7 @@ EditorModule::placementFor(const std::string& id) const
 }
 
 void
-EditorModule::updateDock(bool modal)
+EditorScene::updateDock(bool modal)
 {
   if (ic == nullptr || !m_toolbar || ic->window == nullptr) {
     return;
@@ -219,7 +219,7 @@ EditorModule::updateDock(bool modal)
 }
 
 std::vector<EditorPanelMenuEntry>
-EditorModule::panelMenu() const
+EditorScene::panelMenu() const
 {
   std::vector<EditorPanelMenuEntry> entries;
   for (const EditorPanelInfo& info : kPanels) {
@@ -237,7 +237,7 @@ EditorModule::panelMenu() const
 }
 
 bool
-EditorModule::handlePanelCommand(EditorCommand command)
+EditorScene::handlePanelCommand(EditorCommand command)
 {
   if (command == EditorCommand::ResetLayout) {
     m_dock.reset();
@@ -269,7 +269,7 @@ EditorModule::handlePanelCommand(EditorCommand command)
 }
 
 void
-EditorModule::syncLayout()
+EditorScene::syncLayout()
 {
   if (ic == nullptr || ic->envVars == nullptr) {
     return;
@@ -303,7 +303,7 @@ EditorModule::syncLayout()
 }
 
 bool
-EditorModule::dropToMain(const EditorAssetBrowser::Drop& drop,
+EditorScene::dropToMain(const EditorAssetBrowser::Drop& drop,
                          float* pixelX,
                          float* pixelY) const
 {
@@ -325,7 +325,7 @@ EditorModule::dropToMain(const EditorAssetBrowser::Drop& drop,
 }
 
 void
-EditorModule::dispatchPanels(Scene* scene)
+EditorScene::dispatchPanels(Scene* scene)
 {
   if (m_dockVisual) {
     scene->AddDrawable(m_dockVisual.get(), RenderLayerId::UI);
@@ -356,7 +356,7 @@ EditorModule::dispatchPanels(Scene* scene)
 }
 
 void
-EditorModule::closePanelWindows()
+EditorScene::closePanelWindows()
 {
   if (ic == nullptr || ic->panelSurfaces == nullptr) {
     return;

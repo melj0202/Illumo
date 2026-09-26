@@ -1,4 +1,5 @@
-#include "MeshViewerModule.h"
+#include "MeshViewerScene.h"
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
@@ -43,7 +44,8 @@ struct ViewerPanelFixture
   Scene scene;
   FakePanelSurfaces surfaces;
   IllumoContext context;
-  MeshViewerModule module;
+  SceneDirector director;
+  MeshViewerScene& module;
   bool started;
 
   explicit ViewerPanelFixture(bool windows)
@@ -60,27 +62,24 @@ struct ViewerPanelFixture
     , surfaces(&window, &camera)
     , context{ &scene,  &window, &console, &input,   &renderer,
                &assets, &env,    &camera,  &registry }
-    , module()
+    , director(context)
+    , module(director.emplace<MeshViewerScene>("viewer"))
     , started(false)
   {
     mock.Initialize();
     if (windows) {
       context.panelSurfaces = &surfaces;
     }
-    started = module.Start(&context);
+    director.switchTo("viewer");
+    started = director.applyPending() && director.active() == &module;
   }
 
-  ~ViewerPanelFixture()
-  {
-    if (started) {
-      module.Exit();
-    }
-  }
+  ~ViewerPanelFixture() { director.stopAll(); }
 
   void frame()
   {
     surfaces.step();
-    module.Update(0.016);
+    module.update(0.016);
   }
 
   // A main-window click at a layout point (UI scale 1).
@@ -90,10 +89,10 @@ struct ViewerPanelFixture
     window.mouseY = y;
     InputManagerTestAccess::setAction(
       input, KeyCode::MouseLeft, InputAction::Press);
-    module.Update(0.016);
+    module.update(0.016);
     InputManagerTestAccess::setAction(
       input, KeyCode::MouseLeft, InputAction::None);
-    module.Update(0.016);
+    module.update(0.016);
   }
 };
 
@@ -109,7 +108,7 @@ testDisplayEdits()
   TestCounters counters;
   ViewerPanelFixture fixture(false);
   testTrue(counters, fixture.started, "the viewer starts");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   MeshViewerDisplayPanel* display = fixture.module.displayPanel();
   testTrue(counters,
            display->placement().visible && display->placement().area.x > 900.0f,
@@ -138,15 +137,15 @@ testDisplayEdits()
   fixture.window.mouseY = y;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   float endX = 0.0f;
   float endY = 0.0f;
   display->controlPointForTesting("Radius", 1.0f, &endX, &endY);
   fixture.window.mouseX = endX + 40.0f;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::None);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(counters,
            std::fabs(fixture.module.meshVisual()->getShadowRadius() - 20.0f) <
                0.01f &&
@@ -169,7 +168,7 @@ testDisplayEdits()
            fixture.module.loadMeshFromMemory(
              "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", "tri.obj"),
            "a mesh loads");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(counters,
            info->placement().visible && info->getVisual().textCount() >= 10u,
            "the Info panel lists the mesh");
@@ -199,7 +198,7 @@ testViewerPopOutAndDock()
 
   fixture.scene.ClearDrawables();
   fixture.surfaces.clearScenes();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   FakePanelSurfaces::Window* window = fixture.surfaces.window(202);
   testTrue(counters,
            window != nullptr &&
@@ -215,9 +214,9 @@ testViewerPopOutAndDock()
   window->pointer.x = x;
   window->pointer.y = y;
   window->pointer.left = true;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   window->pointer.left = false;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(counters,
            fixture.module.showWireframe(),
            "the detached Display panel toggles the wireframe");

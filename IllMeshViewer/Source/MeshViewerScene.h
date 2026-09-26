@@ -4,8 +4,7 @@
 #include "MeshViewerPanels.h"
 #include "MeshViewerPlatform.h"
 #include "MeshViewerUi.h"
-#include <Illumo/Content/SceneInstance.h>
-#include <Illumo/Engine/IModule.h>
+#include <Illumo/Content/ProgramScene.h>
 #include <Illumo/Gui/GuiPanelDock.h>
 #include <Illumo/Rendering/MeshData.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -20,22 +19,22 @@ struct IllumoContext;
 // The mesh viewer: an orbit camera over one mesh or scene, a plain menu and
 // status bar (MeshViewerUi), and a GuiPanelDock (D-UI7) whose right column
 // holds the Info and Display panels, each of which can pop out into its own
-// window.
-class MeshViewerModule : public IModule
+// window. The open scene document is this scene's content().
+class MeshViewerScene : public ProgramScene
 {
 public:
-  explicit MeshViewerModule(std::string initialMeshPath = "");
-  ~MeshViewerModule() override;
+  explicit MeshViewerScene(std::string initialMeshPath = "");
+  ~MeshViewerScene() override;
 
-  MeshViewerModule(const MeshViewerModule&) = delete;
-  MeshViewerModule& operator=(const MeshViewerModule&) = delete;
-  MeshViewerModule(MeshViewerModule&&) = delete;
-  MeshViewerModule& operator=(MeshViewerModule&&) = delete;
+  MeshViewerScene(const MeshViewerScene&) = delete;
+  MeshViewerScene& operator=(const MeshViewerScene&) = delete;
+  MeshViewerScene(MeshViewerScene&&) = delete;
+  MeshViewerScene& operator=(MeshViewerScene&&) = delete;
 
-  bool Start(IllumoContext* context) override;
-  void Update(double dt) override;
-  void DispatchDrawables(Scene* scene) override;
-  void Exit() override;
+  bool start(IllumoContext& context) override;
+  void update(double dt) override;
+  void dispatch(Scene& frame) override;
+  void stop() override;
 
 #if !defined(ILLUMO_SERIAL_GUEST)
   // Native paths keep tinyobj's material search beside the OBJ.
@@ -64,7 +63,7 @@ public:
 
   const MeshData& meshData() const { return m_meshData; }
   // The open scene, or nullptr while a mesh (or nothing) is shown.
-  SceneInstance* sceneInstance() { return m_scene.get(); }
+  SceneInstance* sceneInstance() { return m_sceneOpen ? &content() : nullptr; }
   const std::string& meshPath() const { return m_meshPath; }
   const MeshViewerCamera& cameraController() const { return m_camera; }
   MeshViewerCamera& cameraController() { return m_camera; }
@@ -131,7 +130,8 @@ private:
   std::string m_meshPath;
   MeshData m_meshData;
   MeshHandle m_meshAsset{};
-  std::unique_ptr<SceneInstance> m_scene;
+  // content() holds an opened scene document.
+  bool m_sceneOpen = false;
   std::size_t m_sceneMissing = 0;
   // World bounds of the open scene, for framing and the wireframe outline.
   AxisAlignedBounds3 m_sceneBounds;
@@ -166,7 +166,7 @@ private:
   bool m_mouseWasDown;
   double m_lastMouseX;
   double m_lastMouseY;
-  // Expires on Exit so late platform completions never touch a stopped
-  // module.
+  // Expires on stop so late platform completions never touch a stopped
+  // scene.
   std::shared_ptr<bool> m_lifetime;
 };

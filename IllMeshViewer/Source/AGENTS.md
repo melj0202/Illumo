@@ -13,7 +13,7 @@ manifest `IllMeshViewer/illumo.json`, `launchAccess: "read"`, private storage
 `storage/meshviewer/`) run by `IllumoRuntime --app meshviewer [--open
 model.obj]`, like IllumoGame and IllEd. There is no native
 `IllMeshViewer.exe`. `Wasm/ViewerApplication.cpp` is the guest entry
-(`GuestModuleApplication`); it preloads `Assets/Skybox/skybox-daylight.png`
+(a `GuestProgram` whose one scene is `MeshViewerScene`); it preloads `Assets/Skybox/skybox-daylight.png`
 from the package (`packageAssets()`) and hands the `--open` launch file to
 the platform seam. `IllMeshViewerCore` stays a native library for the
 `IllMeshViewerTests` oracle suite.
@@ -51,8 +51,8 @@ the platform seam. `IllMeshViewerCore` stays a native library for the
 - `MeshViewerUi` is only the main-window chrome: File and View menus, the
   empty-state card and toasts inside the dock's centre rectangle, and the
   status bar. The Info and Display panels (`MeshViewerPanels`) live in a
-  `GuiPanelDock` (right column) owned by `MeshViewerModule`
-  (`MeshViewerModulePanels.cpp`); each draws into the `GuiPanelPlacement` it
+  `GuiPanelDock` (right column) owned by `MeshViewerScene`
+  (`MeshViewerScenePanels.cpp`); each draws into the `GuiPanelPlacement` it
   is given and reads its pointer through `GuiPanelPointer`, docked or
   detached. The layout is saved in `panelLayout`. Do not restate UI-scale
   conversion or press-edge bookkeeping.

@@ -3,8 +3,10 @@
 #include <Illumo/Content/ProgramScene.h>
 #include <Illumo/Rendering/Camera.h>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // How a switch reaches the next scene.
@@ -56,6 +58,19 @@ public:
   // Takes ownership. False for an empty name, a null scene or a name in use.
   // The scene starts the first time it is entered.
   bool add(std::string name, std::unique_ptr<ProgramScene> scene);
+  // Constructs and adds a scene, returning it. A name in use is a programming
+  // error and throws std::logic_error.
+  template<typename SceneType, typename... Arguments>
+  SceneType& emplace(std::string name, Arguments&&... arguments)
+  {
+    std::unique_ptr<SceneType> scene =
+      std::make_unique<SceneType>(std::forward<Arguments>(arguments)...);
+    SceneType& added = *scene;
+    if (!add(std::move(name), std::move(scene))) {
+      throw std::logic_error("SceneDirector::emplace: the name is in use");
+    }
+    return added;
+  }
   bool has(std::string_view name) const;
   ProgramScene* find(std::string_view name);
   ProgramScene* active();
