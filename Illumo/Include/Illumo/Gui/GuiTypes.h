@@ -90,6 +90,10 @@ struct GuiLiquidSelection
   float glowSpread = 12.0f;
   ColorRgba glow{ 0, 0, 0, 0 };
   ColorRgba rim{ 0, 0, 0, 0 };
+  // Rim and glow at the bottom of the drop, blending from `rim` and `glow`
+  // at its top (UiTheme::accentBlendOf); zero alpha keeps them uniform.
+  ColorRgba rimBottom{ 0, 0, 0, 0 };
+  ColorRgba glowBottom{ 0, 0, 0, 0 };
   ColorRgba faceTop{ 0, 0, 0, 0 };
   ColorRgba faceBottom{ 0, 0, 0, 0 };
   // GuiMenuAnimator::selectionSheen(); negative skips the sweep.

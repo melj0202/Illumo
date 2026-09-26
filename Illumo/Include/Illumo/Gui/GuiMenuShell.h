@@ -67,10 +67,12 @@ public:
   static constexpr GuiSpringTuning kJelly{ 3.4f, 0.42f };
   // Small parts that snap between states (toggle knobs, lit chips): springy.
   static constexpr GuiSpringTuning kBoing{ 4.4f, 0.38f };
-  // The head of a travelling selection: races ahead and overshoots.
-  static constexpr GuiSpringTuning kLiquidHead{ 4.6f, 0.45f };
+  // The head of a travelling selection: pours ahead and overshoots. Head and
+  // tail stay close in frequency so the drop flows as one body instead of
+  // snapping out, lingering stretched, and beating as the two ring apart.
+  static constexpr GuiSpringTuning kLiquidHead{ 3.9f, 0.52f };
   // The tail of a travelling selection: lags, then catches up with a slosh.
-  static constexpr GuiSpringTuning kLiquidTail{ 2.9f, 0.58f };
+  static constexpr GuiSpringTuning kLiquidTail{ 3.1f, 0.64f };
   // Large surfaces and crossfades: one soft swell, no visible ringing.
   static constexpr GuiSpringTuning kSwell{ 2.2f, 0.72f };
   // Scroll thumbs and followers: smooth, with a hint of follow-through.

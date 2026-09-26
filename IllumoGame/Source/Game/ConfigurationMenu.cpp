@@ -1763,24 +1763,26 @@ ConfigurationMenu::drawTabs(unsigned char panelOpacity, float breathe)
     UiTheme::applyOpacity(UiTheme::fade(cyan, 0.22f + 0.1f * breathe),
                           panelOpacity),
     UiTheme::transparentOf(cyan));
+  // A rim running cyan into violet around a teal-to-indigo face.
+  const ColorRgba pillRim =
+    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.8f), panelOpacity);
+  GuiKit::drawRoundedGradientRect(visual,
+                                  pillX,
+                                  pillY,
+                                  pillWidth,
+                                  pillHeight,
+                                  8.0f,
+                                  pillRim,
+                                  UiTheme::accentBlendOf(pillRim));
   GuiKit::drawRoundedGradientRect(
     visual,
-    pillX,
-    pillY,
-    pillWidth,
-    pillHeight,
-    8.0f,
+    pillX + 1.0f,
+    pillY + 1.0f,
+    pillWidth - 2.0f,
+    pillHeight - 2.0f,
+    7.0f,
     UiTheme::applyOpacity(UiTheme::selectionTop(), panelOpacity),
     UiTheme::applyOpacity(UiTheme::selectionBottom(), panelOpacity));
-  GuiKit::drawRoundedOutline(
-    visual,
-    pillX,
-    pillY,
-    pillWidth,
-    pillHeight,
-    8.0f,
-    1.0f,
-    UiTheme::applyOpacity(UiTheme::fade(cyan, 0.8f), panelOpacity));
 
   for (int tab = 0; tab < kTabCount; ++tab) {
     const float emphasis = std::clamp(tabFocus.value(tab), 0.0f, 1.2f);
@@ -1879,7 +1881,8 @@ ConfigurationMenu::drawRowControl(ConfigurationSetting setting,
         UiTheme::applyOpacity(UiTheme::fade(cyan, 0.35f * lit), rowOpacity),
         UiTheme::transparentOf(cyan));
     }
-    GuiKit::drawRoundedRect(
+    // A lit track runs cyan into violet toward the knob.
+    GuiKit::drawRoundedSideGradientRect(
       visual,
       toggleX,
       toggleY,
@@ -1887,7 +1890,10 @@ ConfigurationMenu::drawRowControl(ConfigurationSetting setting,
       16.0f,
       8.0f,
       UiTheme::applyOpacity(UiTheme::mix(UiTheme::menuBorder(), cyan, lit),
-                            rowOpacity));
+                            rowOpacity),
+      UiTheme::applyOpacity(
+        UiTheme::mix(UiTheme::menuBorder(), UiTheme::accentBlendOf(cyan), lit),
+        rowOpacity));
     GuiKit::drawRoundedRect(
       visual,
       toggleX + 3.0f + 18.0f * knob - knobStretch * 0.5f,
@@ -1989,15 +1995,20 @@ ConfigurationMenu::drawRowControl(ConfigurationSetting setting,
     UiTheme::applyOpacity(UiTheme::menuBorder(), rowOpacity));
   const float fillWidth = std::clamp(knobX - trackLeft, 0.0f, trackWidth);
   if (fillWidth >= 6.0f) {
-    GuiKit::drawRoundedRect(
+    // The fill runs cyan into violet as it reaches the knob, deepening the
+    // further the value goes along the track.
+    const ColorRgba fillStart = UiTheme::applyOpacity(
+      UiTheme::mix(UiTheme::fade(cyan, 0.55f), cyan, focus), rowOpacity);
+    GuiKit::drawRoundedSideGradientRect(
       visual,
       trackLeft,
       centerY - 3.0f,
       fillWidth,
       6.0f,
       3.0f,
-      UiTheme::applyOpacity(
-        UiTheme::mix(UiTheme::fade(cyan, 0.55f), cyan, focus), rowOpacity));
+      fillStart,
+      UiTheme::accentBlendOf(fillStart,
+                             UiTheme::kAccentBlend * fillWidth / trackWidth));
   }
   if (selected || dragging) {
     GuiKit::drawSoftGlow(
@@ -2111,6 +2122,8 @@ ConfigurationMenu::drawRows(unsigned char panelOpacity, float breathe)
       UiTheme::fade(cyan, 0.18f + 0.1f * breathe), selectionOpacity);
     drop.rim =
       UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), selectionOpacity);
+    drop.rimBottom = UiTheme::accentBlendOf(drop.rim);
+    drop.glowBottom = UiTheme::accentBlendOf(drop.glow);
     drop.faceTop =
       UiTheme::applyOpacity(UiTheme::selectionTop(), selectionOpacity);
     drop.faceBottom =

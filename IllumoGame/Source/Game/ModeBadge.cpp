@@ -159,7 +159,8 @@ ModeBadge::rebuild()
     UiTheme::applyOpacity(UiTheme::fade(accent, 0.16f + 0.14f * breathe),
                           opacity),
     UiTheme::transparentOf(accent));
-  GuiKit::drawRoundedRect(
+  // The rim blends from the accent into violet, like the hamburger button's.
+  GuiKit::drawRoundedGradientRect(
     m_visual,
     x,
     y,
@@ -167,7 +168,10 @@ ModeBadge::rebuild()
     height,
     radius,
     UiTheme::applyOpacity(UiTheme::mix(UiTheme::glassRim(), accent, 0.6f),
-                          opacity));
+                          opacity),
+    UiTheme::applyOpacity(
+      UiTheme::mix(UiTheme::glassRim(), UiTheme::accentBlendOf(accent), 0.6f),
+      opacity));
   GuiKit::drawRoundedGradientRect(
     m_visual,
     x + 1.0f,

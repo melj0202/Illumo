@@ -497,10 +497,35 @@ CellGameModule::Start(IllumoContext* context)
   m_paintPaletteHeightMorph.snapTo(0.0f);
   m_paintPaletteWidthMorph.snapTo(0.0f);
   m_paintPaletteBubbleHover.snapTo(0.0f);
+  m_hamburgerPop.configure(GuiMotion::kBoing);
+  m_hamburgerHover.configure(GuiMotion::kJelly);
+  m_hamburgerTip.configure(GuiMotion::kBoing);
+  m_hamburgerTip.snapTo(0.0f);
+  for (GuiSpring& bar : m_hamburgerBars) {
+    bar.configure(GuiMotion::kBoing);
+    bar.snapTo(0.0f);
+  }
+  m_hamburgerPop.snapTo(0.0f);
+  m_hamburgerHover.snapTo(0.0f);
+  m_hamburgerHoverClock = 0.0;
+  m_hamburgerShown = false;
   m_paintPaletteMouseWasDown = false;
   m_paintPaletteCapturing = false;
   m_paintPaletteHovered = false;
   m_paintPaletteEmphasis.clear();
+  for (GuiSpring& card : m_paintCardHover) {
+    card.configure(GuiMotion::kJelly);
+    card.snapTo(0.0f);
+  }
+  for (GuiSpring& card : m_paintCardSquish) {
+    card.configure(GuiMotion::kJelly);
+    card.snapTo(0.0f);
+  }
+  m_paintHeaderHover.configure(GuiMotion::kJelly);
+  m_paintHeaderHover.snapTo(0.0f);
+  m_paintChipPop.configure(GuiMotion::kBoing);
+  m_paintChipPop.snapTo(0.0f);
+  m_paintChipBrush = 0;
   m_paintPaletteStateOffset = 0u;
   m_paintRuleTag.clear();
 
@@ -2406,6 +2431,7 @@ CellGameModule::Exit()
   render3dLoadFailed = false;
   hamburgerVisual.clearPrimitives();
   hamburgerVisual.setVisible(false);
+  m_hamburgerShown = false;
   m_paintPaletteVisual.clearPrimitives();
   m_paintPaletteVisual.setVisible(false);
   canvasEntranceVisual.clearPrimitives();
@@ -2940,6 +2966,54 @@ CellGameModule::buildEditHints(float width,
     0.0f, top + panelHeight, width, panelHeight, footerBottom);
   const ColorRgba cyan = UiTheme::accentCool();
   const ColorRgba violet = UiTheme::accentViolet();
+  // A soft glow hugs the lit top edge: it rises into the canvas and sinks a
+  // little way into the bar, cyan in the middle fading toward cyan and violet
+  // at the ends like the hairline it surrounds. It breathes in step with the
+  // hamburger's halo (the same clock and period), swelling and brightening.
+  const bool stillHints = ic->envVars != nullptr &&
+                          ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  const float hintBreath =
+    stillHints ? 0.5f
+               : 0.5f + 0.5f * std::sin(static_cast<float>(m_hamburgerClock) *
+                                        6.2831853f / 3.2f);
+  const float glowStrength = 0.28f + 0.1f * hintBreath;
+  const float glowAbove = 11.0f + 4.0f * hintBreath;
+  const float glowBelow = 5.0f + 1.5f * hintBreath;
+  const ColorRgba glowCenter = UiTheme::fade(cyan, glowStrength);
+  const ColorRgba glowLeft = UiTheme::fade(cyan, glowStrength * 0.22f);
+  const ColorRgba glowRight = UiTheme::fade(violet, glowStrength * 0.3f);
+  editHintsVisual.addGradientRect(0.0f,
+                                  top - glowAbove,
+                                  width * 0.5f,
+                                  glowAbove,
+                                  UiTheme::transparentOf(glowLeft),
+                                  UiTheme::transparentOf(glowCenter),
+                                  glowCenter,
+                                  glowLeft);
+  editHintsVisual.addGradientRect(width * 0.5f,
+                                  top - glowAbove,
+                                  width * 0.5f,
+                                  glowAbove,
+                                  UiTheme::transparentOf(glowCenter),
+                                  UiTheme::transparentOf(glowRight),
+                                  glowRight,
+                                  glowCenter);
+  editHintsVisual.addGradientRect(0.0f,
+                                  top,
+                                  width * 0.5f,
+                                  glowBelow,
+                                  UiTheme::fade(glowLeft, 0.6f),
+                                  UiTheme::fade(glowCenter, 0.6f),
+                                  UiTheme::transparentOf(glowCenter),
+                                  UiTheme::transparentOf(glowLeft));
+  editHintsVisual.addGradientRect(width * 0.5f,
+                                  top,
+                                  width * 0.5f,
+                                  glowBelow,
+                                  UiTheme::fade(glowCenter, 0.6f),
+                                  UiTheme::fade(glowRight, 0.6f),
+                                  UiTheme::transparentOf(glowRight),
+                                  UiTheme::transparentOf(glowCenter));
   editHintsVisual.addGradientRect(0.0f,
                                   top,
                                   width * 0.5f,
@@ -3411,7 +3485,12 @@ CellGameModule::updatePaintPalette(double dt)
       }
     }
   }
-  m_paintPaletteEmphasis.resize(stateCount, 0.0f);
+  if (m_paintPaletteEmphasis.size() != stateCount) {
+    m_paintPaletteEmphasis.assign(stateCount, GuiSpring{});
+    for (GuiSpring& emphasis : m_paintPaletteEmphasis) {
+      emphasis.configure(GuiMotion::kJelly);
+    }
+  }
   if (m_paintBrush >= stateCount) {
     m_paintBrush = 0u;
   }
@@ -3494,12 +3573,8 @@ CellGameModule::updatePaintPalette(double dt)
     m_paintPaletteToggleHovered = true;
     m_paintPaletteCardHoverQuiet = true;
   }
-  const float blend =
-    reducedMotion
-      ? 1.0f
-      : (std::isfinite(dt) && dt > 0.0
-           ? static_cast<float>(1.0 - std::exp(-14.0 * std::min(dt, 0.25)))
-           : 0.0f);
+  const float springStep =
+    std::isfinite(dt) && dt > 0.0 ? static_cast<float>(dt) : 0.0f;
   // Opening, the width leads on a springier morph so the bubble stretches
   // wide, then rises and settles with a bounce; closing pours it back.
   const float morphStep = std::isfinite(dt) && dt > 0.0
@@ -3512,6 +3587,16 @@ CellGameModule::updatePaintPalette(double dt)
   m_paintPaletteWidthMorph.tick(morphStep, reducedMotion);
   m_paintPaletteHeightMorph.tick(morphStep, reducedMotion);
   m_paintPaletteBubbleHover.tick(morphStep, reducedMotion);
+  // The open drawer's header swells on hover, and the brush chip pops with
+  // a springy jiggle whenever the brush in hand changes.
+  m_paintHeaderHover.setTarget(headerHovered && m_paintPaletteExpanded ? 1.0f
+                                                                       : 0.0f);
+  m_paintHeaderHover.tick(morphStep, reducedMotion);
+  if (m_paintChipBrush != m_paintBrush) {
+    m_paintChipBrush = m_paintBrush;
+    m_paintChipPop.kick(9.0f);
+  }
+  m_paintChipPop.tick(morphStep, reducedMotion);
   m_paintPaletteReveal = m_paintPaletteHeightMorph.value();
   const float widthMorph = m_paintPaletteWidthMorph.value();
   const float heightMorph = m_paintPaletteHeightMorph.value();
@@ -3577,6 +3662,17 @@ CellGameModule::updatePaintPalette(double dt)
                                UiTheme::accentCool(),
                                headerHovered ? 0.45f : 0.25f * hover);
   rim.a = 255;
+  // The same soft drop shadow as the hamburger button, so the bubble and the
+  // drawer sit above the canvas like the rest of the chrome; hover lifts it.
+  GuiKit::drawSoftShadow(m_paintPaletteVisual,
+                         blob.left,
+                         blob.top,
+                         blob.width,
+                         blob.height,
+                         blob.radius,
+                         10.0f,
+                         3.0f + 2.0f * std::min(1.0f, hover),
+                         UiTheme::glowShadow());
   GuiKit::drawRoundedRect(m_paintPaletteVisual,
                           blob.left,
                           blob.top,
@@ -3717,27 +3813,55 @@ CellGameModule::updatePaintPalette(double dt)
                                            tip);
   }
   if (contentReveal > 0.01f) {
-    if (headerHovered) {
-      GuiKit::drawRoundedRect(m_paintPaletteVisual,
-                              bodyX + 8.0f,
-                              y + 5.0f,
-                              width - 16.0f,
-                              header - 10.0f,
-                              6.0f,
-                              UiTheme::applyOpacity(UiTheme::accentSoft(),
-                                                    static_cast<unsigned char>(
-                                                      40.0f * contentReveal)));
+    // The hovered header's highlight swells out from its centre on a jelly
+    // spring, overshooting before it settles, and warms from cyan to violet.
+    const float headerSpring = m_paintHeaderHover.value();
+    const float headerLit = std::clamp(headerSpring, 0.0f, 1.0f);
+    if (headerLit > 0.01f) {
+      const float highlightWidth =
+        (width - 16.0f) * std::max(0.0f, 0.82f + 0.18f * headerSpring);
+      const float highlightHeight =
+        (header - 10.0f) * std::max(0.0f, 0.7f + 0.3f * headerSpring);
+      const unsigned char highlightOpacity =
+        static_cast<unsigned char>(255.0f * contentReveal * headerLit);
+      GuiKit::drawRoundedBand(
+        m_paintPaletteVisual,
+        bodyX + (width - highlightWidth) * 0.5f,
+        y + (header - highlightHeight) * 0.5f,
+        highlightWidth,
+        highlightHeight,
+        6.0f,
+        0.0f,
+        8.0f,
+        UiTheme::applyOpacity(UiTheme::fade(UiTheme::accentCool(), 0.18f),
+                              highlightOpacity),
+        UiTheme::transparentOf(UiTheme::accentCool()));
+      GuiKit::drawRoundedGradientRect(
+        m_paintPaletteVisual,
+        bodyX + (width - highlightWidth) * 0.5f,
+        y + (header - highlightHeight) * 0.5f,
+        highlightWidth,
+        highlightHeight,
+        std::min(6.0f, highlightHeight * 0.5f),
+        UiTheme::applyOpacity(UiTheme::fade(UiTheme::accentCool(), 0.2f),
+                              highlightOpacity),
+        UiTheme::applyOpacity(UiTheme::fade(UiTheme::accentViolet(), 0.2f),
+                              highlightOpacity));
     }
     // A spaced-caps eyebrow, as the menus title their panels, and a chip
-    // naming the brush in hand beside the close chevron.
+    // naming the brush in hand beside the close chevron. The eyebrow leans
+    // in on hover.
     m_paintPaletteVisual.addText(
       "C E L L   P A I N T",
-      bodyX + 16.0f,
+      bodyX + 16.0f + 2.0f * headerSpring,
       y + 11.5f,
       9.5f,
-      UiTheme::applyOpacity(UiTheme::accentCool(), contentOpacity));
+      UiTheme::applyOpacity(
+        UiTheme::mix(UiTheme::accentCool(), UiTheme::glassRimLit(), headerLit),
+        contentOpacity));
     const float arrowX = bodyX + width - 23.0f;
-    const float arrowY = y + 16.0f;
+    // The close chevron dips toward where the drawer will go.
+    const float arrowY = y + 16.0f + 2.5f * headerSpring;
     const std::string brushName = rules->getStateName(m_paintBrush);
     const float brushNameWidth =
       GuiKit::measureEmphasizedText(brushName, 10.0f, 0.6f);
@@ -3745,43 +3869,62 @@ CellGameModule::updatePaintPalette(double dt)
     const float chipWidth = brushNameWidth + 32.0f;
     const float chipLeft = chipRight - chipWidth;
     if (chipLeft > bodyX + 130.0f) {
+      // A new brush makes the chip jiggle about its centre, its dot hopping
+      // a little further than the pill.
+      const float pop = m_paintChipPop.value();
+      const float chipScale = std::max(0.5f, 1.0f + 0.12f * pop);
+      const float dotScale = std::max(0.3f, 1.0f + 0.3f * pop);
+      const float chipCenterX = chipLeft + chipWidth * 0.5f;
+      const float chipCenterY = y + 16.0f;
+      const float scaledWidth = chipWidth * chipScale;
+      const float scaledHeight = 18.0f * chipScale;
+      const float scaledLeft = chipCenterX - scaledWidth * 0.5f;
+      const float scaledTop = chipCenterY - scaledHeight * 0.5f;
+      GuiKit::drawRoundedGradientRect(
+        m_paintPaletteVisual,
+        scaledLeft,
+        scaledTop,
+        scaledWidth,
+        scaledHeight,
+        scaledHeight * 0.5f,
+        UiTheme::applyOpacity(
+          UiTheme::mix(UiTheme::glassRim(), UiTheme::accentCool(), 0.35f),
+          contentOpacity),
+        UiTheme::applyOpacity(
+          UiTheme::mix(UiTheme::glassRim(), UiTheme::accentViolet(), 0.35f),
+          contentOpacity));
       GuiKit::drawRoundedRect(
         m_paintPaletteVisual,
-        chipLeft,
-        y + 7.0f,
-        chipWidth,
-        18.0f,
-        9.0f,
-        UiTheme::applyOpacity(UiTheme::fade(UiTheme::glassRim(), 0.8f),
-                              contentOpacity));
-      GuiKit::drawRoundedRect(
-        m_paintPaletteVisual,
-        chipLeft + 1.0f,
-        y + 8.0f,
-        chipWidth - 2.0f,
-        16.0f,
-        8.0f,
+        scaledLeft + 1.0f,
+        scaledTop + 1.0f,
+        scaledWidth - 2.0f,
+        scaledHeight - 2.0f,
+        scaledHeight * 0.5f - 1.0f,
         UiTheme::applyOpacity(UiTheme::glassBottom(), contentOpacity));
+      const float dotSize = 10.0f * dotScale;
+      const float dotCenterX = scaledLeft + 10.0f * chipScale;
       GuiKit::drawRoundedRect(
         m_paintPaletteVisual,
-        chipLeft + 5.0f,
-        y + 11.0f,
-        10.0f,
-        10.0f,
-        5.0f,
+        dotCenterX - dotSize * 0.5f,
+        chipCenterY - dotSize * 0.5f,
+        dotSize,
+        dotSize,
+        dotSize * 0.5f,
         UiTheme::applyOpacity(brushColor, contentOpacity));
+      const float nameSize = 10.0f * chipScale;
       GuiKit::drawEmphasizedText(
         m_paintPaletteVisual,
         brushName,
-        chipLeft + 21.0f,
-        y + 11.0f,
-        10.0f,
+        scaledLeft + 21.0f * chipScale,
+        chipCenterY - nameSize * 0.5f,
+        nameSize,
         UiTheme::applyOpacity(UiTheme::textPrimary(), contentOpacity),
         0.6f);
     }
     // A down chevron closes the drawer back into its bubble.
-    const ColorRgba arrow =
-      UiTheme::applyOpacity(UiTheme::accent(), contentOpacity);
+    const ColorRgba arrow = UiTheme::applyOpacity(
+      UiTheme::mix(UiTheme::accent(), UiTheme::accentCool(), headerLit),
+      contentOpacity);
     GuiKit::drawChevron(
       m_paintPaletteVisual, arrowX, arrowY + 3.0f, 5.0f, -5.0f, 2.0f, arrow);
   }
@@ -3796,53 +3939,81 @@ CellGameModule::updatePaintPalette(double dt)
       paletteInteractive && m_paintPaletteExpanded && contentReveal > 0.5f &&
       my < screenHeight &&
       GuiKit::isPointInRect(mx, my, cardX, cardY, 124.0f, 64.0f);
+    GuiSpring& cardHover = m_paintCardHover[card];
+    GuiSpring& cardSquish = m_paintCardSquish[card];
     if (hovered) {
       m_paintPaletteHoveredCard = static_cast<int>(card);
       if (clicked) {
         m_paintBrush = static_cast<unsigned char>(state);
         CSimSounds::play(CSimSound::MenuSelect);
+        // The picked swatch jumps: it stretches tall, then bulges as it
+        // lands and jiggles still.
+        cardSquish.kick(-6.0f);
       } else if (static_cast<int>(card) != previousHoveredCard &&
                  !m_paintPaletteCardHoverQuiet) {
         CSimSounds::play(CSimSound::MenuHover);
       }
     }
-    float& emphasis = m_paintPaletteEmphasis[static_cast<std::size_t>(state)];
-    emphasis +=
-      ((m_paintBrush == state ? 1.0f : (hovered ? 0.5f : 0.0f)) - emphasis) *
-      blend;
+    GuiSpring& emphasis =
+      m_paintPaletteEmphasis[static_cast<std::size_t>(state)];
+    emphasis.setTarget(m_paintBrush == state ? 1.0f : (hovered ? 0.5f : 0.0f));
+    emphasis.tick(springStep, reducedMotion);
+    cardHover.setTarget(hovered ? 1.0f : 0.0f);
+    cardHover.tick(springStep, reducedMotion);
+    cardSquish.tick(springStep, reducedMotion);
     if (contentReveal <= 0.01f) {
       continue;
     }
     // Menu cards: a soft drop shadow, a rim that warms toward the accent on
-    // hover and a top-lit face. The chosen card is marked by the liquid drop
-    // poured over it below, not by tinting the card.
-    const float hoverLit = hovered && m_paintBrush != state ? 1.0f : 0.0f;
+    // hover and a top-lit face. A hovered card bobs up on a jelly spring,
+    // its shadow deepening and a cyan glow blooming around it. The chosen
+    // card is marked by the liquid drop poured over it below, not by
+    // tinting the card.
+    const float hoverSpring = cardHover.value();
+    const float hoverLit =
+      m_paintBrush != state ? std::clamp(hoverSpring, 0.0f, 1.0f) : 0.0f;
+    const float liftedY = cardY - 4.0f * hoverSpring;
     GuiKit::drawSoftShadow(m_paintPaletteVisual,
                            cardX,
-                           cardY,
+                           liftedY,
                            124.0f,
                            64.0f,
                            9.0f,
                            8.0f,
-                           3.0f,
+                           3.0f + 3.0f * std::max(0.0f, hoverSpring),
                            UiTheme::fade(UiTheme::glowShadow(), 0.7f));
-    GuiKit::drawRoundedRect(m_paintPaletteVisual,
-                            cardX,
-                            cardY,
-                            124.0f,
-                            64.0f,
-                            9.0f,
-                            UiTheme::mix(UiTheme::cardRim(),
-                                         ColorRgba{ 70, 140, 170, 255 },
-                                         hoverLit));
-    GuiKit::drawRoundedGradientRect(m_paintPaletteVisual,
-                                    cardX + 1.0f,
-                                    cardY + 1.0f,
-                                    122.0f,
-                                    62.0f,
-                                    8.0f,
-                                    UiTheme::cardTop(),
-                                    UiTheme::cardBottom());
+    if (hoverLit > 0.01f) {
+      GuiKit::drawRoundedBand(
+        m_paintPaletteVisual,
+        cardX,
+        liftedY,
+        124.0f,
+        64.0f,
+        9.0f,
+        0.0f,
+        9.0f,
+        UiTheme::fade(UiTheme::accentCool(), 0.28f * hoverLit),
+        UiTheme::transparentOf(UiTheme::accentCool()));
+    }
+    GuiKit::drawRoundedGradientRect(
+      m_paintPaletteVisual,
+      cardX,
+      liftedY,
+      124.0f,
+      64.0f,
+      9.0f,
+      UiTheme::mix(UiTheme::cardRim(), UiTheme::accentCool(), hoverLit),
+      UiTheme::mix(UiTheme::cardRim(), UiTheme::accentViolet(), hoverLit));
+    GuiKit::drawRoundedGradientRect(
+      m_paintPaletteVisual,
+      cardX + 1.0f,
+      liftedY + 1.0f,
+      122.0f,
+      62.0f,
+      8.0f,
+      UiTheme::mix(UiTheme::cardTop(), ColorRgba{ 36, 74, 102, 255 }, hoverLit),
+      UiTheme::mix(
+        UiTheme::cardBottom(), ColorRgba{ 34, 36, 78, 255 }, hoverLit));
   }
   // The chosen brush's drop: the head pours to the new card and the tail
   // follows, so it stretches between them, then settles into a rounded card
@@ -3857,8 +4028,6 @@ CellGameModule::updatePaintPalette(double dt)
   }
   m_paintSelectHead.setTarget(selectedSlot);
   m_paintSelectTail.setTarget(selectedSlot);
-  const float springStep =
-    std::isfinite(dt) && dt > 0.0 ? static_cast<float>(dt) : 0.0f;
   m_paintPaletteBreath = std::fmod(m_paintPaletteBreath + springStep, 3.0);
   m_paintSelectHead.tick(springStep, reducedMotion);
   m_paintSelectTail.tick(springStep, reducedMotion);
@@ -3879,9 +4048,16 @@ CellGameModule::updatePaintPalette(double dt)
       reducedMotion ? 0.5f
                     : 0.5f + 0.5f * std::sin(static_cast<float>(
                                       m_paintPaletteBreath * 6.2831853 / 3.0));
+    // The drop rides its card's hover bob, so hovering the chosen card lifts
+    // both together.
+    const int dropCard = static_cast<int>(std::lround(dropSlot));
+    const float dropLift =
+      dropCard >= 0 && dropCard < static_cast<int>(visibleStateCount)
+        ? 4.0f * m_paintCardHover[static_cast<std::size_t>(dropCard)].value()
+        : 0.0f;
     GuiLiquidSelection drop;
     drop.horizontal = true;
-    drop.crossStart = y + header + 12.0f;
+    drop.crossStart = y + header + 12.0f - dropLift;
     drop.crossSize = 64.0f;
     drop.headStart = slotX0 + head * 132.0f;
     drop.tailStart = slotX0 + tail * 132.0f;
@@ -3895,6 +4071,8 @@ CellGameModule::updatePaintPalette(double dt)
     drop.glow = UiTheme::applyOpacity(
       UiTheme::fade(UiTheme::accentCool(), 0.2f + 0.1f * breathe), dropOpacity);
     drop.rim = UiTheme::applyOpacity(UiTheme::accentCool(), dropOpacity);
+    drop.rimBottom = UiTheme::accentBlendOf(drop.rim);
+    drop.glowBottom = UiTheme::accentBlendOf(drop.glow);
     drop.faceTop = UiTheme::applyOpacity(UiTheme::selectionTop(), dropOpacity);
     drop.faceBottom =
       UiTheme::applyOpacity(UiTheme::selectionBottom(), dropOpacity);
@@ -3905,56 +4083,70 @@ CellGameModule::updatePaintPalette(double dt)
        ++card) {
     const unsigned int state = m_paintPaletteStateOffset + card;
     const float cardX = bodyX + 12.0f + static_cast<float>(card) * 132.0f;
-    const float cardY = y + header + 12.0f;
-    const float lit = std::clamp(
-      m_paintPaletteEmphasis[static_cast<std::size_t>(state)], 0.0f, 1.0f);
+    const float hoverSpring = m_paintCardHover[card].value();
+    const float cardY = y + header + 12.0f - 4.0f * hoverSpring;
+    const float emphasis =
+      m_paintPaletteEmphasis[static_cast<std::size_t>(state)].value();
+    const float lit = std::clamp(emphasis, 0.0f, 1.0f);
     unsigned char rgb[3]{};
     rules->evalCell(static_cast<unsigned char>(state), rgb);
     const ColorRgba swatch{ rgb[0], rgb[1], rgb[2], 255 };
     // A round-cornered swatch with a glass gloss; the chosen one lifts off
-    // the card and glows in its own color.
-    const float swatchLift = 3.0f * lit;
-    const float swatchX = cardX + 48.0f;
-    const float swatchY = cardY + 8.0f - swatchLift;
+    // the card and glows in its own color. It rides the emphasis spring, so
+    // it hops past its height and bounces back, swells a little on hover,
+    // and jiggles (tall, then wide) when picked.
+    const float squish =
+      std::clamp(0.35f * m_paintCardSquish[card].value(), -0.25f, 0.25f);
+    const float swatchScale =
+      std::max(0.5f, 1.0f + 0.1f * std::max(0.0f, hoverSpring));
+    const float swatchWidth = 28.0f * swatchScale * (1.0f + squish);
+    const float swatchHeight = 28.0f * swatchScale * (1.0f - squish);
+    const float swatchLift = 3.0f * emphasis;
+    const float swatchCenterX = cardX + 62.0f;
+    // Keep the swatch's bottom edge anchored as it squishes.
+    const float swatchBottom = cardY + 36.0f - swatchLift;
+    const float swatchX = swatchCenterX - swatchWidth * 0.5f;
+    const float swatchY = swatchBottom - swatchHeight;
+    const float swatchRadius = 8.0f * swatchScale;
     if (lit > 0.02f) {
       GuiKit::drawSoftGlow(m_paintPaletteVisual,
-                           swatchX + 14.0f,
-                           swatchY + 14.0f,
-                           26.0f,
-                           22.0f,
+                           swatchCenterX,
+                           swatchY + swatchHeight * 0.5f,
+                           26.0f * swatchScale,
+                           22.0f * swatchScale,
                            UiTheme::fade(swatch, 0.35f * lit),
                            16);
       GuiKit::drawSoftShadow(m_paintPaletteVisual,
                              swatchX,
                              swatchY,
-                             28.0f,
-                             28.0f,
-                             8.0f,
+                             swatchWidth,
+                             swatchHeight,
+                             swatchRadius,
                              6.0f,
-                             2.0f + swatchLift,
+                             2.0f + std::max(0.0f, swatchLift),
                              UiTheme::fade(UiTheme::glowShadow(), lit));
     }
     GuiKit::drawRoundedRect(
       m_paintPaletteVisual,
       swatchX,
       swatchY,
-      28.0f,
-      28.0f,
-      8.0f,
+      swatchWidth,
+      swatchHeight,
+      swatchRadius,
       UiTheme::mix(UiTheme::panelBorder(), UiTheme::accentCool(), 0.5f * lit));
     GuiKit::drawRoundedRect(m_paintPaletteVisual,
                             swatchX + 1.5f,
                             swatchY + 1.5f,
-                            25.0f,
-                            25.0f,
-                            6.5f,
+                            swatchWidth - 3.0f,
+                            swatchHeight - 3.0f,
+                            std::max(0.0f, swatchRadius - 1.5f),
                             swatch);
     GuiKit::drawRoundedGradientRect(m_paintPaletteVisual,
                                     swatchX + 1.5f,
                                     swatchY + 1.5f,
-                                    25.0f,
-                                    11.0f,
-                                    6.5f,
+                                    swatchWidth - 3.0f,
+                                    (swatchHeight - 3.0f) * 0.44f,
+                                    std::max(0.0f, swatchRadius - 1.5f),
                                     ColorRgba{ 255, 255, 255, 58 },
                                     ColorRgba{ 255, 255, 255, 0 });
     // The label thickens with emphasis, as the menu rows do.
@@ -3965,7 +4157,7 @@ CellGameModule::updatePaintPalette(double dt)
       cardY + 49.0f,
       11.0f,
       UiTheme::mix(UiTheme::textPrimary(), UiTheme::accentCool(), lit),
-      lit);
+      std::max(0.0f, emphasis));
   }
   if (contentReveal > 0.01f) {
     const float dividerWidth = width - 36.0f;
@@ -4113,6 +4305,7 @@ CellGameModule::updateHamburgerVisual(double dt)
   hamburgerVisual.clearPrimitives();
   if (ic == nullptr || ic->window == nullptr) {
     hamburgerVisual.setVisible(false);
+    m_hamburgerShown = false;
     return;
   }
 
@@ -4126,6 +4319,7 @@ CellGameModule::updateHamburgerVisual(double dt)
   if (consoleOpen || exitConfirmOpen || settingsOpen) {
     hamburgerVisual.setVisible(false);
     hamburgerHovered = false;
+    m_hamburgerShown = false;
     return;
   }
 
@@ -4149,105 +4343,204 @@ CellGameModule::updateHamburgerVisual(double dt)
     ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
   const bool isPressed = hamburgerHovered && isMouseDown;
 
-  const float target = hamburgerHovered ? 1.0f : 0.0f;
   const bool reducedMotion = ic->envVars != nullptr &&
                              ic->envVars->getVar("reducedUiMotion").valueAsBool;
-  const float blend =
-    reducedMotion
-      ? 1.0f
-      : (std::isfinite(dt) && dt > 0.0
-           ? static_cast<float>(1.0 - std::exp(-14.0 * std::min(dt, 0.25)))
-           : 0.0f);
-  hamburgerHoverBlend += (target - hamburgerHoverBlend) * blend;
-  const float hover = std::clamp(hamburgerHoverBlend, 0.0f, 1.0f);
+  const float step =
+    std::isfinite(dt) && dt > 0.0 ? static_cast<float>(dt) : 0.0f;
+
+  // Reappearing (entering the canvas, or closing settings, the console or
+  // the exit dialog) pops the button back in from nothing.
+  if (!m_hamburgerShown) {
+    m_hamburgerShown = true;
+    m_hamburgerPop.snapTo(0.0f);
+    m_hamburgerHover.snapTo(0.0f);
+    m_hamburgerTip.snapTo(0.0f);
+    for (GuiSpring& bar : m_hamburgerBars) {
+      bar.snapTo(0.0f);
+    }
+    m_hamburgerHoverClock = 0.0;
+  }
+  m_hamburgerPop.setTarget(1.0f);
+  m_hamburgerPop.tick(step, reducedMotion);
+
+  m_hamburgerHover.setTarget(hamburgerHovered ? 1.0f : 0.0f);
+  m_hamburgerHover.tick(step, reducedMotion);
+  m_hamburgerHoverClock =
+    hamburgerHovered != wasHovered ? 0.0 : m_hamburgerHoverClock + step;
+  // The bars follow in a cascade: top first as the pointer arrives, bottom
+  // first as it leaves.
+  for (std::size_t i = 0; i < m_hamburgerBars.size(); ++i) {
+    const std::size_t order =
+      hamburgerHovered ? i : m_hamburgerBars.size() - 1u - i;
+    if (reducedMotion ||
+        m_hamburgerHoverClock >= 0.05 * static_cast<double>(order)) {
+      m_hamburgerBars[i].setTarget(hamburgerHovered ? 1.0f : 0.0f);
+    }
+    m_hamburgerBars[i].tick(step, reducedMotion);
+  }
+
+  // The hint follows a beat after the pointer arrives, on its own springier
+  // spring, and tucks away at once when it leaves.
+  m_hamburgerTip.setTarget(hamburgerHovered &&
+                               (reducedMotion || m_hamburgerHoverClock >= 0.04)
+                             ? 1.0f
+                             : 0.0f);
+  m_hamburgerTip.tick(step, reducedMotion);
+  // A slow clock for the idle breath and the hovered bars' ripple.
+  m_hamburgerClock = std::fmod(m_hamburgerClock + step, 60.0);
+  const float clock = static_cast<float>(m_hamburgerClock);
+  const float breathe =
+    reducedMotion ? 0.5f : 0.5f + 0.5f * std::sin(clock * 6.2831853f / 3.2f);
+
+  const float hoverSpring = m_hamburgerHover.value();
+  const float hover = std::clamp(hoverSpring, 0.0f, 1.0f);
+  const float pop = std::max(0.0f, m_hamburgerPop.value());
   const ColorRgba cyan = UiTheme::accentCool();
+  const ColorRgba violet = UiTheme::accentViolet();
 
-  // An opaque icon tile like the main menu's: a soft drop shadow, a rim and
-  // top-lit face that warm toward the accent on hover, and a glow around it.
-  // A press sinks it a pixel.
-  const float radius = 10.0f;
-  const float sink = isPressed ? 1.0f : 0.0f;
-  const float tileY = hamburgerY + sink;
-  GuiKit::drawSoftShadow(hamburgerVisual,
-                         hamburgerX,
-                         tileY,
-                         hamburgerSize,
-                         hamburgerSize,
-                         radius,
-                         10.0f,
-                         3.0f - 2.0f * sink,
-                         UiTheme::glowShadow());
-  if (hover > 0.01f) {
-    GuiKit::drawRoundedBand(hamburgerVisual,
-                            hamburgerX,
-                            tileY,
-                            hamburgerSize,
-                            hamburgerSize,
-                            radius,
-                            0.0f,
-                            10.0f,
-                            UiTheme::fade(cyan, 0.3f * hover),
-                            UiTheme::transparentOf(cyan));
+  // Jelly: the tile stretches tall while it grows and bulges wide as it
+  // recoils, driven by how fast the pop and hover springs are moving. A held
+  // press squashes it flat.
+  const float squash = std::clamp(-0.004f * m_hamburgerPop.velocity() -
+                                    0.008f * m_hamburgerHover.velocity() +
+                                    (isPressed ? 0.08f : 0.0f),
+                                  -0.14f,
+                                  0.14f);
+  const float grow = pop * (1.0f + 0.1f * hoverSpring);
+  const float tileWidth = hamburgerSize * grow * (1.0f + squash);
+  const float tileHeight = hamburgerSize * grow * (1.0f - squash);
+  if (tileWidth > 2.0f && tileHeight > 2.0f) {
+    // An opaque icon tile scaled about its centre: a soft drop shadow, a
+    // cyan-to-violet halo that breathes at rest and blooms on hover, a rim
+    // lit cyan at the top and violet at the bottom, and a teal-to-indigo
+    // face that brightens toward the accents on hover. A press sinks it.
+    const float centerX = hamburgerX + hamburgerSize * 0.5f;
+    const float centerY =
+      hamburgerY + hamburgerSize * 0.5f + (isPressed ? 1.0f : 0.0f);
+    const float tileX = centerX - tileWidth * 0.5f;
+    const float tileY = centerY - tileHeight * 0.5f;
+    const float radius =
+      std::min(10.0f * grow, std::min(tileWidth, tileHeight) * 0.5f);
+    GuiKit::drawSoftShadow(hamburgerVisual,
+                           tileX,
+                           tileY,
+                           tileWidth,
+                           tileHeight,
+                           radius,
+                           10.0f,
+                           (isPressed ? 1.0f : 3.0f) + 2.0f * hover,
+                           UiTheme::glowShadow());
+    const ColorRgba halo = UiTheme::mix(violet, cyan, 0.4f + 0.6f * hover);
+    GuiKit::drawRoundedBand(
+      hamburgerVisual,
+      tileX,
+      tileY,
+      tileWidth,
+      tileHeight,
+      radius,
+      0.0f,
+      7.0f + 3.0f * breathe + 5.0f * hover,
+      UiTheme::fade(halo, (0.14f + 0.08f * breathe + 0.26f * hover) * pop),
+      UiTheme::transparentOf(halo));
+    GuiKit::drawRoundedGradientRect(
+      hamburgerVisual,
+      tileX,
+      tileY,
+      tileWidth,
+      tileHeight,
+      radius,
+      isPressed ? cyan
+                : UiTheme::mix(ColorRgba{ 70, 160, 196, 255 }, cyan, hover),
+      isPressed ? cyan
+                : UiTheme::mix(ColorRgba{ 114, 88, 204, 255 }, violet, hover));
+    GuiKit::drawRoundedGradientRect(
+      hamburgerVisual,
+      tileX + 1.0f,
+      tileY + 1.0f,
+      tileWidth - 2.0f,
+      tileHeight - 2.0f,
+      std::max(0.0f, radius - 1.0f),
+      UiTheme::mix(
+        ColorRgba{ 30, 74, 104, 255 }, ColorRgba{ 44, 128, 160, 255 }, hover),
+      UiTheme::mix(
+        ColorRgba{ 46, 34, 104, 255 }, ColorRgba{ 74, 54, 156, 255 }, hover));
+    // A cyan-to-violet hairline crowns the flat top, as on the paint drawer.
+    const float crownInset = std::max(3.0f, radius);
+    if (tileWidth - 2.0f * crownInset > 2.0f) {
+      const unsigned char crownOpacity =
+        static_cast<unsigned char>(255.0f * (0.55f + 0.45f * hover));
+      hamburgerVisual.addGradientRect(
+        tileX + crownInset,
+        tileY + 1.0f,
+        tileWidth - 2.0f * crownInset,
+        1.5f,
+        UiTheme::applyOpacity(cyan, crownOpacity),
+        UiTheme::applyOpacity(violet, crownOpacity),
+        UiTheme::applyOpacity(violet, crownOpacity),
+        UiTheme::applyOpacity(cyan, crownOpacity));
+    }
+
+    // Rounded bars run cyan to violet from top to bottom, pastel at rest and
+    // vivid on hover. Each widens on its own spring, overshooting before it
+    // settles, then ripples gently while the pointer stays.
+    const ColorRgba barTints[3] = { cyan,
+                                    UiTheme::mix(cyan, violet, 0.5f),
+                                    violet };
+    const float barHeight = 2.5f * grow * (1.0f - squash);
+    const float spacing = 5.5f * grow * (1.0f - squash);
+    for (std::size_t i = 0; i < m_hamburgerBars.size(); ++i) {
+      const ColorRgba barColor =
+        isPressed
+          ? ColorRgba{ 236, 250, 255, 255 }
+          : UiTheme::mix(
+              UiTheme::mix(ColorRgba{ 214, 230, 246, 255 }, barTints[i], 0.45f),
+              barTints[i],
+              hover);
+      const float ripple =
+        reducedMotion ? 0.0f
+                      : 1.2f * hover *
+                          std::sin(clock * 7.0f - static_cast<float>(i) * 0.9f);
+      const float barWidth =
+        (14.0f + 6.0f * m_hamburgerBars[i].value() + ripple) * grow *
+        (1.0f + squash);
+      const float y =
+        centerY + (static_cast<float>(i) - 1.0f) * spacing - barHeight * 0.5f;
+      GuiKit::drawRoundedRect(hamburgerVisual,
+                              centerX - barWidth * 0.5f,
+                              y,
+                              barWidth,
+                              barHeight,
+                              barHeight * 0.5f,
+                              barColor);
+    }
   }
-  GuiKit::drawRoundedRect(
-    hamburgerVisual,
-    hamburgerX,
-    tileY,
-    hamburgerSize,
-    hamburgerSize,
-    radius,
-    isPressed ? cyan
-              : UiTheme::mix(
-                  UiTheme::cardRim(), ColorRgba{ 70, 140, 170, 255 }, hover));
-  GuiKit::drawRoundedGradientRect(
-    hamburgerVisual,
-    hamburgerX + 1.0f,
-    tileY + 1.0f,
-    hamburgerSize - 2.0f,
-    hamburgerSize - 2.0f,
-    radius - 1.0f,
-    UiTheme::mix(
-      ColorRgba{ 44, 62, 88, 255 }, ColorRgba{ 58, 132, 154, 255 }, hover),
-    UiTheme::mix(
-      ColorRgba{ 30, 44, 66, 255 }, ColorRgba{ 36, 90, 112, 255 }, hover));
 
-  // Rounded bars widen one after another as the pointer arrives.
-  const ColorRgba barColor =
-    isPressed ? cyan
-              : UiTheme::mix(ColorRgba{ 166, 186, 213, 255 }, cyan, hover);
-  const float barHeight = 2.5f;
-  const float startY = tileY + 9.25f;
-  const float spacing = 5.5f;
-  for (int i = 0; i < 3; ++i) {
-    const float stagger =
-      std::clamp(hover * 1.5f - static_cast<float>(i) * 0.25f, 0.0f, 1.0f);
-    const float barWidth = 14.0f + 6.0f * stagger;
-    const float barX = hamburgerX + (hamburgerSize - barWidth) * 0.5f;
-    const float y = startY + static_cast<float>(i) * spacing;
-    GuiKit::drawRoundedRect(hamburgerVisual,
-                            barX,
-                            y,
-                            barWidth,
-                            barHeight,
-                            barHeight * 0.5f,
-                            barColor);
-  }
-
-  if (hover > 0.01f) {
-    // A glass hint slides out of the button: the action, then its key as a
-    // keycap, the way the menus' footers show shortcuts.
-    const unsigned char opacity = static_cast<unsigned char>(255.0f * hover);
-    const float labelSize = 11.0f;
-    const float keySize = 8.5f;
-    const float tipHeight = 26.0f;
+  const float tipSpring = m_hamburgerTip.value();
+  const float tipShown = std::clamp(tipSpring * 1.4f, 0.0f, 1.0f);
+  if (tipShown > 0.01f && pop > 0.5f) {
+    // A glass hint springs out of the button: it grows from its end nearest
+    // the button, sails past its spot and bounces back, stretching along its
+    // travel and bulging as it recoils. It shows the action, then its key as
+    // a keycap, the way the menus' footers show shortcuts.
+    const unsigned char opacity = static_cast<unsigned char>(255.0f * tipShown);
+    const float tipScale = std::max(0.2f, 0.6f + 0.4f * tipSpring);
+    const float tipSquash =
+      std::clamp(0.01f * m_hamburgerTip.velocity(), -0.15f, 0.15f);
+    const float labelSize = 11.0f * tipScale;
+    const float keySize = 8.5f * tipScale;
+    const float tipHeight = 26.0f * tipScale * (1.0f - tipSquash);
     const float labelWidth =
       GuiKit::measureEmphasizedText("Settings", labelSize, 0.5f);
     // The keycap alone: a hint with no action, less its spacing.
     const float keyWidth =
       GuiKit::measureKeyHint("F1", std::string(), keySize) - keySize * 2.2f;
-    const float tipWidth = 14.0f + labelWidth + 8.0f + keyWidth + 6.0f;
-    const float tipX = hamburgerX - tipWidth - 8.0f + (1.0f - hover) * 12.0f;
+    const float restWidth = 14.0f * tipScale + labelWidth + 8.0f * tipScale +
+                            keyWidth + 6.0f * tipScale;
+    const float tipWidth = restWidth * (1.0f + tipSquash);
+    const float tipRight = hamburgerX - 8.0f + (1.0f - tipSpring) * 18.0f;
+    const float tipX = tipRight - tipWidth;
     const float tipY = hamburgerY + (hamburgerSize - tipHeight) * 0.5f;
+    const float contentX = tipX + (tipWidth - restWidth) * 0.5f;
     GuiKit::drawSoftShadow(
       hamburgerVisual,
       tipX,
@@ -4258,37 +4551,41 @@ CellGameModule::updateHamburgerVisual(double dt)
       10.0f,
       3.0f,
       UiTheme::applyOpacity(UiTheme::glowShadow(), opacity));
-    GuiKit::drawRoundedRect(
+    GuiKit::drawRoundedGradientRect(
       hamburgerVisual,
       tipX,
       tipY,
       tipWidth,
       tipHeight,
       tipHeight * 0.5f,
-      UiTheme::applyOpacity(UiTheme::glassRim(), opacity));
+      UiTheme::applyOpacity(UiTheme::mix(UiTheme::glassRim(), cyan, 0.45f),
+                            opacity),
+      UiTheme::applyOpacity(UiTheme::mix(UiTheme::glassRim(), violet, 0.45f),
+                            opacity));
     GuiKit::drawRoundedGradientRect(
       hamburgerVisual,
       tipX + 1.0f,
       tipY + 1.0f,
       tipWidth - 2.0f,
       tipHeight - 2.0f,
-      tipHeight * 0.5f - 1.0f,
+      std::max(0.0f, tipHeight * 0.5f - 1.0f),
       UiTheme::applyOpacity(UiTheme::glassTop(), opacity),
       UiTheme::applyOpacity(UiTheme::glassBottom(), opacity));
     GuiKit::drawEmphasizedText(
       hamburgerVisual,
       "Settings",
-      tipX + 14.0f,
+      contentX + 14.0f * tipScale,
       tipY + (tipHeight - labelSize) * 0.5f,
       labelSize,
       UiTheme::applyOpacity(UiTheme::textPrimary(), opacity),
       0.5f);
-    GuiKit::drawKeycap(hamburgerVisual,
-                       tipX + 14.0f + labelWidth + 8.0f,
-                       tipY + (tipHeight - keySize * 1.75f) * 0.5f - 0.75f,
-                       "F1",
-                       keySize,
-                       opacity);
+    GuiKit::drawKeycap(
+      hamburgerVisual,
+      contentX + 14.0f * tipScale + labelWidth + 8.0f * tipScale,
+      tipY + (tipHeight - keySize * 1.75f) * 0.5f - 0.75f * tipScale,
+      "F1",
+      keySize,
+      opacity);
   }
 
   hamburgerVisual.setVisible(true);

@@ -1709,6 +1709,8 @@ RulesetWorkshopMenu::rebuildVisual()
     drop.glow = UiTheme::applyOpacity(
       UiTheme::fade(cyan, 0.18f + 0.1f * breathe), pillOpacity);
     drop.rim = UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), pillOpacity);
+    drop.rimBottom = UiTheme::accentBlendOf(drop.rim);
+    drop.glowBottom = UiTheme::accentBlendOf(drop.glow);
     drop.faceTop = UiTheme::applyOpacity(UiTheme::selectionTop(), pillOpacity);
     drop.faceBottom =
       UiTheme::applyOpacity(UiTheme::selectionBottom(), pillOpacity);

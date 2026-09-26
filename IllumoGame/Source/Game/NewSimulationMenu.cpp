@@ -509,6 +509,8 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
   drop.glow =
     UiTheme::applyOpacity(UiTheme::fade(cyan, 0.16f + 0.1f * breathe), opacity);
   drop.rim = UiTheme::applyOpacity(UiTheme::fade(cyan, 0.85f), opacity);
+  drop.rimBottom = UiTheme::accentBlendOf(drop.rim);
+  drop.glowBottom = UiTheme::accentBlendOf(drop.glow);
   drop.faceTop = UiTheme::applyOpacity(UiTheme::selectionTop(), opacity);
   drop.faceBottom = UiTheme::applyOpacity(UiTheme::selectionBottom(), opacity);
   drop.sheen = animator.selectionSheen();

@@ -1117,13 +1117,22 @@ scale. A held opening click is consumed until release.
 The menus share one "living glass" visual language (D-R26). Panels, cards and
 buttons are soft-shadowed glass: a lit rim over a vertical-gradient face, a
 breathing outer glow, and a cyan-to-violet accent hairline with a travelling
-glint. Overlays sit on a radial scrim rather than a flat backdrop. Motion is
+glint. The cool accent blends toward violet throughout
+(`UiTheme::accentBlendOf`): selection drops (`GuiLiquidSelection::rimBottom`
+and `glowBottom`), the settings tab pill, dialog buttons, the mode badge and
+the hamburger run cyan at the top into violet at the bottom; selected faces
+run teal into indigo (`selectionTop`/`selectionBottom`); and slider fills and
+lit toggle tracks run cyan into violet toward the knob. Overlays sit on a
+radial scrim rather than a flat backdrop. Motion is
 liquid and a little bouncy (D-UI8). Selection is a drop of liquid
 (`GuiKit::drawLiquidSelection`): its head and tail are two springs, so the head
 pours toward the new row and overshoots while the tail lags, the drop necks in
 the middle and tapers to a smaller tail like a teardrop, bulges as the tail
 catches up, and keeps its momentum when redirected mid-flight; at rest it is an
-ordinary rounded pill, and a sheen sweeps it on arrival. Panels and rows drop
+ordinary rounded pill, and a sheen sweeps it on arrival. The head and tail
+springs stay close in frequency so the drop flows as one body, and its neck
+leaves the head and meets the tail with zero slope across finely spaced
+slices, so the outline never shows a shoulder or facets. Panels and rows drop
 in on springs and bounce just past their resting places. Rows lean in (label
 slide, tile growth, glow) on jelly-like emphasis springs; toggle knobs stretch
 like droplets as they boing across; count chips, footer buttons and scrollbar
@@ -1161,7 +1170,8 @@ button that drops in as a bead, stretches into a pill, holds, then melts
 away; it replaced the simulator's `SplashText` label) use the same chrome; the
 drawer and the hint footer stay opaque.
 `GuiKit` supplies the chrome: `drawRoundedRect` (three rectangles plus packed
-two-wedge corner quads), `drawRoundedGradientRect`, `drawRoundedBand` (the
+two-wedge corner quads), `drawRoundedGradientRect` and its left-to-right
+twin `drawRoundedSideGradientRect`, `drawRoundedBand` (the
 shared core of outlines, soft shadows and glows), `drawSoftShadow`,
 `drawSoftGlow`, `drawVignette`, `drawSheen`, `drawGlassPanel`
 (`drawRoundedPanel` forwards to it), `drawLiquidSelection` (non-overlapping
@@ -1173,7 +1183,19 @@ optional square caps, one quad per segment) and `drawChevron`, never
 separately drawn line segments, whose butt ends leave notches at corners.
 The canvas chrome (paint drawer, inspector, hamburger and its hint) follows
 the menus: card faces, the liquid drop for the chosen brush, keycap hints,
-spaced-caps eyebrows and label/value rows.
+spaced-caps eyebrows and label/value rows. The hamburger is a cyan-to-violet
+tile (lit rim, crown hairline and tinted bars) whose halo breathes at rest
+(the edit-hint footer's lit top edge glows and breathes in step with it),
+and it moves on the shared `GuiMotion` springs: it pops in like a bead
+whenever it reappears, hover swells it on a jelly spring (stretching and
+bulging with the springs' velocity), its bars widen in a staggered cascade
+and ripple while hovered, and its hint springs out on its own spring,
+growing from the button and bouncing past its spot. The paint bubble and
+drawer cast the hamburger's soft drop shadow. In the drawer, hovered cards
+bob up on jelly springs with a glow (the chosen brush's drop rides along),
+swatches hop on per-state emphasis springs and jiggle when picked, the
+header's highlight swells out from its centre, and the brush chip pops when
+the brush changes.
 
 CSim's type is Kikuta, a variable-weight face (D-UI9). The host font service
 resolves `kikuta:<weight>[:<glyphs>]` (weight 1..1000, an optional subset of
