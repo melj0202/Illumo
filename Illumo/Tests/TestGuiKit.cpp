@@ -574,6 +574,47 @@ testGuiGlassChrome()
              0u,
              "a splash outside its flight draws nothing");
 
+  // A side gradient blends by x: every vertex carries the color of its
+  // position between the left and right edges.
+  const ColorRgba violet = UiTheme::accentViolet();
+  GameVisual side(64u);
+  GuiKit::drawRoundedSideGradientRect(
+    side, 10.0f, 0.0f, 100.0f, 20.0f, 6.0f, cyan, violet);
+  bool sideBlends = side.shapeCount() > 0u;
+  for (size_t i = 0; i < side.shapeCount(); ++i) {
+    const ShapePrimitive* shape = side.getShape(i);
+    const float xs[4] = { shape->x0, shape->x1, shape->x2, shape->x3 };
+    for (int corner = 0; corner < 4; ++corner) {
+      const ColorRgba expected =
+        UiTheme::mix(cyan, violet, (xs[corner] - 10.0f) / 100.0f);
+      const ColorRgba actual = shape->vertexColors[static_cast<size_t>(corner)];
+      sideBlends = sideBlends && std::abs(actual.r - expected.r) <= 1 &&
+                   std::abs(actual.g - expected.g) <= 1 &&
+                   std::abs(actual.b - expected.b) <= 1;
+    }
+  }
+  testTrue(g, sideBlends, "a side gradient blends from left to right");
+
+  // A liquid drop's rim blends from its top color to its bottom color.
+  GuiLiquidSelection blended;
+  blended.crossStart = 0.0f;
+  blended.crossSize = 200.0f;
+  blended.headStart = 0.0f;
+  blended.tailStart = 0.0f;
+  blended.cellLength = 40.0f;
+  blended.rim = cyan;
+  blended.rimBottom = violet;
+  GameVisual blendedDrop(512u);
+  GuiKit::drawLiquidSelection(blendedDrop, blended);
+  const ShapePrimitive* topSlice = blendedDrop.getShape(0u);
+  const ShapePrimitive* bottomSlice =
+    blendedDrop.getShape(blendedDrop.shapeCount() - 1u);
+  testTrue(g,
+           blendedDrop.shapeCount() > 1u &&
+             topSlice->vertexColors[0].g > bottomSlice->vertexColors[2].g &&
+             bottomSlice->vertexColors[2].r > topSlice->vertexColors[0].r,
+           "a drop's rim runs from its top color into its bottom color");
+
   GameVisual degenerate(64u);
   const float nan = std::numeric_limits<float>::quiet_NaN();
   drop.crossStart = nan;

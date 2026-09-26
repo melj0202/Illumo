@@ -1397,6 +1397,8 @@ MainMenuModule::drawRows(float room, unsigned char opacity, float breathe)
   drop.glow = UiTheme::applyOpacity(UiTheme::fade(cyan, 0.2f + 0.12f * breathe),
                                     pillOpacity);
   drop.rim = UiTheme::applyOpacity(cyan, pillOpacity);
+  drop.rimBottom = UiTheme::accentBlendOf(drop.rim);
+  drop.glowBottom = UiTheme::accentBlendOf(drop.glow);
   drop.faceTop = UiTheme::applyOpacity(UiTheme::selectionTop(), pillOpacity);
   drop.faceBottom =
     UiTheme::applyOpacity(UiTheme::selectionBottom(), pillOpacity);
@@ -1461,8 +1463,9 @@ MainMenuModule::drawRows(float room, unsigned char opacity, float breathe)
                                          ColorRgba{ 66, 150, 172, 200 },
                                          eClamped),
                             rowOpacity),
+      // The lit tile runs teal into indigo, like the canvas's hamburger tile.
       UiTheme::applyOpacity(UiTheme::mix(ColorRgba{ 38, 55, 80, 220 },
-                                         ColorRgba{ 42, 104, 128, 200 },
+                                         ColorRgba{ 54, 60, 138, 200 },
                                          eClamped),
                             rowOpacity));
     drawMenuIcon(

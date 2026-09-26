@@ -50,8 +50,9 @@ public:
   static ColorRgba cardTop() { return ColorRgba{ 30, 45, 69, 255 }; }
   static ColorRgba cardBottom() { return ColorRgba{ 19, 30, 48, 255 }; }
   static ColorRgba cardRim() { return ColorRgba{ 50, 73, 102, 255 }; }
+  // Selected faces run teal at the top into indigo at the bottom.
   static ColorRgba selectionTop() { return ColorRgba{ 34, 104, 132, 255 }; }
-  static ColorRgba selectionBottom() { return ColorRgba{ 22, 66, 94, 255 }; }
+  static ColorRgba selectionBottom() { return ColorRgba{ 42, 46, 120, 255 }; }
   static ColorRgba glowShadow() { return ColorRgba{ 0, 3, 10, 150 }; }
   static ColorRgba scrimCenter() { return ColorRgba{ 4, 9, 20, 178 }; }
   static ColorRgba scrimEdge() { return ColorRgba{ 1, 3, 9, 238 }; }
@@ -82,6 +83,19 @@ public:
     result.a = static_cast<unsigned char>(static_cast<float>(from.a) * keep +
                                           static_cast<float>(to.a) * amount);
     return result;
+  }
+
+  // The cool accent blends toward violet across the product: lit rims, glows
+  // and fills run from `color` at the top (or left) into this at the bottom
+  // (or right), keeping `color`'s alpha. Cyan becomes a periwinkle between
+  // accentCool() and accentViolet(); other accents take a lighter tint.
+  // kAccentBlend is the one knob for how far toward violet the product leans.
+  static constexpr float kAccentBlend = 0.7f;
+  static ColorRgba accentBlendOf(ColorRgba color, float amount = kAccentBlend)
+  {
+    ColorRgba blended = mix(color, accentViolet(), amount);
+    blended.a = color.a;
+    return blended;
   }
 
   // Scales alpha by a 0..1 factor (clamped).

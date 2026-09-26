@@ -619,7 +619,7 @@ GuiDialog::drawRoundedContents(float panelY,
       10.0f + 4.0f * e,
       4.0f + 2.0f * e,
       UiTheme::applyOpacity(UiTheme::glowShadow(), opacity));
-    GuiKit::drawRoundedRect(
+    GuiKit::drawRoundedGradientRect(
       m_visual,
       x,
       y - lift,
@@ -627,7 +627,14 @@ GuiDialog::drawRoundedContents(float panelY,
       m_buttonHeight,
       radius,
       UiTheme::applyOpacity(UiTheme::mix(UiTheme::cardRim(), accent, 0.6f * e),
-                            opacity));
+                            opacity),
+      UiTheme::applyOpacity(
+        UiTheme::mix(
+          UiTheme::cardRim(),
+          UiTheme::accentBlendOf(
+            accent, button.isDestructive ? 0.35f : UiTheme::kAccentBlend),
+          0.6f * e),
+        opacity));
     GuiKit::drawRoundedGradientRect(
       m_visual,
       x + 1.0f,
@@ -664,10 +671,18 @@ GuiDialog::drawRoundedContents(float panelY,
     drop.glow = UiTheme::applyOpacity(
       UiTheme::fade(accent, 0.22f + 0.12f * breathe), opacity);
     drop.rim = UiTheme::applyOpacity(accent, opacity);
+    // Rim, glow and face lean toward violet at the bottom, like every lit
+    // accent; a destructive red only takes a hint of it.
+    const float blend =
+      m_buttons[m_selectedButton].isDestructive ? 0.35f : UiTheme::kAccentBlend;
+    drop.rimBottom = UiTheme::accentBlendOf(drop.rim, blend);
+    drop.glowBottom = UiTheme::accentBlendOf(drop.glow, blend);
     drop.faceTop = UiTheme::applyOpacity(
       UiTheme::mix(UiTheme::cardTop(), accent, 0.38f), opacity);
     drop.faceBottom = UiTheme::applyOpacity(
-      UiTheme::mix(UiTheme::cardBottom(), accent, 0.2f), opacity);
+      UiTheme::mix(
+        UiTheme::cardBottom(), UiTheme::accentBlendOf(accent, blend), 0.24f),
+      opacity);
     drop.sheen = m_selectionMotion.selectionSheen();
     drop.sheenColor =
       UiTheme::applyOpacity(ColorRgba{ 220, 250, 255, 44 }, opacity);

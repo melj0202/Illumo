@@ -115,6 +115,16 @@ public:
                                       float radius,
                                       ColorRgba top,
                                       ColorRgba bottom);
+  // The same rounded rect blending from `left` to `right` (13 quads), for
+  // fills that run along a track (sliders, toggles).
+  static void drawRoundedSideGradientRect(GameVisual& visual,
+                                          float x,
+                                          float y,
+                                          float width,
+                                          float height,
+                                          float radius,
+                                          ColorRgba left,
+                                          ColorRgba right);
   // Ring between the rounded rect grown by `innerOffset` and by `outerOffset`
   // (negative offsets inset), blending innerColor to outerColor (28 quads).
   // The shared core of outlines, soft shadows and glows.

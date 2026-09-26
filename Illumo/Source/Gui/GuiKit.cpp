@@ -335,18 +335,21 @@ GuiKit::drawRoundedPanel(GameVisual& visual,
 }
 
 // Horizontal slices pair the right outline with its mirror on the left, so
-// every quad is a convex trapezoid and colors interpolate only along y.
-void
-GuiKit::drawRoundedGradientRect(GameVisual& visual,
-                                float x,
-                                float y,
-                                float width,
-                                float height,
-                                float radius,
-                                ColorRgba top,
-                                ColorRgba bottom)
+// every quad is a convex trapezoid. Each vertex takes its color from its
+// position along y (or x when `acrossX`); a color linear in position is
+// reproduced exactly inside every slice.
+static void
+drawRoundedSlices(GameVisual& visual,
+                  float x,
+                  float y,
+                  float width,
+                  float height,
+                  float radius,
+                  ColorRgba from,
+                  ColorRgba to,
+                  bool acrossX)
 {
-  if (!finiteRect(x, y, width, height) || (top.a == 0 && bottom.a == 0)) {
+  if (!finiteRect(x, y, width, height) || (from.a == 0 && to.a == 0)) {
     return;
   }
   radius = clampedRadius(radius, width, height);
@@ -372,8 +375,13 @@ GuiKit::drawRoundedGradientRect(GameVisual& visual,
     if (r1.y - r0.y <= 0.0001f) {
       continue;
     }
-    const ColorRgba upper = UiTheme::mix(top, bottom, (r0.y - y) / height);
-    const ColorRgba lower = UiTheme::mix(top, bottom, (r1.y - y) / height);
+    const GuiPoint corners[4] = { l0, r0, r1, l1 };
+    ColorRgba colors[4];
+    for (int corner = 0; corner < 4; ++corner) {
+      const float along = acrossX ? (corners[corner].x - x) / width
+                                  : (corners[corner].y - y) / height;
+      colors[corner] = UiTheme::mix(from, to, along);
+    }
     visual.addGradientQuad(l0.x,
                            l0.y,
                            r0.x,
@@ -382,11 +390,37 @@ GuiKit::drawRoundedGradientRect(GameVisual& visual,
                            r1.y,
                            l1.x,
                            l1.y,
-                           upper,
-                           upper,
-                           lower,
-                           lower);
+                           colors[0],
+                           colors[1],
+                           colors[2],
+                           colors[3]);
   }
+}
+
+void
+GuiKit::drawRoundedGradientRect(GameVisual& visual,
+                                float x,
+                                float y,
+                                float width,
+                                float height,
+                                float radius,
+                                ColorRgba top,
+                                ColorRgba bottom)
+{
+  drawRoundedSlices(visual, x, y, width, height, radius, top, bottom, false);
+}
+
+void
+GuiKit::drawRoundedSideGradientRect(GameVisual& visual,
+                                    float x,
+                                    float y,
+                                    float width,
+                                    float height,
+                                    float radius,
+                                    ColorRgba left,
+                                    ColorRgba right)
+{
+  drawRoundedSlices(visual, x, y, width, height, radius, left, right, true);
 }
 
 void
@@ -1098,7 +1132,7 @@ drawArrowLabel(GameVisual& visual,
 // A liquid drop is a stack of slices across its travel axis: a quarter-circle
 // cap at each end (the same 15-degree steps as a rounded rect) and evenly
 // spaced middle levels where the neck forms.
-static const int kLiquidMiddleLevels = 8;
+static const int kLiquidMiddleLevels = 18;
 static const int kLiquidLevels = 2 * kCornerPoints + kLiquidMiddleLevels;
 
 struct LiquidProfile
@@ -1170,7 +1204,9 @@ liquidProfile(const GuiLiquidSelection& drop,
     halfWidth[kCornerPoints + level] = half;
   }
   // The head cell keeps its full width; behind it, u runs from the head (0)
-  // to the tail tip (1), necking in the middle and tapering the tail.
+  // to the tail tip (1), necking in the middle and tapering the tail. Both
+  // terms leave and arrive with zero slope, so the outline flows out of the
+  // head and into the tail without a shoulder.
   const float separation = std::abs(drop.headStart - drop.tailStart);
   const float behindHead =
     headFirst ? drop.headStart + drop.cellLength : drop.headStart;
@@ -1179,8 +1215,9 @@ liquidProfile(const GuiLiquidSelection& drop,
                                    : behindHead - profile->along[level];
     const float u =
       separation > 0.0001f ? std::clamp(behind / separation, 0.0f, 1.0f) : 0.0f;
-    const float inset =
-      maxInset * (0.55f * std::sin(3.14159265f * u) + 0.45f * u * u);
+    const float neck = std::sin(3.14159265f * u);
+    const float taper = u * u * (3.0f - 2.0f * u);
+    const float inset = maxInset * (0.6f * neck * neck + 0.45f * taper);
     const float width = std::max(0.0f, halfWidth[level] - inset);
     profile->nearEdge[level] = center - width;
     profile->farEdge[level] = center + width;
@@ -1289,9 +1326,22 @@ GuiKit::drawLiquidSelection(GameVisual& visual,
       GuiPoint outer[2 * kLiquidLevels];
       liquidPerimeter(selection, shape, inner);
       liquidPerimeter(selection, halo, outer);
-      const ColorRgba clear = UiTheme::transparentOf(selection.glow);
+      // The glow blends top to bottom like the rim, by each point's height.
+      const ColorRgba glowBottom =
+        selection.glowBottom.a != 0 ? selection.glowBottom : selection.glow;
+      float glowTop = inner[0].y;
+      float glowLow = inner[0].y;
+      for (int index = 1; index < 2 * kLiquidLevels; ++index) {
+        glowTop = std::min(glowTop, inner[index].y);
+        glowLow = std::max(glowLow, inner[index].y);
+      }
+      const float glowSpan = std::max(0.0001f, glowLow - glowTop);
       for (int index = 0; index < 2 * kLiquidLevels; ++index) {
         const int next = (index + 1) % (2 * kLiquidLevels);
+        const ColorRgba here = UiTheme::mix(
+          selection.glow, glowBottom, (inner[index].y - glowTop) / glowSpan);
+        const ColorRgba there = UiTheme::mix(
+          selection.glow, glowBottom, (inner[next].y - glowTop) / glowSpan);
         visual.addGradientQuad(inner[index].x,
                                inner[index].y,
                                outer[index].x,
@@ -1300,14 +1350,19 @@ GuiKit::drawLiquidSelection(GameVisual& visual,
                                outer[next].y,
                                inner[next].x,
                                inner[next].y,
-                               selection.glow,
-                               clear,
-                               clear,
-                               selection.glow);
+                               here,
+                               UiTheme::transparentOf(here),
+                               UiTheme::transparentOf(there),
+                               there);
       }
     }
   }
-  drawLiquidFill(visual, selection, shape, selection.rim, selection.rim);
+  drawLiquidFill(visual,
+                 selection,
+                 shape,
+                 selection.rim,
+                 selection.rimBottom.a != 0 ? selection.rimBottom
+                                            : selection.rim);
   LiquidProfile face;
   if (liquidProfile(selection, -1.0f, &face)) {
     drawLiquidFill(

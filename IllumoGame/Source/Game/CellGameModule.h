@@ -203,7 +203,16 @@ private:
   double m_paletteModeDelay = 0.0;
   double m_hintsModeDelay = 0.0;
   bool m_modeChromeTarget = true;
-  std::vector<float> m_paintPaletteEmphasis;
+  // Per-state emphasis (chosen 1, hovered 0.5) on jelly springs, so swatches
+  // hop and labels thicken with an overshoot.
+  std::vector<GuiSpring> m_paintPaletteEmphasis;
+  // Per-card-slot hover lift and click squish; the header's hover swell; and
+  // the brush chip's pop when the brush changes.
+  std::array<GuiSpring, 4> m_paintCardHover;
+  std::array<GuiSpring, 4> m_paintCardSquish;
+  GuiSpring m_paintHeaderHover;
+  GuiSpring m_paintChipPop;
+  unsigned char m_paintChipBrush = 0;
   unsigned int m_paintPaletteStateOffset = 0u;
   unsigned char m_paintBrush = 0;
   std::string m_paintRuleTag;
@@ -218,7 +227,18 @@ private:
   float hamburgerSize;
   bool hamburgerHovered;
   bool hamburgerMouseWasDown;
-  float hamburgerHoverBlend = 0.0f;
+  // The button moves on the shared springs: it pops in like a bead whenever
+  // it reappears, hover swells it with a jelly overshoot (squashing along the
+  // way), each bar widens on its own springy spring a beat after the one
+  // above it, and the hint springs out on its own. A slow clock breathes its
+  // halo and ripples the hovered bars.
+  GuiSpring m_hamburgerPop;
+  GuiSpring m_hamburgerHover;
+  GuiSpring m_hamburgerTip;
+  std::array<GuiSpring, 3> m_hamburgerBars;
+  double m_hamburgerHoverClock = 0.0;
+  double m_hamburgerClock = 0.0;
+  bool m_hamburgerShown = false;
   GameVisual editHintsVisual;
   int editHintsInsetPixels = 0;
   int editHintsFullInsetPixels = 0;

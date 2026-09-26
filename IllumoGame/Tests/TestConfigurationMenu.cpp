@@ -150,16 +150,21 @@ hasSwitchBeside(GameVisual& visual, const std::string& label)
   if (labelY < 0.0f) {
     return false;
   }
+  // The 36x16 pill track is drawn as gradient slices (it blends cyan into
+  // violet). Its wide slices beside the label together span most of its
+  // height, which a 6-pixel slider fill never does.
+  float trackTop = 1000.0f;
+  float trackBottom = -1000.0f;
   for (std::size_t index = 0u; index < visual.shapeCount(); ++index) {
     ShapePrimitive* shape = visual.getShape(index);
-    if (shape != nullptr && shape->kind == ShapeKind::FilledRect &&
-        std::abs(shape->rect.w - 20.0f) < 0.1f &&
-        std::abs(shape->rect.h - 16.0f) < 0.1f &&
-        std::abs(shape->rect.y - labelY) < 4.0f) {
-      return true;
+    if (shape != nullptr && shape->kind == ShapeKind::GradientQuad &&
+        shape->rect.w > 26.0f && shape->rect.w < 36.1f &&
+        std::abs(shape->rect.y + shape->rect.h * 0.5f - labelY) < 20.0f) {
+      trackTop = std::min(trackTop, shape->rect.y);
+      trackBottom = std::max(trackBottom, shape->rect.y + shape->rect.h);
     }
   }
-  return false;
+  return trackBottom - trackTop >= 12.0f;
 }
 
 static float
