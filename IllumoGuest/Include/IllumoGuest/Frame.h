@@ -172,7 +172,10 @@ enum class GuestVisualOp : std::uint32_t
   ItemSet = 4,
   // Removes `count` items from `index`.
   ItemRemove = 5,
-  ItemsClear = 6
+  ItemsClear = 6,
+  // Inserts `count` hidden placeholder items before `index`, for ItemSet
+  // to fill; later items keep their order.
+  ItemInsert = 7
 };
 
 struct GuestTransform2D
@@ -239,8 +242,8 @@ struct GuestVisualOperation
   GuestVisualOp op = GuestVisualOp::Create;
   std::uint32_t id = 0;
   GuestVisualProperties properties; // Set
-  std::uint32_t index = 0;          // ItemSet, ItemRemove
-  std::uint32_t count = 0;          // ItemRemove
+  std::uint32_t index = 0;          // ItemSet, ItemRemove, ItemInsert
+  std::uint32_t count = 0;          // ItemRemove, ItemInsert
   GuestVisualItem item;             // ItemSet
 };
 
@@ -603,9 +606,9 @@ struct GuestFrame
             bytes > reader.remaining()) {
           return false;
         }
-        const std::span<const std::byte> text = reader.bytes(bytes);
-        item.text.assign(reinterpret_cast<const char*>(text.data()),
-                         text.size());
+        const std::span<const std::byte> content = reader.bytes(bytes);
+        item.text.assign(reinterpret_cast<const char*>(content.data()),
+                         content.size());
         return reader.valid();
       }
     }
@@ -634,6 +637,7 @@ struct GuestFrame
         writeVisualItem(output, operation.item);
         break;
       case GuestVisualOp::ItemRemove:
+      case GuestVisualOp::ItemInsert:
         output.u32(operation.index);
         output.u32(operation.count);
         break;
@@ -655,7 +659,7 @@ struct GuestFrame
     operation.id = reader.u32();
     if (!reader.valid() || operation.id == 0 ||
         op < static_cast<std::uint32_t>(GuestVisualOp::Create) ||
-        op > static_cast<std::uint32_t>(GuestVisualOp::ItemsClear)) {
+        op > static_cast<std::uint32_t>(GuestVisualOp::ItemInsert)) {
       return false;
     }
     operation.op = static_cast<GuestVisualOp>(op);
@@ -682,6 +686,7 @@ struct GuestFrame
         operation.index = reader.u32();
         return reader.valid() && readVisualItem(reader, operation.item);
       case GuestVisualOp::ItemRemove:
+      case GuestVisualOp::ItemInsert:
         operation.index = reader.u32();
         operation.count = reader.u32();
         return reader.valid() && operation.count != 0;

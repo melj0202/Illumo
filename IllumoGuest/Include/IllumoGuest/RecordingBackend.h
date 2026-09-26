@@ -267,6 +267,9 @@ private:
   std::size_t m_lastMeshWriteBytes = 0;
 
   GuestVisualProxies m_visuals;
+  // Advances whenever a texture's host copy appears, changes or goes away,
+  // so the visual proxies re-check items they would otherwise skip.
+  std::uint64_t m_textureEpoch = 0;
   GuestRenderWorld* m_world = nullptr;
   bool m_visualsEnabled = false;
   bool m_composeWorld = false;

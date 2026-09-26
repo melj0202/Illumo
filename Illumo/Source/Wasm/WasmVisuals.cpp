@@ -165,6 +165,13 @@ WasmVisuals::plan(const GuestFrame& frame, Host& host, std::string& error)
         valid = state.exists;
         state.items = 0;
         break;
+      case GuestVisualOp::ItemInsert:
+        valid = state.exists && operation.index <= state.items &&
+                operation.count <= kItemsPerVisual - state.items;
+        if (valid) {
+          state.items += operation.count;
+        }
+        break;
     }
     if (!valid) {
       error = "Invalid guest visual operation " + std::to_string(index) +
@@ -350,6 +357,15 @@ WasmVisuals::apply(const GuestFrame& frame)
         m_store.clearItems(id);
         m_visuals[id].leases.clear();
         break;
+      case GuestVisualOp::ItemInsert: {
+        m_store.insertItems(id, operation.index, operation.count);
+        std::vector<ItemLease>& leases = m_visuals[id].leases;
+        leases.insert(
+          leases.begin() + static_cast<std::ptrdiff_t>(operation.index),
+          operation.count,
+          ItemLease{});
+        break;
+      }
     }
   }
   m_resolved.clear();

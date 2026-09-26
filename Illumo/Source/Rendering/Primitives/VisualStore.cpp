@@ -170,6 +170,24 @@ VisualStore::removeItems(VisualId id, size_t first, size_t count)
 }
 
 VisualStore::Result
+VisualStore::insertItems(VisualId id, size_t index, size_t count)
+{
+  Entry* entry = find(id);
+  if (entry == nullptr) {
+    return Result::UnknownId;
+  }
+  const size_t items = entry->visual->itemCount();
+  if (index > items || count == 0) {
+    return Result::BadIndex;
+  }
+  if (count > m_limits.itemsPerVisual - items) {
+    return Result::OverBudget;
+  }
+  entry->visual->insertItems(index, count);
+  return Result::Ok;
+}
+
+VisualStore::Result
 VisualStore::clearItems(VisualId id)
 {
   Entry* entry = find(id);

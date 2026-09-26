@@ -15,8 +15,8 @@ Design and decisions: `docs/host-render-world-design.md` (authorized
 | M5 | done, `7a8057f7` | `VisualStore` over `GameVisual` item edits, opacity, prepare/emit split |
 | M6 | done, `7a8057f7` | Frame v7 visual operations and compositions, `WasmVisuals`, font atlases |
 | M7 | done, `7a8057f7` | Guest `GameVisual` proxy, compositions from the recorder, churn fallback, `hostVisuals=0` rollback |
-| M8 | skybox done, uncommitted | Sky in the world environment; canvas quad and line overlays stay retained batches pending an owner decision |
-| M9 | not started | Docs and decision log closure; scope depends on the M8 decision |
+| M8 | done, `d1bb5b20` | Sky in the world environment; canvas quad and line overlays stay retained batches (owner decision) |
+| M9 | done, uncommitted | D-R29, consensus row, runtime design note, LaTeX 05, guidance, PDF |
 
 ## M6: visual operations and composition on the wire (done)
 
@@ -175,3 +175,57 @@ unchanged.
   0.39 KB with 500 cubes, one batch either way. Migrating the canvas quad and
   line overlays would save about 150 bytes each per frame, so it was held for
   an owner decision. Full Release suite 672 of 672.
+- 2026-09-26: owner chose to keep the canvas quad and line overlays as
+  retained batches, and to commit. M8 committed as `d1bb5b20`. M9 recorded
+  D-R29 and closed the documentation.
+- 2026-09-26, UI performance follow-up (uncommitted):
+  - The guest proxy skips a visual whose `GameVisual::editRevision`, texture
+    epoch and properties match what the host confirmed.
+  - Diffs keep an unchanged head and tail, and middle growth uses a new v7
+    `ItemInsert`.
+  - `GameVisual::setTransform` no longer dirties on an unchanged value.
+  - CSim's main menu draws in nine layers. Its static ones rebuild only when
+    their inputs change.
+  - Settled menu: guest frame 0.27 to 0.15 ms, 49 to 40 KB per frame (108 to
+    46 KB with host visuals off).
+  - The bench JSON now reports `renderMs` and `presentMs`. At uncapped
+    rates, present (the GL swap) is 0.13-0.53 ms, the largest phase, and
+    outside UI code.
+- 2026-09-26, chrome and overlay layering (uncommitted):
+  - `GuiDrawKey` (in `GuiMenuShell.h`) holds the inputs a layer was last drawn
+    from, so an unchanged layer skips its redraw.
+  - Layers in CSim's canvas chrome:
+    - The hamburger button splits into a halo layer and a keyed tile layer.
+    - The editor cursor splits into breathing brackets and a keyed rim.
+    - The paint drawer draws three layers: the blob and cards, the drop, and
+      the swatches and hints.
+  - Layers in the overlays, back to front:
+    - Configuration: eight layers.
+    - New Simulation: seven layers.
+    - Ruleset Workshop: five layers.
+    - Each breathing part (glass glow, selection drop, tab and button glows,
+      chip cursor) sits between layers that stay still.
+  - Fix: `GameVisual` scales about its content's corner, so fitted layers
+    drifted apart in small windows. This includes last round's main menu.
+    `GuiPanelLayout::scaleFromScreenOrigin` cancels that pivot for each
+    layer; `GameVisual::contentBounds` is now public.
+  - Interleaved A/B against a package built from the previous state (5 runs
+    each, medians):
+    - Settings: 557 to 645 FPS, host command time 0.40 to 0.27 ms.
+    - New Simulation: 907 to 1,041 FPS.
+    - Ruleset Workshop: 1,350 to 1,508 FPS, host command time 0.26 to
+      0.07 ms.
+    - Paused canvas and main menu: unchanged.
+  - Raising the churn fallback floor (32 changed items) to 256 helped New
+    Simulation but cost the main menu 15% (its aurora layer relies on the
+    fallback), so it stays at 32.
+  - Swap cost: the presentation phase is GPU backlog, not the swap call.
+    - It jumps between about 0.06 and 0.86 ms as frames become GPU-bound.
+    - Layering lowered it where fewer visuals re-record and upload per frame.
+    - The settled menu and settings overlay stay GPU-bound (0.56-0.8 ms). The
+      likely cost is overdraw from full-screen vignettes and soft glows under
+      MSAA 4x.
+    - Exclusive fullscreen was not tried, since it would take over the
+      owner's screen.
+  - Full Release suite 672 of 672.
+

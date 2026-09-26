@@ -207,6 +207,7 @@ Illumo::initialize()
     m_context.commandRegistry = m_commandRegistry.get();
     m_context.scene = m_scene.get();
     m_context.moduleHost = this;
+    m_context.frameProfiler = &m_frameProfiler;
     m_initialized = true;
     m_terminalCloseRequested = false;
     Logger::LogInfo("Engine services initialized (renderer, assets, console, "

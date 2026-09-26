@@ -282,6 +282,35 @@ editsAndBudgets()
                flipped->shapeCount() + flipped->spriteCount() < 80,
              "replaced primitives are compacted") &&
        ok;
+  // Insertion keeps painter order: the new item draws between its
+  // neighbours.
+  VisualStore ordered;
+  ordered.create(1);
+  ShapePrimitive first = shape;
+  first.rect = { 1.0f, 0.0f, 1.0f, 1.0f };
+  ShapePrimitive last = shape;
+  last.rect = { 3.0f, 0.0f, 1.0f, 1.0f };
+  ShapePrimitive middle = shape;
+  middle.rect = { 2.0f, 0.0f, 1.0f, 1.0f };
+  ordered.setItem(1, 0, first);
+  ordered.setItem(1, 1, last);
+  const uint64_t before = ordered.visual(1)->editRevision();
+  ok = check(ordered.insertItems(1, 3, 1) == Result::BadIndex &&
+               ordered.insertItems(1, 1, 1) == Result::Ok &&
+               ordered.setItem(1, 1, middle) == Result::Ok &&
+               ordered.visual(1)->editRevision() > before,
+             "items insert within the list and bump the edit revision") &&
+       ok;
+  const std::vector<GameVisual::PrimitiveRef> painted =
+    ordered.visual(1)->paintOrder();
+  ok = check(painted.size() == 3 &&
+               ordered.visual(1)->getShape(painted[0].index)->rect.x == 1.0f &&
+               ordered.visual(1)->getShape(painted[1].index)->rect.x == 2.0f &&
+               ordered.visual(1)->getShape(painted[2].index)->rect.x == 3.0f,
+             "an inserted item paints between its neighbours") &&
+       ok;
+  ordered.releaseResources();
+
   ok = check(store.clearItems(1) == Result::Ok &&
                store.visual(1)->itemCount() == 0 &&
                store.destroy(1) == Result::Ok &&

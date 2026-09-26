@@ -104,6 +104,33 @@ struct MainMenuFixture
   }
 };
 
+// The title screen's layers: its first UI drawables, back to front.
+static std::vector<GameVisual*>
+menuLayers(Scene& scene)
+{
+  std::vector<GameVisual*> layers;
+  for (DrawableBase* drawable : scene.drawablesIn(RenderLayerId::UI)) {
+    if (layers.size() == MainMenuModule::menuLayerCountForTesting()) {
+      break;
+    }
+    layers.push_back(static_cast<GameVisual*>(drawable));
+  }
+  return layers;
+}
+
+// Every text of the title screen's layers, in draw order.
+static std::vector<const TextPrimitive*>
+menuTexts(Scene& scene)
+{
+  std::vector<const TextPrimitive*> texts;
+  for (const GameVisual* visual : menuLayers(scene)) {
+    for (size_t index = 0; index < visual->textCount(); ++index) {
+      texts.push_back(visual->getText(index));
+    }
+  }
+  return texts;
+}
+
 static void
 testMainMenuStartAndDrawables()
 {
@@ -121,16 +148,16 @@ testMainMenuStartAndDrawables()
   fixture.module.DispatchDrawables(&fixture.scene);
   testEqSize(g,
              fixture.scene.drawableCount(),
-             2u,
-             "menu dispatches ambient canvas and UI visual");
+             1u + MainMenuModule::menuLayerCountForTesting(),
+             "menu dispatches ambient canvas and its UI layers");
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::World).size(),
              1u,
              "ambient canvas is in World layer");
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::UI).size(),
-             1u,
-             "menu visual is in UI layer");
+             MainMenuModule::menuLayerCountForTesting(),
+             "menu layers are in UI layer");
 }
 
 // Every text the title screen draws this frame that starts with 'v' and a
@@ -141,11 +168,8 @@ versionTexts(MainMenuFixture& fixture)
   fixture.module.Update(1.0 / 60.0);
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
-  const GameVisual* visual = static_cast<const GameVisual*>(
-    fixture.scene.drawablesIn(RenderLayerId::UI).front());
   std::vector<TextPrimitive> found;
-  for (size_t index = 0; index < visual->textCount(); ++index) {
-    const TextPrimitive* text = visual->getText(index);
+  for (const TextPrimitive* text : menuTexts(fixture.scene)) {
     if (text->content.size() > 1 && text->content[0] == 'v' &&
         text->content[1] >= '0' && text->content[1] <= '9') {
       found.push_back(*text);
@@ -192,22 +216,21 @@ testTitleRasterResolution()
     fixture.module.Update(0.0);
     fixture.scene.ClearDrawables();
     fixture.module.DispatchDrawables(&fixture.scene);
-    GameVisual* visual = static_cast<GameVisual*>(
-      fixture.scene.drawablesIn(RenderLayerId::UI).front());
+    const float scaleY =
+      menuLayers(fixture.scene).front()->getTransform().scaleY;
     // The title is drawn letter by letter so each can animate; every letter
     // shares the dedicated title atlas.
     std::string title;
     bool sharp = true;
-    for (size_t index = 0; index < visual->textCount(); ++index) {
-      const TextPrimitive* text = visual->getText(index);
+    for (const TextPrimitive* text : menuTexts(fixture.scene)) {
       if (text->font == nullptr || text->font == Font::getDefaultFont()) {
         continue;
       }
       title += text->content;
       // Letters overshoot by up to 8% while landing.
-      sharp = sharp && text->font->getMetrics().pixelSize >=
-                         text->sizePt * 1.08f * visual->getTransform().scaleY *
-                           static_cast<float>(scale);
+      sharp =
+        sharp && text->font->getMetrics().pixelSize >=
+                   text->sizePt * 1.08f * scaleY * static_cast<float>(scale);
     }
     testTrue(g,
              title == "CSIM",
@@ -223,11 +246,8 @@ titleLetters(MainMenuFixture& fixture)
 {
   fixture.scene.ClearDrawables();
   fixture.module.DispatchDrawables(&fixture.scene);
-  const GameVisual* visual = static_cast<const GameVisual*>(
-    fixture.scene.drawablesIn(RenderLayerId::UI).front());
   std::vector<TextPrimitive> letters;
-  for (size_t index = 0; index < visual->textCount(); ++index) {
-    const TextPrimitive* text = visual->getText(index);
+  for (const TextPrimitive* text : menuTexts(fixture.scene)) {
     if (text->font != nullptr && text->font != Font::getDefaultFont()) {
       letters.push_back(*text);
     }
@@ -385,16 +405,17 @@ testMainMenuPrimitiveBudget()
     fixture.module.DispatchDrawables(&fixture.scene);
     testEqSize(g,
                fixture.scene.drawablesIn(RenderLayerId::UI).size(),
-               1u,
-               "the title screen is one UI drawable while no overlay is open");
-    GameVisual* visual = static_cast<GameVisual*>(
-      fixture.scene.drawablesIn(RenderLayerId::UI).front());
+               MainMenuModule::menuLayerCountForTesting(),
+               "the title screen is only its layers while no overlay is open");
+    unsigned int quads = 0;
     fixture.renderer.BeginFrame();
-    visual->AppendCommands(&fixture.renderer);
+    for (GameVisual* visual : menuLayers(fixture.scene)) {
+      visual->AppendCommands(&fixture.renderer);
+      quads += visual->builtQuadCount();
+    }
     fixture.renderer.EndFrame();
     testTrue(g,
-             visual->builtQuadCount() > 200u &&
-               visual->builtQuadCount() <= 2600u,
+             quads > 200u && quads <= 2600u,
              "the living title screen stays within its quad budget");
   }
 }
@@ -517,8 +538,8 @@ testMainMenuSettingsWorkflow()
   fixture.module.DispatchDrawables(&fixture.scene);
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::UI).size(),
-             2u,
-             "settings menu is dispatched as second UI drawable");
+             MainMenuModule::menuLayerCountForTesting() + 1u,
+             "settings menu is dispatched after the title screen's layers");
 
   // Close Settings with Escape
   fixture.input.getKeyQueue().push(

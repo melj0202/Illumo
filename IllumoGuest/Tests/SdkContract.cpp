@@ -694,6 +694,29 @@ visualProxyContract()
           "A rebuilt visual sends only its shortened tail");
   backend.commitVisuals();
 
+  // An item added before unchanged ones travels as one insertion and one
+  // item, not as every item after it.
+  first->clearPrimitives();
+  first->addFilledRect(0, 0, 5, 5, { 1, 1, 1, 255 });
+  first->addFilledRect(10, 10, 40, 20, { 200, 0, 0, 255 });
+  record({ first.get() });
+  require(frame.visualOperations.size() == 2 &&
+            frame.visualOperations[0].op == GuestVisualOp::ItemInsert &&
+            frame.visualOperations[0].index == 0 &&
+            frame.visualOperations[0].count == 1 &&
+            frame.visualOperations[1].op == GuestVisualOp::ItemSet &&
+            frame.visualOperations[1].index == 0,
+          "An insertion before unchanged items sends only the new item");
+  backend.commitVisuals();
+  first->clearPrimitives();
+  first->addFilledRect(10, 10, 40, 20, { 200, 0, 0, 255 });
+  record({ first.get() });
+  require(frame.visualOperations.size() == 1 &&
+            frame.visualOperations[0].op == GuestVisualOp::ItemRemove &&
+            frame.visualOperations[0].index == 0,
+          "Removing a head item leaves the rest in place");
+  backend.commitVisuals();
+
   record({ first.get(), styled.get(), last.get() });
   const std::vector<GuestCompositionEntry>& entries =
     frame.compositions[0].entries;

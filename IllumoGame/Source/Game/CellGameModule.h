@@ -170,8 +170,27 @@ private:
   double render3dTestTime;
   bool render3dCameraApplied;
   Cursor editorCursor;
+  // The button's shadow and breathing halo animate every frame, so they sit
+  // in their own visual behind the tile; the tile, bars and hint redraw only
+  // when m_hamburgerKey changes.
+  GameVisual m_hamburgerHaloVisual;
   GameVisual hamburgerVisual;
+  GuiDrawKey m_hamburgerHaloKey;
+  GuiDrawKey m_hamburgerKey;
+  // The paint drawer draws in three layers so its breathing drop can redraw
+  // alone: the blob, header and cards; the chosen brush's drop; then the
+  // swatches, labels and hints. The outer two redraw only when their keys
+  // change.
   GameVisual m_paintPaletteVisual;
+  GameVisual m_paintDropVisual;
+  GameVisual m_paintPaletteTopVisual;
+  GuiDrawKey m_paintPaletteKey;
+  GuiDrawKey m_paintDropKey;
+  GuiDrawKey m_paintPaletteTopKey;
+  // Bumped when the rules or their tag change, so the keyed layers redraw
+  // state names.
+  const RuleSet* m_paintRules = nullptr;
+  std::uint32_t m_paintRulesRevision = 0u;
   bool m_paintPaletteExpanded = false;
   bool m_paintPaletteMouseWasDown = false;
   bool m_paintPaletteCapturing = false;

@@ -1783,11 +1783,13 @@ testPaintPaletteFittedInput()
   bool hasStateLabels = true;
   const RuleSet* wireworld =
     CellGameModuleTestAccess::getCellContext(fixture.module)->getRuleSet();
+  GameVisual& labels =
+    CellGameModuleTestAccess::getPaintPaletteTopVisual(fixture.module);
   for (unsigned char state = 0u; state < 4u; ++state) {
     bool found = false;
-    for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+    for (std::size_t index = 0u; index < labels.textCount(); ++index) {
       found = found ||
-              visual.getText(index)->content == wireworld->getStateName(state);
+              labels.getText(index)->content == wireworld->getStateName(state);
     }
     hasStateLabels = hasStateLabels && found;
   }

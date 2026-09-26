@@ -16,6 +16,7 @@
 #include <Illumo/Services/InputManager.h>
 
 class IModuleHost;
+class FrameProfiler;
 
 // Non-owning service bag passed to IModule::Start.
 struct IllumoContext
@@ -46,6 +47,9 @@ struct IllumoContext
   // (IllumoRuntime guests granted HostRender). Composed by the guest
   // application; products must also work without it.
   IRenderWorld* renderWorld{ nullptr };
+  // The host loop's phase profiler (main-thread timings), for diagnostics
+  // such as the runtime benchmark; disabled unless someone enables it.
+  FrameProfiler* frameProfiler{ nullptr };
 };
 
 // Required wiring for DebugModule (console, FPS overlay, env flags).

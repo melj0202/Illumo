@@ -335,7 +335,6 @@ ConfigurationMenu::ConfigurationMenu(IRenderWindow* targetWindow,
                                      Renderer* targetRenderer)
   : window(targetWindow)
   , renderer(targetRenderer)
-  , visual(4096u)
   , openState(false)
   , replaceFieldOnType(true)
   , selectedRow(0)
@@ -350,11 +349,13 @@ ConfigurationMenu::ConfigurationMenu(IRenderWindow* targetWindow,
   , uiScale(1.0)
   , msaa(4)
 {
-  visual.setSpace(PrimitiveSpace::Pixels);
-  visual.setLayerHint(RenderLayerId::UI);
-  visual.setWindow(window);
-  visual.setRenderer(renderer);
-  visual.prepare(renderer);
+  for (GameVisual& layer : layers) {
+    layer.setSpace(PrimitiveSpace::Pixels);
+    layer.setLayerHint(RenderLayerId::UI);
+    layer.setWindow(window);
+    layer.setRenderer(renderer);
+    layer.prepare(renderer);
+  }
   setVisible(false);
 }
 
@@ -1126,7 +1127,8 @@ void
 ConfigurationMenu::updateLayout()
 {
   // Fit oversized UI preferences uniformly; hit testing uses the same scale.
-  panelFit = GuiPanelLayout::fit(window, renderer, &visual);
+  panelFit = GuiPanelLayout::fit(window, renderer, nullptr);
+  visualScale = GuiPanelLayout::visualScale(panelFit, renderer);
   const float virtualWidth = panelFit.virtualWidth;
   const float virtualHeight = panelFit.virtualHeight;
   panelWidth = std::min(680.0f, std::max(200.0f, virtualWidth - 32.0f));
@@ -1680,6 +1682,7 @@ ConfigurationMenu::readConfiguration(SimulatorConfiguration* configuration,
 void
 ConfigurationMenu::drawHeader(float reveal, unsigned char panelOpacity)
 {
+  GameVisual& visual = layers[kHeaderLayer];
   const ColorRgba cyan = UiTheme::accentCool();
   const float animatedPanelY = panelY + animator.panelOffsetY();
   const float headerSlide = (1.0f - reveal) * 10.0f;
@@ -1726,6 +1729,9 @@ ConfigurationMenu::drawHeader(float reveal, unsigned char panelOpacity)
 void
 ConfigurationMenu::drawTabs(unsigned char panelOpacity, float breathe)
 {
+  GameVisual& strip = layers[kHeaderLayer];
+  GameVisual& glow = layers[kTabGlowLayer];
+  GameVisual& visual = layers[kTabLayer];
   const ColorRgba cyan = UiTheme::accentCool();
   const std::array<float, 4> first = tabBounds(0);
   const float stripX = first[0];
@@ -1733,7 +1739,7 @@ ConfigurationMenu::drawTabs(unsigned char panelOpacity, float breathe)
   const float tabWidth = first[2];
   const float stripWidth = tabWidth * static_cast<float>(kTabCount);
   GuiKit::drawRoundedGradientRect(
-    visual,
+    strip,
     stripX,
     stripY,
     stripWidth,
@@ -1752,7 +1758,7 @@ ConfigurationMenu::drawTabs(unsigned char panelOpacity, float breathe)
   const float pillY = stripY + 3.0f;
   const float pillHeight = kTabStripHeight - 6.0f;
   GuiKit::drawRoundedBand(
-    visual,
+    glow,
     pillX,
     pillY,
     pillWidth,
@@ -1808,6 +1814,7 @@ ConfigurationMenu::drawRowControl(ConfigurationSetting setting,
                                   bool selected,
                                   unsigned char rowOpacity)
 {
+  GameVisual& visual = layers[kContentLayer];
   const ColorRgba cyan = UiTheme::accentCool();
   const int index = static_cast<int>(setting);
   const ControlKind kind = controlKind(setting);
@@ -2051,6 +2058,8 @@ ConfigurationMenu::drawRowControl(ConfigurationSetting setting,
 void
 ConfigurationMenu::drawRows(unsigned char panelOpacity, float breathe)
 {
+  GameVisual& cards = layers[kTabLayer];
+  GameVisual& visual = layers[kContentLayer];
   const ColorRgba cyan = UiTheme::accentCool();
   const int lastVisibleRow =
     std::min(firstVisibleRow + visibleRows, rowCount());
@@ -2068,7 +2077,7 @@ ConfigurationMenu::drawRows(unsigned char panelOpacity, float breathe)
       static_cast<unsigned char>(std::round(rowReveal(row) * swap * 255.0f));
     const float e = std::clamp(rowFocus.value(row), 0.0f, 1.0f);
     GuiKit::drawRoundedRect(
-      visual,
+      cards,
       cardX + shiftX,
       y,
       cardWidth,
@@ -2079,7 +2088,7 @@ ConfigurationMenu::drawRows(unsigned char panelOpacity, float breathe)
                                          e * 0.5f),
                             rowOpacity));
     GuiKit::drawRoundedGradientRect(
-      visual,
+      cards,
       cardX + shiftX + 1.0f,
       y + 1.0f,
       cardWidth - 2.0f,
@@ -2131,7 +2140,7 @@ ConfigurationMenu::drawRows(unsigned char panelOpacity, float breathe)
     drop.sheen = animator.selectionSheen();
     drop.sheenColor =
       UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 38 }, selectionOpacity);
-    GuiKit::drawLiquidSelection(visual, drop);
+    GuiKit::drawLiquidSelection(layers[kDropLayer], drop);
   }
 
   for (int row = firstVisibleRow; row < lastVisibleRow; ++row) {
@@ -2186,6 +2195,9 @@ ConfigurationMenu::drawRows(unsigned char panelOpacity, float breathe)
 void
 ConfigurationMenu::drawFooter(unsigned char panelOpacity, float breathe)
 {
+  GameVisual& visual = layers[kContentLayer];
+  GameVisual& glow = layers[kFooterGlowLayer];
+  GameVisual& buttons = layers[kFooterLayer];
   const ColorRgba cyan = UiTheme::accentCool();
   const float top = footerTop();
   const std::string help =
@@ -2226,7 +2238,7 @@ ConfigurationMenu::drawFooter(unsigned char panelOpacity, float breathe)
     const float height = bounds[3];
     if (lit > 0.02f) {
       GuiKit::drawRoundedBand(
-        visual,
+        glow,
         x,
         y,
         width,
@@ -2238,7 +2250,7 @@ ConfigurationMenu::drawFooter(unsigned char panelOpacity, float breathe)
         UiTheme::transparentOf(cyan));
     }
     GuiKit::drawRoundedRect(
-      visual,
+      buttons,
       x,
       y,
       width,
@@ -2249,7 +2261,7 @@ ConfigurationMenu::drawFooter(unsigned char panelOpacity, float breathe)
                                          lit * 0.7f),
                             panelOpacity));
     GuiKit::drawRoundedGradientRect(
-      visual,
+      buttons,
       x + 1.0f,
       y + 1.0f,
       width - 2.0f,
@@ -2262,7 +2274,7 @@ ConfigurationMenu::drawFooter(unsigned char panelOpacity, float breathe)
         UiTheme::mix(UiTheme::cardBottom(), UiTheme::selectionBottom(), lit),
         panelOpacity));
     GuiKit::drawEmphasizedTextCentered(
-      visual,
+      buttons,
       kFooterLabels[button],
       x + width * 0.5f,
       y + height * 0.5f,
@@ -2279,7 +2291,10 @@ void
 ConfigurationMenu::rebuildVisual()
 {
   updateLayout();
-  visual.clearPrimitives();
+  for (GameVisual& layer : layers) {
+    layer.clearPrimitives();
+  }
+  GameVisual& glassLayer = layers[kGlassLayer];
   const float virtualWidth = panelFit.virtualWidth;
   const float virtualHeight = panelFit.virtualHeight;
   const ColorRgba cyan = UiTheme::accentCool();
@@ -2293,7 +2308,7 @@ ConfigurationMenu::rebuildVisual()
   const float breathe =
     0.5f + 0.5f * std::sin(animator.ambientPhase() * 1.04719755f);
 
-  GuiKit::drawVignette(visual,
+  GuiKit::drawVignette(glassLayer,
                        virtualWidth,
                        virtualHeight,
                        UiTheme::fade(UiTheme::scrimCenter(), backdrop),
@@ -2305,7 +2320,7 @@ ConfigurationMenu::rebuildVisual()
   glass.glow = 0.35f + 0.3f * breathe;
   glass.accentReveal = reveal;
   tilt.applyTo(glass);
-  GuiKit::drawGlassPanel(visual,
+  GuiKit::drawGlassPanel(glassLayer,
                          panelX + tilt.layerX(GuiPanelTilt::kGlassDepth),
                          animatedPanelY +
                            tilt.layerY(GuiPanelTilt::kGlassDepth),
@@ -2321,7 +2336,8 @@ ConfigurationMenu::rebuildVisual()
   const ColorRgba ruleCyan = UiTheme::applyOpacity(cyan, panelOpacity);
   const ColorRgba ruleViolet = UiTheme::applyOpacity(
     UiTheme::fade(UiTheme::accentViolet(), 0.8f), panelOpacity);
-  visual.addGradientRect(panelX + 20.0f,
+  GameVisual& rule = layers[kTabLayer];
+  rule.addGradientRect(panelX + 20.0f,
                          animatedFirstRowY - 5.0f,
                          ruleWidth * 0.7f,
                          2.0f,
@@ -2329,7 +2345,7 @@ ConfigurationMenu::rebuildVisual()
                          ruleViolet,
                          ruleViolet,
                          ruleCyan);
-  visual.addGradientRect(panelX + 20.0f + ruleWidth * 0.7f,
+  rule.addGradientRect(panelX + 20.0f + ruleWidth * 0.7f,
                          animatedFirstRowY - 5.0f,
                          ruleWidth * 0.3f,
                          2.0f,
@@ -2340,6 +2356,9 @@ ConfigurationMenu::rebuildVisual()
 
   drawRows(panelOpacity, breathe);
   drawFooter(panelOpacity, breathe);
+  for (GameVisual& layer : layers) {
+    GuiPanelLayout::scaleFromScreenOrigin(layer, visualScale);
+  }
 }
 
 bool
@@ -2353,8 +2372,12 @@ ConfigurationMenu::AppendCommands(Renderer* activeRenderer)
   }
   renderer = activeRenderer;
   rebuildVisual();
-  visual.setRenderer(activeRenderer);
-  visual.setWindow(window);
-  visual.setVisible(true);
-  return visual.AppendCommands(activeRenderer);
+  bool appended = true;
+  for (GameVisual& layer : layers) {
+    layer.setRenderer(activeRenderer);
+    layer.setWindow(window);
+    layer.setVisible(true);
+    appended = layer.AppendCommands(activeRenderer) && appended;
+  }
+  return appended;
 }

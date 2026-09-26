@@ -1,6 +1,7 @@
 #include <Illumo/Audio/AudioDevice.h>
 #include <Illumo/Content/PackageMounts.h>
 #include <Illumo/Engine/Application.h>
+#include <Illumo/Engine/FrameProfiler.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/CommandRegistry.h>
@@ -339,6 +340,11 @@ public:
     if (context != nullptr && context->window != nullptr && !m_title.empty()) {
       context->window->setTitle(m_title);
     }
+    // The bench reports the host loop's phases too.
+    if (m_bench.frames != 0 && context != nullptr &&
+        context->frameProfiler != nullptr) {
+      context->frameProfiler->setEnabled(true);
+    }
     const bool started = m_guest->Start(context);
     if (started) {
       Logger::LogInfo("The " + m_application + " package started");
@@ -391,6 +397,18 @@ public:
         m_benchFrameIntervals.push_back(
           std::chrono::duration<double, std::milli>(start - m_benchLastStart)
             .count());
+        // The last frame, split at its submission: dispatch, render and
+        // submit; then present, input and the loop until this update.
+        if (m_benchDispatch > m_benchLastStart &&
+            m_benchSubmitted > m_benchDispatch) {
+          m_benchRenderMilliseconds.push_back(
+            std::chrono::duration<double, std::milli>(m_benchSubmitted -
+                                                      m_benchDispatch)
+              .count());
+          m_benchPresentMilliseconds.push_back(
+            std::chrono::duration<double, std::milli>(start - m_benchSubmitted)
+              .count());
+        }
       }
       m_benchUpdateMilliseconds.push_back(
         std::chrono::duration<double, std::milli>(end - start).count());
@@ -406,6 +424,17 @@ public:
   }
   void DispatchDrawables(Scene* scene) override
   {
+    // Bench and capture never run together, so the bench may own the hook.
+    if (m_bench.frames != 0 && !m_benchDone && ic != nullptr &&
+        ic->renderer != nullptr) {
+      m_benchDispatch = std::chrono::steady_clock::now();
+      if (!m_hookInstalled) {
+        m_hookInstalled = true;
+        ic->renderer->setBeforePresent([this](Renderer&) {
+          m_benchSubmitted = std::chrono::steady_clock::now();
+        });
+      }
+    }
     m_guest->DispatchDrawables(scene);
     if (m_clearHook) {
       // Cleared here, never from inside the running hook.
@@ -562,6 +591,22 @@ private:
         : 0.0;
     result["frameIntervalMs"] = distribution(m_benchFrameIntervals);
     result["moduleUpdateMs"] = distribution(m_benchUpdateMilliseconds);
+    result["renderMs"] = distribution(m_benchRenderMilliseconds);
+    result["presentMs"] = distribution(m_benchPresentMilliseconds);
+    if (ic != nullptr && ic->frameProfiler != nullptr &&
+        ic->frameProfiler->sampleCount() != 0) {
+      // Mean milliseconds per phase over the last profiler window.
+      static const char* const kPhaseNames[FrameProfiler::kPhaseCount] = {
+        "input",  "camera",   "debugUpdate",  "productUpdate", "scene",
+        "assets", "commands", "presentation", "pacing",        "other"
+      };
+      const FrameProfiler::Sample average = ic->frameProfiler->average();
+      nlohmann::json phases;
+      for (std::size_t phase = 0; phase < FrameProfiler::kPhaseCount; ++phase) {
+        phases[kPhaseNames[phase]] = average[phase];
+      }
+      result["phasesMs"] = phases;
+    }
     const WasmFrameStats& stats = m_guest->stats();
     nlohmann::json host;
     host["services"] = rolling(stats.servicesMilliseconds);
@@ -662,6 +707,10 @@ private:
   std::uint64_t m_benchUpdates = 0;
   std::vector<double> m_benchFrameIntervals;
   std::vector<double> m_benchUpdateMilliseconds;
+  std::vector<double> m_benchRenderMilliseconds;
+  std::vector<double> m_benchPresentMilliseconds;
+  std::chrono::steady_clock::time_point m_benchDispatch{};
+  std::chrono::steady_clock::time_point m_benchSubmitted{};
   std::chrono::steady_clock::time_point m_benchStart{};
   std::chrono::steady_clock::time_point m_benchEnd{};
   std::chrono::steady_clock::time_point m_benchLastStart{};

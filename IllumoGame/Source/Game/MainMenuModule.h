@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 class CanvasView;
 class Font;
@@ -34,6 +35,11 @@ public:
   void Exit() override;
 
   int getSelectedItemForTesting() const { return m_selectedItem; }
+  // The title screen's UI drawables (its layers), dispatched first in order.
+  static constexpr std::size_t menuLayerCountForTesting()
+  {
+    return kLayerCount;
+  }
   bool isSettingsOpenForTesting() const;
   const ConfigurationMenu* settingsMenuForTesting() const
   {
@@ -123,11 +129,54 @@ private:
   void hopTitleLetter(int letter);
   void updateLayout();
   void rebuildVisual();
-  void drawBackground(float width, float height, float reveal);
-  void drawTitle(float room, unsigned char opacity);
-  void drawRows(float room, unsigned char opacity, float breathe);
-  void drawFooter(unsigned char opacity);
-  void drawVersion(float width, float height, unsigned char opacity);
+  // The menu draws in layers, back to front, grouped by how often they
+  // change. Layers whose inputs did not change keep last frame's items, so a
+  // settled menu rebuilds only its ever-moving pieces (aurora, glass glow,
+  // title and motif, selection drop, chevrons) and the host redraws nothing
+  // else.
+  enum Layer : std::size_t
+  {
+    kBackdropLayer,
+    kAuroraLayer,
+    kGlassLayer,
+    kTitleLayer,
+    kCardLayer,
+    kSelectionLayer,
+    kRowContentLayer,
+    kChevronLayer,
+    kFooterLayer,
+    kLayerCount
+  };
+  // Row placement shared by the row layers.
+  struct RowGeometry
+  {
+    float itemX = 0.0f;
+    float firstItemY = 0.0f;
+    float stride = 0.0f;
+    float radius = 13.0f;
+    std::array<float, kItemCount> reveal{};
+    std::array<float, kItemCount> y{};
+    std::array<unsigned char, kItemCount> opacity{};
+  };
+  RowGeometry rowGeometry(unsigned char opacity) const;
+  // Redraws `layer` when `m_keyScratch` (the inputs it draws from) differs
+  // from the last drawing's, or always when `keyed` is false.
+  template<typename Draw>
+  void drawLayer(Layer layer, bool keyed, Draw&& draw);
+  void drawBackdrop(GameVisual& visual, float width, float height);
+  void drawAurora(GameVisual& visual, float width, float height, float reveal);
+  void drawTitle(GameVisual& visual, float room, unsigned char opacity);
+  void drawRowCards(GameVisual& visual, const RowGeometry& rows);
+  void drawSelection(GameVisual& visual,
+                     const RowGeometry& rows,
+                     float breathe);
+  void drawRowContent(GameVisual& visual, const RowGeometry& rows, float room);
+  void drawChevrons(GameVisual& visual, const RowGeometry& rows);
+  void drawFooter(GameVisual& visual, unsigned char opacity);
+  void drawVersion(GameVisual& visual,
+                   float width,
+                   float height,
+                   unsigned char opacity);
   void selectItem(int item);
   void activateSelectedItem();
   void pressItem(float originX, float originY);
@@ -141,10 +190,14 @@ private:
   // Asks to restart after applying settings only a restart applies.
   std::unique_ptr<ExitConfirmDialog> m_restartDialog;
   std::unique_ptr<NewSimulationMenu> m_newSimulationMenu;
-  GameVisual m_menuVisual;
+  std::array<GameVisual, kLayerCount> m_layers;
+  std::array<std::vector<float>, kLayerCount> m_layerKeys;
+  std::vector<float> m_keyScratch;
   GuiMenuAnimator m_animator;
   GuiPointerTracker m_pointer;
   GuiPanelFit m_panelFit;
+  // The fitted scale every layer is drawn at.
+  float m_visualScale = 1.0f;
   // Per-row hover/focus emphasis, the panel receding behind an overlay, the
   // panel's tilt toward the pointer, and pointer-driven parallax and
   // spotlight.

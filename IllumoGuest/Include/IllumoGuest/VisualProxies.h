@@ -39,7 +39,8 @@ public:
   std::uint32_t sync(const GameVisual& visual,
                      Renderer& renderer,
                      GuestLayer layer,
-                     std::vector<GuestVisualOperation>& operations);
+                     std::vector<GuestVisualOperation>& operations,
+                     std::uint64_t textureEpoch);
   void forget(const GameVisual& visual);
   void commit();
   void drop();
@@ -58,6 +59,12 @@ private:
     bool touched = false;
     GuestVisualProperties proposedProperties;
     std::vector<GuestVisualItem> proposed;
+    // The visual's edit revision and the texture epoch the host's copy
+    // matches; an unchanged pair skips the visual (GameVisual::editRevision).
+    std::uint64_t editRevision = 0;
+    std::uint64_t textureEpoch = 0;
+    std::uint64_t proposedRevision = 0;
+    std::uint64_t proposedEpoch = 0;
     // Churn: consecutive frames that changed most items; while churning the
     // visual records batches, and every kChurnRecheck frames its items are
     // compared with the last sample to see whether it has settled.

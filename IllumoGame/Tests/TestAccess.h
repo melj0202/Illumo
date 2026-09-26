@@ -30,6 +30,11 @@ public:
   {
     return module.m_paintPaletteVisual;
   }
+  // The swatches, state labels and hints, drawn over the chosen brush's drop.
+  static GameVisual& getPaintPaletteTopVisual(CellGameModule& module)
+  {
+    return module.m_paintPaletteTopVisual;
+  }
   static std::uint64_t getSimulationGeneration(const CellGameModule& module)
   {
     return module.simulationGeneration;

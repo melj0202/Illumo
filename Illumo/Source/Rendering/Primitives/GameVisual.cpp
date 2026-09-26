@@ -134,6 +134,13 @@ GameVisual::setSpace(PrimitiveSpace value)
 void
 GameVisual::setTransform(const Transform2D& value)
 {
+  // Layout code sets the transform every frame; only a change rebuilds.
+  if (value.x == transform.x && value.y == transform.y &&
+      value.scaleX == transform.scaleX && value.scaleY == transform.scaleY &&
+      value.rotationRadians == transform.rotationRadians &&
+      value.pivotX == transform.pivotX && value.pivotY == transform.pivotY) {
+    return;
+  }
   transform = value;
   markDirty();
 }
@@ -254,6 +261,39 @@ GameVisual::placeItem(size_t index,
   markDirty();
   return true;
 }
+bool
+GameVisual::insertItems(size_t index, size_t count)
+{
+  if (index > items.size() || count == 0) {
+    return false;
+  }
+  // Hidden placeholders that setItem replaces; painter order follows the
+  // item list, so every sequence is renumbered to its new position.
+  ShapePrimitive placeholder;
+  placeholder.visible = false;
+  std::vector<VisualItem> added(count);
+  for (VisualItem& item : added) {
+    item.kind = VisualItemKind::Shape;
+    if (!freeShapes.empty()) {
+      item.index = freeShapes.back();
+      freeShapes.pop_back();
+      shapes[item.index] = placeholder;
+    } else {
+      shapes.push_back(placeholder);
+      item.index = shapes.size() - 1;
+    }
+  }
+  items.insert(items.begin() + static_cast<std::ptrdiff_t>(index),
+               added.begin(),
+               added.end());
+  for (size_t position = 0; position < items.size(); ++position) {
+    items[position].sequence = position;
+  }
+  nextSequence = items.size();
+  markDirty();
+  return true;
+}
+
 void
 GameVisual::removeItems(size_t first, size_t count)
 {

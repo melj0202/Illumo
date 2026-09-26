@@ -203,6 +203,18 @@ visualFrameValidation()
              decoded.compositions[1].target == 5,
            "Compositions round-trip");
 
+  GuestVisualOperation insertion = visualOp(GuestVisualOp::ItemInsert, 4);
+  insertion.index = 2;
+  insertion.count = 3;
+  GuestFrame inserted;
+  testTrue(counters,
+           GuestFrame::read(encode(visualFrame({ insertion })), inserted) &&
+             inserted.visualOperations.size() == 1 &&
+             inserted.visualOperations[0].op == GuestVisualOp::ItemInsert &&
+             inserted.visualOperations[0].index == 2 &&
+             inserted.visualOperations[0].count == 3,
+           "ItemInsert round-trips");
+
   bool truncations = true;
   for (std::size_t size = 0; size < bytes.size(); ++size) {
     GuestFrame ignored;
@@ -212,7 +224,7 @@ visualFrameValidation()
   testTrue(counters, truncations, "Every truncated v7 frame is rejected");
 
   const float nan = std::numeric_limits<float>::quiet_NaN();
-  GuestVisualOperation unknown = visualOp(static_cast<GuestVisualOp>(7), 1);
+  GuestVisualOperation unknown = visualOp(static_cast<GuestVisualOp>(8), 1);
   GuestVisualOperation zeroId = visualOp(GuestVisualOp::Create, 0);
   GuestVisualOperation badShape = shapeItem(1, 0);
   badShape.item.shape = 6;
@@ -231,6 +243,7 @@ visualFrameValidation()
   GuestVisualOperation negativeClip = setLayer(1, GuestLayer::Ui);
   negativeClip.properties.clip[2] = -1.0f;
   GuestVisualOperation emptyRemoval = visualOp(GuestVisualOp::ItemRemove, 1);
+  GuestVisualOperation emptyInsert = visualOp(GuestVisualOp::ItemInsert, 1);
   bool denied = true;
   for (const GuestVisualOperation& invalid : { unknown,
                                                zeroId,
@@ -242,7 +255,8 @@ visualFrameValidation()
                                                overBlend,
                                                opaque,
                                                negativeClip,
-                                               emptyRemoval }) {
+                                               emptyRemoval,
+                                               emptyInsert }) {
     GuestFrame ignored;
     denied =
       denied && !GuestFrame::read(encode(visualFrame({ invalid })), ignored);
@@ -496,6 +510,22 @@ visualOperations()
              countOf(render(), CommandType::ExecuteList) == 2 &&
              renderer.frameError().empty(),
            "After rejections, the next frame applies and draws both visuals");
+
+  // Insertion before existing items: within the list, once.
+  const auto insertAt = [](std::uint32_t index, std::uint32_t count) {
+    GuestVisualOperation operation = visualOp(GuestVisualOp::ItemInsert, 2);
+    operation.index = index;
+    operation.count = count;
+    return operation;
+  };
+  testTrue(counters,
+           !bridge.accept(encode(visualFrame({ insertAt(2, 1) }))) &&
+             bridge.accept(encode(visualFrame(
+               { insertAt(0, 2), shapeItem(2, 0, 5.0f), shapeItem(2, 1, 6.0f) },
+               { composition(0, { entry(GuestCompositionKind::Visual, 2) }) }))) &&
+             countOf(render(), CommandType::ExecuteList) == 1 &&
+             renderer.frameError().empty(),
+           "Items insert before existing ones, never past the end");
 
   // Surfaces: the composition decides when a surface must be replayed.
   GuestSurfaceFrame surface;

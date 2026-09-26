@@ -250,7 +250,8 @@ std::uint32_t
 GuestVisualProxies::sync(const GameVisual& visual,
                          Renderer& renderer,
                          GuestLayer layer,
-                         std::vector<GuestVisualOperation>& operations)
+                         std::vector<GuestVisualOperation>& operations,
+                         std::uint64_t textureEpoch)
 {
   // A visual's own quad cap does not travel: the host applies its store's.
   const std::size_t count = visual.itemCount();
@@ -312,32 +313,62 @@ GuestVisualProxies::sync(const GameVisual& visual,
     return 0;
   }
 
+  // Nothing about the visual changed since the host confirmed it: no item
+  // needs converting, and nothing travels.
+  if (proxy.onHost && proxy.hasProperties &&
+      proxy.editRevision == visual.editRevision() &&
+      proxy.textureEpoch == textureEpoch &&
+      sameProperties(proxy.properties, properties)) {
+    return proxy.id;
+  }
+
   proxy.proposed.resize(count);
-  std::size_t textBytes = 0;
-  std::size_t changedItems = 0;
-  std::size_t operationCount =
-    (proxy.onHost ? 0u : 1u) + (proxy.onHost && proxy.hasProperties &&
-                                    sameProperties(proxy.properties, properties)
-                                  ? 0u
-                                  : 1u);
-  const std::vector<GuestVisualItem>* base =
-    proxy.onHost ? &proxy.items : nullptr;
-  const std::size_t baseCount = base != nullptr ? base->size() : 0;
   for (std::size_t index = 0; index < count; ++index) {
     std::size_t bytes = 0;
     if (!convert(visual, renderer, index, proxy.proposed[index], bytes)) {
       return 0;
     }
-    if (index >= baseCount ||
-        !sameItem((*base)[index], proxy.proposed[index])) {
-      operationCount += 1;
-      changedItems += index < baseCount ? 1u : 0u;
-      textBytes += bytes;
+  }
+  // Items match the host's by position, but a list that grew or shrank in the
+  // middle keeps its unchanged head and tail: only the part between them
+  // travels, as replacements plus one insertion or removal.
+  const std::vector<GuestVisualItem>& base = proxy.items;
+  const std::size_t baseCount = proxy.onHost ? base.size() : 0;
+  const std::size_t shorter = std::min(baseCount, count);
+  std::size_t head = 0;
+  while (head < shorter && sameItem(base[head], proxy.proposed[head])) {
+    ++head;
+  }
+  std::size_t tail = 0;
+  while (tail < shorter - head && sameItem(base[baseCount - 1 - tail],
+                                           proxy.proposed[count - 1 - tail])) {
+    ++tail;
+  }
+  const std::size_t baseMiddle = baseCount - head - tail;
+  const std::size_t middle = count - head - tail;
+  const std::size_t overlap = std::min(baseMiddle, middle);
+  std::size_t replaced = 0;
+  std::size_t textBytes = 0;
+  for (std::size_t index = head; index < head + overlap; ++index) {
+    if (!sameItem(base[index], proxy.proposed[index])) {
+      replaced += 1;
+      textBytes += proxy.proposed[index].text.size();
     }
   }
-  if (baseCount > count) {
-    operationCount += 1;
+  const std::size_t added = middle > baseMiddle ? middle - baseMiddle : 0;
+  const std::size_t removed = baseMiddle > middle ? baseMiddle - middle : 0;
+  for (std::size_t index = head + overlap; index < head + middle; ++index) {
+    textBytes += proxy.proposed[index].text.size();
   }
+  // Added items before an unchanged tail need an insertion; at the end they
+  // simply append.
+  const bool insert = added > 0 && tail > 0;
+  const std::size_t changedItems = replaced + added + removed;
+  const bool sameProps = proxy.onHost && proxy.hasProperties &&
+                         sameProperties(proxy.properties, properties);
+  const std::size_t operationCount = (proxy.onHost ? 0u : 1u) +
+                                     (sameProps ? 0u : 1u) + replaced + added +
+                                     (insert ? 1u : 0u) + (removed > 0 ? 1u : 0u);
   if (proxy.onHost && churns(changedItems, count)) {
     proxy.churnFrames += 1;
     if (proxy.churnFrames >= kChurnFrames) {
@@ -360,33 +391,46 @@ GuestVisualProxies::sync(const GameVisual& visual,
     create.id = proxy.id;
     operations.push_back(std::move(create));
   }
-  if (!proxy.onHost || !proxy.hasProperties ||
-      !sameProperties(proxy.properties, properties)) {
+  if (!sameProps) {
     GuestVisualOperation set;
     set.op = GuestVisualOp::Set;
     set.id = proxy.id;
     set.properties = properties;
     operations.push_back(std::move(set));
   }
-  for (std::size_t index = 0; index < count; ++index) {
-    if (index < baseCount && sameItem((*base)[index], proxy.proposed[index])) {
-      continue;
-    }
+  const auto setItem = [&](std::size_t index) {
     GuestVisualOperation& set = operations.emplace_back();
     set.op = GuestVisualOp::ItemSet;
     set.id = proxy.id;
     set.index = static_cast<std::uint32_t>(index);
     set.item = proxy.proposed[index];
+  };
+  for (std::size_t index = head; index < head + overlap; ++index) {
+    if (!sameItem(base[index], proxy.proposed[index])) {
+      setItem(index);
+    }
   }
-  if (baseCount > count) {
+  if (insert) {
+    GuestVisualOperation insertion;
+    insertion.op = GuestVisualOp::ItemInsert;
+    insertion.id = proxy.id;
+    insertion.index = static_cast<std::uint32_t>(head + overlap);
+    insertion.count = static_cast<std::uint32_t>(added);
+    operations.push_back(std::move(insertion));
+  }
+  for (std::size_t index = head + overlap; index < head + middle; ++index) {
+    setItem(index);
+  }
+  if (removed > 0) {
     GuestVisualOperation removal;
     removal.op = GuestVisualOp::ItemRemove;
     removal.id = proxy.id;
-    removal.index = static_cast<std::uint32_t>(count);
-    removal.count = static_cast<std::uint32_t>(baseCount - count);
+    removal.index = static_cast<std::uint32_t>(head + overlap);
+    removal.count = static_cast<std::uint32_t>(removed);
     operations.push_back(std::move(removal));
   }
-  m_operations += operationCount;
+  proxy.proposedRevision = visual.editRevision();
+  proxy.proposedEpoch = textureEpoch;  m_operations += operationCount;
   m_textBytes += textBytes;
   proxy.touched = true;
   m_touched.push_back(&visual);
@@ -422,6 +466,8 @@ GuestVisualProxies::commit()
     proxy.properties = proxy.proposedProperties;
     proxy.hasProperties = true;
     proxy.onHost = true;
+    proxy.editRevision = proxy.proposedRevision;
+    proxy.textureEpoch = proxy.proposedEpoch;
     proxy.touched = false;
   }
   m_touched.clear();

@@ -136,6 +136,34 @@ hasText(GameVisual& visual, const std::string& content)
   return false;
 }
 
+// The menu draws in layers; its text may sit in any of them.
+template<typename Visit>
+static void
+forEachText(ConfigurationMenu& menu, Visit&& visit)
+{
+  for (std::size_t layer = 0u; layer < ConfigurationMenu::layerCountForTesting();
+       ++layer) {
+    GameVisual& visual = menu.layerForTesting(layer);
+    for (std::size_t index = 0u; index < visual.textCount(); ++index) {
+      if (const TextPrimitive* text = visual.getText(index)) {
+        visit(*text);
+      }
+    }
+  }
+}
+
+static bool
+hasText(ConfigurationMenu& menu, const std::string& content)
+{
+  for (std::size_t layer = 0u; layer < ConfigurationMenu::layerCountForTesting();
+       ++layer) {
+    if (hasText(menu.layerForTesting(layer), content)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static bool
 hasSwitchBeside(GameVisual& visual, const std::string& label)
 {
@@ -594,54 +622,50 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   GameVisual& visual = fixture.menu.getVisual();
   bool foundLargeTitle = false;
   bool foundReadableLabel = false;
-  for (std::size_t index = 0u; index < visual.textCount(); ++index) {
-    TextPrimitive* text = visual.getText(index);
-    if (text == nullptr) {
-      continue;
-    }
+  forEachText(fixture.menu, [&](const TextPrimitive& text) {
     foundLargeTitle =
       foundLargeTitle ||
-      (text->content == "SIMULATOR SETTINGS" && text->sizePt >= 24.0f);
+      (text.content == "SIMULATOR SETTINGS" && text.sizePt >= 24.0f);
     foundReadableLabel =
-      foundReadableLabel || (text->content == "Ruleset" &&
-                             text->sizePt >= 16.0f && text->color.a == 255);
-  }
+      foundReadableLabel || (text.content == "Ruleset" &&
+                             text.sizePt >= 16.0f && text.color.a == 255);
+  });
   testTrue(g, foundLargeTitle, "settings title uses larger text");
   testTrue(g,
            foundReadableLabel,
            "setting labels use opaque high-contrast text at readable size");
   testTrue(g,
-           hasText(visual, "SIMULATION") && hasText(visual, "VIDEO") &&
-             hasText(visual, "AUDIO") && hasText(visual, "GENERAL"),
+           hasText(fixture.menu, "SIMULATION") && hasText(fixture.menu, "VIDEO") &&
+             hasText(fixture.menu, "AUDIO") && hasText(fixture.menu, "GENERAL"),
            "every section tab is labelled");
   testTrue(g,
-           hasText(visual, "Conway's Game of Life"),
+           hasText(fixture.menu, "Conway's Game of Life"),
            "ruleset value uses a human-readable display name");
   testTrue(g,
-           hasText(visual, "select") && hasText(visual, "adjust") &&
-             hasText(visual, "section"),
+           hasText(fixture.menu, "select") && hasText(fixture.menu, "adjust") &&
+             hasText(fixture.menu, "section"),
            "keyboard controls are shown as keycap hints");
   testTrue(g,
-           hasText(visual, "Infinite") && hasText(visual, "30 TPS") &&
-             hasText(visual, "1.5x"),
+           hasText(fixture.menu, "Infinite") && hasText(fixture.menu, "30 TPS") &&
+             hasText(fixture.menu, "1.5x"),
            "sliders show friendly readouts");
   testTrue(g,
-           !hasText(visual, "|"),
+           !hasText(fixture.menu, "|"),
            "sliders show no text caret until digits are typed");
   testTrue(g,
-           hasText(visual, "Apply changes") &&
-             hasText(visual, "Discard changes") &&
-             hasText(visual, "Exit simulator"),
+           hasText(fixture.menu, "Apply changes") &&
+             hasText(fixture.menu, "Discard changes") &&
+             hasText(fixture.menu, "Exit simulator"),
            "footer actions stay visible on every tab");
   testTrue(g,
-           hasText(visual, "Example validation message"),
+           hasText(fixture.menu, "Example validation message"),
            "validation errors show in the footer");
   testTrue(g,
            hasSwitchBeside(visual, "Start paused") &&
              !hasSwitchBeside(visual, "Speed multiplier"),
            "switches render only beside boolean settings");
   testTrue(
-    g, !hasText(visual, "Vertical sync"), "other tabs' settings are not drawn");
+    g, !hasText(fixture.menu, "Vertical sync"), "other tabs' settings are not drawn");
   const std::array<float, 4> exitButton =
     fixture.menu.getFooterButtonBoundsForTesting(
       ConfigurationMenu::kExitButton);
@@ -661,7 +685,7 @@ testConfigurationMenuTokensAtReleaseWindowSize()
              !hasSwitchBeside(visual, "FPS cap"),
            "video toggles render switches; its sliders do not");
   testTrue(g,
-           hasText(visual, "60 FPS") && hasText(visual, "4x"),
+           hasText(fixture.menu, "60 FPS") && hasText(fixture.menu, "4x"),
            "video readouts and segments show their values");
   bool foundRestartNote = false;
   for (std::size_t index = 0u; index < visual.textCount(); ++index) {
@@ -677,8 +701,8 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   fixture.menu.tick(1.0f);
   fixture.render(scene);
   testTrue(g,
-           hasText(visual, "LED keys") && hasText(visual, "Flat") &&
-             hasText(visual, "100%") && hasText(visual, "8") &&
+           hasText(fixture.menu, "LED keys") && hasText(fixture.menu, "Flat") &&
+             hasText(fixture.menu, "100%") && hasText(fixture.menu, "8") &&
              hasSwitchBeside(visual, "Grid lines") &&
              hasSwitchBeside(visual, "Simulation inspector") &&
              !hasSwitchBeside(visual, "Cell glow"),
@@ -689,7 +713,7 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   fixture.menu.update(&fixture.input);
   fixture.render(scene);
   testTrue(
-    g, hasText(visual, "|"), "typing into a slider shows a visible text caret");
+    g, hasText(fixture.menu, "|"), "typing into a slider shows a visible text caret");
   const float caretGap = textCaretGap(visual, "9");
   testTrue(g,
            caretGap >= 0.0f && caretGap <= 2.0f,
@@ -697,14 +721,14 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   fixture.menu.tick(0.6f);
   fixture.render(scene);
   testTrue(g,
-           !hasText(visual, "|"),
+           !hasText(fixture.menu, "|"),
            "the typing caret alternates off during its blink cycle");
   fixture.press(KeyCode::Enter);
   fixture.menu.update(&fixture.input);
   fixture.menu.tick(0.5f);
   fixture.render(scene);
   testTrue(g,
-           !hasText(visual, "|") && fixture.read().fadeSpeed == 9.0,
+           !hasText(fixture.menu, "|") && fixture.read().fadeSpeed == 9.0,
            "Enter keeps the typed value and hides the caret");
 
   SimulatorConfiguration automatic = defaultConfiguration();
@@ -713,11 +737,11 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   fixture.menu.open(automatic);
   fixture.render(scene);
   testTrue(g,
-           hasText(visual, "Auto 1x"),
+           hasText(fixture.menu, "Auto 1x"),
            "automatic UI scale shows the factor it picked for the window");
   fixture.menu.open(defaultConfiguration());
   fixture.render(scene);
-  testTrue(g, hasText(visual, "1x"), "a fixed UI scale shows its factor");
+  testTrue(g, hasText(fixture.menu, "1x"), "a fixed UI scale shows its factor");
 
   fixture.menu.close();
   fixture.mock.resetCounters();
@@ -801,17 +825,14 @@ testDisplaySettingsAndScrolling()
   const float fittedScale =
     visual.getTransform().scaleX * fixture.renderer.getUiScale();
   bool withinWindow = true;
-  for (std::size_t index = 0; index < visual.textCount(); ++index) {
-    TextPrimitive* text = visual.getText(index);
-    if (text != nullptr) {
-      withinWindow = withinWindow && text->y * fittedScale >= 0.0f &&
-                     (text->y + text->sizePt) * fittedScale <= 100.0f;
-    }
-  }
+  forEachText(fixture.menu, [&](const TextPrimitive& text) {
+    withinWindow = withinWindow && text.y * fittedScale >= 0.0f &&
+                   (text.y + text.sizePt) * fittedScale <= 100.0f;
+  });
   testTrue(g, withinWindow, "fitted text stays within a tiny window");
   testTrue(g,
-           hasText(visual, "Simulation inspector") &&
-             hasText(visual, "Apply changes"),
+           hasText(fixture.menu, "Simulation inspector") &&
+             hasText(fixture.menu, "Apply changes"),
            "the scrolled row and the footer are both visible");
 }
 
@@ -885,7 +906,7 @@ testCanvasControlsAndBehaviourSettings()
   scene.AddDrawable(&fixture.menu, RenderLayerId::UI);
   fixture.render(scene);
   testTrue(g,
-           hasText(fixture.menu.getVisual(), "5 min"),
+           hasText(fixture.menu, "5 min"),
            "autosave shows its interval in minutes");
 
   fixture.menu.open(parsed);

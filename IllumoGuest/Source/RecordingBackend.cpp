@@ -327,7 +327,11 @@ GuestRecordingBackend::AppendVisual(GameVisual& visual)
     return false;
   }
   const std::uint32_t id =
-    m_visuals.sync(visual, *m_renderer, m_layer, m_frame.visualOperations);
+    m_visuals.sync(visual,
+                   *m_renderer,
+                   m_layer,
+                   m_frame.visualOperations,
+                   m_textureEpoch);
   if (id == 0) {
     return false;
   }
@@ -882,6 +886,7 @@ GuestRecordingBackend::CreateCubemap(
   Texture texture;
   texture.cubemap = true;
   texture.pending = pending;
+  ++m_textureEpoch;
   texture.pendingInfo = { width, height, 4 };
   m_textures.emplace(handle.slot, std::move(texture));
   return handle;
@@ -928,6 +933,7 @@ GuestRecordingBackend::ReplaceTexture(TextureHandle handle,
     m_abandoned.push_back(texture.pending);
   }
   texture.pending = pending;
+  ++m_textureEpoch;
   texture.pendingInfo = { width, height, channels };
   texture.pendingPixels = std::move(request.pixels);
   texture.changed = false;
@@ -956,6 +962,7 @@ GuestRecordingBackend::DestroyTexture(TextureHandle handle)
   }
   release(texture.id);
   m_textures.erase(handle.slot);
+  ++m_textureEpoch;
   return m_textureHandles.release(handle);
 }
 bool
@@ -983,6 +990,7 @@ GuestRecordingBackend::importTexture(GuestResourceId id)
   Texture texture;
   texture.id = id;
   m_textures.emplace(handle.slot, std::move(texture));
+  ++m_textureEpoch;
   return handle;
 }
 void
@@ -1013,6 +1021,7 @@ GuestRecordingBackend::pump()
     Texture& texture = entry.second;
     if (texture.pending != 0 && m_services.take(texture.pending, result)) {
       texture.pending = 0;
+      ++m_textureEpoch;
       if (result.status != GuestServiceStatus::Complete) {
         texture.pendingPixels.clear();
         texture.changed = false;

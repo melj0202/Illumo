@@ -47,6 +47,9 @@ public:
 
   void setTransform(const Transform2D& value);
   const Transform2D& getTransform() const { return transform; }
+  // The visible primitives' extent before the transform; the transform's
+  // scale and rotation pivot on it.
+  Rect2 contentBounds() const;
   // Optional top-left logical-pixel clip. Pixel-space geometry outside the
   // clip is culled before upload; partial geometry is clipped by scissor.
   void setPixelClipRect(const Rect2& value);
@@ -192,6 +195,12 @@ public:
   bool setItem(size_t index, const SpritePrimitive& value);
   bool setItem(size_t index, const TextPrimitive& value);
   void removeItems(size_t first, size_t count);
+  // Inserts `count` hidden placeholder items before `index` (at most
+  // itemCount()), for setItem to fill; later items keep their order.
+  bool insertItems(size_t index, size_t count);
+  // Advances on every change to items or properties (anything that marks the
+  // geometry dirty), so an owner can tell an untouched visual cheaply.
+  uint64_t editRevision() const { return editCount; }
 
   // Scales every vertex alpha; 1 leaves geometry bit-identical.
   void setOpacity(float value);
@@ -307,6 +316,7 @@ private:
   bool proxied = false;
   float opacity = 1.0f;
   uint64_t geometryRevision = 0;
+  uint64_t editCount = 0;
   // Retained scratch: cleared text strings reused by addText (bounded) and
   // the draw-ordered item list rebuilt with the geometry.
   static constexpr size_t kSpareTextContent = 256;
@@ -333,7 +343,11 @@ private:
   unsigned int gpuQuadCapacity = 0;
   unsigned int maxQuadCount;
 
-  void markDirty() { geometryDirty = true; }
+  void markDirty()
+  {
+    geometryDirty = true;
+    ++editCount;
+  }
   ColorRgba faded(ColorRgba color) const;
   template<typename Primitive>
   bool placeItem(size_t index,
@@ -354,7 +368,6 @@ private:
                         const Rect2& bounds,
                         const Transform2D& local) const;
   Point2 applyHostTransform(Point2 point, const Rect2& contentBounds) const;
-  Rect2 contentBounds() const;
   bool quadOutsideCullRect(Point2 p0, Point2 p1, Point2 p2, Point2 p3) const;
   bool pushShapeQuad(Point2 p0,
                      Point2 p1,

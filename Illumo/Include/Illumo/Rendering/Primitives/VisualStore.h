@@ -78,6 +78,7 @@ public:
   Result setItem(VisualId id, size_t index, const SpritePrimitive& item);
   Result setItem(VisualId id, size_t index, const TextPrimitive& item);
   Result removeItems(VisualId id, size_t first, size_t count);
+  Result insertItems(VisualId id, size_t index, size_t count);
   Result clearItems(VisualId id);
 
   bool contains(VisualId id) const;
