@@ -3,6 +3,7 @@
 #include "EditorShortcuts.h"
 #include "EditorUiAtlas.h"
 #include "TestAccess.h"
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -122,7 +123,9 @@ struct EditorFixture
   InputManager input;
   Scene scene;
   IllumoContext context;
-  EditorScene module;
+  // The editor runs as its program runs it, through a director.
+  SceneDirector director;
+  EditorScene& module;
   bool started;
 
   EditorFixture()
@@ -138,7 +141,8 @@ struct EditorFixture
     , scene(&window, &camera)
     , context{ &scene,  &window, &console, &input,   &renderer,
                &assets, &env,    &camera,  &registry }
-    , module()
+    , director(context)
+    , module(director.emplace<EditorScene>("editor"))
     , started(false)
   {
     env.setVar("WinX", 1280);
@@ -146,14 +150,7 @@ struct EditorFixture
     env.setVar("fontSize", "13");
     mock.Initialize();
     seedShippedAtlas();
-    started = module.start(context);
-  }
-
-  ~EditorFixture()
-  {
-    if (started) {
-      module.stop();
-    }
+    started = director.switchTo("editor") && director.applyPending();
   }
 };
 
@@ -693,10 +690,12 @@ testFontSizeConfiguredFromEnvVars()
   Scene scene(&window, &camera);
   IllumoContext context{ &scene,  &window, &console, &input,   &renderer,
                          &assets, &env,    &camera,  &registry };
-  EditorScene module;
+  SceneDirector director(context);
+  EditorScene& module = director.emplace<EditorScene>("editor");
   mock.Initialize();
   seedShippedAtlas();
-  const bool started = module.start(context);
+  const bool started =
+    director.switchTo("editor") && director.applyPending();
   testTrue(g, started, "module started with fontSize 20");
 
   EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(module);
@@ -716,7 +715,7 @@ testFontSizeConfiguredFromEnvVars()
            std::abs(sceneGraphView->fontSize() - 20.0f) < 0.001f,
            "sceneGraphView fontSize 20");
 
-  module.stop();
+  director.stopAll();
 }
 
 static void
@@ -737,10 +736,12 @@ testFontSizeImmediateRuntimeChange()
   Scene scene(&window, &camera);
   IllumoContext context{ &scene,  &window, &console, &input,   &renderer,
                          &assets, &env,    &camera,  &registry };
-  EditorScene module;
+  SceneDirector director(context);
+  EditorScene& module = director.emplace<EditorScene>("editor");
   mock.Initialize();
   seedShippedAtlas();
-  const bool started = module.start(context);
+  const bool started =
+    director.switchTo("editor") && director.applyPending();
   testTrue(g, started, "module started");
 
   EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(module);
@@ -788,7 +789,7 @@ testFontSizeImmediateRuntimeChange()
            std::abs(tools->fontSize() - 16.0f) < 0.001f,
            "tools resized to 16 immediately");
 
-  module.stop();
+  director.stopAll();
 }
 
 static void
@@ -1836,6 +1837,38 @@ registerEditorSceneTests(IllumoTestRegistry& registry)
     testTrue(g,
              !graph.isNodeValid(retained),
              "deletion invalidates the original generational handle");
+    return g.failures;
+  });
+  registry.add("IllEd.Module.DocumentIsContent", []() {
+    g = {};
+    testSection("EditorScene: the document edits the scene's content");
+    EditorFixture fixture;
+    testTrue(g, fixture.started, "editor starts");
+    EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
+    SceneInstance* content = &fixture.module.content();
+    testTrue(g,
+             &document.scene() == content,
+             "the document borrows the scene's content");
+    EditorSceneTestAccess::createNode(fixture.module,
+                                       EditorCommand::CreateCube);
+    testTrue(g, content->nodeCount() == 1, "edits land in the content");
+    const std::string saved = document.encode();
+    const uint64_t generation = document.sceneGeneration();
+    std::string error;
+    testTrue(g,
+             !document.loadFromText("not a scene", &error) &&
+               content->nodeCount() == 1 &&
+               document.sceneGeneration() == generation,
+             "a failed load leaves the content as it was");
+    document.clear();
+    testTrue(g,
+             &document.scene() == content && content->nodeCount() == 0 &&
+               document.sceneGeneration() > generation,
+             "clearing empties the same content");
+    testTrue(g,
+             document.loadFromText(saved, &error) &&
+               &document.scene() == content && content->nodeCount() == 1,
+             "loading replaces the content in place");
     return g.failures;
   });
   registry.add("IllEd.Module.PropertyCommands", []() {

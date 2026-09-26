@@ -21,8 +21,12 @@ oracle suite.
 
 - Depend only on `Illumo::Illumo` and `Illumo::Content`. Do not link Game,
   Rulesets, or `IllumoGameCore`.
-- `EditorDocument` owns one `SceneInstance` (Content) plus `EditorHistory`
-  and is the only mutation gateway. Every edit is recorded as a patch
+- `EditorDocument` edits one `SceneInstance` (Content) plus `EditorHistory`
+  and is the only mutation gateway. In the editor the instance is
+  `EditorScene`'s content, which the document borrows (`attach`, D-E31);
+  standalone documents (tools, tests) own one. Loads, clears and rebases
+  replace the content in place, since `SceneInstance::load` leaves the scene
+  untouched on failure. Every edit is recorded as a patch
   command (node before/after states plus optional scene settings); dirty
   means the history cursor differs from the saved one, so camera and other
   `SceneEditorState` changes never dirty. Drags share a merge key so one drag

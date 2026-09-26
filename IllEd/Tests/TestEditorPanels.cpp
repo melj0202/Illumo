@@ -1,6 +1,7 @@
 #include "EditorScene.h"
 #include "IllEdPlatform.h"
 #include "TestAccess.h"
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -43,7 +44,8 @@ struct PanelFixture
   Scene scene;
   FakePanelSurfaces surfaces;
   IllumoContext context;
-  EditorScene module;
+  SceneDirector director;
+  EditorScene& module;
   bool started;
 
   explicit PanelFixture(const std::string& layout = {})
@@ -60,7 +62,8 @@ struct PanelFixture
     , surfaces(&window, &camera)
     , context{ &scene,  &window, &console, &input,   &renderer,
                &assets, &env,    &camera,  &registry }
-    , module()
+    , director(context)
+    , module(director.emplace<EditorScene>("editor"))
     , started(false)
   {
     env.setVar("fontSize", "13");
@@ -69,14 +72,7 @@ struct PanelFixture
     }
     mock.Initialize();
     context.panelSurfaces = &surfaces;
-    started = module.start(context);
-  }
-
-  ~PanelFixture()
-  {
-    if (started) {
-      module.stop();
-    }
+    started = director.switchTo("editor") && director.applyPending();
   }
 
   // One host exchange: pending windows open, then the editor runs a frame.

@@ -35,7 +35,8 @@ shapeLabel(ScenePrimitiveShape shape)
 }
 
 EditorDocument::EditorDocument()
-  : m_scene(makeScene())
+  : m_owned(makeScene())
+  , m_scene(m_owned.get())
 {
 }
 
@@ -56,14 +57,35 @@ EditorDocument::makeScene() const
 }
 
 void
+EditorDocument::attach(SceneInstance& scene)
+{
+  if (&scene == m_scene) {
+    return;
+  }
+  std::string error;
+  if (!scene.load(m_scene->document(), m_scene->packageRoot(), error)) {
+    Logger::LogWarning("The document could not move into the editor scene "
+                       "and starts empty: " +
+                       error);
+    scene.load(SceneDocument{}, kLocalPackageRoot, error);
+  }
+  m_scene = &scene;
+  m_owned.reset();
+  ++m_sceneGeneration;
+}
+
+void
 EditorDocument::setAssetManager(AssetManager* assets)
 {
   if (assets == m_assets) {
     return;
   }
+  m_assets = assets;
+  if (!m_owned) {
+    return;
+  }
   const SceneDocument current = m_scene->document();
   const std::string root(m_scene->packageRoot());
-  m_assets = assets;
   std::unique_ptr<SceneInstance> scene = makeScene();
   std::string ignored;
   if (!scene->load(current, root, ignored)) {
@@ -71,7 +93,8 @@ EditorDocument::setAssetManager(AssetManager* assets)
                        "manager and is now empty: " +
                        ignored);
   }
-  m_scene = std::move(scene);
+  m_owned = std::move(scene);
+  m_scene = m_owned.get();
   ++m_sceneGeneration;
 }
 
@@ -81,11 +104,10 @@ EditorDocument::rebase(const std::string& packageRoot)
   if (packageRoot.empty() || packageRoot == m_scene->packageRoot()) {
     return;
   }
+  // A failed load leaves the scene as it was.
   const SceneDocument current = m_scene->document();
-  std::unique_ptr<SceneInstance> scene = makeScene();
   std::string error;
-  if (scene->load(current, packageRoot, error)) {
-    m_scene = std::move(scene);
+  if (m_scene->load(current, packageRoot, error)) {
     ++m_sceneGeneration;
     Logger::LogTrace("Scene assets now resolve against " + packageRoot);
   } else {
@@ -112,7 +134,8 @@ EditorDocument::setRenderWorld(IRenderWorld* world)
 void
 EditorDocument::clear()
 {
-  m_scene = makeScene();
+  std::string ignored;
+  m_scene->load(SceneDocument{}, kLocalPackageRoot, ignored);
   ++m_sceneGeneration;
   m_history.clear();
   m_savedUid = 0;
@@ -133,17 +156,16 @@ EditorDocument::loadFromText(const std::string& text,
     }
     return false;
   }
-  std::unique_ptr<SceneInstance> scene = makeScene();
-  if (!scene->load(document,
-                   packageRoot.empty() ? std::string(kLocalPackageRoot)
-                                       : packageRoot,
-                   message)) {
+  // A failed load leaves the scene as it was.
+  if (!m_scene->load(document,
+                     packageRoot.empty() ? std::string(kLocalPackageRoot)
+                                         : packageRoot,
+                     message)) {
     if (error != nullptr) {
       *error = message;
     }
     return false;
   }
-  m_scene = std::move(scene);
   ++m_sceneGeneration;
   m_history.clear();
   m_savedUid = 0;

@@ -14,7 +14,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 | M3 | done | Frame v8 `SelectWorld`, `ShowWorld`, `DestroyWorld`; `GuestSceneWorlds` |
 | M4 | done | M4a scenes and home zoom; M4b kept canvas and Resume row; M4c shared settings |
 | M5 | done | `RuntimeShell`, `WasmProgram`, `DebugOverlay`; engine frame phases; modules deleted |
-| M6 | not started | Leftovers, template, optional `Scene` rename |
+| M6 | in progress | M6a IllEd document borrows `content()`; template and `Scene` rename next |
 | M7 | not started | Optional crossfade |
 | M8 | not started | Decisions and documentation |
 
@@ -302,3 +302,16 @@ returns nothing outside `docs/history` and archives.
   - `Templates/SpinningCube` still implements `IModule`; nothing in the
     workspace builds it, and M6 converts it.
   - Full suite 674 of 674.
+- 2026-09-26, M6a:
+  - IllEd's `EditorDocument` now edits `EditorScene::content()`: `attach`
+    moves the document into it at start, and the scene asks for pick proxies
+    (`contentOptions`).
+  - Loads, clears and rebases now replace the content in place instead of
+    swapping in a new instance. `SceneInstance::load` already leaves the scene
+    untouched on failure, so a failed open still keeps the old document.
+  - Standalone documents (tools, tests, reloading a saved file) own an
+    instance as before.
+  - IllEd's fixtures run the editor through a `SceneDirector`, like the
+    viewer's.
+  - New test: `IllEd.Module.DocumentIsContent`. IllEd renders as at M5.
+  - Full suite 675 of 675.

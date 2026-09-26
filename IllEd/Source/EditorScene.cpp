@@ -45,6 +45,14 @@ EditorScene::EditorScene(std::string initialScenePath)
 
 EditorScene::~EditorScene() = default;
 
+SceneInstanceOptions
+EditorScene::contentOptions() const
+{
+  SceneInstanceOptions options;
+  options.pickProxies = true;
+  return options;
+}
+
 bool
 EditorScene::start(IllumoContext& startContext)
 {
@@ -83,9 +91,12 @@ EditorScene::start(IllumoContext& startContext)
                          " is unavailable; panels draw without icons");
     }
   }
+  // The document edits this scene's content, which the director bound to the
+  // renderer and this scene's world.
+  m_document.attach(content());
   m_document.setAssetManager(ic->assetManager);
   m_document.setRenderer(ic->renderer);
-  m_document.setRenderWorld(ic->renderWorld);
+  m_document.setRenderWorld(world());
   // New documents belong to the mounted project, when there is one.
   m_document.rebase(documentRoot({}));
   m_grid = std::make_unique<MeshVisual>();

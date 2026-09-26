@@ -55,6 +55,8 @@ public:
   void dispatch(Scene& frame) override;
   void stop() override;
   bool closeRequested() override;
+  // The edited document is this scene's content, which picks through proxies.
+  SceneInstanceOptions contentOptions() const override;
   EditorSceneDetail sceneDetail() const;
 
 private:
