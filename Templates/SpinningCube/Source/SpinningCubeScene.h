@@ -1,27 +1,31 @@
 #pragma once
 
-#include <Illumo/Engine/IModule.h>
+#include <Illumo/Content/ProgramScene.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <array>
 #include <memory>
 
-struct IllumoContext;
-
-class SpinningCubeModule : public IModule
+// @PROJECT_NAME@'s one scene: a lit cube spinning over a reference grid. The
+// program (Source/Wasm/SpinningCubeProgram.cpp) adds it to its SceneDirector;
+// a program with more screens adds more scenes and switches between them.
+// The native tests run it through a director too.
+class SpinningCubeScene final : public ProgramScene
 {
 public:
-  SpinningCubeModule();
-  ~SpinningCubeModule() override;
+  SpinningCubeScene();
+  ~SpinningCubeScene() override;
 
-  SpinningCubeModule(const SpinningCubeModule&) = delete;
-  SpinningCubeModule& operator=(const SpinningCubeModule&) = delete;
-  SpinningCubeModule(SpinningCubeModule&&) = delete;
-  SpinningCubeModule& operator=(SpinningCubeModule&&) = delete;
+  SpinningCubeScene(const SpinningCubeScene&) = delete;
+  SpinningCubeScene& operator=(const SpinningCubeScene&) = delete;
+  SpinningCubeScene(SpinningCubeScene&&) = delete;
+  SpinningCubeScene& operator=(SpinningCubeScene&&) = delete;
 
-  bool Start(IllumoContext* context) override;
-  void Update(double dt) override;
-  void DispatchDrawables(Scene* scene) override;
-  void Exit() override;
+  bool start(IllumoContext& context) override;
+  // Registers the scene's console commands (cube_speed).
+  void enter() override;
+  void update(double dt) override;
+  void dispatch(Scene& frame) override;
+  void stop() override;
 
   float rotationAngle() const { return m_rotationAngle; }
   float rotationSpeed() const { return m_rotationSpeed; }

@@ -43,7 +43,8 @@ class TestProjectCreation(unittest.TestCase):
                     [cmake, "-S", str(dest), "-B", str(build), "-G", "Ninja",
                      "-DCMAKE_BUILD_TYPE=Debug", "-DCMAKE_C_COMPILER=clang",
                      "-DCMAKE_CXX_COMPILER=clang++", "-DILLUMO_ENABLE_COVERAGE=ON",
-                     "-DILLUMO_ENABLE_CLANG_TIDY=OFF"],
+                     "-DILLUMO_ENABLE_CLANG_TIDY=OFF",
+                     "-DILLUMO_BUILD_WASM_RUNTIME=OFF"],
                     text=True, capture_output=True, timeout=120,
                 )
                 self.assertEqual(configured.returncode, 0, configured.stdout + configured.stderr)
@@ -106,8 +107,13 @@ class TestProjectCreation(unittest.TestCase):
         create_project(dest, project_name="GeneratedApp")
         self.assertFalse((dest / "docs").exists())
         build = dest / "build"
+        # The WASM programs build with this checkout's pinned toolchain when it
+        # has one; otherwise only the native libraries and tests build.
+        tools = ROOT_DIR / "build-wasm-tools"
+        wasm = ([f"-DILLUMO_WASM_TOOLS={tools}"] if tools.is_dir()
+                else ["-DILLUMO_BUILD_WASM_RUNTIME=OFF"])
         for command in (
-            [cmake, "-S", str(dest), "-B", str(build)],
+            [cmake, "-S", str(dest), "-B", str(build), *wasm],
             [cmake, "--build", str(build), "--config", "Release", "--parallel", "4"],
         ):
             result = subprocess.run(command, text=True, capture_output=True, timeout=1200)
@@ -126,7 +132,8 @@ class TestProjectCreation(unittest.TestCase):
                 representative = self.temp_dir / name
                 create_project(representative, project_name=name, include_debug_tools=False)
                 configured = subprocess.run(
-                    [cmake, "-S", str(representative), "-B", str(representative / "build")],
+                    [cmake, "-S", str(representative), "-B", str(representative / "build"),
+                     *wasm],
                     text=True, capture_output=True, timeout=120,
                 )
                 self.assertEqual(configured.returncode, 0, configured.stdout + configured.stderr)
@@ -216,7 +223,7 @@ class TestProjectCreation(unittest.TestCase):
         self.assertGreater(count, 0)
         self.assertTrue((target_dir / "CMakeLists.txt").is_file())
         self.assertTrue(
-            (target_dir / "Source" / "SpinningCubeModule.cpp").is_file()
+            (target_dir / "Source" / "SpinningCubeScene.cpp").is_file()
         )
 
         cmake_content = (target_dir / "CMakeLists.txt").read_text(
@@ -225,6 +232,16 @@ class TestProjectCreation(unittest.TestCase):
         self.assertIn("CustomCubeGame", cmake_content)
         self.assertNotIn("@PROJECT_NAME@", cmake_content)
         self.assertIn("cmake_minimum_required(VERSION 3.25)", cmake_content)
+        # The package id is the name in lower case, everywhere it appears.
+        manifest = json.loads((target_dir / "illumo.json").read_text())
+        self.assertEqual(manifest["id"], "customcubegame")
+        self.assertEqual(manifest["app"]["module"], "CustomCubeGame.wasm")
+        package = (target_dir / "PackageTargets.cmake").read_text(encoding="utf-8")
+        self.assertIn("illumo_stage_app(CustomCubeGamePackage customcubegame", package)
+        for path in target_dir.rglob("*"):
+            if path.is_file():
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("@PROJECT_", text, str(path))
 
     def test_create_standalone_project(self) -> None:
         dest = self.temp_dir / "NewProject"
@@ -262,18 +279,33 @@ class TestProjectCreation(unittest.TestCase):
         self.assertTrue((dest / "Illumo" / "Source" / "Engine" / "Application.cpp").is_file())
         self.assertTrue((dest / "Illumo" / "thirdparty" / "glfw-3.4").is_dir())
 
-        # Debug tools
-        self.assertTrue((dest / "IllEd" / "CMakeLists.txt").is_file())
-        self.assertTrue((dest / "IllEd" / "Source" / "EditorModule.cpp").is_file())
+        # The guest SDK and the WASM toolchain download
+        self.assertTrue((dest / "IllumoGuest" / "CMakeLists.txt").is_file())
+        self.assertTrue(
+            (dest / "IllumoGuest" / "Include" / "IllumoGuest" / "Program.h").is_file()
+        )
+        self.assertTrue((dest / "tools" / "bootstrap-wasm.ps1").is_file())
+        self.assertTrue((dest / "cmake" / "IllumoWasm.cmake").is_file())
 
-        # App folder with spinning cube starter
+        # Debug tools, a WASM program too
+        self.assertTrue((dest / "IllEd" / "CMakeLists.txt").is_file())
+        self.assertTrue((dest / "IllEd" / "Source" / "EditorScene.cpp").is_file())
+        self.assertTrue((dest / "IllEd" / "GuestTargets.cmake").is_file())
+        self.assertTrue((dest / "IllEd" / "PackageTargets.cmake").is_file())
+
+        # App folder with spinning cube starter, a WASM scene program
         app_dir = dest / "SpinningApp"
         self.assertTrue(app_dir.is_dir())
         self.assertTrue((app_dir / "CMakeLists.txt").is_file())
         self.assertTrue((app_dir / "envvars.json").is_file())
-        self.assertTrue((app_dir / "Source" / "SpinningCubeApplication.cpp").is_file())
-        self.assertTrue((app_dir / "Source" / "SpinningCubeModule.cpp").is_file())
-        self.assertTrue((app_dir / "Tests" / "TestSpinningCubeModule.cpp").is_file())
+        self.assertTrue((app_dir / "illumo.json").is_file())
+        self.assertTrue((app_dir / "GuestTargets.cmake").is_file())
+        self.assertTrue((app_dir / "PackageTargets.cmake").is_file())
+        self.assertTrue((app_dir / "Source" / "SpinningCubeScene.cpp").is_file())
+        self.assertTrue(
+            (app_dir / "Source" / "Wasm" / "SpinningCubeProgram.cpp").is_file()
+        )
+        self.assertTrue((app_dir / "Tests" / "TestSpinningCubeScene.cpp").is_file())
 
         # Check root CMake
         root_cmake = (dest / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -281,6 +313,8 @@ class TestProjectCreation(unittest.TestCase):
         self.assertIn("cmake_minimum_required(VERSION 3.25)", root_cmake)
         self.assertIn("add_subdirectory(SpinningApp)", root_cmake)
         self.assertIn("add_subdirectory(IllEd)", root_cmake)
+        self.assertIn("set(ILLUMO_PROGRAMS SpinningApp IllEd)", root_cmake)
+        self.assertIn("cmake/IllumoWasm.cmake", root_cmake)
 
     def test_create_without_debug_tools(self) -> None:
         dest = self.temp_dir / "MinimalProject"
@@ -293,6 +327,7 @@ class TestProjectCreation(unittest.TestCase):
         self.assertFalse((dest / "IllEd").exists())
         root_cmake = (dest / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertNotIn("add_subdirectory(IllEd)", root_cmake)
+        self.assertIn("set(ILLUMO_PROGRAMS MinimalApp)", root_cmake)
 
 
 if __name__ == "__main__":

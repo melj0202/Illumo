@@ -14,7 +14,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 | M3 | done | Frame v8 `SelectWorld`, `ShowWorld`, `DestroyWorld`; `GuestSceneWorlds` |
 | M4 | done | M4a scenes and home zoom; M4b kept canvas and Resume row; M4c shared settings |
 | M5 | done | `RuntimeShell`, `WasmProgram`, `DebugOverlay`; engine frame phases; modules deleted |
-| M6 | in progress | M6a IllEd document borrows `content()`; template and `Scene` rename next |
+| M6 | in progress | M6a IllEd document borrows `content()`; M6b template is a WASM scene program, WASM build names no product; `Scene` rename next |
 | M7 | not started | Optional crossfade |
 | M8 | not started | Decisions and documentation |
 
@@ -315,3 +315,29 @@ returns nothing outside `docs/history` and archives.
     viewer's.
   - New test: `IllEd.Module.DocumentIsContent`. IllEd renders as at M5.
   - Full suite 675 of 675.
+- 2026-09-26, M6b:
+  - `Templates/SpinningCube` is a WASM scene program (O2): a `GuestProgram`
+    whose director runs one `SpinningCubeScene`, with a scene-scoped
+    `cube_speed` command. The native tests drive the scene through a
+    director.
+  - The WASM build names no product any more; see design 6.8.
+  - `build.py` reads applications from each listed program. The generator
+    copies `IllumoGuest/` and `tools/bootstrap-wasm.ps1`, fills a new
+    `@PROJECT_ID@` token with the package id (the name in lower case), and
+    reserves the runtime's target names.
+  - Found while building a generated project:
+    - the generator skipped every directory named `archive`, including the
+      package reader's test fixture, so generated builds failed;
+    - the WASI toolchain file lost a custom `ILLUMO_WASM_TOOLS` inside
+      compiler checks, so only the default tool location ever worked.
+
+    Both are fixed.
+  - Verified end to end:
+    - a generated `CubeApp` workspace (with IllEd) configured against this
+      checkout's toolchain, built, and passed its suite, 439 of 439 including
+      the 5 `CubeApp.Scene.*` cases;
+    - `IllumoRuntime --app cubeapp` captured the spinning cube;
+    - a fresh generation matched that copy file for file.
+  - Here, every guest module was rebuilt clean from the moved files. Full
+    suite 675 of 675; the generator's tests 9 of 9 (2 opt-in skipped);
+    `build.py`'s tests pass apart from the one that needs a real console.

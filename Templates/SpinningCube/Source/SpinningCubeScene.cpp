@@ -1,4 +1,4 @@
-#include "SpinningCubeModule.h"
+#include "SpinningCubeScene.h"
 
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/Camera.h>
@@ -10,28 +10,19 @@
 #include <Illumo/Services/KeyCode.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <glm/gtc/matrix_transform.hpp>
+#include <string>
+#include <vector>
 
-SpinningCubeModule::SpinningCubeModule()
-  : ic(nullptr)
-  , m_cubeVisual(nullptr)
-  , m_gridVisual(nullptr)
-  , m_rotationAngle(0.0f)
-  , m_rotationSpeed(1.2f)
-  , m_paused(false)
-  , m_showGrid(true)
-{
-}
+SpinningCubeScene::SpinningCubeScene() = default;
 
-SpinningCubeModule::~SpinningCubeModule() = default;
+SpinningCubeScene::~SpinningCubeScene() = default;
 
 bool
-SpinningCubeModule::Start(IllumoContext* context)
+SpinningCubeScene::start(IllumoContext& context)
 {
-  ic = context;
-  if (ic == nullptr) {
-    return false;
-  }
+  ic = &context;
   m_keysDown.fill(false);
   m_keysBlocked.fill(false);
 
@@ -46,7 +37,8 @@ SpinningCubeModule::Start(IllumoContext* context)
     }
   }
 
-  // Setup 3D perspective camera looking at the cube center
+  // A 3D perspective camera looking at the cube's center. The director keeps
+  // this scene's camera while another scene is active.
   if (ic->camera != nullptr) {
     const glm::vec3 eye(0.0f, 1.8f, 3.8f);
     const glm::vec3 target(0.0f, 0.0f, 0.0f);
@@ -86,12 +78,40 @@ SpinningCubeModule::Start(IllumoContext* context)
       255,
       "Spinning Cube started. Space: Pause | R: Reset | G: Grid");
   }
-
   return true;
 }
 
 void
-SpinningCubeModule::Update(double dt)
+SpinningCubeScene::enter()
+{
+  // Scene commands exist only while the scene is active.
+  command(
+    "cube_speed",
+    [this](const std::vector<std::string>& arguments) {
+      if (ic == nullptr || ic->commandLine == nullptr) {
+        return;
+      }
+      if (arguments.empty()) {
+        ic->commandLine->logNormal("cube_speed = " +
+                                   std::to_string(m_rotationSpeed));
+        return;
+      }
+      const std::string& text = arguments.front();
+      char* end = nullptr;
+      const float speed = std::strtof(text.c_str(), &end);
+      if (end != text.c_str() + text.size() || text.empty() ||
+          !std::isfinite(speed) || speed < 0.0f) {
+        ic->commandLine->logNormal("cube_speed: give a speed of 0 or more");
+        return;
+      }
+      m_rotationSpeed = speed;
+    },
+    "cube_speed [radians per second]",
+    "Show or set the cube's rotation speed");
+}
+
+void
+SpinningCubeScene::update(double dt)
 {
   if (ic == nullptr) {
     return;
@@ -162,21 +182,18 @@ SpinningCubeModule::Update(double dt)
 }
 
 void
-SpinningCubeModule::DispatchDrawables(Scene* scene)
+SpinningCubeScene::dispatch(Scene& frame)
 {
-  if (scene == nullptr) {
-    return;
-  }
   if (m_showGrid && m_gridVisual != nullptr) {
-    scene->AddDrawable(m_gridVisual.get(), RenderLayerId::World);
+    frame.AddDrawable(m_gridVisual.get(), RenderLayerId::World);
   }
   if (m_cubeVisual != nullptr) {
-    scene->AddDrawable(m_cubeVisual.get(), RenderLayerId::World);
+    frame.AddDrawable(m_cubeVisual.get(), RenderLayerId::World);
   }
 }
 
 void
-SpinningCubeModule::Exit()
+SpinningCubeScene::stop()
 {
   m_cubeVisual.reset();
   m_gridVisual.reset();

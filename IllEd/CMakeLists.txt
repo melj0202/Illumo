@@ -39,8 +39,9 @@ target_include_directories(IllEdCore SYSTEM PRIVATE
 target_link_libraries(IllEdCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllEdCore)
 
-# IllEd ships only as the WASM package apps/illed (cmake/IllumoWasm.cmake),
-# played by IllumoRuntime. IllEdCore remains the native test oracle.
+# IllEd ships only as the WASM package apps/illed, played by IllumoRuntime:
+# GuestTargets.cmake builds its module and PackageTargets.cmake stages it.
+# IllEdCore remains the native test oracle.
 
 if(BUILD_TESTING)
   if(WIN32)

@@ -17,9 +17,9 @@ target_include_directories(IllMeshViewerCore SYSTEM PRIVATE
 target_link_libraries(IllMeshViewerCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllMeshViewerCore)
 
-# IllMeshViewer ships only as the WASM package apps/meshviewer
-# (cmake/IllumoWasm.cmake), played by IllumoRuntime. IllMeshViewerCore
-# remains the native test oracle.
+# IllMeshViewer ships only as the WASM package apps/meshviewer, played by
+# IllumoRuntime: GuestTargets.cmake builds its module and PackageTargets.cmake
+# stages it. IllMeshViewerCore remains the native test oracle.
 
 if(BUILD_TESTING)
   add_executable(IllMeshViewerTests

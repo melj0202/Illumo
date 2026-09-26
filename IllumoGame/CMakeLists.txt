@@ -46,8 +46,9 @@ target_link_libraries(IllumoGameCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllumoGameCore)
 
 # IllumoGame ships only as the IllumoGame.wasm package hosted by IllumoRuntime
-# (cmake/IllumoWasm.cmake). IllumoGameCore remains the native test oracle for
-# the same product sources; no native game executable is built.
+# (GuestTargets.cmake, PackageTargets.cmake). IllumoGameCore remains the
+# native test oracle for the same product sources; no native game executable
+# is built.
 
 if(BUILD_TESTING)
   add_executable(IllumoGameTests

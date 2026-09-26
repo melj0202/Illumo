@@ -9,13 +9,13 @@
 #include <string>
 
 void
-registerSpinningCubeModuleTests(IllumoTestRegistry& registry);
+registerSpinningCubeSceneTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
 {
   IllumoTestRegistry registry;
-  registerSpinningCubeModuleTests(registry);
+  registerSpinningCubeSceneTests(registry);
   return registry;
 }
 

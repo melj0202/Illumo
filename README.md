@@ -935,11 +935,17 @@ python tools/create_project.py <destination_path> --name MyGame
 This generates a turnkey standalone workspace:
 
 - `Illumo/`: engine sources (`Include/`, `Source/`, `Shader/`, `Assets/`,
-  `thirdparty/`, `TestSupport/`, `Tests/`, `cmake/`)
-- `IllEd/`: SceneGraph world editor
-- `<ApplicationName>/` (default `IllumoGame/`): starter template (a 3D lit
-  spinning cube with perspective camera, controls, configuration, and tests)
-- `cmake/`, `build.py`, `CMakeLists.txt`, `README.md`
+  `thirdparty/`, `TestSupport/`, `Tests/`, `cmake/`), IllumoRuntime included
+- `IllumoGuest/`: the guest SDK and WASI guest build
+- `IllEd/`: SceneGraph world editor (a WASM program)
+- `<ApplicationName>/` (default `IllumoGame/`): the starter template, a WASM
+  scene program (D-E31). Its `GuestProgram` adds one `SpinningCubeScene` (a
+  3D lit spinning cube with perspective camera, controls, configuration and a
+  scene console command) to its `SceneDirector`. `GuestTargets.cmake` builds
+  the module, `PackageTargets.cmake` stages `apps/<id>` (the name in lower
+  case), and the headless tests run the scene through a director.
+- `cmake/`, `tools/bootstrap-wasm.ps1`, `build.py`, `CMakeLists.txt` (which
+  lists the programs in `ILLUMO_PROGRAMS`), `README.md`
 
 Starter controls yield while the console is open. Keys held during capture
 must be released before they can control the cube again; animation
@@ -949,7 +955,7 @@ continues.
 - **R** — reset rotation angle to 0
 - **G** — toggle 3D reference grid
 - **Up / Down** — rotation speed
-- **Escape** — exit
+- **`cube_speed [value]`** — console command, while the cube scene is active
 
 Generated workspaces omit engine PDF sources, so
 `ILLUMO_BUILD_DOCUMENTATION` defaults off there. This repository defaults it
@@ -971,12 +977,13 @@ python -B -m unittest discover -s tools -p test_create_project.py
 Remove-Item Env:ILLUMO_TEST_GENERATED_BUILD
 ```
 
-To build and run the newly generated application:
+To build and run the newly generated application (Windows x64, where the
+pinned WASM toolchain runs):
 
 ```bash
 cd <destination_path>
-python build.py build
-python build.py run --app <ApplicationName>
+python build.py wasm-tools
+python build.py play --app <application id>
 python build.py test
 ```
 

@@ -74,24 +74,6 @@ illumo_add_guest(FileControlGuest Tests/FileControl.cpp)
 target_link_libraries(FileControlGuest PRIVATE IllumoGuestRendering)
 target_link_libraries(PresentationGuest PRIVATE IllumoGuestRendering)
 
-# Shared product algorithms; only the execution scheduler differs from native.
-# This target is a migration/parity target, not the shipping game entry point.
-add_library(CSimGuestDomain STATIC
-  ../IllumoGame/Source/Game/SparseCellGrid.cpp
-  ../IllumoGame/Source/Game/SparseWorkerPoolSerial.cpp
-  ../IllumoGame/Source/Game/CellPattern.cpp
-  ../IllumoGame/Source/Game/PatternCodec.cpp
-  ../IllumoGame/Source/Game/BuiltinPatterns.cpp
-  ../IllumoGame/Source/Game/IllumoCodecStreams.cpp
-  ../IllumoGame/Source/Rulesets/RuleSet.cpp
-  ../IllumoGame/Source/Rulesets/DataRuleSet.cpp
-  ../IllumoGame/Source/Rulesets/RuleSetRegistry.cpp)
-target_include_directories(CSimGuestDomain PUBLIC "${ILLUMO_ROOT}/IllumoGame/Source")
-target_include_directories(CSimGuestDomain SYSTEM PRIVATE
-  "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
-target_link_libraries(CSimGuestDomain PUBLIC IllumoGuestOptions)
-
 # Guest-side engine: the engine UI, scene graph and asset sources a guest-local
 # IllumoContext is composed from.
 # Engine UI and scene sources compile unchanged against the recording backend.
@@ -153,104 +135,10 @@ target_include_directories(IllumoGuestContent SYSTEM PRIVATE
   "${ILLUMO_ROOT}/Illumo/thirdparty")
 target_link_libraries(IllumoGuestContent PUBLIC IllumoGuestEngine)
 
-# IllumoGame itself: the complete product as a WASM package module. Native
-# IllumoGame sources are shared with the native test oracle; only the
-# platform adapter and serial runner are guest-specific.
-illumo_add_guest(IllumoGame
-  ../IllumoGame/Source/Wasm/GameApplication.cpp
-  ../IllumoGame/Source/Wasm/GuestPlatform.cpp
-  ../IllumoGame/Source/Wasm/CatalogBootstrap.cpp
-  ../IllumoGame/Source/Game/CanvasView.cpp
-  ../IllumoGame/Source/Game/CellClipboard.cpp
-  ../IllumoGame/Source/Game/CellContext.cpp
-  ../IllumoGame/Source/Game/CanvasScene.cpp
-  ../IllumoGame/Source/Game/ConfigurationMenu.cpp
-  ../IllumoGame/Source/Game/CSimScenes.cpp
-  ../IllumoGame/Source/Game/CSimSounds.cpp
-  ../IllumoGame/Source/Game/CSimTypeface.cpp
-  ../IllumoGame/Source/Game/Cursor.cpp
-  ../IllumoGame/Source/Game/ExitConfirmDialog.cpp
-  ../IllumoGame/Source/Game/IllumoGameConfig.cpp
-  ../IllumoGame/Source/Game/TitleScene.cpp
-  ../IllumoGame/Source/Game/MenuMotifs.cpp
-  ../IllumoGame/Source/Game/ModeBadge.cpp
-  ../IllumoGame/Source/Game/SoftwareCursor.cpp
-  ../IllumoGame/Source/Game/NewSimulationMenu.cpp
-  ../IllumoGame/Source/Game/PerformanceOverlay.cpp
-  ../IllumoGame/Source/Game/RuleCatalogOverlay.cpp
-  ../IllumoGame/Source/Game/RulesetWorkshopMenu.cpp
-  ../IllumoGame/Source/Game/SimulationRunnerGeneration.cpp
-  ../IllumoGame/Source/Game/SimulatorSettings.cpp
-  ../IllumoGame/Source/Wasm/SimulationLanes.cpp
-  ../IllumoGame/Source/Wasm/SimulationRunnerGuest.cpp)
-target_include_directories(IllumoGame SYSTEM PRIVATE
-  "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
-target_link_libraries(IllumoGame PRIVATE CSimGuestDomain IllumoGuestEngine IllumoGuestContent)
-
-# The compute worker store: CSW1 whole-world jobs (parity tests) and CSL1
-# simulation lanes (the game's generations).
-add_executable(CSimWorkerGuest
-  ../IllumoGame/Source/Wasm/SimulationLanes.cpp
-  ../IllumoGame/Source/Wasm/SimulationProtocol.cpp
-  ../IllumoGame/Source/Wasm/SimulationWorkerExports.cpp)
-set_target_properties(CSimWorkerGuest PROPERTIES SUFFIX ".wasm")
-target_link_libraries(CSimWorkerGuest PRIVATE CSimGuestDomain)
-target_include_directories(CSimWorkerGuest PRIVATE "${ILLUMO_ROOT}/Illumo/Include")
-target_link_options(CSimWorkerGuest PRIVATE
-  -Wl,--export=illumo_guest_describe -Wl,--export=illumo_guest_alloc
-  -Wl,--export=illumo_guest_free -Wl,--export=illumo_guest_job
-  -Wl,--export=illumo_guest_result_size)
-
-add_executable(CSimDomainGuest ../IllumoGame/Tests/Wasm/DomainGuest.cpp)
-set_target_properties(CSimDomainGuest PROPERTIES SUFFIX ".wasm")
-target_link_libraries(CSimDomainGuest PRIVATE CSimGuestDomain)
-target_link_options(CSimDomainGuest PRIVATE
-  -Wl,--export=domainInitialize -Wl,--export=domainCase
-  -Wl,--export=domainAdvance -Wl,--export=domainHash
-  -Wl,--export=domainSave -Wl,--export=domainSaveSize -Wl,--export=domainRestore
-  -Wl,--export=allocate -Wl,--export=release)
-
-# IllEd: the world editor as a WASM package module. Sources are shared with
-# the native IllEdCore test oracle; only the platform adapter is guest code.
-illumo_add_guest(IllEd
-  ../IllEd/Source/Wasm/EditorApplication.cpp
-  ../IllEd/Source/EditorAssetBrowser.cpp
-  ../IllEd/Source/EditorAssets.cpp
-  ../IllEd/Source/EditorClipboard.cpp
-  ../IllEd/Source/EditorConfirmDialog.cpp
-  ../IllEd/Source/EditorDocument.cpp
-  ../IllEd/Source/EditorGizmo.cpp
-  ../IllEd/Source/EditorHistory.cpp
-  ../IllEd/Source/EditorInspector.cpp
-  ../IllEd/Source/EditorScene.cpp
-  ../IllEd/Source/EditorSceneCommands.cpp
-  ../IllEd/Source/EditorScenePanels.cpp
-  ../IllEd/Source/EditorSceneViewport.cpp
-  ../IllEd/Source/EditorSceneGraphView.cpp
-  ../IllEd/Source/EditorSelection.cpp
-  ../IllEd/Source/EditorShortcuts.cpp
-  ../IllEd/Source/EditorToolbar.cpp
-  ../IllEd/Source/EditorToolsPanel.cpp
-  ../IllEd/Source/EditorUiAtlas.cpp
-  ../IllEd/Source/IllEdConfig.cpp)
-target_include_directories(IllEd PRIVATE "${ILLUMO_ROOT}/IllEd/Source")
-target_include_directories(IllEd SYSTEM PRIVATE
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
-target_link_libraries(IllEd PRIVATE IllumoGuestContent IllumoGuestEngine)
-
-# IllMeshViewer: the mesh viewer as a WASM package module, sharing its
-# sources with the native IllMeshViewerCore test oracle.
-illumo_add_guest(IllMeshViewer
-  ../IllMeshViewer/Source/Wasm/ViewerApplication.cpp
-  ../IllMeshViewer/Source/MeshViewerCamera.cpp
-  ../IllMeshViewer/Source/MeshViewerConfig.cpp
-  ../IllMeshViewer/Source/MeshViewerScene.cpp
-  ../IllMeshViewer/Source/MeshViewerScenePanels.cpp
-  ../IllMeshViewer/Source/MeshViewerPanels.cpp
-  ../IllMeshViewer/Source/MeshViewerUi.cpp)
-target_include_directories(IllMeshViewer PRIVATE
-  "${ILLUMO_ROOT}/IllMeshViewer/Source")
-target_include_directories(IllMeshViewer SYSTEM PRIVATE
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
-target_link_libraries(IllMeshViewer PRIVATE IllumoGuestContent IllumoGuestEngine)
+# The programs this workspace builds (the products here, or a generated
+# project's own): each directory's GuestTargets.cmake adds its modules with
+# illumo_add_guest. cmake/IllumoWasm.cmake passes their absolute paths.
+set(ILLUMO_PROGRAMS "" CACHE STRING "Program directories with a GuestTargets.cmake")
+foreach(_program IN LISTS ILLUMO_PROGRAMS)
+  include("${_program}/GuestTargets.cmake")
+endforeach()

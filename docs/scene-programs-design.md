@@ -450,6 +450,22 @@ scene's content.
 - `Templates/SpinningCube`: converted to a minimal WASM scene program, or
   deleted (O2).
 
+  *As built (M6b):* converted. A `GuestProgram` adds one `SpinningCubeScene`
+  with a scene command, and the native tests run it through a director.
+  Generated projects needed a WASM build that names no product, so the
+  products and the template now describe themselves:
+  - each program directory has a `GuestTargets.cmake`, which adds its modules
+    to the WASI guest build;
+  - each also has a `PackageTargets.cmake`, which stages the package and adds
+    its package tests;
+  - the root `CMakeLists.txt` lists the program directories in
+    `ILLUMO_PROGRAMS`;
+  - `cmake/IllumoWasm.cmake` and `IllumoGuest/CMakeLists.txt` hold only the
+    runtime, the SDK and its test guests;
+  - `build.py` finds applications through the same list.
+
+  The generator also copies `IllumoGuest/` and `tools/bootstrap-wasm.ps1`.
+
 ### 6.9 Ownership, lifetime, errors, threading
 
 - Scenes are main-thread objects, like `SceneInstance`.
