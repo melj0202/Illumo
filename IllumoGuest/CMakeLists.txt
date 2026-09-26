@@ -68,7 +68,8 @@ target_include_directories(IllumoGuestRendering SYSTEM PUBLIC "${_illumo_guest_m
 illumo_add_guest(PresentationGuest Examples/Presentation/Game.cpp)
 illumo_add_guest(JobControlGuest Examples/Presentation/JobControl.cpp)
 illumo_add_guest(SdkContractGuest Tests/SdkContract.cpp)
-target_link_libraries(SdkContractGuest PRIVATE IllumoGuestRendering)
+# The scene worlds contract needs the content library (SceneDirector).
+target_link_libraries(SdkContractGuest PRIVATE IllumoGuestRendering IllumoGuestContent)
 illumo_add_guest(FileControlGuest Tests/FileControl.cpp)
 target_link_libraries(FileControlGuest PRIVATE IllumoGuestRendering)
 target_link_libraries(PresentationGuest PRIVATE IllumoGuestRendering)
@@ -143,7 +144,8 @@ add_library(IllumoGuestContent STATIC
   ../Illumo/Source/Content/ScenePrimitiveMeshes.cpp
   ../Illumo/Source/Content/VirtualPath.cpp
   Source/Program.cpp
-  Source/SceneFetches.cpp)
+  Source/SceneFetches.cpp
+  Source/SceneWorlds.cpp)
 target_include_directories(IllumoGuestContent SYSTEM PRIVATE
   "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
   "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public"

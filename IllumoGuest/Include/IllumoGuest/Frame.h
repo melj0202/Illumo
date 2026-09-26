@@ -114,7 +114,15 @@ enum class GuestWorldOp : std::uint32_t
   Environment = 8,
   // Version 7: the world's sky, a cubemap texture (empty: no sky) and tint.
   // Id zero, like Environment.
-  Skybox = 9
+  Skybox = 9,
+  // Version 8: a guest may keep several worlds, one per scene. A frame's world
+  // operations target world 1 until SelectWorld names another (id nonzero),
+  // which the host creates on first use. ShowWorld picks the world that draws
+  // from now on (id zero: none); world 1 is shown until then. DestroyWorld
+  // releases a world and everything in it. A version 7 frame is world 1.
+  SelectWorld = 10,
+  ShowWorld = 11,
+  DestroyWorld = 12
 };
 
 struct GuestWorldMaterial
@@ -253,7 +261,7 @@ enum class GuestCompositionKind : std::uint32_t
   Visual = 1,
   // `count` of the target's batches from `first`.
   Batches = 2,
-  // The guest's host render world (main frame only).
+  // The guest's shown host render world (main frame only).
   World = 3
 };
 
@@ -342,9 +350,9 @@ struct GuestFrame
   // blend flag, retained host meshes and the cubemap skybox. Version 4 adds
   // in-place writes to dynamic retained meshes. Version 5 adds surface
   // windows. Version 6 adds host render world operations (HostRender).
-  // Version 7 adds host-retained visuals and compositions. The host accepts
-  // all seven.
-  static constexpr std::uint32_t Version = 7;
+  // Version 7 adds host-retained visuals and compositions. Version 8 adds
+  // several worlds per guest (one per scene). The host accepts all eight.
+  static constexpr std::uint32_t Version = 8;
   static constexpr std::uint32_t MaximumSurfaces = 8;
   static constexpr std::uint32_t MaximumSurfaceId = 0x7fffffffu;
   float width = 1280;
@@ -823,6 +831,9 @@ struct GuestFrame
         break;
       case GuestWorldOp::MaterialDestroy:
       case GuestWorldOp::InstanceDestroy:
+      case GuestWorldOp::SelectWorld:
+      case GuestWorldOp::ShowWorld:
+      case GuestWorldOp::DestroyWorld:
         break;
     }
   }
@@ -838,15 +849,19 @@ struct GuestFrame
     operation.id = reader.u32();
     if (!reader.valid() ||
         op < static_cast<std::uint32_t>(GuestWorldOp::MaterialCreate) ||
-        op > static_cast<std::uint32_t>(GuestWorldOp::Skybox) ||
+        op > static_cast<std::uint32_t>(GuestWorldOp::DestroyWorld) ||
         (op == static_cast<std::uint32_t>(GuestWorldOp::Skybox) &&
-         version < 7)) {
+         version < 7) ||
+        (op >= static_cast<std::uint32_t>(GuestWorldOp::SelectWorld) &&
+         version < 8)) {
       return false;
     }
     operation.op = static_cast<GuestWorldOp>(op);
+    // ShowWorld's id is a world or zero (none); the rest are fixed.
     const bool global = operation.op == GuestWorldOp::Environment ||
                         operation.op == GuestWorldOp::Skybox;
-    if (global != (operation.id == 0)) {
+    if (operation.op != GuestWorldOp::ShowWorld &&
+        global != (operation.id == 0)) {
       return false;
     }
     std::uint32_t flags = 0;
@@ -926,6 +941,9 @@ struct GuestFrame
                readFloats(reader, operation.tint.data(), 4);
       case GuestWorldOp::MaterialDestroy:
       case GuestWorldOp::InstanceDestroy:
+      case GuestWorldOp::SelectWorld:
+      case GuestWorldOp::ShowWorld:
+      case GuestWorldOp::DestroyWorld:
         return true;
     }
     return false;

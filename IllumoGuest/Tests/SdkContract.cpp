@@ -8,6 +8,7 @@
 #include <IllumoGuest/FontProvider.h>
 #include <IllumoGuest/InputProvider.h>
 #include <IllumoGuest/RenderWorld.h>
+#include <IllumoGuest/SceneWorlds.h>
 #include <IllumoGuest/SnapshotWindow.h>
 #include <algorithm>
 #include <array>
@@ -606,8 +607,75 @@ renderWorldContract()
   backend.Shutdown();
 }
 
-// Frame schema v7: GameVisuals travel as host visuals placed by a
-// composition. Only changes travel, a dropped frame's changes are sent again,
+// Frame schema v8: each scene's world travels behind a SelectWorld naming
+// it. Only worlds with something to send appear, the active world is shown,
+// and a destroyed world is released (or forgotten, if the host never saw it).
+static void
+sceneWorldsContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  GuestSceneWorlds worlds(backend);
+  std::vector<GuestWorldOperation> operations;
+  const auto take = [&](std::size_t limit) {
+    operations.clear();
+    worlds.takeOperations(operations, limit);
+  };
+  const auto is = [&](std::size_t index, GuestWorldOp op, std::uint32_t id) {
+    return index < operations.size() && operations[index].op == op &&
+           operations[index].id == id;
+  };
+
+  IRenderWorld* title = worlds.create();
+  IRenderWorld* canvas = worlds.create();
+  worlds.activate(title);
+  take(64);
+  require(operations.size() == 2 && is(0, GuestWorldOp::SelectWorld, 1) &&
+            is(1, GuestWorldOp::SelectWorld, 2),
+          "New worlds are announced; world 1 is already shown");
+  take(64);
+  require(operations.empty(), "Steady frames send no world operations");
+
+  require(canvas->createMaterial(5, RenderMaterialDesc{}),
+          "A kept scene's world takes operations");
+  worlds.activate(canvas);
+  take(64);
+  require(operations.size() == 3 && is(0, GuestWorldOp::SelectWorld, 2) &&
+            is(1, GuestWorldOp::MaterialCreate, 5) &&
+            is(2, GuestWorldOp::ShowWorld, 2),
+          "A world's operations follow its SelectWorld; the active world is "
+          "shown");
+
+  worlds.destroy(title);
+  IRenderWorld* unseen = worlds.create();
+  worlds.destroy(unseen);
+  take(64);
+  require(operations.size() == 1 && is(0, GuestWorldOp::DestroyWorld, 1) &&
+            worlds.worldCount() == 1,
+          "A destroyed world is released; one the host never saw is not "
+          "mentioned");
+
+  for (std::size_t count = worlds.worldCount();
+       count < GuestSceneWorlds::kWorlds;
+       ++count) {
+    require(worlds.create() != nullptr, "Worlds up to the limit are created");
+  }
+  require(worlds.create() == nullptr,
+          "A world beyond the limit is refused (its scene uses MeshVisuals)");
+  take(1);
+  require(operations.size() == 1 && is(0, GuestWorldOp::SelectWorld, 4),
+          "The per-frame quota keeps later announcements queued");
+  take(64);
+  require(operations.size() == GuestSceneWorlds::kWorlds - 2 &&
+            is(0, GuestWorldOp::SelectWorld, 5),
+          "They follow in the next frame");
+  backend.Shutdown();
+}
+
+// Frame schema v7: GameVisuals travel as host visuals placed by a// composition. Only changes travel, a dropped frame's changes are sent again,
 // and visuals that cannot travel record their own batches in painter order.
 static void
 visualProxyContract()
@@ -849,6 +917,7 @@ public:
     shadowCasterContract();
     frameLimitContract();
     renderWorldContract();
+    sceneWorldsContract();
     visualProxyContract();
     skyboxContract();
     return true;

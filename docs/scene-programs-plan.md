@@ -10,8 +10,8 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 |---|---|---|
 | M0 | done | Baseline in design section 13; `@begin` bench directive |
 | M1 | done | `ProgramScene`, `SceneDirector` in `Illumo::Content`; 7 tests |
-| M2 | done, awaiting review | `GuestProgram`; viewer and IllEd are scenes; CSim through a temporary adapter |
-| M3 | not started | Frame schema v8: a world per scene |
+| M2 | done, `a3d55795` | `GuestProgram`; viewer and IllEd are scenes; CSim through a temporary adapter |
+| M3 | done | Frame v8 `SelectWorld`, `ShowWorld`, `DestroyWorld`; `GuestSceneWorlds` |
 | M4 | not started | CSim: `CSimProgram`, `TitleScene`, `CanvasScene` |
 | M5 | not started | Host: modules removed |
 | M6 | not started | Leftovers, template, optional `Scene` rename |
@@ -89,10 +89,10 @@ owner review.**
 Objective: design 6.5.
 
 - `IllumoGuest/Frame.h` v8:
-  - `SelectWorld`, `DestroyWorld` and `SetWorldCamera` world operations;
-  - the `World` composition entry names a world;
-  - `GuestFrameLimits::worlds = 8`;
-  - v7 decoding kept.
+  - `SelectWorld`, `ShowWorld` and `DestroyWorld` world operations (a camera
+    per world moved to M7: only the shown world draws, with the frame camera);
+  - at most 8 worlds per guest;
+  - v7 decoding kept (world 1, shown).
 - Host (`WasmFrameRenderer`, `WasmVisuals` world path, `RenderWorld`):
   - worlds keyed by id per guest, with leases per world;
   - each world drawn with its own camera;
@@ -213,3 +213,11 @@ returns nothing outside `docs/history` and archives.
     new, open and undo. Scheduled with M6.
   - The native viewer and IllEd definitions were deleted early.
   - Full suite 679 of 679. Stopped for owner review.
+- 2026-09-26: owner reviewed M2 and decided a new canvas opens at zoom 0.5 (what
+  players saw through the inherited title camera); `CanvasScene` sets it
+  explicitly in M4, `LaunchDirect` included. Continue with M3.
+- 2026-09-26, M3: frame v8 world addressing. `ShowWorld` replaced the planned
+  per-world `World` composition entry and `SetWorldCamera`. Only the active
+  world ever draws, with the frame camera, so a camera per world waits for
+  crossfades (M7). Every scene of every program now has its own host world.
+  Full suite 681 of 681.

@@ -238,9 +238,10 @@ GuestProgram::start(std::span<const std::byte> startup)
   m_audio.setGranted(granted(GuestCapability::Audio));
   m_context.audio = granted(GuestCapability::Audio) ? &m_audio : nullptr;
   if (granted(GuestCapability::HostRender)) {
-    m_renderWorld = std::make_unique<GuestRenderWorld>(m_backend);
+    m_worlds = std::make_unique<GuestSceneWorlds>(m_backend);
   }
-  m_context.renderWorld = m_renderWorld.get();
+  // Scenes get their worlds as they start (startScenes).
+  m_context.renderWorld = nullptr;
   Font::getDefaultFont();
   m_settings.load();
   return true;
@@ -322,8 +323,8 @@ GuestProgram::recordFrame(GuestFrame& output)
 {
   const std::array<int, 2> dimensions = m_window.getWindowDimensions();
   try {
-    if (m_renderWorld) {
-      m_renderWorld->beginFrame();
+    if (m_worlds) {
+      m_worlds->beginFrame();
     }
     m_renderer.BeginFrame();
     m_backend.setFrame(static_cast<float>(dimensions[0]),
@@ -357,8 +358,8 @@ GuestProgram::recordFrame(GuestFrame& output)
     // Only a frame that will be delivered takes world operations, in what
     // the visual operations leave of the shared quota; a dropped frame
     // leaves them queued for the next one. Its visual changes are confirmed.
-    if (m_renderWorld) {
-      m_renderWorld->takeOperations(output.worldOperations,
+    if (m_worlds) {
+      m_worlds->takeOperations(output.worldOperations,
                                     GuestFrameLimits{}.worldOperations -
                                       output.visualOperations.size());
     }
@@ -423,24 +424,24 @@ GuestProgram::startScenes()
   m_scene.ResetDefaultPasses();
   m_scene.ClearDrawables();
   // Settings are loaded by now. hostRenderWorld=0 keeps scenes on
-  // MeshVisuals, for comparison captures and as a rollback switch.
+  // MeshVisuals, for comparison captures and as a rollback switch; skies
+  // follow the same switch.
   const EnvVar& hostWorld = m_settings.getVar("hostRenderWorld");
-  m_context.renderWorld =
-    hostWorld.value.empty() || hostWorld.valueAsDouble != 0.0
-      ? m_renderWorld.get()
-      : nullptr;
-  // Skies follow the same switch.
-  m_backend.setRenderWorld(
-    m_context.renderWorld != nullptr ? m_renderWorld.get() : nullptr);
+  const bool sceneWorlds =
+    m_worlds != nullptr &&
+    (hostWorld.value.empty() || hostWorld.valueAsDouble != 0.0);
+  m_context.renderWorld = nullptr;
+  m_backend.setRenderWorld(nullptr);
   // hostVisuals=0 keeps GameVisuals recording their own batches, likewise.
   const EnvVar& hostVisuals = m_settings.getVar("hostVisuals");
   m_backend.setVisuals(
-    m_renderWorld != nullptr &&
+    m_worlds != nullptr &&
       (hostVisuals.value.empty() || hostVisuals.valueAsDouble != 0.0),
-    m_renderWorld != nullptr);
-  // Every scene starts from this camera and shares this world until scenes
-  // get worlds of their own (frame schema v8).
-  m_scenes = std::make_unique<SceneDirector>(m_context);
+    m_worlds != nullptr);
+  // Every scene starts from this camera, and with HostRender each gets a
+  // host render world of its own (frame schema v8).
+  m_scenes = std::make_unique<SceneDirector>(
+    m_context, sceneWorlds ? m_worlds.get() : nullptr);
   m_context.scenes = m_scenes.get();
   bool created = false;
   try {

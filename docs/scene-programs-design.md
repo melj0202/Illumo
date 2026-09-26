@@ -302,34 +302,46 @@ program start.
 ### 6.5 Content and render worlds: frame schema v8
 
 A kept scene must neither draw nor lose its host objects, so each scene gets
-its own world on the host.
+its own world on the host. As built in M3:
 
-- **World addressing:** a new world operation `SelectWorld(worldId)` sets the
-  target of the world operations after it in the frame. Worlds are created
-  implicitly on first selection and destroyed with `DestroyWorld(worldId)`.
-  Material and instance ids stay unique across a guest's worlds, so a lease
-  names one object.
-- **Camera per world:** `SetWorldCamera(matrix)` stores a camera with the
-  selected world. The frame-level camera (v2) stays for world-layer batches.
-- **Composition:** the `World` composition entry uses `first` as a world id
-  (v7 ignored it; v8 requires a live world). The host draws that world with
-  its own camera.
-- **Limits:** at most 8 worlds per guest (`GuestFrameLimits::worlds`). An
-  undrawn world costs host memory (materials, instances, recorded lists) and
-  nothing per frame.
-- **Guest side:** `GuestRenderWorld` becomes a per-scene object sharing the
-  backend's operation queue. The director tells the backend which world is
-  active, and the recorder composes only the active world. A kept world's
-  queued operations are flushed before the switch.
-- **Compatibility:** the host keeps decoding v7 frames as "world 1, frame
-  camera", so an older package keeps working until it is rebuilt. Guests
-  built from this repo emit v8.
-- **Rollback:** `hostRenderWorld=0` still returns scenes to `MeshVisual`s.
+- **World addressing:** three world operations.
+  - `SelectWorld(id)`: the world operations after it in the frame target world
+    `id`, which the host creates on first selection.
+  - `ShowWorld(id)`: picks the world that draws from now on (id 0: none).
+  - `DestroyWorld(id)`: releases a world and everything in it.
+
+  A frame's operations target world 1 until a `SelectWorld`. World 1 exists
+  from the start and is shown until a `ShowWorld`, so a version 7 frame is
+  exactly "world 1, shown".
+- **Ids:** material and instance ids are per world. Operations on a world that
+  does not exist, or `ShowWorld` of an unknown world, fail the frame, as other
+  invalid operations do.
+- **Limits:** at most 8 worlds per guest (`kWorlds` on both sides). The
+  instance and material ceilings are shared by all of a guest's worlds. An
+  undrawn world costs host memory and nothing per frame.
+- **Camera:** the composition's `World` entry, and the World layer without a
+  composition, draw the shown world with the frame camera. Only the active
+  scene's world is ever shown, so no camera per world is needed; that belongs
+  to crossfades (O4, M7).
+- **Guest side:** `GuestSceneWorlds` (`IllumoGuest/SceneWorlds.h`) implements
+  `ISceneWorlds`. It gives each scene a `GuestRenderWorld` and merges them into
+  one stream, in this order:
+  1. destroyed worlds first;
+  2. then each world with something to send, behind its `SelectWorld` (steady
+     frames send nothing);
+  3. then a `ShowWorld` when the active scene's world changed and exists on the
+     host.
+
+  World ids are never reused and start at 1. The active world also receives
+  the recorder's sky. A scene started beyond the limit gets no world and draws
+  its lit meshes as `MeshVisual`s.
+- **Compatibility:** the host keeps decoding v7 frames as world 1. Guests built
+  from this repo emit v8.
+- **Rollback:** `hostRenderWorld=0` still gives scenes no world.
 
 The alternative (one world, where scenes hide their instances when left)
 needs no ABI change. It costs a visibility sweep per switch and rules out
 drawing two scenes' worlds at once (O5).
-
 ### 6.6 Input, commands and `IllumoContext`
 
 - **Input:** only the program's pre-scene UI and the active scene see input.
@@ -467,7 +479,7 @@ These are summarised here; the tracker has the detail.
 | M0 | Baseline: transition timings, memory, allocation gates, bench medians; commit or shelve the open host-render-world work; new branch. |
 | M1 | Engine `ProgramScene` and `SceneDirector`, with native tests (lifecycle, keep and resume, failed start falls back, input drain, command withdrawal). |
 | M2 | Guest SDK `GuestProgram` over the director; IllMeshViewer and IllEd ported (one scene each). `GuestModuleApplication` removed. |
-| M3 | Frame schema v8 world addressing and per-world camera; per-scene `GuestRenderWorld`; host worlds per guest; v7 decode kept. |
+| M3 | Frame schema v8 world addressing (`SelectWorld`, `ShowWorld`, `DestroyWorld`); per-scene `GuestRenderWorld`; host worlds per guest; v7 decode kept. |
 | M4 | CSim: `CSimProgram`, `TitleScene`, `CanvasScene`, one Settings menu, kept canvas, runner parking; test fixtures moved off mock module hosts. |
 | M5 | Host: `WasmProgram`, `DebugOverlay`, `RuntimeShell`; `IModule`, `IModuleHost` and the module registry deleted; `TestIllumoHost` rewritten. |
 | M6 | Leftovers: native product definitions, SpinningCube (O2), the engine `Scene` rename (O1) if accepted. |
@@ -619,3 +631,37 @@ off, uncapped), CSim storage with the frame cap off.
   - Both transitions still work. The worst frames are 5.6 ms entering and
     6.1 ms returning, against 5.1-5.8 ms at M0.
 - Full Release suite 679 of 679, allocation gates included.
+
+### M3 (2026-09-26, branch `scene-programs`)
+
+- **Frame schema v8:** `SelectWorld`, `ShowWorld` and `DestroyWorld` (section
+  6.5).
+- **Host:** `WasmFrameRenderer` keeps a list of worlds, each with its own
+  instances, material users and sky, and plans a frame's operations per world
+  before applying any. Shadows, compositions and the World layer use the
+  shown world.
+- **Guest:** `GuestSceneWorlds` gives every scene of every program its own
+  world through the director. IllEd and IllMeshViewer have one world each.
+  CSim's title and canvas have one each, and a released module scene's world
+  is destroyed on the host.
+- **New tests:**
+  - `Illumo.Wasm.WorldAddressingValidation`: round trip; world zero and v7
+    addressing denied.
+  - `Illumo.Wasm.WorldsPerScene`:
+    - hidden worlds do not draw, and each world has its own ids;
+    - unknown worlds, operations on a destroyed world and a ninth world are
+      denied;
+    - destroying the shown world shows none.
+  - SDK `sceneWorldsContract`: stream shape, silent steady frames, destroys,
+    the limit and the quota.
+- **IllMeshViewer, `.ilsc` cubes, 1,500 frames:**
+  - 500 cubes: 1,449 FPS, guest frame 0.10 ms, 280 B per frame, one batch.
+  - 2,000 cubes: 619-648 FPS over three runs, guest frame 0.38 ms.
+  - All instances draw, and steady frames carry no world operations.
+  - This is the new viewer reference: the M4 figures were taken before
+    M5-M9 and the UI work.
+- **Parity:**
+  - IllEd matches M0 except the status bar's pointer coordinates.
+  - CSim's paused canvas matches M0 as at M2, and the return to the title
+    works.
+- Full Release suite 681 of 681.

@@ -1662,6 +1662,7 @@ main(int argc, char** argv)
               "RetainedResources\nIllumo.Wasm.AudioServiceDecoder\nIllumo."
               "Wasm.AudioServices\nIllumo.Wasm.GuestAudio\nIllumo.Wasm."
               "WorldFrameValidation\nIllumo.Wasm.WorldOperations\nIllumo.Wasm."
+              "WorldAddressingValidation\nIllumo.Wasm.WorldsPerScene\nIllumo.Wasm."
               "VisualFrameValidation\nIllumo.Wasm.VisualOperations");
     return 0;
   }

@@ -225,7 +225,9 @@ struct WasmFrameRenderer::State
   ~State()
   {
     if (!lifetime.expired()) {
-      renderWorld->releaseResources();
+      for (const std::unique_ptr<HostWorld>& hosted : worlds) {
+        hosted->world->releaseResources();
+      }
       destroyPools(pools);
       for (const std::unique_ptr<Surface>& surface : surfaces) {
         destroyPools(surface->pools);
@@ -683,55 +685,143 @@ struct WasmFrameRenderer::State
     }
   }
 
-  // Frame schema v6: the guest's host render world. Each instance keeps its
-  // retained mesh alive, so a guest releasing a mesh never pulls geometry out
-  // from under instances that still draw it.
+  // Frame schema v6: the guest's host render worlds (v8: one per guest
+  // scene). Each instance keeps its retained mesh alive, so a guest releasing
+  // a mesh never pulls geometry out from under instances that still draw it.
   struct WorldInstance
   {
     std::uint32_t material = 0;
     std::shared_ptr<const RetainedMesh> mesh;
   };
+  // Instances and materials are bounded across all of a guest's worlds.
   static constexpr std::size_t kWorldInstances = 262144;
   static constexpr std::size_t kWorldMaterials = 4096;
+  static constexpr std::size_t kWorlds = 8;
 
-  // The effect of this frame's operations so far, over the live world.
+  struct HostWorld
+  {
+    std::uint32_t id = 0;
+    std::unique_ptr<RenderWorld> world = std::make_unique<RenderWorld>();
+    std::unordered_map<std::uint32_t, WorldInstance> instances;
+    std::unordered_map<std::uint32_t, std::size_t> materialUsers;
+    // Keeps the sky's cubemap alive while the world shows it.
+    std::shared_ptr<const Texture> sky;
+  };
+
+  static std::vector<std::unique_ptr<HostWorld>> initialWorlds()
+  {
+    std::vector<std::unique_ptr<HostWorld>> result;
+    result.push_back(std::make_unique<HostWorld>());
+    result.back()->id = 1;
+    return result;
+  }
+  HostWorld* findWorld(std::uint32_t id) const
+  {
+    for (const std::unique_ptr<HostWorld>& hosted : worlds) {
+      if (hosted->id == id) {
+        return hosted.get();
+      }
+    }
+    return nullptr;
+  }
+  // The world compositions and the World layer draw, or nullptr.
+  HostWorld* shown() const
+  {
+    return shownWorld != 0 ? findWorld(shownWorld) : nullptr;
+  }
+  std::size_t instanceTotal() const
+  {
+    std::size_t total = 0;
+    for (const std::unique_ptr<HostWorld>& hosted : worlds) {
+      total += hosted->instances.size();
+    }
+    return total;
+  }
+  void releaseWorld(HostWorld& hosted)
+  {
+    if (!lifetime.expired()) {
+      hosted.world->releaseResources();
+    }
+  }
+
+  // The effect of this frame's operations so far on one world.
   struct WorldPlan
   {
+    std::uint32_t world = 0;
+    // The live world this plan builds on; null once this frame destroyed it,
+    // or when it did not exist before this frame.
+    const HostWorld* live = nullptr;
+    bool exists = false;
     std::unordered_map<std::uint32_t, bool> materials;
     std::unordered_map<std::uint32_t, long long> userDelta;
     std::unordered_map<std::uint32_t, WorldInstance> created;
     std::unordered_set<std::uint32_t> destroyed;
     std::size_t instances = 0;
     std::size_t materialCount = 0;
-    // Frame v7: the last Skybox operation's cubemap (null: no sky).
-    std::shared_ptr<const Texture> sky;
+  };
+  // Retained across frames: clearing keeps the containers' buckets.
+  struct FramePlan
+  {
+    std::vector<WorldPlan> worlds;
+    std::size_t used = 0;
+    std::size_t instances = 0;
+    std::size_t materials = 0;
+    std::size_t liveWorlds = 0;
   };
 
-  bool plannedMaterial(const WorldPlan& plan, std::uint32_t id) const
+  WorldPlan& planFor(FramePlan& plan, std::uint32_t id)
+  {
+    for (std::size_t index = 0; index < plan.used; ++index) {
+      if (plan.worlds[index].world == id) {
+        return plan.worlds[index];
+      }
+    }
+    if (plan.used == plan.worlds.size()) {
+      plan.worlds.emplace_back();
+    }
+    WorldPlan& added = plan.worlds[plan.used++];
+    resetPlan(added, findWorld(id));
+    added.world = id;
+    return added;
+  }
+  static void resetPlan(WorldPlan& plan, const HostWorld* live)
+  {
+    plan.live = live;
+    plan.exists = live != nullptr;
+    plan.materials.clear();
+    plan.userDelta.clear();
+    plan.created.clear();
+    plan.destroyed.clear();
+    plan.instances = live != nullptr ? live->instances.size() : 0;
+    plan.materialCount = live != nullptr ? live->materialUsers.size() : 0;
+  }
+
+  static bool plannedMaterial(const WorldPlan& plan, std::uint32_t id)
   {
     std::unordered_map<std::uint32_t, bool>::const_iterator found =
       plan.materials.find(id);
-    return found != plan.materials.end() ? found->second
-                                         : worldMaterialUsers.contains(id);
+    return found != plan.materials.end()
+             ? found->second
+             : plan.live != nullptr && plan.live->materialUsers.contains(id);
   }
 
   // The material of a live or planned instance, or zero when there is none.
-  std::uint32_t plannedInstance(const WorldPlan& plan, std::uint32_t id) const
+  static std::uint32_t plannedInstance(const WorldPlan& plan, std::uint32_t id)
   {
     std::unordered_map<std::uint32_t, WorldInstance>::const_iterator created =
       plan.created.find(id);
     if (created != plan.created.end()) {
       return created->second.material;
     }
-    if (plan.destroyed.contains(id)) {
+    if (plan.destroyed.contains(id) || plan.live == nullptr) {
       return 0;
     }
     std::unordered_map<std::uint32_t, WorldInstance>::const_iterator live =
-      worldInstances.find(id);
-    return live != worldInstances.end() ? live->second.material : 0;
+      plan.live->instances.find(id);
+    return live != plan.live->instances.end() ? live->second.material : 0;
   }
 
-  // Validates every operation against the live world before anything is
+  // Validates every operation against the live worlds before anything is
   // applied; resolves each created instance's mesh into `meshes`.
   bool planWorld(const std::vector<GuestWorldOperation>& operations,
                  std::vector<std::shared_ptr<const RetainedMesh>>& meshes)
@@ -741,47 +831,74 @@ struct WasmFrameRenderer::State
     if (operations.empty()) {
       return true;
     }
-    // Retained across frames: clearing keeps the containers' buckets.
-    WorldPlan& plan = worldPlan;
-    plan.materials.clear();
-    plan.userDelta.clear();
-    plan.created.clear();
-    plan.destroyed.clear();
-    plan.instances = worldInstances.size();
-    plan.materialCount = worldMaterialUsers.size();
-    plan.sky.reset();
+    FramePlan& plan = worldPlan;
+    plan.used = 0;
+    plan.instances = instanceTotal();
+    plan.materials = 0;
+    for (const std::unique_ptr<HostWorld>& hosted : worlds) {
+      plan.materials += hosted->materialUsers.size();
+    }
+    plan.liveWorlds = worlds.size();
     meshes.assign(operations.size(), nullptr);
+    // Operations target world 1 until a SelectWorld (frame v8).
+    std::uint32_t current = 1;
     for (std::size_t index = 0; index < operations.size(); ++index) {
       const GuestWorldOperation& operation = operations[index];
       const std::uint32_t id = operation.id;
-      bool valid = true;
+      WorldPlan* target = &planFor(plan, current);
+      bool valid = target->exists;
       switch (operation.op) {
+        case GuestWorldOp::SelectWorld:
+          current = id;
+          target = &planFor(plan, current);
+          valid = target->exists || plan.liveWorlds < kWorlds;
+          if (!target->exists) {
+            target->exists = true;
+            plan.liveWorlds += 1;
+          }
+          break;
+        case GuestWorldOp::ShowWorld:
+          valid = id == 0 || planFor(plan, id).exists;
+          break;
+        case GuestWorldOp::DestroyWorld: {
+          WorldPlan& doomed = planFor(plan, id);
+          valid = doomed.exists;
+          plan.instances -= doomed.instances;
+          plan.materials -= doomed.materialCount;
+          plan.liveWorlds -= 1;
+          resetPlan(doomed, nullptr);
+          break;
+        }
         case GuestWorldOp::MaterialCreate:
-          valid =
-            !plannedMaterial(plan, id) && plan.materialCount < kWorldMaterials;
-          plan.materials[id] = true;
-          plan.materialCount += 1;
+          valid = valid && !plannedMaterial(*target, id) &&
+                  plan.materials < kWorldMaterials;
+          target->materials[id] = true;
+          target->materialCount += 1;
+          plan.materials += 1;
           break;
         case GuestWorldOp::MaterialUpdate:
-          valid = plannedMaterial(plan, id);
+          valid = valid && plannedMaterial(*target, id);
           break;
         case GuestWorldOp::MaterialDestroy: {
-          std::unordered_map<std::uint32_t, std::size_t>::const_iterator live =
-            worldMaterialUsers.find(id);
-          const long long users = (live != worldMaterialUsers.end()
-                                     ? static_cast<long long>(live->second)
-                                     : 0) +
-                                  plan.userDelta[id];
-          valid = plannedMaterial(plan, id) && users == 0;
-          plan.materials[id] = false;
-          plan.materialCount -= 1;
+          long long users = target->userDelta[id];
+          if (target->live != nullptr) {
+            std::unordered_map<std::uint32_t, std::size_t>::const_iterator
+              live = target->live->materialUsers.find(id);
+            if (live != target->live->materialUsers.end()) {
+              users += static_cast<long long>(live->second);
+            }
+          }
+          valid = valid && plannedMaterial(*target, id) && users == 0;
+          target->materials[id] = false;
+          target->materialCount -= 1;
+          plan.materials -= 1;
           break;
         }
         case GuestWorldOp::InstanceCreate: {
           std::shared_ptr<const RetainedMesh> mesh =
             retainedMeshes.resolve(operation.mesh);
-          valid = plannedInstance(plan, id) == 0 &&
-                  plannedMaterial(plan, operation.materialId) &&
+          valid = valid && plannedInstance(*target, id) == 0 &&
+                  plannedMaterial(*target, operation.materialId) &&
                   plan.instances < kWorldInstances && mesh &&
                   mesh->style == GuestBatchStyle::LitMesh &&
                   mesh->upload->ready && !mesh->upload->failed &&
@@ -789,46 +906,47 @@ struct WasmFrameRenderer::State
                   operation.firstIndex <= mesh->upload->indexCount &&
                   operation.indexCount <=
                     mesh->upload->indexCount - operation.firstIndex;
-          plan.destroyed.erase(id);
-          plan.created[id] = WorldInstance{ operation.materialId, mesh };
-          plan.userDelta[operation.materialId] += 1;
+          target->destroyed.erase(id);
+          target->created[id] = WorldInstance{ operation.materialId, mesh };
+          target->userDelta[operation.materialId] += 1;
+          target->instances += 1;
           plan.instances += 1;
           meshes[index] = std::move(mesh);
           break;
         }
         case GuestWorldOp::InstanceUpdate:
         case GuestWorldOp::InstanceTransform:
-          valid = plannedInstance(plan, id) != 0;
+          valid = valid && plannedInstance(*target, id) != 0;
           break;
         case GuestWorldOp::InstanceDestroy: {
-          const std::uint32_t material = plannedInstance(plan, id);
-          valid = material != 0;
-          plan.userDelta[material] -= 1;
-          plan.created.erase(id);
-          plan.destroyed.insert(id);
+          const std::uint32_t material = plannedInstance(*target, id);
+          valid = valid && material != 0;
+          target->userDelta[material] -= 1;
+          target->created.erase(id);
+          target->destroyed.insert(id);
+          target->instances -= 1;
           plan.instances -= 1;
           break;
         }
         case GuestWorldOp::Environment:
           break;
         case GuestWorldOp::Skybox:
-          if (operation.texture.owner != 0) {
-            plan.sky = textures.resolve(operation.texture);
-            valid = plan.sky && plan.sky->cubemap;
-          } else {
-            plan.sky.reset();
+          if (valid && operation.texture.owner != 0) {
+            const std::shared_ptr<const Texture> sky =
+              textures.resolve(operation.texture);
+            valid = sky && sky->cubemap;
           }
           break;
       }
       if (!valid) {
         error = "Invalid guest world operation " + std::to_string(index) +
-                ": unknown, duplicate or busy id, or an unusable mesh";
+                ": unknown, duplicate or busy id, no such world, too many "
+                "worlds, or an unusable mesh";
         return false;
       }
     }
     return true;
   }
-
   static RenderMaterialDesc worldMaterial(const GuestWorldMaterial& material)
   {
     RenderMaterialDesc desc;
@@ -844,23 +962,57 @@ struct WasmFrameRenderer::State
     const std::vector<GuestWorldOperation>& operations,
     const std::vector<std::shared_ptr<const RetainedMesh>>& meshes)
   {
+    HostWorld* current = findWorld(1);
     for (std::size_t index = 0; index < operations.size(); ++index) {
       const GuestWorldOperation& operation = operations[index];
       const std::uint32_t id = operation.id;
       bool applied = true;
       switch (operation.op) {
+        case GuestWorldOp::SelectWorld:
+          current = findWorld(id);
+          if (current == nullptr) {
+            std::unique_ptr<HostWorld> created = std::make_unique<HostWorld>();
+            created->id = id;
+            current = created.get();
+            worlds.push_back(std::move(created));
+          }
+          continue;
+        case GuestWorldOp::ShowWorld:
+          shownWorld = id;
+          continue;
+        case GuestWorldOp::DestroyWorld:
+          for (std::vector<std::unique_ptr<HostWorld>>::iterator it =
+                 worlds.begin();
+               it != worlds.end();
+               ++it) {
+            if ((*it)->id == id) {
+              releaseWorld(**it);
+              if (current == it->get()) {
+                current = nullptr;
+              }
+              worlds.erase(it);
+              break;
+            }
+          }
+          if (shownWorld == id) {
+            shownWorld = 0;
+          }
+          continue;
+        default:
+          break;
+      }
+      RenderWorld& world = *current->world;
+      switch (operation.op) {
         case GuestWorldOp::MaterialCreate:
-          applied =
-            renderWorld->createMaterial(id, worldMaterial(operation.material));
-          worldMaterialUsers[id] = 0;
+          applied = world.createMaterial(id, worldMaterial(operation.material));
+          current->materialUsers[id] = 0;
           break;
         case GuestWorldOp::MaterialUpdate:
-          applied =
-            renderWorld->updateMaterial(id, worldMaterial(operation.material));
+          applied = world.updateMaterial(id, worldMaterial(operation.material));
           break;
         case GuestWorldOp::MaterialDestroy:
-          applied = renderWorld->destroyMaterial(id);
-          worldMaterialUsers.erase(id);
+          applied = world.destroyMaterial(id);
+          current->materialUsers.erase(id);
           break;
         case GuestWorldOp::InstanceCreate: {
           const RetainedMesh::Upload& upload = *meshes[index]->upload;
@@ -874,26 +1026,26 @@ struct WasmFrameRenderer::State
           desc.visible = operation.visible;
           desc.hasBounds = true;
           desc.localBounds = upload.bounds;
-          applied = renderWorld->createInstance(id, desc);
-          worldInstances[id] =
+          applied = world.createInstance(id, desc);
+          current->instances[id] =
             WorldInstance{ operation.materialId, meshes[index] };
-          worldMaterialUsers[operation.materialId] += 1;
+          current->materialUsers[operation.materialId] += 1;
           break;
         }
         case GuestWorldOp::InstanceUpdate:
-          applied = renderWorld->setInstanceTint(id, operation.tint) &&
-                    renderWorld->setInstanceVisible(id, operation.visible);
+          applied = world.setInstanceTint(id, operation.tint) &&
+                    world.setInstanceVisible(id, operation.visible);
           break;
         case GuestWorldOp::InstanceTransform:
-          applied = renderWorld->setInstanceTransform(id, operation.transform);
+          applied = world.setInstanceTransform(id, operation.transform);
           break;
         case GuestWorldOp::InstanceDestroy: {
-          applied = renderWorld->destroyInstance(id);
+          applied = world.destroyInstance(id);
           std::unordered_map<std::uint32_t, WorldInstance>::iterator found =
-            worldInstances.find(id);
-          if (found != worldInstances.end()) {
-            worldMaterialUsers[found->second.material] -= 1;
-            worldInstances.erase(found);
+            current->instances.find(id);
+          if (found != current->instances.end()) {
+            current->materialUsers[found->second.material] -= 1;
+            current->instances.erase(found);
           }
           break;
         }
@@ -912,15 +1064,19 @@ struct WasmFrameRenderer::State
           environment.shadowMinimumRadius = source.shadowMinimumRadius;
           environment.shadowLightDistance = source.shadowLightDistance;
           environment.shadowCasterDistance = source.shadowCasterDistance;
-          renderWorld->setEnvironment(environment);
+          world.setEnvironment(environment);
           break;
         }
         case GuestWorldOp::Skybox:
-          // planWorld resolved the last one; earlier ones are superseded.
-          skyTexture = worldPlan.sky;
-          applied = renderWorld->setSkybox(
-            { skyTexture ? skyTexture->handle : TextureHandle{},
+          // planWorld checked that the cubemap resolves.
+          current->sky = operation.texture.owner != 0
+                           ? textures.resolve(operation.texture)
+                           : nullptr;
+          applied = world.setSkybox(
+            { current->sky ? current->sky->handle : TextureHandle{},
               operation.tint });
+          break;
+        default:
           break;
       }
       if (!applied) {
@@ -930,7 +1086,6 @@ struct WasmFrameRenderer::State
       }
     }
   }
-
   bool accept(std::span<const std::byte> packet)
   {
     if (retired || lifetime.expired()) {
@@ -1202,7 +1357,7 @@ struct WasmFrameRenderer::State
       counters.meshWriteBytes += write.bytes.size();
     }
     counters.worldOperations = frame.worldOperations.size();
-    counters.worldInstances = worldInstances.size();
+    counters.worldInstances = instanceTotal();
     counters.visualOperations = frame.visualOperations.size();
     counters.visuals = visuals.visualCount();
   }
@@ -1307,8 +1462,9 @@ struct WasmFrameRenderer::State
     }
     // A composition that places the world draws it from this layer instead
     // of as its own drawable, so its shadow work comes through here too.
-    if (worldComposed && !retired) {
-      renderWorld->CollectShadowCasters(target);
+    HostWorld* drawn = shown();
+    if (worldComposed && !retired && drawn != nullptr) {
+      drawn->world->CollectShadowCasters(target);
     }
     for (const GuestShadowCaster& caster : frame.shadowCasters) {
       Renderer::ShadowCasterDesc desc;
@@ -1331,8 +1487,9 @@ struct WasmFrameRenderer::State
         !ensureUploads()) {
       return;
     }
-    if (worldComposed && !retired) {
-      renderWorld->AppendShadowCommands(target);
+    HostWorld* drawn = shown();
+    if (worldComposed && !retired && drawn != nullptr) {
+      drawn->world->AppendShadowCommands(target);
     }
     glm::mat4 lightSpace(1.0f);
     std::memcpy(glm::value_ptr(lightSpace),
@@ -1594,7 +1751,9 @@ struct WasmFrameRenderer::State
         }
         void world() override
         {
-          state.renderWorld->AppendCommands(&state.renderer);
+          if (HostWorld* drawn = state.shown()) {
+            drawn->world->AppendCommands(&state.renderer);
+          }
         }
         State& state;
         GuestLayer layer;
@@ -1710,13 +1869,11 @@ struct WasmFrameRenderer::State
   std::vector<std::shared_ptr<const Texture>> writesScratch;
   std::vector<std::shared_ptr<const RetainedMesh>> writeTargets;
   std::vector<std::shared_ptr<const RetainedMesh>> worldMeshesScratch;
-  // The host render world and the bookkeeping planWorld validates against.
-  std::unique_ptr<RenderWorld> renderWorld = std::make_unique<RenderWorld>();
-  std::unordered_map<std::uint32_t, WorldInstance> worldInstances;
-  // Keeps the sky's cubemap alive while the world shows it.
-  std::shared_ptr<const Texture> skyTexture;
-  std::unordered_map<std::uint32_t, std::size_t> worldMaterialUsers;
-  WorldPlan worldPlan;
+  // The host render worlds (world 1 exists from the start, as a version 7
+  // guest expects), the one that draws, and the plan scratch.
+  std::vector<std::unique_ptr<HostWorld>> worlds = initialWorlds();
+  std::uint32_t shownWorld = 1;
+  FramePlan worldPlan;
   // Frame v7: host-retained visuals, and whether the main composition places
   // the render world (which then draws from the World layer, not on its own).
   WasmVisuals visuals{ renderer };
@@ -1980,9 +2137,10 @@ WasmFrameRenderer::dispatch(Scene& scene)
   // Host-owned world objects draw before the frame's world batches, which
   // keep today's overlay order on top of them, unless a composition places
   // them (frame v7).
+  State::HostWorld* shown = m_state->shown();
   if (!m_state->retired && !m_state->lifetime.expired() &&
-      !m_state->worldComposed) {
-    scene.AddDrawable(m_state->renderWorld.get(), RenderLayerId::World);
+      !m_state->worldComposed && shown != nullptr) {
+    scene.AddDrawable(shown->world.get(), RenderLayerId::World);
   }
   scene.AddDrawable(&m_state->world, RenderLayerId::World);
   scene.AddDrawable(&m_state->ui, RenderLayerId::UI);
@@ -2011,13 +2169,11 @@ WasmFrameRenderer::retire()
   m_state->retainedMeshes.retire();
   m_state->dirtyMeshes.clear();
   // Retirement revokes the world at once; its GPU buffers go with it.
-  if (!m_state->lifetime.expired()) {
-    m_state->renderWorld->releaseResources();
+  for (const std::unique_ptr<State::HostWorld>& hosted : m_state->worlds) {
+    m_state->releaseWorld(*hosted);
   }
-  m_state->renderWorld = std::make_unique<RenderWorld>();
-  m_state->worldInstances.clear();
-  m_state->worldMaterialUsers.clear();
-  m_state->skyTexture.reset();
+  m_state->worlds = State::initialWorlds();
+  m_state->shownWorld = 1;
   m_state->visuals.clear();
   m_state->worldComposed = false;
 }

@@ -1,4 +1,5 @@
-// Frame schema v6: host render world operations (HostRender, D-E30).
+// Frame schema v6: host render world operations (HostRender, D-E30); v8:
+// several worlds per guest, one per scene (D-R30).
 
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/Scene.h>
@@ -380,9 +381,186 @@ worldOperations()
   return counters.failures == 0;
 }
 
+// Frame schema v8: SelectWorld, ShowWorld and DestroyWorld.
+static bool
+worldAddressingValidation()
+{
+  TestCounters counters;
+  GuestFrame decoded;
+  const GuestFrame frame =
+    worldFrame({ simple(GuestWorldOp::SelectWorld, 4),
+                 materialCreate(1),
+                 simple(GuestWorldOp::ShowWorld, 4),
+                 simple(GuestWorldOp::ShowWorld, 0),
+                 simple(GuestWorldOp::DestroyWorld, 4) });
+  const std::vector<std::byte> bytes = encode(frame);
+  testTrue(counters,
+           GuestFrame::read(bytes, decoded) &&
+             decoded.worldOperations.size() == 5 &&
+             decoded.worldOperations[0].op == GuestWorldOp::SelectWorld &&
+             decoded.worldOperations[0].id == 4 &&
+             decoded.worldOperations[3].op == GuestWorldOp::ShowWorld &&
+             decoded.worldOperations[3].id == 0 &&
+             decoded.worldOperations[4].op == GuestWorldOp::DestroyWorld,
+           "World addressing round-trips; ShowWorld may name no world");
+  bool denied = true;
+  for (const GuestWorldOperation& invalid :
+       { simple(GuestWorldOp::SelectWorld, 0),
+         simple(GuestWorldOp::DestroyWorld, 0),
+         simple(static_cast<GuestWorldOp>(13), 1) }) {
+    GuestFrame ignored;
+    denied =
+      denied && !GuestFrame::read(encode(worldFrame({ invalid })), ignored);
+  }
+  std::vector<std::byte> version7 = bytes;
+  version7[4] = std::byte{ 7 };
+  GuestFrame ignored;
+  testTrue(counters,
+           denied && !GuestFrame::read(version7, ignored),
+           "Selecting or destroying world zero, unknown operations and "
+           "world addressing in a version 7 frame are denied");
+  return counters.failures == 0;
+}
+
+// Frame schema v8: each guest scene's world lives on the host; only the
+// shown one draws.
+static bool
+worldsPerScene()
+{
+  TestCounters counters;
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0, 0), 1, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  WasmFrameRenderer bridge(renderer, 700);
+
+  const std::array<LitVertex, 3> vertices{
+    { { { 0.0f, 0.0f, 0.0f }, { 0, 0, 1 }, 0xffffffffu, { 0, 0 } },
+      { { 0.5f, 0.0f, 0.0f }, { 0, 0, 1 }, 0xffffffffu, { 1, 0 } },
+      { { 0.0f, 0.5f, 0.0f }, { 0, 0, 1 }, 0xffffffffu, { 0, 1 } } }
+  };
+  const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+  GuestMeshRequest request;
+  request.style = static_cast<std::uint32_t>(GuestBatchStyle::LitMesh);
+  request.vertexBytes = sizeof(vertices);
+  request.indexBytes = sizeof(indices);
+  const GuestResourceId mesh = bridge.createMesh(request);
+  GuestMeshWrite vertexWrite;
+  vertexWrite.mesh = mesh;
+  vertexWrite.bytes.assign(reinterpret_cast<const std::byte*>(vertices.data()),
+                           reinterpret_cast<const std::byte*>(vertices.data()) +
+                             sizeof(vertices));
+  GuestMeshWrite indexWrite;
+  indexWrite.mesh = mesh;
+  indexWrite.indices = true;
+  indexWrite.bytes.assign(reinterpret_cast<const std::byte*>(indices.data()),
+                          reinterpret_cast<const std::byte*>(indices.data()) +
+                            sizeof(indices));
+  bridge.writeMesh(vertexWrite);
+  bridge.writeMesh(indexWrite);
+
+  // Instances drawn this frame, per instanced call.
+  const std::function<std::vector<unsigned int>()> render = [&]() {
+    Scene scene(&window, &camera);
+    bridge.dispatch(scene);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+    std::vector<unsigned int> counts;
+    for (std::size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+         ++index) {
+      const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+      if (command.commandType == CommandType::DrawIndexedInstanced) {
+        counts.push_back(command.drawIndexedInstanced.instanceCount);
+      }
+    }
+    return counts;
+  };
+  GuestWorldOperation opaque = materialCreate(1);
+  opaque.material.blend = false;
+
+  testTrue(counters,
+           bridge.accept(encode(worldFrame(
+             { simple(GuestWorldOp::SelectWorld, 2),
+               opaque,
+               instanceCreate(10, mesh, 1),
+               instanceCreate(11, mesh, 1) }))) &&
+             bridge.counters().worldInstances == 2 && render().empty(),
+           "SelectWorld creates a world; world 1 stays shown and is empty");
+  testTrue(counters,
+           bridge.accept(
+             encode(worldFrame({ simple(GuestWorldOp::ShowWorld, 2) }))) &&
+             render() == std::vector<unsigned int>{ 2 },
+           "ShowWorld draws the named world");
+  testTrue(counters,
+           bridge.accept(encode(worldFrame({ opaque,
+                                             instanceCreate(10, mesh, 1) }))) &&
+             bridge.counters().worldInstances == 3 &&
+             render() == std::vector<unsigned int>{ 2 },
+           "A frame without SelectWorld targets world 1, whose ids are its "
+           "own, and a hidden world does not draw");
+  testTrue(counters,
+           bridge.accept(
+             encode(worldFrame({ simple(GuestWorldOp::ShowWorld, 1) }))) &&
+             render() == std::vector<unsigned int>{ 1 },
+           "Showing world 1 again draws only its instance");
+
+  bool denied = true;
+  for (const GuestFrame& invalid :
+       { worldFrame({ simple(GuestWorldOp::ShowWorld, 5) }),
+         worldFrame({ simple(GuestWorldOp::DestroyWorld, 5) }),
+         worldFrame({ simple(GuestWorldOp::SelectWorld, 3),
+                      simple(GuestWorldOp::DestroyWorld, 3),
+                      materialCreate(7) }) }) {
+    denied = denied && !bridge.accept(encode(invalid));
+  }
+  std::vector<GuestWorldOperation> tooMany;
+  for (std::uint32_t id = 3; id <= 9; ++id) {
+    tooMany.push_back(simple(GuestWorldOp::SelectWorld, id));
+  }
+  std::vector<GuestWorldOperation> enough(tooMany.begin(), tooMany.end() - 1);
+  testTrue(counters,
+           denied && !bridge.accept(encode(worldFrame(tooMany))) &&
+             bridge.accept(encode(worldFrame(enough))),
+           "Unknown worlds, operations on a destroyed world and a ninth world "
+           "are denied; eight worlds are accepted");
+
+  GuestFrame destroyFrame;
+  std::vector<GuestWorldOperation> destroys;
+  for (std::uint32_t id = 3; id <= 8; ++id) {
+    destroys.push_back(simple(GuestWorldOp::DestroyWorld, id));
+  }
+  destroys.push_back(simple(GuestWorldOp::DestroyWorld, 2));
+  testTrue(counters,
+           bridge.accept(encode(worldFrame(destroys))) &&
+             bridge.counters().worldInstances == 1 &&
+             render() == std::vector<unsigned int>{ 1 },
+           "Destroying worlds releases their instances; the shown one draws");
+  testTrue(counters,
+           bridge.accept(
+             encode(worldFrame({ simple(GuestWorldOp::DestroyWorld, 1) }))) &&
+             bridge.counters().worldInstances == 0 && render().empty() &&
+             bridge.accept(encode(worldFrame(
+               { simple(GuestWorldOp::SelectWorld, 1), opaque }))) &&
+             render().empty() && renderer.frameError().empty(),
+           "Destroying the shown world shows none until another is shown");
+  return counters.failures == 0;
+}
+
 bool
 runWasmWorldTest(const std::string& name)
 {
+  if (name == "WorldAddressingValidation") {
+    return worldAddressingValidation();
+  }
+  if (name == "WorldsPerScene") {
+    return worldsPerScene();
+  }
   if (name == "WorldFrameValidation") {
     return worldFrameValidation();
   }
