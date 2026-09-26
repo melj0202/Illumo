@@ -1,12 +1,13 @@
 #include "Game/CSimPlatform.h"
 #include "Game/CSimSounds.h"
-#include "Game/CellGameModule.h"
-#include "Game/MainMenuModule.h"
+#include "Game/CanvasScene.h"
+#include "Game/CSimScenes.h"
+#include "Game/TitleScene.h"
 #include "Game/RuleCatalogLoader.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
-#include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Services/CommandLine.h>
@@ -23,21 +24,6 @@
 
 static TestCounters g;
 
-class MockModuleHost : public IModuleHost
-{
-public:
-  std::unique_ptr<IModule> transitionRequested;
-
-  void RequestTransition(std::unique_ptr<IModule> nextModule) override
-  {
-    transitionRequested = std::move(nextModule);
-  }
-
-  bool HasPendingTransition() const override
-  {
-    return transitionRequested != nullptr;
-  }
-};
 
 struct MainMenuFixture
 {
@@ -50,9 +36,10 @@ struct MainMenuFixture
   CommandLine console;
   InputManager input;
   Scene scene;
-  MockModuleHost host;
   IllumoContext context;
-  MainMenuModule module;
+  // The program's director: choosing a canvas adds it through CSimScenes.
+  SceneDirector director;
+  TitleScene module;
   bool started;
 
   MainMenuFixture()
@@ -65,9 +52,9 @@ struct MainMenuFixture
     , console(&env, &registry, &window, &renderer)
     , input(nullptr)
     , scene(&window, &camera)
-    , host()
-    , context{ &scene,  &window, &console, &input,    &renderer,
-               nullptr, &env,    &camera,  &registry, &host }
+    , context{ &scene,  &window, &console, &input,   &renderer,
+               nullptr, &env,    &camera,  &registry }
+    , director(context)
     , module()
     , started(false)
   {
@@ -93,13 +80,14 @@ struct MainMenuFixture
     env.setVar("autosaveMinutes", 0);
     env.setVar("confirmClear", true);
     mock.Initialize();
-    started = module.Start(&context);
+    context.scenes = &director;
+    started = module.start(context);
   }
 
   ~MainMenuFixture()
   {
     if (started) {
-      module.Exit();
+      module.stop();
     }
   }
 };
@@ -110,7 +98,7 @@ menuLayers(Scene& scene)
 {
   std::vector<GameVisual*> layers;
   for (DrawableBase* drawable : scene.drawablesIn(RenderLayerId::UI)) {
-    if (layers.size() == MainMenuModule::menuLayerCountForTesting()) {
+    if (layers.size() == TitleScene::menuLayerCountForTesting()) {
       break;
     }
     layers.push_back(static_cast<GameVisual*>(drawable));
@@ -134,9 +122,9 @@ menuTexts(Scene& scene)
 static void
 testMainMenuStartAndDrawables()
 {
-  testSection("MainMenuModule: start and drawables");
+  testSection("TitleScene: start and drawables");
   MainMenuFixture fixture;
-  testTrue(g, fixture.started, "valid context starts MainMenuModule");
+  testTrue(g, fixture.started, "valid context starts TitleScene");
   testEqInt(g,
             fixture.module.getSelectedItemForTesting(),
             0,
@@ -145,10 +133,10 @@ testMainMenuStartAndDrawables()
     g, !fixture.module.isSettingsOpenForTesting(), "settings start closed");
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   testEqSize(g,
              fixture.scene.drawableCount(),
-             1u + MainMenuModule::menuLayerCountForTesting(),
+             1u + TitleScene::menuLayerCountForTesting(),
              "menu dispatches ambient canvas and its UI layers");
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::World).size(),
@@ -156,7 +144,7 @@ testMainMenuStartAndDrawables()
              "ambient canvas is in World layer");
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::UI).size(),
-             MainMenuModule::menuLayerCountForTesting(),
+             TitleScene::menuLayerCountForTesting(),
              "menu layers are in UI layer");
 }
 
@@ -165,9 +153,9 @@ testMainMenuStartAndDrawables()
 static std::vector<TextPrimitive>
 versionTexts(MainMenuFixture& fixture)
 {
-  fixture.module.Update(1.0 / 60.0);
+  fixture.module.update(1.0 / 60.0);
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   std::vector<TextPrimitive> found;
   for (const TextPrimitive* text : menuTexts(fixture.scene)) {
     if (text->content.size() > 1 && text->content[0] == 'v' &&
@@ -181,7 +169,7 @@ versionTexts(MainMenuFixture& fixture)
 static void
 testMainMenuShowsVersion()
 {
-  testSection("MainMenuModule: build version in the corner");
+  testSection("TitleScene: build version in the corner");
   CSimPlatform& platform = CSimPlatform::current();
   const std::string previous = platform.packageVersion();
   {
@@ -213,9 +201,9 @@ testTitleRasterResolution()
   fixture.window.handleResize(3840, 2160);
   for (int scale : { 1, 2, 4 }) {
     fixture.env.setVar("uiScale", scale);
-    fixture.module.Update(0.0);
+    fixture.module.update(0.0);
     fixture.scene.ClearDrawables();
-    fixture.module.DispatchDrawables(&fixture.scene);
+    fixture.module.dispatch(fixture.scene);
     const float scaleY =
       menuLayers(fixture.scene).front()->getTransform().scaleY;
     // The title is drawn letter by letter so each can animate; every letter
@@ -245,7 +233,7 @@ static std::vector<TextPrimitive>
 titleLetters(MainMenuFixture& fixture)
 {
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   std::vector<TextPrimitive> letters;
   for (const TextPrimitive* text : menuTexts(fixture.scene)) {
     if (text->font != nullptr && text->font != Font::getDefaultFont()) {
@@ -265,13 +253,13 @@ stretchOf(const TextPrimitive& text)
 static void
 testTitleLettersPose()
 {
-  testSection("MainMenuModule: title letters pose one at a time");
+  testSection("TitleScene: title letters pose one at a time");
   MainMenuFixture fixture;
   float strongest = 0.0f;
   int soloFrames = 0;
   bool fourLetters = true;
   for (int frame = 0; frame < 720; ++frame) {
-    fixture.module.Update(1.0 / 60.0);
+    fixture.module.update(1.0 / 60.0);
     if (frame < 120) {
       continue; // the entrance
     }
@@ -296,7 +284,7 @@ testTitleLettersPose()
   still.env.setVar("reducedUiMotion", true);
   float stillest = 0.0f;
   for (int frame = 0; frame < 480; ++frame) {
-    still.module.Update(1.0 / 60.0);
+    still.module.update(1.0 / 60.0);
     for (const TextPrimitive& letter : titleLetters(still)) {
       stillest = std::max(stillest, stretchOf(letter));
     }
@@ -307,14 +295,14 @@ testTitleLettersPose()
 static void
 testTitlePokeHops()
 {
-  testSection("MainMenuModule: clicking the title sends a hop through it");
+  testSection("TitleScene: clicking the title sends a hop through it");
   // A control menu gets the same pointer without the click, so the only
   // difference between the two is the hop.
   MainMenuFixture fixture;
   MainMenuFixture control;
   for (int frame = 0; frame < 96; ++frame) {
-    fixture.module.Update(1.0 / 60.0);
-    control.module.Update(1.0 / 60.0);
+    fixture.module.update(1.0 / 60.0);
+    control.module.update(1.0 / 60.0);
   }
   const std::array<float, 4> bounds = fixture.module.titleBoundsForTesting();
   testTrue(g, bounds[2] > 0.0f && bounds[3] > 0.0f, "the title has bounds");
@@ -325,15 +313,15 @@ testTitlePokeHops()
   }
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(1.0 / 60.0);
-  control.module.Update(1.0 / 60.0);
+  fixture.module.update(1.0 / 60.0);
+  control.module.update(1.0 / 60.0);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
   float firstLift = 0.0f;
   float lastLift = 0.0f;
   for (int frame = 0; frame < 30; ++frame) {
-    fixture.module.Update(1.0 / 60.0);
-    control.module.Update(1.0 / 60.0);
+    fixture.module.update(1.0 / 60.0);
+    control.module.update(1.0 / 60.0);
     const std::vector<TextPrimitive> poked = titleLetters(fixture);
     const std::vector<TextPrimitive> still = titleLetters(control);
     firstLift = std::max(firstLift, still.front().y - poked.front().y);
@@ -341,7 +329,7 @@ testTitlePokeHops()
   }
   testTrue(g, firstLift > 5.0f && lastLift > 5.0f, "every letter hops");
   testTrue(g,
-           !fixture.host.HasPendingTransition() &&
+           !fixture.director.hasPendingSwitch() &&
              !fixture.module.isSettingsOpenForTesting() &&
              !fixture.module.isCanvasSetupOpenForTesting(),
            "poking the title activates nothing");
@@ -350,13 +338,13 @@ testTitlePokeHops()
 static void
 testMainMenuKeepsRulePreference()
 {
-  testSection("MainMenuModule: the ambient world keeps the player's ruleset");
+  testSection("TitleScene: the ambient world keeps the player's ruleset");
   MainMenuFixture fixture;
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.env.setVar("FamilyString", "LIFE_LIKE_BINARY");
   fixture.env.setVar("RuleSetString", "HIGHLIFE");
   fixture.env.setVar("ModeString", "HIGHLIFE");
-  testTrue(g, fixture.module.Start(&fixture.context), "menu restarts");
+  testTrue(g, fixture.module.start(fixture.context), "menu restarts");
   testTrue(g,
            fixture.env.getVar("RuleSetString").value == "HIGHLIFE" &&
              fixture.env.getVar("ModeString").value == "HIGHLIFE" &&
@@ -367,7 +355,7 @@ testMainMenuKeepsRulePreference()
 static void
 testMainMenuAmbientWorld()
 {
-  testSection("MainMenuModule: the ambient world is seeded and alive");
+  testSection("TitleScene: the ambient world is seeded and alive");
   MainMenuFixture fixture;
   fixture.window.handleResize(1280, 720);
   const CellContext* world = fixture.module.ambientContextForTesting();
@@ -379,7 +367,7 @@ testMainMenuAmbientWorld()
     world != nullptr ? world->getGrid()->getAllocatedChunkCount() : 0u;
   testTrue(g, seeded > 0u, "the gun and methuselahs are stamped");
   for (int frame = 0; frame < 600; ++frame) {
-    fixture.module.Update(1.0 / 60.0);
+    fixture.module.update(1.0 / 60.0);
   }
   testTrue(g,
            world != nullptr && world->getGrid()->getAllocatedChunkCount() > 0u,
@@ -389,7 +377,7 @@ testMainMenuAmbientWorld()
 static void
 testMainMenuPrimitiveBudget()
 {
-  testSection("MainMenuModule: primitive budget at 720p and 4K");
+  testSection("TitleScene: primitive budget at 720p and 4K");
   MainMenuFixture fixture;
   const int sizes[2][3] = { { 1280, 720, 1 }, { 3840, 2160, 4 } };
   for (const int* size : sizes) {
@@ -397,15 +385,15 @@ testMainMenuPrimitiveBudget()
     fixture.env.setVar("uiScale", size[2]);
     // Walk through the entrance, a selection change and a press.
     for (int frame = 0; frame < 30; ++frame) {
-      fixture.module.Update(1.0 / 60.0);
+      fixture.module.update(1.0 / 60.0);
     }
     fixture.module.selectItemForTesting(2);
-    fixture.module.Update(0.1);
+    fixture.module.update(0.1);
     fixture.scene.ClearDrawables();
-    fixture.module.DispatchDrawables(&fixture.scene);
+    fixture.module.dispatch(fixture.scene);
     testEqSize(g,
                fixture.scene.drawablesIn(RenderLayerId::UI).size(),
-               MainMenuModule::menuLayerCountForTesting(),
+               TitleScene::menuLayerCountForTesting(),
                "the title screen is only its layers while no overlay is open");
     unsigned int quads = 0;
     fixture.renderer.BeginFrame();
@@ -423,7 +411,7 @@ testMainMenuPrimitiveBudget()
 static void
 testMainMenuNavigation()
 {
-  testSection("MainMenuModule: keyboard navigation");
+  testSection("TitleScene: keyboard navigation");
   CSimSounds::resetCounts();
   MainMenuFixture fixture;
   testTrue(g, fixture.started, "menu started");
@@ -431,7 +419,7 @@ testMainMenuNavigation()
   // Key Down: 0 -> 1 -> 2 -> 3 -> 0
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
             fixture.module.getSelectedItemForTesting(),
             1,
@@ -439,7 +427,7 @@ testMainMenuNavigation()
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
             fixture.module.getSelectedItemForTesting(),
             2,
@@ -447,7 +435,7 @@ testMainMenuNavigation()
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
             fixture.module.getSelectedItemForTesting(),
             3,
@@ -455,7 +443,7 @@ testMainMenuNavigation()
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
             fixture.module.getSelectedItemForTesting(),
             0,
@@ -464,7 +452,7 @@ testMainMenuNavigation()
   // Key Up: 0 -> 3
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Up, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
             fixture.module.getSelectedItemForTesting(),
             3,
@@ -477,14 +465,14 @@ testMainMenuNavigation()
     InputManager::KeyPressEvent{ KeyCode::Up, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            fixture.module.isSettingsOpenForTesting() &&
              CSimSounds::playCount(CSimSound::MenuSelect) == 1,
            "activating an item plays the select cue");
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.module.isSettingsOpenForTesting() &&
              CSimSounds::playCount(CSimSound::MenuBack) == 1,
@@ -495,35 +483,35 @@ testMainMenuNavigation()
 static void
 testMainMenuPlayTransition()
 {
-  testSection("MainMenuModule: Play action requests transition");
+  testSection("TitleScene: Play action requests transition");
   MainMenuFixture fixture;
   testTrue(g, fixture.started, "menu started");
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   testTrue(g,
            fixture.module.isCanvasSetupOpenForTesting() &&
              !fixture.module.isSettingsOpenForTesting() &&
-             !fixture.host.HasPendingTransition(),
+             !fixture.director.hasPendingSwitch(),
            "New simulation opens its own setup without starting");
   fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           fixture.host.HasPendingTransition(),
-           "Create requests module transition");
+           fixture.director.hasPendingSwitch(),
+           "Create requests the canvas scene");
   testTrue(g,
-           fixture.host.transitionRequested != nullptr,
-           "transitioned module instance is valid");
+           fixture.director.has(CSimScenes::kCanvas),
+           "the new canvas scene is added");
 }
 
 static void
 testMainMenuSettingsWorkflow()
 {
-  testSection("MainMenuModule: Settings dialog open and close");
+  testSection("TitleScene: Settings dialog open and close");
   MainMenuFixture fixture;
   testTrue(g, fixture.started, "menu started");
 
@@ -535,16 +523,16 @@ testMainMenuSettingsWorkflow()
            "activating Settings opens dialog");
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::UI).size(),
-             MainMenuModule::menuLayerCountForTesting() + 1u,
+             TitleScene::menuLayerCountForTesting() + 1u,
              "settings menu is dispatched after the title screen's layers");
 
   // Close Settings with Escape
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.module.isSettingsOpenForTesting(),
            "Escape closes settings dialog");
@@ -561,7 +549,7 @@ testMainMenuSettingsApply()
   fixture.env.setVar("showInspector", true);
   fixture.env.setVar("reducedUiMotion", true);
   fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            fixture.module.isSettingsOpenForTesting(),
            "F1 opens settings on the main menu");
@@ -577,7 +565,7 @@ testMainMenuSettingsApply()
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.module.isSettingsOpenForTesting() &&
              fixture.env.getVar("fps").valueAsLong == 165,
@@ -590,14 +578,14 @@ testMainMenuSettingsApply()
              fixture.env.getVar("reducedUiMotion").valueAsBool,
            "Apply preserves existing display and zero-fade preferences");
   fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   // The menu reopens on the VIDEO tab it closed on.
   for (int row = 0; row < 2; ++row) {
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            fixture.env.getVar("fps").valueAsLong == 165,
            "Discard preserves the applied FPS cap");
@@ -612,7 +600,7 @@ testMainMenuRestartPrompt()
   fixture.window.msaaSamples = 4;
   std::queue<InputManager::KeyPressEvent>& keys = fixture.input.getKeyQueue();
   keys.push({ KeyCode::F1, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   // VIDEO tab (third), Anti-aliasing row (fourth) 4x -> 8x, then Apply.
   keys.push({ KeyCode::Tab, InputAction::Press, 0 });
   keys.push({ KeyCode::Tab, InputAction::Press, 0 });
@@ -624,7 +612,7 @@ testMainMenuRestartPrompt()
     keys.push({ KeyCode::Down, InputAction::Press, 0 });
   }
   keys.push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.module.isSettingsOpenForTesting() &&
              fixture.module.isRestartPromptOpenForTesting() &&
@@ -632,7 +620,7 @@ testMainMenuRestartPrompt()
            "applying a new MSAA from the main menu offers to restart");
   // Escape answers Later; on the main menu behind it, it would quit.
   keys.push({ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.module.isRestartPromptOpenForTesting() &&
              !fixture.window.closeRequested &&
@@ -641,14 +629,14 @@ testMainMenuRestartPrompt()
 
   // Applying again (MSAA still differs from the window) asks again.
   keys.push({ KeyCode::F1, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   keys.push({ KeyCode::End, InputAction::Press, 0 });
   keys.push({ KeyCode::Left, InputAction::Press, 0 });
   keys.push({ KeyCode::Left, InputAction::Press, 0 });
   keys.push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   keys.push({ KeyCode::Y, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            fixture.window.restartRequested() && fixture.window.closeRequested,
            "Restart now asks the host to close and relaunch");
@@ -661,7 +649,7 @@ testSettingsMouseIsolation()
   fixture.env.setVar("reducedUiMotion", true);
   fixture.env.setVar("fps", 60);
   fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   // VIDEO tab (third), FPS cap row, one stop up (60 -> 75).
   fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 0 });
@@ -669,7 +657,7 @@ testSettingsMouseIsolation()
     fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   }
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   // The Apply footer button sits over the underlying main-menu cards.
   const ConfigurationMenu* settings = fixture.module.settingsMenuForTesting();
   const std::array<float, 4> apply =
@@ -681,24 +669,24 @@ testSettingsMouseIsolation()
     static_cast<double>((apply[1] + apply[3] * 0.5f) * scale);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.module.isSettingsOpenForTesting() &&
              fixture.env.getVar("fps").valueAsLong == 75,
            "clicking the Apply button commits the draft");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.window.closeRequested &&
-             !fixture.host.HasPendingTransition(),
+             !fixture.director.hasPendingSwitch(),
            "holding Apply does not activate the underlying main-menu action");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            fixture.window.closeRequested,
            "settings Exit requests normal close from the main menu");
@@ -707,7 +695,7 @@ testSettingsMouseIsolation()
 static void
 testMainMenuYieldsToConsole()
 {
-  testSection("MainMenuModule: open console blocks menu input");
+  testSection("TitleScene: open console blocks menu input");
   MainMenuFixture fixture;
   testTrue(g, fixture.started, "menu started");
 
@@ -715,13 +703,13 @@ testMainMenuYieldsToConsole()
   testTrue(g, fixture.console.isOpen, "console is open");
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
             fixture.module.getSelectedItemForTesting(),
             0,
             "open console blocks Down navigation");
   testTrue(g,
-           !fixture.host.HasPendingTransition(),
+           !fixture.director.hasPendingSwitch(),
            "open console does not activate Play");
 
   fixture.console.Toggle();
@@ -731,7 +719,7 @@ testMainMenuYieldsToConsole()
     InputManager::KeyPressEvent{ KeyCode::Grave, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Down, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
             fixture.module.getSelectedItemForTesting(),
             1,
@@ -745,7 +733,7 @@ testMainMenuYieldsToConsole()
 static void
 testMainMenuSettingsYieldToConsole()
 {
-  testSection("MainMenuModule: open console blocks settings input");
+  testSection("TitleScene: open console blocks settings input");
   MainMenuFixture fixture;
   testTrue(g, fixture.started, "menu started");
 
@@ -758,7 +746,7 @@ testMainMenuSettingsYieldToConsole()
   fixture.console.Toggle();
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            fixture.module.isSettingsOpenForTesting(),
            "open console blocks settings Escape");
@@ -767,7 +755,7 @@ testMainMenuSettingsYieldToConsole()
 static void
 testMainMenuConsoleCommands()
 {
-  testSection("MainMenuModule: console commands");
+  testSection("TitleScene: console commands");
   MainMenuFixture fixture;
   testTrue(g, fixture.started, "menu started");
   testTrue(
@@ -778,7 +766,7 @@ testMainMenuConsoleCommands()
 
   testTrue(g,
            fixture.module.isCanvasSetupOpenForTesting() &&
-             !fixture.host.HasPendingTransition(),
+             !fixture.director.hasPendingSwitch(),
            "play command opens canvas setup");
 }
 
@@ -789,26 +777,26 @@ testCanvasSetupValidation()
   NewSimulationConfiguration config;
   config.worldChunkWidth = 2;
   config.worldChunkHeight = 0;
-  CellGameModule invalid(config);
+  CanvasScene invalid(config);
   testTrue(g,
-           !invalid.Start(&fixture.context),
+           !invalid.start(fixture.context),
            "mixed infinite/finite topology rejected before startup");
   config.worldChunkHeight = 2;
   config.ruleSet = "NOT_A_RULE";
   testTrue(g, !config.isValid(), "unknown ruleset rejected");
   config.ruleSet = "WIREWORLD";
   config.family = "WIREWORLD_FAMILY";
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
-  CellGameModule seeded(config);
+  CanvasScene seeded(config);
   testTrue(
-    g, seeded.Start(&fixture.context), "valid non-default ruleset starts");
-  CellContext* cells = CellGameModuleTestAccess::getCellContext(seeded);
+    g, seeded.start(fixture.context), "valid non-default ruleset starts");
+  CellContext* cells = CanvasSceneTestAccess::getCellContext(seeded);
   testTrue(g,
            cells && cells->getModeString() == "WIREWORLD" &&
              cells->getGrid()->getAllocatedChunkCount() > 0,
            "chosen ruleset and starter pattern reach canvas");
-  seeded.Exit();
+  seeded.stop();
 }
 
 static void
@@ -819,19 +807,19 @@ testCanvasSetupDraft()
   fixture.env.setVar("WorldChunksY", 0);
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !fixture.host.HasPendingTransition(),
+           !fixture.director.hasPendingSwitch(),
            "opening Enter cannot create a canvas");
   fixture.input.getKeyQueue().push({ KeyCode::F1, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.module.isCanvasSetupOpenForTesting() &&
              !fixture.module.isSettingsOpenForTesting() &&
-             !fixture.host.HasPendingTransition(),
+             !fixture.director.hasPendingSwitch(),
            "Escape discards setup and F1 does not open global settings");
   testTrue(g,
            fixture.env.getVar("WorldChunksX").valueAsLong == 0 &&
@@ -859,18 +847,18 @@ testCanvasSetupCreatesConfiguredWorld()
                        KeyCode::Enter }) {
     fixture.input.getKeyQueue().push({ key, InputAction::Press, 0 });
   }
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(
-    g, fixture.host.HasPendingTransition(), "configured canvas is submitted");
-  if (!fixture.host.HasPendingTransition())
+    g, fixture.director.hasPendingSwitch(), "configured canvas is submitted");
+  if (!fixture.director.hasPendingSwitch())
     return;
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
-  CellGameModule* game =
-    static_cast<CellGameModule*>(fixture.host.transitionRequested.get());
-  const bool started = game->Start(&fixture.context);
+  CanvasScene* game =
+    static_cast<CanvasScene*>(fixture.director.find(CSimScenes::kCanvas));
+  const bool started = game->start(fixture.context);
   testTrue(g, started, "configured game starts");
-  CellContext* cells = CellGameModuleTestAccess::getCellContext(*game);
+  CellContext* cells = CanvasSceneTestAccess::getCellContext(*game);
   testTrue(g,
            cells && cells->getWorldChunkWidth() == 33 &&
              cells->getWorldChunkHeight() == 24,
@@ -882,7 +870,7 @@ testCanvasSetupCreatesConfiguredWorld()
            fixture.env.getVar("fps").valueAsLong == 60 &&
              fixture.env.getVar("tps").valueAsLong == 30,
            "canvas creation preserves performance settings");
-  game->Exit();
+  game->stop();
 }
 
 static int
@@ -896,14 +884,14 @@ runMainMenuCase(void (*testFunction)())
 static void
 testMainMenuPanelTilt()
 {
-  testSection("MainMenuModule: the panel swivels toward the pointer");
+  testSection("TitleScene: the panel swivels toward the pointer");
   MainMenuFixture fixture;
   testTrue(g, fixture.started, "menu started");
   // Centered pointer: the entrance settles and the panel stays level.
   fixture.window.mouseX = 320.0;
   fixture.window.mouseY = 240.0;
   for (int frame = 0; frame < 150; ++frame) {
-    fixture.module.Update(1.0 / 60.0);
+    fixture.module.update(1.0 / 60.0);
   }
   testTrue(g,
            std::abs(fixture.module.tiltXForTesting()) < 0.01f &&
@@ -915,7 +903,7 @@ testMainMenuPanelTilt()
   fixture.window.mouseX = 639.0;
   fixture.window.mouseY = 479.0;
   for (int frame = 0; frame < 120; ++frame) {
-    fixture.module.Update(1.0 / 60.0);
+    fixture.module.update(1.0 / 60.0);
   }
   testTrue(g,
            fixture.module.tiltXForTesting() > 0.9f &&
@@ -934,7 +922,7 @@ testMainMenuPanelTilt()
            "the probe lies below where the level row would be");
   fixture.window.mouseX = static_cast<double>(tilted[0] + tilted[2] * 0.5f);
   fixture.window.mouseY = static_cast<double>(pointY);
-  fixture.module.Update(1.0 / 60.0);
+  fixture.module.update(1.0 / 60.0);
   testEqInt(g,
             fixture.module.getSelectedItemForTesting(),
             2,
@@ -943,7 +931,7 @@ testMainMenuPanelTilt()
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::F1, InputAction::Press, 0 });
   for (int frame = 0; frame < 150; ++frame) {
-    fixture.module.Update(1.0 / 60.0);
+    fixture.module.update(1.0 / 60.0);
   }
   testTrue(g,
            fixture.module.isSettingsOpenForTesting() &&

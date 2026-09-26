@@ -11,7 +11,7 @@
 #include "NewSimulationMenu.h"
 #include "RulesetWorkshopMenu.h"
 #include <Illumo/Content/SceneInstance.h>
-#include <Illumo/Engine/IModule.h>
+#include <Illumo/Content/ProgramScene.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -32,18 +32,23 @@ enum class CellState
   EXIT
 };
 
-class CellGameModule : public IModule
+// A CSim canvas: the simulation, its editor and chrome, as a program scene
+// (D-E31). Returning to the title screen asks CSimScenes for it.
+class CanvasScene : public ProgramScene
 {
-  friend class CellGameModuleTestAccess;
+  friend class CanvasSceneTestAccess;
 
 public:
-  explicit CellGameModule(std::string initialSaveFile = {});
-  explicit CellGameModule(const NewSimulationConfiguration& configuration);
-  ~CellGameModule() override;
-  bool Start(IllumoContext* context) override;
-  void Update(double dt) override;
-  void DispatchDrawables(Scene* scene) override;
-  void Exit() override;
+  explicit CanvasScene(std::string initialSaveFile = {});
+  explicit CanvasScene(const NewSimulationConfiguration& configuration);
+  ~CanvasScene() override;
+  // A new canvas opens on its home view: centred, at zoom kHomeZoom.
+  static constexpr float kHomeZoom = 0.5f;
+
+  bool start(IllumoContext& context) override;
+  void update(double dt) override;
+  void dispatch(Scene& frame) override;
+  void stop() override;
 
 private:
   void Normal(double dt);
@@ -81,6 +86,7 @@ private:
   void updatePaintPalette(double dt);
   void updateModeBadge(double dt);
   void advanceCanvasEntrance(double dt);
+  void resetCameraToHome();
   void requestMainMenuReturn();
   void completeMainMenuReturn();
   void rebuildCanvasEntrance();
@@ -126,6 +132,7 @@ private:
   bool applyConfiguration(const SimulatorConfiguration& configuration);
   CellClipboard& getClipboard() { return clipboard; }
   const CellClipboard& getClipboard() const { return clipboard; }
+  IllumoContext* ic{ nullptr };
   CellContext* cellContext;
   CellState currentState;
   InputContext inputContext;

@@ -12,7 +12,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 | M1 | done | `ProgramScene`, `SceneDirector` in `Illumo::Content`; 7 tests |
 | M2 | done, `a3d55795` | `GuestProgram`; viewer and IllEd are scenes; CSim through a temporary adapter |
 | M3 | done | Frame v8 `SelectWorld`, `ShowWorld`, `DestroyWorld`; `GuestSceneWorlds` |
-| M4 | not started | CSim: `CSimProgram`, `TitleScene`, `CanvasScene` |
+| M4 | in progress | M4a done: `TitleScene`, `CanvasScene`, `CSimScenes`, home zoom 0.5; M4b keep-alive and Resume; M4c one Settings menu |
 | M5 | not started | Host: modules removed |
 | M6 | not started | Leftovers, template, optional `Scene` rename |
 | M7 | not started | Optional crossfade |
@@ -221,3 +221,21 @@ returns nothing outside `docs/history` and archives.
   world ever draws, with the frame camera, so a camera per world waits for
   crossfades (M7). Every scene of every program now has its own host world.
   Full suite 681 of 681.
+- 2026-09-26, M4a:
+  - `MainMenuModule` and `CellGameModule` are now `TitleScene` and
+    `CanvasScene`, and the adapter is gone.
+  - `CSimScenes` (static, over `IllumoContext::scenes`) opens the title,
+    starts a new or loaded canvas, returns to the title, and releases the
+    screen that was left. That matches module behaviour until M4b keeps the
+    canvas.
+  - The canvas has a home view (centred, zoom 0.5): new canvases,
+    `camera_reset`, topology changes and saves without a camera all use it.
+    The canvas renders pixel-identical to M0 apart from the pointer and the
+    halo's breathing.
+  - Test fixtures use a real `SceneDirector`, and the mock module hosts are
+    deleted.
+  - The native `IllumoGameApplication.cpp` is deleted, with its four tests of
+    dead command-line metadata and its catalog factory.
+  - A switch hitch is about 1 ms above M0 (6-7 ms): each switch also creates
+    and destroys a host world.
+  - Full suite 677 of 677.

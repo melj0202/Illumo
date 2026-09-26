@@ -1,6 +1,7 @@
 #include "Game/CSimSounds.h"
 #include "Game/CanvasCoordinatePolicy.h"
-#include "Game/CellGameModule.h"
+#include "Game/CSimScenes.h"
+#include "Game/CanvasScene.h"
 #include "Game/RuleCatalogLoader.h"
 #include "Game/SimulatorSettings.h"
 #include "Game/SoftwareCursor.h"
@@ -10,7 +11,7 @@
 #include "TestAccess.h"
 #include "TestHarness.h"
 #include <Illumo/Content/VfsAssetSource.h>
-#include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Platform/SaveLoad.h>
@@ -191,7 +192,7 @@ struct CellGameFixture
   InputManager input;
   Scene scene;
   IllumoContext context;
-  CellGameModule module;
+  CanvasScene module;
   bool started;
 
   CellGameFixture(int width = 8, int height = 6)
@@ -242,14 +243,14 @@ struct CellGameFixture
     env.setVar("autosaveMinutes", 0);
     env.setVar("confirmClear", true);
     mock.Initialize();
-    module.Start(&context);
-    started = CellGameModuleTestAccess::getCellContext(module) != nullptr;
+    module.start(context);
+    started = CanvasSceneTestAccess::getCellContext(module) != nullptr;
   }
 
   ~CellGameFixture()
   {
     if (started) {
-      module.Exit();
+      module.stop();
     }
   }
 
@@ -306,20 +307,20 @@ readFileBytes(const std::filesystem::path& path)
 static void
 testCanvasPreferences()
 {
-  testSection("CellGameModule: camera, look, start and autosave settings");
+  testSection("CanvasScene: camera, look, start and autosave settings");
   CellGameFixture fixture;
 
   // Zoom sensitivity and direction.
   fixture.env.setVar("zoomStep", 0.5);
   fixture.camera.SetZoom(1.0f);
   InputManager::scrollCallback(nullptr, 0.0, 1.0);
-  fixture.module.Update(-1.0);
+  fixture.module.update(-1.0);
   testTrue(g,
            std::abs(fixture.camera.GetTargetZoom() - 1.5f) < 0.001f,
            "one wheel notch zooms by the persisted step");
   fixture.env.setVar("invertZoom", true);
   InputManager::scrollCallback(nullptr, 0.0, 1.0);
-  fixture.module.Update(-1.0);
+  fixture.module.update(-1.0);
   testTrue(g,
            std::abs(fixture.camera.GetTargetZoom() - 0.75f) < 0.001f,
            "inverted zoom turns a wheel-up notch into a zoom out");
@@ -334,7 +335,7 @@ testCanvasPreferences()
   const glm::dvec2 before = fixture.camera.GetTargetPositionPrecise();
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::Right, InputAction::Press);
-  fixture.module.Update(0.5);
+  fixture.module.update(0.5);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::Right, InputAction::Release);
   const glm::dvec2 panned = fixture.camera.GetTargetPositionPrecise();
@@ -344,7 +345,7 @@ testCanvasPreferences()
   fixture.env.setVar("panSpeed", 0);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::Up, InputAction::Press);
-  fixture.module.Update(0.5);
+  fixture.module.update(0.5);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::Up, InputAction::Release);
   testTrue(g,
@@ -353,20 +354,20 @@ testCanvasPreferences()
 
   // The cell look travels in the cell quad's colour channel.
   SimulatorConfiguration look =
-    CellGameModuleTestAccess::currentConfiguration(fixture.module);
+    CanvasSceneTestAccess::currentConfiguration(fixture.module);
   look.ledCells = false;
   look.cellGlow = 2.0;
   look.gridLines = true;
   testTrue(g,
-           CellGameModuleTestAccess::applyConfiguration(fixture.module, look),
+           CanvasSceneTestAccess::applyConfiguration(fixture.module, look),
            "canvas look settings apply");
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   fixture.renderer.BeginFrame();
   fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
   fixture.renderer.EndFrame();
   const std::array<float, 32>& quad =
-    CellGameModuleTestAccess::getCellContext(fixture.module)
+    CanvasSceneTestAccess::getCellContext(fixture.module)
       ->getCanvasView()
       ->getCellQuadVertices();
   testTrue(g,
@@ -381,7 +382,7 @@ testCanvasPreferences()
   invalid.zoomStep = 3.0;
   testTrue(
     g,
-    !CellGameModuleTestAccess::applyConfiguration(fixture.module, invalid),
+    !CanvasSceneTestAccess::applyConfiguration(fixture.module, invalid),
     "out-of-range new settings are rejected");
 
   // Autosave writes to private storage once the interval elapses.
@@ -389,25 +390,25 @@ testCanvasPreferences()
   std::error_code ignored;
   std::filesystem::remove(autosave, ignored);
   fixture.env.setVar("autosaveMinutes", 1);
-  fixture.module.Update(30.0);
+  fixture.module.update(30.0);
   testTrue(
     g, !std::filesystem::exists(autosave), "autosave waits for its interval");
-  fixture.module.Update(31.0);
+  fixture.module.update(31.0);
   testTrue(g,
            std::filesystem::exists(autosave),
            "autosave writes once the interval elapses");
   std::filesystem::remove(autosave, ignored);
 
   // Start paused off opens the next canvas running.
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   fixture.env.setVar("startPaused", false);
-  CellGameModule running;
+  CanvasScene running;
   testTrue(g,
-           running.Start(&fixture.context) &&
-             CellGameModuleTestAccess::getState(running) == CellState::NORMAL,
+           running.start(fixture.context) &&
+             CanvasSceneTestAccess::getState(running) == CellState::NORMAL,
            "with start paused off a canvas opens running");
-  running.Exit();
+  running.stop();
 }
 
 static void
@@ -415,7 +416,7 @@ openCanvasSettings(CellGameFixture& fixture)
 {
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::F1, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::F1, InputAction::Release);
 }
@@ -424,7 +425,7 @@ openCanvasSettings(CellGameFixture& fixture)
 static void
 applyMsaaStep(CellGameFixture& fixture, KeyCode step)
 {
-  CellGameModuleTestAccess::getConfigurationMenu(fixture.module)
+  CanvasSceneTestAccess::getConfigurationMenu(fixture.module)
     ->selectTabForTesting(ConfigurationTab::Video);
   std::queue<InputManager::KeyPressEvent>& keys = fixture.input.getKeyQueue();
   for (int row = 0; row < 3; ++row) {
@@ -435,20 +436,20 @@ applyMsaaStep(CellGameFixture& fixture, KeyCode step)
     keys.push({ KeyCode::Down, InputAction::Press, 0 });
   }
   keys.push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 }
 
 static void
 testRestartPrompt()
 {
-  testSection("CellGameModule: restart prompt for restart-only settings");
+  testSection("CanvasScene: restart prompt for restart-only settings");
   CellGameFixture fixture;
   fixture.env.setVar("msaa", 4);
   fixture.window.msaaSamples = 4;
   ConfigurationMenu* menu =
-    CellGameModuleTestAccess::getConfigurationMenu(fixture.module);
+    CanvasSceneTestAccess::getConfigurationMenu(fixture.module);
   ExitConfirmDialog* prompt =
-    CellGameModuleTestAccess::getExitConfirmDialog(fixture.module);
+    CanvasSceneTestAccess::getExitConfirmDialog(fixture.module);
 
   // Unchanged MSAA: Apply closes the menu and asks nothing.
   openCanvasSettings(fixture);
@@ -456,7 +457,7 @@ testRestartPrompt()
   fixture.input.getKeyQueue().push({ KeyCode::Left, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Left, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !menu->isOpen() && !prompt->isOpen(),
            "applying without a restart-only change asks nothing");
@@ -469,7 +470,7 @@ testRestartPrompt()
              fixture.env.getVar("msaa").valueAsLong == 8,
            "applying a new MSAA saves it and offers to restart");
   fixture.input.getKeyQueue().push({ KeyCode::N, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !prompt->isOpen() && !fixture.window.closeRequested &&
              !fixture.window.restartRequested(),
@@ -481,10 +482,10 @@ testRestartPrompt()
   fixture.input.getKeyQueue().push({ KeyCode::Left, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Left, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, prompt->isOpen(), "the prompt returns while MSAA still differs");
   fixture.input.getKeyQueue().push({ KeyCode::Y, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !prompt->isOpen() && fixture.window.closeRequested &&
              fixture.window.restartRequested(),
@@ -504,11 +505,11 @@ testRestartPrompt()
 static void
 testStartRegistersGameFeatures()
 {
-  testSection("CellGameModule: start and command registration");
+  testSection("CanvasScene: start and command registration");
   CellGameFixture fixture;
   testTrue(g, fixture.started, "valid headless context starts the game module");
   testTrue(g,
-           CellGameModuleTestAccess::getState(fixture.module) ==
+           CanvasSceneTestAccess::getState(fixture.module) ==
              CellState::EDIT,
            "module starts in edit mode");
   testEqSize(g,
@@ -536,12 +537,12 @@ testStartRegistersGameFeatures()
              RuleSetRegistry::instance().getKnownRules().size(),
              "ruleset completion candidates registered");
   testTrue(g,
-           CellGameModuleTestAccess::getConfigurationMenu(fixture.module) !=
+           CanvasSceneTestAccess::getConfigurationMenu(fixture.module) !=
              nullptr,
            "Release-visible configuration menu is constructed at startup");
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   testEqSize(g,
              fixture.scene.drawableCount(),
              2,
@@ -551,7 +552,7 @@ testStartRegistersGameFeatures()
              1,
              "canvas is on the World layer");
 
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   testEqSize(g,
              fixture.registry.GetCommandNames().size(),
@@ -562,43 +563,44 @@ testStartRegistersGameFeatures()
 static void
 testInvalidContextStartIsContained()
 {
-  testSection("CellGameModule: invalid start context");
-  CellGameModule module;
-  module.Start(nullptr);
-  testTrue(g,
-           CellGameModuleTestAccess::getCellContext(module) == nullptr,
-           "null context does not create game state");
-  // Failed Start must not crash on later frame hooks.
-  module.Update(0.016);
-  module.DispatchDrawables(nullptr);
-  module.Exit();
-
+  testSection("CanvasScene: invalid start context");
   CellGameFixture fixture;
+  IllumoContext empty;
+  CanvasScene module;
+  module.start(empty);
+  testTrue(g,
+           CanvasSceneTestAccess::getCellContext(module) == nullptr,
+           "an empty context does not create game state");
+  // A failed start must not crash on later frame hooks.
+  module.update(0.016);
+  module.dispatch(fixture.scene);
+  module.stop();
+
   IllumoContext incomplete = fixture.context;
   incomplete.commandRegistry = nullptr;
-  CellGameModule incompleteModule;
-  incompleteModule.Start(&incomplete);
+  CanvasScene incompleteModule;
+  incompleteModule.start(incomplete);
   testTrue(g,
-           CellGameModuleTestAccess::getCellContext(incompleteModule) ==
+           CanvasSceneTestAccess::getCellContext(incompleteModule) ==
              nullptr,
            "missing service rejects startup");
-  incompleteModule.Update(0.016);
-  incompleteModule.DispatchDrawables(&fixture.scene);
-  incompleteModule.Exit();
+  incompleteModule.update(0.016);
+  incompleteModule.dispatch(fixture.scene);
+  incompleteModule.stop();
 }
 
 static void
 testRender3dTestFlag()
 {
-  testSection("CellGameModule: render3dTest diagnostic scene");
+  testSection("CanvasScene: render3dTest diagnostic scene");
   CellGameFixture fixture;
   fixture.env.setVar("render3dTest", true);
-  fixture.module.Update(0.5);
+  fixture.module.update(0.5);
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
 
   SceneInstance* diagnostic =
-    CellGameModuleTestAccess::getRender3dScene(fixture.module);
+    CanvasSceneTestAccess::getRender3dScene(fixture.module);
   testTrue(g,
            diagnostic != nullptr,
            "the flag loads Scenes/render3d-test.ilsc into a scene instance");
@@ -617,9 +619,9 @@ testRender3dTestFlag()
                diagnostic->parentOf("child") == "orbit",
              "the scene holds the animated orbit and child nodes");
     const Transform3D before = diagnostic->findNode("orbit")->transform;
-    fixture.module.Update(0.25);
+    fixture.module.update(0.25);
     fixture.scene.ClearDrawables();
-    fixture.module.DispatchDrawables(&fixture.scene);
+    fixture.module.dispatch(fixture.scene);
     const Transform3D after = diagnostic->findNode("orbit")->transform;
     testTrue(g,
              std::abs(before.position.x - after.position.x) > 1e-4f,
@@ -631,7 +633,7 @@ testRender3dTestFlag()
 
   fixture.env.setVar("render3dTest", false);
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   testEqSize(g,
              fixture.scene.drawablesIn(RenderLayerId::World).size(),
              1u,
@@ -639,7 +641,7 @@ testRender3dTestFlag()
   testTrue(
     g,
     fixture.scene.drawablesIn(RenderLayerId::World)[0] ==
-      CellGameModuleTestAccess::getCellContext(fixture.module)->getCanvasView(),
+      CanvasSceneTestAccess::getCellContext(fixture.module)->getCanvasView(),
     "normal World presentation is restored");
   testTrue(g,
            fixture.camera.getProjectionType() == ProjectionType::Orthographic,
@@ -649,24 +651,24 @@ testRender3dTestFlag()
 static void
 testWireworldSeedAndBrush()
 {
-  testSection("CellGameModule: Wireworld seed and brush state");
+  testSection("CanvasScene: Wireworld seed and brush state");
   CellGameFixture fixture(16, 12);
   fixture.env.setVar("FamilyString", "WIREWORLD_FAMILY");
   fixture.env.setVar("RuleSetString", "WIREWORLD");
   fixture.env.setVar("ModeString", "WIREWORLD");
   // Restart under Wireworld so seedInitialPattern runs for that ruleset.
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   fixture.env.setVar("FamilyString", "WIREWORLD_FAMILY");
   fixture.env.setVar("RuleSetString", "WIREWORLD");
   fixture.env.setVar("ModeString", "WIREWORLD");
-  fixture.module.Start(&fixture.context);
+  fixture.module.start(fixture.context);
   fixture.started =
-    CellGameModuleTestAccess::getCellContext(fixture.module) != nullptr;
+    CanvasSceneTestAccess::getCellContext(fixture.module) != nullptr;
   testTrue(g, fixture.started, "Wireworld Start succeeds");
 
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g, cellContext != nullptr, "Wireworld cellContext exists");
   testTrue(
     g, cellContext->getModeString() == "WIREWORLD", "ModeString is WIREWORLD");
@@ -693,14 +695,14 @@ testWireworldSeedAndBrush()
 
   testEqInt(g,
             static_cast<int>(
-              CellGameModuleTestAccess::getWireworldBrush(fixture.module)),
+              CanvasSceneTestAccess::getWireworldBrush(fixture.module)),
             static_cast<int>(WireworldRuleSet::CELL_CONDUCTOR),
             "default brush is conductor");
-  CellGameModuleTestAccess::setWireworldBrush(fixture.module,
+  CanvasSceneTestAccess::setWireworldBrush(fixture.module,
                                               WireworldRuleSet::CELL_HEAD);
   testEqInt(g,
             static_cast<int>(
-              CellGameModuleTestAccess::getWireworldBrush(fixture.module)),
+              CanvasSceneTestAccess::getWireworldBrush(fixture.module)),
             static_cast<int>(WireworldRuleSet::CELL_HEAD),
             "brush can select head for left-paint");
 }
@@ -708,16 +710,16 @@ testWireworldSeedAndBrush()
 static void
 testCyclicMultistateSeed()
 {
-  testSection("CellGameModule: cyclic rules seed many interacting states");
+  testSection("CanvasScene: cyclic rules seed many interacting states");
   CellGameFixture fixture(24, 18);
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   fixture.env.setVar("FamilyString", "PRISMATIC_ECOLOGY_12");
   fixture.env.setVar("RuleSetString", "PRISM_RUSH");
   fixture.env.setVar("ModeString", "PRISM_RUSH");
-  fixture.started = fixture.module.Start(&fixture.context);
+  fixture.started = fixture.module.start(fixture.context);
   CellContext* context =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g,
            fixture.started && context != nullptr &&
              context->getRuleSet()->getStateCount() == 12u,
@@ -744,19 +746,19 @@ testCyclicMultistateSeed()
 static void
 testEveryShippedRuleStarts()
 {
-  testSection("CellGameModule: every shipped rule starts and advances");
+  testSection("CanvasScene: every shipped rule starts and advances");
   CellGameFixture fixture(24, 18);
   const std::vector<RuleSetDefinition> definitions =
     RuleSetRegistry::instance().getDefinitions();
   for (const RuleSetDefinition& definition : definitions) {
-    fixture.module.Exit();
+    fixture.module.stop();
     fixture.started = false;
     fixture.env.setVar("FamilyString", definition.familyId);
     fixture.env.setVar("RuleSetString", definition.id);
     fixture.env.setVar("ModeString", definition.id);
-    fixture.started = fixture.module.Start(&fixture.context);
+    fixture.started = fixture.module.start(fixture.context);
     CellContext* context =
-      CellGameModuleTestAccess::getCellContext(fixture.module);
+      CanvasSceneTestAccess::getCellContext(fixture.module);
     const std::string started = definition.id + " starts";
     testTrue(g,
              fixture.started && context != nullptr &&
@@ -781,16 +783,16 @@ testEveryShippedRuleStarts()
 static void
 testResearchedStarterSeeds()
 {
-  testSection("CellGameModule: researched rules start with active populations");
+  testSection("CanvasScene: researched rules start with active populations");
   CellGameFixture fixture(24, 18);
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   fixture.env.setVar("FamilyString", "QUADLIFE_4_SPECIES");
   fixture.env.setVar("RuleSetString", "QUADLIFE");
   fixture.env.setVar("ModeString", "QUADLIFE");
-  fixture.started = fixture.module.Start(&fixture.context);
+  fixture.started = fixture.module.start(fixture.context);
   CellContext* context =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g,
            fixture.started && context != nullptr,
            "QuadLife starts from its researched catalog entry");
@@ -810,13 +812,13 @@ testResearchedStarterSeeds()
              "QuadLife starter includes all four species and background");
   }
 
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   fixture.env.setVar("FamilyString", "GENERATIONS_21_PHASE");
   fixture.env.setVar("RuleSetString", "FIREWORKS");
   fixture.env.setVar("ModeString", "FIREWORKS");
-  fixture.started = fixture.module.Start(&fixture.context);
-  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  fixture.started = fixture.module.start(fixture.context);
+  context = CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g,
            fixture.started && context != nullptr,
            "Fireworks starts from its twenty-one-state family");
@@ -840,13 +842,13 @@ testResearchedStarterSeeds()
              "Fireworks starter develops a multi-phase colored trail");
   }
 
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   fixture.env.setVar("FamilyString", "HODGEPODGE_101_LEVEL");
   fixture.env.setVar("RuleSetString", "HODGEPODGE_SPIRAL_G28");
   fixture.env.setVar("ModeString", "HODGEPODGE_SPIRAL_G28");
-  fixture.started = fixture.module.Start(&fixture.context);
-  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  fixture.started = fixture.module.start(fixture.context);
+  context = CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g,
            fixture.started && context != nullptr,
            "Hodgepodge starts from its 101-level family");
@@ -865,13 +867,13 @@ testResearchedStarterSeeds()
              "Hodgepodge starter exposes nearly its full infection spectrum");
   }
 
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   fixture.env.setVar("FamilyString", "TURMITE_3_COLOR");
   fixture.env.setVar("RuleSetString", "TURMITE_RRL");
   fixture.env.setVar("ModeString", "TURMITE_RRL");
-  fixture.started = fixture.module.Start(&fixture.context);
-  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  fixture.started = fixture.module.start(fixture.context);
+  context = CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g,
            fixture.started && context != nullptr,
            "three-color Turmite starts from its directional family");
@@ -890,13 +892,13 @@ testResearchedStarterSeeds()
              "Turmite swarm advances immediately");
   }
 
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   fixture.env.setVar("FamilyString", "HPP_LATTICE_GAS_16");
   fixture.env.setVar("RuleSetString", "HPP_GAS");
   fixture.env.setVar("ModeString", "HPP_GAS");
-  fixture.started = fixture.module.Start(&fixture.context);
-  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  fixture.started = fixture.module.start(fixture.context);
+  context = CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g,
            fixture.started && context != nullptr,
            "HPP starts from its sixteen-state particle family");
@@ -918,13 +920,13 @@ testResearchedStarterSeeds()
              "particle cloud streams and collides immediately");
   }
 
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   fixture.env.setVar("FamilyString", "RPSLS_5_SPECIES");
   fixture.env.setVar("RuleSetString", "RPSLS_INVASION_T1");
   fixture.env.setVar("ModeString", "RPSLS_INVASION_T1");
-  fixture.started = fixture.module.Start(&fixture.context);
-  context = CellGameModuleTestAccess::getCellContext(fixture.module);
+  fixture.started = fixture.module.start(fixture.context);
+  context = CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g,
            fixture.started && context != nullptr,
            "RPSLS starts from its five-species family");
@@ -948,10 +950,10 @@ testResearchedStarterSeeds()
 static void
 testSaveLoadRoundTrip()
 {
-  testSection("CellGameModule: save/load round trip");
+  testSection("CanvasScene: save/load round trip");
   CellGameFixture fixture(5, 4);
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   CanvasView* canvas = cellContext->getCanvasView();
   testTrue(g,
            cellContext->resetWorld(2, 2),
@@ -967,7 +969,7 @@ testSaveLoadRoundTrip()
 
   const std::filesystem::path savePath = "roundtrip.illumo";
   testTrue(g,
-           CellGameModuleTestAccess::save(fixture.module, savePath.string()),
+           CanvasSceneTestAccess::save(fixture.module, savePath.string()),
            "valid canvas saves");
   const std::vector<char> firstSave = readFileBytes(savePath);
   canvas->clearCanvas();
@@ -978,7 +980,7 @@ testSaveLoadRoundTrip()
   fixture.camera.SetPositionPrecise(1.0, 2.0);
   fixture.camera.SetZoom(1.0f);
   testTrue(g,
-           CellGameModuleTestAccess::load(fixture.module, savePath.string()),
+           CanvasSceneTestAccess::load(fixture.module, savePath.string()),
            "saved canvas loads");
   testTrue(g,
            cellContext->getModeString() == "WIREWORLD" &&
@@ -1013,7 +1015,7 @@ testSaveLoadRoundTrip()
 
   testTrue(
     g,
-    CellGameModuleTestAccess::save(fixture.module, "roundtrip-again.illumo"),
+    CanvasSceneTestAccess::save(fixture.module, "roundtrip-again.illumo"),
     "same sparse state saves again");
   const std::vector<char> secondSave = readFileBytes("roundtrip-again.illumo");
   testTrue(g, firstSave == secondSave, "sparse save output is deterministic");
@@ -1026,10 +1028,10 @@ testSaveLoadRoundTrip()
 static void
 testSparseV2Compatibility()
 {
-  testSection("CellGameModule: sparse v2 compatibility");
+  testSection("CanvasScene: sparse v2 compatibility");
   CellGameFixture fixture;
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(
     g, cellContext->resetWorld(2, 2), "compatibility fixture starts finite");
 
@@ -1064,7 +1066,7 @@ testSparseV2Compatibility()
   }
 
   testTrue(g,
-           CellGameModuleTestAccess::load(fixture.module, "valid-v2.illumo"),
+           CanvasSceneTestAccess::load(fixture.module, "valid-v2.illumo"),
            "version 2 sparse save remains readable");
   testTrue(g,
            !cellContext->getGrid()->isToroidal() &&
@@ -1103,7 +1105,7 @@ testSparseV2Compatibility()
     output.write(reinterpret_cast<const char*>(&noChunks), sizeof(noChunks));
   }
   testTrue(g,
-           CellGameModuleTestAccess::load(fixture.module, "valid-v3.illumo") &&
+           CanvasSceneTestAccess::load(fixture.module, "valid-v3.illumo") &&
              cellContext->getModeString() == "SEEDS" &&
              cellContext->getFamilyString() == "LIFE_LIKE_BINARY",
            "version 3 derives the family from its ruleset ID");
@@ -1112,39 +1114,39 @@ testSparseV2Compatibility()
 static void
 testSettingsYieldToConsole()
 {
-  testSection("CellGameModule: open console blocks settings input");
+  testSection("CanvasScene: open console blocks settings input");
   CellGameFixture fixture;
   ConfigurationMenu* menu =
-    CellGameModuleTestAccess::getConfigurationMenu(fixture.module);
+    CanvasSceneTestAccess::getConfigurationMenu(fixture.module);
   testTrue(g, menu != nullptr && !menu->isOpen(), "settings start closed");
-  menu->open(CellGameModuleTestAccess::currentConfiguration(fixture.module));
+  menu->open(CanvasSceneTestAccess::currentConfiguration(fixture.module));
   testTrue(g, menu->isOpen(), "settings open for console-yield check");
 
   fixture.console.Toggle();
   testTrue(g, fixture.console.isOpen, "console is open");
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, menu->isOpen(), "open console blocks settings Escape");
 }
 
 static void
 testReleaseConfigurationWorkflow()
 {
-  testSection("CellGameModule: Release configuration workflow");
+  testSection("CanvasScene: Release configuration workflow");
   CellGameFixture fixture;
   ConfigurationMenu* menu =
-    CellGameModuleTestAccess::getConfigurationMenu(fixture.module);
+    CanvasSceneTestAccess::getConfigurationMenu(fixture.module);
   testTrue(g, menu != nullptr && !menu->isOpen(), "settings start closed");
 
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::F1, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, menu != nullptr && menu->isOpen(), "F1 opens settings");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::F1, InputAction::Release);
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   testEqSize(g,
              fixture.scene.drawableCount(),
              3u,
@@ -1152,14 +1154,14 @@ testReleaseConfigurationWorkflow()
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, !menu->isOpen(), "Escape closes settings without applying");
 
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   cellContext->getGrid()->setCell(CellAddress{ 77, 88 }, 0);
   SimulatorConfiguration configuration =
-    CellGameModuleTestAccess::currentConfiguration(fixture.module);
+    CanvasSceneTestAccess::currentConfiguration(fixture.module);
   configuration.ruleSet = "SEEDS";
   configuration.worldChunkWidth = 2;
   configuration.worldChunkHeight = 3;
@@ -1174,7 +1176,7 @@ testReleaseConfigurationWorkflow()
   configuration.softwareCursor = false;
   testTrue(
     g,
-    CellGameModuleTestAccess::applyConfiguration(fixture.module, configuration),
+    CanvasSceneTestAccess::applyConfiguration(fixture.module, configuration),
     "valid settings apply atomically");
   testTrue(g,
            cellContext->getGrid()->isToroidal() &&
@@ -1200,7 +1202,7 @@ testReleaseConfigurationWorkflow()
             "fullscreen applies immediately once");
 
   const SimulatorConfiguration applied =
-    CellGameModuleTestAccess::currentConfiguration(fixture.module);
+    CanvasSceneTestAccess::currentConfiguration(fixture.module);
   testTrue(
     g,
     applied.fpsCap == 144 && applied.showInspector && applied.reducedUiMotion &&
@@ -1209,7 +1211,7 @@ testReleaseConfigurationWorkflow()
     "new display preferences round trip through runtime and environment");
   configuration.fpsCap = -1;
   testTrue(g,
-           !CellGameModuleTestAccess::applyConfiguration(fixture.module,
+           !CanvasSceneTestAccess::applyConfiguration(fixture.module,
                                                          configuration) &&
              fixture.env.getVar("fps").valueAsLong == 144,
            "invalid FPS cap leaves applied preferences intact");
@@ -1219,16 +1221,16 @@ testReleaseConfigurationWorkflow()
     InputManager::KeyPressEvent{ KeyCode::End, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   ExitConfirmDialog* confirm =
-    CellGameModuleTestAccess::getExitConfirmDialog(fixture.module);
+    CanvasSceneTestAccess::getExitConfirmDialog(fixture.module);
   testTrue(g,
            !fixture.window.closeRequested && menu->isOpen() &&
              confirm != nullptr && confirm->isOpen(),
            "Exit menu action asks for confirmation first");
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Y, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            fixture.window.closeRequested && !confirm->isOpen(),
            "confirming exit requests normal application shutdown");
@@ -1237,42 +1239,42 @@ testReleaseConfigurationWorkflow()
 static void
 openPaintDrawer(CellGameFixture& fixture)
 {
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           !CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module),
            "drawer starts closed as the peeking bubble");
   fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
   fixture.window.mouseY = static_cast<double>(fixture.window.height) - 1.0;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           !CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module),
            "footer click cannot open the palette");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   const float scale =
     fixture.renderer.getUiScale() *
-    CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module)
+    CanvasSceneTestAccess::getPaintPaletteVisual(fixture.module)
       .getTransform()
       .scaleX;
   fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
   fixture.window.mouseY =
     static_cast<double>(fixture.window.height -
-                        CellGameModuleTestAccess::getCellContext(fixture.module)
+                        CanvasSceneTestAccess::getCellContext(fixture.module)
                           ->getCanvasView()
                           ->getBottomInsetPixels()) -
     16.0 * scale;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module),
            "the peeking bubble opens the drawer");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 }
 
 static void
@@ -1280,7 +1282,7 @@ pointAtPaintCard(CellGameFixture& fixture, int stateCount, int state)
 {
   const float scale =
     fixture.renderer.getUiScale() *
-    CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module)
+    CanvasSceneTestAccess::getPaintPaletteVisual(fixture.module)
       .getTransform()
       .scaleX;
   const float width = static_cast<float>(stateCount) * 132.0f + 24.0f;
@@ -1289,7 +1291,7 @@ pointAtPaintCard(CellGameFixture& fixture, int stateCount, int state)
     (-width * 0.5f + 74.0f + static_cast<float>(state) * 132.0f) * scale;
   fixture.window.mouseY =
     static_cast<double>(fixture.window.height -
-                        CellGameModuleTestAccess::getCellContext(fixture.module)
+                        CanvasSceneTestAccess::getCellContext(fixture.module)
                           ->getCanvasView()
                           ->getBottomInsetPixels()) -
     94.0f * scale;
@@ -1301,14 +1303,14 @@ testPaintPalette()
   fixture.env.setVar("reducedUiMotion", true);
   openPaintDrawer(fixture);
   SparseCellGrid* grid =
-    CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getGrid();
   const std::uint64_t revision = grid->getRevision();
   pointAtPaintCard(fixture, 2, 1);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
-            CellGameModuleTestAccess::getPaintBrush(fixture.module),
+            CanvasSceneTestAccess::getPaintBrush(fixture.module),
             1,
             "dead swatch selects the erase brush");
   testTrue(g,
@@ -1316,30 +1318,30 @@ testPaintPalette()
            "swatch click does not mutate the world");
   fixture.window.mouseX = 400.0;
   fixture.window.mouseY = 200.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(
     g, grid->getRevision() == revision, "dragging off palette stays captured");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   fixture.env.setVar("ModeString", "BRIANS_BRAIN");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
-            CellGameModuleTestAccess::getPaintBrush(fixture.module),
+            CanvasSceneTestAccess::getPaintBrush(fixture.module),
             0,
             "ruleset change resets generic brush");
   pointAtPaintCard(fixture, 3, 2);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
-            CellGameModuleTestAccess::getPaintBrush(fixture.module),
+            CanvasSceneTestAccess::getPaintBrush(fixture.module),
             2,
             "Brian's Brain exposes dying cells");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.window.mouseX = 400.0;
   fixture.window.mouseY = 200.0;
   const glm::dvec2 world =
@@ -1352,17 +1354,17 @@ testPaintPalette()
            "paint target converts to cell coordinates");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
             grid->getCell({ cellX, cellY }),
             2,
             "selected dying brush paints the canvas");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseRight, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
             grid->getCell({ cellX, cellY }),
             1,
@@ -1371,61 +1373,61 @@ testPaintPalette()
     fixture.input, KeyCode::MouseRight, InputAction::Release);
 
   fixture.env.setVar("ModeString", "WIREWORLD");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   pointAtPaintCard(fixture, 4, 0);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
-            CellGameModuleTestAccess::getWireworldBrush(fixture.module),
+            CanvasSceneTestAccess::getWireworldBrush(fixture.module),
             0,
             "Wireworld swatch updates its existing brush");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.env.setVar("reducedUiMotion", false);
   fixture.window.mouseX = 320.0;
   fixture.window.mouseY =
-    326.0 - CellGameModuleTestAccess::getCellContext(fixture.module)
+    326.0 - CanvasSceneTestAccess::getCellContext(fixture.module)
               ->getCanvasView()
               ->getBottomInsetPixels();
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   const float reveal =
-    CellGameModuleTestAccess::getPaintPaletteReveal(fixture.module);
+    CanvasSceneTestAccess::getPaintPaletteReveal(fixture.module);
   testTrue(g,
-           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
+           !CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module) &&
              reveal > 0.0f && reveal < 1.0f,
            "header starts an eased collapse");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           !CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module),
            "held header click does not toggle repeatedly");
   fixture.env.setVar("reducedUiMotion", true);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           CellGameModuleTestAccess::getPaintPaletteReveal(fixture.module) ==
+           CanvasSceneTestAccess::getPaintPaletteReveal(fixture.module) ==
              0.0f,
            "reduced motion snaps the collapsed panel");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.console.isOpen = true;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module)
+           !CanvasSceneTestAccess::getPaintPaletteVisual(fixture.module)
                .isVisible() &&
-             !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+             !CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module),
            "console owns input and hides palette");
 }
 
 static void
 testPaintPaletteSounds()
 {
-  testSection("CellGameModule: the paint drawer voices expand and collapse");
+  testSection("CanvasScene: the paint drawer voices expand and collapse");
   CellGameFixture fixture;
   fixture.env.setVar("reducedUiMotion", true);
   CSimSounds::resetCounts();
@@ -1438,23 +1440,23 @@ testPaintPaletteSounds()
     CSimSounds::playCount(CSimSound::MenuHover);
   fixture.window.mouseX = 320.0;
   fixture.window.mouseY =
-    326.0 - CellGameModuleTestAccess::getCellContext(fixture.module)
+    326.0 - CanvasSceneTestAccess::getCellContext(fixture.module)
               ->getCanvasView()
               ->getBottomInsetPixels();
-  fixture.module.Update(0.016);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == hoversBefore + 1,
            "pointing at the collapse header plays one hover cue");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
+           !CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module) &&
              CSimSounds::playCount(CSimSound::CanvasPaintMenuCollapse) == 1 &&
              CSimSounds::playCount(CSimSound::CanvasPaintMenuExpand) == 1,
            "a held header click collapses it with one collapse cue");
@@ -1463,19 +1465,19 @@ testPaintPaletteSounds()
            "clicking does not add a hover cue");
   fixture.window.mouseX = 0.0;
   fixture.window.mouseY = 0.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
   fixture.window.mouseY =
     static_cast<double>(fixture.window.height -
-                        CellGameModuleTestAccess::getCellContext(fixture.module)
+                        CanvasSceneTestAccess::getCellContext(fixture.module)
                           ->getCanvasView()
                           ->getBottomInsetPixels()) -
     16.0 * fixture.renderer.getUiScale() *
-      CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module)
+      CanvasSceneTestAccess::getPaintPaletteVisual(fixture.module)
         .getTransform()
         .scaleX;
-  fixture.module.Update(0.016);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == hoversBefore + 2,
            "returning to the expand bubble plays one more hover cue");
@@ -1485,44 +1487,44 @@ testPaintPaletteSounds()
 static void
 testPaintPaletteCardSounds()
 {
-  testSection("CellGameModule: paint cards voice hover, pick and browse");
+  testSection("CanvasScene: paint cards voice hover, pick and browse");
   CellGameFixture fixture;
   fixture.env.setVar("reducedUiMotion", true);
   // Five states: four cards show and the wheel can move one step.
   fixture.env.setVar("ModeString", "QUADLIFE");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   openPaintDrawer(fixture);
   CSimSounds::resetCounts();
   pointAtPaintCard(fixture, 4, 0);
-  fixture.module.Update(0.016);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == 1,
            "pointing at a card plays one hover cue");
   pointAtPaintCard(fixture, 4, 2);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == 2,
            "moving to another card plays another");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           CellGameModuleTestAccess::getPaintBrush(fixture.module) == 2 &&
+           CanvasSceneTestAccess::getPaintBrush(fixture.module) == 2 &&
              CSimSounds::playCount(CSimSound::MenuSelect) == 1 &&
              CSimSounds::playCount(CSimSound::MenuHover) == 2,
            "picking a card plays one select cue and no hover");
   *fixture.input.getMouseScrollOffset() = -1.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == 3,
            "a wheel step that moves the cards ticks once");
   *fixture.input.getMouseScrollOffset() = -1.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == 3,
            "the wheel stays quiet at the end of the states");
@@ -1532,12 +1534,12 @@ testPaintPaletteCardSounds()
 static void
 testPaintPaletteBubbleMorph()
 {
-  testSection("CellGameModule: the paint bubble morphs into the drawer");
+  testSection("CanvasScene: the paint bubble morphs into the drawer");
   CellGameFixture fixture;
   fixture.env.setVar("reducedUiMotion", false);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   GameVisual& visual =
-    CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module);
+    CanvasSceneTestAccess::getPaintPaletteVisual(fixture.module);
   testTrue(g,
            visual.isVisible() && visual.textCount() == 0u,
            "the collapsed palette is a wordless bubble");
@@ -1545,7 +1547,7 @@ testPaintPaletteBubbleMorph()
     fixture.renderer.getUiScale() * visual.getTransform().scaleX;
   const double bottom =
     static_cast<double>(fixture.window.height -
-                        CellGameModuleTestAccess::getCellContext(fixture.module)
+                        CanvasSceneTestAccess::getCellContext(fixture.module)
                           ->getCanvasView()
                           ->getBottomInsetPixels());
   // The bubble's bounding corner lies outside the circle.
@@ -1554,37 +1556,37 @@ testPaintPaletteBubbleMorph()
   fixture.window.mouseY = bottom - 38.0 * scale;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module),
+           !CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module),
            "the bubble is round: its bounding corner does not open it");
 
   fixture.window.mouseX = static_cast<double>(fixture.window.width) * 0.5;
   fixture.window.mouseY = bottom - 16.0 * scale;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(
     g,
-    CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
-      CellGameModuleTestAccess::getPaintPaletteWidthMorph(fixture.module) >
-        CellGameModuleTestAccess::getPaintPaletteReveal(fixture.module),
+    CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module) &&
+      CanvasSceneTestAccess::getPaintPaletteWidthMorph(fixture.module) >
+        CanvasSceneTestAccess::getPaintPaletteReveal(fixture.module),
     "opening stretches the bubble wide before it rises");
   testEqSize(g, visual.textCount(), 0u, "labels wait for the drawer to form");
   float peak = 0.0f;
   for (int frame = 0; frame < 90; ++frame) {
-    fixture.module.Update(1.0 / 60.0);
+    fixture.module.update(1.0 / 60.0);
     peak = std::max(
-      peak, CellGameModuleTestAccess::getPaintPaletteReveal(fixture.module));
+      peak, CanvasSceneTestAccess::getPaintPaletteReveal(fixture.module));
   }
   testTrue(g,
-           peak > 1.02f && CellGameModuleTestAccess::getPaintPaletteReveal(
+           peak > 1.02f && CanvasSceneTestAccess::getPaintPaletteReveal(
                              fixture.module) == 1.0f,
            "the drawer bounces past open and settles exactly");
   testTrue(g,
@@ -1642,19 +1644,19 @@ testModeBadge()
   testTrue(g, !badge.isVisible(), "reduced motion hides it at once too");
 
   CellGameFixture fixture;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::Release);
   ModeBadge& moduleBadge =
-    CellGameModuleTestAccess::getModeBadge(fixture.module);
+    CanvasSceneTestAccess::getModeBadge(fixture.module);
   testTrue(g,
            moduleBadge.isVisible() && !moduleBadge.label().empty(),
            "toggling the mode shows the corner badge");
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   bool dispatched = false;
   for (DrawableBase* drawable : fixture.scene.drawablesIn(RenderLayerId::UI)) {
     dispatched = dispatched || drawable == &moduleBadge.getVisual();
@@ -1733,36 +1735,36 @@ testPaintPaletteFittedInput()
   fixture.window.handleResize(200, 240);
   openPaintDrawer(fixture);
   GameVisual& visual =
-    CellGameModuleTestAccess::getPaintPaletteVisual(fixture.module);
+    CanvasSceneTestAccess::getPaintPaletteVisual(fixture.module);
   const float fit = visual.getTransform().scaleX;
   testTrue(g, fit > 0.0f && fit < 1.0f, "small window fits the entire palette");
   const float scale = fixture.renderer.getUiScale() * fit;
   pointAtPaintCard(fixture, 4, 2);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqInt(g,
-            CellGameModuleTestAccess::getWireworldBrush(fixture.module),
+            CanvasSceneTestAccess::getWireworldBrush(fixture.module),
             2,
             "fitted coordinates select the visible tail swatch");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.window.mouseX = 100.0;
   fixture.window.mouseY =
     240.0 -
-    CellGameModuleTestAccess::getCellContext(fixture.module)
+    CanvasSceneTestAccess::getCellContext(fixture.module)
       ->getCanvasView()
       ->getBottomInsetPixels() -
     154.0 * scale;
   const SparseCellGrid* grid =
-    CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getGrid();
   const std::uint64_t beforeClose = grid->getRevision();
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
+           !CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module) &&
              visual.textCount() == 0u,
            "fitted header collapses into the wordless bubble");
   testTrue(g,
@@ -1770,21 +1772,21 @@ testPaintPaletteFittedInput()
            "snapping the tab closed cannot paint through its former position");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.window.mouseY =
     240.0 -
-    CellGameModuleTestAccess::getCellContext(fixture.module)
+    CanvasSceneTestAccess::getCellContext(fixture.module)
       ->getCanvasView()
       ->getBottomInsetPixels() -
     16.0 * scale;
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   bool hasStateLabels = true;
   const RuleSet* wireworld =
-    CellGameModuleTestAccess::getCellContext(fixture.module)->getRuleSet();
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getRuleSet();
   GameVisual& labels =
-    CellGameModuleTestAccess::getPaintPaletteTopVisual(fixture.module);
+    CanvasSceneTestAccess::getPaintPaletteTopVisual(fixture.module);
   for (unsigned char state = 0u; state < 4u; ++state) {
     bool found = false;
     for (std::size_t index = 0u; index < labels.textCount(); ++index) {
@@ -1794,7 +1796,7 @@ testPaintPaletteFittedInput()
     hasStateLabels = hasStateLabels && found;
   }
   testTrue(g,
-           CellGameModuleTestAccess::isPaintPaletteExpanded(fixture.module) &&
+           CanvasSceneTestAccess::isPaintPaletteExpanded(fixture.module) &&
              hasStateLabels,
            "second header click restores all state labels and help");
   const float localPanelWidth = 4.0f * 132.0f + 24.0f;
@@ -1814,7 +1816,7 @@ testPaintPaletteFittedInput()
   }
   testTrue(g, textInside, "every drawer label stays inside the drawer surface");
   testEqInt(g,
-            CellGameModuleTestAccess::getWireworldBrush(fixture.module),
+            CanvasSceneTestAccess::getWireworldBrush(fixture.module),
             2,
             "collapse preserves the selected brush");
   fixture.scene.ClearDrawables();
@@ -1831,22 +1833,22 @@ testPaintPaletteFittedInput()
 static void
 testHamburgerMenuButton()
 {
-  testSection("CellGameModule: hamburger icon toggles settings menu");
+  testSection("CanvasScene: hamburger icon toggles settings menu");
   CellGameFixture fixture;
   ConfigurationMenu* menu =
-    CellGameModuleTestAccess::getConfigurationMenu(fixture.module);
+    CanvasSceneTestAccess::getConfigurationMenu(fixture.module);
   testTrue(g, menu != nullptr && !menu->isOpen(), "settings start closed");
 
   // Initial update establishes hamburger button placement and dimensions
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   GameVisual* hamburger =
-    CellGameModuleTestAccess::getHamburgerVisual(fixture.module);
+    CanvasSceneTestAccess::getHamburgerVisual(fixture.module);
   testTrue(g,
            hamburger != nullptr && hamburger->isVisible(),
            "hamburger button is visible in default state");
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   const std::vector<DrawableBase*> uiDrawables =
     fixture.scene.drawablesIn(RenderLayerId::UI);
   testTrue(g,
@@ -1854,10 +1856,10 @@ testHamburgerMenuButton()
              uiDrawables.end(),
            "hamburger button is on the UI layer");
 
-  const float hx = CellGameModuleTestAccess::getHamburgerX(fixture.module);
-  const float hy = CellGameModuleTestAccess::getHamburgerY(fixture.module);
+  const float hx = CanvasSceneTestAccess::getHamburgerX(fixture.module);
+  const float hy = CanvasSceneTestAccess::getHamburgerY(fixture.module);
   const float hsize =
-    CellGameModuleTestAccess::getHamburgerSize(fixture.module);
+    CanvasSceneTestAccess::getHamburgerSize(fixture.module);
   testTrue(g,
            hx > 0.0f && hy > 0.0f && hsize > 0.0f,
            "hamburger button has valid bounds");
@@ -1865,20 +1867,20 @@ testHamburgerMenuButton()
   // Move mouse outside hamburger -> not hovered
   fixture.window.mouseX = 0.0;
   fixture.window.mouseY = 0.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           !CellGameModuleTestAccess::isHamburgerHovered(fixture.module),
+           !CanvasSceneTestAccess::isHamburgerHovered(fixture.module),
            "hamburger is not hovered when mouse is away");
 
   // Move mouse inside hamburger -> hovered
   CSimSounds::resetCounts();
   fixture.window.mouseX = static_cast<double>(hx + hsize * 0.5f);
   fixture.window.mouseY = static_cast<double>(hy + hsize * 0.5f);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
-           CellGameModuleTestAccess::isHamburgerHovered(fixture.module),
+           CanvasSceneTestAccess::isHamburgerHovered(fixture.module),
            "hamburger is hovered when mouse is over it");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == 1,
            "hovering the hamburger plays the hover cue once");
@@ -1886,7 +1888,7 @@ testHamburgerMenuButton()
   // Click hamburger -> toggles settings open
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, menu->isOpen(), "clicking hamburger opens settings menu");
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuSelect) == 1,
@@ -1896,7 +1898,7 @@ testHamburgerMenuButton()
            "the click adds no hover cue");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   // When settings are open, hamburger is hidden
   testTrue(g,
@@ -1906,7 +1908,7 @@ testHamburgerMenuButton()
   // Press Escape to close settings
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, !menu->isOpen(), "settings menu closed with Escape");
   testTrue(g,
            hamburger->isVisible(),
@@ -1920,22 +1922,22 @@ testHamburgerMenuButton()
 static void
 testExitConfirmationFromQ()
 {
-  testSection("CellGameModule: Q asks before exiting");
+  testSection("CanvasScene: Q asks before exiting");
   CellGameFixture fixture;
   ExitConfirmDialog* confirm =
-    CellGameModuleTestAccess::getExitConfirmDialog(fixture.module);
+    CanvasSceneTestAccess::getExitConfirmDialog(fixture.module);
   testTrue(
     g, confirm != nullptr && !confirm->isOpen(), "confirm starts closed");
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Q, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.window.closeRequested && confirm->isOpen(),
            "Q opens the exit confirmation instead of closing immediately");
 
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   testEqSize(g,
              fixture.scene.drawableCount(),
              3u,
@@ -1943,17 +1945,17 @@ testExitConfirmationFromQ()
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !fixture.window.closeRequested && !confirm->isOpen(),
            "Escape cancels the exit confirmation");
 
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Q, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Y, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            fixture.window.closeRequested && !confirm->isOpen(),
            "Y confirms Q-initiated exit");
@@ -1962,18 +1964,18 @@ testExitConfirmationFromQ()
 static void
 testLoadRejectsInvalidFiles()
 {
-  testSection("CellGameModule: invalid save validation");
+  testSection("CanvasScene: invalid save validation");
   CellGameFixture fixture;
   testTrue(g,
-           !CellGameModuleTestAccess::load(fixture.module, ""),
+           !CanvasSceneTestAccess::load(fixture.module, ""),
            "empty load path rejected");
   testTrue(g,
-           !CellGameModuleTestAccess::load(fixture.module, "missing.illumo"),
+           !CanvasSceneTestAccess::load(fixture.module, "missing.illumo"),
            "missing file rejected");
 
   std::ofstream("short.illumo", std::ios::binary).write("short", 5);
   testTrue(g,
-           !CellGameModuleTestAccess::load(fixture.module, "short.illumo"),
+           !CanvasSceneTestAccess::load(fixture.module, "short.illumo"),
            "truncated header rejected");
 
   const char sparseMagic[8] = { 'I', 'L', 'L', 'U', 'M', 'O', '2', '\0' };
@@ -2000,10 +2002,10 @@ testLoadRejectsInvalidFiles()
                  sizeof(sparseChunks));
   }
   CellContext* liveContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   liveContext->getGrid()->setCell(CellAddress{ 77, 88 }, 0);
   testTrue(g,
-           !CellGameModuleTestAccess::load(fixture.module, "short-v2.illumo"),
+           !CanvasSceneTestAccess::load(fixture.module, "short-v2.illumo"),
            "truncated sparse record rejected");
   testEqUChar(g,
               liveContext->getGrid()->getCell(CellAddress{ 77, 88 }),
@@ -2045,7 +2047,7 @@ testLoadRejectsInvalidFiles()
                        sizeof(noSparseChunks));
         }
         testTrue(g,
-                 !CellGameModuleTestAccess::load(fixture.module,
+                 !CanvasSceneTestAccess::load(fixture.module,
                                                  "invalid-camera.illumo"),
                  "otherwise valid sparse metadata rejects unsafe camera");
         testTrue(g,
@@ -2078,7 +2080,7 @@ testLoadRejectsInvalidFiles()
                  sizeof(noSparseChunks));
   }
   testTrue(g,
-           !CellGameModuleTestAccess::load(fixture.module,
+           !CanvasSceneTestAccess::load(fixture.module,
                                            "invalid-v3-topology.illumo"),
            "mixed finite and infinite topology metadata is rejected");
   testEqUChar(g,
@@ -2089,43 +2091,43 @@ testLoadRejectsInvalidFiles()
   writeSaveFile("unknown-rule.illumo", "NOT_A_RULE", 2, 2, { 1, 1, 1, 1 });
   testTrue(
     g,
-    !CellGameModuleTestAccess::load(fixture.module, "unknown-rule.illumo"),
+    !CanvasSceneTestAccess::load(fixture.module, "unknown-rule.illumo"),
     "unknown ruleset rejected");
 
   writeSaveFile("invalid-size.illumo", "SEEDS", 0, 4, {});
   testTrue(
     g,
-    !CellGameModuleTestAccess::load(fixture.module, "invalid-size.illumo"),
+    !CanvasSceneTestAccess::load(fixture.module, "invalid-size.illumo"),
     "zero dimension rejected");
   writeSaveFile("oversized.illumo", "SEEDS", 100000001, 1, {});
   testTrue(g,
-           !CellGameModuleTestAccess::load(fixture.module, "oversized.illumo"),
+           !CanvasSceneTestAccess::load(fixture.module, "oversized.illumo"),
            "oversized canvas rejected before allocation");
   writeSaveFile("short-cells.illumo", "SEEDS", 2, 2, { 0, 1, 0 });
   testTrue(
     g,
-    !CellGameModuleTestAccess::load(fixture.module, "short-cells.illumo"),
+    !CanvasSceneTestAccess::load(fixture.module, "short-cells.illumo"),
     "truncated cell data rejected");
 
   testTrue(g,
-           !CellGameModuleTestAccess::save(fixture.module, ""),
+           !CanvasSceneTestAccess::save(fixture.module, ""),
            "empty save path rejected");
   testTrue(g,
-           !CellGameModuleTestAccess::save(fixture.module, "."),
+           !CanvasSceneTestAccess::save(fixture.module, "."),
            "directory cannot be opened as a save file");
 }
 
 static void
 testLoadCopiesOverlap()
 {
-  testSection("CellGameModule: different-size save overlap");
+  testSection("CanvasScene: different-size save overlap");
   CellGameFixture fixture(4, 3);
   writeSaveFile("small.illumo", "SEEDS", 2, 2, { 0, 1, 1, 0 });
   testTrue(g,
-           CellGameModuleTestAccess::load(fixture.module, "small.illumo"),
+           CanvasSceneTestAccess::load(fixture.module, "small.illumo"),
            "different-size valid save loads");
   CanvasView* canvas =
-    CellGameModuleTestAccess::getCellContext(fixture.module)->getCanvasView();
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getCanvasView();
   testEqUChar(
     g, canvas->getCanvasPixel(-1, -1), 0, "legacy origin row zero copied");
   testEqUChar(
@@ -2134,7 +2136,7 @@ testLoadCopiesOverlap()
   testEqUChar(
     g, canvas->getCanvasPixel(3, 2), 1, "outside overlap remains empty");
   testTrue(g,
-           CellGameModuleTestAccess::getCellContext(fixture.module)
+           CanvasSceneTestAccess::getCellContext(fixture.module)
                ->getGrid()
                ->getAllocatedChunkCount() == 2,
            "legacy cells are imported sparsely");
@@ -2143,12 +2145,12 @@ testLoadCopiesOverlap()
 static void
 testConsoleSimulationCommands()
 {
-  testSection("CellGameModule: simulation console commands");
+  testSection("CanvasScene: simulation console commands");
   CellGameFixture fixture(6, 6);
   fixture.execute("ruleset", { "SEEDS" });
   testTrue(
     g,
-    CellGameModuleTestAccess::getCellContext(fixture.module)->getModeString() ==
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getModeString() ==
       "SEEDS",
     "ruleset command switches mode");
   fixture.execute("mode", { "not_real" });
@@ -2177,7 +2179,7 @@ testConsoleSimulationCommands()
 
   fixture.execute("setcell", { "1", "2", "0" });
   CanvasView* canvas =
-    CellGameModuleTestAccess::getCellContext(fixture.module)->getCanvasView();
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getCanvasView();
   testEqUChar(
     g, canvas->getCanvasPixel(1, 2), 0, "setcell writes a valid cell");
   fixture.execute("setcell", { "-99", "2", "0" });
@@ -2191,14 +2193,14 @@ testConsoleSimulationCommands()
   const unsigned char beforeClear = canvas->getCanvasPixel(1, 2);
   fixture.execute("clear_canvas");
   ExitConfirmDialog* clearConfirm =
-    CellGameModuleTestAccess::getExitConfirmDialog(fixture.module);
+    CanvasSceneTestAccess::getExitConfirmDialog(fixture.module);
   testTrue(g,
            clearConfirm != nullptr && clearConfirm->isOpen() &&
              canvas->getCanvasPixel(1, 2) == beforeClear,
            "clear command asks before emptying cells");
   fixture.input.getKeyQueue().push(
     InputManager::KeyPressEvent{ KeyCode::Y, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            !clearConfirm->isOpen() && canvas->getCanvasPixel(1, 2) == 1,
            "confirming the dialog empties cells");
@@ -2253,7 +2255,7 @@ testConsoleSimulationCommands()
 
   fixture.execute("pause");
   testTrue(g,
-           CellGameModuleTestAccess::getState(fixture.module) ==
+           CanvasSceneTestAccess::getState(fixture.module) ==
              CellState::EDIT,
            "pause enters edit state");
   fixture.execute("step", { "2" });
@@ -2266,7 +2268,7 @@ testConsoleSimulationCommands()
            "step validates generation count");
   fixture.execute("run");
   testTrue(g,
-           CellGameModuleTestAccess::getState(fixture.module) ==
+           CanvasSceneTestAccess::getState(fixture.module) ==
              CellState::NORMAL,
            "run enters normal state");
   fixture.executeThroughConsole("status");
@@ -2278,7 +2280,7 @@ testConsoleSimulationCommands()
 static void
 testConsoleCameraAndFiles()
 {
-  testSection("CellGameModule: camera and file console commands");
+  testSection("CanvasScene: camera and file console commands");
   CellGameFixture fixture(4, 4);
   fixture.execute("camera", { "10.5", "20.5", "2.5" });
   testTrue(g,
@@ -2362,10 +2364,10 @@ testConsoleCameraAndFiles()
 static void
 testUpdateStateAndTiming()
 {
-  testSection("CellGameModule: update state and timing");
+  testSection("CanvasScene: update state and timing");
   CellGameFixture fixture(5, 5);
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   CanvasView* canvas = cellContext->getCanvasView();
   canvas->clearCanvas();
   canvas->setCanvasPixel(1, 2, 0);
@@ -2374,20 +2376,20 @@ testUpdateStateAndTiming()
 
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::Press);
-  fixture.module.Update(0.0);
+  fixture.module.update(0.0);
   testTrue(g,
-           CellGameModuleTestAccess::getState(fixture.module) ==
+           CanvasSceneTestAccess::getState(fixture.module) ==
              CellState::NORMAL,
            "toggle action enters normal state");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::None);
-  fixture.module.Update(0.04);
+  fixture.module.update(0.04);
   bool publishedGeneration = false;
   for (int attempt = 0; attempt < 10000 && !publishedGeneration; ++attempt) {
     std::this_thread::yield();
-    fixture.module.Update(0.0);
+    fixture.module.update(0.0);
     publishedGeneration =
-      CellGameModuleTestAccess::getLastSimulationSteps(fixture.module) == 1;
+      CanvasSceneTestAccess::getLastSimulationSteps(fixture.module) == 1;
   }
   testTrue(g, publishedGeneration, "normal update publishes async generation");
   testEqUChar(g,
@@ -2398,43 +2400,43 @@ testUpdateStateAndTiming()
   fixture.env.setVar("tps", 100000);
   fixture.env.setVar("speedFactor", 1000.0);
   fixture.env.setVar("cellFadeSpeed", -2.0);
-  fixture.module.Update(1.0);
-  CellGameModuleTestAccess::drainSimulation(fixture.module);
+  fixture.module.update(1.0);
+  CanvasSceneTestAccess::drainSimulation(fixture.module);
   testTrue(g,
-           CellGameModuleTestAccess::getState(fixture.module) ==
+           CanvasSceneTestAccess::getState(fixture.module) ==
              CellState::NORMAL,
            "large delta and rate remain bounded");
   testTrue(g,
-           CellGameModuleTestAccess::getLastSimulationSteps(fixture.module) <=
+           CanvasSceneTestAccess::getLastSimulationSteps(fixture.module) <=
              1,
            "normal update publishes at most one generation per frame");
   testTrue(g,
-           CellGameModuleTestAccess::getSimulationDebtDropped(fixture.module),
+           CanvasSceneTestAccess::getSimulationDebtDropped(fixture.module),
            "normal update drops excessive catch-up debt");
 
   InputManager::scrollCallback(nullptr, 0.0, 1.0);
   const float oldZoom = fixture.camera.GetZoom();
-  fixture.module.Update(-1.0);
+  fixture.module.update(-1.0);
   fixture.camera.Update(1.0f);
   testTrue(
     g, fixture.camera.GetZoom() > oldZoom, "scroll input updates camera zoom");
 
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::Press);
-  fixture.module.Update(0.0);
+  fixture.module.update(0.0);
   testTrue(g,
-           CellGameModuleTestAccess::getState(fixture.module) ==
+           CanvasSceneTestAccess::getState(fixture.module) ==
              CellState::EDIT,
            "toggle action returns to edit state");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::None);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 }
 
 static void
 testCameraInputBounds()
 {
-  testSection("CellGameModule: camera input bounds");
+  testSection("CanvasScene: camera input bounds");
   CellGameFixture fixture;
   const glm::dvec2 boundary(CanvasCoordinatePolicy::kMaximumWorld, 0.0);
   fixture.camera.SetPositionPrecise(boundary.x, boundary.y);
@@ -2442,7 +2444,7 @@ testCameraInputBounds()
   fixture.window.mouseX = -1e9;
   fixture.window.mouseY = 240.0;
   InputManager::scrollCallback(nullptr, 0.0, -1.0);
-  fixture.module.Update(0.0);
+  fixture.module.update(0.0);
   testTrue(g,
            fixture.camera.GetTargetPositionPrecise() == boundary &&
              fixture.camera.GetTargetZoom() == 1.0f,
@@ -2454,13 +2456,13 @@ testCameraInputBounds()
            "later interpolation cannot apply rejected zoom");
   fixture.camera.SetPositionPrecise(0.0, 0.0);
   testTrue(g,
-           CellGameModuleTestAccess::save(fixture.module, "camera-save.illumo"),
+           CanvasSceneTestAccess::save(fixture.module, "camera-save.illumo"),
            "valid camera saves");
   const std::vector<char> saved = readFileBytes("camera-save.illumo");
   fixture.camera.SetPositionPrecise(1e300, 0.0);
   testTrue(
     g,
-    !CellGameModuleTestAccess::save(fixture.module, "camera-save.illumo"),
+    !CanvasSceneTestAccess::save(fixture.module, "camera-save.illumo"),
     "unsafe direct camera cannot produce unloadable save");
   testTrue(g,
            readFileBytes("camera-save.illumo") == saved,
@@ -2471,20 +2473,20 @@ static void
 testSimulationFailureReporting()
 {
   testSection(
-    "CellGameModule: failed generations do not count and remain retryable");
+    "CanvasScene: failed generations do not count and remain retryable");
   {
     CellGameFixture fixture;
     fixture.execute("ruleset", { "RULE_90" });
     SparseCellGrid* grid =
-      CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+      CanvasSceneTestAccess::getCellContext(fixture.module)->getGrid();
     grid->clear();
     grid->setCell(
       CellAddress{ 0, std::numeric_limits<std::int64_t>::max() - 1 }, 0);
     fixture.execute("step", { "3" });
     testTrue(
       g,
-      CellGameModuleTestAccess::getSimulationGeneration(fixture.module) == 1 &&
-        CellGameModuleTestAccess::isSimulationRetryPending(fixture.module),
+      CanvasSceneTestAccess::getSimulationGeneration(fixture.module) == 1 &&
+        CanvasSceneTestAccess::isSimulationRetryPending(fixture.module),
       "manual batch counts only its successful first generation");
     testTrue(g,
              historyContains(fixture.console, "failed after 1 of 3"),
@@ -2492,52 +2494,52 @@ testSimulationFailureReporting()
     grid->clear();
     grid->setCell(CellAddress{ 0, 0 }, 0);
     fixture.execute("run");
-    fixture.module.Update(0.0);
+    fixture.module.update(0.0);
     testTrue(g,
-             CellGameModuleTestAccess::isSimulationBusy(fixture.module),
+             CanvasSceneTestAccess::isSimulationBusy(fixture.module),
              "run retries failed work without waiting another time step");
-    CellGameModuleTestAccess::drainSimulation(fixture.module);
+    CanvasSceneTestAccess::drainSimulation(fixture.module);
     testTrue(
       g,
-      CellGameModuleTestAccess::getSimulationGeneration(fixture.module) == 2,
+      CanvasSceneTestAccess::getSimulationGeneration(fixture.module) == 2,
       "successful retry counts once");
   }
   {
     CellGameFixture fixture;
     fixture.execute("ruleset", { "RULE_90" });
     SparseCellGrid* grid =
-      CellGameModuleTestAccess::getCellContext(fixture.module)->getGrid();
+      CanvasSceneTestAccess::getCellContext(fixture.module)->getGrid();
     grid->clear();
     grid->setCell(CellAddress{ 0, 0 }, 0);
-    CellGameModuleTestAccess::getCellContext(fixture.module)
+    CanvasSceneTestAccess::getCellContext(fixture.module)
       ->getSpareGrid()
       ->setElementaryWriteFailureForTesting(1);
     const std::uint64_t revision = grid->getRevision();
     fixture.execute("run");
-    fixture.module.Update(0.04);
-    CellGameModuleTestAccess::drainSimulation(fixture.module);
+    fixture.module.update(0.04);
+    CanvasSceneTestAccess::drainSimulation(fixture.module);
     testTrue(
       g,
-      CellGameModuleTestAccess::getSimulationGeneration(fixture.module) == 0 &&
+      CanvasSceneTestAccess::getSimulationGeneration(fixture.module) == 0 &&
         grid->getRevision() == revision &&
-        CellGameModuleTestAccess::getState(fixture.module) == CellState::EDIT &&
-        CellGameModuleTestAccess::isSimulationRetryPending(fixture.module),
+        CanvasSceneTestAccess::getState(fixture.module) == CellState::EDIT &&
+        CanvasSceneTestAccess::isSimulationRetryPending(fixture.module),
       "async failure preserves published world and pauses with pending retry");
     testTrue(g,
              historyContains(fixture.console, "paused without publication"),
              "async failure has actionable console diagnostic");
-    fixture.module.Update(0.25);
+    fixture.module.update(0.25);
     testTrue(g,
-             !CellGameModuleTestAccess::isSimulationBusy(fixture.module),
+             !CanvasSceneTestAccess::isSimulationBusy(fixture.module),
              "failure does not create an automatic retry loop");
     grid->clear();
     grid->setCell(CellAddress{ 0, 0 }, 0);
     fixture.execute("run");
-    fixture.module.Update(0.0);
-    CellGameModuleTestAccess::drainSimulation(fixture.module);
+    fixture.module.update(0.0);
+    CanvasSceneTestAccess::drainSimulation(fixture.module);
     testTrue(
       g,
-      CellGameModuleTestAccess::getSimulationGeneration(fixture.module) == 1,
+      CanvasSceneTestAccess::getSimulationGeneration(fixture.module) == 1,
       "explicit async retry succeeds and counts once");
   }
 }
@@ -2545,32 +2547,32 @@ testSimulationFailureReporting()
 static void
 testFrameSimulationBudget()
 {
-  testSection("CellGameModule: asynchronous simulation budget");
+  testSection("CanvasScene: asynchronous simulation budget");
   CellGameFixture fixture(5, 5);
   fixture.env.setVar("tps", 30);
   fixture.env.setVar("speedFactor", 1.0);
 
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::Press);
-  fixture.module.Update(0.0);
+  fixture.module.update(0.0);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::None);
 
-  fixture.module.Update(0.25);
+  fixture.module.update(0.25);
   testEqInt(g,
-            CellGameModuleTestAccess::getLastSimulationSteps(fixture.module),
+            CanvasSceneTestAccess::getLastSimulationSteps(fixture.module),
             0,
             "scheduled generation does not block its render frame");
   testTrue(g,
-           CellGameModuleTestAccess::getSimulationDebtDropped(fixture.module),
+           CanvasSceneTestAccess::getSimulationDebtDropped(fixture.module),
            "in-flight scheduling drops excess catch-up debt");
-  CellGameModuleTestAccess::drainSimulation(fixture.module);
+  CanvasSceneTestAccess::drainSimulation(fixture.module);
   testEqInt(g,
-            CellGameModuleTestAccess::getLastSimulationSteps(fixture.module),
+            CanvasSceneTestAccess::getLastSimulationSteps(fixture.module),
             1,
             "drain publishes the single in-flight generation");
   testTrue(g,
-           CellGameModuleTestAccess::getLastSimulationFrameMilliseconds(
+           CanvasSceneTestAccess::getLastSimulationFrameMilliseconds(
              fixture.module) >= 0.0,
            "published generations expose measured worker time");
   fixture.executeThroughConsole("status");
@@ -2585,57 +2587,57 @@ testFrameSimulationBudget()
 static void
 testAsyncTransitionDraining()
 {
-  testSection("CellGameModule: async state transitions drain safely");
+  testSection("CanvasScene: async state transitions drain safely");
   CellGameFixture fixture(16, 12);
   const std::string savePath = "async-transition.csim";
 
   fixture.execute("run");
-  fixture.module.Update(0.25);
+  fixture.module.update(0.25);
   testTrue(g,
-           CellGameModuleTestAccess::isSimulationBusy(fixture.module),
+           CanvasSceneTestAccess::isSimulationBusy(fixture.module),
            "running update leaves one generation in flight or completed");
   fixture.execute("pause");
   testTrue(g,
-           !CellGameModuleTestAccess::isSimulationBusy(fixture.module) &&
-             CellGameModuleTestAccess::getState(fixture.module) ==
+           !CanvasSceneTestAccess::isSimulationBusy(fixture.module) &&
+             CanvasSceneTestAccess::getState(fixture.module) ==
                CellState::EDIT,
            "pause publishes and drains before entering edit mode");
 
   fixture.execute("run");
-  fixture.module.Update(0.25);
+  fixture.module.update(0.25);
   fixture.execute("save", { savePath });
   testTrue(g,
-           !CellGameModuleTestAccess::isSimulationBusy(fixture.module) &&
+           !CanvasSceneTestAccess::isSimulationBusy(fixture.module) &&
              std::filesystem::exists(savePath),
            "save drains before reading the published grid");
 
-  fixture.module.Update(0.25);
+  fixture.module.update(0.25);
   fixture.execute("ruleset", { "SEEDS" });
   CellContext* context =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g,
-           !CellGameModuleTestAccess::isSimulationBusy(fixture.module) &&
+           !CanvasSceneTestAccess::isSimulationBusy(fixture.module) &&
              context->getModeString() == "SEEDS",
            "ruleset change drains before replacing the transition table");
 
-  fixture.module.Update(0.25);
+  fixture.module.update(0.25);
   fixture.execute("step", { "2" });
   testTrue(g,
-           !CellGameModuleTestAccess::isSimulationBusy(fixture.module) &&
-             CellGameModuleTestAccess::getState(fixture.module) ==
+           !CanvasSceneTestAccess::isSimulationBusy(fixture.module) &&
+             CanvasSceneTestAccess::getState(fixture.module) ==
                CellState::EDIT,
            "manual stepping drains and returns to edit mode");
 
   fixture.execute("run");
-  fixture.module.Update(0.25);
+  fixture.module.update(0.25);
   fixture.execute("load", { savePath });
   testTrue(g,
-           !CellGameModuleTestAccess::isSimulationBusy(fixture.module),
+           !CanvasSceneTestAccess::isSimulationBusy(fixture.module),
            "load drains before replacing published sparse state");
 }
 
 static int
-runCellGameModuleCase(void (*testFunction)())
+runCanvasSceneCase(void (*testFunction)())
 {
   g.failures = 0;
   gSaveDialogResult.clear();
@@ -2648,18 +2650,18 @@ static void
 testInputRegistrationLifetime()
 {
   CellGameFixture fixture;
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.started = false;
   for (int i = 0; i < NUM_INPUT_CONTEXTS * 2; ++i) {
-    CellGameModule module;
+    CanvasScene module;
     testTrue(
-      g, module.Start(&fixture.context), "re-entry retains input capacity");
+      g, module.start(fixture.context), "re-entry retains input capacity");
     testTrue(g,
              fixture.input.getActiveInputContext()->getActions().contains(
                "PaintCanvas"),
              "new module owns active bindings");
-    module.Exit();
-    module.Exit();
+    module.stop();
+    module.stop();
     testTrue(
       g, !fixture.input.isActionActive("PaintCanvas"), "exit retires bindings");
   }
@@ -2669,11 +2671,11 @@ testInputRegistrationLifetime()
              "all slots available after repeated exit");
   }
   InputContext* selected = fixture.input.getActiveInputContext();
-  CellGameModule rejected;
+  CanvasScene rejected;
   testTrue(
-    g, !rejected.Start(&fixture.context), "full registry rejects startup");
+    g, !rejected.start(fixture.context), "full registry rejects startup");
   testTrue(g,
-           CellGameModuleTestAccess::getCellContext(rejected) == nullptr,
+           CanvasSceneTestAccess::getCellContext(rejected) == nullptr,
            "failed startup allocates no domain state");
   testTrue(g,
            fixture.input.getActiveInputContext() == selected,
@@ -2685,14 +2687,14 @@ testRulesetWorkshopF2Draft()
 {
   CellGameFixture fixture;
   RulesetWorkshopMenu* menu =
-    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+    CanvasSceneTestAccess::getRulesetWorkshopMenu(fixture.module);
   const RuleSetDefinition* original =
     RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
   testTrue(g,
            menu != nullptr && original != nullptr,
            "rule workshop and built-in definition are available");
   fixture.input.getKeyQueue().push({ KeyCode::F2, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, menu->isOpen(), "F2 opens the separate rule workshop");
   bool hasWorkshopTitle = false;
   bool hasReadableRowLabel = false;
@@ -2735,7 +2737,7 @@ testRulesetWorkshopF2Draft()
            "workshop focuses the starter rule on open");
 
   *fixture.input.getMouseScrollOffset() = -1.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            menu->getFirstVisibleRowForTesting() == 1 &&
              menu->getSelectedControlForTesting() == "Starter rule" &&
@@ -2757,7 +2759,7 @@ testRulesetWorkshopF2Draft()
   testTrue(
     g, birthFocused, "keyboard focus reaches the family-specific birth chips");
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            menu->getValuePulseForTesting() > 0.0f,
            "editing a rule briefly highlights the changed value");
@@ -2766,8 +2768,8 @@ testRulesetWorkshopF2Draft()
            "enter toggles the selected birth count in the staged draft");
   const float selectionBefore = menu->getSelectionPositionForTesting();
   fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
-  fixture.module.Update(0.07);
+  fixture.module.update(0.016);
+  fixture.module.update(0.07);
   testTrue(
     g,
     menu->getSelectionPositionForTesting() > selectionBefore &&
@@ -2775,7 +2777,7 @@ testRulesetWorkshopF2Draft()
         static_cast<float>(menu->getControlIndexForTesting("Survival counts")),
     "workshop selection highlight glides between rows");
   fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g, !menu->isOpen(), "Escape discards the staged draft");
   testTrue(g,
            original->birthMask == (1u << 3u),
@@ -2784,11 +2786,11 @@ testRulesetWorkshopF2Draft()
   CellGameFixture reducedMotionFixture;
   reducedMotionFixture.env.setVar("reducedUiMotion", true);
   RulesetWorkshopMenu* reducedMenu =
-    CellGameModuleTestAccess::getRulesetWorkshopMenu(
+    CanvasSceneTestAccess::getRulesetWorkshopMenu(
       reducedMotionFixture.module);
   reducedMotionFixture.input.getKeyQueue().push(
     { KeyCode::F2, InputAction::Press, 0 });
-  reducedMotionFixture.module.Update(0.016);
+  reducedMotionFixture.module.update(0.016);
   testTrue(g,
            reducedMenu != nullptr &&
              reducedMenu->getAnimationProgressForTesting() == 1.0f &&
@@ -2811,7 +2813,7 @@ testRulesetWorkshopFamilyControls()
   CellGameFixture fixture;
   fixture.env.setVar("reducedUiMotion", true);
   RulesetWorkshopMenu* menu =
-    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+    CanvasSceneTestAccess::getRulesetWorkshopMenu(fixture.module);
   const RuleSetDefinition* life =
     RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
   const RuleSetDefinition* generations =
@@ -3004,7 +3006,7 @@ testRulesetWorkshopPointerNavigation()
   CellGameFixture fixture;
   fixture.env.setVar("reducedUiMotion", true);
   RulesetWorkshopMenu* menu =
-    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+    CanvasSceneTestAccess::getRulesetWorkshopMenu(fixture.module);
   const RuleSetDefinition* gameOfLife =
     RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
   testTrue(g,
@@ -3084,7 +3086,7 @@ testRulesetWorkshopNavigation()
   CellGameFixture fixture;
   fixture.env.setVar("reducedUiMotion", true);
   RulesetWorkshopMenu* menu =
-    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+    CanvasSceneTestAccess::getRulesetWorkshopMenu(fixture.module);
   const RuleSetDefinition* gameOfLife =
     RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
   testTrue(g,
@@ -3193,23 +3195,23 @@ testRulesetWorkshopRejectsRemovingLiveStates()
 {
   CellGameFixture fixture;
   fixture.execute("ruleset", { "WIREWORLD" });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   CellContext* context =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   testTrue(g,
            context != nullptr && context->getRuleSet()->getStateCount() == 4u,
            "Wireworld is active before testing a smaller custom rule");
   context->getGrid()->setCell(CellAddress{ 5, 5 }, 3u);
 
   RulesetWorkshopMenu* menu =
-    CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+    CanvasSceneTestAccess::getRulesetWorkshopMenu(fixture.module);
   const RuleSetDefinition* wireworld =
     RuleSetRegistry::instance().getRuleSetDefinition("WIREWORLD");
   testTrue(g,
            menu != nullptr && wireworld != nullptr,
            "workshop and Wireworld definition are available");
   fixture.input.getKeyQueue().push({ KeyCode::F2, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   RuleSetDefinition reduced = *wireworld;
   RuleFamilyDefinition reducedFamily =
     *RuleSetRegistry::instance().getFamilyDefinition(wireworld->familyId);
@@ -3227,7 +3229,7 @@ testRulesetWorkshopRejectsRemovingLiveStates()
   fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 
   testTrue(g,
            menu->isOpen() && !menu->getError().empty(),
@@ -3251,14 +3253,14 @@ testRulesetWorkshopApplyPersistsAndActivates()
              "isolated user catalog directory is available");
     if (workingDirectory.isReady()) {
       RulesetWorkshopMenu* menu =
-        CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+        CanvasSceneTestAccess::getRulesetWorkshopMenu(fixture.module);
       const RuleSetDefinition* gameOfLife =
         RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
       testTrue(g,
                menu != nullptr && gameOfLife != nullptr,
                "workshop and source definition are available");
       fixture.input.getKeyQueue().push({ KeyCode::F2, InputAction::Press, 0 });
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
 
       RuleSetDefinition custom = *gameOfLife;
       custom.id = "CUSTOM_F2_APPLY";
@@ -3277,10 +3279,10 @@ testRulesetWorkshopApplyPersistsAndActivates()
       fixture.input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
       fixture.input.getKeyQueue().push(
         { KeyCode::Enter, InputAction::Press, 0 });
-      fixture.module.Update(0.016);
+      fixture.module.update(0.016);
 
       CellContext* activeContext =
-        CellGameModuleTestAccess::getCellContext(fixture.module);
+        CanvasSceneTestAccess::getCellContext(fixture.module);
       const bool firstApplySucceeded =
         activeContext != nullptr && !menu->isOpen() &&
         activeContext->getModeString() == "CUSTOM_F2_APPLY";
@@ -3295,7 +3297,7 @@ testRulesetWorkshopApplyPersistsAndActivates()
                  "first custom definition controls the active transition");
         fixture.input.getKeyQueue().push(
           { KeyCode::F2, InputAction::Press, 0 });
-        fixture.module.Update(0.016);
+        fixture.module.update(0.016);
         const RuleSetDefinition* activeDefinition =
           RuleSetRegistry::instance().getRuleSetDefinition("CUSTOM_F2_APPLY");
         if (menu->isOpen() && activeDefinition != nullptr) {
@@ -3313,7 +3315,7 @@ testRulesetWorkshopApplyPersistsAndActivates()
             { KeyCode::Up, InputAction::Press, 0 });
           fixture.input.getKeyQueue().push(
             { KeyCode::Enter, InputAction::Press, 0 });
-          fixture.module.Update(0.016);
+          fixture.module.update(0.016);
         } else {
           testTrue(g, false, "F2 reopens the active custom rule");
         }
@@ -3362,9 +3364,9 @@ testRulesetWorkshopImportRejectsReducingActiveStateRange()
       const RuleSetDefinition* briansBrain =
         registry.getRuleSetDefinition("BRIANS_BRAIN");
       RulesetWorkshopMenu* menu =
-        CellGameModuleTestAccess::getRulesetWorkshopMenu(fixture.module);
+        CanvasSceneTestAccess::getRulesetWorkshopMenu(fixture.module);
       CellContext* context =
-        CellGameModuleTestAccess::getCellContext(fixture.module);
+        CanvasSceneTestAccess::getCellContext(fixture.module);
       testTrue(g,
                generations != nullptr && briansBrain != nullptr &&
                  menu != nullptr && context != nullptr,
@@ -3414,14 +3416,14 @@ testRulesetWorkshopImportRejectsReducingActiveStateRange()
             gLoadDialogResult = catalogPath.string();
             fixture.input.getKeyQueue().push(
               { KeyCode::F2, InputAction::Press, 0 });
-            fixture.module.Update(0.016);
+            fixture.module.update(0.016);
             testTrue(g,
                      focusWorkshopControl(
                        *menu, fixture.input, "Import rules from JSON"),
                      "workshop import control can be selected");
             fixture.input.getKeyQueue().push(
               { KeyCode::Enter, InputAction::Press, 0 });
-            fixture.module.Update(0.016);
+            fixture.module.update(0.016);
             const RuleFamilyDefinition* unchangedFamily =
               registry.getFamilyDefinition(expandedFamily.id);
             testTrue(g,
@@ -3449,7 +3451,7 @@ testRulesetWorkshopImportRejectsReducingActiveStateRange()
                      "workshop import can be selected again after rejection");
             fixture.input.getKeyQueue().push(
               { KeyCode::Enter, InputAction::Press, 0 });
-            fixture.module.Update(0.016);
+            fixture.module.update(0.016);
             unchangedFamily = registry.getFamilyDefinition(expandedFamily.id);
             testTrue(
               g,
@@ -3481,17 +3483,22 @@ testRulesetWorkshopImportRejectsReducingActiveStateRange()
   RuleSetRegistry::instance() = baseCatalog;
 }
 
-class CanvasReturnHost : public IModuleHost
+// The program's director for a fixture: returning to the title adds the
+// title scene through CSimScenes.
+struct CanvasReturnScenes
 {
-public:
-  int requests = 0;
-  std::unique_ptr<IModule> next;
-  void RequestTransition(std::unique_ptr<IModule> module) override
+  explicit CanvasReturnScenes(IllumoContext& context)
+    : director(context)
   {
-    ++requests;
-    next = std::move(module);
+    context.scenes = &director;
   }
-  bool HasPendingTransition() const override { return next != nullptr; }
+  // Title switches requested: CSimScenes never queues a second.
+  int requests() const
+  {
+    return director.has(CSimScenes::kTitle) && director.hasPendingSwitch() ? 1
+                                                                           : 0;
+  }
+  SceneDirector director;
 };
 
 // Summary of the canvas veil: how many shapes are fully opaque, full-size
@@ -3546,33 +3553,32 @@ static void
 testCanvasReturn()
 {
   CSimSounds::resetCounts();
-  CanvasReturnHost host;
   CellGameFixture fixture;
   testTrue(g,
            CSimSounds::playCount(CSimSound::CanvasEnter) == 1,
            "starting the canvas plays the enter cue");
-  fixture.context.moduleHost = &host;
+  CanvasReturnScenes host(fixture.context);
   GameVisual& veil =
-    CellGameModuleTestAccess::getCanvasEntranceVisual(fixture.module);
+    CanvasSceneTestAccess::getCanvasEntranceVisual(fixture.module);
   // The first frame is fully covered: every shape is one full, opaque cell.
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   const float cellWidth = veil.getShape(0)->rect.w;
   const float cellHeight = veil.getShape(0)->rect.h;
   const std::size_t cellCount = veil.shapeCount();
-  CellGameModuleTestAccess::advanceCanvasEntrance(fixture.module, 1.0);
+  CanvasSceneTestAccess::advanceCanvasEntrance(fixture.module, 1.0);
   fixture.input.getKeyQueue().push({ KeyCode::Q, InputAction::Press, 0 });
-  fixture.module.Update(0.0);
+  fixture.module.update(0.0);
   fixture.input.getKeyQueue().push({ KeyCode::M, InputAction::Press, 0 });
-  fixture.module.Update(0.0);
+  fixture.module.update(0.0);
   testEqInt(
-    g, host.requests, 0, "Main Menu waits for the canvas exit animation");
+    g, host.requests(), 0, "Main Menu waits for the canvas exit animation");
   testTrue(g,
            CSimSounds::playCount(CSimSound::CanvasExit) == 1,
            "leaving for the main menu plays the exit cue at once");
-  fixture.module.Update(0.24);
+  fixture.module.update(0.24);
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   const VeilSummary closing = summarizeVeil(veil, cellWidth, cellHeight);
   testTrue(g,
            veil.isVisible() && closing.shapes > 0u &&
@@ -3580,23 +3586,23 @@ testCanvasReturn()
            "canvas veil closes gradually before returning");
   fixture.execute("menu");
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.25);
+  fixture.module.update(0.25);
   testEqInt(g,
-            host.requests,
+            host.requests(),
             1,
             "repeated returns do not restart or duplicate the transition");
   testTrue(g,
            fixture.input.getKeyQueue().empty(),
            "exit input does not leak into the main menu");
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   const VeilSummary covered = summarizeVeil(veil, cellWidth, cellHeight);
   testTrue(g,
            covered.allOpaque && covered.coveredCells == cellCount &&
              covered.shapes == cellCount,
-           "canvas is covered when the module transition is requested");
-  fixture.module.Update(1.0);
-  testEqInt(g, host.requests, 1, "completed exit submits only once");
+           "canvas is covered when the return to the title is requested");
+  fixture.module.update(1.0);
+  testEqInt(g, host.requests(), 1, "completed exit submits only once");
   testTrue(g,
            CSimSounds::playCount(CSimSound::CanvasExit) == 1,
            "repeated return requests voice the exit once");
@@ -3608,10 +3614,10 @@ pressModeToggle(CellGameFixture& fixture)
 {
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::E, InputAction::None);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
 }
 
 static void
@@ -3619,7 +3625,7 @@ testCanvasModeSwitchSound()
 {
   CellGameFixture fixture;
   CSimSounds::resetCounts();
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(g,
            CSimSounds::playCount(CSimSound::CanvasModeSwitch) == 0,
            "entering the canvas in EDIT plays no mode cue");
@@ -3650,17 +3656,16 @@ testCanvasModeSwitchSound()
 static void
 testReducedCanvasReturn()
 {
-  CanvasReturnHost host;
   CellGameFixture fixture;
-  fixture.context.moduleHost = &host;
+  CanvasReturnScenes host(fixture.context);
   fixture.env.setVar("reducedUiMotion", true);
   fixture.execute("menu");
   testEqInt(g,
-            host.requests,
+            host.requests(),
             1,
             "reduced motion returns immediately through the console path");
   fixture.execute("menu");
-  testEqInt(g, host.requests, 1, "immediate return remains idempotent");
+  testEqInt(g, host.requests(), 1, "immediate return remains idempotent");
 }
 
 static void
@@ -3668,8 +3673,8 @@ testCanvasEntrance()
 {
   CellGameFixture fixture;
   GameVisual& veil =
-    CellGameModuleTestAccess::getCanvasEntranceVisual(fixture.module);
-  fixture.module.DispatchDrawables(&fixture.scene);
+    CanvasSceneTestAccess::getCanvasEntranceVisual(fixture.module);
+  fixture.module.dispatch(fixture.scene);
   testTrue(g,
            veil.isVisible() && veil.shapeCount() > 0,
            "entering a canvas starts a visible reveal");
@@ -3684,9 +3689,9 @@ testCanvasEntrance()
                0.01f &&
              std::abs(start.bottom - static_cast<float>(dimensions[1])) < 0.01f,
            "entrance initially covers the canvas with opaque cells");
-  CellGameModuleTestAccess::advanceCanvasEntrance(fixture.module, 0.24);
+  CanvasSceneTestAccess::advanceCanvasEntrance(fixture.module, 0.24);
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   const VeilSummary partial = summarizeVeil(veil, cellWidth, cellHeight);
   testTrue(g,
            partial.coveredCells > 0u && partial.coveredCells < cellCount,
@@ -3711,7 +3716,7 @@ testCanvasEntrance()
   const std::size_t shapesBefore = veil.shapeCount();
   const std::size_t coveredBefore = partial.coveredCells;
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   testTrue(g,
            veil.shapeCount() == shapesBefore &&
              summarizeVeil(veil, cellWidth, cellHeight).coveredCells ==
@@ -3720,7 +3725,7 @@ testCanvasEntrance()
   fixture.env.setVar("uiScale", 4);
   fixture.window.handleResize(800, 600);
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   // At 800x600 and 4x UI scale the veil spans a 200x150 virtual viewport.
   const VeilSummary scaled = summarizeVeil(veil, 0.0f, 0.0f);
   bool cornerAtOrigin = false;
@@ -3734,142 +3739,142 @@ testCanvasEntrance()
            cornerAtOrigin && std::abs(scaled.right * 4.0f - 800.0f) < 0.05f &&
              std::abs(scaled.bottom * 4.0f - 600.0f) < 0.05f,
            "entrance coverage follows viewport size and UI scale");
-  CellGameModuleTestAccess::advanceCanvasEntrance(fixture.module, 1.0);
+  CanvasSceneTestAccess::advanceCanvasEntrance(fixture.module, 1.0);
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   const std::vector<DrawableBase*>& ui =
     fixture.scene.drawablesIn(RenderLayerId::UI);
   testTrue(g,
            !veil.isVisible() &&
              std::find(ui.begin(), ui.end(), &veil) == ui.end(),
            "completed entrance is no longer submitted");
-  fixture.module.Exit();
+  fixture.module.stop();
   fixture.env.setVar("reducedUiMotion", true);
-  fixture.started = fixture.module.Start(&fixture.context);
+  fixture.started = fixture.module.start(fixture.context);
   testTrue(g,
            fixture.started && !veil.isVisible(),
            "reduced motion skips entrance from the first frame");
 }
 
 void
-registerCellGameModuleTests(IllumoTestRegistry& registry)
+registerCanvasSceneTests(IllumoTestRegistry& registry)
 {
-  registry.add("IllumoGame.CellGameModule.CanvasReturn",
-               []() { return runCellGameModuleCase(testCanvasReturn); });
+  registry.add("IllumoGame.CanvasScene.CanvasReturn",
+               []() { return runCanvasSceneCase(testCanvasReturn); });
   registry.add("IllumoGame.CellGame.PaintPaletteSounds",
-               []() { return runCellGameModuleCase(testPaintPaletteSounds); });
+               []() { return runCanvasSceneCase(testPaintPaletteSounds); });
   registry.add("IllumoGame.CellGame.PaintPaletteCardSounds", []() {
-    return runCellGameModuleCase(testPaintPaletteCardSounds);
+    return runCanvasSceneCase(testPaintPaletteCardSounds);
   });
-  registry.add("IllumoGame.CellGameModule.ModeSwitchSound", []() {
-    return runCellGameModuleCase(testCanvasModeSwitchSound);
+  registry.add("IllumoGame.CanvasScene.ModeSwitchSound", []() {
+    return runCanvasSceneCase(testCanvasModeSwitchSound);
   });
-  registry.add("IllumoGame.CellGameModule.ReducedCanvasReturn",
-               []() { return runCellGameModuleCase(testReducedCanvasReturn); });
+  registry.add("IllumoGame.CanvasScene.ReducedCanvasReturn",
+               []() { return runCanvasSceneCase(testReducedCanvasReturn); });
 
-  registry.add("IllumoGame.CellGameModule.CanvasEntrance",
-               []() { return runCellGameModuleCase(testCanvasEntrance); });
+  registry.add("IllumoGame.CanvasScene.CanvasEntrance",
+               []() { return runCanvasSceneCase(testCanvasEntrance); });
 
   registry.add("IllumoGame.CellGame.InputRegistrationLifetime", []() {
-    return runCellGameModuleCase(testInputRegistrationLifetime);
+    return runCanvasSceneCase(testInputRegistrationLifetime);
   });
   registry.add("IllumoGame.CellGame.RulesetWorkshopF2", []() {
-    return runCellGameModuleCase(testRulesetWorkshopF2Draft);
+    return runCanvasSceneCase(testRulesetWorkshopF2Draft);
   });
   registry.add("IllumoGame.CellGame.RulesetWorkshopFamilyControls", []() {
-    return runCellGameModuleCase(testRulesetWorkshopFamilyControls);
+    return runCanvasSceneCase(testRulesetWorkshopFamilyControls);
   });
   registry.add("IllumoGame.CellGame.RulesetWorkshopPointerNavigation", []() {
-    return runCellGameModuleCase(testRulesetWorkshopPointerNavigation);
+    return runCanvasSceneCase(testRulesetWorkshopPointerNavigation);
   });
   registry.add("IllumoGame.CellGame.RulesetWorkshopNavigation", []() {
-    return runCellGameModuleCase(testRulesetWorkshopNavigation);
+    return runCanvasSceneCase(testRulesetWorkshopNavigation);
   });
   registry.add("IllumoGame.CellGame.RulesetWorkshopStateGuard", []() {
-    return runCellGameModuleCase(testRulesetWorkshopRejectsRemovingLiveStates);
+    return runCanvasSceneCase(testRulesetWorkshopRejectsRemovingLiveStates);
   });
   registry.add("IllumoGame.CellGame.RulesetWorkshopApply", []() {
-    return runCellGameModuleCase(testRulesetWorkshopApplyPersistsAndActivates);
+    return runCanvasSceneCase(testRulesetWorkshopApplyPersistsAndActivates);
   });
   registry.add("IllumoGame.CellGame.RulesetWorkshopImportStateGuard", []() {
-    return runCellGameModuleCase(
+    return runCanvasSceneCase(
       testRulesetWorkshopImportRejectsReducingActiveStateRange);
   });
   registry.add("IllumoGame.CellGame.StartAndRegistration", []() {
-    return runCellGameModuleCase(testStartRegistersGameFeatures);
+    return runCanvasSceneCase(testStartRegistersGameFeatures);
   });
   registry.add("IllumoGame.CellGame.Preferences",
-               []() { return runCellGameModuleCase(testCanvasPreferences); });
+               []() { return runCanvasSceneCase(testCanvasPreferences); });
   registry.add("IllumoGame.CellGame.RestartPrompt",
-               []() { return runCellGameModuleCase(testRestartPrompt); });
+               []() { return runCanvasSceneCase(testRestartPrompt); });
   registry.add("IllumoGame.CellGame.InvalidContext", []() {
-    return runCellGameModuleCase(testInvalidContextStartIsContained);
+    return runCanvasSceneCase(testInvalidContextStartIsContained);
   });
   registry.add("IllumoGame.CellGame.Render3dTestFlag",
-               []() { return runCellGameModuleCase(testRender3dTestFlag); });
+               []() { return runCanvasSceneCase(testRender3dTestFlag); });
   registry.add("IllumoGame.CellGame.WireworldSeedAndBrush", []() {
-    return runCellGameModuleCase(testWireworldSeedAndBrush);
+    return runCanvasSceneCase(testWireworldSeedAndBrush);
   });
   registry.add("IllumoGame.CellGame.CyclicMultistateSeed", []() {
-    return runCellGameModuleCase(testCyclicMultistateSeed);
+    return runCanvasSceneCase(testCyclicMultistateSeed);
   });
   registry.add("IllumoGame.CellGame.EveryShippedRuleStarts", []() {
-    return runCellGameModuleCase(testEveryShippedRuleStarts);
+    return runCanvasSceneCase(testEveryShippedRuleStarts);
   });
   registry.add("IllumoGame.CellGame.ResearchedStarterSeeds", []() {
-    return runCellGameModuleCase(testResearchedStarterSeeds);
+    return runCanvasSceneCase(testResearchedStarterSeeds);
   });
   registry.add("IllumoGame.CellGame.SaveLoadRoundTrip",
-               []() { return runCellGameModuleCase(testSaveLoadRoundTrip); });
+               []() { return runCanvasSceneCase(testSaveLoadRoundTrip); });
   registry.add("IllumoGame.CellGame.SparseV2Compatibility", []() {
-    return runCellGameModuleCase(testSparseV2Compatibility);
+    return runCanvasSceneCase(testSparseV2Compatibility);
   });
   registry.add("IllumoGame.CellGame.ReleaseConfiguration", []() {
-    return runCellGameModuleCase(testReleaseConfigurationWorkflow);
+    return runCanvasSceneCase(testReleaseConfigurationWorkflow);
   });
   registry.add("IllumoGame.CellGame.PaintPalette",
-               []() { return runCellGameModuleCase(testPaintPalette); });
+               []() { return runCanvasSceneCase(testPaintPalette); });
   registry.add("IllumoGame.CellGame.SoftwareCursor",
-               []() { return runCellGameModuleCase(testSoftwareCursor); });
+               []() { return runCanvasSceneCase(testSoftwareCursor); });
   registry.add("IllumoGame.CellGame.ModeBadge",
-               []() { return runCellGameModuleCase(testModeBadge); });
+               []() { return runCanvasSceneCase(testModeBadge); });
   registry.add("IllumoGame.CellGame.PaintPaletteBubbleMorph", []() {
-    return runCellGameModuleCase(testPaintPaletteBubbleMorph);
+    return runCanvasSceneCase(testPaintPaletteBubbleMorph);
   });
   registry.add("IllumoGame.CellGame.PaintPaletteFittedInput", []() {
-    return runCellGameModuleCase(testPaintPaletteFittedInput);
+    return runCanvasSceneCase(testPaintPaletteFittedInput);
   });
   registry.add("IllumoGame.CellGame.HamburgerMenu",
-               []() { return runCellGameModuleCase(testHamburgerMenuButton); });
+               []() { return runCanvasSceneCase(testHamburgerMenuButton); });
   registry.add("IllumoGame.CellGame.SettingsYieldToConsole", []() {
-    return runCellGameModuleCase(testSettingsYieldToConsole);
+    return runCanvasSceneCase(testSettingsYieldToConsole);
   });
   registry.add("IllumoGame.CellGame.ExitConfirmation", []() {
-    return runCellGameModuleCase(testExitConfirmationFromQ);
+    return runCanvasSceneCase(testExitConfirmationFromQ);
   });
   registry.add("IllumoGame.CellGame.InvalidSaveFiles", []() {
-    return runCellGameModuleCase(testLoadRejectsInvalidFiles);
+    return runCanvasSceneCase(testLoadRejectsInvalidFiles);
   });
   registry.add("IllumoGame.CellGame.LoadOverlap",
-               []() { return runCellGameModuleCase(testLoadCopiesOverlap); });
+               []() { return runCanvasSceneCase(testLoadCopiesOverlap); });
   registry.add("IllumoGame.CellGame.SimulationCommands", []() {
-    return runCellGameModuleCase(testConsoleSimulationCommands);
+    return runCanvasSceneCase(testConsoleSimulationCommands);
   });
   registry.add("IllumoGame.CellGame.CameraAndFileCommands", []() {
-    return runCellGameModuleCase(testConsoleCameraAndFiles);
+    return runCanvasSceneCase(testConsoleCameraAndFiles);
   });
   registry.add("IllumoGame.CellGame.UpdateStateAndTiming", []() {
-    return runCellGameModuleCase(testUpdateStateAndTiming);
+    return runCanvasSceneCase(testUpdateStateAndTiming);
   });
   registry.add("IllumoGame.CellGame.FrameSimulationBudget", []() {
-    return runCellGameModuleCase(testFrameSimulationBudget);
+    return runCanvasSceneCase(testFrameSimulationBudget);
   });
   registry.add("IllumoGame.CellGame.SimulationFailureReporting", []() {
-    return runCellGameModuleCase(testSimulationFailureReporting);
+    return runCanvasSceneCase(testSimulationFailureReporting);
   });
   registry.add("IllumoGame.CellGame.CameraInputBounds",
-               []() { return runCellGameModuleCase(testCameraInputBounds); });
+               []() { return runCanvasSceneCase(testCameraInputBounds); });
   registry.add("IllumoGame.CellGame.AsyncTransitionDraining", []() {
-    return runCellGameModuleCase(testAsyncTransitionDraining);
+    return runCanvasSceneCase(testAsyncTransitionDraining);
   });
 }

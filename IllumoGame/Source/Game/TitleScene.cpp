@@ -1,4 +1,5 @@
-#include "MainMenuModule.h"
+#include "TitleScene.h"
+#include "CSimScenes.h"
 
 #include "BuiltinPatterns.h"
 #include "CSimPlatform.h"
@@ -6,11 +7,11 @@
 #include "CSimTypeface.h"
 #include "CanvasCoordinatePolicy.h"
 #include "CellContext.h"
-#include "CellGameModule.h"
+#include "CanvasScene.h"
 #include "PatternCodec.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "SimulatorSettings.h"
-#include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
@@ -41,7 +42,7 @@ applyAmbientCellLook(IEnvVars* environment, CellContext* context)
     static_cast<float>(look.cellGlow), look.ledCells, look.gridLines);
 }
 
-MainMenuModule::MainMenuModule()
+TitleScene::TitleScene()
   : m_selectedItem(kPlayItem)
   , m_bgSimAccum(0.0)
   , m_panelX(0.0f)
@@ -54,21 +55,22 @@ MainMenuModule::MainMenuModule()
 {
 }
 
-MainMenuModule::~MainMenuModule()
+TitleScene::~TitleScene()
 {
-  Exit();
+  stop();
 }
 
 bool
-MainMenuModule::Start(IllumoContext* context)
+TitleScene::start(IllumoContext& startContext)
 {
+  IllumoContext* context = &startContext;
   if (context == nullptr || context->envVars == nullptr ||
       context->window == nullptr || context->camera == nullptr ||
       context->renderer == nullptr || context->inputManager == nullptr ||
       context->commandRegistry == nullptr || context->scene == nullptr ||
-      context->moduleHost == nullptr) {
+      context->scenes == nullptr) {
     Logger::LogError(
-      "MainMenuModule::Start: IllumoContext missing required services");
+      "TitleScene::start: IllumoContext missing required services");
     ic = context;
     return false;
   }
@@ -163,7 +165,7 @@ static const unsigned char kCoralState = 0;
 static const unsigned char kCyanState = 2;
 
 void
-MainMenuModule::stampPattern(const char* name,
+TitleScene::stampPattern(const char* name,
                              std::int64_t originX,
                              std::int64_t originY,
                              bool flipX,
@@ -186,7 +188,7 @@ MainMenuModule::stampPattern(const char* name,
 }
 
 std::uint32_t
-MainMenuModule::nextRandom()
+TitleScene::nextRandom()
 {
   // Deterministic LCG: the menu needs variety, not entropy.
   m_randomState = m_randomState * 1664525u + 1013904223u;
@@ -194,7 +196,7 @@ MainMenuModule::nextRandom()
 }
 
 void
-MainMenuModule::seedAmbientPattern()
+TitleScene::seedAmbientPattern()
 {
   if (!m_bgContext || !m_bgContext->getCanvasView()) {
     return;
@@ -220,7 +222,7 @@ MainMenuModule::seedAmbientPattern()
 }
 
 void
-MainMenuModule::launchVisitor()
+TitleScene::launchVisitor()
 {
   if (!m_bgContext || !m_bgContext->getCanvasView() || ic == nullptr ||
       ic->window == nullptr) {
@@ -264,7 +266,7 @@ MainMenuModule::launchVisitor()
 }
 
 void
-MainMenuModule::advanceAmbientSimulation(double dt)
+TitleScene::advanceAmbientSimulation(double dt)
 {
   if (!m_bgContext || !m_bgContext->getCanvasView() ||
       !m_bgContext->getGrid() || !m_bgContext->getRuleSet()) {
@@ -296,7 +298,7 @@ MainMenuModule::advanceAmbientSimulation(double dt)
 }
 
 void
-MainMenuModule::updateLayout()
+TitleScene::updateLayout()
 {
   // Every layer shares the fitted scale; rebuildVisual applies it once the
   // layers are drawn.
@@ -322,7 +324,7 @@ MainMenuModule::updateLayout()
 }
 
 float
-MainMenuModule::entranceReveal() const
+TitleScene::entranceReveal() const
 {
   if (reducedMotion()) {
     return 1.0f;
@@ -331,14 +333,14 @@ MainMenuModule::entranceReveal() const
 }
 
 bool
-MainMenuModule::reducedMotion() const
+TitleScene::reducedMotion() const
 {
   return ic != nullptr && ic->envVars != nullptr &&
          ic->envVars->getVar("reducedUiMotion").valueAsBool;
 }
 
 void
-MainMenuModule::selectItem(int item)
+TitleScene::selectItem(int item)
 {
   int nextItem = item;
   if (nextItem < 0) {
@@ -355,7 +357,7 @@ MainMenuModule::selectItem(int item)
 }
 
 void
-MainMenuModule::pressItem(float originX, float originY)
+TitleScene::pressItem(float originX, float originY)
 {
   m_pressX = originX;
   m_pressY = originY;
@@ -366,7 +368,7 @@ MainMenuModule::pressItem(float originX, float originY)
 // selection, the panel recedes behind overlays, and the background leans
 // toward the pointer while a soft spotlight follows it.
 void
-MainMenuModule::updateMotion(float dt)
+TitleScene::updateMotion(float dt)
 {
   const bool still = reducedMotion();
   m_rowEmphasis.focusOnly(m_selectedItem, kItemCount);
@@ -421,7 +423,7 @@ MainMenuModule::updateMotion(float dt)
 // flies, then dips past the line on the way back, which reads as a heavy
 // squash, and bounces once more.
 void
-MainMenuModule::hopTitleLetter(int letter)
+TitleScene::hopTitleLetter(int letter)
 {
   TitleLetterPose& pose = m_letterPoses[static_cast<std::size_t>(letter)];
   // High enough to read as a jump, low enough to clear the eyebrow label.
@@ -430,7 +432,7 @@ MainMenuModule::hopTitleLetter(int letter)
 }
 
 void
-MainMenuModule::strikeTitlePose(int letter)
+TitleScene::strikeTitlePose(int letter)
 {
   TitleLetterPose& pose = m_letterPoses[static_cast<std::size_t>(letter)];
   const std::uint32_t roll = nextRandom();
@@ -465,7 +467,7 @@ MainMenuModule::strikeTitlePose(int letter)
 }
 
 void
-MainMenuModule::updateTitlePoses(float dt)
+TitleScene::updateTitlePoses(float dt)
 {
   const bool still = reducedMotion();
   for (int letter = 0; letter < kTitleLetterCount; ++letter) {
@@ -516,7 +518,7 @@ MainMenuModule::updateTitlePoses(float dt)
 }
 
 void
-MainMenuModule::openCanvasSetup()
+TitleScene::openCanvasSetup()
 {
   NewSimulationConfiguration initial;
   initial.ruleSet = ic->envVars->getVar("RuleSetString").value;
@@ -536,9 +538,9 @@ MainMenuModule::openCanvasSetup()
 }
 
 void
-MainMenuModule::activateSelectedItem()
+TitleScene::activateSelectedItem()
 {
-  if (ic == nullptr || ic->moduleHost == nullptr) {
+  if (ic == nullptr || ic->scenes == nullptr) {
     return;
   }
 
@@ -557,9 +559,8 @@ MainMenuModule::activateSelectedItem()
       CSimPlatform::current().chooseLoadLocation(
         spec, [this, alive](const std::string& location) {
           if (!alive.expired() && !location.empty() && ic != nullptr &&
-              ic->moduleHost != nullptr) {
-            ic->moduleHost->RequestTransition(
-              std::make_unique<CellGameModule>(location));
+              ic->scenes != nullptr) {
+            CSimScenes::loadSimulation(*ic->scenes, location);
           }
         });
       break;
@@ -583,7 +584,7 @@ MainMenuModule::activateSelectedItem()
 }
 
 std::array<float, 4>
-MainMenuModule::itemHitBoundsForTesting(int item) const
+TitleScene::itemHitBoundsForTesting(int item) const
 {
   return std::array<float, 4>{
     m_panelX + m_tilt.shiftX(GuiPanelTilt::kBodyDepth) + 28.0f,
@@ -595,25 +596,25 @@ MainMenuModule::itemHitBoundsForTesting(int item) const
 }
 
 void
-MainMenuModule::selectItemForTesting(int item)
+TitleScene::selectItemForTesting(int item)
 {
   selectItem(item);
 }
 
 void
-MainMenuModule::activateSelectedItemForTesting()
+TitleScene::activateSelectedItemForTesting()
 {
   activateSelectedItem();
 }
 
 bool
-MainMenuModule::isSettingsOpenForTesting() const
+TitleScene::isSettingsOpenForTesting() const
 {
   return m_configurationMenu != nullptr && m_configurationMenu->isOpen();
 }
 
 SimulatorConfiguration
-MainMenuModule::currentConfiguration() const
+TitleScene::currentConfiguration() const
 {
   SimulatorConfiguration config;
   if (ic == nullptr || ic->envVars == nullptr) {
@@ -664,7 +665,7 @@ MainMenuModule::currentConfiguration() const
 }
 
 bool
-MainMenuModule::applyConfiguration(const SimulatorConfiguration& configuration)
+TitleScene::applyConfiguration(const SimulatorConfiguration& configuration)
 {
   if (ic == nullptr || ic->envVars == nullptr) {
     return false;
@@ -711,7 +712,7 @@ MainMenuModule::applyConfiguration(const SimulatorConfiguration& configuration)
 }
 
 void
-MainMenuModule::Update(double dt)
+TitleScene::update(double dt)
 {
   if (ic == nullptr) {
     return;
@@ -763,8 +764,8 @@ MainMenuModule::Update(double dt)
       const NewSimulationAction action =
         m_newSimulationMenu->update(ic->inputManager);
       if (action == NewSimulationAction::Create) {
-        ic->moduleHost->RequestTransition(std::make_unique<CellGameModule>(
-          m_newSimulationMenu->configuration()));
+        CSimScenes::newSimulation(*ic->scenes,
+                                  m_newSimulationMenu->configuration());
         m_newSimulationMenu->close();
       } else if (action == NewSimulationAction::Back) {
         CSimSounds::play(CSimSound::MenuBack);
@@ -1004,7 +1005,7 @@ drawMenuIcon(GameVisual& visual,
 }
 
 void
-MainMenuModule::drawBackdrop(GameVisual& visual, float width, float height)
+TitleScene::drawBackdrop(GameVisual& visual, float width, float height)
 {
   // The live Immigration world shows through a translucent tint; a radial
   // scrim darkens the corners so the panel sits in a pool of light.
@@ -1018,7 +1019,7 @@ MainMenuModule::drawBackdrop(GameVisual& visual, float width, float height)
 }
 
 void
-MainMenuModule::drawAurora(GameVisual& visual,
+TitleScene::drawAurora(GameVisual& visual,
                            float width,
                            float height,
                            float reveal)
@@ -1075,7 +1076,7 @@ MainMenuModule::drawAurora(GameVisual& visual,
 }
 
 void
-MainMenuModule::drawTitle(GameVisual& visual, float room, unsigned char opacity)
+TitleScene::drawTitle(GameVisual& visual, float room, unsigned char opacity)
 {
   const ColorRgba cyan = UiTheme::accentCool();
   const bool still = reducedMotion();
@@ -1312,8 +1313,8 @@ MainMenuModule::drawTitle(GameVisual& visual, float room, unsigned char opacity)
                opacity);
 }
 
-MainMenuModule::RowGeometry
-MainMenuModule::rowGeometry(unsigned char opacity) const
+TitleScene::RowGeometry
+TitleScene::rowGeometry(unsigned char opacity) const
 {
   const bool still = reducedMotion();
   RowGeometry rows;
@@ -1341,7 +1342,7 @@ MainMenuModule::rowGeometry(unsigned char opacity) const
 }
 
 void
-MainMenuModule::drawRowCards(GameVisual& visual, const RowGeometry& rows)
+TitleScene::drawRowCards(GameVisual& visual, const RowGeometry& rows)
 {
   // Cards: soft drop shadow, a rim that warms toward the accent with
   // emphasis, and a top-lit gradient face.
@@ -1383,7 +1384,7 @@ MainMenuModule::drawRowCards(GameVisual& visual, const RowGeometry& rows)
 }
 
 void
-MainMenuModule::drawSelection(GameVisual& visual,
+TitleScene::drawSelection(GameVisual& visual,
                               const RowGeometry& rows,
                               float breathe)
 {
@@ -1444,7 +1445,7 @@ MainMenuModule::drawSelection(GameVisual& visual,
 }
 
 void
-MainMenuModule::drawRowContent(GameVisual& visual,
+TitleScene::drawRowContent(GameVisual& visual,
                                const RowGeometry& rows,
                                float room)
 {
@@ -1531,7 +1532,7 @@ MainMenuModule::drawRowContent(GameVisual& visual,
 }
 
 void
-MainMenuModule::drawChevrons(GameVisual& visual, const RowGeometry& rows)
+TitleScene::drawChevrons(GameVisual& visual, const RowGeometry& rows)
 {
   const ColorRgba cyan = UiTheme::accentCool();
   const bool still = reducedMotion();
@@ -1555,7 +1556,7 @@ MainMenuModule::drawChevrons(GameVisual& visual, const RowGeometry& rows)
 }
 
 void
-MainMenuModule::drawFooter(GameVisual& visual, unsigned char opacity)
+TitleScene::drawFooter(GameVisual& visual, unsigned char opacity)
 {
   const float size = 9.0f;
   struct Hint
@@ -1585,7 +1586,7 @@ MainMenuModule::drawFooter(GameVisual& visual, unsigned char opacity)
 // The build version (D-F2) sits quietly in the screen's lower right corner,
 // outside the glass, so it never competes with the menu.
 void
-MainMenuModule::drawVersion(GameVisual& visual,
+TitleScene::drawVersion(GameVisual& visual,
                             float width,
                             float height,
                             unsigned char opacity)
@@ -1607,7 +1608,7 @@ MainMenuModule::drawVersion(GameVisual& visual,
 
 template<typename Draw>
 void
-MainMenuModule::drawLayer(Layer layer, bool keyed, Draw&& draw)
+TitleScene::drawLayer(Layer layer, bool keyed, Draw&& draw)
 {
   std::vector<float>& key = m_layerKeys[layer];
   if (keyed && key == m_keyScratch) {
@@ -1624,7 +1625,7 @@ MainMenuModule::drawLayer(Layer layer, bool keyed, Draw&& draw)
 }
 
 void
-MainMenuModule::rebuildVisual()
+TitleScene::rebuildVisual()
 {
   updateLayout();
   const float width = m_panelFit.virtualWidth;
@@ -1710,11 +1711,9 @@ MainMenuModule::rebuildVisual()
 }
 
 void
-MainMenuModule::DispatchDrawables(Scene* scene)
+TitleScene::dispatch(Scene& frame)
 {
-  if (scene == nullptr) {
-    return;
-  }
+  Scene* scene = &frame;
   if (m_bgContext != nullptr && m_bgContext->getCanvasView() != nullptr) {
     scene->AddDrawable(m_bgContext->getCanvasView(), RenderLayerId::World);
   }
@@ -1733,7 +1732,7 @@ MainMenuModule::DispatchDrawables(Scene* scene)
 }
 
 void
-MainMenuModule::registerConsoleCommands()
+TitleScene::registerConsoleCommands()
 {
   if (ic == nullptr || ic->commandRegistry == nullptr) {
     return;
@@ -1747,7 +1746,7 @@ MainMenuModule::registerConsoleCommands()
         }
         return;
       }
-      if (ic->moduleHost != nullptr) {
+      if (ic->scenes != nullptr) {
         openCanvasSetup();
       }
     },
@@ -1756,7 +1755,7 @@ MainMenuModule::registerConsoleCommands()
 }
 
 void
-MainMenuModule::unregisterConsoleCommands()
+TitleScene::unregisterConsoleCommands()
 {
   if (ic == nullptr || ic->commandRegistry == nullptr) {
     return;
@@ -1765,7 +1764,7 @@ MainMenuModule::unregisterConsoleCommands()
 }
 
 void
-MainMenuModule::Exit()
+TitleScene::stop()
 {
   if (m_lifetime && ic != nullptr) {
     try {

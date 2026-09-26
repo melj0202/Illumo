@@ -9,16 +9,16 @@ add_library(IllumoGameCore STATIC
   Source/Game/CSimSounds.cpp
   Source/Game/CSimTypeface.cpp
   Source/Game/CellContext.cpp
-  Source/Game/CellGameModule.cpp
+  Source/Game/CanvasScene.cpp
   Source/Game/CellPattern.cpp
   Source/Game/ConfigurationMenu.cpp
   Source/Game/Cursor.cpp
   Source/Game/ExitConfirmDialog.cpp
   Source/Game/IllumoCodec.cpp
   Source/Game/IllumoCodecStreams.cpp
-  Source/Game/IllumoGameApplication.cpp
   Source/Game/IllumoGameConfig.cpp
-  Source/Game/MainMenuModule.cpp
+  Source/Game/TitleScene.cpp
+  Source/Game/CSimScenes.cpp
   Source/Game/MenuMotifs.cpp
   Source/Game/ModeBadge.cpp
   Source/Game/SoftwareCursor.cpp
@@ -64,8 +64,8 @@ if(BUILD_TESTING)
     Tests/TestCanvasDomain.cpp
     Tests/TestDomainBoundary.cpp
     Tests/TestSim.cpp
-    Tests/TestCellGameModule.cpp
-    Tests/TestMainMenuModule.cpp
+    Tests/TestCanvasScene.cpp
+    Tests/TestTitleScene.cpp
     Tests/TestProductBoundary.cpp
     Tests/TestCanvasInf.cpp
     Tests/TestWorldTopology.cpp

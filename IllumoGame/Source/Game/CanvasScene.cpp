@@ -1,16 +1,17 @@
-#include "CellGameModule.h"
+#include "CanvasScene.h"
+#include "CSimScenes.h"
 #include "BuiltinPatterns.h"
 #include "CSimPlatform.h"
 #include "CSimSounds.h"
 #include "CanvasCoordinatePolicy.h"
 #include "IllumoCodec.h"
-#include "MainMenuModule.h"
+#include "TitleScene.h"
 #include "PatternCodec.h"
 #include "RuleCatalogOverlay.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "SimulatorSettings.h"
 #include <Illumo/Content/IlscCodec.h>
-#include <Illumo/Engine/IModuleHost.h>
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
@@ -266,7 +267,7 @@ fitTextToWidth(const std::string& text,
   return "...";
 }
 
-CellGameModule::CellGameModule(std::string initialSavePath)
+CanvasScene::CanvasScene(std::string initialSavePath)
   : cellContext(nullptr)
   , currentState(CellState::EDIT)
   , simAccum(0.0)
@@ -308,20 +309,21 @@ CellGameModule::CellGameModule(std::string initialSavePath)
   ic = nullptr;
 }
 
-CellGameModule::CellGameModule(const NewSimulationConfiguration& configuration)
-  : CellGameModule(std::string{})
+CanvasScene::CanvasScene(const NewSimulationConfiguration& configuration)
+  : CanvasScene(std::string{})
 {
   initialCanvas = configuration;
 }
 
-CellGameModule::~CellGameModule() {}
+CanvasScene::~CanvasScene() {}
 
 bool
-CellGameModule::Start(IllumoContext* context)
+CanvasScene::start(IllumoContext& startContext)
 {
+  IllumoContext* context = &startContext;
   if (!cellGameContextComplete(context)) {
     Logger::LogError(
-      "CellGameModule::Start: IllumoContext missing required services "
+      "CanvasScene::start: IllumoContext missing required services "
       "(envVars, window, camera, renderer, inputManager, commandLine, "
       "commandRegistry, scene)");
     ic = context;
@@ -332,6 +334,8 @@ CellGameModule::Start(IllumoContext* context)
     return false;
   }
   ic = context;
+  // A canvas opens on its home view; a save may restore its own camera.
+  resetCameraToHome();
   inspectorEnabled = ic->envVars->getVar("showInspector").valueAsBool;
 
   // Prefer the explicit ruleset setting, then retain the old mode alias.
@@ -569,7 +573,7 @@ CellGameModule::Start(IllumoContext* context)
 }
 
 void
-CellGameModule::showModeSplash(const char* label)
+CanvasScene::showModeSplash(const char* label)
 {
   if (label == nullptr) {
     return;
@@ -589,7 +593,7 @@ CellGameModule::showModeSplash(const char* label)
 }
 
 void
-CellGameModule::updateModeBadge(double dt)
+CanvasScene::updateModeBadge(double dt)
 {
   const bool reducedMotion = ic != nullptr && ic->envVars != nullptr &&
                              ic->envVars->getVar("reducedUiMotion").valueAsBool;
@@ -597,7 +601,7 @@ CellGameModule::updateModeBadge(double dt)
 }
 
 void
-CellGameModule::seedInitialPattern()
+CanvasScene::seedInitialPattern()
 {
   SparseCellGrid* grid = cellContext->getGrid();
   const RuleSet* rules = cellContext->getRuleSet();
@@ -812,7 +816,7 @@ CellGameModule::seedInitialPattern()
 }
 
 void
-CellGameModule::updatePaintBrushFromInput()
+CanvasScene::updatePaintBrushFromInput()
 {
   if (ic == nullptr || ic->inputManager == nullptr ||
       ic->commandLine == nullptr || ic->commandLine->isOpen) {
@@ -848,7 +852,7 @@ CellGameModule::updatePaintBrushFromInput()
 }
 
 void
-CellGameModule::updateVisualTargets()
+CanvasScene::updateVisualTargets()
 {
   ZoneScopedN("Visual.updateTargets");
   // life → palette target colors (sparse); tickVisual eases displayRgb toward
@@ -857,7 +861,7 @@ CellGameModule::updateVisualTargets()
 }
 
 bool
-CellGameModule::consumeCompletedSimulation(bool waitForCompletion)
+CanvasScene::consumeCompletedSimulation(bool waitForCompletion)
 {
   SparseCellGrid* completedGrid = nullptr;
   SparseGenerationDelta completedDelta;
@@ -907,7 +911,7 @@ CellGameModule::consumeCompletedSimulation(bool waitForCompletion)
 }
 
 void
-CellGameModule::drainSimulation()
+CanvasScene::drainSimulation()
 {
   if (cellContext == nullptr) {
     return;
@@ -932,7 +936,7 @@ CellGameModule::drainSimulation()
 }
 
 void
-CellGameModule::prepareGridMutation()
+CanvasScene::prepareGridMutation()
 {
   drainSimulation();
   mirrorDelta.clear();
@@ -940,7 +944,7 @@ CellGameModule::prepareGridMutation()
 }
 
 SimulatorConfiguration
-CellGameModule::currentConfiguration() const
+CanvasScene::currentConfiguration() const
 {
   SimulatorConfiguration configuration;
   if (cellContext == nullptr || ic == nullptr || ic->envVars == nullptr) {
@@ -988,7 +992,7 @@ CellGameModule::currentConfiguration() const
 }
 
 bool
-CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
+CanvasScene::applyConfiguration(const SimulatorConfiguration& configuration)
 {
   if (cellContext == nullptr || ic == nullptr || ic->envVars == nullptr ||
       !CellContext::IsKnownFamilyString(configuration.family) ||
@@ -1079,7 +1083,7 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
 
   if (topologyChanged) {
     seedInitialPattern();
-    ic->camera->Reset();
+    resetCameraToHome();
     currentState = CellState::EDIT;
     simAccum = 0.0;
     achievedSimulationTps = 0.0;
@@ -1110,7 +1114,7 @@ CellGameModule::applyConfiguration(const SimulatorConfiguration& configuration)
 }
 
 void
-CellGameModule::registerConsoleCommands()
+CanvasScene::registerConsoleCommands()
 {
   if (ic == nullptr || ic->commandRegistry == nullptr ||
       ic->commandLine == nullptr) {
@@ -1459,11 +1463,11 @@ CellGameModule::registerConsoleCommands()
         ic->commandLine->logError("Usage: camera_reset");
         return;
       }
-      ic->camera->Reset();
+      resetCameraToHome();
       ic->commandLine->logSuccess("Camera reset");
     },
     "camera_reset",
-    "Center the canvas and restore 1x zoom");
+    "Center the canvas and restore the home zoom");
 
   ic->commandRegistry->RegisterCommand(
     "camera",
@@ -1684,7 +1688,7 @@ CellGameModule::registerConsoleCommands()
 }
 
 void
-CellGameModule::unregisterConsoleCommands()
+CanvasScene::unregisterConsoleCommands()
 {
   if (ic == nullptr || ic->commandRegistry == nullptr) {
     return;
@@ -1703,7 +1707,7 @@ CellGameModule::unregisterConsoleCommands()
 }
 
 void
-CellGameModule::setRunning(bool running)
+CanvasScene::setRunning(bool running)
 {
   prepareGridMutation();
   currentState = running ? CellState::NORMAL : CellState::EDIT;
@@ -1726,7 +1730,7 @@ CellGameModule::setRunning(bool running)
 }
 
 int
-CellGameModule::stepSimulation(int generations)
+CanvasScene::stepSimulation(int generations)
 {
   prepareGridMutation();
   currentState = CellState::EDIT;
@@ -1752,7 +1756,7 @@ CellGameModule::stepSimulation(int generations)
 }
 
 void
-CellGameModule::printStatus() const
+CanvasScene::printStatus() const
 {
   const CanvasView* canvas = cellContext->getCanvasView();
   const SparseAdvanceStats& simulationStats =
@@ -1899,7 +1903,7 @@ CellGameModule::printStatus() const
 }
 
 void
-CellGameModule::syncSimRateFromEnv()
+CanvasScene::syncSimRateFromEnv()
 {
   long tps = ic->envVars->getVar("tps").valueAsLong;
   if (tps < 1)
@@ -1952,9 +1956,9 @@ consumeKeyPress(InputManager* inputManager, KeyCode key)
 }
 
 void
-CellGameModule::Update(double dt)
+CanvasScene::update(double dt)
 {
-  ZoneNamed(CellGameModuleUpdateZone, "CellGameModule Update");
+  ZoneNamed(CanvasSceneUpdateZone, "CanvasScene Update");
 
   // Host erases modules that fail Start; still guard for incomplete fixtures.
   if (cellContext == nullptr || ic == nullptr) {
@@ -2392,9 +2396,6 @@ CellGameModule::Update(double dt)
     case CellState::EDIT:
       Edit(dt);
       break;
-    case CellState::EXIT:
-      Exit();
-      break;
     default:
       break;
   }
@@ -2414,7 +2415,7 @@ CellGameModule::Update(double dt)
 }
 
 void
-CellGameModule::Exit()
+CanvasScene::stop()
 {
   // Late platform completions must not touch a module that has exited.
   if (m_lifetime) {
@@ -2462,7 +2463,7 @@ CellGameModule::Exit()
 }
 
 void
-CellGameModule::Normal(double dt)
+CanvasScene::Normal(double dt)
 {
   syncSimRateFromEnv();
   if (dt < 0.0) {
@@ -2530,7 +2531,7 @@ CellGameModule::Normal(double dt)
 }
 
 void
-CellGameModule::normalizeSelection(std::int64_t* x0,
+CanvasScene::normalizeSelection(std::int64_t* x0,
                                    std::int64_t* y0,
                                    std::int64_t* x1,
                                    std::int64_t* y1) const
@@ -2539,7 +2540,7 @@ CellGameModule::normalizeSelection(std::int64_t* x0,
 }
 
 bool
-CellGameModule::captureSelection(CellPattern* pattern, std::string* error)
+CanvasScene::captureSelection(CellPattern* pattern, std::string* error)
 {
   if (cellContext == nullptr || cellContext->getGrid() == nullptr) {
     if (error != nullptr) {
@@ -2551,7 +2552,7 @@ CellGameModule::captureSelection(CellPattern* pattern, std::string* error)
 }
 
 bool
-CellGameModule::pastePatternAt(const CellPattern& pattern,
+CanvasScene::pastePatternAt(const CellPattern& pattern,
                                std::int64_t originX,
                                std::int64_t originY,
                                std::string* error)
@@ -2577,7 +2578,7 @@ CellGameModule::pastePatternAt(const CellPattern& pattern,
 }
 
 bool
-CellGameModule::fillSelection(unsigned char state)
+CanvasScene::fillSelection(unsigned char state)
 {
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
@@ -2593,7 +2594,7 @@ CellGameModule::fillSelection(unsigned char state)
 }
 
 bool
-CellGameModule::copySelection()
+CanvasScene::copySelection()
 {
   if (cellContext == nullptr || cellContext->getGrid() == nullptr) {
     return false;
@@ -2607,7 +2608,7 @@ CellGameModule::copySelection()
 }
 
 bool
-CellGameModule::cutSelection()
+CanvasScene::cutSelection()
 {
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
@@ -2626,7 +2627,7 @@ CellGameModule::cutSelection()
 }
 
 bool
-CellGameModule::pasteAtCursor()
+CanvasScene::pasteAtCursor()
 {
   if (isPointerOverEditHints()) {
     return false;
@@ -2673,7 +2674,7 @@ CellGameModule::pasteAtCursor()
 }
 
 bool
-CellGameModule::stampNamed(const std::string& name)
+CanvasScene::stampNamed(const std::string& name)
 {
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
@@ -2696,7 +2697,7 @@ CellGameModule::stampNamed(const std::string& name)
 }
 
 bool
-CellGameModule::importPatternText(const std::string& text, PatternFormat format)
+CanvasScene::importPatternText(const std::string& text, PatternFormat format)
 {
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
@@ -2722,7 +2723,7 @@ CellGameModule::importPatternText(const std::string& text, PatternFormat format)
 }
 
 void
-CellGameModule::handleEditorHotkeys()
+CanvasScene::handleEditorHotkeys()
 {
   if (ic == nullptr || ic->inputManager == nullptr || ic->commandLine->isOpen) {
     return;
@@ -2774,7 +2775,7 @@ CellGameModule::handleEditorHotkeys()
 }
 
 void
-CellGameModule::updateEditHintsVisual(double dt)
+CanvasScene::updateEditHintsVisual(double dt)
 {
   const bool overlaysOpen =
     (ic->commandLine != nullptr && ic->commandLine->isOpen) ||
@@ -2886,7 +2887,7 @@ CellGameModule::updateEditHintsVisual(double dt)
 }
 
 void
-CellGameModule::buildEditHints(float width,
+CanvasScene::buildEditHints(float width,
                                float height,
                                float scale,
                                int windowHeight,
@@ -3092,7 +3093,7 @@ CellGameModule::buildEditHints(float width,
 }
 
 bool
-CellGameModule::isPointerOverEditHints() const
+CanvasScene::isPointerOverEditHints() const
 {
   if (editHintsInsetPixels <= 0 || ic == nullptr || ic->window == nullptr) {
     return false;
@@ -3105,7 +3106,7 @@ CellGameModule::isPointerOverEditHints() const
 }
 
 void
-CellGameModule::updateSelectionVisual()
+CanvasScene::updateSelectionVisual()
 {
   selectionVisual.clearPrimitives();
   if (currentState != CellState::EDIT || !clipboard.hasSelection() ||
@@ -3134,7 +3135,7 @@ CellGameModule::updateSelectionVisual()
 }
 
 void
-CellGameModule::updateInspectorVisual()
+CanvasScene::updateInspectorVisual()
 {
   inspectorVisual.clearPrimitives();
   const bool consoleOpen =
@@ -3287,7 +3288,7 @@ CellGameModule::updateInspectorVisual()
 }
 
 void
-CellGameModule::Edit(double dt)
+CanvasScene::Edit(double dt)
 {
   (void)dt;
   if (isPointerOverEditHints()) {
@@ -3452,7 +3453,7 @@ paletteMorphBounds(float centerX,
 }
 
 void
-CellGameModule::updatePaintPalette(double dt)
+CanvasScene::updatePaintPalette(double dt)
 {
   // Hidden frames keep each layer's primitives and key for when it returns.
   m_paintPaletteVisual.setVisible(false);
@@ -4373,7 +4374,7 @@ CellGameModule::updatePaintPalette(double dt)
 }
 
 void
-CellGameModule::toggleSettingsMenu()
+CanvasScene::toggleSettingsMenu()
 {
   if (configurationMenu == nullptr) {
     return;
@@ -4391,7 +4392,7 @@ CellGameModule::toggleSettingsMenu()
 }
 
 bool
-CellGameModule::isHamburgerHovered() const
+CanvasScene::isHamburgerHovered() const
 {
   if (ic == nullptr || ic->window == nullptr) {
     return false;
@@ -4416,7 +4417,7 @@ CellGameModule::isHamburgerHovered() const
 }
 
 void
-CellGameModule::updateHamburgerVisual(double dt)
+CanvasScene::updateHamburgerVisual(double dt)
 {
   const auto hide = [this]() {
     m_hamburgerHaloVisual.setVisible(false);
@@ -4751,7 +4752,7 @@ CellGameModule::updateHamburgerVisual(double dt)
 }
 
 void
-CellGameModule::updateEditorCursor(double dt)
+CanvasScene::updateEditorCursor(double dt)
 {
   // Advance the glide first: a cursor hidden last frame snaps to wherever it
   // is placed below instead of gliding in from its old cell.
@@ -4805,13 +4806,13 @@ CellGameModule::updateEditorCursor(double dt)
 }
 
 bool
-CellGameModule::SaveCellGame(std::string filename)
+CanvasScene::SaveCellGame(std::string filename)
 {
   return saveCellGameTo(std::move(filename), false);
 }
 
 bool
-CellGameModule::LoadCellGame(std::string filename)
+CanvasScene::LoadCellGame(std::string filename)
 {
   if (filename.empty()) {
     if (ic != nullptr && ic->commandLine != nullptr) {
@@ -4823,7 +4824,7 @@ CellGameModule::LoadCellGame(std::string filename)
 }
 
 bool
-CellGameModule::saveCellGameTo(std::string location, bool announce)
+CanvasScene::saveCellGameTo(std::string location, bool announce)
 {
   if (location.empty()) {
     if (ic != nullptr && ic->commandLine != nullptr) {
@@ -4880,7 +4881,7 @@ CellGameModule::saveCellGameTo(std::string location, bool announce)
 }
 
 bool
-CellGameModule::loadCellGameFrom(std::vector<std::string> candidates,
+CanvasScene::loadCellGameFrom(std::vector<std::string> candidates,
                                  bool announce)
 {
   const std::shared_ptr<int> outcome = std::make_shared<int>(-1);
@@ -4919,7 +4920,7 @@ CellGameModule::loadCellGameFrom(std::vector<std::string> candidates,
 }
 
 void
-CellGameModule::importRuleCatalog(const std::string& location)
+CanvasScene::importRuleCatalog(const std::string& location)
 {
   const std::weak_ptr<bool> alive = m_lifetime;
   CSimPlatform::current().readFirst(
@@ -5037,7 +5038,7 @@ CellGameModule::importRuleCatalog(const std::string& location)
 }
 
 void
-CellGameModule::exportRuleCatalog(const std::string& location)
+CanvasScene::exportRuleCatalog(const std::string& location)
 {
   if (rulesetWorkshopMenu == nullptr) {
     return;
@@ -5085,7 +5086,7 @@ CellGameModule::exportRuleCatalog(const std::string& location)
 }
 
 bool
-CellGameModule::applyLoadedDocument(IllumoDocument& doc)
+CanvasScene::applyLoadedDocument(IllumoDocument& doc)
 {
   // All parsing and allocation completed against temporary state.
   prepareGridMutation();
@@ -5116,7 +5117,7 @@ CellGameModule::applyLoadedDocument(IllumoDocument& doc)
       ic->camera->SetPositionPrecise(doc.cameraX, doc.cameraY);
       ic->camera->SetZoom(static_cast<float>(doc.cameraZoom));
     } else {
-      ic->camera->Reset();
+      resetCameraToHome();
     }
   }
   updateVisualTargets();
@@ -5130,7 +5131,7 @@ CellGameModule::applyLoadedDocument(IllumoDocument& doc)
 }
 
 void
-CellGameModule::CameraPan()
+CanvasScene::CameraPan()
 {
   std::array<double, 2> mousePos = ic->inputManager->getMousePosition();
   glm::dvec2 worldMouse =
@@ -5162,7 +5163,7 @@ CellGameModule::CameraPan()
 }
 
 void
-CellGameModule::keyboardPan(double dt)
+CanvasScene::keyboardPan(double dt)
 {
   if (ic == nullptr || ic->inputManager == nullptr || ic->camera == nullptr ||
       !(dt > 0.0)) {
@@ -5206,7 +5207,7 @@ CellGameModule::keyboardPan(double dt)
 }
 
 void
-CellGameModule::updateAutosave(double dt)
+CanvasScene::updateAutosave(double dt)
 {
   if (ic == nullptr || ic->envVars == nullptr || !(dt > 0.0)) {
     return;
@@ -5233,7 +5234,7 @@ CellGameModule::updateAutosave(double dt)
 }
 
 void
-CellGameModule::syncCanvasLookFromEnv()
+CanvasScene::syncCanvasLookFromEnv()
 {
   if (cellContext == nullptr || cellContext->getCanvasView() == nullptr) {
     return;
@@ -5245,7 +5246,7 @@ CellGameModule::syncCanvasLookFromEnv()
 }
 
 void
-CellGameModule::clearCanvas()
+CanvasScene::clearCanvas()
 {
   prepareGridMutation();
   cellContext->getGrid()->clear();
@@ -5256,19 +5257,19 @@ CellGameModule::clearCanvas()
 }
 
 void
-CellGameModule::CameraRotate()
+CanvasScene::CameraRotate()
 {
 }
 
 bool
-CellGameModule::isRender3dTestEnabled() const
+CanvasScene::isRender3dTestEnabled() const
 {
   return ic != nullptr && ic->envVars != nullptr &&
          ic->envVars->getVar("render3dTest").valueAsBool;
 }
 
 void
-CellGameModule::ensureRender3dTestDrawables()
+CanvasScene::ensureRender3dTestDrawables()
 {
   if (render3dScene || render3dLoadFailed || ic == nullptr ||
       ic->renderer == nullptr) {
@@ -5306,7 +5307,7 @@ CellGameModule::ensureRender3dTestDrawables()
   Logger::LogInfo(std::string("render3dTest scene loaded from ") + kScenePath);
 }
 void
-CellGameModule::applyRender3dTestCamera()
+CanvasScene::applyRender3dTestCamera()
 {
   if (ic == nullptr || ic->camera == nullptr) {
     return;
@@ -5320,7 +5321,7 @@ CellGameModule::applyRender3dTestCamera()
 }
 
 void
-CellGameModule::restoreRender3dTestCamera()
+CanvasScene::restoreRender3dTestCamera()
 {
   if (!render3dCameraApplied || ic == nullptr || ic->camera == nullptr) {
     return;
@@ -5330,7 +5331,7 @@ CellGameModule::restoreRender3dTestCamera()
 }
 
 void
-CellGameModule::updateRender3dTestMatrices()
+CanvasScene::updateRender3dTestMatrices()
 {
   if (!render3dScene) {
     return;
@@ -5354,9 +5355,18 @@ CellGameModule::updateRender3dTestMatrices()
   render3dScene->update();
 }
 void
-CellGameModule::requestMainMenuReturn()
+CanvasScene::resetCameraToHome()
 {
-  if (ic->moduleHost == nullptr || mainMenuReturnPending) {
+  if (ic != nullptr && ic->camera != nullptr) {
+    ic->camera->SetPositionPrecise(0.0, 0.0);
+    ic->camera->SetZoom(kHomeZoom);
+  }
+}
+
+void
+CanvasScene::requestMainMenuReturn()
+{
+  if (ic->scenes == nullptr || mainMenuReturnPending) {
     return;
   }
   mainMenuReturnPending = true;
@@ -5370,16 +5380,16 @@ CellGameModule::requestMainMenuReturn()
 }
 
 void
-CellGameModule::completeMainMenuReturn()
+CanvasScene::completeMainMenuReturn()
 {
   if (!mainMenuReturnSubmitted && canvasEntranceElapsed <= 0.0) {
     mainMenuReturnSubmitted = true;
-    ic->moduleHost->RequestTransition(std::make_unique<MainMenuModule>());
+    CSimScenes::returnToTitle(*ic->scenes);
   }
 }
 
 void
-CellGameModule::advanceCanvasEntrance(double dt)
+CanvasScene::advanceCanvasEntrance(double dt)
 {
   const bool reducedMotion = ic->envVars != nullptr &&
                              ic->envVars->getVar("reducedUiMotion").valueAsBool;
@@ -5406,7 +5416,7 @@ CellGameModule::advanceCanvasEntrance(double dt)
 }
 
 void
-CellGameModule::rebuildCanvasEntrance()
+CanvasScene::rebuildCanvasEntrance()
 {
   canvasEntranceVisual.clearPrimitives();
   const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
@@ -5496,9 +5506,10 @@ CellGameModule::rebuildCanvasEntrance()
 }
 
 void
-CellGameModule::DispatchDrawables(Scene* scene)
+CanvasScene::dispatch(Scene& frame)
 {
-  if (cellContext == nullptr || scene == nullptr) {
+  Scene* scene = &frame;
+  if (cellContext == nullptr) {
     return;
   }
   // Owners implement AppendCommands (domain + GameVisual). Scene lists

@@ -12,9 +12,10 @@ types. It must not depend on OpenGL or native platform APIs.
 IllumoGame ships only as the `IllumoGame.wasm` package hosted by
 `IllumoRuntime`. Its application seam is `IllumoGame/Source/Wasm/
 GameApplication.cpp`, a `GuestProgram` that bootstraps settings and
-catalogs, installs the guest `CSimPlatform`, and starts `MainMenuModule`. Until
-scene programs M4 the two modules run as scenes through a temporary adapter
-there (`ModuleScene`). The
+catalogs, installs the guest `CSimPlatform`, and opens the title screen. CSim is
+one program whose scenes are `TitleScene` and `CanvasScene`; `CSimScenes`
+switches between them through the program's `SceneDirector` (reached as
+`IllumoContext::scenes`), and a canvas opens on its home view (zoom 0.5). The
 same Game sources also build natively into `IllumoGameCore`, which is only the
 test oracle; `IllumoGameApplication.cpp` remains for those tests. Do not add a
 process entry point, frame loop, logger lifetime, SysCmdLine implementation,
@@ -24,7 +25,7 @@ do not reintroduce a native game executable.
 Game code performs dialogs, file transfers, clipboard access and user-catalog
 writes only through `CSimPlatform`. Completions may run before the request
 returns (native oracle, `CSimPlatformNative.cpp`) or on a later update (guest,
-`Wasm/GuestPlatform.cpp`); guard callbacks with the module lifetime token and
+`Wasm/GuestPlatform.cpp`); guard callbacks with the scene lifetime token and
 never assume either timing. Locations are opaque: a path natively, a storage
 name or `selected:` capability in the guest. Do not call `SaveLoad`,
 `Clipboard`, `AtomicFile`, `std::filesystem`, or `std::ifstream` from shared
@@ -43,7 +44,7 @@ still win. Both stage overlays through the portable `RuleCatalogOverlay`.
 The `render3dTest` diagnostic is data: `Scenes/render3d-test.ilsc` read through
 the AssetManager's source and instantiated with `SceneInstance`. Code only
 animates the `orbit` and `child` nodes by id; add geometry to the scene file,
-not to `CellGameModule`.
+not to `CanvasScene`.
 `RuleSetRegistry` starts empty and owns text validation and data-backed
 factories; Rulesets has no filesystem or native platform dependencies.
 
@@ -105,8 +106,8 @@ change partitioning, halos or `SparseCellGrid::applyChunkPatches` only with
 ## Ownership, input, and errors
 
 - `CellContext` owns its game objects. Make copy/move behavior explicit and
-  keep module callback registrations within the context/module lifetime.
-- Editing, camera mutation, view sampling, and module callbacks are main-thread
+  keep scene callback registrations within the context/scene lifetime.
+- Editing, camera mutation, view sampling, and scene callbacks are main-thread
   affine. Validate coordinate conversions before narrowing floating-point or
   arithmetic results to signed world coordinates.
 - Treat allocation, worker, parse, and I/O failure as observable failure.
@@ -168,7 +169,7 @@ them can be restored.
 - `docs/packages/game.md`
 - `docs/latex/sections/07-game-and-rules.tex`
 - `docs/architecture-consensus.md`
-- Domain, boundary, simulation, canvas, and CellGameModule exact tests
+- Domain, boundary, simulation, canvas, and CanvasScene exact tests
 - `IllumoGame.Sim.MicroBench` and `IllumoGame.Sim.SparseMicroBench` for measured
   performance claims
 

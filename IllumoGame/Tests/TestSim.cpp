@@ -1110,7 +1110,7 @@ testFrameLatencyBenchReport()
 // Generations per second through the production publication cycle: one
 // outstanding SimulationRunner generation on a spare grid, a pointer swap on
 // completion and the completed delta mirrored into the next spare, exactly as
-// CellGameModule and CellContext::publishSpareGrid drive it (presentation
+// CanvasScene and CellContext::publishSpareGrid drive it (presentation
 // excluded).
 static double
 runnerGenerationsPerSecond(const BenchWorld& world,

@@ -4,7 +4,7 @@
 #include "ExitConfirmDialog.h"
 #include "MenuMotifs.h"
 #include "NewSimulationMenu.h"
-#include <Illumo/Engine/IModule.h>
+#include <Illumo/Content/ProgramScene.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/FontWeightRamp.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -18,21 +18,24 @@ class CanvasView;
 class Font;
 class CellContext;
 
-class MainMenuModule : public IModule
+// CSim's title screen, the program's first scene (D-E31). Choosing a new or
+// saved simulation asks CSimScenes for the canvas.
+class TitleScene : public ProgramScene
 {
 public:
-  MainMenuModule();
-  ~MainMenuModule() override;
+  TitleScene();
+  ~TitleScene() override;
 
-  MainMenuModule(const MainMenuModule&) = delete;
-  MainMenuModule& operator=(const MainMenuModule&) = delete;
-  MainMenuModule(MainMenuModule&&) = delete;
-  MainMenuModule& operator=(MainMenuModule&&) = delete;
+  TitleScene(const TitleScene&) = delete;
+  TitleScene& operator=(const TitleScene&) = delete;
+  TitleScene(TitleScene&&) = delete;
+  TitleScene& operator=(TitleScene&&) = delete;
 
-  bool Start(IllumoContext* context) override;
-  void Update(double dt) override;
-  void DispatchDrawables(Scene* scene) override;
-  void Exit() override;
+  bool start(IllumoContext& context) override;
+  void update(double dt) override;
+  void dispatch(Scene& frame) override;
+  // Idempotent: the destructor stops a scene that is destroyed running.
+  void stop() override;
 
   int getSelectedItemForTesting() const { return m_selectedItem; }
   // The title screen's UI drawables (its layers), dispatched first in order.
@@ -185,6 +188,7 @@ private:
   SimulatorConfiguration currentConfiguration() const;
   bool applyConfiguration(const SimulatorConfiguration& configuration);
 
+  IllumoContext* ic{ nullptr };
   std::unique_ptr<CellContext> m_bgContext;
   std::unique_ptr<ConfigurationMenu> m_configurationMenu;
   // Asks to restart after applying settings only a restart applies.

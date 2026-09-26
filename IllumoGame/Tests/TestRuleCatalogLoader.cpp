@@ -1,7 +1,5 @@
 #include "Game/RuleCatalogLoader.h"
 #include "Rulesets/RuleSetRegistry.h"
-#include <Illumo/Engine/Application.h>
-#include <Illumo/Engine/IModule.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -13,25 +11,6 @@
 #include <stdexcept>
 
 static TestCounters g;
-
-static std::optional<std::string>
-readTestEnvironmentVariable(const char* name)
-{
-#ifdef _MSC_VER
-  char* value = nullptr;
-  std::size_t length = 0u;
-  if (_dupenv_s(&value, &length, name) != 0 || value == nullptr) {
-    std::free(value);
-    return std::nullopt;
-  }
-  const std::string result(value);
-  std::free(value);
-  return result;
-#else
-  const char* value = std::getenv(name);
-  return value == nullptr ? std::nullopt : std::optional<std::string>(value);
-#endif
-}
 
 class CatalogFixture
 {
@@ -85,31 +64,6 @@ public:
 void
 registerRuleCatalogLoaderTests(IllumoTestRegistry& registry)
 {
-  registry.add("IllumoGame.Catalog.StartupComposition", []() {
-    g = {};
-    const std::optional<std::string> expectedRule =
-      readTestEnvironmentVariable("ILLUMO_TEST_CATALOG_RULE");
-    const std::optional<std::string> directLaunch =
-      readTestEnvironmentVariable("ILLUMO_TEST_CATALOG_DIRECT");
-    if (expectedRule.has_value()) {
-      testTrue(g,
-               !RuleSetRegistry::instance().isKnownRule(expectedRule.value()),
-               "custom catalog is not loaded by registry construction");
-    }
-    const IllumoApplicationDefinition application = CreateIllumoApplication();
-    CatalogFixture fixture;
-    EnvVars environment(fixture.root / "environment.json");
-    environment.setVar("LaunchDirect", directLaunch.has_value() ? "1" : "0");
-    const std::unique_ptr<IModule> module =
-      application.createRequiredModule(&environment);
-    testTrue(g, module != nullptr, "required module factory succeeds");
-    testTrue(g,
-             RuleSetRegistry::instance().createRuleSet(
-               expectedRule.has_value() ? expectedRule.value()
-                                        : "GAME_OF_LIFE") != nullptr,
-             "catalog rule is available before required module startup");
-    return g.failures;
-  });
   registry.add("IllumoGame.Catalog.PrecedenceAndFallback", []() {
     g = {};
     CatalogFixture fixture;

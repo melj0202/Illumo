@@ -163,14 +163,15 @@ illumo_add_guest(IllumoGame
   ../IllumoGame/Source/Game/CanvasView.cpp
   ../IllumoGame/Source/Game/CellClipboard.cpp
   ../IllumoGame/Source/Game/CellContext.cpp
-  ../IllumoGame/Source/Game/CellGameModule.cpp
+  ../IllumoGame/Source/Game/CanvasScene.cpp
   ../IllumoGame/Source/Game/ConfigurationMenu.cpp
+  ../IllumoGame/Source/Game/CSimScenes.cpp
   ../IllumoGame/Source/Game/CSimSounds.cpp
   ../IllumoGame/Source/Game/CSimTypeface.cpp
   ../IllumoGame/Source/Game/Cursor.cpp
   ../IllumoGame/Source/Game/ExitConfirmDialog.cpp
   ../IllumoGame/Source/Game/IllumoGameConfig.cpp
-  ../IllumoGame/Source/Game/MainMenuModule.cpp
+  ../IllumoGame/Source/Game/TitleScene.cpp
   ../IllumoGame/Source/Game/MenuMotifs.cpp
   ../IllumoGame/Source/Game/ModeBadge.cpp
   ../IllumoGame/Source/Game/SoftwareCursor.cpp
