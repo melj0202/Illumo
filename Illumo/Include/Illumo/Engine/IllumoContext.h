@@ -17,6 +17,7 @@
 
 class IModuleHost;
 class FrameProfiler;
+class SceneDirector;
 
 // Non-owning service bag passed to IModule::Start.
 struct IllumoContext
@@ -31,6 +32,9 @@ struct IllumoContext
   Camera* camera{ nullptr };
   CommandRegistry* commandRegistry{ nullptr };
   IModuleHost* moduleHost{ nullptr };
+  // The program's scenes (D-E31), when the product runs as a scene program.
+  // camera and renderWorld follow the active scene.
+  SceneDirector* scenes{ nullptr };
   // The host's mounted file tree, when it has one (IllumoRuntime). Published
   // by the module that owns the tree during Start and withdrawn on Exit;
   // tools read it at use time, never cache it.

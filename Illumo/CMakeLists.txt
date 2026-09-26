@@ -246,7 +246,9 @@ add_library(IllumoContent STATIC
   Source/Content/PackageArchive.cpp
   Source/Content/PackageManifest.cpp
   Source/Content/PackageMounts.cpp
+  Source/Content/ProgramScene.cpp
   Source/Content/SceneAssetRefs.cpp
+  Source/Content/SceneDirector.cpp
   Source/Content/SceneDocument.cpp
   Source/Content/SceneInstance.cpp
   Source/Content/ScenePrimitiveMeshes.cpp
@@ -314,6 +316,7 @@ if(BUILD_TESTING)
     Tests/Content/TestPackageArchive.cpp
     Tests/Content/TestPackageMounts.cpp
     Tests/Content/TestPackageManifest.cpp
+    Tests/Content/TestSceneDirector.cpp
     Tests/Content/TestSceneInstance.cpp
     Tests/Content/TestVirtualFileSystem.cpp
     Tests/Content/TestVirtualPath.cpp

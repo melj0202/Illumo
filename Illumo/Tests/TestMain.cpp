@@ -73,6 +73,8 @@ registerIlscCodecTests(IllumoTestRegistry& registry);
 void
 registerSceneInstanceTests(IllumoTestRegistry& registry);
 void
+registerSceneDirectorTests(IllumoTestRegistry& registry);
+void
 registerAudioTests(IllumoTestRegistry& registry);
 void
 registerInstancingTests(IllumoTestRegistry& registry);
@@ -93,6 +95,7 @@ createRegistry()
   registerVirtualFileSystemTests(registry);
   registerIlscCodecTests(registry);
   registerSceneInstanceTests(registry);
+  registerSceneDirectorTests(registry);
   registerFrameCaptureTests(registry);
   registerMockBackendTests(registry);
   registerRendererE2ETests(registry);

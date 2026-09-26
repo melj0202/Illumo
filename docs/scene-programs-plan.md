@@ -9,7 +9,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 | M | State | Notes |
 |---|---|---|
 | M0 | done | Baseline in design section 13; `@begin` bench directive |
-| M1 | not started | Engine `ProgramScene`, `SceneDirector` |
+| M1 | done | `ProgramScene`, `SceneDirector` in `Illumo::Content`; 7 tests |
 | M2 | not started | Guest `GuestProgram`; IllMeshViewer and IllEd ported |
 | M3 | not started | Frame schema v8: a world per scene |
 | M4 | not started | CSim: `CSimProgram`, `TitleScene`, `CanvasScene` |
@@ -42,15 +42,16 @@ Exit: numbers recorded in design section 13 (validation results).
 
 ## M1: engine scenes
 
-Objective: `ProgramScene` and `SceneDirector` exist in `Illumo/Engine`, built
-into host and guest engines. No product uses them yet.
+Objective: `ProgramScene` and `SceneDirector` exist in `Illumo::Content` (a
+scene owns a `SceneInstance`, which core `Illumo` may not include), built into
+host and guest content libraries. No product uses them yet.
 
-- `Illumo/Include/Illumo/Engine/ProgramScene.h` and `SceneDirector.h`, plus
+- `Illumo/Include/Illumo/Content/ProgramScene.h` and `SceneDirector.h`, plus
   sources, following design 6.2 and 6.3: `Cut` and `Cover` switching,
   keep-alive, failed-start fallback, input drain, pass reset, and the context
   camera and world following the active scene.
 - `IllumoContext::scenes` added. `moduleHost` stays until M5.
-- Tests (`Illumo/Tests/TestSceneDirector.cpp`):
+- Tests (`Illumo/Tests/Content/TestSceneDirector.cpp`):
   - first switch starts and enters;
   - leaving keeps, and resuming enters without restarting;
   - release stops and destroys, and is refused for the active scene;
@@ -190,3 +191,9 @@ returns nothing outside `docs/history` and archives.
   costs one 4.4-5.2 ms guest update each way, and a kept canvas would cost
   under 10 MB. Bench and capture scripts gained `@begin`, so a switch can be
   timed.
+- 2026-09-26, M1: scenes and the director land in `Illumo::Content` rather
+  than the engine core, because core `Illumo` may not include Content and a
+  scene owns a `SceneInstance`. There is one camera per program; the director
+  saves and restores its state per scene, since visuals hold camera pointers.
+  Scene commands are scoped through `ProgramScene::command`, and per-scene
+  worlds plug in through `ISceneWorlds` (M3). Full suite 679 of 679.

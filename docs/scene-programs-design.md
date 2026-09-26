@@ -150,13 +150,14 @@ Open questions for the owner are in section 11.
 | `WasmProgram` | host, `Illumo/Wasm` | the guest store, services, frame renderer, per-scene worlds | the process |
 | `RuntimeShell` | host, `RuntimeApplication.cpp` | `Illumo` services, `WasmProgram`, `DebugOverlay`, capture and bench | the process |
 | `GuestProgram` | guest SDK, `IllumoGuest` | guest services, `IllumoContext`, the `SceneDirector`, program UI | the WASM store |
-| `SceneDirector` | engine, `Illumo/Engine` (host and guest builds) | named scenes, the active scene, a pending switch | the program |
-| `ProgramScene` | engine, `Illumo/Engine` | `SceneInstance`, `Camera`, render world binding, product state | created and released by the program |
+| `SceneDirector` | `Illumo::Content` (host), `IllumoGuestContent` (guest) | named scenes, each scene's saved camera and world, the active scene, a pending switch | the program |
+| `ProgramScene` | `Illumo::Content`, `IllumoGuestContent` | `SceneInstance`, render world binding, scene-scoped commands, product state | created and released by the program |
 
-`SceneDirector` and `ProgramScene` live in the engine library, as `IModule`
-does now. That way native product tests (`IllumoGameTests`) can run a real
-director without a WASM store, and no mock host is needed. `GuestProgram`
-composes a director and feeds it its context.
+`SceneDirector` and `ProgramScene` live in the Content library. A scene owns a
+`SceneInstance`, and core `Illumo` never includes `<Illumo/Content/...>`. Both
+host and guest builds compile them, so native product tests (`IllumoGameTests`)
+can run a real director without a WASM store, and no mock host is needed.
+`GuestProgram` composes a director and feeds it its context.
 
 ### 6.2 `ProgramScene`
 
@@ -181,10 +182,19 @@ public:
   virtual void stop() = 0;
   // Close negotiation, as IModule::OnCloseRequested today.
   virtual bool closeRequested() { return true; }
+  // Options for the scene's SceneInstance (editors want pick proxies).
+  virtual SceneInstanceOptions contentOptions() const { return {}; }
 
-  SceneInstance& content();
-  Camera& camera();
-  IRenderWorld* world();   // this scene's world, when HostRender is granted
+  SceneInstance& content();   // from start on
+  IRenderWorld* world() const; // this scene's world, or nullptr
+
+protected:
+  IllumoContext& context();
+  // A console command that lives while the scene is active: withdrawn
+  // when it leaves or stops. Call from enter().
+  void command(name, function, usage, description, completions);
+  // Updates the content and adds its drawable and sky to the world layer.
+  void dispatchContent(Scene& frame);
 };
 ```
 
@@ -192,7 +202,15 @@ The hooks are, deliberately, close to today's `IModule` hooks. What changes
 is ownership:
 - The program owns scenes and can hold several.
 - Starting is separate from entering, and leaving is separate from stopping.
-- Content, camera and world belong to the scene, not to the process.
+- Content, camera state, world and commands belong to the scene, not to the
+  process.
+
+There is one `Camera` per program, because visuals and the renderer hold
+pointers to it. Each scene still has its own camera state: the director
+saves the camera when a scene leaves and restores it when the scene
+re-enters, and a scene starts from the camera the director was created with.
+A frozen scene never runs, so one live camera is enough. Crossfades would need
+two (O4).
 
 A scene that loads content calls `content().load(document, root, error)` in
 `start`. The document may come from a package `.ilsc` through the asset cache
@@ -204,32 +222,53 @@ the program already preloads (`packageAssets`).
 class SceneDirector
 {
 public:
+  SceneDirector(IllumoContext& context, ISceneWorlds* worlds = nullptr);
   // Takes ownership; the scene is not started until first entered.
-  void add(std::string name, std::unique_ptr<ProgramScene> scene);
+  bool add(std::string name, std::unique_ptr<ProgramScene> scene);
   // Applied at the next frame boundary. Replaces any pending request.
-  void switchTo(std::string_view name, SceneSwitch how = SceneSwitch::Cut);
-  // Stops and destroys a kept scene; refused for the active one.
-  void release(std::string_view name);
-  ProgramScene* active();
-  bool has(std::string_view name) const;
+  bool switchTo(std::string_view name, SceneSwitch how = SceneSwitch::Cut);
+  bool covering() const;   // a Cover switch waits for coverComplete()
+  void coverComplete();
+  // Stops and destroys a kept scene; refused for the active one and the
+  // target of a pending switch.
+  bool release(std::string_view name);
+  // Frame boundary; false when a first scene failed and the program closes.
+  bool applyPending();
+  void update(double elapsed);  // active scene only
+  void dispatch(Scene& frame);  // active scene only
+  bool closeRequested();
+  void stopAll() noexcept;      // also run by the destructor
+};
+
+// Per-scene render worlds where the host keeps them (frame schema v8).
+class ISceneWorlds
+{
+public:
+  virtual IRenderWorld* create() = 0;
+  virtual void activate(IRenderWorld* world) = 0;
+  virtual void destroy(IRenderWorld* world) = 0;
 };
 ```
 
 A switch at the frame boundary runs these steps in order:
 1. Drain the key and character queues.
 2. `ResetDefaultPasses` and clear the frame's drawables.
-3. `leave()` the active scene.
-4. `start()` the target if it hasn't started.
-5. Point `IllumoContext::camera` and `IllumoContext::renderWorld` at the
-   target's camera and world.
+3. `leave()` the active scene, withdraw its commands and save its camera.
+4. `start()` the target if it hasn't started. First the director:
+   - creates its content;
+   - gives it its world (its own through `ISceneWorlds`, otherwise the
+     context's shared one);
+   - resets the camera to the initial one.
+5. Restore the target's saved camera. `IllumoContext::renderWorld` becomes the
+   target's world and is activated.
 6. `enter()` the target.
 
-If `start` fails, the director re-enters the previous scene and logs an
-error. If there is no previous scene (the program's first switch), it asks
+If `start` fails (or throws, after which the scene is stopped), the
+director re-enters the previous scene and logs an error. If there is no previous scene (the program's first switch), it asks
 the program to close.
 
 `SceneSwitch` values:
-- **`Cut`:** switch now.
+- **`Cut`:** switch at the next frame boundary.
 - **`Cover`:** the program draws its transition cover (CSim's darken)
   and the switch happens when the cover reports full. The outgoing scene
   keeps updating until then, exactly as CSim's canvas return does today.
@@ -380,8 +419,9 @@ scene's content.
 ### 6.9 Ownership, lifetime, errors, threading
 
 - Scenes are main-thread objects, like `SceneInstance`.
-- The director owns scenes through `std::unique_ptr` and stops them in
-  reverse creation order when the program stops.
+- The director owns scenes through `std::unique_ptr`. When the program
+  stops, the director leaves and stops the active scene, then stops the kept
+  ones newest first. A scene that never started is never stopped.
 - A scene must not hold pointers into another scene. Anything shared goes
   through the program.
 - A switch requested during `update` applies at the next frame boundary,
@@ -524,3 +564,21 @@ off, uncapped), CSim storage with the frame cap off.
 - **Screenshots:** references of IllEd and IllMeshViewer at frame 600, and
   of CSim's settled title and paused canvas at frame 4,000. They are kept
   with the session's measurement files, not in the repository.
+
+### M1 (2026-09-26, branch `scene-programs`)
+
+- `Illumo/Include/Illumo/Content/ProgramScene.h` and `SceneDirector.h`,
+  compiled into `Illumo::Content` and `IllumoGuestContent`.
+- `IllumoContext::scenes` added; `moduleHost` stays until M5.
+- `Illumo/Tests/Content/TestSceneDirector.cpp` covers:
+  - **Lifecycle:** add, switch at the boundary, keep and resume, release.
+  - **Failed starts:** fallback to the previous scene, a start that throws,
+    and closing when the first scene fails.
+  - **Cover switches.**
+  - **Input and commands:** input drained on a switch; scene commands
+    withdrawn and registered again; close negotiation.
+  - **Cameras:** a camera per scene through save and restore.
+  - **Worlds:** per-scene worlds through `ISceneWorlds`, or the shared world
+    without one.
+  - **Shutdown order.**
+- Full Release suite 679 of 679 (672 plus the 7 new cases).

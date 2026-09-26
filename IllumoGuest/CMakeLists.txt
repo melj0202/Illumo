@@ -134,7 +134,9 @@ target_link_libraries(IllumoGuestEngine PUBLIC IllumoGuestRendering)
 add_library(IllumoGuestContent STATIC
   ../Illumo/Source/Content/IlscCodec.cpp
   ../Illumo/Source/Content/PackageManifest.cpp
+  ../Illumo/Source/Content/ProgramScene.cpp
   ../Illumo/Source/Content/SceneAssetRefs.cpp
+  ../Illumo/Source/Content/SceneDirector.cpp
   ../Illumo/Source/Content/SceneDocument.cpp
   ../Illumo/Source/Content/SceneInstance.cpp
   ../Illumo/Source/Content/ScenePrimitiveMeshes.cpp
