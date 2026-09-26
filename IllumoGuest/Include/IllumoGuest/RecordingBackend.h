@@ -31,6 +31,9 @@ public:
   void pump();
   TextureHandle importTexture(GuestResourceId id);
   GuestFrame takeFrame();
+  // Swaps the recorded frame into `output`; the previous contents of
+  // `output` become the next frame's recycled storage.
+  void takeFrame(GuestFrame& output);
   // Frame schema v5: commands submitted between beginSurface and endSurface
   // record into a surface of that logical size instead of the main frame.
   // Surfaces take UI batches only; texture and mesh writes stay frame-level.
@@ -165,6 +168,10 @@ private:
                         std::size_t size);
   void emitMeshWrites();
   void pumpMeshes();
+  // Empties m_frame, keeping its texture pixel and mesh write byte buffers
+  // as spares for the next frame's writes.
+  void recycleFrame();
+  std::vector<std::byte> takeSpareBytes();
   GuestServiceQueue& m_services;
   Renderer* m_renderer = nullptr;
   ResourceHandlePool<MeshHandle> m_meshHandles;
@@ -195,6 +202,9 @@ private:
   CommandQueue m_commands;
   std::vector<GuestLayer> m_commandLayers;
   GuestFrame m_frame;
+  // Recycled texture write and mesh write buffers (bounded count).
+  static constexpr std::size_t MaximumSpareBuffers = 32;
+  std::vector<std::vector<std::byte>> m_spareBytes;
   // Index into m_frame.surfaces while recording a surface, else -1.
   std::ptrdiff_t m_surface = -1;
   std::vector<GuestBatch>& targetBatches();

@@ -501,6 +501,8 @@ private:
   mutable std::vector<ChunkAddress> m_patchAddresses;
   mutable std::vector<AddressIndexSlot> m_patchAddressIndex;
   mutable std::uint64_t m_patchAddressGeneration = 0u;
+  // Retained delta for applyChunkPatches (lanes patch every generation).
+  SparseGenerationDelta m_patchDelta;
   bool m_backgroundTransitionsStayBinary = false;
   bool m_countedChangeCoversStateChange = false;
   mutable std::unique_ptr<ChunkMemoState> m_chunkMemo;
@@ -539,6 +541,14 @@ private:
                        ChunkMap* target,
                        ChunkStatistics* statistics);
   bool synchronizeInactiveMap(const SparseGenerationDelta& incomingDelta);
+  // Delta application keeps map nodes: erased entries go to the recycled
+  // pool and inserts take from it, allocating only when it is empty.
+  ChunkMap::iterator insertRecycledChunk(ChunkMap* target,
+                                         const ChunkAddress& address,
+                                         const ChunkData& chunk);
+  void recycleChunk(ChunkMap* target, ChunkMap::iterator position);
+  // target = source, reusing target's nodes (and the pool) for the copy.
+  void copyChunkMap(const ChunkMap& source, ChunkMap* target);
   bool prepareNextChunks(std::size_t expectedChunkCount);
   bool prepareDirectChunks(std::size_t expectedChunkCount);
   void recycleNextChunks();

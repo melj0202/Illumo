@@ -6,8 +6,8 @@
 #include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Foundation/RollingMetric.h>
 #include <IllumoGuest/Wire.h>
+#include <algorithm>
 #include <chrono>
-#include <deque>
 #include <memory>
 #include <span>
 #include <string>
@@ -97,6 +97,10 @@ struct SimulationLaneRequest
   void write(GuestWireWriter& output) const;
   static bool read(std::span<const std::byte> bytes,
                    SimulationLaneRequest& output);
+  // As read, but decodes in place into retained scratch (its containers keep
+  // their capacity); `output` is unspecified on failure.
+  static bool decode(std::span<const std::byte> bytes,
+                     SimulationLaneRequest& output);
 };
 
 struct SimulationLaneReply
@@ -119,6 +123,9 @@ struct SimulationLaneReply
   void write(GuestWireWriter& output) const;
   static bool read(std::span<const std::byte> bytes,
                    SimulationLaneReply& output);
+  // As read, but decodes in place; `output` is unspecified on failure.
+  static bool decode(std::span<const std::byte> bytes,
+                     SimulationLaneReply& output);
 };
 
 // One lane's state, compiled into the worker store. The grid holds exactly
@@ -153,6 +160,20 @@ private:
   // Halo and outside chunks the last generation changed, with the contents
   // they must return to (their pre-generation values, or removal).
   std::vector<SparseChunkPatch> m_restore;
+  // Per-generation scratch, retained so steady generations reuse capacity.
+  // Sorted address lists stand in for per-generation hash sets and maps.
+  struct HaloChunk
+  {
+    ChunkAddress address;
+    SparseCellGrid::ChunkCells cells;
+  };
+  SimulationLaneRequest m_request;
+  SimulationLaneReply m_reply;
+  GuestWireWriter m_writer;
+  std::vector<SparseChunkPatch> m_patches;
+  std::vector<ChunkAddress> m_sent;
+  std::vector<HaloChunk> m_halo;
+  SparseGenerationDelta m_generationDelta;
 };
 
 // Control-side scheduler: keeps lanes synchronized with the published grid,
@@ -221,9 +242,46 @@ public:
   }
 
 private:
+  // FIFO of encoded requests whose slots keep their buffers, so a steady
+  // generation's message reuses an earlier one's capacity. Bounded by the
+  // most requests ever queued at once.
+  struct RequestQueue
+  {
+    std::vector<std::vector<std::byte>> slots;
+    std::size_t head = 0;
+    std::size_t tail = 0;
+    bool empty() const { return head == tail; }
+    std::vector<std::byte>& front() { return slots[head]; }
+    void clear()
+    {
+      head = 0;
+      tail = 0;
+    }
+    void pop_front()
+    {
+      head += 1;
+      if (head == tail) {
+        clear();
+      }
+    }
+    void push_back(std::span<const std::byte> bytes)
+    {
+      if (tail == slots.size() && head != 0) {
+        // Move the pending slots to the front; swaps, no allocation.
+        std::rotate(slots.begin(), slots.begin() + head, slots.begin() + tail);
+        tail -= head;
+        head = 0;
+      }
+      if (tail == slots.size()) {
+        slots.emplace_back();
+      }
+      slots[tail].assign(bytes.begin(), bytes.end());
+      tail += 1;
+    }
+  };
   struct Lane
   {
-    std::deque<std::vector<std::byte>> queue;
+    RequestQueue queue;
     bool awaitingAdvance = false;
     bool outstanding = false;
     std::vector<SparseChunkPatch> haloUpdates;
@@ -271,6 +329,15 @@ private:
   // this single-threaded store.
   bool m_mergeReady = false;
   std::vector<SparseChunkPatch> m_merged;
+  // Per-generation scratch, retained and swapped so steady generations
+  // reuse capacity: the Advance request and its writer, a polled reply, the
+  // merged changes being applied and the delta they build.
+  SimulationLaneRequest m_advance;
+  GuestWireWriter m_writer;
+  std::vector<std::byte> m_pollBytes;
+  SimulationLaneReply m_replyScratch;
+  std::vector<SparseChunkPatch> m_mergedDrain;
+  SparseGenerationDelta m_resultDelta;
   double m_slowestAdvance = 0.0;
   double m_slowestPatch = 0.0;
   double m_slowestCollect = 0.0;

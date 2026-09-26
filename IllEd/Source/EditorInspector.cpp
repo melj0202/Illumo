@@ -310,6 +310,29 @@ EditorInspector::providePaste(const std::string& text)
 // Field building.
 
 void
+EditorInspector::refreshFields(const EditorDocument& document,
+                               const EditorSelection& selection)
+{
+  // The fields derive only from the document's scene and the selection.
+  // While those are unchanged the built fields (their strings and
+  // callbacks) are kept instead of rebuilt every frame.
+  if (m_fieldsBuilt && m_fieldsDocument == &document &&
+      m_fieldsGeneration == document.sceneGeneration() &&
+      m_fieldsRevision == document.revision() &&
+      m_fieldsPrimary == selection.primary() &&
+      m_fieldsSelection == selection.ids()) {
+    return;
+  }
+  buildFields(document, selection);
+  m_fieldsBuilt = true;
+  m_fieldsDocument = &document;
+  m_fieldsGeneration = document.sceneGeneration();
+  m_fieldsRevision = document.revision();
+  m_fieldsPrimary = selection.primary();
+  m_fieldsSelection = selection.ids();
+}
+
+void
 EditorInspector::buildFields(const EditorDocument& document,
                              const EditorSelection& selection)
 {
@@ -867,7 +890,7 @@ EditorInspector::activateField(const std::string& key,
   if (document == nullptr || selection == nullptr) {
     return false;
   }
-  buildFields(*document, *selection);
+  refreshFields(*document, *selection);
   const InspectorField* target = field(key);
   if (target == nullptr) {
     return false;
@@ -885,7 +908,7 @@ EditorInspector::scrubForTesting(const std::string& key,
   if (document == nullptr || selection == nullptr) {
     return false;
   }
-  buildFields(*document, *selection);
+  refreshFields(*document, *selection);
   const InspectorField* target = field(key);
   if (target == nullptr || target->kind != InspectorFieldKind::Number) {
     return false;
@@ -964,7 +987,7 @@ EditorInspector::update(InputManager* input,
   m_edit.tick(dt);
   bool changed = false;
   // The field being edited may vanish (its node was deleted, undo ran).
-  buildFields(*document, *selection);
+  refreshFields(*document, *selection);
   if (m_edit.active() && field(m_editKey) == nullptr) {
     m_edit.end();
     m_editKey.clear();
@@ -990,7 +1013,7 @@ EditorInspector::update(InputManager* input,
     }
   }
   if (changed) {
-    buildFields(*document, *selection);
+    refreshFields(*document, *selection);
   }
   layout();
 
@@ -1055,7 +1078,7 @@ EditorInspector::update(InputManager* input,
     }
   }
   if (changed) {
-    buildFields(*document, *selection);
+    refreshFields(*document, *selection);
     layout();
   }
   rebuildVisual();

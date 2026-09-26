@@ -134,7 +134,18 @@ private:
   std::string m_copyText;
   bool m_copyPending = false;
   bool m_pastePending = false;
+  // Inputs the current fields were built from; see refreshFields.
+  const EditorDocument* m_fieldsDocument = nullptr;
+  uint64_t m_fieldsGeneration = 0;
+  uint64_t m_fieldsRevision = 0;
+  std::string m_fieldsPrimary;
+  std::vector<std::string> m_fieldsSelection;
+  bool m_fieldsBuilt = false;
 
+  // Rebuilds the fields only when their inputs changed: the document's
+  // scene (generation and revision) or the selection.
+  void refreshFields(const EditorDocument& document,
+                     const EditorSelection& selection);
   void buildFields(const EditorDocument& document,
                    const EditorSelection& selection);
   void layout();

@@ -540,11 +540,38 @@ struct GuestFrame
     return true;
   }
 
+  // Resets a reused batch to its defaults, keeping its geometry capacity.
+  static void recycleBatch(GuestBatch& batch)
+  {
+    std::vector<GuestVertex> vertices = std::move(batch.vertices);
+    std::vector<std::uint32_t> indices = std::move(batch.indices);
+    batch = GuestBatch{};
+    vertices.clear();
+    indices.clear();
+    batch.vertices = std::move(vertices);
+    batch.indices = std::move(indices);
+  }
+
   // Decode transactionally before resource resolution or renderer calls.
   // Counts are checked against both byte availability and aggregate quotas.
   static bool read(std::span<const std::byte> input,
                    GuestFrame& output,
                    GuestFrameLimits limits = {})
+  {
+    GuestFrame frame;
+    if (!decode(input, frame, limits)) {
+      return false;
+    }
+    output = std::move(frame);
+    return true;
+  }
+
+  // As read, but decodes in place into a retained scratch frame, reusing its
+  // containers' capacity. On failure `frame` holds unspecified partial
+  // contents; callers keep their live frame separate and swap on success.
+  static bool decode(std::span<const std::byte> input,
+                     GuestFrame& frame,
+                     GuestFrameLimits limits = {})
   {
     if (input.size() > limits.bytes) {
       return false;
@@ -552,7 +579,11 @@ struct GuestFrame
     GuestWireReader reader(input);
     const std::uint32_t magic = reader.u32();
     const std::uint32_t version = reader.u32();
-    GuestFrame frame;
+    const GuestFrame defaults;
+    frame.hasCamera = false;
+    frame.camera = defaults.camera;
+    frame.shadowCasters.clear();
+    frame.surfaces.clear();
     frame.width = reader.f32();
     frame.height = reader.f32();
     if (magic != Magic || version < 1 || version > Version || !reader.valid() ||
@@ -578,6 +609,7 @@ struct GuestFrame
     std::uint32_t lastLayer = 1;
     frame.batches.resize(count);
     for (GuestBatch& batch : frame.batches) {
+      recycleBatch(batch);
       if (!readBatch(reader, version, limits, totals, batch)) {
         return false;
       }
@@ -594,8 +626,10 @@ struct GuestFrame
     }
     std::uint32_t uploadBytes = 0;
     std::uint32_t lastWritePosition = 0;
+    // Reused writes keep their pixel capacity; every field is overwritten.
+    frame.textureWrites.resize(writes);
     for (std::uint32_t index = 0; index < writes; ++index) {
-      GuestTextureWrite write;
+      GuestTextureWrite& write = frame.textureWrites[index];
       write.texture = GuestResourceId::read(reader);
       write.x = reader.u32();
       write.y = reader.u32();
@@ -621,7 +655,6 @@ struct GuestFrame
       lastWritePosition = write.beforeBatch;
       const std::span<const std::byte> pixels = reader.bytes(bytes);
       write.pixels.assign(pixels.begin(), pixels.end());
-      frame.textureWrites.push_back(std::move(write));
     }
     if (version >= 2) {
       const std::uint32_t casters = reader.u32();
@@ -654,7 +687,9 @@ struct GuestFrame
         frame.shadowCasters.push_back(caster);
       }
     }
-    if (version >= 4) {
+    if (version < 4) {
+      frame.meshWrites.clear();
+    } else {
       // Minimum encoded write: 20-byte id, target, offset, count, one byte.
       const std::uint32_t meshWrites = reader.u32();
       if (!reader.valid() || meshWrites > limits.meshWrites ||
@@ -662,9 +697,10 @@ struct GuestFrame
         return false;
       }
       std::uint32_t writeBytes = 0;
-      frame.meshWrites.reserve(meshWrites);
+      // Reused writes keep their byte capacity; every field is overwritten.
+      frame.meshWrites.resize(meshWrites);
       for (std::uint32_t index = 0; index < meshWrites; ++index) {
-        GuestFrameMeshWrite write;
+        GuestFrameMeshWrite& write = frame.meshWrites[index];
         write.mesh = GuestResourceId::read(reader);
         const std::uint32_t target = reader.u32();
         write.offset = reader.u32();
@@ -680,16 +716,11 @@ struct GuestFrame
         write.indices = target == 1;
         const std::span<const std::byte> data = reader.bytes(bytes);
         write.bytes.assign(data.begin(), data.end());
-        frame.meshWrites.push_back(std::move(write));
       }
     }
     if (version >= 5 && !readSurfaces(reader, limits, totals, frame)) {
       return false;
     }
-    if (!reader.finished()) {
-      return false;
-    }
-    output = std::move(frame);
-    return true;
+    return reader.finished();
   }
 };

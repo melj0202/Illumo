@@ -1231,7 +1231,6 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
     _camera = camera;
   }
 
-  frameArena.Clear();
   beginFrameContext(_camera);
   resetShadowFrame();
   _currentPassFbo = FramebufferHandle{};
@@ -1284,15 +1283,13 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
 
   pushClearScreen(0.1f, 0.1f, 0.1f, 1.0f);
 
-  DrawableBase** immediateList = nullptr;
-  size_t immediateCount = 0;
+  // Drawables without a token submission draw immediately after it, at most
+  // once per scene slot. The retained list grows only with the scene.
+  immediateDrawables.clear();
   size_t immediateCap = 0;
   if (scene) {
     immediateCap = scene->drawableCount();
-    if (immediateCap > 0) {
-      immediateList = static_cast<DrawableBase**>(
-        frameArena.AllocateBytes(sizeof(DrawableBase*) * immediateCap));
-    }
+    immediateDrawables.reserve(immediateCap);
     for (unsigned layerIndex = 0; layerIndex < renderLayerCount();
          ++layerIndex) {
       const RenderLayerId layer = static_cast<RenderLayerId>(layerIndex);
@@ -1321,9 +1318,8 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                 "Drawable did not emit a complete token submission");
               continue;
             }
-            if (immediateList != nullptr && immediateCount < immediateCap) {
-              immediateList[immediateCount] = drawable;
-              immediateCount += 1;
+            if (immediateDrawables.size() < immediateCap) {
+              immediateDrawables.push_back(drawable);
             }
           }
         }
@@ -1393,9 +1389,8 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
                     "Drawable did not emit a complete token submission");
                   continue;
                 }
-                if (immediateList != nullptr && immediateCount < immediateCap) {
-                  immediateList[immediateCount] = drawable;
-                  immediateCount += 1;
+                if (immediateDrawables.size() < immediateCap) {
+                  immediateDrawables.push_back(drawable);
                 }
               }
             }
@@ -1413,11 +1408,11 @@ Renderer::RenderScene(Scene* scene, Camera* camera)
   SubmitOnly();
   clearCommandQueue();
 
-  for (size_t i = 0; i < immediateCount; ++i) {
-    immediateList[i]->Draw();
+  for (DrawableBase* drawable : immediateDrawables) {
+    drawable->Draw();
   }
+  immediateDrawables.clear();
 
-  frameArena.Clear();
   endFrameContext();
 }
 

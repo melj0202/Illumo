@@ -27,13 +27,10 @@ public:
   void setVar(const std::string& key, const char& value) override;
   void setVar(const std::string& key, const char* value) override;
   void setVar(const std::string& key, const int& value) override;
-  const EnvVar& getVar(const std::string& key) override;
-  const std::unordered_map<std::string, EnvVar>& getVars() const override
-  {
-    return m_vars;
-  }
+  const EnvVar& getVar(std::string_view key) override;
+  const EnvVarMap& getVars() const override { return m_vars; }
 
 private:
   static EnvVar parseValue(const std::string& value);
-  std::unordered_map<std::string, EnvVar> m_vars;
+  EnvVarMap m_vars;
 };

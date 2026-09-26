@@ -152,6 +152,10 @@ private:
   std::vector<Lane> m_lanes;
   GuestServiceRecord m_laneQuery;
   std::uint64_t m_lastRequest = 0;
+  // Per-exchange buffers, retained so steady frames reuse their capacity.
+  GuestWireWriter m_renderRequests;
+  std::vector<std::byte> m_renderResponses;
+  GuestWireWriter m_response;
   bool m_cancelled = false;
   std::string m_error;
 };

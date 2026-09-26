@@ -294,6 +294,14 @@ GuestModuleApplication::update(const GuestInput& input)
 GuestFrame
 GuestModuleApplication::frame()
 {
+  GuestFrame recorded;
+  recordFrame(recorded);
+  return recorded;
+}
+
+void
+GuestModuleApplication::recordFrame(GuestFrame& output)
+{
   const std::array<int, 2> dimensions = m_window.getWindowDimensions();
   try {
     m_renderer.BeginFrame();
@@ -318,10 +326,11 @@ GuestModuleApplication::frame()
     if (!m_renderer.frameError().empty()) {
       throw std::runtime_error(m_renderer.frameError());
     }
-    GuestFrame recorded = m_backend.takeFrame();
-    m_panels.finish(recorded);
-    m_lastFrameError.clear();
-    return recorded;
+    m_backend.takeFrame(output);
+    m_panels.finish(output);
+    if (!m_lastFrameError.empty()) {
+      m_lastFrameError.clear();
+    }
   } catch (const std::runtime_error& error) {
     // A rejected recording drops this frame only; product state is intact.
     // Report each distinct failure once so a persistent fault stays visible.
@@ -329,10 +338,9 @@ GuestModuleApplication::frame()
       m_lastFrameError = error.what();
       Logger::LogError("Frame dropped: " + m_lastFrameError);
     }
-    GuestFrame empty;
-    empty.width = static_cast<float>(dimensions[0]);
-    empty.height = static_cast<float>(dimensions[1]);
-    return empty;
+    output.clear();
+    output.width = static_cast<float>(dimensions[0]);
+    output.height = static_cast<float>(dimensions[1]);
   }
 }
 

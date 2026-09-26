@@ -406,6 +406,8 @@ if(BUILD_TESTING)
   set_tests_properties(IllumoGame.Wasm.LaneParity PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 600)
   set_tests_properties(IllumoGame.Wasm.LaneProtocol PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 30)
   set_tests_properties(IllumoGame.Wasm.WorkerParity PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 180)
+  add_test(NAME IllumoGame.Wasm.LaneAllocations COMMAND IllumoGameWasmWorkerTests --run IllumoGame.Wasm.LaneAllocations)
+  set_tests_properties(IllumoGame.Wasm.LaneAllocations PROPERTIES LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 120)
   add_dependencies(IllumoRunTests IllumoGameWasmWorkerTests)
 
 
@@ -455,6 +457,12 @@ if(BUILD_TESTING)
   add_test(NAME IllumoGame.Wasm.GamePackageLanes
     COMMAND IllumoGameWasmPackageTests --run IllumoGame.Wasm.GamePackageLanes)
   set_tests_properties(IllumoGame.Wasm.GamePackageLanes PROPERTIES
+    LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
+  add_test(NAME IllumoGame.Wasm.PackageFrameAllocations
+    COMMAND IllumoGameWasmPackageTests
+      --run IllumoGame.Wasm.PackageFrameAllocations)
+  set_tests_properties(IllumoGame.Wasm.PackageFrameAllocations PROPERTIES
     LABELS "IllumoGame;IllumoWorkspace" TIMEOUT 300
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGameWasmPackageTests>")
   # Performance measurement, not a workspace gate: ctest -L IllumoBenchmark.

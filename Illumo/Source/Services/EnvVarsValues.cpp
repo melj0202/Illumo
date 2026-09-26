@@ -92,9 +92,9 @@ EnvValues::setVar(const std::string& key, const char* value)
   setVar(key, std::string(value));
 }
 const EnvVar&
-EnvValues::getVar(const std::string& key)
+EnvValues::getVar(std::string_view key)
 {
-  std::unordered_map<std::string, EnvVar>::const_iterator it = m_vars.find(key);
+  EnvVarMap::const_iterator it = m_vars.find(key);
   if (it != m_vars.end()) {
     return it->second;
   }
@@ -110,7 +110,7 @@ EnvValues::loadText(std::string_view text)
     if (!document.is_object()) {
       return false;
     }
-    std::unordered_map<std::string, EnvVar> staged = m_vars;
+    EnvVarMap staged = m_vars;
     for (nlohmann::json::const_iterator item = document.cbegin();
          item != document.cend();
          ++item) {

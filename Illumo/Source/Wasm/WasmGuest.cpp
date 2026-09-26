@@ -1,5 +1,6 @@
 #include <Illumo/Wasm/WasmGuest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <exception>
@@ -9,6 +10,7 @@ static std::atomic<std::uint64_t> nextSession{ 1 };
 WasmGuest::WasmGuest(WasmLimits limits, std::uint32_t messageLimit)
   : m_limits(limits)
   , m_messageLimit(messageLimit)
+  , m_request(messageLimit)
 {
 }
 
@@ -23,7 +25,56 @@ WasmGuest::fail(std::string reason)
   m_started = false;
   m_capabilities = 0;
   m_instance.reset();
+  m_transfer = 0;
+  m_transferCapacity = 0;
   return false;
+}
+
+bool
+WasmGuest::transfer(std::span<const std::byte> request,
+                    std::int32_t& address,
+                    bool& retained)
+{
+  const std::uint32_t size = static_cast<std::uint32_t>(request.size());
+  const std::uint32_t previousCapacity = m_transferCapacity;
+  retained = size <= RetainedTransferBytes;
+  if (retained && size > m_transferCapacity && m_transfer != 0) {
+    const std::array<std::int32_t, 1> release{ m_transfer };
+    std::int32_t ignored = 0;
+    m_transfer = 0;
+    m_transferCapacity = 0;
+    if (!m_instance->call("illumo_guest_free", release, ignored)) {
+      return fail(m_instance->error());
+    }
+  }
+  if (!retained || m_transfer == 0) {
+    // The retained buffer grows geometrically so a slowly growing request
+    // does not reallocate on every call; a one-off buffer is exact.
+    const std::uint32_t capacity =
+      retained ? std::min(RetainedTransferBytes,
+                          std::max({ size, 4096u, previousCapacity * 2u }))
+               : size;
+    const std::array<std::int32_t, 1> allocation{ static_cast<std::int32_t>(
+      capacity) };
+    std::int32_t allocated = 0;
+    if (!m_instance->call("illumo_guest_alloc", allocation, allocated)) {
+      return fail(m_instance->error());
+    }
+    if (allocated == 0) {
+      return fail("Guest transfer allocation failed");
+    }
+    if (retained) {
+      m_transfer = allocated;
+      m_transferCapacity = capacity;
+    }
+    address = allocated;
+  } else {
+    address = m_transfer;
+  }
+  if (!m_instance->copyToMemory(static_cast<std::uint32_t>(address), request)) {
+    return fail(m_instance->error());
+  }
+  return true;
 }
 
 bool
@@ -117,42 +168,37 @@ WasmGuest::exchange(GuestCall call,
   if (++m_sequence == 0) {
     return fail("Guest call sequence exhausted");
   }
-  GuestWireWriter request(m_messageLimit);
-  GuestEnvelope{ call, m_session, m_sequence, input }.write(request);
-  const std::array<std::int32_t, 1> allocation{ static_cast<std::int32_t>(
-    request.data().size()) };
+  m_request.clear();
+  GuestEnvelope{ call, m_session, m_sequence, input }.write(m_request);
   std::int32_t address = 0;
-  if (!m_instance->call("illumo_guest_alloc", allocation, address)) {
-    return fail(m_instance->error());
-  }
-  if (address == 0) {
-    return fail("Guest transfer allocation failed");
-  }
-  if (!m_instance->copyToMemory(static_cast<std::uint32_t>(address),
-                                request.data())) {
-    return fail(m_instance->error());
+  bool retained = false;
+  if (!transfer(m_request.data(), address, retained)) {
+    return false;
   }
   constexpr std::array<const char*, 7> exports{
     "illumo_guest_init",    "illumo_guest_update",   "illumo_guest_frame",
     "illumo_guest_close",   "illumo_guest_shutdown", "illumo_guest_receive",
     "illumo_guest_services"
   };
-  const std::array<std::int32_t, 2> arguments{ address, allocation[0] };
+  const std::array<std::int32_t, 2> arguments{
+    address, static_cast<std::int32_t>(m_request.data().size())
+  };
   std::int32_t result = 0;
   if (!m_instance->call(
         exports[static_cast<std::size_t>(call) - 1], arguments, result)) {
     return fail(m_instance->error());
   }
-  std::vector<std::byte> copied;
-  if (!readResult(result, copied, m_messageLimit)) {
+  if (!readResult(result, m_reply, m_messageLimit)) {
     return false;
   }
-  const std::array<std::int32_t, 1> release{ address };
-  if (!m_instance->call("illumo_guest_free", release, result)) {
-    return fail(m_instance->error());
+  if (!retained) {
+    const std::array<std::int32_t, 1> release{ address };
+    if (!m_instance->call("illumo_guest_free", release, result)) {
+      return fail(m_instance->error());
+    }
   }
   GuestEnvelope reply;
-  if (!GuestEnvelope::read(copied, reply) || reply.call != call ||
+  if (!GuestEnvelope::read(m_reply, reply) || reply.call != call ||
       reply.session != m_session || reply.sequence != m_sequence) {
     return fail("Guest response envelope does not match its invocation");
   }
@@ -208,6 +254,8 @@ WasmGuest::shutdown()
   m_started = false;
   m_capabilities = 0;
   m_instance.reset();
+  m_transfer = 0;
+  m_transferCapacity = 0;
 }
 
 bool

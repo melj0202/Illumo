@@ -107,6 +107,9 @@ public:
   const SceneNode* findNode(const std::string& id) const;
   SceneNodeHandle nodeHandle(const std::string& id) const;
   uint64_t revision() const { return m_scene->revision(); }
+  // Advances whenever the scene instance is replaced (load, clear, package
+  // root change); the replacement's revision count starts over.
+  uint64_t sceneGeneration() const { return m_sceneGeneration; }
 
   EditorHistory& history() { return m_history; }
   const EditorHistory& history() const { return m_history; }
@@ -197,6 +200,7 @@ private:
   AssetManager* m_assets = nullptr;
   Renderer* m_renderer = nullptr;
   std::unique_ptr<SceneInstance> m_scene;
+  uint64_t m_sceneGeneration = 0;
   EditorHistory m_history;
   std::string m_path;
   std::string m_label;

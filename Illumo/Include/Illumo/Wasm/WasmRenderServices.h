@@ -29,5 +29,7 @@ private:
   std::deque<GuestServiceRecord> m_pending;
   std::size_t m_pendingBytes = 0;
   std::uint64_t m_lastRequest = 0;
+  // Completion writer, retained so steady frames reuse its capacity.
+  GuestWireWriter m_writer;
   std::string m_error;
 };

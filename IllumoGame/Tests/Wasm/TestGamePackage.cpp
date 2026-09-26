@@ -25,7 +25,129 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <new>
 #include <thread>
+#ifdef _WIN32
+#include <malloc.h>
+#endif
+
+// Host heap allocations made by the counting thread (the control frame) while
+// a bounded check runs. Guest allocations stay inside WASM linear memory and
+// lane workers run on other threads, so neither is counted here.
+static thread_local bool g_countAllocations = false;
+static thread_local std::size_t g_allocations = 0;
+
+void*
+operator new(std::size_t size)
+{
+  if (g_countAllocations) {
+    ++g_allocations;
+  }
+  void* pointer = std::malloc(size == 0 ? 1 : size);
+  if (pointer == nullptr) {
+    throw std::bad_alloc();
+  }
+  return pointer;
+}
+void*
+operator new[](std::size_t size)
+{
+  return ::operator new(size);
+}
+void
+operator delete(void* pointer) noexcept
+{
+  std::free(pointer);
+}
+void
+operator delete[](void* pointer) noexcept
+{
+  std::free(pointer);
+}
+void
+operator delete(void* pointer, std::size_t) noexcept
+{
+  std::free(pointer);
+}
+void
+operator delete[](void* pointer, std::size_t) noexcept
+{
+  std::free(pointer);
+}
+void*
+operator new(std::size_t size, const std::nothrow_t&) noexcept
+{
+  try {
+    return ::operator new(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+void*
+operator new[](std::size_t size, const std::nothrow_t&) noexcept
+{
+  return ::operator new(size, std::nothrow);
+}
+void
+operator delete(void* pointer, const std::nothrow_t&) noexcept
+{
+  ::operator delete(pointer);
+}
+void
+operator delete[](void* pointer, const std::nothrow_t&) noexcept
+{
+  ::operator delete[](pointer);
+}
+void*
+operator new(std::size_t size, std::align_val_t alignment)
+{
+  if (g_countAllocations) {
+    ++g_allocations;
+  }
+  const std::size_t align = static_cast<std::size_t>(alignment);
+#ifdef _WIN32
+  void* pointer = _aligned_malloc(size == 0 ? 1 : size, align);
+#else
+  const std::size_t rounded =
+    ((size == 0 ? 1 : size) + align - 1) / align * align;
+  void* pointer = std::aligned_alloc(align, rounded);
+#endif
+  if (pointer == nullptr) {
+    throw std::bad_alloc();
+  }
+  return pointer;
+}
+void*
+operator new[](std::size_t size, std::align_val_t alignment)
+{
+  return ::operator new(size, alignment);
+}
+void
+operator delete(void* pointer, std::align_val_t) noexcept
+{
+#ifdef _WIN32
+  _aligned_free(pointer);
+#else
+  std::free(pointer);
+#endif
+}
+void
+operator delete[](void* pointer, std::align_val_t alignment) noexcept
+{
+  ::operator delete(pointer, alignment);
+}
+void
+operator delete(void* pointer, std::size_t, std::align_val_t alignment) noexcept
+{
+  ::operator delete(pointer, alignment);
+}
+void
+operator delete[](void* pointer,
+                  std::size_t,
+                  std::align_val_t alignment) noexcept
+{
+  ::operator delete(pointer, alignment);
+}
 
 // The complete IllumoGame product runs only as IllumoGame.wasm. This native
 // side is the generic host, a scripted console/keyboard, and a reference
@@ -1151,6 +1273,126 @@ restartThroughSettings(bool allowed, TestCounters& counters)
   return true;
 }
 
+// Warmed control frames of the real package allocate nothing on the host:
+// the guest exchanges, frame decode/accept and service round trips reuse
+// retained buffers (docs/plans/hot-loop-allocations.md). Measured paused and
+// while generations run; each phase warms up first so first-use growth and
+// lazily created resources are excluded.
+static bool
+packageFrameAllocations()
+{
+  TestCounters counters;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-allocations-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  WasmFileRoots files{ root / "package", root / "storage" };
+  std::filesystem::create_directories(files.package);
+  std::filesystem::create_directories(files.storage);
+  std::filesystem::copy_file(ILLUMO_FAMILIES, files.package / "families.json");
+  std::filesystem::copy_file(ILLUMO_RULES, files.package / "rulesets.json");
+  std::filesystem::create_directories(files.package / "Scenes");
+  std::filesystem::copy_file(ILLUMO_RENDER3D_SCENE,
+                             files.package / "Scenes" / "render3d-test.ilsc");
+  std::filesystem::copy_file(ILLUMO_GAME_DEFAULTS,
+                             files.package / "envvars.json");
+  if (!writeBenchWorlds(files.storage)) {
+    return false;
+  }
+  // Scoped so the host and its settings close before the files are removed.
+  {
+    NullRenderWindow window(1280, 720);
+    EnvVars env(root / "host-envvars.json");
+    env.setVar("WinX", 1280);
+    env.setVar("WinY", 720);
+    env.setVar("fullscreen", false);
+    Camera camera(glm::vec2(0, 0), 1, &env);
+    CanvasObservingBackend mock;
+    mock.Initialize();
+    Renderer renderer(&window, &env, &camera, &mock, false);
+    renderer.ensureBuiltinStyles();
+    CommandRegistry commands;
+    CommandLine console(&env, &commands, &window, &renderer, "Allocations");
+    Logger::setContext(&env, &console);
+    InputManager input(nullptr);
+    IllumoContext context;
+    context.renderer = &renderer;
+    context.window = &window;
+    context.inputManager = &input;
+    context.envVars = &env;
+    context.commandRegistry = &commands;
+    context.commandLine = &console;
+    WasmGameModule game(
+      readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(false), {}, {}, files);
+    const bool started =
+      game.Start(&context) && enterCanvas(game, commands, input);
+    testTrue(counters, started, "Allocation package reaches the canvas");
+    if (!started) {
+      std::printf("%s\n", game.error().c_str());
+      return false;
+    }
+    const std::function<void()> frame = [&]() {
+      Scene scene(&window, &camera);
+      game.DispatchDrawables(&scene);
+      renderer.BeginFrame();
+      renderer.RenderScene(&scene, &camera);
+      renderer.EndFrame();
+    };
+    const char* world = "bench-sparse64";
+    const std::string loaded =
+      std::string("Loaded canvas from ") + world + ".csim";
+    execute(commands, "pause");
+    execute(commands, "load", { world });
+    const bool ready =
+      pumpUntil(game, [&]() { return historyContains(console, loaded); });
+    testTrue(counters, ready, "Allocation world loads in the guest");
+    // Counts host allocations made by Update alone; the mock render stays out.
+    const std::function<std::size_t(int)> measure = [&](int frames) {
+      for (int warmup = 0; warmup < 120 && game.error().empty(); ++warmup) {
+        game.Update(1.0 / 60.0);
+        frame();
+      }
+      std::size_t total = 0;
+      for (int index = 0; index < frames && game.error().empty(); ++index) {
+        g_allocations = 0;
+        g_countAllocations = true;
+        game.Update(1.0 / 60.0);
+        g_countAllocations = false;
+        total += g_allocations;
+        frame();
+      }
+      return total;
+    };
+    const std::size_t paused = ready ? measure(120) : 0u;
+    execute(commands, "tps", { "60" });
+    execute(commands, "run");
+    const std::size_t running = ready ? measure(120) : 0u;
+    std::printf("Host heap allocations over 120 warmed package frames: "
+                "paused %zu, running %zu\n",
+                paused,
+                running);
+    // Before retained exchange buffers this was about 88 per frame. Running
+    // frames may still grow a retained texture-write buffer when the canvas
+    // uploads a dirty rectangle larger than any seen so far; that high-water
+    // growth is bounded, so allow fewer than one per ten frames.
+    testTrue(counters, paused == 0, "Paused package frames allocate nothing");
+    testTrue(counters,
+             running < 12,
+             "Running package frames allocate only on high-water growth");
+    testTrue(counters, game.error().empty(), "The package ran without error");
+    game.Exit();
+    if (counters.failures != 0) {
+      for (const CommandLine::historyBuffer& entry : console.getHistory()) {
+        std::printf("console: %s\n", entry.content.c_str());
+      }
+    }
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return counters.failures == 0;
+}
+
 static bool
 gamePackageRestart()
 {
@@ -1170,6 +1412,7 @@ main(int argc, char** argv)
     std::puts("IllumoGame.Wasm.CatalogMerge");
     std::puts("IllumoGame.Wasm.GamePackageLanes");
     std::puts("IllumoGame.Wasm.PackageBench");
+    std::puts("IllumoGame.Wasm.PackageFrameAllocations");
     return 0;
   }
   if (argc == 3 && std::string(argv[1]) == "--write-bench-worlds") {
@@ -1193,6 +1436,9 @@ main(int argc, char** argv)
   }
   if (std::string(argv[2]) == "IllumoGame.Wasm.GamePackageLanes") {
     return gamePackageLanes() ? 0 : 1;
+  }
+  if (std::string(argv[2]) == "IllumoGame.Wasm.PackageFrameAllocations") {
+    return packageFrameAllocations() ? 0 : 1;
   }
   if (std::string(argv[2]) == "IllumoGame.Wasm.PackageBench") {
     // Serial generations in the game store, then as shipped (8 lanes).

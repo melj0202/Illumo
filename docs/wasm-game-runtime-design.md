@@ -200,7 +200,7 @@ Conceptual exports (names and layouts become an ABI header in milestone 1):
 | `illumo_guest_shutdown` | Best-effort guest cleanup; never required for host cleanup |
 | `illumo_guest_receive` | Receive explicitly routed game/mod messages at a safe scheduling point |
 | `illumo_guest_job` | Worker-role entry with copied job data; no graphics/UI authority |
-| `illumo_guest_alloc/free` | Controlled transient transfer buffer allocation |
+| `illumo_guest_alloc/free` | Controlled transfer buffer allocation; the host keeps one buffer of at most 1 MiB for later calls and frees larger ones after their call |
 
 The host supplies elapsed time; the guest owns simulation policy, fixed-step
 accumulation and dropped-debt behavior. Keep events ordered and maintain the

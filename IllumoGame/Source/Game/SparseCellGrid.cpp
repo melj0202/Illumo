@@ -2468,7 +2468,8 @@ SparseCellGrid::buildPatchDelta(const std::vector<SparseChunkPatch>& patches,
 bool
 SparseCellGrid::applyChunkPatches(const std::vector<SparseChunkPatch>& patches)
 {
-  SparseGenerationDelta delta;
+  // Retained: simulation lanes apply patches every generation.
+  SparseGenerationDelta& delta = m_patchDelta;
   if (!buildPatchDelta(patches, &delta)) {
     return false;
   }
@@ -2480,17 +2481,23 @@ SparseCellGrid::applyChunkPatches(const std::vector<SparseChunkPatch>& patches)
     if (!frontierWasInvalid) {
       // Carry the previous generation's journal: those chunks keep their
       // masks (and their unchanged contents) beside the patch's own changes.
-      std::unordered_map<ChunkAddress, std::size_t, ChunkAddressHash> patched;
-      patched.reserve(delta.changedChunks.size());
-      for (std::size_t index = 0; index < delta.changedChunks.size(); ++index) {
-        patched.emplace(delta.changedChunks[index].address, index);
+      // The retained patch set is rebuilt in record order, so an address's
+      // set index is its record's index.
+      beginAddressSet(
+        &m_patchAddresses, &m_patchAddressIndex, &m_patchAddressGeneration);
+      for (const SparseChangedChunkRecord& record : delta.changedChunks) {
+        insertAddressSet(record.address,
+                         &m_patchAddresses,
+                         &m_patchAddressIndex,
+                         m_patchAddressGeneration);
       }
+      const std::size_t patchedCount = delta.changedChunks.size();
       for (std::size_t index = 0; index < m_changedChunks.size(); ++index) {
         const ChunkAddress& address = m_changedChunks[index];
-        const std::unordered_map<ChunkAddress, std::size_t, ChunkAddressHash>::
-          const_iterator found = patched.find(address);
-        if (found != patched.end()) {
-          SparseChangedChunkRecord& record = delta.changedChunks[found->second];
+        const std::size_t found = findAddressSetIndex(
+          address, m_patchAddressIndex, m_patchAddressGeneration);
+        if (found < patchedCount) {
+          SparseChangedChunkRecord& record = delta.changedChunks[found];
           for (std::size_t word = 0; word < record.stateChanged.size();
                ++word) {
             record.stateChanged[word] |= m_changedCellMasks[index][word];
@@ -2757,6 +2764,49 @@ SparseCellGrid::captureGenerationDelta(std::uint64_t previousRevision,
   return true;
 }
 
+SparseCellGrid::ChunkMap::iterator
+SparseCellGrid::insertRecycledChunk(ChunkMap* target,
+                                    const ChunkAddress& address,
+                                    const ChunkData& chunk)
+{
+  if (m_recycledChunkNodes.empty()) {
+    const std::pair<ChunkMap::iterator, bool> inserted =
+      target->emplace(address, chunk);
+    return inserted.second ? inserted.first : target->end();
+  }
+  ChunkNode node = std::move(m_recycledChunkNodes.back());
+  m_recycledChunkNodes.pop_back();
+  node.key() = address;
+  node.mapped() = chunk;
+  ChunkMap::insert_return_type inserted = target->insert(std::move(node));
+  if (!inserted.inserted) {
+    m_recycledChunkNodes.push_back(std::move(inserted.node));
+    return target->end();
+  }
+  return inserted.position;
+}
+
+void
+SparseCellGrid::recycleChunk(ChunkMap* target, ChunkMap::iterator position)
+{
+  m_recycledChunkNodes.push_back(target->extract(position));
+}
+
+void
+SparseCellGrid::copyChunkMap(const ChunkMap& source, ChunkMap* target)
+{
+  while (!target->empty()) {
+    recycleChunk(target, target->begin());
+  }
+  target->reserve(source.size());
+  for (ChunkMap::const_reference entry : source) {
+    if (insertRecycledChunk(target, entry.first, entry.second) ==
+        target->end()) {
+      throw std::bad_alloc(); // distinct source keys always insert
+    }
+  }
+}
+
 bool
 SparseCellGrid::applyDeltaToMap(const SparseGenerationDelta& delta,
                                 ChunkMap* target,
@@ -2768,8 +2818,7 @@ SparseCellGrid::applyDeltaToMap(const SparseGenerationDelta& delta,
   try {
     if (delta.fullReplacement) {
       while (!target->empty()) {
-        ChunkMap::iterator current = target->begin();
-        m_recycledChunkNodes.push_back(target->extract(current));
+        recycleChunk(target, target->begin());
       }
       *statistics = ChunkStatistics{};
       target->reserve(delta.fullChunks.size());
@@ -2780,26 +2829,12 @@ SparseCellGrid::applyDeltaToMap(const SparseGenerationDelta& delta,
         replacement.counted = record.counted;
         replacement.occupiedCellCount = record.occupiedCellCount;
         replacement.countedCellCount = record.countedCellCount;
-        if (m_recycledChunkNodes.empty()) {
-          const std::pair<ChunkMap::iterator, bool> inserted =
-            target->emplace(record.address, replacement);
-          if (!inserted.second) {
-            return false;
-          }
-          addChunkStatistics(inserted.first->second, statistics);
-        } else {
-          ChunkNode node = std::move(m_recycledChunkNodes.back());
-          m_recycledChunkNodes.pop_back();
-          node.key() = record.address;
-          node.mapped() = replacement;
-          ChunkMap::insert_return_type inserted =
-            target->insert(std::move(node));
-          if (!inserted.inserted) {
-            m_recycledChunkNodes.push_back(std::move(inserted.node));
-            return false;
-          }
-          addChunkStatistics(inserted.position->second, statistics);
+        const ChunkMap::iterator inserted =
+          insertRecycledChunk(target, record.address, replacement);
+        if (inserted == target->end()) {
+          return false;
         }
+        addChunkStatistics(inserted->second, statistics);
       }
     } else {
       for (const SparseChangedChunkRecord& record : delta.changedChunks) {
@@ -2809,7 +2844,7 @@ SparseCellGrid::applyDeltaToMap(const SparseGenerationDelta& delta,
         }
         if (!record.present) {
           if (current != target->end()) {
-            target->erase(current);
+            recycleChunk(target, current);
           }
         } else {
           ChunkData replacement;
@@ -2819,7 +2854,7 @@ SparseCellGrid::applyDeltaToMap(const SparseGenerationDelta& delta,
           replacement.occupiedCellCount = record.occupiedCellCount;
           replacement.countedCellCount = record.countedCellCount;
           if (current == target->end()) {
-            target->emplace(record.address, replacement);
+            insertRecycledChunk(target, record.address, replacement);
           } else {
             current->second = replacement;
           }
@@ -2840,7 +2875,7 @@ SparseCellGrid::synchronizeInactiveMap(
   ZoneScopedN("SparseCellGrid.synchronizeInactiveMap");
   try {
     if (m_inactiveCatchupFullReplacement) {
-      m_nextChunks = chunks;
+      copyChunkMap(chunks, &m_nextChunks);
       m_nextChunkStatistics = m_chunkStatistics;
       return true;
     }
@@ -2870,15 +2905,15 @@ SparseCellGrid::synchronizeInactiveMap(
       const ChunkMap::const_iterator current = chunks.find(address);
       if (current == chunks.end()) {
         if (inactive != m_nextChunks.end()) {
-          m_nextChunks.erase(inactive);
+          recycleChunk(&m_nextChunks, inactive);
         }
       } else if (inactive == m_nextChunks.end()) {
-        const std::pair<ChunkMap::iterator, bool> inserted =
-          m_nextChunks.emplace(address, current->second);
-        if (!inserted.second) {
+        const ChunkMap::iterator inserted =
+          insertRecycledChunk(&m_nextChunks, address, current->second);
+        if (inserted == m_nextChunks.end()) {
           return false;
         }
-        addChunkStatistics(inserted.first->second, &m_nextChunkStatistics);
+        addChunkStatistics(inserted->second, &m_nextChunkStatistics);
       } else {
         inactive->second = current->second;
         addChunkStatistics(inactive->second, &m_nextChunkStatistics);
@@ -2923,7 +2958,7 @@ SparseCellGrid::applyGenerationDelta(const SparseGenerationDelta& delta)
     m_inactiveCatchupDeltaValid = false;
     m_inactiveCatchupFullReplacement = false;
   } else if (!m_nextChunksMirrorCurrent) {
-    m_nextChunks = chunks;
+    copyChunkMap(chunks, &m_nextChunks);
     m_nextChunkStatistics = m_chunkStatistics;
   }
   if (!applyDeltaToMap(delta, &chunks, &m_chunkStatistics) ||
@@ -4163,7 +4198,7 @@ SparseCellGrid::advanceElementaryFromRow(
           if (hasOccupiedCells(chunk->second)) {
             addChunkStatistics(chunk->second, &m_nextChunkStatistics);
           } else {
-            m_nextChunks.erase(chunk);
+            recycleChunk(&m_nextChunks, chunk);
           }
         }
       }

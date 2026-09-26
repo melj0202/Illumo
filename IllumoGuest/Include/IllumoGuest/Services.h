@@ -412,6 +412,13 @@ class GuestServiceQueue
 public:
   std::uint64_t enqueue(GuestService operation, std::vector<std::byte> payload)
   {
+    return tryEnqueue(operation, payload);
+  }
+  // As enqueue, but moves `payload` into the request only when it is
+  // accepted; a refused payload (result 0) is left untouched.
+  std::uint64_t tryEnqueue(GuestService operation,
+                           std::vector<std::byte>& payload)
+  {
     if (m_next == UINT64_MAX ||
         m_pending.size() >= GuestServices::MaximumRecords ||
         payload.size() > GuestServices::MaximumBytes - 64 ||
@@ -453,9 +460,10 @@ public:
         m_completed.emplace(record.request, std::move(record));
       }
     }
-    GuestWireWriter writer;
-    m_outgoing.write(writer);
-    output = writer.take();
+    // Retained writer; the caller retains output, so both keep capacity.
+    m_writer.clear();
+    m_outgoing.write(m_writer);
+    output.assign(m_writer.data().begin(), m_writer.data().end());
     m_outgoing.records.clear();
     m_queuedBytes = 12;
     return true;
@@ -481,4 +489,5 @@ private:
   GuestServices m_outgoing;
   std::map<std::uint64_t, GuestService> m_pending;
   std::map<std::uint64_t, GuestServiceRecord> m_completed;
+  GuestWireWriter m_writer;
 };

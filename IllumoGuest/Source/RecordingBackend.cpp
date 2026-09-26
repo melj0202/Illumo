@@ -130,7 +130,7 @@ GuestRecordingBackend::Shutdown()
 void
 GuestRecordingBackend::BeginFrame()
 {
-  m_frame.clear();
+  recycleFrame();
   m_surface = -1;
   for (std::uint32_t slot : m_drawnDynamic) {
     std::map<std::uint32_t, Mesh>::iterator found = m_meshes.find(slot);
@@ -210,6 +210,13 @@ GuestRecordingBackend::SubmitCommandQueue()
 GuestFrame
 GuestRecordingBackend::takeFrame()
 {
+  GuestFrame result;
+  takeFrame(result);
+  return result;
+}
+void
+GuestRecordingBackend::takeFrame(GuestFrame& output)
+{
   if (m_commands.GetTotalRejected() != m_frameRejections ||
       (m_renderer && !m_renderer->frameError().empty())) {
     throw std::runtime_error("Guest frame submission failed");
@@ -219,9 +226,41 @@ GuestRecordingBackend::takeFrame()
   }
   // Only a frame that will be delivered consumes the dirty ranges.
   emitMeshWrites();
-  GuestFrame result = std::move(m_frame);
-  m_frame = GuestFrame{};
-  return result;
+  std::swap(output, m_frame);
+  // As before, a take leaves a default frame: nothing recorded remains.
+  recycleFrame();
+  const GuestFrame defaults;
+  m_frame.width = defaults.width;
+  m_frame.height = defaults.height;
+  m_frame.camera = defaults.camera;
+}
+void
+GuestRecordingBackend::recycleFrame()
+{
+  for (GuestTextureWrite& write : m_frame.textureWrites) {
+    if (m_spareBytes.size() < MaximumSpareBuffers &&
+        write.pixels.capacity() != 0) {
+      m_spareBytes.push_back(std::move(write.pixels));
+    }
+  }
+  for (GuestFrameMeshWrite& write : m_frame.meshWrites) {
+    if (m_spareBytes.size() < MaximumSpareBuffers &&
+        write.bytes.capacity() != 0) {
+      m_spareBytes.push_back(std::move(write.bytes));
+    }
+  }
+  m_frame.clear();
+}
+std::vector<std::byte>
+GuestRecordingBackend::takeSpareBytes()
+{
+  if (m_spareBytes.empty()) {
+    return {};
+  }
+  std::vector<std::byte> spare = std::move(m_spareBytes.back());
+  m_spareBytes.pop_back();
+  spare.clear();
+  return spare;
 }
 void
 GuestRecordingBackend::markDirty(std::size_t& begin,
@@ -277,20 +316,24 @@ GuestRecordingBackend::emitMeshWrites()
       continue;
     }
     if (vertexDirty) {
-      m_frame.meshWrites.push_back(
-        { mesh.id,
-          false,
-          static_cast<std::uint32_t>(vertexBegin),
-          { mesh.vertices.begin() + static_cast<std::ptrdiff_t>(vertexBegin),
-            mesh.vertices.begin() + static_cast<std::ptrdiff_t>(vertexEnd) } });
+      GuestFrameMeshWrite& write = m_frame.meshWrites.emplace_back();
+      write.mesh = mesh.id;
+      write.indices = false;
+      write.offset = static_cast<std::uint32_t>(vertexBegin);
+      write.bytes = takeSpareBytes();
+      write.bytes.assign(
+        mesh.vertices.begin() + static_cast<std::ptrdiff_t>(vertexBegin),
+        mesh.vertices.begin() + static_cast<std::ptrdiff_t>(vertexEnd));
     }
     if (indexDirty) {
-      m_frame.meshWrites.push_back(
-        { mesh.id,
-          true,
-          static_cast<std::uint32_t>(indexBegin),
-          { mesh.indices.begin() + static_cast<std::ptrdiff_t>(indexBegin),
-            mesh.indices.begin() + static_cast<std::ptrdiff_t>(indexEnd) } });
+      GuestFrameMeshWrite& write = m_frame.meshWrites.emplace_back();
+      write.mesh = mesh.id;
+      write.indices = true;
+      write.offset = static_cast<std::uint32_t>(indexBegin);
+      write.bytes = takeSpareBytes();
+      write.bytes.assign(
+        mesh.indices.begin() + static_cast<std::ptrdiff_t>(indexBegin),
+        mesh.indices.begin() + static_cast<std::ptrdiff_t>(indexEnd));
     }
     writes += count;
     bytes += needed;
@@ -702,15 +745,16 @@ GuestRecordingBackend::pump()
       texture.pixels = std::move(texture.pendingPixels);
     }
     if (texture.id.owner != 0 && texture.changed) {
-      m_frame.textureWrites.push_back(
-        { texture.id,
-          0,
-          0,
-          static_cast<std::uint32_t>(texture.info.width),
-          static_cast<std::uint32_t>(texture.info.height),
-          static_cast<std::uint32_t>(texture.info.channels),
-          texture.pixels,
-          static_cast<std::uint32_t>(m_frame.batches.size()) });
+      GuestTextureWrite& write = m_frame.textureWrites.emplace_back();
+      write.texture = texture.id;
+      write.x = 0;
+      write.y = 0;
+      write.width = static_cast<std::uint32_t>(texture.info.width);
+      write.height = static_cast<std::uint32_t>(texture.info.height);
+      write.channels = static_cast<std::uint32_t>(texture.info.channels);
+      write.pixels = takeSpareBytes();
+      write.pixels.assign(texture.pixels.begin(), texture.pixels.end());
+      write.beforeBatch = static_cast<std::uint32_t>(m_frame.batches.size());
       texture.changed = false;
     }
   }
@@ -1250,6 +1294,7 @@ GuestRecordingBackend::consume(const RenderCommand& command)
                                 {} };
       const std::size_t rowBytes =
         static_cast<std::size_t>(write.width) * channels;
+      copied.pixels = takeSpareBytes();
       copied.pixels.resize(rowBytes * write.height);
       for (int row = 0; row < write.height; ++row) {
         const std::byte* source =

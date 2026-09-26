@@ -22,6 +22,10 @@ public:
   virtual bool start(std::span<const std::byte> startup) = 0;
   virtual void update(const GuestInput& input) = 0;
   virtual GuestFrame frame() = 0;
+  // Records the next frame into `output`, which the export layer retains
+  // between frames. Overrides reuse its container capacity; the default
+  // simply returns frame().
+  virtual void recordFrame(GuestFrame& output) { output = frame(); }
   virtual bool close() = 0;
   virtual void shutdown() = 0;
   virtual std::vector<std::byte> extensionRequest() { return {}; }

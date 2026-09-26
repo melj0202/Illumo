@@ -234,6 +234,11 @@ private:
   std::vector<TextPrimitive> texts;
   std::vector<VisualItem> items;
   uint64_t nextSequence = 0;
+  // Retained scratch: cleared text strings reused by addText (bounded) and
+  // the draw-ordered item list rebuilt with the geometry.
+  static constexpr size_t kSpareTextContent = 256;
+  std::vector<std::string> spareTextContent;
+  std::vector<VisualItem> orderedItems;
 
   MeshHandle shapeMeshHandle{};
   MeshHandle spriteMeshHandle{};

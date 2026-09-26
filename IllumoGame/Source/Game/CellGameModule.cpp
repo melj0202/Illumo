@@ -2774,6 +2774,7 @@ CellGameModule::updateEditHintsVisual(double dt)
     // preference releases its band immediately without hiding the palette.
     if ((editChromeActive && !hintsEnabled) || ic->window == nullptr) {
       editHintsVisual.clearPrimitives();
+      m_editHintsLayout = EditHintsLayout{};
       editHintsFullInsetPixels = 0;
     }
     const float scale = ic->renderer != nullptr
@@ -2790,6 +2791,7 @@ CellGameModule::updateEditHintsVisual(double dt)
     editHintsVisual.setVisible(visible);
     if (!visible) {
       editHintsVisual.clearPrimitives();
+      m_editHintsLayout = EditHintsLayout{};
       editHintsFullInsetPixels = 0;
       editHintsInsetPixels = 0;
     }
@@ -2799,19 +2801,52 @@ CellGameModule::updateEditHintsVisual(double dt)
     return;
   }
 
-  editHintsVisual.clearPrimitives();
-
   const float scale = std::max(1.0f, ic->renderer->getUiScale());
   const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
   const float width = static_cast<float>(dimensions[0]) / scale;
   const float height = static_cast<float>(dimensions[1]) / scale;
   if (width < 120.0f || height < 100.0f) {
+    editHintsVisual.clearPrimitives();
+    m_editHintsLayout = EditHintsLayout{};
     editHintsFullInsetPixels = 0;
     editHintsInsetPixels = 0;
     editHintsVisual.setVisible(false);
     cellContext->getCanvasView()->setBottomInsetPixels(0);
     return;
   }
+  // The footer depends only on these inputs; while they hold, its
+  // primitives are kept and only the slide below updates.
+  const std::shared_ptr<Font> font = Font::getDefaultFont();
+  EditHintsLayout layout;
+  layout.windowWidth = dimensions[0];
+  layout.windowHeight = dimensions[1];
+  layout.scale = scale;
+  layout.selection = clipboard.hasSelection();
+  layout.buffer = !clipboard.getClipboardPattern().empty();
+  layout.ruleSetRevision = cellContext->getRuleSetRevision();
+  layout.font = font.get();
+  layout.built = true;
+  if (!(layout == m_editHintsLayout)) {
+    m_editHintsLayout = layout;
+    buildEditHints(width, height, scale, dimensions[1], font);
+  }
+  editHintsInsetPixels = static_cast<int>(std::ceil(
+    static_cast<float>(editHintsFullInsetPixels) * m_editChromeReveal));
+  Transform2D transform;
+  transform.y = (1.0f - m_editChromeLift) * m_editHintsPanelHeight;
+  editHintsVisual.setTransform(transform);
+  editHintsVisual.setVisible(m_editChromeReveal > 0.001f);
+  cellContext->getCanvasView()->setBottomInsetPixels(editHintsInsetPixels);
+}
+
+void
+CellGameModule::buildEditHints(float width,
+                               float height,
+                               float scale,
+                               int windowHeight,
+                               const std::shared_ptr<Font>& font)
+{
+  editHintsVisual.clearPrimitives();
   std::vector<std::string> hints = {
     "Left drag: paint", "Right drag: erase", "Shift+Left drag: select",
     "Middle drag: pan", "Wheel: zoom",       "Ctrl+V: paste",
@@ -2849,7 +2884,6 @@ CellGameModule::updateEditHintsVisual(double dt)
                                         : stateHints);
   // Wrap complete hints, preserving each key/action pair at narrow sizes.
   const float availableWidth = width - 24.0f;
-  const std::shared_ptr<Font> font = Font::getDefaultFont();
   const std::function<float(const std::string&, float)> measureWidth =
     [&font](const std::string& text, float size) {
       return font != nullptr ? font->measureText(text, size).width
@@ -2884,7 +2918,7 @@ CellGameModule::updateEditHintsVisual(double dt)
     panelHeight = height - 16.0f;
   }
   editHintsFullInsetPixels =
-    std::min(dimensions[1], static_cast<int>(std::ceil(panelHeight * scale)));
+    std::min(windowHeight, static_cast<int>(std::ceil(panelHeight * scale)));
   panelHeight = static_cast<float>(editHintsFullInsetPixels) / scale;
   const float top = height - panelHeight;
   // An opaque glass footer reserves its own band; no canvas shows through.
@@ -2960,13 +2994,7 @@ CellGameModule::updateEditHintsVisual(double dt)
     }
     y += lineHeight;
   }
-  editHintsInsetPixels = static_cast<int>(std::ceil(
-    static_cast<float>(editHintsFullInsetPixels) * m_editChromeReveal));
-  Transform2D transform;
-  transform.y = (1.0f - m_editChromeLift) * panelHeight;
-  editHintsVisual.setTransform(transform);
-  editHintsVisual.setVisible(m_editChromeReveal > 0.001f);
-  cellContext->getCanvasView()->setBottomInsetPixels(editHintsInsetPixels);
+  m_editHintsPanelHeight = panelHeight;
 }
 
 bool
