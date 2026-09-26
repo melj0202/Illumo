@@ -1,5 +1,7 @@
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <IllumoGuest/RecordingBackend.h>
+#include <IllumoGuest/RenderWorld.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -347,6 +349,31 @@ void
 GuestRecordingBackend::ForgetVisual(const GameVisual& visual)
 {
   m_visuals.forget(visual);
+}
+
+GuestResourceId
+GuestRecordingBackend::hostCubemap(TextureHandle handle) const
+{
+  if (!IsTextureValid(handle)) {
+    return {};
+  }
+  const Texture& texture = m_textures.at(handle.slot);
+  return texture.cubemap && texture.pending == 0 ? texture.id
+                                                 : GuestResourceId{};
+}
+
+bool
+GuestRecordingBackend::AppendSkybox(const SkyboxVisual& skybox)
+{
+  // A cubemap still uploading draws nothing either way; recording keeps the
+  // old path's behaviour until it is ready.
+  if (m_world == nullptr || m_surface >= 0 || m_layer != GuestLayer::World ||
+      hostCubemap(skybox.getCubemap()).owner == 0) {
+    return false;
+  }
+  const glm::vec4& tint = skybox.getTint();
+  return m_world->setSkybox(
+    { skybox.getCubemap(), { tint.x, tint.y, tint.z, tint.w } });
 }
 
 void

@@ -166,6 +166,31 @@ worldFrameValidation()
              two.exceededLimit() == nullptr,
            "The world operation quota is enforced and reported to guests");
 
+  // Version 7: the world's sky.
+  GuestWorldOperation sky = simple(GuestWorldOp::Skybox, 0);
+  sky.texture = { 700, GuestResourceKind::Texture, 9, 2 };
+  sky.tint = { 0.5f, 0.25f, 1.0f, 1.0f };
+  GuestFrame skyFrame;
+  const bool skyRead = GuestFrame::read(
+    encode(worldFrame({ sky, simple(GuestWorldOp::Skybox, 0) })), skyFrame);
+  GuestWorldOperation skyWithId = sky;
+  skyWithId.id = 3;
+  GuestWorldOperation meshSky = sky;
+  meshSky.texture.kind = GuestResourceKind::Mesh;
+  std::vector<std::byte> skyVersion6 = encode(worldFrame({ sky }));
+  skyVersion6[4] = std::byte{ 6 };
+  skyVersion6.resize(skyVersion6.size() - 8);
+  testTrue(counters,
+           skyRead && skyFrame.worldOperations.size() == 2 &&
+             skyFrame.worldOperations[0].texture.slot == 9 &&
+             skyFrame.worldOperations[0].tint[1] == 0.25f &&
+             skyFrame.worldOperations[1].texture.owner == 0 &&
+             !GuestFrame::read(encode(worldFrame({ skyWithId })), ignored) &&
+             !GuestFrame::read(encode(worldFrame({ meshSky })), ignored) &&
+             !GuestFrame::read(skyVersion6, ignored),
+           "Skybox operations round-trip in v7 only, with id zero and a "
+           "texture or none");
+
   // Version 5: no world section (nor the v7 sections), nothing to apply.
   std::vector<std::byte> version5 = encode(worldFrame({}));
   version5[4] = std::byte{ 5 };
@@ -312,6 +337,41 @@ worldOperations()
              render() == std::vector<unsigned int>{ 1 } &&
              renderer.frameError().empty(),
            "A released mesh keeps drawing for its instances");
+
+  // The sky: a cubemap only, drawn with the Skybox style's 36 indices.
+  const std::vector<std::byte> faces(GuestCubemapRequest::bytesFor(1));
+  const GuestResourceId cubemap = bridge.createCubemap(faces, 1);
+  const std::array<std::byte, 4> pixel{};
+  const GuestResourceId flat = bridge.createTexture(pixel, 1, 1, 4, false);
+  const auto skyOp = [](const GuestResourceId& texture) {
+    GuestWorldOperation operation = simple(GuestWorldOp::Skybox, 0);
+    operation.texture = texture;
+    return operation;
+  };
+  const auto skyDrawn = [&]() {
+    render();
+    for (std::size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+         ++index) {
+      const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+      if (command.commandType == CommandType::DrawIndexed &&
+          command.drawIndexed.elementCount == 36) {
+        return true;
+      }
+    }
+    return false;
+  };
+  testTrue(counters,
+           cubemap.owner != 0 &&
+             !bridge.accept(encode(worldFrame({ skyOp(flat) }))) &&
+             bridge.accept(encode(worldFrame({ skyOp(cubemap) }))) &&
+             bridge.releaseTexture(cubemap) && skyDrawn() &&
+             renderer.frameError().empty(),
+           "A cubemap sky is drawn, and kept alive after the guest releases "
+           "it; a flat texture is refused");
+  testTrue(counters,
+           bridge.accept(encode(worldFrame({ skyOp(GuestResourceId{}) }))) &&
+             !skyDrawn(),
+           "An empty Skybox operation removes the sky");
 
   bridge.retire();
   testTrue(counters,

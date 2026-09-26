@@ -1668,6 +1668,11 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
     that change most of their items frame after frame; they are rechecked
     every 30 frames.
   - **Rollback:** the guest setting `hostVisuals=0`.
+  - **Sky:** the v7 world operation `Skybox` (a cubemap id or none, plus a
+    tint) sets the render world's sky. The host draws it first, rebuilding
+    the rotation-only view projection from the frame camera. A guest's
+    `SkyboxVisual` becomes that sky, shown only in frames that draw it, and
+    an operation travels only on change.
 - **Simulation lanes** (D-E17): with a `worker` and the Jobs grant the game
   asks `JobLanes` once at startup; the host compiles one isolated worker
   store per lane (in parallel, while menus run) and answers only when all are

@@ -9,6 +9,8 @@
 #include <map>
 #include <set>
 
+class GuestRenderWorld;
+
 // Guest-only backend: consumes borrowed CPU tokens synchronously and records
 // explicit wire values. It owns no native resources and executes no shaders.
 class GuestRecordingBackend final : public IBackend
@@ -136,6 +138,12 @@ public:
   void dropVisuals();
   std::size_t visualCount() const { return m_visuals.proxyCount(); }
 
+  // SkyboxVisuals become the host render world's sky while one is set.
+  void setRenderWorld(GuestRenderWorld* world) { m_world = world; }
+  bool AppendSkybox(const SkyboxVisual& skybox) override;
+  // A cubemap's host id, or empty while it has no ready host copy.
+  GuestResourceId hostCubemap(TextureHandle handle) const;
+
 private:
   struct Mesh
   {
@@ -259,6 +267,7 @@ private:
   std::size_t m_lastMeshWriteBytes = 0;
 
   GuestVisualProxies m_visuals;
+  GuestRenderWorld* m_world = nullptr;
   bool m_visualsEnabled = false;
   bool m_composeWorld = false;
   // Visuals taken at command positions of the current queue.

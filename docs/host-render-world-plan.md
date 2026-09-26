@@ -11,11 +11,12 @@ Design and decisions: `docs/host-render-world-design.md` (authorized
 | M1 | done, `e18d6867` | RHI instancing, per-frame uniform block, instanced shaders |
 | M2 | done, `e18d6867` | `RecordedCommandList`, `ExecuteList`, engine `RenderWorld`, parity and bench |
 | M3 | done, `e18d6867` | Schema v6 world operations, `HostRender`, host binding, `GuestRenderWorld` |
-| M4 | done, uncommitted | `SceneInstance` on `IRenderWorld`; IllMeshViewer, IllEd, game 3D mode; `hostRenderWorld=0` rollback |
-| M5 | done, uncommitted | `VisualStore` over `GameVisual` item edits, opacity, prepare/emit split |
-| M6 | done, uncommitted | Frame v7 visual operations and compositions, `WasmVisuals`, font atlases |
-| M7 | done, uncommitted | Guest `GameVisual` proxy, compositions from the recorder, churn fallback, `hostVisuals=0` rollback |
-| M8-M9 | not started | M8: canvas quad, skybox in the environment, IllEd overlays; M9: retire guest tokens |
+| M4 | done, `7a8057f7` | `SceneInstance` on `IRenderWorld`; IllMeshViewer, IllEd, game 3D mode; `hostRenderWorld=0` rollback |
+| M5 | done, `7a8057f7` | `VisualStore` over `GameVisual` item edits, opacity, prepare/emit split |
+| M6 | done, `7a8057f7` | Frame v7 visual operations and compositions, `WasmVisuals`, font atlases |
+| M7 | done, `7a8057f7` | Guest `GameVisual` proxy, compositions from the recorder, churn fallback, `hostVisuals=0` rollback |
+| M8 | skybox done, uncommitted | Sky in the world environment; canvas quad and line overlays stay retained batches pending an owner decision |
+| M9 | not started | Docs and decision log closure; scope depends on the M8 decision |
 
 ## M6: visual operations and composition on the wire (done)
 
@@ -168,3 +169,9 @@ unchanged.
   each frame. The allocation gate caught decode discarding the v7 buffers every
   frame, and `GameVisual` compaction; both are fixed. Full Release suite 671 of
   671.
+- 2026-09-26: owner said proceed; M4-M7 committed as `7a8057f7`. M8 skybox
+  implemented (a v7 `Skybox` world operation; the host rebuilds the sky
+  matrix from the frame camera). The viewer's idle frame fell to 0.27 KB, and
+  0.39 KB with 500 cubes, one batch either way. Migrating the canvas quad and
+  line overlays would save about 150 bytes each per frame, so it was held for
+  an owner decision. Full Release suite 672 of 672.

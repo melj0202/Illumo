@@ -111,7 +111,10 @@ enum class GuestWorldOp : std::uint32_t
   InstanceUpdate = 5,
   InstanceDestroy = 6,
   InstanceTransform = 7,
-  Environment = 8
+  Environment = 8,
+  // Version 7: the world's sky, a cubemap texture (empty: no sky) and tint.
+  // Id zero, like Environment.
+  Skybox = 9
 };
 
 struct GuestWorldMaterial
@@ -154,6 +157,7 @@ struct GuestWorldOperation
   std::array<float, 4> tint{ 1.0f, 1.0f, 1.0f, 1.0f };       // Create/Update
   bool visible = true;                                       // Create/Update
   GuestWorldEnvironment environment;                         // Environment
+  GuestResourceId texture;                                   // Skybox
 };
 
 // Frame schema v7 (HostRender): one change to a host-retained 2D visual.
@@ -808,6 +812,10 @@ struct GuestFrame
         output.f32(environment.shadowCasterDistance);
         break;
       }
+      case GuestWorldOp::Skybox:
+        operation.texture.write(output);
+        writeFloats(output, operation.tint.data(), 4);
+        break;
       case GuestWorldOp::MaterialDestroy:
       case GuestWorldOp::InstanceDestroy:
         break;
@@ -817,18 +825,23 @@ struct GuestFrame
   // Structure and values only; ids and meshes are checked against the host's
   // world before anything is applied.
   static bool readWorldOperation(GuestWireReader& reader,
-                                 GuestWorldOperation& operation)
+                                 GuestWorldOperation& operation,
+                                 std::uint32_t version = Version)
   {
     operation = GuestWorldOperation{};
     const std::uint32_t op = reader.u32();
     operation.id = reader.u32();
     if (!reader.valid() ||
         op < static_cast<std::uint32_t>(GuestWorldOp::MaterialCreate) ||
-        op > static_cast<std::uint32_t>(GuestWorldOp::Environment)) {
+        op > static_cast<std::uint32_t>(GuestWorldOp::Skybox) ||
+        (op == static_cast<std::uint32_t>(GuestWorldOp::Skybox) &&
+         version < 7)) {
       return false;
     }
     operation.op = static_cast<GuestWorldOp>(op);
-    if ((operation.op == GuestWorldOp::Environment) != (operation.id == 0)) {
+    const bool global = operation.op == GuestWorldOp::Environment ||
+                        operation.op == GuestWorldOp::Skybox;
+    if (global != (operation.id == 0)) {
       return false;
     }
     std::uint32_t flags = 0;
@@ -900,6 +913,12 @@ struct GuestFrame
                environment.shadowMapSize >= 64 &&
                environment.shadowMapSize <= 8192;
       }
+      case GuestWorldOp::Skybox:
+        operation.texture = GuestResourceId::read(reader);
+        return reader.valid() &&
+               (emptyId(operation.texture) ||
+                validTexture(operation.texture)) &&
+               readFloats(reader, operation.tint.data(), 4);
       case GuestWorldOp::MaterialDestroy:
       case GuestWorldOp::InstanceDestroy:
         return true;
@@ -1473,7 +1492,7 @@ struct GuestFrame
       }
       frame.worldOperations.resize(operations);
       for (GuestWorldOperation& operation : frame.worldOperations) {
-        if (!readWorldOperation(reader, operation)) {
+        if (!readWorldOperation(reader, operation, version)) {
           return false;
         }
       }

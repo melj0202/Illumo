@@ -308,6 +308,9 @@ GuestModuleApplication::recordFrame(GuestFrame& output)
 {
   const std::array<int, 2> dimensions = m_window.getWindowDimensions();
   try {
+    if (m_renderWorld) {
+      m_renderWorld->beginFrame();
+    }
     m_renderer.BeginFrame();
     m_backend.setFrame(static_cast<float>(dimensions[0]),
                        static_cast<float>(dimensions[1]));
@@ -428,6 +431,9 @@ GuestModuleApplication::startModule(std::unique_ptr<IModule> module)
     hostWorld.value.empty() || hostWorld.valueAsDouble != 0.0
       ? m_renderWorld.get()
       : nullptr;
+  // Skies follow the same switch.
+  m_backend.setRenderWorld(
+    m_context.renderWorld != nullptr ? m_renderWorld.get() : nullptr);
   // hostVisuals=0 keeps GameVisuals recording their own batches, likewise.
   const EnvVar& hostVisuals = m_settings.getVar("hostVisuals");
   m_backend.setVisuals(

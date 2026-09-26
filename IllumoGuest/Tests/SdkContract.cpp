@@ -1,4 +1,6 @@
+#include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <IllumoGuest/Application.h>
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Console.h>
@@ -7,6 +9,7 @@
 #include <IllumoGuest/InputProvider.h>
 #include <IllumoGuest/RenderWorld.h>
 #include <IllumoGuest/SnapshotWindow.h>
+#include <algorithm>
 #include <array>
 #include <functional>
 
@@ -727,6 +730,79 @@ visualProxyContract()
   backend.Shutdown();
 }
 
+// Frame schema v7: a SkyboxVisual becomes the render world's sky. It follows
+// the frame, only changes travel, and it records nothing.
+static void
+skyboxContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, nullptr);
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  backend.setRenderer(renderer);
+  renderer.ensureBuiltinStyles();
+  GuestRenderWorld world(backend);
+  backend.setRenderWorld(&world);
+  std::array<unsigned char, 4> pixel{ 255, 255, 255, 255 };
+  std::array<const unsigned char*, 6> faces{};
+  faces.fill(pixel.data());
+  const TextureHandle cubemap = renderer.enrollCubemap(faces, 1, 1, 4);
+  SkyboxVisual sky(cubemap);
+  std::vector<GuestWorldOperation> operations;
+  GuestFrame frame;
+  const auto record = [&](bool drawSky) {
+    world.beginFrame();
+    renderer.BeginFrame();
+    backend.setFrame(1280, 720);
+    backend.setLayer(GuestLayer::World);
+    if (drawSky) {
+      sky.AppendCommands(&renderer);
+    }
+    renderer.EndFrame();
+    backend.takeFrame(frame);
+    operations.clear();
+    world.takeOperations(operations, 64);
+  };
+
+  record(true);
+  require(operations.empty(), "A cubemap without a host copy shows no sky");
+  // Complete the cubemap's acquisition with a host id.
+  backend.pump();
+  GuestServices pending = exchange(queue);
+  const GuestResourceId host{ 7, GuestResourceKind::Texture, 5, 1 };
+  GuestWireWriter created;
+  host.write(created);
+  for (GuestServiceRecord& record : pending.records) {
+    record.payload = record.operation == GuestService::CreateCubemap
+                       ? created.data()
+                       : std::vector<std::byte>{};
+    record.status = GuestServiceStatus::Complete;
+  }
+  exchange(queue, pending);
+  backend.pump();
+
+  record(true);
+  require(frame.batches.empty() && operations.size() == 1 &&
+            operations[0].op == GuestWorldOp::Skybox &&
+            operations[0].texture.slot == host.slot,
+          "A ready sky is sent once as a Skybox operation, with no batch");
+  record(true);
+  require(operations.empty(), "An unchanged sky sends nothing");
+  sky.setTint(glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+  record(true);
+  require(operations.size() == 1 && operations[0].tint[0] == 0.5f,
+          "A new tint is sent");
+  record(false);
+  require(operations.size() == 1 && operations[0].texture.owner == 0,
+          "A frame without the sky removes it");
+  backend.setRenderWorld(nullptr);
+  record(true);
+  require(operations.empty() && frame.batches.size() == 1,
+          "Without a render world the sky records its cube");
+  backend.Shutdown();
+}
+
 class SdkContract final : public GuestApplication
 {
 public:
@@ -751,6 +827,7 @@ public:
     frameLimitContract();
     renderWorldContract();
     visualProxyContract();
+    skyboxContract();
     return true;
   }
   void update(const GuestInput&) override {}

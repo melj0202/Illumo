@@ -5,7 +5,7 @@
 #include <array>
 #include <glm/gtc/type_ptr.hpp>
 
-static const float kSkyboxUnitCubeVertices[24] = {
+static const std::array<float, 24> kSkyboxUnitCubeVertices = {
   -1.0f, -1.0f, -1.0f, // 0
   1.0f,  -1.0f, -1.0f, // 1
   1.0f,  1.0f,  -1.0f, // 2
@@ -16,50 +16,23 @@ static const float kSkyboxUnitCubeVertices[24] = {
   -1.0f, 1.0f,  1.0f   // 7
 };
 
-static const unsigned int kSkyboxUnitCubeIndices[36] = {
-  // Front (-Z)
-  0,
-  2,
-  1,
-  0,
-  3,
-  2,
-  // Back (+Z)
-  4,
-  5,
-  6,
-  4,
-  6,
-  7,
-  // Left (-X)
-  0,
-  7,
-  3,
-  0,
-  4,
-  7,
-  // Right (+X)
-  1,
-  6,
-  2,
-  1,
-  5,
-  6,
-  // Top (+Y)
-  3,
-  6,
-  2,
-  3,
-  7,
-  6,
-  // Bottom (-Y)
-  0,
-  1,
-  5,
-  0,
-  5,
-  4
+// Faces: front (-Z), back (+Z), left (-X), right (+X), top (+Y), bottom (-Y).
+static const std::array<unsigned int, 36> kSkyboxUnitCubeIndices = {
+  0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 7, 3, 0, 4, 7,
+  1, 6, 2, 1, 5, 6, 3, 6, 2, 3, 7, 6, 0, 1, 5, 0, 5, 4
 };
+
+const std::array<float, 24>&
+SkyboxVisual::cubeVertices()
+{
+  return kSkyboxUnitCubeVertices;
+}
+
+const std::array<unsigned int, 36>&
+SkyboxVisual::cubeIndices()
+{
+  return kSkyboxUnitCubeIndices;
+}
 
 SkyboxVisual::SkyboxVisual() = default;
 
@@ -93,9 +66,9 @@ SkyboxVisual::prepare(Renderer* renderer)
   }
   m_renderer = renderer;
   if (!m_cubeMesh.isValid()) {
-    m_cubeMesh = m_renderer->enrollMesh(kSkyboxUnitCubeVertices,
+    m_cubeMesh = m_renderer->enrollMesh(kSkyboxUnitCubeVertices.data(),
                                         sizeof(kSkyboxUnitCubeVertices),
-                                        kSkyboxUnitCubeIndices,
+                                        kSkyboxUnitCubeIndices.data(),
                                         sizeof(kSkyboxUnitCubeIndices),
                                         MeshVertexLayout::Pos3,
                                         false);
@@ -119,6 +92,10 @@ SkyboxVisual::AppendCommands(Renderer* renderer)
   }
   if (renderer == nullptr) {
     return false;
+  }
+  if (!renderer->isRecording() && renderer->getBackend() != nullptr &&
+      renderer->getBackend()->AppendSkybox(*this)) {
+    return true;
   }
   prepare(renderer);
   if (!m_cubeMesh.isValid()) {

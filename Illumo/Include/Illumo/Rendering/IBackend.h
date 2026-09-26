@@ -46,6 +46,7 @@ inline constexpr const char* FrameUniformsBlockName = "FrameUniforms";
 inline constexpr unsigned int FrameUniformsBindingPoint = 0;
 
 class GameVisual;
+class SkyboxVisual;
 
 class IBackend
 {
@@ -74,6 +75,13 @@ public:
   }
   // A visual AppendVisual took is being destroyed.
   virtual void ForgetVisual(const GameVisual& visual) { (void)visual; }
+  // Likewise for a sky: true when the host shows it as its render world's
+  // background this frame.
+  virtual bool AppendSkybox(const SkyboxVisual& skybox)
+  {
+    (void)skybox;
+    return false;
+  }
   // Cumulative metrics survive intermediate pass queue resets.
   virtual size_t rejectedCommandCount() const { return 0; }
   virtual size_t commandHighWaterMark() const { return 0; }

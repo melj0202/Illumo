@@ -58,6 +58,10 @@ public:
   bool setInstanceVisible(RenderInstanceId id, bool shown) override;
   bool destroyInstance(RenderInstanceId id) override;
   void setEnvironment(const RenderEnvironment& environment) override;
+  // Drawn first each frame, from the frame's world view projection with its
+  // translation removed, so no per-frame camera data is needed.
+  bool setSkybox(const RenderSkyboxDesc& skybox) override;
+  bool hasSkybox() const { return m_skybox.cubemap.isValid(); }
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
@@ -139,6 +143,7 @@ private:
   // Culls, streams and draws one bucket's color pass. `bound` tracks whether
   // this frame's shared state is already bound.
   void drawColor(Renderer* renderer, Bucket& bucket, bool& bound);
+  void drawSkybox(Renderer* renderer);
 
   std::unordered_map<RenderMaterialId, Material> m_materials;
   std::vector<Instance> m_instances;
@@ -150,6 +155,8 @@ private:
   // Blended buckets in creation order, drawn after the opaque ones.
   std::vector<size_t> m_blendOrder;
   RenderEnvironment m_environment;
+  RenderSkyboxDesc m_skybox;
+  MeshHandle m_skyboxMesh{};
   Renderer* m_renderer = nullptr;
   uint64_t m_frame = 0;
   uint64_t m_preparedSerial = 0;

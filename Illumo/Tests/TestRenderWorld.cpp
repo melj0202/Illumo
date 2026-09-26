@@ -10,9 +10,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <limits>
 #include <memory>
+#include <string>
 #include <vector>
 
 static bool
@@ -406,9 +408,78 @@ renderWorldBench()
   return ok ? 0 : 1;
 }
 
+// The world's sky draws first with SkyboxVisual's rotation-only view
+// projection, rebuilt from the frame's full view projection alone.
+static int
+skyboxFromFrameCamera()
+{
+  WorldFixture fixture;
+  Renderer& renderer = fixture.render.renderer;
+  std::array<unsigned char, 4> pixel{ 255, 255, 255, 255 };
+  std::array<const unsigned char*, 6> data{};
+  data.fill(pixel.data());
+  const TextureHandle cubemap = renderer.enrollCubemap(data, 1, 1, 4);
+  const glm::mat4 projection =
+    glm::perspective(glm::radians(60.0f), 640.0f / 480.0f, 0.1f, 500.0f);
+  const glm::mat4 view = glm::lookAt(
+    glm::vec3(12.0f, -3.0f, 40.0f), glm::vec3(0.0f), glm::vec3(0, 1, 0));
+  const glm::mat4 expected = projection * glm::mat4(glm::mat3(view));
+  std::array<float, 16> viewProjection{};
+  const glm::mat4 full = projection * view;
+  std::copy_n(glm::value_ptr(full), 16, viewProjection.begin());
+
+  const auto frame = [&]() {
+    fixture.render.mock.resetCounters();
+    renderer.setNextWorldViewProjection(viewProjection);
+    renderer.BeginFrame();
+    renderer.RenderScene(&fixture.scene, &fixture.render.camera);
+    renderer.EndFrame();
+  };
+  const auto skyMatrix = [&]() -> const float* {
+    for (size_t index = 0;
+         index < fixture.render.mock.getLastNonEmptySubmittedCount();
+         ++index) {
+      const RenderCommand& command =
+        fixture.render.mock.getLastNonEmptySubmitted(index);
+      if (command.commandType == CommandType::SetUniformMat4 &&
+          std::string(command.uniformMat4.name) == "uViewProjection") {
+        return command.uniformMat4.value;
+      }
+    }
+    return nullptr;
+  };
+
+  bool ok = check(
+    !fixture.world.setSkybox(
+      { cubemap, { std::numeric_limits<float>::quiet_NaN(), 1, 1, 1 } }) &&
+      !fixture.world.hasSkybox(),
+    "a non-finite tint is refused");
+  ok = check(fixture.world.setSkybox({ cubemap, { 1.0f, 0.5f, 0.5f, 1.0f } }),
+             "the sky is set") &&
+       ok;
+  frame();
+  const float* drawn = skyMatrix();
+  float largest = drawn == nullptr ? 1.0f : 0.0f;
+  for (int index = 0; drawn != nullptr && index < 16; ++index) {
+    largest = std::max(
+      largest, std::abs(drawn[index] - glm::value_ptr(expected)[index]));
+  }
+  ok = check(drawn != nullptr && largest < 1e-4f,
+             "the sky's matrix is projection times the rotation-only view") &&
+       ok;
+  fixture.world.setSkybox({});
+  frame();
+  ok =
+    check(skyMatrix() == nullptr, "an invalid cubemap removes the sky") && ok;
+  renderer.destroyTexture(cubemap);
+  return ok ? 0 : 1;
+}
+
 void
 registerRenderWorldTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.RenderWorld.SkyboxFromFrameCamera",
+               skyboxFromFrameCamera);
   registry.add("Illumo.RenderWorld.Bench", renderWorldBench, 120);
   registry.add("Illumo.RenderWorld.BucketsRecordOnce", bucketsRecordOnce);
   registry.add("Illumo.RenderWorld.RejectsInvalidCalls", rejectsInvalidCalls);

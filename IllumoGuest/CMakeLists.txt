@@ -50,6 +50,7 @@ add_library(IllumoGuestRendering STATIC
   ../Illumo/Source/Rendering/FontLayout.cpp
   ../Illumo/Source/Rendering/FontWeightRamp.cpp
   ../Illumo/Source/Rendering/Primitives/GameVisual.cpp
+  ../Illumo/Source/Rendering/Primitives/SkyboxVisual.cpp
   ../Illumo/Source/Services/EnvVarsValues.cpp)
 target_sources(IllumoGuestRendering PRIVATE ../Illumo/Source/Services/InputManagerState.cpp)
 target_include_directories(IllumoGuestRendering SYSTEM PRIVATE
@@ -107,7 +108,6 @@ add_library(IllumoGuestEngine STATIC
   ../Illumo/Source/Rendering/GLString.cpp
   ../Illumo/Source/Rendering/SplashText.cpp
   ../Illumo/Source/Rendering/Primitives/MeshVisual.cpp
-  ../Illumo/Source/Rendering/Primitives/SkyboxVisual.cpp
   ../Illumo/Source/Gui/GuiKit.cpp
   ../Illumo/Source/Gui/GuiMenuShell.cpp
   ../Illumo/Source/Gui/GuiDialog.cpp

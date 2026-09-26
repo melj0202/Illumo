@@ -63,6 +63,14 @@ struct RenderEnvironment
   float shadowCasterDistance = 100.0f;
 };
 
+// The world's background: a cubemap drawn behind everything, oriented by the
+// frame camera (the SkyboxVisual look). An invalid cubemap means no sky.
+struct RenderSkyboxDesc
+{
+  TextureHandle cubemap{};
+  std::array<float, 4> tint{ 1.0f, 1.0f, 1.0f, 1.0f };
+};
+
 class IRenderWorld
 {
 public:
@@ -85,4 +93,6 @@ public:
   virtual bool destroyInstance(RenderInstanceId id) = 0;
 
   virtual void setEnvironment(const RenderEnvironment& environment) = 0;
+  // False, with nothing changed, for a non-finite tint.
+  virtual bool setSkybox(const RenderSkyboxDesc& skybox) = 0;
 };

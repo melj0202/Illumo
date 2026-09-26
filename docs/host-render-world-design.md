@@ -1,7 +1,8 @@
 # Host rendering: host-owned render objects, instancing and recorded command lists
 
-**Status:** authorized by the owner 2026-09-26 (Tier 3). M0-M7 done; M8
-(canvas, skybox and overlay migration) next. Baseline `release/v26.09` at `bb113a9c`.
+**Status:** authorized by the owner 2026-09-26 (Tier 3). M0-M7 and M8's sky
+are done; the rest of M8 and M9 await an owner decision (section 12, M8).
+Baseline `release/v26.09` at `bb113a9c`.
 **Tracker:** `docs/host-render-world-plan.md`.
 **Supersedes (on acceptance):** D-R24 (instance aggregation deferred), the
 recorded-payload clause of D-R25, and the guest-side presentation model of
@@ -933,6 +934,69 @@ against frame versions 1-5.
   - The game menus animate with time, so its run-to-run noise (272,499
     pixels) swamps any comparison. Its visuals draw through batches anyway
     while they churn.
+- **Not run:** `IllumoTidy` and the ASan Debug profile.
+
+### M8 (2026-09-26, branch `host-render-world`, uncommitted)
+
+- **Changes:**
+  - **Skybox in the world:** `IRenderWorld::setSkybox(RenderSkyboxDesc)`
+    (cubemap and tint). The engine `RenderWorld` draws the sky first,
+    before its instances, with SkyboxVisual's tokens. It rebuilds the
+    rotation-only view projection from the frame's full one: the camera
+    position is the preimage of clip (0, 0, 1, 0), and VP × T(eye) =
+    P × mat3(V). So no per-frame camera data travels.
+  - **Wire:** frame v7 world operation `Skybox` (id 0), carrying a cubemap
+    texture id, or none, plus a tint. The host checks that the texture is a
+    cubemap and keeps it alive while shown.
+  - **Guest:** `SkyboxVisual::AppendCommands` offers itself to the new
+    `IBackend::AppendSkybox`. The recorder hands it to `GuestRenderWorld`,
+    whose sky follows the frame. It shows only in frames that draw a
+    `SkyboxVisual`, and a Skybox operation travels only when the sky, its
+    tint or its presence changes. A cubemap still uploading, a surface, or
+    `hostRenderWorld=0` keeps the old recorded cube.
+  - `SkyboxVisual` exposes its unit cube, and moved into the guest
+    rendering library.
+- **Scope decision, open for the owner:**
+  - The design's other M8 items are the canvas quad and the `MeshVisual`
+    line overlays: IllEd's grid, selection boxes and gizmo, and
+    IllMeshViewer's grid and wireframe. They stay as today.
+  - Their geometry is already host-retained: a dynamic retained mesh, with
+    only changed bytes as mesh writes, plus dirty-rect texture writes for
+    the canvas. What remains per frame is one draw reference each, about
+    150 bytes.
+  - Moving them would need unlit line and canvas materials and
+    dynamic-mesh instances in `RenderWorld`. That is substantial work for a
+    few hundred bytes per frame.
+- **Tests:**
+  - New `Illumo.RenderWorld.SkyboxFromFrameCamera`: the drawn matrix
+    matches P × mat3(V) within 1e-4; a non-finite tint is refused; an
+    invalid cubemap removes the sky.
+  - `Illumo.Wasm.WorldFrameValidation` adds the Skybox round trip, which
+    requires v7, id 0 and a texture id.
+  - `Illumo.Wasm.WorldOperations` adds:
+    - A cubemap sky drawn with 36 indices.
+    - The sky kept alive after the guest releases it.
+    - A flat texture refused.
+    - An empty operation removing the sky.
+  - New SDK `skyboxContract` covers:
+    - No sky until the cubemap is on the host.
+    - One operation and no batch once it is.
+    - Nothing sent when unchanged.
+    - Tint changes.
+    - Removal when not drawn.
+    - The recorded cube without a render world.
+  - Full Release `IllumoWorkspace` plus `IllumoGpu`: 672 of 672 pass.
+- **Results** (IllMeshViewer, `--bench-frames 300`):
+
+  | Scene | Frame bytes | Batches | FPS |
+  |---|---|---|---|
+  | Default (sky only) | 0.27 KB, 0.77 KB without the world | 1, 2 | 1,839, 1,888 |
+  | 500 cubes | 0.39 KB, 154.4 KB without the world | 1, 502 | 1,684, 359 |
+
+  The one batch left is the grid's retained line mesh.
+- **Parity:** the default viewer scene at frame 200, world sky against the
+  recorded cube: 10 pixels differ by more than 2, below the viewer's
+  run-to-run noise of 14.
 - **Not run:** `IllumoTidy` and the ASan Debug profile.
 
 ## 13. Documentation changes and follow-ups

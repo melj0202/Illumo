@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/ISceneRenderAttachment.h>
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 #include <Illumo/Rendering/ResourceHandle.h>
+#include <array>
 #include <glm/glm.hpp>
 
 class Renderer;
@@ -34,7 +35,13 @@ public:
   void setTint(const glm::vec4& tint) { m_tint = tint; }
   const glm::vec4& getTint() const { return m_tint; }
 
+  // The unit cube (Pos3) every sky draws: SkyboxVisual and RenderWorld's.
+  static const std::array<float, 24>& cubeVertices();
+  static const std::array<unsigned int, 36>& cubeIndices();
+
   void Draw() override {}
+  // Offers itself to IBackend::AppendSkybox first: a guest with HostRender
+  // shows it as its host render world's sky instead of recording a cube.
   bool AppendCommands(Renderer* renderer) override;
   void appendSceneCommands(Renderer* renderer,
                            const Matrix4& worldTransform) override;

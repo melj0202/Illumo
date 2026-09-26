@@ -703,6 +703,8 @@ struct WasmFrameRenderer::State
     std::unordered_set<std::uint32_t> destroyed;
     std::size_t instances = 0;
     std::size_t materialCount = 0;
+    // Frame v7: the last Skybox operation's cubemap (null: no sky).
+    std::shared_ptr<const Texture> sky;
   };
 
   bool plannedMaterial(const WorldPlan& plan, std::uint32_t id) const
@@ -747,6 +749,7 @@ struct WasmFrameRenderer::State
     plan.destroyed.clear();
     plan.instances = worldInstances.size();
     plan.materialCount = worldMaterialUsers.size();
+    plan.sky.reset();
     meshes.assign(operations.size(), nullptr);
     for (std::size_t index = 0; index < operations.size(); ++index) {
       const GuestWorldOperation& operation = operations[index];
@@ -807,6 +810,14 @@ struct WasmFrameRenderer::State
           break;
         }
         case GuestWorldOp::Environment:
+          break;
+        case GuestWorldOp::Skybox:
+          if (operation.texture.owner != 0) {
+            plan.sky = textures.resolve(operation.texture);
+            valid = plan.sky && plan.sky->cubemap;
+          } else {
+            plan.sky.reset();
+          }
           break;
       }
       if (!valid) {
@@ -904,6 +915,13 @@ struct WasmFrameRenderer::State
           renderWorld->setEnvironment(environment);
           break;
         }
+        case GuestWorldOp::Skybox:
+          // planWorld resolved the last one; earlier ones are superseded.
+          skyTexture = worldPlan.sky;
+          applied = renderWorld->setSkybox(
+            { skyTexture ? skyTexture->handle : TextureHandle{},
+              operation.tint });
+          break;
       }
       if (!applied) {
         // planWorld mirrors RenderWorld's rules; reaching this is a host bug.
@@ -1695,6 +1713,8 @@ struct WasmFrameRenderer::State
   // The host render world and the bookkeeping planWorld validates against.
   std::unique_ptr<RenderWorld> renderWorld = std::make_unique<RenderWorld>();
   std::unordered_map<std::uint32_t, WorldInstance> worldInstances;
+  // Keeps the sky's cubemap alive while the world shows it.
+  std::shared_ptr<const Texture> skyTexture;
   std::unordered_map<std::uint32_t, std::size_t> worldMaterialUsers;
   WorldPlan worldPlan;
   // Frame v7: host-retained visuals, and whether the main composition places
@@ -1997,6 +2017,7 @@ WasmFrameRenderer::retire()
   m_state->renderWorld = std::make_unique<RenderWorld>();
   m_state->worldInstances.clear();
   m_state->worldMaterialUsers.clear();
+  m_state->skyTexture.reset();
   m_state->visuals.clear();
   m_state->worldComposed = false;
 }

@@ -294,6 +294,7 @@ if(BUILD_TESTING)
     "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/PanelSurfaces.cpp"
     "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/RecordingBackend.cpp"
     "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/VisualProxies.cpp"
+    "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/RenderWorld.cpp"
     "${CMAKE_SOURCE_DIR}/IllumoGuest/Source/Display.cpp")
   target_link_libraries(IllumoWasmWindowTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
   target_compile_definitions(IllumoWasmWindowTests PRIVATE

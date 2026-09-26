@@ -32,6 +32,13 @@ public:
   bool setInstanceVisible(RenderInstanceId id, bool shown) override;
   bool destroyInstance(RenderInstanceId id) override;
   void setEnvironment(const RenderEnvironment& environment) override;
+  // Unlike the rest of the world, the guest's sky follows the frame: it
+  // shows only in frames that set it (a SkyboxVisual does, through the
+  // recorder, each frame it is drawn). Only changes travel, as a frame v7
+  // Skybox operation. A cubemap without a ready host copy shows no sky.
+  bool setSkybox(const RenderSkyboxDesc& skybox) override;
+  // Starts a frame with no sky.
+  void beginFrame() { m_skyShown = false; }
 
   // Moves at most `limit` queued operations into `output`, in order. Waiting
   // instances whose meshes became ready are created only after the queue has
@@ -57,4 +64,10 @@ private:
   std::unordered_map<RenderInstanceId, Instance> m_instances;
   std::deque<GuestWorldOperation> m_queue;
   std::vector<RenderInstanceId> m_waiting;
+  // This frame's sky, and the one the host last received.
+  bool m_skyShown = false;
+  GuestResourceId m_sky;
+  std::array<float, 4> m_skyTint{ 1.0f, 1.0f, 1.0f, 1.0f };
+  GuestResourceId m_sentSky;
+  std::array<float, 4> m_sentSkyTint{ 1.0f, 1.0f, 1.0f, 1.0f };
 };

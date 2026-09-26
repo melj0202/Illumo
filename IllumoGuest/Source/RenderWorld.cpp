@@ -247,10 +247,37 @@ GuestRenderWorld::setEnvironment(const RenderEnvironment& environment)
   m_queue.push_back(operation);
 }
 
+bool
+GuestRenderWorld::setSkybox(const RenderSkyboxDesc& skybox)
+{
+  if (!finiteValues(skybox.tint.data(), skybox.tint.size())) {
+    return false;
+  }
+  m_sky = m_backend.hostCubemap(skybox.cubemap);
+  m_skyTint = skybox.tint;
+  m_skyShown = m_sky.owner != 0;
+  return true;
+}
+
 void
 GuestRenderWorld::takeOperations(std::vector<GuestWorldOperation>& output,
                                  std::size_t limit)
 {
+  // The sky change goes first: it never depends on queued operations.
+  const GuestResourceId sky = m_skyShown ? m_sky : GuestResourceId{};
+  const bool sameSky = sky.owner == m_sentSky.owner &&
+                       sky.slot == m_sentSky.slot &&
+                       sky.generation == m_sentSky.generation &&
+                       (sky.owner == 0 || m_skyTint == m_sentSkyTint);
+  if (!sameSky && output.size() < limit) {
+    GuestWorldOperation operation;
+    operation.op = GuestWorldOp::Skybox;
+    operation.texture = sky;
+    operation.tint = m_skyTint;
+    output.push_back(operation);
+    m_sentSky = sky;
+    m_sentSkyTint = m_skyTint;
+  }
   while (!m_queue.empty() && output.size() < limit) {
     output.push_back(m_queue.front());
     m_queue.pop_front();

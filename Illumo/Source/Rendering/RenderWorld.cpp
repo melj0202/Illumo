@@ -1,9 +1,11 @@
+#include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cmath>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 static bool
@@ -47,6 +49,10 @@ RenderWorld::releaseResources()
 {
   if (m_renderer == nullptr) {
     return;
+  }
+  if (m_skyboxMesh.isValid()) {
+    m_renderer->destroyMesh(m_skyboxMesh);
+    m_skyboxMesh = MeshHandle{};
   }
   for (std::unique_ptr<Bucket>& bucket : m_buckets) {
     if (bucket->colorBuffer.isValid()) {
@@ -598,9 +604,68 @@ RenderWorld::drawColor(Renderer* renderer, Bucket& bucket, bool& bound)
 }
 
 bool
+RenderWorld::setSkybox(const RenderSkyboxDesc& skybox)
+{
+  if (!finiteValues(skybox.tint.data(), skybox.tint.size())) {
+    return false;
+  }
+  m_skybox = skybox;
+  return true;
+}
+
+// SkyboxVisual draws projection * rotation-only view. With only the frame's
+// view projection VP = P * R * T(-eye), the same matrix is VP * T(eye), and
+// the camera position is where every clip-space ray starts: the preimage of
+// (0, 0, 1, 0).
+void
+RenderWorld::drawSkybox(Renderer* renderer)
+{
+  const Renderer::FrameContext& frame = renderer->getFrameContext();
+  if (!m_skybox.cubemap.isValid() || !frame.hasWorldMvp) {
+    return;
+  }
+  if (!m_skyboxMesh.isValid()) {
+    const std::array<float, 24>& vertices = SkyboxVisual::cubeVertices();
+    const std::array<unsigned int, 36>& indices = SkyboxVisual::cubeIndices();
+    m_skyboxMesh = renderer->enrollMesh(vertices.data(),
+                                        sizeof(vertices),
+                                        indices.data(),
+                                        sizeof(indices),
+                                        MeshVertexLayout::Pos3,
+                                        false);
+    m_renderer = renderer;
+    if (!m_skyboxMesh.isValid()) {
+      return;
+    }
+  }
+  const glm::mat4 viewProjection = glm::make_mat4(frame.worldMvp.data());
+  glm::mat4 skyboxMvp = viewProjection;
+  const glm::vec4 eye = glm::inverse(viewProjection) * glm::vec4(0, 0, 1, 0);
+  // An orthographic camera has no finite eye; its sky keeps the translation.
+  if (std::abs(eye.w) > 1e-12f) {
+    skyboxMvp =
+      viewProjection * glm::translate(glm::mat4(1.0f), glm::vec3(eye) / eye.w);
+  }
+  if (!renderer->bindStyle(RenderStyleId::Skybox)) {
+    return;
+  }
+  const std::array<float, 4>& tint = m_skybox.tint;
+  renderer->pushSetTexture(m_skybox.cubemap, 0);
+  renderer->pushUniformInt("uSkybox", 0);
+  renderer->pushUniformVec4("uTint", tint[0], tint[1], tint[2], tint[3]);
+  renderer->pushUniformMat4("uViewProjection", glm::value_ptr(skyboxMvp));
+  renderer->pushSetMesh(m_skyboxMesh);
+  renderer->pushDrawIndexed(36, 0);
+}
+
+bool
 RenderWorld::AppendCommands(Renderer* renderer)
 {
-  if (!isVisible() || renderer == nullptr || !prepareFrame(renderer)) {
+  if (!isVisible() || renderer == nullptr) {
+    return true;
+  }
+  drawSkybox(renderer);
+  if (!prepareFrame(renderer)) {
     return true;
   }
   bool bound = false;
