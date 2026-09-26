@@ -1,17 +1,17 @@
 # Host rendering: host-owned render objects, instancing and recorded command lists
 
-**Status:** authorized by the owner 2026-09-26 (Tier 3). M0-M7 and M8's sky
-are done; the rest of M8 and M9 await an owner decision (section 12, M8).
-Baseline `release/v26.09` at `bb113a9c`.
+**Status:** complete 2026-09-26 (authorized by the owner, Tier 3). M0-M9 are
+done, with M8 narrowed by owner decision (section 12, M8). Baseline
+`release/v26.09` at `bb113a9c`.
 **Tracker:** `docs/host-render-world-plan.md`.
-**Supersedes (on acceptance):** D-R24 (instance aggregation deferred), the
+**Supersedes:** D-R24 (instance aggregation deferred), the
 recorded-payload clause of D-R25, and the guest-side presentation model of
 `docs/wasm-game-runtime-design.md` section 7 (lines 312-322: guests
 tessellate, order and batch their own draws). Guests keep presentation
 *decisions*.
 **Precedent:** D-E14 (retained static meshes), D-E16 (retained dynamic
 meshes), D-E28 (capability pattern), D-R27 (surface `same` revisions).
-**New decisions (on acceptance):**
+**New decisions (recorded):**
 - D-E30: guest/host render ownership, frame schema v6 and the `HostRender`
   capability.
 - D-R28: engine `RenderWorld`, instancing and recorded lists.
@@ -956,7 +956,7 @@ against frame versions 1-5.
     `hostRenderWorld=0` keeps the old recorded cube.
   - `SkyboxVisual` exposes its unit cube, and moved into the guest
     rendering library.
-- **Scope decision, open for the owner:**
+- **Scope decision (owner, 2026-09-26: keep them as they are):**
   - The design's other M8 items are the canvas quad and the `MeshVisual`
     line overlays: IllEd's grid, selection boxes and gizmo, and
     IllMeshViewer's grid and wireframe. They stay as today.
@@ -999,9 +999,29 @@ against frame versions 1-5.
   run-to-run noise of 14.
 - **Not run:** `IllumoTidy` and the ASan Debug profile.
 
+### M9 (2026-09-26, branch `host-render-world`, uncommitted)
+
+- **Scope:** documentation and decision log, following the owner's M8
+  decision. In-tree guests still record a few retained batches: the canvas
+  quad, the `MeshVisual` line overlays, and visuals that can't travel.
+- **Recorded:**
+  - D-R29 in `docs/latex/sections/09-design-decision-log.tex`. D-E30 now
+    points to it.
+  - The D-R29 row in `docs/architecture-consensus.md`, next to its v7
+    section.
+  - The `wasm-game-runtime-design.md` section 7 note.
+  - LaTeX `05-rendering-current`: a D-R29 subsection, and the sky and
+    products on `RenderWorld`.
+  - Guidance: `AGENTS.md`, `Illumo/Source/Rendering/AGENTS.md`,
+    `Illumo/Source/Rendering/Primitives/AGENTS.md` and
+    `Illumo/Source/Content/AGENTS.md`.
+  - The PDF was rebuilt.
+- **Not run:** `IllumoTidy`, the ASan Debug profile and the coverage gate.
+
 ## 13. Documentation changes and follow-ups
 
-- On acceptance:
+- On acceptance (done by M9; `06-rendering-target` and the Gui guidance
+  needed no change, because neither describes guest presentation):
   - Add D-E30, D-R28 and D-R29 to
     `docs/latex/sections/09-design-decision-log.tex`, and mark D-R24 and the
     D-R25 clause superseded.
@@ -1017,4 +1037,10 @@ against frame versions 1-5.
 - **Follow-ups:**
   - `CommandQueue` logs its ceiling error on every overflowing frame.
   - IllEd `--open` doesn't load (section 11).
-  - Retained-style rewrites for UI screens that stay hot after M7.
+  - Retained-style rewrites for UI screens that stay hot after M7 (the game
+    menus churn and stay on batches).
+  - If the remaining batches ever matter: unlit, line and canvas world
+    materials with dynamic-mesh instances (the M8 items the owner kept).
+  - DebugModule's renderer demo sets a custom sprite style, which the guest
+    recorder cannot record (`Shader has no guest recording contract`). This
+    predates this work.

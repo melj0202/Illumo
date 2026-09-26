@@ -2898,7 +2898,8 @@ object.\\
 \texttt{docs/host-render-world-design.md}.\\
 \textbf{Refines:} the guest-side presentation model of
 \texttt{docs/wasm-game-runtime-design.md} section 7; \textbf{Extends:} D-E14,
-D-E16, D-E28
+D-E16, D-E28; \textbf{Refined by:} D-R29 (2D visuals, the sky, and the
+batches that remain)
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -2940,6 +2941,50 @@ MeshVisual and SceneGraphDrawable are unchanged. Real-GPU checks carry the
 \textbf{Supersedes:} D-R24's deferral of instance aggregation, and D-R25's
 requirement of a separate decision for recorded payloads (for host-owned
 lists)
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R29 --- Host-retained 2D visuals and compositions}
+\begin{decisionbox}[title={D-R29 \quad 2026-09-26}]
+\textbf{Decision:}
+\begin{itemize}
+  \item \texttt{VisualStore} keeps 2D visuals on the host by id. Each is a
+    \symbolref{GameVisual} edited in place (items set or removed by index,
+    opacity) whose draw tokens are recorded once and replayed until its
+    geometry or frame state changes. Native \symbolref{GameVisual} output is
+    unchanged.
+  \item Frame schema v7 (still \texttt{HostRender}) adds visual operations and
+    per-target compositions. A composition places the target's visuals among
+    its remaining batches and the render world, carries the logical size that
+    pixel-space visuals lay out in, and lasts only for its own frame unless
+    repeated as \texttt{same}. The host validates operations and compositions
+    against its live state before applying anything. Text items name a
+    LoadFont atlas, whose \texttt{Font} the host keeps.
+  \item In a guest, \texttt{GameVisual::AppendCommands} offers the visual to
+    \texttt{IBackend::AppendVisual}. The SDK's \texttt{GuestVisualProxies}
+    sends only item and property changes the host has not confirmed, and
+    confirms them only for delivered frames. Visuals that cannot travel
+    record batches as before: custom styles, textures or fonts not yet on the
+    host, a spent per-frame budget, and visuals that change most of their
+    items frame after frame.
+  \item A guest \texttt{SkyboxVisual} becomes the render world's sky through
+    \texttt{IBackend::AppendSkybox} and the v7 \texttt{Skybox} world
+    operation. The host rebuilds the rotation-only sky matrix from the frame
+    camera.
+\end{itemize}
+\textbf{Why:} Idle tool UIs re-sent every batch each frame: IllEd 9.25\,KB
+and IllMeshViewer 6.55\,KB per frame. With host visuals they send 0.27\,KB,
+and the viewer's 500-cube scene 0.39\,KB (one batch) against 154\,KB. Menu
+chrome that animates nearly every item each frame was cheaper as batches
+(111\,KB) than as item operations (159\,KB), hence the churn fallback.\\
+\textbf{Consequences:} By owner decision, the canvas quad and the
+\symbolref{MeshVisual} line overlays (IllEd's grid, selection and gizmo;
+IllMeshViewer's grid and wireframe) stay retained batches. Their geometry is
+already host-retained, and each costs one draw reference of about 150 bytes
+per frame. The batch path therefore remains for these, for visuals that cannot
+travel, and for packages built against frame versions 1--6. Guest settings
+\texttt{hostRenderWorld=0} and \texttt{hostVisuals=0} are the rollbacks.\\
+\textbf{Refines:} D-E30; \textbf{Extends:} D-R27 (surface revisions), D-R28
 \end{decisionbox}
 
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}

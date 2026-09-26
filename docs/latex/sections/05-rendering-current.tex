@@ -326,8 +326,29 @@ during replacement.
         when buffers, materials or the environment change. With a mock
         backend, 2,000 objects cost 0.11\,ms and 30 tokens per frame against
         3.8\,ms and 50,017 tokens as one MeshVisual each. On a real GPU its
-        images are bit-identical to MeshVisual's, shadows included. Products
-        do not use it yet (\pathref{docs/host-render-world-design.md}).
+        images are bit-identical to MeshVisual's, shadows included.
+        \symbolref{SceneInstance}\texttt{::setRenderWorld} puts a scene's
+        mesh-asset visuals into it (IllMeshViewer, IllEd, the game's 3D mode).
+        It can also draw a sky (\texttt{setSkybox}) first, rebuilding the
+        rotation-only view projection from the frame camera
+        (\pathref{docs/host-render-world-design.md}).
+\end{itemize}
+
+\subsection{Host-retained 2D visuals (D-R29)}
+\begin{itemize}
+  \item \texttt{VisualStore}: 2D visuals by id, each a
+        \symbolref{GameVisual} edited in place (items by index, opacity). A
+        visual's draw tokens are recorded once and replayed with
+        \texttt{ExecuteList} until its geometry or frame state (resolution,
+        projection, clip) changes. \texttt{GameVisual::prepareFrame} builds
+        and uploads; \texttt{emitDraws} pushes only clip and batch tokens.
+  \item Guests: \texttt{GameVisual::AppendCommands} offers the visual to
+        \texttt{IBackend::AppendVisual}, and \texttt{SkyboxVisual} to
+        \texttt{AppendSkybox}. The guest recorder sends frame v7 visual
+        operations (only unconfirmed changes) and per-target compositions,
+        and the host draws them through \texttt{VisualStore} in painter order
+        between the remaining batches. Visuals that cannot travel, the canvas
+        quad and the MeshVisual line overlays still record retained batches.
 \end{itemize}
 
 \subsection{Backend surface}

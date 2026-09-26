@@ -47,8 +47,9 @@ editing. Route detail to these canonical sources:
 - WASM runtime design, ABI and cutover: `docs/wasm-game-runtime-design.md`,
   `docs/wasm-game-runtime-plan.md`, `docs/wasm-game-cutover-plan.md`, and
   `docs/wasm-apps-cutover-plan.md`;
-- host-owned rendering (D-E30, D-R28), instancing, recorded lists and
-  `RenderWorld`: `docs/host-render-world-design.md` and its tracker
+- host-owned rendering (D-E30, D-R28, D-R29), instancing, recorded lists,
+  `RenderWorld`, `VisualStore` and frame schema v7:
+  `docs/host-render-world-design.md` and its tracker
   `docs/host-render-world-plan.md`;
 - persistent scene hierarchy contract: `docs/scene-graph-v2-design.md`;
 - scene implementation and verification record: `docs/scene-graph-v2-plan.md`;
@@ -131,6 +132,9 @@ managed path.
 spans shapes, sprites, and text; only adjacent compatible items batch. Parent and
 local `Transform2D`, normalized pivots, atlas regions/flips, and bounded dynamic
 quad buffers are supported. `SpriteAnimator` is passive and caller-updated.
+In WASM guests with `HostRender`, a `GameVisual` travels whole: the recorder's
+visual proxies send item changes and the host draws it from `VisualStore`
+(D-R29), so products compose UI the same way in both hosts.
 
 Product UI is primitive-composed rather than a separate widget system.
 `CommandLine` and the Release-visible `ConfigurationMenu` build their panels
@@ -511,7 +515,9 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   ceiling (65,536 by default); recording past it fails the list, and
   executed lists and tokens are reported by `Renderer::getRecordedListStats`.
 - Product UI remains primitive-composed through `GameVisual`; do not introduce
-  a separate retained widget tree for the current console and labels.
+  a separate retained widget tree for the current console and labels. The
+  host-retained `VisualStore` holds visuals, not widgets: layout, input and
+  animation stay in the product (D-E30, D-R29).
 
 ## Code, documentation, and generated material
 

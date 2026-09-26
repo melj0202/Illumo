@@ -312,9 +312,11 @@ against driver/runtime vulnerabilities.
 Note (2026-09-26): D-E30 changes this section's model. Guests keep
 presentation *decisions*, but every render and media object moves to the host
 and is managed through host calls. Frame schema v6 (`HostRender`) carries world
-operations on a host `RenderWorld`. 2D visuals follow as described in
-`docs/host-render-world-design.md`. The text below records the batch model,
-which remains valid for frame versions 1 to 5.
+operations on a host `RenderWorld`. Frame schema v7 adds host-retained 2D
+visuals, per-target compositions and the world's sky (D-R29,
+`docs/host-render-world-design.md`). The text below records the batch model.
+It remains valid for frame versions 1 to 6, and for what still records batches:
+the canvas quad, `MeshVisual` line overlays, and visuals that can't travel.
 
 Keep product presentation decisions in WASM. CanvasView continues to sample the
 world, select LOD, fade colors and find dirty uploads there. UI layout, hit tests,

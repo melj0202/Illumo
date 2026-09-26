@@ -74,7 +74,15 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
 - `RenderWorld` is a World drawable that owns persistent instances. Its
   shadow commands rebind the shared `ShadowDepth` style afterwards, because
   later drawables expect it. Call `releaseResources()` before its renderer is
-  destroyed.
+  destroyed. Its sky draws first and derives the rotation-only matrix from
+  the frame's world view projection, so it needs no camera of its own.
+- `VisualStore` replays a visual's recording while its
+  `GameVisual::FrameState` is unchanged, so the recording may depend only on
+  that state. Nothing may destroy a store visual between `append` and
+  submission.
+- Backend hooks `AppendVisual`, `ForgetVisual` and `AppendSkybox` default to
+  off. Only the guest recorder takes drawables whole; GPU and test backends
+  must keep receiving their tokens.
 
 ## Compatibility and errors
 
