@@ -62,7 +62,7 @@
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Rendering/UiScale.h>

@@ -9,7 +9,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/MeshLoader.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/IEnvVars.h>
@@ -1234,9 +1234,9 @@ MeshViewerScene::update(double dt)
 }
 
 void
-MeshViewerScene::dispatch(Scene& frame)
+MeshViewerScene::dispatch(DrawList& frame)
 {
-  Scene* scene = &frame;
+  DrawList* scene = &frame;
   // A scene's own environment sky replaces the default one.
   SkyboxVisual* sky = m_sceneOpen && content().skybox() != nullptr
                         ? content().skybox()
@@ -1268,7 +1268,7 @@ MeshViewerScene::dispatch(Scene& frame)
     if (!view.visible || content[index] == nullptr) {
       continue;
     }
-    Scene* target = scene;
+    DrawList* target = scene;
     if (view.surface != IPanelSurfaces::kMainSurface) {
       target = ic != nullptr && ic->panelSurfaces != nullptr
                  ? ic->panelSurfaces->scene(view.surface)

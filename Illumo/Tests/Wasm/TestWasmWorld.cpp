@@ -2,7 +2,7 @@
 // several worlds per guest, one per scene (D-R30).
 
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
@@ -255,7 +255,7 @@ worldOperations()
            "A retained lit mesh completes");
 
   const std::function<std::vector<unsigned int>()> render = [&]() {
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     bridge.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
@@ -466,7 +466,7 @@ worldsPerScene()
 
   // Instances drawn this frame, per instanced call.
   const std::function<std::vector<unsigned int>()> render = [&]() {
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     bridge.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);

@@ -21,7 +21,7 @@ class Camera;
 class DrawableBase;
 class IRenderWindow;
 class IEnvVars;
-class Scene;
+class DrawList;
 
 class Renderer
 {
@@ -91,7 +91,7 @@ private:
   IRenderWindow* _window;
   Camera* _camera;
   IEnvVars* envVars;
-  Scene* currentScene;
+  DrawList* currentScene;
   struct RenderStyleEntry
   {
     uint32_t generation = 0;
@@ -502,13 +502,14 @@ public:
                               const std::array<int, 2>& targetDims);
 
   // =========================================================================
-  // Scene render (token-first; hybrid immediate only if AppendCommands fails)
+  // Draw list render (token-first; hybrid immediate only if AppendCommands
+  // fails)
   // Production: Canvas / CommandLine / GLString / SplashText are pure-token
   // (D-R10). Immediate Draw() remains for test stubs and any future unmigrated
   // drawable.
   // =========================================================================
 
-  void RenderScene(Scene* scene, Camera* camera);
+  void RenderScene(DrawList* scene, Camera* camera);
 
   // =========================================================================
   // Token proof helpers (test / sample only — not called by Illumo::render)

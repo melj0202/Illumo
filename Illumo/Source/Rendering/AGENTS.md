@@ -26,8 +26,8 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
   default ceiling. Preserve deterministic
   order and explicit overflow behavior; never write past capacity or silently
   claim a dropped frame was complete.
-- `Scene` is a non-owning ordered drawable list rebuilt each frame. It does not
-  own drawables and must not become a retained scene graph or ECS.
+- `DrawList` is a non-owning ordered drawable list rebuilt each frame. It
+  does not own drawables and must not become a retained scene graph or ECS.
 - Directional shadows are one Renderer-owned pass before color rendering. The
   first camera-visible World caster selects the light; the Renderer retains
   caster descriptors, extrudes the camera frustum toward that light by the
@@ -39,7 +39,7 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
 - Camera and shadow bounds tests are Renderer-owned and conservative. Invalid
   frusta, matrices, or bounds disable the corresponding rejection rather than
   risking missing geometry.
-- `SceneGraphDrawable` enters `Scene` and consumes an immutable scene snapshot
+- `SceneGraphDrawable` enters `DrawList` and consumes an immutable scene snapshot
   once per renderer frame. The graph owns its buffers; Rendering never owns
   graph nodes. Attachments receive snapshot transforms and emit tokens only.
   The shared shadow fit follows collection; depth relevance therefore uses

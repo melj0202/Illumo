@@ -14,7 +14,7 @@ class GuestRecordingBackend;
 class GuestSnapshotWindow;
 class IRenderWindow;
 class Renderer;
-class Scene;
+class DrawList;
 
 // IPanelSurfaces inside a guest (Windows capability): Open, Close and
 // SetTitle travel as Window service requests; sizes, pointers, focus and
@@ -66,7 +66,7 @@ public:
   std::array<int, 2> origin(std::uint32_t surface) const override;
   PanelSurfacePointer pointer(std::uint32_t surface) const override;
   std::uint32_t focused() const override { return m_focused; }
-  Scene* scene(std::uint32_t surface) override;
+  DrawList* scene(std::uint32_t surface) override;
   std::vector<PanelSurfaceEvent> takeEvents() override;
 
 private:
@@ -79,7 +79,7 @@ private:
     std::array<int, 2> size{ 0, 0 };
     std::array<int, 2> origin{ 0, 0 };
     PanelSurfacePointer pointer;
-    std::unique_ptr<Scene> scene;
+    std::unique_ptr<DrawList> scene;
     std::uint64_t revision = 0;
     std::vector<std::byte> recorded;
   };

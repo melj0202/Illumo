@@ -1,6 +1,6 @@
 #include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Rendering/Camera.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/TestHelpers.h>
@@ -71,7 +71,7 @@ public:
     (void)elapsed;
     ++m_probe.updates;
   }
-  void dispatch(Scene& frame) override
+  void dispatch(DrawList& frame) override
   {
     (void)frame;
     ++m_probe.draws;

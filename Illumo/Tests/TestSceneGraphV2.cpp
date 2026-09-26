@@ -1,5 +1,5 @@
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Testing/TestHarness.h>
@@ -220,7 +220,7 @@ testSnapshotPassParity()
   SceneGraphDrawable drawable(graph);
   RevisionAttachment attachment;
   graph.addAttachment(graph.createNode(), &attachment);
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&drawable, RenderLayerId::World);
   fixture.renderer.BeginFrame();
   fixture.renderer.RenderScene(&scene, &fixture.camera);
@@ -341,7 +341,7 @@ testMeshSnapshotBoundsCache()
   SceneGraph graph;
   graph.addAttachment(graph.createNode(), &mesh);
   SceneGraphDrawable drawable(graph);
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&drawable);
   for (size_t i = 0; i < 3; ++i) {
     fixture.renderer.BeginFrame();

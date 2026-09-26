@@ -52,7 +52,7 @@ public:
 
   bool start(IllumoContext& context) override;
   void update(double dt) override;
-  void dispatch(Scene& frame) override;
+  void dispatch(DrawList& frame) override;
   void stop() override;
   bool closeRequested() override;
   // The edited document is this scene's content, which picks through proxies.
@@ -214,7 +214,7 @@ private:
   bool dropToMain(const EditorAssetBrowser::Drop& drop,
                   float* pixelX,
                   float* pixelY) const;
-  void dispatchPanels(Scene* scene);
+  void dispatchPanels(DrawList* scene);
   void closePanelWindows();
 
   // EditorSceneViewport.cpp

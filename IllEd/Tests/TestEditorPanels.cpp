@@ -41,7 +41,7 @@ struct PanelFixture
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
-  Scene scene;
+  DrawList scene;
   FakePanelSurfaces surfaces;
   IllumoContext context;
   SceneDirector director;

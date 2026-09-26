@@ -5,7 +5,7 @@
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/RenderWorld.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -95,7 +95,7 @@ primitiveNode(const std::string& id,
 static size_t
 renderFrame(HeadlessRenderFixture& fixture, SceneInstance& instance)
 {
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   if (instance.skybox() != nullptr) {
     scene.AddDrawable(instance.skybox());
   }
@@ -596,7 +596,7 @@ renderWithWorld(HeadlessRenderFixture& fixture,
                 size_t* ownDraws,
                 size_t* worldInstances)
 {
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&world, RenderLayerId::World);
   scene.AddDrawable(&instance.drawable(), RenderLayerId::World);
   instance.update();

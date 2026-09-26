@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Illumo/Gui/PanelSurfaces.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <map>
 #include <memory>
 
@@ -18,7 +18,7 @@ public:
     std::array<int, 2> size{ 0, 0 };
     std::array<int, 2> origin{ 0, 0 };
     PanelSurfacePointer pointer;
-    std::unique_ptr<Scene> scene;
+    std::unique_ptr<DrawList> scene;
     int requestedX = 0;
     int requestedY = 0;
   };
@@ -124,7 +124,7 @@ public:
     created.requestedX = x;
     created.requestedY = y;
     if (!created.scene) {
-      created.scene = std::make_unique<Scene>(m_window, m_camera);
+      created.scene = std::make_unique<DrawList>(m_window, m_camera);
     }
     return true;
   }
@@ -177,7 +177,7 @@ public:
                                     : found->second.pointer;
   }
   std::uint32_t focused() const override { return focusedWindow; }
-  Scene* scene(std::uint32_t surface) override
+  DrawList* scene(std::uint32_t surface) override
   {
     Window* found = window(surface);
     return found != nullptr && found->state == PanelSurfaceState::Open

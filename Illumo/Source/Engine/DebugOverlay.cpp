@@ -787,7 +787,7 @@ DebugOverlay::stop()
 }
 
 void
-DebugOverlay::dispatch(Scene& scene)
+DebugOverlay::dispatch(DrawList& scene)
 {
   if (ic == nullptr) {
     return;

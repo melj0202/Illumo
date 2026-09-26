@@ -3,7 +3,7 @@
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
@@ -182,7 +182,7 @@ SpinningCubeScene::update(double dt)
 }
 
 void
-SpinningCubeScene::dispatch(Scene& frame)
+SpinningCubeScene::dispatch(DrawList& frame)
 {
   if (m_showGrid && m_gridVisual != nullptr) {
     frame.AddDrawable(m_gridVisual.get(), RenderLayerId::World);

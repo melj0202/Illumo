@@ -3,7 +3,7 @@
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -41,7 +41,7 @@ struct ViewerPanelFixture
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
-  Scene scene;
+  DrawList scene;
   FakePanelSurfaces surfaces;
   IllumoContext context;
   SceneDirector director;

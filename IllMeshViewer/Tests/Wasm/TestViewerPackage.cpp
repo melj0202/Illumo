@@ -1,7 +1,7 @@
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -213,7 +213,7 @@ viewerPackage()
          std::chrono::steady_clock::now() < deadline &&
          (mock.retainedDraws < 3 || frames < 30)) {
     viewer.update(1.0 / 60.0);
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     viewer.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
@@ -366,7 +366,7 @@ scenePackage()
       opened = true;
     }
     viewer.update(1.0 / 60.0);
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     viewer.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);

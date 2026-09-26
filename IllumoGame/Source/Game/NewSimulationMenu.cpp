@@ -7,7 +7,7 @@
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/InputManager.h>
 #include <algorithm>
 #include <cmath>
@@ -262,7 +262,7 @@ NewSimulationMenu::update(InputManager* input)
 }
 
 void
-NewSimulationMenu::addDrawables(Scene& scene)
+NewSimulationMenu::addDrawables(DrawList& scene)
 {
   for (GameVisual& layer : layers) {
     scene.AddDrawable(&layer, RenderLayerId::UI);

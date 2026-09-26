@@ -15,7 +15,7 @@
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
 #include <array>
@@ -52,7 +52,7 @@ public:
   void enter() override;
   void leave() override;
   void update(double dt) override;
-  void dispatch(Scene& frame) override;
+  void dispatch(DrawList& frame) override;
   void stop() override;
 
 private:

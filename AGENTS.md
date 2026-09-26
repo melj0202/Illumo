@@ -100,11 +100,11 @@ Drawable::AppendCommands(Renderer*)
 ```
 
 `SceneGraph` owns persistent nodes, compiled transforms/bounds, and two reusable
-snapshot buffers. `SceneGraphDrawable` enters the existing per-frame `Scene`
-as one drawable and uses one immutable view for collection, depth, and color.
-Attachments remain borrowed; detach or invalidate snapshots before retiring
-or changing their content. Already emitted token payloads must outlive
-synchronous submission. Unknown bounds fail open. Renderer fits shadows after
+snapshot buffers. `SceneGraphDrawable` enters the existing per-frame
+`DrawList` as one drawable and uses one immutable view for collection, depth,
+and color. Attachments remain borrowed; detach or invalidate snapshots before
+retiring or changing their content. Already emitted token payloads must
+outlive synchronous submission. Unknown bounds fail open. Renderer fits shadows after
 caster collection, so shadow relevance is tested from snapshot values in the
 depth pass. CA storage and UI remain separate from the scene subsystem.
 
@@ -148,7 +148,7 @@ look and a `GuiPanelDock` of detachable panels whose content draws into a
 `GuiPanelPlacement` and reads `GuiPanelPointer` (D-UI7); extra windows come
 from `IllumoContext::panelSurfaces` and products must work fully docked
 without it. A new screen composes those rather than restating them.
-Preserve the existing drawable owners and Scene layers; do not introduce a
+Preserve the existing drawable owners and DrawList layers; do not introduce a
 retained UI tree for this surface.
 
 Canvas truth (verify here before trusting older notes):
@@ -480,7 +480,7 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   SceneGraph attachments contribute bounds and depth tokens to the same fitted
   light-space matrix and shared map; invalid camera reconstruction falls back
   to all casters, and per-object shadow framebuffers are forbidden.
-- `Rendering::Scene` is a non-owning list rebuilt each frame. `SceneGraph`
+- `DrawList` is a non-owning list rebuilt each frame. `SceneGraph`
   separately owns persistent SoA state and derived preorder/bounds/query caches.
   `SceneGraphDrawable` emits ordered snapshot attachments through the token
   path. Handles remain graph-ID-plus-slot-plus-generation; no node addresses,

@@ -470,7 +470,7 @@ try {
 }
 
 void
-WasmProgram::dispatch(Scene& scene)
+WasmProgram::dispatch(DrawList& scene)
 {
   if (m_frames) {
     m_frames->dispatch(scene);

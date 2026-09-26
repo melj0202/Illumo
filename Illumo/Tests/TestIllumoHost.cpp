@@ -238,7 +238,7 @@ testFramePhases()
              "input nobody read is dropped at endUpdate");
 
     {
-      Scene* scene = host.beginRender();
+      DrawList* scene = host.beginRender();
       testTrue(g,
                scene != nullptr && scene == host.context().scene,
                "beginRender hands out the frame's scene");
@@ -437,7 +437,7 @@ testDebugOverlayWatermarkDispatched()
     host.beginUpdate(0.016);
     overlay.update(0.016);
     host.endUpdate();
-    Scene* scene = host.beginRender();
+    DrawList* scene = host.beginRender();
     testTrue(g, scene != nullptr, "scene exists");
     overlay.dispatch(*scene);
 
@@ -580,7 +580,7 @@ testScenePipelineConfigurationFromEnv()
     setHeadlessFactories(host, &windowDestructions, &backendInitializations);
     testTrue(g, host.initialize(), "host initialized");
 
-    Scene* scene = IllumoTestAccess::getScene(host);
+    DrawList* scene = IllumoTestAccess::getScene(host);
     EnvVars* env = IllumoTestAccess::getEnvironment(host);
     testTrue(g, scene != nullptr, "scene exists");
     testTrue(g, env != nullptr, "env exists");
@@ -628,7 +628,7 @@ testScenePipelineConfigurationFromEnv()
 
 // A client (the program, a scene) replacing the World layer's passes.
 static void
-installPass(Scene& scene, const char* name, int* executions = nullptr)
+installPass(DrawList& scene, const char* name, int* executions = nullptr)
 {
   RenderPassDesc pass;
   pass.name = name;
@@ -652,7 +652,7 @@ testScenePipelineOverrides()
     Illumo host(headlessConfig(path));
     setHeadlessFactories(host, &windows, &backends);
     testTrue(g, host.initialize(), "host initialized");
-    Scene* scene = host.context().scene;
+    DrawList* scene = host.context().scene;
     const std::function<void(const char*)> checkOverride =
       [scene](const char* name) {
         const std::vector<RenderPassDesc>& passes =

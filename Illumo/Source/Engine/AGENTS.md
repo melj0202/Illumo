@@ -52,7 +52,7 @@ Rulesets and the Wasm library.
   relaunches only after the engine and logger have shut down (D-UI13).
 - Keep the `Renderer` backend-neutral. Engine composes
   `CreateOpenGLBackend`; programs see only the context/interface boundary.
-- Host pipeline configuration writes Scene default passes only. Preserve
+- Host pipeline configuration writes DrawList default passes only. Preserve
   application overrides installed during start, update, or dispatch; clearing
   an override restores the current host fallback. A scene switch
   (`SceneDirector`) resets all application overrides to detach borrowed

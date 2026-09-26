@@ -14,7 +14,7 @@ with the recommended answers to O1-O7. Branch `scene-programs` from
 | M3 | done | Frame v8 `SelectWorld`, `ShowWorld`, `DestroyWorld`; `GuestSceneWorlds` |
 | M4 | done | M4a scenes and home zoom; M4b kept canvas and Resume row; M4c shared settings |
 | M5 | done | `RuntimeShell`, `WasmProgram`, `DebugOverlay`; engine frame phases; modules deleted |
-| M6 | in progress | M6a IllEd document borrows `content()`; M6b template is a WASM scene program, WASM build names no product; `Scene` rename next |
+| M6 | done | M6a IllEd document borrows `content()`; M6b template is a WASM scene program, WASM build names no product; M6c `Scene` is `DrawList` (O1) |
 | M7 | not started | Optional crossfade |
 | M8 | not started | Decisions and documentation |
 
@@ -341,3 +341,14 @@ returns nothing outside `docs/history` and archives.
   - Here, every guest module was rebuilt clean from the moved files. Full
     suite 675 of 675; the generator's tests 9 of 9 (2 opt-in skipped);
     `build.py`'s tests pass apart from the one that needs a real console.
+- 2026-09-26, M6c (O1): the engine's per-frame drawable list `Scene`
+  (`Illumo/Rendering/Scene.h`) is `DrawList` (`DrawList.h`).
+  - The rename touched 209 type uses in 75 files. A token-aware script
+    changed only code, leaving comments, strings and raw strings alone, and
+    kept `EditorAssetKind::Scene`. Comments and AGENTS guidance that meant
+    the type were updated by hand.
+  - Member and function names keep "scene": `IllumoContext::scene`,
+    `Renderer::RenderScene` and `ProgramScene::dispatch(DrawList& frame)`.
+    Renaming them is a separate, larger churn, not required by O1.
+  - Release and Debug build, including the IllEd close tool. Full suite 675
+    of 675.

@@ -100,7 +100,7 @@ public:
   bool applyPending();
   // The active scene, when there is one.
   void update(double elapsed);
-  void dispatch(Scene& frame);
+  void dispatch(DrawList& frame);
   bool closeRequested();
   // Stops every started scene (as the destructor does). Idempotent.
   void stopAll() noexcept;

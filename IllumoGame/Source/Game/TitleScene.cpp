@@ -1727,9 +1727,9 @@ TitleScene::rebuildVisual()
 }
 
 void
-TitleScene::dispatch(Scene& frame)
+TitleScene::dispatch(DrawList& frame)
 {
-  Scene* scene = &frame;
+  DrawList* scene = &frame;
   if (m_bgContext != nullptr && m_bgContext->getCanvasView() != nullptr) {
     scene->AddDrawable(m_bgContext->getCanvasView(), RenderLayerId::World);
   }

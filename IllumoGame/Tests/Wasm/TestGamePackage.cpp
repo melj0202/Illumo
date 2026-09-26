@@ -6,7 +6,7 @@
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -466,7 +466,7 @@ gamePackage()
                      }),
            "Guest reloads its own save through storage");
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   game.dispatch(scene);
   mock.canvasDrawn = false;
   renderer.BeginFrame();
@@ -503,7 +503,7 @@ gamePackage()
   mock.worldDraws = 0;
   for (int pass = 0; pass < 2; ++pass) {
     world.update(1.0 / 60.0);
-    Scene worldScene(&window, &camera);
+    DrawList worldScene(&window, &camera);
     world.dispatch(worldScene);
     renderer.BeginFrame();
     renderer.RenderScene(&worldScene, &camera);
@@ -686,7 +686,7 @@ packageBench(bool meterFuel, std::uint32_t lanes)
     return false;
   }
   const std::function<void()> frame = [&]() {
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     game.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
@@ -898,7 +898,7 @@ gamePackageLanes()
   WasmLimits laneLimits = gameLimits();
   game.setWorkerLimits(laneLimits, 4u);
   const std::function<void()> frame = [&]() {
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     game.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
@@ -1359,7 +1359,7 @@ packageFrameAllocations()
       return false;
     }
     const std::function<void()> frame = [&]() {
-      Scene scene(&window, &camera);
+      DrawList scene(&window, &camera);
       game.dispatch(scene);
       renderer.BeginFrame();
       renderer.RenderScene(&scene, &camera);

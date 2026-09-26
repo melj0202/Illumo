@@ -9,7 +9,7 @@
 class DrawableBase;
 class Font;
 class Renderer;
-class Scene;
+class DrawList;
 
 // Diagnostics: the last accepted frame's payload plus lifetime totals of host
 // mesh slot allocations. Counting only; nothing here affects rendering.
@@ -76,7 +76,7 @@ public:
   bool writeMesh(const GuestMeshWrite& write);
   bool releaseMesh(const GuestResourceId& id);
   bool accept(std::span<const std::byte> packet);
-  void dispatch(Scene& scene);
+  void dispatch(DrawList& scene);
   // Surfaces of the last accepted frame. A surface's drawable replays its
   // batches (Renderer::renderOffscreen into its window's target); it stays
   // valid until the next accept.

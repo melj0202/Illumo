@@ -4,7 +4,7 @@
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/IRenderWindow.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
@@ -325,7 +325,7 @@ EditorScene::dropToMain(const EditorAssetBrowser::Drop& drop,
 }
 
 void
-EditorScene::dispatchPanels(Scene* scene)
+EditorScene::dispatchPanels(DrawList* scene)
 {
   if (m_dockVisual) {
     scene->AddDrawable(m_dockVisual.get(), RenderLayerId::UI);
@@ -339,7 +339,7 @@ EditorScene::dispatchPanels(Scene* scene)
     if (!view.visible || content[index] == nullptr) {
       continue;
     }
-    Scene* target = scene;
+    DrawList* target = scene;
     if (view.surface != IPanelSurfaces::kMainSurface) {
       target = ic != nullptr && ic->panelSurfaces != nullptr
                  ? ic->panelSurfaces->scene(view.surface)

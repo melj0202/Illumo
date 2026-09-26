@@ -8,7 +8,7 @@
 class Font;
 
 // Screen/world text run rasterized via Font atlas into tinted quads on the
-// sprite mesh (absolute positions). Not a Scene Drawable by itself.
+// sprite mesh (absolute positions). Not a DrawList Drawable by itself.
 struct TextPrimitive
 {
   std::string content;

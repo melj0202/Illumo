@@ -5,7 +5,7 @@
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
@@ -103,12 +103,12 @@ protected:
   // active scene, so it takes input first, and dispatched after it, so it
   // draws on top. Neither runs before the first scene starts.
   virtual void updateProgram(double elapsed);
-  virtual void dispatchProgram(Scene& frame);
+  virtual void dispatchProgram(DrawList& frame);
   // A product overlay above everything (a software pointer, a transition
   // cover): updated after the scene each running frame, before display
   // settings synchronize, and dispatched last.
   virtual void updateOverlay(double elapsed);
-  virtual void dispatchOverlay(Scene& scene);
+  virtual void dispatchOverlay(DrawList& scene);
   GuestFiles& files() { return m_files; }
   // AssetManager's byte source: pinned preloads, fetch sets and /local bytes.
   GuestVfsAssets& assetCache() { return m_assetCache; }
@@ -154,7 +154,7 @@ private:
   bool m_defaultsApplied = false;
   GuestFontProvider m_fonts;
   InputManager m_input;
-  Scene m_scene;
+  DrawList m_scene;
   // Detached panel windows (Windows capability); published as
   // IllumoContext::panelSurfaces only when granted.
   GuestPanelSurfaces m_panels;

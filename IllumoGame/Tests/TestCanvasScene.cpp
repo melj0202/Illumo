@@ -190,7 +190,7 @@ struct CellGameFixture
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
-  Scene scene;
+  DrawList scene;
   IllumoContext context;
   CanvasScene module;
   bool started;

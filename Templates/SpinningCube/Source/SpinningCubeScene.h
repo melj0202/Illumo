@@ -24,7 +24,7 @@ public:
   // Registers the scene's console commands (cube_speed).
   void enter() override;
   void update(double dt) override;
-  void dispatch(Scene& frame) override;
+  void dispatch(DrawList& frame) override;
   void stop() override;
 
   float rotationAngle() const { return m_rotationAngle; }

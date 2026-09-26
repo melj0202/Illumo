@@ -3,7 +3,7 @@
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
@@ -2127,7 +2127,7 @@ try {
   return false;
 }
 void
-WasmFrameRenderer::dispatch(Scene& scene)
+WasmFrameRenderer::dispatch(DrawList& scene)
 {
   // Shadow fitting and world-camera consumers follow the guest's camera.
   if (m_state->frame.hasCamera && !m_state->retired &&

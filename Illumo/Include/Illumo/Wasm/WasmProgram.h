@@ -68,7 +68,7 @@ public:
   // error() says why.
   bool start(IllumoContext& context);
   void update(double elapsed);
-  void dispatch(Scene& scene);
+  void dispatch(DrawList& scene);
   void stop();
   // Whether the guest agrees to close; a failed guest always does.
   bool closeRequested();

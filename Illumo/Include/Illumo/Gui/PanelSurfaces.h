@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-class Scene;
+class DrawList;
 
 enum class PanelSurfaceState
 {
@@ -87,6 +87,6 @@ public:
   // The window with keyboard focus (kMainSurface when none of the others).
   virtual std::uint32_t focused() const = 0;
   // Drawables for an Open surface this frame; null otherwise.
-  virtual Scene* scene(std::uint32_t surface) = 0;
+  virtual DrawList* scene(std::uint32_t surface) = 0;
   virtual std::vector<PanelSurfaceEvent> takeEvents() = 0;
 };

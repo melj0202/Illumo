@@ -2,7 +2,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
@@ -452,7 +452,7 @@ testMeshVisualManagedAssetParticipatesInSceneShadowPass()
     visual.prepare(&renderer);
     visual.setMeshAsset(info);
 
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     scene.AddDrawable(&visual, RenderLayerId::World);
 
     mock.resetCounters();
@@ -518,7 +518,7 @@ testMeshVisualSpriteAndCube()
                    ColorRgba{ 255, 255, 255, 255 },
                    MeshFacing::World);
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&visual, RenderLayerId::World);
   mock.resetCounters();
   renderer.BeginFrame();
@@ -578,7 +578,7 @@ testMeshVisualBillboard()
                       ColorRgba{},
                       MeshFacing::Billboard);
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&worldAligned, RenderLayerId::World);
   renderer.BeginFrame();
   renderer.RenderScene(&scene, &camera);
@@ -592,7 +592,7 @@ testMeshVisualBillboard()
   }
 
   mock.resetCounters();
-  Scene billboardScene(&window, &camera);
+  DrawList billboardScene(&window, &camera);
   billboardScene.AddDrawable(&billboard, RenderLayerId::World);
   renderer.BeginFrame();
   renderer.RenderScene(&billboardScene, &camera);
@@ -657,7 +657,7 @@ testMeshVisualSceneAttachment()
            graph.setRenderAttachment(node, &visual),
            "MeshVisual attaches to the node");
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&graphDrawable, RenderLayerId::World);
   mock.resetCounters();
   renderer.BeginFrame();
@@ -794,7 +794,7 @@ testMeshVisualSceneShadowPassCoversVisibleSet()
     attachedNode, glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, 0.0f, 0.0f)));
   graph.setRenderAttachment(attachedNode, &attachedVisual);
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&directVisual, RenderLayerId::World);
   scene.AddDrawable(&graphDrawable, RenderLayerId::World);
 
@@ -1043,7 +1043,7 @@ testMeshVisualRelevantCasterVolume()
     glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 40.0f, 0.0f)));
   graph.setRenderAttachment(relevantNode, &relevantCaster);
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&distantCaster, RenderLayerId::World);
   scene.AddDrawable(&receiver, RenderLayerId::World);
   scene.AddDrawable(&graphDrawable, RenderLayerId::World);
@@ -1132,7 +1132,7 @@ testMeshVisualInvalidCameraKeepsAllCasters()
   second.setModelMatrix(
     glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 20.0f, 0.0f)));
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&first, RenderLayerId::World);
   scene.AddDrawable(&second, RenderLayerId::World);
   renderer.BeginFrame();
@@ -1166,7 +1166,7 @@ testMeshVisualCulledFrameResetsMotionHistory()
   visual.prepare(&fixture.renderer);
   visual.setShadowsEnabled(false);
   visual.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{});
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&visual, RenderLayerId::World);
 
   fixture.renderer.BeginFrame();
@@ -1334,7 +1334,7 @@ testMeshVisualShadowUniformsFromSetters()
 
   mock.resetCounters();
   renderer.BeginFrame();
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&visual, RenderLayerId::World);
   renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();

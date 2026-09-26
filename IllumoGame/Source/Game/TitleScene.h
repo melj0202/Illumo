@@ -46,7 +46,7 @@ public:
   void enter() override;
   void leave() override;
   void update(double dt) override;
-  void dispatch(Scene& frame) override;
+  void dispatch(DrawList& frame) override;
   // Idempotent: the destructor stops a scene that is destroyed running.
   void stop() override;
 

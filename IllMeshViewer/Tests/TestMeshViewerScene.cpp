@@ -7,7 +7,7 @@
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/RenderCommand.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -75,7 +75,7 @@ struct ModuleFixture
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
-  Scene scene;
+  DrawList scene;
   IllumoContext context;
   // The viewer runs as a real program scene would, through a director.
   SceneDirector director;
@@ -483,7 +483,7 @@ mountDemoPackage(const std::filesystem::path& root)
 }
 
 static bool
-drawsLayerDrawable(Scene& scene, const DrawableBase* drawable)
+drawsLayerDrawable(DrawList& scene, const DrawableBase* drawable)
 {
   for (const DrawableBase* candidate :
        scene.drawablesIn(RenderLayerId::World)) {

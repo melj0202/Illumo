@@ -1,4 +1,4 @@
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -107,7 +107,7 @@ visibilityBench()
       }
     } bench(graph);
     bench.root = root;
-    Scene scene(&fixture.window, &fixture.camera);
+    DrawList scene(&fixture.window, &fixture.camera);
     scene.AddDrawable(&bench);
     fixture.renderer.BeginFrame();
     fixture.renderer.RenderScene(&scene, &fixture.camera);

@@ -980,7 +980,7 @@ testContextRequirementChecks()
   CommandRegistry registry;
   CommandLine console(&env, &registry, &window, &renderer);
   InputManager input(nullptr);
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   IllumoContext context{ &scene,        &window, &console, &input,   &renderer,
                          &assetManager, &env,    &camera,  &registry };
   testTrue(g,

@@ -11,7 +11,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/InputManager.h>
@@ -558,9 +558,9 @@ EditorScene::updateInspector(float dt)
 }
 
 void
-EditorScene::dispatch(Scene& frame)
+EditorScene::dispatch(DrawList& frame)
 {
-  Scene* scene = &frame;
+  DrawList* scene = &frame;
   if (m_document.worldMode() == SceneWorldMode::World3D &&
       m_document.scene().skybox() != nullptr) {
     scene->AddDrawable(m_document.scene().skybox(), RenderLayerId::World);

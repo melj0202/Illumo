@@ -7,7 +7,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -84,7 +84,7 @@ struct ConfigurationMenuFixture
                                            : InputAction::Release);
   }
 
-  void render(Scene& scene)
+  void render(DrawList& scene)
   {
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
@@ -607,7 +607,7 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   fixture.menu.tick(1.0f);
   fixture.menu.setError("Example validation message");
 
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&fixture.menu, RenderLayerId::UI);
   fixture.mock.resetCounters();
   fixture.render(scene);
@@ -817,7 +817,7 @@ testDisplaySettingsAndScrolling()
            fixture.menu.getFirstVisibleRowForTesting() > 0,
            "keyboard navigation scrolls the selected row into view");
 
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&fixture.menu, RenderLayerId::UI);
   fixture.menu.tick(1.0f);
   fixture.render(scene);
@@ -902,7 +902,7 @@ testCanvasControlsAndBehaviourSettings()
            parsed.autosaveMinutes == 5 && !parsed.confirmClear,
            "autosave interval and confirm clearing change from general");
 
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&fixture.menu, RenderLayerId::UI);
   fixture.render(scene);
   testTrue(g,

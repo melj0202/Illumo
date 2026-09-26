@@ -8,7 +8,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/IRenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -22,7 +22,7 @@ class SceneDirector;
 // when they start.
 struct IllumoContext
 {
-  Scene* scene{ nullptr };
+  DrawList* scene{ nullptr };
   IRenderWindow* window{ nullptr };
   CommandLine* commandLine{ nullptr };
   InputManager* inputManager{ nullptr };

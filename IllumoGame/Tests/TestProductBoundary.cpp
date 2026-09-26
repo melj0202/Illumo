@@ -1,7 +1,7 @@
 #include "Game/Canvas.h"
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/LifeLikeRuleSet.h"
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -15,7 +15,7 @@ testRenderSceneCanvasTokens()
   HeadlessRenderFixture fixture(1280, 720);
   fixture.env.setVar("CanvasX", 16);
   fixture.env.setVar("CanvasY", 12);
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   Canvas canvas(16, 12, &fixture.window, &fixture.camera, &fixture.renderer);
   scene.AddDrawable(&canvas);
 

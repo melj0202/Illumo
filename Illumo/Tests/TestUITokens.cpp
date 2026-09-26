@@ -4,7 +4,7 @@
 #include <Illumo/Rendering/PipelineState.h>
 #include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
 #include <Illumo/Rendering/RenderCommand.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Testing/TestHarness.h>
@@ -254,7 +254,7 @@ testCommandLineClosedEmitsNoDraws()
 
   testTrue(g, !console.isOpen, "starts closed");
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&console, RenderLayerId::UI);
 
   renderer.BeginFrame();
@@ -305,7 +305,7 @@ testCommandLineOpenEmitsPanelTokens()
   console.AppendCommands(&renderer);
 
   // Full scene frame
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&console, RenderLayerId::UI);
 
   mock.resetCounters();
@@ -383,7 +383,7 @@ testCommandLineInvisibleSkipsTokens()
   console.AppendCommands(&renderer); // advance animation
   console.setVisible(false);
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&console, RenderLayerId::UI);
   mock.resetCounters();
 
@@ -431,7 +431,7 @@ testCommandLineHistoryScrollTokens()
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&console, RenderLayerId::UI);
   mock.resetCounters();
 
@@ -473,7 +473,7 @@ testGLStringEmptyAndInvisible()
 
   GLString emptyLabel("FPS: 0", 80, 255, 120, 255, 18, 12, 12, &renderer);
   emptyLabel.setContent("");
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&emptyLabel, RenderLayerId::UI);
 
   renderer.BeginFrame();
@@ -514,7 +514,7 @@ testGLStringEmitsTextTokens()
   testTrue(
     g, mock.getCreateCount() >= 2u, "GLString enrolled mesh + shared styles");
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&label, RenderLayerId::UI);
 
   mock.resetCounters();
@@ -621,7 +621,7 @@ testGLStringAndCommandLineTogether()
     std::this_thread::sleep_for(std::chrono::milliseconds(16));
   }
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&console, RenderLayerId::UI);
   scene.AddDrawable(&fps, RenderLayerId::Debug);
 
@@ -659,7 +659,7 @@ testGLStringCachesGeometry()
   GLString::setRenderWindow(&window);
 
   GLString label("FPS: 12", 80, 255, 120, 255, 18, 12, 12, &renderer);
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&label, RenderLayerId::UI);
 
   renderer.BeginFrame();
@@ -1878,7 +1878,7 @@ testCommandLineConsoleWorkflow()
             "collapsed repeats still count as unseen errors");
   testEqInt(g, console.getUnseenWarningCount(), 1, "warnings are counted");
   testTrue(g, console.wantsDraw(), "unseen alerts keep the badge drawable");
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&console, RenderLayerId::UI);
   fixture.mock.resetCounters();
   fixture.renderer.BeginFrame();

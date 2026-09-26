@@ -1,7 +1,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <IllumoGuest/PanelSurfaces.h>
 #include <IllumoGuest/RecordingBackend.h>
 #include <IllumoGuest/SnapshotWindow.h>
@@ -124,7 +124,7 @@ GuestPanelSurfaces::open(std::uint32_t surface,
   if (existing == nullptr) {
     std::unique_ptr<Surface> created = std::make_unique<Surface>();
     created->id = surface;
-    created->scene = std::make_unique<Scene>(&m_window, &m_camera);
+    created->scene = std::make_unique<DrawList>(&m_window, &m_camera);
     existing = created.get();
     m_surfaces.push_back(std::move(created));
   }
@@ -212,7 +212,7 @@ GuestPanelSurfaces::pointer(std::uint32_t surface) const
   return existing != nullptr ? existing->pointer : PanelSurfacePointer{};
 }
 
-Scene*
+DrawList*
 GuestPanelSurfaces::scene(std::uint32_t surface)
 {
   Surface* existing = find(surface);

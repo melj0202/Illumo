@@ -1,5 +1,5 @@
 #include <Illumo/Rendering/Drawable.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <array>
@@ -80,7 +80,7 @@ frameUniformsOncePerScene()
   HeadlessRenderFixture fixture(640, 480);
   FrameUniformUser user;
   user.calls = 2;
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&user, RenderLayerId::World);
   bool ok = true;
 
@@ -118,7 +118,7 @@ frameUniformsOncePerScene()
        ok;
 
   FrameUniformUser idle;
-  Scene idleScene(&fixture.window, &fixture.camera);
+  DrawList idleScene(&fixture.window, &fixture.camera);
   idleScene.AddDrawable(&idle, RenderLayerId::World);
   fixture.renderer.BeginFrame();
   fixture.renderer.RenderScene(&idleScene, &fixture.camera);

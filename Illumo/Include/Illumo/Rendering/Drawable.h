@@ -3,11 +3,11 @@
 
 class Renderer;
 
-// Scene list entry: token emitter (preferred) and/or legacy immediate Draw.
+// DrawList entry: token emitter (preferred) and/or legacy immediate Draw.
 // GL object ownership lives in the backend registries (not here).
 // Built-in shader + pipeline defaults live on Renderer styles (D-R14);
 // drawables hold content handles and call bindStyle, then emit content tokens.
-// Modules place drawables into Scene layers (World / UI / Debug).
+// Programs place drawables into DrawList layers (World / UI / Debug).
 // Composed shapes/sprites use GameVisual (D-R15) rather than one Drawable each.
 //
 // Production pure-token drawables (always AppendCommands → true when visible):

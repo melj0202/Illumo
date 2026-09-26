@@ -9,7 +9,7 @@
 #include "Wasm/GuestPlatform.h"
 #include <Illumo/Content/PackageManifest.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
@@ -108,7 +108,7 @@ protected:
       static_cast<std::uint64_t>(__builtin_wasm_memory_size(0)) * 65536u);
   }
 
-  void dispatchOverlay(Scene& scene) override
+  void dispatchOverlay(DrawList& scene) override
   {
     // Under the pointer, so the cursor stays on top.
     if (m_performance.isVisible()) {

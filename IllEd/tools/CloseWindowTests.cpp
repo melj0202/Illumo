@@ -26,7 +26,7 @@ updateFrame(Illumo& host, SceneDirector& scenes, double dt)
 static void
 renderFrame(Illumo& host, SceneDirector& scenes)
 {
-  if (Scene* scene = host.beginRender()) {
+  if (DrawList* scene = host.beginRender()) {
     scenes.dispatch(*scene);
   }
   host.endRender();

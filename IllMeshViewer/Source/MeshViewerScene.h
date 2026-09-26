@@ -33,7 +33,7 @@ public:
 
   bool start(IllumoContext& context) override;
   void update(double dt) override;
-  void dispatch(Scene& frame) override;
+  void dispatch(DrawList& frame) override;
   void stop() override;
 
 #if !defined(ILLUMO_SERIAL_GUEST)

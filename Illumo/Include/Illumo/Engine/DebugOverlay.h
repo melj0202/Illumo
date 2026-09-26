@@ -31,7 +31,7 @@ public:
   // False when the context lacks the services it needs (D-E5).
   bool start(IllumoContext& context);
   void update(double dt);
-  void dispatch(Scene& scene);
+  void dispatch(DrawList& scene);
   void stop();
 
 private:

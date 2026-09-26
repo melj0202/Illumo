@@ -36,7 +36,7 @@ ProgramScene::withdrawCommands()
 }
 
 void
-ProgramScene::dispatchContent(Scene& frame)
+ProgramScene::dispatchContent(DrawList& frame)
 {
   if (!m_content) {
     return;

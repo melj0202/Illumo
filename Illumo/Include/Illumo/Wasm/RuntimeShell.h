@@ -11,7 +11,7 @@ class AudioDevice;
 class DebugOverlay;
 class Illumo;
 class Renderer;
-class Scene;
+class DrawList;
 class WasmProgram;
 struct IllumoContext;
 
@@ -75,7 +75,7 @@ public:
 
 private:
   void updateProgram(double dt);
-  void dispatchProgram(Scene& scene);
+  void dispatchProgram(DrawList& scene);
   bool scriptFinished() const;
   bool feedScript(std::string* error);
   void reportBench(const std::string& error);

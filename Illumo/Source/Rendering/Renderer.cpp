@@ -4,7 +4,7 @@
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/RenderLayerId.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <algorithm>
@@ -1374,7 +1374,7 @@ Renderer::executePostProcessPass(const RenderPassDesc& pass,
 }
 
 void
-Renderer::RenderScene(Scene* scene, Camera* camera)
+Renderer::RenderScene(DrawList* scene, Camera* camera)
 {
   currentScene = scene;
   if (_camera == nullptr) {

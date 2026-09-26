@@ -13,7 +13,7 @@
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <algorithm>
@@ -132,7 +132,7 @@ createTarget(Renderer& renderer)
 // Renders `scene` with `viewProjection` and reads `target` back.
 static bool
 renderToImage(Renderer& renderer,
-              Scene& scene,
+              DrawList& scene,
               const std::array<float, 16>& viewProjection,
               FramebufferHandle target,
               FrameReadback& image)
@@ -308,7 +308,7 @@ runInstancingParity(Renderer& renderer)
     return 1;
   }
 
-  Scene scene(renderer.getWindow(), renderer.getCamera());
+  DrawList scene(renderer.getWindow(), renderer.getCamera());
   scene.AddDrawable(&grid, RenderLayerId::World);
   FrameReadback reference;
   FrameReadback instanced;
@@ -457,9 +457,9 @@ runRenderWorldParity(Renderer& renderer)
     toArray(glm::perspective(glm::radians(55.0f), 1.0f, 0.1f, 100.0f) *
             glm::lookAt(
               glm::vec3(6.0f, 9.0f, 11.0f), glm::vec3(0), glm::vec3(0, 1, 0)));
-  Scene referenceScene(renderer.getWindow(), renderer.getCamera());
+  DrawList referenceScene(renderer.getWindow(), renderer.getCamera());
   referenceScene.AddDrawable(&reference, RenderLayerId::World);
-  Scene candidateScene(renderer.getWindow(), renderer.getCamera());
+  DrawList candidateScene(renderer.getWindow(), renderer.getCamera());
   candidateScene.AddDrawable(&candidate, RenderLayerId::World);
   FrameReadback referenceImage;
   FrameReadback candidateImage;

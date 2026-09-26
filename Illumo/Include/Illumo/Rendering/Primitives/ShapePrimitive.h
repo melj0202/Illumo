@@ -18,7 +18,7 @@ enum class ShapeKind : unsigned char
 
 // Value-type shape description. Compose many on a GameVisual (or any host
 // that owns a GameVisual) to build more complex objects — the primitive itself
-// is not a Scene Drawable.
+// is not a DrawList Drawable.
 struct ShapePrimitive
 {
   ShapeKind kind = ShapeKind::FilledRect;

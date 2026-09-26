@@ -207,7 +207,7 @@ GuestProgram::updateProgram(double elapsed)
 }
 
 void
-GuestProgram::dispatchProgram(Scene& frame)
+GuestProgram::dispatchProgram(DrawList& frame)
 {
   (void)frame;
 }
@@ -219,7 +219,7 @@ GuestProgram::updateOverlay(double elapsed)
 }
 
 void
-GuestProgram::dispatchOverlay(Scene& scene)
+GuestProgram::dispatchOverlay(DrawList& scene)
 {
   (void)scene;
 }

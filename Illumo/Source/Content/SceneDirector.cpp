@@ -133,7 +133,7 @@ SceneDirector::update(double elapsed)
 }
 
 void
-SceneDirector::dispatch(Scene& frame)
+SceneDirector::dispatch(DrawList& frame)
 {
   if (m_active != nullptr) {
     m_active->scene->dispatch(frame);

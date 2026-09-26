@@ -436,8 +436,8 @@ CanvasScene::start(IllumoContext& startContext)
 
   editorCursor.init(ic->renderer, ic->window, ic->camera);
   editorCursor.setCellSize(16.0f);
-  // Hidden until Edit() updates cell position (avoids extra Scene entry at
-  // Start before the first mouse sample).
+  // Hidden until Edit() updates cell position (avoids an extra DrawList entry
+  // at Start before the first mouse sample).
   editorCursor.setVisible(false);
 
   editHintsVisual.setRenderer(ic->renderer);
@@ -5476,13 +5476,13 @@ CanvasScene::rebuildCanvasEntrance()
 }
 
 void
-CanvasScene::dispatch(Scene& frame)
+CanvasScene::dispatch(DrawList& frame)
 {
-  Scene* scene = &frame;
+  DrawList* scene = &frame;
   if (cellContext == nullptr) {
     return;
   }
-  // Owners implement AppendCommands (domain + GameVisual). Scene lists
+  // Owners implement AppendCommands (domain + GameVisual). DrawList lists
   // Drawable hosts by layer (World → UI → Debug). The opt-in diagnostic
   // scene replaces CanvasView so its depth-tested primitives start from a clear
   // depth buffer rather than inheriting 2D presentation writes.

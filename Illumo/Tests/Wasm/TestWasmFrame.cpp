@@ -1,7 +1,7 @@
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -445,7 +445,7 @@ run(const std::string& name)
       counters, bridge.accept(drawnWire.data()), "Retained draw accepted");
     mock.observedDraws = 0;
     {
-      Scene scene(&window, &camera);
+      DrawList scene(&window, &camera);
       bridge.dispatch(scene);
       renderer.BeginFrame();
       renderer.RenderScene(&scene, &camera);
@@ -523,7 +523,7 @@ run(const std::string& name)
         }
         mock.observedDraws = 0;
         mock.uploadedBufferBytes = 0;
-        Scene scene(&window, &camera);
+        DrawList scene(&window, &camera);
         bridge.dispatch(scene);
         renderer.BeginFrame();
         renderer.RenderScene(&scene, &camera);
@@ -615,7 +615,7 @@ run(const std::string& name)
              "Skybox samples a guest cubemap");
     mock.observedDraws = 0;
     {
-      Scene scene(&window, &camera);
+      DrawList scene(&window, &camera);
       bridge.dispatch(scene);
       renderer.BeginFrame();
       renderer.RenderScene(&scene, &camera);
@@ -1370,7 +1370,7 @@ run(const std::string& name)
                  modded.start(context),
                  "Optional mod cannot prevent base game startup");
         modded.update(1.0 / 60.0);
-        Scene modScene(&window, &camera);
+        DrawList modScene(&window, &camera);
         modded.dispatch(modScene);
         mock.sawModColor = false;
         renderer.BeginFrame();
@@ -1434,7 +1434,7 @@ run(const std::string& name)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     game.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
@@ -1519,7 +1519,7 @@ run(const std::string& name)
       counters,
       !bridge.accept(wire.data()),
       "Allocation exception contained after a successful slot replacement");
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     bridge.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
@@ -1540,7 +1540,7 @@ run(const std::string& name)
            bridge.releaseTexture(texture),
            "Guest releases texture authority");
   bridge.retire();
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   bridge.dispatch(scene);
   renderer.BeginFrame();
   renderer.RenderScene(&scene, &camera);
@@ -1639,7 +1639,7 @@ main(int argc, char** argv)
         }
         guest
           .shutdown(); // Accepted CPU bytes remain valid after store teardown.
-        Scene scene(renderer.getWindow(), &camera);
+        DrawList scene(renderer.getWindow(), &camera);
         bridge.dispatch(scene);
         renderer.RenderScene(&scene, &camera);
         renderer.SubmitOnly();

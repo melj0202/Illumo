@@ -47,7 +47,7 @@ struct SceneLighting
 // the affected nodes and invalidate graph snapshots before reconfiguring any
 // attachment. Main-thread affine, like SceneGraph.
 //
-// Programs add drawable() (and skybox() when present) to their frame Scene,
+// Programs add drawable() (and skybox() when present) to their frame DrawList,
 // call update() once per frame before rendering, and read document() to
 // save. Asset references resolve against packageRoot(); with no AssetManager
 // every mesh, texture and cubemap draws a placeholder.

@@ -16,7 +16,7 @@
 #include <Illumo/Rendering/Primitives/TextPrimitive.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
@@ -55,7 +55,7 @@ struct EditorFixture
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
-  Scene scene;
+  DrawList scene;
   IllumoContext context;
   CanvasScene module;
   bool started;

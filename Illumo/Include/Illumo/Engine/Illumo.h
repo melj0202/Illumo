@@ -16,7 +16,7 @@ class IBackend;
 class IEnvVars;
 class InputManager;
 class Renderer;
-class Scene;
+class DrawList;
 
 struct IllumoConfig
 {
@@ -55,9 +55,9 @@ public:
   bool initialize();
   void beginUpdate(double dt);
   void endUpdate();
-  // The frame's scene, emptied for this frame's drawables. Null before
+  // The frame's draw list, emptied for this frame's drawables. Null before
   // initialize.
-  Scene* beginRender();
+  DrawList* beginRender();
   void endRender();
   // Releases every service. The program must have stopped first.
   void shutdown() noexcept;
@@ -96,7 +96,7 @@ private:
   std::unique_ptr<CommandRegistry> m_commandRegistry;
   std::unique_ptr<CommandLine> m_commandLine;
   std::unique_ptr<InputManager> m_inputManager;
-  std::unique_ptr<Scene> m_scene;
+  std::unique_ptr<DrawList> m_scene;
   IllumoContext m_context{};
   bool m_initialized{ false };
   bool m_motionBlurPipelineConfigured{ false };

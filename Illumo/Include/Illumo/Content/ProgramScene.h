@@ -2,7 +2,7 @@
 
 #include <Illumo/Content/SceneInstance.h>
 #include <Illumo/Engine/IllumoContext.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <memory>
 #include <string>
@@ -39,7 +39,7 @@ public:
   // else is kept. Commands registered with command() are withdrawn after.
   virtual void leave() {}
   virtual void update(double elapsed) = 0;
-  virtual void dispatch(Scene& frame) = 0;
+  virtual void dispatch(DrawList& frame) = 0;
   // Once, when the program releases the scene or stops. Only a started
   // scene is stopped.
   virtual void stop() = 0;
@@ -67,7 +67,7 @@ protected:
                const std::string& description = "",
                const std::vector<std::string>& completions = {});
   // Updates the content and adds its drawable (and sky) to the world layer.
-  void dispatchContent(Scene& frame);
+  void dispatchContent(DrawList& frame);
 
 private:
   friend class SceneDirector;

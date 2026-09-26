@@ -2,7 +2,7 @@
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/RecordedCommandList.h>
 #include <Illumo/Rendering/RenderWorld.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <algorithm>
@@ -41,7 +41,7 @@ struct WorldFixture
 {
   HeadlessRenderFixture render{ 640, 480 };
   RenderWorld world;
-  Scene scene{ &render.window, &render.camera };
+  DrawList scene{ &render.window, &render.camera };
   MeshHandle mesh{};
 
   WorldFixture()

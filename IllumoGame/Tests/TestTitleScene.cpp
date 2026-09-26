@@ -36,7 +36,7 @@ struct MainMenuFixture
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
-  Scene scene;
+  DrawList scene;
   IllumoContext context;
   // The program's director: choosing a canvas adds it through CSimScenes.
   SceneDirector director;
@@ -96,7 +96,7 @@ struct MainMenuFixture
 
 // The title screen's layers: its first UI drawables, back to front.
 static std::vector<GameVisual*>
-menuLayers(Scene& scene)
+menuLayers(DrawList& scene)
 {
   std::vector<GameVisual*> layers;
   for (DrawableBase* drawable : scene.drawablesIn(RenderLayerId::UI)) {
@@ -110,7 +110,7 @@ menuLayers(Scene& scene)
 
 // Every text of the title screen's layers, in draw order.
 static std::vector<const TextPrimitive*>
-menuTexts(Scene& scene)
+menuTexts(DrawList& scene)
 {
   std::vector<const TextPrimitive*> texts;
   for (const GameVisual* visual : menuLayers(scene)) {

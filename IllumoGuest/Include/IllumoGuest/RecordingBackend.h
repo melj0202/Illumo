@@ -49,7 +49,8 @@ public:
   void SubmitCommandQueue() override;
   void PushToCommandQueue(RenderCommand command) override;
   void ClearCommandQueue() override;
-  // Scene World maps to GuestLayer::World; UI and Debug map to Ui.
+  // The draw list's World layer maps to GuestLayer::World; UI and Debug map
+  // to Ui.
   void BeginLayer(RenderLayerId layer) override;
   std::size_t rejectedCommandCount() const override;
   std::size_t commandHighWaterMark() const override;

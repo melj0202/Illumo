@@ -2,7 +2,7 @@
 
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
@@ -391,7 +391,7 @@ visualOperations()
            "A texture and a font atlas are created");
 
   const std::function<std::vector<CommandType>()> render = [&]() {
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     bridge.dispatch(scene);
     mock.resetCounters();
     renderer.BeginFrame();

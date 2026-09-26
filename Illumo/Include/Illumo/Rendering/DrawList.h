@@ -9,22 +9,23 @@
 
 class IRenderWindow;
 
-// FrameRenderList (kept as type name Scene for source stability).
+// The frame's draw list (named Scene until D-E31, when "scene" came to mean a
+// program's ProgramScene).
 //
 // Role: ordered, non-owning layered list of drawables rebuilt every frame by
 // the program and the debug overlay as they dispatch (World → UI → Debug). Each
 // layer can define an ordered sequence of RenderPass descriptors (defaults to
 // a single DrawPass to the main backbuffer if unspecified).
-class Scene
+class DrawList
 {
 public:
-  Scene(IRenderWindow* window = nullptr, Camera* camera = nullptr)
+  DrawList(IRenderWindow* window = nullptr, Camera* camera = nullptr)
     : window(window)
     , activeCamera(camera)
   {
   }
 
-  ~Scene() = default;
+  ~DrawList() = default;
 
   void AddDrawable(DrawableBase* drawable,
                    RenderLayerId layer = RenderLayerId::World)

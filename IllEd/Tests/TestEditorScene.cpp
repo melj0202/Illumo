@@ -121,7 +121,7 @@ struct EditorFixture
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
-  Scene scene;
+  DrawList scene;
   IllumoContext context;
   // The editor runs as its program runs it, through a director.
   SceneDirector director;
@@ -687,7 +687,7 @@ testFontSizeConfiguredFromEnvVars()
   CommandRegistry registry;
   CommandLine console(&env, &registry, &window, &renderer, "IllEd");
   InputManager input(nullptr);
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   IllumoContext context{ &scene,  &window, &console, &input,   &renderer,
                          &assets, &env,    &camera,  &registry };
   SceneDirector director(context);
@@ -733,7 +733,7 @@ testFontSizeImmediateRuntimeChange()
   CommandRegistry registry;
   CommandLine console(&env, &registry, &window, &renderer, "IllEd");
   InputManager input(nullptr);
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   IllumoContext context{ &scene,  &window, &console, &input,   &renderer,
                          &assets, &env,    &camera,  &registry };
   SceneDirector director(context);

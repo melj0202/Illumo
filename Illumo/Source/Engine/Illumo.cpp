@@ -8,7 +8,7 @@
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/RenderPass.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -186,7 +186,7 @@ Illumo::initialize()
     m_inputManager =
       std::make_unique<InputManager>(m_window->getWindowInstance());
     Logger::LogTrace("Input manager ready");
-    m_scene = std::make_unique<Scene>(m_window.get(), m_camera.get());
+    m_scene = std::make_unique<DrawList>(m_window.get(), m_camera.get());
     m_motionBlurPipelineConfigured = false;
     GLString::setRenderWindow(m_window.get());
 
@@ -412,7 +412,7 @@ Illumo::configureScenePipeline()
   }
 }
 
-Scene*
+DrawList*
 Illumo::beginRender()
 {
   if (!m_initialized) {

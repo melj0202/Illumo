@@ -8,7 +8,7 @@
 #include <string>
 
 class InputManager;
-class Scene;
+class DrawList;
 
 // Startup-only canvas choices; deliberately independent of display preferences.
 struct NewSimulationConfiguration
@@ -43,7 +43,7 @@ public:
   // The rows' boxes, labels and values and the footer.
   GameVisual& getVisual() { return layers[kContentLayer]; }
   // Adds every layer, back to front.
-  void addDrawables(Scene& scene);
+  void addDrawables(DrawList& scene);
 
 private:
   static constexpr int kRowCount = 8;

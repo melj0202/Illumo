@@ -175,7 +175,7 @@ RuntimeShell::frame(double dt)
   }
   {
     ZoneScopedN("Frame.Render");
-    Scene* scene = m_illumo.beginRender();
+    DrawList* scene = m_illumo.beginRender();
     if (scene != nullptr) {
       dispatchProgram(*scene);
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
@@ -335,7 +335,7 @@ RuntimeShell::updateProgram(double dt)
 }
 
 void
-RuntimeShell::dispatchProgram(Scene& scene)
+RuntimeShell::dispatchProgram(DrawList& scene)
 {
   // Bench and capture never run together, so the bench may own the hook.
   if (m_options.bench.frames != 0 && !m_benchDone && ic->renderer != nullptr) {
