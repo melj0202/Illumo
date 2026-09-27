@@ -1,9 +1,45 @@
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Diagnostics.h>
 #include <stdexcept>
+#include <string>
 
 static GuestServiceQueue* diagnosticQueue = nullptr;
 static std::uint64_t dropped = 0;
+// Encoded Log payloads the full queue refused, oldest first, and the lines
+// overflow pushed out since the last dropped-count report.
+static std::deque<std::vector<std::byte>> backlog;
+static std::uint64_t unreported = 0;
+
+static std::vector<std::byte>
+encodeLine(std::uint32_t level, const std::string& text)
+{
+  GuestWireWriter payload;
+  payload.u32(level);
+  payload.text(text);
+  return payload.take();
+}
+static void
+flushBacklog()
+{
+  if (!diagnosticQueue) {
+    return;
+  }
+  // The report goes first: the lost lines were older than any still waiting.
+  if (unreported != 0) {
+    std::vector<std::byte> report =
+      encodeLine(2,
+                 "Guest log dropped " + std::to_string(unreported) +
+                   " line(s) while the service queue was full");
+    if (diagnosticQueue->tryEnqueue(GuestService::Log, report) == 0) {
+      return;
+    }
+    unreported = 0;
+  }
+  while (!backlog.empty() &&
+         diagnosticQueue->tryEnqueue(GuestService::Log, backlog.front()) != 0) {
+    backlog.pop_front();
+  }
+}
 GuestDiagnostics::GuestDiagnostics(GuestServiceQueue& queue)
 {
   if (diagnosticQueue != nullptr) {
@@ -14,11 +50,19 @@ GuestDiagnostics::GuestDiagnostics(GuestServiceQueue& queue)
 GuestDiagnostics::~GuestDiagnostics()
 {
   diagnosticQueue = nullptr;
+  dropped += backlog.size();
+  backlog.clear();
+  unreported = 0;
 }
 std::uint64_t
 GuestDiagnostics::droppedMessages()
 {
   return dropped;
+}
+void
+GuestDiagnostics::pump()
+{
+  flushBacklog();
 }
 static void
 logMessage(std::uint32_t level, const char* text)
@@ -31,12 +75,19 @@ logMessage(std::uint32_t level, const char* text)
   while (length < 4096 && text[length] != '\0') {
     ++length;
   }
-  GuestWireWriter payload;
-  payload.u32(level);
-  payload.text(std::string(text, length));
-  if (diagnosticQueue->enqueue(GuestService::Log, payload.take()) == 0) {
-    ++dropped;
+  std::vector<std::byte> line = encodeLine(level, std::string(text, length));
+  // Waiting lines go first so the host sees them in order.
+  flushBacklog();
+  if (backlog.empty() && unreported == 0 &&
+      diagnosticQueue->tryEnqueue(GuestService::Log, line) != 0) {
+    return;
   }
+  if (backlog.size() >= GuestDiagnostics::MaximumBacklog) {
+    backlog.pop_front();
+    ++dropped;
+    ++unreported;
+  }
+  backlog.push_back(std::move(line));
 }
 void
 Logger::LogError(const char* text)

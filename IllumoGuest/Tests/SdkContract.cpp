@@ -1,9 +1,11 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Application.h>
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Console.h>
+#include <IllumoGuest/Diagnostics.h>
 #include <IllumoGuest/Dialog.h>
 #include <IllumoGuest/FontProvider.h>
 #include <IllumoGuest/InputProvider.h>
@@ -675,7 +677,8 @@ sceneWorldsContract()
   backend.Shutdown();
 }
 
-// Frame schema v7: GameVisuals travel as host visuals placed by a// composition. Only changes travel, a dropped frame's changes are sent again,
+// Frame schema v7: GameVisuals travel as host visuals placed by a
+// composition. Only changes travel, a dropped frame's changes are sent again,
 // and visuals that cannot travel record their own batches in painter order.
 static void
 visualProxyContract()
@@ -894,6 +897,76 @@ skyboxContract()
   backend.Shutdown();
 }
 
+// Log lines the full service queue refuses (a scene change saturates it) wait
+// in a bounded backlog and reach the host in order once requests free up.
+// Overflow drops the oldest, and a warning reporting how many were lost goes
+// ahead of the lines that remain.
+static void
+diagnosticsBackpressureContract()
+{
+  GuestServiceQueue queue;
+  GuestDiagnostics diagnostics(queue);
+  const auto fill = [&]() {
+    while (queue.enqueue(GuestService::Log, {}) != 0) {
+    }
+  };
+  // Delivers queued requests, completes each and decodes the Log lines as
+  // "<level>:<text>"; fillers have no payload.
+  std::vector<std::string> lines;
+  const auto drain = [&]() {
+    lines.clear();
+    GuestServices pending = exchange(queue);
+    for (GuestServiceRecord& record : pending.records) {
+      if (!record.payload.empty()) {
+        GuestWireReader reader(record.payload);
+        const std::uint32_t level = reader.u32();
+        lines.push_back(std::to_string(level) + ":" + reader.text(4096));
+      }
+      record.payload.clear();
+      record.status = GuestServiceStatus::Complete;
+    }
+    exchange(queue, pending);
+  };
+
+  fill();
+  Logger::LogInfo("first");
+  Logger::LogWarning("second");
+  diagnostics.pump();
+  drain();
+  require(lines.empty(), "Lines the full queue refuses wait");
+  diagnostics.pump();
+  drain();
+  require(lines.size() == 2 && lines[0] == "3:first" && lines[1] == "2:second",
+          "Waiting lines are sent in order once requests free up");
+
+  const std::uint64_t dropped = GuestDiagnostics::droppedMessages();
+  const std::size_t logged = GuestDiagnostics::MaximumBacklog + 3;
+  fill();
+  for (std::size_t index = 0; index < logged; ++index) {
+    Logger::LogInfo("line " + std::to_string(index));
+  }
+  drain();
+  require(lines.empty() && GuestDiagnostics::droppedMessages() - dropped == 3,
+          "A full backlog drops its oldest lines and counts them");
+  std::vector<std::string> received;
+  for (int batch = 0; batch < 4; ++batch) {
+    diagnostics.pump();
+    drain();
+    received.insert(received.end(), lines.begin(), lines.end());
+  }
+  require(received.size() == GuestDiagnostics::MaximumBacklog + 1 &&
+            received[0].starts_with("2:Guest log dropped 3 line(s)"),
+          "The dropped count is reported as a warning ahead of the backlog");
+  for (std::size_t index = 1; index < received.size(); ++index) {
+    require(received[index] == "3:line " + std::to_string(index + 2),
+            "The surviving backlog keeps its order");
+  }
+  Logger::LogInfo("direct");
+  drain();
+  require(lines.size() == 1 && lines[0] == "3:direct",
+          "With room and no backlog a line is sent at once");
+}
+
 class SdkContract final : public GuestApplication
 {
 public:
@@ -922,7 +995,15 @@ public:
     skyboxContract();
     return true;
   }
-  void update(const GuestInput&) override {}
+  void update(const GuestInput&) override
+  {
+    // start() already spends most of one call's fuel; later contracts run
+    // in the first update, which has its own.
+    if (!m_updated) {
+      m_updated = true;
+      diagnosticsBackpressureContract();
+    }
+  }
   bool close() override { return true; }
   void shutdown() override {}
   GuestFrame frame() override
@@ -934,6 +1015,9 @@ public:
     frame.batches.push_back(std::move(batch));
     return frame;
   }
+
+private:
+  bool m_updated = false;
 };
 std::unique_ptr<GuestApplication>
 CreateGuestApplication()

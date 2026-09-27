@@ -49,6 +49,7 @@ public:
   void update(const GuestInput& input) override
   {
     window.accept(input);
+    diagnostics.pump();
     fonts.pump();
     ++tick;
   }

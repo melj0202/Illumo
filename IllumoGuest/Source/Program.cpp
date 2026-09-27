@@ -78,7 +78,7 @@ GuestCommandLine::forward(const historyBuffer& item)
 }
 
 GuestProgram::GuestProgram(std::string applicationName,
-                                               std::string settingsPath)
+                           std::string settingsPath)
   : m_applicationName(std::move(applicationName))
   , m_diagnostics(services())
   , m_files(services())
@@ -257,6 +257,9 @@ GuestProgram::update(const GuestInput& input)
   m_settings.setVar("WinY", static_cast<int>(input.height));
   GuestInputProvider::accept(m_input, input);
   m_commandLine.isOpen = input.consoleOpen;
+  // First: log lines refused under backpressure take the requests the
+  // services exchange just freed, ahead of this update's work.
+  m_diagnostics.pump();
   m_files.pump();
   m_settings.pump();
   m_fonts.pump();
@@ -303,7 +306,8 @@ GuestProgram::update(const GuestInput& input)
   m_camera.Update(static_cast<float>(input.elapsed));
   updateProgram(input.elapsed);
   m_scenes->update(input.elapsed);
-  updateOverlay(input.elapsed);  // Key and character queues are per-frame events, as in the native loop.
+  updateOverlay(input.elapsed);
+  // Key and character queues are per-frame events, as in the native loop.
   m_input.clearKeyQueue();
   m_input.clearCharQueue();
   synchronizeCommands();
@@ -360,8 +364,8 @@ GuestProgram::recordFrame(GuestFrame& output)
     // leaves them queued for the next one. Its visual changes are confirmed.
     if (m_worlds) {
       m_worlds->takeOperations(output.worldOperations,
-                                    GuestFrameLimits{}.worldOperations -
-                                      output.visualOperations.size());
+                               GuestFrameLimits{}.worldOperations -
+                                 output.visualOperations.size());
     }
     m_backend.commitVisuals();
     if (!m_lastFrameError.empty()) {
