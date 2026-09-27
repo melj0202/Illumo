@@ -134,7 +134,8 @@ public:
   bool AppendVisual(GameVisual& visual) override;
   void ForgetVisual(const GameVisual& visual) override;
   // The last taken frame was delivered, or dropped: confirms or discards
-  // its visual changes.
+  // its visual changes. A dropped frame reaches the host empty, so the next
+  // frame resends its compositions and the textures it wrote.
   void commitVisuals();
   void dropVisuals();
   std::size_t visualCount() const { return m_visuals.proxyCount(); }
@@ -179,11 +180,17 @@ private:
     std::vector<std::byte> pixels;
     TextureInfo pendingInfo;
     std::vector<std::byte> pendingPixels;
+    bool pendingLinear = false;
+    // A replacement the full service queue refused; pump() sends it later.
+    bool unsent = false;
     bool changed = false;
     // Virtual shadow depth target: never acquired from the host.
     bool depthOnly = false;
     // Sampled only by Skybox batches; never written after creation.
     bool cubemap = false;
+    // A replacement is sent or waiting to be: pendingInfo and pendingPixels
+    // describe the texture, and its host copy (if any) is out of date.
+    bool replacing() const { return pending != 0 || unsent; }
   };
   void consume(const RenderCommand& command);
   void draw(std::uint32_t first, std::uint32_t count);
@@ -194,6 +201,8 @@ private:
                             std::uint32_t first,
                             std::uint32_t count);
   void release(GuestResourceId id);
+  // Sends a texture's unsent replacement if the service queue has room.
+  void sendReplacement(Texture& texture);
   // Drops a mesh's host copy (after replacement, update or destruction).
   void forgetRetained(Mesh& mesh);
   // A dynamic mesh changed after it was drawn by reference this frame.
@@ -237,6 +246,8 @@ private:
   // Dynamic meshes drawn by reference in the current frame.
   std::vector<std::uint32_t> m_drawnDynamic;
   std::map<std::uint32_t, Texture> m_textures;
+  // Textures with writes in the current frame, rewritten whole if it drops.
+  std::vector<std::uint32_t> m_writtenTextures;
   std::vector<std::uint64_t> m_abandoned;
   std::vector<std::uint64_t> m_releases;
   std::vector<GuestResourceId> m_retirements;

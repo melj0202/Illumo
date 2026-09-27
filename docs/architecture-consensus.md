@@ -1743,13 +1743,19 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
     `IBackend::AppendVisual`. The guest recorder's `GuestVisualProxies`
     sends only item and property changes against what the host confirmed,
     and confirms them only for delivered frames. The recorder places each
-    visual among its batches in the target's composition.
-  - **Log backpressure:** the guest service queue holds 32 outstanding
+    visual among its batches in the target's composition. A dropped frame
+    reaches the host empty, so the frame after it sends every composition
+    whole (never `same`) and rewrites the textures the dropped frame wrote.
+  - **Texture backpressure:** the guest service queue holds 32 outstanding
     requests, and a scene change releases and creates many resources at
-    once. `GuestDiagnostics` keeps log lines the full queue refuses in a
-    bounded backlog (64 lines) and sends them in order when there is room,
-    pumped first in each `GuestProgram` update. Overflow drops the oldest
-    lines, and a warning reporting how many were lost goes ahead of the rest.
+    once. A texture creation or replacement the full queue refuses is still
+    accepted: the texture takes its new size at once, writes land in its
+    retained pixels, and the recorder sends the request when there is room.
+  - **Log backpressure:** under the same pressure `GuestDiagnostics` keeps
+    log lines the full queue refuses in a bounded backlog (64 lines) and
+    sends them in order when there is room, pumped first in each
+    `GuestProgram` update. Overflow drops the oldest lines, and a warning
+    reporting how many were lost goes ahead of the rest.
   - **Fallback:** visuals that can't travel still record batches. That
     covers custom styles, textures or fonts not on the host yet, world
     space off the frame camera, and a spent per-frame budget. So do visuals

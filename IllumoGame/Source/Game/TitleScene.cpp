@@ -701,11 +701,15 @@ TitleScene::applyConfiguration(const SimulatorConfiguration& configuration)
   }
   const bool fullscreenChanged =
     configuration.fullscreen != ic->envVars->getVar("fullscreen").valueAsBool;
-  SimulatorSettings::write(ic->envVars, configuration);
-  applyAmbientCellLook(ic->envVars, m_bgContext.get());
+  // toggleFullscreen() flips whatever fullscreen state envVars currently
+  // holds, so it must run before SimulatorSettings::write below overwrites
+  // that entry with the newly configured value; otherwise the toggle flips
+  // the new value straight back to the old one.
   if (fullscreenChanged && ic->window != nullptr) {
     ic->window->toggleFullscreen();
   }
+  SimulatorSettings::write(ic->envVars, configuration);
+  applyAmbientCellLook(ic->envVars, m_bgContext.get());
   ic->envVars->save();
   return true;
 }
