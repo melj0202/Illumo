@@ -1236,7 +1236,15 @@ drawer, the inspector card, the hamburger button, the edit-hint footer and the
 corner EDIT/NORMAL badge (`ModeBadge`, a glass pill mirroring the hamburger
 button that drops in as a bead, stretches into a pill, holds, then melts
 away; it replaced the simulator's `SplashText` label) use the same chrome; the
-drawer and the hint footer stay opaque.
+drawer and the hint footer stay opaque. Edit mode adds a glass toolbar along
+the top edge (`CanvasActionBar`: Save, Load, Paste, Clear, and while cells are
+selected a size chip with Copy, Cut, Fill, Erase and Deselect that pours out
+of it on a spring) and the selection's right-click menu
+(`CanvasContextMenu`, a card that grows from the pointer with a liquid hover
+drop, keycap shortcuts and desktop press-drag-release, keyboard and dismiss
+behaviour); every button and row leads with its action's line icon from
+`CanvasEditIcons` (Fill's is the brush swatch), and both only report an
+action that `CanvasScene` runs (D-UI15).
 `GuiKit` supplies the chrome: `drawRoundedRect` (three rectangles plus packed
 two-wedge corner quads), `drawRoundedGradientRect` and its left-to-right
 twin `drawRoundedSideGradientRect`, `drawRoundedBand` (the

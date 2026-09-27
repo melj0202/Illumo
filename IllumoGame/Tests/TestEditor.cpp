@@ -1,4 +1,6 @@
 #include "Game/BuiltinPatterns.h"
+#include "Game/CanvasCoordinatePolicy.h"
+#include "Game/CanvasEditIcons.h"
 #include "Game/CellClipboard.h"
 #include "Game/CanvasScene.h"
 #include "Game/CellPattern.h"
@@ -14,6 +16,7 @@
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/TextPrimitive.h>
+#include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/DrawList.h>
@@ -1034,6 +1037,291 @@ testEditChromeModeTransition()
            "the hint bar and bubble settle exactly into place");
 }
 
+static void
+setMouse(EditorFixture& fixture, double x, double y)
+{
+  fixture.window.mouseX = x;
+  fixture.window.mouseY = y;
+}
+
+static void
+setButton(EditorFixture& fixture, KeyCode button, bool down)
+{
+  InputManagerTestAccess::setAction(
+    fixture.input, button, down ? InputAction::Press : InputAction::Release);
+}
+
+// Moves to a window point, then presses and releases the left button there,
+// one frame each.
+static void
+clickAt(EditorFixture& fixture, float x, float y)
+{
+  setMouse(fixture, x, y);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+}
+
+static bool
+cellAt(EditorFixture& fixture, double x, double y, CellAddress* cell)
+{
+  const glm::dvec2 world = fixture.camera.ScreenToWorldPrecise({ x, y });
+  return CanvasCoordinatePolicy::tryWorldToCell(world.x, &cell->x) &&
+         CanvasCoordinatePolicy::tryWorldToCell(world.y, &cell->y);
+}
+
+static void
+testActionBar()
+{
+  testSection("Editor: the toolbar edits the selection and clears the canvas");
+  EditorFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  // Preferences persist between runs; start from the default.
+  fixture.env.setVar("confirmClear", true);
+  CellContext* context = CanvasSceneTestAccess::getCellContext(fixture.module);
+  SparseCellGrid* grid = context->getGrid();
+  CanvasView* canvas = context->getCanvasView();
+  CellClipboard& clipboard =
+    CanvasSceneTestAccess::getClipboard(fixture.module);
+  CanvasActionBar& bar = CanvasSceneTestAccess::getActionBar(fixture.module);
+  grid->clear();
+  setMouse(fixture, 320.0, 300.0);
+  fixture.module.update(0.0);
+  float x = 0.0f;
+  float y = 0.0f;
+  testTrue(
+    g,
+    bar.isVisible() &&
+      bar.buttonCenter(CanvasEditAction::Paste, nullptr, nullptr) &&
+      bar.buttonCenter(CanvasEditAction::ClearCanvas, nullptr, nullptr) &&
+      bar.buttonCenter(CanvasEditAction::Save, nullptr, nullptr) &&
+      bar.buttonCenter(CanvasEditAction::Load, nullptr, nullptr),
+    "Edit mode shows the toolbar with Save, Load, Paste and Clear");
+  testTrue(g,
+           !bar.buttonCenter(CanvasEditAction::Erase, nullptr, nullptr),
+           "selection buttons wait for a selection");
+
+  canvas->setCanvasPixel(0, 0, 0);
+  canvas->setCanvasPixel(1, 1, 0);
+  clipboard.setSelection(0, 0, 1, 1);
+  fixture.module.update(0.0);
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::Erase, &x, &y) && y < 60.0f,
+           "a selection adds its buttons to the top bar");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           grid->getStoredCellCount() == 0u && clipboard.hasSelection(),
+           "Erase empties the selection, keeps it, and paints nothing");
+
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::Fill, &x, &y),
+           "Fill is offered with a selection");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           grid->getStoredCellCount() == 4u && grid->getCell({ 1, 0 }) == 0,
+           "Fill paints the selection with the brush");
+
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::Deselect, &x, &y),
+           "Deselect is offered with a selection");
+  clickAt(fixture, x, y);
+  testTrue(g, !clipboard.hasSelection(), "Deselect drops the selection");
+  testTrue(g,
+           !bar.buttonCenter(CanvasEditAction::Copy, nullptr, nullptr),
+           "the selection buttons fold away with it");
+
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::ClearCanvas, &x, &y),
+           "Clear stays available");
+  clickAt(fixture, x, y);
+  ExitConfirmDialog* dialog =
+    CanvasSceneTestAccess::getExitConfirmDialog(fixture.module);
+  testTrue(g,
+           dialog != nullptr && dialog->isOpen() &&
+             grid->getStoredCellCount() == 4u,
+           "Clear asks before emptying the canvas");
+  testTrue(g, !bar.isVisible(), "the confirmation hides the toolbar");
+  dialog->close();
+  fixture.module.update(0.0);
+  fixture.env.setVar("confirmClear", false);
+  fixture.module.update(0.0);
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::ClearCanvas, &x, &y),
+           "the toolbar returns after the dialog");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           grid->getStoredCellCount() == 0u,
+           "without Confirm clearing, Clear empties the canvas at once");
+  fixture.env.setVar("confirmClear", true);
+
+  queueAndRun(fixture, "run");
+  fixture.module.update(0.0);
+  testTrue(g, !bar.isVisible(), "Normal mode hides the toolbar");
+}
+
+static void
+testContextMenu()
+{
+  testSection("Editor: right-clicking a selection opens its context menu");
+  EditorFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  CellContext* context = CanvasSceneTestAccess::getCellContext(fixture.module);
+  SparseCellGrid* grid = context->getGrid();
+  CanvasView* canvas = context->getCanvasView();
+  CellClipboard& clipboard =
+    CanvasSceneTestAccess::getClipboard(fixture.module);
+  CanvasContextMenu& menu =
+    CanvasSceneTestAccess::getContextMenu(fixture.module);
+  grid->clear();
+  CellAddress center{};
+  testTrue(g,
+           cellAt(fixture, 320.0, 240.0, &center),
+           "the menu's cell converts to cell coordinates");
+  for (std::int64_t dx = -1; dx <= 1; ++dx) {
+    canvas->setCanvasPixel(center.x + dx, center.y, 0);
+  }
+  clipboard.setSelection(
+    center.x - 1, center.y - 1, center.x + 1, center.y + 1);
+  setMouse(fixture, 320.0, 240.0);
+  fixture.module.update(0.0);
+
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  testTrue(g, menu.isOpen(), "right-clicking the selection opens its menu");
+  testTrue(g,
+           grid->getCell(center) == 0 && grid->getStoredCellCount() == 3u,
+           "the right click that opens the menu erases nothing");
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  testTrue(g, menu.isOpen(), "a plain right click leaves the menu open");
+  fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() && clipboard.hasSelection(),
+           "Escape closes the menu and keeps the selection");
+
+  // Click a row.
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  float x = 0.0f;
+  float y = 0.0f;
+  testTrue(g,
+           menu.rowCenter(CanvasEditAction::Erase, &x, &y),
+           "the menu offers Erase");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           !menu.isOpen() && grid->getStoredCellCount() == 0u &&
+             clipboard.hasSelection(),
+           "clicking Erase empties the selection and closes the menu");
+
+  // Hold the right button, move onto a row and release.
+  setMouse(fixture, 320.0, 240.0);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  testTrue(
+    g, menu.rowCenter(CanvasEditAction::Fill, &x, &y), "the menu offers Fill");
+  setMouse(fixture, x, y);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() && grid->getStoredCellCount() == 9u &&
+             grid->getCell(center) == 0,
+           "press, drag and release chooses Fill");
+
+  // A press elsewhere only dismisses the menu.
+  setMouse(fixture, 320.0, 240.0);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  CellAddress outside{};
+  testTrue(g,
+           menu.isOpen() && cellAt(fixture, 100.0, 380.0, &outside),
+           "the menu is open over a free cell");
+  setMouse(fixture, 100.0, 380.0);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() &&
+             grid->getCell(outside) == SparseCellGrid::BackgroundState &&
+             clipboard.hasSelection(),
+           "the press that dismisses the menu does not paint");
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.update(0.0);
+  testTrue(g, grid->getCell(outside) == 0, "the next press paints as before");
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+
+  // The keyboard walks the rows: Up wraps to Deselect.
+  clipboard.setSelection(
+    center.x - 1, center.y - 1, center.x + 1, center.y + 1);
+  setMouse(fixture, 320.0, 240.0);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  fixture.input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() && !clipboard.hasSelection(),
+           "Up then Enter chooses Deselect");
+
+  // Outside a selection the right button still erases.
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() &&
+             grid->getCell(center) == SparseCellGrid::BackgroundState,
+           "right-dragging without a selection erases");
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+}
+
+static void
+testEditIcons()
+{
+  testSection("Editor: every toolbar and menu action has an icon");
+  const CanvasEditAction actions[] = {
+    CanvasEditAction::Copy,        CanvasEditAction::Cut,
+    CanvasEditAction::Paste,       CanvasEditAction::Fill,
+    CanvasEditAction::Erase,       CanvasEditAction::Deselect,
+    CanvasEditAction::ClearCanvas, CanvasEditAction::Save,
+    CanvasEditAction::Load,
+  };
+  for (const CanvasEditAction action : actions) {
+    GameVisual visual(512u);
+    CanvasEditIcons::draw(visual,
+                          action,
+                          20.0f,
+                          20.0f,
+                          12.0f,
+                          UiTheme::textPrimary(),
+                          ColorRgba{ 0, 0, 0, 255 });
+    testTrue(g, visual.shapeCount() > 0u, "the action draws an icon");
+  }
+  GameVisual hidden(64u);
+  CanvasEditIcons::draw(hidden,
+                        CanvasEditAction::Copy,
+                        20.0f,
+                        20.0f,
+                        12.0f,
+                        UiTheme::transparentOf(UiTheme::textPrimary()),
+                        ColorRgba{ 0, 0, 0, 255 });
+  testTrue(g, hidden.shapeCount() == 0u, "a transparent icon draws nothing");
+}
+
 static int
 runEditorCase(void (*testFunction)())
 {
@@ -1052,6 +1340,12 @@ registerEditorTests(IllumoTestRegistry& registry)
                []() { return runEditorCase(testSelectionLifecycle); });
   registry.add("IllumoGame.Editor.EditHints",
                []() { return runEditorCase(testEditHints); });
+  registry.add("IllumoGame.Editor.ActionBar",
+               []() { return runEditorCase(testActionBar); });
+  registry.add("IllumoGame.Editor.ContextMenu",
+               []() { return runEditorCase(testContextMenu); });
+  registry.add("IllumoGame.Editor.EditIcons",
+               []() { return runEditorCase(testEditIcons); });
   registry.add("IllumoGame.Editor.ModeChromeTransition",
                []() { return runEditorCase(testEditChromeModeTransition); });
   registry.add("IllumoGame.Editor.CopyPasteIdentity",

@@ -1,4 +1,6 @@
 #pragma once
+#include "CanvasActionBar.h"
+#include "CanvasContextMenu.h"
 #include "CellClipboard.h"
 #include "CellContext.h"
 #include "CellPattern.h"
@@ -75,6 +77,9 @@ private:
   // console. Returns false only for failures known before returning.
   bool saveCellGameTo(std::string location, bool announce);
   bool loadCellGameFrom(std::vector<std::string> candidates, bool announce);
+  // The platform save/load pickers (save_dialog, load_dialog, the toolbar).
+  void openSaveDialog();
+  void openLoadDialog();
   bool applyLoadedDocument(IllumoDocument& document);
   void importRuleCatalog(const std::string& location);
   void exportRuleCatalog(const std::string& location);
@@ -121,7 +126,19 @@ private:
   bool copySelection();
   bool cutSelection();
   bool pasteAtCursor();
+  // Pastes the OS clipboard's pattern with its top-left at the cell.
+  bool pasteAt(std::int64_t originX, std::int64_t originY);
   bool stampNamed(const std::string& name);
+  // Runs the edit toolbar and the selection's context menu for one frame and
+  // performs what they chose.
+  void updateEditTools(double dt);
+  void openContextMenu(std::int64_t cellX, std::int64_t cellY);
+  void runEditAction(CanvasEditAction action, bool fromContextMenu);
+  bool isPointerOverEditTools() const;
+  bool isCellInSelection(std::int64_t cellX, std::int64_t cellY) const;
+  bool pointerCell(std::int64_t* cellX, std::int64_t* cellY) const;
+  std::string paintBrushName() const;
+  ColorRgba paintBrushColor() const;
   bool importPatternText(const std::string& text,
                          PatternFormat format = PatternFormat::Auto);
   void handleEditorHotkeys();
@@ -303,6 +320,18 @@ private:
   std::int64_t lastPaintY = 0;
   GameVisual selectionVisual;
   GameVisual inspectorVisual;
+  // EDIT mode's top toolbar and the selection's right-click menu.
+  CanvasActionBar m_actionBar;
+  CanvasContextMenu m_contextMenu;
+  // The cell the context menu was opened on; its Paste lands there.
+  std::int64_t m_contextMenuCellX = 0;
+  std::int64_t m_contextMenuCellY = 0;
+  // A press that began on the toolbar or menu, or that dismissed the menu,
+  // keeps the canvas from painting until every mouse button is released.
+  bool m_editToolsCapturing = false;
+  bool m_rightMouseWasDown = false;
+  // The right button went down this frame (sampled by updateEditTools).
+  bool m_rightPressEdge = false;
   CellClipboard clipboard;
   std::int64_t hoverX;
   std::int64_t hoverY;

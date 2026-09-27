@@ -55,6 +55,16 @@ public:
     return module.selectionVisual;
   }
 
+  static CanvasActionBar& getActionBar(CanvasScene& module)
+  {
+    return module.m_actionBar;
+  }
+
+  static CanvasContextMenu& getContextMenu(CanvasScene& module)
+  {
+    return module.m_contextMenu;
+  }
+
   static GameVisual& getEditHintsVisual(CanvasScene& module)
   {
     return module.editHintsVisual;

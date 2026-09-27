@@ -257,7 +257,12 @@ Both the pause-menu action and the console menu command use this path.
 EDIT mode supports Shift+drag marquee selection, Ctrl+C/X/V copy/cut/paste,
 Delete fill, R/F buffer rotate/flip, and console commands
 \texttt{select}/\texttt{copy}/\texttt{cut}/\texttt{paste}/\texttt{stamp}/
-\texttt{rle}/\texttt{plaintext}. Patterns are a side path (D-G1). Optional
+\texttt{rle}/\texttt{plaintext}. A glass toolbar
+(\texttt{CanvasActionBar}) along the top edge offers Save, Load, Paste and
+Clear, and while cells are selected their size with Copy, Cut, Fill (with the
+brush), Erase and Deselect. A right press inside the selection opens its
+context menu (\texttt{CanvasContextMenu}) instead of erasing (D-UI15).
+Patterns are a side path (D-G1). Optional
 \texttt{inspect} HUD reports generation count, hover cell, and census.
 The bottom input legend is enabled by default and can be disabled through
 the persisted \texttt{editHints} setting (Edit control hints in F1 settings).
