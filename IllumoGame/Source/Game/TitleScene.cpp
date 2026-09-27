@@ -6,8 +6,8 @@
 #include "CSimSounds.h"
 #include "CSimTypeface.h"
 #include "CanvasCoordinatePolicy.h"
-#include "CellContext.h"
 #include "CanvasScene.h"
+#include "CellContext.h"
 #include "PatternCodec.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "SimulatorSettings.h"
@@ -127,6 +127,7 @@ TitleScene::start(IllumoContext& startContext)
 
   m_newSimulationMenu =
     std::make_unique<NewSimulationMenu>(ic->window, ic->renderer);
+  m_engineBadge.acquire(ic->assetManager);
   for (GameVisual& layer : m_layers) {
     layer.setSpace(PrimitiveSpace::Pixels);
     layer.setLayerHint(RenderLayerId::UI);
@@ -227,11 +228,11 @@ static const unsigned char kCyanState = 2;
 
 void
 TitleScene::stampPattern(const char* name,
-                             std::int64_t originX,
-                             std::int64_t originY,
-                             bool flipX,
-                             bool flipY,
-                             unsigned char state)
+                         std::int64_t originX,
+                         std::int64_t originY,
+                         bool flipX,
+                         bool flipY,
+                         unsigned char state)
 {
   CellPattern pattern;
   if (!m_bgContext || !m_bgContext->getCanvasView() ||
@@ -992,7 +993,8 @@ drawMenuIcon(GameVisual& visual,
   } else if (item == 4) {
     // Resume: a bar, then a play triangle that nudges ahead with emphasis.
     const float nudge = 2.5f * emphasis;
-    GuiKit::drawRoundedRect(visual, x + 2.0f, y + 1.0f, 4.0f, 22.0f, 2.0f, color);
+    GuiKit::drawRoundedRect(
+      visual, x + 2.0f, y + 1.0f, 4.0f, 22.0f, 2.0f, color);
     visual.addFilledTriangle(x + 9.0f + nudge,
                              y + 1.0f,
                              x + 9.0f + nudge,
@@ -1034,9 +1036,9 @@ TitleScene::drawBackdrop(GameVisual& visual, float width, float height)
 
 void
 TitleScene::drawAurora(GameVisual& visual,
-                           float width,
-                           float height,
-                           float reveal)
+                       float width,
+                       float height,
+                       float reveal)
 {
   const float ambient = m_animator.ambientPhase();
   const float phase = ambient * 0.52359877f;
@@ -1399,8 +1401,8 @@ TitleScene::drawRowCards(GameVisual& visual, const RowGeometry& rows)
 
 void
 TitleScene::drawSelection(GameVisual& visual,
-                              const RowGeometry& rows,
-                              float breathe)
+                          const RowGeometry& rows,
+                          float breathe)
 {
   const ColorRgba cyan = UiTheme::accentCool();
   // The selection is a drop of liquid: its head pours toward the new row and
@@ -1460,8 +1462,8 @@ TitleScene::drawSelection(GameVisual& visual,
 
 void
 TitleScene::drawRowContent(GameVisual& visual,
-                               const RowGeometry& rows,
-                               float room)
+                           const RowGeometry& rows,
+                           float room)
 {
   const ColorRgba cyan = UiTheme::accentCool();
   // By item kind.
@@ -1606,9 +1608,9 @@ TitleScene::drawFooter(GameVisual& visual, unsigned char opacity)
 // outside the glass, so it never competes with the menu.
 void
 TitleScene::drawVersion(GameVisual& visual,
-                            float width,
-                            float height,
-                            unsigned char opacity)
+                        float width,
+                        float height,
+                        unsigned char opacity)
 {
   const std::string& version = CSimPlatform::current().packageVersion();
   if (version.empty()) {
@@ -1623,6 +1625,21 @@ TitleScene::drawVersion(GameVisual& visual,
                  height - margin - size,
                  size,
                  UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+}
+
+// Illumo's "Powered by" badge balances the version in the lower left corner,
+// a little quieter than the menu.
+void
+TitleScene::drawEngineBadge(GameVisual& visual,
+                            float height,
+                            unsigned char opacity)
+{
+  const float margin = 14.0f;
+  m_engineBadge.draw(visual,
+                     margin,
+                     height - margin,
+                     24.0f,
+                     static_cast<unsigned char>(opacity * 0.85f));
 }
 
 template<typename Draw>
@@ -1724,6 +1741,7 @@ TitleScene::rebuildVisual()
   drawLayer(kFooterLayer, true, [&](GameVisual& visual) {
     drawFooter(visual, opacity);
     drawVersion(visual, width, height, opacity);
+    drawEngineBadge(visual, height, opacity);
   });
   for (GameVisual& layer : m_layers) {
     GuiPanelLayout::scaleFromScreenOrigin(layer, m_visualScale);
@@ -1799,4 +1817,5 @@ TitleScene::stop()
   m_configurationMenu.reset();
   m_restartDialog.reset();
   m_bgContext.reset();
+  m_engineBadge.release();
 }

@@ -148,6 +148,7 @@ add_library(Illumo STATIC
   Source/Engine/Application.cpp
   Source/Gui/GridAtlas.cpp
   Source/Gui/GuiDialog.cpp
+  Source/Gui/GuiEngineBrand.cpp
   Source/Gui/GuiKit.cpp
   Source/Gui/GuiMenuShell.cpp
   Source/Gui/GuiFileTree.cpp
@@ -310,6 +311,7 @@ if(BUILD_TESTING)
     Tests/TestGuiFileTree.cpp
     Tests/TestGuiPanelDock.cpp
     Tests/TestGuiTextEdit.cpp
+    Tests/TestGuiEngineBrand.cpp
     Tests/TestFont.cpp
     Tests/TestFrameCapture.cpp
     Tests/Content/TestIlscCodec.cpp

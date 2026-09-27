@@ -7,8 +7,10 @@
 #include <Illumo/Engine/FrameProfiler.h>
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Engine/PresentationTiming.h>
+#include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
@@ -149,6 +151,20 @@ RuntimeShell::start()
     m_overlay.reset();
   }
 #endif
+  if (!m_options.splashImage.empty()) {
+    m_splash = std::make_unique<GuiEngineSplash>();
+    const bool reducedMotion =
+      ic->envVars != nullptr &&
+      ic->envVars->getVar("reducedUiMotion").valueAsBool;
+    if (!m_splash->begin(ic->window,
+                         ic->renderer,
+                         ic->assetManager,
+                         m_options.splashImage.string(),
+                         ic->inputManager,
+                         reducedMotion)) {
+      m_splash.reset();
+    }
+  }
   return true;
 }
 
@@ -170,14 +186,22 @@ RuntimeShell::frame(double dt)
     }
 #endif
     profiler.mark(FramePhase::ProductUpdate);
-    updateProgram(dt);
+    if (m_splash != nullptr) {
+      updateSplash(dt);
+    } else {
+      updateProgram(dt);
+    }
     m_illumo.endUpdate();
   }
   {
     ZoneScopedN("Frame.Render");
     DrawList* scene = m_illumo.beginRender();
     if (scene != nullptr) {
-      dispatchProgram(*scene);
+      if (m_splash != nullptr) {
+        m_splash->addDrawables(*scene);
+      } else {
+        dispatchProgram(*scene);
+      }
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
       if (m_overlay) {
         m_overlay->dispatch(*scene);
@@ -194,8 +218,10 @@ RuntimeShell::closing()
   if (!m_illumo.shouldClose()) {
     return false;
   }
-  // A finished capture or benchmark closes without product dialogs.
-  if (!m_started || m_done || m_benchDone || m_program->closeRequested()) {
+  // A finished capture or benchmark closes without product dialogs, and so
+  // does a close during the splash, before the program has run a frame.
+  if (!m_started || m_done || m_benchDone || m_splash != nullptr ||
+      m_program->closeRequested()) {
     return true;
   }
   m_illumo.deferClose();
@@ -209,6 +235,7 @@ RuntimeShell::stop()
     return;
   }
   m_started = false;
+  m_splash.reset();
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   if (m_overlay) {
     m_overlay->stop();
@@ -267,6 +294,29 @@ RuntimeShell::run(std::chrono::steady_clock::time_point launched)
   }
   stop();
   return exitCode();
+}
+
+// The splash's last frame (faded out, or the one a skip ended) is still
+// drawn; the program takes over on the frame after it.
+void
+RuntimeShell::updateSplash(double dt)
+{
+  if (m_splash->finished()) {
+    endSplash();
+    updateProgram(dt);
+    return;
+  }
+  m_splash->update(dt, ic->commandLine != nullptr && ic->commandLine->isOpen);
+}
+
+void
+RuntimeShell::endSplash()
+{
+  m_splash.reset();
+  // Text typed at the splash is not the program's.
+  if (ic->inputManager != nullptr) {
+    ic->inputManager->clearCharQueue();
+  }
 }
 
 void
@@ -381,9 +431,8 @@ RuntimeShell::dispatchProgram(DrawList& scene)
 bool
 RuntimeShell::scriptFinished() const
 {
-  return m_scriptBegun ||
-         (m_benchScriptLine >= m_options.bench.script.size() &&
-          m_benchWaitFrames == 0);
+  return m_scriptBegun || (m_benchScriptLine >= m_options.bench.script.size() &&
+                           m_benchWaitFrames == 0);
 }
 
 // Runs script lines in order: "@wait n" pauses n frames, "@key Name" presses

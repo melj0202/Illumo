@@ -231,6 +231,19 @@ rows depth first with an explicit stack (directories first, at most 20,000
 rows); \texttt{GuiKit::drawTreeRow} draws each row. Neither is a retained
 widget tree.
 
+\subsection{Engine brand (D-UI14)}
+\texttt{GuiEngineBrand} draws the Illumo brand from images in
+\path{Illumo/Assets/Branding}, which a guest reads as \texttt{/engine/Branding}.
+Guest textures have no mipmaps, so \path{tools/make_brand_assets.py} crops the
+kit's logos and pre-sizes them near the size they are drawn at.
+\texttt{GuiEngineSplash} owns its two layers, its clock and its skip input, and
+\texttt{RuntimeShell} plays it on every interactive launch
+(section~\ref{sec:runtime} describes how it holds the program).
+\texttt{GuiEngineBadge} holds only its image and draws a `Powered by'' label
+over the flat wordmark into the caller's visual; every \texttt{GuestProgram}
+preloads that image, and CSim's title screen draws the badge in its lower left
+corner. A missing image ends the splash at once and leaves the badge undrawn.
+
 \subsection{Plain tool look and detachable panels (D-UI7, D-E27)}
 IllEd and IllMeshViewer draw with \texttt{GuiToolStyle}: a neutral palette in
 the spirit of the console's, flat rectangles, lines and text, fixed tool

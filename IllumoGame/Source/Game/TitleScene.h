@@ -5,6 +5,7 @@
 #include "MenuMotifs.h"
 #include "NewSimulationMenu.h"
 #include <Illumo/Content/ProgramScene.h>
+#include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/FontWeightRamp.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -53,7 +54,10 @@ public:
   int getSelectedItemForTesting() const { return m_selectedItem; }
   int rowCountForTesting() const { return m_rowCount; }
   // The item kind a row shows (kPlayItem, ..., kResumeItem).
-  int rowKindForTesting(int row) const { return m_rows[static_cast<std::size_t>(row)]; }
+  int rowKindForTesting(int row) const
+  {
+    return m_rows[static_cast<std::size_t>(row)];
+  }
   // The title screen's UI drawables (its layers), dispatched first in order.
   static constexpr std::size_t menuLayerCountForTesting()
   {
@@ -195,6 +199,7 @@ private:
                    float width,
                    float height,
                    unsigned char opacity);
+  void drawEngineBadge(GameVisual& visual, float height, unsigned char opacity);
   void selectItem(int item);
   void activateSelectedItem();
   void pressItem(float originX, float originY);
@@ -230,6 +235,9 @@ private:
   GuiSpring m_spotY;
   GuiSpring m_spotStrength;
   CellMotif m_motif;
+  // Illumo's "Powered by" badge; draws nothing when the engine image is
+  // unavailable (native tests have no asset manager).
+  GuiEngineBadge m_engineBadge;
   float m_pressX = 0.0f;
   float m_pressY = 0.0f;
   std::shared_ptr<Font> m_titleFont;
@@ -256,7 +264,11 @@ private:
   std::array<float, 4> m_titleBounds{};
   // The selected row, the rows' item kinds, and how many there are.
   int m_selectedItem;
-  std::array<int, kMaxRows> m_rows{ kPlayItem, kLoadItem, kSettingsItem, kExitItem, kExitItem };
+  std::array<int, kMaxRows> m_rows{ kPlayItem,
+                                    kLoadItem,
+                                    kSettingsItem,
+                                    kExitItem,
+                                    kExitItem };
   int m_rowCount = 4;
   // Left for a canvas and not yet re-entered.
   bool m_suspended = false;

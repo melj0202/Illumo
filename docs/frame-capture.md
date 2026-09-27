@@ -49,7 +49,9 @@ cd build-workspace\Release
   they do for a normal launch. `--app` defaults to `game` and cannot be
   combined with `--package` or `--game`.
 
-The runtime renders normally until the target frame. A `Renderer`
+Capture and benchmark runs skip the engine splash (D-UI14), so frames count
+from the program's first frame. The runtime renders normally until the target
+frame. A `Renderer`
 before-present hook (`Renderer::setBeforePresent`, run after submission and
 before presentation) then reads back the presented backbuffer, writes the PNG
 and requests close. The window presents opaquely whatever alpha translucent UI

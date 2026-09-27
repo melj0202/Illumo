@@ -30,8 +30,14 @@ its window class that icon, so it covers Explorer, the title bar, the taskbar
 and Alt+Tab for every app window, detached panels included. The `.ico` holds
 `favicon/favicon-16x16.png` (the flat art, which stays sharp at 16 px) and
 `icon/png/illumo-icon-{32,48,64,128,256}.png`. After changing those PNGs, run
-`python tools/make_runtime_icon.py` from the repository root.
+`python tools/make_brand_assets.py` from the repository root.
 
+**Engine splash and badge:** `tools/make_brand_assets.py` also writes
+`Illumo/Assets/Branding/illumo-splash.png` (the neon logo) and
+`illumo-badge.png` (the flat wordmark), cropped and pre-sized because guest
+textures have no mipmaps. `IllumoRuntime` plays the splash before every app
+(`GuiEngineSplash`); CSim's title screen draws the "Powered by" badge in its
+lower left corner (`GuiEngineBadge`). See D-UI14.
 **Social preview (manual):** go to the repository's **Settings → General**,
 find **Social preview**, click **Edit**, and upload `github/social-preview.png`.
 

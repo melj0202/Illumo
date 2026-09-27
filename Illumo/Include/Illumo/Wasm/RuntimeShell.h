@@ -12,6 +12,7 @@ class DebugOverlay;
 class Illumo;
 class Renderer;
 class DrawList;
+class GuiEngineSplash;
 class WasmProgram;
 struct IllumoContext;
 
@@ -37,12 +38,17 @@ struct RuntimeShellOptions
   std::filesystem::path capture;
   std::uint64_t captureFrame = 60;
   RuntimeBench bench;
+  // The engine splash's logo (GuiEngineSplash), played before the program's
+  // first frame. Empty for no splash, as capture and benchmark runs have.
+  std::filesystem::path splashImage;
 };
 
 // IllumoRuntime's frame around its one program (D-E31), in a fixed order:
 // the engine's input and hotkeys, the debug overlay (debug-tool builds), the
 // program, then render, where the program dispatches before the overlay. The
-// shell also owns the --capture and --bench-frames runs.
+// shell also owns the --capture and --bench-frames runs, and the engine
+// splash: every app opens behind it, started but neither updated nor drawn
+// until the splash ends, so no program triggers or waits for it.
 class RuntimeShell
 {
 public:
@@ -67,6 +73,8 @@ public:
   // Stops the overlay, then the program; reports an unfinished capture or
   // benchmark.
   void stop();
+  // The engine splash is showing; the program is held.
+  bool splashing() const { return m_splash != nullptr; }
   // start, paced frames until closing, then stop. Returns exitCode().
   int run(std::chrono::steady_clock::time_point launched);
   // 1 when a capture or benchmark failed or the program did not start.
@@ -74,6 +82,8 @@ public:
   WasmProgram& program() { return *m_program; }
 
 private:
+  void updateSplash(double dt);
+  void endSplash();
   void updateProgram(double dt);
   void dispatchProgram(DrawList& scene);
   bool scriptFinished() const;
@@ -95,6 +105,8 @@ private:
   std::unique_ptr<AudioDevice> m_audio;
   std::unique_ptr<WasmProgram> m_program;
   std::unique_ptr<DebugOverlay, OverlayDeleter> m_overlay;
+  // Present only while the splash shows.
+  std::unique_ptr<GuiEngineSplash> m_splash;
   RuntimeShellOptions m_options;
   bool m_started = false;
   int m_exitCode = 0;

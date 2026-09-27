@@ -1,3 +1,4 @@
+#include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/InputProvider.h>
@@ -279,11 +280,12 @@ GuestProgram::update(const GuestInput& input)
   }
   if (m_phase == Phase::Bootstrap) {
     if (!m_assetsRequested) {
-      const std::vector<std::string> assets = packageAssets();
-      if (!assets.empty()) {
-        Logger::LogTrace("Preloading " + std::to_string(assets.size()) +
-                         " package asset(s)");
-      }
+      std::vector<std::string> assets = packageAssets();
+      // The engine's badge (GuiEngineBadge) is there for every program to
+      // draw; a runtime without it only logs the miss once.
+      assets.push_back(GuiEngineBadge::kGuestPath);
+      Logger::LogTrace("Preloading " + std::to_string(assets.size()) +
+                       " asset(s)");
       m_assetCache.preload(assets);
       m_assetsRequested = true;
     }

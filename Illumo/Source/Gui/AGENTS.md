@@ -3,8 +3,8 @@
 This directory contains the consolidated primitive-composed GUI toolkit for
 Illumo (`GuiKit`, `GuiDialog`, `GuiMenuShell`, `GridAtlas`, `GuiTypes`,
 `GuiTextEdit`, `GuiFileTree`, `GuiToolStyle`, `GuiPanelDock`,
-`GuiPanelPointer`, `PanelSurfaces`). These sources also build into the guest
-engine.
+`GuiPanelPointer`, `PanelSurfaces`, `GuiEngineBrand`). These sources also
+build into the guest engine.
 
 ## Invariants
 
@@ -84,5 +84,10 @@ engine.
 - `IPanelSurfaces` (`PanelSurfaces.h`) is only an interface; implementations
   live in the guest SDK (`GuestPanelSurfaces`) and `Illumo::TestSupport`
   (`FakePanelSurfaces`). Products must work fully docked when it is absent.
+- The engine's own brand lives in `GuiEngineBrand` (D-UI14): `GuiEngineSplash`,
+  which only `RuntimeShell` plays, and `GuiEngineBadge`, which products may
+  draw. Their images are the pre-sized PNGs in `Illumo/Assets/Branding`,
+  regenerated with `tools/make_brand_assets.py`; keep the kit's palette
+  (`docs/brand/README.md`) and never make a product trigger the splash.
 - Follow `docs/contributing.md`: avoid `auto`, avoid namespaces, keep ownership
   explicit, and format with Mozilla-style `clang-format`.

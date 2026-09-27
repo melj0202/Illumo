@@ -49,6 +49,8 @@ registerGuiFileTreeTests(IllumoTestRegistry& registry);
 void
 registerGuiPanelDockTests(IllumoTestRegistry& registry);
 void
+registerGuiEngineBrandTests(IllumoTestRegistry& registry);
+void
 registerMeshLoaderTests(IllumoTestRegistry& registry);
 void
 registerShaderPreprocessorTests(IllumoTestRegistry& registry);
@@ -118,6 +120,7 @@ createRegistry()
   registerGuiTextEditTests(registry);
   registerGuiFileTreeTests(registry);
   registerGuiPanelDockTests(registry);
+  registerGuiEngineBrandTests(registry);
   registerShaderPreprocessorTests(registry);
   registerFontTests(registry);
   registerAudioTests(registry);

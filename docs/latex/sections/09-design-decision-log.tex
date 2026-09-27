@@ -3242,6 +3242,33 @@ Linux platform.\\
 \textbf{Extends:} D-UI10, D-UI11, D-UI12
 \end{decisionbox}
 
+\subsection*{D-UI14 --- The engine's brand, splash and badge}
+\begin{decisionbox}[title={D-UI14 \quad 2026-09-27}]
+\textbf{Decision:} The Illumo brand kit (\path{docs/brand}) belongs to the
+engine. \texttt{GuiEngineBrand} in \texttt{Illumo/Gui} draws it from images in
+\path{Illumo/Assets/Branding} (\texttt{/engine/Branding} in a guest), which
+\path{tools/make_brand_assets.py} crops and pre-sizes because guest textures
+have no mipmaps. \texttt{RuntimeShell} plays \texttt{GuiEngineSplash} on every
+interactive launch: over the brand's dark ground the neon logo strikes like a
+neon tube (a plain fade with reduced motion), holds and fades in 2.3~seconds,
+and any key but Grave, or a fresh click, skips it. The program is started
+first but is neither updated nor drawn until the splash's last frame has
+shown, and a close during the splash ends the run without asking it. Capture
+and benchmark runs, and a missing logo, have no splash.
+\texttt{GuiEngineBadge} draws a `Powered by'' label over the flat wordmark;
+every \texttt{GuestProgram} preloads its image and CSim's title screen draws it
+in the lower left corner. \texttt{IllumoRuntime.exe} embeds the brand icon as
+its \texttt{GLFW\_ICON} resource.\\
+\textbf{Why:} The owner asked for the brand on the app icon, the README and
+the title screen, for engine branding to live in Illumo rather than in a
+product, and for programs not to have to trigger the splash.\\
+\textbf{Consequences:} Every app, tools included, opens on the splash, and a
+settings restart plays it again because the relaunch replays the command line.
+Capture scripts and benchmarks are unaffected. A program's first scene starts
+once the splash ends, so its entrance is seen in full.\\
+\textbf{Extends:} D-E31, D-UI7
+\end{decisionbox}
+
 \subsection*{D-F2 --- Calendar build versions}
 \begin{decisionbox}[title={D-F2 \quad 2026-09-25}]
 \textbf{Decision:} A build's version is \texttt{vYY.MM\_B}, for example

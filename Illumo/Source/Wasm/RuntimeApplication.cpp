@@ -2,6 +2,7 @@
 #include <Illumo/Content/PackageMounts.h>
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Engine/Illumo.h>
+#include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/RuntimeShell.h>
@@ -23,7 +24,8 @@ static constexpr std::uint64_t kMaximumMemoryMiB = 4095u;
 static constexpr std::uint64_t kMaximumFuelPerCall = 100000000000ull;
 static constexpr std::uint64_t kMaximumDeadlineMilliseconds = 600000u;
 static constexpr std::uint64_t kMaximumCaptureFrame = 100000u;
-static constexpr std::uint64_t kMaximumBenchFrames = RuntimeBench::kMaximumFrames;
+static constexpr std::uint64_t kMaximumBenchFrames =
+  RuntimeBench::kMaximumFrames;
 static constexpr const char* kDefaultApplication = "game";
 
 // The directory the runtime was started from. The runtime then works from its
@@ -585,6 +587,12 @@ prepareShell(Illumo& illumo)
   options.application = std::move(application);
   options.capture = std::move(capture);
   options.captureFrame = captureFrame;
+  // Every interactive launch opens on the engine splash; capture and
+  // benchmark runs start straight into the program.
+  if (options.capture.empty() && bench.frames == 0) {
+    options.splashImage =
+      runtimeDirectory() / "Assets" / GuiEngineSplash::kAssetName;
+  }
   options.bench = std::move(bench);
   return std::make_unique<RuntimeShell>(
     illumo, std::move(audio), std::move(guest), std::move(options));

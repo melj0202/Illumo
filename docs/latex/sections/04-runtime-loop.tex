@@ -123,6 +123,14 @@ then the program. Whoever owns a program or a \symbolref{SceneDirector}
 destroys it before \texttt{Illumo::shutdown}, because scene content holds
 engine assets.
 
+An interactive launch then plays the engine splash, \texttt{GuiEngineSplash}
+(D-UI14): the neon Illumo logo lights, holds and fades over the brand's dark
+ground. The program is already started but is neither updated nor drawn until
+the splash's last frame has shown, so its first scene enters afterwards and no
+program triggers or waits for the splash. Any key except Grave, or a fresh
+click, skips it; the console stays usable, and a close during the splash ends
+the run without asking the program. Capture and benchmark runs have no splash.
+
 When the window asks to close, \texttt{RuntimeShell::closing} asks the program
 (\texttt{WasmProgram::closeRequested}); inside the guest the question reaches
 the active scene's \texttt{closeRequested}. A declined request calls

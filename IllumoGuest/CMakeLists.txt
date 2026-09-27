@@ -93,6 +93,7 @@ add_library(IllumoGuestEngine STATIC
   ../Illumo/Source/Gui/GuiKit.cpp
   ../Illumo/Source/Gui/GuiMenuShell.cpp
   ../Illumo/Source/Gui/GuiDialog.cpp
+  ../Illumo/Source/Gui/GuiEngineBrand.cpp
   ../Illumo/Source/Gui/GuiFileTree.cpp
   ../Illumo/Source/Gui/GuiPanelDock.cpp
   ../Illumo/Source/Gui/GuiPanelPointer.cpp

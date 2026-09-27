@@ -1686,7 +1686,7 @@ main(int argc, char** argv)
   if (name.starts_with("Illumo.Wasm.World")) {
     return runWasmWorldTest(name.substr(12)) ? 0 : 1;
   }
-  if (name == "Illumo.Wasm.RuntimeShell") {
+  if (name.starts_with("Illumo.Wasm.RuntimeShell")) {
     return runRuntimeShellTest(name.substr(12)) ? 0 : 1;
   }
   return run(name.substr(12)) ? 0 : 1;
