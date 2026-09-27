@@ -126,6 +126,17 @@ struct GuestTextureRequest
   std::vector<std::byte> pixels;
   void write(GuestWireWriter& output) const
   {
+    write(output, width, height, channels, linear, pixels);
+  }
+  // The same encoding from pixels the caller keeps, without copying them
+  // into a request first.
+  static void write(GuestWireWriter& output,
+                    std::uint32_t width,
+                    std::uint32_t height,
+                    std::uint32_t channels,
+                    bool linear,
+                    std::span<const std::byte> pixels)
+  {
     output.u32(width);
     output.u32(height);
     output.u32(channels);

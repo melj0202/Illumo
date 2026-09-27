@@ -675,7 +675,8 @@ sceneWorldsContract()
   backend.Shutdown();
 }
 
-// Frame schema v7: GameVisuals travel as host visuals placed by a// composition. Only changes travel, a dropped frame's changes are sent again,
+// Frame schema v7: GameVisuals travel as host visuals placed by a
+// composition. Only changes travel, a dropped frame's changes are sent again,
 // and visuals that cannot travel record their own batches in painter order.
 static void
 visualProxyContract()
@@ -748,6 +749,11 @@ visualProxyContract()
   require(frame.visualOperations.size() == 1 &&
             frame.visualOperations[0].index == 1,
           "A dropped frame's change is sent again");
+  // The host saw the dropped frame without compositions, so the next one
+  // must not be `same` even though it matches the last delivered one.
+  require(frame.compositions.size() == 1 && !frame.compositions[0].same &&
+            frame.compositions[0].entries.size() == 2,
+          "The frame after a dropped one sends its composition whole");
   backend.commitVisuals();
 
   // Immediate-mode rebuild: identical items travel as nothing, a shorter
@@ -818,6 +824,111 @@ visualProxyContract()
           "Disabled visuals record their own batches");
   first.reset();
   styled.reset();
+  backend.Shutdown();
+}
+
+// Texture creation and replacement are accepted while the service queue is
+// full (a scene change releases and creates many resources at once): the
+// texture takes its new size at once and its request follows when there is
+// room. Writes a dropped frame carried are sent again.
+static void
+textureBackpressureContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  GuestFrame frame;
+  const auto fill = [&]() {
+    while (queue.enqueue(GuestService::Log, {}) != 0) {
+    }
+  };
+  // Delivers queued requests; completes each, giving CreateTexture `host`.
+  const auto serve = [&](const GuestResourceId& host) {
+    GuestServices sent = exchange(queue);
+    std::size_t created = 0;
+    for (GuestServiceRecord& record : sent.records) {
+      if (record.operation == GuestService::CreateTexture) {
+        GuestTextureRequest request;
+        require(GuestTextureRequest::read(record.payload, request),
+                "A deferred texture request is well formed");
+        GuestWireWriter id;
+        host.write(id);
+        record.payload = id.take();
+        created += 1;
+      } else {
+        record.payload.clear();
+      }
+      record.status = GuestServiceStatus::Complete;
+    }
+    exchange(queue, sent);
+    return created;
+  };
+  const auto record = [&](TextureHandle texture,
+                          int x,
+                          int y,
+                          const std::array<unsigned char, 3>& texel) {
+    renderer.BeginFrame();
+    backend.setFrame(1280, 720);
+    backend.pump();
+    if (texture.isValid()) {
+      renderer.pushUpdateTexture(texture, x, y, 1, 1, 3, texel.data());
+    }
+    renderer.EndFrame();
+    backend.takeFrame(frame);
+  };
+
+  fill();
+  const std::array<unsigned char, 12> black{};
+  const TextureHandle texture = renderer.enrollTexture(black.data(), 2, 2, 3);
+  require(texture.isValid() && backend.GetTextureInfo(texture).width == 2,
+          "A texture is created while the service queue is full");
+  require(serve({}) == 0, "Its request waits for room");
+  const GuestResourceId first{ 3, GuestResourceKind::Texture, 1, 1 };
+  backend.pump();
+  require(serve(first) == 1, "The waiting request is sent once there is room");
+  record(texture, 1, 1, { 9, 9, 9 });
+  require(frame.textureWrites.size() == 1 &&
+            frame.textureWrites[0].texture.slot == first.slot,
+          "The created texture takes writes");
+  backend.commitVisuals();
+
+  // The canvas case: its cache grows to a new texture size while the queue
+  // is full, and it keeps writing at the new size.
+  fill();
+  const std::array<unsigned char, 48> grown{};
+  require(renderer.replaceTexture(texture, grown.data(), 4, 4, 3, {}) &&
+            backend.GetTextureInfo(texture).width == 4,
+          "A replacement is accepted while the service queue is full");
+  record(texture, 3, 3, { 7, 7, 7 });
+  require(frame.textureWrites.empty(),
+          "Writes at the new size wait for the replacement");
+  backend.commitVisuals();
+  require(serve({}) == 0, "The replacement waits for room");
+  const GuestResourceId second{ 3, GuestResourceKind::Texture, 2, 1 };
+  backend.pump();
+  require(serve(second) == 1, "The replacement is sent once there is room");
+  record({}, 0, 0, {});
+  require(frame.textureWrites.size() == 1 &&
+            frame.textureWrites[0].texture.slot == second.slot &&
+            frame.textureWrites[0].width == 4 &&
+            frame.textureWrites[0].pixels.size() == 48 &&
+            frame.textureWrites[0].pixels[45] == std::byte{ 7 },
+          "The replaced texture is rewritten whole with the waiting writes");
+  backend.commitVisuals();
+
+  record(texture, 0, 0, { 5, 5, 5 });
+  require(frame.textureWrites.size() == 1, "A write travels");
+  backend.dropVisuals();
+  record({}, 0, 0, {});
+  require(frame.textureWrites.size() == 1 &&
+            frame.textureWrites[0].width == 4 &&
+            frame.textureWrites[0].pixels[0] == std::byte{ 5 },
+          "A dropped frame's texture write is sent again");
+  backend.commitVisuals();
+  record({}, 0, 0, {});
+  require(frame.textureWrites.empty(), "A delivered write is not resent");
   backend.Shutdown();
 }
 
@@ -922,7 +1033,15 @@ public:
     skyboxContract();
     return true;
   }
-  void update(const GuestInput&) override {}
+  void update(const GuestInput&) override
+  {
+    // start() already spends most of one call's fuel; later contracts run
+    // in the first update, which has its own.
+    if (!m_updated) {
+      m_updated = true;
+      textureBackpressureContract();
+    }
+  }
   bool close() override { return true; }
   void shutdown() override {}
   GuestFrame frame() override
@@ -934,6 +1053,9 @@ public:
     frame.batches.push_back(std::move(batch));
     return frame;
   }
+
+private:
+  bool m_updated = false;
 };
 std::unique_ptr<GuestApplication>
 CreateGuestApplication()
