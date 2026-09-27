@@ -119,6 +119,16 @@ add_custom_command(TARGET IllumoRuntime POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "$<TARGET_FILE:IllumoWasmtime>" "$<TARGET_FILE_DIR:IllumoRuntime>"
   VERBATIM)
+# The Illumo icon from docs/brand (IllumoRuntime.rc). The preprocessor's
+# dependency scan does not follow ICON statements, so the .ico is listed.
+if(WIN32)
+  enable_language(RC)
+  target_sources(IllumoRuntime PRIVATE
+    "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/IllumoRuntime.rc")
+  set_property(SOURCE "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/IllumoRuntime.rc"
+    APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/IllumoRuntime.ico")
+endif()
 
 # Stages one installed application: apps/<name>/ holds its manifest, module
 # and flat data files. MANIFEST is the source illumo.json, staged with the

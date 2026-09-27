@@ -1,4 +1,9 @@
-# Illumo
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/github/readme-banner-dark.png">
+    <img alt="Illumo" src="docs/brand/github/readme-banner-light.png" width="640">
+  </picture>
+</h1>
 
 Illumo is a reusable C++23 static runtime and rendering library. This
 repository is a source workspace: the library, the `IllumoRuntime` host built
@@ -53,6 +58,7 @@ illumo/
   cmake/                 # Shared CMake (tidy, coverage, Linux deps hook)
   tools/                 # install-linux-deps.sh, create_project.py, tests
   docs/                  # Architecture, packages, LaTeX, session records
+    brand/               # Logo, icon and README banner kit
   Illumo/                # Standalone static-library project
     Include/Illumo/      # Supported consumer headers (<Illumo/...>)
     Source/              # Private library implementation
