@@ -2511,13 +2511,15 @@ measureLenia(const SparseCellGrid& grid, const RuleSet& rules)
       for (int index = 0; index < static_cast<int>(cells.size()); ++index) {
         const std::uint32_t level =
           rules.getKernelLevel(cells[static_cast<std::size_t>(index)]);
+        // Integer world cell coordinates: the row division intentionally
+        // truncates before the values enter the floating-point centroid.
+        const std::int64_t cellX = address.x * SparseCellGrid::kChunkDim +
+                                   index % SparseCellGrid::kChunkDim;
+        const std::int64_t cellY = address.y * SparseCellGrid::kChunkDim +
+                                   index / SparseCellGrid::kChunkDim;
         result.mass += level;
-        weightedX += static_cast<double>(level) *
-                     static_cast<double>(address.x * SparseCellGrid::kChunkDim +
-                                         index % SparseCellGrid::kChunkDim);
-        weightedY += static_cast<double>(level) *
-                     static_cast<double>(address.y * SparseCellGrid::kChunkDim +
-                                         index / SparseCellGrid::kChunkDim);
+        weightedX += static_cast<double>(level) * static_cast<double>(cellX);
+        weightedY += static_cast<double>(level) * static_cast<double>(cellY);
       }
     });
   if (result.mass != 0u) {
