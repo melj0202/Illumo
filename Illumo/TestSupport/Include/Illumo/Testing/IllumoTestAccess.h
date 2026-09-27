@@ -15,7 +15,7 @@ public:
     host.m_backendFactory = std::move(factory);
   }
 
-  static Scene* getScene(Illumo& host) { return host.m_scene.get(); }
+  static DrawList* getScene(Illumo& host) { return host.m_scene.get(); }
 
   static EnvVars* getEnvironment(Illumo& host)
   {

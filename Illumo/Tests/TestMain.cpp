@@ -73,7 +73,15 @@ registerIlscCodecTests(IllumoTestRegistry& registry);
 void
 registerSceneInstanceTests(IllumoTestRegistry& registry);
 void
+registerSceneDirectorTests(IllumoTestRegistry& registry);
+void
 registerAudioTests(IllumoTestRegistry& registry);
+void
+registerInstancingTests(IllumoTestRegistry& registry);
+void
+registerRenderWorldTests(IllumoTestRegistry& registry);
+void
+registerVisualStoreTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -87,6 +95,7 @@ createRegistry()
   registerVirtualFileSystemTests(registry);
   registerIlscCodecTests(registry);
   registerSceneInstanceTests(registry);
+  registerSceneDirectorTests(registry);
   registerFrameCaptureTests(registry);
   registerMockBackendTests(registry);
   registerRendererE2ETests(registry);
@@ -112,6 +121,9 @@ createRegistry()
   registerShaderPreprocessorTests(registry);
   registerFontTests(registry);
   registerAudioTests(registry);
+  registerInstancingTests(registry);
+  registerRenderWorldTests(registry);
+  registerVisualStoreTests(registry);
   return registry;
 }
 

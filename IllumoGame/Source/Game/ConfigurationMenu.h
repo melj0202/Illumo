@@ -17,9 +17,9 @@ struct SimulatorConfiguration
   std::string ruleSet = "GAME_OF_LIFE";
   std::int64_t worldChunkWidth = 0;
   std::int64_t worldChunkHeight = 0;
-  long tps = 12;
+  long tps = 30;
   double speedFactor = 1.0;
-  double fadeSpeed = 6.0;
+  double fadeSpeed = 8.0;
   bool vsync = true;
   bool editHints = true;
   bool fullscreen = false;
@@ -108,8 +108,9 @@ enum class ConfigurationSetting
   Count
 };
 
-// Release-visible, primitive-composed settings overlay. This owns one visual
-// and a draft value; it is deliberately not a retained widget hierarchy.
+// Release-visible, primitive-composed settings overlay. This owns a stack of
+// visuals and a draft value; it is deliberately not a retained widget
+// hierarchy.
 // Settings are grouped into tabs; Apply, Discard and Exit are footer buttons
 // shared by every tab. Selection indexes the active tab's rows first, then
 // the footer buttons.
@@ -136,7 +137,11 @@ public:
   bool readConfiguration(SimulatorConfiguration* configuration,
                          std::string* error) const;
   void setError(const std::string& message);
-  GameVisual& getVisual() { return visual; }
+  // The rows' labels and controls and the footer help.
+  GameVisual& getVisual() { return layers[kContentLayer]; }
+  // Every layer, back to front, for tests that look across the whole menu.
+  static constexpr std::size_t layerCountForTesting() { return kLayerCount; }
+  GameVisual& layerForTesting(std::size_t index) { return layers[index]; }
 
   ConfigurationTab getActiveTabForTesting() const { return activeTab; }
   void selectTabForTesting(ConfigurationTab tab);
@@ -175,9 +180,27 @@ private:
   static const int kSettingCount =
     static_cast<int>(ConfigurationSetting::Count);
 
+  // Back to front. The glass, the tab pill's glow, the selection drop and a
+  // lit footer button's glow breathe every frame, so each sits in its own
+  // layer between the still ones and the host re-records only those (D-R29).
+  enum Layer : std::size_t
+  {
+    kGlassLayer,
+    kHeaderLayer,
+    kTabGlowLayer,
+    kTabLayer,
+    kDropLayer,
+    kContentLayer,
+    kFooterGlowLayer,
+    kFooterLayer,
+    kLayerCount
+  };
+
   IRenderWindow* window;
   Renderer* renderer;
-  GameVisual visual;
+  std::array<GameVisual, kLayerCount> layers;
+  // The fitted scale every layer is drawn at.
+  float visualScale = 1.0f;
   GuiMenuAnimator animator;
   GuiPointerTracker pointer;
   bool openState;

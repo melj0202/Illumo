@@ -10,6 +10,7 @@
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <tracy/Tracy.hpp>
 
@@ -364,6 +365,7 @@ GLBackend::SubmitCommandQueue()
   tables.programs = &_programRegistryLookup;
   tables.textures = &_textureRegistryLookup;
   tables.framebuffers = &_framebufferRegistryLookup;
+  tables.buffers = &_bufferRegistryLookup;
   device->ExecuteCommandQueue(*commandQueue, tables);
 }
 
@@ -445,6 +447,17 @@ GLBackend::Shutdown()
   }
   _framebufferRegistryLookup.clear();
   framebufferHandles.clear();
+
+  for (std::unordered_map<uint32_t, GLBufferResourceEntry>::iterator it =
+         _bufferRegistryLookup.begin();
+       it != _bufferRegistryLookup.end();
+       ++it) {
+    if (it->second.bufferId != 0) {
+      glDeleteBuffers(1, &it->second.bufferId);
+    }
+  }
+  _bufferRegistryLookup.clear();
+  bufferHandles.clear();
 
   delete device;
   device = nullptr;
@@ -989,5 +1002,60 @@ GLBackend::IsFramebufferValid(FramebufferHandle handle) const
     _framebufferRegistryLookup.find(handle.slot);
   return framebufferHandles.isCurrent(handle) &&
          it != _framebufferRegistryLookup.end() &&
+         it->second.generation == handle.generation;
+}
+
+BufferHandle
+GLBackend::CreateBuffer(BufferUsage usage, size_t capacityBytes)
+{
+  if (capacityBytes == 0 ||
+      capacityBytes >
+        static_cast<size_t>(std::numeric_limits<GLsizeiptr>::max())) {
+    return {};
+  }
+  const GLenum target =
+    usage == BufferUsage::Uniform ? GL_UNIFORM_BUFFER : GL_ARRAY_BUFFER;
+  GLuint id = 0;
+  glGenBuffers(1, &id);
+  if (id == 0) {
+    return {};
+  }
+  glBindBuffer(target, id);
+  glBufferData(
+    target, static_cast<GLsizeiptr>(capacityBytes), nullptr, GL_DYNAMIC_DRAW);
+  glBindBuffer(target, 0);
+  const BufferHandle handle = bufferHandles.allocate();
+  GLBufferResourceEntry entry;
+  entry.generation = handle.generation;
+  entry.bufferId = id;
+  entry.usage = usage;
+  entry.capacity = capacityBytes;
+  _bufferRegistryLookup[handle.slot] = entry;
+  return handle;
+}
+
+bool
+GLBackend::DestroyBuffer(BufferHandle handle)
+{
+  std::unordered_map<uint32_t, GLBufferResourceEntry>::iterator it =
+    _bufferRegistryLookup.find(handle.slot);
+  if (it == _bufferRegistryLookup.end() ||
+      it->second.generation != handle.generation) {
+    Logger::LogWarning("DestroyBuffer: stale buffer handle ignored");
+    return false;
+  }
+  if (it->second.bufferId != 0) {
+    glDeleteBuffers(1, &it->second.bufferId);
+  }
+  _bufferRegistryLookup.erase(it);
+  return bufferHandles.release(handle);
+}
+
+bool
+GLBackend::IsBufferValid(BufferHandle handle) const
+{
+  std::unordered_map<uint32_t, GLBufferResourceEntry>::const_iterator it =
+    _bufferRegistryLookup.find(handle.slot);
+  return bufferHandles.isCurrent(handle) && it != _bufferRegistryLookup.end() &&
          it->second.generation == handle.generation;
 }

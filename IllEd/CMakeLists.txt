@@ -9,17 +9,16 @@ add_library(IllEdCore STATIC
   Source/EditorGizmo.cpp
   Source/EditorHistory.cpp
   Source/EditorInspector.cpp
-  Source/EditorModule.cpp
-  Source/EditorModuleCommands.cpp
-  Source/EditorModulePanels.cpp
-  Source/EditorModuleViewport.cpp
+  Source/EditorScene.cpp
+  Source/EditorSceneCommands.cpp
+  Source/EditorScenePanels.cpp
+  Source/EditorSceneViewport.cpp
   Source/EditorSceneGraphView.cpp
   Source/EditorSelection.cpp
   Source/EditorShortcuts.cpp
   Source/EditorToolbar.cpp
   Source/EditorToolsPanel.cpp
   Source/EditorUiAtlas.cpp
-  Source/IllEdApplication.cpp
   Source/IllEdConfig.cpp
   Source/IllEdPlatformNative.cpp
 )
@@ -40,8 +39,9 @@ target_include_directories(IllEdCore SYSTEM PRIVATE
 target_link_libraries(IllEdCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllEdCore)
 
-# IllEd ships only as the WASM package apps/illed (cmake/IllumoWasm.cmake),
-# played by IllumoRuntime. IllEdCore remains the native test oracle.
+# IllEd ships only as the WASM package apps/illed, played by IllumoRuntime:
+# GuestTargets.cmake builds its module and PackageTargets.cmake stages it.
+# IllEdCore remains the native test oracle.
 
 if(BUILD_TESTING)
   if(WIN32)
@@ -61,7 +61,7 @@ if(BUILD_TESTING)
     Tests/TestEditorGizmo.cpp
     Tests/TestEditorHistory.cpp
     Tests/TestEditorInspector.cpp
-    Tests/TestEditorModule.cpp
+    Tests/TestEditorScene.cpp
     Tests/TestEditorPanels.cpp
     Tests/TestEditorSceneGraphView.cpp
     Tests/TestEditorToolbar.cpp

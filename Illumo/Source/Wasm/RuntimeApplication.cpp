@@ -1,13 +1,11 @@
 #include <Illumo/Audio/AudioDevice.h>
 #include <Illumo/Content/PackageMounts.h>
 #include <Illumo/Engine/Application.h>
-#include <Illumo/Rendering/FrameCapture.h>
-#include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Services/CommandRegistry.h>
+#include <Illumo/Engine/Illumo.h>
 #include <Illumo/Services/EnvVars.h>
-#include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
-#include <Illumo/Wasm/WasmGameModule.h>
+#include <Illumo/Wasm/RuntimeShell.h>
+#include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Dialog.h>
 #include <algorithm>
 #include <charconv>
@@ -25,7 +23,7 @@ static constexpr std::uint64_t kMaximumMemoryMiB = 4095u;
 static constexpr std::uint64_t kMaximumFuelPerCall = 100000000000ull;
 static constexpr std::uint64_t kMaximumDeadlineMilliseconds = 600000u;
 static constexpr std::uint64_t kMaximumCaptureFrame = 100000u;
-static constexpr std::uint64_t kMaximumBenchFrames = 1000000u;
+static constexpr std::uint64_t kMaximumBenchFrames = RuntimeBench::kMaximumFrames;
 static constexpr const char* kDefaultApplication = "game";
 
 // The directory the runtime was started from. The runtime then works from its
@@ -185,17 +183,6 @@ static const char* const kLaunchOptions[] = {
   "GuestCaptureScript", "GuestMount",       "GuestProject"
 };
 
-// --bench-frames: warm up, time a fixed number of frames, print one JSON line
-// and close. The optional script queues host console lines, each once its
-// command exists (guest commands register asynchronously). A --capture run
-// may carry the same script (--capture-script) to reach a later screen.
-struct BenchOptions
-{
-  std::uint64_t frames = 0;
-  std::uint64_t warmup = 120;
-  std::vector<std::vector<std::string>> script;
-};
-
 static bool
 readBenchScript(const std::filesystem::path& path,
                 std::vector<std::vector<std::string>>& script)
@@ -222,39 +209,6 @@ readBenchScript(const std::filesystem::path& path,
     }
   }
   return true;
-}
-
-static double
-samplePercentile(std::vector<double> samples, double fraction)
-{
-  if (samples.empty()) {
-    return 0.0;
-  }
-  std::sort(samples.begin(), samples.end());
-  const std::size_t index = static_cast<std::size_t>(
-    std::clamp(fraction, 0.0, 1.0) * static_cast<double>(samples.size() - 1));
-  return samples[index];
-}
-
-static nlohmann::json
-distribution(const std::vector<double>& samples)
-{
-  nlohmann::json result;
-  result["p50"] = samplePercentile(samples, 0.5);
-  result["p95"] = samplePercentile(samples, 0.95);
-  result["p99"] = samplePercentile(samples, 0.99);
-  result["max"] = samplePercentile(samples, 1.0);
-  return result;
-}
-
-static nlohmann::json
-rolling(const RollingMetric& metric)
-{
-  nlohmann::json result;
-  result["p50"] = metric.median();
-  result["p95"] = metric.p95();
-  result["max"] = metric.maximum();
-  return result;
 }
 
 // Launch options select what this invocation runs. The engine persists
@@ -292,381 +246,12 @@ prepareRuntime(IEnvVars* environment)
   clearLaunchOptions(environment);
 }
 
-// Outcome of a --capture run, reported through the process exit code.
-static int s_exitCode = 0;
-
-static int
-runtimeExitCode()
+// The program a launch asks for, with its shell options; null (logged) when
+// the options or the package are unusable.
+static std::unique_ptr<RuntimeShell>
+prepareShell(Illumo& illumo)
 {
-  return s_exitCode;
-}
-
-// Runtime shell around the package: applies the manifest title and, for
-// --capture, reads back one presented frame and closes.
-class RuntimeModule final : public IModule
-{
-public:
-  RuntimeModule(std::unique_ptr<AudioDevice> audio,
-                std::unique_ptr<WasmGameModule> guest,
-                std::string title,
-                std::string application,
-                std::filesystem::path capture,
-                std::uint64_t captureFrame,
-                BenchOptions bench)
-    : m_audio(std::move(audio))
-    , m_guest(std::move(guest))
-    , m_title(std::move(title))
-    , m_application(std::move(application))
-    , m_capture(std::move(capture))
-    , m_captureFrame(captureFrame)
-    , m_bench(std::move(bench))
-  {
-  }
-  ~RuntimeModule() override
-  {
-    if (ic != nullptr && ic->renderer != nullptr && m_hookInstalled) {
-      ic->renderer->setBeforePresent({});
-    }
-  }
-  RuntimeModule(const RuntimeModule&) = delete;
-  RuntimeModule& operator=(const RuntimeModule&) = delete;
-  RuntimeModule(RuntimeModule&&) = delete;
-  RuntimeModule& operator=(RuntimeModule&&) = delete;
-
-  bool Start(IllumoContext* context) override
-  {
-    ic = context;
-    if (context != nullptr && context->window != nullptr && !m_title.empty()) {
-      context->window->setTitle(m_title);
-    }
-    const bool started = m_guest->Start(context);
-    if (started) {
-      Logger::LogInfo("The " + m_application + " package started");
-    } else {
-      Logger::LogError("The " + m_application +
-                       " package failed to start: " + m_guest->error());
-      if (!m_capture.empty()) {
-        report(false, 0, 0, "The package failed to start: " + m_guest->error());
-      }
-      if (m_bench.frames != 0) {
-        reportBench("The package failed to start: " + m_guest->error());
-      }
-    }
-    return started;
-  }
-  void Update(double dt) override
-  {
-    if (m_bench.frames == 0 || m_benchDone) {
-      if (!m_capture.empty() && !m_done) {
-        std::string error;
-        if (!feedScript(&error)) {
-          report(false, 0, 0, error);
-          m_done = true;
-          if (ic != nullptr && ic->window != nullptr) {
-            ic->window->requestClose();
-          }
-        }
-      }
-      m_guest->Update(dt);
-      return;
-    }
-    std::string scriptError;
-    if (!feedScript(&scriptError)) {
-      reportBench(scriptError);
-      return;
-    }
-    const std::chrono::steady_clock::time_point start =
-      std::chrono::steady_clock::now();
-    m_guest->Update(dt);
-    const std::chrono::steady_clock::time_point end =
-      std::chrono::steady_clock::now();
-    // Warm-up counts from the end of the script.
-    if (scriptFinished()) {
-      ++m_benchUpdates;
-    }
-    if (m_benchUpdates > m_bench.warmup) {
-      if (m_benchFrameIntervals.empty() && m_benchUpdateMilliseconds.empty()) {
-        m_benchStart = start;
-      } else {
-        m_benchFrameIntervals.push_back(
-          std::chrono::duration<double, std::milli>(start - m_benchLastStart)
-            .count());
-      }
-      m_benchUpdateMilliseconds.push_back(
-        std::chrono::duration<double, std::milli>(end - start).count());
-      if (m_benchUpdateMilliseconds.size() >= m_bench.frames) {
-        m_benchEnd = end;
-        reportBench({});
-      }
-    }
-    m_benchLastStart = start;
-    if (!m_guest->error().empty() && !m_benchDone) {
-      reportBench("The package failed: " + m_guest->error());
-    }
-  }
-  void DispatchDrawables(Scene* scene) override
-  {
-    m_guest->DispatchDrawables(scene);
-    if (m_clearHook) {
-      // Cleared here, never from inside the running hook.
-      ic->renderer->setBeforePresent({});
-      m_hookInstalled = false;
-      m_clearHook = false;
-    }
-    if (m_capture.empty() || m_done || ic == nullptr ||
-        ic->renderer == nullptr) {
-      return;
-    }
-    // Like bench warm-up, the capture frame counts from the end of the script.
-    if (!scriptFinished()) {
-      return;
-    }
-    ++m_frames;
-    if (m_frames == m_captureFrame && !m_hookInstalled) {
-      // The frame dispatched now is presented at the end of this render.
-      m_hookInstalled = true;
-      ic->renderer->setBeforePresent(
-        [this](Renderer& renderer) { captureFrame(renderer); });
-    } else if (m_frames > m_captureFrame + 2 && !m_done) {
-      // Every presentation of the target frame failed (frame errors skip
-      // presentation, and with it the hook).
-      report(false, 0, 0, "The target frame was never presented");
-      m_done = true;
-      ic->renderer->setBeforePresent({});
-      m_hookInstalled = false;
-      ic->window->requestClose();
-    }
-  }
-  void Exit() override
-  {
-    if (ic != nullptr && ic->renderer != nullptr && m_hookInstalled) {
-      ic->renderer->setBeforePresent({});
-      m_hookInstalled = false;
-    }
-    if (!m_capture.empty() && !m_done) {
-      report(false, 0, 0, "The runtime closed before the capture frame");
-    }
-    if (m_bench.frames != 0 && !m_benchDone) {
-      reportBench("The runtime closed before the benchmark finished");
-    }
-    m_guest->Exit();
-    Logger::LogInfo("The " + m_application + " package stopped");
-  }
-  bool OnCloseRequested() override
-  {
-    // A finished capture or benchmark closes without product dialogs.
-    return m_done || m_benchDone || m_guest->OnCloseRequested();
-  }
-
-private:
-  bool scriptFinished() const
-  {
-    return m_benchScriptLine >= m_bench.script.size() && m_benchWaitFrames == 0;
-  }
-  // Runs script lines in order: "@wait n" pauses n frames, "@key Name"
-  // presses one key, and any other line is a console command queued once it
-  // exists. An unknown key or directive fails the run (false with *error).
-  bool feedScript(std::string* error)
-  {
-    if (ic == nullptr || ic->commandRegistry == nullptr ||
-        ic->inputManager == nullptr) {
-      m_benchScriptLine = m_bench.script.size();
-      m_benchWaitFrames = 0;
-      return true;
-    }
-    if (m_benchWaitFrames > 0) {
-      --m_benchWaitFrames;
-      return true;
-    }
-    CommandRegistry& commands = *ic->commandRegistry;
-    bool queued = false;
-    while (m_benchScriptLine < m_bench.script.size()) {
-      const std::vector<std::string>& words = m_bench.script[m_benchScriptLine];
-      if (words.front() == "@wait") {
-        std::uint64_t frames = 0;
-        if (words.size() != 2 ||
-            !readLimit(words[1], kMaximumBenchFrames, frames)) {
-          *error = "Invalid @wait in the script";
-          return false;
-        }
-        m_benchWaitFrames = frames;
-        ++m_benchScriptLine;
-        break;
-      }
-      if (words.front() == "@key") {
-        KeyCode key = KeyCode::None;
-        if (words.size() != 2 || !keyNamed(words[1], key)) {
-          *error = "Invalid @key in the script";
-          return false;
-        }
-        ic->inputManager->getKeyQueue().push({ key, InputAction::Press, 0 });
-        ++m_benchScriptLine;
-        m_benchWaitFrames = 2;
-        break;
-      }
-      if (words.front().starts_with("@")) {
-        *error = "Unknown script directive " + words.front();
-        return false;
-      }
-      if (!commands.HasCommand(words.front())) {
-        // Guest commands register asynchronously; one that never appears
-        // fails the run instead of stalling it.
-        if (++m_scriptCommandWaitFrames > kScriptCommandWaitFrames) {
-          *error = "Script command never registered: " + words.front();
-          return false;
-        }
-        break;
-      }
-      m_scriptCommandWaitFrames = 0;
-      commands.QueueCommand(
-        words.front(),
-        std::vector<std::string>(words.begin() + 1, words.end()));
-      ++m_benchScriptLine;
-      queued = true;
-    }
-    if (queued) {
-      commands.ExecuteQueue();
-    }
-    return true;
-  }
-  static bool keyNamed(const std::string& name, KeyCode& key)
-  {
-#define ILLUMO_GUEST_KEY(keyName, number)                                      \
-  if (name == #keyName) {                                                      \
-    key = KeyCode::keyName;                                                    \
-    return true;                                                               \
-  }
-#include <IllumoGuest/Keys.inc>
-#undef ILLUMO_GUEST_KEY
-    return false;
-  }
-  void reportBench(const std::string& error)
-  {
-    if (m_benchDone) {
-      return;
-    }
-    m_benchDone = true;
-    s_exitCode = error.empty() ? 0 : 1;
-    nlohmann::json result;
-    result["success"] = error.empty();
-    result["application"] = m_application;
-    result["error"] = error;
-    result["warmupFrames"] = m_bench.warmup;
-    result["frames"] = m_benchUpdateMilliseconds.size();
-    const double seconds =
-      std::chrono::duration<double>(m_benchEnd - m_benchStart).count();
-    result["seconds"] = seconds;
-    result["fps"] =
-      seconds > 0.0
-        ? static_cast<double>(m_benchFrameIntervals.size()) / seconds
-        : 0.0;
-    result["frameIntervalMs"] = distribution(m_benchFrameIntervals);
-    result["moduleUpdateMs"] = distribution(m_benchUpdateMilliseconds);
-    const WasmFrameStats& stats = m_guest->stats();
-    nlohmann::json host;
-    host["services"] = rolling(stats.servicesMilliseconds);
-    host["update"] = rolling(stats.updateMilliseconds);
-    host["receive"] = rolling(stats.receiveMilliseconds);
-    host["frame"] = rolling(stats.frameMilliseconds);
-    host["accept"] = rolling(stats.acceptMilliseconds);
-    host["frameBytes"] = rolling(stats.frameBytes);
-    result["wasmMs"] = host;
-    const WasmFrameCounters* counters = m_guest->frameCounters();
-    if (counters != nullptr) {
-      nlohmann::json frame;
-      frame["batches"] = counters->batches;
-      frame["retainedBatches"] = counters->retainedBatches;
-      frame["inlineVertexBytes"] = counters->inlineVertexBytes;
-      frame["inlineIndexBytes"] = counters->inlineIndexBytes;
-      frame["textureWrites"] = counters->textureWrites;
-      frame["textureWriteBytes"] = counters->textureWriteBytes;
-      frame["meshWriteBytes"] = counters->meshWriteBytes;
-      frame["meshEnrollments"] = counters->meshEnrollments;
-      frame["meshReplacements"] = counters->meshReplacements;
-      result["lastFrame"] = frame;
-    }
-    if (!m_guest->error().empty()) {
-      result["guestError"] = m_guest->error();
-    }
-    std::cout << result.dump() << std::endl;
-    if (ic != nullptr && ic->window != nullptr) {
-      ic->window->requestClose();
-    }
-  }
-
-  void captureFrame(Renderer& renderer)
-  {
-    m_done = true;
-    const std::array<int, 2> size = ic->window->getWindowDimensions();
-    FrameReadback image =
-      renderer.getBackend()->readBackbuffer(size[0], size[1]);
-    // The window presents opaquely whatever alpha translucent UI leaves in
-    // the backbuffer, so the screenshot must be opaque to match it.
-    for (std::size_t index = 3; index < image.pixels.size(); index += 4) {
-      image.pixels[index] = 255;
-    }
-    std::string error = image.error;
-    if (image.success() && !FrameCapture::savePng(m_capture, image, &error) &&
-        error.empty()) {
-      error = "The PNG could not be written";
-    }
-    report(image.success() && error.empty(), image.width, image.height, error);
-    // The hook must not outlive this presentation; clear it after returning.
-    m_clearHook = true;
-    ic->window->requestClose();
-  }
-  void report(bool success, int width, int height, const std::string& error)
-  {
-    if (m_reported) {
-      return;
-    }
-    m_reported = true;
-    s_exitCode = success ? 0 : 1;
-    nlohmann::json result;
-    result["success"] = success;
-    result["application"] = m_application;
-    const std::u8string output = m_capture.u8string();
-    result["output"] =
-      std::string(reinterpret_cast<const char*>(output.data()), output.size());
-    result["frame"] = m_frames;
-    result["width"] = width;
-    result["height"] = height;
-    result["error"] = error;
-    if (!m_guest->error().empty()) {
-      result["guestError"] = m_guest->error();
-    }
-    std::cout << result.dump() << std::endl;
-  }
-
-  // Declared first so it outlives the guest, which borrows it.
-  std::unique_ptr<AudioDevice> m_audio;
-  std::unique_ptr<WasmGameModule> m_guest;
-  std::string m_title;
-  std::string m_application;
-  std::filesystem::path m_capture;
-  std::uint64_t m_captureFrame = 0;
-  std::uint64_t m_frames = 0;
-  bool m_hookInstalled = false;
-  bool m_clearHook = false;
-  bool m_done = false;
-  bool m_reported = false;
-  BenchOptions m_bench;
-  static constexpr std::uint64_t kScriptCommandWaitFrames = 600;
-  std::size_t m_benchScriptLine = 0;
-  std::uint64_t m_benchWaitFrames = 0;
-  std::uint64_t m_scriptCommandWaitFrames = 0;
-  std::uint64_t m_benchUpdates = 0;
-  std::vector<double> m_benchFrameIntervals;
-  std::vector<double> m_benchUpdateMilliseconds;
-  std::chrono::steady_clock::time_point m_benchStart{};
-  std::chrono::steady_clock::time_point m_benchEnd{};
-  std::chrono::steady_clock::time_point m_benchLastStart{};
-  bool m_benchDone = false;
-};
-
-static std::unique_ptr<IModule>
-createGuestModuleFrom(IEnvVars* environment)
-{
+  IEnvVars* environment = &illumo.environment();
   std::filesystem::path gamePath =
     optionPath(environment->getVar("GuestModule").value);
   std::filesystem::path workerPath =
@@ -838,7 +423,7 @@ createGuestModuleFrom(IEnvVars* environment)
   std::uint64_t memoryMiB = limits.memoryBytes / (1024u * 1024u);
   std::uint64_t deadline = limits.deadlineMilliseconds;
   std::uint64_t captureFrame = 60;
-  BenchOptions bench;
+  RuntimeBench bench;
   const std::string fuelOption = environment->getVar("GuestFuel").value;
   if (!fuelOption.empty()) {
     // --fuel forces metering for this launch (comparisons, runaway triage).
@@ -966,13 +551,13 @@ createGuestModuleFrom(IEnvVars* environment)
                     " frames after " + std::to_string(bench.warmup) +
                     " warm-up frames");
   }
-  std::unique_ptr<WasmGameModule> guest =
-    std::make_unique<WasmGameModule>(std::move(game),
-                                     std::move(startup),
-                                     limits,
-                                     std::move(mod),
-                                     std::move(worker),
-                                     std::move(files));
+  std::unique_ptr<WasmProgram> guest =
+    std::make_unique<WasmProgram>(std::move(game),
+                                  std::move(startup),
+                                  limits,
+                                  std::move(mod),
+                                  std::move(worker),
+                                  std::move(files));
   guest->setWorkerLimits(workerLimits, workerLanes);
   // Captures and benchmarks measure the main window alone: panels stay
   // docked there.
@@ -995,24 +580,24 @@ createGuestModuleFrom(IEnvVars* environment)
   // An application may ask to relaunch (settings read at startup); a capture
   // or benchmark run closes instead so its caller sees one process.
   guest->setRestartAllowed(capture.empty() && bench.frames == 0);
-  return std::make_unique<RuntimeModule>(std::move(audio),
-                                         std::move(guest),
-                                         std::move(title),
-                                         std::move(application),
-                                         std::move(capture),
-                                         captureFrame,
-                                         std::move(bench));
+  RuntimeShellOptions options;
+  options.title = std::move(title);
+  options.application = std::move(application);
+  options.capture = std::move(capture);
+  options.captureFrame = captureFrame;
+  options.bench = std::move(bench);
+  return std::make_unique<RuntimeShell>(
+    illumo, std::move(audio), std::move(guest), std::move(options));
 }
 
-static std::unique_ptr<IModule>
-createGuestModule(IEnvVars* environment)
+// The runtime's loop: the launch's program under a RuntimeShell.
+static int
+runRuntime(Illumo& illumo, std::chrono::steady_clock::time_point launched)
 {
-  if (environment == nullptr) {
-    return nullptr;
-  }
-  std::unique_ptr<IModule> module = createGuestModuleFrom(environment);
+  IEnvVars* environment = &illumo.environment();
+  std::unique_ptr<RuntimeShell> shell = prepareShell(illumo);
   const std::string capture = environment->getVar("GuestCapture").value;
-  if (!module && !capture.empty()) {
+  if (!shell && !capture.empty()) {
     // Capture callers read one JSON result line whatever the outcome.
     nlohmann::json result;
     result["success"] = false;
@@ -1023,7 +608,12 @@ createGuestModule(IEnvVars* environment)
     std::cout << result.dump() << std::endl;
   }
   clearLaunchOptions(environment);
-  return module;
+  if (!shell) {
+    Logger::LogError(illumo.applicationName() +
+                     " could not prepare the requested application");
+    return 1;
+  }
+  return shell->run(launched);
 }
 
 IllumoApplicationDefinition
@@ -1066,7 +656,8 @@ CreateIllumoApplication()
     { "--capture-script",
       "file",
       "GuestCaptureScript",
-      "Console lines, @key and @wait run before --capture-frame counts" },
+      "Console lines, @key and @wait run before --capture-frame counts "
+      "(from @begin, if present)" },
     { "--package",
       "path",
       "GuestPackage",
@@ -1113,10 +704,10 @@ CreateIllumoApplication()
     { "--bench-script",
       "file",
       "GuestBenchScript",
-      "Console lines queued in order before timing starts" }
+      "Console lines, @key and @wait run before warm-up and timing start "
+      "(from @begin, if present, with later lines still running)" }
   };
   application.applyDefaults = prepareRuntime;
-  application.createRequiredModule = createGuestModule;
-  application.exitCode = runtimeExitCode;
+  application.run = runRuntime;
   return application;
 }

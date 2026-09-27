@@ -4,6 +4,7 @@
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -62,7 +63,8 @@ public:
   float getAnimationProgressForTesting() const;
   float getSelectionPositionForTesting() const;
   float getValuePulseForTesting() const;
-  GameVisual& getVisual() { return visual; }
+  // The header, the rows' contents and the footer: every text the menu draws.
+  GameVisual& getVisual() { return layers[kContentLayer]; }
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
@@ -114,10 +116,25 @@ private:
     std::string detail;
   };
 
+  // Back to front: the glass; the row surfaces; the selection drop; the
+  // header, row contents and footer; and the count chips' cursor. The glass,
+  // drop and cursor breathe, so each sits in its own layer and the host
+  // re-records only those while the menu idles (D-R29).
+  enum Layer : std::size_t
+  {
+    kGlassLayer,
+    kSurfaceLayer,
+    kDropLayer,
+    kContentLayer,
+    kCursorLayer,
+    kLayerCount
+  };
+
   IRenderWindow* window;
   Renderer* renderer;
-  GameVisual visual;
-  GuiMenuAnimator animator;
+  std::array<GameVisual, kLayerCount> layers;
+  // The fitted scale every layer is drawn at.
+  float visualScale = 1.0f;  GuiMenuAnimator animator;
   GuiPointerTracker pointer;
   // Spring-driven row emphasis (by body row), neighbor-count chip glow
   // (birth 0-8, survival 9-17), footer button focus and scrollbar thumb.

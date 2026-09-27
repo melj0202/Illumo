@@ -12,7 +12,7 @@ IllEd ships only as the `IllEd.wasm` package (`apps/illed/`, manifest
 `IllEd/illumo.json`, `launchAccess: "edit"`, private storage `storage/illed/`)
 run by `IllumoRuntime --app illed [--open scene.ilsc]`, like IllumoGame.
 There is no native `IllEd.exe`. `Wasm/EditorApplication.cpp` is the guest
-entry (`GuestModuleApplication`); it preloads the editor UI atlas from the
+entry (a `GuestProgram` whose one scene is `EditorScene`); it preloads the editor UI atlas from the
 package (`packageAssets()`) and hands the `--open` launch file to the
 platform seam. `IllEdCore` stays a native library for the `IllEdTests`
 oracle suite.
@@ -21,8 +21,12 @@ oracle suite.
 
 - Depend only on `Illumo::Illumo` and `Illumo::Content`. Do not link Game,
   Rulesets, or `IllumoGameCore`.
-- `EditorDocument` owns one `SceneInstance` (Content) plus `EditorHistory`
-  and is the only mutation gateway. Every edit is recorded as a patch
+- `EditorDocument` edits one `SceneInstance` (Content) plus `EditorHistory`
+  and is the only mutation gateway. In the editor the instance is
+  `EditorScene`'s content, which the document borrows (`attach`, D-E31);
+  standalone documents (tools, tests) own one. Loads, clears and rebases
+  replace the content in place, since `SceneInstance::load` leaves the scene
+  untouched on failure. Every edit is recorded as a patch
   command (node before/after states plus optional scene settings); dirty
   means the history cursor differs from the saved one, so camera and other
   `SceneEditorState` changes never dirty. Drags share a merge key so one drag
@@ -44,7 +48,7 @@ oracle suite.
   rename conflicting) as one command. Never paste untagged text.
 - The hierarchy panel draws and hits only rows inside its row window; fold,
   eye, drop-before/into/after and the context menu live in
-  `EditorSceneGraphView`, which hands menu choices to the module through
+  `EditorSceneGraphView`, which hands menu choices to the scene through
   `takeCommand()` rather than editing beyond drops and visibility itself.
 - The asset browser (`EditorAssetBrowser`, over `GuiFileTree`) lists the
   virtual file tree through `IllEdPlatform::listDirectory`; dropping a mesh or
@@ -62,15 +66,15 @@ oracle suite.
 - `EditorShortcuts` is the only key map; menus show `labelFor()` and the
   toolbar dispatches `match()`. Camera navigation uses arrows, PageUp/PageDown
   and the mouse so letters stay free for commands.
-- `EditorModule` is split by concern: `EditorModule.cpp` (lifetime, frame,
-  drawables), `EditorModulePanels.cpp` (dock, placements, saved layout),
-  `EditorModuleCommands.cpp` (dispatch, files, node commands),
-  `EditorModuleViewport.cpp` (camera, grid, picking, gizmo, selection input).
+- `EditorScene` is split by concern: `EditorScene.cpp` (lifetime, frame,
+  drawables), `EditorScenePanels.cpp` (dock, placements, saved layout),
+  `EditorSceneCommands.cpp` (dispatch, files, node commands),
+  `EditorSceneViewport.cpp` (camera, grid, picking, gizmo, selection input).
 - Keep UI primitive-composed through `GameVisual` in the plain tool look
   (`GuiToolStyle`, D-UI7): flat, no animation or glow. No retained widget
   tree.
 - The Hierarchy, Assets, Tools (`EditorToolsPanel`) and Inspector panels live
-  in one `GuiPanelDock` owned by `EditorModule` (left: Hierarchy over Assets;
+  in one `GuiPanelDock` owned by `EditorScene` (left: Hierarchy over Assets;
   right: Tools over Inspector). Each panel is a content renderer: it draws
   into the `GuiPanelPlacement` it is given (content rectangle plus surface)
   and reads its pointer through `GuiPanelPointer`, docked or detached
@@ -85,7 +89,7 @@ oracle suite.
   An asset dropped from a detached Assets window maps to main-window pixels
   through the surfaces' screen origins. The layout is saved in the
   `panelLayout` setting (the dock's text with `;` for newlines) and detached
-  panels reopen on the next start. `EditorModule` keeps its own
+  panels reopen on the next start. `EditorScene` keeps its own
   world-picking and gizmo drag state; that is world input, not panel chrome.
 - Main-thread affine. Iterative hierarchy walks only.
 - Files and dialogs go through `IllEdPlatform` (`IllEdPlatform.h`), the

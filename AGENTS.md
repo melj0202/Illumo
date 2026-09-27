@@ -47,6 +47,10 @@ editing. Route detail to these canonical sources:
 - WASM runtime design, ABI and cutover: `docs/wasm-game-runtime-design.md`,
   `docs/wasm-game-runtime-plan.md`, `docs/wasm-game-cutover-plan.md`, and
   `docs/wasm-apps-cutover-plan.md`;
+- host-owned rendering (D-E30, D-R28, D-R29), instancing, recorded lists,
+  `RenderWorld`, `VisualStore` and frame schema v7:
+  `docs/host-render-world-design.md` and its tracker
+  `docs/host-render-world-plan.md`;
 - persistent scene hierarchy contract: `docs/scene-graph-v2-design.md`;
 - scene implementation and verification record: `docs/scene-graph-v2-plan.md`;
 - long-form design book and chart-only map: `docs/latex/illumo.tex` and
@@ -96,11 +100,11 @@ Drawable::AppendCommands(Renderer*)
 ```
 
 `SceneGraph` owns persistent nodes, compiled transforms/bounds, and two reusable
-snapshot buffers. `SceneGraphDrawable` enters the existing per-frame `Scene`
-as one drawable and uses one immutable view for collection, depth, and color.
-Attachments remain borrowed; detach or invalidate snapshots before retiring
-or changing their content. Already emitted token payloads must outlive
-synchronous submission. Unknown bounds fail open. Renderer fits shadows after
+snapshot buffers. `SceneGraphDrawable` enters the existing per-frame
+`DrawList` as one drawable and uses one immutable view for collection, depth,
+and color. Attachments remain borrowed; detach or invalidate snapshots before
+retiring or changing their content. Already emitted token payloads must
+outlive synchronous submission. Unknown bounds fail open. Renderer fits shadows after
 caster collection, so shadow relevance is tested from snapshot values in the
 depth pass. CA storage and UI remain separate from the scene subsystem.
 
@@ -128,6 +132,9 @@ managed path.
 spans shapes, sprites, and text; only adjacent compatible items batch. Parent and
 local `Transform2D`, normalized pivots, atlas regions/flips, and bounded dynamic
 quad buffers are supported. `SpriteAnimator` is passive and caller-updated.
+In WASM guests with `HostRender`, a `GameVisual` travels whole: the recorder's
+visual proxies send item changes and the host draws it from `VisualStore`
+(D-R29), so products compose UI the same way in both hosts.
 
 Product UI is primitive-composed rather than a separate widget system.
 `CommandLine` and the Release-visible `ConfigurationMenu` build their panels
@@ -141,7 +148,7 @@ look and a `GuiPanelDock` of detachable panels whose content draws into a
 `GuiPanelPlacement` and reads `GuiPanelPointer` (D-UI7); extra windows come
 from `IllumoContext::panelSurfaces` and products must work fully docked
 without it. A new screen composes those rather than restating them.
-Preserve the existing drawable owners and Scene layers; do not introduce a
+Preserve the existing drawable owners and DrawList layers; do not introduce a
 retained UI tree for this surface.
 
 Canvas truth (verify here before trusting older notes):
@@ -268,10 +275,10 @@ Ruleset truth:
 |---|---|
 | Application runner and main loop | `Illumo/Source/Engine/Application.cpp` |
 | Public library API | `Illumo/Include/Illumo/*` |
-| Host, services, modules | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers |
+| Host, services, frame phases | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers, `Illumo/Source/Wasm/RuntimeShell.cpp` |
 | Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
-| CA modes and editor | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
-| World editor | `IllEd/Source/EditorModule*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
+| CA modes and editor | `IllumoGame/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
+| World editor | `IllEd/Source/EditorScene*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
 | Scene format, packages, virtual file tree | `Illumo/Include/Illumo/Content/*`, `Illumo/Source/Content/*`, `Illumo/tools/IllumoPack.cpp` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
 | Sound effects (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `IllumoGame/Source/Game/CSimSounds.*` |
@@ -291,6 +298,7 @@ Ruleset truth:
 | Input, console, env, logging, system CLI | `Illumo/Source/Services/*` |
 | OS entry and native save/load | `Illumo/Source/Platform/*` |
 | WASM host, ABI decoders, runtime | `Illumo/Source/Wasm/*`, `Illumo/Include/Illumo/Wasm/*`, `cmake/IllumoWasm.cmake` |
+| A program's WASM module and package | `<Program>/GuestTargets.cmake`, `<Program>/PackageTargets.cmake`, listed in the root `ILLUMO_PROGRAMS` |
 | Guest SDK, guest-side engine, wire headers | `IllumoGuest/Include/IllumoGuest/*`, `IllumoGuest/Source/*` |
 | IllumoGame package entry and platform adapter | `IllumoGame/Source/Wasm/*`, `IllumoGame/illumo.json` |
 | IllEd package entry and platform seam | `IllEd/Source/Wasm/EditorApplication.cpp`, `IllEd/Source/IllEdPlatform.h`, `IllEd/illumo.json` |
@@ -378,7 +386,7 @@ Clang/LLVM coverage:
 Headless tests cover typed/generational MockBackend resources,
 Renderer/token/style/asset flow, retained scene hierarchy, painter-correct
 primitives and animation, rulesets,
-CellContext, CellGameModule commands and file-backed save/load, Canvas
+CellContext, CanvasScene commands and file-backed save/load, Canvas
 domain/fade/dirty behavior, input, environment/logging, SysCmdLine, and
 CommandLine/GLString/SplashText tokens. `ILLUMO_ENABLE_COVERAGE=ON` adds the
 Clang/LLVM `IllumoCoverage` target, an 85% production-line gate, and an HTML
@@ -421,8 +429,9 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 ## Project-wide invariants
 
 - Illumo owns process entry, platform services, BuildInfo, SysCmdLine, logging
-  lifetime, DebugModule composition, and the frame loop. IllEd supplies
-  editor defaults/CLI metadata and its required editor-module factory.
+  lifetime and the frame phases. `IllumoRuntime`'s `RuntimeShell` runs the
+  frame loop around its one `WasmProgram` and, in debug-tool builds, the
+  `DebugOverlay` (D-E31). There is no module registry and no native product.
   Illumo must not depend on Game, Rulesets, or IllEd.
 - Content layering: core `Illumo` never includes `<Illumo/Content/...>`;
   `Illumo::Content` depends only on `Illumo::Illumo` (never on
@@ -442,31 +451,36 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   `IllumoRuntime` and `Illumo/Source/Wasm` stay product-agnostic: no Game,
   Rulesets, IllEd or IllMeshViewer includes, no product-specific imports or
   opcodes, no native product fallback. The guest composes
-  its own `IllumoContext` (`GuestModuleApplication`); nothing about it crosses
+  its own `IllumoContext` (`GuestProgram`, which runs the product's scenes); nothing about it crosses
   the ABI, which carries only copied envelopes, services and frames. Package
   manifests request budgets; the runtime grants at most its ceilings, and
   launch options are never persisted. Frame schema changes, new capabilities
   or new imports require decoder/deny tests with the change.
 - `IllumoContext` is a non-owning pointer bag frozen after engine startup;
-  the one exception is `fileTree`, which the module owning a file tree (the
-  WASM host) publishes during Start and withdraws on Exit.
-  Failed optional modules remain inactive; a failed required module rolls back
-  every accepted module and fails startup. Each product supplies one required
-  module; `DebugModule` is optional.
+  the one exception is `fileTree`, which the program owning a file tree (the
+  WASM host) publishes when it starts and withdraws when it stops.
+  A program that fails to start fails the launch; a debug overlay that fails
+  to start is dropped. Inside a program, scenes are managed by its
+  `SceneDirector`, and a failed first scene closes the product.
 - Production consumers include only `<Illumo/...>` headers. Test-only support
   is exposed separately by `Illumo::TestSupport`.
-- Runtime window, input, module, rendering, and OpenGL work is main-thread
+- Runtime window, input, program, rendering, and OpenGL work is main-thread
   affine unless a documented subsystem contract explicitly provides workers.
 - Game and Rulesets do not issue raw OpenGL calls or depend on OpenGL types.
 - Production drawables append `RenderCommand` tokens to the backend-neutral
   `Renderer`; `IBackend` executes them. Any pointer carried by a command must
-  remain valid until synchronous queue submission returns.
+  remain valid until synchronous queue submission returns. Tokens recorded
+  into a `RecordedCommandList` point at storage the list owns, and the list
+  must stay alive and unchanged until any submission that runs it (through
+  `ExecuteList`) returns. Lists never contain `ExecuteList`, never carry
+  per-frame camera or light values (those come from Renderer's
+  `FrameUniforms` block), and are recorded and run on the main thread.
 - Directional shadows use one Renderer-owned depth pass over camera-relevant
   World casters before color rendering. Direct `MeshVisual` drawables and
   SceneGraph attachments contribute bounds and depth tokens to the same fitted
   light-space matrix and shared map; invalid camera reconstruction falls back
   to all casters, and per-object shadow framebuffers are forbidden.
-- `Rendering::Scene` is a non-owning list rebuilt each frame. `SceneGraph`
+- `DrawList` is a non-owning list rebuilt each frame. `SceneGraph`
   separately owns persistent SoA state and derived preorder/bounds/query caches.
   `SceneGraphDrawable` emits ordered snapshot attachments through the token
   path. Handles remain graph-ID-plus-slot-plus-generation; no node addresses,
@@ -499,9 +513,13 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   licensing, maintenance, build, and deployment assessment.
 - `CommandQueue` reserves 2,048 commands, grows to a configurable 65,536
   default ceiling, and reports high-water/rejected counts. Do not remove the
-  ceiling or hide rejection metrics.
+  ceiling or hide rejection metrics. `RecordedCommandList` has its own
+  ceiling (65,536 by default); recording past it fails the list, and
+  executed lists and tokens are reported by `Renderer::getRecordedListStats`.
 - Product UI remains primitive-composed through `GameVisual`; do not introduce
-  a separate retained widget tree for the current console and labels.
+  a separate retained widget tree for the current console and labels. The
+  host-retained `VisualStore` holds visuals, not widgets: layout, input and
+  animation stay in the product (D-E30, D-R29).
 
 ## Code, documentation, and generated material
 

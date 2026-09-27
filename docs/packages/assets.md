@@ -13,7 +13,7 @@ yet participate in hot reload.
 (`assetSource()`). Natively the default is the file system; a tool or test can
 supply `VfsAssetSource` (`Illumo::Content`), whose canonical names are
 normalized absolute virtual paths with relative names joined to `/app`. Every
-WASM guest uses the SDK's `GuestVfsAssets` (`GuestModuleApplication::
+WASM guest uses the SDK's `GuestVfsAssets` (`GuestProgram::
 assetCache()`), which replaced `GuestPackageAssets`: `packageAssets()` names
 pinned preloads read before `bootstrap()`, fetch sets load a scene's
 references on demand (collect, fetch, then instantiate), unpinned and unheld
@@ -34,8 +34,9 @@ same output directory. IllumoGame, IllEd, and IllMeshViewer supply their own
 preserves existing user settings; when products share an output directory,
 the first successful seed creates the shared file.
 
-For `IllumoRuntime`, `illumo_stage_app` (`cmake/IllumoWasm.cmake`) stages each
-application as a loose package in `apps/<name>/`: its `illumo.json` (which
+For `IllumoRuntime`, `illumo_stage_app` (`cmake/IllumoWasm.cmake`, called
+from each program's `PackageTargets.cmake`) stages each application as a
+loose package in `apps/<name>/`: its `illumo.json` (which
 replaced `app.json`; staging writes the build version into it, D-F2),
 modules, `envvars.json` and package-relative data such
 as `Scenes/render3d-test.ilsc` or `Assets/IllEd/editor-ui-atlas.jpg`. The

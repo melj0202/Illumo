@@ -1,14 +1,14 @@
 # Illumo
 
 Illumo is a reusable C++23 static runtime and rendering library. This
-repository is a source workspace: the library and the in-tree applications
-that consume it through `CreateIllumoApplication`. It is not an installable
-SDK or a stable DLL ABI. Moving a product to a downstream repository is a
-separate packaging step.
+repository is a source workspace: the library, the `IllumoRuntime` host built
+on it, and the in-tree applications, which run on that host as WASM programs.
+It is not an installable SDK or a stable DLL ABI. Moving a product to a
+downstream repository is a separate packaging step.
 
 Illumo owns the generic application runner, platform entry and native
 dialogs, BuildInfo, SysCmdLine, host, services, persistent `SceneGraph`,
-token renderer, assets, and module lifetime. It does not depend on Game,
+token renderer, assets, and the frame phases. It does not depend on Game,
 Rulesets, or IllEd. Application policy stays in the consuming product.
 
 ## What this repository is
@@ -18,7 +18,7 @@ Rulesets, or IllEd. Application policy stays in the consuming product.
 | `Illumo/` | Static library: runner, platform, services, SceneGraph, OpenGL token renderer, assets |
 | `IllumoGame/` | Cellular-automata sandbox, shipped only as the isolated `IllumoGame.wasm` package. Saves write sparse `.csim` version 4; loads versions 4, 3, and 2 plus legacy dense / `.illumo` |
 | `IllumoRuntime` | Generic native host (Windows x64): window, OpenGL, services and a Wasmtime sandbox. Runs every interactive client program as a WASM package staged beside it in `apps/<name>/`, and captures PNG frames with `--capture` ([docs/wasm-game-runtime-design.md](docs/wasm-game-runtime-design.md), [docs/frame-capture.md](docs/frame-capture.md)) |
-| `IllumoGuest/` | Guest SDK and WASI build tree: ABI wire headers, guest-side engine (`GuestModuleApplication`), recording backend |
+| `IllumoGuest/` | Guest SDK and WASI build tree: ABI wire headers, guest-side engine and program (`GuestProgram`), recording backend |
 | `IllEd/` | SceneGraph world editor, shipped as the `IllEd.wasm` package (`--app illed`). Writes `.ilsc` format 2 scenes for later Illumo applications; its Hierarchy, Assets, Tools and Inspector panels dock or pop out into their own windows |
 | `IllMeshViewer/` | `.obj` mesh and `.ilsc` scene viewer with orbit, pan, zoom, and rotate, and detachable Info and Display panels, shipped as the `IllMeshViewer.wasm` package (`--app meshviewer`) |
 | `build.py` | Standard-library Python 3.10+ front end for the CMake build |
@@ -363,7 +363,7 @@ Host-wide shortcuts (yield while the developer console is open):
 - **F3** — FPS overlay (`showFPS`)
 - **F5** — reload managed textures and shaders
 - **Grave / tilde** — developer console (Debug and RelWithDebInfo;
-  `DebugModule`)
+  `DebugOverlay`)
 
 Applications also honor the window-manager close button. **Q** is not a
 global quit key: IllumoGame uses it to request exit; IllEd and IllMeshViewer
@@ -503,7 +503,7 @@ command shows the same exchange statistics. See
 
 ### Developer console
 
-Available in Debug and RelWithDebInfo (`DebugModule`). Type `help` or
+Available in Debug and RelWithDebInfo (`DebugOverlay`). Type `help` or
 `help <command>`. The table is IllumoGame-oriented; other apps share the
 host overlay.
 
@@ -935,11 +935,17 @@ python tools/create_project.py <destination_path> --name MyGame
 This generates a turnkey standalone workspace:
 
 - `Illumo/`: engine sources (`Include/`, `Source/`, `Shader/`, `Assets/`,
-  `thirdparty/`, `TestSupport/`, `Tests/`, `cmake/`)
-- `IllEd/`: SceneGraph world editor
-- `<ApplicationName>/` (default `IllumoGame/`): starter template (a 3D lit
-  spinning cube with perspective camera, controls, configuration, and tests)
-- `cmake/`, `build.py`, `CMakeLists.txt`, `README.md`
+  `thirdparty/`, `TestSupport/`, `Tests/`, `cmake/`), IllumoRuntime included
+- `IllumoGuest/`: the guest SDK and WASI guest build
+- `IllEd/`: SceneGraph world editor (a WASM program)
+- `<ApplicationName>/` (default `IllumoGame/`): the starter template, a WASM
+  scene program (D-E31). Its `GuestProgram` adds one `SpinningCubeScene` (a
+  3D lit spinning cube with perspective camera, controls, configuration and a
+  scene console command) to its `SceneDirector`. `GuestTargets.cmake` builds
+  the module, `PackageTargets.cmake` stages `apps/<id>` (the name in lower
+  case), and the headless tests run the scene through a director.
+- `cmake/`, `tools/bootstrap-wasm.ps1`, `build.py`, `CMakeLists.txt` (which
+  lists the programs in `ILLUMO_PROGRAMS`), `README.md`
 
 Starter controls yield while the console is open. Keys held during capture
 must be released before they can control the cube again; animation
@@ -949,7 +955,7 @@ continues.
 - **R** — reset rotation angle to 0
 - **G** — toggle 3D reference grid
 - **Up / Down** — rotation speed
-- **Escape** — exit
+- **`cube_speed [value]`** — console command, while the cube scene is active
 
 Generated workspaces omit engine PDF sources, so
 `ILLUMO_BUILD_DOCUMENTATION` defaults off there. This repository defaults it
@@ -971,12 +977,13 @@ python -B -m unittest discover -s tools -p test_create_project.py
 Remove-Item Env:ILLUMO_TEST_GENERATED_BUILD
 ```
 
-To build and run the newly generated application:
+To build and run the newly generated application (Windows x64, where the
+pinned WASM toolchain runs):
 
 ```bash
 cd <destination_path>
-python build.py build
-python build.py run --app <ApplicationName>
+python build.py wasm-tools
+python build.py play --app <application id>
 python build.py test
 ```
 

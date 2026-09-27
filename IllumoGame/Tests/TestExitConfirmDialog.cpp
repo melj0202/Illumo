@@ -2,7 +2,7 @@
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -173,7 +173,7 @@ testExitConfirmTokens()
   fixture.dialog.open();
   fixture.dialog.tick(1.0f);
 
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&fixture.dialog, RenderLayerId::UI);
   fixture.mock.resetCounters();
   fixture.renderer.BeginFrame();

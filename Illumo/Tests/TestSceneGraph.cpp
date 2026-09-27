@@ -1,5 +1,5 @@
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Scene/Transform3D.h>
@@ -523,7 +523,7 @@ testSceneGraphBoundsAndCulling()
            !graph.getWorldBounds(foreign, &childWorldBounds),
            "foreign handles cannot query bounds");
 
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   scene.AddDrawable(&graphDrawable, RenderLayerId::World);
   fixture.renderer.BeginFrame();
   fixture.renderer.RenderScene(&scene, &fixture.camera);
@@ -550,7 +550,7 @@ testSceneGraphBoundsAndCulling()
     6, &perspectiveOrder, localBounds);
   perspectiveGraph.setRenderAttachment(perspectiveVisible, &visibleAttachment);
   perspectiveGraph.setRenderAttachment(perspectiveHidden, &hiddenAttachment);
-  Scene perspectiveScene(&fixture.window, &fixture.camera);
+  DrawList perspectiveScene(&fixture.window, &fixture.camera);
   perspectiveScene.AddDrawable(&perspectiveGraphDrawable, RenderLayerId::World);
   fixture.renderer.BeginFrame();
   fixture.renderer.RenderScene(&perspectiveScene, &fixture.camera);
@@ -581,7 +581,7 @@ runSceneGraphCullingPass(HeadlessRenderFixture* fixture,
     attachments.emplace_back(callbacks, bounded);
     graph.setRenderAttachment(node, &attachments.back());
   }
-  Scene scene(&fixture->window, &fixture->camera);
+  DrawList scene(&fixture->window, &fixture->camera);
   scene.AddDrawable(&graphDrawable, RenderLayerId::World);
   const std::chrono::steady_clock::time_point start =
     std::chrono::steady_clock::now();

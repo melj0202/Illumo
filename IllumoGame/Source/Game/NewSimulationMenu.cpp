@@ -7,6 +7,7 @@
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/InputManager.h>
 #include <algorithm>
 #include <cmath>
@@ -25,11 +26,13 @@ NewSimulationMenu::NewSimulationMenu(IRenderWindow* target, Renderer* owner)
   : window(target)
   , renderer(owner)
 {
-  visual.setWindow(window);
-  visual.setRenderer(renderer);
-  visual.setSpace(PrimitiveSpace::Pixels);
-  visual.setLayerHint(RenderLayerId::UI);
-  visual.prepare(renderer);
+  for (GameVisual& layer : layers) {
+    layer.setWindow(window);
+    layer.setRenderer(renderer);
+    layer.setSpace(PrimitiveSpace::Pixels);
+    layer.setLayerHint(RenderLayerId::UI);
+    layer.prepare(renderer);
+  }
 }
 
 void
@@ -259,9 +262,17 @@ NewSimulationMenu::update(InputManager* input)
 }
 
 void
+NewSimulationMenu::addDrawables(DrawList& scene)
+{
+  for (GameVisual& layer : layers) {
+    scene.AddDrawable(&layer, RenderLayerId::UI);
+  }
+}
+
+void
 NewSimulationMenu::rebuild()
 {
-  panelFit = GuiPanelLayout::fit(window, renderer, &visual);
+  panelFit = GuiPanelLayout::fit(window, renderer, nullptr);
   const float screenWidth = panelFit.virtualWidth;
   const float screenHeight = panelFit.virtualHeight;
   width = std::min(720.0f, screenWidth - 32);
@@ -271,7 +282,12 @@ NewSimulationMenu::rebuild()
   x = (screenWidth - width) / 2 + tilt.bodyShiftX();
   y = (screenHeight - height) / 2 + animator.panelOffsetY() + tilt.bodyShiftY();
   rowHeight = (height - 164) / static_cast<float>(kRowCount);
-  visual.clearPrimitives();
+  for (GameVisual& layer : layers) {
+    layer.clearPrimitives();
+  }
+  GameVisual& glassLayer = layers[kGlassLayer];
+  GameVisual& visual = layers[kHeaderLayer];
+  GameVisual& accent = layers[kAccentLayer];
 
   const float scrim = animator.openReveal(0.18f);
   const float reveal = animator.panelReveal();
@@ -281,7 +297,7 @@ NewSimulationMenu::rebuild()
   const ColorRgba cyan = UiTheme::accentCool();
   const ColorRgba violet = UiTheme::accentViolet();
 
-  GuiKit::drawVignette(visual,
+  GuiKit::drawVignette(glassLayer,
                        screenWidth,
                        screenHeight,
                        UiTheme::fade(UiTheme::scrimCenter(), scrim),
@@ -293,7 +309,7 @@ NewSimulationMenu::rebuild()
   glass.glow = 0.4f + 0.3f * breathe;
   glass.accentReveal = reveal;
   tilt.applyTo(glass);
-  GuiKit::drawGlassPanel(visual,
+  GuiKit::drawGlassPanel(glassLayer,
                          x + tilt.layerX(GuiPanelTilt::kGlassDepth),
                          y + tilt.layerY(GuiPanelTilt::kGlassDepth),
                          width,
@@ -322,7 +338,7 @@ NewSimulationMenu::rebuild()
 
   // A live glider walks a 6x6 torus, echoing the title screen's motif; it is
   // the nearest layer and swings furthest.
-  motif.draw(visual,
+  motif.draw(accent,
              x + width - 90 + tilt.layerX(GuiPanelTilt::kAccentDepth),
              y + 15 + tilt.layerY(GuiPanelTilt::kAccentDepth),
              7.0f,
@@ -355,7 +371,7 @@ NewSimulationMenu::rebuild()
     UiTheme::applyOpacity(ColorRgba{ 16, 26, 44, 255 }, opacity),
     UiTheme::applyOpacity(UiTheme::panelInset(), opacity));
   GuiKit::drawSoftGlow(
-    visual,
+    accent,
     modeBadgeX + 13,
     modeBadgeY + 11,
     12,
@@ -363,12 +379,12 @@ NewSimulationMenu::rebuild()
     UiTheme::applyOpacity(UiTheme::fade(modeColor, 0.35f + 0.25f * breathe),
                           opacity),
     12);
-  visual.addFilledEllipse(modeBadgeX + 10,
+  accent.addFilledEllipse(modeBadgeX + 10,
                           modeBadgeY + 8,
                           6,
                           6,
                           UiTheme::applyOpacity(modeColor, opacity));
-  visual.addText(finite ? "FINITE TORUS" : "INFINITE FIELD",
+  accent.addText(finite ? "FINITE TORUS" : "INFINITE FIELD",
                  modeBadgeX + 22,
                  modeBadgeY + 6,
                  10,
@@ -407,11 +423,18 @@ NewSimulationMenu::rebuild()
 
   drawRows(opacity, breathe);
   drawFooter(height, opacity);
+  const float scale = GuiPanelLayout::visualScale(panelFit, renderer);
+  for (GameVisual& layer : layers) {
+    GuiPanelLayout::scaleFromScreenOrigin(layer, scale);
+  }
 }
 
 void
 NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
 {
+  GameVisual& cards = layers[kCardLayer];
+  GameVisual& dropLayer = layers[kDropLayer];
+  GameVisual& visual = layers[kContentLayer];
   const ColorRgba cyan = UiTheme::accentCool();
   const RuleSetDefinition* rule =
     RuleSetRegistry::instance().getRuleSetDefinition(draft.ruleSet);
@@ -454,7 +477,7 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
     const float e = std::clamp(focus.value(row), 0.0f, 1.0f);
     const bool primary = row == 6;
     GuiKit::drawSoftShadow(
-      visual,
+      cards,
       cardX,
       ry,
       cardWidth,
@@ -465,7 +488,7 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
       UiTheme::applyOpacity(UiTheme::fade(UiTheme::glowShadow(), 0.7f),
                             rowOpacity));
     GuiKit::drawRoundedRect(
-      visual,
+      cards,
       cardX,
       ry,
       cardWidth,
@@ -478,7 +501,7 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
                                          e * 0.6f),
                             rowOpacity));
     GuiKit::drawRoundedGradientRect(
-      visual,
+      cards,
       cardX + 1,
       ry + 1,
       cardWidth - 2,
@@ -516,9 +539,9 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
   drop.sheen = animator.selectionSheen();
   drop.sheenColor =
     UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 40 }, opacity);
-  GuiKit::drawLiquidSelection(visual, drop);
+  GuiKit::drawLiquidSelection(dropLayer, drop);
   // The accent bar rides the head of the drop.
-  GuiKit::drawRoundedRect(visual,
+  GuiKit::drawRoundedRect(dropLayer,
                           x + 31,
                           drop.headStart + 9,
                           3,
@@ -594,7 +617,9 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
         ? UiTheme::mix(cyan, ColorRgba{ 210, 250, 255, 255 }, 0.3f * breathe)
         : UiTheme::mix(
             UiTheme::textSecondary(), UiTheme::textPrimary(), eClamped);
-    visual.addText(
+    // The create row's value breathes, so it sits alone in the last layer.
+    GameVisual& valueLayer = row == 6 ? layers[kPulseLayer] : visual;
+    valueLayer.addText(
       values[row],
       x + width * 0.45f + 27 + slide,
       valueY,
@@ -609,6 +634,7 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
 void
 NewSimulationMenu::drawFooter(float height, unsigned char opacity)
 {
+  GameVisual& visual = layers[kContentLayer];
   if (selected == 3 || selected == 4) {
     visual.addText("LEFT / RIGHT or click either half: resize by 16 cells",
                    x + 28,

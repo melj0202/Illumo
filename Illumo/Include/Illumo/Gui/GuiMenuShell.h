@@ -3,6 +3,9 @@
 #include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
 #include <array>
+#include <initializer_list>
+#include <utility>
+#include <vector>
 
 class GameVisual;
 struct GuiGlassStyle;
@@ -321,6 +324,49 @@ private:
   float m_caretElapsed = 0.0f;
 };
 
+// The inputs a retained overlay layer was last drawn from (D-R29). A layer
+// that changes only on interaction lists this frame's inputs and redraws only
+// when they differ, so an idle layer sends nothing and the host keeps its
+// recorded commands. Swapping the two lists keeps both capacities.
+class GuiDrawKey final
+{
+public:
+  // Starts this frame's inputs.
+  GuiDrawKey& begin()
+  {
+    m_next.clear();
+    return *this;
+  }
+  GuiDrawKey& add(float value)
+  {
+    m_next.push_back(value);
+    return *this;
+  }
+  GuiDrawKey& add(std::initializer_list<float> values)
+  {
+    m_next.insert(m_next.end(), values);
+    return *this;
+  }
+  // Reports whether the inputs differ from the last drawing's, remembering
+  // them when they do.
+  bool changed()
+  {
+    if (m_valid && m_next == m_last) {
+      return false;
+    }
+    std::swap(m_next, m_last);
+    m_valid = true;
+    return true;
+  }
+  // Makes the next changed() report true, for a layer that was cleared.
+  void invalidate() { m_valid = false; }
+
+private:
+  std::vector<float> m_last;
+  std::vector<float> m_next;
+  bool m_valid = false;
+};
+
 // Window size and UI scale resolved into the shared menu virtual space.
 struct GuiPanelFit
 {
@@ -348,6 +394,15 @@ public:
   static GuiPanelFit fit(IRenderWindow* window,
                          Renderer* renderer,
                          GameVisual* visual);
+
+  // The scale fit() applies to its visual: the fitted layout over the UI
+  // scale the renderer already applies.
+  static float visualScale(const GuiPanelFit& fit, Renderer* renderer);
+
+  // Scales a drawn visual about the screen origin. GameVisual pivots its
+  // transform on its content's corner, so the translation cancels that pivot
+  // and layers with different extents stay aligned.
+  static void scaleFromScreenOrigin(GameVisual& visual, float scale);
 
   // The window expressed in UI-scale units, with no design-size floor and no
   // transform. Docked panels and bars anchor to the real viewport rather than

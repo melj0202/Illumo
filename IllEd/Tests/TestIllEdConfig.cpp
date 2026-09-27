@@ -1,6 +1,4 @@
 #include "IllEdConfig.h"
-#include <Illumo/Engine/Application.h>
-#include <Illumo/Engine/IModule.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -12,18 +10,8 @@ static void
 testDefaultsAndIdentity()
 {
   testSection("IllEdConfig: product identity and defaults");
-  const IllumoApplicationDefinition application = CreateIllumoApplication();
-  testEqStr(g, application.applicationName, "IllEd", "application name");
-  testTrue(g,
-           application.applyDefaults == IllEdConfig::ApplyDefaults,
-           "defaults callback");
-  testTrue(
-    g, application.createRequiredModule != nullptr, "required module factory");
-  std::unique_ptr<IModule> module = application.createRequiredModule(nullptr);
-  testTrue(g, module != nullptr, "factory constructs editor module");
-  testTrue(g,
-           application.commandLine.applicationOptions.empty(),
-           "no CA command-line options");
+  testEqStr(g, IllEdConfig::applicationName(), "IllEd", "application name");
+
 
   const std::filesystem::path path =
     std::filesystem::temp_directory_path() / "illed-defaults.json";

@@ -2,14 +2,13 @@
 
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
 #include "Rendering/RenderWindow.h"
-#include <Illumo/Engine/IModule.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/RenderPass.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -21,12 +20,6 @@
 #include <glm/fwd.hpp>
 #include <tracy/Tracy.hpp>
 #include <utility>
-
-static const char*
-requirementName(ModuleRequirement requirement)
-{
-  return requirement == ModuleRequirement::Required ? "required" : "optional";
-}
 
 static void
 cleanupBackendAfterInitializationFailure(
@@ -193,7 +186,7 @@ Illumo::initialize()
     m_inputManager =
       std::make_unique<InputManager>(m_window->getWindowInstance());
     Logger::LogTrace("Input manager ready");
-    m_scene = std::make_unique<Scene>(m_window.get(), m_camera.get());
+    m_scene = std::make_unique<DrawList>(m_window.get(), m_camera.get());
     m_motionBlurPipelineConfigured = false;
     GLString::setRenderWindow(m_window.get());
 
@@ -206,9 +199,8 @@ Illumo::initialize()
     m_context.camera = m_camera.get();
     m_context.commandRegistry = m_commandRegistry.get();
     m_context.scene = m_scene.get();
-    m_context.moduleHost = this;
+    m_context.frameProfiler = &m_frameProfiler;
     m_initialized = true;
-    m_terminalCloseRequested = false;
     Logger::LogInfo("Engine services initialized (renderer, assets, console, "
                     "input, scene)");
     return true;
@@ -220,205 +212,6 @@ Illumo::initialize()
   }
   releaseServices();
   return false;
-}
-
-void
-Illumo::addModule(std::unique_ptr<IModule> module,
-                  ModuleRequirement requirement)
-{
-  if (m_modulesStarted || module == nullptr) {
-    Logger::LogError(
-      "Module registration rejected after startup or with no module");
-    return;
-  }
-  if (requirement == ModuleRequirement::Required) {
-    for (const RegisteredModule& existing : m_modules) {
-      if (existing.requirement == ModuleRequirement::Required) {
-        Logger::LogError("Only one required product module may be registered");
-        return;
-      }
-    }
-  }
-  RegisteredModule registration;
-  registration.module = std::move(module);
-  registration.requirement = requirement;
-  m_modules.push_back(std::move(registration));
-  Logger::LogTrace(std::string("Registered ") + requirementName(requirement) +
-                   " module");
-}
-
-bool
-Illumo::startModules()
-{
-  if (!m_initialized) {
-    Logger::LogError("Illumo modules cannot start before initialization");
-    return false;
-  }
-  if (m_modulesStarted) {
-    Logger::LogWarning("Illumo::startModules called more than once; ignoring");
-    return true;
-  }
-
-  std::vector<RegisteredModule>::iterator registration = m_modules.begin();
-  while (registration != m_modules.end()) {
-    bool accepted = false;
-    bool startThrew = false;
-    try {
-      accepted =
-        registration->module && registration->module->Start(&m_context);
-    } catch (const std::exception& exception) {
-      Logger::LogError(std::string("An Illumo module threw during startup: ") +
-                       exception.what());
-      startThrew = true;
-    } catch (...) {
-      Logger::LogError("An Illumo module threw an unknown startup error");
-      startThrew = true;
-    }
-    if (accepted) {
-      Logger::LogTrace(std::string("Started ") +
-                       requirementName(registration->requirement) + " module");
-      registration->started = true;
-      ++registration;
-      continue;
-    }
-    if (startThrew) {
-      stopModule(*registration, true);
-    }
-    const ModuleRequirement requirement = registration->requirement;
-    registration = m_modules.erase(registration);
-    if (requirement == ModuleRequirement::Optional) {
-      Logger::LogWarning("An optional Illumo module did not start");
-      continue;
-    }
-
-    Logger::LogError("A required Illumo module did not start; rolling back");
-    rollbackStartedModules();
-    return false;
-  }
-
-  m_modulesStarted = true;
-  Logger::LogInfo("Modules started: " + std::to_string(m_modules.size()) +
-                  " active");
-  return true;
-}
-
-void
-Illumo::RequestTransition(std::unique_ptr<IModule> nextModule)
-{
-  if (nextModule == nullptr || m_pendingModuleTransition != nullptr) {
-    Logger::LogWarning("Module transition rejected: empty request or "
-                       "transition already pending");
-    return;
-  }
-  m_pendingModuleTransition = std::move(nextModule);
-}
-
-bool
-Illumo::HasPendingTransition() const
-{
-  return m_pendingModuleTransition != nullptr;
-}
-
-void
-Illumo::applyPendingModuleTransition()
-{
-  if (!m_pendingModuleTransition) {
-    return;
-  }
-
-  std::unique_ptr<IModule> nextModule = std::move(m_pendingModuleTransition);
-  Logger::LogTrace("Switching the required module");
-
-  for (std::vector<RegisteredModule>::iterator it = m_modules.begin();
-       it != m_modules.end();) {
-    if (it->requirement == ModuleRequirement::Required) {
-      if (m_scene != nullptr) {
-        m_scene->ResetDefaultPasses();
-      }
-      stopModule(*it, false);
-      // Exit may install callbacks too; detach before destroying their owners.
-      if (m_scene != nullptr) {
-        m_scene->ResetDefaultPasses();
-      }
-      it = m_modules.erase(it);
-    } else {
-      ++it;
-    }
-  }
-
-  if (m_inputManager != nullptr) {
-    m_inputManager->clearKeyQueue();
-    m_inputManager->clearCharQueue();
-  }
-
-  if (m_scene != nullptr) {
-    m_scene->ClearDrawables();
-  }
-
-  bool accepted = false;
-  bool startThrew = false;
-  try {
-    accepted = nextModule && nextModule->Start(&m_context);
-  } catch (const std::exception& exception) {
-    Logger::LogError(
-      std::string("A transitioned module threw during startup: ") +
-      exception.what());
-    accepted = false;
-    startThrew = true;
-  } catch (...) {
-    Logger::LogError("A transitioned module threw an unknown startup error");
-    accepted = false;
-    startThrew = true;
-  }
-
-  if (!accepted) {
-    Logger::LogError(
-      "A transitioned required module failed to start; closing application");
-    m_terminalCloseRequested = true;
-    if (nextModule && startThrew) {
-      try {
-        nextModule->Exit();
-      } catch (...) {
-      }
-    }
-    if (m_scene != nullptr) {
-      m_scene->ResetDefaultPasses();
-      m_scene->ClearDrawables();
-    }
-    if (m_window != nullptr) {
-      m_window->requestClose();
-    }
-    return;
-  }
-
-  RegisteredModule registration;
-  registration.module = std::move(nextModule);
-  registration.requirement = ModuleRequirement::Required;
-  registration.started = true;
-  m_modules.insert(m_modules.begin(), std::move(registration));
-  Logger::LogTrace("Required module switched");
-}
-
-void
-Illumo::updateStartedModules(ModuleRequirement requirement, double dt)
-{
-  for (RegisteredModule& registration : m_modules) {
-    if (registration.started && registration.module &&
-        registration.requirement == requirement) {
-      registration.module->Update(dt);
-    }
-  }
-}
-
-void
-Illumo::dispatchStartedModules(ModuleRequirement requirement)
-{
-  for (RegisteredModule& registration : m_modules) {
-    if (registration.started && registration.module &&
-        registration.requirement == requirement) {
-      registration.module->DispatchDrawables(m_scene.get());
-    }
-  }
 }
 
 void
@@ -487,13 +280,10 @@ Illumo::processGlobalHotkeys()
 }
 
 void
-Illumo::update(double dt)
+Illumo::beginUpdate(double dt)
 {
-  if (!m_initialized || !m_modulesStarted) {
+  if (!m_initialized) {
     return;
-  }
-  if (m_pendingModuleTransition != nullptr) {
-    applyPendingModuleTransition();
   }
   ZoneScoped;
   m_frameProfiler.mark(FramePhase::Input);
@@ -501,18 +291,19 @@ Illumo::update(double dt)
   processGlobalHotkeys();
   m_frameProfiler.mark(FramePhase::Camera);
   m_camera->Update(static_cast<float>(dt));
-  // Optional overlays (DebugModule) consume global console input first.
-  m_frameProfiler.mark(FramePhase::DebugUpdate);
-  updateStartedModules(ModuleRequirement::Optional, dt);
-  m_frameProfiler.mark(FramePhase::ProductUpdate);
-  updateStartedModules(ModuleRequirement::Required, dt);
+}
+
+void
+Illumo::endUpdate()
+{
+  if (!m_initialized) {
+    return;
+  }
   m_frameProfiler.mark(FramePhase::Other);
   // Key/char queues are per-frame events. Unconsumed leftovers must not
   // retrigger on the next update.
-  if (m_inputManager != nullptr) {
-    m_inputManager->clearKeyQueue();
-    m_inputManager->clearCharQueue();
-  }
+  m_inputManager->clearKeyQueue();
+  m_inputManager->clearCharQueue();
 }
 
 void
@@ -621,20 +412,25 @@ Illumo::configureScenePipeline()
   }
 }
 
-void
-Illumo::render()
+DrawList*
+Illumo::beginRender()
 {
-  if (!m_initialized || !m_modulesStarted) {
-    return;
+  if (!m_initialized) {
+    return nullptr;
   }
-  ZoneScopedN("Illumo.Render");
   m_frameProfiler.mark(FramePhase::ScenePreparation);
   configureScenePipeline();
   m_scene->ClearDrawables();
-  // Product content first; optional overlays (console, FPS, demo) on top.
-  dispatchStartedModules(ModuleRequirement::Required);
-  dispatchStartedModules(ModuleRequirement::Optional);
+  return m_scene.get();
+}
 
+void
+Illumo::endRender()
+{
+  if (!m_initialized) {
+    return;
+  }
+  ZoneScopedN("Illumo.Render");
   m_frameProfiler.mark(FramePhase::Assets);
   m_assetManager->pump();
   m_frameProfiler.mark(FramePhase::Commands);
@@ -657,50 +453,13 @@ Illumo::render()
 }
 
 void
-Illumo::stopModule(RegisteredModule& registration, bool force) noexcept
-{
-  if ((!registration.started && !force) || !registration.module) {
-    return;
-  }
-  registration.started = false;
-  try {
-    registration.module->Exit();
-  } catch (const std::exception& exception) {
-    try {
-      Logger::LogError(std::string("An Illumo module threw during exit: ") +
-                       exception.what());
-    } catch (...) {
-    }
-  } catch (...) {
-    try {
-      Logger::LogError("An Illumo module threw an unknown exit error");
-    } catch (...) {
-    }
-  }
-}
-
-void
-Illumo::rollbackStartedModules() noexcept
-{
-  for (std::vector<RegisteredModule>::reverse_iterator it = m_modules.rbegin();
-       it != m_modules.rend();
-       ++it) {
-    stopModule(*it, false);
-  }
-}
-
-void
 Illumo::shutdown() noexcept
 {
   const bool wasRunning = m_initialized;
-  m_pendingModuleTransition.reset();
-  rollbackStartedModules();
-  m_modules.clear();
-  m_modulesStarted = false;
   releaseServices();
   if (wasRunning) {
     try {
-      Logger::LogTrace("Engine modules stopped and services released");
+      Logger::LogTrace("Engine services released");
     } catch (...) {
     }
   }
@@ -747,24 +506,11 @@ Illumo::shouldClose() const
   return !m_window || m_window->shouldWindowClose();
 }
 
-bool
-Illumo::processCloseRequest()
+void
+Illumo::deferClose()
 {
-  if (!m_window || m_terminalCloseRequested) {
-    return true;
+  if (m_window) {
+    m_window->cancelCloseRequest();
+    m_window->clearRestartRequest();
   }
-  if (!m_window->shouldWindowClose()) {
-    return false;
-  }
-  if (m_modulesStarted) {
-    for (RegisteredModule& registration : m_modules) {
-      if (registration.started && !registration.module->OnCloseRequested()) {
-        // A deferred close also drops a restart that rode on it.
-        m_window->cancelCloseRequest();
-        m_window->clearRestartRequest();
-        return false;
-      }
-    }
-  }
-  return true;
 }

@@ -6,7 +6,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestAccess.h>
@@ -733,7 +733,7 @@ testPanelWindowsLifecycle()
 }
 
 // The guest side, compiled natively: its own window, recording renderer and
-// service queue, as GuestModuleApplication composes them.
+// service queue, as GuestProgram composes them.
 struct GuestSide
 {
   GuestServiceQueue queue;
@@ -742,7 +742,7 @@ struct GuestSide
   Camera camera{ glm::vec2(0, 0), 1, &env };
   GuestRecordingBackend backend{ queue };
   Renderer renderer{ &window, &env, &camera, &backend, false };
-  Scene main{ &window, &camera };
+  DrawList main{ &window, &camera };
   GuestPanelSurfaces panels{ queue, window, camera };
   GuestSide()
   {
@@ -767,7 +767,7 @@ exchangeServices(GuestSide& guest,
   }
 }
 
-// Records one frame the way GuestModuleApplication::frame does.
+// Records one frame the way GuestProgram::frame does.
 static GuestFrame
 recordFrame(GuestSide& guest, GameVisual* panel)
 {
@@ -778,7 +778,7 @@ recordFrame(GuestSide& guest, GameVisual* panel)
   guest.backend.pump();
   guest.main.ClearDrawables();
   guest.panels.clearScenes();
-  Scene* surface = guest.panels.scene(3);
+  DrawList* surface = guest.panels.scene(3);
   if (surface != nullptr && panel != nullptr) {
     surface->AddDrawable(panel, RenderLayerId::UI);
   }

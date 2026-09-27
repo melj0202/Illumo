@@ -250,13 +250,14 @@ RulesetWorkshopMenu::RulesetWorkshopMenu(IRenderWindow* targetWindow,
                                          Renderer* targetRenderer)
   : window(targetWindow)
   , renderer(targetRenderer)
-  , visual(4096u)
 {
-  visual.setSpace(PrimitiveSpace::Pixels);
-  visual.setLayerHint(RenderLayerId::UI);
-  visual.setWindow(window);
-  visual.setRenderer(renderer);
-  visual.prepare(renderer);
+  for (GameVisual& layer : layers) {
+    layer.setSpace(PrimitiveSpace::Pixels);
+    layer.setLayerHint(RenderLayerId::UI);
+    layer.setWindow(window);
+    layer.setRenderer(renderer);
+    layer.prepare(renderer);
+  }
   setVisible(false);
   rowFocus.configure(GuiMotion::kJelly);
   chipGlow.configure(GuiMotion::kBoing);
@@ -369,7 +370,9 @@ RulesetWorkshopMenu::close()
 {
   openState = false;
   setVisible(false);
-  visual.clearPrimitives();
+  for (GameVisual& layer : layers) {
+    layer.clearPrimitives();
+  }
   pointer.forgetPosition();
   errorMessage.clear();
 }
@@ -454,7 +457,8 @@ RulesetWorkshopMenu::getValuePulseForTesting() const
 void
 RulesetWorkshopMenu::updateLayout()
 {
-  panelFit = GuiPanelLayout::fit(window, renderer, &visual);
+  panelFit = GuiPanelLayout::fit(window, renderer, nullptr);
+  visualScale = GuiPanelLayout::visualScale(panelFit, renderer);
   const float virtualWidth = panelFit.virtualWidth;
   const float virtualHeight = panelFit.virtualHeight;
   panelWidth = std::min(820.0f, std::max(200.0f, virtualWidth - 24.0f));
@@ -1476,7 +1480,12 @@ void
 RulesetWorkshopMenu::rebuildVisual()
 {
   updateLayout();
-  visual.clearPrimitives();
+  for (GameVisual& layer : layers) {
+    layer.clearPrimitives();
+  }
+  GameVisual& glassLayer = layers[kGlassLayer];
+  GameVisual& surfaces = layers[kSurfaceLayer];
+  GameVisual& visual = layers[kContentLayer];
   if (!openState) {
     return;
   }
@@ -1493,7 +1502,7 @@ RulesetWorkshopMenu::rebuildVisual()
   const float breathe =
     0.5f + 0.5f * std::sin(animator.ambientPhase() * 1.04719755f);
 
-  GuiKit::drawVignette(visual,
+  GuiKit::drawVignette(glassLayer,
                        virtualWidth,
                        virtualHeight,
                        UiTheme::fade(UiTheme::scrimCenter(), backdrop),
@@ -1505,7 +1514,7 @@ RulesetWorkshopMenu::rebuildVisual()
   glass.glow = 0.35f + 0.3f * breathe;
   glass.accentReveal = reveal;
   tilt.applyTo(glass);
-  GuiKit::drawGlassPanel(visual,
+  GuiKit::drawGlassPanel(glassLayer,
                          panelX + tilt.layerX(GuiPanelTilt::kGlassDepth),
                          animatedPanelY +
                            tilt.layerY(GuiPanelTilt::kGlassDepth),
@@ -1516,7 +1525,7 @@ RulesetWorkshopMenu::rebuildVisual()
   const ColorRgba ruleCyan = UiTheme::applyOpacity(cyan, panelOpacity);
   const ColorRgba ruleViolet = UiTheme::applyOpacity(
     UiTheme::fade(UiTheme::accentViolet(), 0.8f), panelOpacity);
-  visual.addGradientRect(panelX + 20.0f,
+  surfaces.addGradientRect(panelX + 20.0f,
                          animatedFirstRowY - 5.0f,
                          ruleWidth * 0.7f,
                          2.0f,
@@ -1524,7 +1533,7 @@ RulesetWorkshopMenu::rebuildVisual()
                          ruleViolet,
                          ruleViolet,
                          ruleCyan);
-  visual.addGradientRect(panelX + 20.0f + ruleWidth * 0.7f,
+  surfaces.addGradientRect(panelX + 20.0f + ruleWidth * 0.7f,
                          animatedFirstRowY - 5.0f,
                          ruleWidth * 0.3f,
                          2.0f,
@@ -1634,7 +1643,7 @@ RulesetWorkshopMenu::rebuildVisual()
         std::max(0.0f, panelX + panelWidth - 56.0f - dividerX);
       const ColorRgba ruleColor = UiTheme::applyOpacity(
         UiTheme::mix(UiTheme::panelBorder(), cyan, 0.35f), rowOpacity);
-      visual.addGradientRect(dividerX,
+      surfaces.addGradientRect(dividerX,
                              rowY + rowHeight * 0.55f,
                              dividerWidth,
                              1.0f,
@@ -1646,7 +1655,7 @@ RulesetWorkshopMenu::rebuildVisual()
     }
     if (row.kind == RowKind::Information) {
       GuiKit::drawRoundedGradientRect(
-        visual,
+        surfaces,
         panelX + 22.0f,
         rowY + 1.0f,
         panelWidth - 44.0f,
@@ -1658,7 +1667,7 @@ RulesetWorkshopMenu::rebuildVisual()
     }
     const float e = std::clamp(rowFocus.value(bodyRow), 0.0f, 1.0f);
     GuiKit::drawRoundedRect(
-      visual,
+      surfaces,
       cardX,
       rowY + 1.0f,
       cardWidth,
@@ -1669,7 +1678,7 @@ RulesetWorkshopMenu::rebuildVisual()
                                          e * 0.5f),
                             rowOpacity));
     GuiKit::drawRoundedGradientRect(
-      visual,
+      surfaces,
       cardX + 1.0f,
       rowY + 2.0f,
       cardWidth - 2.0f,
@@ -1717,7 +1726,7 @@ RulesetWorkshopMenu::rebuildVisual()
     drop.sheen = animator.selectionSheen();
     drop.sheenColor =
       UiTheme::applyOpacity(ColorRgba{ 210, 250, 255, 38 }, pillOpacity);
-    GuiKit::drawLiquidSelection(visual, drop);
+    GuiKit::drawLiquidSelection(layers[kDropLayer], drop);
   }
 
   // Pass two: row contents.
@@ -1863,8 +1872,9 @@ RulesetWorkshopMenu::rebuildVisual()
             UiTheme::mix(UiTheme::panelBorder(), cyan, litClamped),
             rowOpacity));
         if (cursor) {
+          // The cursor breathes, so it rides on top in its own layer.
           GuiKit::drawRoundedOutline(
-            visual,
+            layers[kCursorLayer],
             currentX - 2.0f,
             rowY + 2.0f,
             chipWidth + 4.0f,
@@ -2101,6 +2111,9 @@ RulesetWorkshopMenu::rebuildVisual()
                    UiTheme::warning(),
                    footerFocus.value(1),
                    panelOpacity);
+  for (GameVisual& layer : layers) {
+    GuiPanelLayout::scaleFromScreenOrigin(layer, visualScale);
+  }
   setVisible(true);
 }
 bool
@@ -2109,5 +2122,9 @@ RulesetWorkshopMenu::AppendCommands(Renderer* targetRenderer)
   if (!isVisible()) {
     return true;
   }
-  return visual.AppendCommands(targetRenderer);
+  bool appended = true;
+  for (GameVisual& layer : layers) {
+    appended = layer.AppendCommands(targetRenderer) && appended;
+  }
+  return appended;
 }

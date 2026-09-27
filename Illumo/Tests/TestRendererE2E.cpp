@@ -8,7 +8,7 @@
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -223,7 +223,7 @@ testRenderSceneLayerOrder()
   MockBackend mock;
   mock.Initialize();
   Renderer renderer(&window, &env, &camera, &mock, false);
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
 
   OrderProbeDrawable worldA;
   worldA.id = 1;
@@ -282,7 +282,7 @@ testRenderSceneTokenDrawable()
   mock.Initialize();
 
   Renderer renderer(&window, &env, &camera, &mock, false);
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
 
   TokenQuadDrawable quad;
   quad.enroll(&renderer);
@@ -444,7 +444,7 @@ testRenderSceneLayerPassPipeline()
   MockBackend mock;
   mock.Initialize();
   Renderer renderer(&window, &env, &camera, &mock, false);
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
 
   // Configure World layer to have 2 passes:
   // 1. Geometry pass to offscreen MRT target (color + velocity)
@@ -548,7 +548,7 @@ testOrdinaryLayerTargetRestore()
   MockBackend backend;
   backend.Initialize();
   Renderer renderer(&window, nullptr, &camera, &backend, false);
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   RenderPassDesc pass;
   pass.useScreenTarget = false;
   pass.pooledTargetName = "small-world";
@@ -614,7 +614,7 @@ testPassClearMasks()
   backend.Initialize();
   Renderer renderer(&window, nullptr, &camera, &backend, false);
   for (int mask = 0; mask < 4; ++mask) {
-    Scene scene(&window, &camera);
+    DrawList scene(&window, &camera);
     RenderPassDesc pass;
     pass.clear.clearColor = (mask & 1) != 0;
     pass.clear.clearDepth = (mask & 2) != 0;
@@ -657,7 +657,7 @@ testRenderSceneShadowPassPrecedesCustomTarget()
   Renderer renderer(&window, &env, &camera, &mock, false);
   renderer.ensureBuiltinStyles();
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
 
   RenderPassDesc geomPass;
   geomPass.name = "WorldGeomPass";
@@ -831,7 +831,7 @@ testRendererSkyboxVisual()
   SkyboxVisual skybox(cubemap);
   skybox.prepare(&renderer);
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&skybox, RenderLayerId::World);
 
   renderer.RenderScene(&scene, &camera);
@@ -1282,7 +1282,7 @@ testOffscreenReadback()
   e2eTrue(!backend.requestFramebufferReadback(4, FramebufferHandle{}, 8, 8),
           "reading an invalid framebuffer is refused");
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   ReentrantOffscreenDrawable reentrant;
   reentrant.target = target;
   scene.AddDrawable(&reentrant, RenderLayerId::UI);

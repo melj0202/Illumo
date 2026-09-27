@@ -7,8 +7,9 @@
 #include <vector>
 
 class DrawableBase;
+class Font;
 class Renderer;
-class Scene;
+class DrawList;
 
 // Diagnostics: the last accepted frame's payload plus lifetime totals of host
 // mesh slot allocations. Counting only; nothing here affects rendering.
@@ -23,6 +24,12 @@ struct WasmFrameCounters
   std::uint64_t meshWriteBytes = 0;
   std::uint64_t meshEnrollments = 0;
   std::uint64_t meshReplacements = 0;
+  // Frame schema v6: the last frame's world operations and live instances.
+  std::uint64_t worldOperations = 0;
+  std::uint64_t worldInstances = 0;
+  // Frame schema v7: the last frame's visual operations and live visuals.
+  std::uint64_t visualOperations = 0;
+  std::uint64_t visuals = 0;
 };
 
 // Frame schema v5: the latest accepted content of one surface window.
@@ -31,6 +38,8 @@ struct WasmSurfaceContent
   std::uint32_t surface = 0;
   float width = 0.0f; // logical space of its batches
   float height = 0.0f;
+  // Advances whenever the surface must be replayed: new guest content, or a
+  // change to a visual its composition lists (frame schema v7).
   std::uint64_t revision = 0;
 };
 
@@ -55,6 +64,9 @@ public:
                                 std::uint32_t channels,
                                 bool linear);
   bool releaseTexture(const GuestResourceId& id);
+  // A LoadFont atlas: a texture that also keeps `font`, so host visuals
+  // (frame schema v7) can lay out text items that name it.
+  GuestResourceId createFontAtlas(const std::shared_ptr<Font>& font);
   // Six square RGBA faces; sampled by Skybox batches (frame schema v3).
   GuestResourceId createCubemap(std::span<const std::byte> faces,
                                 std::uint32_t size);
@@ -64,7 +76,7 @@ public:
   bool writeMesh(const GuestMeshWrite& write);
   bool releaseMesh(const GuestResourceId& id);
   bool accept(std::span<const std::byte> packet);
-  void dispatch(Scene& scene);
+  void dispatch(DrawList& scene);
   // Surfaces of the last accepted frame. A surface's drawable replays its
   // batches (Renderer::renderOffscreen into its window's target); it stays
   // valid until the next accept.
@@ -75,6 +87,13 @@ public:
   const WasmFrameCounters& counters() const;
 
 private:
+  GuestResourceId createTexture(std::span<const std::byte> pixels,
+                                std::uint32_t width,
+                                std::uint32_t height,
+                                std::uint32_t channels,
+                                bool linear,
+                                std::shared_ptr<Font> font);
+
   struct State;
   std::unique_ptr<State> m_state;
 };

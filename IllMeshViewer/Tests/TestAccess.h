@@ -1,20 +1,20 @@
 #pragma once
 
-#include "MeshViewerModule.h"
+#include "MeshViewerScene.h"
 
-class MeshViewerModuleTestAccess
+class MeshViewerSceneTestAccess
 {
 public:
-  static MeshViewerUi* ui(MeshViewerModule& module) { return module.ui(); }
-  static MeshVisual* meshVisual(MeshViewerModule& module)
+  static MeshViewerUi* ui(MeshViewerScene& module) { return module.ui(); }
+  static MeshVisual* meshVisual(MeshViewerScene& module)
   {
     return module.meshVisual();
   }
-  static MeshVisual* gridVisual(MeshViewerModule& module)
+  static MeshVisual* gridVisual(MeshViewerScene& module)
   {
     return module.gridVisual();
   }
-  static MeshVisual* wireframeVisual(MeshViewerModule& module)
+  static MeshVisual* wireframeVisual(MeshViewerScene& module)
   {
     return module.wireframeVisual();
   }

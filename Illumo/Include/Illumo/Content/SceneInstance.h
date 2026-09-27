@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Illumo/Content/SceneDocument.h>
+#include <Illumo/Rendering/IRenderWorld.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
@@ -15,6 +16,8 @@ class Camera;
 class MeshVisual;
 class Renderer;
 class SkyboxVisual;
+struct MeshAssetInfo;
+struct ColorRgba;
 
 struct SceneInstanceOptions
 {
@@ -44,10 +47,15 @@ struct SceneLighting
 // the affected nodes and invalidate graph snapshots before reconfiguring any
 // attachment. Main-thread affine, like SceneGraph.
 //
-// Programs add drawable() (and skybox() when present) to their frame Scene,
+// Programs add drawable() (and skybox() when present) to their frame DrawList,
 // call update() once per frame before rendering, and read document() to
 // save. Asset references resolve against packageRoot(); with no AssetManager
 // every mesh, texture and cubemap draws a placeholder.
+//
+// With a render world bound (setRenderWorld), lit meshes and solid primitives
+// draw as world instances instead: their MeshVisuals stay in the graph, hidden,
+// for bounds and picking, and update() sends only changed transforms and
+// visibility. Wire shapes, sprites and placeholders keep drawing themselves.
 class SceneInstance
 {
 public:
@@ -69,8 +77,14 @@ public:
   // Binds the renderer used for attachment resources. Call before update()
   // or rendering; rebinding to another renderer rebuilds every attachment.
   void setRenderer(Renderer* renderer);
+  // Draws lit meshes through `world` (nullptr returns them to MeshVisuals).
+  // Several scene instances may share one world; the world must outlive the
+  // binding.
+  void setRenderWorld(IRenderWorld* world);
+  IRenderWorld* renderWorld() const { return m_world; }
   // Resolves lighting (light components can move with their parents) and
-  // pushes changes into every visual. Call once per frame.
+  // pushes changes into every visual, and into the render world when bound.
+  // Call once per frame.
   void update();
 
   // The current state as a document, rebuilt lazily in graph preorder.
@@ -166,6 +180,10 @@ private:
 
   AssetManager* m_assets = nullptr;
   Renderer* m_renderer = nullptr;
+  IRenderWorld* m_world = nullptr;
+  // Shared white materials, shadow-casting and not; colours are per-instance
+  // tints so every primitive of a mesh shares one bucket.
+  RenderMaterialId m_worldMaterials[2]{};
   SceneInstanceOptions m_options;
   SceneGraph m_graph;
   SceneGraphDrawable m_drawable;
@@ -195,10 +213,19 @@ private:
   // Returns false (changing nothing) when the visual component kinds differ.
   bool reconfigureAttachments(Record& record,
                               const std::vector<SceneComponent>& before);
+  // `worldMesh` and `worldTint` are set when the visual draws a lit mesh
+  // asset, the only kind a render world can draw.
   bool configureVisual(MeshVisual& visual,
                        const SceneComponent& component,
-                       bool* castShadows);
+                       bool* castShadows,
+                       MeshAssetInfo* worldMesh,
+                       ColorRgba* worldTint);
   void applyLightingTo(MeshVisual& visual, bool castShadows) const;
+  // Render world binding of one visual, and of every visual.
+  void bindWorld(Record& entry, size_t index);
+  void unbindWorld(Record& entry);
+  void syncWorld();
+  void applyWorldEnvironment();
   bool validateNode(const SceneNode& node, std::string& error) const;
   void releaseAssets();
   AssetSlot* assetSlot(std::string_view id);

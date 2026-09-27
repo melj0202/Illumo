@@ -34,6 +34,20 @@ struct FramebufferAttachments
   TextureHandle depthStencilTexture{};
 };
 
+enum class BufferUsage : unsigned char
+{
+  Instance, // per-instance vertex attributes (SetInstanceStream)
+  Uniform,  // uniform blocks (BindUniformBuffer)
+};
+
+// Shaders that declare this uniform block read it from this binding point;
+// backends bind it when a program links. Renderer owns its contents.
+inline constexpr const char* FrameUniformsBlockName = "FrameUniforms";
+inline constexpr unsigned int FrameUniformsBindingPoint = 0;
+
+class GameVisual;
+class SkyboxVisual;
+
 class IBackend
 {
 public:
@@ -51,6 +65,23 @@ public:
   // drawables. Recording backends use it to tag subsequent commands; GPU
   // backends need no action.
   virtual void BeginLayer(RenderLayerId layer) { (void)layer; }
+  // Backends whose host keeps 2D visuals (the guest recorder under frame
+  // schema v7) take a GameVisual whole, at this point of the frame, instead
+  // of its tokens. False: the visual emits its own tokens as usual.
+  virtual bool AppendVisual(GameVisual& visual)
+  {
+    (void)visual;
+    return false;
+  }
+  // A visual AppendVisual took is being destroyed.
+  virtual void ForgetVisual(const GameVisual& visual) { (void)visual; }
+  // Likewise for a sky: true when the host shows it as its render world's
+  // background this frame.
+  virtual bool AppendSkybox(const SkyboxVisual& skybox)
+  {
+    (void)skybox;
+    return false;
+  }
   // Cumulative metrics survive intermediate pass queue resets.
   virtual size_t rejectedCommandCount() const { return 0; }
   virtual size_t commandHighWaterMark() const { return 0; }
@@ -170,4 +201,23 @@ public:
     TextureHandle* outDepthTexture) = 0;
   virtual bool DestroyFramebuffer(FramebufferHandle handle) = 0;
   virtual bool IsFramebufferValid(FramebufferHandle handle) const = 0;
+
+  // Instance and uniform buffers of a fixed capacity, filled by WriteBuffer.
+  // Backends without them return an invalid handle; callers fall back.
+  virtual BufferHandle CreateBuffer(BufferUsage usage, size_t capacityBytes)
+  {
+    (void)usage;
+    (void)capacityBytes;
+    return {};
+  }
+  virtual bool DestroyBuffer(BufferHandle handle)
+  {
+    (void)handle;
+    return false;
+  }
+  virtual bool IsBufferValid(BufferHandle handle) const
+  {
+    (void)handle;
+    return false;
+  }
 };

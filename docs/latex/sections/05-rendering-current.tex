@@ -18,10 +18,12 @@ No second real GPU API.
 
 \subsection{What actually draws frames today}
 \begin{enumerate}
-  \item Modules call \symbolref{DispatchDrawables} and add \symbolref{DrawableBase*}
-        pointers to \symbolref{Scene} \textbf{layers}
-        (\texttt{World} CanvasView, \texttt{UI} console/splash, \texttt{Debug} FPS).
-  \item \symbolref{Illumo::render} pumps completed managed asset work, then
+  \item The program, then the debug overlay, dispatch into the frame's
+        \symbolref{DrawList}, adding \symbolref{DrawableBase*} pointers to its
+        \textbf{layers} (\texttt{World} CanvasView, \texttt{UI} console/splash,
+        \texttt{Debug} FPS). In a guest, the active program scene's
+        \texttt{dispatch} fills the guest's own list.
+  \item \symbolref{Illumo::endRender} pumps completed managed asset work, then
         drives \symbolref{Renderer}:
         \texttt{BeginFrame} $\rightarrow$ \texttt{RenderScene} $\rightarrow$
         \texttt{EndFrame} (swap).
@@ -38,7 +40,8 @@ No second real GPU API.
 \end{enumerate}
 
 \subsection{Compiled scene extraction (D-E12/D-R25)}
-The per-frame \symbolref{Scene} stays a non-owning drawable list.
+The per-frame \symbolref{DrawList} (named \texttt{Scene} until D-E31) stays a
+non-owning drawable list.
 \symbolref{SceneGraph} owns persistent SoA slots and intrusive hierarchy links,
 with graph-local generational handles. Structural edits lazily compile a
 preorder, parent indices, and subtree ranges. Local TRS edits set one dirty bit
@@ -82,9 +85,10 @@ Scenes reach the renderer through \symbolref{SceneInstance} in
 \texttt{Illumo::Content}, not through product code. It owns the document
 state, one \symbolref{SceneGraph}, one \symbolref{MeshVisual} per renderable
 component, and the asset references those visuals hold; stable node ids are
-graph names. Programs add \texttt{drawable()} (and \texttt{skybox()} when the
-environment names one) to their frame Scene and call \texttt{update()} once
-per frame. Per-node edits (transform, flags, components, reparent with sibling
+graph names. Each program scene owns one as its \texttt{content()} (D-E31). A
+scene adds \texttt{drawable()} (and \texttt{skybox()} when the environment
+names one) to the frame's \symbolref{DrawList} and calls \texttt{update()} once
+per frame; \texttt{ProgramScene::dispatchContent} does both. Per-node edits (transform, flags, components, reparent with sibling
 position, create, remove) validate first, change only the nodes they touch,
 and invalidate graph snapshots before reconfiguring an attachment; recolors
 and resizes that keep a node's component kinds reconfigure the visual in
@@ -116,8 +120,9 @@ place.
 Loading 2,000 nodes takes about 3.8\,ms and 1,000 batched transform edits
 about 0.8\,ms in Release (\texttt{Illumo.Content.Bench.Instantiate2000}).
 
-IllEd's \texttt{EditorDocument} wraps one \texttt{SceneInstance} and is the
-only mutation gateway; the editor adds no per-node attachments. IllMeshViewer
+IllEd's \texttt{EditorDocument} edits its \texttt{EditorScene}'s content, one
+\texttt{SceneInstance}, and is the only mutation gateway; the editor adds no
+per-node attachments. IllMeshViewer
 opens scenes through the same class, and IllumoGame's \texttt{render3dTest}
 diagnostic is \pathref{IllumoGame/Scenes/render3d-test.ilsc} instantiated by
 it. Journal overflow resynchronizes bindings without rebuilding nodes. Capture
@@ -138,17 +143,17 @@ color-buffer clear; depth clears carry the requested value. Combined pass
 clears emit both commands. Clear tokens default to depth one, so a later
 default clear does not inherit a custom value from a previous pass.
 
-Scene stores host default passes separately from application overrides.
-Nonempty application overrides take precedence, whether installed
-in module Start, Update, or DispatchDrawables. The host updates only defaults
-through \texttt{SetDefaultLayerPasses}, so motion-blur toggles and parameter
-changes cannot erase application passes. An empty override,
-\texttt{ClearLayerPasses}, or \texttt{ResetDefaultPasses} restores the current
-host fallback; without one, rendering uses the ordinary screen draw.
-\texttt{passesIn} and \texttt{hasCustomPasses} describe the effective sequence.
-Required-module transitions reset all application overrides before destroying
-retired modules and after rejected startup, detaching borrowed callbacks while
-preserving defaults. Optional modules reinstall their overrides after a transition.
+\symbolref{DrawList} stores host default passes separately from application
+overrides. Nonempty application overrides take precedence, whether installed
+in a scene's \texttt{start}, \texttt{update}, or \texttt{dispatch}. The host
+updates only defaults through \texttt{SetDefaultLayerPasses}, so motion-blur
+toggles and parameter changes cannot erase application passes. An empty
+override, \texttt{ClearLayerPasses}, or \texttt{ResetDefaultPasses} restores
+the current host fallback; without one, rendering uses the ordinary screen
+draw. \texttt{passesIn} and \texttt{hasCustomPasses} describe the effective
+sequence. A scene switch resets all application overrides and clears the
+frame's drawables before the old scene leaves, detaching borrowed callbacks
+while preserving defaults.
 \begin{itemize}
   \item \textbf{Layer} --- ordered composition bucket, rendered to the screen
         by default or through its effective custom pass sequence.
@@ -296,6 +301,73 @@ during replacement.
         \pathref{docs/architecture-consensus.md} \S5.6.
 \end{itemize}
 
+\subsection{Instancing, recorded lists and RenderWorld (D-R28, D-R30)}
+\begin{itemize}
+  \item Buffers: backends may create generational instance and uniform
+        buffers (\texttt{BufferHandle}, \texttt{IBackend::CreateBuffer}); the
+        defaults return an invalid handle so recording and test backends need
+        no change. Tokens \texttt{WriteBuffer}, \texttt{BindUniformBuffer},
+        \texttt{SetInstanceStream} and \texttt{DrawIndexedInstanced} fill and
+        use them. Instance attributes occupy locations 4--12
+        (\texttt{InstanceLayout::LitModelTint}: model, previous model, tint;
+        144 bytes).
+  \item Frame block: \symbolref{Renderer} writes one std140
+        \texttt{FrameUniforms} block (view-projection, previous
+        view-projection, light space, shadow state) the first time a drawable
+        calls \texttt{useFrameUniforms()} in a \texttt{RenderScene}. The
+        instanced styles \texttt{LitMeshInstanced} and
+        \texttt{ShadowDepthInstanced} (\pathref{Shader/mesh\_lit\_instanced\_*.glsl},
+        \pathref{Shader/shadow\_depth\_instanced\_vertex.glsl}) read it and
+        otherwise match the lit and shadow-depth math.
+  \item Recorded lists: \texttt{RecordedCommandList} tokens are recorded once
+        through the ordinary push helpers and run in place by one
+        \texttt{ExecuteList} token per list. A list owns its matrices, refuses
+        nested lists, has its own ceiling, and is counted per frame.
+  \item \texttt{RenderWorld}: a World drawable owning persistent instances,
+        materials and one environment behind \texttt{IRenderWorld}. Instances
+        sharing a mesh range and material draw with one instanced call per
+        pass. Per frame it culls against the camera and shadow volume,
+        streams visible instances and patches counts; its lists re-record only
+        when buffers, materials or the environment change. With a mock
+        backend, 2,000 objects cost 0.11\,ms and 30 tokens per frame against
+        3.8\,ms and 50,017 tokens as one MeshVisual each. On a real GPU its
+        images are bit-identical to MeshVisual's, shadows included.
+        \symbolref{SceneInstance}\texttt{::setRenderWorld} puts a scene's
+        mesh-asset visuals into it (IllMeshViewer, IllEd, the game's 3D mode).
+        It can also draw a sky (\texttt{setSkybox}) first, rebuilding the
+        rotation-only view projection from the frame camera
+        (\pathref{docs/host-render-world-design.md}).
+  \item Worlds per scene (D-R30): frame schema v8 addresses host render
+        worlds. \texttt{SelectWorld} (10) sends the world operations after it
+        to a world id, created on first use; \texttt{ShowWorld} (11) picks the
+        world that draws (0: none); \texttt{DestroyWorld} (12) releases one
+        and everything in it. A version 7 frame is exactly ``world 1, shown''.
+        A guest has at most 8 worlds, material and instance ids are per world,
+        and the shown world draws with the frame camera. The guest SDK's
+        \texttt{GuestSceneWorlds} gives every program scene its own
+        \texttt{GuestRenderWorld}, so a kept scene's objects stay on the host
+        undrawn and steady frames send nothing. \texttt{hostRenderWorld=0}
+        still gives scenes no world.
+\end{itemize}
+
+\subsection{Host-retained 2D visuals (D-R29)}
+\begin{itemize}
+  \item \texttt{VisualStore}: 2D visuals by id, each a
+        \symbolref{GameVisual} edited in place (items by index, opacity). A
+        visual's draw tokens are recorded once and replayed with
+        \texttt{ExecuteList} until its geometry or frame state (resolution,
+        projection, clip) changes. \texttt{GameVisual::prepareFrame} builds
+        and uploads; \texttt{emitDraws} pushes only clip and batch tokens.
+  \item Guests: \texttt{GameVisual::AppendCommands} offers the visual to
+        \texttt{IBackend::AppendVisual}, and \texttt{SkyboxVisual} to
+        \texttt{AppendSkybox}. The guest recorder sends visual operations
+        (frame schema v7 and later; only unconfirmed changes) and per-target
+        compositions,
+        and the host draws them through \texttt{VisualStore} in painter order
+        between the remaining batches. Visuals that cannot travel, the canvas
+        quad and the MeshVisual line overlays still record retained batches.
+\end{itemize}
+
 \subsection{Backend surface}
 \symbolref{IBackend}: lifecycle and command-queue push/submit/clear. Resource
 creation returns non-convertible slot+generation \texttt{MeshHandle},
@@ -373,17 +445,17 @@ instead of treating thousands of CPU submissions as displayed frames (D-P32).
         panels, gradient surfaces, soft shadows, radial glows, vignettes,
         sheens, keycaps); fades keep their color at zero alpha so
         straight-alpha blending never darkens an edge.
-  \item \symbolref{DebugModule}: \texttt{renderer\_demo}, \texttt{assets}, and
+  \item \symbolref{DebugOverlay}: \texttt{renderer\_demo}, \texttt{assets}, and
         \texttt{asset\_reload} prove managed atlas/shader loading, atlas
         animation, transforms, tint, alpha order, async load, state inspection,
-        and reload in Debug builds only.
+        and reload in debug-tool builds only.
 \end{itemize}
 
 \subsection{Tests (headless)}
 \texttt{IllumoTests} owns persistent scene hierarchy plus reusable
 rendering/services cases, while
-\texttt{IllumoGameTests} owns CanvasView, ruleset, CellGameModule, simulation,
-and persistence cases. Editor and mesh-viewer cases have their own runners.
+\texttt{IllumoGameTests} owns CanvasView, ruleset, TitleScene, CanvasScene,
+simulation, and persistence cases. Editor and mesh-viewer cases have their own runners.
 These are shared binaries for compile efficiency, but
 CTest invokes one exact logical case per isolated process (D-T1). No GPU
 context is required. Combined Clang/LLVM \texttt{IllumoCoverage} enforces 85\%

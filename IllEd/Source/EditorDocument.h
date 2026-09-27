@@ -35,6 +35,10 @@ struct EditorSceneDetail
 // history and the save location. Every edit goes through this class, which
 // records it as a history command; dirty means the history has moved since
 // the last save, so view-only changes (camera, grid) never ask to save.
+//
+// In the editor the instance is the program scene's content (D-E31), which
+// the document borrows; elsewhere (tools, tests, reloading a saved file) the
+// document owns one. Loads, clears and rebases replace the content in place.
 class EditorDocument
 {
 public:
@@ -50,10 +54,18 @@ public:
   EditorDocument(EditorDocument&&) = delete;
   EditorDocument& operator=(EditorDocument&&) = delete;
 
-  // Rebuilds the live scene against an asset manager (nullptr draws
-  // placeholders), keeping the document and its history.
+  // Edits `scene` from now on (the editor scene's content), moving the
+  // current document and history into it. `scene` must outlive the document
+  // and keeps its own asset manager and bindings.
+  void attach(SceneInstance& scene);
+  // Rebuilds an owned scene against an asset manager (nullptr draws
+  // placeholders), keeping the document and its history. A borrowed scene
+  // keeps the asset manager its owner gave it.
   void setAssetManager(AssetManager* assets);
   void setRenderer(Renderer* renderer);
+  // Scene meshes draw through `world` when the host keeps one (nullptr
+  // draws them as MeshVisuals); kept across scene rebuilds.
+  void setRenderWorld(IRenderWorld* world);
 
   // An empty, clean document with no location and no history.
   void clear();
@@ -67,8 +79,8 @@ public:
   {
     return std::string(m_scene->packageRoot());
   }
-  // Rebuilds the instance with the same content under another package root
-  // (for example after Save to Project); history is kept.
+  // Reloads the same content under another package root (for example after
+  // Save to Project); history is kept.
   void rebase(const std::string& packageRoot);
   // Canonical .ilsc text including the editor view state.
   std::string encode() const;
@@ -107,8 +119,8 @@ public:
   const SceneNode* findNode(const std::string& id) const;
   SceneNodeHandle nodeHandle(const std::string& id) const;
   uint64_t revision() const { return m_scene->revision(); }
-  // Advances whenever the scene instance is replaced (load, clear, package
-  // root change); the replacement's revision count starts over.
+  // Advances whenever the scene's content is replaced (load, clear, package
+  // root change, attach), so node handles from before are stale.
   uint64_t sceneGeneration() const { return m_sceneGeneration; }
 
   EditorHistory& history() { return m_history; }
@@ -199,7 +211,11 @@ public:
 private:
   AssetManager* m_assets = nullptr;
   Renderer* m_renderer = nullptr;
-  std::unique_ptr<SceneInstance> m_scene;
+  IRenderWorld* m_renderWorld = nullptr;
+  // Null once the document borrows a scene.
+  std::unique_ptr<SceneInstance> m_owned;
+  // The scene every edit goes to: m_owned or the borrowed one.
+  SceneInstance* m_scene = nullptr;
   uint64_t m_sceneGeneration = 0;
   EditorHistory m_history;
   std::string m_path;

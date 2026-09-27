@@ -1,17 +1,51 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #define GLFW_INCLUDE_NONE
-#include "EditorModule.h"
+#include "EditorScene.h"
 #include "TestAccess.h"
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <filesystem>
 #include <iostream>
-#include <memory>
 #include <stdexcept>
+
+// The editor scene on the native engine, driven through the runtime's frame
+// phases (D-E31) by a director instead of a WASM program.
+static void
+updateFrame(Illumo& host, SceneDirector& scenes, double dt)
+{
+  host.beginUpdate(dt);
+  scenes.update(dt);
+  host.endUpdate();
+}
+
+static void
+renderFrame(Illumo& host, SceneDirector& scenes)
+{
+  if (DrawList* scene = host.beginRender()) {
+    scenes.dispatch(*scene);
+  }
+  host.endRender();
+}
+
+// The runtime's close negotiation: true once a requested close is approved;
+// a declined request is cleared.
+static bool
+closeApproved(Illumo& host, SceneDirector& scenes)
+{
+  if (!host.shouldClose()) {
+    return false;
+  }
+  if (scenes.closeRequested()) {
+    return true;
+  }
+  host.deferClose();
+  return false;
+}
 
 static void
 requireCloseCheck(bool condition, const char* message)
@@ -22,10 +56,10 @@ requireCloseCheck(bool condition, const char* message)
 }
 
 static void
-runNativeSceneEdits(Illumo& host, EditorModule& editor)
+runNativeSceneEdits(Illumo& host, SceneDirector& scenes, EditorScene& editor)
 {
-  EditorDocument& document = EditorModuleTestAccess::document(editor);
-  EditorModuleTestAccess::handleCommand(editor, EditorCommand::SetMode3D);
+  EditorDocument& document = EditorSceneTestAccess::document(editor);
+  EditorSceneTestAccess::handleCommand(editor, EditorCommand::SetMode3D);
   std::string parent;
   for (size_t i = 0; i < 64; ++i) {
     parent = document.createPrimitive(
@@ -34,15 +68,15 @@ runNativeSceneEdits(Illumo& host, EditorModule& editor)
   const std::string child = document.createPrimitive(
     false, ScenePrimitiveShape::Cube, parent, Transform3D{});
   const SceneNodeHandle handle = document.nodeHandle(child);
-  EditorModuleTestAccess::setSelectedId(editor, child);
-  EditorModuleTestAccess::refreshView(editor);
+  EditorSceneTestAccess::setSelectedId(editor, child);
+  EditorSceneTestAccess::refreshView(editor);
   ISceneRenderAttachment* retained = document.graph().getAttachment(handle, 0);
   for (size_t step = 0; step < 6; ++step) {
     if (step == 1) {
       document.translate(child, Vector3(0.5f, 0.5f, 0));
     }
     if (step == 2) {
-      EditorModuleTestAccess::handleCommand(editor, EditorCommand::CycleColor);
+      EditorSceneTestAccess::handleCommand(editor, EditorCommand::CycleColor);
     }
     if (step == 3) {
       document.setParent(child, {});
@@ -50,11 +84,12 @@ runNativeSceneEdits(Illumo& host, EditorModule& editor)
     if (step == 4) {
       document.setParent(child, parent);
     }
-    EditorModuleTestAccess::refreshView(editor);
+    EditorSceneTestAccess::refreshView(editor);
     const uint64_t extracted = document.graph().getStatistics().extractions;
-    host.render();
-    requireCloseCheck(host.context().renderer->frameError().empty(),
-                      "native edit frame submits");
+    renderFrame(host, scenes);
+    const std::string frameError = host.context().renderer->frameError();
+    requireCloseCheck(frameError.empty(),
+                      ("native edit frame submits: " + frameError).c_str());
     requireCloseCheck(document.nodeHandle(child) == handle &&
                         document.graph().getAttachment(handle, 0) == retained,
                       "native edits retain graph and visual identities");
@@ -64,69 +99,67 @@ runNativeSceneEdits(Illumo& host, EditorModule& editor)
   }
   requireCloseCheck(document.destroySubtree(parent),
                     "native deep subtree deletes");
-  EditorModuleTestAccess::refreshView(editor);
-  host.render();
+  EditorSceneTestAccess::refreshView(editor);
+  renderFrame(host, scenes);
   requireCloseCheck(!document.graph().isNodeValid(handle) &&
                       host.context().renderer->frameError().empty(),
                     "native deletion leaves no stale callback");
   document.clear();
-  EditorModuleTestAccess::setSelectedId(editor, {});
-  EditorModuleTestAccess::refreshView(editor);
+  EditorSceneTestAccess::setSelectedId(editor, {});
+  EditorSceneTestAccess::refreshView(editor);
 }
 
+// The director and its scenes live in this frame, so they are destroyed,
+// releasing their assets, before the engine shuts down.
 static void
-runNativeCloseCase(bool discard, const std::filesystem::path& scratch)
+runEditorCloseFlow(Illumo& host,
+                   bool discard,
+                   const std::filesystem::path& scratch)
 {
-  IllumoConfig config;
-  config.applicationName = "IllEd native close regression";
-  config.environmentPath = (scratch / "envvars.json").string();
-  Illumo host(config);
-  host.environment().setVar("WinX", 640);
-  host.environment().setVar("WinY", 480);
-  requireCloseCheck(host.initialize(), "host initialization");
-  std::unique_ptr<EditorModule> owned = std::make_unique<EditorModule>();
-  EditorModule* editor = owned.get();
-  host.addModule(std::move(owned), ModuleRequirement::Required);
-  requireCloseCheck(host.startModules(), "editor initialization");
+  SceneDirector scenes(host.context());
+  host.context().scenes = &scenes;
+  EditorScene* editor = &scenes.emplace<EditorScene>("editor");
+  requireCloseCheck(scenes.switchTo("editor") && scenes.applyPending(),
+                    "editor initialization");
   HWND window = glfwGetWin32Window(host.context().window->getWindowInstance());
   ShowWindow(window, SW_HIDE);
-  runNativeSceneEdits(host, *editor);
-  EditorDocument& document = EditorModuleTestAccess::document(*editor);
-  EditorModuleTestAccess::createNode(*editor, EditorCommand::CreateCube);
+  runNativeSceneEdits(host, scenes, *editor);
+  EditorDocument& document = EditorSceneTestAccess::document(*editor);
+  EditorSceneTestAccess::createNode(*editor, EditorCommand::CreateCube);
 
   // WM_CLOSE is the title-bar close path; SC_CLOSE is the native Alt+F4 action.
   SendMessageW(window, WM_CLOSE, 0, 0);
   requireCloseCheck(host.shouldClose(), "WM_CLOSE reaches GLFW flag");
-  requireCloseCheck(!host.processCloseRequest() && !host.shouldClose(),
+  requireCloseCheck(!closeApproved(host, scenes) && !host.shouldClose(),
                     "dirty close is deferred and cleared");
-  requireCloseCheck(EditorModuleTestAccess::confirmationOpen(*editor),
+  requireCloseCheck(EditorSceneTestAccess::confirmationOpen(*editor),
                     "native close opens editor confirmation");
-  host.render();
+  renderFrame(host, scenes);
   host.context().inputManager->getKeyQueue().push(
     { KeyCode::Escape, InputAction::Press, 0 });
-  host.update(0.01);
-  requireCloseCheck(!host.processCloseRequest() &&
-                      !EditorModuleTestAccess::confirmationOpen(*editor),
+  updateFrame(host, scenes, 0.01);
+  requireCloseCheck(!closeApproved(host, scenes) &&
+                      !EditorSceneTestAccess::confirmationOpen(*editor),
                     "cancel stays open without reopening");
 
   document.setPath((scratch / "missing" / "scene.ilsc").string());
   SendMessageW(window, WM_SYSCOMMAND, SC_CLOSE, 0);
-  requireCloseCheck(host.shouldClose() && !host.processCloseRequest(),
+  requireCloseCheck(host.shouldClose() && !closeApproved(host, scenes),
                     "SC_CLOSE enters confirmation");
   host.context().inputManager->getKeyQueue().push(
     { KeyCode::Enter, InputAction::Press, 0 });
-  host.update(0.01);
-  requireCloseCheck(document.isDirty() && !host.processCloseRequest(),
+  updateFrame(host, scenes, 0.01);
+  requireCloseCheck(document.isDirty() && !closeApproved(host, scenes),
                     "failed save preserves dirty editor");
 
   const std::filesystem::path saved = scratch / "scene.ilsc";
   document.setPath(saved.string());
   SendMessageW(window, WM_CLOSE, 0, 0);
-  requireCloseCheck(!host.processCloseRequest(), "retry prompts");
+  requireCloseCheck(!closeApproved(host, scenes), "retry prompts");
   host.context().inputManager->getKeyQueue().push(
     { discard ? KeyCode::N : KeyCode::Enter, InputAction::Press, 0 });
-  host.update(0.01);
-  requireCloseCheck(host.processCloseRequest(), "confirmed exit is approved");
+  updateFrame(host, scenes, 0.01);
+  requireCloseCheck(closeApproved(host, scenes), "confirmed exit is approved");
   if (discard) {
     requireCloseCheck(document.isDirty(),
                       "discard does not mutate dirty state");
@@ -141,6 +174,21 @@ runNativeCloseCase(bool discard, const std::filesystem::path& scratch)
         reloaded.nodeCount() == document.nodeCount(),
       "saved scene survives native close");
   }
+  scenes.stopAll();
+  host.context().scenes = nullptr;
+}
+
+static void
+runNativeCloseCase(bool discard, const std::filesystem::path& scratch)
+{
+  IllumoConfig config;
+  config.applicationName = "IllEd native close regression";
+  config.environmentPath = (scratch / "envvars.json").string();
+  Illumo host(config);
+  host.environment().setVar("WinX", 640);
+  host.environment().setVar("WinY", 480);
+  requireCloseCheck(host.initialize(), "host initialization");
+  runEditorCloseFlow(host, discard, scratch);
   host.shutdown();
 }
 

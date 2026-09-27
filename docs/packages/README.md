@@ -8,7 +8,7 @@ documentation, not build inputs.
 |---|---|
 | `source-layout.md` | Workspace, library, product, and test trees |
 | `app.md` | Illumo application definition, generic runner, and process loop |
-| `engine.md` | Illumo host, context, modules, and failure semantics |
+| `engine.md` | Illumo host, context, frame phases, the debug overlay, and failure semantics |
 | `scene.md` | Persistent nodes, hierarchy, transforms, and render attachments |
 | `content.md` | Packages, `illumo.json`, `.ilpk`, the virtual file tree, `.ilsc` format 2, and `SceneInstance` |
 | `game.md` | IllumoGame canvas, simulation, editing, and persistence |

@@ -44,6 +44,15 @@ struct FramebufferHandle
   bool isValid() const { return slot != 0 && generation != 0; }
 };
 
+// A GPU buffer that is not a mesh: per-instance streams and uniform blocks.
+struct BufferHandle
+{
+  uint32_t slot;
+  uint32_t generation;
+
+  bool isValid() const { return slot != 0 && generation != 0; }
+};
+
 inline bool
 operator==(MeshHandle left, MeshHandle right)
 {
@@ -100,6 +109,18 @@ operator==(FramebufferHandle left, FramebufferHandle right)
 
 inline bool
 operator!=(FramebufferHandle left, FramebufferHandle right)
+{
+  return !(left == right);
+}
+
+inline bool
+operator==(BufferHandle left, BufferHandle right)
+{
+  return left.slot == right.slot && left.generation == right.generation;
+}
+
+inline bool
+operator!=(BufferHandle left, BufferHandle right)
 {
   return !(left == right);
 }

@@ -8,6 +8,7 @@
 #include <string>
 
 class InputManager;
+class DrawList;
 
 // Startup-only canvas choices; deliberately independent of display preferences.
 struct NewSimulationConfiguration
@@ -39,11 +40,28 @@ public:
   void tick(float dt);
   NewSimulationAction update(InputManager* input);
   NewSimulationConfiguration configuration() const;
-  GameVisual& getVisual() { return visual; }
+  // The rows' boxes, labels and values and the footer.
+  GameVisual& getVisual() { return layers[kContentLayer]; }
+  // Adds every layer, back to front.
+  void addDrawables(DrawList& scene);
 
 private:
   static constexpr int kRowCount = 8;
-  void rebuild();
+  // Back to front. The glass; the header; the glider, the badge's glow and
+  // its label; the cards; the selection drop; the rows' content and footer;
+  // and the create row's breathing value. The animated layers stay small, so
+  // the host re-records only those while the menu idles (D-R29).
+  enum Layer : std::size_t
+  {
+    kGlassLayer,
+    kHeaderLayer,
+    kAccentLayer,
+    kCardLayer,
+    kDropLayer,
+    kContentLayer,
+    kPulseLayer,
+    kLayerCount
+  };  void rebuild();
   void drawRows(unsigned char opacity, float breathe);
   void drawFooter(float height, unsigned char opacity);
   void change(int direction);
@@ -52,7 +70,7 @@ private:
   NewSimulationAction activate();
   IRenderWindow* window;
   Renderer* renderer;
-  GameVisual visual{ 4096u };
+  std::array<GameVisual, kLayerCount> layers;
   GuiMenuAnimator animator;
   GuiPointerTracker pointer;
   GuiPanelFit panelFit;

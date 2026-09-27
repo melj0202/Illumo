@@ -1,10 +1,10 @@
 #include "MeshViewerConfig.h"
-#include "MeshViewerModule.h"
+#include "MeshViewerScene.h"
 #include "MeshViewerPlatform.h"
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Documents.h>
 #include <IllumoGuest/FileTree.h>
-#include <IllumoGuest/ModuleApplication.h>
+#include <IllumoGuest/Program.h>
 #include <IllumoGuest/SceneFetches.h>
 #include <stdexcept>
 
@@ -98,11 +98,11 @@ MeshViewerPlatform::current()
 // IllMeshViewer as a WASM package: OBJ parsing, orbit camera, lighting,
 // shadows, grid, wireframe and the skybox all run in this store. Loaded
 // meshes are retained on the host (frame schema v3) instead of re-sent.
-class MeshViewerGuest final : public GuestModuleApplication
+class MeshViewerGuest final : public GuestProgram
 {
 public:
   MeshViewerGuest()
-    : GuestModuleApplication(MeshViewerConfig::applicationName())
+    : GuestProgram(MeshViewerConfig::applicationName())
     , m_platform(services(), files(), assetCache())
   {
     installedPlatform = &m_platform;
@@ -134,7 +134,7 @@ public:
 protected:
   bool acceptStartup(std::span<const std::byte> startup) override
   {
-    if (!GuestModuleApplication::acceptStartup(startup)) {
+    if (!GuestProgram::acceptStartup(startup)) {
       return false;
     }
     if (launchFile() != nullptr) {
@@ -152,9 +152,11 @@ protected:
     return { "Assets/Skybox/skybox-daylight.png" };
   }
   void pumpProduct() override { m_platform.pump(); }
-  std::unique_ptr<IModule> createFirstModule() override
+  // One scene: the viewer, whose content is the opened scene document.
+  bool createScenes(SceneDirector& scenes) override
   {
-    return std::make_unique<MeshViewerModule>();
+    scenes.emplace<MeshViewerScene>("viewer");
+    return scenes.switchTo("viewer");
   }
 
 private:

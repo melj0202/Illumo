@@ -35,22 +35,26 @@ reviewed.
 ## Architecture boundaries
 
 - Illumo owns the application runner, process loop, system command-line parser,
-  build metadata, OS entry points, native dialogs, generic services, and module
-  lifetime; it must not depend on Game or Rulesets.
-- IllumoGame owns only CA configuration/CLI metadata, Game, Rulesets, and its
-  required game-module factory.
-- IllEd owns the world-editor document, history, tools, toolbar, and its
-  required editor-module factory. It must not depend on Game or Rulesets.
+  build metadata, OS entry points, native dialogs, generic services, and the
+  frame phases, between which `RuntimeShell` runs one program (D-E31); it must
+  not depend on Game or Rulesets.
+- IllumoGame owns only CA configuration, Game, Rulesets, and its scene program
+  (a `GuestProgram` with `TitleScene` and `CanvasScene`).
+- IllEd owns the world-editor document, history, tools, toolbar, and its scene
+  program (a `GuestProgram` with one `EditorScene`). It must not depend on Game
+  or Rulesets.
 - `Illumo::Content` owns the `.ilsc` scene format and codec (`SceneDocument`,
-  `IlscCodec`, `SceneInstance`), `illumo.json` package manifests, `.ilpk`
+  `IlscCodec`, `SceneInstance`), program scenes (`ProgramScene`,
+  `SceneDirector`), `illumo.json` package manifests, `.ilpk`
   archives, and the virtual file tree. Core `Illumo` never includes
   `<Illumo/Content/...>`, and Content never depends on Wasm or a product.
 - IllumoGame consumes supported headers through `<Illumo/...>`; OpenGL
   implementation headers and TestSupport are not production API.
 - Game and rules code do not issue raw OpenGL calls.
 - Production rendering uses `RenderCommand` tokens through `IBackend`.
-- Keep `DebugModule` out of Release compilation and register it as optional in
-  Debug and RelWithDebInfo; each product supplies its own required module.
+- Keep `DebugOverlay` out of Release compilation. `RuntimeShell` runs it in
+  Debug and RelWithDebInfo and drops it if it fails to start; each product is
+  one WASM program that manages its own scenes.
 - The approved `SceneGraph` v2 owns retained SoA hierarchy, compiled transforms
   and bounds, identity/journal state, and a derived query index. Its separate
   drawable consumes immutable snapshots in the frame list. Keep graph state,

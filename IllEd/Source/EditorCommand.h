@@ -1,7 +1,7 @@
 #pragma once
 
 // Every user-facing editor action. Menus, the panels and keyboard shortcuts
-// all produce these; EditorModule::handleCommand is the single dispatcher.
+// all produce these; EditorScene::handleCommand is the single dispatcher.
 enum class EditorCommand
 {
   None,

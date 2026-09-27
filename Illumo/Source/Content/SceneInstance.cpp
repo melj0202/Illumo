@@ -9,6 +9,7 @@
 #include "ScenePrimitiveMeshes.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include <limits>
@@ -36,12 +37,25 @@ public:
   }
 };
 
+// A visual's render world instance, when it has one, and what the world last
+// received for it.
+struct SceneWorldBinding
+{
+  MeshAssetInfo mesh;
+  ColorRgba tint{ 255, 255, 255, 255 };
+  RenderInstanceId id = 0;
+  std::array<float, 16> sent{};
+  bool sentVisible = true;
+};
+
 struct SceneInstance::Record
 {
   SceneNode node;
   SceneNodeHandle handle;
   std::vector<std::unique_ptr<MeshVisual>> visuals;
   std::vector<bool> castShadows;
+  // Parallel to visuals; mesh is valid only for lit mesh-asset visuals.
+  std::vector<SceneWorldBinding> world;
   std::unique_ptr<PickProxy> proxy;
   bool hasLight = false;
 };
@@ -80,6 +94,7 @@ SceneInstance::SceneInstance(AssetManager* assets, SceneInstanceOptions options)
 
 SceneInstance::~SceneInstance()
 {
+  setRenderWorld(nullptr);
   clear();
   if (m_assets != nullptr) {
     for (MeshHandle& handle : m_primitiveMeshes) {
@@ -192,6 +207,7 @@ SceneInstance::load(const SceneDocument& document,
                       entry.second->castShadows[index]);
     }
   }
+  applyWorldEnvironment();
   touch();
   error.clear();
   if (dropped > 0) {
@@ -244,8 +260,182 @@ sameLighting(const SceneLighting& a, const SceneLighting& b)
 }
 
 void
+SceneInstance::setRenderWorld(IRenderWorld* world)
+{
+  if (world == m_world) {
+    return;
+  }
+  if (m_world != nullptr) {
+    for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
+         m_records) {
+      unbindWorld(*entry.second);
+    }
+    for (RenderMaterialId& material : m_worldMaterials) {
+      m_world->destroyMaterial(material);
+      material = 0;
+    }
+  }
+  m_world = world;
+  if (m_world == nullptr) {
+    return;
+  }
+  for (size_t index = 0; index < 2; ++index) {
+    RenderMaterialDesc material;
+    material.receivesShadow = index == 0;
+    material.castsShadow = index == 0;
+    m_worldMaterials[index] = nextRenderWorldId();
+    m_world->createMaterial(m_worldMaterials[index], material);
+  }
+  applyWorldEnvironment();
+  for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
+       m_records) {
+    for (size_t index = 0; index < entry.second->visuals.size(); ++index) {
+      bindWorld(*entry.second, index);
+    }
+  }
+}
+
+static std::array<float, 16>
+matrixValues(const Matrix4& matrix)
+{
+  std::array<float, 16> values{};
+  for (int column = 0; column < 4; ++column) {
+    for (int row = 0; row < 4; ++row) {
+      values[static_cast<size_t>(column * 4 + row)] = matrix[column][row];
+    }
+  }
+  return values;
+}
+
+void
+SceneInstance::bindWorld(Record& entry, size_t index)
+{
+  SceneWorldBinding& binding = entry.world[index];
+  MeshVisual& visual = *entry.visuals[index];
+  if (m_world == nullptr || binding.id != 0 || !binding.mesh.isValid()) {
+    return;
+  }
+  Matrix4 world(1.0f);
+  m_graph.getWorldTransform(entry.handle, &world);
+  RenderInstanceDesc desc;
+  desc.mesh = binding.mesh.handle;
+  desc.indexCount = binding.mesh.indexCount;
+  // MeshVisual shades with vertex colour times its tint; the instance tint
+  // does the same against a white material.
+  desc.material = m_worldMaterials[entry.castShadows[index] ? 0 : 1];
+  desc.world = matrixValues(world * visual.getModelMatrix());
+  desc.tint = { static_cast<float>(binding.tint.r) / 255.0f,
+                static_cast<float>(binding.tint.g) / 255.0f,
+                static_cast<float>(binding.tint.b) / 255.0f,
+                static_cast<float>(binding.tint.a) / 255.0f };
+  desc.visible = m_graph.isEffectivelyVisible(entry.handle);
+  desc.hasBounds = true;
+  desc.localBounds = { binding.mesh.minBounds, binding.mesh.maxBounds };
+  const RenderInstanceId id = nextRenderWorldId();
+  if (!m_world->createInstance(id, desc)) {
+    return;
+  }
+  m_graph.invalidateSnapshots();
+  binding.id = id;
+  binding.sent = desc.world;
+  binding.sentVisible = desc.visible;
+  visual.setVisible(false);
+}
+
+void
+SceneInstance::unbindWorld(Record& entry)
+{
+  for (size_t index = 0; index < entry.world.size(); ++index) {
+    SceneWorldBinding& binding = entry.world[index];
+    if (binding.id == 0) {
+      continue;
+    }
+    if (m_world != nullptr) {
+      m_world->destroyInstance(binding.id);
+    }
+    binding.id = 0;
+    m_graph.invalidateSnapshots();
+    entry.visuals[index]->setVisible(true);
+  }
+}
+
+// Sends only transforms and visibility that changed since the last frame.
+void
+SceneInstance::syncWorld()
+{
+  if (m_world == nullptr) {
+    return;
+  }
+  for (std::pair<const std::string, std::unique_ptr<Record>>& pair :
+       m_records) {
+    Record& entry = *pair.second;
+    Matrix4 world(1.0f);
+    bool resolved = false;
+    bool visible = false;
+    for (size_t index = 0; index < entry.world.size(); ++index) {
+      SceneWorldBinding& binding = entry.world[index];
+      if (binding.id == 0) {
+        continue;
+      }
+      if (!resolved) {
+        m_graph.getWorldTransform(entry.handle, &world);
+        visible = m_graph.isEffectivelyVisible(entry.handle);
+        resolved = true;
+      }
+      const std::array<float, 16> values =
+        matrixValues(world * entry.visuals[index]->getModelMatrix());
+      if (values != binding.sent) {
+        m_world->setInstanceTransform(binding.id, values);
+        binding.sent = values;
+      }
+      if (visible != binding.sentVisible) {
+        m_world->setInstanceVisible(binding.id, visible);
+        binding.sentVisible = visible;
+      }
+    }
+  }
+}
+
+// The world's light follows the scene's resolved lighting with MeshVisual's
+// default shadow settings, so both paths shade alike.
+void
+SceneInstance::applyWorldEnvironment()
+{
+  if (m_world == nullptr) {
+    return;
+  }
+  RenderEnvironment environment;
+  environment.lightDirection = { m_lighting.towardLight.x,
+                                 m_lighting.towardLight.y,
+                                 m_lighting.towardLight.z };
+  if (m_lighting.lit) {
+    environment.lightColor = { m_lighting.color.x,
+                               m_lighting.color.y,
+                               m_lighting.color.z };
+    environment.ambientColor = { m_lighting.ambient.x,
+                                 m_lighting.ambient.y,
+                                 m_lighting.ambient.z };
+  } else {
+    // Unlit: vertex colour times tint, as MeshVisual draws it.
+    environment.lightColor = { 0.0f, 0.0f, 0.0f };
+    environment.ambientColor = { 1.0f, 1.0f, 1.0f };
+  }
+  environment.shadowsEnabled = m_lighting.lit && m_lighting.shadows;
+  environment.shadowPcf = true;
+  environment.shadowBias = 0.001f;
+  environment.shadowSlopeScale = 0.004f;
+  environment.shadowNormalOffset = 0.015f;
+  environment.shadowMapSize = 1024;
+  environment.shadowMinimumRadius = 2.5f;
+  environment.shadowLightDistance = 8.0f;
+  environment.shadowCasterDistance = 100.0f;
+  m_world->setEnvironment(environment);
+}
+
+void
 SceneInstance::update()
 {
+  syncWorld();
   bool anyLight = false;
   for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
        m_records) {
@@ -268,6 +458,7 @@ SceneInstance::update()
                       entry.second->castShadows[index]);
     }
   }
+  applyWorldEnvironment();
 }
 
 SceneLighting
@@ -498,6 +689,8 @@ SceneInstance::destroyAttachments(Record& entry)
   if (entry.visuals.empty() && !entry.proxy) {
     return;
   }
+  unbindWorld(entry);
+  entry.world.clear();
   m_graph.invalidateSnapshots();
   for (std::unique_ptr<MeshVisual>& visual : entry.visuals) {
     m_graph.removeAttachment(entry.handle, visual.get());
@@ -623,12 +816,15 @@ drawsVisual(const SceneComponent& component)
 bool
 SceneInstance::configureVisual(MeshVisual& visual,
                                const SceneComponent& component,
-                               bool* castShadows)
+                               bool* castShadows,
+                               MeshAssetInfo* worldMesh,
+                               ColorRgba* worldTint)
 {
   visual.clearPrimitives();
   visual.clearMeshAsset();
   visual.setModelMatrix(Matrix4(1.0f));
   *castShadows = true;
+  *worldMesh = MeshAssetInfo{};
   if (const ScenePrimitive* primitive =
         std::get_if<ScenePrimitive>(&component.value)) {
     visual.setModelMatrix(glm::scale(Matrix4(1.0f), primitive->extent));
@@ -642,6 +838,8 @@ SceneInstance::configureVisual(MeshVisual& visual,
         shared.isValid() ? m_assets->getMeshInfo(shared) : MeshAssetInfo{};
       if (info.isValid()) {
         visual.setMeshAsset(info, primitive->color);
+        *worldMesh = info;
+        *worldTint = primitive->color;
       } else {
         MeshData mesh;
         buildScenePrimitiveMesh(primitive->shape, mesh);
@@ -656,6 +854,8 @@ SceneInstance::configureVisual(MeshVisual& visual,
     AssetSlot* slot = assetSlot(mesh->asset);
     if (slot != nullptr && !slot->failed) {
       visual.setMeshAsset(slot->meshInfo, mesh->tint);
+      *worldMesh = slot->meshInfo;
+      *worldTint = mesh->tint;
     } else {
       visual.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), kPlaceholderColor);
     }
@@ -714,7 +914,9 @@ SceneInstance::buildAttachments(Record& entry)
     }
     std::unique_ptr<MeshVisual> visual = std::make_unique<MeshVisual>();
     bool castShadows = true;
-    configureVisual(*visual, component, &castShadows);
+    SceneWorldBinding binding;
+    configureVisual(
+      *visual, component, &castShadows, &binding.mesh, &binding.tint);
     if (m_renderer != nullptr) {
       visual->prepare(m_renderer);
     }
@@ -722,6 +924,8 @@ SceneInstance::buildAttachments(Record& entry)
     m_graph.addAttachment(entry.handle, visual.get());
     entry.visuals.push_back(std::move(visual));
     entry.castShadows.push_back(castShadows);
+    entry.world.push_back(binding);
+    bindWorld(entry, entry.visuals.size() - 1);
   }
   if (entry.visuals.empty() && m_options.pickProxies) {
     entry.proxy = std::make_unique<PickProxy>();
@@ -759,11 +963,20 @@ SceneInstance::reconfigureAttachments(Record& entry,
     }
   }
   m_graph.invalidateSnapshots();
+  // A reconfigured visual may change mesh, colour or shadow casting, so its
+  // world instance is replaced.
+  unbindWorld(entry);
   for (size_t index = 0; index < visuals.size(); ++index) {
     bool castShadows = true;
-    configureVisual(*entry.visuals[index], *visuals[index], &castShadows);
+    SceneWorldBinding& binding = entry.world[index];
+    configureVisual(*entry.visuals[index],
+                    *visuals[index],
+                    &castShadows,
+                    &binding.mesh,
+                    &binding.tint);
     entry.castShadows[index] = castShadows;
     applyLightingTo(*entry.visuals[index], castShadows);
+    bindWorld(entry, index);
   }
   m_lightingDirty = m_lightingDirty || hasLight || entry.hasLight;
   entry.hasLight = hasLight;

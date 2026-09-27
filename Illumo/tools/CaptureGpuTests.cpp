@@ -5,7 +5,7 @@
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Services/Logger.h>
@@ -37,7 +37,7 @@ captureSceneShadows(bool graphPath, bool shadows)
         Vector3(0, 0, 0), Vector3(0.6f), ColorRgba{ 210, 110, 65, 255 });
       SceneGraph graph;
       SceneGraphDrawable drawable(graph);
-      Scene scene(renderer.getWindow(), &camera);
+      DrawList scene(renderer.getWindow(), &camera);
       if (graphPath) {
         graph.addAttachment(graph.createNode(), &floor);
         graph.addAttachment(graph.createNode(), &cube);
@@ -290,7 +290,7 @@ captureProfiler(int width, int height, bool renderingGroup)
       overlay.update(
         0.0, static_cast<float>(width), static_cast<float>(height));
       renderer.pushClearScreen(0.04f, 0.05f, 0.07f, 1.0f);
-      Scene scene(renderer.getWindow(), &camera);
+      DrawList scene(renderer.getWindow(), &camera);
       scene.AddDrawable(&overlay.visual(), RenderLayerId::Debug);
       renderer.RenderScene(&scene, &camera);
       renderer.SubmitOnly();
@@ -407,7 +407,7 @@ main(int argc, char** argv)
         renderer.pushClearColor(1, 0, 0, 1);
         renderer.pushClearDepth(0.75f);
         renderer.SubmitOnly();
-        Scene scene(nullptr, &camera);
+        DrawList scene(nullptr, &camera);
         RenderPassDesc pass;
         pass.useScreenTarget = false;
         pass.pooledTargetName = desc.name;

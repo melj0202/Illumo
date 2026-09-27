@@ -75,18 +75,33 @@ class AppPackage:
         return APP_LABELS.get(self.name, self.name)
 
 
-def installed_apps(root: Path | None = None) -> tuple[AppPackage, ...]:
-    """Applications the runtime build stages, in cmake/IllumoWasm.cmake order."""
-    module_file = (root or REPOSITORY_ROOT) / "cmake" / "IllumoWasm.cmake"
+def program_directories(root: Path | None = None) -> tuple[Path, ...]:
+    """WASM program directories, in the root CMakeLists.txt's ILLUMO_PROGRAMS order."""
+    base = root or REPOSITORY_ROOT
     try:
-        text = module_file.read_text(encoding="utf-8", errors="replace")
+        text = (base / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ()
+    match = re.search(r"set\(\s*ILLUMO_PROGRAMS\s+([^)]*)\)", text)
+    if match is None:
+        return ()
+    return tuple(base / name.strip('"') for name in match[1].split())
+
+
+def installed_apps(root: Path | None = None) -> tuple[AppPackage, ...]:
+    """Applications the runtime build stages: each program's PackageTargets.cmake."""
     apps: list[AppPackage] = []
-    for match in re.finditer(
-        r"illumo_stage_app\(\s*\w+\s+([a-z0-9._-]+)\s+MODULE\s+([A-Za-z0-9._-]+)", text
-    ):
-        apps.append(AppPackage(match[1], match[2]))
+    for directory in program_directories(root):
+        try:
+            text = (directory / "PackageTargets.cmake").read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            continue
+        for match in re.finditer(
+            r"illumo_stage_app\(\s*\w+\s+([a-z0-9._-]+)\s+MODULE\s+([A-Za-z0-9._-]+)", text
+        ):
+            apps.append(AppPackage(match[1], match[2]))
     return tuple(apps)
 
 
@@ -450,10 +465,12 @@ def discover_workspace_projects(root: Path = REPOSITORY_ROOT) -> WorkspaceProjec
             if exe not in test_runners and exe not in smoke_targets:
                 applications.append(exe)
 
-        # IllumoGame ships as a WASM package; IllumoRuntime (defined by the
-        # root WASM CMake module) is the executable that plays it.
+        # Programs ship as WASM packages; IllumoRuntime (defined by the root
+        # WASM CMake module) is the executable that plays them, offered with
+        # the first program.
         wasm_cmake = root / "cmake" / "IllumoWasm.cmake"
-        if name == "IllumoGame" and wasm_cmake.is_file():
+        programs = program_directories(root)
+        if programs and programs[0].name == name and wasm_cmake.is_file():
             try:
                 wasm_text = wasm_cmake.read_text(encoding="utf-8", errors="replace")
             except OSError:

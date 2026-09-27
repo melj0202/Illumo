@@ -18,9 +18,12 @@ decision log when resolved.
         reference-counted managed texture/shader/static-mesh assets.
   \item \sout{\textbf{Scene graph leftovers?}}
         \textbf{Resolved D-E4:} drawable list only; SceneObject archived.
+        D-E31 renamed the list \texttt{DrawList}, so ``scene'' now means a
+        program's \texttt{ProgramScene}.
   \item \sout{\textbf{IllumoContext growth?}}
-        \textbf{Resolved D-E5:} freeze bag; validate at Start; third module =
-        explicit deps.
+        \textbf{Resolved D-E5, refined by D-E31:} freeze bag, minus
+        \texttt{moduleHost} and plus \texttt{scenes}; the program, each scene's
+        \texttt{start} and \texttt{DebugOverlay::start} check what they need.
   \item \sout{\textbf{Canvas domain vs view?}}
         \textbf{Resolved D-C3:} SparseCellGrid is the production domain;
         CanvasView is the bounded presentation adapter. Dense Canvas remains
@@ -31,13 +34,13 @@ decision log when resolved.
         \textbf{Resolved D-P1/D-P4:} dirty rects + PBO. Presentation is RGB
         fade display (R8+palette experiment partially rolled back; fade restored).
   \item \sout{\textbf{Illumo $\leftrightarrow$ Game dependency:} module registration?}
-        \textbf{Resolved D-E1/D-E7:} the Illumo application runner registers a
-        required module returned by the game's declarative factory; Engine
-        knows only \texttt{IModule}.
+        \textbf{Resolved D-E1/D-E7, superseded by D-E31:} there is no module
+        registration. The engine still never includes product code;
+        IllumoRuntime runs one WASM program, which manages its own scenes.
   \item \sout{\textbf{InputManager $\rightarrow$ CellContext include?}}
         \textbf{Resolved D-E2:} InputManager is Game-free.
   \item \sout{\textbf{RenderQueue class:} delete, rename, or repurpose?}
-        \textbf{Resolved D-R6:} archived; Scene + Renderer is the path.
+        \textbf{Resolved D-R6:} archived; DrawList + Renderer is the path.
   \item \sout{\textbf{EntityTable:} first-class for cells, or experimental?}
         \textbf{Resolved D-E3:} experimental/unused; archived under
         \pathref{archive/dead-engine/}. Cells are drawables, not entities.

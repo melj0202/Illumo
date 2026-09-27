@@ -1,5 +1,6 @@
 #pragma once
 #include <GL/glew.h> // Or your preferred OpenGL loader header
+#include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Services/Logger.h>
@@ -189,6 +190,12 @@ private:
       _valid = false;
     } else {
       _valid = true;
+      // GLSL 330 has no layout(binding): assign the shared block's point here.
+      const GLuint block =
+        glGetUniformBlockIndex(_programID, FrameUniformsBlockName);
+      if (block != GL_INVALID_INDEX) {
+        glUniformBlockBinding(_programID, block, FrameUniformsBindingPoint);
+      }
     }
 
     // Clean up intermediate shader objects

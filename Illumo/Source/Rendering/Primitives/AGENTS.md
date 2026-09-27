@@ -42,6 +42,13 @@ retained widget toolkit or a second renderer.
   axis gradients or radial fans rather than four unrelated corner colors.
   Keep `rect` as the bounding box and `color` as the first vertex color so
   bounds, culling, and pivot code treat it like any other shape.
+- `GameVisual` output must depend only on its items, properties and frame
+  state (`FrameState`), because `VisualStore` replays a recording while that
+  state is unchanged. The visual transform stays baked into vertices, and
+  `setOpacity(1)` must leave bytes unchanged. `AppendCommands` offers the
+  visual to `IBackend::AppendVisual` before building anything; a taken
+  visual must tell its backend when destroyed. Item edits by index reuse
+  free slots of the same kind: never compact or reallocate in steady frames.
 - Do not grow this package into a widget tree, scene graph, layout framework,
   or generalized UI architecture without explicit design approval and a real
   consumer.

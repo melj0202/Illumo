@@ -131,7 +131,7 @@ EditorToolbar::rebuildMenus()
     item("Import to Project...", EditorCommand::ImportAsset));
   fileMenu.items.push_back(item("Pack Project...", EditorCommand::PackProject));
   fileMenu.items.push_back(separator());
-  // Alt+F4 is the window's own close path (OnCloseRequested).
+  // Alt+F4 is the window's own close path (closeRequested).
   MenuItem exit = item("Exit", EditorCommand::ExitEditor);
   exit.shortcut = "Alt+F4";
   fileMenu.items.push_back(exit);

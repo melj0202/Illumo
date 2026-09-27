@@ -51,6 +51,18 @@ engine.
   `GuiPanelLayout::viewport`.
 - `GuiMenuShell` owns no drawing, no input polling beyond pointer sampling, and
   no knowledge of product rows. Keep it that way.
+- Draw an overlay whose chrome breathes or animates as a back-to-front stack
+  of `GameVisual` layers (D-R29):
+  - Put each animated part (glass glow, selection drop, glows) in a small
+    layer of its own between layers that stay still. The host then
+    re-records only the small layers.
+  - A still layer may skip its redraw with a `GuiDrawKey` of its inputs. If
+    listing those inputs is error-prone, redraw it anyway: an identical
+    redraw sends nothing.
+  - Fit a layered overlay with `GuiPanelLayout::fit(..., nullptr)`, then
+    call `scaleFromScreenOrigin` on each layer once it is drawn. `GameVisual`
+    pivots its transform on its content's corner, so one shared transform
+    misaligns layers when the fit scale is not 1.
 - Text entry goes through `GuiTextEdit` (UTF-8 caret and selection, clipboard
   through the caller, characters from `InputManager::getCharQueue`) drawn by
   `GuiKit::drawTextField`. Do not write another line editor.

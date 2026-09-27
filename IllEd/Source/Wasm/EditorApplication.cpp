@@ -1,5 +1,5 @@
 #include "EditorAssets.h"
-#include "EditorModule.h"
+#include "EditorScene.h"
 #include "EditorUiAtlas.h"
 #include "IllEdConfig.h"
 #include "IllEdPlatform.h"
@@ -7,7 +7,7 @@
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Documents.h>
 #include <IllumoGuest/FileTree.h>
-#include <IllumoGuest/ModuleApplication.h>
+#include <IllumoGuest/Program.h>
 #include <IllumoGuest/SceneFetches.h>
 #include <stdexcept>
 
@@ -254,11 +254,11 @@ IllEdPlatform::current()
 
 // IllEd as a WASM package: the complete editor (panels, gizmos, picking,
 // scene graph, .ilsc documents) runs in this store on the guest-side engine.
-class IllEdGuest final : public GuestModuleApplication
+class IllEdGuest final : public GuestProgram
 {
 public:
   IllEdGuest()
-    : GuestModuleApplication(IllEdConfig::applicationName())
+    : GuestProgram(IllEdConfig::applicationName())
     , m_platform(services(), files(), assetCache())
   {
     installedPlatform = &m_platform;
@@ -291,7 +291,7 @@ public:
 protected:
   bool acceptStartup(std::span<const std::byte> startup) override
   {
-    if (!GuestModuleApplication::acceptStartup(startup)) {
+    if (!GuestProgram::acceptStartup(startup)) {
       return false;
     }
     if (launchFile() != nullptr) {
@@ -314,9 +314,11 @@ protected:
     return { EditorUiAtlas::relativePath() };
   }
   void pumpProduct() override { m_platform.pump(); }
-  std::unique_ptr<IModule> createFirstModule() override
+  // One scene: the editor.
+  bool createScenes(SceneDirector& scenes) override
   {
-    return std::make_unique<EditorModule>();
+    scenes.emplace<EditorScene>("editor");
+    return scenes.switchTo("editor");
   }
 
 private:

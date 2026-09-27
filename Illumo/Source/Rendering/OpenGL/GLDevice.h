@@ -8,7 +8,9 @@
 #include "GLTexture.h"
 #include "Rendering/HWInfo.h"
 #include <Illumo/Rendering/CommandQueue.h>
+#include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/PipelineState.h>
+#include <Illumo/Rendering/RecordedCommandList.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <memory>
 #include <string>
@@ -43,6 +45,14 @@ struct GLFramebufferResourceEntry
   int height = 0;
 };
 
+struct GLBufferResourceEntry
+{
+  uint32_t generation = 0;
+  GLuint bufferId = 0;
+  BufferUsage usage = BufferUsage::Instance;
+  size_t capacity = 0;
+};
+
 // Registries owned by GLBackend; typed handles resolve by slot and generation.
 struct GLResourceTables
 {
@@ -52,6 +62,7 @@ struct GLResourceTables
     nullptr;
   const std::unordered_map<uint32_t, GLFramebufferResourceEntry>* framebuffers =
     nullptr;
+  const std::unordered_map<uint32_t, GLBufferResourceEntry>* buffers = nullptr;
 };
 
 class GLDevice
@@ -73,6 +84,10 @@ private:
   int _viewportY = -1;
   int _viewportW = -1;
   int _viewportH = -1;
+  // The vertex array the last SetInstanceStream in this submit configured,
+  // and how many instances its stream holds.
+  GLuint _instanceVao = 0;
+  size_t _instanceCapacity = 0;
 
   GLenum mapBlendFactor(BlendFactor factor)
   {
@@ -186,6 +201,21 @@ private:
     return it->second.resource.get();
   }
 
+  const GLBufferResourceEntry* resolveBuffer(const GLResourceTables& tables,
+                                             BufferHandle handle) const
+  {
+    if (!tables.buffers) {
+      return nullptr;
+    }
+    std::unordered_map<uint32_t, GLBufferResourceEntry>::const_iterator it =
+      tables.buffers->find(handle.slot);
+    if (it == tables.buffers->end() ||
+        it->second.generation != handle.generation) {
+      return nullptr;
+    }
+    return &it->second;
+  }
+
   const GLFramebufferResourceEntry* resolveFramebuffer(
     const GLResourceTables& tables,
     FramebufferHandle handle) const
@@ -214,5 +244,8 @@ public:
   void ApplyPipelineState(const PipelineState& pipelineState);
   void ExecuteCommandQueue(CommandQueue& commandQueue,
                            const GLResourceTables& tables);
+  void executeCommand(const RenderCommand& cmd, const GLResourceTables& tables);
+  void executeList(const RecordedCommandList* list,
+                   const GLResourceTables& tables);
   HWInfo GetHWInfo();
 };

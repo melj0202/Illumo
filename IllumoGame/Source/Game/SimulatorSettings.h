@@ -3,18 +3,25 @@
 #include "ConfigurationMenu.h"
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Services/IEnvVars.h>
-#include <algorithm>
-#include <cctype>
 #include <cmath>
-#include <string>
 
-// Persisted canvas, control and behaviour preferences shared by the canvas
-// and the main menu: their environment names, defaults and ranges, so both
-// read and write them identically. Values outside their range fall back to
-// the default when read and are rejected when applied.
+// CSim's persisted settings, shared by every scene that opens the Settings
+// menu (D-E31): their environment names, product defaults and ranges, so the
+// title and the canvas read, check and write them identically. Values outside
+// their range read as the default and are rejected when applied. The canvas
+// overlays its live world on what is read and applies world changes itself.
 class SimulatorSettings final
 {
 public:
+  static constexpr long kDefaultTps = 30;
+  static constexpr long kMaximumTps = 1000;
+  static constexpr double kMaximumSpeedFactor = 100.0;
+  static constexpr double kDefaultFadeSpeed = 8.0;
+  static constexpr double kMaximumFadeSpeed = 100.0;
+  // An explicit interface scale; 0 is automatic.
+  static constexpr double kMinimumUiScale = 1.0;
+  static constexpr double kMaximumUiScale = 8.0;
+  static constexpr long kMaximumFpsCap = 1000;
   static constexpr double kMaximumCellGlow = 2.0;
   static constexpr double kMinimumZoomStep = 0.01;
   static constexpr double kMaximumZoomStep = 0.5;
@@ -23,70 +30,13 @@ public:
   // Where autosave writes, in the game's private storage.
   static constexpr const char* kAutosaveFile = "autosave.csim";
 
-  static void read(IEnvVars* environment, SimulatorConfiguration* output)
-  {
-    if (environment == nullptr || output == nullptr) {
-      return;
-    }
-    output->startPaused = flag(environment, "startPaused", true);
-    output->ledCells =
-      !lower(environment->getVar("cellStyle").value).starts_with("flat");
-    output->cellGlow =
-      number(environment, "cellGlow", 1.0, 0.0, kMaximumCellGlow);
-    output->gridLines = flag(environment, "gridLines", false);
-    output->showFps = flag(environment, "showFPS", false);
-    output->showMemory = flag(environment, "showMemory", false);
-    output->zoomStep =
-      number(environment, "zoomStep", 0.15, kMinimumZoomStep, kMaximumZoomStep);
-    output->invertZoom = flag(environment, "invertZoom", false);
-    output->panSpeed = static_cast<long>(
-      std::lround(number(environment,
-                         "panSpeed",
-                         600.0,
-                         0.0,
-                         static_cast<double>(kMaximumPanSpeed))));
-    output->autosaveMinutes = static_cast<long>(
-      std::lround(number(environment,
-                         "autosaveMinutes",
-                         0.0,
-                         0.0,
-                         static_cast<double>(kMaximumAutosaveMinutes))));
-    output->confirmClear = flag(environment, "confirmClear", true);
-  }
-
-  static bool valid(const SimulatorConfiguration& configuration)
-  {
-    return std::isfinite(configuration.cellGlow) &&
-           configuration.cellGlow >= 0.0 &&
-           configuration.cellGlow <= kMaximumCellGlow &&
-           std::isfinite(configuration.zoomStep) &&
-           configuration.zoomStep >= kMinimumZoomStep &&
-           configuration.zoomStep <= kMaximumZoomStep &&
-           configuration.panSpeed >= 0 &&
-           configuration.panSpeed <= kMaximumPanSpeed &&
-           configuration.autosaveMinutes >= 0 &&
-           configuration.autosaveMinutes <= kMaximumAutosaveMinutes;
-  }
-
+  // Every stored setting, with the world new canvases open with.
+  static void read(IEnvVars* environment, SimulatorConfiguration* output);
+  // Every setting is in range and the ruleset belongs to the family.
+  static bool valid(const SimulatorConfiguration& configuration);
+  // Stores every setting; the caller saves the environment.
   static void write(IEnvVars* environment,
-                    const SimulatorConfiguration& configuration)
-  {
-    if (environment == nullptr) {
-      return;
-    }
-    environment->setVar("startPaused", configuration.startPaused);
-    environment->setVar("cellStyle",
-                        std::string(configuration.ledCells ? "led" : "flat"));
-    environment->setVar("cellGlow", configuration.cellGlow);
-    environment->setVar("gridLines", configuration.gridLines);
-    environment->setVar("showFPS", configuration.showFps);
-    environment->setVar("showMemory", configuration.showMemory);
-    environment->setVar("zoomStep", configuration.zoomStep);
-    environment->setVar("invertZoom", configuration.invertZoom);
-    environment->setVar("panSpeed", configuration.panSpeed);
-    environment->setVar("autosaveMinutes", configuration.autosaveMinutes);
-    environment->setVar("confirmClear", configuration.confirmClear);
-  }
+                    const SimulatorConfiguration& configuration);
 
   // Whether an applied configuration holds a setting that only a restart
   // applies (today MSAA, read when the window is created): true when it
@@ -99,6 +49,13 @@ public:
     }
     const int running = window->getMsaaSamples();
     return running >= 0 && running != configuration.msaa;
+  }
+
+  // The MSAA sample count the environment asks for.
+  static long msaa(IEnvVars* environment)
+  {
+    const EnvVar& value = environment->getVar("msaa");
+    return value.value.empty() ? 4 : value.valueAsLong;
   }
 
   // An unset preference reads as its default.
@@ -120,15 +77,5 @@ public:
       return fallback;
     }
     return value.valueAsDouble;
-  }
-
-private:
-  static std::string lower(std::string text)
-  {
-    std::transform(
-      text.begin(), text.end(), text.begin(), [](unsigned char character) {
-        return static_cast<char>(std::tolower(character));
-      });
-    return text;
   }
 };

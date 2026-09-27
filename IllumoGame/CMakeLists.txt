@@ -9,16 +9,16 @@ add_library(IllumoGameCore STATIC
   Source/Game/CSimSounds.cpp
   Source/Game/CSimTypeface.cpp
   Source/Game/CellContext.cpp
-  Source/Game/CellGameModule.cpp
+  Source/Game/CanvasScene.cpp
   Source/Game/CellPattern.cpp
   Source/Game/ConfigurationMenu.cpp
   Source/Game/Cursor.cpp
   Source/Game/ExitConfirmDialog.cpp
   Source/Game/IllumoCodec.cpp
   Source/Game/IllumoCodecStreams.cpp
-  Source/Game/IllumoGameApplication.cpp
   Source/Game/IllumoGameConfig.cpp
-  Source/Game/MainMenuModule.cpp
+  Source/Game/TitleScene.cpp
+  Source/Game/CSimScenes.cpp
   Source/Game/MenuMotifs.cpp
   Source/Game/ModeBadge.cpp
   Source/Game/SoftwareCursor.cpp
@@ -30,6 +30,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/RulesetWorkshopMenu.cpp
   Source/Game/SimulationRunner.cpp
   Source/Game/SimulationRunnerGeneration.cpp
+  Source/Game/SimulatorSettings.cpp
   Source/Game/SparseCellGrid.cpp
   Source/Game/SparseWorkerPool.cpp
   Source/Rulesets/DataRuleSet.cpp
@@ -45,8 +46,9 @@ target_link_libraries(IllumoGameCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllumoGameCore)
 
 # IllumoGame ships only as the IllumoGame.wasm package hosted by IllumoRuntime
-# (cmake/IllumoWasm.cmake). IllumoGameCore remains the native test oracle for
-# the same product sources; no native game executable is built.
+# (GuestTargets.cmake, PackageTargets.cmake). IllumoGameCore remains the
+# native test oracle for the same product sources; no native game executable
+# is built.
 
 if(BUILD_TESTING)
   add_executable(IllumoGameTests
@@ -64,8 +66,8 @@ if(BUILD_TESTING)
     Tests/TestCanvasDomain.cpp
     Tests/TestDomainBoundary.cpp
     Tests/TestSim.cpp
-    Tests/TestCellGameModule.cpp
-    Tests/TestMainMenuModule.cpp
+    Tests/TestCanvasScene.cpp
+    Tests/TestTitleScene.cpp
     Tests/TestProductBoundary.cpp
     Tests/TestCanvasInf.cpp
     Tests/TestWorldTopology.cpp

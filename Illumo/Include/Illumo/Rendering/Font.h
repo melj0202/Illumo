@@ -104,6 +104,9 @@ public:
   float getDescender(float sizePt) const;
 
   TextureHandle getTextureHandle(Renderer* renderer);
+  // Uses `handle`, owned by the caller, as this font's atlas on `renderer`
+  // instead of enrolling one from the atlas pixels.
+  void adoptTextureHandle(Renderer* renderer, TextureHandle handle);
   const std::vector<unsigned char>& getAtlasPixels() const
   {
     return atlasPixels;

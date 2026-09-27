@@ -4,7 +4,8 @@
 #include <Illumo/Rendering/AssetSource.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/RenderWorld.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -94,7 +95,7 @@ primitiveNode(const std::string& id,
 static size_t
 renderFrame(HeadlessRenderFixture& fixture, SceneInstance& instance)
 {
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   if (instance.skybox() != nullptr) {
     scene.AddDrawable(instance.skybox());
   }
@@ -586,9 +587,114 @@ testInstantiate2000()
   return counters.failures;
 }
 
+// Per-object draws and instances drawn through the render world in one
+// frame of the instance's drawables plus the world.
+static void
+renderWithWorld(HeadlessRenderFixture& fixture,
+                SceneInstance& instance,
+                RenderWorld& world,
+                size_t* ownDraws,
+                size_t* worldInstances)
+{
+  DrawList scene(&fixture.window, &fixture.camera);
+  scene.AddDrawable(&world, RenderLayerId::World);
+  scene.AddDrawable(&instance.drawable(), RenderLayerId::World);
+  instance.update();
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  *ownDraws = fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed);
+  *worldInstances = world.stats().drawnInstances;
+}
+
+static int
+testInstanceRenderWorld()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(640, 480);
+  fixture.mock.Initialize();
+  AssetManager assets(&fixture.renderer, false);
+  RenderWorld world;
+  SceneDocument document;
+  document.worldMode = SceneWorldMode::World3D;
+  document.environment.hasSun = true;
+  document.environment.sun.shadows = true;
+  for (int index = 0; index < 20; ++index) {
+    document.nodes.push_back(
+      primitiveNode("n" + std::to_string(index),
+                    "",
+                    ScenePrimitiveShape::Cube,
+                    Vector3(static_cast<float>(index % 5) * 2.0f - 4.0f,
+                            static_cast<float>(rowOf(index, 5)) * 2.0f - 3.0f,
+                            0.0f)));
+  }
+  document.nodes.insert(
+    document.nodes.begin() + 1,
+    primitiveNode(
+      "wire", "n0", ScenePrimitiveShape::WireCube, Vector3(0.0f, 0.0f, 1.0f)));
+  SceneInstance instance(&assets);
+  instance.setRenderer(&fixture.renderer);
+  instance.setRenderWorld(&world);
+  std::string error;
+  testTrue(counters,
+           instance.load(document, "/app", error) &&
+             world.stats().instances == 20,
+           "solid primitives become render world instances");
+  fixture.camera.setProjectionType(ProjectionType::Perspective);
+  fixture.camera.setPerspective(60.0f, 0.1f, 100.0f);
+  fixture.camera.lookAt(
+    Vector3(0.0f, 0.0f, 20.0f), Vector3(0.0f), Vector3(0.0f, 1.0f, 0.0f));
+  size_t ownDraws = 0;
+  size_t drawn = 0;
+  renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  testTrue(counters,
+           drawn == 20 && ownDraws >= 1 && ownDraws < 20 &&
+             world.stats().buckets == 1,
+           "the world draws the cubes in one bucket; the wire draws itself");
+  std::string picked;
+  testTrue(counters,
+           instance.pickRay(Vector3(-2.0f, -1.0f, 10.0f),
+                            Vector3(0.0f, 0.0f, -1.0f),
+                            &picked) &&
+             picked == "n6",
+           "hidden visuals still answer picking");
+
+  instance.setTransform("n0", Transform3D::fromPosition(Vector3(500.0f)));
+  instance.setVisible("n1", false);
+  renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  testTrue(counters,
+           drawn == 18 && world.stats().recordings <= 2,
+           "moves and visibility reach the world without re-recording");
+
+  SceneNode recoloured = *instance.findNode("n2");
+  std::get<ScenePrimitive>(recoloured.components[0].value).color =
+    ColorRgba{ 10, 20, 30, 255 };
+  testTrue(counters,
+           instance.replaceNode(recoloured, error) &&
+             world.stats().instances == 20 && instance.removeSubtree("n3") &&
+             world.stats().instances == 19,
+           "edits replace instances and removal destroys them");
+
+  instance.setRenderWorld(nullptr);
+  renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  testTrue(counters,
+           world.stats().instances == 0 && drawn == 0 && ownDraws >= 17,
+           "unbinding hands the meshes back to their visuals");
+
+  instance.setRenderWorld(&world);
+  testTrue(counters,
+           world.stats().instances == 19,
+           "binding after load creates every eligible instance");
+  world.releaseResources();
+  return counters.failures;
+}
+
 void
 registerSceneInstanceTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Content.InstanceRenderWorld",
+               []() { return testInstanceRenderWorld(); });
   registry.add("Illumo.Content.InstancePrimitives",
                []() { return testInstancePrimitives(); });
   registry.add("Illumo.Content.InstanceEnvironmentLight",

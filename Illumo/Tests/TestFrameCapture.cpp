@@ -1,6 +1,6 @@
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
@@ -108,7 +108,7 @@ testCaptureStrictSubmission()
   backend.Initialize();
   Renderer renderer(nullptr, nullptr, nullptr, &backend, false);
   CaptureUnsupportedDrawable drawable;
-  Scene scene;
+  DrawList scene;
   scene.AddDrawable(&drawable);
   renderer.setStrictSubmission(true);
   renderer.BeginFrame();

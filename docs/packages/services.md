@@ -19,7 +19,7 @@ are compiled out under `ILLUMO_SERIAL_GUEST`.
 token submission: attached, primitives go to the Renderer; detached (D-UI5),
 the host's `SoftwareCanvas` rasterizes them for a separate window.
 `CommandLine` never creates windows; it raises `Detach`/`Dock`/`Close`
-requests (`takeWindowRequest`) that `DebugModule` fulfils. History wrap metrics are
+requests (`takeWindowRequest`) that `DebugOverlay` fulfils. History wrap metrics are
 cached until contents, view filters, timestamps, or panel width change; hidden
 entries wrap to zero lines. Settled console composition is replayed until a
 dirty reason fires.
@@ -66,9 +66,10 @@ file tree through `IllumoContext::fileTree` using `Illumo::Content`'s
 `VfsTreeSource` (see `engine.md` and `content.md`).
 
 IllumoGame owns CA defaults and `envvars.json`, TPS, speed, fade, ruleset,
-canvas, simulation, camera, persistence commands, canvas CLI descriptors, and
-dialog labels/default filenames. `CellGameModule` registers domain commands
-through `CommandRegistry` and calls SaveLoad without containing native code.
+canvas, simulation, camera, persistence commands, and dialog labels/default
+filenames. `CanvasScene` registers domain commands
+through `CommandRegistry` and reaches save/load dialogs through `CSimPlatform`
+without containing native code.
 
 ## Allocator alignment
 
@@ -85,8 +86,9 @@ is rejected before allocation; underlying allocation failures may throw.
 InputManager supports 32 live contexts with reusable storage and non-reused
 manager-local long IDs. Registration returns -1 when full or ID space is
 exhausted. Invalid activation preserves selection; unregistering the active ID
-selects neutral input. Unknown actions are inactive. Modules must unregister
-on Exit; rejected startup must not retain a registration.
+selects neutral input. Unknown actions are inactive. Owners (programs, scenes,
+the debug overlay) must unregister when they stop; a failed start must not
+retain a registration.
 
 `WorkerPool` provides a generic owner-thread range dispatcher with explicit
 start/stop, one outstanding submission, caller participation in join, and

@@ -44,7 +44,33 @@ enum class CommandType
   Draw,
   DrawIndexed,
   DrawInstanced,
+
+  // GPU buffers and instancing (appended: existing values are unchanged)
+  WriteBuffer,
+  BindUniformBuffer,
+  SetInstanceStream,
+  DrawIndexedInstanced,
+
+  // Runs a RecordedCommandList's tokens in place.
+  ExecuteList,
 };
+
+class RecordedCommandList;
+
+// Per-instance attribute layouts. Mesh attributes use locations 0-3;
+// instance attributes start at location 4.
+enum class InstanceLayout : unsigned char
+{
+  None = 0,
+  // Model mat4 (locations 4-7), previous model mat4 (8-11), tint vec4 (12).
+  LitModelTint = 1,
+};
+
+inline unsigned int
+instanceLayoutStride(InstanceLayout layout)
+{
+  return layout == InstanceLayout::LitModelTint ? 144u : 0u;
+}
 
 struct CmdClearColor
 {
@@ -180,6 +206,42 @@ struct CmdUpdateBuffer
   const void* data;
 };
 
+// A write at offset zero may discard the buffer's previous contents first.
+struct CmdWriteBuffer
+{
+  BufferHandle handle;
+  unsigned int offsetBytes;
+  unsigned int sizeBytes;
+  const void* data;
+};
+
+struct CmdBindUniformBuffer
+{
+  BufferHandle handle;
+  unsigned int binding;
+};
+
+// Attaches an Instance buffer to the currently bound mesh's vertex arrays.
+struct CmdInstanceStream
+{
+  BufferHandle handle;
+  unsigned int offsetBytes;
+  InstanceLayout layout;
+};
+
+struct CmdDrawIndexedInstanced
+{
+  unsigned int elementCount;
+  unsigned int firstIndex;
+  unsigned int instanceCount;
+};
+
+// The list must stay alive and unchanged until submission returns.
+struct CmdExecuteList
+{
+  const RecordedCommandList* list;
+};
+
 // Tagged-union command token. Trivially copyable for the vector queue.
 struct RenderCommand
 {
@@ -209,6 +271,11 @@ struct RenderCommand
     CmdUpdateTexture updateTexture;
     CmdUpdateBuffer updateBuffer;
     CmdUpdateBuffer updateIndexBuffer;
+    CmdWriteBuffer writeBuffer;
+    CmdBindUniformBuffer bindUniformBuffer;
+    CmdInstanceStream instanceStream;
+    CmdDrawIndexedInstanced drawIndexedInstanced;
+    CmdExecuteList executeList;
   };
   // Append fields to preserve existing positional aggregate initialization.
   // ClearDepthBuffer, ClearScreen and ClearAll default to the far depth.

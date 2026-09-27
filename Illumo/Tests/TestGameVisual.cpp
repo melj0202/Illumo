@@ -6,7 +6,7 @@
 #include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -108,7 +108,7 @@ testRendererFrameContext()
   mock.Initialize();
   Renderer renderer(&window, &env, &camera, &mock, false);
   FrameContextProbe probe;
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&probe, RenderLayerId::World);
 
   renderer.BeginFrame();
@@ -164,7 +164,7 @@ testGameVisualShapesEmitTokens()
     g, renderer.getStyle(RenderStyleId::Shape) != nullptr, "Shape style");
 
   mock.resetCounters();
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&visual, RenderLayerId::UI);
 
   renderer.BeginFrame();
@@ -250,7 +250,7 @@ testGameVisualNewShapesEmitTokens()
              visual.getShape(1)->kind == ShapeKind::FilledTriangle,
            "second shape is triangle");
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&visual, RenderLayerId::World);
   renderer.BeginFrame();
   renderer.RenderScene(&scene, &camera);
@@ -312,7 +312,7 @@ testGameVisualSpritesBatchByTexture()
     g, renderer.getStyle(RenderStyleId::Sprite) != nullptr, "Sprite style");
 
   mock.resetCounters();
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&visual, RenderLayerId::World);
 
   renderer.BeginFrame();

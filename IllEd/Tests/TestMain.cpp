@@ -31,7 +31,7 @@ registerEditorSceneGraphViewTests(IllumoTestRegistry& registry);
 void
 registerEditorUiAtlasTests(IllumoTestRegistry& registry);
 void
-registerEditorModuleTests(IllumoTestRegistry& registry);
+registerEditorSceneTests(IllumoTestRegistry& registry);
 void
 registerEditorPanelsTests(IllumoTestRegistry& registry);
 
@@ -50,7 +50,7 @@ createRegistry()
   registerEditorToolsPanelTests(registry);
   registerEditorSceneGraphViewTests(registry);
   registerEditorUiAtlasTests(registry);
-  registerEditorModuleTests(registry);
+  registerEditorSceneTests(registry);
   registerEditorPanelsTests(registry);
   return registry;
 }

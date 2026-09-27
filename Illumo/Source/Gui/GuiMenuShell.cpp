@@ -682,6 +682,28 @@ GuiPanelLayout::fit(IRenderWindow* window,
   return result;
 }
 
+float
+GuiPanelLayout::visualScale(const GuiPanelFit& fit, Renderer* renderer)
+{
+  const float preferredScale =
+    renderer != nullptr ? std::max(1.0f, renderer->getUiScale()) : 1.0f;
+  return fit.layoutScale / preferredScale;
+}
+
+void
+GuiPanelLayout::scaleFromScreenOrigin(GameVisual& visual, float scale)
+{
+  Transform2D transform;
+  transform.scaleX = scale;
+  transform.scaleY = scale;
+  if (scale != 1.0f) {
+    const Rect2 bounds = visual.contentBounds();
+    transform.x = (scale - 1.0f) * bounds.x;
+    transform.y = (scale - 1.0f) * bounds.y;
+  }
+  visual.setTransform(transform);
+}
+
 GuiPanelFit
 GuiPanelLayout::viewport(IRenderWindow* window, Renderer* renderer)
 {

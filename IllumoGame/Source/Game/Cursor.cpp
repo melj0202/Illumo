@@ -14,8 +14,10 @@ static const float kLandingKick = 14.0f;
 
 Cursor::Cursor()
 {
-  visual.setSpace(PrimitiveSpace::World);
-  visual.setLayerHint(RenderLayerId::UI);
+  for (GameVisual* layer : { &breathVisual, &visual }) {
+    layer->setSpace(PrimitiveSpace::World);
+    layer->setLayerHint(RenderLayerId::UI);
+  }
   glideX.configure(GuiMotion::kTrack);
   glideY.configure(GuiMotion::kTrack);
   landingPop.configure(GuiMotion::kJelly);
@@ -24,13 +26,15 @@ Cursor::Cursor()
 void
 Cursor::init(Renderer* rend, IRenderWindow* win, Camera* cam)
 {
-  visual.setRenderer(rend);
-  visual.setWindow(win);
-  visual.setCamera(cam);
-  visual.setSpace(PrimitiveSpace::World);
-  visual.setLayerHint(RenderLayerId::UI);
-  if (rend) {
-    visual.prepare(rend);
+  for (GameVisual* layer : { &breathVisual, &visual }) {
+    layer->setRenderer(rend);
+    layer->setWindow(win);
+    layer->setCamera(cam);
+    layer->setSpace(PrimitiveSpace::World);
+    layer->setLayerHint(RenderLayerId::UI);
+    if (rend) {
+      layer->prepare(rend);
+    }
   }
   initialized = true;
   rebuild();
@@ -108,8 +112,11 @@ Cursor::tick(float deltaSeconds, bool reduced)
 void
 Cursor::rebuild()
 {
-  visual.clearPrimitives();
   if (!initialized) {
+    breathVisual.clearPrimitives();
+    visual.clearPrimitives();
+    breathKey.invalidate();
+    rimKey.invalidate();
     return;
   }
   const float size = cellSize;
@@ -134,17 +141,57 @@ Cursor::rebuild()
       : 0.5f + 0.5f * std::sin(breathPhase * 6.28318531f / kBreathSeconds);
   ColorRgba solid = color;
   solid.a = 255;
+  const float colorKey = static_cast<float>(
+    (static_cast<std::uint32_t>(solid.r) << 16) |
+    (static_cast<std::uint32_t>(solid.g) << 8) | solid.b);
 
-  GuiKit::drawRoundedBand(visual,
-                          x,
-                          y,
-                          width,
-                          height,
-                          radius,
-                          0.0f,
-                          size * 0.3f,
-                          UiTheme::fade(solid, 0.26f + 0.1f * breathe),
-                          UiTheme::transparentOf(solid));
+  breathKey.begin().add({ x, y, width, height, size, breathe, pop, colorKey });
+  if (breathKey.changed()) {
+    breathVisual.clearPrimitives();
+    GuiKit::drawRoundedBand(breathVisual,
+                            x,
+                            y,
+                            width,
+                            height,
+                            radius,
+                            0.0f,
+                            size * 0.3f,
+                            UiTheme::fade(solid, 0.26f + 0.1f * breathe),
+                            UiTheme::transparentOf(solid));
+
+    // Viewfinder brackets just outside each corner; they breathe and pop out
+    // when the cursor moves.
+    const float gap = size * (0.09f + 0.03f * breathe + 0.12f * pop);
+    const float arm = size * 0.26f;
+    const float thickness = size * 0.075f;
+    const float signs[2] = { -1.0f, 1.0f };
+    for (float signX : signs) {
+      for (float signY : signs) {
+        const float cornerX = centerX + signX * (width * 0.5f + gap);
+        const float cornerY = centerY + signY * (height * 0.5f + gap);
+        // Each arm runs past the corner by half its thickness, so the joint
+        // is square rather than notched.
+        breathVisual.addLine(cornerX + signX * thickness * 0.5f,
+                             cornerY,
+                             cornerX - signX * arm,
+                             cornerY,
+                             solid,
+                             thickness);
+        breathVisual.addLine(cornerX,
+                             cornerY + signY * thickness * 0.5f,
+                             cornerX,
+                             cornerY - signY * arm,
+                             solid,
+                             thickness);
+      }
+    }
+  }
+
+  rimKey.begin().add({ x, y, width, height, size, colorKey });
+  if (!rimKey.changed()) {
+    return;
+  }
+  visual.clearPrimitives();
   GuiKit::drawRoundedOutline(visual,
                              x,
                              y,
@@ -153,33 +200,6 @@ Cursor::rebuild()
                              radius,
                              size * 0.05f,
                              UiTheme::fade(solid, 0.75f));
-
-  // Viewfinder brackets just outside each corner; they breathe and pop out
-  // when the cursor moves.
-  const float gap = size * (0.09f + 0.03f * breathe + 0.12f * pop);
-  const float arm = size * 0.26f;
-  const float thickness = size * 0.075f;
-  const float signs[2] = { -1.0f, 1.0f };
-  for (float signX : signs) {
-    for (float signY : signs) {
-      const float cornerX = centerX + signX * (width * 0.5f + gap);
-      const float cornerY = centerY + signY * (height * 0.5f + gap);
-      // Each arm runs past the corner by half its thickness, so the joint is
-      // square rather than notched.
-      visual.addLine(cornerX + signX * thickness * 0.5f,
-                     cornerY,
-                     cornerX - signX * arm,
-                     cornerY,
-                     solid,
-                     thickness);
-      visual.addLine(cornerX,
-                     cornerY + signY * thickness * 0.5f,
-                     cornerX,
-                     cornerY - signY * arm,
-                     solid,
-                     thickness);
-    }
-  }
 
   // A small centre cross marks the exact cell.
   const float crossArm = size * 0.1f;
@@ -202,6 +222,9 @@ Cursor::rebuild()
 bool
 Cursor::AppendCommands(Renderer* renderer)
 {
+  breathVisual.setVisible(isVisible());
   visual.setVisible(isVisible());
-  return visual.AppendCommands(renderer);
+  // The breathing glow and brackets sit behind the rim and cross.
+  const bool breathAppended = breathVisual.AppendCommands(renderer);
+  return visual.AppendCommands(renderer) && breathAppended;
 }

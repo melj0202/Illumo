@@ -21,7 +21,7 @@ registerDomainBoundaryTests(IllumoTestRegistry& registry);
 void
 registerSimTests(IllumoTestRegistry& registry);
 void
-registerCellGameModuleTests(IllumoTestRegistry& registry);
+registerCanvasSceneTests(IllumoTestRegistry& registry);
 void
 registerProductBoundaryTests(IllumoTestRegistry& registry);
 void
@@ -51,7 +51,7 @@ createRegistry()
   registerCanvasDomainTests(registry);
   registerDomainBoundaryTests(registry);
   registerSimTests(registry);
-  registerCellGameModuleTests(registry);
+  registerCanvasSceneTests(registry);
   registerMainMenuTests(registry);
   registerProductBoundaryTests(registry);
   registerCanvasInfTests(registry);

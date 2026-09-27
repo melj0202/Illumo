@@ -1,7 +1,7 @@
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -9,7 +9,7 @@
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
-#include <Illumo/Wasm/WasmGameModule.h>
+#include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Dialog.h>
 #include <chrono>
 #include <cmath>
@@ -57,18 +57,37 @@ public:
     ++cubemaps;
     return MockBackend::CreateCubemap(faces, width, height, channels);
   }
+  // Direct draws and instanced draws inside executed render world lists.
+  std::size_t instancedDraws = 0;
   void PushToCommandQueue(RenderCommand command) override
   {
-    if (command.commandType == CommandType::SetMesh) {
-      m_bound = command.bindMesh.handle;
-    } else if (command.commandType == CommandType::DrawIndexed &&
-               m_retained.isValid() && m_bound == m_retained) {
-      ++retainedDraws;
+    if (command.commandType == CommandType::ExecuteList &&
+        command.executeList.list != nullptr) {
+      for (std::size_t index = 0; index < command.executeList.list->size();
+           ++index) {
+        observe(command.executeList.list->at(index));
+      }
+    } else {
+      observe(command);
     }
     MockBackend::PushToCommandQueue(command);
   }
 
 private:
+  void observe(const RenderCommand& command)
+  {
+    const bool retained = m_retained.isValid() && m_bound == m_retained;
+    if (command.commandType == CommandType::SetMesh) {
+      m_bound = command.bindMesh.handle;
+    } else if (command.commandType == CommandType::DrawIndexed && retained) {
+      ++retainedDraws;
+    } else if (command.commandType == CommandType::DrawIndexedInstanced &&
+               retained) {
+      ++retainedDraws;
+      ++instancedDraws;
+    }
+  }
+
   MeshHandle m_retained{};
   MeshHandle m_bound{};
 };
@@ -179,9 +198,9 @@ viewerPackage()
   limits.memoryBytes = 1024ull * 1024ull * 1024ull;
   limits.meterFuel = false; // As shipped: illumo.json requests epoch metering.
   limits.deadlineMilliseconds = 10000;
-  WasmGameModule viewer(
+  WasmProgram viewer(
     readBytes(ILLUMO_VIEWER_GUEST), startup.take(), limits, {}, {}, files);
-  const bool started = viewer.Start(&context);
+  const bool started = viewer.start(context);
   testTrue(counters, started, "Generic host starts the IllMeshViewer package");
   if (!started) {
     std::printf("%s\n", viewer.error().c_str());
@@ -193,9 +212,9 @@ viewerPackage()
   while (viewer.error().empty() &&
          std::chrono::steady_clock::now() < deadline &&
          (mock.retainedDraws < 3 || frames < 30)) {
-    viewer.Update(1.0 / 60.0);
-    Scene scene(&window, &camera);
-    viewer.DispatchDrawables(&scene);
+    viewer.update(1.0 / 60.0);
+    DrawList scene(&window, &camera);
+    viewer.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
     renderer.EndFrame();
@@ -223,9 +242,9 @@ viewerPackage()
              !historyContains(console, "Failed"),
            "Every viewer frame and transfer completed without rejection");
   testTrue(counters,
-           viewer.OnCloseRequested(),
+           viewer.closeRequested(),
            "The viewer accepts a host close request");
-  viewer.Exit();
+  viewer.stop();
   if (counters.failures != 0) {
     for (const CommandLine::historyBuffer& entry : console.getHistory()) {
       std::printf("console: %s\n", entry.content.c_str());
@@ -318,9 +337,9 @@ scenePackage()
   limits.memoryBytes = 1024ull * 1024ull * 1024ull;
   limits.meterFuel = false;
   limits.deadlineMilliseconds = 10000;
-  WasmGameModule viewer(
+  WasmProgram viewer(
     readBytes(ILLUMO_VIEWER_GUEST), {}, limits, {}, {}, files);
-  const bool started = viewer.Start(&context);
+  const bool started = viewer.start(context);
   testTrue(counters, started, "The viewer starts with a content package");
   if (!started) {
     std::printf("%s\n", viewer.error().c_str());
@@ -346,9 +365,9 @@ scenePackage()
       commands.ExecuteQueue();
       opened = true;
     }
-    viewer.Update(1.0 / 60.0);
-    Scene scene(&window, &camera);
-    viewer.DispatchDrawables(&scene);
+    viewer.update(1.0 / 60.0);
+    DrawList scene(&window, &camera);
+    viewer.dispatch(scene);
     renderer.BeginFrame();
     renderer.RenderScene(&scene, &camera);
     renderer.EndFrame();
@@ -362,14 +381,16 @@ scenePackage()
               mock.retainedDraws);
   testTrue(counters, opened, "The viewer registers viewer_open");
   testTrue(counters,
-           mock.retainedMeshes == 1 && mock.retainedDraws >= 3,
-           "The scene's package mesh is fetched and drawn as a retained mesh");
+           mock.retainedMeshes == 1 && mock.retainedDraws >= 3 &&
+             mock.instancedDraws == mock.retainedDraws,
+           "The scene's package mesh is fetched once and drawn by host render "
+           "world instances");
   testTrue(counters,
            viewer.error().empty() && renderer.frameError().empty() &&
              !historyContains(console, "Failed") &&
              !historyContains(console, "missing"),
            "The scene and its asset load without errors");
-  viewer.Exit();
+  viewer.stop();
   testTrue(counters,
            context.fileTree == nullptr,
            "Exit withdraws the published file tree");

@@ -5,8 +5,11 @@
 #include <Illumo/Rendering/ResourceHandlePool.h>
 #include <IllumoGuest/Frame.h>
 #include <IllumoGuest/Services.h>
+#include <IllumoGuest/VisualProxies.h>
 #include <map>
 #include <set>
+
+class GuestRenderWorld;
 
 // Guest-only backend: consumes borrowed CPU tokens synchronously and records
 // explicit wire values. It owns no native resources and executes no shaders.
@@ -46,7 +49,8 @@ public:
   void SubmitCommandQueue() override;
   void PushToCommandQueue(RenderCommand command) override;
   void ClearCommandQueue() override;
-  // Scene World maps to GuestLayer::World; UI and Debug map to Ui.
+  // The draw list's World layer maps to GuestLayer::World; UI and Debug map
+  // to Ui.
   void BeginLayer(RenderLayerId layer) override;
   std::size_t rejectedCommandCount() const override;
   std::size_t commandHighWaterMark() const override;
@@ -101,11 +105,45 @@ public:
   bool DestroyFramebuffer(FramebufferHandle) override;
   bool IsFramebufferValid(FramebufferHandle) const override;
 
-  // Static meshes at least this large are uploaded once to a retained host
-  // mesh (frame schema v3) instead of travelling inline every frame.
+  // Every shaped static mesh is uploaded once to a retained host mesh (frame
+  // schema v3). Smaller ones draw inline until that copy is ready; at least
+  // this large, they skip drawing instead so a frame never carries them.
   static constexpr std::size_t RetainedMeshBytes = 64u * 1024u;
+
+  // Whether a mesh can back host render world instances (frame schema v6):
+  // only static lit meshes, once their host copy is complete. Ready reports
+  // the host id and the mesh's index count.
+  enum class HostMeshState
+  {
+    Missing,
+    Pending,
+    Ready,
+    Unusable
+  };
+  HostMeshState hostMeshState(MeshHandle handle,
+                              GuestResourceId* id,
+                              std::uint32_t* indexCount) const;
   // Diagnostics: bytes of dynamic mesh writes in the last recorded frame.
   std::size_t lastMeshWriteBytes() const { return m_lastMeshWriteBytes; }
+
+  // Frame schema v7: while enabled, GameVisuals become host visuals, placed
+  // by per-target compositions, instead of recording their tokens.
+  // `composeWorld` puts the host render world first in the main composition.
+  void setVisuals(bool enabled, bool composeWorld);
+  bool visualsEnabled() const { return m_visualsEnabled; }
+  bool AppendVisual(GameVisual& visual) override;
+  void ForgetVisual(const GameVisual& visual) override;
+  // The last taken frame was delivered, or dropped: confirms or discards
+  // its visual changes.
+  void commitVisuals();
+  void dropVisuals();
+  std::size_t visualCount() const { return m_visuals.proxyCount(); }
+
+  // SkyboxVisuals become the host render world's sky while one is set.
+  void setRenderWorld(GuestRenderWorld* world) { m_world = world; }
+  bool AppendSkybox(const SkyboxVisual& skybox) override;
+  // A cubemap's host id, or empty while it has no ready host copy.
+  GuestResourceId hostCubemap(TextureHandle handle) const;
 
 private:
   struct Mesh
@@ -113,8 +151,8 @@ private:
     MeshVertexLayout layout = MeshVertexLayout::Pos3Color4U8;
     std::vector<std::byte> vertices;
     std::vector<std::byte> indices;
-    // Retained upload state. Draws skip a static mesh until the host copy is
-    // complete, and fall back to inline geometry if the upload fails.
+    // Retained upload state. Until the host copy is complete, small static
+    // meshes draw inline and large ones skip; a failed upload draws inline.
     bool retain = false;
     GuestResourceId id;
     std::uint64_t create = 0;
@@ -168,6 +206,15 @@ private:
                         std::size_t size);
   void emitMeshWrites();
   void pumpMeshes();
+  void mergeShadowCaster(const GuestShadowCaster& caster);
+  // A host texture id for a proxied item, or empty while not on the host.
+  GuestResourceId hostTexture(TextureHandle handle) const;
+  std::uint32_t currentTarget() const;
+  // Closes the target's batch range at this point and places a visual.
+  void placeVisual(std::uint32_t visual);
+  // Covers each composition's remaining batches and replaces compositions
+  // equal to the last delivered ones with `same`.
+  void finishCompositions();
   // Empties m_frame, keeping its texture pixel and mesh write byte buffers
   // as spares for the next frame's writes.
   void recycleFrame();
@@ -219,4 +266,24 @@ private:
   PipelineState m_pipeline{};
   std::string m_error;
   std::size_t m_lastMeshWriteBytes = 0;
+
+  GuestVisualProxies m_visuals;
+  // Advances whenever a texture's host copy appears, changes or goes away,
+  // so the visual proxies re-check items they would otherwise skip.
+  std::uint64_t m_textureEpoch = 0;
+  GuestRenderWorld* m_world = nullptr;
+  bool m_visualsEnabled = false;
+  bool m_composeWorld = false;
+  // Visuals taken at command positions of the current queue.
+  struct VisualMarker
+  {
+    std::size_t command = 0;
+    std::uint32_t visual = 0;
+  };
+  std::vector<VisualMarker> m_markers;
+  // Per m_frame.compositions entry: batches already covered.
+  std::vector<std::uint32_t> m_compositionCursors;
+  // Full compositions of the last delivered frame, and of the taken one.
+  std::vector<GuestComposition> m_deliveredCompositions;
+  std::vector<GuestComposition> m_takenCompositions;
 };

@@ -61,7 +61,7 @@ public:
   }
 
   // Detached mode (D-UI5): the console lives in its own OS window owned by
-  // DebugModule. Layout fills that window at UI scale 1, nothing is submitted
+  // DebugOverlay. Layout fills that window at UI scale 1, nothing is submitted
   // to the Renderer, and isOpen stays false so the game keeps its input.
   // CommandLine only raises requests; the host creates and destroys windows.
   enum class WindowRequestKind : unsigned char

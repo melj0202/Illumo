@@ -1,9 +1,9 @@
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
-#include <Illumo/Engine/DebugModule.h>
+#include <Illumo/Engine/DebugOverlay.h>
 #endif
-#include <Illumo/Engine/IModule.h>
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Foundation/BuildInfo.h>
+#include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Testing/IllumoTestAccess.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -17,125 +17,6 @@
 #include <string>
 
 static TestCounters g;
-
-struct ModuleProbe
-{
-  int starts{ 0 };
-  int updates{ 0 };
-  int draws{ 0 };
-  int exits{ 0 };
-  int destructions{ 0 };
-  int closeRequests{ 0 };
-  bool allowClose{ true };
-};
-
-class OrderProbeModule : public IModule
-{
-public:
-  OrderProbeModule(std::string* sequence, char updateTag, char drawTag)
-    : m_sequence(sequence)
-    , m_updateTag(updateTag)
-    , m_drawTag(drawTag)
-  {
-  }
-
-  bool Start(IllumoContext* context) override
-  {
-    ic = context;
-    return true;
-  }
-
-  void Update(double) override
-  {
-    if (m_sequence != nullptr) {
-      m_sequence->push_back(m_updateTag);
-    }
-  }
-
-  void DispatchDrawables(Scene*) override
-  {
-    if (m_sequence != nullptr) {
-      m_sequence->push_back(m_drawTag);
-    }
-  }
-
-  void Exit() override {}
-
-private:
-  std::string* m_sequence;
-  char m_updateTag;
-  char m_drawTag;
-};
-
-class DrainAllInputModule : public IModule
-{
-public:
-  bool Start(IllumoContext* context) override
-  {
-    ic = context;
-    return context != nullptr && context->inputManager != nullptr;
-  }
-
-  void Update(double) override
-  {
-    if (ic == nullptr || ic->inputManager == nullptr) {
-      return;
-    }
-    ic->inputManager->clearKeyQueue();
-    ic->inputManager->clearCharQueue();
-  }
-
-  void DispatchDrawables(Scene*) override {}
-  void Exit() override {}
-};
-
-class ProbeModule : public IModule
-{
-public:
-  ProbeModule(ModuleProbe* probe,
-              bool startResult,
-              bool throwDuringStart = false,
-              bool throwDuringExit = false)
-    : m_probe(probe)
-    , m_startResult(startResult)
-    , m_throwDuringStart(throwDuringStart)
-    , m_throwDuringExit(throwDuringExit)
-  {
-  }
-
-  ~ProbeModule() override { m_probe->destructions += 1; }
-
-  bool Start(IllumoContext* context) override
-  {
-    ic = context;
-    m_probe->starts += 1;
-    if (m_throwDuringStart) {
-      throw std::runtime_error("probe start failure");
-    }
-    return m_startResult;
-  }
-
-  void Update(double) override { m_probe->updates += 1; }
-  bool OnCloseRequested() override
-  {
-    ++m_probe->closeRequests;
-    return m_probe->allowClose;
-  }
-  void DispatchDrawables(Scene*) override { m_probe->draws += 1; }
-  void Exit() override
-  {
-    m_probe->exits += 1;
-    if (m_throwDuringExit) {
-      throw std::runtime_error("probe exit failure");
-    }
-  }
-
-private:
-  ModuleProbe* m_probe;
-  bool m_startResult;
-  bool m_throwDuringStart;
-  bool m_throwDuringExit;
-};
 
 class CountingWindow : public NullRenderWindow
 {
@@ -242,61 +123,51 @@ setHeadlessFactories(Illumo& host,
     });
 }
 
+// The update half of a frame with nothing between the engine's phases.
+static void
+updateFrame(Illumo& host, double dt = 0.016)
+{
+  host.beginUpdate(dt);
+  host.endUpdate();
+}
+
+// The render half of a frame with nothing dispatched.
+static void
+renderFrame(Illumo& host)
+{
+  host.beginRender();
+  host.endRender();
+}
+
 static void
 testCloseNegotiation()
 {
-  testSection("Illumo: explicit close negotiation and terminal failures");
+  testSection("Illumo: a declined close keeps the window open");
   int windowDestructions = 0;
-  ModuleProbe product;
-  ModuleProbe failed;
-  ModuleProbe overlay;
-  product.allowClose = false;
   Illumo host(headlessConfig(temporaryEnvironmentPath("close")));
   setHeadlessFactories(host, &windowDestructions);
   testTrue(g, host.initialize(), "host initializes");
-  host.addModule(std::make_unique<ProbeModule>(&product, true),
-                 ModuleRequirement::Required);
-  host.addModule(std::make_unique<ProbeModule>(&failed, false),
-                 ModuleRequirement::Optional);
-  host.addModule(std::make_unique<ProbeModule>(&overlay, true),
-                 ModuleRequirement::Optional);
-  testTrue(g, host.startModules(), "accepted modules start");
-  testTrue(g, !host.processCloseRequest(), "no close request means continue");
+  testTrue(g, !host.shouldClose(), "no close request means continue");
   host.context().window->requestClose();
-  testTrue(g, host.shouldClose(), "raw query observes native flag");
-  testTrue(g, !host.processCloseRequest(), "product can defer close");
-  testTrue(g, !host.shouldClose(), "deferral clears native flag");
-  host.update(0.01);
-  testEqInt(g, product.updates, 1, "updates continue after deferral");
-  testTrue(
-    g, !host.processCloseRequest(), "deferred flag does not prompt again");
-  testEqInt(g, product.closeRequests, 1, "one callback per native request");
+  testTrue(g, host.shouldClose(), "a close request is seen");
+  host.deferClose();
+  testTrue(g, !host.shouldClose(), "deferring clears the native request");
+  updateFrame(host);
+  testTrue(g, !host.shouldClose(), "a deferred request does not come back");
   host.context().window->requestRestart();
   testTrue(g,
            host.shouldClose() && host.context().window->restartRequested(),
            "a restart request is a close request that remembers the restart");
+  host.deferClose();
   testTrue(g,
-           !host.processCloseRequest() &&
-             !host.context().window->restartRequested(),
+           !host.shouldClose() && !host.context().window->restartRequested(),
            "deferring the close drops the restart");
-  product.allowClose = true;
   host.context().window->requestClose();
-  testTrue(g, host.processCloseRequest(), "approved request can terminate");
-  testEqInt(g, failed.closeRequests, 0, "failed module never participates");
-  testEqInt(g, overlay.closeRequests, 1, "started overlay participates");
-  host.context().window->cancelCloseRequest();
-  ModuleProbe replacement;
-  overlay.allowClose = false;
-  host.RequestTransition(std::make_unique<ProbeModule>(&replacement, false));
-  host.update(0.01);
-  testEqInt(
-    g, replacement.exits, 0, "false transition startup receives no Exit");
-  testTrue(g,
-           host.processCloseRequest(),
-           "required transition failure is terminal despite veto");
-  testEqInt(
-    g, product.closeRequests, 3, "retired product does not receive callbacks");
+  testTrue(g, host.shouldClose(), "an accepted request stays until shutdown");
   host.shutdown();
+  testTrue(g, host.shouldClose(), "a host without a window reports closed");
+  host.deferClose();
+  testEqInt(g, windowDestructions, 1, "window released once");
 }
 
 static void
@@ -335,116 +206,62 @@ testGenericConfigurationOwnership()
 }
 
 static void
-testOptionalModuleFailure()
+testFramePhases()
 {
-  testSection("Illumo: optional module failure is isolated");
-  const std::filesystem::path path = temporaryEnvironmentPath("optional");
+  testSection("Illumo: frame phases hand input and the scene to the runtime");
+  const std::filesystem::path path = temporaryEnvironmentPath("phases");
   std::error_code error;
   std::filesystem::remove(path, error);
   int windowDestructions = 0;
   int backendInitializations = 0;
-  ModuleProbe accepted;
-  ModuleProbe rejected;
-  ModuleProbe required;
   {
     Illumo host(headlessConfig(path));
     setHeadlessFactories(host, &windowDestructions, &backendInitializations);
-    testTrue(g, host.initialize(), "headless host initializes");
-    host.addModule(std::make_unique<ProbeModule>(&accepted, true));
-    host.addModule(std::make_unique<ProbeModule>(&rejected, false));
-    host.addModule(std::make_unique<ProbeModule>(&required, true),
-                   ModuleRequirement::Required);
-    testTrue(g, host.startModules(), "optional rejection preserves startup");
-    host.update(0.016);
-    host.render();
-    testEqInt(g,
-              rejected.destructions,
-              1,
-              "rejected optional module is destroyed immediately");
+    updateFrame(host);
+    testTrue(g,
+             host.beginRender() == nullptr,
+             "phases do nothing before initialization");
+    host.endRender();
+    testTrue(g, host.initialize(), "host initializes");
+
+    InputManager& input = *host.context().inputManager;
+    input.getKeyQueue().push(
+      InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
+    input.getCharQueue().push('a');
+    host.beginUpdate(0.016);
+    testTrue(g,
+             input.getKeyQueue().size() == 1 && input.getCharQueue().size() == 1,
+             "input waits for the overlay and program after beginUpdate");
+    host.endUpdate();
+    testTrue(g,
+             input.getKeyQueue().empty() && input.getCharQueue().empty(),
+             "input nobody read is dropped at endUpdate");
+
+    {
+      DrawList* scene = host.beginRender();
+      testTrue(g,
+               scene != nullptr && scene == host.context().scene,
+               "beginRender hands out the frame's scene");
+      GLString label(
+        "probe", 255, 255, 255, 255, 12, 0, 0, host.context().renderer);
+      scene->AddDrawable(&label, RenderLayerId::UI);
+      host.endRender();
+      testTrue(g,
+               host.beginRender()->drawablesIn(RenderLayerId::UI).empty(),
+               "each frame starts with no drawables");
+      host.endRender();
+    }
     host.shutdown();
+    testTrue(g,
+             host.beginRender() == nullptr,
+             "phases do nothing after shutdown");
+    updateFrame(host);
   }
-  testEqInt(g, accepted.updates, 1, "accepted optional module updates");
-  testEqInt(g, required.draws, 1, "required module contributes drawables");
-  testEqInt(g, rejected.updates, 0, "rejected optional module stays inactive");
-  testEqInt(g, accepted.exits, 1, "accepted optional module exits once");
-  testEqInt(g, required.exits, 1, "required module exits once");
-  testEqInt(g, rejected.exits, 0, "rejected optional module is not exited");
   testEqInt(g, windowDestructions, 1, "window released once");
   testEqInt(g,
             backendInitializations,
             1,
             "host initializes the injected backend exactly once");
-  std::filesystem::remove(path, error);
-}
-
-static void
-testRequiredModuleRollback()
-{
-  testSection("Illumo: required module failure rolls back accepted modules");
-  const std::filesystem::path path = temporaryEnvironmentPath("required");
-  std::error_code error;
-  std::filesystem::remove(path, error);
-  int windowDestructions = 0;
-  ModuleProbe accepted;
-  ModuleProbe requiredFailure;
-  {
-    Illumo host(headlessConfig(path));
-    setHeadlessFactories(host, &windowDestructions);
-    testTrue(g, host.initialize(), "headless host initializes");
-    host.addModule(std::make_unique<ProbeModule>(&accepted, true));
-    host.addModule(std::make_unique<ProbeModule>(&requiredFailure, false),
-                   ModuleRequirement::Required);
-    testTrue(g, !host.startModules(), "required rejection fails startup");
-    host.update(0.016);
-    host.render();
-    host.shutdown();
-  }
-  testEqInt(g, accepted.exits, 1, "accepted module rolled back once");
-  testEqInt(g, accepted.updates, 0, "rolled-back module never updates");
-  testEqInt(g, accepted.draws, 0, "rolled-back module never renders");
-  testEqInt(g, requiredFailure.exits, 0, "failed module was never accepted");
-  std::filesystem::remove(path, error);
-}
-
-static void
-testModuleExceptionContainment()
-{
-  testSection("Illumo: module exceptions remain inside lifecycle boundary");
-  const std::filesystem::path path = temporaryEnvironmentPath("exceptions");
-  std::error_code error;
-  std::filesystem::remove(path, error);
-  int windowDestructions = 0;
-  ModuleProbe accepted;
-  ModuleProbe throwingExit;
-  ModuleProbe requiredThrow;
-  {
-    Illumo host(headlessConfig(path));
-    setHeadlessFactories(host, &windowDestructions);
-    testTrue(g, host.initialize(), "headless host initializes");
-    host.addModule(std::make_unique<ProbeModule>(&accepted, true));
-    host.addModule(
-      std::make_unique<ProbeModule>(&throwingExit, true, false, true));
-    host.addModule(
-      std::make_unique<ProbeModule>(&requiredThrow, false, true, false),
-      ModuleRequirement::Required);
-    testTrue(g,
-             !host.startModules(),
-             "throwing required module is reported as startup failure");
-    host.shutdown();
-  }
-  testEqInt(g,
-            requiredThrow.exits,
-            1,
-            "throwing Start receives one partial-start cleanup attempt");
-  testEqInt(g,
-            throwingExit.exits,
-            1,
-            "throwing Exit is attempted once during rollback");
-  testEqInt(g,
-            accepted.exits,
-            1,
-            "rollback continues after another module throws during Exit");
-  testEqInt(g, windowDestructions, 1, "exceptional rollback releases services");
   std::filesystem::remove(path, error);
 }
 
@@ -562,160 +379,12 @@ testFallibleFactoryBoundaries()
   std::filesystem::remove(path, error);
 }
 
-static void
-testModuleTransitionSuccess()
-{
-  testSection("Illumo: runtime module transition replaces primary module");
-  const std::filesystem::path path =
-    temporaryEnvironmentPath("transition-success");
-  std::error_code error;
-  std::filesystem::remove(path, error);
-  int windowDestructions = 0;
-  ModuleProbe initialPrimary;
-  ModuleProbe nextPrimary;
-  ModuleProbe rejectedPrimary;
-  ModuleProbe lateRegistration;
-  ModuleProbe competingTransition;
-  ModuleProbe optionalOverlay;
-  {
-    Illumo host(headlessConfig(path));
-    setHeadlessFactories(host, &windowDestructions);
-    testTrue(g, host.initialize(), "host initializes");
-    testTrue(g,
-             host.context().moduleHost != nullptr,
-             "moduleHost is wired in context");
-
-    host.addModule(std::make_unique<ProbeModule>(&initialPrimary, true),
-                   ModuleRequirement::Required);
-    host.addModule(std::make_unique<ProbeModule>(&rejectedPrimary, true),
-                   ModuleRequirement::Required);
-    testEqInt(g,
-              rejectedPrimary.destructions,
-              1,
-              "second required module rejected before startup");
-    host.addModule(std::make_unique<ProbeModule>(&optionalOverlay, true),
-                   ModuleRequirement::Optional);
-    testTrue(g, host.startModules(), "modules start");
-    host.addModule(std::make_unique<ProbeModule>(&lateRegistration, true));
-    testEqInt(g,
-              lateRegistration.destructions,
-              1,
-              "late registration rejected explicitly");
-
-    host.update(0.016);
-    host.render();
-    testEqInt(g, initialPrimary.updates, 1, "initial module updated once");
-    testEqInt(g, optionalOverlay.updates, 1, "overlay updated once");
-
-    // Request transition
-    host.context().moduleHost->RequestTransition(
-      std::make_unique<ProbeModule>(&nextPrimary, true));
-    testTrue(g, host.HasPendingTransition(), "pending transition reported");
-    host.RequestTransition(
-      std::make_unique<ProbeModule>(&competingTransition, true));
-    host.RequestTransition(nullptr);
-    testEqInt(
-      g,
-      competingTransition.destructions,
-      1,
-      "competing request rejected without replacing accepted transition");
-
-    // Frame update triggers transition
-    host.update(0.016);
-    host.render();
-
-    testTrue(g, !host.HasPendingTransition(), "pending transition cleared");
-    testEqInt(g, initialPrimary.exits, 1, "initial module exited once");
-    testEqInt(g, initialPrimary.destructions, 1, "initial module destroyed");
-    testEqInt(g, nextPrimary.starts, 1, "next module started once");
-    testEqInt(g, nextPrimary.updates, 1, "next module received update");
-    testEqInt(g, nextPrimary.draws, 1, "next module received draw");
-    testEqInt(g,
-              optionalOverlay.updates,
-              2,
-              "overlay continues updating across transitions");
-    testEqInt(
-      g, optionalOverlay.exits, 0, "overlay was not exited during transition");
-
-    host.shutdown();
-  }
-  testEqInt(g, nextPrimary.exits, 1, "next module exited on shutdown");
-  testEqInt(g, optionalOverlay.exits, 1, "overlay exited on shutdown");
-  std::filesystem::remove(path, error);
-}
-
-static void
-testModuleTransitionFailureShutdown()
-{
-  testSection("Illumo: failing module transition safely closes application");
-  const std::filesystem::path path =
-    temporaryEnvironmentPath("transition-fail");
-  std::error_code error;
-  std::filesystem::remove(path, error);
-  int windowDestructions = 0;
-  ModuleProbe initialPrimary;
-  ModuleProbe failingPrimary;
-  {
-    Illumo host(headlessConfig(path));
-    setHeadlessFactories(host, &windowDestructions);
-    testTrue(g, host.initialize(), "host initializes");
-
-    host.addModule(std::make_unique<ProbeModule>(&initialPrimary, true),
-                   ModuleRequirement::Required);
-    testTrue(g, host.startModules(), "module starts");
-
-    host.context().moduleHost->RequestTransition(std::make_unique<ProbeModule>(
-      &failingPrimary, false, true)); // throws during Start
-
-    host.update(0.016);
-    testTrue(g, host.shouldClose(), "failed transition requests close");
-    testEqInt(
-      g, initialPrimary.exits, 1, "initial module exited before failing start");
-
-    host.shutdown();
-  }
-  std::filesystem::remove(path, error);
-}
-
-static void
-testOptionalOverlayUpdatesBeforeRequired()
-{
-  testSection("Illumo: optional overlays update first and draw last");
-  const std::filesystem::path path = temporaryEnvironmentPath("overlay-order");
-  std::error_code error;
-  std::filesystem::remove(path, error);
-  int windowDestructions = 0;
-  std::string sequence;
-  {
-    Illumo host(headlessConfig(path));
-    setHeadlessFactories(host, &windowDestructions);
-    testTrue(g, host.initialize(), "host initializes");
-
-    host.addModule(std::make_unique<OrderProbeModule>(&sequence, 'R', 'r'),
-                   ModuleRequirement::Required);
-    host.addModule(std::make_unique<OrderProbeModule>(&sequence, 'O', 'o'),
-                   ModuleRequirement::Optional);
-    testTrue(g, host.startModules(), "modules start");
-
-    host.update(0.016);
-    testTrue(g,
-             sequence == "OR",
-             "optional overlay updates before the required module");
-    sequence.clear();
-    host.render();
-    testTrue(
-      g, sequence == "ro", "required module draws before optional overlays");
-
-    host.shutdown();
-  }
-  std::filesystem::remove(path, error);
-}
-
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
 static void
 testDebugOverlayConsoleIsGlobal()
 {
-  testSection("Illumo: Debug overlay toggles console before product input");
+  testSection("Illumo: the debug overlay toggles the console before the "
+              "program reads input");
   const std::filesystem::path path =
     temporaryEnvironmentPath("debug-overlay-console");
   std::error_code error;
@@ -725,12 +394,8 @@ testDebugOverlayConsoleIsGlobal()
     Illumo host(headlessConfig(path));
     setHeadlessFactories(host, &windowDestructions);
     testTrue(g, host.initialize(), "host initializes");
-
-    host.addModule(std::make_unique<DrainAllInputModule>(),
-                   ModuleRequirement::Required);
-    host.addModule(std::make_unique<DebugModule>(),
-                   ModuleRequirement::Optional);
-    testTrue(g, host.startModules(), "modules start");
+    DebugOverlay overlay;
+    testTrue(g, overlay.start(host.context()), "overlay starts");
     testTrue(g,
              host.context().commandLine != nullptr &&
                !host.context().commandLine->isOpen,
@@ -738,11 +403,16 @@ testDebugOverlayConsoleIsGlobal()
 
     host.context().inputManager->getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::Grave, InputAction::Press, 0 });
-    host.update(0.016);
+    host.beginUpdate(0.016);
+    overlay.update(0.016);
+    // A program that drains every key comes after the overlay.
+    host.context().inputManager->clearKeyQueue();
+    host.endUpdate();
     testTrue(g,
              host.context().commandLine->isOpen,
-             "Grave toggles console even if the required module drains input");
+             "Grave toggles the console even if the program drains input");
 
+    overlay.stop();
     host.shutdown();
   }
   std::filesystem::remove(path, error);
@@ -761,18 +431,16 @@ testDebugOverlayWatermarkDispatched()
     Illumo host(headlessConfig(path));
     setHeadlessFactories(host, &windowDestructions);
     testTrue(g, host.initialize(), "host initializes");
+    DebugOverlay overlay;
+    testTrue(g, overlay.start(host.context()), "overlay starts");
 
-    host.addModule(std::make_unique<DrainAllInputModule>(),
-                   ModuleRequirement::Required);
-    host.addModule(std::make_unique<DebugModule>(),
-                   ModuleRequirement::Optional);
-    testTrue(g, host.startModules(), "modules start");
-
-    host.update(0.016);
-    host.render();
-
-    Scene* scene = IllumoTestAccess::getScene(host);
+    host.beginUpdate(0.016);
+    overlay.update(0.016);
+    host.endUpdate();
+    DrawList* scene = host.beginRender();
     testTrue(g, scene != nullptr, "scene exists");
+    overlay.dispatch(*scene);
+
     const std::vector<DrawableBase*>& debugDrawables =
       scene->drawablesIn(RenderLayerId::Debug);
     bool watermarkFound = false;
@@ -790,61 +458,14 @@ testDebugOverlayWatermarkDispatched()
     }
     testTrue(
       g, watermarkFound, "development build watermark is in debug drawables");
+    host.endRender();
 
+    overlay.stop();
     host.shutdown();
   }
   std::filesystem::remove(path, error);
 }
 #endif
-
-static void
-testInputQueueFlushedOnTransition()
-{
-  testSection("Illumo: input queues are cleared on module transition");
-  const std::filesystem::path path =
-    temporaryEnvironmentPath("transition-input");
-  std::error_code error;
-  std::filesystem::remove(path, error);
-  int windowDestructions = 0;
-  ModuleProbe initialPrimary;
-  ModuleProbe nextPrimary;
-  {
-    Illumo host(headlessConfig(path));
-    setHeadlessFactories(host, &windowDestructions);
-    testTrue(g, host.initialize(), "host initializes");
-
-    host.addModule(std::make_unique<ProbeModule>(&initialPrimary, true),
-                   ModuleRequirement::Required);
-    testTrue(g, host.startModules(), "module starts");
-
-    // Queue dummy key and char
-    host.context().inputManager->getKeyQueue().push(
-      InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
-    host.context().inputManager->getCharQueue().push('a');
-    testTrue(g,
-             !host.context().inputManager->getKeyQueue().empty(),
-             "key queue has input");
-    testTrue(g,
-             !host.context().inputManager->getCharQueue().empty(),
-             "char queue has input");
-
-    host.context().moduleHost->RequestTransition(
-      std::make_unique<ProbeModule>(&nextPrimary, true));
-
-    // Update triggers transition
-    host.update(0.016);
-
-    testTrue(g,
-             host.context().inputManager->getKeyQueue().empty(),
-             "key queue flushed on transition");
-    testTrue(g,
-             host.context().inputManager->getCharQueue().empty(),
-             "char queue flushed on transition");
-
-    host.shutdown();
-  }
-  std::filesystem::remove(path, error);
-}
 
 static void
 testGlobalHotkeys()
@@ -854,22 +475,17 @@ testGlobalHotkeys()
   std::error_code error;
   std::filesystem::remove(path, error);
   int windowDestructions = 0;
-  ModuleProbe primaryProbe;
   {
     Illumo host(headlessConfig(path));
     setHeadlessFactories(host, &windowDestructions);
     testTrue(g, host.initialize(), "host initializes");
-
-    host.addModule(std::make_unique<ProbeModule>(&primaryProbe, true),
-                   ModuleRequirement::Required);
-    testTrue(g, host.startModules(), "modules start");
 
     // 1. Test F11 (Fullscreen toggle)
     const bool initialFullscreen =
       host.environment().getVar("fullscreen").valueAsBool;
     host.context().inputManager->getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::F11, InputAction::Press, 0 });
-    host.update(0.016);
+    updateFrame(host);
     testEqInt(g,
               host.environment().getVar("fullscreen").valueAsBool,
               !initialFullscreen,
@@ -880,7 +496,7 @@ testGlobalHotkeys()
              "F11 reports enabled state");
     host.context().inputManager->getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::F11, InputAction::Press, 0 });
-    host.update(0.016);
+    updateFrame(host);
     testEqInt(g,
               host.environment().getVar("fullscreen").valueAsBool,
               initialFullscreen,
@@ -894,7 +510,7 @@ testGlobalHotkeys()
     window->rejectFullscreen = true;
     host.context().inputManager->getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::F11, InputAction::Press, 0 });
-    host.update(0.016);
+    updateFrame(host);
     testEqInt(g,
               host.environment().getVar("fullscreen").valueAsBool,
               initialFullscreen,
@@ -909,19 +525,25 @@ testGlobalHotkeys()
       host.environment().getVar("showFPS").valueAsBool;
     host.context().inputManager->getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::F3, InputAction::Press, 0 });
-    host.update(0.016);
+    updateFrame(host);
     testEqInt(g,
               host.environment().getVar("showFPS").valueAsBool,
               !initialShowFps,
               "F3 toggles showFPS envvar");
 
-    // 3. Test F5 (Asset reload)
+    // 3. Test F5 (Asset reload): the hotkey is taken before the program runs,
+    // while other keys stay for it.
     host.context().inputManager->getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::F5, InputAction::Press, 0 });
-    host.update(0.016);
+    host.context().inputManager->getKeyQueue().push(
+      InputManager::KeyPressEvent{ KeyCode::Enter, InputAction::Press, 0 });
+    host.beginUpdate(0.016);
     testTrue(g,
-             host.context().inputManager->getKeyQueue().empty(),
-             "F5 event consumed");
+             host.context().inputManager->getKeyQueue().size() == 1 &&
+               host.context().inputManager->getKeyQueue().front().key ==
+                 KeyCode::Enter,
+             "F5 is consumed and other keys remain for the program");
+    host.endUpdate();
 
     // 4. Test console open suppresses hotkey interception
     if (host.context().commandLine != nullptr) {
@@ -930,9 +552,7 @@ testGlobalHotkeys()
         host.environment().getVar("showFPS").valueAsBool;
       host.context().inputManager->getKeyQueue().push(
         InputManager::KeyPressEvent{ KeyCode::F3, InputAction::Press, 0 });
-      // Clear queue at end of update normally, but during update global hotkeys
-      // shouldn't fire We can verify showFPS did not change
-      host.update(0.016);
+      updateFrame(host);
       testEqInt(g,
                 host.environment().getVar("showFPS").valueAsBool,
                 beforeHotkeys,
@@ -954,18 +574,13 @@ testScenePipelineConfigurationFromEnv()
   std::filesystem::remove(path, error);
   int windowDestructions = 0;
   int backendInitializations = 0;
-  ModuleProbe probe;
 
   {
     Illumo host(headlessConfig(path));
     setHeadlessFactories(host, &windowDestructions, &backendInitializations);
     testTrue(g, host.initialize(), "host initialized");
 
-    host.addModule(std::make_unique<ProbeModule>(&probe, true),
-                   ModuleRequirement::Required);
-    testTrue(g, host.startModules(), "modules started");
-
-    Scene* scene = IllumoTestAccess::getScene(host);
+    DrawList* scene = IllumoTestAccess::getScene(host);
     EnvVars* env = IllumoTestAccess::getEnvironment(host);
     testTrue(g, scene != nullptr, "scene exists");
     testTrue(g, env != nullptr, "env exists");
@@ -1011,39 +626,18 @@ testScenePipelineConfigurationFromEnv()
   std::filesystem::remove(path, error);
 }
 
-class PipelineOverrideModule : public IModule
+// A client (the program, a scene) replacing the World layer's passes.
+static void
+installPass(DrawList& scene, const char* name, int* executions = nullptr)
 {
-public:
-  bool Start(IllumoContext* context) override
-  {
-    ic = context;
-    install("ClientStart");
-    return startResult;
+  RenderPassDesc pass;
+  pass.name = name;
+  if (executions != nullptr) {
+    pass.type = PassType::Custom;
+    pass.customExecution = [counter = executions](Renderer*) { ++*counter; };
   }
-  void Update(double) override { install("ClientUpdate"); }
-  void DispatchDrawables(Scene*) override
-  {
-    if (installAtDispatch) {
-      install("ClientDispatch");
-    }
-  }
-  void Exit() override {}
-  bool installAtDispatch{ false };
-  bool startResult{ true };
-  int* executions{ nullptr };
-
-private:
-  void install(const char* name)
-  {
-    RenderPassDesc pass;
-    pass.name = name;
-    if (executions != nullptr) {
-      pass.type = PassType::Custom;
-      pass.customExecution = [counter = executions](Renderer*) { ++*counter; };
-    }
-    ic->scene->SetLayerPasses(RenderLayerId::World, { pass });
-  }
-};
+  scene.SetLayerPasses(RenderLayerId::World, { pass });
+}
 
 static void
 testScenePipelineOverrides()
@@ -1058,12 +652,7 @@ testScenePipelineOverrides()
     Illumo host(headlessConfig(path));
     setHeadlessFactories(host, &windows, &backends);
     testTrue(g, host.initialize(), "host initialized");
-    std::unique_ptr<PipelineOverrideModule> module =
-      std::make_unique<PipelineOverrideModule>();
-    PipelineOverrideModule* probe = module.get();
-    host.addModule(std::move(module), ModuleRequirement::Required);
-    testTrue(g, host.startModules(), "override module started");
-    Scene* scene = host.context().scene;
+    DrawList* scene = host.context().scene;
     const std::function<void(const char*)> checkOverride =
       [scene](const char* name) {
         const std::vector<RenderPassDesc>& passes =
@@ -1072,16 +661,19 @@ testScenePipelineOverrides()
                  passes.size() == 1 && passes[0].name == name,
                  "client pass survives host configuration");
       };
-    host.render();
+    installPass(*scene, "ClientStart");
+    renderFrame(host);
     checkOverride("ClientStart");
     host.environment().setVar("motionBlurEnabled", true);
-    host.render();
+    renderFrame(host);
     checkOverride("ClientStart");
-    host.update(0.016);
-    host.render();
+    host.beginUpdate(0.016);
+    installPass(*scene, "ClientUpdate");
+    host.endUpdate();
+    renderFrame(host);
     checkOverride("ClientUpdate");
     host.environment().setVar("motionBlurAmount", 0.625);
-    host.render();
+    renderFrame(host);
     checkOverride("ClientUpdate");
     scene->ClearLayerPasses(RenderLayerId::World);
     const std::vector<RenderPassDesc>& defaults =
@@ -1090,15 +682,14 @@ testScenePipelineOverrides()
              defaults.size() == 2 &&
                defaults[1].uniformFloats[0].value == 0.625f,
              "clearing override reveals updated host defaults");
-    host.update(0.016);
     host.environment().setVar("motionBlurEnabled", false);
-    host.render();
+    installPass(*scene, "ClientUpdate");
+    renderFrame(host);
     checkOverride("ClientUpdate");
-    probe->installAtDispatch = true;
-    host.render();
+    installPass(*host.beginRender(), "ClientDispatch");
+    host.endRender();
     checkOverride("ClientDispatch");
-    probe->installAtDispatch = false;
-    host.render();
+    renderFrame(host);
     checkOverride("ClientDispatch");
     scene->SetLayerPasses(RenderLayerId::World, {});
     testTrue(g,
@@ -1106,34 +697,23 @@ testScenePipelineOverrides()
              "empty override restores ordinary draw when blur is off");
     host.environment().setVar("motionBlurEnabled", true);
     IllumoTestAccess::configureScenePipeline(host);
-    host.update(0.016);
     scene->ResetDefaultPasses();
     testEqSize(g,
                scene->passesIn(RenderLayerId::World).size(),
                2u,
                "reset restores host defaults");
     int executions = 0;
-    probe->executions = &executions;
-    host.update(0.016);
-    host.render();
-    testEqInt(g, executions, 1, "custom callback executes before transition");
-    ModuleProbe replacement;
-    host.RequestTransition(std::make_unique<ProbeModule>(&replacement, true));
-    host.update(0.016);
-    host.render();
-    testEqInt(g, executions, 1, "retired module callback is detached");
+    installPass(*scene, "ClientCustom", &executions);
+    renderFrame(host);
+    testEqInt(g, executions, 1, "a client's custom pass executes");
+    // What a scene switch does before the next scene enters.
+    scene->ResetDefaultPasses();
+    renderFrame(host);
+    testEqInt(g, executions, 1, "a reset detaches the client's callback");
     testEqSize(g,
                scene->passesIn(RenderLayerId::World).size(),
                2u,
-               "module transition preserves host defaults");
-    std::unique_ptr<PipelineOverrideModule> rejected =
-      std::make_unique<PipelineOverrideModule>();
-    rejected->executions = &executions;
-    rejected->startResult = false;
-    host.RequestTransition(std::move(rejected));
-    host.update(0.016);
-    host.render();
-    testEqInt(g, executions, 1, "failed Start callback is detached");
+               "a reset keeps the host defaults");
     host.shutdown();
     testTrue(g, host.initialize(), "host reinitializes");
     host.environment().setVar("motionBlurEnabled", true);
@@ -1164,26 +744,12 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
                []() { return runHostCase(testCloseNegotiation); });
   registry.add("Illumo.Host.ConfigurationOwnership",
                []() { return runHostCase(testGenericConfigurationOwnership); });
-  registry.add("Illumo.Host.OptionalModuleFailure",
-               []() { return runHostCase(testOptionalModuleFailure); });
-  registry.add("Illumo.Host.RequiredModuleRollback",
-               []() { return runHostCase(testRequiredModuleRollback); });
-  registry.add("Illumo.Host.ModuleExceptionContainment",
-               []() { return runHostCase(testModuleExceptionContainment); });
+  registry.add("Illumo.Host.FramePhases",
+               []() { return runHostCase(testFramePhases); });
   registry.add("Illumo.Host.InitializationRollback",
                []() { return runHostCase(testInitializationRollback); });
   registry.add("Illumo.Host.FallibleFactoryBoundaries",
                []() { return runHostCase(testFallibleFactoryBoundaries); });
-  registry.add("Illumo.Host.ModuleTransitionSuccess",
-               []() { return runHostCase(testModuleTransitionSuccess); });
-  registry.add("Illumo.Host.ModuleTransitionFailureShutdown", []() {
-    return runHostCase(testModuleTransitionFailureShutdown);
-  });
-  registry.add("Illumo.Host.InputQueueFlushedOnTransition",
-               []() { return runHostCase(testInputQueueFlushedOnTransition); });
-  registry.add("Illumo.Host.OptionalOverlayUpdatesFirst", []() {
-    return runHostCase(testOptionalOverlayUpdatesBeforeRequired);
-  });
   registry.add("Illumo.Host.GlobalHotkeys",
                []() { return runHostCase(testGlobalHotkeys); });
   registry.add("Illumo.Host.ScenePipelineConfigurationFromEnv", []() {

@@ -78,6 +78,10 @@ GameVisual::GameVisual(unsigned int maxQuads)
 
 GameVisual::~GameVisual()
 {
+  if (proxied && renderer != nullptr && !rendererLifetime.expired() &&
+      renderer->getBackend() != nullptr) {
+    renderer->getBackend()->ForgetVisual(*this);
+  }
   if (renderer != nullptr && !rendererLifetime.expired()) {
     if (shapeMeshHandle.isValid()) {
       renderer->destroyMesh(shapeMeshHandle);
@@ -130,6 +134,13 @@ GameVisual::setSpace(PrimitiveSpace value)
 void
 GameVisual::setTransform(const Transform2D& value)
 {
+  // Layout code sets the transform every frame; only a change rebuilds.
+  if (value.x == transform.x && value.y == transform.y &&
+      value.scaleX == transform.scaleX && value.scaleY == transform.scaleY &&
+      value.rotationRadians == transform.rotationRadians &&
+      value.pivotX == transform.pivotX && value.pivotY == transform.pivotY) {
+    return;
+  }
   transform = value;
   markDirty();
 }
@@ -178,7 +189,163 @@ GameVisual::clearPrimitives()
   texts.clear();
   items.clear();
   nextSequence = 0;
+  freeShapes.clear();
+  freeSprites.clear();
+  freeTexts.clear();
   markDirty();
+}
+
+bool
+GameVisual::setItem(size_t index, const GameVisualItem& value)
+{
+  return std::visit(
+    [this, index](const auto& primitive) { return setItem(index, primitive); },
+    value);
+}
+
+bool
+GameVisual::setItem(size_t index, const ShapePrimitive& value)
+{
+  return placeItem(index, VisualItemKind::Shape, shapes, freeShapes, value);
+}
+
+bool
+GameVisual::setItem(size_t index, const SpritePrimitive& value)
+{
+  return placeItem(index, VisualItemKind::Sprite, sprites, freeSprites, value);
+}
+
+bool
+GameVisual::setItem(size_t index, const TextPrimitive& value)
+{
+  return placeItem(index, VisualItemKind::Text, texts, freeTexts, value);
+}
+
+template<typename Primitive>
+bool
+GameVisual::placeItem(size_t index,
+                      VisualItemKind kind,
+                      std::vector<Primitive>& list,
+                      std::vector<size_t>& freeSlots,
+                      const Primitive& value)
+{
+  if (index > items.size()) {
+    return false;
+  }
+  if (index < items.size() && items[index].kind == kind) {
+    list[items[index].index] = value;
+    markDirty();
+    return true;
+  }
+  VisualItem item;
+  item.kind = kind;
+  // A free slot of this kind is reused, so edited visuals stop growing.
+  if (!freeSlots.empty()) {
+    item.index = freeSlots.back();
+    freeSlots.pop_back();
+    list[item.index] = value;
+  } else {
+    list.push_back(value);
+    item.index = list.size() - 1;
+  }
+  if (index == items.size()) {
+    item.sequence = nextSequence++;
+    items.push_back(item);
+  } else {
+    // A different kind: the old primitive is hidden and the item keeps its
+    // place in painter order.
+    item.sequence = items[index].sequence;
+    orphan(items[index]);
+    items[index] = item;
+  }
+  markDirty();
+  return true;
+}
+bool
+GameVisual::insertItems(size_t index, size_t count)
+{
+  if (index > items.size() || count == 0) {
+    return false;
+  }
+  // Hidden placeholders that setItem replaces; painter order follows the
+  // item list, so every sequence is renumbered to its new position.
+  ShapePrimitive placeholder;
+  placeholder.visible = false;
+  std::vector<VisualItem> added(count);
+  for (VisualItem& item : added) {
+    item.kind = VisualItemKind::Shape;
+    if (!freeShapes.empty()) {
+      item.index = freeShapes.back();
+      freeShapes.pop_back();
+      shapes[item.index] = placeholder;
+    } else {
+      shapes.push_back(placeholder);
+      item.index = shapes.size() - 1;
+    }
+  }
+  items.insert(items.begin() + static_cast<std::ptrdiff_t>(index),
+               added.begin(),
+               added.end());
+  for (size_t position = 0; position < items.size(); ++position) {
+    items[position].sequence = position;
+  }
+  nextSequence = items.size();
+  markDirty();
+  return true;
+}
+
+void
+GameVisual::removeItems(size_t first, size_t count)
+{
+  if (first >= items.size() || count == 0) {
+    return;
+  }
+  const size_t last = std::min(items.size(), first + count);
+  for (size_t index = first; index < last; ++index) {
+    orphan(items[index]);
+  }
+  items.erase(items.begin() + static_cast<std::ptrdiff_t>(first),
+              items.begin() + static_cast<std::ptrdiff_t>(last));
+  markDirty();
+}
+
+void
+GameVisual::orphan(const VisualItem& item)
+{
+  if (item.kind == VisualItemKind::Shape) {
+    shapes[item.index].visible = false;
+    freeShapes.push_back(item.index);
+  } else if (item.kind == VisualItemKind::Sprite) {
+    sprites[item.index].visible = false;
+    freeSprites.push_back(item.index);
+  } else {
+    texts[item.index].visible = false;
+    texts[item.index].content.clear();
+    texts[item.index].font.reset();
+    texts[item.index].heavyFont.reset();
+    freeTexts.push_back(item.index);
+  }
+}
+
+void
+GameVisual::setOpacity(float value)
+{
+  const float next =
+    std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
+  if (next != opacity) {
+    opacity = next;
+    markDirty();
+  }
+}
+
+ColorRgba
+GameVisual::faded(ColorRgba color) const
+{
+  if (opacity < 1.0f) {
+    color.a = static_cast<unsigned char>(
+      std::lround(static_cast<float>(color.a) * opacity));
+  }
+  return color;
 }
 
 size_t
@@ -491,6 +658,63 @@ GameVisual::getText(size_t index) const
   return index < texts.size() ? &texts[index] : nullptr;
 }
 
+const SpritePrimitive*
+GameVisual::getSprite(size_t index) const
+{
+  return index < sprites.size() ? &sprites[index] : nullptr;
+}
+
+GameVisual::PrimitiveRef
+GameVisual::itemAt(size_t index) const
+{
+  PrimitiveRef ref;
+  if (index < items.size()) {
+    const VisualItem& item = items[index];
+    ref.index = item.index;
+    ref.kind = item.kind == VisualItemKind::Shape    ? PrimitiveKind::Shape
+               : item.kind == VisualItemKind::Sprite ? PrimitiveKind::Sprite
+                                                     : PrimitiveKind::Text;
+  }
+  return ref;
+}
+
+std::array<int, 2>
+GameVisual::frameDimensions(Renderer* value, bool* fromFrame) const
+{
+  const Renderer::FrameContext& frameContext = value->getFrameContext();
+  std::array<int, 2> dimensions{ 1280, 720 };
+  *fromFrame =
+    frameContext.active && window != nullptr && window == value->getWindow();
+  if (*fromFrame) {
+    dimensions = frameContext.windowDimensions;
+  } else if (window != nullptr) {
+    dimensions = window->getWindowDimensions();
+  }
+  return dimensions;
+}
+
+std::array<float, 2>
+GameVisual::pixelResolution(Renderer* value) const
+{
+  bool fromFrame = false;
+  const std::array<int, 2> dimensions = frameDimensions(value, &fromFrame);
+  const float uiScale = value->getUiScale();
+  const float width = static_cast<float>(dimensions[0]);
+  const float height = static_cast<float>(dimensions[1]);
+  return { uiScale > 0.0f ? width / uiScale : width,
+           uiScale > 0.0f ? height / uiScale : height };
+}
+
+bool
+GameVisual::drawsWithFrameCamera(Renderer* value) const
+{
+  bool fromFrame = false;
+  frameDimensions(value, &fromFrame);
+  const Renderer::FrameContext& frameContext = value->getFrameContext();
+  return camera != nullptr && fromFrame && frameContext.hasWorldMvp &&
+         frameContext.worldCamera == camera;
+}
+
 std::vector<GameVisual::PrimitiveRef>
 GameVisual::paintOrder() const
 {
@@ -784,7 +1008,7 @@ GameVisual::pushShapeQuadColors(Point2 p0,
   const unsigned int base = shapeQuadCount * 4;
   const Point2 points[4] = { p0, p1, p2, p3 };
   for (unsigned int corner = 0; corner < 4; ++corner) {
-    const ColorRgba& color = colors[corner];
+    const ColorRgba color = faded(colors[corner]);
     shapeVerts[base + corner] = { points[corner].x, points[corner].y, 0.0f,
                                   color.r,          color.g,          color.b,
                                   color.a };
@@ -943,7 +1167,7 @@ GameVisual::pushSpriteQuad(const SpritePrimitive& sprite,
     std::swap(v0, v1);
   }
   const unsigned int base = spriteQuadCount * 4;
-  const ColorRgba color = sprite.tint;
+  const ColorRgba color = faded(sprite.tint);
   spriteVerts[base + 0] = { p0.x,    p0.y,    0.0f, color.r, color.g,
                             color.b, color.a, u0,   v0 };
   spriteVerts[base + 1] = { p1.x,    p1.y,    0.0f, color.r, color.g,
@@ -974,8 +1198,8 @@ GameVisual::pushTextRun(const TextPrimitive& text,
   const float lineHeight = font.getLineHeight(text.sizePt);
   const float ascender = font.getAscender(text.sizePt);
   ColorRgba color = text.color;
-  color.a = static_cast<unsigned char>(
-    std::lround(static_cast<float>(color.a) * std::clamp(alpha, 0.0f, 1.0f)));
+  color.a = static_cast<unsigned char>(std::lround(
+    static_cast<float>(color.a) * std::clamp(alpha, 0.0f, 1.0f) * opacity));
   const float stretchX =
     std::isfinite(text.stretchX) && text.stretchX > 0.0f ? text.stretchX : 1.0f;
   const float stretchY =
@@ -1257,6 +1481,7 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
   shapeUploadPending = shapeQuadCount > 0;
   spriteUploadPending = spriteQuadCount > 0;
   geometryDirty = false;
+  geometryRevision += 1;
 }
 
 bool
@@ -1265,6 +1490,33 @@ GameVisual::AppendCommands(Renderer* value)
   if (!isVisible()) {
     return true;
   }
+  // A backend whose host keeps visuals takes this one whole: no geometry is
+  // built or uploaded here. The renderer is remembered, without enrolling
+  // meshes, so destruction can reach the backend.
+  if (value != nullptr && !value->isRecording() &&
+      value->getBackend() != nullptr &&
+      (renderer == nullptr ||
+       (renderer == value && !rendererLifetime.expired())) &&
+      value->getBackend()->AppendVisual(*this)) {
+    if (renderer == nullptr) {
+      renderer = value;
+      rendererLifetime = value->getLifetimeIdentity();
+    }
+    proxied = true;
+    return true;
+  }
+  FrameState state;
+  if (!prepareFrame(value, &state)) {
+    return false;
+  }
+  return emitDraws(value, state);
+}
+
+bool
+GameVisual::prepareFrame(Renderer* value,
+                         FrameState* state,
+                         const FrameOverride* frame)
+{
   if (value == nullptr) {
     return false;
   }
@@ -1282,22 +1534,19 @@ GameVisual::AppendCommands(Renderer* value)
     return false;
   }
   const Renderer::FrameContext& frameContext = value->getFrameContext();
-  std::array<int, 2> dimensions{ 1280, 720 };
-  const bool useFrameDimensions =
-    frameContext.active && window != nullptr && window == value->getWindow();
-  if (useFrameDimensions) {
-    dimensions = frameContext.windowDimensions;
-  } else if (window != nullptr) {
-    dimensions = window->getWindowDimensions();
-  }
+  bool useFrameDimensions = false;
+  const std::array<int, 2> dimensions =
+    frameDimensions(value, &useFrameDimensions);
   const float width = static_cast<float>(dimensions[0]);
   const float height = static_cast<float>(dimensions[1]);
   const bool usePixels = space == PrimitiveSpace::Pixels;
-  const float uiScale = value != nullptr ? value->getUiScale() : 1.0f;
-  const float resolutionX =
-    (usePixels && uiScale > 0.0f) ? width / uiScale : width;
-  const float resolutionY =
-    (usePixels && uiScale > 0.0f) ? height / uiScale : height;
+  const float uiScale = value->getUiScale();
+  float resolutionX = (usePixels && uiScale > 0.0f) ? width / uiScale : width;
+  float resolutionY = (usePixels && uiScale > 0.0f) ? height / uiScale : height;
+  if (frame != nullptr) {
+    resolutionX = frame->width;
+    resolutionY = frame->height;
+  }
   Rect2 effectiveCullRect;
   const Rect2* cullRect = nullptr;
   if (usePixels) {
@@ -1323,6 +1572,11 @@ GameVisual::AppendCommands(Renderer* value)
     value->reportFrameError(
       "GameVisual geometry exceeded its quad safety limit");
   }
+  state->resolutionX = resolutionX;
+  state->resolutionY = resolutionY;
+  state->geometryRevision = geometryRevision;
+  state->enclosingClip = value->getClipState();
+  state->clip = false;
   if (drawBatches.empty()) {
     return true;
   }
@@ -1342,29 +1596,31 @@ GameVisual::AppendCommands(Renderer* value)
       spriteVerts.data());
   }
 
-  float mvp[16] = {
-    1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-  };
-  if (space == PrimitiveSpace::World && camera != nullptr &&
-      window != nullptr) {
+  float* mvp = state->mvp.data();
+  state->mvp = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+  if (space == PrimitiveSpace::World && frame != nullptr) {
+    if (frame->hasWorldMvp) {
+      state->mvp = frame->worldMvp;
+    }
+  } else if (space == PrimitiveSpace::World && camera != nullptr &&
+             window != nullptr) {
     const bool useFrameMvp = useFrameDimensions && frameContext.hasWorldMvp &&
                              frameContext.worldCamera == camera;
     if (useFrameMvp) {
-      std::memcpy(mvp, frameContext.worldMvp.data(), sizeof(mvp));
+      std::memcpy(mvp, frameContext.worldMvp.data(), sizeof(float) * 16);
     } else {
       const float aspect =
         static_cast<float>(dimensions[0]) /
         static_cast<float>(dimensions[1] > 0 ? dimensions[1] : 1);
       const glm::mat4 matrix = camera->GetMVPMatrix(aspect);
-      std::memcpy(mvp, &matrix[0][0], sizeof(mvp));
+      std::memcpy(mvp, &matrix[0][0], sizeof(float) * 16);
     }
   } else {
     const Matrix4 overlay =
       WorldLook::overlayProjection(resolutionX, resolutionY);
-    std::memcpy(mvp, glm::value_ptr(overlay), sizeof(mvp));
+    std::memcpy(mvp, glm::value_ptr(overlay), sizeof(float) * 16);
   }
 
-  bool clipPushed = false;
   if (usePixels && pixelClipEnabled) {
     const std::array<int, 4> viewport = value->getCurrentPassViewport();
     const double scaleX =
@@ -1381,11 +1637,26 @@ GameVisual::AppendCommands(Renderer* value)
     const int bottom = viewport[1] + viewport[3] -
                        static_cast<int>(std::ceil(
                          (effectiveCullRect.y + effectiveCullRect.h) * scaleY));
-    value->pushClipRect(
-      left, bottom, std::max(0, right - left), std::max(0, top - bottom));
-    clipPushed = true;
+    state->clip = true;
+    state->clipRect = {
+      left, bottom, std::max(0, right - left), std::max(0, top - bottom)
+    };
   }
+  return true;
+}
 
+bool
+GameVisual::emitDraws(Renderer* value, const FrameState& state)
+{
+  if (drawBatches.empty()) {
+    return true;
+  }
+  if (state.clip) {
+    value->pushClipRect(state.clipRect[0],
+                        state.clipRect[1],
+                        state.clipRect[2],
+                        state.clipRect[3]);
+  }
   bool appended = true;
   for (size_t i = 0; i < drawBatches.size(); ++i) {
     const DrawBatch& batch = drawBatches[i];
@@ -1396,8 +1667,8 @@ GameVisual::AppendCommands(Renderer* value)
     value->pushSetMesh(batch.kind == BatchKind::Shape ? shapeMeshHandle
                                                       : spriteMeshHandle);
     value->pushUniformVec2(
-      WorldLook::kResolutionUniform, resolutionX, resolutionY);
-    value->pushUniformMat4(WorldLook::kMvpUniform, mvp);
+      WorldLook::kResolutionUniform, state.resolutionX, state.resolutionY);
+    value->pushUniformMat4(WorldLook::kMvpUniform, state.mvp.data());
     if (batch.kind == BatchKind::Sprite) {
       value->pushUniformInt(WorldLook::kTextureUniform,
                             WorldLook::kTextureUnit);
@@ -1405,7 +1676,7 @@ GameVisual::AppendCommands(Renderer* value)
     }
     value->pushDrawIndexed(batch.quadCount * 6, batch.firstQuad * 6);
   }
-  if (clipPushed) {
+  if (state.clip) {
     value->popClipRect();
   }
   return appended;

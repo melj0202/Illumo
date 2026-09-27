@@ -1,6 +1,7 @@
-#include "EditorModule.h"
+#include "EditorScene.h"
 #include "IllEdPlatform.h"
 #include "TestAccess.h"
+#include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -40,10 +41,11 @@ struct PanelFixture
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
-  Scene scene;
+  DrawList scene;
   FakePanelSurfaces surfaces;
   IllumoContext context;
-  EditorModule module;
+  SceneDirector director;
+  EditorScene& module;
   bool started;
 
   explicit PanelFixture(const std::string& layout = {})
@@ -60,7 +62,8 @@ struct PanelFixture
     , surfaces(&window, &camera)
     , context{ &scene,  &window, &console, &input,   &renderer,
                &assets, &env,    &camera,  &registry }
-    , module()
+    , director(context)
+    , module(director.emplace<EditorScene>("editor"))
     , started(false)
   {
     env.setVar("fontSize", "13");
@@ -69,21 +72,14 @@ struct PanelFixture
     }
     mock.Initialize();
     context.panelSurfaces = &surfaces;
-    started = module.Start(&context);
-  }
-
-  ~PanelFixture()
-  {
-    if (started) {
-      module.Exit();
-    }
+    started = director.switchTo("editor") && director.applyPending();
   }
 
   // One host exchange: pending windows open, then the editor runs a frame.
   void frame()
   {
     surfaces.step();
-    module.Update(0.016);
+    module.update(0.016);
   }
 
   void pressLeft(bool down)
@@ -92,7 +88,7 @@ struct PanelFixture
       input, KeyCode::MouseLeft, down ? InputAction::Press : InputAction::None);
   }
 
-  GuiPanelDock& dock() { return EditorModuleTestAccess::dock(module); }
+  GuiPanelDock& dock() { return EditorSceneTestAccess::dock(module); }
 };
 
 static bool
@@ -110,9 +106,9 @@ testPopOutAndDock()
   testTrue(
     counters, fixture.dock().canDetach(), "a host with windows offers pop-out");
   EditorInspector* inspector =
-    EditorModuleTestAccess::inspector(fixture.module);
+    EditorSceneTestAccess::inspector(fixture.module);
 
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::PopOutInspectorPanel);
   testTrue(counters,
            fixture.dock().mode("inspector") == GuiDockMode::Opening,
@@ -126,7 +122,7 @@ testPopOutAndDock()
 
   fixture.scene.ClearDrawables();
   fixture.surfaces.clearScenes();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   FakePanelSurfaces::Window* window = fixture.surfaces.window(104);
   testTrue(
     counters,
@@ -152,11 +148,11 @@ testPopOutAndDock()
   fixture.window.mouseX = title.x + 30.0;
   fixture.window.mouseY = title.y + 8.0;
   fixture.pressLeft(true);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(counters, fixture.dock().dragging(), "a title press drags");
   fixture.window.mouseX = -40.0;
   fixture.window.mouseY = 120.0;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.pressLeft(false);
   fixture.frame();
   testTrue(counters,
@@ -164,7 +160,7 @@ testPopOutAndDock()
              fixture.surfaces.window(101) != nullptr &&
              fixture.surfaces.window(101)->requestedX < 0,
            "a drag past the edge tears the panel off where it was dropped");
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::PopOutHierarchyPanel);
   testTrue(counters,
            fixture.dock().mode("hierarchy") == GuiDockMode::Docked &&
@@ -172,7 +168,7 @@ testPopOutAndDock()
            "the View menu docks a detached panel");
 
   fixture.surfaces.refuseNextOpen = true;
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::PopOutToolsPanel);
   fixture.frame();
   testTrue(counters,
@@ -186,14 +182,14 @@ testDetachedTextEntry()
 {
   TestCounters counters;
   PanelFixture fixture;
-  const std::string id = EditorModuleTestAccess::createNode(
+  const std::string id = EditorSceneTestAccess::createNode(
     fixture.module, EditorCommand::CreateCube);
-  EditorModuleTestAccess::handleCommand(fixture.module,
+  EditorSceneTestAccess::handleCommand(fixture.module,
                                         EditorCommand::PopOutInspectorPanel);
   fixture.frame();
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   EditorInspector* inspector =
-    EditorModuleTestAccess::inspector(fixture.module);
+    EditorSceneTestAccess::inspector(fixture.module);
   const InspectorField* name = inspector->field("name");
   FakePanelSurfaces::Window* window = fixture.surfaces.window(104);
   testTrue(counters,
@@ -206,9 +202,9 @@ testDetachedTextEntry()
   window->pointer.x = name->x + name->width * 0.5f;
   window->pointer.y = name->y + 8.0f;
   window->pointer.left = true;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   window->pointer.left = false;
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testTrue(counters,
            inspector->editing() && inspector->editingKey() == "name",
            "a click in the detached window focuses the field");
@@ -217,16 +213,16 @@ testDetachedTextEntry()
   }
   // R is also the Scale shortcut; a focused field takes the key first.
   fixture.input.getKeyQueue().push({ KeyCode::R, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
-  fixture.module.Update(0.016);
-  EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+  fixture.module.update(0.016);
+  EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
   testEqStr(counters,
             document.findNode(id)->name,
             "Crate",
             "typing in the detached inspector renames the node");
   testTrue(counters,
-           EditorModuleTestAccess::toolbar(fixture.module)
+           EditorSceneTestAccess::toolbar(fixture.module)
                ->statusForTesting()
                .find("Scale") == std::string::npos,
            "shortcut keys wait while a field has focus");
@@ -257,19 +253,19 @@ testCrossWindowAssetDrop()
   IllEdNativeTree::install(tree);
   {
     PanelFixture fixture;
-    EditorModuleTestAccess::handleCommand(fixture.module,
+    EditorSceneTestAccess::handleCommand(fixture.module,
                                           EditorCommand::PopOutAssetsPanel);
     fixture.frame();
-    fixture.module.Update(0.016);
+    fixture.module.update(0.016);
     EditorAssetBrowser* browser =
-      EditorModuleTestAccess::assetBrowser(fixture.module);
+      EditorSceneTestAccess::assetBrowser(fixture.module);
     testTrue(counters,
              browser->placement().surface == 102u && browser->visible(),
              "the Assets panel is in its own window");
     browser->clickRowForTesting(0);
-    fixture.module.Update(0.016);
+    fixture.module.update(0.016);
     browser->clickRowForTesting(1);
-    fixture.module.Update(0.016);
+    fixture.module.update(0.016);
     const std::vector<GuiFileTreeRow> rows = browser->rowsForTesting();
     float rowX = 0.0f;
     float rowY = 0.0f;
@@ -283,31 +279,31 @@ testCrossWindowAssetDrop()
     window->pointer.x = rowX;
     window->pointer.y = rowY;
     window->pointer.left = true;
-    fixture.module.Update(0.016);
+    fixture.module.update(0.016);
     // Released over the main viewport's (640, 360), in this window's pixels.
     window->pointer.x =
       640.0 + fixture.surfaces.mainOrigin[0] - static_cast<double>(origin[0]);
     window->pointer.y =
       360.0 + fixture.surfaces.mainOrigin[1] - static_cast<double>(origin[1]);
-    fixture.module.Update(0.016);
+    fixture.module.update(0.016);
     testEqStr(counters,
               browser->dragging(),
               "/project/meshes/tri.obj",
               "dragging past the window's edge carries the file");
     const std::size_t before =
-      EditorModuleTestAccess::document(fixture.module).nodeCount();
+      EditorSceneTestAccess::document(fixture.module).nodeCount();
     window->pointer.left = false;
-    fixture.module.Update(0.016);
-    EditorDocument& document = EditorModuleTestAccess::document(fixture.module);
+    fixture.module.update(0.016);
+    EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
     const SceneNode* placed =
-      document.findNode(EditorModuleTestAccess::selectedId(fixture.module));
+      document.findNode(EditorSceneTestAccess::selectedId(fixture.module));
     testTrue(counters,
              document.nodeCount() == before + 1u && placed != nullptr &&
                placed->find(SceneComponentType::Mesh) != nullptr,
              "a drop over the main viewport places the mesh");
     float expectedX = 0.0f;
     float expectedY = 0.0f;
-    EditorModuleTestAccess::screenToWorld(
+    EditorSceneTestAccess::screenToWorld(
       fixture.module, 640.0f, 360.0f, &expectedX, &expectedY);
     testTrue(counters,
              placed != nullptr &&
@@ -326,9 +322,9 @@ testLayoutPersists()
   std::string saved;
   {
     PanelFixture first;
-    EditorModuleTestAccess::handleCommand(first.module,
+    EditorSceneTestAccess::handleCommand(first.module,
                                           EditorCommand::ToggleToolsPanel);
-    EditorModuleTestAccess::handleCommand(first.module,
+    EditorSceneTestAccess::handleCommand(first.module,
                                           EditorCommand::PopOutHierarchyPanel);
     first.dock().setColumnWidth(GuiDockSide::Left, 300.0f);
     first.frame();

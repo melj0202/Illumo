@@ -3,26 +3,27 @@
 Illumo owns process-level system behavior:
 
 - `Illumo/Source/Engine/Application.cpp` initializes logging, applies the
-  consumer's defaults callback, invokes engine `SysCmdLine`, fallibly
-  initializes the host, registers the consumer's required module and optional
-  Debug `DebugModule` overlay, drives the `std::chrono::steady_clock` frame loop,
-  performs shutdown, and returns an explicit process code. The overlay remains
-  active across main-menu and canvas transitions.
+  consumer's defaults callback, invokes engine `SysCmdLine`, logs the startup
+  report, fallibly initializes the host, calls the definition's `run`
+  callback, performs shutdown, relaunches when the application asked to, and
+  returns an explicit process code.
 - `Illumo/Source/Platform/<port>/` supplies the selected entry point and native
   dialogs.
 - `Illumo/Include/Illumo/Engine/Application.h` is the narrow reverse seam. A
   consumer defines `CreateIllumoApplication()` and returns only declarative
-  identity, CLI metadata, defaults, and its required module factory.
+  identity, CLI metadata, defaults, and its `run` callback
+  (`int (*)(Illumo&, std::chrono::steady_clock::time_point launched)`), which
+  runs the frame loop on the initialized engine and returns the exit code.
 
-Each in-tree product implements that definition: IllumoGame in
-`IllumoGame/Source/Game/IllumoGameApplication.cpp`, IllEd in
-`IllEd/Source/IllEdApplication.cpp`, and IllMeshViewer in
-`IllMeshViewer/Source/IllMeshViewerApplication.cpp`. These contain product policy only — no
-process loop, logger lifetime, platform SDK code, or system parser.
+`IllumoRuntime` (`Illumo/Source/Wasm/RuntimeApplication.cpp`) is the only
+definition; there are no native product definitions (D-E31). Its `run` builds
+a `RuntimeShell` (`Illumo/Include/Illumo/Wasm/RuntimeShell.h`) around one
+`WasmProgram` and runs it: the shell starts the program and, in debug-tool
+builds, the `DebugOverlay`, drives the paced `std::chrono::steady_clock` frame
+loop, and stops both (see `engine.md`). The overlay stays active across the
+program's scene switches, which happen inside the guest.
 
-`IllumoRuntime` (`Illumo/Source/Wasm/RuntimeApplication.cpp`) is the generic
-application definition for WASM packages. It launches one `app` package
-described by `illumo.json`: `--app <name>` resolves `apps/<name>/` or
+The runtime launches one `app` package described by `illumo.json`: `--app <name>` resolves `apps/<name>/` or
 `apps/<name>.ilpk` beside the runtime (`game` by default), and `--package`
 takes a package directory or `.ilpk` instead (`--app` cannot be combined with
 `--package` or `--game`). Every package in `packages/` beside the runtime is

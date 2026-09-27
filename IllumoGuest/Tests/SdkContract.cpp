@@ -1,11 +1,16 @@
+#include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <IllumoGuest/Application.h>
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Console.h>
 #include <IllumoGuest/Dialog.h>
 #include <IllumoGuest/FontProvider.h>
 #include <IllumoGuest/InputProvider.h>
+#include <IllumoGuest/RenderWorld.h>
+#include <IllumoGuest/SceneWorlds.h>
 #include <IllumoGuest/SnapshotWindow.h>
+#include <algorithm>
 #include <array>
 #include <functional>
 
@@ -384,6 +389,511 @@ dynamicMeshContract()
   backend.Shutdown();
 }
 
+// Every shaped static mesh gets one host copy, however small: it draws inline
+// while that copy uploads, then by reference with no geometry in the frame.
+static void
+staticMeshContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  renderer.ensureBuiltinStyles();
+  const std::array<float, 12> vertices{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0 };
+  const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+  const MeshHandle mesh = renderer.enrollMesh(vertices.data(),
+                                              sizeof(vertices),
+                                              indices.data(),
+                                              sizeof(indices),
+                                              MeshVertexLayout::Pos3Color4U8,
+                                              false);
+  require(mesh.isValid(), "Static mesh enrollment");
+  const std::function<GuestFrame()> record = [&]() {
+    renderer.BeginFrame();
+    backend.setFrame(1280, 720);
+    backend.pump();
+    renderer.bindStyle(RenderStyleId::Shape);
+    renderer.pushSetMesh(mesh);
+    renderer.pushDrawIndexed(3, 0);
+    renderer.EndFrame();
+    return backend.takeFrame();
+  };
+  const GuestFrame before = record();
+  require(before.batches.size() == 1 && !before.batches[0].retained() &&
+            before.batches[0].vertices.size() == 3,
+          "Small static mesh draws inline before its host copy exists");
+  GuestServices pending = exchange(queue);
+  GuestMeshRequest request;
+  require(pending.records.size() == 1 &&
+            pending.records[0].operation == GuestService::CreateMesh &&
+            GuestMeshRequest::read(pending.records[0].payload, request) &&
+            !request.dynamic && request.vertexBytes == sizeof(vertices),
+          "Small static mesh requests one host copy");
+  const GuestResourceId host{ 7, GuestResourceKind::Mesh, 1, 1 };
+  GuestWireWriter created;
+  host.write(created);
+  pending.records[0].payload = created.take();
+  pending.records[0].status = GuestServiceStatus::Complete;
+  exchange(queue, pending);
+  const GuestFrame uploading = record();
+  require(uploading.batches.size() == 1 && !uploading.batches[0].retained(),
+          "Small static mesh stays inline while its bytes upload");
+  pending = exchange(queue);
+  require(pending.records.size() == 2 &&
+            pending.records[0].operation == GuestService::WriteMesh &&
+            pending.records[1].operation == GuestService::WriteMesh,
+          "Vertices and indices upload once");
+  for (GuestServiceRecord& entry : pending.records) {
+    entry.payload.clear();
+    entry.status = GuestServiceStatus::Complete;
+  }
+  exchange(queue, pending);
+  const GuestFrame referenced = record();
+  require(referenced.batches.size() == 1 && referenced.batches[0].retained() &&
+            referenced.batches[0].vertices.empty() &&
+            referenced.batches[0].mesh.slot == host.slot,
+          "Uploaded static mesh draws by reference");
+  backend.Shutdown();
+}
+
+// Past the host's shadow caster limit, extra casters grow the nearest
+// compatible caster instead of vanishing from the shared shadow fit.
+static void
+shadowCasterContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  renderer.BeginFrame();
+  backend.setFrame(1280, 720);
+  const std::size_t limit = GuestFrameLimits{}.shadowCasters;
+  for (std::size_t index = 0; index <= limit; ++index) {
+    Renderer::ShadowCasterDesc caster;
+    const float x = static_cast<float>(index) * 4.0f;
+    caster.boundsMin = { x, 0, 0 };
+    caster.boundsMax = { x + 1, 1, 1 };
+    renderer.registerShadowCaster(caster);
+  }
+  backend.BeginLayer(RenderLayerId::World);
+  renderer.EndFrame();
+  const GuestFrame frame = backend.takeFrame();
+  const float last = static_cast<float>(limit) * 4.0f;
+  require(frame.shadowCasters.size() == limit &&
+            frame.shadowCasters.back().boundsMin[0] == last - 4.0f &&
+            frame.shadowCasters.back().boundsMax[0] == last + 1.0f,
+          "Overflow caster merges into its nearest compatible caster");
+  backend.Shutdown();
+}
+
+// Guests find over-quota frames before sending them; unchanged surfaces do
+// not count against the batch quota.
+static void
+frameLimitContract()
+{
+  GuestFrame frame;
+  frame.batches.resize(2);
+  require(frame.exceededLimit() == nullptr, "A small frame is within quota");
+  GuestSurfaceFrame unchanged;
+  unchanged.same = true;
+  unchanged.batches.resize(GuestFrameLimits{}.batches);
+  frame.surfaces.push_back(unchanged);
+  require(frame.exceededLimit() == nullptr,
+          "Unchanged surfaces do not count against the batch quota");
+  frame.batches.resize(GuestFrameLimits{}.batches + 1);
+  require(frame.exceededLimit() != nullptr,
+          "A frame over the batch quota is reported");
+}
+
+// Frame schema v6: GuestRenderWorld holds an instance until its mesh's host
+// copy exists, folds later changes into the waiting create, and never emits
+// an operation the host would refuse.
+static void
+renderWorldContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  const std::array<float, 27> vertices{};
+  const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+  const MeshHandle mesh =
+    renderer.enrollMesh(vertices.data(),
+                        sizeof(vertices),
+                        indices.data(),
+                        sizeof(indices),
+                        MeshVertexLayout::Pos3Norm3Color4U8Uv2,
+                        false);
+  const MeshHandle shape = renderer.enrollDynamicMesh(
+    3 * 16, indices.data(), sizeof(indices), MeshVertexLayout::Pos3Color4U8);
+  GuestRenderWorld world(backend);
+  std::vector<GuestWorldOperation> operations;
+
+  RenderInstanceDesc desc;
+  desc.mesh = mesh;
+  desc.indexCount = 3;
+  desc.material = 1;
+  RenderInstanceDesc unusable = desc;
+  unusable.mesh = shape;
+  require(world.createMaterial(1, RenderMaterialDesc{}) &&
+            !world.createMaterial(1, RenderMaterialDesc{}) &&
+            !world.createInstance(9, unusable) &&
+            world.createInstance(10, desc) && world.waitingInstances() == 1,
+          "An instance waits for its mesh; unusable meshes are refused");
+  std::array<float, 16> moved{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+  moved[12] = 4.0f;
+  require(world.setInstanceTransform(10, moved) &&
+            world.queuedOperations() == 1,
+          "Changes to a waiting instance do not travel");
+  world.takeOperations(operations, 64);
+  require(operations.size() == 1 &&
+            operations[0].op == GuestWorldOp::MaterialCreate &&
+            world.waitingInstances() == 1,
+          "Only the material reaches the host before the mesh is ready");
+
+  // Complete the mesh's host copy: create, then its vertex and index bytes.
+  backend.pump();
+  GuestServices pending = exchange(queue);
+  const GuestResourceId host{ 7, GuestResourceKind::Mesh, 4, 1 };
+  GuestWireWriter created;
+  host.write(created);
+  const std::vector<std::byte> hostBytes = created.take();
+  for (GuestServiceRecord& record : pending.records) {
+    record.payload = record.operation == GuestService::CreateMesh
+                       ? hostBytes
+                       : std::vector<std::byte>{};
+    record.status = GuestServiceStatus::Complete;
+  }
+  exchange(queue, pending);
+  backend.pump();
+  pending = exchange(queue);
+  for (GuestServiceRecord& record : pending.records) {
+    record.payload.clear();
+    record.status = GuestServiceStatus::Complete;
+  }
+  exchange(queue, pending);
+  backend.pump();
+
+  operations.clear();
+  world.takeOperations(operations, 64);
+  require(operations.size() == 1 &&
+            operations[0].op == GuestWorldOp::InstanceCreate &&
+            operations[0].id == 10 && operations[0].mesh.slot == host.slot &&
+            operations[0].transform[12] == 4.0f &&
+            world.waitingInstances() == 0,
+          "The ready instance is created with its host mesh and latest "
+          "transform");
+  require(!world.destroyMaterial(1) && world.destroyInstance(10) &&
+            world.destroyMaterial(1),
+          "A material is destroyed only once unused");
+  operations.clear();
+  world.takeOperations(operations, 64);
+  require(operations.size() == 2 &&
+            operations[0].op == GuestWorldOp::InstanceDestroy &&
+            operations[1].op == GuestWorldOp::MaterialDestroy,
+          "Destruction travels in order");
+
+  for (RenderMaterialId id = 20; id < 25; ++id) {
+    world.createMaterial(id, RenderMaterialDesc{});
+  }
+  operations.clear();
+  world.takeOperations(operations, 2);
+  require(operations.size() == 2 && operations[0].id == 20 &&
+            world.queuedOperations() == 3,
+          "The per-frame quota keeps the rest queued in order");
+  backend.Shutdown();
+}
+
+// Frame schema v8: each scene's world travels behind a SelectWorld naming
+// it. Only worlds with something to send appear, the active world is shown,
+// and a destroyed world is released (or forgotten, if the host never saw it).
+static void
+sceneWorldsContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  GuestSceneWorlds worlds(backend);
+  std::vector<GuestWorldOperation> operations;
+  const auto take = [&](std::size_t limit) {
+    operations.clear();
+    worlds.takeOperations(operations, limit);
+  };
+  const auto is = [&](std::size_t index, GuestWorldOp op, std::uint32_t id) {
+    return index < operations.size() && operations[index].op == op &&
+           operations[index].id == id;
+  };
+
+  IRenderWorld* title = worlds.create();
+  IRenderWorld* canvas = worlds.create();
+  worlds.activate(title);
+  take(64);
+  require(operations.size() == 2 && is(0, GuestWorldOp::SelectWorld, 1) &&
+            is(1, GuestWorldOp::SelectWorld, 2),
+          "New worlds are announced; world 1 is already shown");
+  take(64);
+  require(operations.empty(), "Steady frames send no world operations");
+
+  require(canvas->createMaterial(5, RenderMaterialDesc{}),
+          "A kept scene's world takes operations");
+  worlds.activate(canvas);
+  take(64);
+  require(operations.size() == 3 && is(0, GuestWorldOp::SelectWorld, 2) &&
+            is(1, GuestWorldOp::MaterialCreate, 5) &&
+            is(2, GuestWorldOp::ShowWorld, 2),
+          "A world's operations follow its SelectWorld; the active world is "
+          "shown");
+
+  worlds.destroy(title);
+  IRenderWorld* unseen = worlds.create();
+  worlds.destroy(unseen);
+  take(64);
+  require(operations.size() == 1 && is(0, GuestWorldOp::DestroyWorld, 1) &&
+            worlds.worldCount() == 1,
+          "A destroyed world is released; one the host never saw is not "
+          "mentioned");
+
+  for (std::size_t count = worlds.worldCount();
+       count < GuestSceneWorlds::kWorlds;
+       ++count) {
+    require(worlds.create() != nullptr, "Worlds up to the limit are created");
+  }
+  require(worlds.create() == nullptr,
+          "A world beyond the limit is refused (its scene uses MeshVisuals)");
+  take(1);
+  require(operations.size() == 1 && is(0, GuestWorldOp::SelectWorld, 4),
+          "The per-frame quota keeps later announcements queued");
+  take(64);
+  require(operations.size() == GuestSceneWorlds::kWorlds - 2 &&
+            is(0, GuestWorldOp::SelectWorld, 5),
+          "They follow in the next frame");
+  backend.Shutdown();
+}
+
+// Frame schema v7: GameVisuals travel as host visuals placed by a// composition. Only changes travel, a dropped frame's changes are sent again,
+// and visuals that cannot travel record their own batches in painter order.
+static void
+visualProxyContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  renderer.ensureBuiltinStyles();
+  backend.setVisuals(true, true);
+  auto first = std::make_unique<GameVisual>();
+  auto styled = std::make_unique<GameVisual>();
+  auto last = std::make_unique<GameVisual>();
+  for (GameVisual* visual : { first.get(), styled.get(), last.get() }) {
+    visual->setWindow(&window);
+  }
+  first->addFilledRect(10, 10, 40, 20, { 200, 0, 0, 255 });
+  first->addFilledRect(60, 10, 40, 20, { 0, 200, 0, 255 });
+  styled->addFilledRect(0, 40, 10, 10, { 9, 9, 9, 255 });
+  styled->getShape(0)->styleHandle =
+    renderer.getBuiltinStyleHandle(RenderStyleId::Shape);
+  last->addLine(0, 0, 50, 50, { 1, 2, 3, 255 }, 2.0f);
+  GuestFrame frame;
+  const auto record = [&](std::initializer_list<GameVisual*> visuals) {
+    renderer.BeginFrame();
+    backend.setFrame(1280, 720);
+    for (GameVisual* visual : visuals) {
+      visual->AppendCommands(&renderer);
+    }
+    renderer.EndFrame();
+    backend.takeFrame(frame);
+  };
+  const auto ops = [&](GuestVisualOp op) {
+    return std::count_if(frame.visualOperations.begin(),
+                         frame.visualOperations.end(),
+                         [op](const GuestVisualOperation& operation) {
+                           return operation.op == op;
+                         });
+  };
+
+  record({ first.get() });
+  require(
+    frame.batches.empty() && frame.visualOperations.size() == 4 &&
+      ops(GuestVisualOp::Create) == 1 && ops(GuestVisualOp::Set) == 1 &&
+      ops(GuestVisualOp::ItemSet) == 2 && frame.compositions.size() == 1 &&
+      frame.compositions[0].entries.size() == 2 &&
+      frame.compositions[0].entries[0].kind == GuestCompositionKind::World &&
+      frame.compositions[0].entries[1].kind == GuestCompositionKind::Visual &&
+      frame.compositions[0].width == 1280.0f &&
+      frame.exceededLimit() == nullptr,
+    "A new visual is created with its items and placed after the world");
+  const std::uint32_t firstId = frame.compositions[0].entries[1].first;
+  backend.commitVisuals();
+
+  record({ first.get() });
+  require(frame.visualOperations.empty() && frame.compositions.size() == 1 &&
+            frame.compositions[0].same,
+          "An unchanged visual sends nothing and a `same` composition");
+  backend.commitVisuals();
+
+  first->getShape(1)->color = { 0, 0, 200, 255 };
+  record({ first.get() });
+  require(frame.visualOperations.size() == 1 &&
+            frame.visualOperations[0].op == GuestVisualOp::ItemSet &&
+            frame.visualOperations[0].index == 1,
+          "One changed item sends one ItemSet");
+  backend.dropVisuals();
+  record({ first.get() });
+  require(frame.visualOperations.size() == 1 &&
+            frame.visualOperations[0].index == 1,
+          "A dropped frame's change is sent again");
+  backend.commitVisuals();
+
+  // Immediate-mode rebuild: identical items travel as nothing, a shorter
+  // list as one removal.
+  first->clearPrimitives();
+  first->addFilledRect(10, 10, 40, 20, { 200, 0, 0, 255 });
+  record({ first.get() });
+  require(frame.visualOperations.size() == 1 &&
+            frame.visualOperations[0].op == GuestVisualOp::ItemRemove &&
+            frame.visualOperations[0].index == 1 &&
+            frame.visualOperations[0].count == 1,
+          "A rebuilt visual sends only its shortened tail");
+  backend.commitVisuals();
+
+  // An item added before unchanged ones travels as one insertion and one
+  // item, not as every item after it.
+  first->clearPrimitives();
+  first->addFilledRect(0, 0, 5, 5, { 1, 1, 1, 255 });
+  first->addFilledRect(10, 10, 40, 20, { 200, 0, 0, 255 });
+  record({ first.get() });
+  require(frame.visualOperations.size() == 2 &&
+            frame.visualOperations[0].op == GuestVisualOp::ItemInsert &&
+            frame.visualOperations[0].index == 0 &&
+            frame.visualOperations[0].count == 1 &&
+            frame.visualOperations[1].op == GuestVisualOp::ItemSet &&
+            frame.visualOperations[1].index == 0,
+          "An insertion before unchanged items sends only the new item");
+  backend.commitVisuals();
+  first->clearPrimitives();
+  first->addFilledRect(10, 10, 40, 20, { 200, 0, 0, 255 });
+  record({ first.get() });
+  require(frame.visualOperations.size() == 1 &&
+            frame.visualOperations[0].op == GuestVisualOp::ItemRemove &&
+            frame.visualOperations[0].index == 0,
+          "Removing a head item leaves the rest in place");
+  backend.commitVisuals();
+
+  record({ first.get(), styled.get(), last.get() });
+  const std::vector<GuestCompositionEntry>& entries =
+    frame.compositions[0].entries;
+  require(frame.batches.size() == 1 && entries.size() == 4 &&
+            entries[1].kind == GuestCompositionKind::Visual &&
+            entries[1].first == firstId &&
+            entries[2].kind == GuestCompositionKind::Batches &&
+            entries[2].first == 0 && entries[2].count == 1 &&
+            entries[3].kind == GuestCompositionKind::Visual &&
+            entries[3].first != firstId,
+          "A custom-styled visual records its batch between the proxied ones");
+  const std::uint32_t lastId = entries[3].first;
+  backend.commitVisuals();
+
+  last.reset();
+  record({ first.get() });
+  require(ops(GuestVisualOp::Destroy) == 1 &&
+            frame.visualOperations[0].id == lastId,
+          "A destroyed visual is destroyed on the host");
+  backend.dropVisuals();
+  record({ first.get() });
+  require(ops(GuestVisualOp::Destroy) == 1, "An undelivered destroy is resent");
+  backend.commitVisuals();
+  record({ first.get() });
+  require(ops(GuestVisualOp::Destroy) == 0,
+          "A delivered destroy is not resent");
+
+  backend.setVisuals(false, true);
+  record({ first.get() });
+  require(frame.compositions.empty() && frame.batches.size() == 1,
+          "Disabled visuals record their own batches");
+  first.reset();
+  styled.reset();
+  backend.Shutdown();
+}
+
+// Frame schema v7: a SkyboxVisual becomes the render world's sky. It follows
+// the frame, only changes travel, and it records nothing.
+static void
+skyboxContract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, nullptr);
+  Renderer renderer(&window, nullptr, &camera, &backend, false);
+  backend.setRenderer(renderer);
+  renderer.ensureBuiltinStyles();
+  GuestRenderWorld world(backend);
+  backend.setRenderWorld(&world);
+  std::array<unsigned char, 4> pixel{ 255, 255, 255, 255 };
+  std::array<const unsigned char*, 6> faces{};
+  faces.fill(pixel.data());
+  const TextureHandle cubemap = renderer.enrollCubemap(faces, 1, 1, 4);
+  SkyboxVisual sky(cubemap);
+  std::vector<GuestWorldOperation> operations;
+  GuestFrame frame;
+  const auto record = [&](bool drawSky) {
+    world.beginFrame();
+    renderer.BeginFrame();
+    backend.setFrame(1280, 720);
+    backend.setLayer(GuestLayer::World);
+    if (drawSky) {
+      sky.AppendCommands(&renderer);
+    }
+    renderer.EndFrame();
+    backend.takeFrame(frame);
+    operations.clear();
+    world.takeOperations(operations, 64);
+  };
+
+  record(true);
+  require(operations.empty(), "A cubemap without a host copy shows no sky");
+  // Complete the cubemap's acquisition with a host id.
+  backend.pump();
+  GuestServices pending = exchange(queue);
+  const GuestResourceId host{ 7, GuestResourceKind::Texture, 5, 1 };
+  GuestWireWriter created;
+  host.write(created);
+  for (GuestServiceRecord& record : pending.records) {
+    record.payload = record.operation == GuestService::CreateCubemap
+                       ? created.data()
+                       : std::vector<std::byte>{};
+    record.status = GuestServiceStatus::Complete;
+  }
+  exchange(queue, pending);
+  backend.pump();
+
+  record(true);
+  require(frame.batches.empty() && operations.size() == 1 &&
+            operations[0].op == GuestWorldOp::Skybox &&
+            operations[0].texture.slot == host.slot,
+          "A ready sky is sent once as a Skybox operation, with no batch");
+  record(true);
+  require(operations.empty(), "An unchanged sky sends nothing");
+  sky.setTint(glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+  record(true);
+  require(operations.size() == 1 && operations[0].tint[0] == 0.5f,
+          "A new tint is sent");
+  record(false);
+  require(operations.size() == 1 && operations[0].texture.owner == 0,
+          "A frame without the sky removes it");
+  backend.setRenderWorld(nullptr);
+  record(true);
+  require(operations.empty() && frame.batches.size() == 1,
+          "Without a render world the sky records its cube");
+  backend.Shutdown();
+}
+
 class SdkContract final : public GuestApplication
 {
 public:
@@ -403,6 +913,13 @@ public:
     dialogContract();
     recordingContract();
     dynamicMeshContract();
+    staticMeshContract();
+    shadowCasterContract();
+    frameLimitContract();
+    renderWorldContract();
+    sceneWorldsContract();
+    visualProxyContract();
+    skyboxContract();
     return true;
   }
   void update(const GuestInput&) override {}

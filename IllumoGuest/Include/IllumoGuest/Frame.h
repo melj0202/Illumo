@@ -3,6 +3,7 @@
 #include <IllumoGuest/ResourceId.h>
 #include <array>
 #include <cmath>
+#include <string>
 
 enum class GuestBatchStyle : std::uint32_t
 {
@@ -98,6 +99,194 @@ struct GuestShadowCaster
   float casterDistance = 100.0f;
 };
 
+// Frame schema v6 (HostRender): one change to the guest's host render world.
+// Ids are guest-chosen and nonzero, except Environment, whose id is zero.
+enum class GuestWorldOp : std::uint32_t
+{
+  MaterialCreate = 1,
+  MaterialUpdate = 2,
+  MaterialDestroy = 3,
+  InstanceCreate = 4,
+  // Tint and visibility; mesh and material stay as created.
+  InstanceUpdate = 5,
+  InstanceDestroy = 6,
+  InstanceTransform = 7,
+  Environment = 8,
+  // Version 7: the world's sky, a cubemap texture (empty: no sky) and tint.
+  // Id zero, like Environment.
+  Skybox = 9,
+  // Version 8: a guest may keep several worlds, one per scene. A frame's world
+  // operations target world 1 until SelectWorld names another (id nonzero),
+  // which the host creates on first use. ShowWorld picks the world that draws
+  // from now on (id zero: none); world 1 is shown until then. DestroyWorld
+  // releases a world and everything in it. A version 7 frame is world 1.
+  SelectWorld = 10,
+  ShowWorld = 11,
+  DestroyWorld = 12
+};
+
+struct GuestWorldMaterial
+{
+  std::array<float, 4> tint{ 1.0f, 1.0f, 1.0f, 1.0f };
+  bool receivesShadow = true;
+  bool castsShadow = true;
+  bool blend = false;
+};
+
+struct GuestWorldEnvironment
+{
+  std::array<float, 3> lightDirection{ 0.5f, 1.0f, 0.3f };
+  std::array<float, 3> lightColor{ 1.0f, 1.0f, 1.0f };
+  std::array<float, 3> ambientColor{ 0.2f, 0.2f, 0.2f };
+  bool shadowsEnabled = false;
+  bool shadowPcf = false;
+  float shadowBias = 0.002f;
+  float shadowSlopeScale = 0.01f;
+  float shadowNormalOffset = 0.02f;
+  std::uint32_t shadowMapSize = 1024;
+  float shadowMinimumRadius = 2.5f;
+  float shadowLightDistance = 8.0f;
+  float shadowCasterDistance = 100.0f;
+};
+
+// Fields beyond an operation's own are ignored when encoding and default
+// after decoding. An instance culls with its retained mesh's host bounds.
+struct GuestWorldOperation
+{
+  GuestWorldOp op = GuestWorldOp::MaterialCreate;
+  std::uint32_t id = 0;
+  GuestWorldMaterial material;  // MaterialCreate/Update
+  GuestResourceId mesh;         // InstanceCreate: a lit mesh
+  std::uint32_t firstIndex = 0; // InstanceCreate
+  std::uint32_t indexCount = 0; // InstanceCreate
+  std::uint32_t materialId = 0; // InstanceCreate
+  std::array<float, 16> transform{ 1, 0, 0, 0, 0, 1, 0, 0,
+                                   0, 0, 1, 0, 0, 0, 0, 1 }; // Create/Transform
+  std::array<float, 4> tint{ 1.0f, 1.0f, 1.0f, 1.0f };       // Create/Update
+  bool visible = true;                                       // Create/Update
+  GuestWorldEnvironment environment;                         // Environment
+  GuestResourceId texture;                                   // Skybox
+};
+
+// Frame schema v7 (HostRender): one change to a host-retained 2D visual.
+// Ids are guest-chosen and nonzero.
+enum class GuestVisualOp : std::uint32_t
+{
+  Create = 1,
+  Destroy = 2,
+  // Space, layer, transform, opacity, clip and visibility.
+  Set = 3,
+  // Replaces item `index`, or appends at the visual's item count.
+  ItemSet = 4,
+  // Removes `count` items from `index`.
+  ItemRemove = 5,
+  ItemsClear = 6,
+  // Inserts `count` hidden placeholder items before `index`, for ItemSet
+  // to fill; later items keep their order.
+  ItemInsert = 7
+};
+
+struct GuestTransform2D
+{
+  float x = 0.0f;
+  float y = 0.0f;
+  float scaleX = 1.0f;
+  float scaleY = 1.0f;
+  float rotation = 0.0f;
+  float pivotX = 0.0f;
+  float pivotY = 0.0f;
+};
+
+struct GuestVisualProperties
+{
+  bool worldSpace = false; // logical pixels otherwise
+  GuestLayer layer = GuestLayer::Ui;
+  GuestTransform2D transform;
+  float opacity = 1.0f;
+  bool clipped = false;
+  std::array<float, 4> clip{}; // logical top-left x, y, width, height
+  bool visible = true;
+};
+
+enum class GuestItemKind : std::uint32_t
+{
+  Shape = 1,
+  Sprite = 2,
+  Text = 3
+};
+
+// One GameVisual item. Colours pack as r | g << 8 | b << 16 | a << 24. Items
+// always use the built-in Shape and Sprite styles.
+struct GuestVisualItem
+{
+  GuestItemKind kind = GuestItemKind::Shape;
+  std::int32_t drawOrder = 0;
+  bool visible = true;
+  GuestTransform2D transform;  // Shape and Sprite
+  std::uint32_t shape = 0;     // ShapeKind value
+  std::array<float, 4> rect{}; // Shape and Sprite bounds; Text x, y
+  std::array<float, 8> points{};
+  std::uint32_t rgba = UINT32_MAX; // Shape colour, Sprite tint, Text colour
+  std::array<std::uint32_t, 4> vertexColors{};
+  float lineWidth = 1.0f;
+  GuestResourceId texture; // Sprite
+  std::array<float, 4> region{ 0.0f, 0.0f, 1.0f, 1.0f };
+  bool flipX = false;
+  bool flipY = false;
+  // Text: fonts are the atlas textures LoadFont returned.
+  GuestResourceId font;
+  GuestResourceId heavyFont;
+  float heavyBlend = 0.0f;
+  float sizePt = 12.0f;
+  float stretchX = 1.0f;
+  float stretchY = 1.0f;
+  std::string text;
+};
+
+// Fields beyond an operation's own are ignored when encoding and default
+// after decoding.
+struct GuestVisualOperation
+{
+  GuestVisualOp op = GuestVisualOp::Create;
+  std::uint32_t id = 0;
+  GuestVisualProperties properties; // Set
+  std::uint32_t index = 0;          // ItemSet, ItemRemove, ItemInsert
+  std::uint32_t count = 0;          // ItemRemove, ItemInsert
+  GuestVisualItem item;             // ItemSet
+};
+
+enum class GuestCompositionKind : std::uint32_t
+{
+  // A visual, by id.
+  Visual = 1,
+  // `count` of the target's batches from `first`.
+  Batches = 2,
+  // The guest's shown host render world (main frame only).
+  World = 3
+};
+
+struct GuestCompositionEntry
+{
+  GuestCompositionKind kind = GuestCompositionKind::Visual;
+  std::uint32_t first = 0; // visual id, or first batch
+  std::uint32_t count = 0; // Batches
+};
+
+// Frame schema v7: the painter order of one target. Target 0 is the main
+// frame; others are surface ids. World-layer entries come first, and batch
+// ranges cover the target's batches once, in order. `same` repeats the
+// target's previous composition, size included.
+struct GuestComposition
+{
+  std::uint32_t target = 0;
+  bool same = false;
+  // The logical size that pixel-space visuals lay out in: the guest's
+  // window divided by its UI scale, or a surface's own size.
+  float width = 1280.0f;
+  float height = 720.0f;
+  std::vector<GuestCompositionEntry> entries;
+};
+
 struct GuestFrameLimits
 {
   std::uint32_t bytes = 64u * 1024u * 1024u;
@@ -111,6 +300,10 @@ struct GuestFrameLimits
   std::uint32_t shadowCasters = 256;
   std::uint32_t meshWrites = 4096;
   std::uint32_t meshWriteBytes = 32u * 1024u * 1024u;
+  // Version 6 world operations and version 7 visual operations together.
+  std::uint32_t worldOperations = 65536;
+  std::uint32_t textBytes = 1024u * 1024u;  // version 7
+  std::uint32_t compositionEntries = 16384; // version 7, per target
 };
 
 // Version 4: a byte range written into a dynamic retained host mesh. Every
@@ -156,8 +349,10 @@ struct GuestFrame
   // primitive/depth flags, lit meshes and shadow casters. Version 3 adds the
   // blend flag, retained host meshes and the cubemap skybox. Version 4 adds
   // in-place writes to dynamic retained meshes. Version 5 adds surface
-  // windows. The host accepts all five.
-  static constexpr std::uint32_t Version = 5;
+  // windows. Version 6 adds host render world operations (HostRender).
+  // Version 7 adds host-retained visuals and compositions. Version 8 adds
+  // several worlds per guest (one per scene). The host accepts all eight.
+  static constexpr std::uint32_t Version = 8;
   static constexpr std::uint32_t MaximumSurfaces = 8;
   static constexpr std::uint32_t MaximumSurfaceId = 0x7fffffffu;
   float width = 1280;
@@ -172,6 +367,13 @@ struct GuestFrame
   std::vector<GuestShadowCaster> shadowCasters;
   std::vector<GuestFrameMeshWrite> meshWrites;
   std::vector<GuestSurfaceFrame> surfaces;
+  std::vector<GuestWorldOperation> worldOperations;
+  std::vector<GuestVisualOperation> visualOperations;
+  std::vector<GuestComposition> compositions;
+  // Not encoded: text buffers of operations a shorter frame dropped, reused
+  // by decode so steady frames with changing text allocate nothing.
+  std::vector<std::string> spareText;
+  std::vector<std::vector<GuestCompositionEntry>> spareEntries;
 
   // Empties the frame but keeps every container's capacity for reuse.
   void clear()
@@ -181,7 +383,570 @@ struct GuestFrame
     shadowCasters.clear();
     meshWrites.clear();
     surfaces.clear();
+    worldOperations.clear();
+    visualOperations.clear();
+    compositions.clear();
     hasCamera = false;
+  }
+
+  static void countInline(const std::vector<GuestBatch>& list,
+                          std::uint64_t& vertices,
+                          std::uint64_t& indices)
+  {
+    for (const GuestBatch& batch : list) {
+      if (!batch.retained()) {
+        vertices += batch.vertices.size();
+        indices += batch.indices.size();
+      }
+    }
+  }
+
+  // The first count quota `decode` would reject this frame for, or nullptr.
+  // Guests check before sending, because the host retires a guest whose frame
+  // breaks its quotas. The encoded byte total is not estimated here.
+  const char* exceededLimit(const GuestFrameLimits& limits = {}) const
+  {
+    std::uint64_t batchCount = batches.size();
+    std::uint64_t vertexCount = 0;
+    std::uint64_t indexCount = 0;
+    countInline(batches, vertexCount, indexCount);
+    for (const GuestSurfaceFrame& surface : surfaces) {
+      if (!surface.same) {
+        batchCount += surface.batches.size();
+        countInline(surface.batches, vertexCount, indexCount);
+      }
+    }
+    std::uint64_t uploadBytes = 0;
+    for (const GuestTextureWrite& write : textureWrites) {
+      uploadBytes += write.pixels.size();
+    }
+    std::uint64_t meshWriteBytes = 0;
+    for (const GuestFrameMeshWrite& write : meshWrites) {
+      meshWriteBytes += write.bytes.size();
+    }
+    if (batchCount > limits.batches) {
+      return "the frame has more batches than the host accepts";
+    }
+    if (vertexCount > limits.vertices || indexCount > limits.indices) {
+      return "the frame has more inline geometry than the host accepts";
+    }
+    if (textureWrites.size() > limits.textureWrites ||
+        uploadBytes > limits.uploadBytes) {
+      return "the frame has more texture uploads than the host accepts";
+    }
+    if (shadowCasters.size() > limits.shadowCasters) {
+      return "the frame has more shadow casters than the host accepts";
+    }
+    if (meshWrites.size() > limits.meshWrites ||
+        meshWriteBytes > limits.meshWriteBytes) {
+      return "the frame has more mesh writes than the host accepts";
+    }
+    if (worldOperations.size() + visualOperations.size() >
+        limits.worldOperations) {
+      return "the frame has more world and visual operations than the host "
+             "accepts";
+    }
+    std::uint64_t textBytes = 0;
+    for (const GuestVisualOperation& operation : visualOperations) {
+      if (operation.op == GuestVisualOp::ItemSet &&
+          operation.item.kind == GuestItemKind::Text) {
+        textBytes += operation.item.text.size();
+      }
+    }
+    if (textBytes > limits.textBytes) {
+      return "the frame has more visual text than the host accepts";
+    }
+    if (compositions.size() > MaximumSurfaces + 1u) {
+      return "the frame has more compositions than the host accepts";
+    }
+    for (const GuestComposition& composition : compositions) {
+      if (composition.entries.size() > limits.compositionEntries) {
+        return "a composition has more entries than the host accepts";
+      }
+    }
+    return nullptr;
+  }
+
+  // Version 7 wire forms. Colours and ids are checked against the host's
+  // resources when applied; here only structure and finite values.
+  static void writeTransform(GuestWireWriter& output,
+                             const GuestTransform2D& value)
+  {
+    const float values[] = { value.x,      value.y,        value.scaleX,
+                             value.scaleY, value.rotation, value.pivotX,
+                             value.pivotY };
+    writeFloats(output, values, 7);
+  }
+  static bool readTransform(GuestWireReader& reader, GuestTransform2D& value)
+  {
+    float values[7] = {};
+    if (!readFloats(reader, values, 7)) {
+      return false;
+    }
+    value = { values[0], values[1], values[2], values[3],
+              values[4], values[5], values[6] };
+    return true;
+  }
+  static bool validTexture(const GuestResourceId& id)
+  {
+    return id.owner != 0 && id.slot != 0 && id.generation != 0 &&
+           id.kind == GuestResourceKind::Texture;
+  }
+  static bool emptyId(const GuestResourceId& id)
+  {
+    return id.owner == 0 && id.slot == 0 && id.generation == 0;
+  }
+
+  static constexpr std::uint32_t MaximumItemText = 65536;
+
+  static void writeVisualItem(GuestWireWriter& output,
+                              const GuestVisualItem& item)
+  {
+    output.u32(static_cast<std::uint32_t>(item.kind));
+    output.u32(static_cast<std::uint32_t>(item.drawOrder));
+    output.u32(item.visible ? 1u : 0u);
+    switch (item.kind) {
+      case GuestItemKind::Shape:
+        writeTransform(output, item.transform);
+        output.u32(item.shape);
+        writeFloats(output, item.rect.data(), 4);
+        writeFloats(output, item.points.data(), 8);
+        output.u32(item.rgba);
+        for (std::uint32_t color : item.vertexColors) {
+          output.u32(color);
+        }
+        output.f32(item.lineWidth);
+        break;
+      case GuestItemKind::Sprite:
+        writeTransform(output, item.transform);
+        writeFloats(output, item.rect.data(), 4);
+        item.texture.write(output);
+        writeFloats(output, item.region.data(), 4);
+        output.u32(item.rgba);
+        output.u32((item.flipX ? 1u : 0u) | (item.flipY ? 2u : 0u));
+        break;
+      case GuestItemKind::Text:
+        if (item.text.size() > MaximumItemText) {
+          throw std::length_error("Guest visual text exceeds ABI range");
+        }
+        writeFloats(output, item.rect.data(), 2);
+        output.f32(item.sizePt);
+        output.u32(item.rgba);
+        item.font.write(output);
+        item.heavyFont.write(output);
+        output.f32(item.heavyBlend);
+        output.f32(item.stretchX);
+        output.f32(item.stretchY);
+        output.u32(static_cast<std::uint32_t>(item.text.size()));
+        output.bytes(std::as_bytes(std::span(item.text)));
+        break;
+    }
+  }
+
+  static bool readVisualItem(GuestWireReader& reader, GuestVisualItem& item)
+  {
+    // Reused items keep their text capacity.
+    std::string text = std::move(item.text);
+    text.clear();
+    item = GuestVisualItem{};
+    item.text = std::move(text);
+    const std::uint32_t kind = reader.u32();
+    item.drawOrder = static_cast<std::int32_t>(reader.u32());
+    const std::uint32_t visible = reader.u32();
+    if (!reader.valid() || kind < 1 || kind > 3 || visible > 1) {
+      return false;
+    }
+    item.kind = static_cast<GuestItemKind>(kind);
+    item.visible = visible != 0;
+    std::uint32_t flags = 0;
+    switch (item.kind) {
+      case GuestItemKind::Shape:
+        if (!readTransform(reader, item.transform)) {
+          return false;
+        }
+        item.shape = reader.u32();
+        if (!reader.valid() || item.shape > 5 ||
+            !readFloats(reader, item.rect.data(), 4) ||
+            !readFloats(reader, item.points.data(), 8)) {
+          return false;
+        }
+        item.rgba = reader.u32();
+        for (std::uint32_t& color : item.vertexColors) {
+          color = reader.u32();
+        }
+        item.lineWidth = reader.f32();
+        return reader.valid() && std::isfinite(item.lineWidth);
+      case GuestItemKind::Sprite:
+        if (!readTransform(reader, item.transform) ||
+            !readFloats(reader, item.rect.data(), 4)) {
+          return false;
+        }
+        item.texture = GuestResourceId::read(reader);
+        if (!reader.valid() || !validTexture(item.texture) ||
+            !readFloats(reader, item.region.data(), 4)) {
+          return false;
+        }
+        item.rgba = reader.u32();
+        flags = reader.u32();
+        item.flipX = (flags & 1u) != 0;
+        item.flipY = (flags & 2u) != 0;
+        return reader.valid() && flags <= 3u;
+      case GuestItemKind::Text: {
+        if (!readFloats(reader, item.rect.data(), 2)) {
+          return false;
+        }
+        item.sizePt = reader.f32();
+        item.rgba = reader.u32();
+        item.font = GuestResourceId::read(reader);
+        item.heavyFont = GuestResourceId::read(reader);
+        item.heavyBlend = reader.f32();
+        item.stretchX = reader.f32();
+        item.stretchY = reader.f32();
+        const std::uint32_t bytes = reader.u32();
+        if (!reader.valid() || !std::isfinite(item.sizePt) ||
+            item.sizePt <= 0.0f || item.sizePt > 4096.0f ||
+            !validTexture(item.font) ||
+            !(emptyId(item.heavyFont) || validTexture(item.heavyFont)) ||
+            !std::isfinite(item.heavyBlend) || item.heavyBlend < 0.0f ||
+            item.heavyBlend > 1.0f || !std::isfinite(item.stretchX) ||
+            !std::isfinite(item.stretchY) || item.stretchX <= 0.0f ||
+            item.stretchY <= 0.0f || bytes > MaximumItemText ||
+            bytes > reader.remaining()) {
+          return false;
+        }
+        const std::span<const std::byte> content = reader.bytes(bytes);
+        item.text.assign(reinterpret_cast<const char*>(content.data()),
+                         content.size());
+        return reader.valid();
+      }
+    }
+    return false;
+  }
+
+  static void writeVisualOperation(GuestWireWriter& output,
+                                   const GuestVisualOperation& operation)
+  {
+    output.u32(static_cast<std::uint32_t>(operation.op));
+    output.u32(operation.id);
+    switch (operation.op) {
+      case GuestVisualOp::Set: {
+        const GuestVisualProperties& properties = operation.properties;
+        output.u32((properties.worldSpace ? 1u : 0u) |
+                   (properties.clipped ? 2u : 0u) |
+                   (properties.visible ? 4u : 0u));
+        output.u32(static_cast<std::uint32_t>(properties.layer));
+        writeTransform(output, properties.transform);
+        output.f32(properties.opacity);
+        writeFloats(output, properties.clip.data(), 4);
+        break;
+      }
+      case GuestVisualOp::ItemSet:
+        output.u32(operation.index);
+        writeVisualItem(output, operation.item);
+        break;
+      case GuestVisualOp::ItemRemove:
+      case GuestVisualOp::ItemInsert:
+        output.u32(operation.index);
+        output.u32(operation.count);
+        break;
+      case GuestVisualOp::Create:
+      case GuestVisualOp::Destroy:
+      case GuestVisualOp::ItemsClear:
+        break;
+    }
+  }
+
+  static bool readVisualOperation(GuestWireReader& reader,
+                                  GuestVisualOperation& operation)
+  {
+    std::string text = std::move(operation.item.text);
+    text.clear();
+    operation = GuestVisualOperation{};
+    operation.item.text = std::move(text);
+    const std::uint32_t op = reader.u32();
+    operation.id = reader.u32();
+    if (!reader.valid() || operation.id == 0 ||
+        op < static_cast<std::uint32_t>(GuestVisualOp::Create) ||
+        op > static_cast<std::uint32_t>(GuestVisualOp::ItemInsert)) {
+      return false;
+    }
+    operation.op = static_cast<GuestVisualOp>(op);
+    switch (operation.op) {
+      case GuestVisualOp::Set: {
+        GuestVisualProperties& properties = operation.properties;
+        const std::uint32_t flags = reader.u32();
+        const std::uint32_t layer = reader.u32();
+        if (!reader.valid() || flags > 7u || layer < 1 || layer > 2 ||
+            !readTransform(reader, properties.transform)) {
+          return false;
+        }
+        properties.worldSpace = (flags & 1u) != 0;
+        properties.clipped = (flags & 2u) != 0;
+        properties.visible = (flags & 4u) != 0;
+        properties.layer = static_cast<GuestLayer>(layer);
+        properties.opacity = reader.f32();
+        return reader.valid() && std::isfinite(properties.opacity) &&
+               properties.opacity >= 0.0f && properties.opacity <= 1.0f &&
+               readFloats(reader, properties.clip.data(), 4) &&
+               properties.clip[2] >= 0.0f && properties.clip[3] >= 0.0f;
+      }
+      case GuestVisualOp::ItemSet:
+        operation.index = reader.u32();
+        return reader.valid() && readVisualItem(reader, operation.item);
+      case GuestVisualOp::ItemRemove:
+      case GuestVisualOp::ItemInsert:
+        operation.index = reader.u32();
+        operation.count = reader.u32();
+        return reader.valid() && operation.count != 0;
+      case GuestVisualOp::Create:
+      case GuestVisualOp::Destroy:
+      case GuestVisualOp::ItemsClear:
+        return true;
+    }
+    return false;
+  }
+
+  static void writeComposition(GuestWireWriter& output,
+                               const GuestComposition& composition)
+  {
+    if (composition.entries.size() > UINT32_MAX) {
+      throw std::length_error("Too many guest composition entries");
+    }
+    output.u32(composition.target);
+    output.u32(composition.same ? 1u : 0u);
+    if (composition.same) {
+      return;
+    }
+    output.f32(composition.width);
+    output.f32(composition.height);
+    output.u32(static_cast<std::uint32_t>(composition.entries.size()));
+    for (const GuestCompositionEntry& entry : composition.entries) {
+      output.u32(static_cast<std::uint32_t>(entry.kind));
+      output.u32(entry.first);
+      output.u32(entry.count);
+    }
+  }
+
+  // Entry shapes only; ranges, layers and ids are checked by the host
+  // against its batches, surfaces and visuals.
+  static bool readComposition(GuestWireReader& reader,
+                              const GuestFrameLimits& limits,
+                              GuestComposition& composition)
+  {
+    composition.target = reader.u32();
+    const std::uint32_t same = reader.u32();
+    composition.same = same == 1;
+    composition.entries.clear();
+    // Entry counts vary a little from frame to frame; a small floor keeps
+    // steady frames from growing the vector.
+    if (composition.entries.capacity() < 32) {
+      composition.entries.reserve(32);
+    }
+    if (!reader.valid() || same > 1 || composition.target > MaximumSurfaceId) {
+      return false;
+    }
+    if (composition.same) {
+      return true;
+    }
+    composition.width = reader.f32();
+    composition.height = reader.f32();
+    const std::uint32_t count = reader.u32();
+    if (!reader.valid() || !std::isfinite(composition.width) ||
+        !std::isfinite(composition.height) || composition.width < 1 ||
+        composition.height < 1 || composition.width > 65536 ||
+        composition.height > 65536 || count > limits.compositionEntries ||
+        count > reader.remaining() / 12u) {
+      return false;
+    }
+    composition.entries.resize(count);
+    for (GuestCompositionEntry& entry : composition.entries) {
+      const std::uint32_t kind = reader.u32();
+      entry.first = reader.u32();
+      entry.count = reader.u32();
+      if (!reader.valid() || kind < 1 || kind > 3) {
+        return false;
+      }
+      entry.kind = static_cast<GuestCompositionKind>(kind);
+      const bool valid =
+        entry.kind == GuestCompositionKind::Visual
+          ? entry.first != 0 && entry.count == 0
+        : entry.kind == GuestCompositionKind::Batches
+          ? entry.count != 0
+          : composition.target == 0 && entry.first == 0 && entry.count == 0;
+      if (!valid) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static void writeWorldOperation(GuestWireWriter& output,
+                                  const GuestWorldOperation& operation)
+  {
+    output.u32(static_cast<std::uint32_t>(operation.op));
+    output.u32(operation.id);
+    switch (operation.op) {
+      case GuestWorldOp::MaterialCreate:
+      case GuestWorldOp::MaterialUpdate:
+        writeFloats(output, operation.material.tint.data(), 4);
+        output.u32((operation.material.receivesShadow ? 1u : 0u) |
+                   (operation.material.castsShadow ? 2u : 0u) |
+                   (operation.material.blend ? 4u : 0u));
+        break;
+      case GuestWorldOp::InstanceCreate:
+        operation.mesh.write(output);
+        output.u32(operation.firstIndex);
+        output.u32(operation.indexCount);
+        output.u32(operation.materialId);
+        writeFloats(output, operation.transform.data(), 16);
+        writeFloats(output, operation.tint.data(), 4);
+        output.u32(operation.visible ? 1u : 0u);
+        break;
+      case GuestWorldOp::InstanceUpdate:
+        writeFloats(output, operation.tint.data(), 4);
+        output.u32(operation.visible ? 1u : 0u);
+        break;
+      case GuestWorldOp::InstanceTransform:
+        writeFloats(output, operation.transform.data(), 16);
+        break;
+      case GuestWorldOp::Environment: {
+        const GuestWorldEnvironment& environment = operation.environment;
+        writeFloats(output, environment.lightDirection.data(), 3);
+        writeFloats(output, environment.lightColor.data(), 3);
+        writeFloats(output, environment.ambientColor.data(), 3);
+        output.u32((environment.shadowsEnabled ? 1u : 0u) |
+                   (environment.shadowPcf ? 2u : 0u));
+        output.f32(environment.shadowBias);
+        output.f32(environment.shadowSlopeScale);
+        output.f32(environment.shadowNormalOffset);
+        output.u32(environment.shadowMapSize);
+        output.f32(environment.shadowMinimumRadius);
+        output.f32(environment.shadowLightDistance);
+        output.f32(environment.shadowCasterDistance);
+        break;
+      }
+      case GuestWorldOp::Skybox:
+        operation.texture.write(output);
+        writeFloats(output, operation.tint.data(), 4);
+        break;
+      case GuestWorldOp::MaterialDestroy:
+      case GuestWorldOp::InstanceDestroy:
+      case GuestWorldOp::SelectWorld:
+      case GuestWorldOp::ShowWorld:
+      case GuestWorldOp::DestroyWorld:
+        break;
+    }
+  }
+
+  // Structure and values only; ids and meshes are checked against the host's
+  // world before anything is applied.
+  static bool readWorldOperation(GuestWireReader& reader,
+                                 GuestWorldOperation& operation,
+                                 std::uint32_t version = Version)
+  {
+    operation = GuestWorldOperation{};
+    const std::uint32_t op = reader.u32();
+    operation.id = reader.u32();
+    if (!reader.valid() ||
+        op < static_cast<std::uint32_t>(GuestWorldOp::MaterialCreate) ||
+        op > static_cast<std::uint32_t>(GuestWorldOp::DestroyWorld) ||
+        (op == static_cast<std::uint32_t>(GuestWorldOp::Skybox) &&
+         version < 7) ||
+        (op >= static_cast<std::uint32_t>(GuestWorldOp::SelectWorld) &&
+         version < 8)) {
+      return false;
+    }
+    operation.op = static_cast<GuestWorldOp>(op);
+    // ShowWorld's id is a world or zero (none); the rest are fixed.
+    const bool global = operation.op == GuestWorldOp::Environment ||
+                        operation.op == GuestWorldOp::Skybox;
+    if (operation.op != GuestWorldOp::ShowWorld &&
+        global != (operation.id == 0)) {
+      return false;
+    }
+    std::uint32_t flags = 0;
+    switch (operation.op) {
+      case GuestWorldOp::MaterialCreate:
+      case GuestWorldOp::MaterialUpdate:
+        if (!readFloats(reader, operation.material.tint.data(), 4)) {
+          return false;
+        }
+        flags = reader.u32();
+        operation.material.receivesShadow = (flags & 1u) != 0;
+        operation.material.castsShadow = (flags & 2u) != 0;
+        operation.material.blend = (flags & 4u) != 0;
+        return reader.valid() && flags <= 7u;
+      case GuestWorldOp::InstanceCreate:
+        operation.mesh = GuestResourceId::read(reader);
+        operation.firstIndex = reader.u32();
+        operation.indexCount = reader.u32();
+        operation.materialId = reader.u32();
+        if (!reader.valid() || operation.mesh.owner == 0 ||
+            operation.mesh.slot == 0 || operation.mesh.generation == 0 ||
+            operation.mesh.kind != GuestResourceKind::Mesh ||
+            operation.indexCount == 0 || operation.indexCount % 3u != 0 ||
+            operation.materialId == 0 ||
+            !readFloats(reader, operation.transform.data(), 16) ||
+            !readFloats(reader, operation.tint.data(), 4)) {
+          return false;
+        }
+        flags = reader.u32();
+        operation.visible = flags != 0;
+        return reader.valid() && flags <= 1u;
+      case GuestWorldOp::InstanceUpdate:
+        if (!readFloats(reader, operation.tint.data(), 4)) {
+          return false;
+        }
+        flags = reader.u32();
+        operation.visible = flags != 0;
+        return reader.valid() && flags <= 1u;
+      case GuestWorldOp::InstanceTransform:
+        return readFloats(reader, operation.transform.data(), 16);
+      case GuestWorldOp::Environment: {
+        GuestWorldEnvironment& environment = operation.environment;
+        if (!readFloats(reader, environment.lightDirection.data(), 3) ||
+            !readFloats(reader, environment.lightColor.data(), 3) ||
+            !readFloats(reader, environment.ambientColor.data(), 3)) {
+          return false;
+        }
+        flags = reader.u32();
+        environment.shadowsEnabled = (flags & 1u) != 0;
+        environment.shadowPcf = (flags & 2u) != 0;
+        environment.shadowBias = reader.f32();
+        environment.shadowSlopeScale = reader.f32();
+        environment.shadowNormalOffset = reader.f32();
+        environment.shadowMapSize = reader.u32();
+        environment.shadowMinimumRadius = reader.f32();
+        environment.shadowLightDistance = reader.f32();
+        environment.shadowCasterDistance = reader.f32();
+        const float scalars[] = {
+          environment.shadowBias,          environment.shadowSlopeScale,
+          environment.shadowNormalOffset,  environment.shadowMinimumRadius,
+          environment.shadowLightDistance, environment.shadowCasterDistance
+        };
+        for (float value : scalars) {
+          if (!std::isfinite(value)) {
+            return false;
+          }
+        }
+        return reader.valid() && flags <= 3u &&
+               environment.shadowMapSize >= 64 &&
+               environment.shadowMapSize <= 8192;
+      }
+      case GuestWorldOp::Skybox:
+        operation.texture = GuestResourceId::read(reader);
+        return reader.valid() &&
+               (emptyId(operation.texture) ||
+                validTexture(operation.texture)) &&
+               readFloats(reader, operation.tint.data(), 4);
+      case GuestWorldOp::MaterialDestroy:
+      case GuestWorldOp::InstanceDestroy:
+      case GuestWorldOp::SelectWorld:
+      case GuestWorldOp::ShowWorld:
+      case GuestWorldOp::DestroyWorld:
+        return true;
+    }
+    return false;
   }
 
   static void writeFloats(GuestWireWriter& output, const float* values, int n)
@@ -324,6 +1089,25 @@ struct GuestFrame
       for (const GuestBatch& batch : surface.batches) {
         writeBatch(output, batch);
       }
+    }
+    if (worldOperations.size() > UINT32_MAX) {
+      throw std::length_error("Too many guest world operations");
+    }
+    output.u32(static_cast<std::uint32_t>(worldOperations.size()));
+    for (const GuestWorldOperation& operation : worldOperations) {
+      writeWorldOperation(output, operation);
+    }
+    if (visualOperations.size() > UINT32_MAX ||
+        compositions.size() > MaximumSurfaces + 1u) {
+      throw std::length_error("Too many guest visual operations");
+    }
+    output.u32(static_cast<std::uint32_t>(visualOperations.size()));
+    for (const GuestVisualOperation& operation : visualOperations) {
+      writeVisualOperation(output, operation);
+    }
+    output.u32(static_cast<std::uint32_t>(compositions.size()));
+    for (const GuestComposition& composition : compositions) {
+      writeComposition(output, composition);
     }
   }
 
@@ -720,6 +1504,93 @@ struct GuestFrame
     }
     if (version >= 5 && !readSurfaces(reader, limits, totals, frame)) {
       return false;
+    }
+    frame.worldOperations.clear();
+    if (version >= 6) {
+      // Minimum encoded operation: op and id (8 bytes).
+      const std::uint32_t operations = reader.u32();
+      if (!reader.valid() || operations > limits.worldOperations ||
+          operations > reader.remaining() / 8u) {
+        return false;
+      }
+      frame.worldOperations.resize(operations);
+      for (GuestWorldOperation& operation : frame.worldOperations) {
+        if (!readWorldOperation(reader, operation, version)) {
+          return false;
+        }
+      }
+    }
+    // Version 7 reuses the containers below (resize keeps what it can);
+    // older frames carry neither section.
+    if (version < 7) {
+      frame.visualOperations.clear();
+      frame.compositions.clear();
+    } else {
+      // Minimum encoded operation: op and id (8 bytes).
+      const std::uint32_t operations = reader.u32();
+      if (!reader.valid() ||
+          operations > limits.worldOperations - frame.worldOperations.size() ||
+          operations > reader.remaining() / 8u) {
+        return false;
+      }
+      std::uint64_t textBytes = 0;
+      std::vector<GuestVisualOperation>& visuals = frame.visualOperations;
+      const std::size_t kept =
+        std::min<std::size_t>(visuals.size(), operations);
+      for (std::size_t index = kept; index < visuals.size(); ++index) {
+        if (visuals[index].item.text.capacity() != 0 &&
+            frame.spareText.size() < 64) {
+          frame.spareText.push_back(std::move(visuals[index].item.text));
+        }
+      }
+      visuals.resize(operations);
+      for (std::size_t index = kept;
+           index < visuals.size() && !frame.spareText.empty();
+           ++index) {
+        visuals[index].item.text = std::move(frame.spareText.back());
+        frame.spareText.pop_back();
+      }
+      for (GuestVisualOperation& operation : frame.visualOperations) {
+        if (!readVisualOperation(reader, operation)) {
+          return false;
+        }
+        textBytes += operation.item.text.size();
+        if (textBytes > limits.textBytes) {
+          return false;
+        }
+      }
+      // Minimum encoded composition: target and same flag (8 bytes).
+      const std::uint32_t compositions = reader.u32();
+      if (!reader.valid() || compositions > MaximumSurfaces + 1u ||
+          compositions > reader.remaining() / 8u) {
+        return false;
+      }
+      std::vector<GuestComposition>& targets = frame.compositions;
+      const std::size_t reused =
+        std::min<std::size_t>(targets.size(), compositions);
+      for (std::size_t index = reused; index < targets.size(); ++index) {
+        if (frame.spareEntries.size() < MaximumSurfaces + 1u) {
+          frame.spareEntries.push_back(std::move(targets[index].entries));
+        }
+      }
+      targets.resize(compositions);
+      for (std::size_t index = reused;
+           index < targets.size() && !frame.spareEntries.empty();
+           ++index) {
+        targets[index].entries = std::move(frame.spareEntries.back());
+        frame.spareEntries.pop_back();
+      }
+      for (std::size_t index = 0; index < frame.compositions.size(); ++index) {
+        if (!readComposition(reader, limits, frame.compositions[index])) {
+          return false;
+        }
+        for (std::size_t earlier = 0; earlier < index; ++earlier) {
+          if (frame.compositions[earlier].target ==
+              frame.compositions[index].target) {
+            return false;
+          }
+        }
+      }
     }
     return reader.finished();
   }

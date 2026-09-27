@@ -11,7 +11,7 @@ it must not include game types or own persistence behavior.
 - Forward the complete argument vector and consumer application definition to
   `RunIllumoApplication`.
 - Keep Win32 headers and handles inside this directory.
-- Preserve Debug CRT setup only as platform bootstrap; DebugModule composition
+- Preserve Debug CRT setup only as platform bootstrap; DebugOverlay composition
   belongs to the engine runner.
 - Keep dialog labels/defaults data-driven through `SaveLoadDialogSpec`.
 

@@ -4,7 +4,7 @@
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -13,7 +13,7 @@
 #include <Illumo/Testing/TestAccess.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
-#include <Illumo/Wasm/WasmGameModule.h>
+#include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Dialog.h>
 #include <chrono>
 #include <cstdio>
@@ -47,7 +47,24 @@ public:
     }
     return handle;
   }
+  // Direct draws, and the draws of host visuals inside executed lists
+  // (frame schema v7).
   void PushToCommandQueue(RenderCommand command) override
+  {
+    if (command.commandType == CommandType::ExecuteList &&
+        command.executeList.list != nullptr) {
+      for (std::size_t index = 0; index < command.executeList.list->size();
+           ++index) {
+        observe(command.executeList.list->at(index));
+      }
+    } else {
+      observe(command);
+    }
+    MockBackend::PushToCommandQueue(command);
+  }
+
+private:
+  void observe(const RenderCommand& command)
   {
     if (command.commandType == CommandType::SetTexture &&
         command.bindTexture.slot == 0) {
@@ -57,10 +74,8 @@ public:
                m_bound.generation == m_atlas.generation) {
       atlasDrawn = true;
     }
-    MockBackend::PushToCommandQueue(command);
   }
 
-private:
   TextureHandle m_atlas{};
   TextureHandle m_bound{};
 };
@@ -98,13 +113,13 @@ editorLimits()
 }
 
 static bool
-pumpUntil(WasmGameModule& editor, const std::function<bool()>& reached)
+pumpUntil(WasmProgram& editor, const std::function<bool()>& reached)
 {
   const std::chrono::steady_clock::time_point deadline =
     std::chrono::steady_clock::now() + std::chrono::seconds(60);
   while (editor.error().empty() &&
          std::chrono::steady_clock::now() < deadline) {
-    editor.Update(1.0 / 60.0);
+    editor.update(1.0 / 60.0);
     if (reached()) {
       return true;
     }
@@ -115,13 +130,13 @@ pumpUntil(WasmGameModule& editor, const std::function<bool()>& reached)
 }
 
 static void
-renderFrame(WasmGameModule& editor,
+renderFrame(WasmProgram& editor,
             Renderer& renderer,
             IRenderWindow& window,
             Camera& camera)
 {
-  Scene scene(&window, &camera);
-  editor.DispatchDrawables(&scene);
+  DrawList scene(&window, &camera);
+  editor.dispatch(scene);
   renderer.BeginFrame();
   renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();
@@ -189,13 +204,13 @@ editorPackage()
   context.commandRegistry = &commands;
   context.commandLine = &console;
 
-  WasmGameModule editor(readBytes(ILLUMO_ILLED_GUEST),
-                        startup.take(),
-                        editorLimits(),
-                        {},
-                        {},
-                        files);
-  const bool started = editor.Start(&context);
+  WasmProgram editor(readBytes(ILLUMO_ILLED_GUEST),
+                     startup.take(),
+                     editorLimits(),
+                     {},
+                     {},
+                     files);
+  const bool started = editor.start(context);
   testTrue(counters, started, "Generic host starts the IllEd package");
   if (!started) {
     std::printf("%s\n", editor.error().c_str());
@@ -242,9 +257,9 @@ editorPackage()
              !historyContains(console, "Failed"),
            "Every editor frame and transfer completed without rejection");
   testTrue(counters,
-           editor.error().empty() && editor.OnCloseRequested(),
+           editor.error().empty() && editor.closeRequested(),
            "A saved document closes without confirmation");
-  editor.Exit();
+  editor.stop();
   if (counters.failures != 0) {
     for (const CommandLine::historyBuffer& entry : console.getHistory()) {
       std::printf("console: %s\n", entry.content.c_str());
@@ -340,9 +355,9 @@ projectPackage()
   context.commandRegistry = &commands;
   context.commandLine = &console;
 
-  WasmGameModule editor(
+  WasmProgram editor(
     readBytes(ILLUMO_ILLED_GUEST), {}, editorLimits(), {}, {}, files);
-  const bool started = editor.Start(&context);
+  const bool started = editor.start(context);
   testTrue(counters, started, "The package starts with a project mounted");
   if (!started) {
     std::printf("%s\n", editor.error().c_str());
@@ -392,7 +407,7 @@ projectPackage()
              !historyContains(console, "Failed") &&
              !historyContains(console, "Cannot"),
            "fetches, placement and the save complete without errors");
-  editor.Exit();
+  editor.stop();
   if (counters.failures != 0) {
     for (const CommandLine::historyBuffer& entry : console.getHistory()) {
       std::printf("console: %s\n", entry.content.c_str());

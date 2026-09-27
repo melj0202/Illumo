@@ -359,6 +359,36 @@ Renderer::ensureBuiltinStyles()
       createStyle(style);
   }
 
+  // Instanced lit meshes and their shadow depth pass.
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = true;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderPaths paths;
+    paths.vertexPath = "Shader/mesh_lit_instanced_vertex.glsl";
+    paths.fragmentPath = "Shader/mesh_lit_instanced_frag.glsl";
+    style.shaderHandle = enrollShader(paths);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::LitMeshInstanced)] =
+      createStyle(style);
+  }
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = true;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderPaths paths;
+    paths.vertexPath = "Shader/shadow_depth_instanced_vertex.glsl";
+    paths.fragmentPath = "Shader/shadow_depth_frag.glsl";
+    style.shaderHandle = enrollShader(paths);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::ShadowDepthInstanced)] =
+      createStyle(style);
+  }
+
   _builtinStylesReady = true;
 }
 

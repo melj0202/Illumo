@@ -2,25 +2,26 @@
 
 #include <Illumo/Services/SysCmdLine.h>
 
-#include <memory>
+#include <chrono>
 #include <string>
 
 class IEnvVars;
-class IModule;
+class Illumo;
 
 using IllumoDefaultsCallback = void (*)(IEnvVars* environment);
-using IllumoModuleFactory = std::unique_ptr<IModule> (*)(IEnvVars* environment);
-using IllumoExitCodeCallback = int (*)();
+// Runs the application on the initialized engine until it closes and returns
+// the process exit code. `launched` is when the process started, for the
+// startup time it reports.
+using IllumoRunCallback =
+  int (*)(Illumo& illumo, std::chrono::steady_clock::time_point launched);
 
 struct IllumoApplicationDefinition
 {
   std::string applicationName{ "Illumo" };
   SysCmdLineConfig commandLine;
   IllumoDefaultsCallback applyDefaults{ nullptr };
-  IllumoModuleFactory createRequiredModule{ nullptr };
-  // Consulted after a normal close. Products whose run has an outcome (a
-  // capture that failed) report it here; absent means success.
-  IllumoExitCodeCallback exitCode{ nullptr };
+  // The runtime's frame loop (D-E31). Required.
+  IllumoRunCallback run{ nullptr };
 };
 
 // The consuming product defines this factory. Illumo's platform entry invokes
@@ -28,6 +29,8 @@ struct IllumoApplicationDefinition
 IllumoApplicationDefinition
 CreateIllumoApplication();
 
+// The process around the application: logger, settings, command line,
+// startup report, engine services and, when asked, the relaunch.
 int
 RunIllumoApplication(int argc,
                      char** argv,

@@ -35,6 +35,8 @@ public:
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
 
+  // The rim and centre cross; the breathing glow and brackets are drawn
+  // behind them from breathVisual.
   GameVisual& getVisual() { return visual; }
   const GameVisual& getVisual() const { return visual; }
   // Where the cursor is drawn now, and where it is gliding to.
@@ -46,7 +48,12 @@ public:
 private:
   void retarget(float x, float y);
 
+  // The glow and brackets breathe every frame, so they sit in their own
+  // visual behind the rim and cross, which redraw only when their key does.
+  GameVisual breathVisual;
   GameVisual visual;
+  GuiDrawKey breathKey;
+  GuiDrawKey rimKey;
   float cellSize = 16.0f;
   ColorRgba color{ 80, 220, 255, 220 };
   bool initialized = false;

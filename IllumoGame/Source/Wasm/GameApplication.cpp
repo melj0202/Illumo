@@ -1,7 +1,7 @@
 #include "Game/CSimSounds.h"
 #include "Game/CSimTypeface.h"
 #include "Game/IllumoGameConfig.h"
-#include "Game/MainMenuModule.h"
+#include "Game/CSimScenes.h"
 #include "Game/PerformanceOverlay.h"
 #include "Game/SimulatorSettings.h"
 #include "Game/SoftwareCursor.h"
@@ -9,26 +9,29 @@
 #include "Wasm/GuestPlatform.h"
 #include <Illumo/Content/PackageManifest.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
-#include <IllumoGuest/ModuleApplication.h>
+#include <IllumoGuest/Program.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // IllumoGame as a WASM package: the complete product (menus, canvas, editor,
 // console commands, persistence, workshop) runs in this store on top of the
-// guest-side engine. The host provides only generic services and frames.
-class IllumoGameGuest final : public GuestModuleApplication
+// guest-side engine, as one program whose scenes are the title screen and the
+// canvas (CSimScenes). The host provides only generic services and frames.
+class IllumoGameGuest final : public GuestProgram
 {
 public:
   IllumoGameGuest()
-    : GuestModuleApplication("CSim")
+    : GuestProgram("CSim")
     , m_platform(services(), files())
     , m_catalog(files())
   {
@@ -105,7 +108,7 @@ protected:
       static_cast<std::uint64_t>(__builtin_wasm_memory_size(0)) * 65536u);
   }
 
-  void dispatchOverlay(Scene& scene) override
+  void dispatchOverlay(DrawList& scene) override
   {
     // Under the pointer, so the cursor stays on top.
     if (m_performance.isVisible()) {
@@ -169,12 +172,13 @@ protected:
     return true;
   }
 
-  std::unique_ptr<IModule> createFirstModule() override
+  bool createScenes(SceneDirector& scenes) override
   {
     Logger::LogTrace("CSim bootstrap complete; opening the main menu");
     CSimSounds::play(CSimSound::ProgramStart);
-    return std::make_unique<MainMenuModule>();
+    return CSimScenes::openTitle(scenes);
   }
+
 
 private:
   // The staged illumo.json carries the build version (D-F2) that the main

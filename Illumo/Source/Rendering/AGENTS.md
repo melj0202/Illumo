@@ -26,8 +26,8 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
   default ceiling. Preserve deterministic
   order and explicit overflow behavior; never write past capacity or silently
   claim a dropped frame was complete.
-- `Scene` is a non-owning ordered drawable list rebuilt each frame. It does not
-  own drawables and must not become a retained scene graph or ECS.
+- `DrawList` is a non-owning ordered drawable list rebuilt each frame. It
+  does not own drawables and must not become a retained scene graph or ECS.
 - Directional shadows are one Renderer-owned pass before color rendering. The
   first camera-visible World caster selects the light; the Renderer retains
   caster descriptors, extrudes the camera frustum toward that light by the
@@ -39,7 +39,7 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
 - Camera and shadow bounds tests are Renderer-owned and conservative. Invalid
   frusta, matrices, or bounds disable the corresponding rejection rather than
   risking missing geometry.
-- `SceneGraphDrawable` enters `Scene` and consumes an immutable scene snapshot
+- `SceneGraphDrawable` enters `DrawList` and consumes an immutable scene snapshot
   once per renderer frame. The graph owns its buffers; Rendering never owns
   graph nodes. Attachments receive snapshot transforms and emit tokens only.
   The shared shadow fit follows collection; depth relevance therefore uses
@@ -56,6 +56,33 @@ execution belongs only in `OpenGL/`; headless semantic execution belongs in
   matrices or texture-space sampling implicitly.
 - Renderer and backend calls are main-thread affine with the active graphics
   context unless an authorized design introduces synchronization.
+- Instancing (D-R28): instance attributes use locations 4-12
+  (`InstanceLayout::LitModelTint`, 144 B); mesh attributes keep 0-3. A
+  backend accepts `DrawIndexedInstanced` only after `SetInstanceStream`
+  attached a large enough Instance buffer to the bound mesh in the same
+  submission. A `WriteBuffer` at offset zero may discard the buffer first.
+- `Renderer::useFrameUniforms()` writes the `FrameUniforms` block at most once
+  per `RenderScene`, and only when called, so frames without instanced draws
+  emit nothing new. Shaders declaring the block read it from
+  `FrameUniformsBindingPoint`; keep `Renderer::FrameUniforms` and every
+  shader's std140 declaration identical (`Illumo.Instancing.StylesRegistered`
+  checks the text).
+- A `RecordedCommandList` is recorded with the ordinary push helpers between
+  `beginRecording` and `endRecording`, owns its matrices, and runs in place by
+  `ExecuteList`. Never record `useFrameUniforms`, framebuffer or viewport
+  changes, or anything that varies per frame; patch counts in place instead.
+- `RenderWorld` is a World drawable that owns persistent instances. Its
+  shadow commands rebind the shared `ShadowDepth` style afterwards, because
+  later drawables expect it. Call `releaseResources()` before its renderer is
+  destroyed. Its sky draws first and derives the rotation-only matrix from
+  the frame's world view projection, so it needs no camera of its own.
+- `VisualStore` replays a visual's recording while its
+  `GameVisual::FrameState` is unchanged, so the recording may depend only on
+  that state. Nothing may destroy a store visual between `append` and
+  submission.
+- Backend hooks `AppendVisual`, `ForgetVisual` and `AppendSkybox` default to
+  off. Only the guest recorder takes drawables whole; GPU and test backends
+  must keep receiving their tokens.
 
 ## Compatibility and errors
 
@@ -84,4 +111,6 @@ failure must be observable and must not leave a partially usable backend.
 
 Use MockBackend for deterministic contract tests. Use a live OpenGL smoke for
 context, shader, state, upload, and visual behavior; headless success is not
-pixel validation. Update this file only for durable Rendering contracts.
+pixel validation. `IllumoGpuTests` (CTest label `IllumoGpu`, skipped with 77
+without a context) compares real-GPU images, for example
+`Illumo.Gpu.RenderWorldParity`; run it for shader or instancing changes. Update this file only for durable Rendering contracts.

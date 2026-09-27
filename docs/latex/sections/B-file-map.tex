@@ -13,13 +13,13 @@
 \path{cmake/RunWorkspaceTidy.cmake} & First-party \texttt{clang-tidy} runner for \texttt{IllumoTidy} \\
 \path{.clang-tidy} & Workspace \texttt{clang-tidy} check set and header filter \\
 \path{Illumo/CMakeLists.txt} & Static library, TestSupport, library tests, standalone mode \\
-\path{Illumo/Include/Illumo/Engine/Illumo.h} & Public host/config/module-requirement API \\
-\path{Illumo/Include/Illumo/Engine/Application.h} & Declarative application seam and generic runner API \\
+\path{Illumo/Include/Illumo/Engine/Illumo.h} & Public host/config API and frame phases \\
+\path{Illumo/Include/Illumo/Engine/Application.h} & Declarative application seam, \texttt{run} callback and generic runner API \\
 \path{Illumo/Include/Illumo/Engine/IllumoContext.h} & Frozen non-owning service bag \\
-\path{Illumo/Include/Illumo/Engine/IModule.h} & Source-level module contract \\
-\path{Illumo/Source/Engine/Illumo.cpp} & Fallible host initialization, rollback, teardown \\
-\path{Illumo/Source/Engine/Application.cpp} & Logger lifetime, CLI flow, module composition, steady-clock loop \\
-\path{Illumo/Source/Engine/DebugModule.cpp} & Optional Debug renderer/tooling module \\
+\path{Illumo/Include/Illumo/Content/ProgramScene.h}, \path{SceneDirector.h} & Program scenes and the director that switches them (D-E31) \\
+\path{Illumo/Source/Engine/Illumo.cpp} & Fallible host initialization and rollback, frame phases, teardown \\
+\path{Illumo/Source/Engine/Application.cpp} & Logger lifetime, settings, CLI flow, startup report, relaunch; calls \texttt{run} \\
+\path{Illumo/Source/Engine/DebugOverlay.cpp} & Debug-tools overlay: console, diagnostics, profiler, renderer demo \\
 \path{Illumo/Include/Illumo/Scene/} & Public persistent hierarchy and generational node handles \\
 \path{Illumo/Source/Scene/SceneGraph.cpp} & Node ownership, deterministic traversal, transform cache, render extraction \\
 \path{Illumo/Include/Illumo/Foundation/BuildInfo.h} & Build version \texttt{vYY.MM\_B}, defined by a generated source (D-F2) \\
@@ -51,6 +51,8 @@
 \path{Illumo/Source/Content/VirtualFileSystem.cpp} & Mount table, overlays, directory and archive backends \\
 \path{Illumo/Source/Content/PackageMounts.cpp} & Package open, \texttt{packages/} discovery, mount assembly, pack \\
 \path{Illumo/Source/Wasm/RuntimeApplication.cpp} & \texttt{IllumoRuntime} options, package launch, mounts \\
+\path{Illumo/Source/Wasm/RuntimeShell.cpp} & Frame order around the one program, paced loop, capture and bench (D-E31) \\
+\path{Illumo/Source/Wasm/WasmProgram.cpp} & The one WASM program: guest store, services, frame renderer, render worlds \\
 \path{Illumo/Source/Wasm/WasmFileServices.cpp} & Host file protocol v2, project quota, Import and Pack \\
 \path{Illumo/tools/IllumoPack.cpp} & Pack a package directory into an \texttt{.ilpk}, or \texttt{--verify} one \\
 \path{cmake/IllumoPackCheck.cmake} & Packs and verifies a staged application for \texttt{Illumo.Pack.StagedApp} \\
@@ -69,21 +71,24 @@
 \toprule
 \textbf{Path} & \textbf{Why it matters} \\
 \midrule
+\path{IllumoGuest/Include/IllumoGuest/Program.h} & \texttt{GuestProgram}: guest-local engine and the program's scenes (D-E31) \\
+\path{IllumoGuest/Include/IllumoGuest/SceneWorlds.h} & One host render world per scene, frame schema v8 (D-R30) \\
 \path{IllumoGame/CMakeLists.txt} & Product core (native test oracle), tests, runtime seed \\
-\path{IllumoGame/Source/Game/IllumoGameApplication.cpp} & Product identity, CA CLI metadata, required-module factory \\
+\path{IllumoGame/Source/Wasm/GameApplication.cpp} & The CSim program: bootstrap, catalogs, sounds, pointer, first scene \\
 \path{IllumoGame/Source/Game/IllumoGameConfig.*} & CA defaults \\
-\path{IllumoGame/Source/Game/CellGameModule.*} & Modes, input, commands, simulation orchestration \\
+\path{IllumoGame/Source/Game/TitleScene.*}, \path{CSimScenes.*} & Title scene and CSim's scene flow (kept canvas, resume) \\
+\path{IllumoGame/Source/Game/CanvasScene.*} & Canvas scene: modes, input, commands, simulation orchestration \\
 \path{IllumoGame/Source/Game/SparseCellGrid.*} & Signed-coordinate sparse domain \\
 \path{IllumoGame/Source/Game/CanvasView.*} & Bounded presentation, fade, dirty upload \\
 \path{IllumoGame/Source/Rulesets/} & Cellular-automata transitions and palettes \\
 \path{IllumoGame/Scenes/render3d-test.ilsc} & Scene behind the \texttt{render3dTest} diagnostic \\
 \path{IllumoGame/Tests/} & \texttt{IllumoGame.*} product cases \\
 \path{IllumoGame/illumo.json}, \path{IllEd/illumo.json}, \path{IllMeshViewer/illumo.json} & Package manifests (replace \texttt{app.json}) \\
-\path{IllEd/Source/EditorDocument.*} & The single mutation gateway over one \texttt{SceneInstance} \\
+\path{IllEd/Source/EditorDocument.*} & The single mutation gateway over the editor scene's \texttt{SceneInstance} \\
 \path{IllEd/Source/EditorHistory.*}, \path{EditorSelection.*}, \path{EditorShortcuts.*} & Patch undo/redo, selection set, the one key table \\
 \path{IllEd/Source/EditorGizmo.*}, \path{EditorInspector.*}, \path{EditorClipboard.*} & Transform gizmos, typed inspector, fragment copy/paste \\
 \path{IllEd/Source/EditorAssetBrowser.*}, \path{EditorAssets.*} & File-tree browser, asset kinds, import checks \\
-\path{IllEd/Source/EditorModule*.cpp} & Lifetime and frame, dock panels, command dispatch, viewport input \\
+\path{IllEd/Source/EditorScene*.cpp} & Lifetime and frame, dock panels, command dispatch, viewport input \\
 \path{IllEd/Source/EditorToolsPanel.*}, \path{EditorToolbar.*} & Tools panel; menu bar, toasts and status bar \\
 \path{IllEd/Source/IllEdPlatform.h} & Dialogs, files, clipboard, file tree, project seam \\
 \path{IllEd/Tests/} & \texttt{IllEd.*} product cases \\
@@ -93,6 +98,8 @@
 \path{docs/illumo-library-and-illumogame-design.md} & Approved extraction design and outcome \\
 \path{docs/content-packages-and-scenes-design.md} & Packages, file tree, \texttt{.ilsc} format 2, IllEd wave 1 design \\
 \path{docs/content-packages-and-scenes-plan.md} & Per-milestone execution record for that design \\
+\path{docs/scene-programs-design.md} & Scene programs design (D-E31, D-R30) and validation results \\
+\path{Templates/SpinningCube/} & Template for new projects: a one-scene WASM program \\
 \path{docs/latex/illumo.tex} & Prose-book entry point \\
 \path{docs/latex/architecture-map.tex} & Chart-pack entry point \\
 \bottomrule

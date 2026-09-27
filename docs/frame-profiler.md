@@ -2,7 +2,7 @@
 
 ## Scope and controls
 
-DebugModule presents an optional pie and matching legend through its Debug
+DebugOverlay presents an optional pie and matching legend through its Debug
 layer. F6 and `profiler [on|off|toggle]` control it in Debug and RelWithDebInfo.
 It starts disabled with no persisted flag. FPS, memory diagnostics, and Tracy
 are independent. Release retains a disabled collector, without the overlay.
@@ -19,12 +19,12 @@ shortcuts remain available.
 
 | Root | Measured phases |
 |---|---|
-| Update | Input/global hotkeys; camera; optional/debug modules; required product module |
+| Update | Input/global hotkeys; camera; debug overlay (`debugUpdate`); program (`productUpdate`) |
 | Rendering | Pipeline and drawable-list preparation; asset pump; command generation and synchronous CPU submission |
 | Presentation / waits | Backend EndFrame including swap; frame limiter |
 | Other | Remaining elapsed time inside the measured loop body |
 
-A sample spans beginFrame to endFrame in the application loop. Close negotiation
+A sample spans beginFrame to endFrame in `RuntimeShell`'s loop. Close negotiation
 before that body, startup, and shutdown are excluded. Sequential steady-clock
 marks partition elapsed time into exclusive phases. Renderer reports a timestamp
 between SubmitCommandQueue and backend EndFrame without changing their order.
@@ -45,18 +45,20 @@ concurrent simulation work. The profiler's own costs remain included.
 
 ## Ownership and rendering
 
-Illumo owns FrameProfiler. The runner/host mark existing phases; DebugModule
-borrows it through an optional constructor argument. IllumoContext is unchanged.
-The collector outlives modules and is main-thread affine. ProfilerOverlay owns
+Illumo owns FrameProfiler. `Illumo`'s frame phases and `RuntimeShell` mark the
+phases; DebugOverlay borrows it through an optional constructor argument, and
+`IllumoContext::frameProfiler` exposes it to diagnostics such as the runtime
+benchmark. The collector outlives the program and the overlay and is
+main-thread affine. ProfilerOverlay owns
 one bounded GameVisual with triangle-fan slices and text. Geometry persists
 through submission, uses logical pixels and the Debug layer, and scales to fit
-the window. Existing no-argument DebugModule and Renderer::EndFrame calls remain
-supported.
+the window. No-argument DebugOverlay construction and Renderer::EndFrame calls
+remain supported.
 
 InputManager::suppressKeyForFrame masks keyboard polling and bound actions until
 the next update without manufacturing release events or changing queued events.
-DebugModule consumes events separately and refreshes held-key capture before the
-required product update.
+DebugOverlay consumes events separately and refreshes held-key capture before the
+program's update.
 
 ## Verification
 

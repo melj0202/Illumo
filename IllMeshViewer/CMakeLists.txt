@@ -3,12 +3,11 @@ cmake_minimum_required(VERSION 3.25)
 add_library(IllMeshViewerCore STATIC
   Source/MeshViewerCamera.cpp
   Source/MeshViewerConfig.cpp
-  Source/MeshViewerModule.cpp
-  Source/MeshViewerModulePanels.cpp
+  Source/MeshViewerScene.cpp
+  Source/MeshViewerScenePanels.cpp
   Source/MeshViewerPanels.cpp
   Source/MeshViewerPlatformNative.cpp
   Source/MeshViewerUi.cpp
-  Source/IllMeshViewerApplication.cpp
 )
 
 target_include_directories(IllMeshViewerCore PUBLIC
@@ -18,16 +17,16 @@ target_include_directories(IllMeshViewerCore SYSTEM PRIVATE
 target_link_libraries(IllMeshViewerCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllMeshViewerCore)
 
-# IllMeshViewer ships only as the WASM package apps/meshviewer
-# (cmake/IllumoWasm.cmake), played by IllumoRuntime. IllMeshViewerCore
-# remains the native test oracle.
+# IllMeshViewer ships only as the WASM package apps/meshviewer, played by
+# IllumoRuntime: GuestTargets.cmake builds its module and PackageTargets.cmake
+# stages it. IllMeshViewerCore remains the native test oracle.
 
 if(BUILD_TESTING)
   add_executable(IllMeshViewerTests
     Tests/TestMain.cpp
     Tests/TestMeshViewerCamera.cpp
     Tests/TestMeshViewerConfig.cpp
-    Tests/TestMeshViewerModule.cpp
+    Tests/TestMeshViewerScene.cpp
     Tests/TestMeshViewerPanels.cpp
     Tests/TestMeshViewerUi.cpp
   )

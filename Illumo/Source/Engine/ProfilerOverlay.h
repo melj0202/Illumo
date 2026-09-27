@@ -11,7 +11,7 @@
 #include <locale>
 #include <sstream>
 
-// DebugModule owns input and lifetime. The visual remains an ordinary token
+// DebugOverlay owns input and lifetime. The visual remains an ordinary token
 // drawable; the fixed category order keeps number-key navigation stable.
 class ProfilerOverlay
 {

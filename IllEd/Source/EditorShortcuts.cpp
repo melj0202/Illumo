@@ -2,7 +2,7 @@
 
 // Camera navigation uses the arrow keys, PageUp/PageDown and the mouse, so
 // letters stay free for editing commands. Alt+F4 is the window's own close
-// path (OnCloseRequested), so Exit has no entry here.
+// path (closeRequested), so Exit has no entry here.
 const std::vector<EditorShortcut>&
 EditorShortcuts::all()
 {

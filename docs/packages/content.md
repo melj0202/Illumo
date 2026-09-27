@@ -4,7 +4,8 @@
 sources `Illumo/Source/Content/`) is the optional content layer above the
 engine: the virtual path grammar, `illumo.json` package manifests, `.ilpk`
 archives, the host's virtual file tree, the `.ilsc` format 2 scene model and
-codec, and `SceneInstance`, the one scene loader every Illumo program uses.
+codec, `SceneInstance`, the one scene loader every Illumo program uses, and
+the scenes a program runs (`ProgramScene`, `SceneDirector`; D-E31).
 The design is `../content-packages-and-scenes-design.md`; the execution
 record `../content-packages-and-scenes-plan.md` is authoritative where the two
 differ.
@@ -27,6 +28,8 @@ generic `IFileTreeSource` (`<Illumo/Services/FileTreeSource.h>`).
 | `IlscCodec` | yes | yes | `.ilsc` format 2 parse and canonical encode |
 | `SceneAssetRefs` | yes | yes | Package roots, reference resolution, fetch lists |
 | `SceneInstance` | yes | yes | Live `SceneGraph` plus attachments from a document |
+| `ProgramScene` | yes | yes | One screen of a program: logic, UI, commands, content, render world |
+| `SceneDirector` | yes | yes | A program's named scenes and switches between them |
 | `PackageArchive` | yes | no | `.ilpk` ZIP-subset reader, writer, CRC-32 |
 | `VirtualFileSystem` | yes | no | Mount table, layered mounts, directory/archive backends |
 | `VfsAssetSource` | yes | no | `IAssetSource` over the tree |
@@ -36,8 +39,9 @@ generic `IFileTreeSource` (`<Illumo/Services/FileTreeSource.h>`).
 
 The guest build compiles the serial-safe subset as `IllumoGuestContent`
 (`IllumoGuest/CMakeLists.txt`), which also carries `GuestSceneFetches`
-(`<IllumoGuest/SceneFetches.h>`). Archives and the tree stay host-side;
-guests reach them through file protocol v2.
+(`<IllumoGuest/SceneFetches.h>`), `GuestProgram` (`<IllumoGuest/Program.h>`)
+and `GuestSceneWorlds` (`<IllumoGuest/SceneWorlds.h>`). Archives and the tree
+stay host-side; guests reach them through file protocol v2.
 
 ## Virtual paths
 
@@ -154,7 +158,7 @@ the host `vfs` command (`mounts`, `ls <path>`, `tree <path> [depth]`, `stat
 lines, and `cat` previews text or dumps hex, 4 KiB by default and at most
 64 KiB. `vfs mount` and `vfs unmount` were not added; the mount table is fixed
 per launch. `VfsTreeSource` publishes the tree as a read-only
-`IFileTreeSource` (at most 4,096 entries per listing); `WasmGameModule` sets
+`IFileTreeSource` (at most 4,096 entries per listing); `WasmProgram` sets
 it as `IllumoContext::fileTree`, which the debug `files` browser reads.
 
 ## `.ilsc` format 2
@@ -218,6 +222,26 @@ IllEd's `EditorDocument`, IllMeshViewer's scene view and IllumoGame's
 paths from `collectSceneFetches` (and the OBJ material libraries) through
 `GuestSceneFetches` into the guest asset cache, then instantiate.
 
+## `ProgramScene` and `SceneDirector`
+
+A program's screens are `ProgramScene`s (D-E31). A scene starts once
+(`start(IllumoContext&)`), enters and leaves any number of times, updates and
+dispatches only while active, and stops once; `closeRequested` and
+`contentOptions` complete it. `content()` is its `SceneInstance`, `world()`
+its render world, and `command(...)` registers a console command that is
+withdrawn when the scene leaves.
+
+`SceneDirector` owns a program's named scenes (`add`, `emplace<T>`, `find`,
+`active`, `switchTo(name, Cut | Cover)`, `release`). A switch applies at a
+frame boundary (`applyPending`): input is drained, passes and drawables are
+reset, the old scene leaves (camera saved, commands withdrawn), the target
+starts if needed (content, world, initial camera), its camera is restored,
+and it enters. A failed start re-enters the previous scene; with none, the
+program closes. A scene left is kept, frozen, until the program releases it.
+With an `ISceneWorlds` (the guest's `GuestSceneWorlds` when `HostRender` is
+granted, frame schema v8) each scene gets its own render world; otherwise
+scenes share `IllumoContext::renderWorld`. Both are main-thread only.
+
 ## Tests
 
 `IllumoTests` covers the library under `Illumo.Content.*`:
@@ -231,6 +255,8 @@ paths from `collectSceneFetches` (and the OBJ material libraries) through
   `InstanceSkyboxAndAssets`, `InstanceIncrementalEdit`,
   `InstanceSiblingOrder`, `InstancePicking`, and the benchmark
   `Bench.Instantiate2000`;
+- scenes: `SceneLifecycle`, `SceneFailedStart`, `SceneCoverSwitch`,
+  `SceneInputAndCommands`, `SceneCamera`, `SceneWorlds`, `SceneStopOrder`;
 - archives: `ArchiveCrc32`, `ArchiveRoundTrip`, `ArchiveReadsCMakeZip`
   (a fixture zipped by `cmake -E tar --format=zip`), `ArchiveInflateBounded`,
   `ArchiveRejectsMalformed`, `ArchiveFuzzSmoke`;

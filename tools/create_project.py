@@ -2,12 +2,15 @@
 """Illumo Project Creation Tool.
 
 Generates a new Illumo application project with an Unreal Engine style structure:
-  - Illumo/      : Full source code of the engine framework
-  - IllEd/       : Debug tools and SceneGraph world editor
-  - IllumoGame/  : Game application with starter template (Spinning Cube base code)
+  - Illumo/      : Full source code of the engine framework and IllumoRuntime
+  - IllumoGuest/ : The guest SDK that WASM programs are built with
+  - IllEd/       : The SceneGraph world editor (a WASM program too)
+  - <Name>/      : The application, a WASM program from the starter template
+                   (a spinning cube scene)
   - cmake/       : Shared CMake build utilities
+  - tools/       : bootstrap-wasm.ps1, which fetches the pinned WASM toolchain
   - build.py     : Interactive front end for building, running, and testing
-  - CMakeLists.txt : Root build file wiring the engine and application together
+  - CMakeLists.txt : Root build file wiring the engine and programs together
 """
 
 from __future__ import annotations
@@ -95,6 +98,15 @@ RESERVED_PROJECT_NAMES = {
     "illumocaptureruntimestage", "illedcore", "illedtests",
     "illedtestsdiscover", "illedclosewindowtests", "illedruntimestage",
     "illed_envvars_json_stage",
+    # WASM runtime and guest build infrastructure (cmake/IllumoWasm.cmake,
+    # IllumoGuest/CMakeLists.txt).
+    "illumoruntime", "illumowasmruntime", "illumowasmrendering",
+    "illumowasmcompiler", "illumowasmtime", "illumoguestbuild", "illumopack",
+    "illumoguest", "illumoguestoptions", "illumoguestrendering",
+    "illumoguestengine", "illumoguestcontent", "paddleguest",
+    "paddlepalettemod", "paddlefaultymod", "presentationguest",
+    "jobcontrolguest", "sdkcontractguest", "filecontrolguest",
+    "illedpackage", "illedwasmpackagetests",
     "glfw", "glm", "freetype", "glew_s", "uninstall",
     "all", "clean", "help", "install", "test", "package", "package_source",
     "edit_cache", "rebuild_cache", "all_build", "zero_check", "run_tests",
@@ -118,7 +130,8 @@ def validate_project_name(name: str) -> str:
         )
     generated_names = {
         name.casefold() + suffix
-        for suffix in ("", "core", "tests", "testsdiscover", "runtimestage")
+        for suffix in ("", "core", "tests", "testsdiscover", "runtimestage",
+                       "testsruntimestage", "package")
     }
     if generated_names & RESERVED_PROJECT_NAMES:
         raise ProjectCreationError(
@@ -129,7 +142,11 @@ def validate_project_name(name: str) -> str:
 
 def is_excluded_dir(dir_name: str, rel_root: Path) -> bool:
     name_lower = dir_name.lower()
-    if name_lower in {".git", ".vs", ".agent", ".agents", "__pycache__", "archive"}:
+    if name_lower in {".git", ".vs", ".agent", ".agents", "__pycache__"}:
+        return True
+    # A retired-material archive at the top of a tree; deeper directories of
+    # that name are content (the package reader's test fixture).
+    if name_lower == "archive" and rel_root == Path("."):
         return True
     # Only treat 'build*' as build tree if not inside thirdparty
     parts = [p.lower() for p in rel_root.parts]
@@ -175,13 +192,21 @@ def copy_directory_tree(
     return copied_count
 
 
+def package_id(project_name: str) -> str:
+    """The application's package id: the name in lower case ([a-z0-9._-])."""
+    return project_name.lower()
+
+
 def instantiate_template(
     template_dir: Path,
     destination: Path,
     project_name: str,
     verbose: bool = False,
 ) -> int:
-    """Instantiate a template directory into destination, replacing @PROJECT_NAME@ tokens."""
+    """Instantiate a template directory into destination.
+
+    @PROJECT_NAME@ becomes the project name and @PROJECT_ID@ its package id.
+    """
     project_name = validate_project_name(project_name)
     if not template_dir.is_dir():
         raise ProjectCreationError(
@@ -213,7 +238,9 @@ def instantiate_template(
             if src_file.suffix.lower() in text_extensions:
                 try:
                     content = src_file.read_text(encoding="utf-8")
-                    replaced = content.replace("@PROJECT_NAME@", project_name)
+                    replaced = content.replace(
+                        "@PROJECT_NAME@", project_name
+                    ).replace("@PROJECT_ID@", package_id(project_name))
                     dest_file.write_text(replaced, encoding="utf-8")
                 except OSError as err:
                     raise ProjectCreationError(
@@ -237,6 +264,7 @@ def generate_root_cmake(
     """Generate the root CMakeLists.txt for the standalone project."""
     debug_tools_sub = "add_subdirectory(IllEd)\n" if include_debug_tools else ""
     debug_tools_test = "IllEdTestsDiscover " if include_debug_tools else ""
+    programs = f"{app_folder_name} IllEd" if include_debug_tools else app_folder_name
 
     return f"""cmake_minimum_required(VERSION 3.25)
 
@@ -260,6 +288,13 @@ if(BUILD_TESTING)
     COMMENT "Running the {project_name} workspace test suite"
   )
 endif()
+
+# The WASM programs IllumoRuntime plays: each directory has a
+# GuestTargets.cmake and a PackageTargets.cmake (cmake/IllumoWasm.cmake).
+# Run tools/bootstrap-wasm.ps1 once first, or configure with
+# -DILLUMO_BUILD_WASM_RUNTIME=OFF to build only the native libraries and tests.
+set(ILLUMO_PROGRAMS {programs})
+include("${{CMAKE_CURRENT_SOURCE_DIR}}/cmake/IllumoWasm.cmake")
 
 if(ILLUMO_ENABLE_COVERAGE)
   illumo_add_workspace_coverage()
@@ -292,11 +327,16 @@ endif()
 
 def generate_readme(project_name: str, app_folder_name: str) -> str:
     """Generate README.md for the new project."""
+    app_id = package_id(project_name)
     return f"""# {project_name}
 
-An interactive application built on the **Illumo** engine framework.
+An interactive application built on the **Illumo** engine framework. It runs
+as a WASM program under IllumoRuntime: the program owns a SceneDirector, and
+each screen is a scene (`{app_folder_name}/Source/SpinningCubeScene.*`).
 
-Requires CMake 3.25 or newer and a C++23-capable compiler.
+Requires CMake 3.25 or newer and a C++23-capable compiler. The WASM runtime and
+guest build need Windows x64 and the pinned toolchain from
+`tools/bootstrap-wasm.ps1` (or `python build.py wasm-tools`).
 
 Illumo exposes its public headers and GLM math headers. Other vendor APIs require
 an explicit dependency in your application's CMake configuration.
@@ -307,17 +347,23 @@ Engine PDF sources are not included; PDF builds default off in this workspace.
 
 ```text
 {project_name}/
-  CMakeLists.txt         # Root workspace CMake configuration
+  CMakeLists.txt         # Root workspace CMake configuration (ILLUMO_PROGRAMS)
   build.py               # Interactive front end for building and testing
-  Illumo/                # Engine framework source code, shaders, and assets
+  Illumo/                # Engine framework and IllumoRuntime, shaders, assets
     Include/Illumo/      # Public engine API headers
     Source/              # Core runtime, rendering, and scene subsystems
     thirdparty/          # Vendored dependencies (GLFW, GLEW, GLM, Tracy, etc.)
-  IllEd/                 # Debug tools & SceneGraph world editor
-  {app_folder_name}/             # Your game / application code
-    Source/              # Spinning cube starter base code & module
-    Tests/               # Automated headless tests
-    envvars.json         # Runtime configuration seed
+  IllumoGuest/           # Guest SDK: GuestProgram and the WASI guest build
+  IllEd/                 # SceneGraph world editor (a WASM program too)
+  {app_folder_name}/             # Your application
+    Source/              # The cube scene and its settings
+    Source/Wasm/         # The program: GuestProgram and createScenes
+    Tests/               # Headless tests of the scene through a director
+    GuestTargets.cmake   # Builds {project_name}.wasm in the guest build
+    PackageTargets.cmake # Stages apps/{app_id} beside IllumoRuntime
+    illumo.json          # Package manifest
+    envvars.json         # First-run settings
+  tools/                 # bootstrap-wasm.ps1
 ```
 
 ## Quick Start
@@ -330,11 +376,14 @@ Launch the interactive build menu:
 python build.py
 ```
 
-Or build and launch directly via command line:
+Or fetch the toolchain once, then build and play the application directly:
 
 ```bash
-python build.py run --app {project_name}
+python build.py wasm-tools
+python build.py play --app {app_id}
 ```
+
+The staged package runs directly too: `IllumoRuntime --app {app_id}`.
 
 ### Run Tests
 
@@ -350,7 +399,15 @@ python build.py test
 - **R**: Reset cube rotation angle to 0
 - **G**: Toggle 3D spatial reference grid
 - **Up / Down**: Increase / decrease rotation speed
-- **Escape**: Exit application
+- **Console** (`cube_speed [value]`): show or set the rotation speed; the
+  command exists only while the cube scene is active
+
+## Adding scenes
+
+A program owns a `SceneDirector`. Add each screen as a `ProgramScene` in
+`createScenes` (`{app_folder_name}/Source/Wasm/SpinningCubeProgram.cpp`)
+and switch between them with `switchTo`. A scene the program leaves is kept
+and resumes where it was.
 """
 
 
@@ -395,7 +452,8 @@ def create_project(
             if sub_line not in cmake_content:
                 print(
                     f"\nNOTE: To enable your application in the workspace build, add:"
-                    f"\n  {sub_line}\nto {root_cmake}"
+                    f"\n  {sub_line}\nto {root_cmake}, and add {target_dir.name} to"
+                    f" its set(ILLUMO_PROGRAMS ...) list."
                 )
 
         print(f"\nSuccessfully created '{project_name}' application at: {target_dir}")
@@ -419,11 +477,14 @@ def create_project(
     destination.mkdir(parents=True, exist_ok=True)
     print(f"Creating new Illumo project '{project_name}' at: {destination}")
 
-    # 1. Copy engine framework (Illumo/)
+    # 1. Copy engine framework (Illumo/) and the guest SDK (IllumoGuest/)
     engine_src = REPOSITORY_ROOT / "Illumo"
     engine_dest = destination / "Illumo"
-    print("  [1/6] Copying engine framework source code (Illumo/)...")
+    print("  [1/6] Copying the engine framework and guest SDK (Illumo/, IllumoGuest/)...")
     copy_directory_tree(engine_src, engine_dest, verbose)
+    copy_directory_tree(
+        REPOSITORY_ROOT / "IllumoGuest", destination / "IllumoGuest", verbose
+    )
 
     # 2. Copy debug tools (IllEd/)
     if include_debug_tools:
@@ -443,6 +504,12 @@ def create_project(
     # 4. Copy build and formatting tools and licensing notices
     print("  [4/6] Copying build.py front end, notices, and configuration files...")
     shutil.copy2(REPOSITORY_ROOT / "build.py", destination / "build.py")
+    # The pinned WASM toolchain download (build.py wasm-tools runs it).
+    (destination / "tools").mkdir(exist_ok=True)
+    shutil.copy2(
+        REPOSITORY_ROOT / "tools" / "bootstrap-wasm.ps1",
+        destination / "tools" / "bootstrap-wasm.ps1",
+    )
     # The engine release; cmake/IllumoVersion.cmake stamps BuildInfo from it.
     shutil.copy2(REPOSITORY_ROOT / "VERSION.txt", destination / "VERSION.txt")
     if (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").is_file():
@@ -487,8 +554,8 @@ def create_project(
     print("\nProject creation completed successfully!")
     print(f"\nTo build and run your new application:")
     print(f"  cd {destination}")
-    print(f"  python build.py build")
-    print(f"  python build.py run --app {project_name}")
+    print(f"  python build.py wasm-tools")
+    print(f"  python build.py play --app {package_id(project_name)}")
     print(f"  python build.py test\n")
 
     return destination

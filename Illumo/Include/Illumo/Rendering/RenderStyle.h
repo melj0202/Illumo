@@ -19,6 +19,10 @@ enum class RenderStyleId : unsigned char
   ShadowDepth = 6, // Depth-only shadow mapping pass
   MotionBlur = 7,  // Deferred screen-space motion blur post-process
   Skybox = 8,      // 3D cubemap skybox
+  // LitMesh and ShadowDepth for instanced draws: per-instance model and tint
+  // attributes, camera and shadow state from Renderer's FrameUniforms block.
+  LitMeshInstanced = 9,
+  ShadowDepthInstanced = 10,
   Count
 };
 

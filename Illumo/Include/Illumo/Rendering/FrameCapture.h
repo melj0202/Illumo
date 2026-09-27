@@ -29,9 +29,9 @@ struct FrameCaptureResult
 // while another Illumo window is live. The callback must create, synchronously
 // submit, and destroy all renderer-bound content before returning. It must not
 // swap, start a loop, retain service pointers, or mutate external simulation.
-// Return false with a diagnostic for required content/asset failures. Scene is
-// an optional transient frame list; persistent SceneGraph nodes are not
-// required.
+// Return false with a diagnostic for required content/asset failures. The
+// DrawList is an optional transient frame list; persistent SceneGraph nodes
+// are not required.
 using FrameCaptureProducer =
   std::function<bool(Renderer&, Camera&, std::string&)>;
 
