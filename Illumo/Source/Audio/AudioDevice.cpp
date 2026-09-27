@@ -15,6 +15,14 @@ clampedOr(float value, float minimum, float maximum, float fallback)
   return std::isfinite(value) ? std::clamp(value, minimum, maximum) : fallback;
 }
 
+ma_uint64
+fadeMilliseconds(float seconds)
+{
+  return static_cast<ma_uint64>(std::lround(
+    clampedOr(seconds, 0.0f, SoundPlayback::kMaximumFadeSeconds, 0.0f) *
+    1000.0f));
+}
+
 struct Sound
 {
   std::uint32_t generation = 0;
@@ -30,6 +38,8 @@ struct Sound
 struct Voice
 {
   bool initialized = false;
+  // Looping and not being stopped: replaced only when every voice is.
+  bool looping = false;
   std::uint32_t sound = 0;
   std::uint64_t order = 0;
   ma_audio_buffer_ref source{};
@@ -82,22 +92,28 @@ struct AudioDevice::State
       ma_audio_buffer_ref_uninit(&voice.source);
       voice.initialized = false;
     }
+    voice.looping = false;
   }
-  // A finished voice, else the oldest one, which is cut off.
+  // A finished voice, else the oldest one that is not looping (the oldest of
+  // all when every voice loops), which is cut off. Music outlives effects.
   Voice& claimVoice()
   {
-    Voice* oldest = &voices.front();
+    Voice* oldest = nullptr;
+    Voice* oldestLoop = &voices.front();
     for (Voice& voice : voices) {
       if (finished(voice)) {
         release(voice);
         return voice;
       }
-      if (voice.order < oldest->order) {
+      if (voice.looping) {
+        oldestLoop = voice.order < oldestLoop->order ? &voice : oldestLoop;
+      } else if (oldest == nullptr || voice.order < oldest->order) {
         oldest = &voice;
       }
     }
-    release(*oldest);
-    return *oldest;
+    Voice& replaced = oldest != nullptr ? *oldest : *oldestLoop;
+    release(replaced);
+    return replaced;
   }
 };
 
@@ -222,6 +238,7 @@ AudioDevice::play(SoundHandle handle, const SoundPlayback& playback)
     return false;
   }
   voice.initialized = true;
+  voice.looping = playback.loop;
   voice.sound = handle.slot;
   voice.order = m_state->nextOrder++;
   ma_sound_set_volume(&voice.node,
@@ -232,11 +249,52 @@ AudioDevice::play(SoundHandle handle, const SoundPlayback& playback)
                                SoundPlayback::kMinimumPitch,
                                SoundPlayback::kMaximumPitch,
                                1.0f));
+  ma_sound_set_looping(&voice.node, playback.loop ? MA_TRUE : MA_FALSE);
+  const ma_uint64 fade = fadeMilliseconds(playback.fadeInSeconds);
+  if (fade > 0) {
+    // The fader scales the voice's volume from silence to full.
+    ma_sound_set_fade_in_milliseconds(&voice.node, 0.0f, 1.0f, fade);
+  }
   if (ma_sound_start(&voice.node) != MA_SUCCESS) {
     m_state->release(voice);
     return false;
   }
   return true;
+}
+
+void
+AudioDevice::stop(SoundHandle handle, float fadeSeconds)
+{
+  if (m_state->find(handle) == nullptr) {
+    return;
+  }
+  const ma_uint64 fade = fadeMilliseconds(fadeSeconds);
+  for (Voice& voice : m_state->voices) {
+    if (!voice.initialized || voice.sound != handle.slot) {
+      continue;
+    }
+    if (fade == 0 || State::finished(voice)) {
+      m_state->release(voice);
+      continue;
+    }
+    // The voice keeps its slot until the fade ends and it reads as finished.
+    voice.looping = false;
+    ma_sound_stop_with_fade_in_milliseconds(&voice.node, fade);
+  }
+}
+
+void
+AudioDevice::setVolume(SoundHandle handle, float volume)
+{
+  if (m_state->find(handle) == nullptr) {
+    return;
+  }
+  const float gain = clampedOr(volume, 0.0f, 1.0f, 1.0f);
+  for (Voice& voice : m_state->voices) {
+    if (voice.initialized && voice.sound == handle.slot) {
+      ma_sound_set_volume(&voice.node, gain);
+    }
+  }
 }
 
 void

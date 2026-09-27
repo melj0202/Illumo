@@ -1,8 +1,8 @@
 #include "SimulatorSettings.h"
 #include "CSimSounds.h"
 #include "CellContext.h"
-#include "SparseCellGrid.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include "SparseCellGrid.h"
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Rendering/UiScale.h>
 #include <algorithm>
@@ -67,14 +67,15 @@ SimulatorSettings::read(IEnvVars* environment, SimulatorConfiguration* output)
   output->fullscreen = environment->getVar("fullscreen").valueAsBool;
   // 0 is automatic; explicit factors outside the menu's range read as 1x.
   output->uiScale = UiScale::stored(environment->getVar("uiScale"));
-  if (output->uiScale != 0.0 &&
-      (output->uiScale < kMinimumUiScale || output->uiScale > kMaximumUiScale)) {
+  if (output->uiScale != 0.0 && (output->uiScale < kMinimumUiScale ||
+                                 output->uiScale > kMaximumUiScale)) {
     output->uiScale = 1.0;
   }
   output->msaa = msaa(environment);
   output->showInspector = environment->getVar("showInspector").valueAsBool;
   output->reducedUiMotion = environment->getVar("reducedUiMotion").valueAsBool;
   output->soundVolume = CSimSounds::volumeSetting(environment);
+  output->musicVolume = CSimSounds::musicVolumeSetting(environment);
 
   output->startPaused = flag(environment, "startPaused", true);
   output->ledCells =
@@ -87,8 +88,11 @@ SimulatorSettings::read(IEnvVars* environment, SimulatorConfiguration* output)
   output->zoomStep =
     number(environment, "zoomStep", 0.15, kMinimumZoomStep, kMaximumZoomStep);
   output->invertZoom = flag(environment, "invertZoom", false);
-  output->panSpeed = std::lround(number(
-    environment, "panSpeed", 600.0, 0.0, static_cast<double>(kMaximumPanSpeed)));
+  output->panSpeed = std::lround(number(environment,
+                                        "panSpeed",
+                                        600.0,
+                                        0.0,
+                                        static_cast<double>(kMaximumPanSpeed)));
   output->autosaveMinutes =
     std::lround(number(environment,
                        "autosaveMinutes",
@@ -160,6 +164,7 @@ SimulatorSettings::write(IEnvVars* environment,
                       UiScale::text(static_cast<float>(configuration.uiScale)));
   environment->setVar("msaa", configuration.msaa);
   environment->setVar("soundVolume", configuration.soundVolume);
+  environment->setVar("musicVolume", configuration.musicVolume);
   environment->setVar("startPaused", configuration.startPaused);
   environment->setVar("cellStyle",
                       std::string(configuration.ledCells ? "led" : "flat"));

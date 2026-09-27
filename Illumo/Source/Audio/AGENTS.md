@@ -1,7 +1,8 @@
 # Illumo audio subsystem guidance
 
-This directory holds sound effects (D-E28): `AudioDecoder.cpp` (clips from
-WAV, FLAC and MP3 bytes) and `AudioDevice.cpp` (the native `IAudio` mixer).
+This directory holds sound effects and looping music (D-E28, D-E32):
+`AudioDecoder.cpp` (clips from WAV, FLAC and MP3 bytes) and `AudioDevice.cpp`
+(the native `IAudio` mixer).
 Public contracts are `Illumo/Include/Illumo/Audio/*`. `AudioDecoder.cpp` also
 builds into the guest library `IllumoGuestRendering`.
 
@@ -27,12 +28,17 @@ builds into the guest library `IllumoGuestRendering`.
   before reusing it or freeing its sound's samples.
 - Keep clip and table bounds (`AudioClip::kMaximumSamples`,
   `IAudio::kMaximumSounds`, `IAudio::kMaximumVoices`) in step with the Audio
-  service decoder and the per-guest budget in `WasmGameServices`.
+  service decoder (`GuestAudioRequest::MaximumChunkSamples`, which must let a
+  chunk share a 16 MiB exchange) and the per-guest budget in
+  `WasmGameServices`.
+- Music is a looping voice over a whole clip, not a stream. A voice stopped
+  with a fade keeps its slot until the fade ends; looping voices are the last
+  replaced.
 
 ## Verification
 
-`Illumo.Audio.*` (decoder and a headless `AudioDevice`, no sound card
-needed), `Illumo.Wasm.AudioServiceDecoder`, `Illumo.Wasm.AudioServices`,
+`Illumo.Audio.*` (decoder and a headless `AudioDevice`, including loops and
+fades, no sound card needed), `Illumo.Wasm.AudioServiceDecoder`, `Illumo.Wasm.AudioServices`,
 `Illumo.Wasm.GuestAudio` and `IllumoGame.Wasm.GamePackageAudio`. Real output
 needs a manual smoke on a machine with a device. Record:
 `docs/audio-subsystem-plan.md`.

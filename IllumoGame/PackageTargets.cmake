@@ -4,14 +4,20 @@ set(_game "${CMAKE_CURRENT_LIST_DIR}")
 
 # The package: manifest, product module, simulation lane worker and packaged
 # catalogs.
-# Sound effects ship as Sounds/<file>.wav. Their sources in IllumoGame/Assets
-# are not tracked in git, so a checkout without them builds a silent package.
+# Sound effects ship as Sounds/<file>.wav and music as Music/<file>.mp3. Their
+# sources in IllumoGame/Assets are not tracked in git, so a checkout without
+# them builds a silent package.
 set(_game_sounds)
 foreach(_sound canvas_enter canvas_exit canvas_mode_switch
     canvas_paintmenu_collapse canvas_paintmenu_expand csim_program_start
     ui_menu_back ui_menu_error ui_menu_hover ui_menu_select)
   if(EXISTS "${_game}/Assets/${_sound}.wav")
     list(APPEND _game_sounds "${_game}/Assets/${_sound}.wav" "Sounds/${_sound}.wav")
+  endif()
+endforeach()
+foreach(_track music_main_menu)
+  if(EXISTS "${_game}/Assets/${_track}.mp3")
+    list(APPEND _game_sounds "${_game}/Assets/${_track}.mp3" "Music/${_track}.mp3")
   endif()
 endforeach()
 illumo_stage_app(IllumoGamePackage game

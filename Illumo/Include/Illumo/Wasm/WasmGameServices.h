@@ -66,9 +66,12 @@ public:
   // every audio request. Replacing it releases the guest's sounds first.
   // The output must outlive these services or be withdrawn with null.
   void setAudio(IAudio* audio);
-  // Most samples one guest may keep registered (64 MiB of float samples).
-  static constexpr std::size_t kMaximumGuestSamples = 16u * 1024u * 1024u;
+  // Most samples one guest may keep registered or arriving (128 MiB of float
+  // samples: two maximal clips).
+  static constexpr std::size_t kMaximumGuestSamples = 32u * 1024u * 1024u;
   std::size_t audioSounds() const { return m_sounds.size(); }
+  // Sounds whose chunks are still arriving.
+  std::size_t audioUploads() const { return m_uploads.size(); }
   // Budgets for compute children: the Job worker, created on its first job,
   // and `lanes` LaneJob workers, created when the guest asks for its lanes.
   static WasmLimits defaultWorkerLimits();
@@ -89,6 +92,9 @@ private:
   void completeAudio(std::uint64_t request,
                      GuestAudioRequest& audio,
                      GuestServices& results);
+  // Registers a whole clip whose samples the budget already counts; a refusal
+  // returns them to the budget.
+  bool registerAudioClip(std::uint32_t sound, AudioClip& clip);
   // Destroys every sound this guest registered and silences its voices.
   void releaseAudio();
   WasmRenderServices m_render;
@@ -117,6 +123,17 @@ private:
     std::size_t samples = 0;
   };
   std::map<std::uint32_t, AudioSound> m_sounds;
+  // A sound sent in chunks, registered with the output when the last lands.
+  // Its whole size is charged to the budget from its Create.
+  struct AudioUpload
+  {
+    std::uint32_t channels = 0;
+    std::uint32_t sampleRate = 0;
+    std::size_t total = 0;
+    std::vector<float> samples;
+  };
+  std::map<std::uint32_t, AudioUpload> m_uploads;
+  // Registered and arriving samples, bounded by kMaximumGuestSamples.
   std::size_t m_soundSamples = 0;
   bool m_masterVolumeChanged = false;
   std::deque<GuestServiceRecord> m_listenRequests;

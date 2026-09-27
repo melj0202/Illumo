@@ -261,6 +261,81 @@ testDeviceLifetimes()
   return counters.failures;
 }
 
+static int
+testDeviceLoops()
+{
+  TestCounters counters;
+  std::unique_ptr<AudioDevice> device = headlessDevice(counters);
+  if (!device) {
+    return counters.failures;
+  }
+  // A tenth of a second of tone; the mix runs at 48 kHz.
+  AudioClip clip;
+  clip.channels = 1;
+  clip.sampleRate = 48000;
+  clip.samples = makeTone(4800, 1, 48000);
+  const SoundHandle music = device->createSound(clip);
+  const SoundHandle effect = device->createSound(clip);
+  SoundPlayback looping;
+  looping.loop = true;
+  testTrue(counters, device->play(music, looping), "a looping voice starts");
+  renderedLevel(*device, 48000 / 2);
+  testTrue(counters,
+           device->activeVoices() == 1 && renderedLevel(*device, 480) > 0.05,
+           "a looping voice plays on past the end of its sound");
+
+  device->setVolume(music, 0.0f);
+  testTrue(counters,
+           renderedLevel(*device, 480) == 0.0,
+           "setVolume silences the sound's playing voices");
+  device->setVolume(music, 1.0f);
+  device->setVolume(effect, 0.0f);
+  testTrue(counters,
+           renderedLevel(*device, 480) > 0.05,
+           "another sound's volume leaves it alone");
+
+  // Every other voice is taken by effects; more effects replace effects.
+  for (std::uint32_t index = 0; index < IAudio::kMaximumVoices + 4; ++index) {
+    device->play(effect);
+  }
+  device->setVolume(effect, 0.0f);
+  testTrue(counters,
+           device->activeVoices() == IAudio::kMaximumVoices &&
+             renderedLevel(*device, 480) > 0.05,
+           "a looping voice outlives replaced effect voices");
+
+  device->stop(music, 0.05f);
+  testTrue(counters,
+           renderedLevel(*device, 240) > 0.0,
+           "a fading stop is still heard as it begins");
+  renderedLevel(*device, 48000 / 10);
+  testTrue(counters,
+           renderedLevel(*device, 480) == 0.0,
+           "the voice is silent once its fade ends");
+  device->stopAll();
+
+  SoundPlayback fading = looping;
+  fading.fadeInSeconds = 1.0f;
+  device->play(music, fading);
+  const double opening = renderedLevel(*device, 480);
+  renderedLevel(*device, 48000);
+  const double settled = renderedLevel(*device, 480);
+  testTrue(counters,
+           opening < settled * 0.1 && settled > 0.05,
+           "a fade-in rises from near silence to full level");
+  device->stop(music);
+  testEqInt(counters,
+            static_cast<int>(device->activeVoices()),
+            0,
+            "stop without a fade ends the voice at once");
+  device->stop(SoundHandle{ 99, 1 });
+  device->setVolume(SoundHandle{ 99, 1 }, 0.5f);
+  testTrue(counters,
+           device->soundCount() == 2,
+           "stale handles are ignored by stop and setVolume");
+  return counters.failures;
+}
+
 void
 registerAudioTests(IllumoTestRegistry& registry)
 {
@@ -272,4 +347,5 @@ registerAudioTests(IllumoTestRegistry& registry)
   registry.add("Illumo.Audio.DeviceMixes", []() { return testDeviceMixes(); });
   registry.add("Illumo.Audio.DeviceLifetimes",
                []() { return testDeviceLifetimes(); });
+  registry.add("Illumo.Audio.DeviceLoops", []() { return testDeviceLoops(); });
 }

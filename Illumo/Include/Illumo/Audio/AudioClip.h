@@ -7,14 +7,15 @@
 #include <vector>
 
 // Decoded sound: interleaved 32-bit float samples at the source's own rate.
-// Clips are bounded so one always fits a single guest service record.
+// Guests send a clip larger than one service record in several (GuestAudio).
 struct AudioClip
 {
   static constexpr std::uint32_t kMaximumChannels = 2;
   static constexpr std::uint32_t kMinimumSampleRate = 8000;
   static constexpr std::uint32_t kMaximumSampleRate = 192000;
-  // 12 MiB of samples: about 34 s of 44.1 kHz stereo.
-  static constexpr std::size_t kMaximumSamples = 3u * 1024u * 1024u;
+  // 64 MiB of samples: about 3 min 10 s of 44.1 kHz stereo, room for a
+  // looping music track.
+  static constexpr std::size_t kMaximumSamples = 16u * 1024u * 1024u;
 
   std::uint32_t channels = 0;
   std::uint32_t sampleRate = 0;

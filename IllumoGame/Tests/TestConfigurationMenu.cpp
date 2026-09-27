@@ -5,9 +5,9 @@
 #include "Rulesets/RuleSetRegistry.h"
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -141,7 +141,8 @@ template<typename Visit>
 static void
 forEachText(ConfigurationMenu& menu, Visit&& visit)
 {
-  for (std::size_t layer = 0u; layer < ConfigurationMenu::layerCountForTesting();
+  for (std::size_t layer = 0u;
+       layer < ConfigurationMenu::layerCountForTesting();
        ++layer) {
     GameVisual& visual = menu.layerForTesting(layer);
     for (std::size_t index = 0u; index < visual.textCount(); ++index) {
@@ -155,7 +156,8 @@ forEachText(ConfigurationMenu& menu, Visit&& visit)
 static bool
 hasText(ConfigurationMenu& menu, const std::string& content)
 {
-  for (std::size_t layer = 0u; layer < ConfigurationMenu::layerCountForTesting();
+  for (std::size_t layer = 0u;
+       layer < ConfigurationMenu::layerCountForTesting();
        ++layer) {
     if (hasText(menu.layerForTesting(layer), content)) {
       return true;
@@ -635,8 +637,9 @@ testConfigurationMenuTokensAtReleaseWindowSize()
            foundReadableLabel,
            "setting labels use opaque high-contrast text at readable size");
   testTrue(g,
-           hasText(fixture.menu, "SIMULATION") && hasText(fixture.menu, "VIDEO") &&
-             hasText(fixture.menu, "AUDIO") && hasText(fixture.menu, "GENERAL"),
+           hasText(fixture.menu, "SIMULATION") &&
+             hasText(fixture.menu, "VIDEO") && hasText(fixture.menu, "AUDIO") &&
+             hasText(fixture.menu, "GENERAL"),
            "every section tab is labelled");
   testTrue(g,
            hasText(fixture.menu, "Conway's Game of Life"),
@@ -646,8 +649,8 @@ testConfigurationMenuTokensAtReleaseWindowSize()
              hasText(fixture.menu, "section"),
            "keyboard controls are shown as keycap hints");
   testTrue(g,
-           hasText(fixture.menu, "Infinite") && hasText(fixture.menu, "30 TPS") &&
-             hasText(fixture.menu, "1.5x"),
+           hasText(fixture.menu, "Infinite") &&
+             hasText(fixture.menu, "30 TPS") && hasText(fixture.menu, "1.5x"),
            "sliders show friendly readouts");
   testTrue(g,
            !hasText(fixture.menu, "|"),
@@ -664,8 +667,9 @@ testConfigurationMenuTokensAtReleaseWindowSize()
            hasSwitchBeside(visual, "Start paused") &&
              !hasSwitchBeside(visual, "Speed multiplier"),
            "switches render only beside boolean settings");
-  testTrue(
-    g, !hasText(fixture.menu, "Vertical sync"), "other tabs' settings are not drawn");
+  testTrue(g,
+           !hasText(fixture.menu, "Vertical sync"),
+           "other tabs' settings are not drawn");
   const std::array<float, 4> exitButton =
     fixture.menu.getFooterButtonBoundsForTesting(
       ConfigurationMenu::kExitButton);
@@ -712,8 +716,9 @@ testConfigurationMenuTokensAtReleaseWindowSize()
   fixture.type('9');
   fixture.menu.update(&fixture.input);
   fixture.render(scene);
-  testTrue(
-    g, hasText(fixture.menu, "|"), "typing into a slider shows a visible text caret");
+  testTrue(g,
+           hasText(fixture.menu, "|"),
+           "typing into a slider shows a visible text caret");
   const float caretGap = textCaretGap(visual, "9");
   testTrue(g,
            caretGap >= 0.0f && caretGap <= 2.0f,
@@ -972,12 +977,13 @@ testSoundVolumeAndCues()
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == 0,
            "a selection that cannot move is silent");
-  fixture.press(KeyCode::Down);
+  // Sound volume, music volume, the footer's Apply, Discard, then back up.
+  fixture.pressRepeated(KeyCode::Down, 2);
   fixture.press(KeyCode::Right);
-  fixture.press(KeyCode::Up);
+  fixture.pressRepeated(KeyCode::Up, 2);
   fixture.menu.update(&fixture.input);
   testTrue(g,
-           CSimSounds::playCount(CSimSound::MenuHover) == 3 &&
+           CSimSounds::playCount(CSimSound::MenuHover) == 5 &&
              fixture.menu.getSelectedRowForTesting() == 0,
            "every selection change, footer included, plays the hover cue");
 
@@ -1003,6 +1009,27 @@ testSoundVolumeAndCues()
   fixture.menu.update(&fixture.input);
   testTrue(g, fixture.read().soundVolume == 30, "steps build the draft volume");
 
+  const std::uint64_t selectsBefore =
+    CSimSounds::playCount(CSimSound::MenuSelect);
+  fixture.press(KeyCode::Down);
+  fixture.pressRepeated(KeyCode::Left, 3);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.menu.getSelectedRowForTesting() ==
+               ConfigurationMenu::rowOfSettingForTesting(
+                 ConfigurationSetting::MusicVolume) &&
+             fixture.read().musicVolume == initial.musicVolume - 15 &&
+             fixture.read().soundVolume == 30 &&
+             CSimSounds::playCount(CSimSound::MenuSelect) == selectsBefore + 3,
+           "the music volume row below it steps its own draft by 5");
+  fixture.pressRepeated(KeyCode::Left,
+                        static_cast<int>(fixture.read().musicVolume / 5));
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.read().musicVolume == 0 &&
+             CSimSounds::playCount(CSimSound::MenuError) == 2,
+           "the music volume steps down to off");
+
   fixture.menu.setError("Settings could not be applied.");
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuError) == 3,
@@ -1015,10 +1042,11 @@ testSoundVolumeAndCues()
            "discarding plays the back cue");
 
   initial.soundVolume = 250;
+  initial.musicVolume = -20;
   fixture.menu.open(initial);
   testTrue(g,
-           fixture.read().soundVolume == 100,
-           "an out-of-range stored volume opens clamped");
+           fixture.read().soundVolume == 100 && fixture.read().musicVolume == 0,
+           "out-of-range stored volumes open clamped");
   CSimSounds::resetCounts();
 }
 

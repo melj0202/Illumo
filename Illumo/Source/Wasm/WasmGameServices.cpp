@@ -332,6 +332,7 @@ WasmGameServices::setAudio(IAudio* audio)
 void
 WasmGameServices::releaseAudio()
 {
+  m_uploads.clear();
   if (m_audio == nullptr) {
     m_sounds.clear();
     m_soundSamples = 0;
@@ -351,6 +352,19 @@ WasmGameServices::releaseAudio()
   m_soundSamples = 0;
 }
 
+bool
+WasmGameServices::registerAudioClip(std::uint32_t sound, AudioClip& clip)
+{
+  const std::size_t samples = clip.samples.size();
+  const SoundHandle handle = m_audio->createSound(clip);
+  if (!handle.isValid()) {
+    m_soundSamples -= samples;
+    return false;
+  }
+  m_sounds.emplace(sound, AudioSound{ handle, samples });
+  return true;
+}
+
 void
 WasmGameServices::completeAudio(std::uint64_t request,
                                 GuestAudioRequest& audio,
@@ -362,20 +376,44 @@ WasmGameServices::completeAudio(std::uint64_t request,
   if (m_audio != nullptr && hasGrant(m_grants, GuestCapability::Audio)) {
     const std::map<std::uint32_t, AudioSound>::iterator found =
       m_sounds.find(audio.sound);
+    const std::map<std::uint32_t, AudioUpload>::iterator upload =
+      m_uploads.find(audio.sound);
     switch (audio.action) {
       case GuestAudioAction::Create:
-        if (found == m_sounds.end() &&
-            audio.samples.size() <= kMaximumGuestSamples - m_soundSamples) {
-          AudioClip clip;
-          clip.channels = audio.channels;
-          clip.sampleRate = audio.sampleRate;
-          clip.samples = std::move(audio.samples);
-          const SoundHandle handle = m_audio->createSound(clip);
-          if (handle.isValid()) {
-            m_sounds.emplace(audio.sound,
-                             AudioSound{ handle, clip.samples.size() });
-            m_soundSamples += clip.samples.size();
+        if (found == m_sounds.end() && upload == m_uploads.end() &&
+            audio.total <= kMaximumGuestSamples - m_soundSamples) {
+          m_soundSamples += audio.total;
+          if (audio.samples.size() == audio.total) {
+            AudioClip clip;
+            clip.channels = audio.channels;
+            clip.sampleRate = audio.sampleRate;
+            clip.samples = std::move(audio.samples);
+            accepted = registerAudioClip(audio.sound, clip);
+          } else {
+            m_uploads.emplace(audio.sound,
+                              AudioUpload{ audio.channels,
+                                           audio.sampleRate,
+                                           audio.total,
+                                           std::move(audio.samples) });
             accepted = true;
+          }
+        }
+        break;
+      case GuestAudioAction::Append:
+        if (upload != m_uploads.end() &&
+            audio.samples.size() <=
+              upload->second.total - upload->second.samples.size()) {
+          AudioUpload& arriving = upload->second;
+          arriving.samples.insert(
+            arriving.samples.end(), audio.samples.begin(), audio.samples.end());
+          accepted = true;
+          if (arriving.samples.size() == arriving.total) {
+            AudioClip clip;
+            clip.channels = arriving.channels;
+            clip.sampleRate = arriving.sampleRate;
+            clip.samples = std::move(arriving.samples);
+            m_uploads.erase(upload);
+            accepted = registerAudioClip(audio.sound, clip);
           }
         }
         break;
@@ -385,12 +423,33 @@ WasmGameServices::completeAudio(std::uint64_t request,
           m_soundSamples -= found->second.samples;
           m_sounds.erase(found);
           accepted = true;
+        } else if (upload != m_uploads.end()) {
+          m_soundSamples -= upload->second.total;
+          m_uploads.erase(upload);
+          accepted = true;
         }
         break;
       case GuestAudioAction::Play:
         if (found != m_sounds.end()) {
-          accepted = m_audio->play(found->second.handle,
-                                   { audio.volume, audio.pan, audio.pitch });
+          SoundPlayback playback;
+          playback.volume = audio.volume;
+          playback.pan = audio.pan;
+          playback.pitch = audio.pitch;
+          playback.loop = (audio.flags & GuestAudioRequest::LoopFlag) != 0;
+          playback.fadeInSeconds = audio.fade;
+          accepted = m_audio->play(found->second.handle, playback);
+        }
+        break;
+      case GuestAudioAction::Stop:
+        if (found != m_sounds.end()) {
+          m_audio->stop(found->second.handle, audio.fade);
+          accepted = true;
+        }
+        break;
+      case GuestAudioAction::SetSoundVolume:
+        if (found != m_sounds.end()) {
+          m_audio->setVolume(found->second.handle, audio.volume);
+          accepted = true;
         }
         break;
       case GuestAudioAction::StopAll:

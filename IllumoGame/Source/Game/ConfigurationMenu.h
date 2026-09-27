@@ -32,8 +32,9 @@ struct SimulatorConfiguration
   bool reducedUiMotion = false;
   // CSim draws its own pointer and hides the system cursor.
   bool softwareCursor = true;
-  // Sound effect volume, 0 (off) to 100 percent.
+  // Sound effect and music volumes, 0 (off) to 100 percent.
   long soundVolume = 80;
+  long musicVolume = 80;
   // New and loaded canvases open paused in EDIT; off starts them running.
   bool startPaused = true;
   // Up-close cell look: LED keys or flat pixels, glow 0-2, grid lines.
@@ -97,6 +98,7 @@ enum class ConfigurationSetting
   ShowFps,
   ShowMemory,
   SoundVolume,
+  MusicVolume,
   ZoomStep,
   InvertZoom,
   PanSpeed,
@@ -257,6 +259,7 @@ private:
   bool showInspector = false;
   bool reducedUiMotion = false;
   long soundVolume = 80;
+  long musicVolume = 80;
   bool startPaused = true;
   bool ledCells = true;
   bool gridLines = false;
@@ -301,6 +304,12 @@ private:
   std::string* sliderText(ConfigurationSetting setting);
   const std::string* sliderText(ConfigurationSetting setting) const;
   bool sliderValue(ConfigurationSetting setting, double* value) const;
+  // The draft behind a volume slider (sound or music), or nullptr.
+  long* volumeSlot(ConfigurationSetting setting);
+  const long* volumeSlot(ConfigurationSetting setting) const;
+  // Lets the player hear a volume draft: a cue at the sound level, or the
+  // playing music at the music level.
+  void previewVolume(ConfigurationSetting setting) const;
   float sliderFraction(ConfigurationSetting setting) const;
   bool setSliderStop(ConfigurationSetting setting, int stop);
   bool stepSlider(ConfigurationSetting setting, int direction);

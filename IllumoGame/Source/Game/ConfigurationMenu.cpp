@@ -51,7 +51,8 @@ static const ConfigurationSetting kVideoRows[] = {
   ConfigurationSetting::ShowFps,    ConfigurationSetting::ShowMemory
 };
 static const ConfigurationSetting kAudioRows[] = {
-  ConfigurationSetting::SoundVolume
+  ConfigurationSetting::SoundVolume,
+  ConfigurationSetting::MusicVolume
 };
 static const ConfigurationSetting kControlsRows[] = {
   ConfigurationSetting::ZoomStep,
@@ -90,6 +91,7 @@ static const char* const kSettingLabels[] = { "Cell family",
                                               "FPS counter",
                                               "Memory readout",
                                               "Sound volume",
+                                              "Music volume",
                                               "Zoom sensitivity",
                                               "Invert zoom",
                                               "Keyboard pan speed",
@@ -120,6 +122,7 @@ static const char* const kSettingHelp[] = {
   "Show frames per second and frame time in the top-left corner.",
   "Show the game's memory use in the top-left corner.",
   "Sound effect volume, off to 100%; each step previews the new level.",
+  "Music volume, off to 100%; playing music follows each step.",
   "How far one mouse-wheel notch zooms the canvas.",
   "Reverse the mouse-wheel zoom direction.",
   "Arrow keys pan the canvas at this speed; far left turns them off.",
@@ -214,6 +217,7 @@ sliderStops(ConfigurationSetting setting)
     case ConfigurationSetting::FpsCap:
       return std::span<const double>(kFpsStops);
     case ConfigurationSetting::SoundVolume:
+    case ConfigurationSetting::MusicVolume:
       return std::span<const double>(kVolumeStops);
     case ConfigurationSetting::UiScale:
       return std::span<const double>(kUiScaleStops);
@@ -418,6 +422,7 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
   showInspector = current.showInspector;
   reducedUiMotion = current.reducedUiMotion;
   soundVolume = std::clamp(current.soundVolume, 0L, 100L);
+  musicVolume = std::clamp(current.musicVolume, 0L, 100L);
   startPaused = current.startPaused;
   ledCells = current.ledCells;
   gridLines = current.gridLines;
@@ -517,6 +522,7 @@ ConfigurationMenu::controlKind(ConfigurationSetting setting)
     case ConfigurationSetting::Fade:
     case ConfigurationSetting::FpsCap:
     case ConfigurationSetting::SoundVolume:
+    case ConfigurationSetting::MusicVolume:
     case ConfigurationSetting::CellGlow:
     case ConfigurationSetting::ZoomStep:
     case ConfigurationSetting::PanSpeed:
@@ -659,7 +665,8 @@ ConfigurationMenu::sliderValue(ConfigurationSetting setting,
       *value = parsedDouble;
       return true;
     case ConfigurationSetting::SoundVolume:
-      *value = static_cast<double>(soundVolume);
+    case ConfigurationSetting::MusicVolume:
+      *value = static_cast<double>(*volumeSlot(setting));
       return true;
     default: {
       const double* number = sliderNumber(setting);
@@ -729,12 +736,12 @@ ConfigurationMenu::setSliderStop(ConfigurationSetting setting, int stop)
   }
   const double value = stops[static_cast<std::size_t>(
     std::clamp(stop, 0, static_cast<int>(stops.size()) - 1))];
-  if (setting == ConfigurationSetting::SoundVolume) {
+  if (long* volume = volumeSlot(setting); volume != nullptr) {
     const long next = static_cast<long>(value);
-    if (next == soundVolume) {
+    if (next == *volume) {
       return false;
     }
-    soundVolume = next;
+    *volume = next;
     return true;
   }
   double* number = sliderNumber(setting);
@@ -818,7 +825,10 @@ ConfigurationMenu::sliderReadout(ConfigurationSetting setting) const
     case ConfigurationSetting::FpsCap:
       return value == 0.0 ? "Uncapped" : *text + " FPS";
     case ConfigurationSetting::SoundVolume:
-      return soundVolume == 0 ? "Off" : std::to_string(soundVolume) + "%";
+    case ConfigurationSetting::MusicVolume: {
+      const long volume = *volumeSlot(setting);
+      return volume == 0 ? "Off" : std::to_string(volume) + "%";
+    }
     case ConfigurationSetting::UiScale: {
       if (uiScale != 0.0) {
         return decimalText(uiScale) + "x";
@@ -1112,6 +1122,43 @@ ConfigurationMenu::close()
   dragSetting = ConfigurationSetting::Count;
   pointer.reset(false);
   setVisible(false);
+  // A music preview ends with the menu: the stored level (just applied, or
+  // unchanged on discard) comes back.
+  CSimSounds::refreshMusicVolume();
+}
+
+long*
+ConfigurationMenu::volumeSlot(ConfigurationSetting setting)
+{
+  if (setting == ConfigurationSetting::SoundVolume) {
+    return &soundVolume;
+  }
+  if (setting == ConfigurationSetting::MusicVolume) {
+    return &musicVolume;
+  }
+  return nullptr;
+}
+
+const long*
+ConfigurationMenu::volumeSlot(ConfigurationSetting setting) const
+{
+  if (setting == ConfigurationSetting::SoundVolume) {
+    return &soundVolume;
+  }
+  if (setting == ConfigurationSetting::MusicVolume) {
+    return &musicVolume;
+  }
+  return nullptr;
+}
+
+void
+ConfigurationMenu::previewVolume(ConfigurationSetting setting) const
+{
+  if (setting == ConfigurationSetting::SoundVolume) {
+    CSimSounds::playAt(CSimSound::MenuSelect, static_cast<int>(soundVolume));
+  } else if (setting == ConfigurationSetting::MusicVolume) {
+    CSimSounds::previewMusicVolume(static_cast<int>(musicVolume));
+  }
 }
 
 void
@@ -1344,9 +1391,12 @@ ConfigurationMenu::cycleSelected(int direction)
       CSimSounds::play(CSimSound::MenuError);
     } else if (setting == ConfigurationSetting::SoundVolume) {
       // Previewed at the level just chosen, before it is applied.
-      CSimSounds::playAt(CSimSound::MenuSelect, static_cast<int>(soundVolume));
+      previewVolume(setting);
       animator.triggerValuePulse(direction);
     } else {
+      if (setting == ConfigurationSetting::MusicVolume) {
+        previewVolume(setting);
+      }
       changed = true;
     }
   } else if (bool* toggle = toggleSlot(setting); toggle != nullptr) {
@@ -1414,9 +1464,7 @@ ConfigurationMenu::dragSliderTo(ConfigurationSetting setting, float pointerX)
   dragChanged = true;
   animator.triggerValuePulse();
   errorMessage.clear();
-  if (setting == ConfigurationSetting::SoundVolume) {
-    CSimSounds::playAt(CSimSound::MenuSelect, static_cast<int>(soundVolume));
-  }
+  previewVolume(setting);
   return true;
 }
 
@@ -1661,6 +1709,7 @@ ConfigurationMenu::readConfiguration(SimulatorConfiguration* configuration,
   parsed.uiScale = uiScale;
   parsed.msaa = msaa;
   parsed.soundVolume = soundVolume;
+  parsed.musicVolume = musicVolume;
   parsed.startPaused = startPaused;
   parsed.ledCells = ledCells;
   parsed.cellGlow = cellGlow;
@@ -2338,21 +2387,21 @@ ConfigurationMenu::rebuildVisual()
     UiTheme::fade(UiTheme::accentViolet(), 0.8f), panelOpacity);
   GameVisual& rule = layers[kTabLayer];
   rule.addGradientRect(panelX + 20.0f,
-                         animatedFirstRowY - 5.0f,
-                         ruleWidth * 0.7f,
-                         2.0f,
-                         ruleCyan,
-                         ruleViolet,
-                         ruleViolet,
-                         ruleCyan);
+                       animatedFirstRowY - 5.0f,
+                       ruleWidth * 0.7f,
+                       2.0f,
+                       ruleCyan,
+                       ruleViolet,
+                       ruleViolet,
+                       ruleCyan);
   rule.addGradientRect(panelX + 20.0f + ruleWidth * 0.7f,
-                         animatedFirstRowY - 5.0f,
-                         ruleWidth * 0.3f,
-                         2.0f,
-                         ruleViolet,
-                         UiTheme::transparentOf(ruleViolet),
-                         UiTheme::transparentOf(ruleViolet),
-                         ruleViolet);
+                       animatedFirstRowY - 5.0f,
+                       ruleWidth * 0.3f,
+                       2.0f,
+                       ruleViolet,
+                       UiTheme::transparentOf(ruleViolet),
+                       UiTheme::transparentOf(ruleViolet),
+                       ruleViolet);
 
   drawRows(panelOpacity, breathe);
   drawFooter(panelOpacity, breathe);

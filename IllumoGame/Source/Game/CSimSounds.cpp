@@ -30,12 +30,22 @@ constexpr std::array<Cue, kCueCount> kCues = { {
   { "Sounds/canvas_paintmenu_collapse.wav", 0.6f },
 } };
 
+constexpr std::size_t kTrackCount = static_cast<std::size_t>(CSimMusic::Count);
+
+// Music sits under the cues so menu sounds stay clear over it.
+constexpr std::array<Cue, kTrackCount> kTracks = { {
+  { "Music/music_main_menu.mp3", 0.45f },
+} };
+
 struct Bank
 {
   IAudio* audio = nullptr;
   IEnvVars* settings = nullptr;
   std::array<SoundHandle, kCueCount> sounds{};
+  std::array<SoundHandle, kTrackCount> music{};
   std::array<std::uint64_t, kCueCount> counts{};
+  // The track asked for and not stopped; kTrackCount for none.
+  std::size_t track = kTrackCount;
 };
 
 Bank&
@@ -50,6 +60,60 @@ indexOf(CSimSound cue)
 {
   return std::min(static_cast<std::size_t>(cue), kCueCount - 1);
 }
+
+std::size_t
+indexOf(CSimMusic track)
+{
+  return std::min(static_cast<std::size_t>(track), kTrackCount - 1);
+}
+
+SoundHandle
+load(IAudio& audio,
+     const CSimSounds::ReadFile& read,
+     const std::string& path,
+     std::vector<std::string>& problems)
+{
+  std::vector<std::byte> bytes;
+  if (!read || !read(path, bytes)) {
+    problems.push_back(path + " is missing");
+    return {};
+  }
+  AudioClip clip;
+  std::string error;
+  if (!AudioDecoder::decode(bytes, clip, error)) {
+    problems.push_back(path + ": " + error);
+    return {};
+  }
+  const SoundHandle sound = audio.createSound(clip);
+  if (!sound.isValid()) {
+    problems.push_back(path + " could not be registered");
+  }
+  return sound;
+}
+
+float
+musicVolume(const Bank& state, int volumePercent)
+{
+  return kTracks[state.track].level *
+         static_cast<float>(std::clamp(volumePercent, 0, 100)) / 100.0f;
+}
+
+int
+percentSetting(IEnvVars* settings, const char* name)
+{
+  if (settings == nullptr) {
+    return CSimSounds::kDefaultVolume;
+  }
+  const std::string text = settings->getVar(name).value;
+  int value = 0;
+  const char* end = text.data() + text.size();
+  const std::from_chars_result result =
+    std::from_chars(text.data(), end, value);
+  if (text.empty() || result.ec != std::errc() || result.ptr != end) {
+    return CSimSounds::kDefaultVolume;
+  }
+  return std::clamp(value, 0, 100);
+}
 } // namespace
 
 const char*
@@ -58,12 +122,21 @@ CSimSounds::fileName(CSimSound cue)
   return kCues[indexOf(cue)].file;
 }
 
+const char*
+CSimSounds::fileName(CSimMusic track)
+{
+  return kTracks[indexOf(track)].file;
+}
+
 std::vector<std::string>
 CSimSounds::fileNames()
 {
   std::vector<std::string> names;
   for (const Cue& cue : kCues) {
     names.emplace_back(cue.file);
+  }
+  for (const Cue& track : kTracks) {
+    names.emplace_back(track.file);
   }
   return names;
 }
@@ -82,22 +155,10 @@ CSimSounds::install(IAudio* audio,
   state.audio = audio;
   state.settings = settings;
   for (std::size_t index = 0; index < kCueCount; ++index) {
-    const std::string path = kCues[index].file;
-    std::vector<std::byte> bytes;
-    if (!read || !read(path, bytes)) {
-      problems.push_back(path + " is missing");
-      continue;
-    }
-    AudioClip clip;
-    std::string error;
-    if (!AudioDecoder::decode(bytes, clip, error)) {
-      problems.push_back(path + ": " + error);
-      continue;
-    }
-    state.sounds[index] = audio->createSound(clip);
-    if (!state.sounds[index].isValid()) {
-      problems.push_back(path + " could not be registered");
-    }
+    state.sounds[index] = load(*audio, read, kCues[index].file, problems);
+  }
+  for (std::size_t index = 0; index < kTrackCount; ++index) {
+    state.music[index] = load(*audio, read, kTracks[index].file, problems);
   }
 }
 
@@ -110,9 +171,14 @@ CSimSounds::uninstall()
       state.audio->destroySound(sound);
       sound = {};
     }
+    for (SoundHandle& sound : state.music) {
+      state.audio->destroySound(sound);
+      sound = {};
+    }
   }
   state.audio = nullptr;
   state.settings = nullptr;
+  state.track = kTrackCount;
 }
 
 bool
@@ -142,21 +208,72 @@ CSimSounds::playAt(CSimSound cue, int volumePercent)
   state.audio->play(state.sounds[index], playback);
 }
 
+void
+CSimSounds::playMusic(CSimMusic track)
+{
+  Bank& state = bank();
+  const std::size_t index = indexOf(track);
+  if (state.track == index) {
+    return;
+  }
+  stopMusic();
+  state.track = index;
+  if (state.audio == nullptr || !state.music[index].isValid()) {
+    return;
+  }
+  // Started even at volume 0, so raising musicVolume later brings it in.
+  SoundPlayback playback;
+  playback.volume = musicVolume(state, musicVolumeSetting(state.settings));
+  playback.loop = true;
+  playback.fadeInSeconds = kMusicFadeInSeconds;
+  state.audio->play(state.music[index], playback);
+}
+
+void
+CSimSounds::stopMusic()
+{
+  Bank& state = bank();
+  if (state.track == kTrackCount) {
+    return;
+  }
+  if (state.audio != nullptr) {
+    state.audio->stop(state.music[state.track], kMusicFadeOutSeconds);
+  }
+  state.track = kTrackCount;
+}
+
+void
+CSimSounds::refreshMusicVolume()
+{
+  previewMusicVolume(musicVolumeSetting(bank().settings));
+}
+
+void
+CSimSounds::previewMusicVolume(int volumePercent)
+{
+  const Bank& state = bank();
+  if (state.track != kTrackCount && state.audio != nullptr) {
+    state.audio->setVolume(state.music[state.track],
+                           musicVolume(state, volumePercent));
+  }
+}
+
+bool
+CSimSounds::musicPlaying(CSimMusic track)
+{
+  return bank().track == indexOf(track);
+}
+
 int
 CSimSounds::volumeSetting(IEnvVars* settings)
 {
-  if (settings == nullptr) {
-    return kDefaultVolume;
-  }
-  const std::string text = settings->getVar("soundVolume").value;
-  int value = 0;
-  const char* end = text.data() + text.size();
-  const std::from_chars_result result =
-    std::from_chars(text.data(), end, value);
-  if (text.empty() || result.ec != std::errc() || result.ptr != end) {
-    return kDefaultVolume;
-  }
-  return std::clamp(value, 0, 100);
+  return percentSetting(settings, "soundVolume");
+}
+
+int
+CSimSounds::musicVolumeSetting(IEnvVars* settings)
+{
+  return percentSetting(settings, "musicVolume");
 }
 
 std::uint64_t

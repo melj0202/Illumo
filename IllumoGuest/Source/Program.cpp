@@ -266,6 +266,7 @@ GuestProgram::update(const GuestInput& input)
   m_fonts.pump();
   m_console.pump();
   m_panels.pump();
+  m_audio.pump();
   pumpProduct();
   if (m_phase == Phase::Settings) {
     if (!m_settings.loaded() || !applyPackagedDefaults()) {

@@ -5,8 +5,8 @@
 #include "Wasm/CatalogBootstrap.h"
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Rendering/Camera.h>
-#include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/DrawList.h>
+#include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -17,6 +17,7 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Wasm/WasmFileServices.h>
 #include <Illumo/Wasm/WasmProgram.h>
+#include <IllumoGuest/Audio.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -315,9 +316,7 @@ execute(CommandRegistry& commands,
 // Opens canvas setup through the menu's console command, then selects and
 // confirms Create with the keyboard, as a player would.
 static bool
-enterCanvas(WasmProgram& game,
-            CommandRegistry& commands,
-            InputManager& input)
+enterCanvas(WasmProgram& game, CommandRegistry& commands, InputManager& input)
 {
   if (!pumpUntil(game, [&]() { return commands.HasCommand("play"); })) {
     return false;
@@ -1092,6 +1091,7 @@ gamePackageAudio()
        std::chrono::steady_clock::now().time_since_epoch().count()));
   WasmFileRoots files{ root / "package", root / "storage" };
   std::filesystem::create_directories(files.package / "Sounds");
+  std::filesystem::create_directories(files.package / "Music");
   std::filesystem::create_directories(files.storage);
   std::filesystem::copy_file(ILLUMO_FAMILIES, files.package / "families.json");
   std::filesystem::copy_file(ILLUMO_RULES, files.package / "rulesets.json");
@@ -1100,10 +1100,16 @@ gamePackageAudio()
                              files.package / "Scenes" / "render3d-test.ilsc");
   std::filesystem::copy_file(ILLUMO_GAME_DEFAULTS,
                              files.package / "envvars.json");
-  // Each cue's file has its own length, which identifies it on the host.
+  // Each cue's file has its own length, which identifies it on the host. The
+  // menu music is longer than one upload chunk, so it reaches the host in
+  // several Audio records over several exchanges.
   const std::vector<std::string> sounds = CSimSounds::fileNames();
+  const std::string music = CSimSounds::fileName(CSimMusic::MainMenu);
+  const std::size_t musicFrames =
+    GuestAudioRequest::MaximumChunkSamples + 4410u;
   for (std::size_t cue = 0; cue < sounds.size(); ++cue) {
-    const std::size_t frames = 100u * (cue + 1u);
+    const std::size_t frames =
+      sounds[cue] == music ? musicFrames : 100u * (cue + 1u);
     const std::vector<std::byte> wav =
       makeWav(makeTone(frames, 1, 22050), 1, 22050);
     std::ofstream(files.package / sounds[cue], std::ios::binary)
@@ -1146,6 +1152,33 @@ gamePackageAudio()
     }
     return count;
   };
+  // The music's registered clip, looping plays of it and fading stops of it.
+  const std::function<SoundHandle()> musicSound = [&]() {
+    for (std::size_t index = 0; index < audio.clips.size(); ++index) {
+      if (audio.clips[index].frames() == musicFrames) {
+        return SoundHandle{ static_cast<std::uint32_t>(index + 1u), 1u };
+      }
+    }
+    return SoundHandle{};
+  };
+  const std::function<std::size_t()> musicPlays = [&]() {
+    std::size_t count = 0;
+    for (const RecordingAudio::Play& play : audio.plays) {
+      count += play.sound == musicSound() && play.playback.loop &&
+                   play.playback.fadeInSeconds > 0.0f &&
+                   std::abs(play.playback.volume - 0.45f * 0.8f) < 1e-4f
+                 ? 1u
+                 : 0u;
+    }
+    return count;
+  };
+  const std::function<std::size_t()> musicStops = [&]() {
+    std::size_t count = 0;
+    for (const RecordingAudio::Stop& stop : audio.soundStops) {
+      count += stop.sound == musicSound() && stop.fadeSeconds > 0.0f ? 1u : 0u;
+    }
+    return count;
+  };
 
   WasmProgram game(
     readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(), {}, {}, files);
@@ -1154,9 +1187,16 @@ gamePackageAudio()
   testTrue(counters,
            pumpUntil(game, [&]() { return commands.HasCommand("play"); }),
            "the main menu comes up");
+  // The music's later chunks, and the plays queued behind them, follow in
+  // the next exchanges.
   testTrue(counters,
-           audio.clips.size() == sounds.size(),
-           "every packaged sound is decoded in the guest and registered");
+           pumpUntil(game, [&]() { return musicPlays() == 1; }),
+           "the main menu loops its music, fading in at the music level");
+  testTrue(counters,
+           audio.clips.size() == sounds.size() &&
+             audio.clips[musicSound().slot - 1u].samples.size() == musicFrames,
+           "every packaged sound is decoded in the guest and registered, the "
+           "music whole across several upload chunks");
   testTrue(counters,
            plays(CSimSound::ProgramStart) == 1,
            "the start cue plays with the first screen");
@@ -1179,6 +1219,9 @@ gamePackageAudio()
            enterCanvas(game, commands, input) &&
              plays(CSimSound::CanvasEnter) == 1,
            "entering the canvas plays the enter cue");
+  testTrue(counters,
+           musicStops() == 1 && musicPlays() == 1,
+           "leaving the main menu fades its music out");
   execute(commands, "run");
   frame = 0;
   pumpUntil(game, [&]() { return ++frame > 3; });
@@ -1190,6 +1233,11 @@ gamePackageAudio()
            pumpUntil(game, [&]() { return commands.HasCommand("play"); }) &&
              plays(CSimSound::CanvasExit) == 1,
            "returning to the menu plays the exit cue");
+  frame = 0;
+  pumpUntil(game, [&]() { return ++frame > 3; });
+  testTrue(counters,
+           musicPlays() == 2,
+           "the music starts over when the main menu returns");
   game.stop();
   testTrue(counters,
            audio.destroyed.size() == sounds.size() && audio.stops >= 1,

@@ -286,6 +286,16 @@ releases a guest's sounds when it retires. The guest SDK exposes the service
 as `GuestAudio`, published as `IllumoContext::audio`. See
 `docs/audio-subsystem-plan.md`.
 
+Note (2026-09-27): the Audio service moved to `GuestAudioRequest` version 2
+for looping music (D-E32); version 1 records are malformed. `Create` now
+declares the sound's whole sample count (at most 16 Mi) and carries its first
+chunk, `Append` carries the next (each chunk at most 2 Mi samples), and the
+host registers the sound when its last sample lands. `Play` gains a loop
+flag and a fade-in (0-10 s); `Stop` (with a fade-out) and `SetSoundVolume`
+act on one sound's voices. The per-guest budget is 128 MiB of samples,
+arriving sounds charged at their whole size. `GuestAudio` keeps requests the
+queue cannot take in an ordered backlog, pumped each update.
+
 Quotas cover linear memory, aggregate child-worker memory, tables/stack, compiled
 module input, instructions/time, pending requests, handles, upload bytes and GPU
 allocations. Game packages cannot raise ceilings themselves. Proposed starting

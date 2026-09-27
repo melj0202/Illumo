@@ -44,7 +44,10 @@ testSoundBank()
            "cues without an output are silent but counted");
 
   RecordingAudio audio;
+  // EnvVars persists beside the test runner, so start (and end) unset.
   EnvVars settings;
+  settings.setVar("soundVolume", "");
+  settings.setVar("musicVolume", "");
   std::vector<std::string> problems;
   CSimSounds::install(&audio, &settings, read, problems);
   // Every cue but the two broken above.
@@ -92,11 +95,64 @@ testSoundBank()
             CSimSounds::kDefaultVolume,
             "a malformed setting falls back to the default");
 
+  testEqInt(counters,
+            CSimSounds::musicVolumeSetting(&settings),
+            CSimSounds::kDefaultVolume,
+            "an unset music volume reads as the default");
+  settings.setVar("soundVolume", "0");
+  settings.setVar("musicVolume", "50");
+  const std::size_t playsBefore = audio.plays.size();
+  CSimSounds::playMusic(CSimMusic::MainMenu);
+  CSimSounds::playMusic(CSimMusic::MainMenu);
+  testTrue(counters,
+           audio.plays.size() == playsBefore + 1 &&
+             audio.plays.back().playback.loop &&
+             audio.plays.back().playback.fadeInSeconds ==
+               CSimSounds::kMusicFadeInSeconds &&
+             near(audio.plays.back().playback.volume, 0.45f * 0.5f) &&
+             CSimSounds::musicPlaying(CSimMusic::MainMenu),
+           "menu music loops once at its level scaled by musicVolume alone, "
+           "fading in, however often it is asked for");
+  const SoundHandle track = audio.plays.back().sound;
+  settings.setVar("musicVolume", "100");
+  CSimSounds::refreshMusicVolume();
+  CSimSounds::previewMusicVolume(20);
+  CSimSounds::refreshMusicVolume();
+  testTrue(counters,
+           audio.volumes.size() == 3 && audio.volumes[0].sound == track &&
+             near(audio.volumes[0].volume, 0.45f) &&
+             near(audio.volumes[1].volume, 0.45f * 0.2f) &&
+             near(audio.volumes[2].volume, 0.45f),
+           "a changed musicVolume and a preview reach the playing music, and "
+           "a refresh ends the preview");
+  settings.setVar("musicVolume", "130");
+  testEqInt(counters,
+            CSimSounds::musicVolumeSetting(&settings),
+            100,
+            "music volume settings clamp to 100");
+  CSimSounds::stopMusic();
+  CSimSounds::stopMusic();
+  CSimSounds::refreshMusicVolume();
+  testTrue(counters,
+           audio.soundStops.size() == 1 && audio.soundStops[0].sound == track &&
+             audio.soundStops[0].fadeSeconds ==
+               CSimSounds::kMusicFadeOutSeconds &&
+             audio.volumes.size() == 3 &&
+             !CSimSounds::musicPlaying(CSimMusic::MainMenu),
+           "stopping fades the music out once and it takes no more volume");
+
   CSimSounds::uninstall();
   testTrue(counters,
            !CSimSounds::installed() && audio.destroyed.size() == decodable,
            "uninstall releases every registered sound");
+  CSimSounds::playMusic(CSimMusic::MainMenu);
+  testTrue(counters,
+           CSimSounds::musicPlaying(CSimMusic::MainMenu),
+           "music is tracked without an output too");
+  CSimSounds::stopMusic();
   CSimSounds::resetCounts();
+  settings.setVar("soundVolume", "");
+  settings.setVar("musicVolume", "");
   return counters.failures;
 }
 

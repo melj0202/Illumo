@@ -167,6 +167,9 @@ TitleScene::leave()
 {
   m_suspended = true;
   unregisterConsoleCommands();
+  if (CSimSounds::musicPlaying(CSimMusic::MainMenu)) {
+    CSimSounds::stopMusic();
+  }
   if (m_configurationMenu != nullptr) {
     m_configurationMenu->close();
   }
@@ -194,6 +197,8 @@ TitleScene::rebuildRows()
 void
 TitleScene::beginPresentation()
 {
+  // Loops for as long as the main menu (and its overlays) is on screen.
+  CSimSounds::playMusic(CSimMusic::MainMenu);
   rebuildRows();
   // The word lands again before its first pose.
   for (TitleLetterPose& pose : m_letterPoses) {
@@ -711,6 +716,7 @@ TitleScene::applyConfiguration(const SimulatorConfiguration& configuration)
   }
   SimulatorSettings::write(ic->envVars, configuration);
   applyAmbientCellLook(ic->envVars, m_bgContext.get());
+  CSimSounds::refreshMusicVolume();
   ic->envVars->save();
   return true;
 }
@@ -1813,6 +1819,9 @@ TitleScene::stop()
   }
   m_lifetime.reset();
   unregisterConsoleCommands();
+  if (CSimSounds::musicPlaying(CSimMusic::MainMenu)) {
+    CSimSounds::stopMusic();
+  }
   m_newSimulationMenu.reset();
   m_configurationMenu.reset();
   m_restartDialog.reset();

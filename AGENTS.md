@@ -281,7 +281,7 @@ Ruleset truth:
 | World editor | `IllEd/Source/EditorScene*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
 | Scene format, packages, virtual file tree | `Illumo/Include/Illumo/Content/*`, `Illumo/Source/Content/*`, `Illumo/tools/IllumoPack.cpp` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
-| Sound effects (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `IllumoGame/Source/Game/CSimSounds.*` |
+| Sound effects and looping music (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `IllumoGame/Source/Game/CSimSounds.*` |
 | Domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
 | Bounded view, fade, dirty upload | `IllumoGame/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
 | Compatibility dense storage | `IllumoGame/Source/Game/CellGrid.*`, `Canvas.*` |
@@ -342,8 +342,8 @@ whose WASM guests also use explicit bounds checks; play and measure with the
 
 Package-level checks drive each real package through the generic host:
 `IllumoGame.Wasm.GamePackage` (menu, setup, edit, step, save/load, 3D mode),
-`IllumoGame.Wasm.GamePackageAudio` (packaged sound cues reach a recording
-audio output),
+`IllumoGame.Wasm.GamePackageAudio` (packaged sound cues and the chunked,
+looping menu music reach a recording audio output),
 `IllumoGame.Wasm.GamePackageLanes` (real simulation lanes against a native
 serial reference), `IllumoGame.Wasm.PackageFrameAllocations` (warmed control
 frames make no host heap allocations), `IllEd.Wasm.Package` (launch scene, preloaded atlas,

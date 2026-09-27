@@ -28,11 +28,30 @@ GuestAudio::find(SoundHandle sound) const
 }
 
 bool
-GuestAudio::send(const GuestAudioRequest& request)
+GuestAudio::send(const GuestAudioRequest& request, std::span<const float> chunk)
 {
-  GuestWireWriter payload;
-  request.write(payload);
-  return m_services.enqueue(GuestService::Audio, payload.take()) != 0;
+  GuestWireWriter writer;
+  request.write(writer, chunk);
+  std::vector<std::byte> payload = writer.take();
+  // Behind a waiting request, so the host sees requests in the order made.
+  if (m_backlog.empty() &&
+      m_services.tryEnqueue(GuestService::Audio, payload) != 0) {
+    return true;
+  }
+  if (m_backlog.size() >= kMaximumBacklog) {
+    return false;
+  }
+  m_backlog.push_back(std::move(payload));
+  return true;
+}
+
+void
+GuestAudio::pump()
+{
+  while (!m_backlog.empty() &&
+         m_services.tryEnqueue(GuestService::Audio, m_backlog.front()) != 0) {
+    m_backlog.pop_front();
+  }
 }
 
 SoundHandle
@@ -42,19 +61,32 @@ GuestAudio::createSound(const AudioClip& clip)
       m_nextWire > GuestAudioRequest::MaximumSoundId) {
     return {};
   }
+  const std::size_t chunkSamples = GuestAudioRequest::MaximumChunkSamples;
+  const std::size_t chunks =
+    (clip.samples.size() + chunkSamples - 1) / chunkSamples;
+  // Every chunk may have to wait; none may be dropped.
+  if (m_backlog.size() + chunks > kMaximumBacklog) {
+    return {};
+  }
   for (std::uint32_t index = 1; index <= IAudio::kMaximumSounds; ++index) {
     Slot& slot = m_slots[index];
     if (slot.used) {
       continue;
     }
+    const std::span<const float> samples(clip.samples);
     GuestAudioRequest request;
     request.action = GuestAudioAction::Create;
     request.sound = m_nextWire;
     request.channels = clip.channels;
     request.sampleRate = clip.sampleRate;
-    request.samples = clip.samples;
-    if (!send(request)) {
-      return {};
+    request.total = static_cast<std::uint32_t>(samples.size());
+    for (std::size_t offset = 0; offset < samples.size();
+         offset += chunkSamples) {
+      const std::size_t count = std::min(chunkSamples, samples.size() - offset);
+      send(request, samples.subspan(offset, count));
+      request = {};
+      request.action = GuestAudioAction::Append;
+      request.sound = m_nextWire;
     }
     slot.used = true;
     slot.generation = slot.generation == UINT32_MAX ? 1 : slot.generation + 1;
@@ -102,7 +134,39 @@ GuestAudio::play(SoundHandle sound, const SoundPlayback& playback)
                             SoundPlayback::kMinimumPitch,
                             SoundPlayback::kMaximumPitch,
                             1.0f);
+  request.fade = clampedOr(
+    playback.fadeInSeconds, 0.0f, SoundPlayback::kMaximumFadeSeconds, 0.0f);
+  request.flags = playback.loop ? GuestAudioRequest::LoopFlag : 0u;
   return send(request);
+}
+
+void
+GuestAudio::stop(SoundHandle sound, float fadeSeconds)
+{
+  const Slot* found = find(sound);
+  if (!m_granted || found == nullptr) {
+    return;
+  }
+  GuestAudioRequest request;
+  request.action = GuestAudioAction::Stop;
+  request.sound = found->wire;
+  request.fade =
+    clampedOr(fadeSeconds, 0.0f, SoundPlayback::kMaximumFadeSeconds, 0.0f);
+  send(request);
+}
+
+void
+GuestAudio::setVolume(SoundHandle sound, float volume)
+{
+  const Slot* found = find(sound);
+  if (!m_granted || found == nullptr) {
+    return;
+  }
+  GuestAudioRequest request;
+  request.action = GuestAudioAction::SetSoundVolume;
+  request.sound = found->wire;
+  request.volume = clampedOr(volume, 0.0f, 1.0f, 1.0f);
+  send(request);
 }
 
 void

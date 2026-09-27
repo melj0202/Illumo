@@ -31,6 +31,7 @@ struct SoundPlayback
 {
   static constexpr float kMinimumPitch = 0.25f;
   static constexpr float kMaximumPitch = 4.0f;
+  static constexpr float kMaximumFadeSeconds = 10.0f;
 
   // Linear gain, 0 to 1.
   float volume = 1.0f;
@@ -38,12 +39,17 @@ struct SoundPlayback
   float pan = 0.0f;
   // Playback-rate multiplier; also shifts the pitch.
   float pitch = 1.0f;
+  // Starts over at the end until stopped (music, ambience).
+  bool loop = false;
+  // Seconds to rise from silence to `volume`, 0 to kMaximumFadeSeconds.
+  float fadeInSeconds = 0.0f;
 };
 
-// Fire-and-forget sound effects. A product registers decoded clips once and
-// then plays them by handle; every play is an independent voice, so a sound
-// may overlap itself. When more voices are wanted than the output mixes, the
-// oldest voice is replaced. Calls are main-thread affine.
+// Sound effects and music. A product registers decoded clips once and then
+// plays them by handle; every play is an independent voice, so a sound may
+// overlap itself. When more voices are wanted than the output mixes, the
+// oldest voice is replaced, sparing looping voices while any other can go.
+// Calls are main-thread affine.
 // Published as IllumoContext::audio; absent where nothing can play sound, so
 // products must also work silently.
 class IAudio
@@ -68,6 +74,11 @@ public:
   // Starts a voice; values outside SoundPlayback's ranges are clamped. False
   // for a stale handle or when there is no output.
   virtual bool play(SoundHandle sound, const SoundPlayback& playback = {}) = 0;
+  // Ends the sound's voices, fading them out over `fadeSeconds` (clamped to
+  // 0..SoundPlayback::kMaximumFadeSeconds).
+  virtual void stop(SoundHandle sound, float fadeSeconds = 0.0f) = 0;
+  // Linear gain, 0 to 1, of the sound's playing voices.
+  virtual void setVolume(SoundHandle sound, float volume) = 0;
   virtual void stopAll() = 0;
   // Linear gain over every voice, 0 to 1.
   virtual void setMasterVolume(float volume) = 0;

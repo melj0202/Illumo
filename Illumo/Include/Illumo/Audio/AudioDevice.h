@@ -37,6 +37,8 @@ public:
   SoundHandle createSound(const AudioClip& clip) override;
   void destroySound(SoundHandle sound) override;
   bool play(SoundHandle sound, const SoundPlayback& playback = {}) override;
+  void stop(SoundHandle sound, float fadeSeconds = 0.0f) override;
+  void setVolume(SoundHandle sound, float volume) override;
   void stopAll() override;
   void setMasterVolume(float volume) override;
   float masterVolume() const override;

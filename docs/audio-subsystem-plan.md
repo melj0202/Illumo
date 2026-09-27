@@ -121,5 +121,60 @@ See §5.13 of the consensus for the full contract. Key choices:
 - Owner decision (2026-09-24): sound files are not tracked. `IllumoGame/.gitignore`
   ignores everything under `IllumoGame/Assets/`; supply the WAVs locally, or a
   fresh checkout builds a silent game.
-- Music or long ambience would need streaming rather than whole-clip
-  registration (clips are capped near 34 s of stereo).
+- ~~Music or long ambience would need streaming rather than whole-clip
+  registration (clips are capped near 34 s of stereo).~~ Done as looping
+  whole clips uploaded in chunks, section 8; tracks beyond about 3 minutes
+  would still need streaming.
+
+## 8. Main-menu music (D-E32, 2026-09-27)
+
+The owner added `IllumoGame/Assets/music_main_menu.mp3` (a 64 s, 192 kbps,
+44.1 kHz joint-stereo MP3, about 5.6 Mi samples decoded) and asked for it to
+loop on the main menu.
+
+It did not fit the D-E28 design: a clip was capped at 3 Mi samples (one
+service record), one exchange carries at most 16 MiB, and voices could not
+loop, stop individually or change volume. Chosen shape (streaming rejected:
+it would put guest frame stalls, such as scene loads, into the audio path,
+and the decoded track is small):
+
+- **Engine.** `SoundPlayback::loop` and `fadeInSeconds` (at most 10 s);
+  `IAudio::stop(sound, fadeSeconds)` and `IAudio::setVolume(sound, gain)`;
+  `AudioDevice` spares looping voices when it must replace one and keeps a
+  fading voice's slot until the fade ends. `AudioClip::kMaximumSamples` is
+  16 Mi (about 3 min 10 s of 44.1 kHz stereo).
+- **ABI.** `GuestAudioRequest` version 2 adds fade, flags and total fields
+  and the `Append`, `Stop` and `SetSoundVolume` actions; chunks hold at most
+  2 Mi samples (8 MiB). `WasmGameServices` stages a chunked sound
+  (`audioUploads()`), charging its whole size to the budget at `Create`,
+  and registers it when the last chunk lands. The per-guest budget doubled
+  to 128 MiB so one maximal track leaves room for effects.
+- **Guest.** `GuestAudio` splits large clips and keeps requests the queue
+  refuses in an ordered backlog (64 entries), pumped by `GuestProgram` each
+  update, so a play made after `createSound` follows the last chunk.
+- **CSim.** `CSimMusic::MainMenu` loads with the cue bank from
+  `Music/music_main_menu.mp3` (staged by `IllumoGame/PackageTargets.cmake`
+  when the git-ignored source is present). `TitleScene::beginPresentation`
+  plays it looping (2 s fade-in); `leave` and `stop` fade it out over
+  0.8 s; `applyConfiguration` calls `CSimSounds::refreshMusicVolume`. It
+  keeps playing under the title's overlays (settings, canvas setup,
+  dialogs).
+- **Music volume** (owner request, same day): a separate `musicVolume`
+  setting (0-100, default 80, `envvars.json` and `IllumoGameConfig`), read
+  by `CSimSounds::musicVolumeSetting` and persisted by `SimulatorSettings`.
+  The music plays at 0.45 of it, independent of `soundVolume`. It is the
+  Audio tab's second row ("Music volume"); each step or drag calls
+  `CSimSounds::previewMusicVolume` so the playing music follows the draft,
+  and `ConfigurationMenu::close` calls `refreshMusicVolume`, restoring the
+  stored level (the applied one after Apply, the old one after Discard).
+
+Tests: `Illumo.Audio.DeviceLoops` (headless loop, per-sound volume, loops
+outliving replaced voices, fading stop, fade-in), new decoder, service and
+guest cases in `Illumo.Wasm.{AudioServiceDecoder,AudioServices,GuestAudio}`
+(chunk assembly, early plays rejected, budget, backlog order across
+exchanges), `IllumoGame.Sounds.Bank` (music follows `musicVolume` and
+previews), `IllumoGame.ConfigurationMenu.SoundVolume` (the Music volume row),
+`IllumoGame.MainMenu.Navigation`, and
+`IllumoGame.Wasm.GamePackageAudio` (a music file longer than one chunk
+through the real package: uploaded whole, looping on the menu, faded out on
+the canvas, restarted on return).

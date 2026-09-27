@@ -28,8 +28,11 @@ decodes(const GuestAudioRequest& request)
   return GuestAudioRequest::read(encode(request), decoded);
 }
 
+// A mono sound's Create; `total` 0 means the chunk is the whole sound.
 static GuestAudioRequest
-createRequest(std::uint32_t sound, std::size_t frames = 64)
+createRequest(std::uint32_t sound,
+              std::size_t frames = 64,
+              std::size_t total = 0)
 {
   GuestAudioRequest request;
   request.action = GuestAudioAction::Create;
@@ -37,6 +40,17 @@ createRequest(std::uint32_t sound, std::size_t frames = 64)
   request.channels = 1;
   request.sampleRate = 22050;
   request.samples = makeTone(frames, 1, 22050);
+  request.total = static_cast<std::uint32_t>(total == 0 ? frames : total);
+  return request;
+}
+
+static GuestAudioRequest
+appendRequest(std::uint32_t sound, std::size_t frames = 64)
+{
+  GuestAudioRequest request;
+  request.action = GuestAudioAction::Append;
+  request.sound = sound;
+  request.samples = makeTone(frames, 1, 22050, 220.0f);
   return request;
 }
 
@@ -116,13 +130,44 @@ testDecoder()
   volume.volume = 0.25f;
   testTrue(counters, decodes(volume), "SetVolume round-trips");
 
+  GuestAudioRequest loop = playRequest(7);
+  loop.flags = GuestAudioRequest::LoopFlag;
+  loop.fade = 1.5f;
+  testTrue(counters,
+           GuestAudioRequest::read(encode(loop), decoded) &&
+             decoded.flags == GuestAudioRequest::LoopFlag &&
+             decoded.fade == 1.5f,
+           "Play carries its loop flag and fade-in");
+  const GuestAudioRequest first = createRequest(7, 64, 192);
+  const GuestAudioRequest more = appendRequest(7);
+  testTrue(counters,
+           GuestAudioRequest::read(encode(first), decoded) &&
+             decoded.total == 192 && decoded.samples.size() == 64 &&
+             GuestAudioRequest::read(encode(more), decoded) &&
+             decoded.action == GuestAudioAction::Append &&
+             decoded.samples == more.samples,
+           "A chunked Create and its Append round-trip");
+  GuestAudioRequest stop = simpleRequest(GuestAudioAction::Stop, 7);
+  stop.fade = 0.8f;
+  GuestAudioRequest soundVolume =
+    simpleRequest(GuestAudioAction::SetSoundVolume, 7);
+  soundVolume.volume = 0.3f;
+  testTrue(counters,
+           decodes(stop) && decodes(soundVolume) &&
+             decodes(simpleRequest(GuestAudioAction::Stop, 7)),
+           "Stop and SetSoundVolume round-trip");
+
   std::vector<std::byte> bytes = encode(playRequest(7));
-  bytes[0] = std::byte{ 2 };
+  bytes[0] = std::byte{ 1 };
+  testTrue(counters,
+           !GuestAudioRequest::read(bytes, decoded),
+           "The retired version 1 layout is rejected");
+  bytes[0] = std::byte{ 3 };
   testTrue(counters,
            !GuestAudioRequest::read(bytes, decoded),
            "An unknown version is rejected");
   bytes = encode(playRequest(7));
-  bytes[4] = std::byte{ 6 };
+  bytes[4] = std::byte{ 9 };
   testTrue(counters,
            !GuestAudioRequest::read(bytes, decoded),
            "An unknown action is rejected");
@@ -156,6 +201,48 @@ testDecoder()
   testTrue(counters, !decodes(bad), "Create carries no voice fields");
   bad = createRequest(7, 0);
   testTrue(counters, !decodes(bad), "Create needs samples");
+  bad = createRequest(7, 64, 32);
+  testTrue(counters, !decodes(bad), "Create's total covers its chunk");
+  bad = createRequest(7, 64, AudioClip::kMaximumSamples + 1u);
+  testTrue(counters, !decodes(bad), "Create's total stays within a clip");
+  bad = createRequest(7, 64, 129);
+  bad.channels = 2;
+  testTrue(counters, !decodes(bad), "Create's total is whole frames");
+  bad = createRequest(7, GuestAudioRequest::MaximumChunkSamples + 1u);
+  testTrue(counters, !decodes(bad), "A chunk stays within its bound");
+  bad = appendRequest(7, 0);
+  testTrue(counters, !decodes(bad), "Append needs samples");
+  bad = appendRequest(7);
+  bad.channels = 1;
+  testTrue(counters, !decodes(bad), "Append carries no layout");
+  bad = appendRequest(0);
+  testTrue(counters, !decodes(bad), "Append needs a sound id");
+  bad = appendRequest(7);
+  bad.samples[5] = std::numeric_limits<float>::infinity();
+  testTrue(counters, !decodes(bad), "Append refuses non-finite samples");
+  bad = playRequest(7);
+  bad.flags = 2;
+  testTrue(counters, !decodes(bad), "Play refuses unknown flags");
+  bad = playRequest(7);
+  bad.fade = SoundPlayback::kMaximumFadeSeconds + 1.0f;
+  testTrue(counters, !decodes(bad), "Play fade stays within its bound");
+  bad = simpleRequest(GuestAudioAction::Stop, 7);
+  bad.fade = -1.0f;
+  testTrue(counters, !decodes(bad), "Stop fade is not negative");
+  bad = simpleRequest(GuestAudioAction::Stop, 7);
+  bad.volume = 0.5f;
+  testTrue(counters, !decodes(bad), "Stop carries no gain");
+  bad = simpleRequest(GuestAudioAction::Stop);
+  testTrue(counters, !decodes(bad), "Stop needs a sound id");
+  bad = simpleRequest(GuestAudioAction::SetSoundVolume, 7);
+  bad.volume = 1.5f;
+  testTrue(counters, !decodes(bad), "SetSoundVolume stays within 0..1");
+  bad = simpleRequest(GuestAudioAction::SetSoundVolume);
+  bad.volume = 0.5f;
+  testTrue(counters, !decodes(bad), "SetSoundVolume needs a sound id");
+  bad = simpleRequest(GuestAudioAction::StopAll);
+  bad.fade = 1.0f;
+  testTrue(counters, !decodes(bad), "StopAll carries no fade");
 
   bad = playRequest(7, 1.5f);
   testTrue(counters, !decodes(bad), "Play volume stays within 0..1");
@@ -292,15 +379,87 @@ testServices()
              second.master == 1.0f && retiring.audioSounds() == 0,
            "Cancel releases the guest's sounds and restores the volume");
 
-  // The per-guest sample budget: the sixth maximal clip does not fit.
+  // A sound in chunks: registered only when its last sample lands.
+  RecordingAudio chunked;
+  WasmGameServices uploads(host.bridge, grant, ILLUMO_ENGINE_ASSETS);
+  uploads.setAudio(&chunked);
+  const GuestAudioRequest head = createRequest(4, 64, 192);
+  const GuestAudioRequest middle = appendRequest(4);
+  const GuestAudioRequest tail = appendRequest(4);
+  testTrue(
+    counters,
+    uploads.process(batch({ head, playRequest(4), middle }, 1), completions) &&
+      statuses(completions,
+               { GuestServiceStatus::Complete,
+                 GuestServiceStatus::Rejected,
+                 GuestServiceStatus::Complete }) &&
+      chunked.clips.empty() && uploads.audioUploads() == 1 &&
+      uploads.audioSounds() == 0,
+    "An arriving sound cannot play until its last chunk lands");
+  GuestAudioRequest loop = playRequest(4);
+  loop.flags = GuestAudioRequest::LoopFlag;
+  loop.fade = 2.0f;
+  std::vector<float> whole = head.samples;
+  whole.insert(whole.end(), middle.samples.begin(), middle.samples.end());
+  whole.insert(whole.end(), tail.samples.begin(), tail.samples.end());
+  testTrue(counters,
+           uploads.process(batch({ tail, loop }, 4), completions) &&
+             statuses(completions,
+                      { GuestServiceStatus::Complete,
+                        GuestServiceStatus::Complete }) &&
+             chunked.clips.size() == 1 && chunked.clips[0].samples == whole &&
+             uploads.audioUploads() == 0 && uploads.audioSounds() == 1 &&
+             chunked.plays.size() == 1 && chunked.plays[0].playback.loop &&
+             chunked.plays[0].playback.fadeInSeconds == 2.0f,
+           "The last chunk registers the whole sound, which then loops");
+  GuestAudioRequest fadeOut = simpleRequest(GuestAudioAction::Stop, 4);
+  fadeOut.fade = 0.8f;
+  GuestAudioRequest softer = simpleRequest(GuestAudioAction::SetSoundVolume, 4);
+  softer.volume = 0.2f;
+  testTrue(counters,
+           uploads.process(batch({ softer,
+                                   fadeOut,
+                                   appendRequest(4),
+                                   simpleRequest(GuestAudioAction::Stop, 9) },
+                                 6),
+                           completions) &&
+             statuses(completions,
+                      { GuestServiceStatus::Complete,
+                        GuestServiceStatus::Complete,
+                        GuestServiceStatus::Rejected,
+                        GuestServiceStatus::Rejected }) &&
+             chunked.volumes.size() == 1 && chunked.volumes[0].volume == 0.2f &&
+             chunked.soundStops.size() == 1 &&
+             chunked.soundStops[0].fadeSeconds == 0.8f &&
+             chunked.clips.size() == 1,
+           "Sound volume and fading stops reach the output; a complete sound "
+           "takes no more chunks");
+  testTrue(counters,
+           uploads.process(batch({ createRequest(5, 64, 128),
+                                   appendRequest(5, 128),
+                                   simpleRequest(GuestAudioAction::Destroy, 5),
+                                   appendRequest(5) },
+                                 10),
+                           completions) &&
+             statuses(completions,
+                      { GuestServiceStatus::Complete,
+                        GuestServiceStatus::Rejected,
+                        GuestServiceStatus::Complete,
+                        GuestServiceStatus::Rejected }) &&
+             uploads.audioUploads() == 0 && chunked.clips.size() == 1,
+           "A chunk past the declared total is refused and an arriving sound "
+           "can be released");
+
+  // The per-guest sample budget counts arriving sounds at their whole size.
   RecordingAudio third;
   WasmGameServices budgeted(host.bridge, grant, ILLUMO_ENGINE_ASSETS);
   budgeted.setAudio(&third);
   std::uint32_t accepted = 0;
-  for (std::uint32_t sound = 1; sound <= 6; ++sound) {
-    GuestAudioRequest large = createRequest(sound, 0);
-    large.samples.assign(AudioClip::kMaximumSamples, 0.0f);
-    if (budgeted.process(batch({ large }, sound), completions) &&
+  for (std::uint32_t sound = 1; sound <= 3; ++sound) {
+    if (budgeted.process(
+          batch({ createRequest(sound, 64, AudioClip::kMaximumSamples) },
+                sound),
+          completions) &&
         statuses(completions, { GuestServiceStatus::Complete })) {
       ++accepted;
     }
@@ -309,11 +468,22 @@ testServices()
             static_cast<int>(accepted),
             static_cast<int>(WasmGameServices::kMaximumGuestSamples /
                              AudioClip::kMaximumSamples),
-            "Registered samples are bounded per guest");
+            "Registered and arriving samples are bounded per guest");
+  testTrue(counters,
+           budgeted.process(batch({ simpleRequest(GuestAudioAction::Destroy, 1),
+                                    createRequest(3) },
+                                  4),
+                            completions) &&
+             statuses(completions,
+                      { GuestServiceStatus::Complete,
+                        GuestServiceStatus::Complete }) &&
+             budgeted.audioSounds() == 1,
+           "Releasing an arriving sound returns its budget");
   budgeted.setAudio(nullptr);
   testTrue(counters,
-           third.destroyed.size() == accepted && budgeted.audioSounds() == 0,
-           "Withdrawing the output releases the guest's sounds");
+           third.destroyed.size() == 1 && budgeted.audioSounds() == 0 &&
+             budgeted.audioUploads() == 0,
+           "Withdrawing the output releases the guest's sounds and uploads");
   return counters.failures == 0;
 }
 
@@ -391,6 +561,49 @@ testGuestAudio()
   testTrue(counters,
            guest.masterVolume() == 0.4f && audio.master == 0.4f,
            "Master volume reaches the host");
+
+  // A clip of three chunks: one exchange cannot carry two, so the later
+  // chunks and the play made after them wait in order in the backlog.
+  AudioClip music;
+  music.channels = 1;
+  music.sampleRate = 44100;
+  music.samples.assign(GuestAudioRequest::MaximumChunkSamples * 2u + 10u, 0.0f);
+  for (std::size_t index = 0; index < music.samples.size(); index += 997u) {
+    music.samples[index] = static_cast<float>(index % 13u) / 13.0f;
+  }
+  const SoundHandle track = guest.createSound(music);
+  SoundPlayback looping;
+  looping.loop = true;
+  looping.fadeInSeconds = 99.0f;
+  testTrue(counters,
+           track.isValid() && guest.play(track, looping) &&
+             guest.backlog() == 3,
+           "A large clip's later chunks and the play behind them wait");
+  const std::size_t clipsBefore = audio.clips.size();
+  const std::size_t playsBefore = audio.plays.size();
+  bool flowing = true;
+  for (int round = 0; round < 4 && flowing; ++round) {
+    flowing = exchange(queue, services, completions);
+    guest.pump();
+  }
+  testTrue(counters,
+           flowing && guest.backlog() == 0 &&
+             audio.clips.size() == clipsBefore + 1u &&
+             audio.clips.back().samples == music.samples &&
+             audio.plays.size() == playsBefore + 1u &&
+             audio.plays.back().playback.loop &&
+             audio.plays.back().playback.fadeInSeconds ==
+               SoundPlayback::kMaximumFadeSeconds,
+           "The chunks arrive over several exchanges and the looping play "
+           "follows the whole sound, its fade clamped");
+  guest.setVolume(track, 0.25f);
+  guest.stop(track, 0.5f);
+  exchange(queue, services, completions);
+  testTrue(counters,
+           audio.volumes.size() == 1 && audio.volumes[0].volume == 0.25f &&
+             audio.soundStops.size() == 1 &&
+             audio.soundStops[0].fadeSeconds == 0.5f,
+           "Sound volume and a fading stop reach the host");
   return counters.failures == 0;
 }
 

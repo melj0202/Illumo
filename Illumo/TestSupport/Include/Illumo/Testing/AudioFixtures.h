@@ -124,10 +124,29 @@ public:
       --live;
     }
   }
+  struct Stop
+  {
+    SoundHandle sound;
+    float fadeSeconds = 0.0f;
+  };
+  struct Volume
+  {
+    SoundHandle sound;
+    float volume = 0.0f;
+  };
+
   bool play(SoundHandle sound, const SoundPlayback& playback) override
   {
     plays.push_back({ sound, playback });
     return sound.isValid() && sound.slot <= clips.size();
+  }
+  void stop(SoundHandle sound, float fadeSeconds) override
+  {
+    soundStops.push_back({ sound, fadeSeconds });
+  }
+  void setVolume(SoundHandle sound, float volume) override
+  {
+    volumes.push_back({ sound, volume });
   }
   void stopAll() override { ++stops; }
   void setMasterVolume(float volume) override { master = volume; }
@@ -136,6 +155,8 @@ public:
   std::vector<AudioClip> clips;
   std::vector<SoundHandle> destroyed;
   std::vector<Play> plays;
+  std::vector<Stop> soundStops;
+  std::vector<Volume> volumes;
   std::uint32_t live = 0;
   int stops = 0;
   float master = 1.0f;

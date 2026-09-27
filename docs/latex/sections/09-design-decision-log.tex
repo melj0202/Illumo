@@ -2843,6 +2843,7 @@ library and guest types, as D-E27 did for windows.\\
 rejected without retiring the guest. The host releases a guest's sounds and
 restores the master volume when it retires. Products must also work
 silently. CSim plays seven cues scaled by its \texttt{soundVolume} setting.\\
+\textbf{Refined by:} D-E32 (looping music, chunked clips, protocol version 2)\\
 \textbf{Extends:} D-E27 (capability pattern)
 \end{decisionbox}
 
@@ -3267,6 +3268,36 @@ settings restart plays it again because the relaunch replays the command line.
 Capture scripts and benchmarks are unaffected. A program's first scene starts
 once the splash ends, so its entrance is seen in full.\\
 \textbf{Extends:} D-E31, D-UI7
+\end{decisionbox}
+
+\subsection*{D-E32 --- Looping music over the sound seam}
+\begin{decisionbox}[title={D-E32 \quad 2026-09-27}]
+\textbf{Decision:} Music is a looping sound, not a separate streaming
+service. \texttt{SoundPlayback} gains \texttt{loop} and a fade-in (at most
+10~s); \texttt{IAudio} gains \texttt{stop(sound, fade)} and
+\texttt{setVolume(sound, gain)} for one sound's voices; voice replacement
+spares looping voices while any other can go. A clip may hold 16\,Mi samples
+(about 3~min~10~s of 44.1~kHz stereo). The Audio service moves to
+\texttt{GuestAudioRequest} version 2: \texttt{Create} declares the whole sample
+count and carries the first chunk, \texttt{Append} carries the rest (at most
+2\,Mi samples each), and the host registers the sound when the last sample
+lands; \texttt{Play} carries the loop flag and fade, and \texttt{Stop} and
+\texttt{SetSoundVolume} are new. \texttt{GuestAudio} keeps requests the service
+queue cannot take in an ordered backlog that \texttt{GuestProgram} pumps each
+update. CSim's title scene loops \texttt{Music/music\_main\_menu.mp3} at its own
+\texttt{musicVolume} setting (the Audio tab's Music volume row, heard live
+while adjusted) and fades it out when a canvas opens.\\
+\textbf{Why:} The owner asked for a 64-second track to loop on the main menu.
+It is too large for one service record (and one exchange) but small once
+decoded, so uploading it whole keeps playback on the mixer thread, immune to
+guest stalls such as scene loads, and needs no host-side decoding of guest
+media.\\
+\textbf{Consequences:} Version 1 audio records are malformed, so packages
+built before this change retire on their first audio request. A guest may keep
+128\,MiB of samples, sounds still arriving counted at their whole size. A
+large sound reaches the host over several updates, and requests made after it
+follow it. Tracks longer than the clip bound would need real streaming.\\
+\textbf{Extends:} D-E28
 \end{decisionbox}
 
 \subsection*{D-F2 --- Calendar build versions}

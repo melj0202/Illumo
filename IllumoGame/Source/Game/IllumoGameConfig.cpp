@@ -44,6 +44,7 @@ IllumoGameConfig::ApplyDefaults(IEnvVars* environment)
     { "editHints", "1" },
     { "softwareCursor", "1" },
     { "soundVolume", "80" },
+    { "musicVolume", "80" },
     { "startPaused", "1" },
     { "cellStyle", "led" },
     { "cellGlow", "1" },

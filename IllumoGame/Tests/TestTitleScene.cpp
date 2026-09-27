@@ -1,10 +1,10 @@
 #include "Game/CSimPlatform.h"
+#include "Game/CSimScenes.h"
 #include "Game/CSimSounds.h"
 #include "Game/CanvasScene.h"
-#include "Game/CSimScenes.h"
-#include "Game/TitleScene.h"
 #include "Game/RuleCatalogLoader.h"
 #include "Game/SimulatorSettings.h"
+#include "Game/TitleScene.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
@@ -24,7 +24,6 @@
 #include <vector>
 
 static TestCounters g;
-
 
 struct MainMenuFixture
 {
@@ -479,6 +478,17 @@ testMainMenuNavigation()
            !fixture.module.isSettingsOpenForTesting() &&
              CSimSounds::playCount(CSimSound::MenuBack) == 1,
            "leaving settings plays the back cue");
+  testTrue(g,
+           CSimSounds::musicPlaying(CSimMusic::MainMenu),
+           "the main menu loops its music through its overlays");
+  fixture.module.leave();
+  testTrue(g,
+           !CSimSounds::musicPlaying(CSimMusic::MainMenu),
+           "leaving the main menu stops its music");
+  fixture.module.enter();
+  testTrue(g,
+           CSimSounds::musicPlaying(CSimMusic::MainMenu),
+           "returning to the main menu starts its music again");
   CSimSounds::resetCounts();
 }
 
@@ -502,9 +512,8 @@ testMainMenuPlayTransition()
   fixture.input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
   fixture.module.update(0.016);
-  testTrue(g,
-           fixture.director.hasPendingSwitch(),
-           "Create requests the canvas scene");
+  testTrue(
+    g, fixture.director.hasPendingSwitch(), "Create requests the canvas scene");
   testTrue(g,
            fixture.director.has(CSimScenes::kCanvas),
            "the new canvas scene is added");
@@ -809,8 +818,8 @@ testSettingsShared()
            fixture.module.isSettingsOpenForTesting() && menu != nullptr &&
              menu->readConfiguration(&shown, nullptr) &&
              shown.tps == stored.tps && shown.fadeSpeed == stored.fadeSpeed &&
-             shown.ruleSet == stored.ruleSet &&
-             shown.worldChunkWidth == 0 && shown.worldChunkHeight == 0,
+             shown.ruleSet == stored.ruleSet && shown.worldChunkWidth == 0 &&
+             shown.worldChunkHeight == 0,
            "the title's Settings menu opens on the shared read");
 
   SimulatorConfiguration refused = stored;
@@ -981,8 +990,7 @@ testSceneFlowKeepsCanvas()
   TitleScene* title =
     static_cast<TitleScene*>(director.find(CSimScenes::kTitle));
   testTrue(g,
-           title->rowCountForTesting() == 4 &&
-             !CSimScenes::canResume(director),
+           title->rowCountForTesting() == 4 && !CSimScenes::canResume(director),
            "without a canvas the title shows its four rows");
 
   NewSimulationConfiguration configuration;

@@ -338,7 +338,7 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **Illumo/Source/Content/** | Optional `Illumo::Content` layer above the engine: virtual paths, `illumo.json` manifests, `.ilpk` archives, the virtual file tree and its console/asset/tree adapters, package mounting, the `.ilsc` format 2 codec plus `SceneInstance` (D-E18), and program scenes (`ProgramScene`, `SceneDirector`; D-E31). Guests link the serial-safe mirror `IllumoGuestContent`. Core Illumo never includes it. |
 | **IllEd/Source/** | SceneGraph world editor over a `SceneInstance` document: patch history, selection set, shortcut table, gizmos, typed inspector, clipboard, hierarchy, asset browser and project commands (D-E25); shipped as `IllEd.wasm` (`Wasm/`), with `IllEdCore` as native test oracle (D-E14). |
 | **IllMeshViewer/Source/** | Mesh and scene viewer (`.obj`, `.ilsc` through `SceneInstance`), camera, configuration, input, and product UI; shipped as `IllMeshViewer.wasm` (`Wasm/`), with `IllMeshViewerCore` as native test oracle (D-E14). |
-| **Illumo/Source/Audio/** | Sound effects (D-E28): the `IAudio` seam, `AudioDecoder` (WAV/FLAC/MP3 to float clips) and the native `AudioDevice` mixer, all over vendored miniaudio kept private here; supported contracts are under `Illumo/Include/Illumo/Audio`. Guests compile only `AudioDecoder`. |
+| **Illumo/Source/Audio/** | Sound effects and looping music (D-E28, D-E32): the `IAudio` seam, `AudioDecoder` (WAV/FLAC/MP3 to float clips) and the native `AudioDevice` mixer, all over vendored miniaudio kept private here; supported contracts are under `Illumo/Include/Illumo/Audio`. Guests compile only `AudioDecoder`. |
 | **Illumo/Source/Services/** | Generic log, env, input, system CLI, branded console UI, and allocators. |
 | **Illumo/Source/Foundation/** | BuildInfo, macros, and implementation support; public aliases/utilities are under `Illumo/Include/Illumo/Foundation`. |
 | **Illumo/Source/Platform/** | OS entry, public SaveLoad implementation boundary, and native dialogs. |
@@ -1849,22 +1849,27 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   [wasm-apps-cutover-plan.md](wasm-apps-cutover-plan.md) and
   `.agent/wasm-runtime-performance-plan.md`.
 
-### 5.13 Audio (D-E28)
+### 5.13 Audio (D-E28, D-E32)
 
-Sound effects are an engine service with one product-facing seam, `IAudio`
-(`Illumo/Include/Illumo/Audio/Audio.h`): register a decoded `AudioClip` once
-(`createSound`, at most 256 sounds), then `play` it by `SoundHandle`
-(slot+generation, stale handles ignored) with a `SoundPlayback` volume, pan
-and pitch; every play is its own voice, at most 32 mix and the oldest is
-replaced. `stopAll` and a master volume complete the surface. Calls are
-main-thread affine. It is published as `IllumoContext::audio` and, like
-`panelSurfaces`, may be absent, so products must also work silently.
+Sound effects and music are an engine service with one product-facing seam,
+`IAudio` (`Illumo/Include/Illumo/Audio/Audio.h`): register a decoded
+`AudioClip` once (`createSound`, at most 256 sounds), then `play` it by
+`SoundHandle` (slot+generation, stale handles ignored) with a `SoundPlayback`
+volume, pan, pitch, `loop` flag and fade-in (at most 10 s); every play is its
+own voice, at most 32 mix and the oldest is replaced, sparing looping voices
+while any other can go. `stop(sound, fade)` ends a sound's voices, optionally
+fading out; `setVolume(sound, gain)` changes its playing voices (a volume
+setting applied while music plays); `stopAll` and a master volume complete
+the surface. Calls are main-thread affine. It is published as
+`IllumoContext::audio` and, like `panelSurfaces`, may be absent, so products
+must also work silently.
 
 - **Library** (vendored miniaudio 0.11.25, `Illumo/thirdparty/miniaudio-0.11.25`,
   public domain or MIT-0): no miniaudio type crosses a public header.
   `AudioDecoder` (`AudioClip.h`) decodes WAV (integer or float), FLAC and MP3
   bytes to interleaved float samples at the source rate, mixing wider sources
-  to stereo, and bounds clips at 3 Mi samples. It uses only miniaudio's
+  to stereo, and bounds clips at 16 Mi samples (about 3 min 10 s of
+  44.1 kHz stereo, room for a music loop). It uses only miniaudio's
   memory decoder entry points, so no stdio file loader is linked, and
   `AudioDecoder.cpp` is the single miniaudio implementation unit.
   `AudioDevice` is the native `IAudio`: a miniaudio engine on the default
@@ -1872,15 +1877,22 @@ main-thread affine. It is published as `IllumoContext::audio` and, like
   converted per voice, and a headless mode whose `render()` pulls the mix for
   tests.
 - **ABI** (`Audio` capability, bit 11; `GuestService::Audio`, 18): offered only
-  when the host has an output. `GuestAudioRequest` version 1 carries
-  `Create` (a guest-chosen sound id plus float samples), `Destroy`, `Play`,
-  `StopAll` and `SetVolume`; unused fields must be zero, values are range
-  checked, and a malformed request fails the exchange. Requests complete in
-  the same exchange with no payload, and the guest queue discards Audio
-  completions (like Log), so plays never accumulate against the outstanding
-  bound. Unknown or duplicate ids, a full table, a missing output or the
-  64 MiB per-guest sample budget are rejections that leave the guest
-  running. `WasmGameServices` releases a guest's sounds, voices and master
+  when the host has an output. `GuestAudioRequest` version 2 carries
+  `Create` (a guest-chosen sound id, its layout and whole sample count, and
+  the first chunk of float samples), `Append` (the next chunk), `Destroy`,
+  `Play` (with a loop flag and fade-in), `Stop` (with a fade-out),
+  `SetSoundVolume`, `StopAll` and `SetVolume`; a chunk holds at most 2 Mi
+  samples (8 MiB), so a chunk shares an exchange with the rest of an update's
+  requests. Unused fields must be zero, values are range checked, and a
+  malformed request fails the exchange. The host registers a chunked sound
+  with the output when its last sample lands; until then plays of it are
+  rejected, and a chunk beyond the declared total is refused. Requests
+  complete in the same exchange with no payload, and the guest queue
+  discards Audio completions (like Log), so plays never accumulate against
+  the outstanding bound. Unknown or duplicate ids, a full table, a missing
+  output or the 128 MiB per-guest sample budget (arriving sounds counted at
+  their whole size) are rejections that leave the guest running.
+  `WasmGameServices` releases a guest's sounds, uploads, voices and master
   volume when it retires.
 - **Decoding stays in the sandbox**: guests decode their own package files
   (as textures are decoded guest-side) and send only validated samples;
@@ -1893,8 +1905,12 @@ main-thread affine. It is published as `IllumoContext::audio` and, like
   `RuntimeShell` holds it and declares it before the program so it outlives
   the guest.
 - **Guest** (`IllumoGuest/Audio.h`): `GuestAudio` implements `IAudio` over the
-  service with guest-local handles and never-reused wire ids;
-  `GuestProgram` publishes it when granted.
+  service with guest-local handles and never-reused wire ids, splitting a
+  large clip into chunks. Requests the service queue cannot take yet wait in
+  an ordered backlog (at most 64; a clip whose chunks would not fit is
+  refused rather than half sent) that `GuestProgram` pumps each update, so
+  a play made right after a large `createSound` reaches the host after the
+  sound's last chunk. `GuestProgram` publishes it when granted.
 - **CSim**: `CSimSounds` maps ten cues (program start, menu hover, select,
   back and error, canvas enter and exit, the canvas EDIT/NORMAL mode switch,
   voiced only when the mode actually changes, and the paint drawer's expand
@@ -1903,15 +1919,24 @@ main-thread affine. It is published as `IllumoContext::audio` and, like
   default 80, a F1 settings row that previews each step). Menus and dialogs
   without an `IllumoContext` fire cues through its installed bank, as they
   use `CSimPlatform::current()`; with no bank cues are silent but counted,
-  which the native tests read. The WAV sources in `IllumoGame/Assets` are
+  which the native tests read. The title scene loops
+  `Music/music_main_menu.mp3` (`CSimMusic::MainMenu`) while the main menu and
+  its overlays are shown: `playMusic` fades it in over 2 s at 0.45 of the
+  separate `musicVolume` setting (0-100, default 80, the Audio tab's second
+  row), leaving for a canvas fades it out over 0.8 s, and returning starts it
+  over. Stepping or dragging the Music volume row changes the playing music
+  at once (`previewMusicVolume`); closing the menu restores the stored level,
+  so Apply keeps the new one and Discard the old. The sound sources in
+  `IllumoGame/Assets` are
   deliberately not tracked in git (`IllumoGame/.gitignore` ignores the whole
   directory, owner decision); CMake stages the ones present, and a package
   without them plays silently. Tests: `Illumo.Audio.*`,
   `Illumo.Wasm.AudioServiceDecoder`, `Illumo.Wasm.AudioServices`,
   `Illumo.Wasm.GuestAudio`, `IllumoGame.Sounds.Bank`,
-  `IllumoGame.ConfigurationMenu.SoundVolume` and
-  `IllumoGame.Wasm.GamePackageAudio` (the real package through the host with
-  a recording output). Record: [audio-subsystem-plan.md](audio-subsystem-plan.md).
+  `IllumoGame.ConfigurationMenu.SoundVolume`, `IllumoGame.MainMenu.Navigation`
+  (music across leave and enter) and `IllumoGame.Wasm.GamePackageAudio` (the
+  real package through the host with a recording output, its music uploaded
+  in chunks). Record: [audio-subsystem-plan.md](audio-subsystem-plan.md).
 
 ---
 
@@ -2105,7 +2130,8 @@ disabled.
 | **D-E25** | IllEd edits a format 2 document over `SceneInstance` with patch history (merged drags, count/byte caps, cursor-based dirty), a selection set, one shortcut table, gizmos, typed inspector, clipboard fragments, asset browser and project commands. |
 | **D-E26** | SceneGraph gains `setParent(node, parent, insertBefore)` for sibling order; nothing else in v2 changes. Refines D-E12. |
 | **D-E27** | `IPanelSurfaces` (`IllumoContext::panelSurfaces`) gives products extra top-level windows for detached panels: surface 0 is the main window, keys stay in one queue with `focused()`. Guests get it through the `Windows` capability (bit 10, granted opportunistically when the host can present windows), `GuestService::Window` (17) and input v2; `WasmPanelWindows` owns the windows. Hosts without windows (Linux, `--capture`, `--bench-*`, headless) omit it and products stay docked. |
-| **D-E28** | Sound effects through `IAudio` (`IllumoContext::audio`), implemented natively by `AudioDevice` over vendored miniaudio 0.11.25 (private to `Source/Audio`). Guests get it through the `Audio` capability (bit 11, granted only with an output; never for `--capture`/`--bench-*`) and `GuestService::Audio` (18, fire-and-forget, completions discarded); guests decode their own files with `AudioDecoder` and send only float samples, bounded per clip and per guest. Extends D-E27's capability pattern. |
+| **D-E28** | Sound effects through `IAudio` (`IllumoContext::audio`), implemented natively by `AudioDevice` over vendored miniaudio 0.11.25 (private to `Source/Audio`). Guests get it through the `Audio` capability (bit 11, granted only with an output; never for `--capture`/`--bench-*`) and `GuestService::Audio` (18, fire-and-forget, completions discarded); guests decode their own files with `AudioDecoder` and send only float samples, bounded per clip and per guest. Extends D-E27's capability pattern. Refined by D-E32. |
+| **D-E32** | Looping music over the same seam (2026-09-27): `SoundPlayback` gains `loop` and a fade-in, `IAudio` gains per-sound `stop` (with fade-out) and `setVolume`, and looping voices are replaced last. Clips hold up to 16 Mi samples; `GuestAudioRequest` version 2 sends larger clips as `Create` plus `Append` chunks (2 Mi samples each) that the host registers when complete, and `GuestAudio` queues what the service queue cannot take in an ordered backlog. The guest budget is 128 MiB of samples. CSim's title loops `Music/music_main_menu.mp3` (§5.13). |
 | **D-E31** | Programs own scenes; modules are gone. Each package is one WASM program that manages scenes; the engine has no module registry (`IModule`, `IModuleHost`, `IllumoContext::moduleHost`, required and optional registration, transitions and rollback are removed). `Illumo` runs a frame in phases (`beginUpdate`, `endUpdate`, `beginRender`, `endRender`), and IllumoRuntime's `RuntimeShell` puts the `DebugOverlay` (debug-tool builds; was `DebugModule`) and the one `WasmProgram` between them. In a guest, a `GuestProgram` owns a `SceneDirector` of `ProgramScene`s (`Illumo::Content`, mirrored in `IllumoGuestContent`), each with its own `SceneInstance`, camera state, render world and scene commands. Switches happen at a frame boundary (cut or cover) and keep the scene left, frozen, until the program releases it. The engine's per-frame `Scene` is renamed `DrawList`. Supersedes D-004 and D-E1; refines D-E4, D-E5, D-E9 and D-B1 (`docs/scene-programs-design.md`). |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
