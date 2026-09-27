@@ -48,7 +48,7 @@ windowsVersion()
   }
   const RtlGetVersionFunction rtlGetVersion =
     reinterpret_cast<RtlGetVersionFunction>(
-      reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlGetVersion")));
+      GetProcAddress(ntdll, "RtlGetVersion"));
   OSVERSIONINFOW version{};
   version.dwOSVersionInfoSize = sizeof(version);
   if (rtlGetVersion == nullptr || rtlGetVersion(&version) != 0) {
