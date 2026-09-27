@@ -466,6 +466,12 @@ CanvasScene::start(IllumoContext& startContext)
     inspectorVisual.prepare(ic->renderer);
   }
 
+  m_actionBar.prepare(ic->window, ic->renderer);
+  m_contextMenu.prepare(ic->window, ic->renderer);
+  m_editToolsCapturing = false;
+  m_rightMouseWasDown = false;
+  m_rightPressEdge = false;
+
   for (GameVisual* visual : { &m_hamburgerHaloVisual, &hamburgerVisual }) {
     visual->setRenderer(ic->renderer);
     visual->setWindow(ic->window);
@@ -1203,22 +1209,9 @@ CanvasScene::registerConsoleCommands()
         ic->commandLine->logError("Usage: save_dialog");
         return;
       }
-      const SaveLoadDialogSpec dialogSpec{ "CSim Simulation",
-                                           "MyCanvas.csim",
-                                           "*.CSIM" };
-      const std::weak_ptr<bool> alive = m_lifetime;
-      CSimPlatform::current().chooseSaveLocation(
-        dialogSpec, [this, alive](const std::string& location) {
-          if (alive.expired()) {
-            return;
-          }
-          if (location.empty()) {
-            ic->commandLine->logWarning("Save cancelled");
-            return;
-          }
-          saveCellGameTo(location, true);
-        });
+      openSaveDialog();
     },
+
     "save_dialog",
     "Open the native save-file picker");
 
@@ -1229,22 +1222,9 @@ CanvasScene::registerConsoleCommands()
         ic->commandLine->logError("Usage: load_dialog");
         return;
       }
-      const SaveLoadDialogSpec dialogSpec{ "CSim Simulation",
-                                           "myCanvas.csim",
-                                           "*.CSIM;*.ILLUMO" };
-      const std::weak_ptr<bool> alive = m_lifetime;
-      CSimPlatform::current().chooseLoadLocation(
-        dialogSpec, [this, alive](const std::string& location) {
-          if (alive.expired()) {
-            return;
-          }
-          if (location.empty()) {
-            ic->commandLine->logWarning("Load cancelled");
-            return;
-          }
-          loadCellGameFrom({ location }, true);
-        });
+      openLoadDialog();
     },
+
     "load_dialog",
     "Open the native load-file picker");
 
@@ -1980,6 +1960,7 @@ CanvasScene::update(double dt)
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
     updateModeBadge(dt);
+    updateEditTools(dt);
     updateEditorCursor(dt);
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -2030,6 +2011,7 @@ CanvasScene::update(double dt)
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
     updateModeBadge(dt);
+    updateEditTools(dt);
     updateEditorCursor(dt);
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -2199,6 +2181,7 @@ CanvasScene::update(double dt)
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
     updateModeBadge(dt);
+    updateEditTools(dt);
     updateEditorCursor(dt);
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -2219,6 +2202,7 @@ CanvasScene::update(double dt)
     updateEditHintsVisual(dt);
     updatePaintPalette(dt);
     updateModeBadge(dt);
+    updateEditTools(dt);
     updateEditorCursor(dt);
     updateHamburgerVisual(dt);
     updateSelectionVisual();
@@ -2272,10 +2256,12 @@ CanvasScene::update(double dt)
   updateEditHintsVisual(dt);
   updatePaintPalette(dt);
   updateModeBadge(dt);
+  updateEditTools(dt);
 
   // Palette gestures own pointer input until both mouse buttons are released.
+  // An open context menu holds the camera still (its arrows walk the rows).
   if (!ic->commandLine->isOpen && !m_paintPaletteHovered &&
-      !m_paintPaletteCapturing) {
+      !m_paintPaletteCapturing && !m_contextMenu.isOpen()) {
     CameraPan();
 
     // Zoom behavior using scroll offset
@@ -2284,7 +2270,9 @@ CanvasScene::update(double dt)
       glm::dvec2(mouseCoords[0], mouseCoords[1]));
     keyboardPan(dt);
     double* scroll = ic->inputManager->getMouseScrollOffset();
-    if (*scroll != 0.0f && !isPointerOverEditHints()) {
+    const bool overChrome =
+      isPointerOverEditHints() || isPointerOverEditTools();
+    if (*scroll != 0.0f && !overChrome) {
       // One notch zooms by the persisted step (15% by default); invert
       // reverses the wheel.
       const double step =
@@ -2308,9 +2296,11 @@ CanvasScene::update(double dt)
         ic->camera->ZoomAt(static_cast<float>(zoomFactor), worldMouse);
       }
     }
-    if (isPointerOverEditHints()) {
+    if (overChrome) {
       *scroll = 0.0;
     }
+  } else if (m_contextMenu.isOpen()) {
+    *ic->inputManager->getMouseScrollOffset() = 0.0;
   }
 
   updateAutosave(dt);
@@ -2365,6 +2355,8 @@ CanvasScene::stop()
   rulesetWorkshopMenu.reset();
   configurationMenu.reset();
   modeBadge.hide();
+  m_contextMenu.close();
+  m_actionBar.hide();
   render3dScene.reset();
   render3dLoadFailed = false;
   m_hamburgerHaloVisual.clearPrimitives();
@@ -2559,13 +2551,17 @@ CanvasScene::pasteAtCursor()
   if (isPointerOverEditHints()) {
     return false;
   }
+  return pasteAt(hoverX, hoverY);
+}
+
+bool
+CanvasScene::pasteAt(std::int64_t originX, std::int64_t originY)
+{
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
     return false;
   }
   // The origin is fixed at request time; the text may arrive on a later update.
-  const std::int64_t originX = hoverX;
-  const std::int64_t originY = hoverY;
   const std::shared_ptr<int> outcome = std::make_shared<int>(-1);
   const std::weak_ptr<bool> alive = m_lifetime;
   CSimPlatform::current().readClipboard(
@@ -2701,6 +2697,231 @@ CanvasScene::handleEditorHotkeys()
   deleteHeld = deleteDown;
 }
 
+bool
+CanvasScene::isCellInSelection(std::int64_t cellX, std::int64_t cellY) const
+{
+  if (!clipboard.hasSelection()) {
+    return false;
+  }
+  std::int64_t x0 = 0;
+  std::int64_t y0 = 0;
+  std::int64_t x1 = 0;
+  std::int64_t y1 = 0;
+  clipboard.getNormalizedSelection(&x0, &y0, &x1, &y1);
+  return cellX >= x0 && cellX <= x1 && cellY >= y0 && cellY <= y1;
+}
+
+bool
+CanvasScene::pointerCell(std::int64_t* cellX, std::int64_t* cellY) const
+{
+  if (ic == nullptr || ic->window == nullptr || ic->camera == nullptr) {
+    return false;
+  }
+  const std::array<double, 2> mouse = ic->window->getMouseCoords();
+  const glm::dvec2 world =
+    ic->camera->ScreenToWorldPrecise(glm::dvec2(mouse[0], mouse[1]));
+  return CanvasCoordinatePolicy::tryWorldToCell(world.x, cellX) &&
+         CanvasCoordinatePolicy::tryWorldToCell(world.y, cellY);
+}
+
+bool
+CanvasScene::isPointerOverEditTools() const
+{
+  return m_actionBar.isPointerOver() || m_contextMenu.containsPointer();
+}
+
+std::string
+CanvasScene::paintBrushName() const
+{
+  if (cellContext == nullptr || cellContext->getRuleSet() == nullptr) {
+    return std::string();
+  }
+  return cellContext->getRuleSet()->getStateName(m_paintBrush);
+}
+
+ColorRgba
+CanvasScene::paintBrushColor() const
+{
+  if (cellContext == nullptr || cellContext->getRuleSet() == nullptr) {
+    return UiTheme::textPrimary();
+  }
+  unsigned char rgb[3]{};
+  cellContext->getRuleSet()->evalCell(m_paintBrush, rgb);
+  return ColorRgba{ rgb[0], rgb[1], rgb[2], 255 };
+}
+
+void
+CanvasScene::openContextMenu(std::int64_t cellX, std::int64_t cellY)
+{
+  m_contextMenuCellX = cellX;
+  m_contextMenuCellY = cellY;
+  m_contextMenu.open(paintBrushName(),
+                     paintBrushColor(),
+                     ic->inputManager,
+                     ic->envVars != nullptr &&
+                       ic->envVars->getVar("reducedUiMotion").valueAsBool);
+  // The right button that opened it stays with the menu until released.
+  m_editToolsCapturing = true;
+  CSimSounds::play(CSimSound::MenuHover);
+}
+
+void
+CanvasScene::updateEditTools(double dt)
+{
+  if (ic == nullptr || ic->inputManager == nullptr || cellContext == nullptr) {
+    return;
+  }
+  const float step =
+    std::isfinite(dt) && dt > 0.0 ? static_cast<float>(dt) : 0.0f;
+  const bool leftDown =
+    ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+  const bool rightDown =
+    ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
+  m_rightPressEdge = rightDown && !m_rightMouseWasDown;
+  m_rightMouseWasDown = rightDown;
+  if (!leftDown && !rightDown) {
+    m_editToolsCapturing = false;
+  }
+  const bool overlaysOpen =
+    (ic->commandLine != nullptr && ic->commandLine->isOpen) ||
+    (rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen()) ||
+    (configurationMenu != nullptr && configurationMenu->isOpen()) ||
+    (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen());
+  const bool editActive =
+    currentState == CellState::EDIT && !overlaysOpen && !mainMenuReturnPending;
+  const bool reducedMotion = ic->envVars != nullptr &&
+                             ic->envVars->getVar("reducedUiMotion").valueAsBool;
+
+  // The menu belongs to a live selection in EDIT mode.
+  if (m_contextMenu.isOpen() && (!editActive || !clipboard.hasSelection())) {
+    m_contextMenu.close();
+  }
+  CanvasEditAction action = CanvasEditAction::None;
+  bool fromContextMenu = false;
+  bool dismissed = false;
+  if (m_contextMenu.isOpen()) {
+    action = m_contextMenu.update(ic->inputManager, step, reducedMotion);
+    fromContextMenu = action != CanvasEditAction::None;
+    if (fromContextMenu || m_contextMenu.dismissedByPress()) {
+      // Neither the choosing press nor the dismissing one reaches the world.
+      m_editToolsCapturing = m_editToolsCapturing || leftDown || rightDown;
+    }
+    if (m_contextMenu.dismissedByPress()) {
+      dismissed = true;
+      // Right-clicking elsewhere on the selection moves the menu there.
+      std::int64_t cellX = 0;
+      std::int64_t cellY = 0;
+      if (m_contextMenu.dismissedByRightPress() && !leftDown &&
+          !m_actionBar.isPointerOver() && pointerCell(&cellX, &cellY) &&
+          isCellInSelection(cellX, cellY)) {
+        openContextMenu(cellX, cellY);
+      }
+    }
+  }
+
+  CanvasActionBarState bar;
+  bar.interactive = editActive;
+  bar.lift = m_editChromeLift;
+  bar.selection = clipboard.hasSelection();
+  if (bar.selection) {
+    std::int64_t x0 = 0;
+    std::int64_t y0 = 0;
+    std::int64_t x1 = 0;
+    std::int64_t y1 = 0;
+    clipboard.getNormalizedSelection(&x0, &y0, &x1, &y1);
+    // Unsigned differences stay exact across the whole signed range.
+    const std::uint64_t width =
+      static_cast<std::uint64_t>(x1) - static_cast<std::uint64_t>(x0) + 1u;
+    const std::uint64_t height =
+      static_cast<std::uint64_t>(y1) - static_cast<std::uint64_t>(y0) + 1u;
+    bar.selectionLabel = groupDigits(width) + " x " + groupDigits(height);
+  }
+  bar.brushColor = paintBrushColor();
+  bar.reducedMotion = reducedMotion;
+  const CanvasEditAction barAction = m_actionBar.update(
+    bar,
+    ic->inputManager,
+    step,
+    !dismissed && !m_contextMenu.isOpen() && action == CanvasEditAction::None);
+  if (m_actionBar.isPointerOver() && (leftDown || rightDown) &&
+      !paintStrokeActive && !clipboard.isSelecting()) {
+    m_editToolsCapturing = true;
+  }
+  if (action == CanvasEditAction::None) {
+    action = barAction;
+  }
+  if (action != CanvasEditAction::None) {
+    runEditAction(action, fromContextMenu);
+  }
+}
+
+void
+CanvasScene::runEditAction(CanvasEditAction action, bool fromContextMenu)
+{
+  switch (action) {
+    case CanvasEditAction::Copy:
+      if (copySelection()) {
+        Logger::LogTrace("Selection copied to the clipboard");
+      }
+      break;
+    case CanvasEditAction::Cut:
+      if (cutSelection()) {
+        Logger::LogTrace("Selection cut to the clipboard");
+      }
+      break;
+    case CanvasEditAction::Paste: {
+      // The menu pastes where it was opened; the toolbar pastes over the
+      // selection, or at the middle of the view without one.
+      std::int64_t originX = 0;
+      std::int64_t originY = 0;
+      if (fromContextMenu) {
+        originX = m_contextMenuCellX;
+        originY = m_contextMenuCellY;
+      } else if (clipboard.hasSelection()) {
+        std::int64_t x1 = 0;
+        std::int64_t y1 = 0;
+        clipboard.getNormalizedSelection(&originX, &originY, &x1, &y1);
+      } else if (ic != nullptr && ic->camera != nullptr) {
+        const glm::dvec2 center = ic->camera->GetPositionPrecise();
+        if (!CanvasCoordinatePolicy::tryWorldToCell(center.x, &originX) ||
+            !CanvasCoordinatePolicy::tryWorldToCell(center.y, &originY)) {
+          originX = 0;
+          originY = 0;
+        }
+      }
+      pasteAt(originX, originY);
+      break;
+    }
+    case CanvasEditAction::Fill:
+      fillSelection(m_paintBrush);
+      break;
+    case CanvasEditAction::Erase:
+      fillSelection(SparseCellGrid::BackgroundState);
+      break;
+    case CanvasEditAction::Deselect:
+      clipboard.clearSelection();
+      break;
+    case CanvasEditAction::ClearCanvas:
+      // With Confirm clearing on, the canvas asks first (as clear_canvas does).
+      if (exitConfirmDialog != nullptr &&
+          SimulatorSettings::flag(ic->envVars, "confirmClear", true)) {
+        ic->inputManager->clearCharQueue();
+        exitConfirmDialog->openClearCanvas();
+      } else {
+        clearCanvas();
+      }
+      break;
+    case CanvasEditAction::Save:
+      openSaveDialog();
+      break;
+    case CanvasEditAction::Load:
+      openLoadDialog();
+      break;
+    case CanvasEditAction::None:
+      break;
+  }
+}
+
 void
 CanvasScene::updateEditHintsVisual(double dt)
 {
@@ -2830,6 +3051,7 @@ CanvasScene::buildEditHints(float width,
   if (clipboard.hasSelection()) {
     hints.emplace_back("Ctrl+C/X: copy/cut");
     hints.emplace_back("Delete: erase selection");
+    hints.emplace_back("Right-click selection: menu");
   }
   if (!clipboard.getClipboardPattern().empty()) {
     hints.emplace_back("R/F: rotate/flip buffer");
@@ -3252,9 +3474,18 @@ CanvasScene::Edit(double dt)
       ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
     const bool shift = ic->inputManager->isShiftPressed();
 
-    const bool pointerInWorld = hoverValid && !isHamburgerHovered() &&
-                                !m_paintPaletteHovered &&
-                                !m_paintPaletteCapturing;
+    const bool pointerInWorld =
+      hoverValid && !isHamburgerHovered() && !m_paintPaletteHovered &&
+      !m_paintPaletteCapturing && !m_editToolsCapturing &&
+      !m_contextMenu.isOpen() && !isPointerOverEditTools();
+    // A right press inside the selection opens its menu instead of erasing;
+    // the held button then belongs to the menu.
+    if (m_rightPressEdge && pointerInWorld && !shift && !isLeftPressed &&
+        !clipboard.isSelecting() && isCellInSelection(currentX, currentY)) {
+      openContextMenu(currentX, currentY);
+      paintStrokeActive = false;
+      return;
+    }
     // Shift starts a selection, but releasing Shift before the mouse button
     // must not turn the same drag into a paint stroke.
     if ((shift || clipboard.isSelecting()) && isLeftPressed && pointerInWorld) {
@@ -3406,8 +3637,9 @@ CanvasScene::updatePaintPalette(double dt)
     (rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen()) ||
     (configurationMenu != nullptr && configurationMenu->isOpen()) ||
     (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen());
+  // An open context menu sits above the drawer and takes its clicks.
   const bool paletteInteractive =
-    currentState == CellState::EDIT && !overlaysOpen;
+    currentState == CellState::EDIT && !overlaysOpen && !m_contextMenu.isOpen();
   m_paintPaletteMouseWasDown = leftDown;
   if (!leftDown && !rightDown) {
     m_paintPaletteCapturing = false;
@@ -4699,7 +4931,8 @@ CanvasScene::updateEditorCursor(double dt)
 
   const bool canShow =
     (currentState == CellState::EDIT) && !m_paintPaletteHovered &&
-    !m_paintPaletteCapturing &&
+    !m_paintPaletteCapturing && !m_contextMenu.isOpen() &&
+    !isPointerOverEditTools() &&
     (ic->commandLine == nullptr || !ic->commandLine->isOpen) &&
     (configurationMenu == nullptr || !configurationMenu->isOpen()) &&
     (exitConfirmDialog == nullptr || !exitConfirmDialog->isOpen());
@@ -4805,6 +5038,46 @@ CanvasScene::saveCellGameTo(std::string location, bool announce)
       }
     });
   return *outcome != 0;
+}
+
+void
+CanvasScene::openSaveDialog()
+{
+  const SaveLoadDialogSpec dialogSpec{ "CSim Simulation",
+                                       "MyCanvas.csim",
+                                       "*.CSIM" };
+  const std::weak_ptr<bool> alive = m_lifetime;
+  CSimPlatform::current().chooseSaveLocation(
+    dialogSpec, [this, alive](const std::string& location) {
+      if (alive.expired()) {
+        return;
+      }
+      if (location.empty()) {
+        ic->commandLine->logWarning("Save cancelled");
+        return;
+      }
+      saveCellGameTo(location, true);
+    });
+}
+
+void
+CanvasScene::openLoadDialog()
+{
+  const SaveLoadDialogSpec dialogSpec{ "CSim Simulation",
+                                       "myCanvas.csim",
+                                       "*.CSIM;*.ILLUMO" };
+  const std::weak_ptr<bool> alive = m_lifetime;
+  CSimPlatform::current().chooseLoadLocation(
+    dialogSpec, [this, alive](const std::string& location) {
+      if (alive.expired()) {
+        return;
+      }
+      if (location.empty()) {
+        ic->commandLine->logWarning("Load cancelled");
+        return;
+      }
+      loadCellGameFrom({ location }, true);
+    });
 }
 
 bool
@@ -5326,6 +5599,7 @@ CanvasScene::leave()
   if (rulesetWorkshopMenu != nullptr) {
     rulesetWorkshopMenu->close();
   }
+  m_contextMenu.close();
 }
 
 void
@@ -5520,12 +5794,20 @@ CanvasScene::dispatch(DrawList& frame)
   if (inspectorVisual.isVisible()) {
     scene->AddDrawable(&inspectorVisual, RenderLayerId::UI);
   }
+  if (m_actionBar.isVisible()) {
+    scene->AddDrawable(&m_actionBar.getVisual(), RenderLayerId::UI);
+  }
   if (modeBadge.isVisible()) {
     scene->AddDrawable(&modeBadge.getVisual(), RenderLayerId::UI);
   }
   if (hamburgerVisual.isVisible()) {
     scene->AddDrawable(&m_hamburgerHaloVisual, RenderLayerId::UI);
     scene->AddDrawable(&hamburgerVisual, RenderLayerId::UI);
+  }
+  if (m_contextMenu.isOpen()) {
+    scene->AddDrawable(&m_contextMenu.getPanelVisual(), RenderLayerId::UI);
+    scene->AddDrawable(&m_contextMenu.getDropVisual(), RenderLayerId::UI);
+    scene->AddDrawable(&m_contextMenu.getLabelVisual(), RenderLayerId::UI);
   }
   advanceCanvasEntrance(0.0);
   if (canvasEntranceVisual.isVisible()) {

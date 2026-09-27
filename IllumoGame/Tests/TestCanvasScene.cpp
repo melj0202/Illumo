@@ -2361,6 +2361,77 @@ testConsoleCameraAndFiles()
     "load dialog uses selected path");
 }
 
+// Presses and releases the left button over a toolbar button.
+static bool
+clickToolbarButton(CellGameFixture& fixture, CanvasEditAction action)
+{
+  float x = 0.0f;
+  float y = 0.0f;
+  if (!CanvasSceneTestAccess::getActionBar(fixture.module)
+         .buttonCenter(action, &x, &y)) {
+    return false;
+  }
+  fixture.window.mouseX = x;
+  fixture.window.mouseY = y;
+  fixture.module.update(0.0);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.update(0.0);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.update(0.0);
+  return true;
+}
+
+static void
+testToolbarSaveLoad()
+{
+  testSection("CanvasScene: the toolbar saves and loads through the pickers");
+  WorkingDirectoryFixture directory;
+  testTrue(g, directory.isReady(), "temporary working directory is ready");
+  if (!directory.isReady()) {
+    return;
+  }
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  SparseCellGrid* grid =
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getGrid();
+  CanvasView* canvas =
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getCanvasView();
+  canvas->clearCanvas();
+  canvas->setCanvasPixel(3, 4, 0);
+  fixture.module.update(0.0);
+
+  gSaveDialogResult = "toolbar-save";
+  testTrue(g,
+           clickToolbarButton(fixture, CanvasEditAction::Save),
+           "Save is on the toolbar");
+  testTrue(g,
+           std::filesystem::exists("toolbar-save.csim"),
+           "Save writes the picked file");
+
+  canvas->clearCanvas();
+  fixture.module.update(0.0);
+  gLoadDialogResult = "toolbar-save.csim";
+  testTrue(g,
+           clickToolbarButton(fixture, CanvasEditAction::Load),
+           "Load is on the toolbar");
+  testTrue(g,
+           grid->getCell({ 3, 4 }) == 0 && grid->getStoredCellCount() == 1u,
+           "Load restores the picked world");
+  testTrue(
+    g,
+    historyContains(fixture.console, "Loaded canvas from toolbar-save.csim"),
+    "the load is announced");
+
+  gLoadDialogResult.clear();
+  clickToolbarButton(fixture, CanvasEditAction::Load);
+  testTrue(g,
+           historyContains(fixture.console, "Load cancelled") &&
+             grid->getStoredCellCount() == 1u,
+           "a cancelled pick keeps the world");
+}
+
 static void
 testUpdateStateAndTiming()
 {
@@ -3774,6 +3845,8 @@ registerCanvasSceneTests(IllumoTestRegistry& registry)
 
   registry.add("IllumoGame.CanvasScene.CanvasEntrance",
                []() { return runCanvasSceneCase(testCanvasEntrance); });
+  registry.add("IllumoGame.CanvasScene.ToolbarSaveLoad",
+               []() { return runCanvasSceneCase(testToolbarSaveLoad); });
 
   registry.add("IllumoGame.CellGame.InputRegistrationLifetime", []() {
     return runCanvasSceneCase(testInputRegistrationLifetime);

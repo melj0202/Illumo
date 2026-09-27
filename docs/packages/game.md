@@ -453,8 +453,16 @@ preserving the copied pattern; clipboard hotkeys act only in Edit mode.
 Modal overlays and the console hide hints and selection outlines and stop
 active strokes. Explicit console pattern commands remain mode-independent.
 Pattern text is a clipboard/console side path and does not bump the sparse v3
-save format (D-G1). `Ctrl+C`/`Ctrl+X`/`Ctrl+V` are editor clipboard keys; full clear remains
-`clear_canvas`. An optional inspector HUD reports generation, hover address,
+save format (D-G1). `Ctrl+C`/`Ctrl+X`/`Ctrl+V` are editor clipboard keys; a
+full clear is `clear_canvas` or the toolbar's Clear. In Edit mode a glass
+toolbar (`CanvasActionBar`) rides the edit chrome along the top edge with
+Save, Load (the platform pickers, as `save_dialog`/`load_dialog`), Paste and
+Clear (which asks first when Confirm clearing is on); a selection adds its
+size and Copy, Cut, Fill (with the brush), Erase and Deselect. A right press
+inside the selection opens its context menu (`CanvasContextMenu`: Cut, Copy,
+Paste here, Fill, Erase, Deselect) instead of erasing; outside a selection
+the right button still erases (D-UI15). Presses on the toolbar or menu, and
+the press that dismisses the menu, never paint. An optional inspector HUD reports generation, hover address,
 state, chunk, and census (`inspect` or `I`).
 Startup patterns are centered around `(0, 0)`. Infinite mode is non-toroidal;
 positive chunk width and height select a finite torus. `0 x 0` selects the

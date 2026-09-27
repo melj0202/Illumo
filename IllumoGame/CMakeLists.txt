@@ -10,6 +10,9 @@ add_library(IllumoGameCore STATIC
   Source/Game/CSimTypeface.cpp
   Source/Game/CellContext.cpp
   Source/Game/CanvasScene.cpp
+  Source/Game/CanvasActionBar.cpp
+  Source/Game/CanvasContextMenu.cpp
+  Source/Game/CanvasEditIcons.cpp
   Source/Game/CellPattern.cpp
   Source/Game/ConfigurationMenu.cpp
   Source/Game/Cursor.cpp

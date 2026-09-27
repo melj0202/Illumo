@@ -3270,6 +3270,32 @@ once the splash ends, so its entrance is seen in full.\\
 \textbf{Extends:} D-E31, D-UI7
 \end{decisionbox}
 
+\subsection*{D-UI15 --- Canvas toolbar and selection context menu}
+\begin{decisionbox}[title={D-UI15 \quad 2026-09-27}]
+\textbf{Decision:} CSim's Edit mode gains a glass toolbar,
+\texttt{CanvasActionBar}, centred along the top edge between the mode badge
+and the settings button. It rides the edit chrome's lift spring and offers
+Save and Load (the platform pickers behind \texttt{save\_dialog} and
+\texttt{load\_dialog}), Paste (over the selection, else at the middle of the
+view) and Clear (the Confirm clearing dialog when that setting is on). While
+cells are selected a group with the selection's size, Copy, Cut, Fill (with the
+paint brush), Erase and Deselect pours out of it. A right press inside the
+selection now opens \texttt{CanvasContextMenu} (Cut, Copy, Paste here, Fill,
+Erase, Deselect) instead of erasing; it chooses on a click, on a right-button
+release after moving onto a row, or with Up/Down and Enter, and Escape or a
+press elsewhere closes it (a right press elsewhere on the selection reopens it
+there). Both widgets only report a \texttt{CanvasEditAction};
+\texttt{CanvasScene} runs it.\\
+\textbf{Why:} The owner asked for canvas buttons (clear, save and load) and a
+desktop-style right-click menu on a selection.\\
+\textbf{Consequences:} Right-dragging that starts inside a selection no longer
+erases; outside a selection the right button still does. Presses on the
+toolbar or menu, and the press that dismisses the menu, never reach the world.
+While the menu is open the camera holds still and the paint drawer ignores
+the pointer. No engine, ABI or save-format change.\\
+\textbf{Extends:} D-UI7, D-UI12
+\end{decisionbox}
+
 \subsection*{D-E32 --- Looping music over the sound seam}
 \begin{decisionbox}[title={D-E32 \quad 2026-09-27}]
 \textbf{Decision:} Music is a looping sound, not a separate streaming
