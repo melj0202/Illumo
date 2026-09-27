@@ -291,8 +291,9 @@ backlog, and the host registers it when the last chunk lands. The runtime
 opens one output device, except for captures and benchmarks, and releases a
 guest's sounds when the guest retires. Without an output, \texttt{audio} is
 null and products run silently. CSim's cues (\texttt{CSimSounds}) scale with
-its \texttt{soundVolume} setting, and its title screen loops the main-menu
-music at its separate \texttt{musicVolume} setting.
+its \texttt{soundVolume} setting; its title screen loops the main-menu
+music, and its canvas loops an edit track only while it is in EDIT, both at
+the separate \texttt{musicVolume} setting.
 
 \subsection{Third-party and runtime data}
 Dependencies remain vendored under \pathref{Illumo/thirdparty/}. Illumo owns

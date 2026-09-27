@@ -91,6 +91,9 @@ private:
   void seedInitialPattern();
   void updatePaintBrushFromInput();
   void showModeSplash(const char* label);
+  // Loops the edit music while this canvas is on screen in EDIT and fades it
+  // out otherwise (running, left for the title, or exiting).
+  void syncEditMusic();
   void updateEditorCursor(double dt);
   void updateHamburgerVisual(double dt);
   void updatePaintPalette(double dt);

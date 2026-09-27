@@ -32,6 +32,8 @@ enum class CSimSound
 enum class CSimMusic
 {
   MainMenu,
+  // The canvas while it is in EDIT (paused for drawing).
+  CanvasEdit,
   Count
 };
 

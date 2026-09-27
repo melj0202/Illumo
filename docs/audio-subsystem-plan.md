@@ -178,3 +178,26 @@ previews), `IllumoGame.ConfigurationMenu.SoundVolume` (the Music volume row),
 `IllumoGame.Wasm.GamePackageAudio` (a music file longer than one chunk
 through the real package: uploaded whole, looping on the menu, faded out on
 the canvas, restarted on return).
+
+## 9. Canvas edit music (2026-09-27)
+
+The owner added `IllumoGame/Assets/music_canvas_edit.mp3` (54 s, 192 kbps,
+44.1 kHz stereo, about 4.8 Mi samples decoded) to loop on the canvas, only in
+EDIT. It reuses the section 8 seam unchanged:
+
+- `CSimMusic::CanvasEdit` loads `Music/music_canvas_edit.mp3` (staged by the
+  same `foreach(_track ...)` in `IllumoGame/PackageTargets.cmake`) at the menu
+  track's 0.45 level of `musicVolume`.
+- `CanvasScene::syncEditMusic` plays it while the canvas is on screen
+  (`!m_suspended`), not returning to the title, and in `CellState::EDIT`, and
+  otherwise fades it out if it is the playing track. Every EDIT/NORMAL change
+  already passes through `showModeSplash`, which calls it; `start`, `enter`,
+  `leave` and `requestMainMenuReturn` call it too, and `stop` stops it. A
+  canvas opened running (`startPaused` off) stays silent until paused.
+- The two tracks together hold about 10.4 Mi samples (42 MB), inside the
+  128 MiB guest budget.
+
+Tests: `IllumoGame.CanvasScene.EditMusic` (opening in EDIT, E, `run`,
+`step`, leave/enter, `menu`, stop) and `IllumoGame.Wasm.GamePackageAudio`
+(the edit track loops on entry, fades on `run`, restarts on `pause`, fades on
+the return to the menu).

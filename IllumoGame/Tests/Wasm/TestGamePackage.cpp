@@ -1152,33 +1152,46 @@ gamePackageAudio()
     }
     return count;
   };
-  // The music's registered clip, looping plays of it and fading stops of it.
-  const std::function<SoundHandle()> musicSound = [&]() {
-    for (std::size_t index = 0; index < audio.clips.size(); ++index) {
-      if (audio.clips[index].frames() == musicFrames) {
-        return SoundHandle{ static_cast<std::uint32_t>(index + 1u), 1u };
+  // The canvas edit music is short, identified by its length as a cue is.
+  const std::size_t editFrames =
+    100u *
+    (static_cast<std::size_t>(
+       std::find(sounds.begin(),
+                 sounds.end(),
+                 CSimSounds::fileName(CSimMusic::CanvasEdit)) -
+       sounds.begin()) +
+     1u);
+  // A track's registered clip, looping plays of it and fading stops of it.
+  const std::function<SoundHandle(std::size_t)> musicSound =
+    [&](std::size_t frames) {
+      for (std::size_t index = 0; index < audio.clips.size(); ++index) {
+        if (audio.clips[index].frames() == frames) {
+          return SoundHandle{ static_cast<std::uint32_t>(index + 1u), 1u };
+        }
       }
-    }
-    return SoundHandle{};
-  };
-  const std::function<std::size_t()> musicPlays = [&]() {
-    std::size_t count = 0;
-    for (const RecordingAudio::Play& play : audio.plays) {
-      count += play.sound == musicSound() && play.playback.loop &&
-                   play.playback.fadeInSeconds > 0.0f &&
-                   std::abs(play.playback.volume - 0.45f * 0.8f) < 1e-4f
-                 ? 1u
-                 : 0u;
-    }
-    return count;
-  };
-  const std::function<std::size_t()> musicStops = [&]() {
-    std::size_t count = 0;
-    for (const RecordingAudio::Stop& stop : audio.soundStops) {
-      count += stop.sound == musicSound() && stop.fadeSeconds > 0.0f ? 1u : 0u;
-    }
-    return count;
-  };
+      return SoundHandle{};
+    };
+  const std::function<std::size_t(std::size_t)> musicPlays =
+    [&](std::size_t frames) {
+      std::size_t count = 0;
+      for (const RecordingAudio::Play& play : audio.plays) {
+        count += play.sound == musicSound(frames) && play.playback.loop &&
+                     play.playback.fadeInSeconds > 0.0f &&
+                     std::abs(play.playback.volume - 0.45f * 0.8f) < 1e-4f
+                   ? 1u
+                   : 0u;
+      }
+      return count;
+    };
+  const std::function<std::size_t(std::size_t)> musicStops =
+    [&](std::size_t frames) {
+      std::size_t count = 0;
+      for (const RecordingAudio::Stop& stop : audio.soundStops) {
+        count +=
+          stop.sound == musicSound(frames) && stop.fadeSeconds > 0.0f ? 1u : 0u;
+      }
+      return count;
+    };
 
   WasmProgram game(
     readBytes(ILLUMO_GAME_GUEST), {}, gameLimits(), {}, {}, files);
@@ -1190,11 +1203,12 @@ gamePackageAudio()
   // The music's later chunks, and the plays queued behind them, follow in
   // the next exchanges.
   testTrue(counters,
-           pumpUntil(game, [&]() { return musicPlays() == 1; }),
+           pumpUntil(game, [&]() { return musicPlays(musicFrames) == 1; }),
            "the main menu loops its music, fading in at the music level");
   testTrue(counters,
            audio.clips.size() == sounds.size() &&
-             audio.clips[musicSound().slot - 1u].samples.size() == musicFrames,
+             audio.clips[musicSound(musicFrames).slot - 1u].samples.size() ==
+               musicFrames,
            "every packaged sound is decoded in the guest and registered, the "
            "music whole across several upload chunks");
   testTrue(counters,
@@ -1220,14 +1234,26 @@ gamePackageAudio()
              plays(CSimSound::CanvasEnter) == 1,
            "entering the canvas plays the enter cue");
   testTrue(counters,
-           musicStops() == 1 && musicPlays() == 1,
+           musicStops(musicFrames) == 1 && musicPlays(musicFrames) == 1,
            "leaving the main menu fades its music out");
+  testTrue(counters,
+           musicPlays(editFrames) == 1 && musicStops(editFrames) == 0,
+           "the canvas opens in EDIT and loops the edit music");
   execute(commands, "run");
   frame = 0;
   pumpUntil(game, [&]() { return ++frame > 3; });
   testTrue(counters,
            plays(CSimSound::CanvasModeSwitch) == 1,
            "switching the canvas to NORMAL plays the mode cue");
+  testTrue(counters,
+           musicStops(editFrames) == 1,
+           "running the canvas fades the edit music out");
+  execute(commands, "pause");
+  frame = 0;
+  pumpUntil(game, [&]() { return ++frame > 3; });
+  testTrue(counters,
+           musicPlays(editFrames) == 2,
+           "pausing back into EDIT starts the edit music again");
   execute(commands, "menu");
   testTrue(counters,
            pumpUntil(game, [&]() { return commands.HasCommand("play"); }) &&
@@ -1236,8 +1262,9 @@ gamePackageAudio()
   frame = 0;
   pumpUntil(game, [&]() { return ++frame > 3; });
   testTrue(counters,
-           musicPlays() == 2,
-           "the music starts over when the main menu returns");
+           musicPlays(musicFrames) == 2 && musicStops(editFrames) == 2,
+           "the edit music fades out and the menu music starts over when the "
+           "main menu returns");
   game.stop();
   testTrue(counters,
            audio.destroyed.size() == sounds.size() && audio.stops >= 1,

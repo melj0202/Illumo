@@ -15,7 +15,7 @@ foreach(_sound canvas_enter canvas_exit canvas_mode_switch
     list(APPEND _game_sounds "${_game}/Assets/${_sound}.wav" "Sounds/${_sound}.wav")
   endif()
 endforeach()
-foreach(_track music_main_menu)
+foreach(_track music_canvas_edit music_main_menu)
   if(EXISTS "${_game}/Assets/${_track}.mp3")
     list(APPEND _game_sounds "${_game}/Assets/${_track}.mp3" "Music/${_track}.mp3")
   endif()

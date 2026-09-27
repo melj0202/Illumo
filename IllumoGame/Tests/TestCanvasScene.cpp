@@ -3725,6 +3725,56 @@ testCanvasModeSwitchSound()
 }
 
 static void
+testCanvasEditMusic()
+{
+  {
+    CellGameFixture fixture;
+    testTrue(g,
+             CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+             "a canvas opening in EDIT loops the edit music");
+    pressModeToggle(fixture);
+    testTrue(g,
+             !CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+             "E to NORMAL fades the edit music out");
+    pressModeToggle(fixture);
+    testTrue(g,
+             CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+             "E back to EDIT starts it again");
+    fixture.execute("run");
+    testTrue(g,
+             !CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+             "the run command stops it");
+    fixture.execute("step", { "1" });
+    testTrue(g,
+             CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+             "stepping back into EDIT starts it");
+    fixture.module.leave();
+    testTrue(g,
+             !CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+             "leaving the canvas for the title stops it");
+    fixture.module.enter();
+    testTrue(g,
+             CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+             "resuming the canvas in EDIT starts it again");
+    CanvasReturnScenes host(fixture.context);
+    fixture.execute("menu");
+    testTrue(g,
+             !CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+             "returning to the main menu fades it out at once");
+  }
+  {
+    CellGameFixture fixture;
+    testTrue(g,
+             CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+             "a second canvas plays it");
+  }
+  testTrue(g,
+           !CSimSounds::musicPlaying(CSimMusic::CanvasEdit),
+           "closing the canvas stops it");
+  CSimSounds::resetCounts();
+}
+
+static void
 testReducedCanvasReturn()
 {
   CellGameFixture fixture;
@@ -3840,6 +3890,8 @@ registerCanvasSceneTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CanvasScene.ModeSwitchSound", []() {
     return runCanvasSceneCase(testCanvasModeSwitchSound);
   });
+  registry.add("IllumoGame.CanvasScene.EditMusic",
+               []() { return runCanvasSceneCase(testCanvasEditMusic); });
   registry.add("IllumoGame.CanvasScene.ReducedCanvasReturn",
                []() { return runCanvasSceneCase(testReducedCanvasReturn); });
 

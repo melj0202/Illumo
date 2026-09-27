@@ -35,6 +35,7 @@ constexpr std::size_t kTrackCount = static_cast<std::size_t>(CSimMusic::Count);
 // Music sits under the cues so menu sounds stay clear over it.
 constexpr std::array<Cue, kTrackCount> kTracks = { {
   { "Music/music_main_menu.mp3", 0.45f },
+  { "Music/music_canvas_edit.mp3", 0.45f },
 } };
 
 struct Bank

@@ -1934,7 +1934,12 @@ must also work silently.
   row), leaving for a canvas fades it out over 0.8 s, and returning starts it
   over. Stepping or dragging the Music volume row changes the playing music
   at once (`previewMusicVolume`); closing the menu restores the stored level,
-  so Apply keeps the new one and Discard the old. The sound sources in
+  so Apply keeps the new one and Discard the old. The canvas loops
+  `Music/music_canvas_edit.mp3` (`CSimMusic::CanvasEdit`, same level and
+  setting) only while it is on screen in EDIT: `CanvasScene::syncEditMusic`
+  runs on every mode change (`showModeSplash`) and on start, enter, leave,
+  the return to the title and stop, so running the simulation or leaving
+  fades it out and pausing back into EDIT starts it over. The sound sources in
   `IllumoGame/Assets` are
   deliberately not tracked in git (`IllumoGame/.gitignore` ignores the whole
   directory, owner decision); CMake stages the ones present, and a package
@@ -1942,9 +1947,10 @@ must also work silently.
   `Illumo.Wasm.AudioServiceDecoder`, `Illumo.Wasm.AudioServices`,
   `Illumo.Wasm.GuestAudio`, `IllumoGame.Sounds.Bank`,
   `IllumoGame.ConfigurationMenu.SoundVolume`, `IllumoGame.MainMenu.Navigation`
-  (music across leave and enter) and `IllumoGame.Wasm.GamePackageAudio` (the
-  real package through the host with a recording output, its music uploaded
-  in chunks). Record: [audio-subsystem-plan.md](audio-subsystem-plan.md).
+  (music across leave and enter), `IllumoGame.CanvasScene.EditMusic` and
+  `IllumoGame.Wasm.GamePackageAudio` (the real package through the host with
+  a recording output, its menu music uploaded in chunks, the edit music
+  following the canvas mode). Record: [audio-subsystem-plan.md](audio-subsystem-plan.md).
 
 ---
 

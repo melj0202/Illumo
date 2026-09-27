@@ -557,6 +557,7 @@ CanvasScene::start(IllumoContext& startContext)
   mainMenuReturnSubmitted = false;
   advanceCanvasEntrance(0.0);
   CSimSounds::play(CSimSound::CanvasEnter);
+  syncEditMusic();
 
   configurationMenu =
     std::make_unique<ConfigurationMenu>(ic->window, ic->renderer);
@@ -593,6 +594,18 @@ CanvasScene::showModeSplash(const char* label)
   if (shown != soundedState) {
     soundedState = shown;
     CSimSounds::play(CSimSound::CanvasModeSwitch);
+  }
+  syncEditMusic();
+}
+
+void
+CanvasScene::syncEditMusic()
+{
+  if (!m_suspended && !mainMenuReturnPending &&
+      currentState == CellState::EDIT) {
+    CSimSounds::playMusic(CSimMusic::CanvasEdit);
+  } else if (CSimSounds::musicPlaying(CSimMusic::CanvasEdit)) {
+    CSimSounds::stopMusic();
   }
 }
 
@@ -2343,6 +2356,9 @@ CanvasScene::stop()
     }
   }
   m_lifetime.reset();
+  if (CSimSounds::musicPlaying(CSimMusic::CanvasEdit)) {
+    CSimSounds::stopMusic();
+  }
   if (inputContextId >= 0 && ic != nullptr && ic->inputManager != nullptr) {
     ic->inputManager->unregisterInputContext(inputContextId);
     inputContextId = -1;
@@ -5574,6 +5590,7 @@ CanvasScene::enter()
   mainMenuReturnSubmitted = false;
   advanceCanvasEntrance(0.0);
   CSimSounds::play(CSimSound::CanvasEnter);
+  syncEditMusic();
   Logger::LogTrace("Canvas resumed");
 }
 
@@ -5584,6 +5601,7 @@ CanvasScene::leave()
     return;
   }
   m_suspended = true;
+  syncEditMusic();
   drainSimulation();
   unregisterConsoleCommands();
   if (inputContextId >= 0 && ic->inputManager != nullptr) {
@@ -5620,6 +5638,7 @@ CanvasScene::requestMainMenuReturn()
   mainMenuReturnPending = true;
   Logger::LogTrace("Returning to the main menu");
   CSimSounds::play(CSimSound::CanvasExit);
+  syncEditMusic();
   configurationMenu->close();
   exitConfirmDialog->close();
   // Reverse the existing reveal from its current position, even during entry.
