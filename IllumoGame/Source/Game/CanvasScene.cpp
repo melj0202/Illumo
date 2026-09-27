@@ -993,6 +993,13 @@ CanvasScene::applyConfiguration(const SimulatorConfiguration& configuration)
     }
   }
 
+  // toggleFullscreen() flips whatever fullscreen state envVars currently
+  // holds, so it must run before SimulatorSettings::write below overwrites
+  // that entry with the newly configured value; otherwise the toggle flips
+  // the new value straight back to the old one.
+  if (fullscreenChanged && ic->window != nullptr) {
+    ic->window->toggleFullscreen();
+  }
   inspectorEnabled = configuration.showInspector;
   SimulatorSettings::write(ic->envVars, configuration);
   syncCanvasLookFromEnv();
@@ -1018,9 +1025,6 @@ CanvasScene::applyConfiguration(const SimulatorConfiguration& configuration)
     cellContext->getCanvasView()->snapVisualToTargets();
   }
   syncSimRateFromEnv();
-  if (fullscreenChanged && ic->window != nullptr) {
-    ic->window->toggleFullscreen();
-  }
   ic->envVars->save();
   if (rulesetChanged) {
     Logger::LogInfo("Ruleset switched to " +
