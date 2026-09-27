@@ -149,7 +149,7 @@ bool
 GuestRecordingBackend::hasPendingTextures() const
 {
   for (const std::pair<const std::uint32_t, Texture>& entry : m_textures) {
-    if (entry.second.pending != 0) {
+    if (entry.second.replacing()) {
       return true;
     }
   }
@@ -175,6 +175,7 @@ void
 GuestRecordingBackend::BeginFrame()
 {
   recycleFrame();
+  m_writtenTextures.clear();
   m_surface = -1;
   // A frame recorded but never delivered or dropped counts as dropped.
   m_visuals.drop();
@@ -282,7 +283,7 @@ GuestRecordingBackend::hostTexture(TextureHandle handle) const
     return {};
   }
   const Texture& texture = m_textures.at(handle.slot);
-  if (texture.cubemap || texture.depthOnly || texture.pending != 0) {
+  if (texture.cubemap || texture.depthOnly || texture.replacing()) {
     return {};
   }
   return texture.id;
@@ -470,6 +471,18 @@ void
 GuestRecordingBackend::dropVisuals()
 {
   m_visuals.drop();
+  // The host replaces its compositions with the dropped frame's (none), so
+  // none of them can be referred to as `same` any more.
+  m_deliveredCompositions.clear();
+  // The frame's texture writes never arrived; the retained pixels have them.
+  for (std::uint32_t slot : m_writtenTextures) {
+    const std::map<std::uint32_t, Texture>::iterator found =
+      m_textures.find(slot);
+    if (found != m_textures.end()) {
+      found->second.changed = true;
+    }
+  }
+  m_writtenTextures.clear();
 }
 GuestFrame
 GuestRecordingBackend::takeFrame()
@@ -910,34 +923,53 @@ GuestRecordingBackend::ReplaceTexture(TextureHandle handle,
   if (bytes > GuestServices::MaximumBytes - 64) {
     return false;
   }
-  GuestTextureRequest request;
-  request.width = width;
-  request.height = height;
-  request.channels = channels;
-  request.linear = options.filter == TextureFilter::Linear;
-  request.pixels.resize(bytes);
-  if (pixels != nullptr) {
-    std::memcpy(request.pixels.data(), pixels, bytes);
-  }
-  GuestWireWriter payload;
-  request.write(payload);
-  const std::uint64_t pending =
-    m_services.enqueue(GuestService::CreateTexture, payload.take());
-  if (pending == 0) {
-    return false;
-  }
   Texture& texture = m_textures.at(handle.slot);
   if (texture.pending != 0) {
     // A newer replacement supersedes an unfinished one; the superseded
     // acquisition is released when its completion arrives.
     m_abandoned.push_back(texture.pending);
+    texture.pending = 0;
   }
-  texture.pending = pending;
-  ++m_textureEpoch;
   texture.pendingInfo = { width, height, channels };
-  texture.pendingPixels = std::move(request.pixels);
+  texture.pendingPixels.resize(bytes);
+  if (pixels != nullptr) {
+    std::memcpy(texture.pendingPixels.data(), pixels, bytes);
+  } else {
+    std::fill(
+      texture.pendingPixels.begin(), texture.pendingPixels.end(), std::byte{});
+  }
+  texture.pendingLinear = options.filter == TextureFilter::Linear;
+  texture.unsent = true;
   texture.changed = false;
+  ++m_textureEpoch;
+  // The queue holds a bounded number of outstanding requests, and scene
+  // changes release and create many resources at once. A replacement it
+  // refuses now is still accepted: pump() sends it once there is room, and
+  // until then the texture reports its new size, as a sent one does.
+  sendReplacement(texture);
   return true;
+}
+void
+GuestRecordingBackend::sendReplacement(Texture& texture)
+{
+  if (!texture.unsent) {
+    return;
+  }
+  GuestWireWriter payload;
+  GuestTextureRequest::write(
+    payload,
+    static_cast<std::uint32_t>(texture.pendingInfo.width),
+    static_cast<std::uint32_t>(texture.pendingInfo.height),
+    static_cast<std::uint32_t>(texture.pendingInfo.channels),
+    texture.pendingLinear,
+    texture.pendingPixels);
+  std::vector<std::byte> bytes = payload.take();
+  const std::uint64_t pending =
+    m_services.tryEnqueue(GuestService::CreateTexture, bytes);
+  if (pending != 0) {
+    texture.pending = pending;
+    texture.unsent = false;
+  }
 }
 void
 GuestRecordingBackend::release(GuestResourceId id)
@@ -977,7 +1009,7 @@ GuestRecordingBackend::GetTextureInfo(TextureHandle handle) const
     return {};
   }
   const Texture& texture = m_textures.at(handle.slot);
-  return texture.pending != 0 ? texture.pendingInfo : texture.info;
+  return texture.replacing() ? texture.pendingInfo : texture.info;
 }
 TextureHandle
 GuestRecordingBackend::importTexture(GuestResourceId id)
@@ -1019,6 +1051,7 @@ GuestRecordingBackend::pump()
   }
   for (std::pair<const std::uint32_t, Texture>& entry : m_textures) {
     Texture& texture = entry.second;
+    sendReplacement(texture);
     if (texture.pending != 0 && m_services.take(texture.pending, result)) {
       texture.pending = 0;
       ++m_textureEpoch;
@@ -1041,7 +1074,10 @@ GuestRecordingBackend::pump()
       texture.info = texture.pendingInfo;
       texture.pixels = std::move(texture.pendingPixels);
     }
-    if (texture.id.owner != 0 && texture.changed) {
+    // While a replacement is outstanding, writes land in its pixels; they
+    // reach the host whole once it completes.
+    if (texture.id.owner != 0 && texture.changed && !texture.replacing()) {
+      m_writtenTextures.push_back(entry.first);
       GuestTextureWrite& write = m_frame.textureWrites.emplace_back();
       write.texture = texture.id;
       write.x = 0;
@@ -1570,9 +1606,9 @@ GuestRecordingBackend::consume(const RenderCommand& command)
       }
       Texture& texture = m_textures.at(write.handle.slot);
       const TextureInfo& info =
-        texture.pending != 0 ? texture.pendingInfo : texture.info;
+        texture.replacing() ? texture.pendingInfo : texture.info;
       std::vector<std::byte>& pixels =
-        texture.pending != 0 ? texture.pendingPixels : texture.pixels;
+        texture.replacing() ? texture.pendingPixels : texture.pixels;
       const int channels = write.channels == 0 ? info.channels : write.channels;
       const int stride =
         write.srcRowStride == 0 ? write.width : write.srcRowStride;
@@ -1609,9 +1645,10 @@ GuestRecordingBackend::consume(const RenderCommand& command)
           source,
           rowBytes);
       }
-      if (texture.id.owner != 0 && texture.pending == 0) {
+      if (texture.id.owner != 0 && !texture.replacing()) {
         copied.beforeBatch = static_cast<std::uint32_t>(m_frame.batches.size());
         m_frame.textureWrites.push_back(std::move(copied));
+        m_writtenTextures.push_back(write.handle.slot);
       } else {
         texture.changed = true;
       }
