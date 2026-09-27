@@ -1751,6 +1751,11 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
     once. A texture creation or replacement the full queue refuses is still
     accepted: the texture takes its new size at once, writes land in its
     retained pixels, and the recorder sends the request when there is room.
+  - **Log backpressure:** under the same pressure `GuestDiagnostics` keeps
+    log lines the full queue refuses in a bounded backlog (64 lines) and
+    sends them in order when there is room, pumped first in each
+    `GuestProgram` update. Overflow drops the oldest lines, and a warning
+    reporting how many were lost goes ahead of the rest.
   - **Fallback:** visuals that can't travel still record batches. That
     covers custom styles, textures or fonts not on the host yet, world
     space off the frame camera, and a spent per-frame budget. So do visuals
