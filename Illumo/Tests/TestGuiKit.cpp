@@ -404,6 +404,24 @@ testGuiGlassChrome()
              downChevron.getShape(0)->y2 > 10.0f,
            "a negative depth points the chevron down");
 
+  GameVisual sideChevron(16u);
+  GuiKit::drawSideChevron(sideChevron, 50.0f, 10.0f, 5.0f, 5.0f, 2.0f, cyan);
+  const ShapePrimitive* upperArm = sideChevron.getShape(0);
+  const ShapePrimitive* lowerArm = sideChevron.getShape(1);
+  testTrue(g,
+           sideChevron.shapeCount() == 2u && upperArm != nullptr &&
+             lowerArm != nullptr && std::abs(upperArm->y2 - 10.0f) < 0.001f &&
+             std::abs(upperArm->x2 - lowerArm->x2) < 0.001f &&
+             upperArm->x2 > 50.0f && upperArm->x3 < 50.0f &&
+             upperArm->x0 < 50.0f && lowerArm->x0 < 50.0f,
+           "a side chevron points right from one mitered tip");
+  GameVisual leftChevron(16u);
+  GuiKit::drawSideChevron(leftChevron, 50.0f, 10.0f, 5.0f, -5.0f, 2.0f, cyan);
+  testTrue(g,
+           leftChevron.shapeCount() == 2u && leftChevron.getShape(0)->x2 < 50.0f &&
+             leftChevron.getShape(0)->x0 > 50.0f,
+           "a negative depth points the side chevron left");
+
   GameVisual band(256u);
   GuiKit::drawSoftShadow(
     band, 0.0f, 0.0f, 100.0f, 60.0f, 12.0f, 20.0f, 6.0f, UiTheme::glowShadow());
@@ -485,6 +503,49 @@ testGuiGlassChrome()
                   bounds.x + bounds.w <= 190.0f + 0.01f;
   }
   testTrue(g, sheenInside, "the sheen stays inside its inset");
+  // Entering, the band is clipped at the inset: it must be faint there, not
+  // cut off at full strength.
+  const auto brightest = [](GameVisual& visual) {
+    unsigned char alpha = 0;
+    for (size_t i = 0; i < visual.shapeCount(); ++i) {
+      for (const ColorRgba& vertex : visual.getShape(i)->vertexColors) {
+        alpha = std::max(alpha, vertex.a);
+      }
+    }
+    return alpha;
+  };
+  GameVisual entering(64u);
+  GuiKit::drawSheen(entering, 0.0f, 0.0f, 200.0f, 40.0f, 10.0f, 0.25f, cyan);
+  testTrue(g,
+           entering.shapeCount() > 0u &&
+             brightest(entering) * 2 < brightest(sheen),
+           "a sheen fades in as it enters instead of popping in at an edge");
+  // Across a wide menu row a sweep swells in and dies away over many frames:
+  // no step of it brightens or dims abruptly, and it still peaks bright.
+  int largestJump = 0;
+  int peak = 0;
+  int previous = 0;
+  for (int step = 0; step <= 60; ++step) {
+    GameVisual wide(64u);
+    GuiKit::drawSheen(wide,
+                      0.0f,
+                      0.0f,
+                      780.0f,
+                      90.0f,
+                      20.0f,
+                      static_cast<float>(step) / 60.0f,
+                      cyan);
+    const int alpha = wide.shapeCount() > 0u ? brightest(wide) : 0;
+    largestJump = std::max(largestJump, std::abs(alpha - previous));
+    peak = std::max(peak, alpha);
+    previous = alpha;
+  }
+  testTrue(g,
+           largestJump < 40 && peak > 200,
+           "a quick sweep across a wide row fades in and out gradually");
+  GameVisual gone(64u);
+  GuiKit::drawSheen(gone, 0.0f, 0.0f, 200.0f, 40.0f, 10.0f, 0.12f, cyan);
+  testEqSize(g, gone.shapeCount(), 0u, "a sheen still outside draws nothing");
   GameVisual idle(64u);
   GuiKit::drawSheen(idle, 0.0f, 0.0f, 200.0f, 40.0f, 10.0f, -1.0f, cyan);
   testEqSize(g, idle.shapeCount(), 0u, "an idle sheen draws nothing");

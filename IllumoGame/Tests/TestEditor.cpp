@@ -1086,6 +1086,14 @@ testActionBar()
   CellClipboard& clipboard =
     CanvasSceneTestAccess::getClipboard(fixture.module);
   CanvasActionBar& bar = CanvasSceneTestAccess::getActionBar(fixture.module);
+  // The starting pattern the canvas opened with, for Reset to put back.
+  const std::size_t seededCount = grid->getStoredCellCount();
+  std::vector<unsigned char> seeded;
+  for (std::int64_t cellY = -24; cellY <= 24; ++cellY) {
+    for (std::int64_t cellX = -24; cellX <= 24; ++cellX) {
+      seeded.push_back(grid->getCell({ cellX, cellY }));
+    }
+  }
   grid->clear();
   setMouse(fixture, 320.0, 300.0);
   fixture.module.update(0.0);
@@ -1095,10 +1103,11 @@ testActionBar()
     g,
     bar.isVisible() &&
       bar.buttonCenter(CanvasEditAction::Paste, nullptr, nullptr) &&
+      bar.buttonCenter(CanvasEditAction::ResetCanvas, nullptr, nullptr) &&
       bar.buttonCenter(CanvasEditAction::ClearCanvas, nullptr, nullptr) &&
       bar.buttonCenter(CanvasEditAction::Save, nullptr, nullptr) &&
       bar.buttonCenter(CanvasEditAction::Load, nullptr, nullptr),
-    "Edit mode shows the toolbar with Save, Load, Paste and Clear");
+    "Edit mode shows the toolbar with Save, Load, Paste, Reset and Clear");
   testTrue(g,
            !bar.buttonCenter(CanvasEditAction::Erase, nullptr, nullptr),
            "selection buttons wait for a selection");
@@ -1154,7 +1163,33 @@ testActionBar()
   testTrue(g,
            grid->getStoredCellCount() == 0u,
            "without Confirm clearing, Clear empties the canvas at once");
+
+  // Reset puts back the rule's starting pattern and asks first like Clear.
   fixture.env.setVar("confirmClear", true);
+  fixture.module.update(0.0);
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::ResetCanvas, &x, &y),
+           "Reset is offered without a selection");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           dialog->isOpen() && grid->getStoredCellCount() == 0u,
+           "Reset asks before replacing the canvas");
+  fixture.input.getKeyQueue().push({ KeyCode::Y, InputAction::Press, 0 });
+  fixture.module.update(0.016);
+  std::vector<unsigned char> reset;
+  for (std::int64_t cellY = -24; cellY <= 24; ++cellY) {
+    for (std::int64_t cellX = -24; cellX <= 24; ++cellX) {
+      reset.push_back(grid->getCell({ cellX, cellY }));
+    }
+  }
+  testTrue(g,
+           !dialog->isOpen() && seededCount > 0u &&
+             grid->getStoredCellCount() == seededCount && reset == seeded,
+           "confirming Reset puts back the pattern the canvas opened with");
+  testTrue(g,
+           CanvasSceneTestAccess::getSimulationGeneration(fixture.module) ==
+             0u,
+           "Reset starts the generation count over");
 
   queueAndRun(fixture, "run");
   fixture.module.update(0.0);
@@ -1297,8 +1332,8 @@ testEditIcons()
     CanvasEditAction::Copy,        CanvasEditAction::Cut,
     CanvasEditAction::Paste,       CanvasEditAction::Fill,
     CanvasEditAction::Erase,       CanvasEditAction::Deselect,
-    CanvasEditAction::ClearCanvas, CanvasEditAction::Save,
-    CanvasEditAction::Load,
+    CanvasEditAction::ClearCanvas, CanvasEditAction::ResetCanvas,
+    CanvasEditAction::Save,        CanvasEditAction::Load,
   };
   for (const CanvasEditAction action : actions) {
     GameVisual visual(512u);

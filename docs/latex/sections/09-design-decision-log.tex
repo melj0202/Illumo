@@ -3296,6 +3296,46 @@ the pointer. No engine, ABI or save-format change.\\
 \textbf{Extends:} D-UI7, D-UI12
 \end{decisionbox}
 
+\subsection*{D-UI16 --- Resetting the canvas to its starting pattern}
+\begin{decisionbox}[title={D-UI16 \quad 2026-09-27}]
+\textbf{Decision:} The canvas toolbar gains Reset between Paste and Clear,
+and the console gains \texttt{reset\_canvas [yes]}. Reset replaces the world
+with the active rule's starting pattern, the same one
+\texttt{seedInitialPattern} places when a new canvas opens, starts the
+generation count over and returns the camera to the home view that frames
+it. The world's topology, family and ruleset and the EDIT/NORMAL mode are
+kept. Confirm clearing guards it as it guards Clear
+(\texttt{ExitConfirmDialog::openResetCanvas}; \texttt{yes} skips it).\\
+\textbf{Why:} The owner asked for a way back to each rule's starting colony
+without reopening the canvas.\\
+\textbf{Consequences:} The toolbar's base group has five buttons; a narrow
+window still fits it by one scale. No engine, ABI or save-format change.\\
+\textbf{Extends:} D-UI15, D-UI12
+\end{decisionbox}
+
+\subsection*{D-UI17 --- Drop-down lists for families and rulesets}
+\begin{decisionbox}[title={D-UI17 \quad 2026-09-27}]
+\textbf{Decision:} \texttt{GuiDropdownList} joins \texttt{Illumo/Gui}: a
+pick-one list for glass-menu fields with more values than stepping through
+them suits. It opens below its field, or above when more rows fit there, and
+shows up to eight rows that the arrows, Page Up/Down, Home/End, the wheel and
+type-ahead letters scroll; it marks the current value and chooses with Enter
+or a click, while Escape or a press elsewhere closes it. It pops open on a
+\texttt{kBoing} spring, highlights with \texttt{drawLiquidSelection}, draws
+its card, highlight and labels into three caller-owned layers above the menu,
+and follows its field as the panel tilts. Like \texttt{GuiDialog} it keeps its
+own state and hit testing; the owner routes a frame's input to it while it is
+open and voices its own cues. CSim's F1 settings and New Canvas screen use it
+for Cell family (each with its rule count) and Ruleset (the family's rules);
+Left/Right still step to the neighbouring value.\\
+\textbf{Why:} With 38 families and up to 27 rules in one family, the owner
+found stepping left and right through them too slow.\\
+\textbf{Consequences:} Enter and a click on those rows open the list instead
+of stepping. A new family keeps the ruleset only if it belongs to it. No ABI
+or save-format change.\\
+\textbf{Extends:} D-UI8, D-UI12, D-GC3
+\end{decisionbox}
+
 \subsection*{D-E32 --- Looping music over the sound seam}
 \begin{decisionbox}[title={D-E32 \quad 2026-09-27}]
 \textbf{Decision:} Music is a looping sound, not a separate streaming

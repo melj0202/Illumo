@@ -1572,11 +1572,14 @@ TitleScene::drawChevrons(GameVisual& visual, const RowGeometry& rows)
       still ? 0.0f
             : std::sin(m_animator.ambientPhase() * 6.2831853f / 1.5f) * 1.5f *
                 eClamped;
-    visual.addText(
-      ">",
-      rows.itemX + m_itemWidth - 26.0f + 6.0f * e + chevronBob,
-      rows.y[slot] + m_itemHeight * 0.5f - 9.0f,
-      18.0f,
+    // A drawn chevron rather than the font's ">", so it stays crisp.
+    GuiKit::drawSideChevron(
+      visual,
+      rows.itemX + m_itemWidth - 18.0f + 6.0f * e + chevronBob,
+      rows.y[slot] + m_itemHeight * 0.5f,
+      6.0f,
+      5.5f,
+      2.2f,
       UiTheme::applyOpacity(UiTheme::fade(cyan, 0.35f + 0.65f * eClamped),
                             rows.opacity[slot]));
   }

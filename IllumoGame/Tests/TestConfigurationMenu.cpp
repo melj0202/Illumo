@@ -1050,6 +1050,79 @@ testSoundVolumeAndCues()
   CSimSounds::resetCounts();
 }
 
+static void
+testFamilyAndRulesetLists()
+{
+  testSection("ConfigurationMenu: family and ruleset pick from drop-down lists");
+  ConfigurationMenuFixture fixture;
+  SimulatorConfiguration initial = defaultConfiguration();
+  initial.reducedUiMotion = true;
+  fixture.menu.open(initial);
+  const GuiDropdownList& list = fixture.menu.getDropdownForTesting();
+
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           list.isOpen() && list.itemCount() > 1 && list.currentIndex() >= 0 &&
+             list.highlightedIndex() == list.currentIndex(),
+           "ENTER on the family row opens its list at the current family");
+  fixture.press(KeyCode::Escape);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           !list.isOpen() && fixture.menu.isOpen() &&
+             fixture.read().ruleSet == "GAME_OF_LIFE",
+           "Escape closes only the list and keeps the value");
+
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  fixture.press(KeyCode::Down);
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           !list.isOpen() && fixture.read().ruleSet == "BRIANS_BRAIN",
+           "choosing the next family takes that family's first rule");
+
+  // The ruleset row lists the chosen family's rules; End picks the last.
+  fixture.press(KeyCode::Down);
+  fixture.menu.update(&fixture.input);
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  const int ruleCount = list.itemCount();
+  testTrue(g,
+           list.isOpen() && ruleCount >= 1,
+           "ENTER on the ruleset row opens that family's rules");
+  fixture.press(KeyCode::End);
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           !list.isOpen() && list.chosenIndex() == ruleCount - 1 &&
+             (ruleCount == 1 || fixture.read().ruleSet != "BRIANS_BRAIN"),
+           "End then ENTER chooses the family's last rule");
+
+  // With the pointer: a click on a row of the open list chooses it.
+  fixture.setMouseDown(false);
+  fixture.menu.update(&fixture.input);
+  fixture.press(KeyCode::Up);
+  fixture.menu.update(&fixture.input);
+  fixture.press(KeyCode::Enter);
+  fixture.menu.update(&fixture.input);
+  float x = 0.0f;
+  float y = 0.0f;
+  float width = 0.0f;
+  float height = 0.0f;
+  const int target = list.currentIndex() == 0 ? 1 : 0;
+  testTrue(g,
+           list.isOpen() && list.rowBounds(target, &x, &y, &width, &height),
+           "the family list shows its first rows");
+  fixture.pointAt(x + width * 0.5f, y + height * 0.5f);
+  fixture.setMouseDown(true);
+  fixture.menu.update(&fixture.input);
+  fixture.setMouseDown(false);
+  testTrue(g,
+           !list.isOpen() && list.chosenIndex() == target,
+           "clicking a row of the list chooses it");
+}
+
 static int
 runConfigurationMenuCase(void (*testFunction)())
 {
@@ -1061,6 +1134,9 @@ runConfigurationMenuCase(void (*testFunction)())
 void
 registerConfigurationMenuTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.ConfigurationMenu.FamilyAndRulesetLists", []() {
+    return runConfigurationMenuCase(testFamilyAndRulesetLists);
+  });
   registry.add("IllumoGame.ConfigurationMenu.DisplaySettings", []() {
     return runConfigurationMenuCase(testDisplaySettingsAndScrolling);
   });

@@ -16,6 +16,9 @@ enum class CanvasEditAction
   Deselect,
   // Clear the whole canvas (asking first when Confirm clearing is on).
   ClearCanvas,
+  // Put the active rule's starting pattern back, as a new canvas opens with
+  // (asking first when Confirm clearing is on).
+  ResetCanvas,
   // Save or load the world through the platform file pickers.
   Save,
   Load

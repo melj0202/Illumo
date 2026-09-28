@@ -1,11 +1,13 @@
 #pragma once
 
+#include <Illumo/Gui/GuiDropdownList.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 class InputManager;
 class IRenderWindow;
@@ -51,7 +53,7 @@ struct SimulatorConfiguration
   long panSpeed = 600;
   // Minutes between autosaves to private storage; 0 turns autosave off.
   long autosaveMinutes = 0;
-  // clear_canvas asks first.
+  // Clear and Reset (clear_canvas, reset_canvas) ask first.
   bool confirmClear = true;
 };
 
@@ -165,6 +167,8 @@ public:
   std::array<float, 4> getFooterButtonBoundsForTesting(int button) const;
   // The slider track of a row in the active tab (zero size if none).
   std::array<float, 4> getSliderTrackBoundsForTesting(int row) const;
+  // The family or ruleset list, open while the player picks from it.
+  const GuiDropdownList& getDropdownForTesting() const { return dropdown; }
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
@@ -185,6 +189,8 @@ private:
   // Back to front. The glass, the tab pill's glow, the selection drop and a
   // lit footer button's glow breathe every frame, so each sits in its own
   // layer between the still ones and the host re-records only those (D-R29).
+  // An open family or ruleset list (card, highlight drop, labels) lies above
+  // everything.
   enum Layer : std::size_t
   {
     kGlassLayer,
@@ -195,6 +201,9 @@ private:
     kContentLayer,
     kFooterGlowLayer,
     kFooterLayer,
+    kListCardLayer,
+    kListDropLayer,
+    kListTextLayer,
     kLayerCount
   };
 
@@ -241,6 +250,11 @@ private:
   // The panel swivels toward the pointer; its layout origin carries the body
   // shift, so rows are hit where they are drawn.
   GuiPanelTilt tilt;
+  // The family and ruleset rows pick from a drop-down list: the open list,
+  // the row it belongs to, and the ids its items stand for.
+  GuiDropdownList dropdown;
+  int listRow = -1;
+  std::vector<std::string> listIds;
 
   std::string family;
   std::string ruleSet;
@@ -339,6 +353,12 @@ private:
   void selectTab(int tab);
   void cycleSelected(int direction);
   bool dragSliderTo(ConfigurationSetting setting, float pointerX);
+  // The value box of a row in the active tab, as {x, y, width, height}.
+  std::array<float, 4> valueBox(int row) const;
+  void openList(int row);
+  void chooseFromList(int index);
+  // Routes a frame's input to the open list; the menu itself stays put.
+  void updateList(InputManager* inputManager);
   void handlePointer(bool wheelScrolled, ConfigurationMenuAction* action);
   ConfigurationMenuAction activateSelected();
   void addCharacter(unsigned int codepoint);

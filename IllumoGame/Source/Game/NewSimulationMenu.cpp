@@ -57,6 +57,8 @@ NewSimulationMenu::open(const NewSimulationConfiguration& initial,
   // Ignore the held click that opened the menu until its first release.
   pointer.reset(true);
   tilt.level();
+  dropdown.close();
+  listRow = -1;
   openState = true;
   rebuild();
 }
@@ -90,8 +92,127 @@ NewSimulationMenu::tick(float dt)
              panelFit.virtualHeight,
              openState);
     tilt.tick(step, still);
+    dropdown.tick(step);
   }
   rebuild();
+}
+
+void
+NewSimulationMenu::valueBox(int row,
+                            float* boxX,
+                            float* boxY,
+                            float* boxWidth,
+                            float* boxHeight) const
+{
+  const float ry = y + 110 + static_cast<float>(row) * rowHeight +
+                   animator.rowDrop(row, 0) * 10.0f;
+  *boxX = x + width * 0.45f;
+  *boxY = ry + 5;
+  *boxWidth = width * 0.55f - 37;
+  *boxHeight = rowHeight - 15;
+}
+
+void
+NewSimulationMenu::openList(int row)
+{
+  std::vector<GuiDropdownItem> items;
+  listIds.clear();
+  int current = -1;
+  if (row == 0) {
+    // Families that have rules, each with how many it offers.
+    for (const std::string& id : CellContext::GetKnownFamilyStrings()) {
+      const std::size_t rules = CellContext::GetKnownRuleStrings(id).size();
+      if (rules == 0u) {
+        continue;
+      }
+      const RuleFamilyDefinition* family =
+        RuleSetRegistry::instance().getFamilyDefinition(id);
+      if (id == draft.family) {
+        current = static_cast<int>(items.size());
+      }
+      items.push_back({ family == nullptr ? id : family->name,
+                        std::to_string(rules) +
+                          (rules == 1u ? " rule" : " rules") });
+      listIds.push_back(id);
+    }
+  } else {
+    for (const std::string& id :
+         RuleSetRegistry::instance().getKnownRules(draft.family)) {
+      const RuleSetDefinition* rule =
+        RuleSetRegistry::instance().getRuleSetDefinition(id);
+      if (id == draft.ruleSet) {
+        current = static_cast<int>(items.size());
+      }
+      items.push_back({ rule == nullptr ? id : rule->name, "" });
+      listIds.push_back(id);
+    }
+  }
+  float boxX = 0;
+  float boxY = 0;
+  float boxWidth = 0;
+  float boxHeight = 0;
+  valueBox(row, &boxX, &boxY, &boxWidth, &boxHeight);
+  dropdown.open(std::move(items),
+                current,
+                boxX,
+                boxY,
+                boxWidth,
+                boxHeight,
+                8.0f,
+                panelFit.virtualHeight - 8.0f,
+                animator.reducedMotion());
+  if (dropdown.isOpen()) {
+    listRow = row;
+    CSimSounds::play(CSimSound::MenuSelect);
+  }
+}
+
+void
+NewSimulationMenu::chooseFromList(int index)
+{
+  if (index < 0 || index >= static_cast<int>(listIds.size())) {
+    return;
+  }
+  const std::string& id = listIds[static_cast<std::size_t>(index)];
+  if (listRow == 0) {
+    if (id != draft.family) {
+      // A new family keeps the ruleset only if it belongs to that family.
+      draft.family = id;
+      const std::vector<std::string> rules =
+        CellContext::GetKnownRuleStrings(id);
+      if (!rules.empty() &&
+          std::find(rules.begin(), rules.end(), draft.ruleSet) == rules.end()) {
+        draft.ruleSet = rules.front();
+      }
+    }
+  } else {
+    draft.ruleSet = id;
+  }
+  animator.triggerValuePulse(1);
+  CSimSounds::play(CSimSound::MenuSelect);
+}
+
+NewSimulationAction
+NewSimulationMenu::updateList(InputManager* input)
+{
+  // The open list takes every key, typed letter, the wheel and the pointer;
+  // the rows beneath it keep their selection.
+  rebuild();
+  pointer.sample(window, input, panelFit.layoutScale);
+  const int before = dropdown.highlightedIndex();
+  const GuiDropdownResult result = dropdown.update(input, pointer);
+  if (result == GuiDropdownResult::Chosen) {
+    chooseFromList(dropdown.chosenIndex());
+  } else if (result == GuiDropdownResult::Dismissed) {
+    CSimSounds::play(CSimSound::MenuBack);
+  } else if (dropdown.highlightedIndex() != before) {
+    CSimSounds::play(CSimSound::MenuHover);
+  }
+  if (!dropdown.isOpen()) {
+    listRow = -1;
+  }
+  rebuild();
+  return NewSimulationAction::None;
 }
 
 void
@@ -186,6 +307,10 @@ NewSimulationMenu::activate()
   if (selected == 7) {
     return NewSimulationAction::Back;
   }
+  if (isListRow(selected)) {
+    openList(selected);
+    return NewSimulationAction::None;
+  }
   change(1);
   return NewSimulationAction::None;
 }
@@ -195,6 +320,9 @@ NewSimulationMenu::update(InputManager* input)
 {
   if (!openState || input == nullptr) {
     return NewSimulationAction::None;
+  }
+  if (dropdown.isOpen()) {
+    return updateList(input);
   }
   NewSimulationAction result = NewSimulationAction::None;
   std::queue<InputManager::KeyPressEvent> remaining;
@@ -247,7 +375,9 @@ NewSimulationMenu::update(InputManager* input)
     if (finite || (row != 3 && row != 4)) {
       selectRow(row);
       if (pointer.clicked()) {
-        if (selected < 6 && mx < x + width * 0.55f)
+        // The family and ruleset rows open their list anywhere; the other
+        // value rows step back on their left half.
+        if (!isListRow(selected) && selected < 6 && mx < x + width * 0.55f)
           change(-1);
         else
           result = activate();
@@ -423,6 +553,19 @@ NewSimulationMenu::rebuild()
 
   drawRows(opacity, breathe);
   drawFooter(height, opacity);
+  if (dropdown.isOpen() && listRow >= 0) {
+    // The list rides its field as the panel tilts, above everything else.
+    float boxX = 0;
+    float boxY = 0;
+    float boxWidth = 0;
+    float boxHeight = 0;
+    valueBox(listRow, &boxX, &boxY, &boxWidth, &boxHeight);
+    dropdown.follow(boxX, boxY);
+    dropdown.draw(layers[kListCardLayer],
+                  layers[kListDropLayer],
+                  layers[kListTextLayer],
+                  opacity);
+  }
   const float scale = GuiPanelLayout::visualScale(panelFit, renderer);
   for (GameVisual& layer : layers) {
     GuiPanelLayout::scaleFromScreenOrigin(layer, scale);
@@ -457,7 +600,8 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
     finite ? std::to_string(draft.worldChunkHeight * 16) + " cells"
            : "Unbounded",
     draft.starterPattern ? "Starter pattern" : "Empty canvas",
-    "Enter to begin  >",
+    // Its arrow is drawn after the text (drawRows).
+    "Enter to begin",
     "Discard choices"
   };
   const float cardX = x + 24;
@@ -591,10 +735,31 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
       const float rightNudge = active && direction > 0 ? 5.0f * swing : 0.0f;
       const ColorRgba arrow = UiTheme::applyOpacity(
         UiTheme::fade(cyan, 0.45f + 0.55f * eClamped), rowOpacity);
-      visual.addText(
-        "<", boxX + 8 - leftNudge, ry + (rowHeight - 18) / 2, 12, arrow);
-      visual.addText(
-        ">", x + width - 50 + rightNudge, ry + (rowHeight - 18) / 2, 12, arrow);
+      // Drawn chevrons rather than the font's "<" and ">", so they stay crisp;
+      // centered on the value box.
+      const float arrowY = ry + 5 + (rowHeight - 15) * 0.5f;
+      if (isListRow(row)) {
+        // A list field shows a caret at its right end: down while closed,
+        // up while its list is open.
+        const bool listOpen = dropdown.isOpen() && listRow == row;
+        GuiKit::drawChevron(visual,
+                            x + width - 46,
+                            listOpen ? arrowY - 2.0f : arrowY + 2.5f,
+                            4.5f,
+                            listOpen ? 4.0f : -4.0f,
+                            1.8f,
+                            arrow);
+      } else {
+        GuiKit::drawSideChevron(
+          visual, boxX + 9 - leftNudge, arrowY, 4.5f, -4.0f, 1.8f, arrow);
+        GuiKit::drawSideChevron(visual,
+                                x + width - 43 + rightNudge,
+                                arrowY,
+                                4.5f,
+                                4.0f,
+                                1.8f,
+                                arrow);
+      }
     }
     const ColorRgba labelColor =
       disabled   ? UiTheme::fade(UiTheme::textMuted(), 0.7f)
@@ -619,15 +784,23 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
             UiTheme::textSecondary(), UiTheme::textPrimary(), eClamped);
     // The create row's value breathes, so it sits alone in the last layer.
     GameVisual& valueLayer = row == 6 ? layers[kPulseLayer] : visual;
-    valueLayer.addText(
-      values[row],
-      x + width * 0.45f + 27 + slide,
-      valueY,
-      14,
-      UiTheme::applyOpacity(
-        UiTheme::fade(valueColor,
-                      1.0f - 0.45f * pulse * (active ? 1.0f : 0.0f)),
-        rowOpacity));
+    const float valueX = x + width * 0.45f + 27 + slide;
+    const ColorRgba shownValueColor = UiTheme::applyOpacity(
+      UiTheme::fade(valueColor, 1.0f - 0.45f * pulse * (active ? 1.0f : 0.0f)),
+      rowOpacity);
+    valueLayer.addText(values[row], valueX, valueY, 14, shownValueColor);
+    if (row == 6) {
+      // "Enter to begin", then a drawn chevron that leans toward the action.
+      const float textWidth =
+        GuiKit::measureEmphasizedText(values[row], 14, 0.0f);
+      GuiKit::drawSideChevron(valueLayer,
+                              valueX + textWidth + 12.0f + 3.0f * eClamped,
+                              valueY + 7.0f,
+                              4.5f,
+                              4.0f,
+                              1.8f,
+                              shownValueColor);
+    }
   }
 }
 
@@ -635,7 +808,29 @@ void
 NewSimulationMenu::drawFooter(float height, unsigned char opacity)
 {
   GameVisual& visual = layers[kContentLayer];
-  if (selected == 3 || selected == 4) {
+  if (dropdown.isOpen()) {
+    float hintX = x + 28;
+    const float size = 9.0f;
+    hintX += GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "UPDOWN", "Browse", size, opacity);
+    hintX += GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "A-Z", "Jump", size, opacity);
+    hintX += GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "ENTER", "Choose", size, opacity);
+    GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "ESC", "Close list", size, opacity);
+  } else if (isListRow(selected)) {
+    float hintX = x + 28;
+    const float size = 9.0f;
+    hintX += GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "UPDOWN", "Select", size, opacity);
+    hintX += GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "ENTER", "Open list", size, opacity);
+    hintX += GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "LEFTRIGHT", "Step", size, opacity);
+    GuiKit::drawKeyHint(
+      visual, hintX, y + height - 48, "ESC", "Back", size, opacity);
+  } else if (selected == 3 || selected == 4) {
     visual.addText("LEFT / RIGHT or click either half: resize by 16 cells",
                    x + 28,
                    y + height - 45,

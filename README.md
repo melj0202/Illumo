@@ -516,7 +516,7 @@ host overlay.
 | Group | Commands |
 |---|---|
 | Simulation | `pause`, `run`, `step [count]`, `status` |
-| Canvas | `clear_canvas`, `randomize [percent]`, `setcell <x> <y> <state>` |
+| Canvas | `clear_canvas`, `reset_canvas`, `randomize [percent]`, `setcell <x> <y> <state>` |
 | Rules and files | `ruleset [name]`, `save <file>`, `load <file>`, `save_dialog`, `load_dialog` |
 | Camera and display | `camera [x y [zoom]]`, `camera_reset`, `fullscreen`, `fps`, `memory` |
 | Renderer diagnostics | `renderer_demo [on|off]`, `assets`, `asset_reload <all|path>` |

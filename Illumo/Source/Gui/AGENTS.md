@@ -1,8 +1,8 @@
 # Illumo GUI Subsystem Guidance
 
 This directory contains the consolidated primitive-composed GUI toolkit for
-Illumo (`GuiKit`, `GuiDialog`, `GuiMenuShell`, `GridAtlas`, `GuiTypes`,
-`GuiTextEdit`, `GuiFileTree`, `GuiToolStyle`, `GuiPanelDock`,
+Illumo (`GuiKit`, `GuiDialog`, `GuiDropdownList`, `GuiMenuShell`, `GridAtlas`,
+`GuiTypes`, `GuiTextEdit`, `GuiFileTree`, `GuiToolStyle`, `GuiPanelDock`,
 `GuiPanelPointer`, `PanelSurfaces`, `GuiEngineBrand`). These sources also
 build into the guest engine.
 
@@ -66,6 +66,13 @@ build into the guest engine.
 - Text entry goes through `GuiTextEdit` (UTF-8 caret and selection, clipboard
   through the caller, characters from `InputManager::getCharQueue`) drawn by
   `GuiKit::drawTextField`. Do not write another line editor.
+- A glass-menu field that picks one of many values goes through
+  `GuiDropdownList` (D-UI17): it opens under or above its field, scrolls a
+  window of rows, takes keys, type-ahead, wheel and pointer while open, and
+  draws its card, liquid highlight and labels into three caller-owned layers
+  above the rest of the menu. The owner routes that frame's input to it while
+  it is open, calls `follow` as its panel tilts, and voices its own cues. Do
+  not write another pop-up list.
 - Tree views go through `GuiFileTree`: it keeps expansion state and the
   listings received so far and flattens them without recursion; the owner
   lists directories itself (`takePendingListings`) from whatever source it

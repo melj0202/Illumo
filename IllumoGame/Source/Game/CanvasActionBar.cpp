@@ -1,5 +1,6 @@
 #include "CanvasActionBar.h"
 #include "CSimSounds.h"
+#include "CanvasChromeStyle.h"
 #include "CanvasEditIcons.h"
 
 #include <Illumo/Gui/GuiKit.h>
@@ -27,6 +28,19 @@ static const float kIconGap = 6.0f;
 // the settings button on the right.
 static const float kSideClearance = 56.0f;
 static const float kMinimumFit = 0.55f;
+
+// The bar's pop and jelly squash: a scale about its centre applied to what
+// is drawn, never to where buttons are hit.
+struct CanvasActionBarDeform
+{
+  float pivotX = 0.0f;
+  float pivotY = 0.0f;
+  float scaleX = 1.0f;
+  float scaleY = 1.0f;
+
+  float x(float value) const { return pivotX + (value - pivotX) * scaleX; }
+  float y(float value) const { return pivotY + (value - pivotY) * scaleY; }
+};
 
 // Selection-group items appear one by one as the bar grows over them: each
 // fades in with the share of it the bar already covers (eased, so a part
@@ -56,6 +70,7 @@ CanvasActionBar::CanvasActionBar()
     { CanvasEditAction::Save, "Save", false, false },
     { CanvasEditAction::Load, "Load", false, false },
     { CanvasEditAction::Paste, "Paste", false, false },
+    { CanvasEditAction::ResetCanvas, "Reset", false, true },
     { CanvasEditAction::ClearCanvas, "Clear", false, true },
     { CanvasEditAction::Copy, "Copy", true, false },
     { CanvasEditAction::Cut, "Cut", true, false },
@@ -69,12 +84,16 @@ CanvasActionBar::CanvasActionBar()
     button.label = definitions[index].label;
     button.selectionOnly = definitions[index].selectionOnly;
     button.destructive = definitions[index].destructive;
-    button.hover.configure(GuiMotion::kJelly);
-    button.squish.configure(GuiMotion::kJelly);
+    button.hover.configure(GuiMotion::kBoing);
+    button.squish.configure(GuiMotion::kBoing);
+    button.iconPop.configure(GuiMotion::kBoing);
   }
-  m_group.configure(GuiMotion::kJelly);
+  m_group.configure(GuiMotion::kBoing);
   m_chipPop.configure(GuiMotion::kBoing);
+  m_pop.configure(GuiMotion::kBoing);
+  m_barHover.configure(GuiMotion::kBoing);
   m_visual.setVisible(false);
+  m_haloVisual.setVisible(false);
 }
 
 void
@@ -89,6 +108,14 @@ CanvasActionBar::prepare(IRenderWindow* window, Renderer* renderer)
   m_visual.prepare(renderer);
   m_visual.setVisible(false);
   m_key.invalidate();
+  m_haloVisual.setRenderer(renderer);
+  m_haloVisual.setWindow(window);
+  m_haloVisual.setSpace(PrimitiveSpace::Pixels);
+  m_haloVisual.setLayerHint(RenderLayerId::UI);
+  m_haloVisual.prepare(renderer);
+  m_haloVisual.setVisible(false);
+  m_haloKey.invalidate();
+  m_shown = false;
 }
 
 float
@@ -102,6 +129,9 @@ void
 CanvasActionBar::hide()
 {
   m_visual.setVisible(false);
+  m_haloVisual.setVisible(false);
+  // It pops back in from nothing when it next appears.
+  m_shown = false;
   m_pointerOver = false;
   m_hovered = -1;
   m_barDrawn = false;
@@ -146,8 +176,14 @@ CanvasActionBar::update(const CanvasActionBarState& state,
     hide();
     return CanvasEditAction::None;
   }
+  // Appearing pops the bar in from nothing, as the settings button does.
+  if (!m_shown) {
+    m_shown = true;
+    m_pop.snapTo(0.0f);
+    m_barHover.snapTo(0.0f);
+  }
 
-  // Hover and presses test the bar as it was drawn last frame.
+  // Hover and presses test the bar as it was laid out last frame.
   const float scale = uiScale();
   const std::array<double, 2> mouse = m_window->getMouseCoords();
   const float mx = static_cast<float>(mouse[0]) / scale;
@@ -166,18 +202,33 @@ CanvasActionBar::update(const CanvasActionBarState& state,
       }
     }
   }
-  if (hovered >= 0 && hovered != m_hovered && !leftDown) {
-    CSimSounds::play(CSimSound::MenuHover);
+  if (hovered >= 0 && hovered != m_hovered) {
+    // The newly hovered button's icon hops, and the bar gives a small
+    // sympathetic wobble.
+    m_buttons[static_cast<std::size_t>(hovered)].iconPop.kick(7.0f);
+    m_pop.kick(0.6f);
+    if (!leftDown) {
+      CSimSounds::play(CSimSound::MenuHover);
+    }
   }
   m_hovered = hovered;
   CanvasEditAction action = CanvasEditAction::None;
   if (hovered >= 0 && leftClicked) {
     Button& pressed = m_buttons[static_cast<std::size_t>(hovered)];
     action = pressed.action;
-    // The pressed button flattens, then jiggles back.
-    pressed.squish.kick(6.0f);
+    // The pressed button flattens, then boings back with its icon hopping,
+    // and the whole bar jiggles.
+    pressed.squish.kick(10.0f);
+    pressed.iconPop.kick(10.0f);
+    m_pop.kick(-3.0f);
     CSimSounds::play(CSimSound::MenuSelect);
   }
+  m_pop.setTarget(1.0f);
+  m_pop.tick(step, state.reducedMotion);
+  m_barHover.setTarget(m_pointerOver ? 1.0f : 0.0f);
+  m_barHover.tick(step, state.reducedMotion);
+  m_clock = std::fmod(m_clock + static_cast<double>(step), 60.0);
+  const bool pressHeld = hovered >= 0 && leftDown;
 
   m_group.setTarget(state.selection ? 1.0f : 0.0f);
   m_group.tick(step, state.reducedMotion);
@@ -196,6 +247,7 @@ CanvasActionBar::update(const CanvasActionBarState& state,
     button.hover.setTarget(index == hovered ? 1.0f : 0.0f);
     button.hover.tick(step, state.reducedMotion);
     button.squish.tick(step, state.reducedMotion);
+    button.iconPop.tick(step, state.reducedMotion);
   }
 
   // Rest layout: the base group, then the selection group (divider, size
@@ -283,12 +335,77 @@ CanvasActionBar::update(const CanvasActionBarState& state,
   m_barHeight = barHeight;
   m_barDrawn = true;
   m_visual.setVisible(true);
+  m_haloVisual.setVisible(true);
+
+  // Jelly: the bar pops in from nothing, swells a little while the pointer
+  // is over it, stretches tall as it grows and bulges wide as it recoils; a
+  // held press squashes it. The long bar gives way less across than up and
+  // down. This deforms the drawing about the bar's centre, never the layout.
+  const float pop = std::max(0.0f, m_pop.value());
+  const float barHover = std::clamp(m_barHover.value(), 0.0f, 1.0f);
+  const float squash = CanvasChromeStyle::squash(
+    m_pop.velocity(), m_barHover.velocity(), pressHeld);
+  const float grow = pop * (1.0f + 0.03f * m_barHover.value());
+  CanvasActionBarDeform deform;
+  deform.pivotX = barX + barWidth * 0.5f;
+  deform.pivotY = barY + barHeight * 0.5f;
+  deform.scaleX = grow * (1.0f + 0.35f * squash);
+  deform.scaleY = grow * (1.0f - squash);
+  const float drawnX = deform.x(barX);
+  const float drawnY = deform.y(barY);
+  const float drawnWidth = barWidth * deform.scaleX;
+  const float drawnHeight = barHeight * deform.scaleY;
+  const bool barShown = drawnWidth > 2.0f && drawnHeight > 2.0f;
+  const float radius = drawnHeight * 0.5f;
+
+  // Beneath the bar: a soft drop shadow and a violet-to-cyan halo that
+  // breathes at rest and blooms while the pointer is over the bar.
+  const float breathe =
+    CanvasChromeStyle::breathe(static_cast<float>(m_clock), state.reducedMotion);
+  m_haloKey.begin().add({ barShown ? 1.0f : 0.0f,
+                          drawnX,
+                          drawnY,
+                          drawnWidth,
+                          drawnHeight,
+                          fit,
+                          barHover,
+                          breathe,
+                          std::min(1.0f, pop) });
+  if (m_haloKey.changed()) {
+    m_haloVisual.clearPrimitives();
+    if (barShown) {
+      GuiKit::drawSoftShadow(m_haloVisual,
+                             drawnX,
+                             drawnY,
+                             drawnWidth,
+                             drawnHeight,
+                             radius,
+                             12.0f * fit,
+                             (4.0f + 2.0f * barHover) * fit,
+                             UiTheme::glowShadow());
+      const ColorRgba halo = CanvasChromeStyle::halo(barHover);
+      GuiKit::drawRoundedBand(
+        m_haloVisual,
+        drawnX,
+        drawnY,
+        drawnWidth,
+        drawnHeight,
+        radius,
+        0.0f,
+        CanvasChromeStyle::haloWidth(breathe, barHover) * fit,
+        UiTheme::fade(halo,
+                      CanvasChromeStyle::haloOpacity(breathe, barHover) *
+                        std::min(1.0f, pop)),
+        UiTheme::transparentOf(halo));
+    }
+  }
 
   // The drawing depends only on these inputs; an idle bar keeps its
   // primitives and sends nothing.
-  m_key.begin().add({ barX,
-                      barY,
-                      barWidth,
+  m_key.begin().add({ drawnX,
+                      drawnY,
+                      drawnWidth,
+                      drawnHeight,
                       fit,
                       groupOpen,
                       chipOpacity,
@@ -297,56 +414,54 @@ CanvasActionBar::update(const CanvasActionBarState& state,
                       static_cast<float>(state.brushColor.r),
                       static_cast<float>(state.brushColor.g),
                       static_cast<float>(state.brushColor.b),
-                      static_cast<float>(m_chipRevision) });
+                      static_cast<float>(m_chipRevision),
+                      barHover });
   for (int index = 0; index < kButtonCount; ++index) {
     const Button& button = m_buttons[static_cast<std::size_t>(index)];
     m_key.add({ button.hover.value(),
+                button.hover.velocity(),
                 button.squish.value(),
+                button.iconPop.value(),
                 opacity[static_cast<std::size_t>(index)],
-                button.pressable ? 1.0f : 0.0f });
+                button.pressable ? 1.0f : 0.0f,
+                pressHeld && index == hovered ? 1.0f : 0.0f });
   }
   if (!m_key.changed()) {
     return action;
   }
   m_visual.clearPrimitives();
+  if (!barShown) {
+    return action;
+  }
 
   const ColorRgba cyan = UiTheme::accentCool();
   const ColorRgba violet = UiTheme::accentViolet();
-  const float radius = barHeight * 0.5f;
-  GuiKit::drawSoftShadow(m_visual,
-                         barX,
-                         barY,
-                         barWidth,
-                         barHeight,
-                         radius,
-                         12.0f * fit,
-                         4.0f * fit,
-                         UiTheme::glowShadow());
-  // A lit rim, cyan along the top and violet along the bottom, around a
-  // glass face, crowned by the menus' cyan-to-violet hairline.
-  GuiKit::drawRoundedGradientRect(
-    m_visual,
-    barX,
-    barY,
-    barWidth,
-    barHeight,
-    radius,
-    UiTheme::mix(UiTheme::glassRim(), cyan, 0.4f),
-    UiTheme::mix(UiTheme::glassRim(), violet, 0.4f));
+  // The settings button's tile: a rim lit teal at the top and indigo at the
+  // bottom around a deep teal-to-indigo face, brightening on hover, crowned
+  // by a cyan-to-violet hairline.
   GuiKit::drawRoundedGradientRect(m_visual,
-                                  barX + 1.0f,
-                                  barY + 1.0f,
-                                  barWidth - 2.0f,
-                                  barHeight - 2.0f,
+                                  drawnX,
+                                  drawnY,
+                                  drawnWidth,
+                                  drawnHeight,
+                                  radius,
+                                  CanvasChromeStyle::rimTop(barHover),
+                                  CanvasChromeStyle::rimBottom(barHover));
+  GuiKit::drawRoundedGradientRect(m_visual,
+                                  drawnX + 1.0f,
+                                  drawnY + 1.0f,
+                                  drawnWidth - 2.0f,
+                                  drawnHeight - 2.0f,
                                   std::max(0.0f, radius - 1.0f),
-                                  UiTheme::glassTop(),
-                                  UiTheme::glassBottom());
-  if (barWidth - radius * 2.0f > 2.0f) {
-    const ColorRgba crownCyan = UiTheme::fade(cyan, 0.7f);
-    const ColorRgba crownViolet = UiTheme::fade(violet, 0.7f);
-    m_visual.addGradientRect(barX + radius,
-                             barY + 1.0f,
-                             barWidth - radius * 2.0f,
+                                  CanvasChromeStyle::faceTop(barHover),
+                                  CanvasChromeStyle::faceBottom(barHover));
+  if (drawnWidth - radius * 2.0f > 2.0f) {
+    const float crown = 0.55f + 0.45f * barHover;
+    const ColorRgba crownCyan = UiTheme::fade(cyan, crown);
+    const ColorRgba crownViolet = UiTheme::fade(violet, crown);
+    m_visual.addGradientRect(drawnX + radius,
+                             drawnY + 1.0f,
+                             drawnWidth - radius * 2.0f,
                              1.5f,
                              crownCyan,
                              crownViolet,
@@ -357,20 +472,21 @@ CanvasActionBar::update(const CanvasActionBarState& state,
   // A hairline divides the base buttons from the selection group.
   if (chipOpacity > 0.0f) {
     const ColorRgba line = UiTheme::fade(UiTheme::divider(), chipOpacity);
-    m_visual.addGradientRect(dividerX,
-                             barY + 7.0f * fit,
+    m_visual.addGradientRect(deform.x(dividerX),
+                             deform.y(barY + 7.0f * fit),
                              1.0f,
-                             barHeight - 14.0f * fit,
+                             (barHeight - 14.0f * fit) * deform.scaleY,
                              line,
                              line,
                              UiTheme::transparentOf(line),
                              UiTheme::transparentOf(line));
     // The selection's size in a small cyan chip that pops as it changes.
-    const float pop = 1.0f + 0.12f * m_chipPop.value();
-    const float chipHeight = kChipHeight * fit * pop;
-    const float chipDrawnWidth = chipWidth * fit * pop;
-    const float chipCenterX = chipX + chipWidth * fit * 0.5f;
-    const float chipCenterY = barY + barHeight * 0.5f;
+    const float chipScale = 1.0f + 0.12f * m_chipPop.value();
+    const float chipHeight = kChipHeight * fit * chipScale * deform.scaleY;
+    const float chipDrawnWidth =
+      chipWidth * fit * chipScale * deform.scaleX;
+    const float chipCenterX = deform.x(chipX + chipWidth * fit * 0.5f);
+    const float chipCenterY = deform.y(barY + barHeight * 0.5f);
     GuiKit::drawRoundedRect(m_visual,
                             chipCenterX - chipDrawnWidth * 0.5f,
                             chipCenterY - chipHeight * 0.5f,
@@ -382,7 +498,8 @@ CanvasActionBar::update(const CanvasActionBarState& state,
                                        m_chipLabel,
                                        chipCenterX,
                                        chipCenterY,
-                                       kChipFontSize * fit * pop,
+                                       kChipFontSize * fit * chipScale *
+                                         deform.scaleY,
                                        UiTheme::fade(cyan, chipOpacity),
                                        0.6f);
   }
@@ -395,13 +512,26 @@ CanvasActionBar::update(const CanvasActionBarState& state,
     }
     const float hover = std::max(0.0f, button.hover.value());
     const float lit = std::min(1.0f, hover);
-    // Hover lifts a button at most a couple of pixels; a press flattens it
-    // and it jiggles back. Neither moves its hit area.
-    const float squish = std::clamp(button.squish.value(), -0.3f, 0.3f) * 0.5f;
-    const float faceWidth = button.width * (1.0f + squish * 0.4f);
-    const float faceHeight = button.height * (1.0f - squish);
-    const float centerX = button.x + button.width * 0.5f;
-    const float centerY = button.y + button.height * 0.5f - 1.5f * fit * lit;
+    const bool held = pressHeld && index == hovered;
+    // Each button is a little settings-button tile: hovered, it swells past
+    // its size and wobbles back, stretching tall as it grows and bulging
+    // wide as it recoils; a held press squashes it flat and sinks it, and
+    // the click's kick boings it back. Hover lifts it at most a couple of
+    // pixels. Only the drawing moves: it is hit at its rest rectangle.
+    const float jelly = std::clamp(
+      CanvasChromeStyle::squash(0.0f, button.hover.velocity(), held) +
+        std::clamp(button.squish.value(), -0.3f, 0.3f) * 0.5f,
+      -0.2f,
+      0.2f);
+    const float grow = 1.0f + 0.1f * hover;
+    const float iconPop = std::max(-0.5f, button.iconPop.value());
+    const float faceWidth =
+      button.width * deform.scaleX * grow * (1.0f + jelly * 0.6f);
+    const float faceHeight =
+      button.height * deform.scaleY * grow * (1.0f - jelly);
+    const float centerX = deform.x(button.x + button.width * 0.5f);
+    const float centerY = deform.y(button.y + button.height * 0.5f) -
+                          1.5f * fit * lit + (held ? 1.0f * fit : 0.0f);
     const float faceX = centerX - faceWidth * 0.5f;
     const float faceY = centerY - faceHeight * 0.5f;
     const float faceRadius = faceHeight * 0.5f;
@@ -413,14 +543,18 @@ CanvasActionBar::update(const CanvasActionBarState& state,
                            faceWidth * 0.7f,
                            faceHeight * 0.9f,
                            UiTheme::fade(tint, 0.16f * lit * shown));
+      // A lit tile of the bar's own teal-to-indigo, leaning violet at the
+      // bottom; destructive buttons warm toward red.
+      const ColorRgba litTop =
+        UiTheme::mix(CanvasChromeStyle::faceTop(1.0f), cyan, 0.3f);
+      const ColorRgba litBottom =
+        UiTheme::mix(CanvasChromeStyle::faceBottom(1.0f), violet, 0.45f);
       const ColorRgba top =
-        button.destructive
-          ? UiTheme::mix(UiTheme::selectionTop(), UiTheme::error(), 0.55f)
-          : UiTheme::selectionTop();
+        button.destructive ? UiTheme::mix(litTop, UiTheme::error(), 0.55f)
+                           : litTop;
       const ColorRgba bottom =
-        button.destructive
-          ? UiTheme::mix(UiTheme::selectionBottom(), UiTheme::error(), 0.4f)
-          : UiTheme::selectionBottom();
+        button.destructive ? UiTheme::mix(litBottom, UiTheme::error(), 0.4f)
+                           : litBottom;
       GuiKit::drawRoundedGradientRect(
         m_visual,
         faceX,
@@ -447,25 +581,29 @@ CanvasActionBar::update(const CanvasActionBarState& state,
                                 : UiTheme::textPrimary();
     const ColorRgba textColor =
       UiTheme::fade(UiTheme::mix(restText, hotText, lit), shown);
-    // The action's icon leads the label; it swells a little and warms
-    // toward the button's tint on hover.
-    const float fontSize = kFontSize * fit;
+    // The action's icon leads the label and warms toward the button's tint
+    // on hover. Both grow and squash with the tile, and the icon hops up and
+    // swells as the pointer arrives or the button is pressed.
+    const float contentScale = grow * (1.0f - jelly * 0.5f);
+    const float fontSize = kFontSize * fit * deform.scaleY * contentScale;
+    const float iconSize = kIconSize * fit * deform.scaleY * contentScale;
+    const float iconGap = kIconGap * fit * deform.scaleX * grow;
     const float labelWidth =
       GuiKit::measureEmphasizedText(button.label, fontSize, 1.0f);
-    const float contentWidth = (kIconSize + kIconGap) * fit + labelWidth;
+    const float contentWidth = iconSize + iconGap + labelWidth;
     const float contentX = centerX - contentWidth * 0.5f;
     const ColorRgba iconColor = UiTheme::fade(
       UiTheme::mix(restText, UiTheme::mix(hotText, tint, 0.5f), lit), shown);
     CanvasEditIcons::draw(m_visual,
                           button.action,
-                          contentX + kIconSize * fit * 0.5f,
-                          centerY,
-                          kIconSize * fit * (1.0f + 0.1f * lit),
+                          contentX + iconSize * 0.5f,
+                          centerY - 3.0f * fit * std::max(0.0f, iconPop),
+                          iconSize * (1.0f + 0.1f * lit + 0.3f * iconPop),
                           iconColor,
                           state.brushColor);
     GuiKit::drawEmphasizedTextCentered(m_visual,
                                        button.label,
-                                       contentX + (kIconSize + kIconGap) * fit +
+                                       contentX + iconSize + iconGap +
                                          labelWidth * 0.5f,
                                        centerY,
                                        fontSize,

@@ -81,7 +81,7 @@ framework, scripting language, or simulation API is introduced.
 ### Menus and selection
 
 F1 and New Simulation present a family selector followed by a ruleset selector
-filtered to that family. The pair is always validated and applied together;
+filtered to that family; both are drop-down lists (D-UI17). The pair is always validated and applied together;
 there is no state where a selected rule has a different family. The current
 family and ruleset are both visible in status and relevant rule-selection
 surfaces.

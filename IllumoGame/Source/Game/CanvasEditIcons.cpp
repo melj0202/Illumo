@@ -131,6 +131,41 @@ CanvasEditIcons::draw(GameVisual& visual,
       line(visual, frame, 0.0f, -0.1f, 0.0f, 0.28f);
       break;
     }
+    case CanvasEditAction::ResetCanvas: {
+      // A counter-clockwise arrow coming back round to its start: a 270
+      // degree arc open across the top, with a chevron at its end pointing
+      // along its travel.
+      const float degrees = 6.2831853f / 360.0f;
+      const float radius = 0.34f;
+      const float centerOffset = 0.04f;
+      float arc[26];
+      for (int index = 0; index < 13; ++index) {
+        const float angle =
+          (-60.0f + 22.5f * static_cast<float>(index)) * degrees;
+        arc[index * 2] = -std::cos(angle) * radius;
+        arc[index * 2 + 1] = std::sin(angle) * radius + centerOffset;
+      }
+      stroke(visual, frame, arc, 13, false);
+      // The arms lean back from the tip, 40 degrees either side of the arc's
+      // reversed direction of travel at 210 degrees.
+      const float endAngle = 210.0f * degrees;
+      const float backX = -std::sin(endAngle);
+      const float backY = -std::cos(endAngle);
+      const float spread = 40.0f * degrees;
+      const float arm = 0.2f;
+      const float tipX = arc[24];
+      const float tipY = arc[25];
+      const float chevron[] = {
+        tipX + (backX * std::cos(spread) - backY * std::sin(spread)) * arm,
+        tipY + (backX * std::sin(spread) + backY * std::cos(spread)) * arm,
+        tipX,
+        tipY,
+        tipX + (backX * std::cos(spread) + backY * std::sin(spread)) * arm,
+        tipY + (-backX * std::sin(spread) + backY * std::cos(spread)) * arm,
+      };
+      stroke(visual, frame, chevron, 3, false);
+      break;
+    }
     case CanvasEditAction::Copy: {
       // Two overlapping sheets; the back one shows only its free edges.
       const float front[] = { -0.1f, -0.1f, 0.44f, -0.1f,

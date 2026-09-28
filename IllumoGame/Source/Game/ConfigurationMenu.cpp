@@ -130,7 +130,7 @@ static const char* const kSettingHelp[] = {
   "Disable decorative motion and snap menu transitions.",
   "Draw CSim's animated pointer in place of the system cursor.",
   "Save the canvas to autosave.csim this often (console: load autosave).",
-  "Ask before clear_canvas empties the canvas."
+  "Ask before Clear empties the canvas or Reset restores its start."
 };
 
 static const char* const kFooterLabels[] = { "Apply changes",
@@ -319,22 +319,6 @@ parseDoubleText(const std::string& text,
   }
 }
 
-// A small arrowhead pointing left (direction -1) or right (+1).
-static void
-drawArrowhead(GameVisual& visual,
-              float centerX,
-              float centerY,
-              float direction,
-              ColorRgba color)
-{
-  const GuiPoint2 points[3] = {
-    GuiPoint2{ centerX - 2.5f * direction, centerY - 5.0f },
-    GuiPoint2{ centerX + 2.5f * direction, centerY },
-    GuiPoint2{ centerX - 2.5f * direction, centerY + 5.0f }
-  };
-  GuiKit::drawPolyline(visual, points, 3, 2.0f, color);
-}
-
 ConfigurationMenu::ConfigurationMenu(IRenderWindow* targetWindow,
                                      Renderer* targetRenderer)
   : window(targetWindow)
@@ -452,6 +436,8 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
   // Ignore a held click that opened the modal until its first release.
   pointer.reset(true);
   tilt.level();
+  dropdown.close();
+  listRow = -1;
   openState = true;
   setVisible(true);
   updateLayout();
@@ -1083,6 +1069,7 @@ ConfigurationMenu::tick(float deltaSeconds)
   }
   animator.tick(deltaSeconds);
   updateSprings(deltaSeconds);
+  dropdown.tick(deltaSeconds);
 }
 
 float
@@ -1120,6 +1107,8 @@ ConfigurationMenu::close()
 {
   openState = false;
   dragSetting = ConfigurationSetting::Count;
+  dropdown.close();
+  listRow = -1;
   pointer.reset(false);
   setVisible(false);
   // A music preview ends with the menu: the stored level (just applied, or
@@ -1442,6 +1431,11 @@ ConfigurationMenu::activateSelected()
     CSimSounds::play(CSimSound::MenuSelect);
     return ConfigurationMenuAction::None;
   }
+  if (kind == ControlKind::Choice) {
+    // ENTER opens the family or ruleset list.
+    openList(selectedRow);
+    return ConfigurationMenuAction::None;
+  }
   cycleSelected(1);
   return ConfigurationMenuAction::None;
 }
@@ -1568,11 +1562,118 @@ ConfigurationMenu::handlePointer(bool wheelScrolled,
       }
     }
   } else if (kind == ControlKind::Choice) {
-    if (mouseX >= valueLeft()) {
-      cycleSelected(mouseX < valueLeft() + 36.0f ? -1 : 1);
-    }
+    // A click anywhere on the family or ruleset row opens its list.
+    openList(row);
   } else {
     cycleSelected(1);
+  }
+}
+
+std::array<float, 4>
+ConfigurationMenu::valueBox(int row) const
+{
+  const float cardHeight = rowHeight - 4.0f;
+  const float boxHeight = std::min(30.0f, cardHeight - 8.0f);
+  const float centerY = rowTop(row) + cardHeight * 0.5f;
+  return { valueLeft(),
+           centerY - boxHeight * 0.5f,
+           valueRight() - valueLeft(),
+           boxHeight };
+}
+
+void
+ConfigurationMenu::openList(int row)
+{
+  const ConfigurationSetting setting = settingAt(row);
+  std::vector<GuiDropdownItem> items;
+  listIds.clear();
+  int current = -1;
+  if (setting == ConfigurationSetting::Family) {
+    // Families that have rules, each with how many it offers.
+    for (const std::string& id : CellContext::GetKnownFamilyStrings()) {
+      const std::size_t rules = CellContext::GetKnownRuleStrings(id).size();
+      if (rules == 0u) {
+        continue;
+      }
+      const RuleFamilyDefinition* definition =
+        RuleSetRegistry::instance().getFamilyDefinition(id);
+      if (id == family) {
+        current = static_cast<int>(items.size());
+      }
+      items.push_back({ definition == nullptr ? id : definition->name,
+                        std::to_string(rules) +
+                          (rules == 1u ? " rule" : " rules") });
+      listIds.push_back(id);
+    }
+  } else if (setting == ConfigurationSetting::Ruleset) {
+    for (const std::string& id : CellContext::GetKnownRuleStrings(family)) {
+      if (id == ruleSet) {
+        current = static_cast<int>(items.size());
+      }
+      items.push_back({ displayRuleSetName(id), "" });
+      listIds.push_back(id);
+    }
+  } else {
+    return;
+  }
+  const std::array<float, 4> box = valueBox(row);
+  dropdown.open(std::move(items),
+                current,
+                box[0],
+                box[1],
+                box[2],
+                box[3],
+                8.0f,
+                panelFit.virtualHeight - 8.0f,
+                reducedUiMotion);
+  if (dropdown.isOpen()) {
+    listRow = row;
+    CSimSounds::play(CSimSound::MenuSelect);
+  }
+}
+
+void
+ConfigurationMenu::chooseFromList(int index)
+{
+  if (index < 0 || index >= static_cast<int>(listIds.size()) || listRow < 0) {
+    return;
+  }
+  const std::string& id = listIds[static_cast<std::size_t>(index)];
+  if (settingAt(listRow) == ConfigurationSetting::Family) {
+    if (id != family) {
+      // A new family keeps the ruleset only if it belongs to that family.
+      family = id;
+      const std::vector<std::string> rules =
+        CellContext::GetKnownRuleStrings(id);
+      if (!rules.empty() &&
+          std::find(rules.begin(), rules.end(), ruleSet) == rules.end()) {
+        ruleSet = rules.front();
+      }
+    }
+  } else {
+    ruleSet = id;
+  }
+  animator.triggerValuePulse(1);
+  CSimSounds::play(CSimSound::MenuSelect);
+  replaceFieldOnType = true;
+  errorMessage.clear();
+}
+
+void
+ConfigurationMenu::updateList(InputManager* inputManager)
+{
+  pointer.sample(window, inputManager, panelFit.layoutScale);
+  const int before = dropdown.highlightedIndex();
+  const GuiDropdownResult result = dropdown.update(inputManager, pointer);
+  if (result == GuiDropdownResult::Chosen) {
+    chooseFromList(dropdown.chosenIndex());
+  } else if (result == GuiDropdownResult::Dismissed) {
+    CSimSounds::play(CSimSound::MenuBack);
+  } else if (dropdown.highlightedIndex() != before) {
+    CSimSounds::play(CSimSound::MenuHover);
+  }
+  if (!dropdown.isOpen()) {
+    listRow = -1;
   }
 }
 
@@ -1583,6 +1684,11 @@ ConfigurationMenu::update(InputManager* inputManager)
     return ConfigurationMenuAction::None;
   }
   updateLayout();
+  if (dropdown.isOpen()) {
+    // Escape closes only the list; the settings stay open.
+    updateList(inputManager);
+    return ConfigurationMenuAction::None;
+  }
 
   ConfigurationMenuAction action = ConfigurationMenuAction::None;
   std::queue<InputManager::KeyPressEvent>& keyQueue =
@@ -1962,10 +2068,19 @@ ConfigurationMenu::drawRowControl(ConfigurationSetting setting,
   }
 
   if (kind == ControlKind::Choice) {
+    // A drop-down field: the value, then a caret at the right end that
+    // points down while closed and up while its list is open.
     const ColorRgba arrow = UiTheme::applyOpacity(
       UiTheme::mix(UiTheme::textMuted(), cyan, focus), rowOpacity);
-    drawArrowhead(visual, boxX + 14.0f, centerY, -1.0f, arrow);
-    drawArrowhead(visual, boxX + boxWidth - 14.0f, centerY, 1.0f, arrow);
+    const bool listOpen = dropdown.isOpen() && listRow >= 0 &&
+                          settingAt(listRow) == setting;
+    GuiKit::drawChevron(visual,
+                        boxX + boxWidth - 16.0f,
+                        listOpen ? centerY - 2.0f : centerY + 2.5f,
+                        4.5f,
+                        listOpen ? 4.0f : -4.0f,
+                        1.8f,
+                        arrow);
     std::string value;
     if (setting == ConfigurationSetting::Family) {
       const RuleFamilyDefinition* definition =
@@ -1975,13 +2090,8 @@ ConfigurationMenu::drawRowControl(ConfigurationSetting setting,
       value = displayRuleSetName(ruleSet);
     }
     const float valueSize = rowFontSize * 0.94f;
-    const float innerLeft = boxX + 26.0f;
-    const float innerWidth = boxWidth - 52.0f;
-    const float valueWidth =
-      GuiKit::measureEmphasizedText(value, valueSize, 0.0f);
-    const float valueX =
-      innerLeft + std::max(0.0f, (innerWidth - valueWidth) * 0.5f) + nudge;
-    visual.addText(value, valueX, centerY - valueSize * 0.5f, valueSize, ink);
+    visual.addText(
+      value, boxX + 12.0f + nudge, centerY - valueSize * 0.5f, valueSize, ink);
     return;
   }
 
@@ -2405,6 +2515,15 @@ ConfigurationMenu::rebuildVisual()
 
   drawRows(panelOpacity, breathe);
   drawFooter(panelOpacity, breathe);
+  if (dropdown.isOpen() && listRow >= 0) {
+    // The list rides its field as the panel tilts, above everything else.
+    const std::array<float, 4> box = valueBox(listRow);
+    dropdown.follow(box[0], box[1]);
+    dropdown.draw(layers[kListCardLayer],
+                  layers[kListDropLayer],
+                  layers[kListTextLayer],
+                  panelOpacity);
+  }
   for (GameVisual& layer : layers) {
     GuiPanelLayout::scaleFromScreenOrigin(layer, visualScale);
   }

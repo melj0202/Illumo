@@ -75,6 +75,7 @@ if(BUILD_TESTING)
     Tests/TestCanvasInf.cpp
     Tests/TestWorldTopology.cpp
     Tests/TestConfigurationMenu.cpp
+    Tests/TestNewSimulationMenu.cpp
     Tests/TestCSimSounds.cpp
     Tests/TestExitConfirmDialog.cpp
     Tests/TestIllumoGameConfig.cpp

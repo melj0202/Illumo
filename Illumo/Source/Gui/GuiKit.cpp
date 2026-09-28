@@ -576,14 +576,46 @@ GuiKit::drawPolyline(GameVisual& visual,
   }
 }
 
-void
-GuiKit::drawChevron(GameVisual& visual,
-                    float centerX,
-                    float tipY,
-                    float halfWidth,
-                    float depth,
-                    float thickness,
-                    ColorRgba color)
+// One solid quad whose four (across, along) corners are given in chevron
+// space; `sideways` swaps the axes so the same geometry points left/right.
+static void
+addChevronQuad(GameVisual& visual,
+               bool sideways,
+               const float (&corners)[8],
+               ColorRgba color)
+{
+  float points[8];
+  for (int index = 0; index < 4; ++index) {
+    points[index * 2] = sideways ? corners[index * 2 + 1] : corners[index * 2];
+    points[index * 2 + 1] =
+      sideways ? corners[index * 2] : corners[index * 2 + 1];
+  }
+  visual.addGradientQuad(points[0],
+                         points[1],
+                         points[2],
+                         points[3],
+                         points[4],
+                         points[5],
+                         points[6],
+                         points[7],
+                         color,
+                         color,
+                         color,
+                         color);
+}
+
+// A mitered chevron in chevron space: the tip at (centerX, tipY), the arms
+// ending at centerX -/+ halfWidth, tipY + depth. With `sideways` the axes
+// swap: centerX runs vertically and tipY horizontally.
+static void
+drawChevronQuads(GameVisual& visual,
+                 float centerX,
+                 float tipY,
+                 float halfWidth,
+                 float depth,
+                 float thickness,
+                 ColorRgba color,
+                 bool sideways)
 {
   if (!std::isfinite(centerX) || !std::isfinite(tipY) ||
       !std::isfinite(halfWidth) || !std::isfinite(depth) ||
@@ -609,30 +641,44 @@ GuiKit::drawChevron(GameVisual& visual,
   const float endY = tipY + depth;
   const float rightX = centerX + halfWidth;
   const float leftX = centerX - halfWidth;
-  visual.addGradientQuad(rightX + nx * half,
-                         endY + ny * half,
-                         rightX - nx * half,
-                         endY - ny * half,
-                         centerX,
-                         outerTipY,
-                         centerX,
-                         innerTipY,
-                         color,
-                         color,
-                         color,
-                         color);
-  visual.addGradientQuad(leftX - nx * half,
-                         endY + ny * half,
-                         leftX + nx * half,
-                         endY - ny * half,
-                         centerX,
-                         outerTipY,
-                         centerX,
-                         innerTipY,
-                         color,
-                         color,
-                         color,
-                         color);
+  const float rightArm[8] = { rightX + nx * half, endY + ny * half,
+                              rightX - nx * half, endY - ny * half,
+                              centerX,            outerTipY,
+                              centerX,            innerTipY };
+  const float leftArm[8] = { leftX - nx * half, endY + ny * half,
+                             leftX + nx * half, endY - ny * half,
+                             centerX,           outerTipY,
+                             centerX,           innerTipY };
+  addChevronQuad(visual, sideways, rightArm, color);
+  addChevronQuad(visual, sideways, leftArm, color);
+}
+
+void
+GuiKit::drawChevron(GameVisual& visual,
+                    float centerX,
+                    float tipY,
+                    float halfWidth,
+                    float depth,
+                    float thickness,
+                    ColorRgba color)
+{
+  drawChevronQuads(
+    visual, centerX, tipY, halfWidth, depth, thickness, color, false);
+}
+
+void
+GuiKit::drawSideChevron(GameVisual& visual,
+                        float tipX,
+                        float centerY,
+                        float halfHeight,
+                        float depth,
+                        float thickness,
+                        ColorRgba color)
+{
+  // In chevron space the arms end at tip + depth; a right-pointing chevron's
+  // arms end to the left of its tip.
+  drawChevronQuads(
+    visual, centerY, tipX, halfHeight, -depth, thickness, color, true);
 }
 
 void
@@ -837,6 +883,21 @@ GuiKit::drawSheen(GameVisual& visual,
   const float travel = (maxX - minX) + band * 2.0f + skew;
   const float centerBottom = minX - band - skew + travel * progress;
   const float centerTop = centerBottom + skew;
+  // The band is clipped to the inset, so it swells in as it enters and dies
+  // away as it leaves: by the time any part of it is cut at an edge it is
+  // nearly clear, so no cut shows. The ramps span a good share of the width
+  // it crosses (not just its own), so even a quick sweep across a wide row
+  // brightens and fades over many frames instead of popping in and out.
+  const float reach = std::min({ centerBottom - minX,
+                                 centerTop - minX,
+                                 maxX - centerBottom,
+                                 maxX - centerTop });
+  const float ramp = std::max(band * 0.75f, (maxX - minX) * 0.4f);
+  const float entry = std::clamp(reach / ramp, 0.0f, 1.0f);
+  if (entry <= 0.0f) {
+    return;
+  }
+  color = UiTheme::fade(color, entry * entry * (3.0f - 2.0f * entry));
   const float top = y + 1.0f;
   const float bottom = y + height - 1.0f;
   const ColorRgba clear = UiTheme::transparentOf(color);
@@ -1047,8 +1108,21 @@ GuiKit::drawGlassPanel(GameVisual& visual,
     std::clamp(glintX + glintWidth * 0.5f, lineX, lineX + lineWidth);
   const float glintRight =
     std::clamp(glintX + glintWidth, lineX, lineX + lineWidth);
-  const ColorRgba white =
-    UiTheme::applyOpacity(ColorRgba{ 236, 252, 255, 230 }, opacity);
+  // The glint swells in as its peak enters the line and dies away as it
+  // leaves, over a good share of the line, so it never pops in or out at
+  // either end.
+  const float glintReach =
+    std::min(glintX + glintWidth * 0.5f - lineX,
+             lineX + lineWidth - (glintX + glintWidth * 0.5f));
+  const float glintRamp =
+    std::max({ 1.0f, glintWidth * 0.75f, lineWidth * 0.3f });
+  const float glintEntry = std::clamp(glintReach / glintRamp, 0.0f, 1.0f);
+  if (glintEntry <= 0.0f) {
+    return;
+  }
+  const ColorRgba white = UiTheme::fade(
+    UiTheme::applyOpacity(ColorRgba{ 236, 252, 255, 230 }, opacity),
+    glintEntry * glintEntry * (3.0f - 2.0f * glintEntry));
   const ColorRgba clearWhite = UiTheme::transparentOf(white);
   if (glintMid > glintLeft) {
     visual.addGradientRect(glintLeft,

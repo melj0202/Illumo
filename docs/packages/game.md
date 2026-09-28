@@ -454,10 +454,14 @@ Modal overlays and the console hide hints and selection outlines and stop
 active strokes. Explicit console pattern commands remain mode-independent.
 Pattern text is a clipboard/console side path and does not bump the sparse v3
 save format (D-G1). `Ctrl+C`/`Ctrl+X`/`Ctrl+V` are editor clipboard keys; a
-full clear is `clear_canvas` or the toolbar's Clear. In Edit mode a glass
-toolbar (`CanvasActionBar`) rides the edit chrome along the top edge with
-Save, Load (the platform pickers, as `save_dialog`/`load_dialog`), Paste and
-Clear (which asks first when Confirm clearing is on); a selection adds its
+full clear is `clear_canvas` or the toolbar's Clear, and `reset_canvas` or
+the toolbar's Reset puts back the active rule's starting pattern (the one a
+new canvas opens with), restarts the generation count and returns to the home
+view (D-UI16). In Edit mode a toolbar (`CanvasActionBar`, wearing the
+settings button's tile and bouncy springs through `CanvasChromeStyle`, as the
+collapsed paint bubble does) rides the edit chrome along the top edge with
+Save, Load (the platform pickers, as `save_dialog`/`load_dialog`), Paste,
+Reset and Clear (both ask first when Confirm clearing is on); a selection adds its
 size and Copy, Cut, Fill (with the brush), Erase and Deselect. A right press
 inside the selection opens its context menu (`CanvasContextMenu`: Cut, Copy,
 Paste here, Fill, Erase, Deselect) instead of erasing; outside a selection
@@ -479,7 +483,7 @@ keys or flat), cell glow, grid lines, the corner FPS counter and memory
 readout (`PerformanceOverlay`, drawn by the guest over every screen), zoom
 sensitivity, invert zoom, arrow-key pan speed, autosave (`autosave.csim` in
 private storage; `load autosave` restores it) and confirm clearing
-(`clear_canvas` asks; `clear_canvas yes` skips it). `SimulatorSettings` owns
+(`clear_canvas` and `reset_canvas` ask; `yes` skips it). `SimulatorSettings` owns
 every setting's key, default and range; the title and the canvas read, check
 and write through it (D-E31). Numeric settings (world width/height, TPS,
 speed multiplier, FPS cap, fade speed, sound volume, UI scale, glow, zoom
@@ -488,7 +492,14 @@ stepped with Left/Right or dragged; typing digits still enters an exact value
 where the setting is text-backed. The UI scale slider starts at Auto, which
 sizes the interface to the window (D-UI11; the default for new settings) and
 shows the factor it picked, then runs 1x to 4x in fractional steps. MSAA and
-cell style are segmented pickers and booleans are switches. MSAA is read
+cell style are segmented pickers and booleans are switches. Cell family and
+ruleset, here and on the New Canvas screen (`NewSimulationMenu`), are
+drop-down fields (`GuiDropdownList`, D-UI17): Enter or a click opens a
+scrolling list of every family (with its rule count) or of the chosen
+family's rules, browsed with the arrows, Page Up/Down, Home/End, the wheel
+or type-ahead letters and chosen with Enter or a click; Escape closes only the
+list. Left/Right still step to the neighbouring value, and a new family keeps
+the ruleset only if it belongs to it (else takes its first rule). MSAA is read
 only when the host window is created: Display wire version 4 saves it for
 the next window, and after Apply, when it differs from the running window's
 samples, the canvas and main menu ask "Restart CSim?" (Later / Restart now,

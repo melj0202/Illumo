@@ -1237,26 +1237,46 @@ corner EDIT/NORMAL badge (`ModeBadge`, a glass pill mirroring the hamburger
 button that drops in as a bead, stretches into a pill, holds, then melts
 away; it replaced the simulator's `SplashText` label) use the same chrome; the
 drawer and the hint footer stay opaque. Edit mode adds a glass toolbar along
-the top edge (`CanvasActionBar`: Save, Load, Paste, Clear, and while cells are
+the top edge (`CanvasActionBar`: Save, Load, Paste, Reset (back to the active
+rule's starting pattern, D-UI16), Clear, and while cells are
 selected a size chip with Copy, Cut, Fill, Erase and Deselect that pours out
 of it on a spring) and the selection's right-click menu
 (`CanvasContextMenu`, a card that grows from the pointer with a liquid hover
 drop, keycap shortcuts and desktop press-drag-release, keyboard and dismiss
 behaviour); every button and row leads with its action's line icon from
 `CanvasEditIcons` (Fill's is the brush swatch), and both only report an
-action that `CanvasScene` runs (D-UI15).
+action that `CanvasScene` runs (D-UI15). The toolbar and the collapsed paint
+bubble wear the settings button's tile (`CanvasChromeStyle`: teal-to-indigo
+face and rim, violet-to-cyan halo) on its bouncy springs: the toolbar pops in
+from nothing and squashes like jelly, and each of its buttons swells past its
+size and wobbles back on hover, squashes and sinks under a held press and
+boings back on release while its icon hops; all of it deforms only the
+drawing, never where a button is hit. The
+bubble stretches and squashes above its hidden base; the bubble's look melts
+into the glass drawer as it opens. Breathing halos redraw every frame in
+their own small layers (settings button, toolbar); the bubble's halo only
+blooms on hover, which keeps warmed frames allocation-free
+(`IllumoGame.Wasm.PackageFrameAllocations`).
 `GuiKit` supplies the chrome: `drawRoundedRect` (three rectangles plus packed
 two-wedge corner quads), `drawRoundedGradientRect` and its left-to-right
 twin `drawRoundedSideGradientRect`, `drawRoundedBand` (the
 shared core of outlines, soft shadows and glows), `drawSoftShadow`,
-`drawSoftGlow`, `drawVignette`, `drawSheen`, `drawGlassPanel`
+`drawSoftGlow`, `drawVignette`, `drawSheen` (the band swells in and dies
+away over about 40% of the width it crosses, so a sweep or pointer glare
+never pops in or shows a cut edge where it is clipped; the panel hairline's
+glint does the same over 30% of its line),
+`drawGlassPanel`
 (`drawRoundedPanel` forwards to it), `drawLiquidSelection` (non-overlapping
 slices across the travel, so translucent faces stay even), `drawSplash` and
-keycap hints. Rounded corners subdivide by radius: 15-degree steps through
+keycap hints. Fields that pick one of many values open a `GuiDropdownList`
+(D-UI17): a scrolling glass list with keys, type-ahead, wheel and pointer,
+drawn in its own layers above the menu. Rounded corners subdivide by radius: 15-degree steps through
 radius 15, finer beyond (up to 24 per quarter), so large radii such as the
 paint bubble stay round. Line icons use `drawPolyline` (mitered joins and
-optional square caps, one quad per segment) and `drawChevron`, never
-separately drawn line segments, whose butt ends leave notches at corners.
+optional square caps, one quad per segment) and `drawChevron` (with its
+left/right twin `drawSideChevron`), never separately drawn line segments,
+whose butt ends leave notches at corners, and never the font's `<`/`>`
+glyphs, which pixelate at arrow sizes.
 The canvas chrome (paint drawer, inspector, hamburger and its hint) follows
 the menus: card faces, the liquid drop for the chosen brush, keycap hints,
 spaced-caps eyebrows and label/value rows. The hamburger is a cyan-to-violet
@@ -1987,6 +2007,8 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-UI12** | CSim adds Canvas and Controls settings tabs. `SimulatorSettings` owns the new keys, defaults and ranges for the canvas and main menu: `startPaused` (canvases open in EDIT; off opens them running), `cellStyle` (`led`/`flat`), `cellGlow` (0-2), `gridLines`, `showFPS`/`showMemory`, `zoomStep` (wheel zoom per notch, 0.01-0.5), `invertZoom`, `panSpeed` (arrow-key pan in screen pixels per second, 0 off), `autosaveMinutes` (writes `autosave.csim` to private storage; 0 off) and `confirmClear` (`clear_canvas` opens the confirmation dialog; `clear_canvas yes` skips it). The cell look travels to the host Canvas shader in the cell quad's colour attribute (glow / 2, LED keys, grid lines), which `GLMesh` now binds for `Pos3Color3Uv2`; no uniform or frame schema changes. The FPS/memory readout is CSim's own `PerformanceOverlay`, drawn by the guest over every screen because the engine's `DebugModule` overlay exists only in development builds; memory is the store's linear memory. |
 | **D-UI13** | In-application restart for settings read only at startup (today MSAA). `IRenderWindow::requestRestart()` is a close request that remembers a relaunch; a deferred close (`Illumo::processCloseRequest`) drops it, and `RunIllumoApplication` relaunches after the engine and logger have shut down (`RelaunchCurrentProcess`: `CreateProcessW` with the original command line on Windows; `posix_spawn` of `/proc/self/exe` on Linux, unverified). Guests ask with `GuestUpdateFlags::RequestRestart` (4) beside `RequestClose`; `WasmGameModule` honours it only for a Display-granted guest when the runtime allows it (`setRestartAllowed`, off for captures, benchmarks and tests), else it is an ordinary close. Display wire version 4 appends `msaa` (saved to the host `msaa` for its next window) and `activeMsaa` (the running window's samples, `IRenderWindow::getMsaaSamples`, unknown for capture windows); before it, CSim's MSAA setting never reached the host. After Apply, CSim compares the applied MSAA with `activeMsaa` and, when they differ, asks "Restart CSim?" (Later / Restart now) in the canvas and the main menu. |
 | **D-UI14** | The engine's brand (`docs/brand`) belongs to Illumo, not to products. `GuiEngineBrand` (`Illumo/Gui`) draws it from images in `Illumo/Assets/Branding` (`/engine/Branding` in a guest), pre-sized by `tools/make_brand_assets.py` because guest textures have no mipmaps. `RuntimeShell` plays `GuiEngineSplash` on every interactive launch (`RuntimeShellOptions::splashImage`): the neon logo on the brand's dark ground strikes like a neon tube (a plain fade with reduced motion), holds and fades in 2.3 s; any key but Grave, or a fresh click, skips it; the console stays usable. The program is started first but neither updated nor drawn until the splash's last frame has shown, so its first scene enters afterwards, and a close during the splash ends the run without asking it. Capture and benchmark runs, and a missing logo, have no splash. `GuiEngineBadge` is a "Powered by" label over the flat wordmark; every `GuestProgram` preloads its image, and CSim's title screen draws it in the lower left corner. `IllumoRuntime.exe` also embeds the brand icon as its `GLFW_ICON` resource. |
+| **D-UI16** | The canvas toolbar gains Reset beside Clear, and the console `reset_canvas [yes]`: the world goes back to the active rule's starting pattern (the same `seedInitialPattern` a new canvas opens with), the generation count starts over and the camera returns to the home view. Topology, ruleset and mode are kept. `confirmClear` guards it too (`ExitConfirmDialog::openResetCanvas`). No engine, ABI or save-format change. |
+| **D-UI17** | `GuiDropdownList` joins `Illumo/Gui` for glass-menu fields that pick one of many values: it opens below its field (above when more rows fit there), shows up to eight rows scrolled by the arrows, Page Up/Down, Home/End, the wheel and type-ahead, marks the current value, and chooses with Enter or a click; Escape or a press elsewhere closes it. It pops open on a `kBoing` spring, highlights with `drawLiquidSelection`, draws into three caller-owned layers above the menu and follows its field as the panel tilts. CSim's F1 settings and New Canvas screen use it for Cell family (with rule counts) and Ruleset, replacing the left/right steppers as the primary picker (Left/Right still step). No ABI or save-format change. |
 | **D-DOC1** | Established one first-party documentation tree; refined by D-DOC2. |
 | **D-DOC2** | Canonical technical documentation remains under `docs/`; `illumo.tex` is the prose book and `architecture-map.tex` the chart pack. Root/nested `AGENTS.md` and `.agent/` are operational-guidance exceptions. |
 | **D-T1** | Independent compile-efficient test runners expose exact cases; `IllumoWorkspace` aggregates all registered runners and combined Clang/LLVM coverage enforces at least 85% production line coverage across their linked production code. |

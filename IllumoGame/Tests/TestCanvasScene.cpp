@@ -514,7 +514,7 @@ testStartRegistersGameFeatures()
            "module starts in edit mode");
   testEqSize(g,
              fixture.registry.GetCommandNames().size(),
-             31,
+             32,
              "all game commands are registered");
   testTrue(
     g, fixture.registry.HasCommand("select"), "select command registered");
@@ -705,6 +705,78 @@ testWireworldSeedAndBrush()
               CanvasSceneTestAccess::getWireworldBrush(fixture.module)),
             static_cast<int>(WireworldRuleSet::CELL_HEAD),
             "brush can select head for left-paint");
+}
+
+static void
+testResetCanvas()
+{
+  testSection("CanvasScene: reset_canvas puts back the starting pattern");
+  CellGameFixture fixture(16, 12);
+  fixture.module.stop();
+  fixture.started = false;
+  fixture.env.setVar("FamilyString", "WIREWORLD_FAMILY");
+  fixture.env.setVar("RuleSetString", "WIREWORLD");
+  fixture.env.setVar("ModeString", "WIREWORLD");
+  fixture.started = fixture.module.start(fixture.context);
+  CellContext* context = CanvasSceneTestAccess::getCellContext(fixture.module);
+  testTrue(g, fixture.started && context != nullptr, "Wireworld canvas starts");
+  if (context == nullptr) {
+    return;
+  }
+  SparseCellGrid* grid = context->getGrid();
+  const std::size_t seededCount = grid->getStoredCellCount();
+
+  // Draw elsewhere, run the electron along and look away.
+  fixture.execute("setcell", { "20", "20", "3" });
+  fixture.execute("step", { "3" });
+  fixture.camera.SetPositionPrecise(400.0, -250.0);
+  testTrue(g,
+           grid->getCell({ 20, 20 }) == WireworldRuleSet::CELL_CONDUCTOR &&
+             grid->getCell({ -4, 0 }) != WireworldRuleSet::CELL_HEAD &&
+             CanvasSceneTestAccess::getSimulationGeneration(fixture.module) ==
+               3u,
+           "the world has moved on from its starting pattern");
+
+  // Confirm clearing is on by default: the command asks first.
+  fixture.execute("reset_canvas");
+  ExitConfirmDialog* dialog =
+    CanvasSceneTestAccess::getExitConfirmDialog(fixture.module);
+  testTrue(g,
+           dialog != nullptr && dialog->isOpen() &&
+             grid->getCell({ 20, 20 }) == WireworldRuleSet::CELL_CONDUCTOR,
+           "reset_canvas asks before replacing the world");
+  if (dialog == nullptr) {
+    return;
+  }
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Y, InputAction::Press, 0 });
+  fixture.module.update(0.016);
+  testTrue(g, !dialog->isOpen(), "confirming closes the dialog");
+  testTrue(g,
+           grid->getCell({ -4, 0 }) == WireworldRuleSet::CELL_HEAD &&
+             grid->getCell({ -3, 0 }) == WireworldRuleSet::CELL_TAIL &&
+             grid->getCell({ -2, 0 }) == WireworldRuleSet::CELL_CONDUCTOR &&
+             grid->getCell({ 20, 20 }) == SparseCellGrid::BackgroundState &&
+             grid->getStoredCellCount() == seededCount,
+           "confirming puts back exactly the electron on its wire");
+  const glm::dvec2 home = fixture.camera.GetPositionPrecise();
+  testTrue(g,
+           CanvasSceneTestAccess::getSimulationGeneration(fixture.module) ==
+               0u &&
+             home.x == 0.0 && home.y == 0.0,
+           "reset starts the count over and returns to the home view");
+
+  fixture.execute("setcell", { "20", "20", "3" });
+  fixture.execute("reset_canvas", { "yes" });
+  testTrue(g,
+           !dialog->isOpen() &&
+             grid->getCell({ 20, 20 }) == SparseCellGrid::BackgroundState &&
+             grid->getStoredCellCount() == seededCount,
+           "reset_canvas yes resets without asking");
+  fixture.execute("reset_canvas", { "now" });
+  testTrue(g,
+           historyContains(fixture.console, "Usage: reset_canvas"),
+           "reset_canvas rejects other arguments");
 }
 
 static void
@@ -3890,6 +3962,8 @@ registerCanvasSceneTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CanvasScene.ModeSwitchSound", []() {
     return runCanvasSceneCase(testCanvasModeSwitchSound);
   });
+  registry.add("IllumoGame.CanvasScene.ResetCanvas",
+               []() { return runCanvasSceneCase(testResetCanvas); });
   registry.add("IllumoGame.CanvasScene.EditMusic",
                []() { return runCanvasSceneCase(testCanvasEditMusic); });
   registry.add("IllumoGame.CanvasScene.ReducedCanvasReturn",

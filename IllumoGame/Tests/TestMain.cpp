@@ -31,6 +31,8 @@ registerWorldTopologyTests(IllumoTestRegistry& registry);
 void
 registerConfigurationMenuTests(IllumoTestRegistry& registry);
 void
+registerNewSimulationMenuTests(IllumoTestRegistry& registry);
+void
 registerCSimSoundsTests(IllumoTestRegistry& registry);
 void
 registerExitConfirmDialogTests(IllumoTestRegistry& registry);
@@ -57,6 +59,7 @@ createRegistry()
   registerCanvasInfTests(registry);
   registerWorldTopologyTests(registry);
   registerConfigurationMenuTests(registry);
+  registerNewSimulationMenuTests(registry);
   registerCSimSoundsTests(registry);
   registerExitConfirmDialogTests(registry);
   registerIllumoGameConfigTests(registry);

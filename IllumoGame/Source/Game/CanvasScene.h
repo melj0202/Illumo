@@ -69,6 +69,9 @@ private:
   // Saves to private storage once the persisted interval has elapsed.
   void updateAutosave(double dt);
   void clearCanvas();
+  // Replaces the world with the active rule's starting pattern, the one a new
+  // canvas opens with, and returns the camera to the home view that frames it.
+  void resetCanvas();
   void registerConsoleCommands();
   void unregisterConsoleCommands();
   bool SaveCellGame(std::string filename);
@@ -214,7 +217,10 @@ private:
   // The paint drawer draws in three layers so its breathing drop can redraw
   // alone: the blob, header and cards; the chosen brush's drop; then the
   // swatches, labels and hints. The outer two redraw only when their keys
-  // change.
+  // change. Beneath them, the collapsed bubble's halo (the settings button's,
+  // CanvasChromeStyle) redraws alone as it blooms on hover.
+  GameVisual m_paintBubbleHaloVisual;
+  GuiDrawKey m_paintBubbleHaloKey;
   GameVisual m_paintPaletteVisual;
   GameVisual m_paintDropVisual;
   GameVisual m_paintPaletteTopVisual;

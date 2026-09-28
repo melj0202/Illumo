@@ -102,6 +102,17 @@ public:
                           float depth,
                           float thickness,
                           ColorRgba color);
+  // The same chevron on its side, for "next" and "previous" arrows: the tip
+  // sits at (tipX, centerY) and the arms end at tipX - depth,
+  // centerY -/+ halfHeight. A positive depth points it right, a negative
+  // one left.
+  static void drawSideChevron(GameVisual& visual,
+                              float tipX,
+                              float centerY,
+                              float halfHeight,
+                              float depth,
+                              float thickness,
+                              ColorRgba color);
 
   // --- Living-glass chrome (per-vertex-color shapes) ---
   // Rounded rects and bands subdivide each corner by its radius: 15-degree

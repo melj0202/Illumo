@@ -27,18 +27,21 @@ struct CanvasActionBarState
 };
 
 // The canvas's edit toolbar: a glass pill centered along the top edge in EDIT
-// mode. It always offers Save, Load, Paste and Clear; while cells are
-// selected a second
+// mode. It always offers Save, Load, Paste, Reset (the rule's starting
+// pattern) and Clear; while cells are selected a second
 // group pours out of it with the selection's size and Copy, Cut, Fill, Erase
-// and Deselect. Buttons swell on jelly springs when hovered and squish when
-// pressed. Presentation and hit testing only: the canvas runs the returned
-// action. Buttons are hit where they were drawn last frame.
+// and Deselect. It wears the settings button's look (CanvasChromeStyle): a
+// teal-to-indigo tile with a breathing violet-to-cyan halo, popping in from
+// nothing and squashing like jelly on bouncy springs. Buttons swell when
+// hovered and squish when pressed. Presentation and hit testing only: the
+// canvas runs the returned action. Buttons are hit where they were laid out
+// last frame; the pop and squash deform only the drawing.
 class CanvasActionBar
 {
 public:
   static constexpr float kTop = 12.0f;
   static constexpr float kHeight = 34.0f;
-  static constexpr int kButtonCount = 9;
+  static constexpr int kButtonCount = 10;
 
   CanvasActionBar();
   CanvasActionBar(const CanvasActionBar&) = delete;
@@ -60,6 +63,9 @@ public:
   bool isPointerOver() const { return m_pointerOver; }
   bool isVisible() const { return m_visual.isVisible(); }
   GameVisual& getVisual() { return m_visual; }
+  // The drop shadow and breathing halo, drawn beneath getVisual(). It
+  // redraws as the halo breathes while the bar keeps its primitives.
+  GameVisual& getHaloVisual() { return m_haloVisual; }
   // Center of a button as last drawn, in window pixels; false when it is not
   // shown or cannot be pressed.
   bool buttonCenter(CanvasEditAction action, float* x, float* y) const;
@@ -79,12 +85,24 @@ private:
     bool pressable = false;
     GuiSpring hover;
     GuiSpring squish;
+    // Rests at 0; kicked as the pointer arrives and on a press, so the icon
+    // hops and settles.
+    GuiSpring iconPop;
   };
 
   float uiScale() const;
 
   GameVisual m_visual;
   GuiDrawKey m_key;
+  GameVisual m_haloVisual;
+  GuiDrawKey m_haloKey;
+  // The bar pops in from nothing each time it appears, swells a little while
+  // the pointer is over it, and jiggles when a button is pressed.
+  GuiSpring m_pop;
+  GuiSpring m_barHover;
+  bool m_shown = false;
+  // Seconds, for the halo's idle breath.
+  double m_clock = 0.0;
   IRenderWindow* m_window = nullptr;
   Renderer* m_renderer = nullptr;
   std::array<Button, kButtonCount> m_buttons;

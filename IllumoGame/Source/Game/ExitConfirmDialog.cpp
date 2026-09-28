@@ -70,6 +70,34 @@ ExitConfirmDialog::configureClearCanvas()
 }
 
 void
+ExitConfirmDialog::configureResetCanvas()
+{
+  m_dialog.setTitle("RESET THE CANVAS?");
+  m_dialog.setMessage(
+    "The world goes back to this rule's starting pattern. This can't be "
+    "undone.");
+  m_dialog.clearButtons();
+
+  GuiButtonDef keepBtn;
+  keepBtn.label = "Keep";
+  keepBtn.actionId = static_cast<int>(ExitConfirmAction::Cancel);
+  keepBtn.shortcutKey = KeyCode::N;
+  keepBtn.shortcut = "ESC / N";
+  keepBtn.isCancel = true;
+  keepBtn.isDefault = true;
+
+  GuiButtonDef resetBtn;
+  resetBtn.label = "Reset";
+  resetBtn.actionId = static_cast<int>(ExitConfirmAction::ResetCanvas);
+  resetBtn.shortcutKey = KeyCode::Y;
+  resetBtn.shortcut = "Y";
+  resetBtn.isDestructive = true;
+
+  m_dialog.addButton(keepBtn);
+  m_dialog.addButton(resetBtn);
+}
+
+void
 ExitConfirmDialog::configureRestart(bool inCanvas)
 {
   m_dialog.setTitle("RESTART CSIM?");
@@ -128,6 +156,16 @@ ExitConfirmDialog::openClearCanvas()
 }
 
 void
+ExitConfirmDialog::openResetCanvas()
+{
+  configureResetCanvas();
+  m_dialog.selectButton(0);
+  m_dialog.open();
+  m_lastHovered = -1;
+  setVisible(true);
+}
+
+void
 ExitConfirmDialog::close()
 {
   m_dialog.close();
@@ -165,6 +203,9 @@ ExitConfirmDialog::update(InputManager* inputManager)
     case static_cast<int>(ExitConfirmAction::ClearCanvas):
       CSimSounds::play(CSimSound::MenuSelect);
       return ExitConfirmAction::ClearCanvas;
+    case static_cast<int>(ExitConfirmAction::ResetCanvas):
+      CSimSounds::play(CSimSound::MenuSelect);
+      return ExitConfirmAction::ResetCanvas;
     case static_cast<int>(ExitConfirmAction::Restart):
       CSimSounds::play(CSimSound::MenuSelect);
       return ExitConfirmAction::Restart;

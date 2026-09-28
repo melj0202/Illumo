@@ -1,11 +1,13 @@
 #pragma once
 
 #include "MenuMotifs.h"
+#include <Illumo/Gui/GuiDropdownList.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 class InputManager;
 class DrawList;
@@ -44,13 +46,17 @@ public:
   GameVisual& getVisual() { return layers[kContentLayer]; }
   // Adds every layer, back to front.
   void addDrawables(DrawList& scene);
+  // The family or ruleset list, open while the player picks from it.
+  const GuiDropdownList& getDropdownForTesting() const { return dropdown; }
 
 private:
   static constexpr int kRowCount = 8;
   // Back to front. The glass; the header; the glider, the badge's glow and
   // its label; the cards; the selection drop; the rows' content and footer;
-  // and the create row's breathing value. The animated layers stay small, so
-  // the host re-records only those while the menu idles (D-R29).
+  // the create row's breathing value; then an open family or ruleset list's
+  // card, highlight drop and labels, above everything. The animated layers
+  // stay small, so the host re-records only those while the menu idles
+  // (D-R29).
   enum Layer : std::size_t
   {
     kGlassLayer,
@@ -60,14 +66,26 @@ private:
     kDropLayer,
     kContentLayer,
     kPulseLayer,
+    kListCardLayer,
+    kListDropLayer,
+    kListTextLayer,
     kLayerCount
-  };  void rebuild();
+  };
+  void rebuild();
   void drawRows(unsigned char opacity, float breathe);
   void drawFooter(float height, unsigned char opacity);
   void change(int direction);
   void select(int direction);
   void selectRow(int row);
   NewSimulationAction activate();
+  // The family (row 0) and ruleset (row 1) rows pick from a drop-down list.
+  static bool isListRow(int row) { return row == 0 || row == 1; }
+  // The value box of a row, in the menu's virtual space.
+  void valueBox(int row, float* boxX, float* boxY, float* boxWidth,
+                float* boxHeight) const;
+  void openList(int row);
+  void chooseFromList(int index);
+  NewSimulationAction updateList(InputManager* input);
   IRenderWindow* window;
   Renderer* renderer;
   std::array<GameVisual, kLayerCount> layers;
@@ -85,6 +103,11 @@ private:
   // The panel swivels toward the pointer; x and y carry the body shift, so
   // rows are hit where they are drawn.
   GuiPanelTilt tilt;
+  // The open family or ruleset list, the row it belongs to, and the ids its
+  // items stand for.
+  GuiDropdownList dropdown;
+  int listRow = -1;
+  std::vector<std::string> listIds;
   CellMotif motif;
   float x = 0;
   float y = 0;

@@ -3,6 +3,7 @@
 #include "BuiltinPatterns.h"
 #include "CSimPlatform.h"
 #include "CSimSounds.h"
+#include "CanvasChromeStyle.h"
 #include "CanvasCoordinatePolicy.h"
 #include "IllumoCodec.h"
 #include "TitleScene.h"
@@ -485,8 +486,10 @@ CanvasScene::start(IllumoContext& startContext)
   m_hamburgerHaloKey.invalidate();
   m_hamburgerKey.invalidate();
 
-  for (GameVisual* visual :
-       { &m_paintPaletteVisual, &m_paintDropVisual, &m_paintPaletteTopVisual }) {
+  for (GameVisual* visual : { &m_paintBubbleHaloVisual,
+                              &m_paintPaletteVisual,
+                              &m_paintDropVisual,
+                              &m_paintPaletteTopVisual }) {
     visual->setRenderer(ic->renderer);
     visual->setWindow(ic->window);
     visual->setSpace(PrimitiveSpace::Pixels);
@@ -494,6 +497,7 @@ CanvasScene::start(IllumoContext& startContext)
     visual->prepare(ic->renderer);
     visual->setVisible(false);
   }
+  m_paintBubbleHaloKey.invalidate();
   m_paintPaletteKey.invalidate();
   m_paintDropKey.invalidate();
   m_paintPaletteTopKey.invalidate();
@@ -504,14 +508,15 @@ CanvasScene::start(IllumoContext& startContext)
   m_paintSelectPlaced = false;
   m_paintPaletteReveal = 0.0f;
   m_editChromeSpring.configure(GuiMotion::kJelly);
-  m_paintPaletteChromeSpring.configure(GuiMotion::kJelly);
+  // The paint bubble bounces in on the settings button's springier feel.
+  m_paintPaletteChromeSpring.configure(GuiMotion::kBoing);
   m_editChromeSpring.snapTo(m_editChromeReveal);
   m_paintPaletteChromeSpring.snapTo(m_paintPaletteChromeReveal);
   m_editChromeLift = m_editChromeReveal;
   m_paintPaletteChromeLift = m_paintPaletteChromeReveal;
   m_paintPaletteHeightMorph.configure(GuiMotion::kJelly);
   m_paintPaletteWidthMorph.configure(GuiMotion::kBoing);
-  m_paintPaletteBubbleHover.configure(GuiMotion::kJelly);
+  m_paintPaletteBubbleHover.configure(GuiMotion::kBoing);
   m_paintPaletteHeightMorph.snapTo(0.0f);
   m_paintPaletteWidthMorph.snapTo(0.0f);
   m_paintPaletteBubbleHover.snapTo(0.0f);
@@ -1311,6 +1316,27 @@ CanvasScene::registerConsoleCommands()
     "Set every cell to the empty state (asks first unless yes is given)");
 
   ic->commandRegistry->RegisterCommand(
+    "reset_canvas",
+    [this](const std::vector<std::string>& args) {
+      const bool confirmed = args.size() == 1u && args[0] == "yes";
+      if (!args.empty() && !confirmed) {
+        ic->commandLine->logError("Usage: reset_canvas [yes]");
+        return;
+      }
+      // Confirm clearing guards a reset too; "yes" skips it.
+      if (!confirmed && exitConfirmDialog != nullptr &&
+          SimulatorSettings::flag(ic->envVars, "confirmClear", true)) {
+        exitConfirmDialog->openResetCanvas();
+        ic->commandLine->logNormal(
+          "Confirm in the dialog to reset the canvas (or: reset_canvas yes)");
+        return;
+      }
+      resetCanvas();
+    },
+    "reset_canvas [yes]",
+    "Put back the rule's starting pattern (asks first unless yes is given)");
+
+  ic->commandRegistry->RegisterCommand(
     "randomize",
     [this](const std::vector<std::string>& args) {
       double density = 25.0;
@@ -1619,7 +1645,7 @@ CanvasScene::unregisterConsoleCommands()
     "ruleset", "run",          "save",          "save_dialog",  "setcell",
     "speed",   "speedfactor",  "status",        "step",         "tps",
     "select",  "copy",         "cut",           "paste",        "stamp",
-    "rle",     "plaintext",    "inspect",       "menu"
+    "rle",     "plaintext",    "inspect",       "menu",         "reset_canvas"
   };
   for (const char* commandName : commandNames) {
     ic->commandRegistry->UnregisterCommand(commandName);
@@ -1963,6 +1989,9 @@ CanvasScene::update(double dt)
     } else if (action == ExitConfirmAction::ClearCanvas) {
       exitConfirmDialog->close();
       clearCanvas();
+    } else if (action == ExitConfirmAction::ResetCanvas) {
+      exitConfirmDialog->close();
+      resetCanvas();
     } else if (action == ExitConfirmAction::Restart) {
       exitConfirmDialog->close();
       Logger::LogInfo("Restarting to apply settings read at startup");
@@ -2382,11 +2411,14 @@ CanvasScene::stop()
   m_hamburgerHaloKey.invalidate();
   m_hamburgerKey.invalidate();
   m_hamburgerShown = false;
-  for (GameVisual* visual :
-       { &m_paintPaletteVisual, &m_paintDropVisual, &m_paintPaletteTopVisual }) {
+  for (GameVisual* visual : { &m_paintBubbleHaloVisual,
+                              &m_paintPaletteVisual,
+                              &m_paintDropVisual,
+                              &m_paintPaletteTopVisual }) {
     visual->clearPrimitives();
     visual->setVisible(false);
   }
+  m_paintBubbleHaloKey.invalidate();
   m_paintPaletteKey.invalidate();
   m_paintDropKey.invalidate();
   m_paintPaletteTopKey.invalidate();
@@ -2925,6 +2957,16 @@ CanvasScene::runEditAction(CanvasEditAction action, bool fromContextMenu)
         exitConfirmDialog->openClearCanvas();
       } else {
         clearCanvas();
+      }
+      break;
+    case CanvasEditAction::ResetCanvas:
+      // Confirm clearing guards a reset too: both discard the current world.
+      if (exitConfirmDialog != nullptr &&
+          SimulatorSettings::flag(ic->envVars, "confirmClear", true)) {
+        ic->inputManager->clearCharQueue();
+        exitConfirmDialog->openResetCanvas();
+      } else {
+        resetCanvas();
       }
       break;
     case CanvasEditAction::Save:
@@ -3582,6 +3624,25 @@ struct DrawerGradient
 static const float kPaletteBubbleDiameter = 56.0f;
 static const float kPaletteBubblePeek = 40.0f;
 
+// The colour a top-to-bottom gradient must reach at its full height so that
+// it shows `bottom` where its visible top `share` ends (the bubble peeks only
+// partly above the footer).
+static ColorRgba
+extendGradient(ColorRgba top, ColorRgba bottom, float share)
+{
+  const float scale = 1.0f / std::clamp(share, 0.25f, 1.0f);
+  const auto channel = [scale](unsigned char from, unsigned char to) {
+    const float value =
+      static_cast<float>(from) +
+      (static_cast<float>(to) - static_cast<float>(from)) * scale;
+    return static_cast<unsigned char>(std::clamp(value, 0.0f, 255.0f));
+  };
+  return ColorRgba{ channel(top.r, bottom.r),
+                    channel(top.g, bottom.g),
+                    channel(top.b, bottom.b),
+                    bottom.a };
+}
+
 // One frame of the bubble-to-drawer morph, in palette space.
 struct PaletteMorph
 {
@@ -3630,6 +3691,7 @@ void
 CanvasScene::updatePaintPalette(double dt)
 {
   // Hidden frames keep each layer's primitives and key for when it returns.
+  m_paintBubbleHaloVisual.setVisible(false);
   m_paintPaletteVisual.setVisible(false);
   m_paintDropVisual.setVisible(false);
   m_paintPaletteTopVisual.setVisible(false);
@@ -3824,6 +3886,30 @@ CanvasScene::updatePaintPalette(double dt)
     paletteInteractive && my < screenHeight &&
     (bubbleHovered || GuiKit::isPointInRect(
                         mx, my, blob.left, blob.top, blob.width, blob.height));
+  // How much of the blob is still the collapsed bubble: it wears the settings
+  // button's look and jelly, which melt away as it grows into the drawer.
+  const float bubbleLook =
+    std::clamp(1.0f - std::max(widthMorph, heightMorph), 0.0f, 1.0f);
+  // Jelly, as on the settings button: the bubble stretches tall as it springs
+  // up and as the hover swells it, bulges wide as it recoils, and squashes
+  // under a held press. Its hidden bottom stays put behind the footer. This
+  // deforms the drawing only; the bubble is hit by its unsquashed circle.
+  const float bubbleSquash =
+    CanvasChromeStyle::squash(m_paintPaletteChromeSpring.velocity(),
+                              m_paintPaletteBubbleHover.velocity(),
+                              bubbleHovered && leftDown) *
+    bubbleLook;
+  if (bubbleSquash != 0.0f) {
+    const float blobBottom = blob.top + blob.height;
+    const float squashedWidth = blob.width * (1.0f + bubbleSquash);
+    blob.height *= 1.0f - bubbleSquash;
+    blob.top = blobBottom - blob.height;
+    blob.left = centerX - squashedWidth * 0.5f;
+    blob.width = squashedWidth;
+    blob.radius = std::max(
+      0.0f,
+      std::min(blob.radius, std::min(blob.width, blob.height) * 0.5f - 0.5f));
+  }
   double* paletteScroll = ic->inputManager->getMouseScrollOffset();
   if (paletteScroll != nullptr && m_paintPaletteHovered &&
       contentReveal > 0.5f && *paletteScroll != 0.0) {
@@ -3945,6 +4031,45 @@ CanvasScene::updatePaintPalette(double dt)
   const float headerSpring = m_paintHeaderHover.value();
   const float chipPop = m_paintChipPop.value();
 
+  // Beneath the bubble, the settings button's violet-to-cyan halo blooms on
+  // hover and fades as the drawer opens. It holds a steady half breath at
+  // rest: a breathing layer resends its shapes every frame, and the settings
+  // button and the toolbar already breathe beside it.
+  const float bubbleHover = std::clamp(hover, 0.0f, 1.0f);
+  const float bubbleBreathe = CanvasChromeStyle::breathe(0.0f, true);
+  const float haloStrength =
+    bubbleLook * std::clamp(m_paintPaletteChromeLift, 0.0f, 1.0f);
+  m_paintBubbleHaloKey.begin().add({ fit,
+                                     haloStrength,
+                                     blob.left,
+                                     blob.top,
+                                     blob.width,
+                                     blob.height,
+                                     blob.radius,
+                                     bubbleHover,
+                                     bubbleBreathe });
+  if (m_paintBubbleHaloKey.changed()) {
+    m_paintBubbleHaloVisual.clearPrimitives();
+    if (haloStrength > 0.01f) {
+      const ColorRgba halo = CanvasChromeStyle::halo(bubbleHover);
+      GuiKit::drawRoundedBand(
+        m_paintBubbleHaloVisual,
+        blob.left,
+        blob.top,
+        blob.width,
+        blob.height,
+        blob.radius,
+        0.0f,
+        CanvasChromeStyle::haloWidth(bubbleBreathe, bubbleHover),
+        UiTheme::fade(halo,
+                      CanvasChromeStyle::haloOpacity(bubbleBreathe,
+                                                     bubbleHover) *
+                        haloStrength),
+        UiTheme::transparentOf(halo));
+    }
+    placeLayer(m_paintBubbleHaloVisual);
+  }
+
   // The blob, its header and the cards.
   m_paintPaletteKey.begin().add({ fit,
                                   centerX,
@@ -3986,6 +4111,24 @@ CanvasScene::updatePaintPalette(double dt)
                                  UiTheme::accentCool(),
                                  headerHovered ? 0.45f : 0.25f * hover);
     rim.a = 255;
+    // The collapsed bubble wears the settings button's tile: a rim lit teal
+    // at the top and indigo at the bottom around a teal-to-indigo face. Its
+    // gradients reach indigo where the footer cuts it off, not at its hidden
+    // bottom.
+    const float bubbleTint = std::clamp(hover, 0.0f, 1.0f);
+    const float peekShare = kPaletteBubblePeek / std::max(1.0f, blob.height);
+    const ColorRgba rimTop =
+      UiTheme::mix(rim, CanvasChromeStyle::rimTop(bubbleTint), bubbleLook);
+    const ColorRgba rimBottom = UiTheme::mix(
+      rim,
+      extendGradient(CanvasChromeStyle::rimTop(bubbleTint),
+                     CanvasChromeStyle::rimBottom(bubbleTint),
+                     peekShare),
+      bubbleLook);
+    const ColorRgba bubbleFaceBottom =
+      extendGradient(CanvasChromeStyle::faceTop(bubbleTint),
+                     CanvasChromeStyle::faceBottom(bubbleTint),
+                     peekShare);
     // The same soft drop shadow as the hamburger button, so the bubble and
     // the drawer sit above the canvas like the rest of the chrome; hover
     // lifts it.
@@ -3998,35 +4141,28 @@ CanvasScene::updatePaintPalette(double dt)
                            10.0f,
                            3.0f + 2.0f * std::min(1.0f, hover),
                            UiTheme::glowShadow());
-    GuiKit::drawRoundedRect(m_paintPaletteVisual,
-                            blob.left,
-                            blob.top,
-                            blob.width,
-                            blob.height,
-                            blob.radius,
-                            rim);
-    if (hover > 0.01f) {
-      // A hovered bubble glows as it swells.
-      GuiKit::drawRoundedBand(
-        m_paintPaletteVisual,
-        blob.left,
-        blob.top,
-        blob.width,
-        blob.height,
-        blob.radius,
-        0.0f,
-        10.0f,
-        UiTheme::fade(UiTheme::accentCool(), 0.3f * std::min(1.0f, hover)),
-        UiTheme::transparentOf(UiTheme::accentCool()));
-    }
+    // Its halo (m_paintBubbleHaloVisual) glows beneath it as it swells.
     GuiKit::drawRoundedGradientRect(m_paintPaletteVisual,
-                                    blob.left + 1.0f,
-                                    blob.top + 1.0f,
-                                    blob.width - 2.0f,
-                                    blob.height - 2.0f,
-                                    std::max(0.0f, blob.radius - 1.0f),
-                                    surfaceAt(blob.top + 1.0f),
-                                    surfaceAt(blob.top + blob.height - 1.0f));
+                                    blob.left,
+                                    blob.top,
+                                    blob.width,
+                                    blob.height,
+                                    blob.radius,
+                                    rimTop,
+                                    rimBottom);
+    GuiKit::drawRoundedGradientRect(
+      m_paintPaletteVisual,
+      blob.left + 1.0f,
+      blob.top + 1.0f,
+      blob.width - 2.0f,
+      blob.height - 2.0f,
+      std::max(0.0f, blob.radius - 1.0f),
+      UiTheme::mix(surfaceAt(blob.top + 1.0f),
+                   CanvasChromeStyle::faceTop(bubbleTint),
+                   bubbleLook),
+      UiTheme::mix(surfaceAt(blob.top + blob.height - 1.0f),
+                   bubbleFaceBottom,
+                   bubbleLook));
     // A cyan-to-violet hairline crowns the flat top of the blob.
     const float crownInset = std::max(14.0f, blob.radius);
     if (blob.width - 2.0f * crownInset > 4.0f) {
@@ -4543,6 +4679,7 @@ CanvasScene::updatePaintPalette(double dt)
     fadeContent(m_paintPaletteTopVisual, 0u, 0u);
     placeLayer(m_paintPaletteTopVisual);
   }
+  m_paintBubbleHaloVisual.setVisible(true);
   m_paintPaletteVisual.setVisible(true);
   m_paintDropVisual.setVisible(true);
   m_paintPaletteTopVisual.setVisible(true);
@@ -4684,8 +4821,7 @@ CanvasScene::updateHamburgerVisual(double dt)
   // A slow clock for the idle breath and the hovered bars' ripple.
   m_hamburgerClock = std::fmod(m_hamburgerClock + step, 60.0);
   const float clock = static_cast<float>(m_hamburgerClock);
-  const float breathe =
-    reducedMotion ? 0.5f : 0.5f + 0.5f * std::sin(clock * 6.2831853f / 3.2f);
+  const float breathe = CanvasChromeStyle::breathe(clock, reducedMotion);
 
   const float hoverSpring = m_hamburgerHover.value();
   const float hover = std::clamp(hoverSpring, 0.0f, 1.0f);
@@ -4696,11 +4832,8 @@ CanvasScene::updateHamburgerVisual(double dt)
   // Jelly: the tile stretches tall while it grows and bulges wide as it
   // recoils, driven by how fast the pop and hover springs are moving. A held
   // press squashes it flat.
-  const float squash = std::clamp(-0.004f * m_hamburgerPop.velocity() -
-                                    0.008f * m_hamburgerHover.velocity() +
-                                    (isPressed ? 0.08f : 0.0f),
-                                  -0.14f,
-                                  0.14f);
+  const float squash = CanvasChromeStyle::squash(
+    m_hamburgerPop.velocity(), m_hamburgerHover.velocity(), isPressed);
   const float grow = pop * (1.0f + 0.1f * hoverSpring);
   const float tileWidth = hamburgerSize * grow * (1.0f + squash);
   const float tileHeight = hamburgerSize * grow * (1.0f - squash);
@@ -4731,7 +4864,7 @@ CanvasScene::updateHamburgerVisual(double dt)
                              10.0f,
                              (isPressed ? 1.0f : 3.0f) + 2.0f * hover,
                              UiTheme::glowShadow());
-      const ColorRgba halo = UiTheme::mix(violet, cyan, 0.4f + 0.6f * hover);
+      const ColorRgba halo = CanvasChromeStyle::halo(hover);
       GuiKit::drawRoundedBand(
         m_hamburgerHaloVisual,
         tileX,
@@ -4740,8 +4873,8 @@ CanvasScene::updateHamburgerVisual(double dt)
         tileHeight,
         radius,
         0.0f,
-        7.0f + 3.0f * breathe + 5.0f * hover,
-        UiTheme::fade(halo, (0.14f + 0.08f * breathe + 0.26f * hover) * pop),
+        CanvasChromeStyle::haloWidth(breathe, hover),
+        UiTheme::fade(halo, CanvasChromeStyle::haloOpacity(breathe, hover) * pop),
         UiTheme::transparentOf(halo));
     }
   }
@@ -4799,21 +4932,16 @@ CanvasScene::updateHamburgerVisual(double dt)
       tileWidth,
       tileHeight,
       radius,
-      isPressed ? cyan
-                : UiTheme::mix(ColorRgba{ 70, 160, 196, 255 }, cyan, hover),
-      isPressed ? cyan
-                : UiTheme::mix(ColorRgba{ 114, 88, 204, 255 }, violet, hover));
-    GuiKit::drawRoundedGradientRect(
-      hamburgerVisual,
-      tileX + 1.0f,
-      tileY + 1.0f,
-      tileWidth - 2.0f,
-      tileHeight - 2.0f,
-      std::max(0.0f, radius - 1.0f),
-      UiTheme::mix(
-        ColorRgba{ 30, 74, 104, 255 }, ColorRgba{ 44, 128, 160, 255 }, hover),
-      UiTheme::mix(
-        ColorRgba{ 46, 34, 104, 255 }, ColorRgba{ 74, 54, 156, 255 }, hover));
+      isPressed ? cyan : CanvasChromeStyle::rimTop(hover),
+      isPressed ? cyan : CanvasChromeStyle::rimBottom(hover));
+    GuiKit::drawRoundedGradientRect(hamburgerVisual,
+                                    tileX + 1.0f,
+                                    tileY + 1.0f,
+                                    tileWidth - 2.0f,
+                                    tileHeight - 2.0f,
+                                    std::max(0.0f, radius - 1.0f),
+                                    CanvasChromeStyle::faceTop(hover),
+                                    CanvasChromeStyle::faceBottom(hover));
     // A cyan-to-violet hairline crowns the flat top, as on the paint drawer.
     const float crownInset = std::max(3.0f, radius);
     if (tileWidth - 2.0f * crownInset > 2.0f) {
@@ -5473,6 +5601,21 @@ CanvasScene::clearCanvas()
 }
 
 void
+CanvasScene::resetCanvas()
+{
+  prepareGridMutation();
+  cellContext->getGrid()->clear();
+  seedInitialPattern();
+  simulationGeneration = 0;
+  resetCameraToHome();
+  updateVisualTargets();
+  cellContext->getCanvasView()->snapVisualToTargets();
+  ic->commandLine->logSuccess("Canvas reset to " +
+                              ruleDisplayName(cellContext->getRuleSetString()) +
+                              "'s starting pattern");
+}
+
+void
 CanvasScene::CameraRotate()
 {
 }
@@ -5802,6 +5945,7 @@ CanvasScene::dispatch(DrawList& frame)
     scene->AddDrawable(&selectionVisual, RenderLayerId::UI);
   }
   if (m_paintPaletteVisual.isVisible()) {
+    scene->AddDrawable(&m_paintBubbleHaloVisual, RenderLayerId::UI);
     scene->AddDrawable(&m_paintPaletteVisual, RenderLayerId::UI);
     scene->AddDrawable(&m_paintDropVisual, RenderLayerId::UI);
     scene->AddDrawable(&m_paintPaletteTopVisual, RenderLayerId::UI);
@@ -5814,6 +5958,7 @@ CanvasScene::dispatch(DrawList& frame)
     scene->AddDrawable(&inspectorVisual, RenderLayerId::UI);
   }
   if (m_actionBar.isVisible()) {
+    scene->AddDrawable(&m_actionBar.getHaloVisual(), RenderLayerId::UI);
     scene->AddDrawable(&m_actionBar.getVisual(), RenderLayerId::UI);
   }
   if (modeBadge.isVisible()) {

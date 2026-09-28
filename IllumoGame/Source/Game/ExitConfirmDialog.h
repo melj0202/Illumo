@@ -15,12 +15,14 @@ enum class ExitConfirmAction
   Cancel,
   MainMenu,
   ClearCanvas,
+  ResetCanvas,
   Restart
 };
 
 // Primitive-composed confirmation overlay backed by Illumo::Gui::GuiDialog.
 // It asks before leaving (open), before clearing the canvas
-// (openClearCanvas), or whether to restart now for settings that only a
+// (openClearCanvas), before putting back the rule's starting pattern
+// (openResetCanvas), or whether to restart now for settings that only a
 // restart applies (openRestart); the owner treats each as the same modal.
 class ExitConfirmDialog : public DrawableBase
 {
@@ -33,6 +35,7 @@ public:
 
   void open();
   void openClearCanvas();
+  void openResetCanvas();
   // inCanvas warns that the open world closes with the restart.
   void openRestart(bool inCanvas);
   void close();
@@ -58,6 +61,7 @@ public:
 private:
   void configureExit();
   void configureClearCanvas();
+  void configureResetCanvas();
   void configureRestart(bool inCanvas);
 
   GuiDialog m_dialog;
