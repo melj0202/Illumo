@@ -16,6 +16,7 @@
 #include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/AssetSource.h>
@@ -3847,6 +3848,9 @@ CanvasScene::updatePaintPalette(double dt)
     CSimSounds::play(CSimSound::MenuHover);
   }
   m_paintPaletteToggleHovered = headerHovered;
+  if (headerHovered) {
+    GuiPointerHint::markInteractive();
+  }
   if (clicked && headerHovered) {
     m_paintPaletteExpanded = !m_paintPaletteExpanded;
     CSimSounds::play(m_paintPaletteExpanded
@@ -3970,6 +3974,7 @@ CanvasScene::updatePaintPalette(double dt)
     GuiSpring& cardHover = m_paintCardHover[card];
     GuiSpring& cardSquish = m_paintCardSquish[card];
     if (hovered) {
+      GuiPointerHint::markInteractive();
       m_paintPaletteHoveredCard = static_cast<int>(card);
       if (clicked) {
         m_paintBrush = static_cast<unsigned char>(state);
@@ -4794,6 +4799,9 @@ CanvasScene::updateHamburgerVisual(double dt)
 
   const bool wasHovered = hamburgerHovered;
   hamburgerHovered = isHamburgerHovered();
+  if (hamburgerHovered) {
+    GuiPointerHint::markInteractive();
+  }
   if (hamburgerHovered && !wasHovered) {
     CSimSounds::play(CSimSound::MenuHover);
   }

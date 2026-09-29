@@ -5,6 +5,7 @@
 
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -214,6 +215,9 @@ CanvasActionBar::update(const CanvasActionBarState& state,
     }
   }
   m_hovered = hovered;
+  if (hovered >= 0) {
+    GuiPointerHint::markInteractive();
+  }
   CanvasEditAction action = CanvasEditAction::None;
   if (hovered >= 0 && leftClicked) {
     Button& pressed = m_buttons[static_cast<std::size_t>(hovered)];

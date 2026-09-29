@@ -30,12 +30,15 @@ public:
   void prepare(IRenderWindow* window, Renderer* renderer);
   // pointerX/Y are in the visual's (UI-scale) pixels. A hidden cursor
   // forgets its motion so it reappears still, at the pointer.
+  // `interactive` turns the arrow into a pointing hand while the pointer is
+  // over something that can be pressed; the hand's fingertip is the tip.
   void update(float deltaSeconds,
               float pointerX,
               float pointerY,
               bool visible,
               bool pressed,
-              bool reducedMotion);
+              bool reducedMotion,
+              bool interactive = false);
 
   GameVisual& getVisual() { return m_visual; }
   bool isVisible() const { return m_visual.isVisible(); }
@@ -43,6 +46,7 @@ public:
   // scale, for tests.
   float lean() const { return m_lean.value(); }
   float pressScale() const { return m_press.value(); }
+  bool isHand() const { return m_hand; }
   float tipX() const { return m_x; }
   float tipY() const { return m_y; }
 
@@ -63,6 +67,9 @@ private:
   float m_ambient = 0.0f;
   GuiSpring m_lean;
   GuiSpring m_press;
+  // Boings the body back to full size when the arrow and the hand swap.
+  GuiSpring m_swap;
+  bool m_hand = false;
   // Where the tip was and when, newest first, for the afterimage.
   std::array<float, kHistoryLength> m_historyX{};
   std::array<float, kHistoryLength> m_historyY{};

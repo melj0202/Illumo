@@ -4,6 +4,7 @@
 
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -328,6 +329,9 @@ CanvasContextMenu::update(InputManager* input,
   // Rows answer once they have faded in; they are hit where they rest.
   const bool ready = m_pop.value() >= 0.5f;
   const int hovered = ready ? rowAt(mx, my) : -1;
+  if (hovered >= 0) {
+    GuiPointerHint::markInteractive();
+  }
   if (moved && hovered != m_selected) {
     // The pointer leaving the rows drops the highlight, as on the desktop.
     if (hovered >= 0) {

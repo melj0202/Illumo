@@ -6,6 +6,7 @@
 #include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -1461,6 +1462,7 @@ ConfigurationMenu::handlePointer(bool wheelScrolled,
   const float mouseX = pointer.x();
   const float mouseY = pointer.y();
   if (dragSetting != ConfigurationSetting::Count) {
+    GuiPointerHint::markInteractive();
     if (pointer.pressed()) {
       if (pointer.moved()) {
         dragSliderTo(dragSetting, mouseX);
@@ -1486,6 +1488,7 @@ ConfigurationMenu::handlePointer(bool wheelScrolled,
     if (GuiKit::isPointInRect(
           mouseX, mouseY, bounds[0], bounds[1], bounds[2], bounds[3])) {
       hoveredTab = tab;
+      GuiPointerHint::markInteractive();
       if (clicked) {
         selectTab(tab);
       }
@@ -1498,6 +1501,7 @@ ConfigurationMenu::handlePointer(bool wheelScrolled,
     if (GuiKit::isPointInRect(
           mouseX, mouseY, bounds[0], bounds[1], bounds[2], bounds[3])) {
       hoveredFooterButton = button;
+      GuiPointerHint::markInteractive();
       if (hovering || clicked) {
         selectRow(rowCount() + button);
       }
@@ -1523,6 +1527,7 @@ ConfigurationMenu::handlePointer(bool wheelScrolled,
   if (row >= rowCount()) {
     return;
   }
+  GuiPointerHint::markInteractive();
   if ((hovering || clicked) && row != selectedRow) {
     selectRow(row);
   }

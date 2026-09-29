@@ -1,5 +1,6 @@
 #include <Illumo/Gui/GuiDialog.h>
 #include <Illumo/Gui/GuiMenuShell.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/InputManager.h>
@@ -340,6 +341,9 @@ GuiDialog::update(InputManager* inputManager, float dt)
     }
   }
 
+  if (m_hoveredButton >= 0) {
+    GuiPointerHint::markInteractive();
+  }
   int action = 0;
   if (inputManager != nullptr) {
     std::queue<InputManager::KeyPressEvent>& keyQueue =

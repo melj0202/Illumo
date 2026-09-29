@@ -8,13 +8,79 @@
 
 // The arrow in local pixels with its tip at the origin (y grows down): a
 // triangular head and a tail. Both are convex, so each is one primitive.
-static const float kHead[3][2] = { { 0.0f, 0.0f },
-                                   { 0.0f, 16.5f },
-                                   { 11.7f, 11.7f } };
-static const float kTail[4][2] = { { 3.6f, 12.4f },
-                                   { 6.3f, 11.5f },
-                                   { 9.6f, 18.6f },
-                                   { 6.9f, 19.8f } };
+// Each shape is a few convex parts of 3, 4, 6 or 8 points. A part with more
+// than four points is drawn as a fan of quads around its first point.
+struct ShapePart
+{
+  int count;
+  float point[8][2];
+};
+static const ShapePart kArrowParts[2] = {
+  { 3, { { 0.0f, 0.0f }, { 0.0f, 16.5f }, { 11.7f, 11.7f } } },
+  { 4, { { 3.6f, 12.4f }, { 6.3f, 11.5f }, { 9.6f, 18.6f }, { 6.9f, 19.8f } } }
+};
+static const float kArrowHeight = 19.8f;
+// The pointing hand shown over things that can be pressed: the index
+// fingertip sits on the tip, so clicks stay as precise as with the arrow.
+// Every finger has chamfered corners at its tip; the rim's offset copies
+// round them off.
+static const int kHandPartCount = 7;
+static const ShapePart kHandParts[kHandPartCount] = {
+  // Index finger.
+  { 8,
+    { { -1.0f, 0.0f },
+      { 1.0f, 0.0f },
+      { 1.8f, 0.8f },
+      { 1.9f, 2.0f },
+      { 1.9f, 10.5f },
+      { -1.9f, 10.5f },
+      { -1.9f, 2.0f },
+      { -1.8f, 0.8f } } },
+  // Middle finger, curled shorter.
+  { 6,
+    { { 2.6f, 6.6f },
+      { 4.4f, 6.6f },
+      { 5.1f, 7.3f },
+      { 5.1f, 10.5f },
+      { 1.9f, 10.5f },
+      { 1.9f, 7.3f } } },
+  // Ring finger.
+  { 6,
+    { { 5.7f, 7.6f },
+      { 7.4f, 7.6f },
+      { 8.0f, 8.2f },
+      { 8.0f, 11.0f },
+      { 5.1f, 11.0f },
+      { 5.1f, 8.2f } } },
+  // Little finger.
+  { 6,
+    { { 8.6f, 9.0f },
+      { 10.0f, 9.0f },
+      { 10.6f, 9.6f },
+      { 10.6f, 12.5f },
+      { 8.0f, 12.5f },
+      { 8.0f, 9.6f } } },
+  // Palm, tapering to the wrist. Its top-left is carved back to the index
+  // finger; the thumb below keeps the palm's full width.
+  { 6,
+    { { -1.9f, 9.6f },
+      { 10.6f, 9.6f },
+      { 10.6f, 16.4f },
+      { 9.6f, 17.6f },
+      { -0.9f, 17.6f },
+      { -1.9f, 16.4f } } },
+  // Wrist, narrower than the palm with straight sides.
+  { 4, { { 0.5f, 17.0f }, { 8.2f, 17.0f }, { 8.2f, 21.0f }, { 0.5f, 21.0f } } },
+  // Thumb: the palm's left side below the carved space.
+  { 6,
+    { { -3.0f, 9.0f },
+      { -4.4f, 9.3f },
+      { -5.1f, 10.4f },
+      { -5.2f, 13.0f },
+      { -1.9f, 17.2f },
+      { -1.9f, 13.0f } } }
+};
+static const float kHandHeight = 21.0f;
 // Lean per pixel-per-second of sideways speed, and its limit in radians.
 static const float kLeanPerSpeed = 0.0012f;
 static const float kMaximumLean = 0.55f;
@@ -26,6 +92,8 @@ static const float kGhostFullGap = 20.0f;
 static const float kGlowRadii[4] = { 5.5f, 4.3f, 3.2f, 2.3f };
 static const float kGlowAlpha[4] = { 0.022f, 0.03f, 0.04f, 0.05f };
 static const int kGlowDirections = 16;
+// Offset copies that build the dark halo and the lit rim.
+static const int kOutlineDirections = 16;
 // One placement of the arrow: tip position, lean and scale.
 struct ArrowPose
 {
@@ -34,6 +102,7 @@ struct ArrowPose
   float cosine = 1.0f;
   float sine = 0.0f;
   float scale = 1.0f;
+  bool hand = false;
 
   void place(float localX, float localY, float* outX, float* outY) const
   {
@@ -54,51 +123,54 @@ drawArrow(GameVisual& visual,
           ColorRgba top,
           ColorRgba bottom)
 {
-  const float height = 19.8f;
-  float hx[3];
-  float hy[3];
-  ColorRgba headColors[3];
-  for (int point = 0; point < 3; ++point) {
-    pose.place(kHead[point][0], kHead[point][1], &hx[point], &hy[point]);
-    headColors[point] = UiTheme::mix(top, bottom, kHead[point][1] / height);
+  const ShapePart* parts = pose.hand ? kHandParts : kArrowParts;
+  const int partCount = pose.hand ? kHandPartCount : 2;
+  const float height = pose.hand ? kHandHeight : kArrowHeight;
+  for (int part = 0; part < partCount; ++part) {
+    const ShapePart& shape = parts[part];
+    float px[8];
+    float py[8];
+    ColorRgba colors[8];
+    for (int point = 0; point < shape.count; ++point) {
+      pose.place(shape.point[point][0], shape.point[point][1], &px[point], &py[point]);
+      px[point] += dx;
+      py[point] += dy;
+      colors[point] = UiTheme::mix(top, bottom, shape.point[point][1] / height);
+    }
+    if (shape.count == 3) {
+      visual.addGradientTriangle(
+        px[0], py[0], px[1], py[1], px[2], py[2], colors[0], colors[1], colors[2]);
+    } else {
+      for (int first = 1; first + 2 < shape.count; first += 2) {
+        const int a = first;
+        const int b = first + 1;
+        const int c = first + 2;
+        visual.addGradientQuad(px[0],
+                               py[0],
+                               px[a],
+                               py[a],
+                               px[b],
+                               py[b],
+                               px[c],
+                               py[c],
+                               colors[0],
+                               colors[a],
+                               colors[b],
+                               colors[c]);
+      }
+    }
   }
-  visual.addGradientTriangle(hx[0] + dx,
-                             hy[0] + dy,
-                             hx[1] + dx,
-                             hy[1] + dy,
-                             hx[2] + dx,
-                             hy[2] + dy,
-                             headColors[0],
-                             headColors[1],
-                             headColors[2]);
-  float tx[4];
-  float ty[4];
-  ColorRgba tailColors[4];
-  for (int point = 0; point < 4; ++point) {
-    pose.place(kTail[point][0], kTail[point][1], &tx[point], &ty[point]);
-    tailColors[point] = UiTheme::mix(top, bottom, kTail[point][1] / height);
-  }
-  visual.addGradientQuad(tx[0] + dx,
-                         ty[0] + dy,
-                         tx[1] + dx,
-                         ty[1] + dy,
-                         tx[2] + dx,
-                         ty[2] + dy,
-                         tx[3] + dx,
-                         ty[3] + dy,
-                         tailColors[0],
-                         tailColors[1],
-                         tailColors[2],
-                         tailColors[3]);
 }
 
 SoftwareCursor::SoftwareCursor()
-  : m_visual(512u)
+  : m_visual(2048u)
 {
   // The body swings like a pendulum; a press squishes and boings back.
   m_lean.configure(GuiMotion::kJelly);
   m_press.configure(GuiMotion::kBoing);
   m_press.snapTo(1.0f);
+  m_swap.configure(GuiMotion::kBoing);
+  m_swap.snapTo(1.0f);
   m_visual.setVisible(false);
 }
 
@@ -119,7 +191,8 @@ SoftwareCursor::update(float deltaSeconds,
                        float pointerY,
                        bool visible,
                        bool pressed,
-                       bool reducedMotion)
+                       bool reducedMotion,
+                       bool interactive)
 {
   ILLUMO_PROFILE_ZONE("SoftwareCursor.update");
   m_reducedMotion = reducedMotion;
@@ -131,6 +204,8 @@ SoftwareCursor::update(float deltaSeconds,
     m_historyCount = 0;
     m_lean.snapTo(0.0f);
     m_press.snapTo(1.0f);
+    m_swap.snapTo(1.0f);
+    m_hand = false;
     m_splashElapsed = kSplashSeconds;
     m_wasPressed = pressed;
     m_visual.clearPrimitives();
@@ -158,8 +233,15 @@ SoftwareCursor::update(float deltaSeconds,
       ? 0.0f
       : std::clamp(m_velocityX * kLeanPerSpeed, -kMaximumLean, kMaximumLean));
   m_press.setTarget(pressed ? 0.8f : 1.0f);
+  if (interactive != m_hand) {
+    // The swap squeezes the body small and lets it boing back.
+    m_hand = interactive;
+    m_swap.snapTo(0.72f);
+  }
+  m_swap.setTarget(1.0f);
   m_lean.tick(step, reducedMotion);
   m_press.tick(step, reducedMotion);
+  m_swap.tick(step, reducedMotion);
 
   if (pressed && !m_wasPressed && !reducedMotion) {
     m_splashElapsed = 0.0f;
@@ -228,7 +310,8 @@ SoftwareCursor::rebuild()
   pose.y = m_y;
   pose.cosine = std::cos(m_lean.value());
   pose.sine = std::sin(m_lean.value());
-  pose.scale = std::clamp(m_press.value(), 0.6f, 1.3f);
+  pose.scale = std::clamp(m_press.value() * m_swap.value(), 0.5f, 1.4f);
+  pose.hand = m_hand;
 
   // A holographic afterimage: ghost arrows where the tip was a moment ago,
   // each split into cyan and magenta-violet copies across the motion and
@@ -325,10 +408,15 @@ SoftwareCursor::rebuild()
                 bottom);
     }
   }
-  const float directions[8][2] = { { -1.0f, 0.0f },    { 1.0f, 0.0f },
-                                   { 0.0f, -1.0f },    { 0.0f, 1.0f },
-                                   { -0.71f, -0.71f }, { 0.71f, -0.71f },
-                                   { -0.71f, 0.71f },  { 0.71f, 0.71f } };
+  // Sixteen directions keep the outline's corners round: with eight, each
+  // corner of the offset copies shows as a flat facet.
+  float directions[kOutlineDirections][2];
+  for (int direction = 0; direction < kOutlineDirections; ++direction) {
+    const float angle = static_cast<float>(direction) * 6.28318531f /
+                        static_cast<float>(kOutlineDirections);
+    directions[direction][0] = std::cos(angle);
+    directions[direction][1] = std::sin(angle);
+  }
   const ColorRgba haloColor = UiTheme::fade(UiTheme::keycapEdge(), 0.7f);
   for (const float* direction : directions) {
     drawArrow(m_visual,

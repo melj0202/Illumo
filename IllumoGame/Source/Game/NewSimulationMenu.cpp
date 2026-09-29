@@ -5,6 +5,7 @@
 #include "SparseCellGrid.h"
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/IRenderWindow.h>
@@ -370,6 +371,14 @@ NewSimulationMenu::update(InputManager* input)
   pointer.sample(window, input, panelFit.layoutScale);
   const float mx = pointer.x();
   const float my = pointer.y();
+  if (mx >= x + 24 && mx < x + width - 24 && my >= y + 110 &&
+      my < y + 110 + rowHeight * kRowCount) {
+    // The disabled world-size rows are not pressable.
+    const int hoverRow = static_cast<int>((my - y - 110) / rowHeight);
+    if (finite || (hoverRow != 3 && hoverRow != 4)) {
+      GuiPointerHint::markInteractive();
+    }
+  }
   if (result == NewSimulationAction::None &&
       (pointer.moved() || pointer.clicked()) && mx >= x + 24 &&
       mx < x + width - 24 && my >= y + 110 &&

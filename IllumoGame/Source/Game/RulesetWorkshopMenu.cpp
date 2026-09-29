@@ -3,6 +3,7 @@
 #include "RuleCatalogLoader.h"
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -822,6 +823,14 @@ RulesetWorkshopMenu::update(InputManager* input)
                           buttonY,
                           buttonWidth,
                           buttonHeight);
+  if (overApply || overDiscard) {
+    GuiPointerHint::markInteractive();
+  } else {
+    const int hoverIndex = bodyRowForPoint(mouseX, mouseY);
+    if (hoverIndex >= 0 && controlForRow(hoverIndex) != Control::None) {
+      GuiPointerHint::markInteractive();
+    }
+  }
   if ((mouseMoved || clicked) && overApply) {
     const int applyRow = rowForControl(Control::Apply);
     selectRow(applyRow);

@@ -1,5 +1,6 @@
 #include <Illumo/Gui/GuiDropdownList.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Gui/GuiTypes.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Services/InputManager.h>
@@ -270,6 +271,9 @@ GuiDropdownList::handlePointer(float x, float y, bool moved, bool clicked)
     return GuiDropdownResult::None;
   }
   const int row = rowAt(x, y);
+  if (row >= 0) {
+    GuiPointerHint::markInteractive();
+  }
   if (row >= 0 && (moved || clicked)) {
     highlight(row);
   }

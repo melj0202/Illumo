@@ -9,6 +9,7 @@
 #include "Wasm/GuestPlatform.h"
 #include <Illumo/Content/PackageManifest.h>
 #include <Illumo/Foundation/Profile.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/CommandLine.h>
@@ -98,7 +99,8 @@ protected:
       active && inside,
       engine.inputManager != nullptr &&
         engine.inputManager->isMouseButtonPressed(KeyCode::MouseLeft),
-      settings().getVar("reducedUiMotion").valueAsBool);
+      settings().getVar("reducedUiMotion").valueAsBool,
+      GuiPointerHint::take());
 
     // The corner performance readout (Video settings). Memory is this
     // store's linear memory, which only grows.

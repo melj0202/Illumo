@@ -14,6 +14,7 @@
 #include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Font.h>
@@ -919,9 +920,13 @@ TitleScene::update(double dt)
       const float currentItemY =
         m_firstItemY + m_tilt.shiftY(GuiPanelTilt::kBodyDepth) +
         static_cast<float>(i) * (m_itemHeight + itemGap);
-      if ((m_pointer.moved() || m_pointer.clicked()) && mouseX >= itemX &&
-          mouseX <= itemX + m_itemWidth && mouseY >= currentItemY &&
-          mouseY <= currentItemY + m_itemHeight) {
+      const bool overItem = mouseX >= itemX && mouseX <= itemX + m_itemWidth &&
+                            mouseY >= currentItemY &&
+                            mouseY <= currentItemY + m_itemHeight;
+      if (overItem) {
+        GuiPointerHint::markInteractive();
+      }
+      if ((m_pointer.moved() || m_pointer.clicked()) && overItem) {
         if (m_selectedItem != i) {
           selectItem(i);
         }
