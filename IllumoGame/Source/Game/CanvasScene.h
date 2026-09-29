@@ -6,6 +6,7 @@
 #include "CellPattern.h"
 #include "ConfigurationMenu.h"
 #include "Cursor.h"
+#include "SelectionBox.h"
 #include "ExitConfirmDialog.h"
 #include "Game/IllumoCodec.h"
 #include "Game/SimulationRunner.h"
@@ -327,7 +328,7 @@ private:
   bool paintStrokeActive = false;
   std::int64_t lastPaintX = 0;
   std::int64_t lastPaintY = 0;
-  GameVisual selectionVisual;
+  SelectionBox selectionVisual;
   GameVisual inspectorVisual;
   // EDIT mode's top toolbar and the selection's right-click menu.
   CanvasActionBar m_actionBar;

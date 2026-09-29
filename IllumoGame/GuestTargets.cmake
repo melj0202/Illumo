@@ -41,6 +41,7 @@ illumo_add_guest(IllumoGame
   "${_game}/Source/Game/CSimTypeface.cpp"
   "${_game}/Source/Game/Cursor.cpp"
   "${_game}/Source/Game/ExitConfirmDialog.cpp"
+  "${_game}/Source/Game/SelectionBox.cpp"
   "${_game}/Source/Game/IllumoGameConfig.cpp"
   "${_game}/Source/Game/TitleScene.cpp"
   "${_game}/Source/Game/MenuMotifs.cpp"

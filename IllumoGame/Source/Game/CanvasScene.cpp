@@ -424,15 +424,9 @@ CanvasScene::start(IllumoContext& startContext)
   editHintsVisual.setVisible(false);
   editHintsVisual.prepare(ic->renderer);
 
-  selectionVisual.setRenderer(ic->renderer);
-  selectionVisual.setWindow(ic->window);
-  selectionVisual.setCamera(ic->camera);
-  selectionVisual.setSpace(PrimitiveSpace::World);
-  selectionVisual.setLayerHint(RenderLayerId::UI);
+  selectionVisual.init(ic->renderer, ic->window, ic->camera);
+  selectionVisual.setCellSize(16.0f);
   selectionVisual.setVisible(false);
-  if (ic->renderer != nullptr) {
-    selectionVisual.prepare(ic->renderer);
-  }
 
   inspectorVisual.setRenderer(ic->renderer);
   inspectorVisual.setWindow(ic->window);
@@ -3333,12 +3327,11 @@ void
 CanvasScene::updateSelectionVisual()
 {
   ILLUMO_PROFILE_ZONE("CanvasScene.updateSelectionVisual");
-  selectionVisual.clearPrimitives();
   if (currentState != CellState::EDIT || !clipboard.hasSelection() ||
       ic == nullptr || ic->camera == nullptr || ic->commandLine->isOpen ||
       (configurationMenu != nullptr && configurationMenu->isOpen()) ||
       (exitConfirmDialog != nullptr && exitConfirmDialog->isOpen())) {
-    selectionVisual.setVisible(false);
+    selectionVisual.hide();
     return;
   }
   std::int64_t x0 = 0;
@@ -3346,17 +3339,11 @@ CanvasScene::updateSelectionVisual()
   std::int64_t x1 = 0;
   std::int64_t y1 = 0;
   clipboard.getNormalizedSelection(&x0, &y0, &x1, &y1);
-  const float cellSize = 16.0f;
-  const float worldX = static_cast<float>(x0) * cellSize - cellSize * 0.5f;
-  const float worldY = static_cast<float>(y0) * cellSize - cellSize * 0.5f;
-  const float width = static_cast<float>(x1 - x0 + 1) * cellSize;
-  const float height = static_cast<float>(y1 - y0 + 1) * cellSize;
   selectionVisual.setCamera(ic->camera);
-  selectionVisual.setSpace(PrimitiveSpace::World);
-  selectionVisual.setLayerHint(RenderLayerId::UI);
-  selectionVisual.addOutlineRect(
-    worldX, worldY, width, height, UiTheme::accent(), 2.0f);
+  // Shown first so a fresh selection snaps and pops in; the box then glides
+  // to each new rectangle as the selection is dragged.
   selectionVisual.setVisible(true);
+  selectionVisual.setCells(x0, y0, x1, y1);
 }
 
 void
@@ -5098,9 +5085,11 @@ CanvasScene::updateEditorCursor(double dt)
   ILLUMO_PROFILE_ZONE("CanvasScene.updateEditorCursor");
   // Advance the glide first: a cursor hidden last frame snaps to wherever it
   // is placed below instead of gliding in from its old cell.
-  editorCursor.tick(static_cast<float>(dt),
-                    ic != nullptr && ic->envVars != nullptr &&
-                      ic->envVars->getVar("reducedUiMotion").valueAsBool);
+  const bool reducedUiMotion =
+    ic != nullptr && ic->envVars != nullptr &&
+    ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  editorCursor.tick(static_cast<float>(dt), reducedUiMotion);
+  selectionVisual.tick(static_cast<float>(dt), reducedUiMotion);
   if (isPointerOverEditHints()) {
     hoverValid = false;
     editorCursor.setVisible(false);

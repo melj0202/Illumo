@@ -50,7 +50,7 @@ public:
     return module.clipboard;
   }
 
-  static GameVisual& getSelectionVisual(CanvasScene& module)
+  static SelectionBox& getSelectionVisual(CanvasScene& module)
   {
     return module.selectionVisual;
   }
