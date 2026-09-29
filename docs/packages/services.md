@@ -79,7 +79,8 @@ or allocate a new aligned chunk without moving live allocations. Alignment zero
 retains its byte-alignment meaning; other non-power-of-two values are rejected.
 Typed pools use storage aligned for their element type, including over-aligned
 types. Clear and stack LIFO behavior remain unchanged. Invalid size arithmetic
-is rejected before allocation; underlying allocation failures may throw.
+is rejected before allocation; an underlying allocation failure ends the
+process (D-F3).
 
 ## Input registration lifetime
 

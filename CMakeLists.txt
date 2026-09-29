@@ -12,6 +12,12 @@ add_subdirectory(IllEd)
 add_subdirectory(IllMeshViewer)
 
 if(BUILD_TESTING)
+  # The workspace builds without exceptions; see cmake/CheckNoExceptions.cmake.
+  add_test(NAME Illumo.Build.NoExceptions
+    COMMAND ${CMAKE_COMMAND} "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckNoExceptions.cmake")
+  set_tests_properties(Illumo.Build.NoExceptions PROPERTIES
+    LABELS "Illumo;IllumoWorkspace")
   add_custom_target(IllumoRunTests ALL
     COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>
       -L IllumoWorkspace --output-on-failure

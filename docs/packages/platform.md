@@ -58,5 +58,7 @@ proven by `Illumo.Platform.AtomicFile` on the native host.
 SaveLoad specification strings and returned paths are UTF-8. Windows uses wide
 common-dialog APIs and a 32,768-character filename buffer; invalid specification
 encoding is rejected and cancellation remains an empty result. Product codecs
-construct filesystem paths from UTF-8 and contain conversion failures. A wide
+construct filesystem paths from UTF-8 through `PathText.h` (`pathFromUtf8`
+refuses invalid UTF-8; `pathToUtf8` never fails, for display), since the
+standard conversions report failure by throwing (D-F3). A wide
 API and large buffer do not certify every native-dialog long-path scenario.

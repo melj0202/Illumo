@@ -299,11 +299,10 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wasm-tests"
     COMMAND "${_wasi_sdk}/bin/clang++.exe" "${_guest_source}"
       "-I${CMAKE_SOURCE_DIR}/IllumoGuest/Include"
-      -std=c++23 -O2 -msimd128 -fwasm-exceptions
-      -mllvm -wasm-use-legacy-eh=false -mexec-model=reactor
+      -std=c++23 -O2 -msimd128 -fno-exceptions -mexec-model=reactor
       -Wl,--export=compatibility -Wl,--export=counter
       -Wl,--export=spin -Wl,--export=crash -Wl,--export=grow
-      -Wl,--export=allocate -Wl,--export=release -lunwind
+      -Wl,--export=allocate -Wl,--export=release
       -Wl,--export=allocationFailure
       -Wl,--export=illumo_guest_describe -Wl,--export=illumo_guest_alloc
       -Wl,--export=illumo_guest_free -Wl,--export=illumo_guest_job
@@ -318,8 +317,7 @@ if(BUILD_TESTING)
     COMMAND "${_wasi_sdk}/bin/clang++.exe"
       "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/LifecycleGuest.cpp"
       "-I${CMAKE_SOURCE_DIR}/IllumoGuest/Include"
-      -std=c++23 -O2 -msimd128 -fwasm-exceptions
-      -mllvm -wasm-use-legacy-eh=false -mexec-model=reactor -lunwind
+      -std=c++23 -O2 -msimd128 -fno-exceptions -mexec-model=reactor
       -Wl,--export=illumo_guest_describe -Wl,--export=illumo_guest_manifest
       -Wl,--export=illumo_guest_alloc -Wl,--export=illumo_guest_free
       -Wl,--export=illumo_guest_result_size -Wl,--export=illumo_guest_init

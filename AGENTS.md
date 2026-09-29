@@ -529,7 +529,9 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 
 Follow `docs/contributing.md`: avoid `auto`, namespaces, and recursion; use the
 documented names; run the Mozilla-based `clang-format` on every modified C++ or
-header file. Prefer explicit ownership and narrow dependencies. Owning types
+header file. The host and guests build without C++ exceptions (D-F3): no
+`try`/`catch`/`throw`, failures return errors, and a programming error or
+exhausted memory or threads ends the process through `illumoFatal`. Prefer explicit ownership and narrow dependencies. Owning types
 must define or delete copy/move operations deliberately.
 
 Use comments for non-obvious intent and invariants. Put current architecture,

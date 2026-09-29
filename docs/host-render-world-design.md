@@ -53,7 +53,7 @@ Causes, from the current code:
   (`GLShaderProgram.h:39-56`).
 - Three failure modes appear with large worlds:
   1. At about 2,600-3,000 lit objects the guest's 65,536-token queue
-     overflows. `takeFrame` throws and the guest sends an empty frame, logged
+     overflows. `takeFrame` fails and the guest sends an empty frame, logged
      once as "Frame dropped" (`IllumoGuest/Source/ModuleApplication.cpp:334-344`).
      This is the 8,000-cube row above.
   2. A frame with more than 4,096 batches is rejected by the host decoder

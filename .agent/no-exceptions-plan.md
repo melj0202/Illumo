@@ -1,8 +1,9 @@
 # Plan: disable C++ exceptions everywhere
 
-Status: PROPOSED. No source has been changed. Tier 2 (Tier 3 for the recorder
-and allocation-failure milestones, which change error-handling architecture).
-Implementation waits for the decisions in section 10.
+Status: IMPLEMENTED on branch `no-exceptions` (2026-09-29): M1-M8 in one
+commit (exceptions still on, suite green), M9 flags and M10 docs in a second
+commit that can be reverted alone. Decisions: section 10a (D-F3 in the
+decision log). Results: sections 11 and 12.
 
 ## 1. Objective and end state
 
@@ -270,8 +271,55 @@ D6. The untracked WIP files (`WasmGameModule`, `CellGameModule`,
 
 ## 11. Validation results
 
-(none yet)
+Windows 11, MSVC (VS 18 2026) Release, WASI SDK 34 (clang 23), Wasmtime 48.0.2.
+
+- M0 baseline (release/v26.09 at e8d0a337): 697/697 workspace tests pass.
+- M1-M8 with exceptions still enabled: 697/697 (one case removed:
+  `Illumo.SceneGraph.AllocationFallbacks`, see D1).
+- M9 with exceptions disabled: 698/698 (adds `Illumo.Build.NoExceptions`).
+  Host compile commands carry `/EHs-c-` and `_HAS_EXCEPTIONS=0`; all 149
+  guest compile commands carry `-fno-exceptions`; `llvm-objdump` finds no
+  exception opcodes in any staged module; no C4530/C4577/D9025 warnings.
+- Real GPU: `tools/verify_capture.py` 7/7 captures; `IllumoCaptureGpuTests`
+  0 failures; `IllEdCloseWindowTests` passes.
+- clang-tidy (`python build.py tidy`, Clang with `-fno-exceptions`, 284
+  entries): no exception diagnostics. One new finding in `WinPathText.cpp`
+  was fixed. Pre-existing and left alone: `bugprone-sizeof-expression` at
+  `IllumoGame/Source/Wasm/SimulationLanes.cpp:1075` (from 63c95fc4) and the
+  batch run failing on `IllumoRuntime.rc` entries in the compile database.
+- Sizes: `IllumoRuntime.exe` 3,073,024 -> 2,973,184 bytes (-3.2%);
+  `IllumoGame.wasm` 7,356,403 -> 6,798,143 (-7.6%); `IllEd.wasm` 6,929,939 ->
+  6,395,225 (-7.7%); `IllMeshViewer.wasm` 6,085,443 -> 5,691,381 (-6.5%);
+  `CSimWorkerGuest.wasm` 4,288,025 -> 3,999,760 (-6.7%).
+- `IllumoGame.Wasm.PackageBench`: stable worlds within +/-4% (serial dense32
+  279 -> 276-291 fps, dense64 99 -> 99-101, sparse128 334 -> 334-341); lane
+  runs 3-21% faster in the first run. Serial dense16 and sparse64 vary more
+  between runs than any change (dense16 TPS 1,841 / 6,168 / 8,249 over three
+  runs against a 3,278 baseline), so no regression is claimed or excluded
+  there.
 
 ## 12. Completion record
 
-(none yet)
+Implemented as planned, with these deviations:
+
+- D1 changed from (b) to (a) during implementation: standard containers
+  cannot report allocation failure without exceptions, so recovery would
+  have meant replacing them. The owner chose to abort everywhere.
+- Added `Platform/PathText.h`: MSVC's path/string conversions throw on
+  unrepresentable characters, which would now crash.
+- `GuestProgram::failStartup` replaces throwing from `bootstrap` (a guest's
+  `illumoFatal` message would be lost: guests have no stderr).
+- nlohmann JSON needs no `JSON_NOEXCEPTION`: it detects exceptions off.
+- `GuestWireWriter::fail(reason)` keeps the thrown messages as diagnostics.
+
+Remaining risks and follow-up:
+
+- Host code that still converts paths through `path::string()` to reopen a
+  file (fonts, shader includes, mesh search paths, the splash image) now
+  aborts instead of failing on characters outside the ANSI code page. A
+  UTF-8 active code page in the runtime manifest would remove the class;
+  it is a behavior change, so it needs an owner decision.
+- `substr`, `.at()` and `std::get` still abort on misuse; the audited uses
+  are guarded, but new code must keep guest-driven input away from them.
+- Linux: gtkmm can throw `Glib::Error` through `-fno-exceptions` frames
+  (terminate). Linux is unsupported, so this is noted, not fixed.

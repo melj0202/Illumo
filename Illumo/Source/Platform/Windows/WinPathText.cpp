@@ -57,16 +57,19 @@ pathFromUtf8(std::string_view text, std::filesystem::path* path)
     *path = std::filesystem::path();
     return true;
   }
-  const int narrowLength = static_cast<int>(text.size());
+  // A terminated copy: the conversion reads exactly narrowLength bytes, but
+  // a view's data() carries no terminator of its own.
+  const std::string narrow(text);
+  const int narrowLength = static_cast<int>(narrow.size());
   const int length = MultiByteToWideChar(
-    CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), narrowLength, nullptr, 0);
+    CP_UTF8, MB_ERR_INVALID_CHARS, narrow.c_str(), narrowLength, nullptr, 0);
   if (length <= 0) {
     return false;
   }
   std::wstring wide(static_cast<std::size_t>(length), L'\0');
   if (MultiByteToWideChar(CP_UTF8,
                           MB_ERR_INVALID_CHARS,
-                          text.data(),
+                          narrow.c_str(),
                           narrowLength,
                           wide.data(),
                           length) != length) {

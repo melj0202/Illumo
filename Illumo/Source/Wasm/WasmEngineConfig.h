@@ -44,7 +44,9 @@ createWasmEngine(const WasmEngineOptions& options)
   wasm_config_t* config = wasm_config_new();
   wasmtime_config_consume_fuel_set(config, options.meterFuel);
   wasmtime_config_epoch_interruption_set(config, true);
-  wasmtime_config_wasm_exceptions_set(config, true);
+  // Guests build without exceptions; a module using exception opcodes is
+  // refused.
+  wasmtime_config_wasm_exceptions_set(config, false);
   wasmtime_config_wasm_threads_set(config, false);
   wasmtime_config_wasm_memory64_set(config, false);
   wasmtime_config_wasm_multi_memory_set(config, false);

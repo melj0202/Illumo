@@ -12,12 +12,13 @@ include("${ILLUMO_ROOT}/Illumo/cmake/IllumoPublicMath.cmake")
 illumo_prepare_public_math(_illumo_guest_math)
 
 add_library(IllumoGuestOptions INTERFACE)
+# Guests build without C++ exceptions, as the host does; the WASI SDK then
+# links its no-exceptions libc++ and the runtime rejects exception opcodes.
 target_compile_options(IllumoGuestOptions INTERFACE
-  -Wall -Wextra -msimd128 -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false)
+  -Wall -Wextra -msimd128 -fno-exceptions)
 target_link_options(IllumoGuestOptions INTERFACE
-  -msimd128 -fwasm-exceptions -mexec-model=reactor
+  -msimd128 -fno-exceptions -mexec-model=reactor
   -Wl,-z,stack-size=1048576 -Wl,--max-memory=1073741824)
-target_link_libraries(IllumoGuestOptions INTERFACE unwind)
 # Guests are single-threaded: shared engine and product sources select their
 # serial variants (no worker threads, locks or file-system paths).
 target_compile_definitions(IllumoGuestOptions INTERFACE ILLUMO_SERIAL_GUEST)
