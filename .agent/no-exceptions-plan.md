@@ -280,6 +280,15 @@ Windows 11, MSVC (VS 18 2026) Release, WASI SDK 34 (clang 23), Wasmtime 48.0.2.
   Host compile commands carry `/EHs-c-` and `_HAS_EXCEPTIONS=0`; all 149
   guest compile commands carry `-fno-exceptions`; `llvm-objdump` finds no
   exception opcodes in any staged module; no C4530/C4577/D9025 warnings.
+- Debug (AddressSanitizer, explicit guest bounds): 695/700. All five failures
+  predate this change, checked against an older Debug build with exceptions
+  (`build/Debug`, 2026-09-26): the allocation gates
+  `IllumoGame.Wasm.PackageFrameAllocations`, `IllumoGame.Wasm.LaneAllocations`
+  (1,026 allocations in both builds) and `Illumo.GameVisual.SteadyTextAllocations`
+  (MSVC debug-iterator allocations; the gates hold in Release), and two
+  timeouts: `Illumo.SceneGraph.Oracle` takes 2,368 s alone against a 1,800 s
+  limit (the older build: 2,366 s) and `Illumo.SceneGraph.Bench.Visibility`
+  about 148 s against 120 s in the older build too.
 - Real GPU: `tools/verify_capture.py` 7/7 captures; `IllumoCaptureGpuTests`
   0 failures; `IllEdCloseWindowTests` passes.
 - clang-tidy (`python build.py tidy`, Clang with `-fno-exceptions`, 284
