@@ -1,5 +1,7 @@
 #include "SceneGraphInternal.h"
 
+#include <Illumo/Foundation/Profile.h>
+
 void
 SceneGraph::raycastCandidates(const Vector3& origin,
                               const Vector3& direction,
@@ -24,6 +26,7 @@ SceneGraph::raycastCandidates(const Vector3& origin,
     ~Guard() { active = false; }
   };
   Guard guard(m_impl->extractionActive);
+  ILLUMO_PROFILE_ZONE("SceneGraph.raycastCandidates");
   const bool compiled = m_impl->resolve(true);
   if (compiled && useIndex && m_impl->ensureQueryIndex()) {
     m_impl->queryIndex.raycastCandidates(
@@ -92,6 +95,7 @@ SceneGraph::raycast(const Vector3& origin,
     ~Guard() { active = false; }
   };
   Guard guard(m_impl->extractionActive);
+  ILLUMO_PROFILE_ZONE("SceneGraph.raycast");
   const bool compiled = m_impl->resolve(true);
   if (compiled && useIndex && m_impl->ensureQueryIndex()) {
     uint32_t index = 0;
@@ -156,6 +160,7 @@ SceneGraph::queryBounds(const AxisAlignedBounds3& bounds,
     ~Guard() { active = false; }
   };
   Guard guard(m_impl->extractionActive);
+  ILLUMO_PROFILE_ZONE("SceneGraph.queryBounds");
   const bool compiled = m_impl->resolve(true);
   if (compiled && useIndex && m_impl->ensureQueryIndex()) {
     m_impl->queryIndex.queryBounds(

@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/IRenderWindow.h>
@@ -204,6 +205,7 @@ void
 WasmGameServices::ensureLaneWorkers()
 {
   // Every lane compiles and instantiates on its own thread, in parallel.
+  ILLUMO_PROFILE_ZONE("WasmGameServices.ensureLaneWorkers");
   m_lanes.resize(m_laneCount);
   for (Lane& lane : m_lanes) {
     if (!lane.worker) {
@@ -220,6 +222,7 @@ WasmGameServices::completeDisplay(GuestServices& results)
   if (m_displayRequests.empty()) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("WasmGameServices.completeDisplay");
   const GuestServiceRecord& record = m_displayRequests.front();
   GuestServiceRecord response{
     record.request, GuestService::Display, GuestServiceStatus::Rejected, {}
@@ -298,6 +301,7 @@ WasmGameServices::completeWindows(GuestServices& results)
 {
   // Window requests are synchronous on the host, so each completes now.
   while (!m_windowRequests.empty()) {
+    ILLUMO_PROFILE_ZONE("WasmGameServices.completeWindow");
     const GuestServiceRecord& record = m_windowRequests.front();
     GuestServiceRecord response{
       record.request, GuestService::Window, GuestServiceStatus::Rejected, {}
@@ -372,6 +376,7 @@ WasmGameServices::completeAudio(std::uint64_t request,
 {
   // Unknown sound ids, a full table or budget and a missing output are all
   // rejections: the guest keeps running and nothing else changes.
+  ILLUMO_PROFILE_ZONE("WasmGameServices.completeAudio");
   bool accepted = false;
   if (m_audio != nullptr && hasGrant(m_grants, GuestCapability::Audio)) {
     const std::map<std::uint32_t, AudioSound>::iterator found =
@@ -476,6 +481,7 @@ WasmGameServices::completeClipboard(GuestServices& results)
   if (m_clipboardRequests.empty()) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("WasmGameServices.completeClipboard");
   const GuestServiceRecord& record = m_clipboardRequests.front();
   GuestServiceRecord response{
     record.request, GuestService::Clipboard, GuestServiceStatus::Rejected, {}
@@ -511,6 +517,7 @@ WasmGameServices::completeDialog(GuestServices& results)
   if (m_dialogRequests.empty()) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("WasmGameServices.completeDialog");
   const GuestServiceRecord& record = m_dialogRequests.front();
   GuestServiceRecord response{
     record.request, GuestService::Dialog, GuestServiceStatus::Rejected, {}
@@ -555,6 +562,7 @@ bool
 WasmGameServices::completeConsole(GuestServices& results)
 {
   while (!m_consoleRequests.empty()) {
+    ILLUMO_PROFILE_ZONE("WasmGameServices.completeConsole");
     GuestServiceRecord record = m_consoleRequests.front();
     m_consoleRequests.pop_front();
     GuestServiceRecord response{
@@ -650,10 +658,142 @@ WasmGameServices::completeConsole(GuestServices& results)
   }
   return true;
 }
+
+// Lane replies share one completion exchange with everything else.
+static constexpr std::size_t kLaneReplyBudget = 12u * 1024u * 1024u;
+
+static bool
+workerDone(const WasmWorker& worker)
+{
+  const WasmWorkerStatus status = worker.status();
+  return status == WasmWorkerStatus::Completed ||
+         status == WasmWorkerStatus::Failed;
+}
+
+bool
+WasmGameServices::finishedWorkWaiting() const
+{
+  if (m_worker && m_job.request != 0 && workerDone(*m_worker)) {
+    return true;
+  }
+  for (const Lane& lane : m_lanes) {
+    if (lane.worker && lane.job.request != 0 &&
+        (lane.finished || workerDone(*lane.worker))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool
+WasmGameServices::collectFinished(GuestServices& results,
+                                  std::size_t laneReplyBudget,
+                                  std::size_t recordLimit,
+                                  bool firstReplyAlwaysFits)
+{
+  const std::size_t before = results.records.size();
+  if (m_worker && m_job.request != 0 && results.records.size() < recordLimit) {
+    WasmJobResult result;
+    if (m_worker->poll(result)) {
+      const bool accepted =
+        result.error.empty() && m_hostJob != 0 &&
+        result.requestId == m_hostJob &&
+        result.bytes.size() <= GuestServices::MaximumJobBytes;
+      results.records.push_back(
+        { m_job.request,
+          GuestService::Job,
+          accepted ? GuestServiceStatus::Complete
+                   : GuestServiceStatus::Rejected,
+          accepted ? std::move(result.bytes) : std::vector<std::byte>{} });
+      m_job = {};
+      m_hostJob = 0;
+    }
+  }
+  // A reply that does not fit the budget or the record limit waits in its
+  // lane for the next exchange.
+  std::size_t laneReplyBytes = 0;
+  for (Lane& lane : m_lanes) {
+    WasmJobResult result;
+    if (lane.worker && lane.job.request != 0 && !lane.finished &&
+        lane.worker->poll(result)) {
+      lane.accepted = result.error.empty() && lane.hostJob != 0 &&
+                      result.requestId == lane.hostJob &&
+                      result.bytes.size() <= GuestServices::MaximumJobBytes;
+      lane.reply =
+        lane.accepted ? std::move(result.bytes) : std::vector<std::byte>{};
+      lane.finished = true;
+    }
+    // A lone reply above the budget still goes (it is within the job limit),
+    // or it could never be delivered.
+    const bool fits = lane.reply.size() <= laneReplyBudget - laneReplyBytes ||
+                      (firstReplyAlwaysFits && laneReplyBytes == 0u);
+    if (!lane.finished || results.records.size() >= recordLimit || !fits) {
+      continue;
+    }
+    laneReplyBytes += std::min(lane.reply.size(), laneReplyBudget);
+    results.records.push_back({ lane.job.request,
+                                GuestService::LaneJob,
+                                lane.accepted ? GuestServiceStatus::Complete
+                                              : GuestServiceStatus::Rejected,
+                                std::move(lane.reply) });
+    lane.job = {};
+    lane.hostJob = 0;
+    lane.finished = false;
+    lane.accepted = false;
+    lane.reply.clear();
+  }
+  return results.records.size() != before;
+}
+
+bool
+WasmGameServices::harvest(std::vector<std::byte>& completions)
+try {
+  // Most frames nothing finished: leave the exchange untouched, allocation
+  // free.
+  if (m_cancelled || !finishedWorkWaiting()) {
+    return true;
+  }
+  ILLUMO_PROFILE_ZONE("WasmGameServices.harvest");
+  GuestServices& results = m_harvested;
+  results.records.clear();
+  if (!completions.empty() &&
+      !GuestServices::read(completions, results, false)) {
+    m_error = "Invalid pending service completion";
+    return false;
+  }
+  // Keep headroom for record headers; a reply that does not fit now is
+  // delivered by the next process().
+  constexpr std::size_t kRecordOverhead = 64u;
+  const std::size_t used =
+    completions.size() + kRecordOverhead * (GuestServices::MaximumRecords + 1u);
+  if (used >= GuestServices::MaximumBytes ||
+      !collectFinished(
+        results,
+        std::min(kLaneReplyBudget, GuestServices::MaximumBytes - used),
+        GuestServices::MaximumRecords,
+        false)) {
+    return true;
+  }
+  m_response.clear();
+  results.write(m_response);
+  if (m_response.data().size() > GuestServices::MaximumBytes) {
+    m_error = "Service completion budget exceeded";
+    return false;
+  }
+  completions.assign(m_response.data().begin(), m_response.data().end());
+  ILLUMO_PROFILE_PLOT("WasmGameServices.HarvestedCompletions",
+                      results.records.size());
+  return true;
+} catch (const std::exception& exception) {
+  m_error = exception.what();
+  return false;
+}
+
 bool
 WasmGameServices::process(std::span<const std::byte> requests,
                           std::vector<std::byte>& completions)
 try {
+  ILLUMO_PROFILE_ZONE("WasmGameServices.process");
   completions.clear();
   m_error.clear();
   GuestServices incoming;
@@ -666,14 +806,16 @@ try {
   for (const Lane& lane : m_lanes) {
     laneJobs += lane.job.request != 0 ? 1u : 0u;
   }
-  if (incoming.records.size() + m_render.pendingRequests() +
-        m_displayRequests.size() + m_clipboardRequests.size() +
-        m_windowRequests.size() + m_dialogRequests.size() +
-        m_consoleRequests.size() + m_listenRequests.size() +
-        (m_files ? m_files->pendingRequests() : 0u) +
-        (m_job.request != 0 ? 1u : 0u) + laneJobs +
-        (m_laneQuery.request != 0 ? 1u : 0u) >
-      GuestServices::MaximumRecords) {
+  const std::size_t outstanding =
+    m_render.pendingRequests() + m_displayRequests.size() +
+    m_clipboardRequests.size() + m_windowRequests.size() +
+    m_dialogRequests.size() + m_consoleRequests.size() +
+    m_listenRequests.size() + (m_files ? m_files->pendingRequests() : 0u) +
+    (m_job.request != 0 ? 1u : 0u) + laneJobs +
+    (m_laneQuery.request != 0 ? 1u : 0u);
+  ILLUMO_PROFILE_PLOT("WasmGameServices.Requests", incoming.records.size());
+  ILLUMO_PROFILE_PLOT("WasmGameServices.Outstanding", outstanding);
+  if (incoming.records.size() + outstanding > GuestServices::MaximumRecords) {
     m_error = "Too many outstanding service requests";
     return false;
   }
@@ -793,55 +935,8 @@ try {
   }
   // Poll before accepting another operation. Never block the control frame on
   // worker compilation, execution or a game-defined synchronization barrier.
-  if (m_worker && m_job.request != 0) {
-    WasmJobResult result;
-    if (m_worker->poll(result)) {
-      const bool accepted =
-        result.error.empty() && m_hostJob != 0 &&
-        result.requestId == m_hostJob &&
-        result.bytes.size() <= GuestServices::MaximumJobBytes;
-      results.records.push_back(
-        { m_job.request,
-          GuestService::Job,
-          accepted ? GuestServiceStatus::Complete
-                   : GuestServiceStatus::Rejected,
-          accepted ? std::move(result.bytes) : std::vector<std::byte>{} });
-      m_job = {};
-      m_hostJob = 0;
-    }
-  }
-  // Lane replies share one completion exchange; a reply that does not fit
-  // waits in its lane for the next one.
-  std::size_t laneReplyBytes = 0;
-  constexpr std::size_t kLaneReplyBudget = 12u * 1024u * 1024u;
-  for (Lane& lane : m_lanes) {
-    WasmJobResult result;
-    if (lane.worker && lane.job.request != 0 && !lane.finished &&
-        lane.worker->poll(result)) {
-      lane.accepted = result.error.empty() && lane.hostJob != 0 &&
-                      result.requestId == lane.hostJob &&
-                      result.bytes.size() <= GuestServices::MaximumJobBytes;
-      lane.reply =
-        lane.accepted ? std::move(result.bytes) : std::vector<std::byte>{};
-      lane.finished = true;
-    }
-    if (!lane.finished ||
-        (laneReplyBytes != 0 &&
-         lane.reply.size() > kLaneReplyBudget - laneReplyBytes)) {
-      continue;
-    }
-    laneReplyBytes += std::min(lane.reply.size(), kLaneReplyBudget);
-    results.records.push_back({ lane.job.request,
-                                GuestService::LaneJob,
-                                lane.accepted ? GuestServiceStatus::Complete
-                                              : GuestServiceStatus::Rejected,
-                                std::move(lane.reply) });
-    lane.job = {};
-    lane.hostJob = 0;
-    lane.finished = false;
-    lane.accepted = false;
-    lane.reply.clear();
-  }
+  collectFinished(
+    results, kLaneReplyBudget, GuestServices::MaximumRecords, true);
   completeLaneQuery(results);
   for (GuestServiceRecord& record : incoming.records) {
     if (record.operation == GuestService::JobLanes) {
@@ -900,6 +995,7 @@ try {
   }
   if (m_worker && m_job.request != 0 && m_hostJob == 0 &&
       m_worker->status() == WasmWorkerStatus::Idle) {
+    ILLUMO_PROFILE_ZONE("WasmGameServices.submitJob");
     if (!m_worker->submit(m_job.payload, m_hostJob)) {
       m_error = "Worker rejected its accepted request";
       return false;
@@ -913,6 +1009,7 @@ try {
         lane.worker->status() != WasmWorkerStatus::Idle) {
       continue;
     }
+    ILLUMO_PROFILE_ZONE("WasmGameServices.submitLaneJob");
     if (!lane.worker->submit(std::span(lane.job.payload).subspan(4),
                              lane.hostJob)) {
       m_error = "A compute lane rejected its accepted request";
@@ -922,6 +1019,7 @@ try {
   }
   if (!files.records.empty()) {
     if (m_files) {
+      ILLUMO_PROFILE_ZONE("WasmGameServices.submitFiles");
       if (!m_files->submit(files)) {
         m_error = m_files->error();
         return false;
@@ -936,6 +1034,7 @@ try {
     }
   }
   if (m_files) {
+    ILLUMO_PROFILE_ZONE("WasmGameServices.pollFiles");
     // Measured with the same retained writer that serializes the reply.
     m_response.clear();
     results.write(m_response);
@@ -949,8 +1048,11 @@ try {
       results.records.push_back(std::move(result));
     }
   }
-  m_response.clear();
-  results.write(m_response);
+  {
+    ILLUMO_PROFILE_ZONE("WasmGameServices.writeCompletions");
+    m_response.clear();
+    results.write(m_response);
+  }
   if (results.records.size() > GuestServices::MaximumRecords ||
       m_response.data().size() > GuestServices::MaximumBytes) {
     m_error = "Service completion budget exceeded";
@@ -958,6 +1060,8 @@ try {
   }
   completions.assign(m_response.data().begin(), m_response.data().end());
   m_lastRequest = last;
+  ILLUMO_PROFILE_PLOT("WasmGameServices.Completions", results.records.size());
+  ILLUMO_PROFILE_PLOT("WasmGameServices.CompletionBytes", completions.size());
   return true;
 } catch (const std::exception& exception) {
   m_error = exception.what();

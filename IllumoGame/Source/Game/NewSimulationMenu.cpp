@@ -3,11 +3,12 @@
 #include "CellContext.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "SparseCellGrid.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/InputManager.h>
 #include <algorithm>
 #include <cmath>
@@ -77,6 +78,7 @@ NewSimulationMenu::configuration() const
 void
 NewSimulationMenu::tick(float dt)
 {
+  ILLUMO_PROFILE_ZONE("NewSimulationMenu.tick");
   if (std::isfinite(dt)) {
     const float step = std::clamp(dt, 0.0f, 0.1f);
     const bool still = animator.reducedMotion();
@@ -318,6 +320,7 @@ NewSimulationMenu::activate()
 NewSimulationAction
 NewSimulationMenu::update(InputManager* input)
 {
+  ILLUMO_PROFILE_ZONE("NewSimulationMenu.update");
   if (!openState || input == nullptr) {
     return NewSimulationAction::None;
   }
@@ -402,6 +405,7 @@ NewSimulationMenu::addDrawables(DrawList& scene)
 void
 NewSimulationMenu::rebuild()
 {
+  ILLUMO_PROFILE_ZONE("NewSimulationMenu.rebuild");
   panelFit = GuiPanelLayout::fit(window, renderer, nullptr);
   const float screenWidth = panelFit.virtualWidth;
   const float screenHeight = panelFit.virtualHeight;
@@ -575,6 +579,7 @@ NewSimulationMenu::rebuild()
 void
 NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
 {
+  ILLUMO_PROFILE_ZONE("NewSimulationMenu.drawRows");
   GameVisual& cards = layers[kCardLayer];
   GameVisual& dropLayer = layers[kDropLayer];
   GameVisual& visual = layers[kContentLayer];

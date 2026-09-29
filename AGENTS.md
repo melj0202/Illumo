@@ -44,6 +44,8 @@ editing. Route detail to these canonical sources:
 - current architecture and decision catalog: `docs/architecture-consensus.md`;
 - intended charter direction and current boundary: `docs/charter-direction.md`;
 - capture API and runtime `--capture` mode: `docs/frame-capture.md`;
+- Tracy builds, `<Illumo/Foundation/Profile.h>` markers and the guest
+  `illumo_profile` imports: `docs/tracy-profiling.md`;
 - WASM runtime design, ABI and cutover: `docs/wasm-game-runtime-design.md`,
   `docs/wasm-game-runtime-plan.md`, `docs/wasm-game-cutover-plan.md`, and
   `docs/wasm-apps-cutover-plan.md`;
@@ -196,14 +198,16 @@ Canvas truth (verify here before trusting older notes):
   generations publish only at frame boundaries with `SparseGenerationDelta`;
   journals of at least 2,048 presentation chunks carry a lightweight
   replacement marker instead of per-chunk payloads. The former display grid
-  consumes the delta before reuse. Only one generation
-  may be outstanding, overdue whole steps are dropped, and state mutations,
-  persistence, ruleset changes, manual stepping, and shutdown drain first.
-  In the package, generations costing more than 1 ms run on up to eight
-  isolated simulation lanes (`CSimWorkerGuest.wasm` stores owning interleaved
-  eight-row chunk bands with one-row halos; D-E17) and the control store
-  merges one exact delta per generation; there a drain retires the outstanding
-  generation instead of waiting for it.
+  consumes the delta before reuse. Only one start may be outstanding (it may
+  publish several generations as one delta), due whole steps beyond what it
+  accepts are dropped, and state mutations, persistence, ruleset changes,
+  manual stepping, and shutdown drain first. In the package, serial starts
+  run as many generations as fit 4 ms of the frame; once that cannot deliver
+  the requested rate, blocks of up to 32 generations run on up to eight
+  isolated simulation lanes (`CSimWorkerGuest.wasm` stores each owning a
+  contiguous, chunk-balanced run of lines with a two-line halo; D-E34) and
+  the control store merges one exact delta per block; there a drain retires
+  the outstanding block instead of waiting for it.
   Status derives achieved TPS from published completions and reports rolling
   generation latency. The default `0 x 0` topology is infinite and
   non-toroidal; positive chunk width and height select a finite torus with

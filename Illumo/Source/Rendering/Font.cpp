@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -223,6 +224,7 @@ Font::loadFile(const std::string& path,
                float pixelSize,
                const FontFaceOptions& options)
 {
+  ILLUMO_PROFILE_ZONE("Font.loadFile");
   sourcePath = path;
   FT_Library library = getFreeTypeLibrary();
   if (library == nullptr) {
@@ -282,6 +284,7 @@ Font::rasterizeFace(void* ftFace,
                     float pixelSize,
                     const std::string& glyphSet)
 {
+  ILLUMO_PROFILE_ZONE("Font.rasterizeFace");
   if (ftFace == nullptr) {
     return false;
   }
@@ -455,6 +458,7 @@ Font::rasterizeFace(void* ftFace,
 void
 Font::buildFallbackAtlas(float pixelSize)
 {
+  ILLUMO_PROFILE_ZONE("Font.buildFallbackAtlas");
   atlasWidth = 256;
   atlasHeight = 256;
   atlasPixels.assign(static_cast<size_t>(atlasWidth * atlasHeight * 4), 0);
@@ -541,6 +545,7 @@ Font::getTextureHandle(Renderer* renderer)
   lastRendererLifetime = renderer->getLifetimeIdentity();
   TextureHandle& cached = rendererTextures[lastRendererLifetime];
   if (!cached.isValid() || !renderer->getBackend()->IsTextureValid(cached)) {
+    ILLUMO_PROFILE_ZONE("Font.enrollAtlas");
     TextureOptions options;
     options.filter = TextureFilter::Linear;
     options.wrapX = TextureWrap::ClampToEdge;

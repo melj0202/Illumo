@@ -1,6 +1,7 @@
 #include "SimulationProtocol.h"
 #include "Game/IllumoCodec.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Foundation/Profile.h>
 #include <bit>
 #include <cstring>
 #include <limits>
@@ -42,6 +43,7 @@ private:
 void
 SimulationRequest::write(GuestWireWriter& output) const
 {
+  ILLUMO_PROFILE_ZONE("CSW1.writeRequest");
   output.u32(Magic);
   output.u32(2);
   output.u32(synchronize ? 1 : 0);
@@ -60,6 +62,7 @@ bool
 SimulationRequest::read(std::span<const std::byte> bytes,
                         SimulationRequest& output)
 {
+  ILLUMO_PROFILE_ZONE("CSW1.readRequest");
   if (bytes.size() > 64u * 1024u * 1024u) {
     return false;
   }
@@ -97,6 +100,7 @@ SimulationRequest::read(std::span<const std::byte> bytes,
 void
 SimulationReply::write(GuestWireWriter& output) const
 {
+  ILLUMO_PROFILE_ZONE("CSW1.writeReply");
   output.u32(SimulationRequest::Magic);
   output.u32(2);
   output.u32(static_cast<std::uint32_t>(content));
@@ -125,6 +129,7 @@ SimulationReply::read(std::span<const std::byte> bytes,
                       const SimulationRequest& expected,
                       SimulationReply& output)
 {
+  ILLUMO_PROFILE_ZONE("CSW1.readReply");
   if (bytes.size() > 64u * 1024u * 1024u) {
     return false;
   }
@@ -208,6 +213,7 @@ SimulationReply::restore(const SparseCellGrid& base,
                          const RuleSet& rule,
                          std::string* error) const
 try {
+  ILLUMO_PROFILE_ZONE("CSW1.restore");
   if (!changed || base.getRevision() != baseRevision ||
       baseRevision == UINT64_MAX || revision != baseRevision + 1) {
     if (error) {
@@ -330,6 +336,7 @@ SimulationGuestWorker::execute(std::span<const std::byte> bytes,
                                std::vector<std::byte>& output,
                                std::string& error)
 try {
+  ILLUMO_PROFILE_ZONE("CSW1.execute");
   output.clear();
   error.clear();
   SimulationRequest request;
@@ -343,6 +350,7 @@ try {
     return false;
   }
   if (request.synchronize) {
+    ILLUMO_PROFILE_ZONE("CSW1.synchronize");
     RuleSetRegistry registry;
     if (!registry.loadFromCatalogTexts(request.families, request.rules)) {
       error = "Invalid worker rule catalogs";
@@ -392,7 +400,12 @@ try {
     return false;
   }
   m_operation = request.operation;
-  if (!m_grid->advance(*m_rule)) {
+  bool advanced = false;
+  {
+    ILLUMO_PROFILE_ZONE("CSW1.advance");
+    advanced = m_grid->advance(*m_rule);
+  }
+  if (!advanced) {
     error = "Simulation generation failed";
     return false;
   }
@@ -408,6 +421,7 @@ try {
   reply.revision = m_grid->getRevision();
   reply.changed = reply.revision != request.revision;
   if (reply.changed) {
+    ILLUMO_PROFILE_ZONE("CSW1.captureReply");
     SparseGenerationDelta delta;
     if (!m_grid->captureGenerationDelta(request.revision, &delta, false)) {
       error = "Worker failed to capture generation changes";

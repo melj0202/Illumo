@@ -1,7 +1,8 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <IllumoGuest/PanelSurfaces.h>
 #include <IllumoGuest/RecordingBackend.h>
 #include <IllumoGuest/SnapshotWindow.h>
@@ -367,6 +368,7 @@ GuestPanelSurfaces::record(Renderer& renderer,
                            GuestRecordingBackend& backend,
                            GuestSnapshotWindow& window)
 {
+  ILLUMO_PROFILE_ZONE("PanelSurfaces.record");
   for (const std::unique_ptr<Surface>& surface : m_surfaces) {
     if (surface->state != PanelSurfaceState::Open || surface->size[0] < 1 ||
         surface->size[1] < 1) {
@@ -398,6 +400,7 @@ sameId(const GuestResourceId& left, const GuestResourceId& right)
 void
 GuestPanelSurfaces::finish(GuestFrame& frame)
 {
+  ILLUMO_PROFILE_ZONE("PanelSurfaces.finish");
   for (GuestSurfaceFrame& content : frame.surfaces) {
     Surface* surface = find(content.surface);
     if (surface == nullptr) {

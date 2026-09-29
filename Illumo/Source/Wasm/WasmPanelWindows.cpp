@@ -1,4 +1,5 @@
 #include "WasmInputMapping.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/Logger.h>
@@ -120,6 +121,7 @@ WasmPanelWindows::handle(const GuestWindowRequest& request,
                          GuestWindowOpened* opened,
                          std::string* reason)
 {
+  ILLUMO_PROFILE_ZONE("WasmPanelWindows.handle");
   Window* existing = find(request.surface);
   if (request.action == GuestWindowAction::Close) {
     if (existing == nullptr) {
@@ -197,6 +199,7 @@ WasmPanelWindows::handle(const GuestWindowRequest& request,
 void
 WasmPanelWindows::collectInput(GuestInput& input)
 {
+  ILLUMO_PROFILE_ZONE("WasmPanelWindows.collectInput");
   input.version = 2;
   input.eventSurfaces.assign(input.events.size(), 0u);
   input.characterSurfaces.assign(input.characters.size(), 0u);
@@ -299,6 +302,7 @@ WasmPanelWindows::collectInput(GuestInput& input)
 void
 WasmPanelWindows::present(WasmFrameRenderer& frames)
 {
+  ILLUMO_PROFILE_ZONE("WasmPanelWindows.present");
   IBackend* backend = m_renderer.getBackend();
   if (backend == nullptr) {
     return;
@@ -318,6 +322,7 @@ WasmPanelWindows::present(WasmFrameRenderer& frames)
     if (content != nullptr && width > 0 && height > 0 &&
         (content->revision != window->replayedRevision ||
          width != window->replayedWidth || height != window->replayedHeight)) {
+      ILLUMO_PROFILE_ZONE("WasmPanelWindows.replay");
       if (!window->target.isValid() || width != window->targetWidth ||
           height != window->targetHeight) {
         if (window->target.isValid()) {
@@ -348,6 +353,7 @@ WasmPanelWindows::present(WasmFrameRenderer& frames)
       }
     }
     // Present the newest completed copy; older ones are superseded.
+    ILLUMO_PROFILE_ZONE("WasmPanelWindows.readbackPresent");
     bool fresh = false;
     FrameReadback readback;
     while (window->pendingReadbacks > 0 &&

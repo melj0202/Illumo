@@ -1,4 +1,5 @@
 #include "Cursor.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
@@ -95,6 +96,7 @@ Cursor::retarget(float x, float y)
 void
 Cursor::tick(float deltaSeconds, bool reduced)
 {
+  ILLUMO_PROFILE_ZONE("Cursor.tick");
   reducedMotion = reduced;
   if (!isVisible()) {
     snapNext = true;
@@ -147,6 +149,7 @@ Cursor::rebuild()
 
   breathKey.begin().add({ x, y, width, height, size, breathe, pop, colorKey });
   if (breathKey.changed()) {
+    ILLUMO_PROFILE_ZONE("Cursor.rebuildBreath");
     breathVisual.clearPrimitives();
     GuiKit::drawRoundedBand(breathVisual,
                             x,
@@ -191,6 +194,7 @@ Cursor::rebuild()
   if (!rimKey.changed()) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("Cursor.rebuildRim");
   visual.clearPrimitives();
   GuiKit::drawRoundedOutline(visual,
                              x,
@@ -222,6 +226,7 @@ Cursor::rebuild()
 bool
 Cursor::AppendCommands(Renderer* renderer)
 {
+  ILLUMO_PROFILE_ZONE("Cursor.AppendCommands");
   breathVisual.setVisible(isVisible());
   visual.setVisible(isVisible());
   // The breathing glow and brackets sit behind the rim and cross.

@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
@@ -229,6 +230,7 @@ Renderer::ensureBuiltinStyles()
   if (_builtinStylesReady || !_backend) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("Renderer.ensureBuiltinStyles");
 
   // Canvas: file-backed shaders (same paths as historical Canvas enroll).
   {

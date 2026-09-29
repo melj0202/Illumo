@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IMesh.h>
@@ -66,6 +67,37 @@ sameRect(const Rect2& left, const Rect2& right)
 {
   return left.x == right.x && left.y == right.y && left.w == right.w &&
          left.h == right.h;
+}
+
+// What every GameVisual prepared this thread did in one frame, plotted once
+// when the next frame's first visual prepares.
+struct GameVisualFrameTotals
+{
+  uint64_t frameSerial = 0;
+  size_t visuals = 0;
+  size_t rebuilds = 0;
+  size_t items = 0;
+  size_t batches = 0;
+  size_t quads = 0;
+};
+
+static thread_local GameVisualFrameTotals s_frameTotals;
+
+static void
+beginGameVisualFrameTotals(uint64_t frameSerial)
+{
+  if (frameSerial == s_frameTotals.frameSerial) {
+    return;
+  }
+  if (s_frameTotals.frameSerial != 0) {
+    ILLUMO_PROFILE_PLOT("GameVisual.Visuals", s_frameTotals.visuals);
+    ILLUMO_PROFILE_PLOT("GameVisual.Rebuilds", s_frameTotals.rebuilds);
+    ILLUMO_PROFILE_PLOT("GameVisual.Items", s_frameTotals.items);
+    ILLUMO_PROFILE_PLOT("GameVisual.Batches", s_frameTotals.batches);
+    ILLUMO_PROFILE_PLOT("GameVisual.Quads", s_frameTotals.quads);
+  }
+  s_frameTotals = GameVisualFrameTotals{};
+  s_frameTotals.frameSerial = frameSerial;
 }
 
 GameVisual::GameVisual(unsigned int maxQuads)
@@ -1302,6 +1334,8 @@ GameVisual::appendBatch(BatchKind kind,
 void
 GameVisual::rebuildGeometry(const Rect2* cullRect)
 {
+  ILLUMO_PROFILE_ZONE("GameVisual.rebuildGeometry");
+  s_frameTotals.rebuilds += 1;
   pendingFontGeometry = false;
   geometryTruncated = false;
   shapeQuadCount = 0;
@@ -1505,6 +1539,7 @@ GameVisual::AppendCommands(Renderer* value)
     proxied = true;
     return true;
   }
+  ILLUMO_PROFILE_ZONE("GameVisual.AppendCommands");
   FrameState state;
   if (!prepareFrame(value, &state)) {
     return false;
@@ -1534,6 +1569,7 @@ GameVisual::prepareFrame(Renderer* value,
     return false;
   }
   const Renderer::FrameContext& frameContext = value->getFrameContext();
+  beginGameVisualFrameTotals(frameContext.frameSerial);
   bool useFrameDimensions = false;
   const std::array<int, 2> dimensions =
     frameDimensions(value, &useFrameDimensions);
@@ -1577,6 +1613,10 @@ GameVisual::prepareFrame(Renderer* value,
   state->geometryRevision = geometryRevision;
   state->enclosingClip = value->getClipState();
   state->clip = false;
+  s_frameTotals.visuals += 1;
+  s_frameTotals.items += items.size();
+  s_frameTotals.batches += drawBatches.size();
+  s_frameTotals.quads += shapeQuadCount + spriteQuadCount;
   if (drawBatches.empty()) {
     return true;
   }

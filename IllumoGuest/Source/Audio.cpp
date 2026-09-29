@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Audio.h>
 #include <algorithm>
@@ -48,6 +49,8 @@ GuestAudio::send(const GuestAudioRequest& request, std::span<const float> chunk)
 void
 GuestAudio::pump()
 {
+  ILLUMO_PROFILE_ZONE("Audio.pump");
+  ILLUMO_PROFILE_PLOT("Guest audio backlog", m_backlog.size());
   while (!m_backlog.empty() &&
          m_services.tryEnqueue(GuestService::Audio, m_backlog.front()) != 0) {
     m_backlog.pop_front();
@@ -57,6 +60,7 @@ GuestAudio::pump()
 SoundHandle
 GuestAudio::createSound(const AudioClip& clip)
 {
+  ILLUMO_PROFILE_ZONE("Audio.createSound");
   if (!m_granted || !clip.valid() ||
       m_nextWire > GuestAudioRequest::MaximumSoundId) {
     return {};

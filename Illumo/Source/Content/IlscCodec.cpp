@@ -1,4 +1,5 @@
 #include <Illumo/Content/IlscCodec.h>
+#include <Illumo/Foundation/Profile.h>
 
 #include <charconv>
 #include <cmath>
@@ -722,6 +723,7 @@ IlscCodec::parse(std::string_view text,
                  SceneDocument& document,
                  std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("IlscCodec.parse");
   if (text.size() > kMaximumBytes) {
     return fail(error, "Scene file is larger than 256 MiB");
   }
@@ -1135,6 +1137,7 @@ prettyPrint(const OrderedJson& root)
 std::string
 IlscCodec::encode(const SceneDocument& document, bool includeEditor)
 {
+  ILLUMO_PROFILE_ZONE("IlscCodec.encode");
   OrderedJson root = OrderedJson::object();
   root["format"] = "ilsc";
   root["format_version"] = OrderedJson::array(

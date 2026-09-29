@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Documents.h>
 #include <string>
@@ -93,6 +94,7 @@ GuestDocuments::submit(Transfer& transfer)
 void
 GuestDocuments::pump()
 {
+  ILLUMO_PROFILE_ZONE("Documents.pump");
   // Completions are collected first; callbacks may queue further requests.
   std::vector<std::function<void()>> completions;
 

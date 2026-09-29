@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #if !defined(ILLUMO_SERIAL_GUEST)
 #include <Illumo/Platform/Clipboard.h>
 #endif
@@ -722,6 +723,7 @@ CommandLine::wrapEntry(const historyBuffer& entry,
 void
 CommandLine::rebuildWrapCache(float width) const
 {
+  ILLUMO_PROFILE_ZONE("CommandLine.rebuildWrapCache");
   wrappedHistory.clear();
   wrappedHistory.resize(history.size());
   wrappedHistoryTotalLines = 0;
@@ -1433,6 +1435,7 @@ CommandLine::AppendCommands(Renderer* r)
     // Drawn by the separate window's software canvas, never in the game.
     return true;
   }
+  ILLUMO_PROFILE_ZONE("CommandLine.AppendCommands");
 
   const std::chrono::high_resolution_clock::time_point now =
     std::chrono::high_resolution_clock::now();
@@ -1471,6 +1474,7 @@ CommandLine::AppendCommands(Renderer* r)
 bool
 CommandLine::composePanel()
 {
+  ILLUMO_PROFILE_ZONE("CommandLine.composePanel");
   const std::chrono::high_resolution_clock::time_point now =
     std::chrono::high_resolution_clock::now();
   // The panel snaps to its target; only the open/close slide animates.

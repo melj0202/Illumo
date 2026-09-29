@@ -1,5 +1,6 @@
 #include "OpenGL/CreateOpenGLBackend.h"
 #include "RenderWindow.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -110,6 +111,7 @@ FrameCaptureResult
 FrameCapture::render(const FrameCaptureOptions& options,
                      const FrameCaptureProducer& producer)
 {
+  ILLUMO_PROFILE_ZONE("FrameCapture.render");
   const std::chrono::steady_clock::time_point start =
     std::chrono::steady_clock::now();
   FrameCaptureResult result = renderCapture(options, producer);

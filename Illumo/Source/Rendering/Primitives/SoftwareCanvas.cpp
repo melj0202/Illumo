@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/ShapePrimitive.h>
@@ -22,6 +23,7 @@ SoftwareCanvas::resize(int width, int height)
 void
 SoftwareCanvas::clear(ColorRgba color)
 {
+  ILLUMO_PROFILE_ZONE("SoftwareCanvas.clear");
   for (std::size_t i = 0; i + 3 < m_pixels.size(); i += 4) {
     m_pixels[i + 0] = color.r;
     m_pixels[i + 1] = color.g;
@@ -295,6 +297,7 @@ SoftwareCanvas::drawShape(const ShapePrimitive& shape)
 void
 SoftwareCanvas::draw(const GameVisual& visual)
 {
+  ILLUMO_PROFILE_ZONE("SoftwareCanvas.draw");
   const std::vector<GameVisual::PrimitiveRef> order = visual.paintOrder();
   for (const GameVisual::PrimitiveRef& ref : order) {
     if (ref.kind == GameVisual::PrimitiveKind::Shape) {

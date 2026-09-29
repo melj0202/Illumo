@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Primitives/VisualStore.h>
 #include <Illumo/Rendering/Renderer.h>
 
@@ -241,6 +242,7 @@ VisualStore::append(Renderer* renderer,
   }
   if (!entry->recorded || entry->list.failed() ||
       !(state == entry->recordedState)) {
+    ILLUMO_PROFILE_ZONE("VisualStore.record");
     entry->list.clear();
     renderer->beginRecording(&entry->list);
     const bool emitted = visual.emitDraws(renderer, state);

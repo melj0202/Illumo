@@ -1,4 +1,5 @@
 #include "PatternCodec.h"
+#include <Illumo/Foundation/Profile.h>
 
 #include <algorithm>
 #include <cctype>
@@ -69,6 +70,7 @@ PatternCodec::parseRle(const std::string& text,
                        CellPattern* pattern,
                        std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("PatternCodec.parseRle");
   if (pattern == nullptr) {
     setError(error, "pattern output is null");
     return false;
@@ -186,6 +188,7 @@ PatternCodec::parsePlaintext(const std::string& text,
                              CellPattern* pattern,
                              std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("PatternCodec.parsePlaintext");
   if (pattern == nullptr) {
     setError(error, "pattern output is null");
     return false;
@@ -253,6 +256,7 @@ PatternCodec::parse(const std::string& text,
 std::string
 PatternCodec::encodeRle(const CellPattern& pattern)
 {
+  ILLUMO_PROFILE_ZONE("PatternCodec.encodeRle");
   std::ostringstream output;
   output << "x = " << pattern.getWidth() << ", y = " << pattern.getHeight()
          << "\n";
@@ -323,6 +327,7 @@ PatternCodec::encodeRle(const CellPattern& pattern)
 std::string
 PatternCodec::encodePlaintext(const CellPattern& pattern)
 {
+  ILLUMO_PROFILE_ZONE("PatternCodec.encodePlaintext");
   const int width = std::max(0, pattern.getWidth());
   const int height = std::max(0, pattern.getHeight());
   std::vector<unsigned char> grid(

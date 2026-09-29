@@ -2,11 +2,13 @@
 #include "CanvasScene.h"
 #include "TitleScene.h"
 #include <Illumo/Content/SceneDirector.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 
 bool
 CSimScenes::openTitle(SceneDirector& scenes)
 {
+  ILLUMO_PROFILE_ZONE("CSimScenes.openTitle");
   if (scenes.hasPendingSwitch()) {
     return false;
   }
@@ -52,6 +54,7 @@ bool
 CSimScenes::openCanvas(SceneDirector& scenes,
                        std::unique_ptr<CanvasScene> canvas)
 {
+  ILLUMO_PROFILE_ZONE("CSimScenes.openCanvas");
   if (scenes.hasPendingSwitch()) {
     Logger::LogWarning("A canvas was requested while a switch is pending");
     return false;

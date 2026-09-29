@@ -1,6 +1,7 @@
 #include <Illumo/Content/PackageArchive.h>
 
 #include <Illumo/Content/VirtualPath.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Platform/AtomicFile.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
@@ -190,6 +191,7 @@ PackageArchive::open(std::shared_ptr<const IPackageByteSource> source,
                      std::string& error,
                      const PackageArchiveLimits& requested)
 {
+  ILLUMO_PROFILE_ZONE("PackageArchive.open");
   if (!source) {
     error = "No package bytes";
     return nullptr;
@@ -527,6 +529,7 @@ PackageArchive::read(const PackageArchiveEntry& entry,
                      std::vector<uint8_t>& output,
                      std::string& error) const
 {
+  ILLUMO_PROFILE_ZONE("PackageArchive.read");
   std::vector<uint8_t> packed(static_cast<std::size_t>(entry.compressedSize));
   if (!m_source->readAt(entry.dataOffset, packed.data(), packed.size())) {
     error = "Cannot read entry: " + entry.name;
@@ -566,6 +569,7 @@ PackageArchive::readRange(const PackageArchiveEntry& entry,
                           std::vector<uint8_t>& output,
                           std::string& error) const
 {
+  ILLUMO_PROFILE_ZONE("PackageArchive.readRange");
   const uint64_t start = std::min(offset, entry.size);
   const std::size_t count =
     static_cast<std::size_t>(std::min<uint64_t>(bytes, entry.size - start));
@@ -642,6 +646,7 @@ bool
 PackageArchiveWriter::addDirectory(const std::filesystem::path& root,
                                    std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("PackageArchiveWriter.addDirectory");
   std::error_code code;
   std::filesystem::recursive_directory_iterator walk(
     root, std::filesystem::directory_options::none, code);
@@ -689,6 +694,7 @@ bool
 PackageArchiveWriter::finish(std::vector<uint8_t>& output,
                              std::string& error) const
 {
+  ILLUMO_PROFILE_ZONE("PackageArchiveWriter.finish");
   std::vector<const File*> files;
   files.reserve(m_files.size());
   for (const File& file : m_files) {
@@ -785,6 +791,7 @@ bool
 PackageArchiveWriter::write(const std::filesystem::path& destination,
                             std::string& error) const
 {
+  ILLUMO_PROFILE_ZONE("PackageArchiveWriter.write");
   std::vector<uint8_t> bytes;
   if (!finish(bytes, error)) {
     return false;

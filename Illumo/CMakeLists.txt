@@ -158,11 +158,11 @@ add_library(Illumo STATIC
   Source/Gui/GuiToolStyle.cpp
   Source/Gui/GuiTextEdit.cpp
   ${ILLUMO_PLATFORM_SOURCES}
-  thirdparty/tracy-0.13.1/public/TracyClient.cpp
+  thirdparty/tracy-0.14.1/public/TracyClient.cpp
 )
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.27")
   set_source_files_properties(
-    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/tracy-0.13.1/public/TracyClient.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/tracy-0.14.1/public/TracyClient.cpp"
     PROPERTIES SKIP_LINTING ON)
 endif()
 target_sources(Illumo PRIVATE
@@ -205,7 +205,7 @@ target_include_directories(Illumo
   PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source"
     "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/tracy-0.13.1/public"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/tracy-0.14.1/public"
 )
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoPublicMath.cmake")
 illumo_prepare_public_math(_illumo_public_math_include)

@@ -2,11 +2,11 @@
 
 #include "GL/glew.h"
 #include "TextureUploadPolicy.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <array>
 #include <cstring>
 #include <string>
-#include <tracy/Tracy.hpp>
 
 class GLTexture : public ITexture
 {
@@ -213,7 +213,7 @@ public:
                       const void* data,
                       int srcRowStridePixels)
   {
-    ZoneScopedN("GLTexture.UpdateSubImage");
+    ILLUMO_PROFILE_ZONE("GLTexture.UpdateSubImage");
     const int ch = channels == 0 ? m_channels : channels;
     if (!data || m_id == 0 || m_target != GL_TEXTURE_2D ||
         !TextureUploadPolicy::validLayout(
@@ -245,7 +245,7 @@ public:
     std::array<TextureUploadSlotState, TextureUploadPolicy::kPboCount>
       slotStates;
     {
-      ZoneScopedN("GLTexture.selectPBO");
+      ILLUMO_PROFILE_ZONE("GLTexture.selectPBO");
       for (int candidate = 0; candidate < TextureUploadPolicy::kPboCount;
            ++candidate) {
         if (m_pboFence[candidate] == nullptr) {
@@ -282,7 +282,7 @@ public:
     // Reuses the existing PBO allocation (no glBufferData orphan each frame).
     void* mapped = nullptr;
     {
-      ZoneScopedN("GLTexture.mapPBO");
+      ILLUMO_PROFILE_ZONE("GLTexture.mapPBO");
       mapped = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER,
                                 0,
                                 static_cast<GLsizeiptr>(stageBytes),
@@ -296,7 +296,7 @@ public:
 
     unsigned char* dstBase = static_cast<unsigned char*>(mapped);
     {
-      ZoneScopedN("GLTexture.copyPBO");
+      ILLUMO_PROFILE_ZONE("GLTexture.copyPBO");
       if (usePacked) {
         for (int row = 0; row < height; ++row) {
           unsigned char* dst =
@@ -322,7 +322,7 @@ public:
       }
     }
     {
-      ZoneScopedN("GLTexture.unmapPBO");
+      ILLUMO_PROFILE_ZONE("GLTexture.unmapPBO");
       if (glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER) != GL_TRUE) {
         directUpload(x, y, width, height, format, data, rowStride);
         return true;
@@ -330,7 +330,7 @@ public:
     }
 
     {
-      ZoneScopedN("GLTexture.submitPBO");
+      ILLUMO_PROFILE_ZONE("GLTexture.submitPBO");
       glBindTexture(GL_TEXTURE_2D, m_id);
       glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
       if (usePacked) {
@@ -505,7 +505,7 @@ private:
                     const void* data,
                     int rowStride)
   {
-    ZoneScopedN("GLTexture.directUpload");
+    ILLUMO_PROFILE_ZONE("GLTexture.directUpload");
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, m_id);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);

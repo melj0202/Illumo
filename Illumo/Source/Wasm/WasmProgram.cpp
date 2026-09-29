@@ -1,13 +1,13 @@
 #include "WasmInputMapping.h"
 #include <Illumo/Content/VfsConsole.h>
 #include <Illumo/Content/VfsTreeSource.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Input.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-#include <tracy/Tracy.hpp>
 
 // Reaches the log file and, once, the console: directly when the logger does
 // not feed this console (tests, early startup), otherwise through the logger.
@@ -130,9 +130,10 @@ WasmProgram::setWorkerLimits(const WasmLimits& limits, std::uint32_t lanes)
 bool
 WasmProgram::start(IllumoContext& host)
 try {
+  ILLUMO_PROFILE_ZONE("Wasm.Start");
   IllumoContext* const context = &host;
-  if (context->renderer == nullptr ||
-      context->window == nullptr || context->inputManager == nullptr) {
+  if (context->renderer == nullptr || context->window == nullptr ||
+      context->inputManager == nullptr) {
     m_error = "WASM host services are incomplete";
     return false;
   }
@@ -343,25 +344,34 @@ try {
   if (!m_guest.isAlive()) {
     return;
   }
-  ZoneScopedN("Wasm.Update");
+  ILLUMO_PROFILE_ZONE("Wasm.Update");
   const std::chrono::steady_clock::time_point updateStart =
     std::chrono::steady_clock::now();
   // Surfaces of the frame drawn last time replay into their windows now,
   // after its texture writes and before the next frame replaces them.
   if (m_windows) {
-    ZoneScopedN("Wasm.SurfaceWindows");
+    ILLUMO_PROFILE_ZONE("Wasm.SurfaceWindows");
     m_windows->present(*m_frames);
   }
-  GuestInput snapshotInput = snapshot(*ic, elapsed);
-  if (m_windows) {
-    m_windows->collectInput(snapshotInput);
+  {
+    ILLUMO_PROFILE_ZONE("Wasm.InputSnapshot");
+    GuestInput snapshotInput = snapshot(*ic, elapsed);
+    if (m_windows) {
+      m_windows->collectInput(snapshotInput);
+    }
+    m_input.clear();
+    snapshotInput.write(m_input);
   }
-  m_input.clear();
-  snapshotInput.write(m_input);
   std::vector<std::byte>& response = m_response;
   std::chrono::steady_clock::time_point stageStart = updateStart;
   {
-    ZoneScopedN("Wasm.Services");
+    ILLUMO_PROFILE_ZONE("Wasm.Services");
+    // Work that finished while the last frame rendered (lane generations
+    // especially) reaches this update, not the next one.
+    if (!m_services->harvest(m_completions)) {
+      fail(m_services->error());
+      return;
+    }
     if (!m_guest.invoke(GuestCall::Services, m_completions, response)) {
       fail(m_guest.error());
       return;
@@ -374,7 +384,7 @@ try {
   m_stats.servicesMilliseconds.add(millisecondsSince(stageStart));
   stageStart = std::chrono::steady_clock::now();
   {
-    ZoneScopedN("Wasm.GuestUpdate");
+    ILLUMO_PROFILE_ZONE("Wasm.GuestUpdate");
     if (!m_guest.invoke(GuestCall::Update, m_input.data(), response)) {
       fail(m_guest.error());
       return;
@@ -412,7 +422,7 @@ try {
   if ((flags & GuestUpdateFlags::ServicesPending) != 0) {
     // Requests queued by this update (compute lane jobs especially) start
     // now, while this frame renders, instead of at the next frame.
-    ZoneScopedN("Wasm.ServicesPending");
+    ILLUMO_PROFILE_ZONE("Wasm.ServicesPending");
     const std::chrono::steady_clock::time_point pendingStart =
       std::chrono::steady_clock::now();
     if (!m_guest.invoke(GuestCall::Services, m_completions, m_queued)) {
@@ -429,7 +439,7 @@ try {
   // validates the opaque reply before changing its own state or geometry.
   stageStart = std::chrono::steady_clock::now();
   if (m_mod && !message.empty()) {
-    ZoneScopedN("Wasm.Receive");
+    ILLUMO_PROFILE_ZONE("Wasm.Receive");
     std::vector<std::byte>& modReply = m_modReply;
     if (!m_mod->invoke(GuestCall::Receive, message, modReply) ||
         modReply.size() > 65536) {
@@ -446,7 +456,7 @@ try {
   m_stats.receiveMilliseconds.add(millisecondsSince(stageStart));
   stageStart = std::chrono::steady_clock::now();
   {
-    ZoneScopedN("Wasm.GuestFrame");
+    ILLUMO_PROFILE_ZONE("Wasm.GuestFrame");
     if (!m_guest.invoke(GuestCall::Frame, {}, response)) {
       fail(m_guest.error());
       return;
@@ -456,7 +466,7 @@ try {
   m_stats.frameBytes.add(static_cast<double>(response.size()));
   stageStart = std::chrono::steady_clock::now();
   {
-    ZoneScopedN("Wasm.FrameAccept");
+    ILLUMO_PROFILE_ZONE("Wasm.FrameAccept");
     if (!m_frames->accept(response)) {
       fail(m_frames->error());
       return;
@@ -465,6 +475,20 @@ try {
   m_stats.acceptMilliseconds.add(millisecondsSince(stageStart));
   m_stats.totalMilliseconds.add(millisecondsSince(updateStart));
   ++m_stats.updates;
+  ILLUMO_PROFILE_PLOT("Wasm.FrameBytes", response.size());
+  ILLUMO_PROFILE_PLOT("Wasm.MessageBytes", messageBytes);
+  const WasmFrameCounters& counters = m_frames->counters();
+  ILLUMO_PROFILE_PLOT("Wasm.Batches", counters.batches);
+  ILLUMO_PROFILE_PLOT("Wasm.RetainedBatches", counters.retainedBatches);
+  ILLUMO_PROFILE_PLOT("Wasm.InlineVertexBytes", counters.inlineVertexBytes);
+  ILLUMO_PROFILE_PLOT("Wasm.InlineIndexBytes", counters.inlineIndexBytes);
+  ILLUMO_PROFILE_PLOT("Wasm.TextureWrites", counters.textureWrites);
+  ILLUMO_PROFILE_PLOT("Wasm.TextureWriteBytes", counters.textureWriteBytes);
+  ILLUMO_PROFILE_PLOT("Wasm.MeshWriteBytes", counters.meshWriteBytes);
+  ILLUMO_PROFILE_PLOT("Wasm.WorldOperations", counters.worldOperations);
+  ILLUMO_PROFILE_PLOT("Wasm.WorldInstances", counters.worldInstances);
+  ILLUMO_PROFILE_PLOT("Wasm.VisualOperations", counters.visualOperations);
+  ILLUMO_PROFILE_PLOT("Wasm.Visuals", counters.visuals);
 } catch (const std::exception& exception) {
   fail(exception.what());
 }
@@ -472,6 +496,7 @@ try {
 void
 WasmProgram::dispatch(DrawList& scene)
 {
+  ILLUMO_PROFILE_ZONE("Wasm.Dispatch");
   if (m_frames) {
     m_frames->dispatch(scene);
   }
@@ -483,6 +508,7 @@ WasmProgram::closeRequested()
   if (!m_guest.isAlive()) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("Wasm.CloseRequested");
   std::vector<std::byte> response;
   if (!m_guest.invoke(GuestCall::Close, {}, response)) {
     fail(m_guest.error());
@@ -500,6 +526,7 @@ WasmProgram::closeRequested()
 void
 WasmProgram::stop()
 {
+  ILLUMO_PROFILE_ZONE("Wasm.Stop");
   if (m_guest.isAlive()) {
     Logger::LogTrace("Shutting down the WASM guest after " +
                      std::to_string(m_stats.updates) + " updates");

@@ -1,5 +1,6 @@
 #include "SceneGraphInternal.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <algorithm>
 #include <atomic>
 #include <new>
@@ -369,6 +370,7 @@ SceneGraph::clear()
   if (m_impl->extractionActive) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("SceneGraph.clear");
   invalidateSnapshots();
   m_impl->freeSlots.clear();
   for (uint32_t slot = 1; slot < m_impl->flags.size(); ++slot) {
@@ -520,6 +522,7 @@ SceneGraph::setLocalTransforms(const SceneNodeHandle* nodes,
       (count != 0 && (nodes == nullptr || transforms == nullptr))) {
     return false;
   }
+  ILLUMO_PROFILE_ZONE("SceneGraph.setLocalTransforms");
   for (size_t i = 0; i < count; ++i) {
     if (!m_impl->current(nodes[i])) {
       return false;

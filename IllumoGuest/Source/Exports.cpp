@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <IllumoGuest/Application.h>
 #include <cstdlib>
 
@@ -37,6 +38,7 @@ illumo_guest_free(void* pointer)
 extern "C" const void*
 illumo_guest_manifest()
 {
+  ILLUMO_PROFILE_ZONE("Guest.manifest");
   if (application) {
     __builtin_trap();
   }
@@ -82,10 +84,16 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
     }
     if (expected == GuestCall::Update) {
       GuestInput input;
-      if (!GuestInput::read(request.payload, input)) {
-        __builtin_trap();
+      {
+        ILLUMO_PROFILE_ZONE("Guest.decodeInput");
+        if (!GuestInput::read(request.payload, input)) {
+          __builtin_trap();
+        }
       }
-      application->update(input);
+      {
+        ILLUMO_PROFILE_ZONE("Guest.applicationUpdate");
+        application->update(input);
+      }
       const bool closing = application->closeRequested();
       payload.u32((closing ? GuestUpdateFlags::RequestClose : 0u) |
                   (closing && application->restartRequested()
@@ -104,8 +112,15 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
       if (!request.payload.empty()) {
         __builtin_trap();
       }
-      application->recordFrame(recorded);
-      recorded.write(payload);
+      {
+        ILLUMO_PROFILE_ZONE("Guest.recordFrame");
+        application->recordFrame(recorded);
+      }
+      {
+        ILLUMO_PROFILE_ZONE("GuestFrame.write");
+        recorded.write(payload);
+      }
+      ILLUMO_PROFILE_PLOT("Guest frame bytes", payload.data().size());
     } else if (expected == GuestCall::Close) {
       if (!request.payload.empty()) {
         __builtin_trap();
@@ -120,9 +135,15 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
       recorded = GuestFrame{};
       started = false;
     } else if (expected == GuestCall::Services) {
-      if (!application->services().exchange(request.payload, messages)) {
-        __builtin_trap();
+      {
+        ILLUMO_PROFILE_ZONE("GuestServices.exchange");
+        if (!application->services().exchange(request.payload, messages)) {
+          __builtin_trap();
+        }
       }
+      ILLUMO_PROFILE_PLOT("Guest service completion bytes",
+                          request.payload.size());
+      ILLUMO_PROFILE_PLOT("Guest service request bytes", messages.size());
       payload.bytes(messages);
     } else if (expected == GuestCall::Receive) {
       if (request.payload.size() > 65536) {
@@ -138,6 +159,7 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
       __builtin_trap();
     }
   }
+  ILLUMO_PROFILE_ZONE("Guest.writeEnvelope");
   request.payload = payload.data();
   response.clear();
   request.write(response);
@@ -147,37 +169,44 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
 extern "C" const void*
 illumo_guest_init(const void* p, std::uint32_t n)
 {
+  ILLUMO_PROFILE_ZONE("Guest.init");
   return dispatch(p, n, GuestCall::Init);
 }
 extern "C" const void*
 illumo_guest_update(const void* p, std::uint32_t n)
 {
+  ILLUMO_PROFILE_ZONE("Guest.update");
   return dispatch(p, n, GuestCall::Update);
 }
 extern "C" const void*
 illumo_guest_frame(const void* p, std::uint32_t n)
 {
+  ILLUMO_PROFILE_ZONE("Guest.frame");
   return dispatch(p, n, GuestCall::Frame);
 }
 extern "C" const void*
 illumo_guest_close(const void* p, std::uint32_t n)
 {
+  ILLUMO_PROFILE_ZONE("Guest.close");
   return dispatch(p, n, GuestCall::Close);
 }
 extern "C" const void*
 illumo_guest_shutdown(const void* p, std::uint32_t n)
 {
+  ILLUMO_PROFILE_ZONE("Guest.shutdown");
   return dispatch(p, n, GuestCall::Shutdown);
 }
 
 extern "C" const void*
 illumo_guest_receive(const void* p, std::uint32_t n)
 {
+  ILLUMO_PROFILE_ZONE("Guest.receive");
   return dispatch(p, n, GuestCall::Receive);
 }
 
 extern "C" const void*
 illumo_guest_services(const void* p, std::uint32_t n)
 {
+  ILLUMO_PROFILE_ZONE("Guest.services");
   return dispatch(p, n, GuestCall::Services);
 }

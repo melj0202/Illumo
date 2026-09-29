@@ -1,4 +1,5 @@
 #include "SimulationRunner.h"
+#include <Illumo/Foundation/Profile.h>
 #include <utility>
 
 SimulationRunner::SimulationRunner()
@@ -18,8 +19,14 @@ SimulationRunner::start(SparseCellGrid* workingGrid,
                         const SparseCellGrid* publishedGrid,
                         const RuleSet* ruleSet,
                         SparseGenerationDelta&& mirrorDelta,
-                        bool useMirrorDelta)
+                        bool useMirrorDelta,
+                        std::uint32_t requestedGenerations,
+                        std::uint32_t* acceptedGenerations)
 {
+  ILLUMO_PROFILE_ZONE("SimulationRunner.start");
+  // The worker thread runs one generation per start: several would have it
+  // read the published grid's scratch while this thread uses that grid.
+  (void)requestedGenerations;
   if (workingGrid == nullptr || publishedGrid == nullptr ||
       ruleSet == nullptr) {
     return false;
@@ -35,6 +42,9 @@ SimulationRunner::start(SparseCellGrid* workingGrid,
   requestUsesMirror = useMirrorDelta;
   requestPending = true;
   condition.notify_all();
+  if (acceptedGenerations != nullptr) {
+    *acceptedGenerations = 1u;
+  }
   return true;
 }
 
@@ -45,6 +55,7 @@ SimulationRunner::tryTakeCompleted(SparseCellGrid** completedGrid,
                                    bool* advanceSucceeded,
                                    SimulationRunnerTimings* timings)
 {
+  ILLUMO_PROFILE_ZONE("SimulationRunner.tryTakeCompleted");
   std::lock_guard<std::mutex> lock(mutex);
   if (!completed) {
     return false;
@@ -76,6 +87,7 @@ SimulationRunner::waitAndTakeCompleted(SparseCellGrid** completedGrid,
                                        bool* advanceSucceeded,
                                        SimulationRunnerTimings* timings)
 {
+  ILLUMO_PROFILE_ZONE("SimulationRunner.waitAndTakeCompleted");
   std::unique_lock<std::mutex> lock(mutex);
   if (!requestPending && !running && !completed) {
     return false;
@@ -120,6 +132,7 @@ SimulationRunner::canBlock() const
 void
 SimulationRunner::retire()
 {
+  ILLUMO_PROFILE_ZONE("SimulationRunner.retire");
   // The worker finishes within one generation; its result is dropped.
   SparseGenerationDelta discarded;
   waitAndTakeCompleted(nullptr, &discarded, nullptr, nullptr, nullptr);
@@ -160,6 +173,7 @@ SimulationRunner::shutdown()
 void
 SimulationRunner::workerLoop()
 {
+  ILLUMO_PROFILE_THREAD("SimulationRunner");
   for (;;) {
     SparseCellGrid* workingGrid = nullptr;
     const SparseCellGrid* publishedGrid = nullptr;
@@ -181,6 +195,7 @@ SimulationRunner::workerLoop()
       running = true;
     }
 
+    ILLUMO_PROFILE_ZONE("SimulationRunner.workerGeneration");
     SparseGenerationDelta completedDelta;
     SimulationRunnerTimings timings;
     const bool succeeded = runGeneration(workingGrid,
@@ -188,6 +203,7 @@ SimulationRunner::workerLoop()
                                          ruleSet,
                                          std::move(mirrorDelta),
                                          useMirrorDelta,
+                                         1u,
                                          &completedDelta,
                                          &timings);
 

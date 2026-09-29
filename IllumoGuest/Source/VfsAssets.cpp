@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/VfsAssets.h>
 #include <algorithm>
@@ -81,6 +82,7 @@ GuestVfsAssets::join(const std::string& path, bool pinned, std::uint64_t set)
 void
 GuestVfsAssets::preload(const std::vector<std::string>& names)
 {
+  ILLUMO_PROFILE_ZONE("VfsAssets.preload");
   for (const std::string& name : names) {
     const std::string key = canonical(name);
     if (key.empty() || key == "/") {
@@ -113,6 +115,7 @@ GuestVfsAssets::ready()
 std::uint64_t
 GuestVfsAssets::fetch(const std::vector<std::string>& paths)
 {
+  ILLUMO_PROFILE_ZONE("VfsAssets.fetch");
   const std::uint64_t id = m_nextSet++;
   Set set;
   for (const std::string& path : paths) {
@@ -222,6 +225,8 @@ GuestVfsAssets::removeLocal(const std::string& name)
 void
 GuestVfsAssets::finish(Load& load, GuestFileResult& result)
 {
+  // Once per completed load: copies the asset into the cache.
+  ILLUMO_PROFILE_ZONE("VfsAssets.finish");
   const bool loaded = result.outcome == GuestFileOutcome::Success;
   if (loaded) {
     Entry& entry = m_entries[load.path];
@@ -299,6 +304,8 @@ static bool overBudgetReported = false;
 void
 GuestVfsAssets::evict()
 {
+  ILLUMO_PROFILE_ZONE("VfsAssets.evict");
+  ILLUMO_PROFILE_PLOT("Guest asset cache bytes", m_bytes);
   std::size_t evicted = 0;
   std::size_t freed = 0;
   while (m_bytes > m_budget) {
@@ -344,6 +351,7 @@ GuestVfsAssets::read(const std::string& canonical,
   if (found == m_entries.end()) {
     return false;
   }
+  ILLUMO_PROFILE_ZONE("VfsAssets.read");
   found->second.used = ++m_clock;
   bytes = found->second.bytes;
   return true;

@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <IllumoGuest/Console.h>
 
 void
@@ -69,6 +70,8 @@ GuestConsole::enqueue(GuestConsoleRequest request)
 void
 GuestConsole::pump()
 {
+  ILLUMO_PROFILE_ZONE("Console.pump");
+  ILLUMO_PROFILE_PLOT("Guest console outgoing", m_outgoing.size());
   for (std::deque<std::uint64_t>::iterator it = m_requests.begin();
        it != m_requests.end();) {
     GuestServiceRecord result;

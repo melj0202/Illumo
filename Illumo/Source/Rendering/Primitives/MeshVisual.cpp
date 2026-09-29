@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
@@ -1283,6 +1284,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value,
 void
 MeshVisual::rebuildMeshes()
 {
+  ILLUMO_PROFILE_ZONE("MeshVisual.rebuildMeshes");
   expandIndexedVertices(lineVertices, lineIndices, &lineDrawVertices);
   triangleBoundsValid = !triangleVertices.empty() && !triangleIndices.empty();
   if (triangleBoundsValid) {
@@ -1370,6 +1372,7 @@ MeshVisual::ensureMeshCapacity(MeshHandle* meshHandle,
   if (meshHandle->isValid() && *capacity >= required) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("MeshVisual.ensureMeshCapacity");
 
   size_t nextCapacity = *capacity == 0 ? 64u : *capacity;
   while (nextCapacity < required) {
@@ -1423,6 +1426,7 @@ MeshVisual::ensureTriangleMeshCapacity(size_t requiredVertices,
       triangleIndexCapacity >= requiredIndices) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("MeshVisual.ensureTriangleMeshCapacity");
 
   size_t nextVertexCapacity =
     triangleVertexCapacity == 0 ? 64u : triangleVertexCapacity;

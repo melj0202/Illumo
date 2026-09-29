@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -322,6 +323,7 @@ RenderWorld::prepareFrame(Renderer* renderer)
   if (m_frame != 0 && serial == m_preparedSerial) {
     return m_ready;
   }
+  ILLUMO_PROFILE_ZONE("RenderWorld.prepareFrame");
   m_preparedSerial = serial;
   m_frame += 1;
   m_renderer = renderer;
@@ -483,6 +485,7 @@ RenderWorld::CollectShadowCasters(Renderer* renderer)
       !prepareFrame(renderer)) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("RenderWorld.CollectShadowCasters");
   Renderer::ShadowCasterDesc caster;
   caster.lightDirection = m_environment.lightDirection;
   caster.mapSize = m_environment.shadowMapSize;
@@ -518,6 +521,7 @@ RenderWorld::AppendShadowCommands(Renderer* renderer)
       !prepareFrame(renderer) || !renderer->getShadowFrameContext().active) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("RenderWorld.AppendShadowCommands");
   bool bound = false;
   for (std::unique_ptr<Bucket>& bucket : m_buckets) {
     if (!bucket->inUse || bucket->dirty || bucket->shadow.size() == 0 ||
@@ -664,6 +668,7 @@ RenderWorld::AppendCommands(Renderer* renderer)
   if (!isVisible() || renderer == nullptr) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("RenderWorld.AppendCommands");
   drawSkybox(renderer);
   if (!prepareFrame(renderer)) {
     return true;
@@ -677,5 +682,10 @@ RenderWorld::AppendCommands(Renderer* renderer)
   for (size_t index : m_blendOrder) {
     drawColor(renderer, *m_buckets[index], bound);
   }
+  ILLUMO_PROFILE_PLOT("RenderWorld.Instances", m_stats.instances);
+  ILLUMO_PROFILE_PLOT("RenderWorld.Buckets", m_stats.buckets);
+  ILLUMO_PROFILE_PLOT("RenderWorld.DrawnInstances", m_stats.drawnInstances);
+  ILLUMO_PROFILE_PLOT("RenderWorld.ShadowInstances", m_stats.shadowInstances);
+  ILLUMO_PROFILE_PLOT("RenderWorld.Recordings", m_stats.recordings);
   return true;
 }

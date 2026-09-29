@@ -21,7 +21,14 @@ target_link_libraries(IllumoGuestOptions INTERFACE unwind)
 # Guests are single-threaded: shared engine and product sources select their
 # serial variants (no worker threads, locks or file-system paths).
 target_compile_definitions(IllumoGuestOptions INTERFACE ILLUMO_SERIAL_GUEST)
-target_include_directories(IllumoGuestOptions INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/Include")
+target_include_directories(IllumoGuestOptions INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/Include"
+  "${ILLUMO_ROOT}/Illumo/Include")
+# ILLUMO_ENABLE_TRACY builds: <Illumo/Foundation/Profile.h> markers call the
+# host's illumo_profile imports, which report to the runtime's Tracy client.
+option(ILLUMO_GUEST_PROFILE "Report guest profiling markers to the host" OFF)
+if(ILLUMO_GUEST_PROFILE)
+  target_compile_definitions(IllumoGuestOptions INTERFACE ILLUMO_GUEST_PROFILE)
+endif()
 
 function(illumo_add_guest target)
   add_executable(${target} Source/Exports.cpp ${ARGN})
@@ -107,7 +114,7 @@ add_library(IllumoGuestEngine STATIC
   ../Illumo/Source/Scene/SceneGraphDrawable.cpp)
 target_include_directories(IllumoGuestEngine SYSTEM PRIVATE
   "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public"
+  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.14.1/public"
   "${ILLUMO_ROOT}/Illumo"
   "${ILLUMO_ROOT}/Illumo/thirdparty")
 target_link_libraries(IllumoGuestEngine PUBLIC IllumoGuestRendering)
@@ -132,7 +139,7 @@ add_library(IllumoGuestContent STATIC
   Source/SceneWorlds.cpp)
 target_include_directories(IllumoGuestContent SYSTEM PRIVATE
   "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public"
+  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.14.1/public"
   "${ILLUMO_ROOT}/Illumo"
   "${ILLUMO_ROOT}/Illumo/thirdparty")
 target_link_libraries(IllumoGuestContent PUBLIC IllumoGuestEngine)

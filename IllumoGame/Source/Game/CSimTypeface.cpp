@@ -1,5 +1,6 @@
 #include "CSimTypeface.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Font.h>
 #include <utility>
 #include <vector>
@@ -29,6 +30,7 @@ faceName(float weight, const std::string& glyphs)
 void
 CSimTypeface::install()
 {
+  ILLUMO_PROFILE_ZONE("CSimTypeface.install");
   std::vector<FontWeightRamp::Sample> samples;
   for (float weight : kUiWeights) {
     samples.push_back({ weight,
@@ -66,6 +68,7 @@ CSimTypeface::titleRamp(int rasterSize, const std::string& glyphs)
   if (!s_installed) {
     return FontWeightRamp();
   }
+  ILLUMO_PROFILE_ZONE("CSimTypeface.titleRamp");
   std::vector<FontWeightRamp::Sample> samples;
   for (float weight : kTitleWeights) {
     samples.push_back({ weight,

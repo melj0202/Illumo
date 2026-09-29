@@ -439,7 +439,9 @@ cutover; the engine/product boundary must not be weakened as a shortcut.
 
 Implemented 2026-09-22 (D-E17), differing from the recommendation above in two
 approved ways. There are up to eight worker instances (lanes), not one: each
-holds only its interleaved bands of eight chunk rows plus a one-row halo and
+holds only its interleaved bands of eight chunk rows plus a one-row halo
+(2026-09-28: one contiguous run with a two-line halo and multi-generation
+blocks, D-E34) and
 returns owned changes, so no whole-world snapshot or replacement marker
 crosses stores after the first synchronization. Drains retire the outstanding
 generation rather than becoming pending operations. The control store merges
@@ -461,7 +463,7 @@ native production runner because the control-side merge is serial.
 | Audio (2026-09-24) | Decoding its own sound files, cue choice and volume policy | Validated float samples registered per guest; mixing on the host output (`Audio` capability) |
 | Transitions | Guest-local menu/game ownership | Native host only switches complete packages |
 | Close | Product save/confirmation UI | Generic defer/accept handshake and forced shutdown cleanup |
-| Diagnostics | Game metrics and timing labels | Guest-safe logging/profiling imports; no native Tracy client in guest |
+| Diagnostics | Game metrics and timing labels | Guest-safe logging/profiling imports; no native Tracy client in guest (2026-09-28: the `illumo_profile` imports, D-E33, `docs/tracy-profiling.md`) |
 
 Keep sparse `.csim` version 4 output and older v3/v2/dense reads. Preserve rule
 IDs, family semantics, palette/brush behavior, finite topology, signed 64-bit

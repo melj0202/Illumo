@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/GLString.h>
@@ -69,6 +70,7 @@ GLString::setRenderer(Renderer* rend)
 void
 GLString::syncVisual()
 {
+  ILLUMO_PROFILE_ZONE("GLString.syncVisual");
   visual.clearPrimitives();
   if (!content.empty()) {
     ColorRgba color{ static_cast<unsigned char>(r),

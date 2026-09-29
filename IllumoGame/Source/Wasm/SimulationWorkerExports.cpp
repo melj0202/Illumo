@@ -1,5 +1,6 @@
 #include "SimulationLanes.h"
 #include "SimulationProtocol.h"
+#include <Illumo/Foundation/Profile.h>
 #include <cstdlib>
 #include <cstring>
 
@@ -41,9 +42,14 @@ illumo_guest_job(const void* pointer, std::uint32_t length)
     std::memcpy(&magic, pointer, sizeof(magic)); // wire values are LE
   }
   std::string error;
-  const bool executed = magic == SimulationLaneRequest::Magic
-                          ? lane.execute(request, result, error)
-                          : worker.execute(request, result, error);
+  bool executed = false;
+  {
+    // Closed before a trap, so a failed job leaves no zone open.
+    ILLUMO_PROFILE_ZONE("Worker.job");
+    executed = magic == SimulationLaneRequest::Magic
+                 ? lane.execute(request, result, error)
+                 : worker.execute(request, result, error);
+  }
   if (!executed) {
     // The mutable worker must be retired after any failed generation/parse.
     __builtin_trap();

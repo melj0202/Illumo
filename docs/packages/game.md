@@ -417,27 +417,35 @@ payloads. There is no backlog, and overdue whole steps
 are dropped while fractional time is retained. Pause, edit, save/load, ruleset
 changes, manual stepping, and shutdown drain first.
 
-In the package (D-E17) the guest runner measures its serial generations and,
-once they exceed 1 ms, runs generations on up to eight simulation lanes
+In the package (D-E17, D-E34; `docs/simulation-lanes-v2-design.md`) the
+canvas asks each start for every whole step due, and the guest runner
+answers with as many generations as it can publish as one delta. Serial
+starts run as many as fit 4 ms of the frame (measured per generation), so
+small worlds exceed the frame rate in the game store. Once serial
+generations cannot deliver the requested generations per frame within that
+budget, blocks of up to 32 generations run on up to eight simulation lanes
 (`IllumoGame/Source/Wasm/SimulationLanes.*`): isolated
-`CSimWorkerGuest.wasm` stores that own interleaved bands of eight chunk rows
-plus a one-row halo, advance them with the same kernels, and return their
-owned changes. Elementary 1D rules, whose single active row spans columns,
+`CSimWorkerGuest.wasm` stores that each own one contiguous run of chunk
+lines, cut so every lane holds about the same number of stored chunks,
+plus a two-line halo on each side. A halo H lines deep keeps the owned
+lines exact for `16 * H / radius` generations (32 for Life-like rules, two
+at radius 16), so a lane advances a whole block with the same kernels and
+returns the owned chunks any of its generations changed. Elementary 1D rules, whose single active row spans columns,
 partition by chunk column instead: the coordinator finds the global source
 row (lane protocol version 2 carries it), each lane writes only the row
 cells in its own columns, and the lanes' owned-column rows combine into the
-next generation's source row. The control store merges them into the spare grid as one exact
-delta (explicit changed chunks, never the replacement marker), publishes it as
-above, and launches the next generation from the halos before merging. Lanes
-resynchronize after any change to the published world, rule or topology.
-Their generations finish on a later frame, so the runner reports
-`canBlock()` false and a drain retires the outstanding generation: at most
-one generation is discarded, and pause, save, load, edits and exit act on the
-displayed world. Lanes stop for small or settled worlds (all lanes together
-under 0.5 ms), and never run radii above 16 or after a lane failure. The
-1 ms entry comes from `IllumoGame.Wasm.PackageBench`: at about 1 ms a lane
-generation costs the store only its 0.3-0.4 ms merge, at the price of some
-uncapped peak TPS. `status` reports the execution mode, round trip, slowest lane,
+next generation's source row. Elementary rows run one generation per block. The control store merges a
+block's replies into the spare grid as one exact delta (explicit changed
+chunks, never the replacement marker), publishes it as above, and launches
+the next block from the halos before merging. Lanes resynchronize, and are
+recut, after any change to the published world, rule or topology, and when
+the slowest lane stays over 1.5 times the mean for 30 blocks. A block finishes
+on a later frame (the host delivers a reply to the first update after it
+completes), so the runner reports `canBlock()` false and a drain retires
+the outstanding block: its unpublished generations are discarded, and
+pause, save, load, edits and exit act on the displayed world. Lanes return
+to the game store once their summed work per generation would fit half the
+serial budget, and never run after a lane failure. `status` reports the execution mode, round trip, slowest lane,
 merge time, resynchronizations and retirements. Painting, Bresenham strokes, rectangular selection, copy/cut/paste, built-in
 stamps, RLE/plaintext import, `setcell`,
 randomization, and clearing operate directly on signed world coordinates.

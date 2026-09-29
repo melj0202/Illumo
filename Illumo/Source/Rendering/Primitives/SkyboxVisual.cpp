@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
@@ -97,6 +98,7 @@ SkyboxVisual::AppendCommands(Renderer* renderer)
       renderer->getBackend()->AppendSkybox(*this)) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("SkyboxVisual.AppendCommands");
   prepare(renderer);
   if (!m_cubeMesh.isValid()) {
     return false;

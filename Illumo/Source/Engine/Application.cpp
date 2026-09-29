@@ -2,6 +2,7 @@
 
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Foundation/BuildInfo.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Platform/PlatformTimer.h>
 #include <Illumo/Platform/ProcessRelaunch.h>
 #include <Illumo/Platform/SystemInfo.h>
@@ -60,6 +61,7 @@ gibibytes(std::uint64_t bytes)
 static void
 logStartupReport(const std::string& applicationName)
 {
+  ILLUMO_PROFILE_ZONE("Application.startupReport");
   Logger::LogInfo(applicationName + " starting: Illumo " +
                   BuildInfo::FullVersion + ", " + buildConfiguration() +
                   " build of " + __DATE__ + " " + __TIME__ + " (" +
@@ -116,6 +118,7 @@ runApplication(int argc,
                IllumoApplicationDefinition application,
                bool* restart)
 {
+  ILLUMO_PROFILE_THREAD("Main");
   *restart = false;
   const std::chrono::steady_clock::time_point launched =
     std::chrono::steady_clock::now();

@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/RenderWorld.h>
 #include <algorithm>
@@ -263,6 +264,7 @@ void
 GuestRenderWorld::takeOperations(std::vector<GuestWorldOperation>& output,
                                  std::size_t limit)
 {
+  ILLUMO_PROFILE_ZONE("RenderWorld.takeOperations");
   // The sky change goes first: it never depends on queued operations.
   const GuestResourceId sky = m_skyShown ? m_sky : GuestResourceId{};
   const bool sameSky = sky.owner == m_sentSky.owner &&

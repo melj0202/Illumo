@@ -3,6 +3,7 @@
 #include "CanvasChromeStyle.h"
 #include "CanvasEditIcons.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -165,6 +166,7 @@ CanvasActionBar::update(const CanvasActionBarState& state,
                         float deltaSeconds,
                         bool acceptInput)
 {
+  ILLUMO_PROFILE_ZONE("CanvasActionBar.update");
   const float step = std::isfinite(deltaSeconds) && deltaSeconds > 0.0f
                        ? std::min(deltaSeconds, 0.1f)
                        : 0.0f;
@@ -372,6 +374,7 @@ CanvasActionBar::update(const CanvasActionBarState& state,
                           breathe,
                           std::min(1.0f, pop) });
   if (m_haloKey.changed()) {
+    ILLUMO_PROFILE_ZONE("CanvasActionBar.rebuildHalo");
     m_haloVisual.clearPrimitives();
     if (barShown) {
       GuiKit::drawSoftShadow(m_haloVisual,

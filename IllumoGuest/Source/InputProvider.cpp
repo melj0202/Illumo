@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <IllumoGuest/InputProvider.h>
 #include <stdexcept>
 
@@ -93,6 +94,8 @@ InputManager::getMousePosition()
 void
 GuestInputProvider::accept(InputManager& manager, const GuestInput& input)
 {
+  ILLUMO_PROFILE_ZONE("InputProvider.accept");
+  ILLUMO_PROFILE_PLOT("Guest input events", input.events.size());
   manager.clearCharQueue();
   manager.clearKeyQueue();
   manager.m_suppressedKeys.fill(false);

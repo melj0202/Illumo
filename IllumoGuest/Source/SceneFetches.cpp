@@ -1,4 +1,5 @@
 #include <Illumo/Content/SceneAssetRefs.h>
+#include <Illumo/Foundation/Profile.h>
 #include <IllumoGuest/SceneFetches.h>
 #include <cstddef>
 #include <utility>
@@ -53,6 +54,7 @@ GuestSceneFetches::release()
 void
 GuestSceneFetches::pump()
 {
+  ILLUMO_PROFILE_ZONE("SceneFetches.pump");
   for (std::size_t index = 0; index < m_fetches.size();) {
     std::vector<std::string> missing;
     if (!m_cache.fetched(m_fetches[index].set, &missing)) {

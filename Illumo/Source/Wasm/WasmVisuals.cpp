@@ -1,5 +1,6 @@
 #include "WasmVisuals.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <algorithm>
@@ -109,6 +110,7 @@ WasmVisuals::find(std::uint32_t target) const
 bool
 WasmVisuals::plan(const GuestFrame& frame, Host& host, std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("WasmVisuals.plan");
   const std::vector<GuestVisualOperation>& operations = frame.visualOperations;
   m_resolved.clear();
   m_planned.clear();
@@ -303,6 +305,7 @@ WasmVisuals::stage(const GuestVisualItem& item,
 void
 WasmVisuals::apply(const GuestFrame& frame)
 {
+  ILLUMO_PROFILE_ZONE("WasmVisuals.apply");
   const std::vector<GuestVisualOperation>& operations = frame.visualOperations;
   m_touched.clear();
   for (std::size_t index = 0; index < operations.size(); ++index) {
@@ -360,10 +363,10 @@ WasmVisuals::apply(const GuestFrame& frame)
       case GuestVisualOp::ItemInsert: {
         m_store.insertItems(id, operation.index, operation.count);
         std::vector<ItemLease>& leases = m_visuals[id].leases;
-        leases.insert(
-          leases.begin() + static_cast<std::ptrdiff_t>(operation.index),
-          operation.count,
-          ItemLease{});
+        leases.insert(leases.begin() +
+                        static_cast<std::ptrdiff_t>(operation.index),
+                      operation.count,
+                      ItemLease{});
         break;
       }
     }
@@ -469,6 +472,7 @@ WasmVisuals::draw(Renderer& renderer,
   if (composition == nullptr) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("WasmVisuals.draw");
   GameVisual::FrameOverride frame;
   frame.width = composition->width;
   frame.height = composition->height;

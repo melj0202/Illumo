@@ -3,6 +3,7 @@
 #include <Illumo/Content/PackageMounts.h>
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Content/VirtualPath.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Platform/AtomicFile.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmFileServices.h>
@@ -81,8 +82,14 @@ public:
       throw std::invalid_argument("File service roots must be directories");
     }
     files.resize(limits.openFiles);
-    worker = std::thread([this]() { work(); });
-    packer = std::thread([this]() { packWork(); });
+    worker = std::thread([this]() {
+      ILLUMO_PROFILE_THREAD("Wasm file IO");
+      work();
+    });
+    packer = std::thread([this]() {
+      ILLUMO_PROFILE_THREAD("Wasm file pack");
+      packWork();
+    });
   }
   ~State()
   {
@@ -152,6 +159,7 @@ public:
   }
   bool storageFits(const File& replacing)
   {
+    ILLUMO_PROFILE_ZONE("WasmFileServices.storageFits");
     std::uint64_t bytes = replacing.size;
     std::size_t count = 0;
     for (const std::filesystem::directory_entry& entry :
@@ -211,6 +219,7 @@ public:
              std::string& name,
              std::uint64_t& size)
   {
+    ILLUMO_PROFILE_ZONE("WasmFileServices.grant");
     std::error_code status;
     if (!path.is_absolute()) {
       return refuseGrant(path, "not an absolute path");
@@ -316,6 +325,7 @@ public:
                    std::uint64_t* after)
   {
     if (!projectMeasured) {
+      ILLUMO_PROFILE_ZONE("WasmFileServices.measureProject");
       std::vector<std::pair<std::string, std::uint64_t>> found;
       if (!walk("/project", found)) {
         return false;
@@ -343,6 +353,7 @@ public:
   GuestFileOutcome query(const GuestFileRequest& request,
                          GuestWireWriter& response) const
   {
+    ILLUMO_PROFILE_ZONE("WasmFileServices.query");
     std::string normalized;
     if (!has(GuestCapability::Assets) ||
         !VirtualPath::normalize(request.path, normalized)) {
@@ -398,6 +409,7 @@ public:
   }
   GuestFileOutcome importGrant(const GuestFileRequest& request)
   {
+    ILLUMO_PROFILE_ZONE("WasmFileServices.importGrant");
     std::filesystem::path source;
     std::string target;
     if (!has(GuestCapability::ProjectFiles) ||
@@ -435,6 +447,7 @@ public:
   // illumo.json into the writable Selected grant.
   GuestFileOutcome packProject(const GuestFileRequest& request)
   {
+    ILLUMO_PROFILE_ZONE("WasmFileServices.packProject");
     std::filesystem::path destination;
     std::string source;
     if (!has(GuestCapability::ProjectFiles) ||
@@ -709,6 +722,7 @@ public:
         (!file->selected && !storageFits(*file))) {
       return GuestFileOutcome::Denied;
     }
+    ILLUMO_PROFILE_ZONE("WasmFileServices.commit");
     file->stream.flush();
     if (!file->stream) {
       return GuestFileOutcome::IoError;
@@ -768,6 +782,7 @@ public:
   }
   void complete(const Request& request)
   {
+    ILLUMO_PROFILE_ZONE("WasmFileServices.complete");
     GuestServiceRecord completion{
       request.id, GuestService::File, GuestServiceStatus::Complete, {}
     };
@@ -961,6 +976,7 @@ WasmFileServices::grantLaunch(const std::filesystem::path& path,
 bool
 WasmFileServices::submit(const GuestServices& incoming)
 {
+  ILLUMO_PROFILE_ZONE("WasmFileServices.submit");
   State& state = *m_state;
   if (incoming.records.size() > GuestServices::MaximumRecords) {
     state.error = "File batch exceeds record quota";
@@ -1002,6 +1018,7 @@ WasmFileServices::submit(const GuestServices& incoming)
 GuestServices
 WasmFileServices::poll(std::size_t byteBudget)
 {
+  ILLUMO_PROFILE_ZONE("WasmFileServices.poll");
   State& state = *m_state;
   GuestServices result;
   {

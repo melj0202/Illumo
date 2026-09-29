@@ -1,15 +1,16 @@
+#include "Game/CSimScenes.h"
 #include "Game/CSimSounds.h"
 #include "Game/CSimTypeface.h"
 #include "Game/IllumoGameConfig.h"
-#include "Game/CSimScenes.h"
 #include "Game/PerformanceOverlay.h"
 #include "Game/SimulatorSettings.h"
 #include "Game/SoftwareCursor.h"
 #include "Wasm/CatalogBootstrap.h"
 #include "Wasm/GuestPlatform.h"
 #include <Illumo/Content/PackageManifest.h>
-#include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/DrawList.h>
+#include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
@@ -59,13 +60,18 @@ public:
   }
 
 protected:
-  void pumpProduct() override { m_platform.pump(); }
+  void pumpProduct() override
+  {
+    ILLUMO_PROFILE_ZONE("CSim.pumpProduct");
+    m_platform.pump();
+  }
 
   // CSim draws its own pointer over every screen and hides the system
   // cursor while it does. The host console draws above the game, so while it
   // is open the system cursor returns. `softwareCursor 0` turns it off.
   void updateOverlay(double elapsed) override
   {
+    ILLUMO_PROFILE_ZONE("CSim.updateOverlay");
     const IllumoContext& engine = context();
     if (engine.window == nullptr || engine.renderer == nullptr) {
       return;
@@ -110,6 +116,7 @@ protected:
 
   void dispatchOverlay(DrawList& scene) override
   {
+    ILLUMO_PROFILE_ZONE("CSim.dispatchOverlay");
     // Under the pointer, so the cursor stays on top.
     if (m_performance.isVisible()) {
       scene.AddDrawable(&m_performance.getVisual(), RenderLayerId::UI);
@@ -135,6 +142,7 @@ protected:
 
   bool bootstrap() override
   {
+    ILLUMO_PROFILE_ZONE("CSim.bootstrap");
     // Kikuta replaces the engine default; its weights load beside the
     // catalogs, and the menu waits only for the rest weight.
     if (!CSimTypeface::installed()) {
@@ -174,11 +182,11 @@ protected:
 
   bool createScenes(SceneDirector& scenes) override
   {
+    ILLUMO_PROFILE_ZONE("CSim.createScenes");
     Logger::LogTrace("CSim bootstrap complete; opening the main menu");
     CSimSounds::play(CSimSound::ProgramStart);
     return CSimScenes::openTitle(scenes);
   }
-
 
 private:
   // The staged illumo.json carries the build version (D-F2) that the main
@@ -201,6 +209,7 @@ private:
     }
     m_versionTask = 0;
     m_versionRead = true;
+    ILLUMO_PROFILE_ZONE("CSim.decodePackageManifest");
     PackageManifest manifest;
     std::string error;
     const std::string_view text(
@@ -239,6 +248,7 @@ private:
     if (!assetCache().fetched(m_soundFetch, &missing)) {
       return false;
     }
+    ILLUMO_PROFILE_ZONE("CSim.installSounds");
     std::vector<std::string> problems;
     CSimSounds::install(
       audio,

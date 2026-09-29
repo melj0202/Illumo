@@ -40,13 +40,16 @@ add_library(IllumoWasmRuntime STATIC
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmInstance.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGuest.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmWorker.cpp"
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmProfile.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Platform/Windows/WinWasmCompiler.cpp")
 add_library(Illumo::WasmRuntime ALIAS IllumoWasmRuntime)
 target_include_directories(IllumoWasmRuntime PUBLIC "${CMAKE_SOURCE_DIR}/Illumo/Include")
 target_include_directories(IllumoWasmRuntime PUBLIC "${CMAKE_SOURCE_DIR}/IllumoGuest/Include")
 target_include_directories(IllumoWasmRuntime SYSTEM PRIVATE
-  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include")
-target_link_libraries(IllumoWasmRuntime PRIVATE IllumoWasmtime)
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include"
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/tracy-0.14.1/public")
+# Illumo compiles the Tracy client the guest profiling imports report to.
+target_link_libraries(IllumoWasmRuntime PRIVATE IllumoWasmtime Illumo::Illumo)
 illumo_configure_runtime_target(IllumoWasmRuntime)
 add_executable(IllumoWasmCompiler
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Platform/Windows/WinWasmCompilerMain.cpp")
@@ -74,7 +77,7 @@ target_link_libraries(IllumoWasmRendering PUBLIC Illumo::WasmRuntime Illumo::Ill
 # Tracy zones around guest exchanges; the client itself is compiled by Illumo.
 # The runtime shell prints its capture and benchmark results as JSON.
 target_include_directories(IllumoWasmRendering SYSTEM PRIVATE
-  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/tracy-0.13.1/public"
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/tracy-0.14.1/public"
   "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include")
 illumo_configure_runtime_target(IllumoWasmRendering)
 
@@ -109,7 +112,8 @@ add_executable(IllumoRuntime $<TARGET_OBJECTS:IllumoPlatformEntry>
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/RuntimeApplication.cpp")
 target_link_libraries(IllumoRuntime PRIVATE IllumoWasmRendering)
 target_include_directories(IllumoRuntime SYSTEM PRIVATE
-  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include")
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include"
+  "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/tracy-0.14.1/public")
 illumo_configure_runtime_target(IllumoRuntime)
 illumo_stage_runtime(IllumoRuntime)
 illumo_stage_default_file(IllumoRuntime
@@ -255,7 +259,7 @@ if(BUILD_TESTING)
   add_dependencies(IllumoWasmFrameTests IllumoGuestBuild)
   illumo_configure_runtime_target(IllumoWasmFrameTests)
   illumo_stage_msvc_asan(IllumoWasmFrameTests)
-  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices RetainedResources AudioServiceDecoder AudioServices GuestAudio WorldFrameValidation WorldOperations WorldAddressingValidation WorldsPerScene VisualFrameValidation VisualOperations RuntimeShell RuntimeShellSplash)
+  foreach(_case FrameValidation FrameRendering FrameFailures GameHost ModIsolation RenderServices GuestPresentation GameJobs SdkContract GameFiles DisplayServices ClipboardServices ConsoleServices DialogServices RetainedResources AudioServiceDecoder AudioServices GuestAudio WorldFrameValidation WorldOperations WorldAddressingValidation WorldsPerScene VisualFrameValidation VisualOperations RuntimeShell RuntimeShellSplash ServiceHarvest)
     add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmFrameTests --run "Illumo.Wasm.${_case}")
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20 WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmFrameTests>")
   endforeach()
@@ -335,7 +339,7 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "$<TARGET_FILE:IllumoWasmtime>" "$<TARGET_FILE_DIR:IllumoWasmTests>"
     VERBATIM)
-  foreach(_case Compatibility Isolation Fuel Epoch Memory DeniedImports InvalidModule Worker Wire CompilerLimits Lifecycle Protocol Resources EngineModes)
+  foreach(_case Compatibility Isolation Fuel Epoch Memory DeniedImports InvalidModule Worker Wire CompilerLimits Lifecycle Protocol Resources EngineModes ProfileImports)
     add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmTests --run "Illumo.Wasm.${_case}")
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES
       LABELS "Illumo;IllumoWorkspace" TIMEOUT 20)
@@ -361,6 +365,7 @@ ExternalProject_Add(IllumoGuestBuild
   CMAKE_ARGS "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_SOURCE_DIR}/cmake/IllumoWasiToolchain.cmake"
     "-DILLUMO_WASM_TOOLS=${ILLUMO_WASM_TOOLS}" -DCMAKE_BUILD_TYPE=Release
     "-DILLUMO_PROGRAMS=${_illumo_program_list}"
+    "-DILLUMO_GUEST_PROFILE=${ILLUMO_ENABLE_TRACY}"
   BUILD_ALWAYS TRUE
   BUILD_BYPRODUCTS "${_guest_build}/PaddleGuest.wasm"
     "${_guest_build}/PaddlePaletteMod.wasm" "${_guest_build}/PaddleFaultyMod.wasm"

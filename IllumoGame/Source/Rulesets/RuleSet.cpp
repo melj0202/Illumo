@@ -1,5 +1,5 @@
 #include "RuleSet.h"
-#include <tracy/Tracy.hpp>
+#include <Illumo/Foundation/Profile.h>
 
 RuleSet::RuleSet(const TransitionTable& precompiledTransitions)
   : transitionTable(precompiledTransitions)
@@ -14,7 +14,7 @@ RuleSet::getTransitionTable() const
   if (transitionTableReady) {
     return transitionTable;
   }
-  ZoneScopedN("Rule.buildTransitionTable");
+  ILLUMO_PROFILE_ZONE("Rule.buildTransitionTable");
   for (std::size_t state = 0u; state < kCellStateCount; ++state) {
     for (std::size_t neighbors = 0u; neighbors < kNeighborCountCount;
          ++neighbors) {

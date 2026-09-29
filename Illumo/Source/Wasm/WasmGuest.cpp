@@ -1,5 +1,6 @@
 #include <Illumo/Wasm/WasmGuest.h>
 
+#include <Illumo/Foundation/Profile.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -35,6 +36,7 @@ WasmGuest::transfer(std::span<const std::byte> request,
                     std::int32_t& address,
                     bool& retained)
 {
+  ILLUMO_PROFILE_ZONE("WasmGuest.transfer");
   const std::uint32_t size = static_cast<std::uint32_t>(request.size());
   const std::uint32_t previousCapacity = m_transferCapacity;
   retained = size <= RetainedTransferBytes;
@@ -82,6 +84,7 @@ WasmGuest::readResult(std::int32_t address,
                       std::vector<std::byte>& output,
                       std::uint32_t maximum)
 {
+  ILLUMO_PROFILE_ZONE("WasmGuest.readResult");
   std::int32_t size = 0;
   if (!m_instance->call("illumo_guest_result_size", {}, size)) {
     return fail(m_instance->error());
@@ -105,6 +108,7 @@ WasmGuest::start(std::span<const std::byte> module,
                  std::span<const std::byte> startup,
                  std::vector<std::byte>& response)
 try {
+  ILLUMO_PROFILE_ZONE("WasmGuest.start");
   response.clear();
   if (m_attempted) {
     return false;
@@ -125,9 +129,12 @@ try {
     m_session, m_session + 1, std::memory_order_relaxed));
   m_instance = std::make_unique<WasmInstance>(m_limits);
   std::int32_t abi = 0;
-  if (!m_instance->load(module) ||
-      !m_instance->call("illumo_guest_describe", {}, abi)) {
-    return fail(m_instance->error());
+  {
+    ILLUMO_PROFILE_ZONE("WasmGuest.load");
+    if (!m_instance->load(module) ||
+        !m_instance->call("illumo_guest_describe", {}, abi)) {
+      return fail(m_instance->error());
+    }
   }
   if (abi != GuestEnvelope::Version) {
     return fail("Unsupported guest ABI");
@@ -164,6 +171,7 @@ WasmGuest::exchange(GuestCall call,
                     std::span<const std::byte> input,
                     std::vector<std::byte>& output)
 {
+  ILLUMO_PROFILE_ZONE("WasmGuest.exchange");
   output.clear();
   if (++m_sequence == 0) {
     return fail("Guest call sequence exhausted");
@@ -184,9 +192,12 @@ WasmGuest::exchange(GuestCall call,
     address, static_cast<std::int32_t>(m_request.data().size())
   };
   std::int32_t result = 0;
-  if (!m_instance->call(
-        exports[static_cast<std::size_t>(call) - 1], arguments, result)) {
-    return fail(m_instance->error());
+  {
+    ILLUMO_PROFILE_ZONE("WasmGuest.call");
+    if (!m_instance->call(
+          exports[static_cast<std::size_t>(call) - 1], arguments, result)) {
+      return fail(m_instance->error());
+    }
   }
   if (!readResult(result, m_reply, m_messageLimit)) {
     return false;
@@ -202,7 +213,10 @@ WasmGuest::exchange(GuestCall call,
       reply.session != m_session || reply.sequence != m_sequence) {
     return fail("Guest response envelope does not match its invocation");
   }
-  output.assign(reply.payload.begin(), reply.payload.end());
+  {
+    ILLUMO_PROFILE_ZONE("WasmGuest.copyReply");
+    output.assign(reply.payload.begin(), reply.payload.end());
+  }
   return true;
 }
 
@@ -243,6 +257,7 @@ WasmGuest::retire(std::string reason)
 void
 WasmGuest::shutdown()
 {
+  ILLUMO_PROFILE_ZONE("WasmGuest.shutdown");
   if (isAlive()) {
     try {
       std::vector<std::byte> ignored;

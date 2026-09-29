@@ -1,5 +1,6 @@
 #include <Illumo/Content/SceneAssetRefs.h>
 #include <Illumo/Content/SceneInstance.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -167,6 +168,7 @@ SceneInstance::load(const SceneDocument& document,
                     std::string_view packageRoot,
                     std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("SceneInstance.load");
   if (!validateSceneDocument(document, error)) {
     return false;
   }
@@ -265,6 +267,7 @@ SceneInstance::setRenderWorld(IRenderWorld* world)
   if (world == m_world) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("SceneInstance.setRenderWorld");
   if (m_world != nullptr) {
     for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
          m_records) {
@@ -366,6 +369,7 @@ SceneInstance::syncWorld()
   if (m_world == nullptr) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("SceneInstance.syncWorld");
   for (std::pair<const std::string, std::unique_ptr<Record>>& pair :
        m_records) {
     Record& entry = *pair.second;
@@ -435,6 +439,8 @@ SceneInstance::applyWorldEnvironment()
 void
 SceneInstance::update()
 {
+  ILLUMO_PROFILE_ZONE("SceneInstance.update");
+  ILLUMO_PROFILE_PLOT("SceneInstance.Records", m_records.size());
   syncWorld();
   bool anyLight = false;
   for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
@@ -449,6 +455,7 @@ SceneInstance::update()
   if (sameLighting(next, m_lighting)) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("SceneInstance.applyLighting");
   m_lighting = next;
   m_graph.invalidateSnapshots();
   for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
@@ -985,6 +992,7 @@ SceneInstance::reconfigureAttachments(Record& entry,
 void
 SceneInstance::rebuildAllAttachments()
 {
+  ILLUMO_PROFILE_ZONE("SceneInstance.rebuildAllAttachments");
   m_graph.invalidateSnapshots();
   for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
        m_records) {
@@ -1136,6 +1144,7 @@ bool
 SceneInstance::setTransforms(const std::vector<std::string>& ids,
                              const std::vector<Transform3D>& transforms)
 {
+  ILLUMO_PROFILE_ZONE("SceneInstance.setTransforms");
   if (ids.size() != transforms.size()) {
     return false;
   }
@@ -1413,6 +1422,7 @@ SceneInstance::pickRay(const Vector3& origin,
                        const Vector3& direction,
                        std::string* id) const
 {
+  ILLUMO_PROFILE_ZONE("SceneInstance.pickRay");
   if (id == nullptr) {
     return false;
   }

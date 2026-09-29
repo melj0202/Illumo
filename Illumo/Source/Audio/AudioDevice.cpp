@@ -1,5 +1,6 @@
 #include <Illumo/Audio/AudioClip.h>
 #include <Illumo/Audio/AudioDevice.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <array>
@@ -134,6 +135,7 @@ AudioDevice::~AudioDevice()
 std::unique_ptr<AudioDevice>
 AudioDevice::create(const AudioDeviceOptions& options, std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("AudioDevice.create");
   error.clear();
   std::unique_ptr<State> state = std::make_unique<State>();
   state->headless = options.headless;
@@ -174,6 +176,7 @@ AudioDevice::createSound(const AudioClip& clip)
   if (!clip.valid()) {
     return {};
   }
+  ILLUMO_PROFILE_ZONE("AudioDevice.createSound");
   for (std::uint32_t slot = 1; slot <= IAudio::kMaximumSounds; ++slot) {
     Sound& sound = m_state->sounds[slot];
     if (sound.used) {
@@ -219,6 +222,7 @@ AudioDevice::play(SoundHandle handle, const SoundPlayback& playback)
   if (sound == nullptr) {
     return false;
   }
+  ILLUMO_PROFILE_ZONE("AudioDevice.play");
   Voice& voice = m_state->claimVoice();
   if (ma_audio_buffer_ref_init(ma_format_f32,
                                sound->channels,
@@ -352,6 +356,7 @@ AudioDevice::render(std::span<float> output)
   if (!m_state->headless || width == 0) {
     return 0;
   }
+  ILLUMO_PROFILE_ZONE("AudioDevice.render");
   ma_uint64 read = 0;
   if (ma_engine_read_pcm_frames(
         &m_state->engine, output.data(), output.size() / width, &read) !=

@@ -146,6 +146,114 @@ engineModes(const std::vector<std::byte>& bytes)
                  &instance);
 }
 
+// The illumo_profile imports link for every guest, validate guest ranges and
+// site ids, bound registration, and survive unbalanced and trapping zones.
+// Registration succeeds only in hosts built with Tracy.
+static bool
+profileImports(WasmInstance& instance)
+{
+  constexpr char kWat[] =
+    "(module"
+    " (import \"illumo_profile\" \"register\" (func $register"
+    "  (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))"
+    " (import \"illumo_profile\" \"zone_begin\" (func $begin (param i32)))"
+    " (import \"illumo_profile\" \"zone_end\" (func $end))"
+    " (import \"illumo_profile\" \"plot\" (func $plot (param i32 f64)))"
+    " (import \"illumo_profile\" \"frame_mark\" (func $mark (param i32)))"
+    " (memory (export \"memory\") 1)"
+    " (data (i32.const 16) \"Test.zone\")"
+    " (data (i32.const 32) \"run\")"
+    " (data (i32.const 48) \"test.cpp\")"
+    " (func (export \"registerKind\") (param i32) (result i32)"
+    "  (call $register (local.get 0) (i32.const 16) (i32.const 9)"
+    "   (i32.const 32) (i32.const 3) (i32.const 48) (i32.const 8)"
+    "   (i32.const 7)))"
+    " (func (export \"registerOutside\") (result i32)"
+    "  (call $register (i32.const 0) (i32.const 65530) (i32.const 9)"
+    "   (i32.const 32) (i32.const 3) (i32.const 48) (i32.const 8)"
+    "   (i32.const 7)))"
+    " (func (export \"registerNegative\") (result i32)"
+    "  (call $register (i32.const 0) (i32.const 16) (i32.const -1)"
+    "   (i32.const 32) (i32.const 3) (i32.const 48) (i32.const 8)"
+    "   (i32.const 7)))"
+    " (func (export \"fill\") (result i32) (local $i i32) (local $r i32)"
+    "  (loop $again"
+    "   (local.set $r (call $register (i32.const 0) (i32.const 16)"
+    "    (i32.const 9) (i32.const 32) (i32.const 3) (i32.const 48)"
+    "    (i32.const 8) (local.get $i)))"
+    "   (local.set $i (i32.add (local.get $i) (i32.const 1)))"
+    "   (br_if $again (i32.lt_u (local.get $i) (i32.const 5000))))"
+    "  (local.get $r))"
+    " (func (export \"unbalanced\") (param i32) (result i32) (local $i i32)"
+    "  (call $begin (local.get 0)) (call $end) (call $end)"
+    "  (loop $deeper"
+    "   (call $begin (local.get 0))"
+    "   (local.set $i (i32.add (local.get $i) (i32.const 1)))"
+    "   (br_if $deeper (i32.lt_u (local.get $i) (i32.const 300))))"
+    "  (call $end)"
+    "  (call $begin (i32.const 4095)) (call $begin (i32.const -3))"
+    "  (call $plot (local.get 0) (f64.const 1.5))"
+    "  (call $plot (i32.const 99) (f64.const 2))"
+    "  (call $mark (local.get 0)) (call $mark (i32.const -5))"
+    "  (i32.const 1))"
+    " (func (export \"trapInZone\") (param i32) (result i32)"
+    "  (call $begin (local.get 0)) unreachable))";
+  wasm_byte_vec_t module{};
+  wasmtime_error_t* error = wasmtime_wat2wasm(kWat, sizeof(kWat) - 1u, &module);
+  if (error != nullptr) {
+    wasmtime_error_delete(error);
+    return require(false, "Profile test module assembles");
+  }
+  const bool loaded =
+    instance.load(std::as_bytes(std::span(module.data, module.size)));
+  wasm_byte_vec_delete(&module);
+  if (!require(loaded, "Profile imports link", &instance)) {
+    return false;
+  }
+#ifdef TRACY_ENABLE
+  const bool recording = true;
+#else
+  const bool recording = false;
+#endif
+  std::int32_t zone = 0;
+  std::int32_t plot = 0;
+  std::int32_t result = 0;
+  const std::array<std::int32_t, 1> zoneKind{ 0 };
+  const std::array<std::int32_t, 1> plotKind{ 1 };
+  const std::array<std::int32_t, 1> unknownKind{ 7 };
+  if (!require(
+        instance.call("registerKind", zoneKind, zone) &&
+          instance.call("registerKind", plotKind, plot) &&
+          (recording ? zone >= 0 && plot > zone : zone == -1 && plot == -1),
+        "Sites register only in Tracy hosts",
+        &instance) ||
+      !require(instance.call("registerKind", unknownKind, result) &&
+                 result == -1 && instance.call("registerOutside", {}, result) &&
+                 result == -1 &&
+                 instance.call("registerNegative", {}, result) && result == -1,
+               "Unknown kinds and out-of-range text are refused",
+               &instance)) {
+    return false;
+  }
+  // Unbalanced ends, depth overflow, unknown ids and a wrong-kind plot are
+  // ignored; zones left open are closed when the call returns.
+  const std::array<std::int32_t, 1> site{ zone };
+  if (!require(instance.call("unbalanced", site, result) && result == 1 &&
+                 instance.call("unbalanced", site, result) && result == 1,
+               "Unbalanced markers are contained",
+               &instance) ||
+      !require(instance.call("fill", {}, result) && result == -1,
+               "Registration is bounded per instance",
+               &instance)) {
+    return false;
+  }
+  return require(!instance.call("trapInZone", site, result) &&
+                   !instance.isAlive() &&
+                   instance.failure() == WasmFailure::Trap,
+                 "A trap inside a zone retires the guest",
+                 &instance);
+}
+
 static bool
 run(const std::string& name, const std::vector<std::byte>& bytes)
 {
@@ -388,6 +496,9 @@ run(const std::string& name, const std::vector<std::byte>& bytes)
     return require(!instance.load({}) && !instance.isAlive(),
                    "Empty module rejected");
   }
+  if (name == "ProfileImports") {
+    return profileImports(instance);
+  }
   if (name == "DeniedImports") {
     constexpr char kWat[] =
       "(module (import \"wasi_snapshot_preview1\" \"path_open\""
@@ -483,7 +594,7 @@ main(int argc, char** argv)
     "Compatibility", "Isolation",      "Fuel",          "Epoch",
     "Memory",        "DeniedImports",  "InvalidModule", "Worker",
     "Wire",          "CompilerLimits", "Lifecycle",     "Protocol",
-    "Resources",     "EngineModes"
+    "Resources",     "EngineModes",    "ProfileImports"
   };
   if (argc == 2 && std::string(argv[1]) == "--list") {
     for (const char* name : kCases) {

@@ -5,7 +5,7 @@
 DebugOverlay presents an optional pie and matching legend through its Debug
 layer. F6 and `profiler [on|off|toggle]` control it in Debug and RelWithDebInfo.
 It starts disabled with no persisted flag. FPS, memory diagnostics, and Tracy
-are independent. Release retains a disabled collector, without the overlay.
+([tracy-profiling.md](tracy-profiling.md)) are independent. Release retains a disabled collector, without the overlay.
 
 Root keys 1–3 select Update, Rendering, and Presentation / waits. Key 0 returns
 to Frame; leaf rows and Other have no deeper children. Fixed ordering keeps keys

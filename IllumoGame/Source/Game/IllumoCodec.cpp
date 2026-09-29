@@ -1,4 +1,5 @@
 #include "IllumoCodec.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Platform/AtomicFile.h>
 #include <filesystem>
 #include <fstream>
@@ -9,6 +10,7 @@ IllumoCodec::writeFile(const std::string& path,
                        const IllumoDocument& document,
                        std::string* error)
 try {
+  ILLUMO_PROFILE_ZONE("IllumoCodec.writeFile");
   if (path.empty()) {
     setError(error, "Save path is empty");
     return false;
@@ -29,6 +31,7 @@ IllumoCodec::readFile(const std::string& path,
                       IllumoDocument* document,
                       std::string* error)
 try {
+  ILLUMO_PROFILE_ZONE("IllumoCodec.readFile");
   if (document == nullptr) {
     setError(error, "Document pointer is null");
     return false;

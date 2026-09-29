@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/FontWeightRamp.h>
@@ -641,10 +642,14 @@ drawChevronQuads(GameVisual& visual,
   const float endY = tipY + depth;
   const float rightX = centerX + halfWidth;
   const float leftX = centerX - halfWidth;
-  const float rightArm[8] = { rightX + nx * half, endY + ny * half,
-                              rightX - nx * half, endY - ny * half,
-                              centerX,            outerTipY,
-                              centerX,            innerTipY };
+  const float rightArm[8] = { rightX + nx * half,
+                              endY + ny * half,
+                              rightX - nx * half,
+                              endY - ny * half,
+                              centerX,
+                              outerTipY,
+                              centerX,
+                              innerTipY };
   const float leftArm[8] = { leftX - nx * half, endY + ny * half,
                              leftX + nx * half, endY - ny * half,
                              centerX,           outerTipY,
@@ -949,6 +954,7 @@ GuiKit::drawGlassPanel(GameVisual& visual,
   if (!finiteRect(x, y, width, height) || style.opacity == 0) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("GuiKit.drawGlassPanel");
   const unsigned char opacity = style.opacity;
   const float radius = clampedRadius(style.radius, width, height);
   const float tiltX =

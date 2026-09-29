@@ -1,5 +1,6 @@
 #include "GuestPlatform.h"
 #include "Game/RuleCatalogOverlay.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <array>
 #include <stdexcept>
@@ -83,6 +84,7 @@ bool
 GuestSimulationLanes::submit(std::uint32_t lane,
                              std::vector<std::byte>&& request)
 {
+  ILLUMO_PROFILE_ZONE("Lanes.submit");
   if (lane >= m_lanes || m_outstanding[lane] != 0 || m_failed[lane] ||
       request.size() > GuestServices::MaximumJobBytes - 4u) {
     return false;
@@ -240,6 +242,7 @@ GuestCSimPlatform::saveUserCatalog(std::vector<RuleFamilyDefinition> families,
                                    std::vector<RuleSetDefinition> rules,
                                    WriteCallback done)
 {
+  ILLUMO_PROFILE_ZONE("CSimPlatform.saveUserCatalog");
   // The active registry already holds the shipped catalog plus the overlay
   // loaded at startup and every overlay write since, so no reread is needed.
   RuleSetRegistry staged = RuleSetRegistry::instance();
@@ -287,6 +290,7 @@ GuestCSimPlatform::startWrite(WriteRequest& request)
 void
 GuestCSimPlatform::pump()
 {
+  ILLUMO_PROFILE_ZONE("CSimPlatform.pump");
   m_lanes.pump();
   // Completions are collected first; callbacks may queue further requests.
   std::vector<std::function<void()>> completions;
@@ -420,6 +424,7 @@ GuestCSimPlatform::pump()
     }
   }
 
+  ILLUMO_PROFILE_ZONE("CSimPlatform.completions");
   for (const std::function<void()>& completion : completions) {
     completion();
   }

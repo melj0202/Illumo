@@ -1,6 +1,7 @@
 #include <Illumo/Content/VirtualFileSystem.h>
 
 #include <Illumo/Content/VirtualPath.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Platform/AtomicFile.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
@@ -590,6 +591,7 @@ VfsFile::readAll(std::vector<uint8_t>& output, std::string& error) const
 bool
 VirtualFileSystem::mount(VfsMount mount, std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("VirtualFileSystem.mount");
   std::string point;
   if (!VirtualPath::normalize(mount.point, point) || point != mount.point ||
       point == "/") {
@@ -713,6 +715,7 @@ VirtualFileSystem::list(std::string_view path,
                         std::size_t limit,
                         std::size_t* total) const
 {
+  ILLUMO_PROFILE_ZONE("VirtualFileSystem.list");
   std::string normalized;
   if (!normalizeRequest(path, normalized, error)) {
     return false;
@@ -757,6 +760,7 @@ VirtualFileSystem::read(std::string_view path,
                         std::vector<uint8_t>& bytes,
                         std::string& error) const
 {
+  ILLUMO_PROFILE_ZONE("VirtualFileSystem.read");
   std::shared_ptr<VfsFile> file = open(path, error);
   return file && file->readAll(bytes, error);
 }
@@ -768,6 +772,7 @@ VirtualFileSystem::readRange(std::string_view path,
                              std::vector<uint8_t>& output,
                              std::string& error) const
 {
+  ILLUMO_PROFILE_ZONE("VirtualFileSystem.readRange");
   std::shared_ptr<VfsFile> file = open(path, error);
   return file && file->read(offset, bytes, output, error);
 }
@@ -823,6 +828,7 @@ VirtualFileSystem::write(std::string_view path,
                          const std::vector<uint8_t>& bytes,
                          std::string& error) const
 {
+  ILLUMO_PROFILE_ZONE("VirtualFileSystem.write");
   std::string normalized;
   if (!normalizeRequest(path, normalized, error)) {
     return false;

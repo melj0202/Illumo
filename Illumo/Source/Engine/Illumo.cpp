@@ -2,13 +2,14 @@
 
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
 #include "Rendering/RenderWindow.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/RenderPass.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -18,7 +19,6 @@
 #include <exception>
 #include <filesystem>
 #include <glm/fwd.hpp>
-#include <tracy/Tracy.hpp>
 #include <utility>
 
 static void
@@ -116,16 +116,20 @@ Illumo::initialize()
     Logger::LogWarning("Illumo::initialize called more than once; ignoring");
     return true;
   }
+  ILLUMO_PROFILE_ZONE("Illumo.Initialize");
 
   try {
     const int initialWindowWidth =
       static_cast<int>(m_environment->getVar("WinX").valueAsLong);
     const int initialWindowHeight =
       static_cast<int>(m_environment->getVar("WinY").valueAsLong);
-    m_window = m_windowFactory(initialWindowWidth,
-                               initialWindowHeight,
-                               m_applicationName,
-                               m_environment.get());
+    {
+      ILLUMO_PROFILE_ZONE("Illumo.CreateWindow");
+      m_window = m_windowFactory(initialWindowWidth,
+                                 initialWindowHeight,
+                                 m_applicationName,
+                                 m_environment.get());
+    }
     if (!m_window) {
       Logger::LogError("Illumo failed to create its render window");
       releaseServices();
@@ -146,6 +150,7 @@ Illumo::initialize()
     }
     bool backendInitialized = false;
     try {
+      ILLUMO_PROFILE_ZONE("Illumo.InitializeBackend");
       backendInitialized = backend->Initialize();
     } catch (const std::exception& exception) {
       Logger::LogError(
@@ -168,9 +173,14 @@ Illumo::initialize()
       return false;
     }
     Logger::LogTrace("Rendering backend initialized");
-    m_renderer = std::make_unique<Renderer>(
-      m_window.get(), m_environment.get(), m_camera.get(), std::move(backend));
-    m_renderer->ensureBuiltinStyles();
+    {
+      ILLUMO_PROFILE_ZONE("Illumo.CreateRenderer");
+      m_renderer = std::make_unique<Renderer>(m_window.get(),
+                                              m_environment.get(),
+                                              m_camera.get(),
+                                              std::move(backend));
+      m_renderer->ensureBuiltinStyles();
+    }
     Logger::LogTrace("Renderer ready with built-in styles");
     m_assetManager = std::make_unique<AssetManager>(m_renderer.get());
     Logger::LogTrace("Asset manager ready");
@@ -285,7 +295,7 @@ Illumo::beginUpdate(double dt)
   if (!m_initialized) {
     return;
   }
-  ZoneScoped;
+  ILLUMO_PROFILE_ZONE("Illumo.BeginUpdate");
   m_frameProfiler.mark(FramePhase::Input);
   m_inputManager->update();
   processGlobalHotkeys();
@@ -418,6 +428,7 @@ Illumo::beginRender()
   if (!m_initialized) {
     return nullptr;
   }
+  ILLUMO_PROFILE_ZONE("Illumo.BeginRender");
   m_frameProfiler.mark(FramePhase::ScenePreparation);
   configureScenePipeline();
   m_scene->ClearDrawables();
@@ -430,17 +441,23 @@ Illumo::endRender()
   if (!m_initialized) {
     return;
   }
-  ZoneScopedN("Illumo.Render");
+  ILLUMO_PROFILE_ZONE("Illumo.Render");
   m_frameProfiler.mark(FramePhase::Assets);
-  m_assetManager->pump();
-  m_frameProfiler.mark(FramePhase::Commands);
-  m_renderer->BeginFrame();
   {
-    ZoneScopedN("Illumo.RenderScene");
+    ILLUMO_PROFILE_ZONE("Illumo.AssetPump");
+    m_assetManager->pump();
+  }
+  m_frameProfiler.mark(FramePhase::Commands);
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.BeginFrame");
+    m_renderer->BeginFrame();
+  }
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.RenderScene");
     m_renderer->RenderScene(m_scene.get(), m_camera.get());
   }
   {
-    ZoneScopedN("Illumo.EndFrame");
+    ILLUMO_PROFILE_ZONE("Illumo.EndFrame");
     if (m_frameProfiler.recording()) {
       FrameProfiler::TimePoint presentationStart;
       m_renderer->EndFrame(&presentationStart);
@@ -468,6 +485,7 @@ Illumo::shutdown() noexcept
 void
 Illumo::releaseServices()
 {
+  ILLUMO_PROFILE_ZONE("Illumo.ReleaseServices");
   GLString::setRenderWindow(nullptr);
   m_scene.reset();
   m_inputManager.reset();

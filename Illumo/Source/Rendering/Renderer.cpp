@@ -1,10 +1,11 @@
 #include <Illumo/Rendering/Renderer.h>
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/RenderLayerId.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <algorithm>
@@ -293,6 +294,7 @@ Renderer::releaseShadowResources()
 bool
 Renderer::prepareShadowPass()
 {
+  ILLUMO_PROFILE_ZONE("Renderer.prepareShadowPass");
   if (shadowCasters.empty()) {
     return false;
   }
@@ -763,6 +765,7 @@ Renderer::useFrameUniforms()
 void
 Renderer::BeginFrame()
 {
+  ILLUMO_PROFILE_ZONE("Renderer.BeginFrame");
   m_frameError.clear();
   m_frameRejectedBaseline = _backend->rejectedCommandCount();
   m_recordedStats = RecordedListStats{};
@@ -785,14 +788,19 @@ Renderer::EndFrame()
 void
 Renderer::EndFrame(std::chrono::steady_clock::time_point* presentationStart)
 {
+  ILLUMO_PROFILE_ZONE("Renderer.EndFrame");
+  ILLUMO_PROFILE_PLOT("Renderer.RecordedListsExecuted", m_recordedStats.lists);
+  ILLUMO_PROFILE_PLOT("Renderer.RecordedListTokens", m_recordedStats.tokens);
   SubmitOnly();
   if (presentationStart != nullptr) {
     *presentationStart = std::chrono::steady_clock::now();
   }
   if (m_frameError.empty()) {
     if (m_beforePresent) {
+      ILLUMO_PROFILE_ZONE("Renderer.BeforePresent");
       m_beforePresent(*this);
     }
+    ILLUMO_PROFILE_ZONE("Renderer.Present");
     _backend->EndFrame();
   }
 }
@@ -805,6 +813,7 @@ Renderer::renderOffscreen(FramebufferHandle target,
                           const std::array<float, 4>& clearColor,
                           float uiScale)
 {
+  ILLUMO_PROFILE_ZONE("Renderer.renderOffscreen");
   if (frameContext.active || !target.isValid() || width < 1 || height < 1 ||
       !_backend->IsFramebufferValid(target)) {
     return false;
@@ -855,6 +864,7 @@ Renderer::renderOffscreen(FramebufferHandle target,
 void
 Renderer::SubmitOnly()
 {
+  ILLUMO_PROFILE_ZONE("Renderer.SubmitOnly");
   checkCommandRejections();
   _backend->SubmitCommandQueue();
   const std::string error = _backend->submissionError();
@@ -1376,6 +1386,7 @@ Renderer::executePostProcessPass(const RenderPassDesc& pass,
 void
 Renderer::RenderScene(DrawList* scene, Camera* camera)
 {
+  ILLUMO_PROFILE_ZONE("Renderer.RenderScene");
   currentScene = scene;
   if (_camera == nullptr) {
     _camera = camera;
@@ -1397,14 +1408,18 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
   if (scene != nullptr) {
     const std::vector<DrawableBase*>& worldDrawables =
       scene->drawablesIn(RenderLayerId::World);
-    for (size_t i = 0; i < worldDrawables.size(); ++i) {
-      DrawableBase* drawable = worldDrawables[i];
-      if (drawable != nullptr && drawable->isVisible()) {
-        drawable->CollectShadowCasters(this);
+    {
+      ILLUMO_PROFILE_ZONE("Renderer.CollectShadowCasters");
+      for (size_t i = 0; i < worldDrawables.size(); ++i) {
+        DrawableBase* drawable = worldDrawables[i];
+        if (drawable != nullptr && drawable->isVisible()) {
+          drawable->CollectShadowCasters(this);
+        }
       }
     }
 
     if (prepareShadowPass()) {
+      ILLUMO_PROFILE_ZONE("Renderer.ShadowPass");
       const FramebufferHandle restoredFramebuffer = _currentPassFbo;
       const std::array<int, 4> restoredViewport = _currentPassViewport;
       pushFramebuffer(shadowFramebuffer);
@@ -1444,12 +1459,14 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
   immediateDrawables.clear();
   size_t immediateCap = 0;
   if (scene) {
+    ILLUMO_PROFILE_ZONE("Renderer.AppendLayers");
     immediateCap = scene->drawableCount();
     immediateDrawables.reserve(immediateCap);
     for (unsigned layerIndex = 0; layerIndex < renderLayerCount();
          ++layerIndex) {
       const RenderLayerId layer = static_cast<RenderLayerId>(layerIndex);
       const std::vector<DrawableBase*>& list = scene->drawablesIn(layer);
+      ILLUMO_PROFILE_ZONE("Renderer.AppendLayer");
       _backend->BeginLayer(layer);
 
       if (!scene->hasCustomPasses(layer)) {
@@ -1483,6 +1500,7 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
         const std::vector<RenderPassDesc>& passes = scene->passesIn(layer);
         for (size_t p = 0; p < passes.size(); ++p) {
           const RenderPassDesc& pass = passes[p];
+          ILLUMO_PROFILE_ZONE("Renderer.AppendPass");
 
           FramebufferHandle targetFbo{};
           int targetW = frameContext.windowDimensions[0];
@@ -1564,8 +1582,12 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
   SubmitOnly();
   clearCommandQueue();
 
-  for (DrawableBase* drawable : immediateDrawables) {
-    drawable->Draw();
+  ILLUMO_PROFILE_PLOT("Renderer.ImmediateDrawables", immediateDrawables.size());
+  if (!immediateDrawables.empty()) {
+    ILLUMO_PROFILE_ZONE("Renderer.DrawImmediate");
+    for (DrawableBase* drawable : immediateDrawables) {
+      drawable->Draw();
+    }
   }
   immediateDrawables.clear();
 

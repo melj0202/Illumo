@@ -2,6 +2,7 @@
 #include <Illumo/Content/PackageMounts.h>
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Engine/Illumo.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
@@ -52,6 +53,7 @@ runtimeDirectory()
 static std::vector<std::byte>
 readModule(const std::filesystem::path& path)
 {
+  ILLUMO_PROFILE_ZONE("Runtime.readModule");
   if (path.empty()) {
     return {};
   }
@@ -143,6 +145,7 @@ manifestCeilings()
 static std::vector<std::byte>
 readPackageModule(const VirtualFileSystem& vfs, const std::string& member)
 {
+  ILLUMO_PROFILE_ZONE("Runtime.readPackageModule");
   const std::string path = "/app/" + member;
   VfsStat stat;
   std::string error;
@@ -233,6 +236,7 @@ clearLaunchOptions(IEnvVars* environment)
 static void
 prepareRuntime(IEnvVars* environment)
 {
+  ILLUMO_PROFILE_ZONE("Runtime.prepareRuntime");
   // stdout carries only the --capture and --bench JSON results; terminal log
   // lines go to stderr so callers can parse stdout as-is.
   Logger::setConsoleToStderr(true);
@@ -253,6 +257,7 @@ prepareRuntime(IEnvVars* environment)
 static std::unique_ptr<RuntimeShell>
 prepareShell(Illumo& illumo)
 {
+  ILLUMO_PROFILE_ZONE("Runtime.prepareShell");
   IEnvVars* environment = &illumo.environment();
   std::filesystem::path gamePath =
     optionPath(environment->getVar("GuestModule").value);
@@ -570,6 +575,7 @@ prepareShell(Illumo& illumo)
   // stay silent, and a machine without an output runs without audio.
   std::unique_ptr<AudioDevice> audio;
   if (capture.empty() && bench.frames == 0) {
+    ILLUMO_PROFILE_ZONE("Runtime.createAudio");
     std::string audioError;
     audio = AudioDevice::create({}, audioError);
     if (!audio) {

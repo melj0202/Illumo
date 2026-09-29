@@ -1,9 +1,10 @@
 #include "WasmVisuals.h"
 #include <Illumo/Foundation/AxisAlignedBounds3.h>
+#include <Illumo/Foundation/Profile.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
@@ -338,6 +339,7 @@ struct WasmFrameRenderer::State
                  const std::array<std::uint32_t, kStylePools>& used,
                  std::array<std::vector<Mesh>, kStylePools>& value)
   {
+    ILLUMO_PROFILE_ZONE("WasmFrame.GrowSlots");
     for (std::uint32_t pool = 0; pool < kStylePools; ++pool) {
       value[pool].resize(std::max<std::size_t>(value[pool].size(), used[pool]));
     }
@@ -387,6 +389,7 @@ struct WasmFrameRenderer::State
   bool prepareBatches(const std::vector<GuestBatch>& batches,
                       std::vector<PreparedBatch>& prepared)
   {
+    ILLUMO_PROFILE_ZONE("WasmFrame.PrepareBatches");
     prepared.resize(batches.size());
     for (std::size_t index = 0; index < batches.size(); ++index) {
       const GuestBatch& batch = batches[index];
@@ -653,6 +656,7 @@ struct WasmFrameRenderer::State
     const GuestFrame& proposed,
     const std::vector<std::shared_ptr<const RetainedMesh>>& targets)
   {
+    ILLUMO_PROFILE_ZONE("WasmFrame.ApplyMeshWrites");
     for (std::size_t index = 0; index < proposed.meshWrites.size(); ++index) {
       const GuestFrameMeshWrite& write = proposed.meshWrites[index];
       RetainedMesh::Upload& upload = *targets[index]->upload;
@@ -831,6 +835,7 @@ struct WasmFrameRenderer::State
     if (operations.empty()) {
       return true;
     }
+    ILLUMO_PROFILE_ZONE("WasmFrame.PlanWorld");
     FramePlan& plan = worldPlan;
     plan.used = 0;
     plan.instances = instanceTotal();
@@ -962,6 +967,7 @@ struct WasmFrameRenderer::State
     const std::vector<GuestWorldOperation>& operations,
     const std::vector<std::shared_ptr<const RetainedMesh>>& meshes)
   {
+    ILLUMO_PROFILE_ZONE("WasmFrame.ApplyWorld");
     HostWorld* current = findWorld(1);
     for (std::size_t index = 0; index < operations.size(); ++index) {
       const GuestWorldOperation& operation = operations[index];
@@ -1108,33 +1114,41 @@ struct WasmFrameRenderer::State
       ScratchRelease& operator=(ScratchRelease&&) = delete;
     } release{ *this };
     GuestFrame& proposed = proposedFrame;
-    if (!GuestFrame::decode(packet, proposed, limits)) {
-      error = "Malformed or over-budget guest frame";
-      return false;
+    {
+      ILLUMO_PROFILE_ZONE("WasmFrame.Decode");
+      if (!GuestFrame::decode(packet, proposed, limits)) {
+        error = "Malformed or over-budget guest frame";
+        return false;
+      }
     }
     std::vector<PreparedBatch>& prepared = preparedScratch;
     std::vector<std::shared_ptr<const Texture>>& preparedWrites = writesScratch;
     std::vector<Slot>& slots = slotsScratch;
-    writeTargets.reserve(proposed.meshWrites.size());
-    for (const GuestFrameMeshWrite& write : proposed.meshWrites) {
-      std::shared_ptr<const RetainedMesh> mesh =
-        retainedMeshes.resolve(write.mesh);
-      if (!mesh || !validMeshWrite(*mesh, write)) {
-        error = "Invalid guest mesh write authority, range or contents";
-        return false;
+    {
+      ILLUMO_PROFILE_ZONE("WasmFrame.ValidateWrites");
+      writeTargets.reserve(proposed.meshWrites.size());
+      for (const GuestFrameMeshWrite& write : proposed.meshWrites) {
+        std::shared_ptr<const RetainedMesh> mesh =
+          retainedMeshes.resolve(write.mesh);
+        if (!mesh || !validMeshWrite(*mesh, write)) {
+          error = "Invalid guest mesh write authority, range or contents";
+          return false;
+        }
+        writeTargets.push_back(std::move(mesh));
       }
-      writeTargets.push_back(std::move(mesh));
-    }
-    for (const GuestTextureWrite& write : proposed.textureWrites) {
-      std::shared_ptr<const Texture> texture = textures.resolve(write.texture);
-      if (!texture || texture->cubemap || texture->channels != write.channels ||
-          write.x > texture->width || write.y > texture->height ||
-          write.width > texture->width - write.x ||
-          write.height > texture->height - write.y) {
-        error = "Invalid guest texture upload authority or region";
-        return false;
+      for (const GuestTextureWrite& write : proposed.textureWrites) {
+        std::shared_ptr<const Texture> texture =
+          textures.resolve(write.texture);
+        if (!texture || texture->cubemap ||
+            texture->channels != write.channels || write.x > texture->width ||
+            write.y > texture->height ||
+            write.width > texture->width - write.x ||
+            write.height > texture->height - write.y) {
+          error = "Invalid guest texture upload authority or region";
+          return false;
+        }
+        preparedWrites.push_back(std::move(texture));
       }
-      preparedWrites.push_back(std::move(texture));
     }
     if (!prepareBatches(proposed.batches, prepared)) {
       return false;
@@ -1317,6 +1331,8 @@ struct WasmFrameRenderer::State
     changingResources = false;
     error.clear();
     count();
+    ILLUMO_PROFILE_PLOT("WasmFrame.Surfaces", surfaces.size());
+    ILLUMO_PROFILE_PLOT("WasmFrame.ResidentBytes", budget->bytes);
     return true;
   }
 
@@ -1375,13 +1391,16 @@ struct WasmFrameRenderer::State
   // submission that reads these payload pointers.
   bool uploadDynamicMeshes()
   {
+    ILLUMO_PROFILE_ZONE("WasmFrame.UploadDynamicMeshes");
     uploadingMeshes.clear();
     uploadingMeshes.swap(dirtyMeshes);
     bool uploaded = true;
+    std::uint64_t uploadBytes = 0;
     for (const std::shared_ptr<const RetainedMesh>& mesh : uploadingMeshes) {
       RetainedMesh::Upload& upload = *mesh->upload;
       upload.queued = false;
       if (upload.vertexDirtyEnd > upload.vertexDirtyBegin) {
+        uploadBytes += upload.vertexDirtyEnd - upload.vertexDirtyBegin;
         uploaded = renderer.pushUpdateBuffer(
                      upload.handle,
                      upload.vertexDirtyBegin,
@@ -1390,6 +1409,7 @@ struct WasmFrameRenderer::State
                    uploaded;
       }
       if (upload.indexDirtyEnd > upload.indexDirtyBegin) {
+        uploadBytes += upload.indexDirtyEnd - upload.indexDirtyBegin;
         uploaded = renderer.pushUpdateIndexBuffer(
                      upload.handle,
                      upload.indexDirtyBegin,
@@ -1400,6 +1420,7 @@ struct WasmFrameRenderer::State
       upload.vertexDirtyBegin = upload.vertexDirtyEnd = 0;
       upload.indexDirtyBegin = upload.indexDirtyEnd = 0;
     }
+    ILLUMO_PROFILE_PLOT("WasmFrame.DynamicMeshUploadBytes", uploadBytes);
     return uploaded;
   }
 
@@ -1427,6 +1448,7 @@ struct WasmFrameRenderer::State
     if (context.active && uploadedSerial == context.frameSerial) {
       return true;
     }
+    ILLUMO_PROFILE_ZONE("WasmFrame.EnsureUploads");
     uploadedSerial = context.active ? context.frameSerial : 0;
     if (!uploadDynamicMeshes()) {
       renderer.reportFrameError("Guest mesh write upload rejected");
@@ -1460,6 +1482,7 @@ struct WasmFrameRenderer::State
     if (target != &renderer || lifetime.expired()) {
       return;
     }
+    ILLUMO_PROFILE_ZONE("WasmFrame.CollectShadowCasters");
     // A composition that places the world draws it from this layer instead
     // of as its own drawable, so its shadow work comes through here too.
     HostWorld* drawn = shown();
@@ -1481,6 +1504,7 @@ struct WasmFrameRenderer::State
 
   void appendShadowCommands(Renderer* target)
   {
+    ILLUMO_PROFILE_ZONE("WasmFrame.AppendShadowCommands");
     const Renderer::ShadowFrameContext& shadow =
       renderer.getShadowFrameContext();
     if (target != &renderer || lifetime.expired() || !shadow.active ||
@@ -1627,6 +1651,7 @@ struct WasmFrameRenderer::State
     if (target != &renderer || lifetime.expired() || retired) {
       return true;
     }
+    ILLUMO_PROFILE_ZONE("WasmFrame.AppendSurface");
     for (std::size_t index = 0; index < surface.batches.size(); ++index) {
       const GuestBatch& batch = surface.batches[index];
       if (batch.retained()) {
@@ -1725,6 +1750,7 @@ struct WasmFrameRenderer::State
     if (target != &renderer || lifetime.expired()) {
       return true;
     }
+    ILLUMO_PROFILE_ZONE("WasmFrame.AppendLayer");
     if (layer == GuestLayer::World) {
       nextWrite = 0;
     }
@@ -1778,6 +1804,7 @@ struct WasmFrameRenderer::State
   // memory is released either way.
   bool finalizeMesh(const RetainedMesh& mesh)
   {
+    ILLUMO_PROFILE_ZONE("WasmFrame.FinalizeMesh");
     RetainedMesh::Upload& upload = *mesh.upload;
     const std::uint32_t stride =
       GuestMeshRequest::stride(static_cast<std::uint32_t>(mesh.style));
@@ -1930,6 +1957,7 @@ WasmFrameRenderer::createTexture(std::span<const std::byte> pixels,
                                  bool linear,
                                  std::shared_ptr<Font> font)
 try {
+  ILLUMO_PROFILE_ZONE("WasmFrame.CreateTexture");
   State& state = *m_state;
   const std::uint64_t bytes =
     static_cast<std::uint64_t>(width) * height * channels;
@@ -1978,6 +2006,7 @@ GuestResourceId
 WasmFrameRenderer::createCubemap(std::span<const std::byte> faces,
                                  std::uint32_t size)
 try {
+  ILLUMO_PROFILE_ZONE("WasmFrame.CreateCubemap");
   State& state = *m_state;
   const std::uint64_t bytes = GuestCubemapRequest::bytesFor(size);
   if (state.retired || state.lifetime.expired() || size == 0 || size > 2048 ||
@@ -2018,6 +2047,7 @@ try {
 GuestResourceId
 WasmFrameRenderer::createMesh(const GuestMeshRequest& request)
 try {
+  ILLUMO_PROFILE_ZONE("WasmFrame.CreateMesh");
   State& state = *m_state;
   const std::uint64_t bytes =
     static_cast<std::uint64_t>(request.vertexBytes) + request.indexBytes;
@@ -2069,6 +2099,7 @@ try {
 bool
 WasmFrameRenderer::writeMesh(const GuestMeshWrite& write)
 try {
+  ILLUMO_PROFILE_ZONE("WasmFrame.WriteMesh");
   State& state = *m_state;
   const std::shared_ptr<const State::RetainedMesh> mesh =
     state.retainedMeshes.resolve(write.mesh);

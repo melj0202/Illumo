@@ -1,4 +1,5 @@
 #include "PerformanceOverlay.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -50,6 +51,7 @@ PerformanceOverlay::update(float deltaSeconds,
                            bool showMemory,
                            std::uint64_t memoryBytes)
 {
+  ILLUMO_PROFILE_ZONE("PerformanceOverlay.update");
   if (std::isfinite(deltaSeconds) && deltaSeconds > 0.0f) {
     m_windowSeconds += deltaSeconds;
     m_windowFrames += 1;
@@ -81,6 +83,7 @@ PerformanceOverlay::update(float deltaSeconds,
 void
 PerformanceOverlay::rebuild(bool showFps, bool showMemory)
 {
+  ILLUMO_PROFILE_ZONE("PerformanceOverlay.rebuild");
   m_visual.clearPrimitives();
   const float scale =
     m_renderer != nullptr ? std::max(0.01f, m_renderer->getUiScale()) : 1.0f;

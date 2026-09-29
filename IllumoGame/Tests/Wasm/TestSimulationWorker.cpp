@@ -3,12 +3,14 @@
 #include "Wasm/SimulationLanes.h"
 #include "Wasm/SimulationProtocol.h"
 #include <Illumo/Wasm/WasmWorker.h>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <new>
 #include <thread>
 #ifdef _WIN32
@@ -209,20 +211,28 @@ gridHash(const SparseCellGrid& grid)
   return result;
 }
 
-// Starts one generation, retrying while lanes drain retired work, as later
-// frames would.
+// Starts a block of up to `steps` generations, retrying while lanes drain
+// retired work, as later frames would. `accepted` receives the block length.
 static bool
 startLanes(SimulationLaneCoordinator& lanes,
            SparseCellGrid* published,
            SparseCellGrid* spare,
            const RuleSet& rule,
            SparseGenerationDelta& mirror,
-           bool mirrorValid)
+           bool mirrorValid,
+           std::uint32_t steps = 1u,
+           std::uint32_t* accepted = nullptr)
 {
   for (int attempt = 0; attempt < 10000; ++attempt) {
     if (lanes.availability(rule) ==
           SimulationLaneCoordinator::Availability::Available &&
-        lanes.start(spare, published, &rule, std::move(mirror), mirrorValid)) {
+        lanes.start(spare,
+                    published,
+                    &rule,
+                    std::move(mirror),
+                    mirrorValid,
+                    steps,
+                    accepted)) {
       return true;
     }
     if (lanes.failed()) {
@@ -233,30 +243,39 @@ startLanes(SimulationLaneCoordinator& lanes,
   return false;
 }
 
-// Drives one coordinator generation to completion (publication swap
-// included), pumping the loopback lanes. False on a stall or failure.
+// Drives one coordinator block to completion (publication swap included),
+// pumping the loopback lanes; `published` then holds `generations` more.
+// False on a stall or failure.
 static bool
 laneGeneration(SimulationLaneCoordinator& lanes,
                SparseCellGrid*& published,
                SparseCellGrid*& spare,
                const RuleSet& rule,
                SparseGenerationDelta& mirror,
-               bool& mirrorValid)
+               bool& mirrorValid,
+               std::uint32_t steps = 1u,
+               std::uint32_t* generations = nullptr)
 {
-  if (!startLanes(lanes, published, spare, rule, mirror, mirrorValid)) {
+  std::uint32_t accepted = 0u;
+  if (!startLanes(
+        lanes, published, spare, rule, mirror, mirrorValid, steps, &accepted)) {
     return false;
   }
   for (int attempt = 0; attempt < 10000; ++attempt) {
     SparseCellGrid* completed = nullptr;
     SparseGenerationDelta delta;
     bool succeeded = false;
-    if (lanes.poll(&completed, &delta, nullptr, &succeeded, nullptr)) {
-      if (!succeeded || completed != spare) {
+    SimulationRunnerTimings timings;
+    if (lanes.poll(&completed, &delta, nullptr, &succeeded, &timings)) {
+      if (!succeeded || completed != spare || timings.generations != accepted) {
         return false;
       }
       std::swap(published, spare);
       mirror = std::move(delta);
       mirrorValid = true;
+      if (generations != nullptr) {
+        *generations = timings.generations;
+      }
       return true;
     }
     if (lanes.failed()) {
@@ -267,9 +286,84 @@ laneGeneration(SimulationLaneCoordinator& lanes,
   return false;
 }
 
-// Lane generations match serial ones for every catalog rule, both
-// topologies, several lane counts and one-row bands (every row a halo),
-// across edits and a retired in-flight generation.
+// Advances `serial` by `generations`.
+static bool
+advanceSerial(SparseCellGrid& serial,
+              const RuleSet& rule,
+              std::uint32_t generations)
+{
+  for (std::uint32_t step = 0u; step < generations; ++step) {
+    if (!serial.advance(rule)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Serial multi-generation starts (the guest runner's frame budget) publish
+// their net change as one delta: the result equals plain advances, the delta
+// brings the other grid of the pair to it exactly, and the pair keeps
+// alternating as the canvas publishes it.
+static bool
+serialBlocks()
+{
+  std::unique_ptr<RuleSet> life =
+    RuleSetRegistry::instance().createRuleSet("GAME_OF_LIFE");
+  if (!life) {
+    return false;
+  }
+  for (std::int64_t size : { std::int64_t{ 0 }, std::int64_t{ 12 } }) {
+    SparseCellGrid serial(size, size);
+    std::uint32_t state = 4242u;
+    for (std::int64_t y = -80; y < 80; ++y) {
+      for (std::int64_t x = -80; x < 80; ++x) {
+        state = state * 1664525u + 1013904223u;
+        if ((state >> 24) < 80u) {
+          serial.setCell({ x, y }, 0);
+        }
+      }
+    }
+    SparseCellGrid first(size, size);
+    SparseCellGrid second(size, size);
+    first.copyStateFrom(serial);
+    SparseCellGrid* published = &first;
+    SparseCellGrid* spare = &second;
+    SparseGenerationDelta mirror;
+    bool mirrorValid = false;
+    for (std::uint32_t generations : { 1u, 5u, 2u, 16u, 1u, 7u, 3u }) {
+      SparseGenerationDelta delta;
+      SimulationRunnerTimings timings;
+      if (!SimulationRunner::runGenerationsForTesting(spare,
+                                                      published,
+                                                      life.get(),
+                                                      std::move(mirror),
+                                                      mirrorValid,
+                                                      generations,
+                                                      &delta,
+                                                      &timings) ||
+          timings.generations != generations ||
+          delta.fromRevision != published->getRevision() ||
+          delta.toRevision != spare->getRevision() ||
+          !advanceSerial(serial, *life, generations) ||
+          gridHash(serial) != gridHash(*spare)) {
+        std::fprintf(stderr,
+                     "Serial block mismatch: size=%lld generations=%u\n",
+                     static_cast<long long>(size),
+                     generations);
+        return false;
+      }
+      std::swap(published, spare);
+      mirror = std::move(delta);
+      mirrorValid = true;
+    }
+  }
+  return true;
+}
+
+// Lane blocks match serial generations for every catalog rule, both
+// topologies, several lane counts and halo depths, blocks from one generation
+// to the halo's limit, across edits, a retired in-flight block, forced
+// recuts and wide elementary rows.
 static bool
 laneParity(const std::string& families, const std::string& rules)
 {
@@ -287,11 +381,21 @@ laneParity(const std::string& families, const std::string& rules)
         const RuleSet& rule = reference.rule();
         LoopbackLanes transport(laneCount);
         SimulationLaneCoordinator lanes(transport);
-        lanes.setBandRowsForTesting(1u);
+        // One-line halos give the tightest block limit; three lanes also
+        // recut after every imbalanced block.
+        const std::uint32_t haloLines = laneCount == 2u ? 1u : 2u;
+        lanes.setHaloLinesForTesting(haloLines);
+        if (laneCount == 3u) {
+          lanes.setRebalanceForTesting(1u, 0.0, 0.0);
+        }
         // Every rule partitions: elementary 1D by chunk column.
         if (lanes.availability(rule) !=
             SimulationLaneCoordinator::Availability::Available) {
           std::fprintf(stderr, "Rule %d refused lanes\n", ruleIndex);
+          return false;
+        }
+        const std::uint32_t cap = lanes.maximumBlockSteps(rule);
+        if (cap == 0u) {
           return false;
         }
         const std::int64_t size = topology == 0 ? 0 : 4;
@@ -312,9 +416,9 @@ laneParity(const std::string& families, const std::string& rules)
             mirrorValid = false;
           }
           if (step == 6) {
-            // A retired generation leaves the published world unchanged.
+            // A retired block leaves the published world unchanged.
             if (!startLanes(
-                  lanes, published, spare, rule, mirror, mirrorValid)) {
+                  lanes, published, spare, rule, mirror, mirrorValid, cap)) {
               return false;
             }
             lanes.retire();
@@ -326,10 +430,20 @@ laneParity(const std::string& families, const std::string& rules)
               return false;
             }
           }
-          if (!laneGeneration(
-                lanes, published, spare, rule, mirror, mirrorValid)) {
+          // Block lengths cycle through one, a few and the halo's limit.
+          const std::uint32_t lengths[] = { 1u, 3u, cap, 2u, cap };
+          const std::uint32_t steps = std::min(cap, lengths[step % 5]);
+          std::uint32_t generations = 0u;
+          if (!laneGeneration(lanes,
+                              published,
+                              spare,
+                              rule,
+                              mirror,
+                              mirrorValid,
+                              steps,
+                              &generations)) {
             std::fprintf(stderr,
-                         "Lane generation failed: rule=%d topology=%d "
+                         "Lane block failed: rule=%d topology=%d "
                          "lanes=%u step=%d\n",
                          ruleIndex,
                          topology,
@@ -337,15 +451,17 @@ laneParity(const std::string& families, const std::string& rules)
                          step);
             return false;
           }
-          if (!serial.advance(rule) ||
+          if (!advanceSerial(serial, rule, generations) ||
               gridHash(serial) != gridHash(*published)) {
             std::fprintf(stderr,
                          "Lane state mismatch: rule=%s topology=%d lanes=%u "
-                         "step=%d\n",
+                         "halo=%u step=%d generations=%u\n",
                          rule.getRuleTag().c_str(),
                          topology,
                          laneCount,
-                         step);
+                         haloLines,
+                         step,
+                         generations);
             return false;
           }
         }
@@ -353,55 +469,74 @@ laneParity(const std::string& families, const std::string& rules)
       }
     }
   }
-  // A soup large enough to span many bands, grow and collide across them.
+  // A soup large enough to span many lines, grow and collide across lanes.
   std::unique_ptr<RuleSet> life =
     RuleSetRegistry::instance().createRuleSet("GAME_OF_LIFE");
   if (!life) {
     return false;
   }
   for (std::int64_t size : { std::int64_t{ 0 }, std::int64_t{ 12 } }) {
-    for (std::uint32_t bandRows : { 1u, 2u, 8u }) {
-      SparseCellGrid serial(size, size);
-      std::uint32_t state = 12345u;
-      for (std::int64_t y = -96; y < 96; ++y) {
-        for (std::int64_t x = -96; x < 96; ++x) {
-          state = state * 1664525u + 1013904223u;
-          if ((state >> 24) < 90u) {
-            serial.setCell({ x, y }, 0);
+    for (std::uint32_t haloLines : { 1u, 2u }) {
+      for (bool recut : { false, true }) {
+        SparseCellGrid serial(size, size);
+        std::uint32_t state = 12345u;
+        for (std::int64_t y = -96; y < 96; ++y) {
+          for (std::int64_t x = -96; x < 96; ++x) {
+            state = state * 1664525u + 1013904223u;
+            if ((state >> 24) < 90u) {
+              serial.setCell({ x, y }, 0);
+            }
           }
         }
-      }
-      LoopbackLanes transport(4);
-      SimulationLaneCoordinator lanes(transport);
-      lanes.setBandRowsForTesting(bandRows);
-      SparseCellGrid first(size, size);
-      SparseCellGrid second(size, size);
-      first.copyStateFrom(serial);
-      SparseCellGrid* published = &first;
-      SparseCellGrid* spare = &second;
-      SparseGenerationDelta mirror;
-      bool mirrorValid = false;
-      for (int step = 0; step < 40; ++step) {
-        if (!laneGeneration(
-              lanes, published, spare, *life, mirror, mirrorValid) ||
-            !serial.advance(*life) ||
-            gridHash(serial) != gridHash(*published)) {
-          std::fprintf(stderr,
-                       "Large lane world mismatch: size=%lld bands=%u "
-                       "step=%d\n",
-                       static_cast<long long>(size),
-                       bandRows,
-                       step);
+        LoopbackLanes transport(4);
+        SimulationLaneCoordinator lanes(transport);
+        lanes.setHaloLinesForTesting(haloLines);
+        lanes.setRebalanceForTesting(
+          recut ? 1u : std::numeric_limits<std::uint32_t>::max(), 0.0, 0.0);
+        SparseCellGrid first(size, size);
+        SparseCellGrid second(size, size);
+        first.copyStateFrom(serial);
+        SparseCellGrid* published = &first;
+        SparseCellGrid* spare = &second;
+        SparseGenerationDelta mirror;
+        bool mirrorValid = false;
+        const std::uint32_t cap = lanes.maximumBlockSteps(*life);
+        for (int step = 0; step < 24; ++step) {
+          const std::uint32_t steps = step % 3 == 0 ? 1u : cap;
+          std::uint32_t generations = 0u;
+          if (!laneGeneration(lanes,
+                              published,
+                              spare,
+                              *life,
+                              mirror,
+                              mirrorValid,
+                              steps,
+                              &generations) ||
+              !advanceSerial(serial, *life, generations) ||
+              gridHash(serial) != gridHash(*published)) {
+            std::fprintf(stderr,
+                         "Large lane world mismatch: size=%lld halo=%u "
+                         "recut=%d step=%d\n",
+                         static_cast<long long>(size),
+                         haloLines,
+                         recut ? 1 : 0,
+                         step);
+            return false;
+          }
+        }
+        if (!recut && lanes.resynchronizations() != 1u) {
+          std::puts("Steady lane blocks must not resynchronize");
+          return false;
+        }
+        if (recut && lanes.rebalances() == 0u &&
+            lanes.resynchronizations() != 1u) {
+          std::puts("Rebalance accounting is inconsistent");
           return false;
         }
       }
-      if (lanes.resynchronizations() != 1u) {
-        std::puts("Steady lane generations must not resynchronize");
-        return false;
-      }
     }
   }
-  // Elementary rows wide enough to cross many column bands, including a torus
+  // Elementary rows wide enough to cross many column runs, including a torus
   // narrower than the row so it wraps, and a user edit below the active row.
   for (const char* id : { "RULE_90", "RULE_184" }) {
     std::unique_ptr<RuleSet> elementary =
@@ -410,7 +545,7 @@ laneParity(const std::string& families, const std::string& rules)
       return false;
     }
     for (std::int64_t size : { std::int64_t{ 0 }, std::int64_t{ 12 } }) {
-      for (std::uint32_t bandRows : { 1u, 3u }) {
+      for (std::uint32_t haloLines : { 1u, 2u }) {
         SparseCellGrid serial(size, size);
         std::uint32_t state = 777u;
         for (std::int64_t x = -1500; x < 1500; ++x) {
@@ -421,7 +556,11 @@ laneParity(const std::string& families, const std::string& rules)
         }
         LoopbackLanes transport(4);
         SimulationLaneCoordinator lanes(transport);
-        lanes.setBandRowsForTesting(bandRows);
+        lanes.setHaloLinesForTesting(haloLines);
+        if (lanes.maximumBlockSteps(*elementary) != 1u) {
+          std::puts("Elementary rows must run one generation per block");
+          return false;
+        }
         SparseCellGrid first(size, size);
         SparseCellGrid second(size, size);
         first.copyStateFrom(serial);
@@ -435,16 +574,24 @@ laneParity(const std::string& families, const std::string& rules)
             serial.setCell({ 40, -3 }, 0);
             mirrorValid = false;
           }
-          if (!laneGeneration(
-                lanes, published, spare, *elementary, mirror, mirrorValid) ||
-              !serial.advance(*elementary) ||
+          std::uint32_t generations = 0u;
+          if (!laneGeneration(lanes,
+                              published,
+                              spare,
+                              *elementary,
+                              mirror,
+                              mirrorValid,
+                              4u,
+                              &generations) ||
+              generations != 1u ||
+              !advanceSerial(serial, *elementary, generations) ||
               gridHash(serial) != gridHash(*published)) {
             std::fprintf(stderr,
                          "Elementary lane mismatch: rule=%s size=%lld "
-                         "bands=%u step=%d\n",
+                         "halo=%u step=%d\n",
                          id,
                          static_cast<long long>(size),
-                         bandRows,
+                         haloLines,
                          step);
             return false;
           }
@@ -452,8 +599,12 @@ laneParity(const std::string& families, const std::string& rules)
       }
     }
   }
-  std::printf("%d rule/topology/lane-count combinations, large worlds and "
-              "wide elementary rows match serial generations\n",
+  if (!serialBlocks()) {
+    return false;
+  }
+  std::printf("%d rule/topology/lane-count combinations, large worlds, "
+              "wide elementary rows and serial blocks match serial "
+              "generations\n",
               partitioned);
   return partitioned > 0;
 }
@@ -479,9 +630,14 @@ laneProtocol(const std::string& families, const std::string& rules)
   begin.kind = SimulationLaneMessage::SyncBegin;
   begin.session = 3;
   begin.epoch = 1;
+  // Lane 1 of 2 owns row 1 with a one-line halo (rows 0 and 2).
   begin.partition.lane = 1;
   begin.partition.laneCount = 2;
-  begin.partition.bandRows = 1;
+  begin.partition.haloLines = 1;
+  begin.partition.beginUnbounded = false;
+  begin.partition.ownedBegin = 1;
+  begin.partition.endUnbounded = false;
+  begin.partition.ownedEnd = 2;
   begin.ruleId = "GAME_OF_LIFE";
   begin.rulePackage =
     RuleSetRegistry::serializeRulePackage(*family, *definition);
@@ -519,6 +675,15 @@ laneProtocol(const std::string& families, const std::string& rules)
   invalid = begin;
   invalid.ruleId.clear();
   denied = denied && rejected(invalid);
+  invalid = begin;
+  invalid.partition.haloLines = 0;
+  denied = denied && rejected(invalid);
+  invalid = begin;
+  invalid.partition.haloLines = SimulationLanePartition::MaximumHaloLines + 1u;
+  denied = denied && rejected(invalid);
+  invalid = begin;
+  invalid.partition.ownedBegin = 3; // an inverted run
+  denied = denied && rejected(invalid);
   std::vector<std::byte> truncated = beginBytes;
   truncated.pop_back();
   std::vector<std::byte> trailing = beginBytes;
@@ -551,7 +716,7 @@ laneProtocol(const std::string& families, const std::string& rules)
     std::fprintf(stderr, "SyncBegin failed: %s\n", error.c_str());
     return false;
   }
-  // Lane 1 of 2 with one-row bands owns odd rows; rows 0 and 2 are halo.
+  // The lane owns row 1; rows 0 and 2 are its halo.
   SparseChunkPatch owned;
   owned.address = { 0, 1 };
   owned.present = true;
@@ -574,17 +739,19 @@ laneProtocol(const std::string& families, const std::string& rules)
   wrongGeneration.generation = 5;
   SimulationLaneRequest duplicate = advance;
   duplicate.patches = { owned, owned };
+  // A one-line halo keeps Life exact for 16 generations, not 17.
+  SimulationLaneRequest tooLong = advance;
+  tooLong.steps = 17u;
   if (!accepted(chunks) || accepted(stale) || accepted(badState) ||
-      accepted(wrongGeneration) || accepted(duplicate)) {
+      accepted(wrongGeneration) || accepted(duplicate) || accepted(tooLong)) {
     std::puts("Lane worker accepted stale, invalid or duplicate input");
     return false;
   }
-  // Lane 1 of 3 with two-row bands owns rows 2-3 (band 1) and has halo rows
-  // 1 and 4; row 5 (band 2, lane 2) borders rows 4 (lane 2) and 6 (lane 0),
-  // so it is outside the lane.
+  // Lane 1 of 3 owning rows 2-3 has halo rows 1 and 4; row 5 is outside.
   SimulationLaneWorker narrow;
   begin.partition.laneCount = 3;
-  begin.partition.bandRows = 2;
+  begin.partition.ownedBegin = 2;
+  begin.partition.ownedEnd = 4;
   writer.clear();
   begin.write(writer);
   if (!narrow.execute(writer.data(), output, error)) {
@@ -610,7 +777,7 @@ laneProtocol(const std::string& families, const std::string& rules)
     std::puts("An acknowledgement carried changes");
     return false;
   }
-  // Version 2: the partition axis and the elementary source row round-trip,
+  // The partition axis and the elementary source row round-trip,
   // and a worker refuses an axis or a row that does not match its rule.
   SimulationLaneRequest columns = begin;
   columns.partition.axis = SimulationLanePartition::Axis::Columns;
@@ -649,7 +816,8 @@ laneProtocol(const std::string& families, const std::string& rules)
   SimulationLaneWorker lifeLane;
   writer.clear();
   begin.partition.laneCount = 2;
-  begin.partition.bandRows = 1;
+  begin.partition.ownedBegin = 1;
+  begin.partition.ownedEnd = 2;
   begin.write(writer);
   rowWriter.clear();
   rowAdvance.write(rowWriter);
@@ -668,12 +836,12 @@ laneProtocol(const std::string& families, const std::string& rules)
   rowReply.write(rowReplyWriter);
   SimulationLaneReply decodedRowReply;
   std::vector<std::byte> oldVersion = rowReplyWriter.data();
-  oldVersion[4] = std::byte{ 1 };
+  oldVersion[4] = std::byte{ 2 };
   if (!SimulationLaneReply::read(rowReplyWriter.data(), decodedRowReply) ||
       !decodedRowReply.hasElementaryRow ||
       decodedRowReply.elementaryRow.sourceY != 5 ||
       SimulationLaneReply::read(oldVersion, decodedRowReply)) {
-    std::puts("Elementary replies did not round-trip or version 1 was read");
+    std::puts("Elementary replies did not round-trip or version 2 was read");
     return false;
   }
 
@@ -927,7 +1095,6 @@ laneAllocations(const std::string& families, const std::string& rules)
   }
   LoopbackLanes transport(4);
   SimulationLaneCoordinator lanes(transport);
-  lanes.setBandRowsForTesting(2u);
   SparseCellGrid* published = &first;
   SparseCellGrid* spare = &second;
   SparseGenerationDelta mirror;

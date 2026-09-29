@@ -4,6 +4,7 @@
 #define STBI_NO_STDIO
 #endif
 #include "thirdparty/stb/stb_image.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Renderer.h>
 #if !defined(ILLUMO_SERIAL_GUEST)
@@ -251,6 +252,7 @@ AssetManager::acquireTexture(const std::string& path,
     entry.referenceCount += 1;
     return entry.handle;
   }
+  ILLUMO_PROFILE_ZONE("AssetManager.acquireTexture");
 
   const unsigned char fallback[16] = {
     255, 0, 255, 255, 32, 32, 32, 255, 32, 32, 32, 255, 255, 0, 255, 255,
@@ -373,6 +375,7 @@ AssetManager::decodeCubemap(const LoadJob& job,
                             const IAssetSource& source,
                             LoadResult& result)
 {
+  ILLUMO_PROFILE_ZONE("AssetManager.decodeCubemap");
   const size_t count =
     job.sourceKind == TextureSourceKind::CubemapFaces ? 6 : 1;
   for (size_t i = 0; i < count; ++i) {
@@ -537,6 +540,7 @@ AssetManager::acquireShader(const ShaderPaths& paths, AssetLoadMode mode)
     entry.referenceCount += 1;
     return entry.handle;
   }
+  ILLUMO_PROFILE_ZONE("AssetManager.acquireShader");
 
   ShaderSources fallback;
   fallback.vertexSource = kFallbackVertexShader;
@@ -596,6 +600,7 @@ AssetManager::acquireMesh(const std::string& path,
     entry.referenceCount += 1;
     return entry.handle;
   }
+  ILLUMO_PROFILE_ZONE("AssetManager.acquireMesh");
 
   // Native files keep tinyobj's material search beside the OBJ; byte sources
   // (packages) read each mtllib beside the OBJ through the same source.
@@ -643,6 +648,7 @@ AssetManager::enrollMesh(const MeshData& mesh,
                          const std::string& path,
                          const std::string& cacheKey)
 {
+  ILLUMO_PROFILE_ZONE("AssetManager.enrollMesh");
   if (renderer == nullptr || mesh.vertices.empty() || mesh.indices.empty() ||
       mesh.vertices.size() > std::numeric_limits<unsigned int>::max() ||
       mesh.indices.size() > std::numeric_limits<unsigned int>::max()) {
@@ -1015,6 +1021,7 @@ void
 AssetManager::workerMain()
 {
 #if !defined(ILLUMO_SERIAL_GUEST)
+  ILLUMO_PROFILE_THREAD("AssetWorker");
   while (true) {
     LoadJob job;
     {
@@ -1040,6 +1047,7 @@ AssetManager::workerMain()
 AssetManager::LoadResult
 AssetManager::executeJob(const LoadJob& job, const IAssetSource* source)
 {
+  ILLUMO_PROFILE_ZONE("AssetManager.executeJob");
   LoadResult result;
   result.kind = job.kind;
   result.slot = job.slot;
@@ -1129,6 +1137,7 @@ AssetManager::executeJob(const LoadJob& job, const IAssetSource* source)
 void
 AssetManager::processResult(LoadResult& result)
 {
+  ILLUMO_PROFILE_ZONE("AssetManager.processResult");
   if (result.kind == AssetKind::Texture) {
     std::unordered_map<uint32_t, TextureEntry>::iterator it =
       textures.find(result.slot);
@@ -1246,6 +1255,7 @@ AssetManager::pollHotReload()
     return;
   }
   nextHotReloadPoll = now + std::chrono::milliseconds(500);
+  ILLUMO_PROFILE_ZONE("AssetManager.pollHotReload");
 
   for (std::unordered_map<uint32_t, TextureEntry>::iterator it =
          textures.begin();
@@ -1310,6 +1320,7 @@ AssetManager::pollHotReload()
 void
 AssetManager::pump()
 {
+  ILLUMO_PROFILE_ZONE("AssetManager.pump");
 #if defined(ILLUMO_SERIAL_GUEST)
   // No worker: queued (Async) loads complete here, on the caller.
   std::deque<LoadJob> queued;

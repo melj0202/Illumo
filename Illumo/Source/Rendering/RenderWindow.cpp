@@ -2,6 +2,7 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/PresentationTiming.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 
 void
@@ -61,6 +62,7 @@ RenderWindow::RenderWindow(const int width,
 bool
 RenderWindow::initialize()
 {
+  ILLUMO_PROFILE_ZONE("RenderWindow.initialize");
   glfwSetErrorCallback(glfwErrorCallback);
   if (!glfwInit()) {
     const char* description = nullptr;
@@ -237,6 +239,7 @@ RenderWindow::centerWindow()
 void
 RenderWindow::handleResize(int width, int height)
 {
+  ILLUMO_PROFILE_ZONE("RenderWindow.handleResize");
   windowWidth = width;
   windowHeight = height;
 
@@ -292,6 +295,7 @@ RenderWindow::reinitializeWindow()
 void
 RenderWindow::toggleFullscreen()
 {
+  ILLUMO_PROFILE_ZONE("RenderWindow.toggleFullscreen");
   if (isFullScreen) {
     glfwSetWindowMonitor(
       window, nullptr, windowedX, windowedY, windowedWidth, windowedHeight, 0);
@@ -346,6 +350,7 @@ RenderWindow::cancelCloseRequest()
 int
 RenderWindow::getRefreshRate() const
 {
+  ILLUMO_PROFILE_ZONE("RenderWindow.getRefreshRate");
   GLFWmonitor* monitor = glfwGetPrimaryMonitor();
   if (monitor != nullptr) {
     const GLFWvidmode* mode = glfwGetVideoMode(monitor);

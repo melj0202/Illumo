@@ -1,5 +1,7 @@
 #include <Illumo/Rendering/MeshLoader.h>
 
+#include <Illumo/Foundation/Profile.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -471,6 +473,7 @@ MeshLoadResult
 MeshLoader::loadFromFile(const std::string& filePath,
                          const MeshLoadOptions& options)
 {
+  ILLUMO_PROFILE_ZONE("MeshLoader.loadFromFile");
   MeshLoadResult result;
   std::shared_ptr<IMeshLoaderBackend> backend = getActiveBackend();
   if (backend != nullptr) {
@@ -486,6 +489,7 @@ MeshLoader::loadFromMemory(const std::string& fileContent,
                            const MeshLoadOptions& options,
                            const std::string& baseDir)
 {
+  ILLUMO_PROFILE_ZONE("MeshLoader.loadFromMemory");
   MeshLoadResult result;
   std::shared_ptr<IMeshLoaderBackend> backend = getActiveBackend();
   if (backend != nullptr) {

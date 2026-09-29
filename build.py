@@ -37,13 +37,16 @@ PUBLIC_HEADER_SMOKE_TEST = "Illumo.PublicHeaders.ConsumerSmoke"
 DEFAULT_PROFILES_FILE = REPOSITORY_ROOT / "build-profiles.local.json"
 # "debug" is the AddressSanitizer profile (explicit WASM guest bounds checks);
 # "dev" is optimized with symbols and debug tools, the one to play with; and
-# "debug-noasan" keeps Debug code generation with fast guest traps.
+# "debug-noasan" keeps Debug code generation with fast guest traps; and
+# "tracy" is Release with Tracy zones in the host and every WASM guest.
 BUILTIN_PROFILES = {
     "debug": {"config": "Debug", "build_dir": "build-workspace-debug"},
     "release": {"config": "Release", "build_dir": "build-workspace-release"},
     "dev": {"config": "RelWithDebInfo", "build_dir": "build-workspace-dev"},
     "debug-noasan": {"config": "Debug", "build_dir": "build-workspace-debug-noasan",
                      "cmake_arg": ["-DILLUMO_ENABLE_ASAN=OFF"]},
+    "tracy": {"config": "Release", "build_dir": "build-workspace-tracy",
+              "tracy": True, "no_docs": True, "no_tidy": True},
 }
 PROFILE_STRINGS = ("config", "build_dir", "generator", "architecture")
 PROFILE_FLAGS = ("tracy", "no_tests", "no_docs", "no_tidy", "no_wasm")

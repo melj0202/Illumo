@@ -1,5 +1,6 @@
 #include "MenuMotifs.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -135,6 +136,7 @@ CellMotif::draw(GameVisual& visual,
                 float glow,
                 unsigned char opacity) const
 {
+  ILLUMO_PROFILE_ZONE("CellMotif.draw");
   const float mix = blend();
   const float halo = std::clamp(glow, 0.0f, 1.0f);
   // Three passes (dormant cells, halos, live cells) keep every halo above

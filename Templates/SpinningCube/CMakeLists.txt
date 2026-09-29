@@ -12,7 +12,7 @@ add_library(@PROJECT_NAME@Core STATIC
 target_include_directories(@PROJECT_NAME@Core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_include_directories(@PROJECT_NAME@Core SYSTEM PRIVATE
-  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
+  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
 target_link_libraries(@PROJECT_NAME@Core PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(@PROJECT_NAME@Core)
 
@@ -25,7 +25,7 @@ if(BUILD_TESTING)
   target_include_directories(@PROJECT_NAME@Tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
   target_include_directories(@PROJECT_NAME@Tests SYSTEM PRIVATE
-    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
   target_link_libraries(@PROJECT_NAME@Tests PRIVATE
     @PROJECT_NAME@Core Illumo::TestSupport)
   illumo_configure_runtime_target(@PROJECT_NAME@Tests)

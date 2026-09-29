@@ -44,7 +44,7 @@ target_include_directories(IllumoGameCore PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_include_directories(IllumoGameCore SYSTEM PRIVATE
   "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/json/single_include"
-  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
+  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
 target_link_libraries(IllumoGameCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllumoGameCore)
 
@@ -85,7 +85,7 @@ if(BUILD_TESTING)
   target_include_directories(IllumoGameTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
   target_include_directories(IllumoGameTests SYSTEM PRIVATE
-    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
   target_link_libraries(IllumoGameTests PRIVATE
     IllumoGameCore Illumo::TestSupport)
   illumo_configure_runtime_target(IllumoGameTests)

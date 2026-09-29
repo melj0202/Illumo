@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Services/Logger.h>
@@ -157,6 +158,7 @@ GuestProgram::applyPackagedDefaults()
   if (!m_files.take(m_defaultsTask, result)) {
     return false;
   }
+  ILLUMO_PROFILE_ZONE("GuestProgram.applyPackagedDefaults");
   m_defaultsTask = 0;
   m_defaultsApplied = true;
   if (result.outcome != GuestFileOutcome::Success) {
@@ -228,6 +230,7 @@ GuestProgram::dispatchOverlay(DrawList& scene)
 bool
 GuestProgram::start(std::span<const std::byte> startup)
 {
+  ILLUMO_PROFILE_ZONE("GuestProgram.start");
   if (!acceptStartup(startup)) {
     return false;
   }
@@ -251,23 +254,33 @@ GuestProgram::start(std::span<const std::byte> startup)
 void
 GuestProgram::update(const GuestInput& input)
 {
-  m_window.accept(input);
-  m_panels.accept(input);
-  // Camera and settings-driven layout read the window size from settings.
-  m_settings.setVar("WinX", static_cast<int>(input.width));
-  m_settings.setVar("WinY", static_cast<int>(input.height));
-  GuestInputProvider::accept(m_input, input);
-  m_commandLine.isOpen = input.consoleOpen;
-  // First: log lines refused under backpressure take the requests the
-  // services exchange just freed, ahead of this update's work.
-  m_diagnostics.pump();
-  m_files.pump();
-  m_settings.pump();
-  m_fonts.pump();
-  m_console.pump();
-  m_panels.pump();
-  m_audio.pump();
-  pumpProduct();
+  ILLUMO_PROFILE_ZONE("GuestProgram.update");
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.acceptInput");
+    m_window.accept(input);
+    m_panels.accept(input);
+    // Camera and settings-driven layout read the window size from settings.
+    m_settings.setVar("WinX", static_cast<int>(input.width));
+    m_settings.setVar("WinY", static_cast<int>(input.height));
+    GuestInputProvider::accept(m_input, input);
+    m_commandLine.isOpen = input.consoleOpen;
+  }
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.pumpServices");
+    // First: log lines refused under backpressure take the requests the
+    // services exchange just freed, ahead of this update's work.
+    m_diagnostics.pump();
+    m_files.pump();
+    m_settings.pump();
+    m_fonts.pump();
+    m_console.pump();
+    m_panels.pump();
+    m_audio.pump();
+  }
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.pumpProduct");
+    pumpProduct();
+  }
   if (m_phase == Phase::Settings) {
     if (!m_settings.loaded() || !applyPackagedDefaults()) {
       return;
@@ -280,6 +293,7 @@ GuestProgram::update(const GuestInput& input)
     m_phase = Phase::Bootstrap;
   }
   if (m_phase == Phase::Bootstrap) {
+    ILLUMO_PROFILE_ZONE("GuestProgram.bootstrap");
     if (!m_assetsRequested) {
       std::vector<std::string> assets = packageAssets();
       // The engine's badge (GuiEngineBadge) is there for every program to
@@ -299,17 +313,29 @@ GuestProgram::update(const GuestInput& input)
   if (m_phase != Phase::Running || !m_scenes) {
     return;
   }
-  if (!m_scenes->applyPending()) {
-    // As a failed required module did: a first scene that cannot start
-    // closes the product.
-    Logger::LogError("The program's first scene failed to start; closing");
-    m_window.requestClose();
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.applyPendingScenes");
+    if (!m_scenes->applyPending()) {
+      // As a failed required module did: a first scene that cannot start
+      // closes the product.
+      Logger::LogError("The program's first scene failed to start; closing");
+      m_window.requestClose();
+    }
   }
   runConsoleInvocations();
   m_camera.Update(static_cast<float>(input.elapsed));
-  updateProgram(input.elapsed);
-  m_scenes->update(input.elapsed);
-  updateOverlay(input.elapsed);
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.updateProgram");
+    updateProgram(input.elapsed);
+  }
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.updateScenes");
+    m_scenes->update(input.elapsed);
+  }
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.updateOverlay");
+    updateOverlay(input.elapsed);
+  }
   // Key and character queues are per-frame events, as in the native loop.
   m_input.clearKeyQueue();
   m_input.clearCharQueue();
@@ -328,39 +354,58 @@ GuestProgram::frame()
 void
 GuestProgram::recordFrame(GuestFrame& output)
 {
+  ILLUMO_PROFILE_ZONE("GuestProgram.recordFrame");
   const std::array<int, 2> dimensions = m_window.getWindowDimensions();
   try {
-    if (m_worlds) {
-      m_worlds->beginFrame();
+    {
+      ILLUMO_PROFILE_ZONE("GuestProgram.beginFrame");
+      if (m_worlds) {
+        m_worlds->beginFrame();
+      }
+      m_renderer.BeginFrame();
+      m_backend.setFrame(static_cast<float>(dimensions[0]),
+                         static_cast<float>(dimensions[1]));
+      m_backend.pump();
+      m_scene.ClearDrawables();
+      m_panels.clearScenes();
     }
-    m_renderer.BeginFrame();
-    m_backend.setFrame(static_cast<float>(dimensions[0]),
-                       static_cast<float>(dimensions[1]));
-    m_backend.pump();
-    m_scene.ClearDrawables();
-    m_panels.clearScenes();
-    if (m_scenes) {
-      m_scenes->dispatch(m_scene);
+    {
+      ILLUMO_PROFILE_ZONE("GuestProgram.dispatchScenes");
+      if (m_scenes) {
+        m_scenes->dispatch(m_scene);
+      }
+      if (m_phase == Phase::Running) {
+        dispatchProgram(m_scene);
+        dispatchOverlay(m_scene);
+      }
     }
-    if (m_phase == Phase::Running) {
-      dispatchProgram(m_scene);
-      dispatchOverlay(m_scene);
+    {
+      ILLUMO_PROFILE_ZONE("GuestProgram.pumpAssets");
+      // As the native host: queued asset loads complete before submission.
+      m_assets.pump();
     }
-    // As the native host: queued asset loads complete before submission.
-    m_assets.pump();
-    m_renderer.RenderScene(&m_scene, &m_camera);
+    {
+      ILLUMO_PROFILE_ZONE("GuestProgram.renderScene");
+      m_renderer.RenderScene(&m_scene, &m_camera);
+    }
     // Detached panels record after the main scene, into the frame's
     // surfaces section.
     m_panels.record(m_renderer, m_backend, m_window);
-    m_renderer.EndFrame();
+    {
+      ILLUMO_PROFILE_ZONE("GuestProgram.endFrame");
+      m_renderer.EndFrame();
+    }
     if (!m_renderer.frameError().empty()) {
       throw std::runtime_error(m_renderer.frameError());
     }
     m_backend.takeFrame(output);
     m_panels.finish(output);
-    const char* exceeded = output.exceededLimit();
-    if (exceeded != nullptr) {
-      throw std::runtime_error(exceeded);
+    {
+      ILLUMO_PROFILE_ZONE("GuestFrame.exceededLimit");
+      const char* exceeded = output.exceededLimit();
+      if (exceeded != nullptr) {
+        throw std::runtime_error(exceeded);
+      }
     }
     // Only a frame that will be delivered takes world operations, in what
     // the visual operations leave of the shared quota; a dropped frame
@@ -371,6 +416,14 @@ GuestProgram::recordFrame(GuestFrame& output)
                                  output.visualOperations.size());
     }
     m_backend.commitVisuals();
+    ILLUMO_PROFILE_PLOT("Guest batches", output.batches.size());
+    ILLUMO_PROFILE_PLOT("Guest surfaces", output.surfaces.size());
+    ILLUMO_PROFILE_PLOT("Guest texture writes", output.textureWrites.size());
+    ILLUMO_PROFILE_PLOT("Guest mesh writes", output.meshWrites.size());
+    ILLUMO_PROFILE_PLOT("Guest visual operations",
+                        output.visualOperations.size());
+    ILLUMO_PROFILE_PLOT("Guest world operations",
+                        output.worldOperations.size());
     if (!m_lastFrameError.empty()) {
       m_lastFrameError.clear();
     }
@@ -414,6 +467,7 @@ GuestProgram::restartRequested()
 void
 GuestProgram::shutdown()
 {
+  ILLUMO_PROFILE_ZONE("GuestProgram.shutdown");
   if (m_scenes) {
     m_scenes->stopAll();
     m_context.scenes = nullptr;
@@ -426,6 +480,7 @@ GuestProgram::shutdown()
 void
 GuestProgram::startScenes()
 {
+  ILLUMO_PROFILE_ZONE("GuestProgram.startScenes");
   m_input.clearKeyQueue();
   m_input.clearCharQueue();
   m_scene.ResetDefaultPasses();
@@ -466,6 +521,7 @@ GuestProgram::startScenes()
 void
 GuestProgram::runConsoleInvocations()
 {
+  ILLUMO_PROFILE_ZONE("GuestProgram.runConsoleInvocations");
   GuestConsoleRequest invocation;
   while (m_console.take(invocation)) {
     m_commands.QueueCommand(invocation.name, invocation.arguments);
@@ -476,6 +532,7 @@ GuestProgram::runConsoleInvocations()
 void
 GuestProgram::synchronizeCommands()
 {
+  ILLUMO_PROFILE_ZONE("GuestProgram.synchronizeCommands");
   const std::vector<std::string> names = m_commands.GetCommandNames();
   const std::set<std::string> current(names.begin(), names.end());
   for (std::set<std::string>::iterator it = m_forwarded.begin();

@@ -1,6 +1,7 @@
 #include <Illumo/Content/PackageMounts.h>
 
 #include <Illumo/Content/PackageArchive.h>
+#include <Illumo/Foundation/Profile.h>
 
 #include <algorithm>
 #include <system_error>
@@ -29,6 +30,7 @@ PackageMounts::open(const std::filesystem::path& path,
                     LoadedPackage& output,
                     std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("PackageMounts.open");
   std::error_code code;
   std::shared_ptr<IVfsBackend> backend;
   if (std::filesystem::is_directory(path, code)) {
@@ -74,6 +76,7 @@ PackageMounts::discover(const std::filesystem::path& directory,
                         std::vector<std::string>& takenIds,
                         std::vector<std::string>& warnings)
 {
+  ILLUMO_PROFILE_ZONE("PackageMounts.discover");
   std::vector<LoadedPackage> packages;
   std::error_code code;
   if (!std::filesystem::is_directory(directory, code)) {
@@ -131,6 +134,7 @@ PackageMounts::mountAll(VirtualFileSystem& vfs,
                         std::vector<std::string>& warnings,
                         std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("PackageMounts.mountAll");
   if (!engineAssets.empty()) {
     std::string engineError;
     std::shared_ptr<DirectoryVfsBackend> engine =
@@ -266,6 +270,7 @@ PackageMounts::packMounted(const VirtualFileSystem& vfs,
                            std::uint64_t maximumBytes,
                            std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("PackageMounts.packMounted");
   std::vector<uint8_t> manifestBytes;
   PackageManifest manifest;
   if (!vfs.read(

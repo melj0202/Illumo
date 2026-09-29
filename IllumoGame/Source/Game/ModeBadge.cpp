@@ -1,5 +1,6 @@
 #include "ModeBadge.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -112,6 +113,7 @@ ModeBadge::tick(float deltaSeconds, bool reducedMotion)
 void
 ModeBadge::rebuild()
 {
+  ILLUMO_PROFILE_ZONE("ModeBadge.rebuild");
   m_visual.clearPrimitives();
   if (!m_showing) {
     m_visual.setVisible(false);

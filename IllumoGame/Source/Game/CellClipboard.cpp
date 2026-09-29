@@ -2,6 +2,7 @@
 #include "BuiltinPatterns.h"
 #include "CSimPlatform.h"
 #include "PatternCodec.h"
+#include <Illumo/Foundation/Profile.h>
 #include <limits>
 
 void
@@ -110,6 +111,7 @@ CellClipboard::captureSelection(const SparseCellGrid* grid,
                                 CellPattern* pattern,
                                 std::string* error) const
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.captureSelection");
   if (pattern == nullptr) {
     if (error != nullptr) {
       *error = "pattern output is null";
@@ -182,6 +184,7 @@ CellClipboard::captureSelection(const SparseCellGrid* grid,
 bool
 CellClipboard::copySelection(const SparseCellGrid* grid, std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.copySelection");
   if (!captureSelection(grid, &m_clipboardPattern, error)) {
     return false;
   }
@@ -195,6 +198,7 @@ CellClipboard::fillSelection(SparseCellGrid* grid,
                              CanvasView* canvas,
                              unsigned char state)
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.fillSelection");
   if (!m_hasSelection || grid == nullptr || canvas == nullptr) {
     return false;
   }
@@ -243,6 +247,7 @@ CellClipboard::pastePatternAt(SparseCellGrid* grid,
                               std::int64_t originY,
                               std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.pastePatternAt");
   if (grid == nullptr || canvas == nullptr) {
     if (error != nullptr) {
       *error = "grid or canvas is null";
@@ -283,6 +288,7 @@ CellClipboard::pasteText(SparseCellGrid* grid,
                          std::int64_t hoverY,
                          std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.pasteText");
   CellPattern pattern;
   if (!PatternCodec::parse(clipboardText, &pattern, error)) {
     return false;
@@ -327,6 +333,7 @@ CellClipboard::importPatternText(SparseCellGrid* grid,
                                  std::string* error,
                                  PatternFormat format)
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.importPatternText");
   CellPattern pattern;
   if (!PatternCodec::parse(text, &pattern, error, format)) {
     return false;

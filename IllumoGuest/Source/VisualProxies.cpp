@@ -1,5 +1,6 @@
 #include <IllumoGuest/VisualProxies.h>
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -274,6 +275,7 @@ GuestVisualProxies::sync(const GameVisual& visual,
       proxy.recheck -= 1;
       return 0;
     }
+    ILLUMO_PROFILE_ZONE("VisualProxies.recheckChurn");
     proxy.recheck = kChurnRecheck;
     proxy.proposed.resize(count);
     std::size_t changed = proxy.sample.size() != count ? count : 0;
@@ -322,6 +324,8 @@ GuestVisualProxies::sync(const GameVisual& visual,
     return proxy.id;
   }
 
+  // Only visuals that changed get here: conversion and diffing of items.
+  ILLUMO_PROFILE_ZONE("VisualProxies.syncChanged");
   proxy.proposed.resize(count);
   for (std::size_t index = 0; index < count; ++index) {
     std::size_t bytes = 0;
@@ -366,9 +370,9 @@ GuestVisualProxies::sync(const GameVisual& visual,
   const std::size_t changedItems = replaced + added + removed;
   const bool sameProps = proxy.onHost && proxy.hasProperties &&
                          sameProperties(proxy.properties, properties);
-  const std::size_t operationCount = (proxy.onHost ? 0u : 1u) +
-                                     (sameProps ? 0u : 1u) + replaced + added +
-                                     (insert ? 1u : 0u) + (removed > 0 ? 1u : 0u);
+  const std::size_t operationCount =
+    (proxy.onHost ? 0u : 1u) + (sameProps ? 0u : 1u) + replaced + added +
+    (insert ? 1u : 0u) + (removed > 0 ? 1u : 0u);
   if (proxy.onHost && churns(changedItems, count)) {
     proxy.churnFrames += 1;
     if (proxy.churnFrames >= kChurnFrames) {
@@ -430,7 +434,8 @@ GuestVisualProxies::sync(const GameVisual& visual,
     operations.push_back(std::move(removal));
   }
   proxy.proposedRevision = visual.editRevision();
-  proxy.proposedEpoch = textureEpoch;  m_operations += operationCount;
+  proxy.proposedEpoch = textureEpoch;
+  m_operations += operationCount;
   m_textBytes += textBytes;
   proxy.touched = true;
   m_touched.push_back(&visual);
@@ -460,6 +465,10 @@ GuestVisualProxies::forget(const GameVisual& visual)
 void
 GuestVisualProxies::commit()
 {
+  ILLUMO_PROFILE_ZONE("VisualProxies.commit");
+  ILLUMO_PROFILE_PLOT("Guest visual proxies changed", m_touched.size());
+  ILLUMO_PROFILE_PLOT("Guest visual proxy operations", m_operations);
+  ILLUMO_PROFILE_PLOT("Guest visual text bytes", m_textBytes);
   for (const GameVisual* visual : m_touched) {
     Proxy& proxy = m_proxies.at(visual);
     std::swap(proxy.items, proxy.proposed);

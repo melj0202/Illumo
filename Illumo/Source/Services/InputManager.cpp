@@ -1,13 +1,8 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <limits>
 #include <utility>
-
-#ifdef TRACY_ENABLE
-#include "tracy/Tracy.hpp"
-#else
-#define ZoneNamed(varname, name)
-#endif
 
 #ifndef GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_NONE
@@ -370,12 +365,14 @@ InputManager::~InputManager()
 void
 InputManager::update()
 {
+  ILLUMO_PROFILE_ZONE("InputManager.update");
   m_suppressedKeys.fill(false);
-  ZoneNamed(InputManagerUpdateZone, "InputManager Update");
   *scrollOffset = 0.0;
   if (window != nullptr) {
+    ILLUMO_PROFILE_ZONE("InputManager.pollEvents");
     glfwPollEvents();
   }
+  ILLUMO_PROFILE_ZONE("InputManager.pollKeys");
   for (KeyCode keyCode : AllKeyCodes) {
     inputStatesCurrent[keyCode] = GetInputAction(keyCode);
 

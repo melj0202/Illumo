@@ -12,19 +12,19 @@
 #include "ModeBadge.h"
 #include "NewSimulationMenu.h"
 #include "RulesetWorkshopMenu.h"
-#include <Illumo/Content/SceneInstance.h>
 #include <Illumo/Content/ProgramScene.h>
+#include <Illumo/Content/SceneInstance.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Foundation/RollingMetric.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
 #include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <tracy/Tracy.hpp>
 #include <vector>
 
 enum class CellState

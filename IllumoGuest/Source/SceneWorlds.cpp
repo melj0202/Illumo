@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <IllumoGuest/SceneWorlds.h>
 
 GuestSceneWorlds::GuestSceneWorlds(GuestRecordingBackend& backend)
@@ -36,8 +37,7 @@ GuestSceneWorlds::activate(IRenderWorld* world)
 void
 GuestSceneWorlds::destroy(IRenderWorld* world)
 {
-  for (std::vector<World>::iterator it = m_worlds.begin();
-       it != m_worlds.end();
+  for (std::vector<World>::iterator it = m_worlds.begin(); it != m_worlds.end();
        ++it) {
     if (it->world.get() != world) {
       continue;
@@ -68,6 +68,7 @@ void
 GuestSceneWorlds::takeOperations(std::vector<GuestWorldOperation>& output,
                                  std::size_t limit)
 {
+  ILLUMO_PROFILE_ZONE("SceneWorlds.takeOperations");
   std::size_t sentDestroys = 0;
   while (sentDestroys < m_destroyed.size() && output.size() < limit) {
     GuestWorldOperation operation;
@@ -99,8 +100,8 @@ GuestSceneWorlds::takeOperations(std::vector<GuestWorldOperation>& output,
   // The shown world must exist on the host first.
   bool activeAnnounced = m_activeId == 0;
   for (const World& world : m_worlds) {
-    activeAnnounced = activeAnnounced ||
-                      (world.id == m_activeId && world.announced);
+    activeAnnounced =
+      activeAnnounced || (world.id == m_activeId && world.announced);
   }
   if (m_activeId != m_shownOnHost && activeAnnounced && output.size() < limit) {
     GuestWorldOperation show;

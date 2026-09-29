@@ -225,6 +225,11 @@ public:
                                    const OccupiedChunkVisitor& visitor) const;
   bool visitChangedChunksSince(std::uint64_t previousRevision,
                                const ChangedChunkVisitor& visitor) const;
+  // A stored chunk's cells, or null when the chunk is absent (background).
+  const ChunkCells* findChunkCells(const ChunkAddress& address) const
+  {
+    return findChunk(address);
+  }
 
   static std::int64_t floorDivide(std::int64_t value, std::int64_t divisor);
   static std::int64_t floorModulo(std::int64_t value, std::int64_t divisor);

@@ -7,6 +7,7 @@
 #include <Illumo/Engine/FrameProfiler.h>
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Engine/PresentationTiming.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -113,6 +114,7 @@ RuntimeShell::~RuntimeShell()
 bool
 RuntimeShell::start()
 {
+  ILLUMO_PROFILE_ZONE("RuntimeShell.start");
   ic = &m_illumo.context();
   if (ic->window != nullptr && !m_options.title.empty()) {
     ic->window->setTitle(m_options.title);
@@ -123,6 +125,7 @@ RuntimeShell::start()
   }
   bool started = false;
   try {
+    ILLUMO_PROFILE_ZONE("RuntimeShell.startProgram");
     started = m_program->start(*ic);
   } catch (const std::exception& exception) {
     Logger::LogError(std::string("The program threw during startup: ") +
@@ -176,7 +179,7 @@ RuntimeShell::frame(double dt)
   }
   FrameProfiler& profiler = m_illumo.frameProfiler();
   {
-    ZoneScopedN("Frame.Update");
+    ILLUMO_PROFILE_ZONE("Frame.Update");
     m_illumo.beginUpdate(dt);
     // The overlay reads console keys before the program can drain them.
     profiler.mark(FramePhase::DebugUpdate);
@@ -194,10 +197,11 @@ RuntimeShell::frame(double dt)
     m_illumo.endUpdate();
   }
   {
-    ZoneScopedN("Frame.Render");
+    ILLUMO_PROFILE_ZONE("Frame.Render");
     DrawList* scene = m_illumo.beginRender();
     if (scene != nullptr) {
       if (m_splash != nullptr) {
+        ILLUMO_PROFILE_ZONE("RuntimeShell.splashDrawables");
         m_splash->addDrawables(*scene);
       } else {
         dispatchProgram(*scene);
@@ -234,6 +238,7 @@ RuntimeShell::stop()
   if (!m_started) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("RuntimeShell.stop");
   m_started = false;
   m_splash.reset();
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
@@ -282,7 +287,7 @@ RuntimeShell::run(std::chrono::steady_clock::time_point launched)
     lastTime = currentTime;
     frame(dt);
     {
-      ZoneScopedN("Frame.Pacing");
+      ILLUMO_PROFILE_ZONE("Frame.Pacing");
       profiler.mark(FramePhase::Pacing);
       const long targetFps = getTargetFps(&m_illumo.environment());
       const bool vsyncEnabled = isVsyncRequested(&m_illumo.environment());
@@ -301,6 +306,7 @@ RuntimeShell::run(std::chrono::steady_clock::time_point launched)
 void
 RuntimeShell::updateSplash(double dt)
 {
+  ILLUMO_PROFILE_ZONE("RuntimeShell.updateSplash");
   if (m_splash->finished()) {
     endSplash();
     updateProgram(dt);
@@ -387,6 +393,7 @@ RuntimeShell::updateProgram(double dt)
 void
 RuntimeShell::dispatchProgram(DrawList& scene)
 {
+  ILLUMO_PROFILE_ZONE("RuntimeShell.dispatchProgram");
   // Bench and capture never run together, so the bench may own the hook.
   if (m_options.bench.frames != 0 && !m_benchDone && ic->renderer != nullptr) {
     m_benchDispatch = std::chrono::steady_clock::now();
@@ -503,6 +510,7 @@ RuntimeShell::feedScript(std::string* error)
     queued = true;
   }
   if (queued) {
+    ILLUMO_PROFILE_ZONE("RuntimeShell.scriptCommands");
     commands.ExecuteQueue();
   }
   return true;
@@ -514,6 +522,7 @@ RuntimeShell::reportBench(const std::string& error)
   if (m_benchDone) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("RuntimeShell.reportBench");
   m_benchDone = true;
   m_exitCode = error.empty() ? 0 : 1;
   nlohmann::json result;
@@ -585,6 +594,7 @@ RuntimeShell::reportBench(const std::string& error)
 void
 RuntimeShell::captureFrame(Renderer& renderer)
 {
+  ILLUMO_PROFILE_ZONE("RuntimeShell.captureFrame");
   m_done = true;
   const std::array<int, 2> size = ic->window->getWindowDimensions();
   FrameReadback image = renderer.getBackend()->readBackbuffer(size[0], size[1]);

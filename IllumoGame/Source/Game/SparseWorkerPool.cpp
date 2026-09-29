@@ -1,4 +1,5 @@
 #include "SparseWorkerPool.h"
+#include <Illumo/Foundation/Profile.h>
 
 SparseWorkerPool::SparseWorkerPool() = default;
 
@@ -24,6 +25,7 @@ SparseWorkerPool::evaluate(const SparseCellGrid* grid,
                            std::vector<SparseCellGrid::TargetResult>* results,
                            unsigned int workerCount)
 {
+  ILLUMO_PROFILE_ZONE("SparseWorkerPool.evaluate");
   if (grid == nullptr || transitions == nullptr || targets == nullptr ||
       results == nullptr || workerCount <= 1u || targets->empty()) {
     return;
@@ -53,6 +55,7 @@ SparseWorkerPool::evaluate(const SparseCellGrid* grid,
 
   executeAvailableWork(0u);
 
+  ILLUMO_PROFILE_ZONE("SparseWorkerPool.waitForWorkers");
   std::unique_lock<std::mutex> lock(mutex);
   workComplete.wait(lock,
                     [this]() { return completedWorkers >= requiredWorkers; });
@@ -67,6 +70,7 @@ SparseWorkerPool::evaluateCandidates(
   std::vector<SparseCellGrid::TargetResult>* results,
   unsigned int workerCount)
 {
+  ILLUMO_PROFILE_ZONE("SparseWorkerPool.evaluateCandidates");
   if (grid == nullptr || transitions == nullptr || scratch == nullptr ||
       ranges == nullptr || results == nullptr || workerCount <= 1u ||
       ranges->empty()) {
@@ -97,6 +101,7 @@ SparseWorkerPool::evaluateCandidates(
 
   executeAvailableWork(0u);
 
+  ILLUMO_PROFILE_ZONE("SparseWorkerPool.waitForWorkers");
   std::unique_lock<std::mutex> lock(mutex);
   workComplete.wait(lock,
                     [this]() { return completedWorkers >= requiredWorkers; });
@@ -109,6 +114,7 @@ SparseWorkerPool::prepareCandidates(
   const std::vector<SparseCellGrid::CandidateWorkRange>* ranges,
   unsigned int workerCount)
 {
+  ILLUMO_PROFILE_ZONE("SparseWorkerPool.prepareCandidates");
   if (grid == nullptr || scratch == nullptr || workerCount <= 1u ||
       ranges == nullptr || ranges->empty()) {
     return;
@@ -138,6 +144,7 @@ SparseWorkerPool::prepareCandidates(
 
   executeAvailableWork(0u);
 
+  ILLUMO_PROFILE_ZONE("SparseWorkerPool.waitForWorkers");
   std::unique_lock<std::mutex> lock(mutex);
   workComplete.wait(lock,
                     [this]() { return completedWorkers >= requiredWorkers; });
@@ -148,6 +155,7 @@ SparseWorkerPool::run(std::size_t itemCount,
                       unsigned int workerCount,
                       const Job& job)
 {
+  ILLUMO_PROFILE_ZONE("SparseWorkerPool.run");
   if (itemCount == 0u) {
     return;
   }
@@ -183,6 +191,7 @@ SparseWorkerPool::run(std::size_t itemCount,
 
   executeAvailableWork(0u);
 
+  ILLUMO_PROFILE_ZONE("SparseWorkerPool.waitForWorkers");
   std::unique_lock<std::mutex> lock(mutex);
   workComplete.wait(lock,
                     [this]() { return completedWorkers >= requiredWorkers; });
@@ -233,6 +242,7 @@ SparseWorkerPool::executeAvailableWork(unsigned int memoShardIndex)
       }
       const SparseCellGrid::CandidateWorkRange& range =
         (*activeCandidatePreparationRanges)[index];
+      ILLUMO_PROFILE_ZONE("SparseWorkerPool.prepareRange");
       for (std::size_t scratchIndex = range.begin; scratchIndex < range.end;
            ++scratchIndex) {
         activeGrid->prepareCandidateScratchChunk(
@@ -249,6 +259,7 @@ SparseWorkerPool::executeAvailableWork(unsigned int memoShardIndex)
       }
       SparseCellGrid::CandidateWorkRange& range =
         (*activeCandidateRanges)[index];
+      ILLUMO_PROFILE_ZONE("SparseWorkerPool.evaluateRange");
       range.outputChunkCount = 0u;
       for (std::size_t scratchIndex = range.begin; scratchIndex < range.end;
            ++scratchIndex) {
@@ -276,6 +287,7 @@ SparseWorkerPool::executeAvailableWork(unsigned int memoShardIndex)
 void
 SparseWorkerPool::workerLoop(unsigned int memoShardIndex)
 {
+  ILLUMO_PROFILE_THREAD("SparseWorkerPool");
   std::size_t observedGeneration = 0u;
   for (;;) {
     {
@@ -292,6 +304,7 @@ SparseWorkerPool::workerLoop(unsigned int memoShardIndex)
     if (!claimWorkerSlot()) {
       continue;
     }
+    ILLUMO_PROFILE_ZONE("SparseWorkerPool.workerShare");
     executeAvailableWork(memoShardIndex);
 
     {

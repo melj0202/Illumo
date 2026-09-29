@@ -22,6 +22,9 @@ struct SimulationRunnerTimings
   bool usedMirrorDelta = false;
   bool usedFullCopy = false;
   bool usedDirectSourceAdvance = false;
+  // Generations the published result advanced (a lane block or a serial
+  // multi-generation start publishes several at once).
+  std::uint32_t generations = 1u;
 };
 
 // Native builds advance on one persistent worker thread. The WASM guest
@@ -47,11 +50,17 @@ public:
   SimulationRunner(const SimulationRunner&) = delete;
   SimulationRunner& operator=(const SimulationRunner&) = delete;
 
+  // Starts up to `requestedGenerations` generations published as one result;
+  // `acceptedGenerations` receives how many (the completion's
+  // timings.generations). The native runner and a first serial guest start
+  // run one.
   bool start(SparseCellGrid* workingGrid,
              const SparseCellGrid* publishedGrid,
              const RuleSet* ruleSet,
              SparseGenerationDelta&& mirrorDelta,
-             bool useMirrorDelta);
+             bool useMirrorDelta,
+             std::uint32_t requestedGenerations = 1u,
+             std::uint32_t* acceptedGenerations = nullptr);
   bool tryTakeCompleted(SparseCellGrid** completedGrid,
                         SparseGenerationDelta* delta,
                         double* elapsedMilliseconds,
@@ -64,15 +73,36 @@ public:
                             SimulationRunnerTimings* timings = nullptr);
   bool isBusy() const;
   void shutdown();
+  // Test access to the generation body the runners share.
+  static bool runGenerationsForTesting(SparseCellGrid* workingGrid,
+                                       const SparseCellGrid* publishedGrid,
+                                       const RuleSet* ruleSet,
+                                       SparseGenerationDelta&& mirrorDelta,
+                                       bool useMirrorDelta,
+                                       std::uint32_t generations,
+                                       SparseGenerationDelta* completedDelta,
+                                       SimulationRunnerTimings* timings)
+  {
+    return runGeneration(workingGrid,
+                         publishedGrid,
+                         ruleSet,
+                         std::move(mirrorDelta),
+                         useMirrorDelta,
+                         generations,
+                         completedDelta,
+                         timings);
+  }
 
 private:
-  // Mirrors or copies the published grid, advances one generation and
-  // captures its delta. Returns true only when both advance and capture held.
+  // Mirrors or copies the published grid, advances `generations` generations
+  // and captures their net change as one delta against the published grid.
+  // Returns true only when every advance and the capture held.
   static bool runGeneration(SparseCellGrid* workingGrid,
                             const SparseCellGrid* publishedGrid,
                             const RuleSet* ruleSet,
                             SparseGenerationDelta&& mirrorDelta,
                             bool useMirrorDelta,
+                            std::uint32_t generations,
                             SparseGenerationDelta* completedDelta,
                             SimulationRunnerTimings* timings);
 
@@ -85,10 +115,13 @@ private:
 #else
   std::unique_ptr<SimulationLaneCoordinator> lanes;
   bool laneRequestPending = false;
-  // Lanes pay a round trip and a merge per generation, so they are used
-  // only while a serial generation would cost more than that.
+  // Lanes pay a round trip and a merge per block, so they are used only while
+  // serial generations would deliver less (docs/simulation-lanes-v2-design.md).
   bool preferLanes = false;
+  // Per-generation cost of serial starts, which run inside the frame.
   RollingMetric serialCost;
+  // Generations each start was asked for: the demand per frame.
+  RollingMetric requestedMetric;
   // Diagnostics only: each lane state change is logged once, never per frame.
   void reportLaneFailure();
   bool laneFailureReported = false;

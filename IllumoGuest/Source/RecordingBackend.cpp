@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <IllumoGuest/RecordingBackend.h>
@@ -174,6 +175,7 @@ GuestRecordingBackend::Shutdown()
 void
 GuestRecordingBackend::BeginFrame()
 {
+  ILLUMO_PROFILE_ZONE("RecordingBackend.beginFrame");
   recycleFrame();
   m_writtenTextures.clear();
   m_surface = -1;
@@ -246,6 +248,8 @@ GuestRecordingBackend::getFPS() const
 void
 GuestRecordingBackend::SubmitCommandQueue()
 {
+  ILLUMO_PROFILE_ZONE("RecordingBackend.submitCommands");
+  ILLUMO_PROFILE_PLOT("Guest commands submitted", m_commands.GetCommandCount());
   const GuestLayer current = m_layer;
   try {
     if (m_commandLayers.size() != m_commands.GetCommandCount()) {
@@ -327,12 +331,8 @@ GuestRecordingBackend::AppendVisual(GameVisual& visual)
        m_frame.compositions[slot].height != size[1])) {
     return false;
   }
-  const std::uint32_t id =
-    m_visuals.sync(visual,
-                   *m_renderer,
-                   m_layer,
-                   m_frame.visualOperations,
-                   m_textureEpoch);
+  const std::uint32_t id = m_visuals.sync(
+    visual, *m_renderer, m_layer, m_frame.visualOperations, m_textureEpoch);
   if (id == 0) {
     return false;
   }
@@ -425,6 +425,7 @@ sameComposition(const GuestComposition& left, const GuestComposition& right)
 void
 GuestRecordingBackend::finishCompositions()
 {
+  ILLUMO_PROFILE_ZONE("RecordingBackend.finishCompositions");
   m_takenCompositions.resize(m_frame.compositions.size());
   for (std::size_t index = 0; index < m_frame.compositions.size(); ++index) {
     GuestComposition& composition = m_frame.compositions[index];
@@ -463,6 +464,7 @@ GuestRecordingBackend::finishCompositions()
 void
 GuestRecordingBackend::commitVisuals()
 {
+  ILLUMO_PROFILE_ZONE("RecordingBackend.commitVisuals");
   m_visuals.commit();
   std::swap(m_deliveredCompositions, m_takenCompositions);
 }
@@ -470,6 +472,7 @@ GuestRecordingBackend::commitVisuals()
 void
 GuestRecordingBackend::dropVisuals()
 {
+  ILLUMO_PROFILE_ZONE("RecordingBackend.dropVisuals");
   m_visuals.drop();
   // The host replaces its compositions with the dropped frame's (none), so
   // none of them can be referred to as `same` any more.
@@ -494,6 +497,7 @@ GuestRecordingBackend::takeFrame()
 void
 GuestRecordingBackend::takeFrame(GuestFrame& output)
 {
+  ILLUMO_PROFILE_ZONE("RecordingBackend.takeFrame");
   if (m_commands.GetTotalRejected() != m_frameRejections) {
     throw std::runtime_error(
       "the frame recorded more render commands than the guest ceiling");
@@ -507,6 +511,12 @@ GuestRecordingBackend::takeFrame(GuestFrame& output)
   // Only a frame that will be delivered consumes the dirty ranges.
   emitMeshWrites();
   finishCompositions();
+  // A few writes per frame at most; unused when profiling is off.
+  [[maybe_unused]] std::size_t textureWriteBytes = 0;
+  for (const GuestTextureWrite& write : m_frame.textureWrites) {
+    textureWriteBytes += write.pixels.size();
+  }
+  ILLUMO_PROFILE_PLOT("Guest texture write bytes", textureWriteBytes);
   std::swap(output, m_frame);
   // As before, a take leaves a default frame: nothing recorded remains.
   recycleFrame();
@@ -563,6 +573,7 @@ GuestRecordingBackend::markDirty(std::size_t& begin,
 void
 GuestRecordingBackend::emitMeshWrites()
 {
+  ILLUMO_PROFILE_ZONE("RecordingBackend.emitMeshWrites");
   const GuestFrameLimits limits;
   std::size_t writes = 0;
   std::size_t bytes = 0;
@@ -622,10 +633,13 @@ GuestRecordingBackend::emitMeshWrites()
     mesh.indexDirtyBegin = mesh.indexDirtyEnd = 0;
   }
   m_lastMeshWriteBytes = bytes;
+  ILLUMO_PROFILE_PLOT("Guest mesh write bytes", bytes);
 }
 void
 GuestRecordingBackend::demoteDynamic(Mesh& mesh)
 {
+  // Rare, and rescans every batch recorded so far.
+  ILLUMO_PROFILE_ZONE("RecordingBackend.demoteDynamic");
   std::vector<std::vector<GuestBatch>*> lists{ &m_frame.batches };
   for (GuestSurfaceFrame& surface : m_frame.surfaces) {
     lists.push_back(&surface.batches);
@@ -865,6 +879,7 @@ GuestRecordingBackend::CreateCubemap(
       width > 2048 || (channels != 3 && channels != 4)) {
     return {};
   }
+  ILLUMO_PROFILE_ZONE("RecordingBackend.createCubemap");
   GuestCubemapRequest request;
   request.size = static_cast<std::uint32_t>(width);
   const std::uint64_t bytes = GuestCubemapRequest::bytesFor(request.size);
@@ -923,6 +938,7 @@ GuestRecordingBackend::ReplaceTexture(TextureHandle handle,
   if (bytes > GuestServices::MaximumBytes - 64) {
     return false;
   }
+  ILLUMO_PROFILE_ZONE("RecordingBackend.replaceTexture");
   Texture& texture = m_textures.at(handle.slot);
   if (texture.pending != 0) {
     // A newer replacement supersedes an unfinished one; the superseded
@@ -1028,6 +1044,7 @@ GuestRecordingBackend::importTexture(GuestResourceId id)
 void
 GuestRecordingBackend::pump()
 {
+  ILLUMO_PROFILE_ZONE("RecordingBackend.pump");
   GuestServiceRecord result;
   for (std::vector<std::uint64_t>::iterator it = m_releases.begin();
        it != m_releases.end();) {
@@ -1108,6 +1125,7 @@ GuestRecordingBackend::pump()
 void
 GuestRecordingBackend::pumpMeshes()
 {
+  ILLUMO_PROFILE_ZONE("RecordingBackend.pumpMeshes");
   GuestServiceRecord result;
   for (std::vector<std::uint64_t>::iterator it = m_drained.begin();
        it != m_drained.end();) {

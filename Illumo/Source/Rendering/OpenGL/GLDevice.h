@@ -65,10 +65,23 @@ struct GLResourceTables
   const std::unordered_map<uint32_t, GLBufferResourceEntry>* buffers = nullptr;
 };
 
+// Work one frame's submissions did, for profiling plots. GLBackend resets it
+// in BeginFrame and plots it in EndFrame.
+struct GLFrameStats
+{
+  size_t submits = 0;
+  size_t commands = 0;
+  size_t recordedLists = 0;
+  size_t recordedCommands = 0;
+  size_t drawCalls = 0;
+  size_t uploadBytes = 0;
+};
+
 class GLDevice
 {
 private:
   PipelineState _currentGLState;
+  GLFrameStats m_frameStats;
   GLShaderProgram* _activeProgram = nullptr;
   std::string m_frameError;
   void reportFrameError(const char* message);
@@ -241,6 +254,8 @@ public:
   }
   void resetFrameError() { m_frameError.clear(); }
   const std::string& frameError() const { return m_frameError; }
+  void resetFrameStats() { m_frameStats = GLFrameStats{}; }
+  const GLFrameStats& frameStats() const { return m_frameStats; }
   void ApplyPipelineState(const PipelineState& pipelineState);
   void ExecuteCommandQueue(CommandQueue& commandQueue,
                            const GLResourceTables& tables);

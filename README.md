@@ -423,13 +423,14 @@ canvas). Set it back to `0` to
 restore the orthographic CA view. Its lit meshes cast into the runtime's
 shared shadow pass through frame schema version 2.
 
-Simulation publishes at most one generation per frame. Once a generation
-costs more than 1 ms, it runs on up to eight isolated simulation lanes
-(`CSimWorkerGuest.wasm` stores, each owning bands of chunk rows, or chunk
-columns for elementary 1D rules) while frames keep rendering; smaller worlds
-run in the game store.
-Editing, loading or saving while running discards at most the one generation
-in flight. `status` shows where generations execute. Overdue whole steps are
+Simulation publishes each frame's due generations as one update, so the
+rate can exceed the frame rate. The game store runs as many as fit 4 ms of
+the frame; when that cannot keep up, blocks of up to 32 generations run on
+up to eight isolated simulation lanes (`CSimWorkerGuest.wasm` stores, each
+owning a balanced run of chunk rows, or chunk columns for elementary 1D
+rules, which run one generation per block) while frames keep rendering.
+Editing, loading or saving while running discards at most the block in
+flight. `status` shows where generations execute. Overdue whole steps are
 dropped. The visible viewport is a padded, integer-LOD
 cache with tiled uploads. Timing, fade, and upload details:
 [docs/packages/game.md](docs/packages/game.md).
@@ -825,7 +826,9 @@ also available). Built-in `debug` and `release` profiles select their
 configuration and separate `build-workspace-debug` /
 `build-workspace-release` directories; `dev` is RelWithDebInfo in
 `build-workspace-dev` (play and profile), and `debug-noasan` is Debug without
-AddressSanitizer in `build-workspace-debug-noasan`. A saved profile with a
+AddressSanitizer in `build-workspace-debug-noasan`; `tracy` is Release with
+Tracy zones in the host and every guest in `build-workspace-tracy`
+([docs/tracy-profiling.md](docs/tracy-profiling.md)). A saved profile with a
 built-in's name replaces it. Commands without a profile retain their
 existing defaults.
 
@@ -1046,13 +1049,18 @@ simulation-worker time are excluded. See
 [docs/frame-profiler.md](docs/frame-profiler.md). Use Tracy for deeper
 analysis.
 
-Keep the normal Release optimization level while enabling application Tracy
-instrumentation:
+The `tracy` build profile is Release with Tracy zones in the host and in
+every WASM guest, including IllumoGame's simulation lanes; connect the Tracy
+0.14.1 GUI to the running `IllumoRuntime`:
 
 ```bash
-cmake -S . -B build-profile -DILLUMO_ENABLE_TRACY=ON -DILLUMO_BUILD_DOCUMENTATION=OFF
-cmake --build build-profile --config Release
+python build.py play --profile tracy --app game
 ```
+
+Or configure any tree with `-DILLUMO_ENABLE_TRACY=ON`. Markers use
+`<Illumo/Foundation/Profile.h>` (`ILLUMO_PROFILE_ZONE` and friends), which
+reaches Tracy from guests through the host's `illumo_profile` imports. See
+[docs/tracy-profiling.md](docs/tracy-profiling.md).
 
 Visual Studio: open the generated solution from the build directory, or
 generate with the VS generator.

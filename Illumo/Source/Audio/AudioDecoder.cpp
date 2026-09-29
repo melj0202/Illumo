@@ -1,4 +1,5 @@
 #include <Illumo/Audio/AudioClip.h>
+#include <Illumo/Foundation/Profile.h>
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -156,6 +157,7 @@ AudioDecoder::decode(std::span<const std::byte> encoded,
                      AudioClip& clip,
                      std::string& error)
 {
+  ILLUMO_PROFILE_ZONE("AudioDecoder.decode");
   error.clear();
   if (encoded.empty() || encoded.size() > kMaximumEncodedBytes) {
     error = "The sound file is empty or larger than 64 MiB";

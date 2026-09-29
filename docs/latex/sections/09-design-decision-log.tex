@@ -3366,6 +3366,78 @@ follow it. Tracks longer than the clip bound would need real streaming.\\
 \textbf{Extends:} D-E28
 \end{decisionbox}
 
+\subsection*{D-E33 --- Guest profiling imports}
+\begin{decisionbox}[title={D-E33 \quad 2026-09-28}]
+\textbf{Decision:} Guests report profiling markers to the host's Tracy
+client through five imports in the \texttt{illumo\_profile} module.
+\texttt{register} takes a site's kind (zone, plot or frame mark), name,
+function, file and line; the host copies the text, interns it for the rest of
+the process and returns an index, or $-1$. \texttt{zone\_begin},
+\texttt{zone\_end}, \texttt{plot} and \texttt{frame\_mark} then pass only that
+index. Every \texttt{WasmInstance} defines the imports; a host built without
+\texttt{TRACY\_ENABLE} answers every registration with $-1$. An instance
+registers at most 4096 sites and the process interns at most 16\,384 sites and
+4~MiB of text; zones nest at most 256 deep, deeper begins being counted so
+their ends still pair; unknown ids and unmatched ends are ignored, and zones a
+call leaves open are closed when it returns. \pathref{Illumo/Include/Illumo/Foundation/Profile.h}
+is the one marker API (\texttt{ILLUMO\_PROFILE\_ZONE}, \texttt{PLOT},
+\texttt{FRAME\_MARK}, \texttt{THREAD}) for host, engine, guest and product
+code: natively Tracy's macros, in a guest built with
+\texttt{ILLUMO\_GUEST\_PROFILE} the imports, otherwise nothing.
+\texttt{ILLUMO\_ENABLE\_TRACY} builds the guests that way, and
+\texttt{build.py}'s \texttt{tracy} profile selects it. The vendored client
+moves from Tracy 0.13.1 to an unmodified upstream 0.14.1 (BSD-3-Clause), the
+version of the owner's profiler tools.\\
+\textbf{Why:} The owner asked to audit IllumoGame's performance in Tracy.
+Every application now runs as a guest, where a Tracy client cannot run, so
+the game's zones compiled to nothing and a capture showed the whole guest as
+one host zone. Registering sites once keeps each zone to two cheap host calls,
+and emitting on the calling thread gives each simulation lane its own row.\\
+\textbf{Consequences:} Profiling guests import \texttt{illumo\_profile} and
+load only on hosts that define it (every host from this change on). Tracy
+retains interned sites for the process lifetime, which the process bounds
+limit. Guest zones include the cost of their import calls. Guests are always
+compiled Release, so a Debug host profiles only host code unless it is also
+configured with \texttt{ILLUMO\_ENABLE\_TRACY}. Tracy refuses connections
+across versions, so the profiler GUI and capture tools must be 0.14.1.\\
+\textbf{Extends:} D-E15, D-E17
+\end{decisionbox}
+
+\subsection*{D-E34 --- Simulation lanes v2}
+\begin{decisionbox}[title={D-E34 \quad 2026-09-28}]
+\textbf{Decision:} Four changes to how IllumoGame's generations leave the
+frame (\pathref{docs/simulation-lanes-v2-design.md}). The host delivers a
+finished job or lane reply to the first update after it completes
+(\texttt{WasmGameServices::harvest} before the services exchange) instead of
+a frame later. A lane owns one contiguous run of chunk lines, cut so lanes
+hold equal stored-chunk counts and recut at resynchronization or after
+persistent imbalance, with a halo two lines deep; it advances a block of up
+to $16H/r$ generations (32 for Life-like rules, one for elementary rows) and
+replies with every owned chunk the block changed (CSL1 version~3). A start
+may publish several generations as one delta
+(\texttt{SimulationRunnerTimings::generations}); the canvas asks for every
+whole step due, serial starts run as many generations as fit 4~ms of the
+frame, and the guest runner prefers lanes exactly when serial generations
+cannot deliver the requested generations per frame within that budget,
+returning once summed lane work would fit half of it.\\
+\textbf{Why:} Tracy captures (D-E33) showed lanes capped at 30 generations per
+second at vsync 60: every generation needed a two-frame round trip, fixed
+eight-row bands left six of eight lanes idle on typical worlds, and the
+per-generation thresholds kept lanes where serial was faster. Blocks
+amortize the round trip and the control-store merge over many generations;
+the same 619-chunk world now runs at about 980 generations per second with
+one-frame blocks.\\
+\textbf{Consequences:} Above the frame rate the canvas shows every block's
+last generation; the intermediate ones are computed exactly but not drawn,
+where before they were dropped. A drain retires a whole unpublished block.
+Deltas may span several revisions ($\texttt{toRevision} -
+\texttt{fromRevision} > 1$). CSL1 version~2 is refused; lanes and the
+control store ship in one package. The native runner still runs one
+generation per start.\\
+\textbf{Supersedes:} the partition and thresholds of D-E17 and D-E29\\
+\textbf{Extends:} D-E33
+\end{decisionbox}
+
 \subsection*{D-F2 --- Calendar build versions}
 \begin{decisionbox}[title={D-F2 \quad 2026-09-25}]
 \textbf{Decision:} A build's version is \texttt{vYY.MM\_B}, for example

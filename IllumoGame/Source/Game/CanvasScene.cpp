@@ -1,18 +1,19 @@
 #include "CanvasScene.h"
-#include "CSimScenes.h"
 #include "BuiltinPatterns.h"
 #include "CSimPlatform.h"
+#include "CSimScenes.h"
 #include "CSimSounds.h"
 #include "CanvasChromeStyle.h"
 #include "CanvasCoordinatePolicy.h"
 #include "IllumoCodec.h"
-#include "TitleScene.h"
 #include "PatternCodec.h"
 #include "RuleCatalogOverlay.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include "SimulatorSettings.h"
+#include "TitleScene.h"
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Content/SceneDirector.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -319,6 +320,7 @@ CanvasScene::~CanvasScene() {}
 bool
 CanvasScene::start(IllumoContext& startContext)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.start");
   IllumoContext* context = &startContext;
   if (!cellGameContextComplete(context)) {
     Logger::LogError(
@@ -617,6 +619,7 @@ CanvasScene::syncEditMusic()
 void
 CanvasScene::updateModeBadge(double dt)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.updateModeBadge");
   const bool reducedMotion = ic != nullptr && ic->envVars != nullptr &&
                              ic->envVars->getVar("reducedUiMotion").valueAsBool;
   modeBadge.tick(static_cast<float>(dt), reducedMotion);
@@ -625,6 +628,7 @@ CanvasScene::updateModeBadge(double dt)
 void
 CanvasScene::seedInitialPattern()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.seedInitialPattern");
   SparseCellGrid* grid = cellContext->getGrid();
   const RuleSet* rules = cellContext->getRuleSet();
   const RuleSetDefinition* definition =
@@ -876,7 +880,7 @@ CanvasScene::updatePaintBrushFromInput()
 void
 CanvasScene::updateVisualTargets()
 {
-  ZoneScopedN("Visual.updateTargets");
+  ILLUMO_PROFILE_ZONE("CanvasScene.updateVisualTargets");
   // life → palette target colors (sparse); tickVisual eases displayRgb toward
   // them.
   cellContext->getCanvasView()->rebuildTargetsFromGrid();
@@ -885,6 +889,7 @@ CanvasScene::updateVisualTargets()
 bool
 CanvasScene::consumeCompletedSimulation(bool waitForCompletion)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.consumeCompletedSimulation");
   SparseCellGrid* completedGrid = nullptr;
   SparseGenerationDelta completedDelta;
   double elapsedMilliseconds = 0.0;
@@ -917,14 +922,19 @@ CanvasScene::consumeCompletedSimulation(bool waitForCompletion)
     showModeSplash("EDIT");
     return true;
   }
-  cellContext->publishSpareGrid(completedDelta);
+  {
+    ILLUMO_PROFILE_ZONE("CanvasScene.publishGeneration");
+    cellContext->publishSpareGrid(completedDelta);
+  }
   mirrorDelta = std::move(completedDelta);
   mirrorDeltaValid = true;
   lastSimulationRunnerTimings = timings;
   lastSimulationStepMilliseconds = elapsedMilliseconds;
   lastSimulationFrameMilliseconds = elapsedMilliseconds;
-  lastSimulationSteps += 1;
-  simulationGeneration += 1;
+  // A lane block or a multi-generation serial start publishes several.
+  const std::uint32_t generations = std::max(1u, timings.generations);
+  lastSimulationSteps += static_cast<int>(generations);
+  simulationGeneration += generations;
   simulationStepMetric.add(elapsedMilliseconds);
   simulationMirrorMetric.add(timings.mirrorMilliseconds);
   simulationAdvanceMetric.add(timings.advanceMilliseconds);
@@ -935,6 +945,7 @@ CanvasScene::consumeCompletedSimulation(bool waitForCompletion)
 void
 CanvasScene::drainSimulation()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.drainSimulation");
   if (cellContext == nullptr) {
     return;
   }
@@ -984,6 +995,7 @@ CanvasScene::currentConfiguration() const
 bool
 CanvasScene::applyConfiguration(const SimulatorConfiguration& configuration)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.applyConfiguration");
   if (cellContext == nullptr || ic == nullptr || ic->envVars == nullptr ||
       !SimulatorSettings::valid(configuration)) {
     return false;
@@ -1655,6 +1667,7 @@ CanvasScene::unregisterConsoleCommands()
 void
 CanvasScene::setRunning(bool running)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.setRunning");
   prepareGridMutation();
   currentState = running ? CellState::NORMAL : CellState::EDIT;
   paintStrokeActive = false;
@@ -1678,6 +1691,7 @@ CanvasScene::setRunning(bool running)
 int
 CanvasScene::stepSimulation(int generations)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.stepSimulation");
   prepareGridMutation();
   currentState = CellState::EDIT;
   simAccum = 0.0;
@@ -1704,6 +1718,7 @@ CanvasScene::stepSimulation(int generations)
 void
 CanvasScene::printStatus() const
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.printStatus");
   const CanvasView* canvas = cellContext->getCanvasView();
   const SparseAdvanceStats& simulationStats =
     cellContext->getGrid()->getLastAdvanceStats();
@@ -1904,7 +1919,7 @@ consumeKeyPress(InputManager* inputManager, KeyCode key)
 void
 CanvasScene::update(double dt)
 {
-  ZoneNamed(CanvasSceneUpdateZone, "CanvasScene Update");
+  ILLUMO_PROFILE_ZONE("CanvasScene.update");
 
   // Host erases modules that fail Start; still guard for incomplete fixtures.
   if (cellContext == nullptr || ic == nullptr) {
@@ -1975,6 +1990,7 @@ CanvasScene::update(double dt)
   }
 
   if (exitConfirmOpen) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.updateExitConfirm");
     exitConfirmDialog->tick(static_cast<float>(dt));
     const ExitConfirmAction action =
       consoleOpen ? ExitConfirmAction::None
@@ -2013,6 +2029,7 @@ CanvasScene::update(double dt)
   }
 
   if (configurationMenu != nullptr && configurationMenu->isOpen()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.updateConfigurationMenu");
     configurationMenu->tick(static_cast<float>(dt));
     const ConfigurationMenuAction action =
       consoleOpen ? ConfigurationMenuAction::None
@@ -2067,6 +2084,7 @@ CanvasScene::update(double dt)
       (configurationMenu == nullptr || !configurationMenu->isOpen()) &&
       rulesetWorkshopMenu != nullptr && !rulesetWorkshopMenu->isOpen() &&
       consumeKeyPress(ic->inputManager, KeyCode::F2)) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.openRulesetWorkshop");
     const RuleSetDefinition* definition =
       RuleSetRegistry::instance().getRuleSetDefinition(
         cellContext->getModeString());
@@ -2086,6 +2104,7 @@ CanvasScene::update(double dt)
   }
 
   if (rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.updateRulesetWorkshop");
     rulesetWorkshopMenu->tick(static_cast<float>(dt));
     const RulesetWorkshopAction action =
       consoleOpen ? RulesetWorkshopAction::None
@@ -2117,6 +2136,7 @@ CanvasScene::update(double dt)
           }
         });
     } else if (action == RulesetWorkshopAction::Apply) {
+      ILLUMO_PROFILE_ZONE("CanvasScene.applyWorkshopRuleset");
       // The published grid can advance while the workshop is open. Drain
       // first so validation sees the latest generation and the runner no
       // longer borrows the active RuleSet when it is replaced below.
@@ -2175,6 +2195,7 @@ CanvasScene::update(double dt)
             { *compiled },
             [this, alive, staged, draft](bool saved,
                                          const std::string& error) mutable {
+              ILLUMO_PROFILE_ZONE("CanvasScene.activateWorkshopRuleset");
               if (alive.expired() || rulesetWorkshopMenu == nullptr) {
                 return;
               }
@@ -2258,6 +2279,7 @@ CanvasScene::update(double dt)
   {
     std::string wanted = ic->envVars->getVar("ModeString").value;
     if (!wanted.empty() && wanted != cellContext->getModeString()) {
+      ILLUMO_PROFILE_ZONE("CanvasScene.applyModeString");
       prepareGridMutation();
       if (cellContext->setRuleSet(wanted)) {
         std::string msg = "Active ruleset: " + cellContext->getModeString();
@@ -2304,6 +2326,7 @@ CanvasScene::update(double dt)
   // An open context menu holds the camera still (its arrows walk the rows).
   if (!ic->commandLine->isOpen && !m_paintPaletteHovered &&
       !m_paintPaletteCapturing && !m_contextMenu.isOpen()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.cameraInput");
     CameraPan();
 
     // Zoom behavior using scroll offset
@@ -2376,6 +2399,7 @@ CanvasScene::update(double dt)
 void
 CanvasScene::stop()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.stop");
   // Late platform completions must not touch a module that has exited.
   if (m_lifetime) {
     try {
@@ -2432,6 +2456,7 @@ CanvasScene::stop()
 void
 CanvasScene::Normal(double dt)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.Normal");
   syncSimRateFromEnv();
   if (dt < 0.0) {
     dt = 0.0;
@@ -2444,24 +2469,37 @@ CanvasScene::Normal(double dt)
   simulationBudgetLimited = false;
   if ((simulationRetryPending || simAccum >= simStepSeconds) &&
       !simulationRunner.isBusy()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.submitGeneration");
     SparseGenerationDelta transferDelta;
     const bool useMirrorDelta = mirrorDeltaValid;
     if (useMirrorDelta) {
       transferDelta = std::move(mirrorDelta);
     }
     mirrorDeltaValid = false;
+    // Every whole step due goes to one start; the runner accepts what it can
+    // publish at once (lane blocks, budgeted serial generations) and the
+    // rest is dropped below as debt. A block already running ahead may accept
+    // more than is due, leaving the accumulator behind until it catches up.
+    const double due = std::floor(simAccum / simStepSeconds);
+    const std::uint32_t requested =
+      simulationRetryPending || !(due >= 1.0)
+        ? 1u
+        : static_cast<std::uint32_t>(std::min(due, 4096.0));
+    std::uint32_t accepted = 1u;
     if (simulationRunner.start(cellContext->getSpareGrid(),
                                cellContext->getGrid(),
                                cellContext->getRuleSet(),
                                std::move(transferDelta),
-                               useMirrorDelta)) {
+                               useMirrorDelta,
+                               requested,
+                               &accepted)) {
       if (!simulationRetryPending) {
-        simAccum -= simStepSeconds;
+        simAccum -= simStepSeconds * static_cast<double>(accepted);
       }
       simulationRetryPending = false;
     }
   } else if (simAccum >= simStepSeconds) {
-    FrameMarkNamed("Sim.inFlightDeferred");
+    ILLUMO_PROFILE_FRAME_MARK("Sim.inFlightDeferred");
     simulationBudgetLimited = true;
   }
 
@@ -2479,7 +2517,7 @@ CanvasScene::Normal(double dt)
 
   simulationDebtDropped = false;
   if (simAccum >= simStepSeconds) {
-    FrameMarkNamed("Sim.debtDropped");
+    ILLUMO_PROFILE_FRAME_MARK("Sim.debtDropped");
     simAccum = std::fmod(simAccum, simStepSeconds);
     simulationDebtDropped = true;
     // A sustained shortfall, not a single hitch, is worth one warning.
@@ -2509,6 +2547,7 @@ CanvasScene::normalizeSelection(std::int64_t* x0,
 bool
 CanvasScene::captureSelection(CellPattern* pattern, std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.captureSelection");
   if (cellContext == nullptr || cellContext->getGrid() == nullptr) {
     if (error != nullptr) {
       *error = "Grid unavailable";
@@ -2524,6 +2563,7 @@ CanvasScene::pastePatternAt(const CellPattern& pattern,
                                std::int64_t originY,
                                std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.pastePatternAt");
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
     if (error != nullptr) {
@@ -2547,6 +2587,7 @@ CanvasScene::pastePatternAt(const CellPattern& pattern,
 bool
 CanvasScene::fillSelection(unsigned char state)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.fillSelection");
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
     return false;
@@ -2563,6 +2604,7 @@ CanvasScene::fillSelection(unsigned char state)
 bool
 CanvasScene::copySelection()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.copySelection");
   if (cellContext == nullptr || cellContext->getGrid() == nullptr) {
     return false;
   }
@@ -2577,6 +2619,7 @@ CanvasScene::copySelection()
 bool
 CanvasScene::cutSelection()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.cutSelection");
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
     return false;
@@ -2615,6 +2658,7 @@ CanvasScene::pasteAt(std::int64_t originX, std::int64_t originY)
   CSimPlatform::current().readClipboard(
     [this, alive, outcome, originX, originY](bool available,
                                              const std::string& text) {
+      ILLUMO_PROFILE_ZONE("CanvasScene.pasteClipboardText");
       *outcome = 0;
       if (alive.expired() || cellContext == nullptr ||
           cellContext->getGrid() == nullptr ||
@@ -2647,6 +2691,7 @@ CanvasScene::pasteAt(std::int64_t originX, std::int64_t originY)
 bool
 CanvasScene::stampNamed(const std::string& name)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.stampNamed");
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
     return false;
@@ -2670,6 +2715,7 @@ CanvasScene::stampNamed(const std::string& name)
 bool
 CanvasScene::importPatternText(const std::string& text, PatternFormat format)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.importPatternText");
   if (cellContext == nullptr || cellContext->getGrid() == nullptr ||
       cellContext->getCanvasView() == nullptr) {
     return false;
@@ -2696,6 +2742,7 @@ CanvasScene::importPatternText(const std::string& text, PatternFormat format)
 void
 CanvasScene::handleEditorHotkeys()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.handleEditorHotkeys");
   if (ic == nullptr || ic->inputManager == nullptr || ic->commandLine->isOpen) {
     return;
   }
@@ -2816,6 +2863,7 @@ CanvasScene::openContextMenu(std::int64_t cellX, std::int64_t cellY)
 void
 CanvasScene::updateEditTools(double dt)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.updateEditTools");
   if (ic == nullptr || ic->inputManager == nullptr || cellContext == nullptr) {
     return;
   }
@@ -2906,6 +2954,7 @@ CanvasScene::updateEditTools(double dt)
 void
 CanvasScene::runEditAction(CanvasEditAction action, bool fromContextMenu)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.runEditAction");
   switch (action) {
     case CanvasEditAction::Copy:
       if (copySelection()) {
@@ -2983,6 +3032,7 @@ CanvasScene::runEditAction(CanvasEditAction action, bool fromContextMenu)
 void
 CanvasScene::updateEditHintsVisual(double dt)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.updateEditHintsVisual");
   const bool overlaysOpen =
     (ic->commandLine != nullptr && ic->commandLine->isOpen) ||
     (rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen()) ||
@@ -3099,6 +3149,7 @@ CanvasScene::buildEditHints(float width,
                                int windowHeight,
                                const std::shared_ptr<Font>& font)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.buildEditHints");
   editHintsVisual.clearPrimitives();
   std::vector<std::string> hints = {
     "Left drag: paint", "Right drag: erase", "Shift+Left drag: select",
@@ -3315,6 +3366,7 @@ CanvasScene::isPointerOverEditHints() const
 void
 CanvasScene::updateSelectionVisual()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.updateSelectionVisual");
   selectionVisual.clearPrimitives();
   if (currentState != CellState::EDIT || !clipboard.hasSelection() ||
       ic == nullptr || ic->camera == nullptr || ic->commandLine->isOpen ||
@@ -3344,6 +3396,7 @@ CanvasScene::updateSelectionVisual()
 void
 CanvasScene::updateInspectorVisual()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.updateInspectorVisual");
   inspectorVisual.clearPrimitives();
   const bool consoleOpen =
     ic != nullptr && ic->commandLine != nullptr && ic->commandLine->isOpen;
@@ -3497,6 +3550,7 @@ CanvasScene::updateInspectorVisual()
 void
 CanvasScene::Edit(double dt)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.Edit");
   (void)dt;
   if (isPointerOverEditHints()) {
     hoverValid = false;
@@ -3556,6 +3610,7 @@ CanvasScene::Edit(double dt)
     } else {
       clipboard.stopSelectionDrag();
       if ((isLeftPressed || isRightPressed) && pointerInWorld) {
+        ILLUMO_PROFILE_ZONE("CanvasScene.paintStroke");
         clipboard.clearSelection();
         mirrorDeltaValid = false;
         const unsigned char colorVal =
@@ -3690,6 +3745,7 @@ paletteMorphBounds(float centerX,
 void
 CanvasScene::updatePaintPalette(double dt)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.updatePaintPalette");
   // Hidden frames keep each layer's primitives and key for when it returns.
   m_paintBubbleHaloVisual.setVisible(false);
   m_paintPaletteVisual.setVisible(false);
@@ -4049,6 +4105,7 @@ CanvasScene::updatePaintPalette(double dt)
                                      bubbleHover,
                                      bubbleBreathe });
   if (m_paintBubbleHaloKey.changed()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildPaintBubbleHalo");
     m_paintBubbleHaloVisual.clearPrimitives();
     if (haloStrength > 0.01f) {
       const ColorRgba halo = CanvasChromeStyle::halo(bubbleHover);
@@ -4097,6 +4154,7 @@ CanvasScene::updatePaintPalette(double dt)
     m_paintPaletteKey.add(m_paintCardHover[card].value());
   }
   if (m_paintPaletteKey.changed()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildPaintPalette");
     m_paintPaletteVisual.clearPrimitives();
     // One opaque glass blob: a rim, then a face sampled from one vertical
     // gradient by absolute y so every size of the morph shades the same way.
@@ -4488,6 +4546,7 @@ CanvasScene::updatePaintPalette(double dt)
                                dropSquash,
                                breathe });
   if (m_paintDropKey.changed()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildPaintDrop");
     m_paintDropVisual.clearPrimitives();
     if (dropShown) {
       const unsigned char dropOpacity =
@@ -4539,6 +4598,7 @@ CanvasScene::updatePaintPalette(double dt)
         packedColor(swatches[card]) });
   }
   if (m_paintPaletteTopKey.changed()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildPaintPaletteTop");
     m_paintPaletteTopVisual.clearPrimitives();
     for (unsigned int card = 0u;
          contentReveal > 0.01f && card < visibleStateCount;
@@ -4688,6 +4748,7 @@ CanvasScene::updatePaintPalette(double dt)
 void
 CanvasScene::toggleSettingsMenu()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.toggleSettingsMenu");
   if (configurationMenu == nullptr) {
     return;
   }
@@ -4731,6 +4792,7 @@ CanvasScene::isHamburgerHovered() const
 void
 CanvasScene::updateHamburgerVisual(double dt)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.updateHamburgerVisual");
   const auto hide = [this]() {
     m_hamburgerHaloVisual.setVisible(false);
     hamburgerVisual.setVisible(false);
@@ -4853,6 +4915,7 @@ CanvasScene::updateHamburgerVisual(double dt)
     { tileShown ? 1.0f : 0.0f, tileX, tileY, tileWidth, tileHeight, radius });
   m_hamburgerHaloKey.add({ isPressed ? 1.0f : 0.0f, hover, breathe, pop });
   if (m_hamburgerHaloKey.changed()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildHamburgerHalo");
     m_hamburgerHaloVisual.clearPrimitives();
     if (tileShown) {
       GuiKit::drawSoftShadow(m_hamburgerHaloVisual,
@@ -4923,6 +4986,7 @@ CanvasScene::updateHamburgerVisual(double dt)
   hamburgerVisual.clearPrimitives();
 
   if (tileShown) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildHamburgerTile");
     // A rim lit cyan at the top and violet at the bottom, and a
     // teal-to-indigo face that brightens toward the accents on hover.
     GuiKit::drawRoundedGradientRect(
@@ -4985,6 +5049,7 @@ CanvasScene::updateHamburgerVisual(double dt)
   }
 
   if (tipDrawn) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildHamburgerTip");
     // A glass hint springs out of the button: it grows from its end nearest
     // the button, sails past its spot and bounces back, stretching along its
     // travel and bulging as it recoils. It shows the action, then its key as
@@ -5057,6 +5122,7 @@ CanvasScene::updateHamburgerVisual(double dt)
 void
 CanvasScene::updateEditorCursor(double dt)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.updateEditorCursor");
   // Advance the glide first: a cursor hidden last frame snaps to wherever it
   // is placed below instead of gliding in from its old cell.
   editorCursor.tick(static_cast<float>(dt),
@@ -5130,6 +5196,7 @@ CanvasScene::LoadCellGame(std::string filename)
 bool
 CanvasScene::saveCellGameTo(std::string location, bool announce)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.saveCellGameTo");
   if (location.empty()) {
     if (ic != nullptr && ic->commandLine != nullptr) {
       ic->commandLine->logError("Save path is empty");
@@ -5233,6 +5300,7 @@ CanvasScene::loadCellGameFrom(std::vector<std::string> candidates,
   CSimPlatform::current().readFirst(
     std::move(candidates),
     [this, alive, outcome, announce](const CSimReadResult& read) {
+      ILLUMO_PROFILE_ZONE("CanvasScene.decodeLoadedCanvas");
       *outcome = 0;
       if (alive.expired() || ic == nullptr) {
         return;
@@ -5269,6 +5337,7 @@ CanvasScene::importRuleCatalog(const std::string& location)
   const std::weak_ptr<bool> alive = m_lifetime;
   CSimPlatform::current().readFirst(
     { location }, [this, alive, location](const CSimReadResult& read) {
+      ILLUMO_PROFILE_ZONE("CanvasScene.importRuleCatalog");
       if (alive.expired() || rulesetWorkshopMenu == nullptr) {
         return;
       }
@@ -5384,6 +5453,7 @@ CanvasScene::importRuleCatalog(const std::string& location)
 void
 CanvasScene::exportRuleCatalog(const std::string& location)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.exportRuleCatalog");
   if (rulesetWorkshopMenu == nullptr) {
     return;
   }
@@ -5432,6 +5502,7 @@ CanvasScene::exportRuleCatalog(const std::string& location)
 bool
 CanvasScene::applyLoadedDocument(IllumoDocument& doc)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.applyLoadedDocument");
   // All parsing and allocation completed against temporary state.
   prepareGridMutation();
   if ((cellContext->getWorldChunkWidth() != doc.worldChunkWidth ||
@@ -5592,6 +5663,7 @@ CanvasScene::syncCanvasLookFromEnv()
 void
 CanvasScene::clearCanvas()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.clearCanvas");
   prepareGridMutation();
   cellContext->getGrid()->clear();
   simulationGeneration = 0;
@@ -5603,6 +5675,7 @@ CanvasScene::clearCanvas()
 void
 CanvasScene::resetCanvas()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.resetCanvas");
   prepareGridMutation();
   cellContext->getGrid()->clear();
   seedInitialPattern();
@@ -5716,6 +5789,7 @@ CanvasScene::updateRender3dTestMatrices()
 void
 CanvasScene::enter()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.enter");
   if (!m_suspended || ic == nullptr || cellContext == nullptr) {
     return;
   }
@@ -5740,6 +5814,7 @@ CanvasScene::enter()
 void
 CanvasScene::leave()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.leave");
   if (ic == nullptr) {
     return;
   }
@@ -5828,6 +5903,7 @@ CanvasScene::advanceCanvasEntrance(double dt)
 void
 CanvasScene::rebuildCanvasEntrance()
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.rebuildCanvasEntrance");
   canvasEntranceVisual.clearPrimitives();
   const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
   const float scale = ic->renderer->getUiScale();
@@ -5918,15 +5994,32 @@ CanvasScene::rebuildCanvasEntrance()
 void
 CanvasScene::dispatch(DrawList& frame)
 {
+  ILLUMO_PROFILE_ZONE("CanvasScene.dispatch");
   DrawList* scene = &frame;
   if (cellContext == nullptr) {
     return;
   }
+  // Once-per-frame simulation plots, after this frame's update() has run.
+  ILLUMO_PROFILE_PLOT("CanvasScene.generation", simulationGeneration);
+  ILLUMO_PROFILE_PLOT("CanvasScene.achievedTps", achievedSimulationTps);
+  ILLUMO_PROFILE_PLOT("CanvasScene.requestedTps", requestedSimulationTps);
+  ILLUMO_PROFILE_PLOT("CanvasScene.stepsThisFrame", lastSimulationSteps);
+  ILLUMO_PROFILE_PLOT("CanvasScene.pendingSteps",
+                      simStepSeconds > 0.0 ? simAccum / simStepSeconds : 0.0);
+  ILLUMO_PROFILE_PLOT("CanvasScene.debtDropped",
+                      simulationDebtDropped ? 1.0 : 0.0);
+  ILLUMO_PROFILE_PLOT("CanvasScene.inFlightDeferred",
+                      simulationBudgetLimited ? 1.0 : 0.0);
+  ILLUMO_PROFILE_PLOT("CanvasScene.allocatedChunks",
+                      cellContext->getGrid()->getAllocatedChunkCount());
+  ILLUMO_PROFILE_PLOT("CanvasScene.liveCells",
+                      cellContext->getGrid()->getStoredCellCount());
   // Owners implement AppendCommands (domain + GameVisual). DrawList lists
   // Drawable hosts by layer (World → UI → Debug). The opt-in diagnostic
   // scene replaces CanvasView so its depth-tested primitives start from a clear
   // depth buffer rather than inheriting 2D presentation writes.
   if (isRender3dTestEnabled()) {
+    ILLUMO_PROFILE_ZONE("CanvasScene.render3dTest");
     ensureRender3dTestDrawables();
     applyRender3dTestCamera();
     updateRender3dTestMatrices();

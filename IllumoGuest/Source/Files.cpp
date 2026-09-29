@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Files.h>
 #include <algorithm>
@@ -189,6 +190,8 @@ GuestFiles::complete(Task& task,
 void
 GuestFiles::pump()
 {
+  ILLUMO_PROFILE_ZONE("Files.pump");
+  ILLUMO_PROFILE_PLOT("Guest file tasks", m_tasks.size());
   std::size_t issued = 0;
   for (std::pair<const std::uint64_t, Task>& entry : m_tasks) {
     Task& task = entry.second;

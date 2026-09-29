@@ -1,10 +1,13 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Wasm/WasmWorker.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <exception>
 #include <mutex>
+#include <string>
 #include <thread>
 
 struct WasmWorker::State
@@ -99,6 +102,11 @@ struct WasmWorker::State
 
   void run()
   {
+    // Numbered so each simulation lane gets its own row in Tracy.
+    static std::atomic<std::uint32_t> workerCount{ 0 };
+    const std::string threadName =
+      "Wasm worker " + std::to_string(workerCount.fetch_add(1u) + 1u);
+    ILLUMO_PROFILE_THREAD(threadName.c_str());
     try {
       WasmInstance instance(limits);
       std::int32_t abi = 0;
@@ -133,7 +141,12 @@ struct WasmWorker::State
         }
         WasmJobResult completed;
         completed.requestId = id;
-        if (!execute(instance, request, completed.bytes)) {
+        bool executed = false;
+        {
+          ILLUMO_PROFILE_ZONE("WasmWorker.job");
+          executed = execute(instance, request, completed.bytes);
+        }
+        if (!executed) {
           fail(instance.error().empty() ? "Invalid worker response"
                                         : instance.error(),
                id);

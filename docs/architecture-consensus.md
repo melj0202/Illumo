@@ -1823,24 +1823,29 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
 - **Simulation lanes** (D-E17): with a `worker` and the Jobs grant the game
   asks `JobLanes` once at startup; the host compiles one isolated worker
   store per lane (in parallel, while menus run) and answers only when all are
-  ready, so serial generations continue meanwhile. Each lane owns interleaved
-  bands of eight chunk rows plus a one-row halo (`SimulationLanePartition`),
-  speaks the `CSL1` protocol (`IllumoGame/Source/Wasm/SimulationLanes.*`:
-  multipart sync, advance with halo patches, owned-change replies) and
-  advances its rows exactly with the unchanged `SparseCellGrid` kernels;
+  ready, so serial generations continue meanwhile. Each lane owns one
+  contiguous run of chunk lines, cut so lanes hold equal stored-chunk
+  counts, plus a halo two lines deep (`SimulationLanePartition`; D-E34),
+  speaks the `CSL1` protocol version 3 (`IllumoGame/Source/Wasm/SimulationLanes.*`:
+  multipart sync, advance blocks with halo patches, owned-change replies)
+  and advances a block of up to `16 * H / radius` generations (32 for
+  Life-like rules) exactly with the unchanged `SparseCellGrid` kernels;
   `SparseCellGrid::applyChunkPatches` keeps each lane's frontier journal
   sound across halo updates. The control store (`SimulationLaneCoordinator`
   behind the guest `SimulationRunner`) merges owned changes into the spare
-  grid as one exact delta and publishes it through the unchanged
-  mirror/publication path, launches the next generation from the halos
-  before merging (pipelining), and resynchronizes lanes whenever the
-  published world, rule or topology changed. Drains cannot wait inside one
+  grid as one exact delta per block and publishes it through the unchanged
+  mirror/publication path, launches the next block from the halos before
+  merging (pipelining), and resynchronizes and recuts lanes whenever the
+  published world, rule or topology changed or the lanes stay imbalanced.
+  The host's `WasmGameServices::harvest` delivers a finished lane reply to
+  the first update after it completes, so a block costs one frame. Drains cannot wait inside one
   frame: `SimulationRunner::canBlock()` is false with lanes, so edits, loads,
   ruleset changes, saves and exit retire the outstanding generation (the
   displayed world is what they act on) and stale replies are dropped by
-  session and epoch. Lanes are used once serial generations exceed 1 ms and
-  dropped when all lanes together work under 0.5 ms; radii above 16 stay
-  serial, as does everything after a lane failure. Elementary 1D rules
+  session and epoch. Serial starts run as many generations as fit 4 ms of
+  the frame; lanes are used once that cannot deliver the requested
+  generations per frame and dropped once summed lane work would fit half of
+  it (D-E34); everything after a lane failure stays serial. Elementary 1D rules
   partition by chunk column: the coordinator supplies the global source row
   (CSL1 version 2), lanes write only their own columns of the next row, and
   the lanes' owned-column source rows merge into the next one (D-E29).
@@ -1859,9 +1864,10 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   `IllumoGame.Wasm.PackageFrameAllocations` gates host heap allocations of
   warmed control frames (the exchange, decode and accept buffers are
   retained and swapped, never rebuilt per frame);
-  `IllumoGame.Wasm.LaneParity` checks every rule, both topologies and 1-3
-  lanes (one-row bands, edits, retirement) plus large 4-lane worlds against
-  serial generations, and `IllumoGame.Wasm.LaneProtocol` the CSL1 decoders and
+  `IllumoGame.Wasm.LaneParity` checks every rule, both topologies, 1-3
+  lanes, one- and two-line halos and blocks up to the halo's limit (edits,
+  retirement, forced recuts) plus large 4-lane worlds and serial
+  multi-generation starts against serial generations, and `IllumoGame.Wasm.LaneProtocol` the CSL1 decoders and
   lane rejections; `IllumoGame.Wasm.LaneAllocations` gates heap allocations
   of warmed lane generations (retained coordinator, lane and delta scratch;
   lanes catch their inactive map up from the generation journal, as the
@@ -2168,6 +2174,8 @@ disabled.
 | **D-E27** | `IPanelSurfaces` (`IllumoContext::panelSurfaces`) gives products extra top-level windows for detached panels: surface 0 is the main window, keys stay in one queue with `focused()`. Guests get it through the `Windows` capability (bit 10, granted opportunistically when the host can present windows), `GuestService::Window` (17) and input v2; `WasmPanelWindows` owns the windows. Hosts without windows (Linux, `--capture`, `--bench-*`, headless) omit it and products stay docked. |
 | **D-E28** | Sound effects through `IAudio` (`IllumoContext::audio`), implemented natively by `AudioDevice` over vendored miniaudio 0.11.25 (private to `Source/Audio`). Guests get it through the `Audio` capability (bit 11, granted only with an output; never for `--capture`/`--bench-*`) and `GuestService::Audio` (18, fire-and-forget, completions discarded); guests decode their own files with `AudioDecoder` and send only float samples, bounded per clip and per guest. Extends D-E27's capability pattern. Refined by D-E32. |
 | **D-E32** | Looping music over the same seam (2026-09-27): `SoundPlayback` gains `loop` and a fade-in, `IAudio` gains per-sound `stop` (with fade-out) and `setVolume`, and looping voices are replaced last. Clips hold up to 16 Mi samples; `GuestAudioRequest` version 2 sends larger clips as `Create` plus `Append` chunks (2 Mi samples each) that the host registers when complete, and `GuestAudio` queues what the service queue cannot take in an ordered backlog. The guest budget is 128 MiB of samples. CSim's title loops `Music/music_main_menu.mp3` (§5.13). |
+| **D-E34** | Simulation lanes v2 (2026-09-28, `docs/simulation-lanes-v2-design.md`): the host delivers finished job and lane replies to the next update (`WasmGameServices::harvest`); a lane owns one contiguous, chunk-balanced run of lines with a two-line halo and advances blocks of up to `16 * H / radius` generations (CSL1 version 3); a start may publish several generations as one delta (`SimulationRunnerTimings::generations`), the canvas requests every whole step due, serial starts fill 4 ms of the frame, and lanes are chosen by throughput against that budget. Supersedes the partition and thresholds of D-E17 and D-E29. |
+| **D-E33** | Guest profiling over five `illumo_profile` imports (2026-09-28): `register` (a site's kind, name, function, file and line, copied and interned host-side for the process lifetime; bounded to 4096 sites per instance, 16,384 and 4 MiB per process), `zone_begin`, `zone_end`, `plot` and `frame_mark`. Every `WasmInstance` defines them; without `TRACY_ENABLE` `register` returns -1. Events land on the thread running the guest, zones left open by a call are closed when it returns, and nesting past 256 is counted, not recorded. `<Illumo/Foundation/Profile.h>` (`ILLUMO_PROFILE_ZONE`/`PLOT`/`FRAME_MARK`/`THREAD`) is the one marker API for host, engine, guest and product code; `ILLUMO_ENABLE_TRACY` builds the guests with `ILLUMO_GUEST_PROFILE`, and `build.py`'s `tracy` profile selects it (`docs/tracy-profiling.md`). The vendored client moves from Tracy 0.13.1 to 0.14.1 (unmodified upstream `v0.14.1`, BSD-3-Clause) to match the owner's profiler tools; the protocol is not compatible across versions. |
 | **D-E31** | Programs own scenes; modules are gone. Each package is one WASM program that manages scenes; the engine has no module registry (`IModule`, `IModuleHost`, `IllumoContext::moduleHost`, required and optional registration, transitions and rollback are removed). `Illumo` runs a frame in phases (`beginUpdate`, `endUpdate`, `beginRender`, `endRender`), and IllumoRuntime's `RuntimeShell` puts the `DebugOverlay` (debug-tool builds; was `DebugModule`) and the one `WasmProgram` between them. In a guest, a `GuestProgram` owns a `SceneDirector` of `ProgramScene`s (`Illumo::Content`, mirrored in `IllumoGuestContent`), each with its own `SceneInstance`, camera state, render world and scene commands. Switches happen at a frame boundary (cut or cover) and keep the scene left, frozen, until the program releases it. The engine's per-frame `Scene` is renamed `DrawList`. Supersedes D-004 and D-E1; refines D-E4, D-E5, D-E9 and D-B1 (`docs/scene-programs-design.md`). |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
@@ -2353,7 +2361,7 @@ Most design questions from the LaTeX open list are **resolved** (see §6). Still
 |-------|----------------|
 | Resource ownership long-term | Typed generational handles validate explicit replace/destroy operations; `AssetManager` reference-counts textures, shaders, cubemaps, and immutable model meshes, while the resizeable canvas explicitly replaces/releases its texture and PBO ring. |
 | Linux validation | Linux sources and CMake are repaired for Ubuntu 24.04 x86_64 X11/XWayland with gtkmm-3 dialogs (`docs/packages/platform-linux.md`). Keep Linux unsupported until native configure, compile, launch, dialog, render, and shutdown smoke exist on that host. macOS is not targeted and its scaffold has been removed. |
-| Tracy CI policy | Debug-oriented; no strict CI policy yet. |
+| Tracy CI policy | Debug-oriented; no strict CI policy yet. Release captures come from the `tracy` build profile, which also profiles guests (D-E33). |
 | When to introduce SYCL / GPU simulation | Only after a current benchmark and explicit product or learning goal justify a second compute path. Sparse chunks and bounded CPU workers are already live. |
 
 Resolved highlights (do not re-open without a new decision ID):

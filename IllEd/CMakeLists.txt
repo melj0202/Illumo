@@ -35,7 +35,7 @@ endfunction()
 target_include_directories(IllEdCore PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_include_directories(IllEdCore SYSTEM PRIVATE
-  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
+  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
 target_link_libraries(IllEdCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllEdCore)
 
@@ -73,7 +73,7 @@ if(BUILD_TESTING)
   target_include_directories(IllEdTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
   target_include_directories(IllEdTests SYSTEM PRIVATE
-    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
   target_link_libraries(IllEdTests PRIVATE IllEdCore Illumo::TestSupport)
   illumo_configure_runtime_target(IllEdTests)
   illumo_discover_test_runner(IllEdTests IllEd)

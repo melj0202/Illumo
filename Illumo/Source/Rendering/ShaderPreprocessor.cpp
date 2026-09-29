@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
@@ -454,6 +455,7 @@ PreprocessResult
 ShaderPreprocessor::Process(const std::string& source,
                             const PreprocessOptions& options)
 {
+  ILLUMO_PROFILE_ZONE("ShaderPreprocessor.Process");
   RegisterDefaultModules();
 
   PreprocessContext ctx;
@@ -511,6 +513,7 @@ PreprocessResult
 ShaderPreprocessor::ProcessFile(const std::string& filePath,
                                 const PreprocessOptions& options)
 {
+  ILLUMO_PROFILE_ZONE("ShaderPreprocessor.ProcessFile");
   std::string source = readFileToString(filePath);
   if (source.empty()) {
     std::error_code ec;

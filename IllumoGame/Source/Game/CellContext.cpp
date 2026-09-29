@@ -1,6 +1,7 @@
 #include "CellContext.h"
 #include "Rulesets/RuleSet.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -180,6 +181,7 @@ CellContext::setRuleSetInternal(std::string familyString,
     return false;
   }
 
+  ILLUMO_PROFILE_ZONE("CellContext.compileRuleSet");
   std::unique_ptr<RuleSet> newRuleSet =
     RuleSetRegistry::instance().createRuleSet(ruleSetString);
   if (!newRuleSet) {
@@ -220,6 +222,7 @@ bool
 CellContext::resetWorld(std::int64_t worldChunkWidth,
                         std::int64_t worldChunkHeight)
 {
+  ILLUMO_PROFILE_ZONE("CellContext.resetWorld");
   if (!SparseCellGrid::isValidTopology(worldChunkWidth, worldChunkHeight)) {
     Logger::LogWarning("Rejected invalid world topology " +
                        std::to_string(worldChunkWidth) + " x " +
@@ -264,6 +267,10 @@ CellContext::resetWorld(std::int64_t worldChunkWidth,
 void
 CellContext::publishSpareGrid(const SparseGenerationDelta& delta)
 {
+  ILLUMO_PROFILE_ZONE("CellContext.publishSpareGrid");
+  ILLUMO_PROFILE_PLOT("Sim.publishedDeltaChunks", delta.changedChunks.size());
+  ILLUMO_PROFILE_PLOT("Sim.publishedFullReplacement",
+                      delta.fullReplacement ? 1 : 0);
   SparseCellGrid* previous = grid;
   grid = spareGrid;
   spareGrid = previous;

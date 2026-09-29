@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiPanelDock.h>
 #include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
@@ -310,6 +311,7 @@ GuiPanelDock::reset()
 void
 GuiPanelDock::update(const GuiDockPointer& main)
 {
+  ILLUMO_PROFILE_ZONE("GuiPanelDock.update");
   m_consumed.clear();
   handleEvents();
   handleMain(main);
@@ -604,6 +606,7 @@ GuiPanelDock::overPanels(float x, float y) const
 void
 GuiPanelDock::drawDocked(GameVisual& visual) const
 {
+  ILLUMO_PROFILE_ZONE("GuiPanelDock.drawDocked");
   for (std::size_t index = 0; index < m_panels.size(); ++index) {
     const Panel& panel = m_panels[index];
     if (!panel.view.visible ||

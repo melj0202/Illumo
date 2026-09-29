@@ -26,6 +26,6 @@ illumo_add_guest(IllEd
   "${_illed}/IllEdConfig.cpp")
 target_include_directories(IllEd PRIVATE "${_illed}")
 target_include_directories(IllEd SYSTEM PRIVATE
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
+  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.14.1/public")
 target_link_libraries(IllEd PRIVATE IllumoGuestContent IllumoGuestEngine)
 unset(_illed)

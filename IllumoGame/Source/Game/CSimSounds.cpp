@@ -1,6 +1,7 @@
 #include "CSimSounds.h"
 #include <Illumo/Audio/Audio.h>
 #include <Illumo/Audio/AudioClip.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <algorithm>
 #include <charconv>
@@ -148,6 +149,7 @@ CSimSounds::install(IAudio* audio,
                     const ReadFile& read,
                     std::vector<std::string>& problems)
 {
+  ILLUMO_PROFILE_ZONE("CSimSounds.install");
   uninstall();
   if (audio == nullptr || !audio->available()) {
     return;

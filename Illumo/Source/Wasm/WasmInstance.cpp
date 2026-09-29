@@ -1,5 +1,6 @@
 #include "WasmCompiler.h"
 #include "WasmEngineConfig.h"
+#include "WasmProfile.h"
 #include <Illumo/Wasm/WasmInstance.h>
 
 #include <wasmtime.h>
@@ -46,6 +47,7 @@ struct WasmInstance::State
   std::string failure;
   WasmFailure failureKind = WasmFailure::None;
   std::thread::id owner = std::this_thread::get_id();
+  WasmProfileState profile;
   std::jthread ticker;
 
   bool fail(std::string message)
@@ -370,8 +372,9 @@ WasmInstance::load(std::span<const std::byte> bytes)
       linker, "environ_get", kTwo, false, emptyEnvironment)) &&
     state.check(defineLibcFunction(
       linker, "environ_sizes_get", kTwo, false, emptyEnvironmentSizes)) &&
-    state.check(
-      defineLibcFunction(linker, "clock_time_get", kClock, false, guestClock));
+    state.check(defineLibcFunction(
+      linker, "clock_time_get", kClock, false, guestClock)) &&
+    state.check(defineWasmProfileImports(linker, &state.profile));
   wasm_trap_t* trap = nullptr;
   bool instantiated = false;
   if (linked && state.budget()) {
@@ -405,6 +408,7 @@ WasmInstance::load(std::span<const std::byte> bytes)
       wasmtime_error_t* error = wasmtime_func_call(
         state.context, &exported.of.func, nullptr, 0, nullptr, 0, &trap);
       initialized = state.check(error, trap);
+      state.profile.closeOpenZones();
     }
     wasmtime_extern_delete(&exported);
     if (!initialized) {
@@ -454,6 +458,10 @@ WasmInstance::call(std::string_view name,
                                                  1,
                                                  &trap);
     succeeded = state.check(error, trap);
+    // A trap or an unbalanced guest leaves zones open on this thread.
+    if (state.profile.openZoneCount() != 0u) {
+      state.profile.closeOpenZones();
+    }
   }
   wasmtime_extern_delete(&exported);
   if (!succeeded) {

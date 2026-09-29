@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
@@ -9,17 +10,20 @@ SceneGraphDrawable::SceneGraphDrawable(SceneGraph& graph)
 bool
 SceneGraphDrawable::AppendCommands(Renderer* renderer)
 {
+  ILLUMO_PROFILE_ZONE("SceneGraphDrawable.AppendCommands");
   emit(renderer, Pass::Color);
   return true;
 }
 void
 SceneGraphDrawable::CollectShadowCasters(Renderer* renderer)
 {
+  ILLUMO_PROFILE_ZONE("SceneGraphDrawable.CollectShadowCasters");
   emit(renderer, Pass::Collect);
 }
 void
 SceneGraphDrawable::AppendShadowCommands(Renderer* renderer)
 {
+  ILLUMO_PROFILE_ZONE("SceneGraphDrawable.AppendShadowCommands");
   emit(renderer, Pass::Shadow);
 }
 

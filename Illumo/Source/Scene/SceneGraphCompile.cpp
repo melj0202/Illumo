@@ -1,5 +1,6 @@
 #include "SceneGraphInternal.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <algorithm>
 #include <new>
@@ -82,6 +83,7 @@ SceneGraph::Impl::compile()
   if (compiledRevision == structuralRevision) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("SceneGraph.compile");
   compiledRevision = 0;
   try {
     preorder.resize(nodeCount);
@@ -166,6 +168,7 @@ SceneGraph::Impl::boundsAtWorld(uint32_t slot,
 bool
 SceneGraph::Impl::resolve(bool withBounds)
 {
+  ILLUMO_PROFILE_ZONE("SceneGraph.resolve");
   if (!compile()) {
     return false;
   }
@@ -202,6 +205,7 @@ SceneGraph::Impl::resolve(bool withBounds)
   if (!withBounds) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("SceneGraph.resolveBounds");
   for (uint32_t slot : preorder) {
     for (uint32_t index = attachmentFirst[slot]; index != 0;
          index = attachment(index).next) {
@@ -292,6 +296,7 @@ SceneGraph::emitDirect(Renderer* renderer, unsigned pass)
     ~Guard() { active = false; }
   };
   Guard guard(m_impl->extractionActive);
+  ILLUMO_PROFILE_ZONE("SceneGraph.emitDirect");
   for (uint32_t slot = m_impl->firstChild[0]; slot != 0;
        slot = m_impl->nextSlot(slot)) {
     if (!isEffectivelyVisible(m_impl->handle(slot))) {
@@ -338,6 +343,7 @@ SceneGraph::extract(Renderer* renderer)
     ~Guard() { active = false; }
   };
   Guard guard(m_impl->extractionActive);
+  ILLUMO_PROFILE_ZONE("SceneGraph.extract");
   m_impl->statistics.boundsQueries = 0;
   m_impl->statistics.extractionVisits = 0;
   const bool compiled = m_impl->resolve(true);
@@ -410,6 +416,14 @@ SceneGraph::extract(Renderer* renderer)
     }
   }
   ++m_impl->statistics.extractions;
+  ILLUMO_PROFILE_PLOT("SceneGraph.Nodes", m_impl->nodeCount);
+  ILLUMO_PROFILE_PLOT("SceneGraph.SnapshotItems", snapshot->items.size());
+  ILLUMO_PROFILE_PLOT("SceneGraph.ExtractionVisits",
+                      m_impl->statistics.extractionVisits);
+  ILLUMO_PROFILE_PLOT("SceneGraph.RecomputedTransforms",
+                      m_impl->statistics.recomputedTransforms);
+  ILLUMO_PROFILE_PLOT("SceneGraph.BoundsQueries",
+                      m_impl->statistics.boundsQueries);
   SceneSnapshotView view;
   view.m_snapshot = snapshot;
   view.m_lifetime = m_impl->lifetime;

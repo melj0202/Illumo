@@ -1,4 +1,5 @@
 #include <Illumo/Content/SceneDirector.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <exception>
 
@@ -65,8 +66,9 @@ SceneDirector::switchTo(std::string_view name, SceneSwitch how)
 {
   Entry* target = entry(name);
   if (target == nullptr || target == m_active) {
-    Logger::LogWarning("Scene switch refused: '" + std::string(name) + "' " +
-                       (target == nullptr ? "is unknown" : "is already active"));
+    Logger::LogWarning(
+      "Scene switch refused: '" + std::string(name) + "' " +
+      (target == nullptr ? "is unknown" : "is already active"));
     return false;
   }
   m_pending = target;
@@ -103,6 +105,7 @@ SceneDirector::applyPending()
       (m_pendingHow == SceneSwitch::Cover && !m_covered)) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("SceneDirector.applyPending");
   Entry* target = m_pending;
   m_pending = nullptr;
   m_covered = false;
@@ -127,6 +130,7 @@ SceneDirector::applyPending()
 void
 SceneDirector::update(double elapsed)
 {
+  ILLUMO_PROFILE_ZONE("SceneDirector.update");
   if (m_active != nullptr) {
     m_active->scene->update(elapsed);
   }
@@ -135,6 +139,7 @@ SceneDirector::update(double elapsed)
 void
 SceneDirector::dispatch(DrawList& frame)
 {
+  ILLUMO_PROFILE_ZONE("SceneDirector.dispatch");
   if (m_active != nullptr) {
     m_active->scene->dispatch(frame);
   }
@@ -189,6 +194,7 @@ SceneDirector::entry(std::string_view name) const
 bool
 SceneDirector::startEntry(Entry& target)
 {
+  ILLUMO_PROFILE_ZONE("SceneDirector.startEntry");
   ProgramScene& scene = *target.scene;
   scene.m_context = &m_context;
   if (!scene.m_content) {
@@ -242,6 +248,7 @@ SceneDirector::startEntry(Entry& target)
 void
 SceneDirector::enterEntry(Entry& target)
 {
+  ILLUMO_PROFILE_ZONE("SceneDirector.enterEntry");
   if (m_context.camera != nullptr && target.hasCamera) {
     *m_context.camera = target.camera;
   }
@@ -256,6 +263,7 @@ SceneDirector::enterEntry(Entry& target)
 void
 SceneDirector::leaveEntry(Entry& current)
 {
+  ILLUMO_PROFILE_ZONE("SceneDirector.leaveEntry");
   try {
     current.scene->leave();
   } catch (const std::exception& exception) {
@@ -278,6 +286,7 @@ SceneDirector::stopEntry(Entry& current) noexcept
   if (!current.started) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("SceneDirector.stopEntry");
   current.started = false;
   try {
     current.scene->stop();

@@ -1,6 +1,7 @@
 #include "RulesetWorkshopMenu.h"
 #include "CSimSounds.h"
 #include "RuleCatalogLoader.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IRenderWindow.h>
@@ -300,6 +301,7 @@ RulesetWorkshopMenu::open(const RuleFamilyDefinition& currentFamily,
                           const RuleSetDefinition& currentRule,
                           bool useReducedMotion)
 {
+  ILLUMO_PROFILE_ZONE("RulesetWorkshopMenu.open");
   openState = false;
   setVisible(false);
   setDraft(currentFamily, currentRule);
@@ -380,6 +382,7 @@ RulesetWorkshopMenu::close()
 void
 RulesetWorkshopMenu::tick(float deltaSeconds)
 {
+  ILLUMO_PROFILE_ZONE("RulesetWorkshopMenu.tick");
   if (!openState) {
     return;
   }
@@ -579,6 +582,7 @@ RulesetWorkshopMenu::appendInformation(Control control,
 void
 RulesetWorkshopMenu::rebuildRows()
 {
+  ILLUMO_PROFILE_ZONE("RulesetWorkshopMenu.rebuildRows");
   const Control previouslySelected = controlForRow(selectedRow);
   rows.clear();
   appendSection("RULE");
@@ -682,6 +686,7 @@ RulesetWorkshopMenu::setError(const std::string& error)
 RulesetWorkshopAction
 RulesetWorkshopMenu::update(InputManager* input)
 {
+  ILLUMO_PROFILE_ZONE("RulesetWorkshopMenu.update");
   if (!openState || input == nullptr) {
     return RulesetWorkshopAction::None;
   }
@@ -1238,6 +1243,7 @@ RulesetWorkshopMenu::refreshPreview()
     return;
   }
   previewDirty = false;
+  ILLUMO_PROFILE_ZONE("RulesetWorkshopMenu.refreshPreview");
   RuleSetRegistry previewRegistry;
   if (!previewRegistry.registerFamily(familyDraft) ||
       !previewRegistry.registerRule(draft)) {
@@ -1479,6 +1485,7 @@ RulesetWorkshopMenu::helpForControl(Control control) const
 void
 RulesetWorkshopMenu::rebuildVisual()
 {
+  ILLUMO_PROFILE_ZONE("RulesetWorkshopMenu.rebuildVisual");
   updateLayout();
   for (GameVisual& layer : layers) {
     layer.clearPrimitives();
@@ -2119,6 +2126,7 @@ RulesetWorkshopMenu::rebuildVisual()
 bool
 RulesetWorkshopMenu::AppendCommands(Renderer* targetRenderer)
 {
+  ILLUMO_PROFILE_ZONE("RulesetWorkshopMenu.AppendCommands");
   if (!isVisible()) {
     return true;
   }

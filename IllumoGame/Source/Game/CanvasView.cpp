@@ -1,6 +1,7 @@
 #include "CanvasView.h"
 #include "CanvasCoordinatePolicy.h"
 #include "Rulesets/RuleSet.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -17,7 +18,6 @@
 #include <glm/glm.hpp>
 #include <limits>
 #include <numeric>
-#include <tracy/Tracy.hpp>
 
 CanvasView::CanvasView(int width,
                        int height,
@@ -169,7 +169,7 @@ CanvasView::rebuildDefaultPalette()
 void
 CanvasView::rebuildPalette(const RuleSet* rules)
 {
-  ZoneScopedN("CanvasView.rebuildPalette");
+  ILLUMO_PROFILE_ZONE("CanvasView.rebuildPalette");
   if (rules == nullptr) {
     rebuildDefaultPalette();
   } else {
@@ -189,6 +189,7 @@ CanvasView::rebuildPalette(const RuleSet* rules)
 void
 CanvasView::initializeGpuResources()
 {
+  ILLUMO_PROFILE_ZONE("CanvasView.initializeGpuResources");
   if (renderer == nullptr) {
     return;
   }
@@ -227,6 +228,7 @@ CanvasView::resizeBuffers(int width, int height)
   if (width <= textureWidth && height <= textureHeight) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("CanvasView.resizeBuffers");
 
   const int newWidth = growTextureDimension(textureWidth, width);
   const int newHeight = growTextureDimension(textureHeight, height);
@@ -583,7 +585,7 @@ CanvasView::getSlotSampleCount(int x, int y) const
 void
 CanvasView::applySampledTargets(bool snap)
 {
-  ZoneScopedN("CanvasView.applySampledTargets");
+  ILLUMO_PROFILE_ZONE("CanvasView.applySampledTargets");
   if (snap) {
     applySnappedSampledTargets();
     return;
@@ -626,7 +628,7 @@ CanvasView::applySnappedSampledTargets()
 void
 CanvasView::sampleGrid(bool snap)
 {
-  ZoneScopedN("CanvasView.sampleGrid");
+  ILLUMO_PROFILE_ZONE("CanvasView.sampleGrid");
   const std::chrono::steady_clock::time_point sampleStart =
     std::chrono::steady_clock::now();
   if (activeViewWidth <= 0 || activeViewHeight <= 0) {
@@ -897,7 +899,7 @@ CanvasView::tooManyChangedSampleTexels() const
 void
 CanvasView::resampleMarkedCacheTexels(bool snap)
 {
-  ZoneScopedN("CanvasView.resampleMarkedCacheTexels");
+  ILLUMO_PROFILE_ZONE("CanvasView.resampleMarkedCacheTexels");
   if (cellsPerTexel > 1 && grid != nullptr && !grid->isToroidal()) {
     resampleMarkedOverviewTexels(snap);
     return;
@@ -913,7 +915,7 @@ CanvasView::resampleMarkedCacheTexels(bool snap)
 void
 CanvasView::resampleMarkedOverviewTexels(bool snap)
 {
-  ZoneScopedN("CanvasView.resampleMarkedOverviewTexels");
+  ILLUMO_PROFILE_ZONE("CanvasView.resampleMarkedOverviewTexels");
   const int backgroundBase = SparseCellGrid::BackgroundState * 3;
   const float backgroundR =
     static_cast<float>(paletteRgb[backgroundBase + 0]) / 255.0f;
@@ -1027,7 +1029,7 @@ CanvasView::resampleMarkedOverviewTexels(bool snap)
 bool
 CanvasView::sampleChangedChunks(std::uint64_t previousRevision)
 {
-  ZoneScopedN("CanvasView.sampleChangedChunks");
+  ILLUMO_PROFILE_ZONE("CanvasView.sampleChangedChunks");
   if (grid == nullptr || grid->isToroidal()) {
     // A changed canonical torus chunk can appear at several visible aliases.
     // A complete refill stays bounded by the presentation cache and avoids
@@ -1037,11 +1039,15 @@ CanvasView::sampleChangedChunks(std::uint64_t previousRevision)
 
   lastSampledTexelCount = 0u;
   changedSampleTexels.clear();
-  const bool visited = grid->visitChangedChunksSince(
-    previousRevision,
-    [this](const ChunkAddress& address, const SparseCellGrid::ChunkCells*) {
-      markChangedCacheChunk(address);
-    });
+  bool visited = false;
+  {
+    ILLUMO_PROFILE_ZONE("CanvasView.markChangedChunks");
+    visited = grid->visitChangedChunksSince(
+      previousRevision,
+      [this](const ChunkAddress& address, const SparseCellGrid::ChunkCells*) {
+        markChangedCacheChunk(address);
+      });
+  }
   if (!visited) {
     clearChangedSampleTexels();
     return false;
@@ -1061,6 +1067,7 @@ CanvasView::adoptGrid(SparseCellGrid* nextGrid,
   if (nextGrid == nullptr || nextGrid == grid) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("CanvasView.adoptGrid");
   grid = nextGrid;
   if (!regionReady) {
     lastGridRevision = std::numeric_limits<std::uint64_t>::max();
@@ -1072,11 +1079,14 @@ CanvasView::adoptGrid(SparseCellGrid* nextGrid,
     sampleGrid(cellsPerTexel > 1);
   } else {
     changedSampleTexels.clear();
-    for (const SparseChangedChunkRecord& record : delta.changedChunks) {
-      if (tooManyChangedSampleTexels()) {
-        break;
+    {
+      ILLUMO_PROFILE_ZONE("CanvasView.markChangedCells");
+      for (const SparseChangedChunkRecord& record : delta.changedChunks) {
+        if (tooManyChangedSampleTexels()) {
+          break;
+        }
+        markChangedCacheCells(record.address, record.stateChanged);
       }
-      markChangedCacheCells(record.address, record.stateChanged);
     }
     if (tooManyChangedSampleTexels()) {
       clearChangedSampleTexels();
@@ -1087,6 +1097,7 @@ CanvasView::adoptGrid(SparseCellGrid* nextGrid,
   }
   lastGridRevision = grid->getRevision();
   paletteDirty = false;
+  ILLUMO_PROFILE_PLOT("CanvasView.adoptSampledTexels", lastSampledTexelCount);
   if (snapChanged) {
     snapVisualToTargets();
   }
@@ -1200,6 +1211,7 @@ CanvasView::copyCacheRow(int dstY, int srcY, int dstX, int srcX, int count)
 void
 CanvasView::copyCacheOverlap(int deltaTexelsX, int deltaTexelsY)
 {
+  ILLUMO_PROFILE_ZONE("CanvasView.copyCacheOverlap");
   const int overlapWidth = activeViewWidth - std::abs(deltaTexelsX);
   const int overlapHeight = activeViewHeight - std::abs(deltaTexelsY);
   if (overlapWidth <= 0 || overlapHeight <= 0) {
@@ -1244,7 +1256,7 @@ CanvasView::sampleCacheRectangle(int minimumX,
                                  int minimumY,
                                  int maximumY)
 {
-  ZoneScopedN("CanvasView.sampleCacheRectangle");
+  ILLUMO_PROFILE_ZONE("CanvasView.sampleCacheRectangle");
   if (cellsPerTexel > 1) {
     sampleSparseCacheRectangle(minimumX, maximumX, minimumY, maximumY);
     return;
@@ -1265,7 +1277,7 @@ CanvasView::sampleSparseCacheRectangle(int minimumX,
                                        int minimumY,
                                        int maximumY)
 {
-  ZoneScopedN("CanvasView.sampleSparseCacheRectangle");
+  ILLUMO_PROFILE_ZONE("CanvasView.sampleSparseCacheRectangle");
   if (grid == nullptr || minimumX > maximumX || minimumY > maximumY) {
     return;
   }
@@ -1395,6 +1407,7 @@ CanvasView::sampleSparseCacheRectangle(int minimumX,
 void
 CanvasView::sampleExposedCacheStrips(int deltaTexelsX, int deltaTexelsY)
 {
+  ILLUMO_PROFILE_ZONE("CanvasView.sampleExposedCacheStrips");
   lastSampledTexelCount = 0u;
   if (grid == nullptr || activeViewWidth <= 0 || activeViewHeight <= 0) {
     return;
@@ -1459,7 +1472,7 @@ CanvasView::tryScrollCache(const CacheLayout& nextLayout)
     return false;
   }
 
-  ZoneNamedN(CanvasViewScrollZone, "CanvasView.scrollCache", true);
+  ILLUMO_PROFILE_ZONE("CanvasView.scrollCache");
   const std::chrono::steady_clock::time_point scrollStart =
     std::chrono::steady_clock::now();
   const int deltaTexelsX = static_cast<int>(deltaTexelsX64);
@@ -1490,7 +1503,7 @@ CanvasView::setBottomInsetPixels(int pixels)
 void
 CanvasView::syncVisibleRegion()
 {
-  ZoneScopedN("CanvasView.syncVisibleRegion");
+  ILLUMO_PROFILE_ZONE("CanvasView.syncVisibleRegion");
   int width = 1280;
   int height = 720;
   double zoom = 1.0;
@@ -1556,7 +1569,7 @@ CanvasView::syncVisibleRegion()
     return;
   }
 
-  ZoneNamedN(CanvasViewRefillZone, "CanvasView.refillCache", true);
+  ILLUMO_PROFILE_ZONE("CanvasView.refillCache");
   resizeBuffers(nextLayout.activeWidth, nextLayout.activeHeight);
   cellsPerTexel = nextCellsPerTexel;
   cacheFirstCell = nextLayout.firstCell;
@@ -1577,7 +1590,7 @@ CanvasView::syncVisibleRegion()
 void
 CanvasView::rebuildTargetsFromGrid()
 {
-  ZoneScopedN("CanvasView.rebuildTargetsFromGrid");
+  ILLUMO_PROFILE_ZONE("CanvasView.rebuildTargetsFromGrid");
   syncVisibleRegion();
   if (grid == nullptr) {
     return;
@@ -1589,6 +1602,7 @@ CanvasView::rebuildTargetsFromGrid()
   if (paletteDirty || !sampleChangedChunks(lastGridRevision)) {
     sampleGrid(cellsPerTexel > 1);
   }
+  ILLUMO_PROFILE_PLOT("CanvasView.rebuildSampledTexels", lastSampledTexelCount);
   lastGridRevision = currentRevision;
   paletteDirty = false;
   if (shouldSnapSample()) {
@@ -1599,6 +1613,7 @@ CanvasView::rebuildTargetsFromGrid()
 void
 CanvasView::clearView()
 {
+  ILLUMO_PROFILE_ZONE("CanvasView.clearView");
   if (grid != nullptr) {
     grid->clear();
   }
@@ -1646,7 +1661,7 @@ CanvasView::setCellLook(float glow, bool ledKeys, bool gridLines)
 void
 CanvasView::snapVisualToTargets()
 {
-  ZoneScopedN("CanvasView.snapVisualToTargets");
+  ILLUMO_PROFILE_ZONE("CanvasView.snapVisualToTargets");
   lastSnapVisitCount = fadingTexels.size();
   for (int index : fadingTexels) {
     const int base = index * 3;
@@ -1661,8 +1676,9 @@ CanvasView::snapVisualToTargets()
 void
 CanvasView::tickVisual(float dt)
 {
-  ZoneScopedN("CanvasView.tickVisual");
+  ILLUMO_PROFILE_ZONE("CanvasView.tickVisual");
   lastFadeVisitCount = fadingTexels.size();
+  ILLUMO_PROFILE_PLOT("CanvasView.fadingTexels", lastFadeVisitCount);
   if (!fadeActive) {
     return;
   }
@@ -1726,12 +1742,12 @@ CanvasView::DrawImpl()
 bool
 CanvasView::AppendCommands(Renderer* activeRenderer)
 {
-  ZoneScopedN("CanvasView.AppendCommands");
+  ILLUMO_PROFILE_ZONE("CanvasView.AppendCommands");
   if (!isVisible() || !gpuReady || activeRenderer == nullptr) {
     return isVisible();
   }
   if (textureUploadPending && activeViewWidth > 0 && activeViewHeight > 0) {
-    ZoneScopedN("CanvasView.prepareUploadRectangles");
+    ILLUMO_PROFILE_ZONE("CanvasView.prepareUploadRectangles");
     buildUploadRects();
     lastUploadByteCount = 0u;
     lastUploadRectCount = uploadRectScratch.size();
@@ -1755,6 +1771,8 @@ CanvasView::AppendCommands(Renderer* activeRenderer)
     }
     uploadByteMetric.add(static_cast<double>(lastUploadByteCount));
     uploadRectMetric.add(static_cast<double>(lastUploadRectCount));
+    ILLUMO_PROFILE_PLOT("CanvasView.uploadBytes", lastUploadByteCount);
+    ILLUMO_PROFILE_PLOT("CanvasView.uploadRects", lastUploadRectCount);
     textureUploadPending = !accepted;
     if (accepted) {
       resetUploadBounds();
@@ -1784,6 +1802,7 @@ CanvasView::AppendCommands(Renderer* activeRenderer)
 bool
 CanvasView::emitCellQuad(Renderer* activeRenderer)
 {
+  ILLUMO_PROFILE_ZONE("CanvasView.emitCellQuad");
   if (!cellQuadReady || !cellQuadMesh.isValid() ||
       !displayTextureHandle.isValid()) {
     return true;

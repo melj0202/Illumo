@@ -4,6 +4,7 @@
 #include "GLTexture.h"
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/IShaderProgram.h>
@@ -12,7 +13,6 @@
 #include <cstring>
 #include <limits>
 #include <string>
-#include <tracy/Tracy.hpp>
 
 GLBackend::GLBackend(IRenderWindow* window)
   : device(new GLDevice())
@@ -105,6 +105,7 @@ GLBackend::logContextDescription()
 void
 GLBackend::BeginFrame()
 {
+  device->resetFrameStats();
   m_rejectionsAtFrameStart = commandQueue->GetTotalRejected();
   device->resetFrameError();
 }
@@ -112,6 +113,7 @@ GLBackend::BeginFrame()
 FrameReadback
 GLBackend::readBackbuffer(int width, int height)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.readBackbuffer");
   FrameReadback result;
   if (width < 1 || height < 1 || width > 4096 || height > 4096) {
     result.error = "Readback dimensions must be within 1..4096";
@@ -201,6 +203,7 @@ GLBackend::requestFramebufferReadback(std::uint32_t stream,
                                       int width,
                                       int height)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.requestFramebufferReadback");
   std::unordered_map<uint32_t, GLFramebufferResourceEntry>::const_iterator
     target = _framebufferRegistryLookup.find(framebuffer.slot);
   if (!IsFramebufferValid(framebuffer) ||
@@ -260,6 +263,7 @@ GLBackend::takeFramebufferReadback(std::uint32_t stream,
                                    bool wait,
                                    FrameReadback& out)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.takeFramebufferReadback");
   out = FrameReadback{};
   std::unordered_map<std::uint32_t, ReadbackStream>::iterator found =
     _readbackStreams.find(stream);
@@ -340,8 +344,18 @@ GLBackend::releaseReadbackStream(std::uint32_t stream)
 void
 GLBackend::EndFrame()
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.EndFrame");
+  const GLFrameStats& stats = device->frameStats();
+  ILLUMO_PROFILE_PLOT("GL.Submits", stats.submits);
+  ILLUMO_PROFILE_PLOT("GL.Commands", stats.commands);
+  ILLUMO_PROFILE_PLOT("GL.RecordedLists", stats.recordedLists);
+  ILLUMO_PROFILE_PLOT("GL.RecordedCommands", stats.recordedCommands);
+  ILLUMO_PROFILE_PLOT("GL.DrawCalls", stats.drawCalls);
+  ILLUMO_PROFILE_PLOT("GL.UploadBytes", stats.uploadBytes);
+  ILLUMO_PROFILE_PLOT("GL.CommandQueueHighWater",
+                      commandQueue->GetHighWaterMark());
   {
-    ZoneScopedN("GLBackend.swapBuffers");
+    ILLUMO_PROFILE_ZONE("GLBackend.swapBuffers");
     window->swapBuffers();
   }
   static long frameCount = 0;
@@ -359,7 +373,7 @@ GLBackend::EndFrame()
 void
 GLBackend::SubmitCommandQueue()
 {
-  ZoneScopedN("GLBackend.SubmitCommandQueue");
+  ILLUMO_PROFILE_ZONE("GLBackend.SubmitCommandQueue");
   GLResourceTables tables;
   tables.meshes = &_vaoRegistryLookup;
   tables.programs = &_programRegistryLookup;
@@ -487,6 +501,7 @@ GLBackend::CreateMesh(const void* vertices,
                       MeshVertexLayout layout,
                       bool dynamic)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateMesh");
   MeshHandle handle = meshHandles.allocate();
   GLMeshResourceEntry entry;
   entry.generation = handle.generation;
@@ -512,6 +527,7 @@ GLBackend::ReplaceMesh(MeshHandle handle,
                        MeshVertexLayout layout,
                        bool dynamic)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.ReplaceMesh");
   std::unordered_map<uint32_t, GLMeshResourceEntry>::iterator it =
     _vaoRegistryLookup.find(handle.slot);
   if (it == _vaoRegistryLookup.end() ||
@@ -562,6 +578,7 @@ GLBackend::IsMeshValid(MeshHandle handle) const
 ShaderHandle
 GLBackend::CreateShaderProgram(const ShaderPaths& paths)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateShaderProgram");
   ShaderHandle handle = shaderHandles.allocate();
   GLShaderResourceEntry entry;
   entry.generation = handle.generation;
@@ -581,6 +598,7 @@ GLBackend::CreateShaderProgram(const ShaderPaths& paths)
 ShaderHandle
 GLBackend::CreateShaderProgram(const ShaderSources& sources)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateShaderProgram");
   ShaderHandle handle = shaderHandles.allocate();
   GLShaderResourceEntry entry;
   entry.generation = handle.generation;
@@ -597,6 +615,7 @@ bool
 GLBackend::ReplaceShaderProgram(ShaderHandle handle,
                                 const ShaderSources& sources)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.ReplaceShaderProgram");
   std::unordered_map<uint32_t, GLShaderResourceEntry>::iterator it =
     _programRegistryLookup.find(handle.slot);
   if (it == _programRegistryLookup.end() ||
@@ -663,6 +682,7 @@ GLBackend::CreateTexture(const unsigned char* data,
                          int channels,
                          const TextureOptions& options)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateTexture");
   if (data == nullptr || width <= 0 || height <= 0) {
     Logger::LogWarning("CreateTexture: missing pixels or invalid size " +
                        std::to_string(width) + "x" + std::to_string(height));
@@ -690,6 +710,7 @@ GLBackend::CreateCubemap(const std::array<const unsigned char*, 6>& facesData,
                          int height,
                          int channels)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateCubemap");
   for (size_t i = 0; i < 6; ++i) {
     if (facesData[i] == nullptr) {
       Logger::LogWarning("CreateCubemap: face " + std::to_string(i) +
@@ -727,6 +748,7 @@ GLBackend::ReplaceTexture(TextureHandle handle,
                           int channels,
                           const TextureOptions& options)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.ReplaceTexture");
   std::unordered_map<uint32_t, GLTextureResourceEntry>::iterator it =
     _textureRegistryLookup.find(handle.slot);
   if (it == _textureRegistryLookup.end() ||
@@ -758,6 +780,7 @@ GLBackend::ReplaceCubemap(TextureHandle handle,
                           int height,
                           int channels)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.ReplaceCubemap");
   std::unordered_map<uint32_t, GLTextureResourceEntry>::iterator it =
     _textureRegistryLookup.find(handle.slot);
   if (it == _textureRegistryLookup.end() ||
@@ -828,6 +851,7 @@ FramebufferHandle
 GLBackend::CreateFramebuffer(const FramebufferDesc& desc,
                              FramebufferAttachments* outAttachments)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateFramebuffer");
   if (desc.width <= 0 || desc.height <= 0) {
     Logger::LogError("CreateFramebuffer: invalid dimensions");
     return FramebufferHandle{};

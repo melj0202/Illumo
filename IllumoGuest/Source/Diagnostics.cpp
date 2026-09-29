@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Diagnostics.h>
 #include <stdexcept>
@@ -62,11 +63,14 @@ GuestDiagnostics::droppedMessages()
 void
 GuestDiagnostics::pump()
 {
+  ILLUMO_PROFILE_ZONE("Diagnostics.pump");
+  ILLUMO_PROFILE_PLOT("Guest log backlog", backlog.size());
   flushBacklog();
 }
 static void
 logMessage(std::uint32_t level, const char* text)
 {
+  ILLUMO_PROFILE_ZONE("Diagnostics.logMessage");
   if (!diagnosticQueue || !text) {
     ++dropped;
     return;

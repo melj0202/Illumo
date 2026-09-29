@@ -1,7 +1,7 @@
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -10,8 +10,8 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Wasm/WasmFileServices.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
-#include <Illumo/Wasm/WasmProgram.h>
 #include <Illumo/Wasm/WasmGameServices.h>
+#include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Console.h>
 #include <IllumoGuest/Dialog.h>
@@ -649,7 +649,8 @@ run(const std::string& name)
       name != "RenderServices" && name != "GuestPresentation" &&
       name != "GameJobs" && name != "SdkContract" && name != "GameFiles" &&
       name != "DisplayServices" && name != "ClipboardServices" &&
-      name != "ConsoleServices" && name != "DialogServices") {
+      name != "ConsoleServices" && name != "DialogServices" &&
+      name != "ServiceHarvest") {
     return false;
   }
   NullRenderWindow window(640, 480);
@@ -661,6 +662,84 @@ run(const std::string& name)
   mock.Initialize();
   Renderer renderer(&window, &env, &camera, &mock, false);
   renderer.ensureBuiltinStyles();
+  if (name == "ServiceHarvest") {
+    // A job that finishes after process() reaches the exchange about to be
+    // delivered through harvest(), not a frame later through the next
+    // process().
+    WasmFrameRenderer bridge(renderer, 323);
+    std::ifstream workerFile(ILLUMO_JOB_WORKER_GUEST, std::ios::binary);
+    const std::vector<char> content{ std::istreambuf_iterator<char>(workerFile),
+                                     {} };
+    std::vector<std::byte> worker(content.size());
+    std::memcpy(worker.data(), content.data(), content.size());
+    WasmGameServices services(bridge,
+                              static_cast<std::uint32_t>(GuestCapability::Jobs),
+                              ILLUMO_ENGINE_ASSETS,
+                              std::move(worker));
+    std::vector<std::byte> completions;
+    testTrue(counters,
+             services.harvest(completions) && completions.empty(),
+             "Harvest leaves the exchange untouched when nothing finished");
+    const std::function<void(std::uint64_t, GuestWireWriter&)> jobBatch =
+      [](std::uint64_t request, GuestWireWriter& output) {
+        GuestWireWriter job;
+        job.u32(2u);
+        job.text("harvest");
+        GuestServices requests;
+        requests.records.push_back({ request,
+                                     GuestService::Job,
+                                     GuestServiceStatus::Request,
+                                     job.take() });
+        output.clear();
+        requests.write(output);
+      };
+    GuestWireWriter batch;
+    GuestWireWriter emptyBatch;
+    GuestServices{}.write(emptyBatch);
+    GuestServices result;
+    // The worker compiles on its first job, which starts once it is idle;
+    // process() alone completes this one.
+    jobBatch(1u, batch);
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    bool warmed = services.process(batch.data(), completions);
+    while (warmed && std::chrono::steady_clock::now() < deadline &&
+           !(GuestServices::read(completions, result, false) &&
+             result.records.size() == 1u)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      warmed = services.process(emptyBatch.data(), completions);
+    }
+    // An idle worker starts the next job inside process(); only harvest()
+    // runs after that.
+    jobBatch(2u, batch);
+    testTrue(counters,
+             warmed && services.process(batch.data(), completions) &&
+               GuestServices::read(completions, result, false) &&
+               result.records.empty(),
+             "An accepted job has no completion yet");
+    bool delivered = false;
+    while (!delivered && std::chrono::steady_clock::now() < deadline) {
+      if (!services.harvest(completions)) {
+        break;
+      }
+      delivered = GuestServices::read(completions, result, false) &&
+                  result.records.size() == 1u;
+      if (!delivered) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    }
+    testTrue(counters,
+             delivered && result.records.front().request == 2u &&
+               result.records.front().operation == GuestService::Job &&
+               result.records.front().status == GuestServiceStatus::Complete,
+             "A finished job is harvested into the pending exchange");
+    testTrue(counters,
+             services.process(emptyBatch.data(), completions) &&
+               GuestServices::read(completions, result, false) &&
+               result.records.empty(),
+             "A harvested completion is not delivered again");
+    return counters.failures == 0;
+  }
   if (name == "DisplayServices") {
     WasmFrameRenderer bridge(renderer, 322);
     WasmGameServices denied(
@@ -1416,8 +1495,7 @@ run(const std::string& name)
       std::filesystem::create_directory(files.storage);
       std::ofstream(files.package / "asset.txt", std::ios::binary) << "abc";
     }
-    WasmProgram game(
-      std::move(module), {}, {}, {}, std::move(worker), files);
+    WasmProgram game(std::move(module), {}, {}, {}, std::move(worker), files);
     testTrue(counters,
              game.start(context),
              "Generic host starts actual independent WASM game");
@@ -1655,19 +1733,20 @@ main(int argc, char** argv)
     return 0;
   }
   if (argc == 2 && std::string(argv[1]) == "--list") {
-    std::puts("Illumo.Wasm.FrameValidation\nIllumo.Wasm.FrameRendering\nIllumo."
-              "Wasm.FrameFailures\nIllumo.Wasm.GameHost\nIllumo.Wasm."
-              "ModIsolation\nIllumo.Wasm.RenderServices\nIllumo.Wasm."
-              "GuestPresentation\nIllumo.Wasm.GameJobs\nIllumo.Wasm."
-              "SdkContract\nIllumo.Wasm.GameFiles\nIllumo.Wasm."
-              "DisplayServices\nIllumo.Wasm.ClipboardServices\nIllumo.Wasm."
-              "ConsoleServices\nIllumo.Wasm.DialogServices\nIllumo.Wasm."
-              "RetainedResources\nIllumo.Wasm.AudioServiceDecoder\nIllumo."
-              "Wasm.AudioServices\nIllumo.Wasm.GuestAudio\nIllumo.Wasm."
-              "WorldFrameValidation\nIllumo.Wasm.WorldOperations\nIllumo.Wasm."
-              "WorldAddressingValidation\nIllumo.Wasm.WorldsPerScene\nIllumo.Wasm."
-              "VisualFrameValidation\nIllumo.Wasm.VisualOperations\nIllumo.Wasm."
-              "RuntimeShell");
+    std::puts(
+      "Illumo.Wasm.FrameValidation\nIllumo.Wasm.FrameRendering\nIllumo."
+      "Wasm.FrameFailures\nIllumo.Wasm.GameHost\nIllumo.Wasm."
+      "ModIsolation\nIllumo.Wasm.RenderServices\nIllumo.Wasm."
+      "GuestPresentation\nIllumo.Wasm.GameJobs\nIllumo.Wasm."
+      "SdkContract\nIllumo.Wasm.GameFiles\nIllumo.Wasm."
+      "DisplayServices\nIllumo.Wasm.ClipboardServices\nIllumo.Wasm."
+      "ConsoleServices\nIllumo.Wasm.DialogServices\nIllumo.Wasm."
+      "RetainedResources\nIllumo.Wasm.AudioServiceDecoder\nIllumo."
+      "Wasm.AudioServices\nIllumo.Wasm.GuestAudio\nIllumo.Wasm."
+      "WorldFrameValidation\nIllumo.Wasm.WorldOperations\nIllumo.Wasm."
+      "WorldAddressingValidation\nIllumo.Wasm.WorldsPerScene\nIllumo.Wasm."
+      "VisualFrameValidation\nIllumo.Wasm.VisualOperations\nIllumo.Wasm."
+      "RuntimeShell\nIllumo.Wasm.ServiceHarvest");
     return 0;
   }
   if (argc != 3 || std::string(argv[1]) != "--run") {

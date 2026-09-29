@@ -57,6 +57,12 @@ public:
   WasmGameServices& operator=(WasmGameServices&&) = delete;
   bool process(std::span<const std::byte> requests,
                std::vector<std::byte>& completions);
+  // Adds work that finished after the last process() (the Job worker's and
+  // the lanes' replies) to `completions`, the exchange about to be delivered,
+  // so an update sees what finished while the previous frame rendered rather
+  // than a frame later. Unchanged when nothing finished. False with error()
+  // only on an internal failure.
+  bool harvest(std::vector<std::byte>& completions);
   void cancel();
   const std::string& error() const { return m_error; }
   // Surface windows for the Window service (Windows capability); null
@@ -163,6 +169,16 @@ private:
   };
   bool lanesGranted() const;
   void ensureLaneWorkers();
+  // Moves finished Job and lane replies into `results`: lane replies up to
+  // `laneReplyBudget` bytes (a lone larger one too when
+  // `firstReplyAlwaysFits`) and no record past `recordLimit`; a reply that
+  // does not fit waits in its lane. True when any record was added.
+  bool collectFinished(GuestServices& results,
+                       std::size_t laneReplyBudget,
+                       std::size_t recordLimit,
+                       bool firstReplyAlwaysFits);
+  // Whether a Job or lane reply is ready to collect (no polling side effect).
+  bool finishedWorkWaiting() const;
   // Answers a deferred JobLanes query once every lane store left Loading.
   void completeLaneQuery(GuestServices& results);
   std::uint32_t m_laneCount = 1u;
@@ -173,6 +189,7 @@ private:
   GuestWireWriter m_renderRequests;
   std::vector<std::byte> m_renderResponses;
   GuestWireWriter m_response;
+  GuestServices m_harvested;
   bool m_cancelled = false;
   std::string m_error;
 };

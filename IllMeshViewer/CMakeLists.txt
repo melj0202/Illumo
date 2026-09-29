@@ -13,7 +13,7 @@ add_library(IllMeshViewerCore STATIC
 target_include_directories(IllMeshViewerCore PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_include_directories(IllMeshViewerCore SYSTEM PRIVATE
-  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
+  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
 target_link_libraries(IllMeshViewerCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllMeshViewerCore)
 
@@ -34,7 +34,7 @@ if(BUILD_TESTING)
   target_include_directories(IllMeshViewerTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
   target_include_directories(IllMeshViewerTests SYSTEM PRIVATE
-    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
   target_link_libraries(IllMeshViewerTests PRIVATE IllMeshViewerCore Illumo::TestSupport)
   illumo_configure_runtime_target(IllMeshViewerTests)
   illumo_discover_test_runner(IllMeshViewerTests IllMeshViewer)

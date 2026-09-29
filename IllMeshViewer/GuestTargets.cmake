@@ -13,6 +13,6 @@ illumo_add_guest(IllMeshViewer
   "${_viewer}/MeshViewerUi.cpp")
 target_include_directories(IllMeshViewer PRIVATE "${_viewer}")
 target_include_directories(IllMeshViewer SYSTEM PRIVATE
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
+  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.14.1/public")
 target_link_libraries(IllMeshViewer PRIVATE IllumoGuestContent IllumoGuestEngine)
 unset(_viewer)

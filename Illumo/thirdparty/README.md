@@ -15,7 +15,7 @@ Do not remove the license files stored beside these source trees.
 | `miniaudio-0.11.25/` | miniaudio 0.11.25 (`miniaudio.h` and upstream `README.md`; the implementation is compiled once, by `Source/Audio/AudioDecoder.cpp`) | `LICENSE` |
 | `stb/` | stb headers (`stb_image` is active) | `LICENSE` and the notice at the end of each header |
 | `tinyobjloader/` | tinyobjloader header | `LICENSE` |
-| `tracy-0.13.1/` | Tracy Profiler 0.13.1 | `LICENSE` |
+| `tracy-0.14.1/` | Tracy Profiler 0.14.1 | `LICENSE` |
 
 ## Present but not linked by the current targets
 

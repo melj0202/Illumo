@@ -2,6 +2,7 @@
 #include "CSimSounds.h"
 #include "CanvasEditIcons.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -291,6 +292,7 @@ CanvasContextMenu::update(InputManager* input,
                           float deltaSeconds,
                           bool reducedMotion)
 {
+  ILLUMO_PROFILE_ZONE("CanvasContextMenu.update");
   m_dismissedByPress = false;
   m_dismissedByRightPress = false;
   if (!m_open) {
@@ -423,6 +425,7 @@ CanvasContextMenu::update(InputManager* input,
 void
 CanvasContextMenu::draw()
 {
+  ILLUMO_PROFILE_ZONE("CanvasContextMenu.draw");
   const ColorRgba cyan = UiTheme::accentCool();
   const ColorRgba violet = UiTheme::accentViolet();
   // The card grows out of the pointer's corner on a bouncy spring while it

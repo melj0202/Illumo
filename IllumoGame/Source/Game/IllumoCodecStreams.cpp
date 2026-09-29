@@ -2,6 +2,7 @@
 #include "IllumoCodec.h"
 #include "Rulesets/RuleSet.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Foundation/Profile.h>
 #include <system_error>
 
 #include <algorithm>
@@ -59,6 +60,7 @@ IllumoCodec::writeStream(std::ostream& file,
                          const IllumoDocument& document,
                          std::string* error)
 try {
+  ILLUMO_PROFILE_ZONE("IllumoCodec.writeStream");
   if (!CanvasCoordinatePolicy::validPosition(document.cameraX,
                                              document.cameraY) ||
       !std::isfinite(document.cameraZoom) || document.cameraZoom < 0.1 ||
@@ -88,6 +90,7 @@ try {
     document.sourceGrid != nullptr ? document.sourceGrid : document.grid.get();
   std::vector<SparseChunkRecord> records;
   if (grid != nullptr) {
+    ILLUMO_PROFILE_ZONE("IllumoCodec.collectAndValidate");
     records = grid->collectChunkRecords();
     for (const SparseChunkRecord& record : records) {
       for (const unsigned char state : record.cells) {
@@ -132,6 +135,8 @@ try {
   file.write(reinterpret_cast<const char*>(&worldChunkHeight),
              sizeof(worldChunkHeight));
   file.write(reinterpret_cast<const char*>(&chunkCount), sizeof(chunkCount));
+  ILLUMO_PROFILE_ZONE("IllumoCodec.writeChunks");
+  ILLUMO_PROFILE_PLOT("IllumoCodec.writtenChunks", records.size());
   for (const SparseChunkRecord& record : records) {
     file.write(reinterpret_cast<const char*>(&record.chunkX),
                sizeof(record.chunkX));
@@ -151,6 +156,7 @@ IllumoCodec::readStream(std::istream& file,
                         IllumoDocument* document,
                         std::string* error)
 try {
+  ILLUMO_PROFILE_ZONE("IllumoCodec.readStream");
   if (document == nullptr) {
     setError(error, "Document pointer is null");
     return false;
@@ -225,6 +231,8 @@ try {
       familyString = boundedRuleTag(familyTag, sizeof(familyTag));
     }
     ruleString = boundedRuleTag(ruleTag, sizeof(ruleTag));
+    ILLUMO_PROFILE_ZONE("IllumoCodec.readSparseChunks");
+    ILLUMO_PROFILE_PLOT("IllumoCodec.readChunks", chunkCount);
     bool havePreviousChunk = false;
     std::int64_t previousChunkX = 0;
     std::int64_t previousChunkY = 0;
@@ -299,6 +307,7 @@ try {
       setError(error, "Legacy save is truncated");
       return false;
     }
+    ILLUMO_PROFILE_ZONE("IllumoCodec.readLegacyCells");
     const std::int64_t originX = static_cast<std::int64_t>(fileWidth / 2);
     const std::int64_t originY = static_cast<std::int64_t>(fileHeight / 2);
     for (int y = 0; y < fileHeight; ++y) {
@@ -335,13 +344,17 @@ try {
     setError(error, "Save uses unsupported family: " + familyString);
     return false;
   }
-  std::vector<SparseChunkRecord> records;
-  loadedGrid->collectChunkRecords(&records);
-  for (const SparseChunkRecord& record : records) {
-    for (const unsigned char state : record.cells) {
-      if (static_cast<unsigned int>(state) >= family->stateCount) {
-        setError(error, "Save contains a state that is invalid for its family");
-        return false;
+  {
+    ILLUMO_PROFILE_ZONE("IllumoCodec.validateLoadedStates");
+    std::vector<SparseChunkRecord> records;
+    loadedGrid->collectChunkRecords(&records);
+    for (const SparseChunkRecord& record : records) {
+      for (const unsigned char state : record.cells) {
+        if (static_cast<unsigned int>(state) >= family->stateCount) {
+          setError(error,
+                   "Save contains a state that is invalid for its family");
+          return false;
+        }
       }
     }
   }

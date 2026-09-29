@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/FontProvider.h>
 #include <stdexcept>
@@ -65,6 +66,7 @@ GuestFontProvider::acquire(const std::string& name, float pixelSize)
 void
 GuestFontProvider::pump()
 {
+  ILLUMO_PROFILE_ZONE("FontProvider.pump");
   for (std::pair<const std::string, Entry>& pair : m_fonts) {
     complete(pair.second);
   }
@@ -86,6 +88,8 @@ GuestFontProvider::complete(Entry& entry)
   if (entry.pending == 0 || !m_services.take(entry.pending, completion)) {
     return;
   }
+  // Once per loaded font: decodes the glyph table and enrolls the atlas.
+  ILLUMO_PROFILE_ZONE("FontProvider.completeFont");
   GuestFont description;
   if (completion.status != GuestServiceStatus::Complete ||
       !GuestFont::read(completion.payload, description)) {

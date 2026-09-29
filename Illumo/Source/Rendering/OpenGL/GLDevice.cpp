@@ -1,4 +1,5 @@
 #include "GLDevice.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 
 void
@@ -70,6 +71,9 @@ void
 GLDevice::ExecuteCommandQueue(CommandQueue& commandQueue,
                               const GLResourceTables& tables)
 {
+  ILLUMO_PROFILE_ZONE("GLDevice.ExecuteCommandQueue");
+  m_frameStats.submits += 1;
+  m_frameStats.commands += commandQueue.GetCommandCount();
   // Fresh submit: do not assume previous frame left valid binds (other code may
   // touch GL). Still skip duplicates *within* this queue.
   _boundProgram = 0;
@@ -106,6 +110,9 @@ GLDevice::executeList(const RecordedCommandList* list,
     reportFrameError("ExecuteList: missing or failed recorded list");
     return;
   }
+  ILLUMO_PROFILE_ZONE("GLDevice.ExecuteList");
+  m_frameStats.recordedLists += 1;
+  m_frameStats.recordedCommands += list->size();
   // RecordedCommandList refuses nested ExecuteList tokens, so this loop never
   // recurses.
   for (size_t index = 0; index < list->size(); ++index) {
@@ -301,6 +308,12 @@ GLDevice::executeCommand(const RenderCommand& cmd,
           "UpdateTexture: invalid rectangle, channels, or stride");
         break;
       }
+      m_frameStats.uploadBytes +=
+        static_cast<size_t>(cmd.updateTexture.width) *
+        static_cast<size_t>(cmd.updateTexture.height) *
+        static_cast<size_t>(cmd.updateTexture.channels > 0
+                              ? cmd.updateTexture.channels
+                              : texture->getChannels());
       // Texture bind may have changed inside UpdateSubImage.
       _boundTexture[0] = static_cast<GLuint>(texture->getID());
       break;
@@ -395,6 +408,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
       glDrawArrays(mode,
                    static_cast<GLint>(cmd.draw.first),
                    static_cast<GLsizei>(cmd.draw.elementCount));
+      m_frameStats.drawCalls += 1;
       break;
     }
 
@@ -411,6 +425,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
                      static_cast<GLsizei>(cmd.drawIndexed.elementCount),
                      GL_UNSIGNED_INT,
                      offset);
+      m_frameStats.drawCalls += 1;
       break;
     }
 
@@ -426,6 +441,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
         0,
         static_cast<GLsizei>(cmd.drawInstanced.elementCount),
         static_cast<GLsizei>(cmd.drawInstanced.instanceCount));
+      m_frameStats.drawCalls += 1;
       break;
     }
 
@@ -440,6 +456,8 @@ GLDevice::executeCommand(const RenderCommand& cmd,
                                   cmd.updateBuffer.offsetBytes)) {
         reportFrameError(
           "UpdateBuffer: range exceeds enrolled vertex capacity");
+      } else {
+        m_frameStats.uploadBytes += cmd.updateBuffer.sizeBytes;
       }
       break;
     }
@@ -454,6 +472,8 @@ GLDevice::executeCommand(const RenderCommand& cmd,
                                  cmd.updateIndexBuffer.sizeBytes,
                                  cmd.updateIndexBuffer.offsetBytes)) {
         reportFrameError("UpdateIndexBuffer: range exceeds index capacity");
+      } else {
+        m_frameStats.uploadBytes += cmd.updateIndexBuffer.sizeBytes;
       }
       break;
     }
@@ -485,6 +505,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
                       static_cast<GLsizeiptr>(write.sizeBytes),
                       write.data);
       glBindBuffer(target, 0);
+      m_frameStats.uploadBytes += write.sizeBytes;
       break;
     }
 
@@ -560,6 +581,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
                               GL_UNSIGNED_INT,
                               offset,
                               static_cast<GLsizei>(draw.instanceCount));
+      m_frameStats.drawCalls += 1;
       break;
     }
 

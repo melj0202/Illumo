@@ -3,6 +3,7 @@
 #include "Game/CellContext.h"
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IRenderWindow.h>
@@ -379,6 +380,7 @@ ConfigurationMenu::displayRuleSetName(const std::string& mode)
 void
 ConfigurationMenu::open(const SimulatorConfiguration& current)
 {
+  ILLUMO_PROFILE_ZONE("ConfigurationMenu.open");
   family = CellContext::NormalizeFamilyString(current.family);
   ruleSet = CellContext::NormalizeModeString(current.ruleSet);
   const RuleSetDefinition* definition =
@@ -1064,6 +1066,7 @@ ConfigurationMenu::updateSprings(float deltaSeconds)
 void
 ConfigurationMenu::tick(float deltaSeconds)
 {
+  ILLUMO_PROFILE_ZONE("ConfigurationMenu.tick");
   if (!openState) {
     return;
   }
@@ -1680,6 +1683,7 @@ ConfigurationMenu::updateList(InputManager* inputManager)
 ConfigurationMenuAction
 ConfigurationMenu::update(InputManager* inputManager)
 {
+  ILLUMO_PROFILE_ZONE("ConfigurationMenu.update");
   if (!openState || inputManager == nullptr) {
     return ConfigurationMenuAction::None;
   }
@@ -2217,6 +2221,7 @@ ConfigurationMenu::drawRowControl(ConfigurationSetting setting,
 void
 ConfigurationMenu::drawRows(unsigned char panelOpacity, float breathe)
 {
+  ILLUMO_PROFILE_ZONE("ConfigurationMenu.drawRows");
   GameVisual& cards = layers[kTabLayer];
   GameVisual& visual = layers[kContentLayer];
   const ColorRgba cyan = UiTheme::accentCool();
@@ -2449,6 +2454,7 @@ ConfigurationMenu::drawFooter(unsigned char panelOpacity, float breathe)
 void
 ConfigurationMenu::rebuildVisual()
 {
+  ILLUMO_PROFILE_ZONE("ConfigurationMenu.rebuildVisual");
   updateLayout();
   for (GameVisual& layer : layers) {
     layer.clearPrimitives();
@@ -2532,6 +2538,7 @@ ConfigurationMenu::rebuildVisual()
 bool
 ConfigurationMenu::AppendCommands(Renderer* activeRenderer)
 {
+  ILLUMO_PROFILE_ZONE("ConfigurationMenu.AppendCommands");
   if (!openState || !isVisible()) {
     return true;
   }

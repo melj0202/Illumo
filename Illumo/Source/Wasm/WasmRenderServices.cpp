@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmRenderServices.h>
@@ -96,6 +97,7 @@ bool
 WasmRenderServices::process(std::span<const std::byte> requests,
                             std::vector<std::byte>& completions)
 try {
+  ILLUMO_PROFILE_ZONE("WasmRenderServices.process");
   completions.clear();
   m_error.clear();
   GuestServices incoming;
@@ -244,6 +246,7 @@ try {
         result.status = GuestServiceStatus::Complete;
       }
     } else if (record.operation == GuestService::LoadFont) {
+      ILLUMO_PROFILE_ZONE("WasmRenderServices.loadFont");
       ++fontCount;
       GuestFontRequest requested;
       GuestFontRequest::read(record.payload, requested);
@@ -303,6 +306,7 @@ try {
     results.records.push_back(std::move(result));
   }
   m_lastRequest = last;
+  ILLUMO_PROFILE_PLOT("WasmRenderServices.Pending", m_pending.size());
   m_writer.clear();
   results.write(m_writer);
   completions.assign(m_writer.data().begin(), m_writer.data().end());

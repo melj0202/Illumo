@@ -12,6 +12,7 @@
 #include "Rulesets/RuleSetRegistry.h"
 #include "SimulatorSettings.h"
 #include <Illumo/Content/SceneDirector.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Platform/SaveLoad.h>
@@ -61,6 +62,7 @@ TitleScene::~TitleScene()
 bool
 TitleScene::start(IllumoContext& startContext)
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.start");
   IllumoContext* context = &startContext;
   if (context == nullptr || context->envVars == nullptr ||
       context->window == nullptr || context->camera == nullptr ||
@@ -335,6 +337,7 @@ TitleScene::launchVisitor()
 void
 TitleScene::advanceAmbientSimulation(double dt)
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.advanceAmbientSimulation");
   if (!m_bgContext || !m_bgContext->getCanvasView() ||
       !m_bgContext->getGrid() || !m_bgContext->getRuleSet()) {
     return;
@@ -354,9 +357,12 @@ TitleScene::advanceAmbientSimulation(double dt)
   }
   m_bgSimAccum += dt;
   const double stepSeconds = 1.0 / kAmbientStepsPerSecond;
-  while (m_bgSimAccum >= stepSeconds) {
-    m_bgSimAccum -= stepSeconds;
-    m_bgContext->getGrid()->advance(*m_bgContext->getRuleSet());
+  {
+    ILLUMO_PROFILE_ZONE("TitleScene.ambientGenerations");
+    while (m_bgSimAccum >= stepSeconds) {
+      m_bgSimAccum -= stepSeconds;
+      m_bgContext->getGrid()->advance(*m_bgContext->getRuleSet());
+    }
   }
   // Resample changed chunks (and stamped visitors) into the view's targets;
   // the view then fades toward them.
@@ -441,6 +447,7 @@ TitleScene::pressItem(float originX, float originY)
 void
 TitleScene::updateMotion(float dt)
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.updateMotion");
   const bool still = reducedMotion();
   m_rowEmphasis.focusOnly(m_selectedItem, m_rowCount);
   m_rowEmphasis.tick(dt, still);
@@ -724,6 +731,7 @@ TitleScene::applyConfiguration(const SimulatorConfiguration& configuration)
 void
 TitleScene::update(double dt)
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.update");
   if (ic == nullptr) {
     return;
   }
@@ -1046,6 +1054,7 @@ TitleScene::drawAurora(GameVisual& visual,
                        float height,
                        float reveal)
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.drawAurora");
   const float ambient = m_animator.ambientPhase();
   const float phase = ambient * 0.52359877f;
   const float leanX = std::clamp(m_parallaxX.value(), -1.3f, 1.3f);
@@ -1100,6 +1109,7 @@ TitleScene::drawAurora(GameVisual& visual,
 void
 TitleScene::drawTitle(GameVisual& visual, float room, unsigned char opacity)
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.drawTitle");
   const ColorRgba cyan = UiTheme::accentCool();
   const bool still = reducedMotion();
   const float ambient = m_animator.ambientPhase();
@@ -1410,6 +1420,7 @@ TitleScene::drawSelection(GameVisual& visual,
                           const RowGeometry& rows,
                           float breathe)
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.drawSelection");
   const ColorRgba cyan = UiTheme::accentCool();
   // The selection is a drop of liquid: its head pours toward the new row and
   // overshoots, its tail stretches, necks and snaps in behind it, and it
@@ -1471,6 +1482,7 @@ TitleScene::drawRowContent(GameVisual& visual,
                            const RowGeometry& rows,
                            float room)
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.drawRowContent");
   const ColorRgba cyan = UiTheme::accentCool();
   // By item kind.
   const char* labels[kItemKinds] = { "New simulation",
@@ -1672,6 +1684,7 @@ TitleScene::drawLayer(Layer layer, bool keyed, Draw&& draw)
 void
 TitleScene::rebuildVisual()
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.rebuildVisual");
   updateLayout();
   const float width = m_panelFit.virtualWidth;
   const float height = m_panelFit.virtualHeight;
@@ -1760,6 +1773,7 @@ TitleScene::rebuildVisual()
 void
 TitleScene::dispatch(DrawList& frame)
 {
+  ILLUMO_PROFILE_ZONE("TitleScene.dispatch");
   DrawList* scene = &frame;
   if (m_bgContext != nullptr && m_bgContext->getCanvasView() != nullptr) {
     scene->AddDrawable(m_bgContext->getCanvasView(), RenderLayerId::World);

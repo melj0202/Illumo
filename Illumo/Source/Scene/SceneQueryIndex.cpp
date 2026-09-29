@@ -1,5 +1,6 @@
 #include "SceneQueryIndex.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -58,6 +59,7 @@ SceneQueryIndex::build(const std::vector<AxisAlignedBounds3>& bounds,
                        const std::vector<unsigned char>& valid,
                        const std::vector<unsigned char>& enabled)
 {
+  ILLUMO_PROFILE_ZONE("SceneQueryIndex.build");
   m_nodes.clear();
   m_indices.clear();
   m_buildScratch.clear();

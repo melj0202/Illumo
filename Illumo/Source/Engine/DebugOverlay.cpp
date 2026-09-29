@@ -8,6 +8,7 @@
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/DebugOverlay.h>
 #include <Illumo/Foundation/BuildInfo.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
 #include <Illumo/Services/CommandLine.h>
@@ -16,7 +17,6 @@
 #include <algorithm>
 #include <queue>
 #include <string>
-#include <tracy/Tracy.hpp>
 #include <vector>
 
 DebugOverlay::DebugOverlay(FrameProfiler* profiler)
@@ -308,6 +308,7 @@ DebugOverlay::updateDiagnostics(double dt)
   if (diagnosticsLabel == nullptr || ic == nullptr || ic->envVars == nullptr) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("DebugOverlay.updateDiagnostics");
   const IBackend* backend = ic->renderer->getBackend();
   if (diagnostics->update(dt,
                           ic->envVars->getVar("showFPS").valueAsBool,
@@ -349,7 +350,7 @@ DebugOverlay::updateWatermarkPosition()
 void
 DebugOverlay::update(double dt)
 {
-  ZoneNamed(DebugOverlayUpdateZone, "DebugOverlay Update");
+  ILLUMO_PROFILE_ZONE("DebugOverlay.update");
 
   // The runtime drops an overlay that fails to start; still guard for
   // incomplete fixtures.
@@ -435,6 +436,7 @@ DebugOverlay::update(double dt)
   keyQueue.swap(remainingKeys);
 
   if (m_profilerOverlay != nullptr) {
+    ILLUMO_PROFILE_ZONE("DebugOverlay.profilerOverlay");
     m_profilerOverlay->captureInput(*ic->inputManager, ic->commandLine->isOpen);
     const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
     const float scale = ic->renderer->getUiScale();
@@ -444,6 +446,7 @@ DebugOverlay::update(double dt)
   }
 
   if (m_fileTreeOverlay != nullptr && m_fileTreeOverlay->visible()) {
+    ILLUMO_PROFILE_ZONE("DebugOverlay.fileTreeOverlay");
     // A tree that was withdrawn (the product exited) closes the browser.
     if (ic->fileTree == nullptr) {
       m_fileTreeOverlay->hide();
@@ -506,6 +509,7 @@ DebugOverlay::update(double dt)
 
   // Execute command queue
   if (ic->commandRegistry != nullptr) {
+    ILLUMO_PROFILE_ZONE("DebugOverlay.executeCommands");
     ic->commandRegistry->ExecuteQueue();
   }
 }
@@ -660,6 +664,7 @@ DebugOverlay::updateDetachedConsole()
   if (m_consoleWindow == nullptr) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("DebugOverlay.updateDetachedConsole");
   if (m_consoleWindow->isCloseRequested()) {
     closeDetachedConsole(false);
     return;
@@ -734,6 +739,7 @@ DebugOverlay::updateDetachedConsole()
   }
   const bool rebuilt = console->ComposeDetached();
   if (rebuilt || resized) {
+    ILLUMO_PROFILE_ZONE("DebugOverlay.drawDetachedConsole");
     m_consoleCanvas->clear(ColorRgba{ 14, 14, 14, 255 });
     m_consoleCanvas->draw(console->getVisual());
     m_consoleWindow->takeRepaintRequest();

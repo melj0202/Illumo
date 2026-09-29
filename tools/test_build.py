@@ -104,6 +104,10 @@ class BuildTests(unittest.TestCase):
         self.assertIn("--cmake-arg=-DILLUMO_ENABLE_ASAN=OFF", no_asan)
         self.assertNotEqual(build.BUILTIN_PROFILES["debug-noasan"]["build_dir"],
                             build.BUILTIN_PROFILES["debug"]["build_dir"])
+        # "tracy" profiles optimized code with host and guest zones.
+        tracy = build.profile_arguments(build.BUILTIN_PROFILES["tracy"])
+        self.assertIn("--config=Release", tracy)
+        self.assertIn("--tracy", tracy)
 
     def test_save_from_builtin_to_new_shared_file(self):
         code, _, errors = self.invoke("profile-save", "custom", "--profile", "debug",

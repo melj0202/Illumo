@@ -1,4 +1,5 @@
 #include "CatalogBootstrap.h"
+#include <Illumo/Foundation/Profile.h>
 #include <algorithm>
 
 static constexpr std::size_t kCatalogBytes = 4u * 1024u * 1024u;
@@ -164,6 +165,7 @@ CSimCatalogBootstrap::readCatalogs()
 void
 CSimCatalogBootstrap::apply()
 {
+  ILLUMO_PROFILE_ZONE("CatalogBootstrap.apply");
   if (!m_staged.loadFromCatalogTexts(m_reads[0].text, m_reads[1].text)) {
     m_error = "Packaged rule catalogs are invalid";
     return;
@@ -172,6 +174,7 @@ CSimCatalogBootstrap::apply()
     if (catalog.text.empty()) {
       continue;
     }
+    ILLUMO_PROFILE_ZONE("CatalogBootstrap.mergePackageCatalog");
     // Merge into a copy so a rejected catalog leaves no partial state.
     RuleSetRegistry candidate = m_staged;
     const std::size_t slash = catalog.path.rfind('/');

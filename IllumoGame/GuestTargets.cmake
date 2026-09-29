@@ -18,7 +18,7 @@ add_library(CSimGuestDomain STATIC
 target_include_directories(CSimGuestDomain PUBLIC "${_game}/Source")
 target_include_directories(CSimGuestDomain SYSTEM PRIVATE
   "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
+  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.14.1/public")
 target_link_libraries(CSimGuestDomain PUBLIC IllumoGuestOptions)
 
 # IllumoGame itself: the complete product as a WASM package module. Native
@@ -56,7 +56,7 @@ illumo_add_guest(IllumoGame
   "${_game}/Source/Wasm/SimulationRunnerGuest.cpp")
 target_include_directories(IllumoGame SYSTEM PRIVATE
   "${ILLUMO_ROOT}/Illumo/thirdparty/json/single_include"
-  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.13.1/public")
+  "${ILLUMO_ROOT}/Illumo/thirdparty/tracy-0.14.1/public")
 target_link_libraries(IllumoGame PRIVATE CSimGuestDomain IllumoGuestEngine IllumoGuestContent)
 
 # The compute worker store: CSW1 whole-world jobs (parity tests) and CSL1

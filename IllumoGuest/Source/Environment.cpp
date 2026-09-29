@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Environment.h>
 #include <string>
@@ -60,6 +61,7 @@ GuestEnvironment::pump()
       m_loaded = true;
       m_writable = result.outcome == GuestFileOutcome::NotFound;
       if (result.outcome == GuestFileOutcome::Success) {
+        ILLUMO_PROFILE_ZONE("Environment.loadText");
         const std::string_view text(
           reinterpret_cast<const char*>(result.bytes.data()),
           result.bytes.size());
@@ -80,6 +82,7 @@ GuestEnvironment::pump()
     }
   }
   if (m_savePending) {
+    ILLUMO_PROFILE_ZONE("Environment.save");
     const std::string text = saveText();
     if (text.size() > 1024u * 1024u) {
       m_savePending = false;

@@ -1,5 +1,6 @@
 #include "RuleSetRegistry.h"
 #include "DataRuleSet.h"
+#include <Illumo/Foundation/Profile.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -2303,6 +2304,7 @@ RuleSetRegistry::registerRule(const RuleSetDefinition& definition)
 bool
 RuleSetRegistry::loadFromText(const std::string& text)
 {
+  ILLUMO_PROFILE_ZONE("RuleSetRegistry.loadFromText");
   try {
     const nlohmann::json root = nlohmann::json::parse(text);
     unsigned int schemaVersion = 1u;
@@ -2379,6 +2381,7 @@ RuleSetRegistry::loadFromText(const std::string& text)
 bool
 RuleSetRegistry::loadFamiliesFromText(const std::string& text)
 {
+  ILLUMO_PROFILE_ZONE("RuleSetRegistry.loadFamiliesFromText");
   try {
     const nlohmann::json root = nlohmann::json::parse(text);
     unsigned int schemaVersion = 0u;
@@ -2407,6 +2410,7 @@ bool
 RuleSetRegistry::loadFromCatalogTexts(const std::string& familiesText,
                                       const std::string& rulesText)
 {
+  ILLUMO_PROFILE_ZONE("RuleSetRegistry.loadFromCatalogTexts");
   RuleSetRegistry staged;
   if (!familiesText.empty() && !staged.loadFamiliesFromText(familiesText)) {
     return false;
@@ -2427,6 +2431,7 @@ RuleSetRegistry::loadFromCatalogTexts(const std::string& familiesText,
 bool
 RuleSetRegistry::loadRulePackage(const std::string& text)
 {
+  ILLUMO_PROFILE_ZONE("RuleSetRegistry.loadRulePackage");
   try {
     const nlohmann::json root = nlohmann::json::parse(text);
     if (root.is_array() || !root.is_object() ||
@@ -2572,6 +2577,7 @@ std::string
 RuleSetRegistry::serializeRulePackage(const RuleFamilyDefinition& family,
                                       const RuleSetDefinition& definition)
 {
+  ILLUMO_PROFILE_ZONE("RuleSetRegistry.serializeRulePackage");
   nlohmann::json root;
   root["schema_version"] = 1u;
   root["families"] = nlohmann::json::array({ familyToJson(family) });
@@ -2582,6 +2588,7 @@ RuleSetRegistry::serializeRulePackage(const RuleFamilyDefinition& family,
 std::unique_ptr<RuleSet>
 RuleSetRegistry::createRuleSet(const std::string& id) const
 {
+  ILLUMO_PROFILE_ZONE("RuleSetRegistry.createRuleSet");
   const RuleSetDefinition* definition = getRuleSetDefinition(id);
   const RuleFamilyDefinition* family =
     definition == nullptr ? nullptr : getFamilyDefinition(definition->familyId);

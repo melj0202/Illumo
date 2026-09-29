@@ -52,11 +52,14 @@ factories; Rulesets has no filesystem or native platform dependencies.
 implementation (`Wasm/SimulationRunnerGuest.cpp`, `ILLUMO_SERIAL_GUEST`) that
 runs the shared generation body serially or fans it out to simulation lanes
 through `CSimPlatform::simulationLanes()` (`Wasm/SimulationLanes.*`). Keep
-publication and mirror-delta semantics identical across both. A drain
-consumes the outstanding generation when `canBlock()` is true and retires it
-(discarding at most one generation) when lanes make it false; never wait for
-a lane inside one frame. Lanes must produce exactly the serial generation:
-change partitioning, halos or `SparseCellGrid::applyChunkPatches` only with
+publication and mirror-delta semantics identical across both. A start may
+publish several generations as one delta (`SimulationRunnerTimings::generations`,
+D-E34): its `fromRevision` is the published grid's and its `toRevision` the
+working grid's, which can differ by more than one. A drain consumes the
+outstanding start when `canBlock()` is true and retires it (discarding its
+unpublished block) when lanes make it false; never wait for a lane inside one
+frame. Lanes must produce exactly the serial generations: change partitioning,
+halo depth, block limits or `SparseCellGrid::applyChunkPatches` only with
 `IllumoGame.Wasm.LaneParity` green.
 
 ## Domain and presentation invariants

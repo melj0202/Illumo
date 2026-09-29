@@ -1,5 +1,6 @@
 #include "ExitConfirmDialog.h"
 #include "CSimSounds.h"
+#include <Illumo/Foundation/Profile.h>
 
 ExitConfirmDialog::ExitConfirmDialog(IRenderWindow* window, Renderer* renderer)
   : m_dialog(window, renderer)
@@ -175,12 +176,14 @@ ExitConfirmDialog::close()
 void
 ExitConfirmDialog::tick(float deltaSeconds)
 {
+  ILLUMO_PROFILE_ZONE("ExitConfirmDialog.tick");
   m_dialog.tick(deltaSeconds);
 }
 
 ExitConfirmAction
 ExitConfirmDialog::update(InputManager* inputManager)
 {
+  ILLUMO_PROFILE_ZONE("ExitConfirmDialog.update");
   // The product ticks once with the frame delta, including console-open frames.
   const int selectedBefore = m_dialog.selectedButton();
   const int action = m_dialog.update(inputManager, 0.0f);
@@ -217,5 +220,6 @@ ExitConfirmDialog::update(InputManager* inputManager)
 bool
 ExitConfirmDialog::AppendCommands(Renderer* renderer)
 {
+  ILLUMO_PROFILE_ZONE("ExitConfirmDialog.AppendCommands");
   return m_dialog.AppendCommands(renderer);
 }

@@ -1,5 +1,6 @@
 #include "SoftwareCursor.h"
 
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <algorithm>
@@ -120,6 +121,7 @@ SoftwareCursor::update(float deltaSeconds,
                        bool pressed,
                        bool reducedMotion)
 {
+  ILLUMO_PROFILE_ZONE("SoftwareCursor.update");
   m_reducedMotion = reducedMotion;
   if (!visible || !std::isfinite(pointerX) || !std::isfinite(pointerY)) {
     // Forget the motion so the pointer reappears still, where it is.
@@ -216,6 +218,7 @@ SoftwareCursor::pathAt(float delay, float* x, float* y) const
 void
 SoftwareCursor::rebuild()
 {
+  ILLUMO_PROFILE_ZONE("SoftwareCursor.rebuild");
   m_visual.clearPrimitives();
   const ColorRgba cyan = UiTheme::accentCool();
   const ColorRgba violet = UiTheme::accentViolet();

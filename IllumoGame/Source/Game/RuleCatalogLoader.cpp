@@ -1,6 +1,7 @@
 #include "RuleCatalogLoader.h"
 #include "RuleCatalogOverlay.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Platform/AtomicFile.h>
 #include <Illumo/Services/EnvVars.h>
 #include <fstream>
@@ -32,6 +33,7 @@ bool
 RuleCatalogLoader::loadFromFile(RuleSetRegistry& registry,
                                 const std::filesystem::path& path)
 {
+  ILLUMO_PROFILE_ZONE("RuleCatalogLoader.loadFromFile");
   std::string text;
   return readTextFile(path, text) && registry.loadRulePackage(text);
 }
@@ -42,6 +44,7 @@ RuleCatalogLoader::loadFromCatalogFiles(
   const std::filesystem::path& familiesPath,
   const std::filesystem::path& rulesPath)
 {
+  ILLUMO_PROFILE_ZONE("RuleCatalogLoader.loadFromCatalogFiles");
   std::string familiesText;
   std::string rulesText;
   if (!readTextFile(rulesPath, rulesText)) {
@@ -64,6 +67,7 @@ RuleCatalogLoader::loadFromLocations(
   const std::filesystem::path& executableDirectory,
   const std::filesystem::path& workingDirectory)
 {
+  ILLUMO_PROFILE_ZONE("RuleCatalogLoader.loadFromLocations");
   std::vector<std::filesystem::path> candidates;
   if (!executableDirectory.empty()) {
     candidates.push_back(executableDirectory);

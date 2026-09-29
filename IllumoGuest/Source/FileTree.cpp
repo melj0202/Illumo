@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/FileTree.h>
 #include <string>
@@ -78,6 +79,7 @@ GuestFileTree::pack(std::string grant, std::string source, Done done)
 void
 GuestFileTree::pump()
 {
+  ILLUMO_PROFILE_ZONE("FileTree.pump");
   // Finished operations are moved out first, so callbacks may start new
   // operations without disturbing this walk.
   std::vector<std::pair<Operation, GuestFileResult>> finished;
