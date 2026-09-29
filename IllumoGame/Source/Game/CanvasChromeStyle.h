@@ -5,37 +5,40 @@
 
 // The settings (hamburger) button's look, shared by the canvas chrome that
 // wears it: the edit toolbar (CanvasActionBar) and the collapsed paint bubble.
-// An opaque tile with a rim lit teal at the top and indigo at the bottom, a
-// deep teal-to-indigo face, both brightening toward the accents on hover, and
-// a violet-to-cyan halo behind it that breathes at rest and blooms on hover.
-// `hover` runs 0..1.
+// An opaque tile in the settings menu's palette: a navy glass card at rest
+// with a slate rim, lighting to the menu's selected teal-to-indigo face and a
+// cyan-lit rim on hover, with a cyan-leaning halo behind it that breathes at
+// rest and blooms on hover. `hover` runs 0..1.
 class CanvasChromeStyle
 {
 public:
   static ColorRgba rimTop(float hover)
   {
     return UiTheme::mix(
-      ColorRgba{ 70, 160, 196, 255 }, UiTheme::accentCool(), hover);
+      UiTheme::mix(UiTheme::glassRim(), UiTheme::accentCool(), 0.2f),
+      UiTheme::accentCool(),
+      hover);
   }
   static ColorRgba rimBottom(float hover)
   {
     return UiTheme::mix(
-      ColorRgba{ 114, 88, 204, 255 }, UiTheme::accentViolet(), hover);
+      UiTheme::glassRim(),
+      UiTheme::mix(UiTheme::glassRim(), UiTheme::accentViolet(), 0.55f),
+      hover);
   }
   static ColorRgba faceTop(float hover)
   {
-    return UiTheme::mix(
-      ColorRgba{ 30, 74, 104, 255 }, ColorRgba{ 44, 128, 160, 255 }, hover);
+    return UiTheme::mix(UiTheme::cardTop(), UiTheme::selectionTop(), hover);
   }
   static ColorRgba faceBottom(float hover)
   {
     return UiTheme::mix(
-      ColorRgba{ 46, 34, 104, 255 }, ColorRgba{ 74, 54, 156, 255 }, hover);
+      UiTheme::cardBottom(), UiTheme::selectionBottom(), hover);
   }
   static ColorRgba halo(float hover)
   {
     return UiTheme::mix(
-      UiTheme::accentViolet(), UiTheme::accentCool(), 0.4f + 0.6f * hover);
+      UiTheme::accentViolet(), UiTheme::accentCool(), 0.7f + 0.3f * hover);
   }
   // How far the halo reaches past the tile, and its inner opacity.
   static float haloWidth(float breathe, float hover)
@@ -44,7 +47,7 @@ public:
   }
   static float haloOpacity(float breathe, float hover)
   {
-    return 0.14f + 0.08f * breathe + 0.26f * hover;
+    return 0.11f + 0.07f * breathe + 0.22f * hover;
   }
   // The idle breath (0..1) on a 3.2 s cycle of a seconds clock; a steady
   // half breath with reduced motion.

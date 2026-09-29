@@ -3192,10 +3192,10 @@ CanvasScene::buildEditHints(float width,
   panelHeight = static_cast<float>(editHintsFullInsetPixels) / scale;
   const float top = height - panelHeight;
   // An opaque glass footer reserves its own band; no canvas shows through.
-  ColorRgba footerTop = UiTheme::glassTop();
-  footerTop.a = 255;
-  ColorRgba footerBottom = UiTheme::glassBottom();
-  footerBottom.a = 255;
+  // The legend wears the same teal-to-indigo face as the settings button,
+  // the toolbar and the paint bubble.
+  const ColorRgba footerTop = CanvasChromeStyle::faceTop(0.0f);
+  const ColorRgba footerBottom = CanvasChromeStyle::faceBottom(0.0f);
   editHintsVisual.addGradientRect(0.0f,
                                   top,
                                   width,
@@ -3209,7 +3209,7 @@ CanvasScene::buildEditHints(float width,
   editHintsVisual.addFilledRect(
     0.0f, top + panelHeight, width, panelHeight, footerBottom);
   const ColorRgba cyan = UiTheme::accentCool();
-  const ColorRgba violet = UiTheme::accentViolet();
+  const ColorRgba violet = CanvasChromeStyle::halo(0.0f);
   // A soft glow hugs the lit top edge: it rises into the canvas and sinks a
   // little way into the bar, cyan in the middle fading toward cyan and violet
   // at the ends like the hairline it surrounds. It breathes in step with the
