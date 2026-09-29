@@ -21,6 +21,11 @@
 #include <glm/fwd.hpp>
 #include <utility>
 
+// The window size applyHostDefaults seeds as "WinX"/"WinY" (keep them in
+// step), and the fallback for a saved size that cannot open a window.
+static constexpr int kDefaultWindowWidth = 1280;
+static constexpr int kDefaultWindowHeight = 720;
+
 static void
 cleanupBackendAfterInitializationFailure(
   std::unique_ptr<IBackend>* backend) noexcept
@@ -119,10 +124,23 @@ Illumo::initialize()
   ILLUMO_PROFILE_ZONE("Illumo.Initialize");
 
   try {
-    const int initialWindowWidth =
+    int initialWindowWidth =
       static_cast<int>(m_environment->getVar("WinX").valueAsLong);
-    const int initialWindowHeight =
+    int initialWindowHeight =
       static_cast<int>(m_environment->getVar("WinY").valueAsLong);
+    // A settings file saved with a minimized window (0x0) or edited by hand
+    // must not stop the window from opening.
+    if (initialWindowWidth <= 0 || initialWindowHeight <= 0) {
+      Logger::LogWarning("Ignoring the saved window size " +
+                         std::to_string(initialWindowWidth) + "x" +
+                         std::to_string(initialWindowHeight) + "; using " +
+                         std::to_string(kDefaultWindowWidth) + "x" +
+                         std::to_string(kDefaultWindowHeight));
+      initialWindowWidth = kDefaultWindowWidth;
+      initialWindowHeight = kDefaultWindowHeight;
+      m_environment->setVar("WinX", initialWindowWidth);
+      m_environment->setVar("WinY", initialWindowHeight);
+    }
     {
       ILLUMO_PROFILE_ZONE("Illumo.CreateWindow");
       m_window = m_windowFactory(initialWindowWidth,

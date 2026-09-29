@@ -34,6 +34,7 @@
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/CommandQueue.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/GLString.h>
@@ -62,7 +63,6 @@
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Rendering/UiScale.h>
@@ -111,7 +111,10 @@ main()
   static_assert(std::is_destructible_v<IllumoApplicationDefinition>);
   static_assert(!std::is_copy_constructible_v<DebugOverlay>);
   static_assert(std::is_destructible_v<FramePacer>);
+  static_assert(!std::is_copy_constructible_v<FramePacer>);
   static_assert(std::is_destructible_v<PlatformTimerScope>);
+  static_assert(!std::is_copy_constructible_v<PlatformWaitTimer>);
+  static_assert(!std::is_move_constructible_v<PlatformWaitTimer>);
   static_assert(std::has_virtual_destructor_v<IEnvVars>);
   static_assert(std::is_destructible_v<GameVisual>);
   static_assert(std::is_destructible_v<MeshVisual>);

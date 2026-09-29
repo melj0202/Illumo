@@ -10,7 +10,9 @@
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -643,6 +645,43 @@ testPresentationTimingPolicy()
     shouldPace(true, 144, 60),
     "60 FPS target on 144 Hz display engages software pacing under VSync");
 
+  // Sleep strategy: sleep all but the timer's wake latency, then spin.
+  testTrue(g,
+           calculatePacingSleep(std::chrono::milliseconds(16),
+                                std::chrono::milliseconds(1)) ==
+             std::chrono::milliseconds(15),
+           "pacer sleeps until the wake latency before the deadline");
+  testTrue(g,
+           calculatePacingSleep(std::chrono::microseconds(800),
+                                std::chrono::milliseconds(1)) ==
+             std::chrono::nanoseconds::zero(),
+           "pacer spins when less than the wake latency remains");
+  testTrue(g,
+           calculatePacingSleep(std::chrono::milliseconds(1),
+                                std::chrono::milliseconds(1)) ==
+             std::chrono::nanoseconds::zero(),
+           "pacer spins when exactly the wake latency remains");
+  testTrue(g,
+           calculatePacingSleep(std::chrono::milliseconds(-5),
+                                std::chrono::milliseconds(1)) ==
+             std::chrono::nanoseconds::zero(),
+           "pacer does not sleep past a missed deadline");
+  {
+    PlatformWaitTimer waitTimer;
+    testTrue(g,
+             waitTimer.wakeLatency() > std::chrono::nanoseconds::zero() &&
+               waitTimer.wakeLatency() <= std::chrono::milliseconds(3),
+             "wait timer reports a bounded wake latency");
+    const std::chrono::steady_clock::time_point before =
+      std::chrono::steady_clock::now();
+    waitTimer.sleepFor(std::chrono::nanoseconds::zero());
+    waitTimer.sleepFor(std::chrono::milliseconds(-1));
+    testTrue(g,
+             std::chrono::steady_clock::now() - before <
+               std::chrono::milliseconds(5),
+             "non-positive sleeps return at once");
+  }
+
   // FramePacer cadence and state
   {
     PlatformTimerScope timerScope;
@@ -690,6 +729,89 @@ testPresentationTimingPolicy()
              elapsed < std::chrono::milliseconds(50),
              "paceFrame does not overshoot excessively");
   }
+}
+
+static double
+medianMilliseconds(std::vector<double> samples)
+{
+  std::sort(samples.begin(), samples.end());
+  return samples[samples.size() / 2];
+}
+
+// Runs without PlatformTimerScope, as Windows 11 effectively does for an
+// occluded or minimized window: a 1 ms sleep_for then lasts a whole 15.6 ms
+// timer tick, while the high-resolution wait timer keeps its precision.
+static void
+testPacingSleepPrecision()
+{
+  testSection("PresentationTiming: sleeps without a raised timer resolution");
+  PlatformWaitTimer waitTimer;
+#if defined(_WIN32)
+  testTrue(g,
+           waitTimer.isHighResolution(),
+           "Windows 10 1803+ provides a high-resolution wait timer");
+#endif
+
+  const int kSleeps = 25;
+  const std::chrono::nanoseconds kSleep = std::chrono::milliseconds(2);
+  std::vector<double> sleeps;
+  for (int index = 0; index < kSleeps; ++index) {
+    const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+    waitTimer.sleepFor(kSleep);
+    sleeps.push_back(std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - start)
+                       .count());
+  }
+  const double sleepMedian = medianMilliseconds(sleeps);
+  const double sleepMax = *std::max_element(sleeps.begin(), sleeps.end());
+  // Median, not maximum: a loaded machine may preempt a few wake-ups, while a
+  // tick-bound sleep misses on nearly every one.
+  testTrue(g, sleepMedian >= 1.5, "a 2 ms sleep does not return early");
+  testTrue(g,
+           sleepMedian < 2.0 +
+                           std::chrono::duration<double, std::milli>(
+                             waitTimer.wakeLatency())
+                             .count() +
+                           1.0,
+           "a 2 ms sleep wakes within its wake latency");
+
+  const int kFrames = 30;
+  FramePacer pacer;
+  std::vector<double> intervals;
+  pacer.pace(100, false, 60);
+  std::chrono::steady_clock::time_point previous =
+    std::chrono::steady_clock::now();
+  for (int frame = 0; frame < kFrames; ++frame) {
+    pacer.pace(100, false, 60);
+    const std::chrono::steady_clock::time_point now =
+      std::chrono::steady_clock::now();
+    intervals.push_back(
+      std::chrono::duration<double, std::milli>(now - previous).count());
+    previous = now;
+  }
+  const double intervalMedian = medianMilliseconds(intervals);
+  int lateFrames = 0;
+  for (double interval : intervals) {
+    if (interval > 13.0) {
+      ++lateFrames;
+    }
+  }
+  testTrue(g,
+           intervalMedian > 9.5 && intervalMedian < 10.5,
+           "100 FPS pacing holds a 10 ms cadence");
+  testTrue(g, lateFrames <= 3, "at most 3 of 30 paced frames run late");
+  std::printf(
+    "PacingSleepPrecision highResolution=%d wakeLatencyMs=%.3f "
+    "sleep2msMedianMs=%.3f sleep2msMaxMs=%.3f "
+    "pace100MedianMs=%.3f pace100MaxMs=%.3f lateFrames=%d\n",
+    waitTimer.isHighResolution() ? 1 : 0,
+    std::chrono::duration<double, std::milli>(waitTimer.wakeLatency()).count(),
+    sleepMedian,
+    sleepMax,
+    intervalMedian,
+    *std::max_element(intervals.begin(), intervals.end()),
+    lateFrames);
 }
 
 static void
@@ -1212,6 +1334,9 @@ registerRuntimeUtilityTests(IllumoTestRegistry& registry)
                []() { return runRuntimeUtilityCase(testBackendConfigTokens); });
   registry.add("Illumo.Presentation.FramePacingPolicy", []() {
     return runRuntimeUtilityCase(testPresentationTimingPolicy);
+  });
+  registry.add("Illumo.Presentation.PacingSleepPrecision", []() {
+    return runRuntimeUtilityCase(testPacingSleepPrecision);
   });
   registry.add("Illumo.AssetManager.Enrollment", []() {
     return runRuntimeUtilityCase(testAssetManagerEnrollment);

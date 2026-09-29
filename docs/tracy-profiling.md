@@ -57,6 +57,16 @@ The simulation runs beside the frame: a generation on lanes appears on the
 worker threads while the main thread keeps drawing, and the control store's
 merge appears inside the game's update.
 
+`Frame.Pacing` is the software frame limiter (active when VSync is off or
+`fps` is below the monitor rate). It should end on the target cadence: at
+`fps 60` a zone longer than about 16.7 ms is an overslept wait. Windows 11
+ignores the runtime's 1 ms timer resolution while its window is occluded or
+minimized, so the pacer waits on a high-resolution waitable timer instead
+(D-P34). To check pacing under that policy without hiding the window, set
+`PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION` on the running
+`IllumoRuntime` process (`SetProcessInformation` with
+`ProcessPowerThrottling`, control and state mask `0x4`) before timing starts.
+
 ## Adding markers
 
 Include `<Illumo/Foundation/Profile.h>`; it works unchanged in host, engine,

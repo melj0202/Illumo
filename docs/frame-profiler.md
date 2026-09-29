@@ -24,6 +24,11 @@ shortcuts remain available.
 | Presentation / waits | Backend EndFrame including swap; frame limiter |
 | Other | Remaining elapsed time inside the measured loop body |
 
+The frame limiter is `FramePacer`'s wait, active when VSync is off or `fps`
+is below the monitor rate. It is mostly a high-resolution timer sleep plus a
+final spin of about 0.5 ms, so its slice fills the frame up to the target
+duration and is not CPU work (D-P34).
+
 A sample spans beginFrame to endFrame in `RuntimeShell`'s loop. Close negotiation
 before that body, startup, and shutdown are excluded. Sequential steady-clock
 marks partition elapsed time into exclusive phases. Renderer reports a timestamp

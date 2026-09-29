@@ -75,6 +75,13 @@ private:
   void syncPresentationMode();
 };
 
+// Records a window size as the persisted WinX/WinY. A minimized window
+// reports 0x0, and persisting that would make the next launch fail to create
+// its window, so a non-positive or iconified size keeps the last restored
+// size. Returns whether the size was recorded.
+bool
+recordWindowSize(IEnvVars* envVars, int width, int height, bool iconified);
+
 std::unique_ptr<IRenderWindow>
 CreateRenderWindow(int width,
                    int height,

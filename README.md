@@ -357,7 +357,9 @@ Escape closes). `--open` hands one
 document to the app: the guest sees only the file's base name, and the host
 grants the file as the selection `launch`, writable when the manifest says
 `launchAccess: "edit"`. The window title comes from the manifest `title`.
-Runtime settings live in `envvars.json` beside the runtime; each app keeps
+Runtime settings live in `envvars.json` beside the runtime, including the
+last restored window size (`WinX`/`WinY`; a minimized window keeps the
+previous size, and a non-positive saved size opens at 1280x720); each app keeps
 its own settings in its storage directory, seeded from the package's
 `envvars.json` on first run. `--help` and `--version` work on the runtime.
 Design and cutover record:

@@ -495,6 +495,10 @@ Illumo construction loads only generic host defaults. The engine runner invokes
 the application's defaults callback, then its own parser consumes standard
 window flags plus the application's option/help descriptors before host
 initialization.
+The window size persists as `WinX`/`WinY` (default 1280×720, `-ww`/`-wh`).
+`RenderWindow` records only positive sizes of a window that is not minimized,
+so closing while minimized keeps the last restored size; initialization opens
+at the default instead when a saved size is not positive, and logs a warning.
 `--help` and `--version` return explicit process results; library code does not
 call `std::exit`.
 
@@ -519,6 +523,17 @@ when it changes, so Debug's generic `toggle vsync` command works live. The FPS
 overlay labels synchronized swap-completion cadence as `Paced FPS` and reports
 main-loop submissions separately; uncapped mode reports paced FPS as off rather
 than presenting CPU submissions as monitor output (D-P32).
+
+`FramePacer` limits the loop in software to the persisted `fps` whenever VSync
+is off or `fps` is below the monitor refresh rate (for example `fps 60` on a
+144 Hz display); `fps 0` disables it. Each frame it sleeps on a
+`PlatformWaitTimer` until the timer's wake latency before the deadline, then
+spins with `PlatformCpuPause` for the rest (about 0.5 ms), and it resets the
+deadline instead of bursting when a frame runs more than 1.5 frames late. On
+Windows the timer is a high-resolution waitable timer, so pacing does not
+depend on the process timer resolution that Windows 11 ignores for occluded or
+minimized windows; with 1 ms `sleep_for` steps that case overslept by up to a
+15.6 ms tick (D-P34).
 
 #### 5.4.1 Compiled scene hierarchy and snapshots (D-E12/D-R25)
 
@@ -2139,6 +2154,7 @@ disabled.
 | **D-P30** | Link candidate targets to source chunks during discovery and prepare them through retained coarse ranges. | 2026-08-11 |
 | **D-P31** | Probe duplicate candidate enrollments before growth checks and construct sparse results directly in recycled nodes. | 2026-08-16 |
 | **D-P32** | Default to configurable synchronized presentation and distinguish paced swap cadence from CPU submissions. | 2026-08-16 |
+| **D-P34** | Pace frames on a high-resolution waitable timer (sleep to 1 ms before the deadline, then spin) instead of 1 ms `sleep_for` steps that depend on the process timer resolution. | 2026-09-28 |
 
 ### 6.4 Engine shape (D-E\*, D-C\*, D-F\*)
 

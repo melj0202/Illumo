@@ -67,6 +67,18 @@ int RuntimeShell::run(std::chrono::steady_clock::time_point launched) {
 No product supplies a native definition: IllumoGame, IllEd and IllMeshViewer
 are WASM packages, and each is one program (\cref{sec:runtime-programs}).
 
+\symbolref{FramePacer} limits the loop in software to the persisted
+\texttt{fps} when VSync is off or \texttt{fps} is below the monitor refresh
+rate, for example \texttt{fps 60} on a 144\,Hz display; \texttt{fps 0}
+disables it. Each frame it sleeps on a \symbolref{PlatformWaitTimer} until the
+timer's wake latency before the deadline, then spins with
+\symbolref{PlatformCpuPause} for the remainder, about 0.5\,ms. A frame more
+than 1.5 frame durations late resets the deadline rather than bursting to catch
+up. On Windows the timer is a high-resolution waitable timer, so pacing does
+not depend on the 1\,ms timer resolution that \symbolref{PlatformTimerScope}
+requests and that Windows 11 ignores for occluded or minimized windows
+(D-P34).
+
 \subsection{Illumo host ownership}
 \symbolref{Illumo} owns the long-lived generic services
 (\symbolref{EnvVars}, \symbolref{RenderWindow}, \symbolref{Camera},
@@ -82,6 +94,11 @@ defaults callback and feeds its option descriptors to engine-owned
 factories report failure; Illumo owns exactly one backend initialization attempt
 and transfers the resulting \texttt{std::unique\_ptr<IBackend>} to the renderer.
 Library code logs and returns failures rather than calling \texttt{std::exit}.
+The window size persists as \texttt{WinX}/\texttt{WinY} (default
+1280$\times$720). \symbolref{RenderWindow} records only positive sizes of a
+window that is not minimized, so closing while minimized keeps the last
+restored size, and initialization opens at the default, with a warning, when a
+saved size is not positive.
 
 \symbolref{IllumoContext} is a non-owning pointer bag frozen after successful
 host initialization and passed to the program, its scenes and the debug
