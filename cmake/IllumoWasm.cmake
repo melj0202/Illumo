@@ -54,6 +54,9 @@ illumo_configure_runtime_target(IllumoWasmRuntime)
 add_executable(IllumoWasmCompiler
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Platform/Windows/WinWasmCompilerMain.cpp")
 target_link_libraries(IllumoWasmCompiler PRIVATE IllumoWasmtime)
+# Header-only Foundation helpers (ParseNumber) only; no Illumo library link.
+target_include_directories(IllumoWasmCompiler PRIVATE
+  "${CMAKE_SOURCE_DIR}/Illumo/Include")
 # No sanitizer: the helper runs no product code, and ASan's allocator would
 # only inflate Wasmtime's compilation inside the job's memory limit (a Debug
 # game package then exceeded it). Its engine settings arrive from the host on

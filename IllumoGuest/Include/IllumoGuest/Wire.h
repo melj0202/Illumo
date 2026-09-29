@@ -6,7 +6,6 @@
 #include <cstring>
 #include <limits>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,10 +30,10 @@ public:
   // hosts, which wasm32 and x86 both are).
   void u32s(const std::uint32_t* values, std::size_t count)
   {
-    if (count > m_maximum / 4u) {
-      throw std::length_error("Guest packet exceeds byte quota");
+    if (count > m_maximum / 4u || !reserve(count * 4u)) {
+      fail("Guest packet exceeds byte quota");
+      return;
     }
-    reserve(count * 4u);
     const std::size_t start = m_bytes.size();
     m_bytes.resize(start + count * 4u);
     std::byte* output = m_bytes.data() + start;
@@ -55,10 +54,10 @@ public:
   {
     static_assert(sizeof(float) == sizeof(std::uint32_t));
     if constexpr (std::endian::native == std::endian::little) {
-      if (count > m_maximum / 4u) {
-        throw std::length_error("Guest packet exceeds byte quota");
+      if (count > m_maximum / 4u || !reserve(count * 4u)) {
+        fail("Guest packet exceeds byte quota");
+        return;
       }
-      reserve(count * 4u);
       const std::size_t start = m_bytes.size();
       m_bytes.resize(start + count * 4u);
       if (count != 0) {
@@ -79,13 +78,16 @@ public:
   void f64(double value) { u64(std::bit_cast<std::uint64_t>(value)); }
   void bytes(std::span<const std::byte> value)
   {
-    reserve(value.size());
+    if (!reserve(value.size())) {
+      return;
+    }
     m_bytes.insert(m_bytes.end(), value.begin(), value.end());
   }
   void text(const std::string& value)
   {
     if (value.size() > UINT32_MAX) {
-      throw std::length_error("Guest string exceeds wire range");
+      fail("Guest string exceeds wire range");
+      return;
     }
     u32(static_cast<std::uint32_t>(value.size()));
     bytes(std::as_bytes(std::span(value.data(), value.size())));
@@ -93,26 +95,51 @@ public:
   // Overwrites a word written earlier (a length known only afterwards).
   void patchU32(std::size_t offset, std::uint32_t value)
   {
-    if (offset > m_bytes.size() || m_bytes.size() - offset < 4u) {
-      throw std::out_of_range("Guest wire patch outside the packet");
+    if (m_failed || offset > m_bytes.size() || m_bytes.size() - offset < 4u) {
+      fail("Guest wire patch outside the packet");
+      return;
     }
     for (unsigned int index = 0; index < 4u; ++index) {
       m_bytes[offset + index] = static_cast<std::byte>(value >> (index * 8u));
     }
   }
+  // A write went past the byte quota (or a string past the wire range, or a
+  // patch outside the packet). The failure is sticky: later writes are
+  // ignored and the packet must not be sent. The writer never throws.
+  bool failed() const { return m_failed; }
+  // Why the writer failed ("" while it has not).
+  const char* failure() const { return m_failed ? m_failure : ""; }
+  // Marks the packet unusable; the first reason is kept.
+  void fail(const char* reason)
+  {
+    if (!m_failed) {
+      m_failure = reason;
+    }
+    m_failed = true;
+  }
   const std::vector<std::byte>& data() const { return m_bytes; }
   std::vector<std::byte> take() { return std::move(m_bytes); }
-  void clear() { m_bytes.clear(); }
+  void clear()
+  {
+    m_bytes.clear();
+    m_failed = false;
+  }
 
 private:
-  void reserve(std::size_t count)
+  // False, marking the writer failed, when count more bytes do not fit.
+  bool reserve(std::size_t count)
   {
-    if (m_bytes.size() > m_maximum || count > m_maximum - m_bytes.size()) {
-      throw std::length_error("Guest packet exceeds byte quota");
+    if (m_failed || m_bytes.size() > m_maximum ||
+        count > m_maximum - m_bytes.size()) {
+      fail("Guest packet exceeds byte quota");
+      return false;
     }
+    return true;
   }
   std::vector<std::byte> m_bytes;
   std::size_t m_maximum;
+  bool m_failed = false;
+  const char* m_failure = "";
 };
 
 class GuestWireReader

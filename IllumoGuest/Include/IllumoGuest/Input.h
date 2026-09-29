@@ -116,7 +116,8 @@ struct GuestInput
                           characterSurfaces.size() != characters.size() ||
                           surfaces.size() > MaximumSurfaces ||
                           windowEvents.size() > MaximumWindowEvents))) {
-      throw std::length_error("Guest input event quota exceeded");
+      output.fail("Guest input event quota exceeded");
+      return;
     }
     output.u32(version);
     output.f64(elapsed);

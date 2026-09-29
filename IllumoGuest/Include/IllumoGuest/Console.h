@@ -143,12 +143,14 @@ public:
   GuestConsole& operator=(const GuestConsole&) = delete;
   GuestConsole(GuestConsole&&) = delete;
   GuestConsole& operator=(GuestConsole&&) = delete;
-  void add(std::string name,
+  // Each returns false, queuing nothing, for text that is not UTF-8 or
+  // exceeds the wire limits.
+  bool add(std::string name,
            std::string usage,
            std::string description,
            std::vector<std::string> completions = {});
-  void remove(std::string name);
-  void log(std::uint32_t level, std::string text);
+  bool remove(std::string name);
+  bool log(std::uint32_t level, std::string text);
   void pump();
   bool take(GuestConsoleRequest& invocation);
   const std::string& error() const { return m_error; }

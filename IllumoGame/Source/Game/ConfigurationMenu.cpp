@@ -3,6 +3,7 @@
 #include "Game/CellContext.h"
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Font.h>
@@ -261,18 +262,13 @@ parseTopologyText(const std::string& text, std::int64_t* value)
     *value = 0;
     return true;
   }
-  try {
-    std::size_t consumed = 0u;
-    const long long parsed = std::stoll(normalized, &consumed);
-    if (consumed != normalized.size() || parsed < 1 ||
-        parsed > SparseCellGrid::kMaximumWorldChunksPerAxis) {
-      return false;
-    }
-    *value = static_cast<std::int64_t>(parsed);
-    return true;
-  } catch (...) {
+  long long parsed = 0;
+  if (!parseWholeInteger(normalized, &parsed) || parsed < 1 ||
+      parsed > SparseCellGrid::kMaximumWorldChunksPerAxis) {
     return false;
   }
+  *value = static_cast<std::int64_t>(parsed);
+  return true;
 }
 
 static bool
@@ -281,17 +277,13 @@ parseLongText(const std::string& text, long minimum, long maximum, long* value)
   if (value == nullptr || text.empty()) {
     return false;
   }
-  try {
-    std::size_t consumed = 0u;
-    const long parsed = std::stol(text, &consumed);
-    if (consumed != text.size() || parsed < minimum || parsed > maximum) {
-      return false;
-    }
-    *value = parsed;
-    return true;
-  } catch (...) {
+  long parsed = 0;
+  if (!parseWholeInteger(text, &parsed) || parsed < minimum ||
+      parsed > maximum) {
     return false;
   }
+  *value = parsed;
+  return true;
 }
 
 static bool
@@ -304,20 +296,17 @@ parseDoubleText(const std::string& text,
   if (value == nullptr || text.empty()) {
     return false;
   }
-  try {
-    std::size_t consumed = 0u;
-    const double parsed = std::stod(text, &consumed);
-    const bool minimumValid =
-      minimumInclusive ? parsed >= minimum : parsed > minimum;
-    if (consumed != text.size() || !std::isfinite(parsed) || !minimumValid ||
-        parsed > maximum) {
-      return false;
-    }
-    *value = parsed;
-    return true;
-  } catch (...) {
+  double parsed = 0.0;
+  if (!parseWholeFloating(text, &parsed)) {
     return false;
   }
+  const bool minimumValid =
+    minimumInclusive ? parsed >= minimum : parsed > minimum;
+  if (!std::isfinite(parsed) || !minimumValid || parsed > maximum) {
+    return false;
+  }
+  *value = parsed;
+  return true;
 }
 
 ConfigurationMenu::ConfigurationMenu(IRenderWindow* targetWindow,

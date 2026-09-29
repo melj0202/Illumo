@@ -2,17 +2,12 @@
 #include "RuleCatalogLoader.h"
 #include <Illumo/Platform/AtomicFile.h>
 #include <Illumo/Platform/Clipboard.h>
+#include <Illumo/Platform/PathText.h>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <system_error>
-
-static std::filesystem::path
-utf8Path(const std::string& location)
-{
-  return std::filesystem::path(std::u8string(location.begin(), location.end()));
-}
 
 // "*.EXT" names one extension; a chosen path without it gains ".ext".
 static std::string
@@ -62,24 +57,25 @@ public:
     CSimReadResult result;
     result.missing = true;
     for (const std::string& location : locations) {
-      try {
-        std::ifstream file(utf8Path(location), std::ios::binary);
-        if (!file.is_open()) {
-          continue;
-        }
-        result.missing = false;
-        result.location = location;
-        result.bytes.assign(std::istreambuf_iterator<char>(file),
-                            std::istreambuf_iterator<char>());
-        if (file.bad()) {
-          result.bytes.clear();
-          result.error = "Failed to read: " + location;
-        } else {
-          result.success = true;
-        }
-      } catch (const std::system_error&) {
+      std::filesystem::path path;
+      if (!pathFromUtf8(location, &path)) {
         result.missing = false;
         result.error = "Invalid or inaccessible UTF-8 file path";
+        break;
+      }
+      std::ifstream file(path, std::ios::binary);
+      if (!file.is_open()) {
+        continue;
+      }
+      result.missing = false;
+      result.location = location;
+      result.bytes.assign(std::istreambuf_iterator<char>(file),
+                          std::istreambuf_iterator<char>());
+      if (file.bad()) {
+        result.bytes.clear();
+        result.error = "Failed to read: " + location;
+      } else {
+        result.success = true;
       }
       break;
     }
@@ -97,20 +93,19 @@ public:
       done(false, "Save path is empty");
       return;
     }
-    std::string error;
-    bool written = false;
-    try {
-      written = AtomicFile::write(
-        utf8Path(location),
-        [&bytes](std::ostream& stream, std::string*) {
-          stream.write(bytes.data(),
-                       static_cast<std::streamsize>(bytes.size()));
-          return static_cast<bool>(stream);
-        },
-        &error);
-    } catch (const std::system_error&) {
-      error = "Invalid or inaccessible UTF-8 file path";
+    std::filesystem::path path;
+    if (!pathFromUtf8(location, &path)) {
+      done(false, "Invalid or inaccessible UTF-8 file path");
+      return;
     }
+    std::string error;
+    const bool written = AtomicFile::write(
+      path,
+      [&bytes](std::ostream& stream, std::string*) {
+        stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        return static_cast<bool>(stream);
+      },
+      &error);
     done(written, error);
   }
   void readClipboard(TextCallback done) override

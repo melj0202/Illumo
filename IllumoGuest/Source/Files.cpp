@@ -112,6 +112,17 @@ GuestFiles::enqueue(Task& task, GuestFileRequest request, std::uint32_t count)
   task.pending.push_back({ id, request.action, request.offset, count });
   return true;
 }
+// A completion that breaks the file protocol ends the task as Denied; the
+// host is trusted, so this is logged as a defect rather than retried.
+void
+GuestFiles::failTask(Task& task, const char* reason)
+{
+  Logger::LogError(std::string(reason) + " for " + task.path);
+  if (task.outcome == GuestFileOutcome::Success) {
+    task.outcome = GuestFileOutcome::Denied;
+  }
+  task.stage = task.file.owner != 0 ? Stage::Close : Stage::Done;
+}
 void
 GuestFiles::complete(Task& task,
                      const Pending& pending,
@@ -124,7 +135,8 @@ GuestFiles::complete(Task& task,
       : static_cast<std::uint32_t>(GuestFileOutcome::Denied);
   if (outcome > static_cast<std::uint32_t>(GuestFileOutcome::Cancelled) ||
       (result.status == GuestServiceStatus::Complete && !reader.valid())) {
-    throw std::runtime_error("Invalid host file completion");
+    failTask(task, "Invalid host file completion");
+    return;
   }
   if (outcome != 0) {
     if (task.outcome == GuestFileOutcome::Success) {
@@ -148,7 +160,10 @@ GuestFiles::complete(Task& task,
     if (!reader.finished() || task.file.owner == 0 ||
         task.file.kind != GuestResourceKind::File || task.file.slot == 0 ||
         task.file.generation == 0 || (task.writing && size != task.size)) {
-      throw std::runtime_error("Invalid host file capability");
+      // Not a capability this guest may use or close.
+      task.file = {};
+      failTask(task, "Invalid host file capability");
+      return;
     }
     if (task.cancelled) {
       task.stage = Stage::Close;
@@ -168,7 +183,8 @@ GuestFiles::complete(Task& task,
   } else if (pending.action == GuestFileAction::Read) {
     const std::span<const std::byte> bytes = reader.bytes(pending.count);
     if (!reader.finished()) {
-      throw std::runtime_error("Invalid host file block");
+      failTask(task, "Invalid host file block");
+      return;
     }
     std::memcpy(task.bytes.data() + static_cast<std::size_t>(pending.offset),
                 bytes.data(),
@@ -176,14 +192,16 @@ GuestFiles::complete(Task& task,
     task.completed += pending.count;
   } else if (pending.action == GuestFileAction::Write) {
     if (reader.u64() != pending.offset + pending.count || !reader.finished()) {
-      throw std::runtime_error("Invalid host write acknowledgement");
+      failTask(task, "Invalid host write acknowledgement");
+      return;
     }
     task.completed += pending.count;
   } else {
-    if (!reader.finished()) {
-      throw std::runtime_error("Invalid host close acknowledgement");
-    }
     task.file = {};
+    if (!reader.finished()) {
+      failTask(task, "Invalid host close acknowledgement");
+      return;
+    }
     task.stage = Stage::Done;
   }
 }

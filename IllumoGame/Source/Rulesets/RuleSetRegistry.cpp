@@ -72,6 +72,30 @@ readUnsigned(const nlohmann::json& value,
   return false;
 }
 
+// An optional string field of an object: missing gives fallback; present
+// with another type is invalid (false). Keeps a malformed catalog a refusal
+// rather than a type error, which would end the process (no exceptions).
+bool
+optionalText(const nlohmann::json& object,
+             const char* key,
+             const std::string& fallback,
+             std::string& result)
+{
+  if (!object.is_object()) {
+    return false;
+  }
+  const nlohmann::json::const_iterator found = object.find(key);
+  if (found == object.end()) {
+    result = fallback;
+    return true;
+  }
+  if (!found->is_string()) {
+    return false;
+  }
+  result = found->get<std::string>();
+  return true;
+}
+
 bool
 readNeighborMask(const nlohmann::json& values, unsigned int& mask)
 {
@@ -887,22 +911,26 @@ bool
 parseLegacyDefinition(const nlohmann::json& item,
                       LegacyRuleSetDefinition& definition)
 {
-  if (!item.is_object()) {
+  std::string id;
+  std::string family;
+  if (!optionalText(item, "id", "", id)) {
     return false;
   }
-  definition.id = RuleSetRegistry::normalizeId(item.value("id", ""));
-  if (definition.id.empty()) {
+  definition.id = RuleSetRegistry::normalizeId(id);
+  if (definition.id.empty() ||
+      !optionalText(item, "name", definition.id, definition.name) ||
+      !optionalText(item, "family", "life_like", family)) {
     return false;
   }
-  definition.name = item.value("name", definition.id);
-  const std::string family = item.value("family", "life_like");
   const bool isLegacyWireworld = family == "wireworld";
   if (isLegacyWireworld) {
     definition.family = RuleFamily::MooreTable;
   } else if (!RuleSetRegistry::parseFamily(family, definition.family)) {
     return false;
   }
-  definition.rule = item.value("rule", "");
+  if (!optionalText(item, "rule", "", definition.rule)) {
+    return false;
+  }
   definition.stateCount = 2u;
 
   if (definition.family == RuleFamily::LifeLike) {
@@ -971,10 +999,11 @@ bool
 parseVersionTwoDefinition(const nlohmann::json& item,
                           LegacyRuleSetDefinition& definition)
 {
-  if (!item.is_object()) {
+  std::string id;
+  if (!optionalText(item, "id", "", id)) {
     return false;
   }
-  definition.id = RuleSetRegistry::normalizeId(item.value("id", ""));
+  definition.id = RuleSetRegistry::normalizeId(id);
   if (definition.id.empty() || !item.contains("family") ||
       !item["family"].is_string() || !item.contains("state_count") ||
       !readUnsigned(
@@ -982,18 +1011,17 @@ parseVersionTwoDefinition(const nlohmann::json& item,
       definition.stateCount < 2u) {
     return false;
   }
-  definition.name = item.value("name", definition.id);
-  if (!RuleSetRegistry::parseFamily(item["family"].get<std::string>(),
+  if (!optionalText(item, "name", definition.id, definition.name) ||
+      !RuleSetRegistry::parseFamily(item["family"].get<std::string>(),
                                     definition.family)) {
     return false;
   }
 
   if (definition.family == RuleFamily::LifeLike ||
       definition.family == RuleFamily::Generations) {
-    if (item.contains("rule") && !item["rule"].is_string()) {
+    if (!optionalText(item, "rule", "", definition.rule)) {
       return false;
     }
-    definition.rule = item.value("rule", "");
     if (!definition.rule.empty() &&
         !RuleSetRegistry::parseLifeLikeRuleString(
           definition.rule, definition.birthMask, definition.surviveMask)) {
@@ -1479,8 +1507,8 @@ readFamilyDefinition(const nlohmann::json& item,
     return false;
   }
   definition.id = item["id"].get<std::string>();
-  definition.name = item.value("name", definition.id);
-  if (!RuleSetRegistry::parseFamily(item["model"].get<std::string>(),
+  if (!optionalText(item, "name", definition.id, definition.name) ||
+      !RuleSetRegistry::parseFamily(item["model"].get<std::string>(),
                                     definition.kind) ||
       item["states"].size() != definition.stateCount) {
     return false;
@@ -1519,15 +1547,16 @@ parseModernRule(const nlohmann::json& item,
     return false;
   }
   definition.id = item["id"].get<std::string>();
-  definition.name = item.value("name", definition.id);
+  if (!optionalText(item, "name", definition.id, definition.name)) {
+    return false;
+  }
   definition.familyId = item["family_id"].get<std::string>();
   if (family.kind == RuleFamily::LifeLike ||
       family.kind == RuleFamily::Generations ||
       family.kind == RuleFamily::SpeciesLife) {
-    if (item.contains("rule") && !item["rule"].is_string()) {
+    if (!optionalText(item, "rule", "", definition.rule)) {
       return false;
     }
-    definition.rule = item.value("rule", "");
     if (!definition.rule.empty() &&
         !RuleSetRegistry::parseLifeLikeRuleString(
           definition.rule, definition.birthMask, definition.surviveMask)) {
@@ -1649,10 +1678,9 @@ parseModernRule(const nlohmann::json& item,
     }
   } else if (family.kind == RuleFamily::VonNeumannTable) {
     if (!item.contains("rule_table") || !item["rule_table"].is_array() ||
-        (item.contains("symmetries") && !item["symmetries"].is_string())) {
+        !optionalText(item, "symmetries", "none", definition.tableSymmetry)) {
       return false;
     }
-    definition.tableSymmetry = item.value("symmetries", "none");
     definition.ruleTable.clear();
     for (const nlohmann::json& line : item["rule_table"]) {
       if (!line.is_string()) {
@@ -2305,105 +2333,101 @@ bool
 RuleSetRegistry::loadFromText(const std::string& text)
 {
   ILLUMO_PROFILE_ZONE("RuleSetRegistry.loadFromText");
-  try {
-    const nlohmann::json root = nlohmann::json::parse(text);
-    unsigned int schemaVersion = 1u;
-    const nlohmann::json* definitions = &root;
-    if (!root.is_array()) {
-      if (!root.is_object() || !root.contains("schema_version") ||
-          !root.contains("rules") ||
-          !readUnsigned(root["schema_version"], 3u, schemaVersion) ||
-          (schemaVersion != 2u && schemaVersion != 3u) ||
-          !root["rules"].is_array()) {
-        return false;
-      }
-      definitions = &root["rules"];
-    }
-
-    RuleSetRegistry pending = *this;
-    for (const nlohmann::json& item : *definitions) {
-      if (schemaVersion < 3u) {
-        LegacyRuleSetDefinition legacy;
-        const bool parsed = schemaVersion == 1u
-                              ? parseLegacyDefinition(item, legacy)
-                              : parseVersionTwoDefinition(item, legacy);
-        if (!parsed) {
-          return false;
-        }
-        RuleFamilyDefinition family = familyFromLegacy(legacy);
-        const RuleFamilyDefinition* matchingFamily = nullptr;
-        for (const RuleFamilyDefinition& existing : pending.families) {
-          if (sameFamilySchema(existing, family)) {
-            matchingFamily = &existing;
-            break;
-          }
-        }
-        if (matchingFamily != nullptr) {
-          family.id = matchingFamily->id;
-        } else if (!pending.registerFamily(family)) {
-          return false;
-        }
-        RuleSetDefinition definition;
-        definition.id = legacy.id;
-        definition.name = legacy.name;
-        definition.familyId = family.id;
-        definition.rule = legacy.rule;
-        definition.birthMask = legacy.birthMask;
-        definition.surviveMask = legacy.surviveMask;
-        definition.ruleNumber = legacy.ruleNumber;
-        definition.transitionTable = legacy.transitionTable;
-        definition.hasTransitionTable = family.kind == RuleFamily::MooreTable;
-        definition.transitionTableStateCount = family.stateCount;
-        if (!pending.registerRule(definition)) {
-          return false;
-        }
-      } else {
-        if (!item.is_object() || !item.contains("family_id") ||
-            !item["family_id"].is_string()) {
-          return false;
-        }
-        const RuleFamilyDefinition* family =
-          pending.getFamilyDefinition(item["family_id"].get<std::string>());
-        RuleSetDefinition definition;
-        if (family == nullptr || !parseModernRule(item, *family, definition) ||
-            !pending.registerRule(definition)) {
-          return false;
-        }
-      }
-    }
-    *this = std::move(pending);
-    return true;
-  } catch (...) {
+  const nlohmann::json root = nlohmann::json::parse(text, nullptr, false);
+  if (root.is_discarded()) {
     return false;
   }
+  unsigned int schemaVersion = 1u;
+  const nlohmann::json* definitions = &root;
+  if (!root.is_array()) {
+    if (!root.is_object() || !root.contains("schema_version") ||
+        !root.contains("rules") ||
+        !readUnsigned(root["schema_version"], 3u, schemaVersion) ||
+        (schemaVersion != 2u && schemaVersion != 3u) ||
+        !root["rules"].is_array()) {
+      return false;
+    }
+    definitions = &root["rules"];
+  }
+
+  RuleSetRegistry pending = *this;
+  for (const nlohmann::json& item : *definitions) {
+    if (schemaVersion < 3u) {
+      LegacyRuleSetDefinition legacy;
+      const bool parsed = schemaVersion == 1u
+                            ? parseLegacyDefinition(item, legacy)
+                            : parseVersionTwoDefinition(item, legacy);
+      if (!parsed) {
+        return false;
+      }
+      RuleFamilyDefinition family = familyFromLegacy(legacy);
+      const RuleFamilyDefinition* matchingFamily = nullptr;
+      for (const RuleFamilyDefinition& existing : pending.families) {
+        if (sameFamilySchema(existing, family)) {
+          matchingFamily = &existing;
+          break;
+        }
+      }
+      if (matchingFamily != nullptr) {
+        family.id = matchingFamily->id;
+      } else if (!pending.registerFamily(family)) {
+        return false;
+      }
+      RuleSetDefinition definition;
+      definition.id = legacy.id;
+      definition.name = legacy.name;
+      definition.familyId = family.id;
+      definition.rule = legacy.rule;
+      definition.birthMask = legacy.birthMask;
+      definition.surviveMask = legacy.surviveMask;
+      definition.ruleNumber = legacy.ruleNumber;
+      definition.transitionTable = legacy.transitionTable;
+      definition.hasTransitionTable = family.kind == RuleFamily::MooreTable;
+      definition.transitionTableStateCount = family.stateCount;
+      if (!pending.registerRule(definition)) {
+        return false;
+      }
+    } else {
+      if (!item.is_object() || !item.contains("family_id") ||
+          !item["family_id"].is_string()) {
+        return false;
+      }
+      const RuleFamilyDefinition* family =
+        pending.getFamilyDefinition(item["family_id"].get<std::string>());
+      RuleSetDefinition definition;
+      if (family == nullptr || !parseModernRule(item, *family, definition) ||
+          !pending.registerRule(definition)) {
+        return false;
+      }
+    }
+  }
+  *this = std::move(pending);
+  return true;
 }
 
 bool
 RuleSetRegistry::loadFamiliesFromText(const std::string& text)
 {
   ILLUMO_PROFILE_ZONE("RuleSetRegistry.loadFamiliesFromText");
-  try {
-    const nlohmann::json root = nlohmann::json::parse(text);
-    unsigned int schemaVersion = 0u;
-    if (!root.is_object() || !root.contains("schema_version") ||
-        !readUnsigned(root["schema_version"], 1u, schemaVersion) ||
-        schemaVersion != 1u || !root.contains("families") ||
-        !root["families"].is_array()) {
-      return false;
-    }
-    RuleSetRegistry staged = *this;
-    for (const nlohmann::json& item : root["families"]) {
-      RuleFamilyDefinition definition;
-      if (!readFamilyDefinition(item, definition) ||
-          !staged.registerFamily(definition)) {
-        return false;
-      }
-    }
-    *this = std::move(staged);
-    return true;
-  } catch (...) {
+  const nlohmann::json root = nlohmann::json::parse(text, nullptr, false);
+  unsigned int schemaVersion = 0u;
+  // A text that does not parse is discarded, which is not an object.
+  if (!root.is_object() || !root.contains("schema_version") ||
+      !readUnsigned(root["schema_version"], 1u, schemaVersion) ||
+      schemaVersion != 1u || !root.contains("families") ||
+      !root["families"].is_array()) {
     return false;
   }
+  RuleSetRegistry staged = *this;
+  for (const nlohmann::json& item : root["families"]) {
+    RuleFamilyDefinition definition;
+    if (!readFamilyDefinition(item, definition) ||
+        !staged.registerFamily(definition)) {
+      return false;
+    }
+  }
+  *this = std::move(staged);
+  return true;
 }
 
 bool
@@ -2432,33 +2456,34 @@ bool
 RuleSetRegistry::loadRulePackage(const std::string& text)
 {
   ILLUMO_PROFILE_ZONE("RuleSetRegistry.loadRulePackage");
-  try {
-    const nlohmann::json root = nlohmann::json::parse(text);
-    if (root.is_array() || !root.is_object() ||
-        !root.contains("schema_version")) {
-      return loadFromText(text);
-    }
-    unsigned int schemaVersion = 0u;
-    if (!readUnsigned(root["schema_version"], 1u, schemaVersion) ||
-        schemaVersion != 1u || !root.contains("families") ||
-        !root["families"].is_array() || !root.contains("rules") ||
-        !root["rules"].is_array()) {
-      return false;
-    }
-    nlohmann::json familyCatalog = { { "schema_version", 1u },
-                                     { "families", root["families"] } };
-    nlohmann::json ruleCatalog = { { "schema_version", 3u },
-                                   { "rules", root["rules"] } };
-    RuleSetRegistry staged = *this;
-    if (!staged.loadFamiliesFromText(familyCatalog.dump()) ||
-        !staged.loadFromText(ruleCatalog.dump())) {
-      return false;
-    }
-    *this = std::move(staged);
-    return true;
-  } catch (...) {
+  const nlohmann::json root = nlohmann::json::parse(text, nullptr, false);
+  if (root.is_discarded()) {
     return false;
   }
+  if (root.is_array() || !root.is_object() ||
+      !root.contains("schema_version")) {
+    return loadFromText(text);
+  }
+  unsigned int schemaVersion = 0u;
+  if (!readUnsigned(root["schema_version"], 1u, schemaVersion) ||
+      schemaVersion != 1u || !root.contains("families") ||
+      !root["families"].is_array() || !root.contains("rules") ||
+      !root["rules"].is_array()) {
+    return false;
+  }
+  nlohmann::json familyCatalog = { { "schema_version", 1u },
+                                   { "families", root["families"] } };
+  nlohmann::json ruleCatalog = { { "schema_version", 3u },
+                                 { "rules", root["rules"] } };
+  RuleSetRegistry staged = *this;
+  if (!staged.loadFamiliesFromText(familyCatalog.dump(
+        -1, ' ', false, nlohmann::json::error_handler_t::replace)) ||
+      !staged.loadFromText(ruleCatalog.dump(
+        -1, ' ', false, nlohmann::json::error_handler_t::replace))) {
+    return false;
+  }
+  *this = std::move(staged);
+  return true;
 }
 
 bool
@@ -2547,7 +2572,7 @@ RuleSetRegistry::serializeFamilies(
   for (const RuleFamilyDefinition& definition : definitions) {
     root["families"].push_back(familyToJson(definition));
   }
-  return root.dump(2);
+  return root.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 std::string
@@ -2570,7 +2595,7 @@ RuleSetRegistry::serializeCatalog(
       root["rules"].push_back(ruleToJson(definition, *family));
     }
   }
-  return root.dump(2);
+  return root.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 std::string
@@ -2582,7 +2607,7 @@ RuleSetRegistry::serializeRulePackage(const RuleFamilyDefinition& family,
   root["schema_version"] = 1u;
   root["families"] = nlohmann::json::array({ familyToJson(family) });
   root["rules"] = nlohmann::json::array({ ruleToJson(definition, family) });
-  return root.dump(2);
+  return root.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 std::unique_ptr<RuleSet>

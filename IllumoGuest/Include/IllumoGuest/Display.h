@@ -160,17 +160,19 @@ public:
     m_next = GuestDisplayRequest{};
     m_pending = true;
   }
-  void apply(GuestDisplayState state)
+  // False, queuing nothing, for settings the host would reject.
+  bool apply(GuestDisplayState state)
   {
     GuestWireWriter bytes;
     GuestDisplayRequest request{ true, state };
     request.write(bytes);
     GuestDisplayRequest checked;
-    if (!GuestDisplayRequest::read(bytes.data(), checked)) {
-      throw std::invalid_argument("Invalid display settings");
+    if (bytes.failed() || !GuestDisplayRequest::read(bytes.data(), checked)) {
+      return false;
     }
     m_next = request;
     m_pending = true;
+    return true;
   }
   void pump();
   bool idle() const { return !m_pending && m_request == 0; }

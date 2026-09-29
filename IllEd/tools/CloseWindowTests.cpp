@@ -11,7 +11,6 @@
 #include <Illumo/Services/Logger.h>
 #include <filesystem>
 #include <iostream>
-#include <stdexcept>
 
 // The editor scene on the native engine, driven through the runtime's frame
 // phases (D-E31) by a director instead of a WASM program.
@@ -47,11 +46,15 @@ closeApproved(Illumo& host, SceneDirector& scenes)
   return false;
 }
 
+// Checks report and continue; main fails the run if any did not hold.
+static bool g_closeCheckFailed = false;
+
 static void
 requireCloseCheck(bool condition, const char* message)
 {
   if (!condition) {
-    throw std::runtime_error(message);
+    std::cerr << message << '\n';
+    g_closeCheckFailed = true;
   }
 }
 
@@ -199,21 +202,18 @@ main()
   const std::filesystem::path scratch =
     std::filesystem::temp_directory_path() /
     ("illed-close-" + std::to_string(GetCurrentProcessId()));
-  if (!std::filesystem::create_directory(scratch)) {
+  std::error_code error;
+  if (!std::filesystem::create_directory(scratch, error) || error) {
     std::cerr << "Scratch directory already exists\n";
     return 1;
   }
-  int result = 0;
-  try {
-    runNativeCloseCase(false, scratch);
-    runNativeCloseCase(true, scratch);
+  runNativeCloseCase(false, scratch);
+  runNativeCloseCase(true, scratch);
+  const int result = g_closeCheckFailed ? 1 : 0;
+  if (result == 0) {
     std::cout << "Native scene edits, close, cancel, failed save, save, and "
                  "discard passed\n";
-  } catch (const std::exception& exception) {
-    std::cerr << exception.what() << '\n';
-    result = 1;
   }
-  std::error_code error;
   std::filesystem::remove(scratch / "envvars.json", error);
   std::filesystem::remove(scratch / "scene.ilsc", error);
   std::filesystem::remove(scratch, error);

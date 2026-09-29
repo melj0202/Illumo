@@ -3,13 +3,13 @@
 #include "EditorUiAtlas.h"
 #include "IllEdConfig.h"
 #include "IllEdPlatform.h"
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Clipboard.h>
 #include <IllumoGuest/Documents.h>
 #include <IllumoGuest/FileTree.h>
 #include <IllumoGuest/Program.h>
 #include <IllumoGuest/SceneFetches.h>
-#include <stdexcept>
 
 // IllEdPlatform over guest services: opened scenes are editable grants, so
 // Save writes them in place; the host never discloses their paths.
@@ -190,7 +190,9 @@ public:
   }
   void setClipboardText(const std::string& text) override
   {
-    m_clipboard.set(text);
+    if (!m_clipboard.set(text)) {
+      Logger::LogWarning("Clipboard text refused: not UTF-8 or too long");
+    }
   }
   void requestClipboardText(
     std::function<void(const std::string& text)> done) override
@@ -247,7 +249,7 @@ IllEdPlatform&
 IllEdPlatform::current()
 {
   if (installedPlatform == nullptr) {
-    throw std::logic_error("No guest IllEdPlatform is installed");
+    illumoFatal("No guest IllEdPlatform is installed");
   }
   return *installedPlatform;
 }

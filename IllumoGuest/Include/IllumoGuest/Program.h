@@ -24,9 +24,11 @@
 #include <IllumoGuest/SceneWorlds.h>
 #include <IllumoGuest/SnapshotWindow.h>
 #include <IllumoGuest/VfsAssets.h>
+#include <array>
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
 
 // Product console lines are forwarded to the host console, which owns the
 // overlay's drawing, input and built-in commands. The base CommandLine is
@@ -92,7 +94,8 @@ protected:
   // meshes by name), relative to /app or absolute virtual paths. All are read
   // and pinned before bootstrap() first runs.
   virtual std::vector<std::string> packageAssets() const;
-  // Pumped every update until true; throw to fail startup visibly.
+  // Pumped every update until true. To fail startup visibly, call
+  // failStartup() and return false.
   virtual bool bootstrap();
   // Runs once after bootstrap: add the program's scenes and switch to the
   // first. False, or a first scene that fails to start, closes the product.
@@ -120,6 +123,9 @@ protected:
   SceneDirector* scenes() { return m_scenes.get(); }
   const SceneDirector* scenes() const { return m_scenes.get(); }
   bool running() const { return m_phase == Phase::Running; }
+  // Logs why startup cannot continue and closes the product; bootstrap is
+  // not pumped again.
+  void failStartup(const std::string& reason);
 
 private:
   enum class Phase
@@ -131,6 +137,10 @@ private:
   };
   // Applies the rendering switches and creates the program's scenes.
   void startScenes();
+  // One frame's recording; false with `error` set when it must be dropped.
+  bool renderFrame(GuestFrame& output,
+                   const std::array<int, 2>& dimensions,
+                   std::string& error);
   // Reads the package's envvars.json once; true when done (or absent).
   bool applyPackagedDefaults();
   void runConsoleInvocations();

@@ -3,7 +3,6 @@
 #include <Illumo/Testing/TestRegistry.h>
 #include <cctype>
 #include <cstdio>
-#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -138,20 +137,12 @@ runTestCase(const IllumoTestCase& testCase)
 {
   std::printf("\n======== %s ========\n", testCase.name.c_str());
 
-  try {
-    const int failures = testCase.function();
-    std::printf("======== %s: %s (%d failure(s)) ========\n",
-                testCase.name.c_str(),
-                failures == 0 ? "PASSED" : "FAILED",
-                failures);
-    return failures == 0 ? 0 : 1;
-  } catch (const std::exception& exception) {
-    std::printf("FAIL: unhandled exception: %s\n", exception.what());
-  } catch (...) {
-    std::printf("FAIL: unhandled non-standard exception\n");
-  }
-
-  return 1;
+  const int failures = testCase.function();
+  std::printf("======== %s: %s (%d failure(s)) ========\n",
+              testCase.name.c_str(),
+              failures == 0 ? "PASSED" : "FAILED",
+              failures);
+  return failures == 0 ? 0 : 1;
 }
 
 static int

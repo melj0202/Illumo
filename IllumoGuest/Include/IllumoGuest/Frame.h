@@ -537,7 +537,8 @@ struct GuestFrame
         break;
       case GuestItemKind::Text:
         if (item.text.size() > MaximumItemText) {
-          throw std::length_error("Guest visual text exceeds ABI range");
+          output.fail("Guest visual text exceeds ABI range");
+          return;
         }
         writeFloats(output, item.rect.data(), 2);
         output.f32(item.sizePt);
@@ -720,7 +721,8 @@ struct GuestFrame
                                const GuestComposition& composition)
   {
     if (composition.entries.size() > UINT32_MAX) {
-      throw std::length_error("Too many guest composition entries");
+      output.fail("Too many guest composition entries");
+      return;
     }
     output.u32(composition.target);
     output.u32(composition.same ? 1u : 0u);
@@ -982,7 +984,8 @@ struct GuestFrame
         batch.indices.size() > UINT32_MAX ||
         (batch.retained() &&
          (!batch.vertices.empty() || !batch.indices.empty()))) {
-      throw std::length_error("Guest geometry exceeds ABI range");
+      output.fail("Guest geometry exceeds ABI range");
+      return;
     }
     output.u32(static_cast<std::uint32_t>(batch.style));
     output.u32(static_cast<std::uint32_t>(batch.layer));
@@ -1042,7 +1045,8 @@ struct GuestFrame
   void write(GuestWireWriter& output) const
   {
     if (batches.size() > UINT32_MAX || shadowCasters.size() > UINT32_MAX) {
-      throw std::length_error("Too many guest batches");
+      output.fail("Too many guest batches");
+      return;
     }
     output.u32(Magic);
     output.u32(Version);
@@ -1077,12 +1081,14 @@ struct GuestFrame
       output.f32(caster.casterDistance);
     }
     if (meshWrites.size() > UINT32_MAX) {
-      throw std::length_error("Too many guest mesh writes");
+      output.fail("Too many guest mesh writes");
+      return;
     }
     output.u32(static_cast<std::uint32_t>(meshWrites.size()));
     for (const GuestFrameMeshWrite& write : meshWrites) {
       if (write.bytes.size() > UINT32_MAX) {
-        throw std::length_error("Guest mesh write exceeds ABI range");
+        output.fail("Guest mesh write exceeds ABI range");
+        return;
       }
       write.mesh.write(output);
       output.u32(write.indices ? 1 : 0);
@@ -1091,7 +1097,8 @@ struct GuestFrame
       output.bytes(write.bytes);
     }
     if (surfaces.size() > MaximumSurfaces) {
-      throw std::length_error("Too many guest surfaces");
+      output.fail("Too many guest surfaces");
+      return;
     }
     output.u32(static_cast<std::uint32_t>(surfaces.size()));
     for (const GuestSurfaceFrame& surface : surfaces) {
@@ -1104,7 +1111,8 @@ struct GuestFrame
         continue;
       }
       if (surface.batches.size() > UINT32_MAX) {
-        throw std::length_error("Too many guest surface batches");
+        output.fail("Too many guest surface batches");
+        return;
       }
       output.u32(static_cast<std::uint32_t>(surface.batches.size()));
       for (const GuestBatch& batch : surface.batches) {
@@ -1112,7 +1120,8 @@ struct GuestFrame
       }
     }
     if (worldOperations.size() > UINT32_MAX) {
-      throw std::length_error("Too many guest world operations");
+      output.fail("Too many guest world operations");
+      return;
     }
     output.u32(static_cast<std::uint32_t>(worldOperations.size()));
     for (const GuestWorldOperation& operation : worldOperations) {
@@ -1120,7 +1129,8 @@ struct GuestFrame
     }
     if (visualOperations.size() > UINT32_MAX ||
         compositions.size() > MaximumSurfaces + 1u) {
-      throw std::length_error("Too many guest visual operations");
+      output.fail("Too many guest visual operations");
+      return;
     }
     output.u32(static_cast<std::uint32_t>(visualOperations.size()));
     for (const GuestVisualOperation& operation : visualOperations) {

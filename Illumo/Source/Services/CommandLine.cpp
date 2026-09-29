@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Foundation/Profile.h>
 #if !defined(ILLUMO_SERIAL_GUEST)
 #include <Illumo/Platform/Clipboard.h>
@@ -35,17 +36,7 @@ parseLongStrict(const std::string& text, long* value)
   if (value == nullptr || text.empty()) {
     return false;
   }
-  try {
-    std::size_t consumed = 0;
-    long parsed = std::stol(text, &consumed);
-    if (consumed != text.size()) {
-      return false;
-    }
-    *value = parsed;
-    return true;
-  } catch (...) {
-    return false;
-  }
+  return parseWholeInteger(text, value);
 }
 
 constexpr float kConsoleFontSize = 14.0f;

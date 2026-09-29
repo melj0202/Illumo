@@ -9,6 +9,6 @@ struct ProcessMemoryStats
 };
 
 // Whole-process counters. Peak resident memory covers the process lifetime.
-// Returns false and clears stats if unavailable; does not log or throw.
+// Returns false and clears stats if unavailable; does not log.
 bool
 QueryProcessMemoryStats(ProcessMemoryStats& stats) noexcept;

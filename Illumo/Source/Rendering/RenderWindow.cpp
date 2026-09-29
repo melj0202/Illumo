@@ -35,11 +35,8 @@ recordWindowSize(IEnvVars* envVars, int width, int height, bool iconified)
 static void
 glfwErrorCallback(int code, const char* description) noexcept
 {
-  try {
-    Logger::LogWarning("GLFW error " + std::to_string(code) + ": " +
-                       (description != nullptr ? description : "unknown"));
-  } catch (...) {
-  }
+  Logger::LogWarning("GLFW error " + std::to_string(code) + ": " +
+                     (description != nullptr ? description : "unknown"));
 }
 
 RenderWindow::RenderWindow(const int width,
@@ -386,10 +383,7 @@ RenderWindow::~RenderWindow()
   if (window != nullptr) {
     glfwDestroyWindow(window);
     window = nullptr;
-    try {
-      Logger::LogTrace("Render window destroyed");
-    } catch (...) {
-    }
+    Logger::LogTrace("Render window destroyed");
   }
   if (glfwInitialized) {
     glfwTerminate();

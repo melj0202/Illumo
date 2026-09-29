@@ -19,7 +19,6 @@
 #include <array>
 #include <cstring>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -150,7 +149,8 @@ protected:
     }
     m_catalog.pump();
     if (m_catalog.failed()) {
-      throw std::runtime_error(m_catalog.error());
+      failStartup(m_catalog.error());
+      return false;
     }
     const bool soundsReady = loadSounds();
     const bool versionReady = readPackageVersion();

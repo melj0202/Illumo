@@ -63,147 +63,140 @@ SceneQueryIndex::build(const std::vector<AxisAlignedBounds3>& bounds,
   m_nodes.clear();
   m_indices.clear();
   m_buildScratch.clear();
-  try {
-    m_indices.reserve(bounds.size());
-    for (uint32_t i = 0; i < bounds.size(); ++i) {
-      if (valid[i] != 0 && enabled[i] != 0) {
-        m_indices.push_back(i);
-      }
+  m_indices.reserve(bounds.size());
+  for (uint32_t i = 0; i < bounds.size(); ++i) {
+    if (valid[i] != 0 && enabled[i] != 0) {
+      m_indices.push_back(i);
     }
-    if (m_indices.empty()) {
-      return true;
+  }
+  if (m_indices.empty()) {
+    return true;
+  }
+  m_nodes.reserve(m_indices.size() * 2 + 1);
+  m_buildScratch.reserve(m_indices.size());
+  m_nodes.emplace_back(); // zero terminates threaded traversal
+  Node root;
+  root.count = static_cast<uint32_t>(m_indices.size());
+  m_nodes.push_back(root);
+  m_buildScratch.push_back(1);
+  constexpr int kBins = 12;
+  struct Bin
+  {
+    AxisAlignedBounds3 bounds;
+    uint32_t count = 0;
+  };
+  while (!m_buildScratch.empty()) {
+    const uint32_t nodeIndex = m_buildScratch.back();
+    m_buildScratch.pop_back();
+    Node node = m_nodes[nodeIndex];
+    node.bounds = bounds[m_indices[node.begin]];
+    AxisAlignedBounds3 centers{ Vector3(centerAxis(node.bounds, 0),
+                                        centerAxis(node.bounds, 1),
+                                        centerAxis(node.bounds, 2)),
+                                Vector3(centerAxis(node.bounds, 0),
+                                        centerAxis(node.bounds, 1),
+                                        centerAxis(node.bounds, 2)) };
+    for (uint32_t i = node.begin + 1; i < node.begin + node.count; ++i) {
+      const AxisAlignedBounds3& box = bounds[m_indices[i]];
+      node.bounds.include(box);
+      centers.include(
+        Vector3(centerAxis(box, 0), centerAxis(box, 1), centerAxis(box, 2)));
     }
-    m_nodes.reserve(m_indices.size() * 2 + 1);
-    m_buildScratch.reserve(m_indices.size());
-    m_nodes.emplace_back(); // zero terminates threaded traversal
-    Node root;
-    root.count = static_cast<uint32_t>(m_indices.size());
-    m_nodes.push_back(root);
-    m_buildScratch.push_back(1);
-    constexpr int kBins = 12;
-    struct Bin
-    {
-      AxisAlignedBounds3 bounds;
-      uint32_t count = 0;
-    };
-    while (!m_buildScratch.empty()) {
-      const uint32_t nodeIndex = m_buildScratch.back();
-      m_buildScratch.pop_back();
-      Node node = m_nodes[nodeIndex];
-      node.bounds = bounds[m_indices[node.begin]];
-      AxisAlignedBounds3 centers{ Vector3(centerAxis(node.bounds, 0),
-                                          centerAxis(node.bounds, 1),
-                                          centerAxis(node.bounds, 2)),
-                                  Vector3(centerAxis(node.bounds, 0),
-                                          centerAxis(node.bounds, 1),
-                                          centerAxis(node.bounds, 2)) };
-      for (uint32_t i = node.begin + 1; i < node.begin + node.count; ++i) {
-        const AxisAlignedBounds3& box = bounds[m_indices[i]];
-        node.bounds.include(box);
-        centers.include(
-          Vector3(centerAxis(box, 0), centerAxis(box, 1), centerAxis(box, 2)));
-      }
-      m_nodes[nodeIndex].bounds = node.bounds;
-      if (node.count <= 4) {
+    m_nodes[nodeIndex].bounds = node.bounds;
+    if (node.count <= 4) {
+      continue;
+    }
+    double bestCost = std::numeric_limits<double>::infinity();
+    int bestAxis = -1;
+    int bestBin = -1;
+    for (int axis = 0; axis < 3; ++axis) {
+      const double extent =
+        static_cast<double>(centers.maximum[axis]) - centers.minimum[axis];
+      if (extent <= 0.0) {
         continue;
       }
-      double bestCost = std::numeric_limits<double>::infinity();
-      int bestAxis = -1;
-      int bestBin = -1;
-      for (int axis = 0; axis < 3; ++axis) {
-        const double extent =
-          static_cast<double>(centers.maximum[axis]) - centers.minimum[axis];
-        if (extent <= 0.0) {
+      std::array<Bin, kBins> bins{};
+      for (uint32_t i = node.begin; i < node.begin + node.count; ++i) {
+        const AxisAlignedBounds3& box = bounds[m_indices[i]];
+        const int bin = std::clamp(
+          static_cast<int>((centerAxis(box, axis) -
+                            static_cast<double>(centers.minimum[axis])) /
+                           extent * kBins),
+          0,
+          kBins - 1);
+        if (bins[bin].count == 0) {
+          bins[bin].bounds = box;
+        } else {
+          bins[bin].bounds.include(box);
+        }
+        ++bins[bin].count;
+      }
+      for (int split = 0; split < kBins - 1; ++split) {
+        Bin left, right;
+        for (int bin = 0; bin < kBins; ++bin) {
+          if (bins[bin].count == 0) {
+            continue;
+          }
+          Bin& side = bin <= split ? left : right;
+          if (side.count == 0) {
+            side.bounds = bins[bin].bounds;
+          } else {
+            side.bounds.include(bins[bin].bounds);
+          }
+          side.count += bins[bin].count;
+        }
+        if (left.count == 0 || right.count == 0) {
           continue;
         }
-        std::array<Bin, kBins> bins{};
-        for (uint32_t i = node.begin; i < node.begin + node.count; ++i) {
-          const AxisAlignedBounds3& box = bounds[m_indices[i]];
+        const double cost = surfaceArea(left.bounds) * left.count +
+                            surfaceArea(right.bounds) * right.count;
+        if (cost < bestCost) {
+          bestCost = cost;
+          bestAxis = axis;
+          bestBin = split;
+        }
+      }
+    }
+    uint32_t middle = node.begin + node.count / 2;
+    if (bestAxis >= 0) {
+      const double extent = static_cast<double>(centers.maximum[bestAxis]) -
+                            centers.minimum[bestAxis];
+      const std::vector<uint32_t>::iterator split = std::partition(
+        m_indices.begin() + node.begin,
+        m_indices.begin() + node.begin + node.count,
+        [&bounds, &centers, bestAxis, bestBin, extent](uint32_t index) {
           const int bin = std::clamp(
-            static_cast<int>((centerAxis(box, axis) -
-                              static_cast<double>(centers.minimum[axis])) /
+            static_cast<int>((centerAxis(bounds[index], bestAxis) -
+                              static_cast<double>(centers.minimum[bestAxis])) /
                              extent * kBins),
             0,
             kBins - 1);
-          if (bins[bin].count == 0) {
-            bins[bin].bounds = box;
-          } else {
-            bins[bin].bounds.include(box);
-          }
-          ++bins[bin].count;
-        }
-        for (int split = 0; split < kBins - 1; ++split) {
-          Bin left, right;
-          for (int bin = 0; bin < kBins; ++bin) {
-            if (bins[bin].count == 0) {
-              continue;
-            }
-            Bin& side = bin <= split ? left : right;
-            if (side.count == 0) {
-              side.bounds = bins[bin].bounds;
-            } else {
-              side.bounds.include(bins[bin].bounds);
-            }
-            side.count += bins[bin].count;
-          }
-          if (left.count == 0 || right.count == 0) {
-            continue;
-          }
-          const double cost = surfaceArea(left.bounds) * left.count +
-                              surfaceArea(right.bounds) * right.count;
-          if (cost < bestCost) {
-            bestCost = cost;
-            bestAxis = axis;
-            bestBin = split;
-          }
-        }
-      }
-      uint32_t middle = node.begin + node.count / 2;
-      if (bestAxis >= 0) {
-        const double extent = static_cast<double>(centers.maximum[bestAxis]) -
-                              centers.minimum[bestAxis];
-        const std::vector<uint32_t>::iterator split = std::partition(
-          m_indices.begin() + node.begin,
-          m_indices.begin() + node.begin + node.count,
-          [&bounds, &centers, bestAxis, bestBin, extent](uint32_t index) {
-            const int bin =
-              std::clamp(static_cast<int>(
-                           (centerAxis(bounds[index], bestAxis) -
-                            static_cast<double>(centers.minimum[bestAxis])) /
-                           extent * kBins),
-                         0,
-                         kBins - 1);
-            return bin <= bestBin;
-          });
-        middle = static_cast<uint32_t>(split - m_indices.begin());
-      }
-      if (middle == node.begin || middle == node.begin + node.count) {
-        middle = node.begin + node.count / 2;
-      }
-      const uint32_t leftIndex = static_cast<uint32_t>(m_nodes.size());
-      const uint32_t rightIndex = leftIndex + 1;
-      Node left;
-      left.begin = node.begin;
-      left.count = middle - node.begin;
-      left.escape = rightIndex;
-      Node right;
-      right.begin = middle;
-      right.count = node.begin + node.count - middle;
-      right.escape = node.escape;
-      m_nodes.push_back(left);
-      m_nodes.push_back(right);
-      m_nodes[nodeIndex].left = leftIndex;
-      m_nodes[nodeIndex].right = rightIndex;
-      m_nodes[nodeIndex].count = 0;
-      m_buildScratch.push_back(rightIndex);
-      m_buildScratch.push_back(leftIndex);
+          return bin <= bestBin;
+        });
+      middle = static_cast<uint32_t>(split - m_indices.begin());
     }
-    return true;
-  } catch (const std::bad_alloc&) {
-    m_nodes.clear();
-    m_indices.clear();
-    return false;
+    if (middle == node.begin || middle == node.begin + node.count) {
+      middle = node.begin + node.count / 2;
+    }
+    const uint32_t leftIndex = static_cast<uint32_t>(m_nodes.size());
+    const uint32_t rightIndex = leftIndex + 1;
+    Node left;
+    left.begin = node.begin;
+    left.count = middle - node.begin;
+    left.escape = rightIndex;
+    Node right;
+    right.begin = middle;
+    right.count = node.begin + node.count - middle;
+    right.escape = node.escape;
+    m_nodes.push_back(left);
+    m_nodes.push_back(right);
+    m_nodes[nodeIndex].left = leftIndex;
+    m_nodes[nodeIndex].right = rightIndex;
+    m_nodes[nodeIndex].count = 0;
+    m_buildScratch.push_back(rightIndex);
+    m_buildScratch.push_back(leftIndex);
   }
+  return true;
 }
 
 bool

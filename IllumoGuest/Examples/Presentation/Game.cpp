@@ -1,4 +1,5 @@
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Application.h>
 #include <IllumoGuest/Diagnostics.h>
 #include <IllumoGuest/FontProvider.h>
@@ -66,10 +67,15 @@ public:
     renderer.pushUpdateTexture(texture, 0, 0, 1, 1, 4, pixel.data());
     visual.AppendCommands(&renderer);
     renderer.EndFrame();
-    if (!renderer.frameError().empty()) {
-      throw std::runtime_error(renderer.frameError());
+    GuestFrame recorded;
+    if (!renderer.frameError().empty() || !backend.takeFrame(recorded)) {
+      // A dropped frame: the host keeps showing the previous one.
+      Logger::LogError("Frame dropped: " + (renderer.frameError().empty()
+                                              ? backend.submissionError()
+                                              : renderer.frameError()));
+      return {};
     }
-    return backend.takeFrame();
+    return recorded;
   }
   bool close() override
   {

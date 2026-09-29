@@ -399,14 +399,11 @@ void
 GLBackend::Shutdown()
 {
   if (device != nullptr) {
-    try {
-      Logger::LogTrace(
-        "OpenGL backend releasing " +
-        std::to_string(_vaoRegistryLookup.size()) + " meshes, " +
-        std::to_string(_programRegistryLookup.size()) + " shaders, " +
-        std::to_string(_textureRegistryLookup.size()) + " textures");
-    } catch (...) {
-    }
+    Logger::LogTrace(
+      "OpenGL backend releasing " + std::to_string(_vaoRegistryLookup.size()) +
+      " meshes, " + std::to_string(_programRegistryLookup.size()) +
+      " shaders, " + std::to_string(_textureRegistryLookup.size()) +
+      " textures");
   }
   for (std::unordered_map<uint32_t, GLMeshResourceEntry>::iterator it =
          _vaoRegistryLookup.begin();

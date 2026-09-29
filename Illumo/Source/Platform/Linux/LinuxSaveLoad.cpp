@@ -80,39 +80,35 @@ chooseFile(const SaveLoadDialogSpec& specification, bool save)
                                         ? "MyCanvas.illumo"
                                         : specification.defaultFilename;
 
-  try {
-    Gtk::FileChooserDialog dialog(save ? "Save File" : "Open File",
-                                  save ? Gtk::FILE_CHOOSER_ACTION_SAVE
-                                       : Gtk::FILE_CHOOSER_ACTION_OPEN);
-    dialog.set_modal(true);
-    dialog.set_keep_above(true);
-    dialog.set_local_only(true);
-    dialog.set_select_multiple(false);
-    dialog.set_do_overwrite_confirmation(save);
-    dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
-    dialog.add_button(save ? "_Save" : "_Open", Gtk::RESPONSE_OK);
-    dialog.set_default_response(Gtk::RESPONSE_OK);
-    dialog.set_current_name(
-      std::filesystem::path(defaultFilename).filename().string());
+  Gtk::FileChooserDialog dialog(save ? "Save File" : "Open File",
+                                save ? Gtk::FILE_CHOOSER_ACTION_SAVE
+                                     : Gtk::FILE_CHOOSER_ACTION_OPEN);
+  dialog.set_modal(true);
+  dialog.set_keep_above(true);
+  dialog.set_local_only(true);
+  dialog.set_select_multiple(false);
+  dialog.set_do_overwrite_confirmation(save);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button(save ? "_Save" : "_Open", Gtk::RESPONSE_OK);
+  dialog.set_default_response(Gtk::RESPONSE_OK);
+  dialog.set_current_name(
+    std::filesystem::path(defaultFilename).filename().string());
 
-    Glib::RefPtr<Gtk::FileFilter> filter = Gtk::FileFilter::create();
-    filter->set_name(description + " (" + pattern + ")");
-    addFilterPatterns(filter, pattern);
-    dialog.add_filter(filter);
+  Glib::RefPtr<Gtk::FileFilter> filter = Gtk::FileFilter::create();
+  filter->set_name(description + " (" + pattern + ")");
+  addFilterPatterns(filter, pattern);
+  dialog.add_filter(filter);
 
-    const int response = dialog.run();
-    dialog.hide();
-    if (response != Gtk::RESPONSE_OK) {
-      return std::string();
-    }
-    const Glib::ustring filename = dialog.get_filename();
-    if (filename.empty()) {
-      return std::string();
-    }
-    return std::string(filename);
-  } catch (...) {
+  const int response = dialog.run();
+  dialog.hide();
+  if (response != Gtk::RESPONSE_OK) {
     return std::string();
   }
+  const Glib::ustring filename = dialog.get_filename();
+  if (filename.empty()) {
+    return std::string();
+  }
+  return std::string(filename);
 }
 
 std::string

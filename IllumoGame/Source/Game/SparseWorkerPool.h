@@ -19,7 +19,7 @@ public:
   // workerCount threads, including the caller, and returns when all finish.
   // Slots are stable per participating thread and stay below
   // SparseCellGrid::kMaxParallelWorkers + 1, so callers can index per-slot
-  // scratch. Jobs must not throw.
+  // scratch.
   using Job = std::function<void(std::size_t, unsigned int)>;
 
   SparseWorkerPool();

@@ -177,12 +177,7 @@ compileWasmIsolated(std::span<const std::byte> input,
     error = "Invalid compiler artifact size";
     return false;
   }
-  try {
-    artifact.assign(shared + kHeaderBytes, shared + kHeaderBytes + outputSize);
-  } catch (...) {
-    UnmapViewOfFile(shared);
-    throw;
-  }
+  artifact.assign(shared + kHeaderBytes, shared + kHeaderBytes + outputSize);
   UnmapViewOfFile(shared);
   return true;
 }

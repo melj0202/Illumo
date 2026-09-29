@@ -1,7 +1,6 @@
 #include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
-#include <exception>
 
 SceneDirector::SceneDirector(IllumoContext& context, ISceneWorlds* worlds)
   : m_context(context)
@@ -216,24 +215,9 @@ SceneDirector::startEntry(Entry& target)
     *m_context.camera = m_initialCamera;
   }
 
-  bool started = false;
-  bool threw = false;
-  try {
-    started = scene.start(m_context);
-  } catch (const std::exception& exception) {
-    Logger::LogError("Scene '" + target.name +
-                     "' threw during start: " + exception.what());
-    threw = true;
-  }
-  if (started) {
+  if (scene.start(m_context)) {
     target.started = true;
     return true;
-  }
-  if (threw) {
-    try {
-      scene.stop();
-    } catch (...) {
-    }
   }
   scene.withdrawCommands();
   scene.m_content->setRenderWorld(nullptr);
@@ -264,12 +248,7 @@ void
 SceneDirector::leaveEntry(Entry& current)
 {
   ILLUMO_PROFILE_ZONE("SceneDirector.leaveEntry");
-  try {
-    current.scene->leave();
-  } catch (const std::exception& exception) {
-    Logger::LogError("Scene '" + current.name +
-                     "' threw while leaving: " + exception.what());
-  }
+  current.scene->leave();
   current.scene->withdrawCommands();
   if (m_context.camera != nullptr) {
     current.camera = *m_context.camera;
@@ -288,14 +267,7 @@ SceneDirector::stopEntry(Entry& current) noexcept
   }
   ILLUMO_PROFILE_ZONE("SceneDirector.stopEntry");
   current.started = false;
-  try {
-    current.scene->stop();
-  } catch (const std::exception& exception) {
-    Logger::LogError("Scene '" + current.name +
-                     "' threw while stopping: " + exception.what());
-  } catch (...) {
-    Logger::LogError("Scene '" + current.name + "' threw while stopping");
-  }
+  current.scene->stop();
   current.scene->withdrawCommands();
   if (current.scene->m_content) {
     current.scene->m_content->setRenderWorld(nullptr);

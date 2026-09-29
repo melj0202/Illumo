@@ -82,18 +82,13 @@ public:
     batch.swap(queue);
     executing = true;
     cancelBatch = false;
-    try {
-      for (const QueuedCommand& command : batch) {
-        if (cancelBatch) {
-          break;
-        }
-        if (!command.identity.expired() && command.fn) {
-          command.fn(command.args);
-        }
+    for (const QueuedCommand& command : batch) {
+      if (cancelBatch) {
+        break;
       }
-    } catch (...) {
-      executing = false;
-      throw;
+      if (!command.identity.expired() && command.fn) {
+        command.fn(command.args);
+      }
     }
     executing = false;
   }

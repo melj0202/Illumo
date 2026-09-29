@@ -31,7 +31,7 @@ operator new(std::size_t size)
   }
   void* pointer = std::malloc(size == 0 ? 1 : size);
   if (pointer == nullptr) {
-    throw std::bad_alloc();
+    std::abort(); // allocation failure is fatal (no exceptions)
   }
   return pointer;
 }
@@ -63,11 +63,10 @@ operator delete[](void* pointer, std::size_t) noexcept
 void*
 operator new(std::size_t size, const std::nothrow_t&) noexcept
 {
-  try {
-    return ::operator new(size);
-  } catch (...) {
-    return nullptr;
+  if (g_countAllocations) {
+    ++g_allocations;
   }
+  return std::malloc(size == 0 ? 1 : size);
 }
 void*
 operator new[](std::size_t size, const std::nothrow_t&) noexcept
@@ -99,7 +98,7 @@ operator new(std::size_t size, std::align_val_t alignment)
   void* pointer = std::aligned_alloc(align, rounded);
 #endif
   if (pointer == nullptr) {
-    throw std::bad_alloc();
+    std::abort(); // allocation failure is fatal (no exceptions)
   }
   return pointer;
 }

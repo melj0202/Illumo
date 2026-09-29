@@ -33,6 +33,7 @@ if(WIN32)
     Source/Platform/Windows/WinProcessMemoryStats.cpp
     Source/Platform/Windows/WinProcessRelaunch.cpp
     Source/Platform/Windows/WinSystemInfo.cpp
+    Source/Platform/Windows/WinPathText.cpp
     Source/Platform/Windows/WinPixelWindowPresent.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm Gdi32 Advapi32)
 elseif(UNIX)
@@ -44,6 +45,7 @@ elseif(UNIX)
     Source/Platform/Linux/LinuxGtk.cpp
     Source/Platform/Linux/LinuxSaveLoad.cpp
     Source/Platform/PosixAtomicFile.cpp
+    Source/Platform/PosixPathText.cpp
     Source/Platform/Linux/LinuxClipboard.cpp
     Source/Platform/Linux/LinuxTimer.cpp
     Source/Platform/Linux/LinuxPixelWindowPresent.cpp

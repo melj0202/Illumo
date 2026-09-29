@@ -134,15 +134,7 @@ private:
       address = chunk->data;
     }
     mark.pointer = address;
-    try {
-      marks.push_back(mark);
-    } catch (...) {
-      releaseChunksAfter(mark.chunk);
-      chunk = mark.chunk;
-      offset = mark.offset;
-      numChunks = mark.numChunks;
-      throw;
-    }
+    marks.push_back(mark);
     offset =
       static_cast<size_t>(static_cast<char*>(address) - chunk->data) + size;
     return address;

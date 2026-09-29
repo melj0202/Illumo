@@ -206,7 +206,8 @@ readsFrame(const GuestFrame& frame, GuestFrame* decoded = nullptr)
   GuestWireWriter bytes;
   frame.write(bytes);
   GuestFrame ignored;
-  return GuestFrame::read(bytes.data(),
+  return !bytes.failed() &&
+         GuestFrame::read(bytes.data(),
                           decoded != nullptr ? *decoded : ignored);
 }
 
@@ -368,14 +369,10 @@ testInputV2()
            "kinds are refused");
   GuestInput mismatched = inputV2();
   mismatched.eventSurfaces.pop_back();
-  bool threw = false;
-  try {
-    GuestWireWriter bytes;
-    mismatched.write(bytes);
-  } catch (const std::length_error&) {
-    threw = true;
-  }
-  testTrue(counters, threw, "an event without a window tag cannot be sent");
+  GuestWireWriter bytes;
+  mismatched.write(bytes);
+  testTrue(
+    counters, bytes.failed(), "an event without a window tag cannot be sent");
   return counters.failures;
 }
 
@@ -416,13 +413,7 @@ testFrameV5Surfaces()
              !readsFrame(depth) && !readsFrame(size),
            "surface 0, revision 0, duplicates, world, depth-tested and empty "
            "surfaces are refused");
-  bool manyRefused = false;
-  try {
-    manyRefused = !readsFrame(many);
-  } catch (const std::length_error&) {
-    manyRefused = true;
-  }
-  testTrue(counters, manyRefused, "more than eight surfaces are refused");
+  testTrue(counters, !readsFrame(many), "more than eight surfaces are refused");
   GuestFrame shared = frameWithSurface(4, 1, false);
   shared.batches.push_back(surfaceQuad());
   GuestWireWriter sharedBytes;
@@ -760,10 +751,10 @@ exchangeServices(GuestSide& guest,
 {
   std::vector<std::byte> requests;
   if (!guest.queue.exchange(completions, requests)) {
-    throw std::runtime_error("Guest queue rejected host completions");
+    testFailure("Guest queue rejected host completions");
   }
   if (!services.process(requests, completions)) {
-    throw std::runtime_error(services.error());
+    testFailure(services.error());
   }
 }
 
@@ -786,7 +777,7 @@ recordFrame(GuestSide& guest, GameVisual* panel)
   guest.panels.record(guest.renderer, guest.backend, guest.window);
   guest.renderer.EndFrame();
   if (!guest.renderer.frameError().empty()) {
-    throw std::runtime_error("guest frame: " + guest.renderer.frameError());
+    testFailure("guest frame: " + guest.renderer.frameError());
   }
   GuestFrame frame = guest.backend.takeFrame();
   guest.panels.finish(frame);
@@ -1102,19 +1093,9 @@ main(int argc, char** argv)
   } else if (name == "Illumo.Wasm.PanelWindowsLifecycle") {
     failures = testPanelWindowsLifecycle();
   } else if (name == "Illumo.Wasm.Bench.PanelSurface") {
-    try {
-      failures = benchPanelSurface();
-    } catch (const std::exception& exception) {
-      std::printf("FAIL: %s\n", exception.what());
-      failures = 1;
-    }
+    failures = benchPanelSurface();
   } else if (name == "Illumo.Wasm.GuestPanelSurfaces") {
-    try {
-      failures = testGuestPanelSurfaces();
-    } catch (const std::exception& exception) {
-      std::printf("FAIL: %s\n", exception.what());
-      failures = 1;
-    }
+    failures = testGuestPanelSurfaces();
   }
   if (failures < 0) {
     return 2;

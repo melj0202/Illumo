@@ -1,7 +1,7 @@
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/FontProvider.h>
-#include <stdexcept>
 
 static GuestFontProvider* activeProvider = nullptr;
 static std::shared_ptr<Font> defaultFont;
@@ -16,7 +16,7 @@ GuestFontProvider::GuestFontProvider(GuestServiceQueue& services,
   , m_backend(backend)
 {
   if (activeProvider != nullptr) {
-    throw std::logic_error("Only one font provider per control store");
+    illumoFatal("GuestFontProvider: only one font provider per control store");
   }
   activeProvider = this;
 }
@@ -91,9 +91,13 @@ GuestFontProvider::complete(Entry& entry)
   // Once per loaded font: decodes the glyph table and enrolls the atlas.
   ILLUMO_PROFILE_ZONE("FontProvider.completeFont");
   GuestFont description;
+  // A font that fails stays invalid; text drawn with it draws nothing.
+  entry.pending = 0;
   if (completion.status != GuestServiceStatus::Complete ||
       !GuestFont::read(completion.payload, description)) {
-    throw std::runtime_error("Font resource acquisition failed");
+    Logger::LogError("Font " + entry.font->sourcePath +
+                     " could not be acquired from the host");
+    return;
   }
   Font& font = *entry.font;
   font.metrics = { description.metrics[0],
@@ -118,10 +122,10 @@ GuestFontProvider::complete(Entry& entry)
   }
   font.textureHandle = m_backend.importTexture(description.atlas);
   if (!font.textureHandle.isValid()) {
-    throw std::runtime_error("Font atlas enrollment failed");
+    Logger::LogError("Font " + font.sourcePath + " atlas enrollment failed");
+    return;
   }
   font.valid = true;
-  entry.pending = 0;
 }
 void
 GuestFontProvider::clear()

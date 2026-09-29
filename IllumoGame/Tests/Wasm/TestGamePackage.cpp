@@ -4,6 +4,7 @@
 #include "Rulesets/RuleSetRegistry.h"
 #include "Wasm/CatalogBootstrap.h"
 #include <Illumo/Content/VirtualFileSystem.h>
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -46,7 +47,7 @@ operator new(std::size_t size)
   }
   void* pointer = std::malloc(size == 0 ? 1 : size);
   if (pointer == nullptr) {
-    throw std::bad_alloc();
+    std::abort(); // allocation failure is fatal (no exceptions)
   }
   return pointer;
 }
@@ -78,11 +79,10 @@ operator delete[](void* pointer, std::size_t) noexcept
 void*
 operator new(std::size_t size, const std::nothrow_t&) noexcept
 {
-  try {
-    return ::operator new(size);
-  } catch (...) {
-    return nullptr;
+  if (g_countAllocations) {
+    ++g_allocations;
   }
+  return std::malloc(size == 0 ? 1 : size);
 }
 void*
 operator new[](std::size_t size, const std::nothrow_t&) noexcept
@@ -114,7 +114,7 @@ operator new(std::size_t size, std::align_val_t alignment)
   void* pointer = std::aligned_alloc(align, rounded);
 #endif
   if (pointer == nullptr) {
-    throw std::bad_alloc();
+    std::abort(); // allocation failure is fatal (no exceptions)
   }
   return pointer;
 }
@@ -575,7 +575,9 @@ lastGeneration(const CommandLine& console, std::size_t* reports = nullptr)
   std::size_t count = 0;
   for (const CommandLine::historyBuffer& entry : console.getHistory()) {
     if (entry.content.rfind("Generation: ", 0) == 0) {
-      generation = std::stoll(entry.content.substr(12));
+      if (!parseInteger(entry.content.substr(12), &generation)) {
+        generation = -1;
+      }
       ++count;
     }
   }

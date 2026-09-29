@@ -1,9 +1,9 @@
 #include "GuestPlatform.h"
 #include "Game/RuleCatalogOverlay.h"
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <array>
-#include <stdexcept>
 #include <string>
 
 static GuestCSimPlatform* installedPlatform = nullptr;
@@ -20,7 +20,7 @@ CSimPlatform&
 CSimPlatform::current()
 {
   if (installedPlatform == nullptr) {
-    throw std::logic_error("No guest CSimPlatform is installed");
+    illumoFatal("No guest CSimPlatform is installed");
   }
   return *installedPlatform;
 }
@@ -234,7 +234,9 @@ GuestCSimPlatform::readClipboard(TextCallback done)
 void
 GuestCSimPlatform::writeClipboard(const std::string& text)
 {
-  m_clipboard.set(text);
+  if (!m_clipboard.set(text)) {
+    Logger::LogWarning("Clipboard text refused: not UTF-8 or too long");
+  }
 }
 
 void
@@ -313,16 +315,22 @@ GuestCSimPlatform::pump()
     const std::string defaultName = next.specification.defaultFilename.empty()
                                       ? std::string("untitled")
                                       : next.specification.defaultFilename;
-    if (next.save) {
-      m_dialog.save(next.specification.fileDescription,
-                    defaultName,
-                    next.specification.extensionPattern);
+    const bool queued = next.save
+                          ? m_dialog.save(next.specification.fileDescription,
+                                          defaultName,
+                                          next.specification.extensionPattern)
+                          : m_dialog.load(next.specification.fileDescription,
+                                          defaultName,
+                                          next.specification.extensionPattern);
+    if (queued) {
+      m_dialogActive = true;
     } else {
-      m_dialog.load(next.specification.fileDescription,
-                    defaultName,
-                    next.specification.extensionPattern);
+      // Text the host would refuse (not UTF-8, too long): no selection.
+      DialogRequest refused = std::move(m_dialogs.front());
+      m_dialogs.pop_front();
+      Logger::LogWarning("File dialog request refused: invalid dialog text");
+      completions.push_back([refused]() { refused.done(std::string()); });
     }
-    m_dialogActive = true;
   }
   m_dialog.pump();
 

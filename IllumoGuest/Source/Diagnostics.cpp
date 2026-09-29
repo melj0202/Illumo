@@ -1,7 +1,7 @@
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Diagnostics.h>
-#include <stdexcept>
 #include <string>
 
 static GuestServiceQueue* diagnosticQueue = nullptr;
@@ -44,7 +44,7 @@ flushBacklog()
 GuestDiagnostics::GuestDiagnostics(GuestServiceQueue& queue)
 {
   if (diagnosticQueue != nullptr) {
-    throw std::logic_error("Only one diagnostic route per store");
+    illumoFatal("GuestDiagnostics: only one diagnostic route per store");
   }
   diagnosticQueue = &queue;
 }

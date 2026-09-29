@@ -3,11 +3,11 @@
 #include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Services/Logger.h>
 #include <IllumoGuest/PanelSurfaces.h>
 #include <IllumoGuest/RecordingBackend.h>
 #include <IllumoGuest/SnapshotWindow.h>
 #include <algorithm>
-#include <stdexcept>
 
 GuestPanelSurfaces::GuestPanelSurfaces(GuestServiceQueue& services,
                                        IRenderWindow& window,
@@ -320,11 +320,12 @@ GuestPanelSurfaces::pump()
     }
     surface->openRequest = 0;
     GuestWindowOpened opened;
-    if (result.status == GuestServiceStatus::Complete &&
-        !GuestWindowOpened::read(result.payload, opened)) {
-      throw std::runtime_error("Invalid window completion");
+    const bool malformed = result.status == GuestServiceStatus::Complete &&
+                           !GuestWindowOpened::read(result.payload, opened);
+    if (malformed) {
+      Logger::LogError("Invalid window completion; the panel stays docked");
     }
-    if (result.status != GuestServiceStatus::Complete) {
+    if (result.status != GuestServiceStatus::Complete || malformed) {
       surface->state = PanelSurfaceState::Failed;
       if (surface->closeAfterOpen) {
         removed.push_back(surface->id);
@@ -378,13 +379,7 @@ GuestPanelSurfaces::record(Renderer& renderer,
     backend.beginSurface(surface->id,
                          static_cast<float>(surface->size[0]),
                          static_cast<float>(surface->size[1]));
-    try {
-      renderer.RenderScene(surface->scene.get(), &m_camera);
-    } catch (...) {
-      backend.endSurface();
-      window.clearOverride();
-      throw;
-    }
+    renderer.RenderScene(surface->scene.get(), &m_camera);
     backend.endSurface();
     window.clearOverride();
   }

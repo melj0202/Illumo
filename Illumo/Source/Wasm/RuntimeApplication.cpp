@@ -619,7 +619,9 @@ runRuntime(Illumo& illumo, std::chrono::steady_clock::time_point launched)
     result["output"] = capture;
     result["error"] =
       "The requested application could not be prepared; see the log";
-    std::cout << result.dump() << std::endl;
+    std::cout << result.dump(
+                   -1, ' ', false, nlohmann::json::error_handler_t::replace)
+              << std::endl;
   }
   clearLaunchOptions(environment);
   if (!shell) {

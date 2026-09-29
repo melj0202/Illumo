@@ -461,13 +461,9 @@ run(const std::string& name, const std::vector<std::byte>& bytes)
     bad.u32();
     GuestWireReader oversize(packet.data());
     oversize.text(4);
-    bool rejected = false;
-    try {
-      GuestWireWriter tiny(3);
-      tiny.u32(1);
-    } catch (const std::length_error&) {
-      rejected = true;
-    }
+    GuestWireWriter tiny(3);
+    tiny.u32(1);
+    const bool rejected = tiny.failed() && tiny.data().empty();
     return require(!bad.valid() && bad.bytes(SIZE_MAX).empty() &&
                      !oversize.valid() && rejected,
                    "Truncation, length and quota checks");
@@ -526,10 +522,10 @@ run(const std::string& name, const std::vector<std::byte>& bytes)
   if (name == "Compatibility") {
     const std::array<std::int32_t, 1> size{ 16 };
     if (!require(instance.call("compatibility", {}, result) && result == 4,
-                 "C++23 containers, exceptions, SIMD and constructors",
+                 "C++23 containers, destructors, SIMD and constructors",
                  &instance) ||
         !require(instance.call("allocationFailure", {}, result) && result == 1,
-                 "Guest allocation failure is catchable",
+                 "Guest nothrow allocation reports failure",
                  &instance) ||
         !require(instance.call("allocate", size, result),
                  "Guest allocation",

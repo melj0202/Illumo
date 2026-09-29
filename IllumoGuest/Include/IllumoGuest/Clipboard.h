@@ -48,17 +48,20 @@ public:
     m_next = GuestClipboardRequest{};
     m_pending = true;
   }
-  void set(std::string text)
+  // False, queuing nothing, for text the host would reject (not UTF-8, or
+  // too long).
+  bool set(std::string text)
   {
     GuestClipboardRequest request{ true, std::move(text) };
     GuestWireWriter bytes;
     request.write(bytes);
     GuestClipboardRequest checked;
-    if (!GuestClipboardRequest::read(bytes.data(), checked)) {
-      throw std::invalid_argument("Invalid clipboard text");
+    if (bytes.failed() || !GuestClipboardRequest::read(bytes.data(), checked)) {
+      return false;
     }
     m_next = std::move(request);
     m_pending = true;
+    return true;
   }
   void pump();
   bool idle() const { return !m_pending && m_request == 0; }

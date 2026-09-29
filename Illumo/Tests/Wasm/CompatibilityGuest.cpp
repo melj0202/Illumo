@@ -1,7 +1,7 @@
 #include <IllumoGuest/Wire.h>
 #include <algorithm>
 #include <cstdint>
-#include <stdexcept>
+#include <new>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -57,17 +57,17 @@ illumo_guest_result_size()
   return static_cast<int>(s_response.size());
 }
 
-struct UnwindProbe
+struct ScopeProbe
 {
-  explicit UnwindProbe(bool& destroyed)
+  explicit ScopeProbe(bool& destroyed)
     : m_destroyed(destroyed)
   {
   }
-  ~UnwindProbe() { m_destroyed = true; }
-  UnwindProbe(const UnwindProbe&) = delete;
-  UnwindProbe& operator=(const UnwindProbe&) = delete;
-  UnwindProbe(UnwindProbe&&) = delete;
-  UnwindProbe& operator=(UnwindProbe&&) = delete;
+  ~ScopeProbe() { m_destroyed = true; }
+  ScopeProbe(const ScopeProbe&) = delete;
+  ScopeProbe& operator=(const ScopeProbe&) = delete;
+  ScopeProbe(ScopeProbe&&) = delete;
+  ScopeProbe& operator=(ScopeProbe&&) = delete;
   bool& m_destroyed;
 };
 
@@ -77,16 +77,12 @@ compatibility()
   std::vector<int> values = s_initialized;
   std::ranges::sort(values);
   std::unordered_map<std::string, int> map{ { "answer", values[2] } };
-  bool unwound = false;
-  try {
-    UnwindProbe probe(unwound);
-    throw std::runtime_error("guest exception");
-  } catch (const std::exception& error) {
-    if (std::string(error.what()) != "guest exception") {
-      return -1;
-    }
+  // Guests build without exceptions; destructors still run at scope exit.
+  bool destroyed = false;
+  {
+    ScopeProbe probe(destroyed);
   }
-  if (!unwound) {
+  if (!destroyed) {
     return -2;
   }
   s_simd = wasm_i32x4_splat(map.at("answer"));
@@ -94,17 +90,18 @@ compatibility()
   return wasm_i32x4_extract_lane(lanes, 0) + ++s_count;
 }
 
+// Past the guest's memory limit a plain new would abort (trap); the nothrow
+// form reports the failure.
 extern "C" int
 allocationFailure()
 {
-  try {
-    s_allocation = new unsigned char[80u * 1024u * 1024u];
-    delete[] s_allocation;
-    s_allocation = nullptr;
-    return 0;
-  } catch (const std::bad_alloc&) {
+  s_allocation = new (std::nothrow) unsigned char[80u * 1024u * 1024u];
+  if (s_allocation == nullptr) {
     return 1;
   }
+  delete[] s_allocation;
+  s_allocation = nullptr;
+  return 0;
 }
 
 extern "C" int

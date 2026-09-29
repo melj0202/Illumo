@@ -8,10 +8,10 @@
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Platform/AtomicFile.h>
 #include <Illumo/Platform/Clipboard.h>
+#include <Illumo/Platform/PathText.h>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
-#include <system_error>
 
 static void
 setError(std::string* error, const char* message)
@@ -25,14 +25,17 @@ bool
 IllEdNativeFiles::readText(const std::string& path,
                            std::string* text,
                            std::string* error)
-try {
+{
   if (path.empty()) {
     setError(error, "Scene path is empty");
     return false;
   }
-  std::ifstream file(
-    std::filesystem::path(std::u8string(path.begin(), path.end())),
-    std::ios::binary);
+  std::filesystem::path source;
+  if (!pathFromUtf8(path, &source)) {
+    setError(error, "Invalid or inaccessible UTF-8 file path");
+    return false;
+  }
+  std::ifstream file(source, std::ios::binary);
   if (!file.is_open()) {
     setError(error, "Failed to open scene file");
     return false;
@@ -45,30 +48,29 @@ try {
   }
   *text = buffer.str();
   return true;
-} catch (const std::system_error&) {
-  setError(error, "Invalid or inaccessible UTF-8 file path");
-  return false;
 }
 
 bool
 IllEdNativeFiles::writeText(const std::string& path,
                             const std::string& text,
                             std::string* error)
-try {
+{
   if (path.empty()) {
     setError(error, "Scene path is empty");
     return false;
   }
+  std::filesystem::path target;
+  if (!pathFromUtf8(path, &target)) {
+    setError(error, "Invalid or inaccessible UTF-8 file path");
+    return false;
+  }
   return AtomicFile::write(
-    std::filesystem::path(std::u8string(path.begin(), path.end())),
+    target,
     [&text](std::ostream& file, std::string*) {
       file << text;
       return file.good();
     },
     error);
-} catch (const std::system_error&) {
-  setError(error, "Invalid or inaccessible UTF-8 file path");
-  return false;
 }
 
 // Synchronous native oracle used by the workspace tests: every completion runs
@@ -167,10 +169,12 @@ public:
       done(false, {}, {});
       return;
     }
-    const std::filesystem::path path(
-      std::u8string(source.begin(), source.end()));
-    const std::u8string file = path.filename().u8string();
-    const std::string name(file.begin(), file.end());
+    std::filesystem::path path;
+    if (!pathFromUtf8(source, &path)) {
+      done(false, {}, "Invalid or inaccessible UTF-8 file path");
+      return;
+    }
+    const std::string name = pathToUtf8(path.filename());
     std::ifstream input(path, std::ios::binary);
     const std::vector<unsigned char> bytes(
       (std::istreambuf_iterator<char>(input)),
@@ -210,14 +214,14 @@ public:
       done(false, {});
       return;
     }
+    std::filesystem::path target;
+    if (!pathFromUtf8(destination, &target)) {
+      done(false, "Invalid or inaccessible UTF-8 file path");
+      return;
+    }
     std::string error;
-    const bool packed =
-      PackageMounts::packMounted(*tree,
-                                 "/project",
-                                 std::filesystem::path(std::u8string(
-                                   destination.begin(), destination.end())),
-                                 4096ull * 1024ull * 1024ull,
-                                 error);
+    const bool packed = PackageMounts::packMounted(
+      *tree, "/project", target, 4096ull * 1024ull * 1024ull, error);
     done(packed, error);
   }
   void setClipboardText(const std::string& text) override

@@ -503,8 +503,10 @@ WasmGameServices::completeClipboard(GuestServices& results)
     if (accepted) {
       GuestWireWriter payload;
       GuestClipboardRequest{ false, std::move(text) }.write(payload);
-      response.status = GuestServiceStatus::Complete;
-      response.payload = payload.take();
+      if (!payload.failed()) {
+        response.status = GuestServiceStatus::Complete;
+        response.payload = payload.take();
+      }
     }
   }
   results.records.push_back(std::move(response));
@@ -551,8 +553,10 @@ WasmGameServices::completeDialog(GuestServices& results)
     }
     GuestWireWriter payload;
     result.write(payload);
-    response.status = GuestServiceStatus::Complete;
-    response.payload = payload.take();
+    if (!payload.failed()) {
+      response.status = GuestServiceStatus::Complete;
+      response.payload = payload.take();
+    }
   }
   results.records.push_back(std::move(response));
   m_dialogRequests.pop_front();
@@ -649,10 +653,12 @@ WasmGameServices::completeConsole(GuestServices& results)
     invocation.arguments = m_invocations.front().arguments;
     GuestWireWriter payload;
     invocation.write(payload);
-    results.records.push_back({ listen.request,
-                                GuestService::Console,
-                                GuestServiceStatus::Complete,
-                                payload.take() });
+    const bool written = !payload.failed();
+    results.records.push_back(
+      { listen.request,
+        GuestService::Console,
+        written ? GuestServiceStatus::Complete : GuestServiceStatus::Rejected,
+        written ? payload.take() : std::vector<std::byte>() });
     m_listenRequests.pop_front();
     m_invocations.pop_front();
   }
@@ -747,7 +753,7 @@ WasmGameServices::collectFinished(GuestServices& results,
 
 bool
 WasmGameServices::harvest(std::vector<std::byte>& completions)
-try {
+{
   // Most frames nothing finished: leave the exchange untouched, allocation
   // free.
   if (m_cancelled || !finishedWorkWaiting()) {
@@ -776,7 +782,8 @@ try {
   }
   m_response.clear();
   results.write(m_response);
-  if (m_response.data().size() > GuestServices::MaximumBytes) {
+  if (m_response.failed() ||
+      m_response.data().size() > GuestServices::MaximumBytes) {
     m_error = "Service completion budget exceeded";
     return false;
   }
@@ -784,15 +791,12 @@ try {
   ILLUMO_PROFILE_PLOT("WasmGameServices.HarvestedCompletions",
                       results.records.size());
   return true;
-} catch (const std::exception& exception) {
-  m_error = exception.what();
-  return false;
 }
 
 bool
 WasmGameServices::process(std::span<const std::byte> requests,
                           std::vector<std::byte>& completions)
-try {
+{
   ILLUMO_PROFILE_ZONE("WasmGameServices.process");
   completions.clear();
   m_error.clear();
@@ -902,6 +906,10 @@ try {
   }
   m_renderRequests.clear();
   rendering.write(m_renderRequests);
+  if (m_renderRequests.failed()) {
+    m_error = m_renderRequests.failure();
+    return false;
+  }
   if (!m_render.process(m_renderRequests.data(), m_renderResponses)) {
     m_error = m_render.error();
     return false;
@@ -1038,7 +1046,8 @@ try {
     // Measured with the same retained writer that serializes the reply.
     m_response.clear();
     results.write(m_response);
-    if (m_response.data().size() > GuestServices::MaximumBytes) {
+    if (m_response.failed() ||
+        m_response.data().size() > GuestServices::MaximumBytes) {
       m_error = "Completion budget exceeded";
       return false;
     }
@@ -1053,7 +1062,8 @@ try {
     m_response.clear();
     results.write(m_response);
   }
-  if (results.records.size() > GuestServices::MaximumRecords ||
+  if (m_response.failed() ||
+      results.records.size() > GuestServices::MaximumRecords ||
       m_response.data().size() > GuestServices::MaximumBytes) {
     m_error = "Service completion budget exceeded";
     return false;
@@ -1063,8 +1073,4 @@ try {
   ILLUMO_PROFILE_PLOT("WasmGameServices.Completions", results.records.size());
   ILLUMO_PROFILE_PLOT("WasmGameServices.CompletionBytes", completions.size());
   return true;
-} catch (const std::exception& exception) {
-  m_error = exception.what();
-  completions.clear();
-  return false;
 }

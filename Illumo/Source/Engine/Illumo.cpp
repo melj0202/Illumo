@@ -3,6 +3,7 @@
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
 #include "Rendering/RenderWindow.h"
 #include <Illumo/Foundation/Profile.h>
+#include <Illumo/Platform/PathText.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/DrawList.h>
@@ -16,7 +17,6 @@
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <array>
-#include <exception>
 #include <filesystem>
 #include <glm/fwd.hpp>
 #include <utility>
@@ -33,23 +33,7 @@ cleanupBackendAfterInitializationFailure(
   if (backend == nullptr || !*backend) {
     return;
   }
-  try {
-    (*backend)->Shutdown();
-  } catch (const std::exception& exception) {
-    try {
-      Logger::LogError(
-        std::string("Illumo backend cleanup failed after initialization: ") +
-        exception.what());
-    } catch (...) {
-    }
-  } catch (...) {
-    try {
-      Logger::LogError(
-        "Illumo backend cleanup failed with an unknown error after "
-        "initialization");
-    } catch (...) {
-    }
-  }
+  (*backend)->Shutdown();
   backend->reset();
 }
 
@@ -59,10 +43,12 @@ Illumo::Illumo(IllumoConfig config)
   , m_windowFactory(CreateRenderWindow)
   , m_backendFactory(CreateOpenGLBackend)
 {
-  const std::filesystem::path environmentPath =
-    config.environmentPath.empty()
-      ? EnvVars::ApplicationConfigPath()
-      : std::filesystem::path(config.environmentPath);
+  std::filesystem::path environmentPath = EnvVars::ApplicationConfigPath();
+  if (!config.environmentPath.empty() &&
+      !pathFromUtf8(config.environmentPath, &environmentPath)) {
+    Logger::LogWarning("The settings path is not valid UTF-8; using " +
+                       pathToUtf8(environmentPath));
+  }
   m_environment = std::make_unique<EnvVars>(environmentPath);
   applyHostDefaults();
   // The configured log level applies from here, before the console exists,
@@ -123,123 +109,99 @@ Illumo::initialize()
   }
   ILLUMO_PROFILE_ZONE("Illumo.Initialize");
 
-  try {
-    int initialWindowWidth =
-      static_cast<int>(m_environment->getVar("WinX").valueAsLong);
-    int initialWindowHeight =
-      static_cast<int>(m_environment->getVar("WinY").valueAsLong);
-    // A settings file saved with a minimized window (0x0) or edited by hand
-    // must not stop the window from opening.
-    if (initialWindowWidth <= 0 || initialWindowHeight <= 0) {
-      Logger::LogWarning("Ignoring the saved window size " +
-                         std::to_string(initialWindowWidth) + "x" +
-                         std::to_string(initialWindowHeight) + "; using " +
-                         std::to_string(kDefaultWindowWidth) + "x" +
-                         std::to_string(kDefaultWindowHeight));
-      initialWindowWidth = kDefaultWindowWidth;
-      initialWindowHeight = kDefaultWindowHeight;
-      m_environment->setVar("WinX", initialWindowWidth);
-      m_environment->setVar("WinY", initialWindowHeight);
-    }
-    {
-      ILLUMO_PROFILE_ZONE("Illumo.CreateWindow");
-      m_window = m_windowFactory(initialWindowWidth,
-                                 initialWindowHeight,
-                                 m_applicationName,
-                                 m_environment.get());
-    }
-    if (!m_window) {
-      Logger::LogError("Illumo failed to create its render window");
-      releaseServices();
-      return false;
-    }
-    const std::array<int, 2> windowSize = m_window->getWindowDimensions();
-    Logger::LogInfo("Render window ready: " + std::to_string(windowSize[0]) +
-                    "x" + std::to_string(windowSize[1]) + ", monitor " +
-                    std::to_string(m_window->getRefreshRate()) + " Hz");
-
-    m_camera = std::make_unique<Camera>(
-      glm::vec2(0.0f, 0.0f), 1.0f, m_environment.get());
-    std::unique_ptr<IBackend> backend = m_backendFactory(m_window.get());
-    if (!backend) {
-      Logger::LogError("Illumo failed to create its rendering backend");
-      releaseServices();
-      return false;
-    }
-    bool backendInitialized = false;
-    try {
-      ILLUMO_PROFILE_ZONE("Illumo.InitializeBackend");
-      backendInitialized = backend->Initialize();
-    } catch (const std::exception& exception) {
-      Logger::LogError(
-        std::string("Illumo rendering backend threw during initialization: ") +
-        exception.what());
-      cleanupBackendAfterInitializationFailure(&backend);
-      releaseServices();
-      return false;
-    } catch (...) {
-      Logger::LogError(
-        "Illumo rendering backend threw an unknown initialization error");
-      cleanupBackendAfterInitializationFailure(&backend);
-      releaseServices();
-      return false;
-    }
-    if (!backendInitialized) {
-      Logger::LogError("Illumo failed to initialize its rendering backend");
-      cleanupBackendAfterInitializationFailure(&backend);
-      releaseServices();
-      return false;
-    }
-    Logger::LogTrace("Rendering backend initialized");
-    {
-      ILLUMO_PROFILE_ZONE("Illumo.CreateRenderer");
-      m_renderer = std::make_unique<Renderer>(m_window.get(),
-                                              m_environment.get(),
-                                              m_camera.get(),
-                                              std::move(backend));
-      m_renderer->ensureBuiltinStyles();
-    }
-    Logger::LogTrace("Renderer ready with built-in styles");
-    m_assetManager = std::make_unique<AssetManager>(m_renderer.get());
-    Logger::LogTrace("Asset manager ready");
-    m_commandRegistry = std::make_unique<CommandRegistry>();
-    m_commandLine = std::make_unique<CommandLine>(m_environment.get(),
-                                                  m_commandRegistry.get(),
-                                                  m_window.get(),
-                                                  m_renderer.get(),
-                                                  m_applicationName);
-    // Attaching the console replays everything logged so far into it.
-    Logger::setContext(m_environment.get(), m_commandLine.get());
-    Logger::LogTrace("Developer console attached");
-    m_inputManager =
-      std::make_unique<InputManager>(m_window->getWindowInstance());
-    Logger::LogTrace("Input manager ready");
-    m_scene = std::make_unique<DrawList>(m_window.get(), m_camera.get());
-    m_motionBlurPipelineConfigured = false;
-    GLString::setRenderWindow(m_window.get());
-
-    m_context.envVars = m_environment.get();
-    m_context.window = m_window.get();
-    m_context.commandLine = m_commandLine.get();
-    m_context.inputManager = m_inputManager.get();
-    m_context.renderer = m_renderer.get();
-    m_context.assetManager = m_assetManager.get();
-    m_context.camera = m_camera.get();
-    m_context.commandRegistry = m_commandRegistry.get();
-    m_context.scene = m_scene.get();
-    m_context.frameProfiler = &m_frameProfiler;
-    m_initialized = true;
-    Logger::LogInfo("Engine services initialized (renderer, assets, console, "
-                    "input, scene)");
-    return true;
-  } catch (const std::exception& exception) {
-    Logger::LogError(std::string("Illumo initialization failed: ") +
-                     exception.what());
-  } catch (...) {
-    Logger::LogError("Illumo initialization failed with an unknown error");
+  int initialWindowWidth =
+    static_cast<int>(m_environment->getVar("WinX").valueAsLong);
+  int initialWindowHeight =
+    static_cast<int>(m_environment->getVar("WinY").valueAsLong);
+  // A settings file saved with a minimized window (0x0) or edited by hand
+  // must not stop the window from opening.
+  if (initialWindowWidth <= 0 || initialWindowHeight <= 0) {
+    Logger::LogWarning("Ignoring the saved window size " +
+                       std::to_string(initialWindowWidth) + "x" +
+                       std::to_string(initialWindowHeight) + "; using " +
+                       std::to_string(kDefaultWindowWidth) + "x" +
+                       std::to_string(kDefaultWindowHeight));
+    initialWindowWidth = kDefaultWindowWidth;
+    initialWindowHeight = kDefaultWindowHeight;
+    m_environment->setVar("WinX", initialWindowWidth);
+    m_environment->setVar("WinY", initialWindowHeight);
   }
-  releaseServices();
-  return false;
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.CreateWindow");
+    m_window = m_windowFactory(initialWindowWidth,
+                               initialWindowHeight,
+                               m_applicationName,
+                               m_environment.get());
+  }
+  if (!m_window) {
+    Logger::LogError("Illumo failed to create its render window");
+    releaseServices();
+    return false;
+  }
+  const std::array<int, 2> windowSize = m_window->getWindowDimensions();
+  Logger::LogInfo("Render window ready: " + std::to_string(windowSize[0]) +
+                  "x" + std::to_string(windowSize[1]) + ", monitor " +
+                  std::to_string(m_window->getRefreshRate()) + " Hz");
+
+  m_camera =
+    std::make_unique<Camera>(glm::vec2(0.0f, 0.0f), 1.0f, m_environment.get());
+  std::unique_ptr<IBackend> backend = m_backendFactory(m_window.get());
+  if (!backend) {
+    Logger::LogError("Illumo failed to create its rendering backend");
+    releaseServices();
+    return false;
+  }
+  bool backendInitialized = false;
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.InitializeBackend");
+    backendInitialized = backend->Initialize();
+  }
+  if (!backendInitialized) {
+    Logger::LogError("Illumo failed to initialize its rendering backend");
+    cleanupBackendAfterInitializationFailure(&backend);
+    releaseServices();
+    return false;
+  }
+  Logger::LogTrace("Rendering backend initialized");
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.CreateRenderer");
+    m_renderer = std::make_unique<Renderer>(
+      m_window.get(), m_environment.get(), m_camera.get(), std::move(backend));
+    m_renderer->ensureBuiltinStyles();
+  }
+  Logger::LogTrace("Renderer ready with built-in styles");
+  m_assetManager = std::make_unique<AssetManager>(m_renderer.get());
+  Logger::LogTrace("Asset manager ready");
+  m_commandRegistry = std::make_unique<CommandRegistry>();
+  m_commandLine = std::make_unique<CommandLine>(m_environment.get(),
+                                                m_commandRegistry.get(),
+                                                m_window.get(),
+                                                m_renderer.get(),
+                                                m_applicationName);
+  // Attaching the console replays everything logged so far into it.
+  Logger::setContext(m_environment.get(), m_commandLine.get());
+  Logger::LogTrace("Developer console attached");
+  m_inputManager =
+    std::make_unique<InputManager>(m_window->getWindowInstance());
+  Logger::LogTrace("Input manager ready");
+  m_scene = std::make_unique<DrawList>(m_window.get(), m_camera.get());
+  m_motionBlurPipelineConfigured = false;
+  GLString::setRenderWindow(m_window.get());
+
+  m_context.envVars = m_environment.get();
+  m_context.window = m_window.get();
+  m_context.commandLine = m_commandLine.get();
+  m_context.inputManager = m_inputManager.get();
+  m_context.renderer = m_renderer.get();
+  m_context.assetManager = m_assetManager.get();
+  m_context.camera = m_camera.get();
+  m_context.commandRegistry = m_commandRegistry.get();
+  m_context.scene = m_scene.get();
+  m_context.frameProfiler = &m_frameProfiler;
+  m_initialized = true;
+  Logger::LogInfo("Engine services initialized (renderer, assets, console, "
+                  "input, scene)");
+  return true;
 }
 
 void
@@ -493,10 +455,7 @@ Illumo::shutdown() noexcept
   const bool wasRunning = m_initialized;
   releaseServices();
   if (wasRunning) {
-    try {
-      Logger::LogTrace("Engine services released");
-    } catch (...) {
-    }
+    Logger::LogTrace("Engine services released");
   }
 }
 

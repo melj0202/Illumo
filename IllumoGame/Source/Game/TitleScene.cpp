@@ -1828,11 +1828,7 @@ void
 TitleScene::stop()
 {
   if (m_lifetime && ic != nullptr) {
-    try {
-      Logger::LogTrace("Main menu closed");
-    } catch (...) {
-      // Diagnostics never block shutdown.
-    }
+    Logger::LogTrace("Main menu closed");
   }
   m_lifetime.reset();
   unregisterConsoleCommands();

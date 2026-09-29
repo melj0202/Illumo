@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <exception>
 
 static std::atomic<std::uint64_t> nextSession{ 1 };
 
@@ -107,7 +106,7 @@ WasmGuest::start(std::span<const std::byte> module,
                  std::uint32_t grants,
                  std::span<const std::byte> startup,
                  std::vector<std::byte>& response)
-try {
+{
   ILLUMO_PROFILE_ZONE("WasmGuest.start");
   response.clear();
   if (m_attempted) {
@@ -156,14 +155,14 @@ try {
   GuestWireWriter initial(m_messageLimit);
   initial.u32(grants);
   initial.bytes(startup);
+  if (initial.failed()) {
+    return fail("Guest startup data exceeds the message limit");
+  }
   if (!exchange(GuestCall::Init, initial.data(), response)) {
     return false;
   }
   m_started = true;
   return true;
-} catch (const std::exception& exception) {
-  response.clear();
-  return fail(exception.what());
 }
 
 bool
@@ -193,6 +192,9 @@ WasmGuest::exchangeView(GuestCall call,
   }
   m_request.clear();
   GuestEnvelope{ call, m_session, m_sequence, input }.write(m_request);
+  if (m_request.failed()) {
+    return fail(m_request.failure());
+  }
   std::int32_t address = 0;
   bool retained = false;
   if (!transfer(m_request.data(), address, retained)) {
@@ -250,7 +252,7 @@ bool
 WasmGuest::invoke(GuestCall call,
                   std::span<const std::byte> input,
                   std::vector<std::byte>& output)
-try {
+{
   output.clear();
   if (!isAlive()) {
     return false;
@@ -269,16 +271,13 @@ try {
     return fail("Guest lifecycle operation lacks a capability grant");
   }
   return exchange(call, input, output);
-} catch (const std::exception& exception) {
-  output.clear();
-  return fail(exception.what());
 }
 
 bool
 WasmGuest::invokeView(GuestCall call,
                       std::span<const std::byte> input,
                       std::span<const std::byte>& output)
-try {
+{
   output = {};
   if (!isAlive()) {
     return false;
@@ -291,9 +290,6 @@ try {
     return fail("Guest lifecycle operation lacks a capability grant");
   }
   return exchangeView(call, input, output);
-} catch (const std::exception& exception) {
-  output = {};
-  return fail(exception.what());
 }
 
 void
@@ -307,12 +303,8 @@ WasmGuest::shutdown()
 {
   ILLUMO_PROFILE_ZONE("WasmGuest.shutdown");
   if (isAlive()) {
-    try {
-      std::vector<std::byte> ignored;
-      exchange(GuestCall::Shutdown, {}, ignored);
-    } catch (const std::exception& exception) {
-      fail(exception.what());
-    }
+    std::vector<std::byte> ignored;
+    exchange(GuestCall::Shutdown, {}, ignored);
   }
   m_started = false;
   m_capabilities = 0;

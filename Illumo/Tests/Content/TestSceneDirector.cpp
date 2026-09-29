@@ -6,7 +6,6 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -21,7 +20,6 @@ struct SceneProbe
   int stops = 0;
   int destructions = 0;
   bool failStart = false;
-  bool throwOnStart = false;
   bool allowClose = true;
   // Registered from enter() through ProgramScene::command.
   std::string command;
@@ -48,9 +46,6 @@ public:
     ++m_probe.starts;
     note("start");
     m_probe.worldAtStart = world();
-    if (m_probe.throwOnStart) {
-      throw std::runtime_error("probe start failure");
-    }
     return !m_probe.failStart;
   }
   void enter() override
@@ -256,13 +251,10 @@ testFailedStart()
   DirectorFixture fixture;
   SceneProbe first;
   SceneProbe broken;
-  SceneProbe throwing;
   broken.failStart = true;
-  throwing.throwOnStart = true;
   SceneDirector director(fixture.context);
   addProbe(director, "first", first);
   addProbe(director, "broken", broken);
-  addProbe(director, "throwing", throwing);
   director.switchTo("first");
   director.applyPending();
 
@@ -271,11 +263,6 @@ testFailedStart()
            director.applyPending() && director.activeName() == "first" &&
              first.enters == 2 && broken.starts == 1 && broken.stops == 0,
            "a failed start re-enters the previous scene");
-  director.switchTo("throwing");
-  testTrue(c,
-           director.applyPending() && director.activeName() == "first" &&
-             throwing.stops == 1,
-           "a start that throws is stopped and the previous scene re-entered");
   broken.failStart = false;
   director.switchTo("broken");
   director.applyPending();

@@ -150,32 +150,34 @@ public:
   GuestDialog& operator=(const GuestDialog&) = delete;
   GuestDialog(GuestDialog&&) = delete;
   GuestDialog& operator=(GuestDialog&&) = delete;
-  void load(std::string description,
+  // Each request returns false, queuing nothing, when its text is not
+  // UTF-8 or exceeds the wire limits.
+  bool load(std::string description,
             std::string defaultName,
             std::string pattern)
   {
-    apply(false,
-          std::move(description),
-          std::move(defaultName),
-          std::move(pattern));
+    return apply(false,
+                 std::move(description),
+                 std::move(defaultName),
+                 std::move(pattern));
   }
-  void save(std::string description,
+  bool save(std::string description,
             std::string defaultName,
             std::string pattern)
   {
-    apply(
+    return apply(
       true, std::move(description), std::move(defaultName), std::move(pattern));
   }
   // An open for editing: the selection may later be written in place.
-  void edit(std::string description,
+  bool edit(std::string description,
             std::string defaultName,
             std::string pattern)
   {
     m_edit = true;
-    apply(false,
-          std::move(description),
-          std::move(defaultName),
-          std::move(pattern));
+    return apply(false,
+                 std::move(description),
+                 std::move(defaultName),
+                 std::move(pattern));
   }
   void pump();
   bool idle() const { return !m_pending && m_request == 0; }
@@ -183,7 +185,7 @@ public:
   const std::string& error() const { return m_error; }
 
 private:
-  void apply(bool save,
+  bool apply(bool save,
              std::string description,
              std::string defaultName,
              std::string pattern);
