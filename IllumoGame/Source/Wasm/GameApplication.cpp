@@ -92,6 +92,18 @@ protected:
                         mouse[0] < static_cast<double>(size[0]) &&
                         mouse[1] < static_cast<double>(size[1]);
     const float scale = std::max(0.01f, engine.renderer->getUiScale());
+    const GuiPointerHintState hint = GuiPointerHint::take();
+    SoftwareCursor::Shape shape = SoftwareCursor::Shape::Arrow;
+    if (hint.kind == GuiPointerHintState::Kind::Interactive) {
+      shape = SoftwareCursor::Shape::Hand;
+    } else if (hint.kind == GuiPointerHintState::Kind::Brush) {
+      // Right-drag erases: the pencil flips over to its eraser end.
+      const bool erasing =
+        engine.inputManager != nullptr &&
+        engine.inputManager->isMouseButtonPressed(KeyCode::MouseRight);
+      shape = erasing ? SoftwareCursor::Shape::Eraser
+                      : SoftwareCursor::Shape::Brush;
+    }
     m_cursor.update(
       static_cast<float>(elapsed),
       static_cast<float>(mouse[0]) / scale,
@@ -100,7 +112,8 @@ protected:
       engine.inputManager != nullptr &&
         engine.inputManager->isMouseButtonPressed(KeyCode::MouseLeft),
       settings().getVar("reducedUiMotion").valueAsBool,
-      GuiPointerHint::take());
+      shape,
+      ColorRgba{ hint.red, hint.green, hint.blue, 255 });
 
     // The corner performance readout (Video settings). Memory is this
     // store's linear memory, which only grows.

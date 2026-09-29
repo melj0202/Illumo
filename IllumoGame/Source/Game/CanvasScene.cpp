@@ -5144,6 +5144,10 @@ CanvasScene::updateEditorCursor(double dt)
   if (!hoverValid) {
     return;
   }
+  // Over paintable canvas the software pointer becomes a pencil in the brush
+  // color.
+  const ColorRgba brush = paintBrushColor();
+  GuiPointerHint::markBrush(brush.r, brush.g, brush.b);
   editorCursor.setCellSize(16.0f);
   editorCursor.setFromCell(cellX, cellY);
 }

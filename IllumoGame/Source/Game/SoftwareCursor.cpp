@@ -14,6 +14,8 @@ struct ShapePart
 {
   int count;
   float point[8][2];
+  // Takes the brush color when the cursor is tinted.
+  bool tinted = false;
 };
 static const ShapePart kArrowParts[2] = {
   { 3, { { 0.0f, 0.0f }, { 0.0f, 16.5f }, { 11.7f, 11.7f } } },
@@ -81,6 +83,35 @@ static const ShapePart kHandParts[kHandPartCount] = {
       { -1.9f, 13.0f } } }
 };
 static const float kHandHeight = 21.0f;
+// The pencil shown over paintable canvas: its point is the tip and the body
+// rises up and to the right at 45 degrees, clear of the cell it paints. The
+// lead cone and the eraser cap wear the brush color.
+static const int kBrushPartCount = 3;
+static const ShapePart kBrushParts[kBrushPartCount] = {
+  // Lead cone.
+  { 3,
+    { { 0.0f, 0.0f }, { 1.06f, -3.75f }, { 3.75f, -1.06f } },
+    true },
+  // Body.
+  { 4,
+    { { 0.99f, -3.82f },
+      { 3.82f, -0.99f },
+      { 12.02f, -9.19f },
+      { 9.19f, -12.02f } } },
+  // Cap.
+  { 4,
+    { { 10.6f, -13.43f },
+      { 13.43f, -10.6f },
+      { 15.55f, -12.73f },
+      { 12.73f, -15.55f } },
+    true }
+};
+// Gradients run from this local y down `span` pixels, per shape.
+static const float kBrushTop = -15.55f;
+static const float kBrushSpan = 15.55f;
+// The center of the pencil's cap end, which the flipped eraser rests on.
+static const float kBrushCapX = 14.14f;
+static const float kBrushCapY = -14.14f;
 // Lean per pixel-per-second of sideways speed, and its limit in radians.
 static const float kLeanPerSpeed = 0.0012f;
 static const float kMaximumLean = 0.55f;
@@ -102,7 +133,12 @@ struct ArrowPose
   float cosine = 1.0f;
   float sine = 0.0f;
   float scale = 1.0f;
-  bool hand = false;
+  SoftwareCursor::Shape shape = SoftwareCursor::Shape::Arrow;
+  // Set for the body only: glow, halo and rim copies stay untinted.
+  bool useTint = false;
+  ColorRgba tint{ 255, 255, 255, 255 };
+  // The pencil's flip, 0 point-down to 1 cap-down (it may overshoot).
+  float flip = 0.0f;
 
   void place(float localX, float localY, float* outX, float* outY) const
   {
@@ -123,19 +159,53 @@ drawArrow(GameVisual& visual,
           ColorRgba top,
           ColorRgba bottom)
 {
-  const ShapePart* parts = pose.hand ? kHandParts : kArrowParts;
-  const int partCount = pose.hand ? kHandPartCount : 2;
-  const float height = pose.hand ? kHandHeight : kArrowHeight;
+  const ShapePart* parts = kArrowParts;
+  int partCount = 2;
+  float gradientTop = 0.0f;
+  float height = kArrowHeight;
+  if (pose.shape == SoftwareCursor::Shape::Hand) {
+    parts = kHandParts;
+    partCount = kHandPartCount;
+    height = kHandHeight;
+  } else if (pose.shape == SoftwareCursor::Shape::Brush) {
+    parts = kBrushParts;
+    partCount = kBrushPartCount;
+    gradientTop = kBrushTop;
+    height = kBrushSpan;
+  }
   for (int part = 0; part < partCount; ++part) {
     const ShapePart& shape = parts[part];
+    const bool tinted = pose.useTint && shape.tinted;
+    // The brush color, lit toward the tip and deeper toward the far end.
+    const ColorRgba partTop =
+      tinted ? UiTheme::mix(pose.tint, UiTheme::textPrimary(), 0.25f) : top;
+    const ColorRgba partBottom =
+      tinted ? UiTheme::mix(pose.tint, UiTheme::glassBottom(), 0.35f) : bottom;
     float px[8];
     float py[8];
     ColorRgba colors[8];
     for (int point = 0; point < shape.count; ++point) {
-      pose.place(shape.point[point][0], shape.point[point][1], &px[point], &py[point]);
+      float localX = shape.point[point][0];
+      float localY = shape.point[point][1];
+      // Colors stay with their part of the pencil while it turns.
+      colors[point] = UiTheme::mix(
+        partTop, partBottom, (localY - gradientTop) / height);
+      if (pose.shape == SoftwareCursor::Shape::Brush && pose.flip != 0.0f) {
+        // Turn the pencil end over end about its middle: at a full flip the
+        // cap rests where the point was.
+        const float middleX = kBrushCapX * 0.5f;
+        const float middleY = kBrushCapY * 0.5f;
+        const float angle = 3.14159265f * pose.flip;
+        const float relativeX = localX - middleX;
+        const float relativeY = localY - middleY;
+        localX = middleX + relativeX * std::cos(angle) -
+                 relativeY * std::sin(angle);
+        localY = middleY + relativeX * std::sin(angle) +
+                 relativeY * std::cos(angle);
+      }
+      pose.place(localX, localY, &px[point], &py[point]);
       px[point] += dx;
       py[point] += dy;
-      colors[point] = UiTheme::mix(top, bottom, shape.point[point][1] / height);
     }
     if (shape.count == 3) {
       visual.addGradientTriangle(
@@ -171,6 +241,8 @@ SoftwareCursor::SoftwareCursor()
   m_press.snapTo(1.0f);
   m_swap.configure(GuiMotion::kBoing);
   m_swap.snapTo(1.0f);
+  m_flip.configure(GuiMotion::kBoing);
+  m_flip.snapTo(0.0f);
   m_visual.setVisible(false);
 }
 
@@ -192,7 +264,8 @@ SoftwareCursor::update(float deltaSeconds,
                        bool visible,
                        bool pressed,
                        bool reducedMotion,
-                       bool interactive)
+                       Shape shape,
+                       ColorRgba tint)
 {
   ILLUMO_PROFILE_ZONE("SoftwareCursor.update");
   m_reducedMotion = reducedMotion;
@@ -205,7 +278,8 @@ SoftwareCursor::update(float deltaSeconds,
     m_lean.snapTo(0.0f);
     m_press.snapTo(1.0f);
     m_swap.snapTo(1.0f);
-    m_hand = false;
+    m_flip.snapTo(0.0f);
+    m_shape = Shape::Arrow;
     m_splashElapsed = kSplashSeconds;
     m_wasPressed = pressed;
     m_visual.clearPrimitives();
@@ -233,15 +307,22 @@ SoftwareCursor::update(float deltaSeconds,
       ? 0.0f
       : std::clamp(m_velocityX * kLeanPerSpeed, -kMaximumLean, kMaximumLean));
   m_press.setTarget(pressed ? 0.8f : 1.0f);
-  if (interactive != m_hand) {
+  // The pencil and its flipped eraser are one shape turning over.
+  const bool wasPencil = m_shape == Shape::Brush || m_shape == Shape::Eraser;
+  const bool isPencil = shape == Shape::Brush || shape == Shape::Eraser;
+  if (isPencil != wasPencil || (!isPencil && shape != m_shape)) {
     // The swap squeezes the body small and lets it boing back.
-    m_hand = interactive;
     m_swap.snapTo(0.72f);
+    m_flip.snapTo(shape == Shape::Eraser ? 1.0f : 0.0f);
   }
+  m_shape = shape;
+  m_flip.setTarget(shape == Shape::Eraser ? 1.0f : 0.0f);
+  m_tint = tint;
   m_swap.setTarget(1.0f);
   m_lean.tick(step, reducedMotion);
   m_press.tick(step, reducedMotion);
   m_swap.tick(step, reducedMotion);
+  m_flip.tick(step, reducedMotion);
 
   if (pressed && !m_wasPressed && !reducedMotion) {
     m_splashElapsed = 0.0f;
@@ -311,7 +392,9 @@ SoftwareCursor::rebuild()
   pose.cosine = std::cos(m_lean.value());
   pose.sine = std::sin(m_lean.value());
   pose.scale = std::clamp(m_press.value() * m_swap.value(), 0.5f, 1.4f);
-  pose.hand = m_hand;
+  pose.shape = m_shape == Shape::Eraser ? Shape::Brush : m_shape;
+  pose.flip = m_flip.value();
+  pose.tint = m_tint;
 
   // A holographic afterimage: ghost arrows where the tip was a moment ago,
   // each split into cyan and magenta-violet copies across the motion and
@@ -437,8 +520,10 @@ SoftwareCursor::rebuild()
               rimTop,
               rimBottom);
   }
+  ArrowPose bodyPose = pose;
+  bodyPose.useTint = true;
   drawArrow(m_visual,
-            pose,
+            bodyPose,
             0.0f,
             0.0f,
             UiTheme::mix(UiTheme::cardTop(), cyan, 0.22f),

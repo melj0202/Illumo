@@ -18,6 +18,17 @@ class Renderer;
 class SoftwareCursor
 {
 public:
+  // The arrow, the pointing hand over pressable things, and the pencil over
+  // paintable canvas (its tip and cap wear the brush color).
+  // The eraser is the pencil flipped over, its blunt end on the pointer; the
+  // flip is animated.
+  enum class Shape
+  {
+    Arrow,
+    Hand,
+    Brush,
+    Eraser
+  };
   // The afterimage: kGhostCount ghosts, each kGhostSpacing seconds further
   // back along the pointer's path, which is kept for kHistoryLength frames.
   static constexpr int kGhostCount = 6;
@@ -30,15 +41,16 @@ public:
   void prepare(IRenderWindow* window, Renderer* renderer);
   // pointerX/Y are in the visual's (UI-scale) pixels. A hidden cursor
   // forgets its motion so it reappears still, at the pointer.
-  // `interactive` turns the arrow into a pointing hand while the pointer is
-  // over something that can be pressed; the hand's fingertip is the tip.
+  // `shape` swaps the arrow for a hand or pencil; the fingertip or pencil
+  // point is the tip. `tint` colors the pencil.
   void update(float deltaSeconds,
               float pointerX,
               float pointerY,
               bool visible,
               bool pressed,
               bool reducedMotion,
-              bool interactive = false);
+              Shape shape = Shape::Arrow,
+              ColorRgba tint = ColorRgba{ 255, 255, 255, 255 });
 
   GameVisual& getVisual() { return m_visual; }
   bool isVisible() const { return m_visual.isVisible(); }
@@ -46,7 +58,8 @@ public:
   // scale, for tests.
   float lean() const { return m_lean.value(); }
   float pressScale() const { return m_press.value(); }
-  bool isHand() const { return m_hand; }
+  bool isHand() const { return m_shape == Shape::Hand; }
+  Shape shape() const { return m_shape; }
   float tipX() const { return m_x; }
   float tipY() const { return m_y; }
 
@@ -69,7 +82,10 @@ private:
   GuiSpring m_press;
   // Boings the body back to full size when the arrow and the hand swap.
   GuiSpring m_swap;
-  bool m_hand = false;
+  // Turns the pencil over to its eraser end (0 to 1) on a bouncy spring.
+  GuiSpring m_flip;
+  Shape m_shape = Shape::Arrow;
+  ColorRgba m_tint{ 255, 255, 255, 255 };
   // Where the tip was and when, newest first, for the afterimage.
   std::array<float, kHistoryLength> m_historyX{};
   std::array<float, kHistoryLength> m_historyY{};
