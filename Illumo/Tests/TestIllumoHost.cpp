@@ -1,15 +1,18 @@
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
 #include <Illumo/Engine/DebugOverlay.h>
 #endif
+#include "Rendering/RenderWindow.h"
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
+#include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/IllumoTestAccess.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <array>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -205,6 +208,104 @@ testGenericConfigurationOwnership()
   std::filesystem::remove(path, error);
 }
 
+// Initializes a headless host whose settings hold WinX/WinY and reports the
+// size the host asked its window factory for.
+static std::array<int, 2>
+requestedWindowSize(const char* savedWidth,
+                    const char* savedHeight,
+                    std::string* persistedWidth)
+{
+  const std::filesystem::path path = temporaryEnvironmentPath("window-size");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  std::array<int, 2> requested = { -1, -1 };
+  int windowDestructions = 0;
+  {
+    Illumo host(headlessConfig(path));
+    host.environment().setVar("WinX", savedWidth);
+    host.environment().setVar("WinY", savedHeight);
+    IllumoTestAccess::setWindowFactory(
+      host,
+      [&requested, &windowDestructions](
+        int width, int height, const std::string&, IEnvVars* environment) {
+        requested = { width, height };
+        return std::make_unique<CountingWindow>(&windowDestructions,
+                                                environment);
+      });
+    IllumoTestAccess::setBackendFactory(host, [](IRenderWindow*) {
+      return std::unique_ptr<IBackend>(std::make_unique<MockBackend>());
+    });
+    testTrue(g, host.initialize(), "host initializes");
+    *persistedWidth = host.environment().getVar("WinX").value;
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+  return requested;
+}
+
+static void
+testSavedWindowSize()
+{
+  testSection("Illumo: a saved window size that cannot open falls back");
+  std::string persistedWidth;
+  std::array<int, 2> requested = requestedWindowSize("0", "0", &persistedWidth);
+  testTrue(g,
+           requested[0] == 1280 && requested[1] == 720,
+           "a minimized 0x0 save opens at the default 1280x720");
+  testTrue(g,
+           persistedWidth == "1280",
+           "the fallback replaces the saved size in the settings");
+  requested = requestedWindowSize("800", "-5", &persistedWidth);
+  testTrue(g,
+           requested[0] == 1280 && requested[1] == 720,
+           "one non-positive axis falls back to the whole default size");
+  requested = requestedWindowSize("", "", &persistedWidth);
+  testTrue(g,
+           requested[0] == 1280 && requested[1] == 720,
+           "an empty saved size opens at the default");
+  requested = requestedWindowSize("800", "600", &persistedWidth);
+  testTrue(g,
+           requested[0] == 800 && requested[1] == 600 &&
+             persistedWidth == "800",
+           "a valid saved size is used as is");
+
+  testSection("RenderWindow: minimized sizes are not persisted");
+  const std::filesystem::path recordPath =
+    temporaryEnvironmentPath("record-size");
+  std::error_code error;
+  std::filesystem::remove(recordPath, error);
+  {
+    EnvVars environment(recordPath);
+    environment.setVar("WinX", 1024);
+    environment.setVar("WinY", 768);
+    testTrue(g,
+             !recordWindowSize(&environment, 0, 0, true),
+             "a minimized 0x0 resize is not recorded");
+    testTrue(g,
+             !recordWindowSize(&environment, 0, 0, false),
+             "a 0x0 size is not recorded even without the iconified flag");
+    testTrue(g,
+             !recordWindowSize(&environment, 1600, 900, true),
+             "an iconified window's size is not recorded");
+    testTrue(g,
+             !recordWindowSize(&environment, 1600, -1, false),
+             "a negative axis is not recorded");
+    testTrue(g,
+             environment.getVar("WinX").value == "1024" &&
+               environment.getVar("WinY").value == "768",
+             "the last restored size survives");
+    testTrue(g,
+             recordWindowSize(&environment, 1600, 900, false) &&
+               environment.getVar("WinX").value == "1600" &&
+               environment.getVar("WinY").value == "900",
+             "a restored size is recorded");
+    testTrue(g,
+             !recordWindowSize(nullptr, 1600, 900, false),
+             "a window without settings records nothing");
+  }
+  std::filesystem::remove(recordPath, error);
+}
+
 static void
 testFramePhases()
 {
@@ -230,7 +331,8 @@ testFramePhases()
     input.getCharQueue().push('a');
     host.beginUpdate(0.016);
     testTrue(g,
-             input.getKeyQueue().size() == 1 && input.getCharQueue().size() == 1,
+             input.getKeyQueue().size() == 1 &&
+               input.getCharQueue().size() == 1,
              "input waits for the overlay and program after beginUpdate");
     host.endUpdate();
     testTrue(g,
@@ -252,9 +354,8 @@ testFramePhases()
       host.endRender();
     }
     host.shutdown();
-    testTrue(g,
-             host.beginRender() == nullptr,
-             "phases do nothing after shutdown");
+    testTrue(
+      g, host.beginRender() == nullptr, "phases do nothing after shutdown");
     updateFrame(host);
   }
   testEqInt(g, windowDestructions, 1, "window released once");
@@ -744,6 +845,8 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
                []() { return runHostCase(testCloseNegotiation); });
   registry.add("Illumo.Host.ConfigurationOwnership",
                []() { return runHostCase(testGenericConfigurationOwnership); });
+  registry.add("Illumo.Host.SavedWindowSize",
+               []() { return runHostCase(testSavedWindowSize); });
   registry.add("Illumo.Host.FramePhases",
                []() { return runHostCase(testFramePhases); });
   registry.add("Illumo.Host.InitializationRollback",

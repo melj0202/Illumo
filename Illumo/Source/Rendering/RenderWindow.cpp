@@ -21,6 +21,17 @@ windowSizeCallback(GLFWwindow* window, int width, int height) noexcept
                    std::to_string(height));
 }
 
+bool
+recordWindowSize(IEnvVars* envVars, int width, int height, bool iconified)
+{
+  if (envVars == nullptr || iconified || width <= 0 || height <= 0) {
+    return false;
+  }
+  envVars->setVar("WinX", std::to_string(width));
+  envVars->setVar("WinY", std::to_string(height));
+  return true;
+}
+
 static void
 glfwErrorCallback(int code, const char* description) noexcept
 {
@@ -141,10 +152,7 @@ RenderWindow::initialize()
                    (isFullScreen ? ", fullscreen" : ", windowed") +
                    (m_captureOnly ? ", hidden for capture" : "") + ", " +
                    std::to_string(samples) + "x MSAA");
-  if (envVars) {
-    envVars->setVar("WinX", std::to_string(windowWidth));
-    envVars->setVar("WinY", std::to_string(windowHeight));
-  }
+  recordWindowSize(envVars, windowWidth, windowHeight, false);
   if (!isFullScreen) {
     centerWindow();
     glfwGetWindowPos(window, &windowedX, &windowedY);
@@ -247,10 +255,13 @@ RenderWindow::handleResize(int width, int height)
   int fbHeight = 0;
   glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
   glViewport(0, 0, fbWidth, fbHeight);
-  if (envVars) {
-    envVars->setVar("WinX", std::to_string(width));
-    envVars->setVar("WinY", std::to_string(height));
-  }
+  // Minimizing reports 0x0 here; the live size follows it, but the persisted
+  // size stays the last restored one.
+  recordWindowSize(envVars,
+                   width,
+                   height,
+                   window != nullptr &&
+                     glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE);
 }
 
 void

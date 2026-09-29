@@ -1546,6 +1546,36 @@ direct sparse output, and D-P32 paced presentation.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-P34 --- High-resolution timer frame pacing}
+\begin{decisionbox}[title={D-P34 \quad 2026-09-28}]
+\textbf{Decision:} \texttt{FramePacer} sleeps on a platform
+\texttt{PlatformWaitTimer} until the timer's wake latency before its deadline,
+then spins. On Windows the timer is a high-resolution waitable timer
+(\texttt{CREATE\_WAITABLE\_TIMER\_HIGH\_RESOLUTION}, Windows 10 1803 and
+later) held behind an opaque handle with a 1\,ms latency; elsewhere, or when
+it is unavailable, \texttt{sleep\_for} with a 3\,ms latency. The run-scoped
+\texttt{timeBeginPeriod(1)} and the hitch reset remain.\\
+\textbf{Why:} The pacer slept in 1\,ms \texttt{sleep\_for} steps while more
+than 3\,ms remained, which relies on the process timer resolution. Windows 11
+ignores a process's resolution request while its windows are occluded or
+minimized, and a 1\,ms sleep then lasts up to a 15.6\,ms tick. A Tracy capture
+at \texttt{fps 60} on a 144\,Hz display showed \texttt{Frame.Pacing} zones of
+21--33\,ms in about 8\% of frames. Forcing that policy on the runtime
+(\texttt{PROCESS\_POWER\_THROTTLING\_IGNORE\_TIMER\_RESOLUTION}) reproduced it
+in the menu benchmark: \texttt{Frame.Pacing} p95 26.4\,ms, 13\% of zones above
+20\,ms, benchmark frame interval p95 28.4\,ms.\\
+\textbf{Consequences:} The same forced run measured \texttt{Frame.Pacing} p95
+16.0 and maximum 16.1\,ms, no zone above 20\,ms and a frame interval p95 of
+16.7\,ms; foreground, occluded and canvas runs keep a 16.67\,ms p95 cadence.
+The final spin shrinks from 2--3\,ms to about 0.5\,ms a frame, since the timer
+wakes about 0.5\,ms late. \texttt{Illumo.Presentation.PacingSleepPrecision}
+checks timer precision and 100\,FPS cadence without a raised timer resolution.
+Occasional 50--160\,ms stalls of the whole main thread, seen before and after
+the change, are outside the pacer.\\
+\textbf{Refines:} D-P32 paced presentation.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{D-C6 --- Configurable infinite or finite toroidal world}
 \begin{decisionbox}[title={D-C6 \quad 2026-08-17}]
 \textbf{Decision:} Keep \texttt{0 x 0} as the existing infinite,

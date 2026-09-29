@@ -295,7 +295,10 @@ Remaining risks and follow-ups:
 - Above the frame rate intermediate generations are not drawn (owner
   decision 1).
 - `FramePacer` sleeps with 1 ms granularity requests that Windows can round to
-  a timer tick (M1 note above).
+  a timer tick (M1 note above). Resolved 2026-09-28 by D-P34: the runtime
+  already held `timeBeginPeriod(1)`, which Windows 11 ignores for occluded or
+  minimized windows, so the pacer now waits on a high-resolution waitable
+  timer.
 - The native runner still runs one generation per start.
 
 ## 11. Owner decisions (2026-09-28)

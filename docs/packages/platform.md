@@ -31,6 +31,18 @@ targets. Source presence does not establish
 support: each port requires native build, tests, live rendering/input, dialogs,
 and clean shutdown.
 
+Timing lives in `Illumo/Platform/PlatformTimer.h` (D-P34).
+`PlatformTimerScope` raises the Windows timer resolution to 1 ms for the
+application's run (`timeBeginPeriod`). `PlatformWaitTimer` sleeps for frame
+pacing: on Windows it owns a high-resolution waitable timer
+(`CreateWaitableTimerExW` with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`,
+Windows 10 1803 and later) behind an opaque handle, so its wake-ups do not
+depend on that resolution, which Windows 11 stops honouring while a process's
+windows are occluded or minimized. It reports a 1 ms wake latency; where the
+timer is unavailable, and on Linux, it falls back to `sleep_for` with a 3 ms
+latency. `PlatformCpuPause` is the spin-wait pause instruction
+(`Windows/WinTimer.cpp`, `Linux/LinuxTimer.cpp`).
+
 `AtomicFile::write` synchronously creates an exclusive sibling staging file,
 streams the caller's format, checks write/flush/close, and publishes by replacing
 the destination. A reported failure preserves the old destination and removes

@@ -55,10 +55,31 @@ shouldPace(bool vsyncEnabled, int refreshRate, long targetFps)
   return true;
 }
 
+// How much of `remaining` a pacer sleeps through before spinning to its
+// deadline: all but the timer's wake latency, so a late wake-up still lands
+// before the deadline.
+inline std::chrono::nanoseconds
+calculatePacingSleep(std::chrono::nanoseconds remaining,
+                     std::chrono::nanoseconds wakeLatency)
+{
+  if (remaining <= wakeLatency) {
+    return std::chrono::nanoseconds::zero();
+  }
+  return remaining - wakeLatency;
+}
+
+// Paces the main loop in software. It sleeps on a PlatformWaitTimer until
+// its wake latency before the deadline, then spins with PlatformCpuPause for
+// the final stretch.
 class FramePacer
 {
 public:
   FramePacer() = default;
+
+  FramePacer(const FramePacer&) = delete;
+  FramePacer& operator=(const FramePacer&) = delete;
+  FramePacer(FramePacer&&) = delete;
+  FramePacer& operator=(FramePacer&&) = delete;
 
   void reset()
   {
@@ -105,20 +126,7 @@ public:
       m_nextDeadline = now + targetDuration;
     }
 
-    // Coarse sleep if sufficient time remains (> 3ms) to minimize CPU load
-    // while avoiding sleep-overshoot spikes.
-    std::chrono::steady_clock::time_point current =
-      std::chrono::steady_clock::now();
-    while (m_nextDeadline - current > std::chrono::milliseconds(3)) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      current = std::chrono::steady_clock::now();
-    }
-
-    // Fine spin-pause for sub-millisecond precision.
-    while (std::chrono::steady_clock::now() < m_nextDeadline) {
-      PlatformCpuPause();
-    }
-
+    waitUntil(m_nextDeadline);
     m_nextDeadline += targetDuration;
     return true;
   }
@@ -132,23 +140,7 @@ public:
       return;
     }
 
-    const std::chrono::steady_clock::time_point targetEndTime =
-      frameStartTime + targetDuration;
-    std::chrono::steady_clock::time_point now =
-      std::chrono::steady_clock::now();
-
-    if (now >= targetEndTime) {
-      return;
-    }
-
-    while (targetEndTime - now > std::chrono::milliseconds(3)) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      now = std::chrono::steady_clock::now();
-    }
-
-    while (std::chrono::steady_clock::now() < targetEndTime) {
-      PlatformCpuPause();
-    }
+    waitUntil(frameStartTime + targetDuration);
   }
 
   std::chrono::steady_clock::time_point nextDeadline() const
@@ -159,6 +151,25 @@ public:
   bool hasTarget() const { return m_hasTarget; }
 
 private:
+  // Sleeps until the timer's wake latency before `deadline`, then spins. A
+  // wake-up that comes early sleeps again.
+  void waitUntil(std::chrono::steady_clock::time_point deadline)
+  {
+    const std::chrono::nanoseconds wakeLatency = m_waitTimer.wakeLatency();
+    std::chrono::nanoseconds sleep = calculatePacingSleep(
+      deadline - std::chrono::steady_clock::now(), wakeLatency);
+    while (sleep > std::chrono::nanoseconds::zero()) {
+      m_waitTimer.sleepFor(sleep);
+      sleep = calculatePacingSleep(deadline - std::chrono::steady_clock::now(),
+                                   wakeLatency);
+    }
+
+    while (std::chrono::steady_clock::now() < deadline) {
+      PlatformCpuPause();
+    }
+  }
+
+  PlatformWaitTimer m_waitTimer;
   std::chrono::steady_clock::time_point m_nextDeadline;
   long m_lastTargetFps = 0;
   bool m_lastVsyncEnabled = false;
