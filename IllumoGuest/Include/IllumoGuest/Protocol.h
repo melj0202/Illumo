@@ -82,13 +82,20 @@ struct GuestEnvelope
     if (payload.size() > UINT32_MAX) {
       throw std::length_error("Guest message exceeds ABI range");
     }
+    writeHeader(output, static_cast<std::uint32_t>(payload.size()));
+    output.bytes(payload);
+  }
+  // A header whose payload the caller writes straight after it; the size
+  // word sits at PayloadSizeOffset for a caller that learns it afterwards.
+  static constexpr std::size_t PayloadSizeOffset = 12;
+  void writeHeader(GuestWireWriter& output, std::uint32_t payloadSize) const
+  {
     output.u32(Magic);
     output.u32(Version);
     output.u32(static_cast<std::uint32_t>(call));
-    output.u32(static_cast<std::uint32_t>(payload.size()));
+    output.u32(payloadSize);
     output.u64(session);
     output.u64(sequence);
-    output.bytes(payload);
   }
 
   static bool read(std::span<const std::byte> input, GuestEnvelope& value)

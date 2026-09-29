@@ -455,19 +455,21 @@ try {
   }
   m_stats.receiveMilliseconds.add(millisecondsSince(stageStart));
   stageStart = std::chrono::steady_clock::now();
+  // Read in place from guest memory and decoded before the next guest call.
+  std::span<const std::byte> frame;
   {
     ILLUMO_PROFILE_ZONE("Wasm.GuestFrame");
-    if (!m_guest.invoke(GuestCall::Frame, {}, response)) {
+    if (!m_guest.invokeView(GuestCall::Frame, {}, frame)) {
       fail(m_guest.error());
       return;
     }
   }
   m_stats.frameMilliseconds.add(millisecondsSince(stageStart));
-  m_stats.frameBytes.add(static_cast<double>(response.size()));
+  m_stats.frameBytes.add(static_cast<double>(frame.size()));
   stageStart = std::chrono::steady_clock::now();
   {
     ILLUMO_PROFILE_ZONE("Wasm.FrameAccept");
-    if (!m_frames->accept(response)) {
+    if (!m_frames->accept(frame)) {
       fail(m_frames->error());
       return;
     }
@@ -475,7 +477,7 @@ try {
   m_stats.acceptMilliseconds.add(millisecondsSince(stageStart));
   m_stats.totalMilliseconds.add(millisecondsSince(updateStart));
   ++m_stats.updates;
-  ILLUMO_PROFILE_PLOT("Wasm.FrameBytes", response.size());
+  ILLUMO_PROFILE_PLOT("Wasm.FrameBytes", frame.size());
   ILLUMO_PROFILE_PLOT("Wasm.MessageBytes", messageBytes);
   const WasmFrameCounters& counters = m_frames->counters();
   ILLUMO_PROFILE_PLOT("Wasm.Batches", counters.batches);

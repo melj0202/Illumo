@@ -5,7 +5,8 @@
 #include <vector>
 
 // Protocol/lifecycle boundary shared by games and mods. The caller supplies
-// grants; descriptor requests can only narrow them. Payloads are owned copies.
+// grants; descriptor requests can only narrow them. Payloads are owned copies,
+// read once from guest memory; invokeView lends a frame without that copy.
 // Service/render decoders must validate their schemas before acting on a reply.
 class WasmGuest
 {
@@ -26,6 +27,11 @@ public:
   bool invoke(GuestCall call,
               std::span<const std::byte> input,
               std::vector<std::byte>& output);
+  // A Frame reply read in place from guest memory, without a copy. The view
+  // is valid only until the next call on this guest; decode it first.
+  bool invokeView(GuestCall call,
+                  std::span<const std::byte> input,
+                  std::span<const std::byte>& output);
   void retire(std::string reason);
   void shutdown();
   bool isAlive() const;
@@ -38,6 +44,9 @@ private:
   bool exchange(GuestCall call,
                 std::span<const std::byte> input,
                 std::vector<std::byte>& output);
+  bool exchangeView(GuestCall call,
+                    std::span<const std::byte> input,
+                    std::span<const std::byte>& output);
   bool readResult(std::int32_t address,
                   std::vector<std::byte>& output,
                   std::uint32_t maximum);
@@ -54,7 +63,6 @@ private:
   std::unique_ptr<WasmInstance> m_instance;
   // Retained between calls so steady frames reuse their capacity.
   GuestWireWriter m_request;
-  std::vector<std::byte> m_reply;
   std::int32_t m_transfer = 0;
   std::uint32_t m_transferCapacity = 0;
   GuestDescriptor m_descriptor;

@@ -171,8 +171,23 @@ WasmGuest::exchange(GuestCall call,
                     std::span<const std::byte> input,
                     std::vector<std::byte>& output)
 {
-  ILLUMO_PROFILE_ZONE("WasmGuest.exchange");
   output.clear();
+  std::span<const std::byte> payload;
+  if (!exchangeView(call, input, payload)) {
+    return false;
+  }
+  ILLUMO_PROFILE_ZONE("WasmGuest.copyReply");
+  output.assign(payload.begin(), payload.end());
+  return true;
+}
+
+bool
+WasmGuest::exchangeView(GuestCall call,
+                        std::span<const std::byte> input,
+                        std::span<const std::byte>& output)
+{
+  ILLUMO_PROFILE_ZONE("WasmGuest.exchange");
+  output = {};
   if (++m_sequence == 0) {
     return fail("Guest call sequence exhausted");
   }
@@ -199,24 +214,35 @@ WasmGuest::exchange(GuestCall call,
       return fail(m_instance->error());
     }
   }
-  if (!readResult(result, m_reply, m_messageLimit)) {
-    return false;
+  std::int32_t size = 0;
+  if (!m_instance->call("illumo_guest_result_size", {}, size)) {
+    return fail(m_instance->error());
   }
+  // The request buffer is released before the reply is viewed, so no call
+  // into the guest follows the view (only a call can change guest memory).
   if (!retained) {
     const std::array<std::int32_t, 1> release{ address };
-    if (!m_instance->call("illumo_guest_free", release, result)) {
+    std::int32_t ignored = 0;
+    if (!m_instance->call("illumo_guest_free", release, ignored)) {
       return fail(m_instance->error());
     }
   }
+  if (size < 0 || static_cast<std::uint32_t>(size) > m_messageLimit ||
+      (size != 0 && result == 0)) {
+    return fail("Guest result exceeds the message contract");
+  }
+  std::span<const std::byte> replyBytes;
+  if (!m_instance->viewMemory(static_cast<std::uint32_t>(result),
+                              static_cast<std::size_t>(size),
+                              replyBytes)) {
+    return fail(m_instance->error());
+  }
   GuestEnvelope reply;
-  if (!GuestEnvelope::read(m_reply, reply) || reply.call != call ||
+  if (!GuestEnvelope::read(replyBytes, reply) || reply.call != call ||
       reply.session != m_session || reply.sequence != m_sequence) {
     return fail("Guest response envelope does not match its invocation");
   }
-  {
-    ILLUMO_PROFILE_ZONE("WasmGuest.copyReply");
-    output.assign(reply.payload.begin(), reply.payload.end());
-  }
+  output = reply.payload;
   return true;
 }
 
@@ -245,6 +271,28 @@ try {
   return exchange(call, input, output);
 } catch (const std::exception& exception) {
   output.clear();
+  return fail(exception.what());
+}
+
+bool
+WasmGuest::invokeView(GuestCall call,
+                      std::span<const std::byte> input,
+                      std::span<const std::byte>& output)
+try {
+  output = {};
+  if (!isAlive()) {
+    return false;
+  }
+  if (call != GuestCall::Frame) {
+    return fail("Only frames are read in place");
+  }
+  if ((m_capabilities & static_cast<std::uint32_t>(GuestCapability::Render)) ==
+      0) {
+    return fail("Guest lifecycle operation lacks a capability grant");
+  }
+  return exchangeView(call, input, output);
+} catch (const std::exception& exception) {
+  output = {};
   return fail(exception.what());
 }
 

@@ -3071,6 +3071,53 @@ world waits for crossfades.\\
 \textbf{Extends:} D-E30, D-R29
 \end{decisionbox}
 
+\subsection*{D-R31 --- The canvas fade runs in the shader (frame schema v9)}
+\begin{decisionbox}[title={D-R31 \quad 2026-09-28}]
+\textbf{Decision:} \texttt{CanvasView}'s texture holds two RGBA8 texels per
+cell: the colour a fade starts from and its target, whose alpha bytes hold
+the fade's start time in 1/512\,s ticks, wrapping every 128\,s. Frame schema
+v9 gives the Canvas batch \texttt{uCanvasFade} (the fade clock, the fade speed
+and the texture layout), and \texttt{canvas\_frag.glsl} shows
+$\mathrm{mix}(\mathit{to}, \mathit{from}, e^{-\mathit{speed} \cdot
+\mathit{age}})$. The CPU writes a cell's slot only when its target changes,
+starting the new fade from the colour on screen, and settles finished fades
+in a sweep every 0.25\,s (at most 100\,s, before the wrap). Layout 0, one RGB
+texel per cell, keeps frames before version 9 drawing.\\
+\textbf{Why:} Tracy showed the per-frame CPU fade at 1.4\,ms of a 2\,ms guest
+update, rewriting and uploading about 250\,KB of texture every frame while
+any cell faded.\\
+\textbf{Consequences:} A fading canvas costs no per-frame CPU work or upload.
+At the owner's settings (12 generations per second) the canvas went from
+about 400 to about 2,100\,FPS and its frame packets from 299\,KB to 5\,KB.
+The texture is twice as wide and four channels deep, so a changed cell
+uploads 8 bytes instead of 3.\\
+\textbf{Extends:} D-R29
+\end{decisionbox}
+
+\subsection*{D-R32 --- Canvas fade pre-pass and a leaner frame path}
+\begin{decisionbox}[title={D-R32 \quad 2026-09-29}]
+\textbf{Decision:} Right before a layout-1 canvas draws, the host resolves its
+fade texture into a cell-sized RGBA8 target, one fragment per cell
+(\texttt{Renderer::pushCanvasFadeResolve} with the built-in
+\texttt{CanvasFade} style), restores the pass framebuffer, viewport and
+scissor, and draws the canvas from that target as layout~0. The target lives
+with its guest texture; the direct layout-1 path remains the fallback. On the
+frame path, the guest writes its frame straight into the reply envelope and
+patches the size afterwards, the host reads every reply in place from guest
+memory (\texttt{WasmInstance::viewMemory}) and lends the frame to the decoder
+without a copy (\texttt{WasmGuest::invokeView}, valid until the next guest
+call), and the wire codec appends and reads words in bulk.\\
+\textbf{Why:} With the fade on the GPU (D-R31), the LED canvas shader
+evaluated it for all nine neighbours of every pixel, and each frame was
+copied whole once in the guest and twice on the host.\\
+\textbf{Consequences:} At 2560$\times$1440 with LED cells the canvas went from
+about 1,530 to about 1,650\,FPS, and the guest's frame build from 0.066 to
+0.055\,ms. The remaining difference from flat cells (about 0.13\,ms) is the
+LED look itself. A frame view must be decoded before the guest is called
+again.\\
+\textbf{Extends:} D-R31
+\end{decisionbox}
+
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}
 \begin{decisionbox}[title={D-UI8 \quad 2026-09-23}]
 \textbf{Decision:} The glass menus move like liquid. A travelling selection

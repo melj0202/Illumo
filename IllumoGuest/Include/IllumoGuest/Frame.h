@@ -2,6 +2,7 @@
 
 #include <IllumoGuest/ResourceId.h>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <string>
 
@@ -77,6 +78,12 @@ struct GuestBatch
   std::uint32_t firstIndex = 0;
   std::uint32_t indexCount = 0;
   GuestLighting lighting; // LitMesh; Skybox uses its tint only
+  // Version 9, Canvas batches: the shader-side colour fade. The fade clock in
+  // seconds (0..MaximumCanvasFadeClock), the fade speed, and the texture
+  // layout: 0 is one RGB texel per cell (versions 1-8), 1 is two RGBA texels
+  // per cell holding each fade's endpoints and start time.
+  std::array<float, 2> canvasFade{ 0.0f, 0.0f };
+  std::uint32_t canvasLayout = 0;
   std::vector<GuestVertex> vertices;
   std::vector<std::uint32_t> indices;
 
@@ -351,8 +358,11 @@ struct GuestFrame
   // in-place writes to dynamic retained meshes. Version 5 adds surface
   // windows. Version 6 adds host render world operations (HostRender).
   // Version 7 adds host-retained visuals and compositions. Version 8 adds
-  // several worlds per guest (one per scene). The host accepts all eight.
-  static constexpr std::uint32_t Version = 8;
+  // several worlds per guest (one per scene). Version 9 adds the Canvas
+  // batch's shader fade. The host accepts all nine.
+  static constexpr std::uint32_t Version = 9;
+  static constexpr float MaximumCanvasFadeClock = 128.0f;
+  static constexpr float MaximumCanvasFadeSpeed = 1000.0f;
   static constexpr std::uint32_t MaximumSurfaces = 8;
   static constexpr std::uint32_t MaximumSurfaceId = 0x7fffffffu;
   float width = 1280;
@@ -951,19 +961,19 @@ struct GuestFrame
 
   static void writeFloats(GuestWireWriter& output, const float* values, int n)
   {
-    for (int index = 0; index < n; ++index) {
-      output.f32(values[index]);
-    }
+    output.f32s(values, static_cast<std::size_t>(n));
   }
   static bool readFloats(GuestWireReader& reader, float* values, int n)
   {
+    if (!reader.f32s(values, static_cast<std::size_t>(n))) {
+      return false;
+    }
     for (int index = 0; index < n; ++index) {
-      values[index] = reader.f32();
       if (!std::isfinite(values[index])) {
         return false;
       }
     }
-    return reader.valid();
+    return true;
   }
 
   static void writeBatch(GuestWireWriter& output, const GuestBatch& batch)
@@ -1003,19 +1013,30 @@ struct GuestFrame
                  (lighting.receivesShadow ? 2u : 0u) |
                  (lighting.castsShadow ? 4u : 0u));
     }
+    if (batch.style == GuestBatchStyle::Canvas) {
+      writeFloats(output, batch.canvasFade.data(), 2);
+      output.u32(batch.canvasLayout);
+    }
     output.u32(static_cast<std::uint32_t>(batch.vertices.size()));
     output.u32(batch.drawCount());
+    // Position, colour, uv (and a lit normal): one append per vertex.
+    std::array<std::uint32_t, 9> words{};
+    const std::size_t wordCount = lit ? 9u : 6u;
     for (const GuestVertex& vertex : batch.vertices) {
-      writeFloats(output, vertex.position.data(), 3);
-      output.u32(vertex.rgba);
-      writeFloats(output, vertex.uv.data(), 2);
+      words[0] = std::bit_cast<std::uint32_t>(vertex.position[0]);
+      words[1] = std::bit_cast<std::uint32_t>(vertex.position[1]);
+      words[2] = std::bit_cast<std::uint32_t>(vertex.position[2]);
+      words[3] = vertex.rgba;
+      words[4] = std::bit_cast<std::uint32_t>(vertex.uv[0]);
+      words[5] = std::bit_cast<std::uint32_t>(vertex.uv[1]);
       if (lit) {
-        writeFloats(output, vertex.normal.data(), 3);
+        words[6] = std::bit_cast<std::uint32_t>(vertex.normal[0]);
+        words[7] = std::bit_cast<std::uint32_t>(vertex.normal[1]);
+        words[8] = std::bit_cast<std::uint32_t>(vertex.normal[2]);
       }
+      output.u32s(words.data(), wordCount);
     }
-    for (std::uint32_t index : batch.indices) {
-      output.u32(index);
-    }
+    output.u32s(batch.indices.data(), batch.indices.size());
   }
 
   void write(GuestWireWriter& output) const
@@ -1216,6 +1237,21 @@ struct GuestFrame
       lighting.receivesShadow = (flags & 2u) != 0;
       lighting.castsShadow = (flags & 4u) != 0;
     }
+    batch.canvasFade = { 0.0f, 0.0f };
+    batch.canvasLayout = 0;
+    if (version >= 9 && batch.style == GuestBatchStyle::Canvas) {
+      if (!readFloats(reader, batch.canvasFade.data(), 2)) {
+        return false;
+      }
+      batch.canvasLayout = reader.u32();
+      if (!reader.valid() || batch.canvasLayout > 1 ||
+          !(batch.canvasFade[0] >= 0.0f) ||
+          !(batch.canvasFade[0] <= MaximumCanvasFadeClock) ||
+          !(batch.canvasFade[1] >= 0.0f) ||
+          !(batch.canvasFade[1] <= MaximumCanvasFadeSpeed)) {
+        return false;
+      }
+    }
     const std::uint32_t vertices = reader.u32();
     const std::uint32_t indices = reader.u32();
     const std::uint32_t stride = lit ? 36u : 24u;
@@ -1240,13 +1276,30 @@ struct GuestFrame
     totals.vertices += vertices;
     totals.indices += indices;
     batch.vertices.resize(vertices);
+    std::array<std::uint32_t, 9> words{};
+    const std::size_t wordCount = lit ? 9u : 6u;
     for (GuestVertex& vertex : batch.vertices) {
-      if (!readFloats(reader, vertex.position.data(), 3)) {
+      if (!reader.u32s(words.data(), wordCount)) {
         return false;
       }
-      vertex.rgba = reader.u32();
-      if (!readFloats(reader, vertex.uv.data(), 2) ||
-          (lit && !readFloats(reader, vertex.normal.data(), 3))) {
+      vertex.position = { std::bit_cast<float>(words[0]),
+                          std::bit_cast<float>(words[1]),
+                          std::bit_cast<float>(words[2]) };
+      vertex.rgba = words[3];
+      vertex.uv = { std::bit_cast<float>(words[4]),
+                    std::bit_cast<float>(words[5]) };
+      if (lit) {
+        vertex.normal = { std::bit_cast<float>(words[6]),
+                          std::bit_cast<float>(words[7]),
+                          std::bit_cast<float>(words[8]) };
+      }
+      if (!std::isfinite(vertex.position[0]) ||
+          !std::isfinite(vertex.position[1]) ||
+          !std::isfinite(vertex.position[2]) || !std::isfinite(vertex.uv[0]) ||
+          !std::isfinite(vertex.uv[1]) ||
+          (lit && (!std::isfinite(vertex.normal[0]) ||
+                   !std::isfinite(vertex.normal[1]) ||
+                   !std::isfinite(vertex.normal[2])))) {
         return false;
       }
     }
@@ -1254,8 +1307,10 @@ struct GuestFrame
       return false;
     }
     batch.indices.resize(indices);
-    for (std::uint32_t& index : batch.indices) {
-      index = reader.u32();
+    if (!reader.u32s(batch.indices.data(), indices)) {
+      return false;
+    }
+    for (std::uint32_t index : batch.indices) {
       if (index >= vertices) {
         return false;
       }

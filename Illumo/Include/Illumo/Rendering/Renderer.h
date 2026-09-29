@@ -332,6 +332,11 @@ public:
                                            int height,
                                            TextureHandle* outDepthTexture);
 
+  // One RGBA8 colour attachment, nearest-filtered; invalid on failure.
+  FramebufferHandle enrollColorFramebuffer(int width,
+                                           int height,
+                                           TextureHandle* outColorTexture);
+
   bool destroyFramebuffer(FramebufferHandle handle);
 
   bool destroyShader(ShaderHandle handle);
@@ -459,6 +464,17 @@ public:
                        unsigned int offsetBytes,
                        unsigned int sizeBytes,
                        const void* data);
+  // Resolves a canvas fade texture (two RGBA8 texels per cell, frame schema
+  // v9) into `target`, cellsWide x cellsHigh, one settled colour per cell, so
+  // the canvas shader samples plain colours (D-R32). Restores the current
+  // pass framebuffer, viewport and scissor; the caller binds its style again.
+  // False while recording or when the resolve style is unavailable.
+  bool pushCanvasFadeResolve(TextureHandle source,
+                             FramebufferHandle target,
+                             int cellsWide,
+                             int cellsHigh,
+                             float clock,
+                             float speed);
   void pushBindUniformBuffer(BufferHandle handle, unsigned int binding);
   void pushInstanceStream(BufferHandle handle,
                           unsigned int offsetBytes,

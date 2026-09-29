@@ -491,6 +491,24 @@ WasmInstance::copyFromMemory(std::uint32_t offset, std::span<std::byte> output)
 }
 
 bool
+WasmInstance::viewMemory(std::uint32_t offset,
+                         std::size_t size,
+                         std::span<const std::byte>& output)
+{
+  output = {};
+  if (!m_state->bounds(offset, size)) {
+    return false;
+  }
+  if (size != 0) {
+    output = { reinterpret_cast<const std::byte*>(
+                 wasmtime_memory_data(m_state->context, &m_state->memory) +
+                 offset),
+               size };
+  }
+  return true;
+}
+
+bool
 WasmInstance::copyToMemory(std::uint32_t offset,
                            std::span<const std::byte> input)
 {

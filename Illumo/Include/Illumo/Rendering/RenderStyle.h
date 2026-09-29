@@ -23,6 +23,9 @@ enum class RenderStyleId : unsigned char
   // attributes, camera and shadow state from Renderer's FrameUniforms block.
   LitMeshInstanced = 9,
   ShadowDepthInstanced = 10,
+  // Resolves a two-texel-per-cell canvas fade texture to one colour per cell
+  // (Renderer::pushCanvasFadeResolve, D-R32).
+  CanvasFade = 11,
   Count
 };
 

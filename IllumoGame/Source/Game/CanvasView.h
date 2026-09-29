@@ -98,7 +98,12 @@ public:
   }
 
   CellAddress getVisibleCell(int x, int y) const;
-  const unsigned char* getDisplayTexBuffer() const { return texBuffer; }
+  // The colour (RGB8) of cache slot (x, y) as the canvas shader shows it now,
+  // for tests and diagnostics; the texture itself holds each fade's endpoints
+  // (see writeTexel).
+  std::array<unsigned char, 3> getDisplayedTexel(int x, int y) const;
+  // Seconds of fade time so far (advanced by tickVisual).
+  double getFadeClock() const { return fadeClock; }
   const unsigned char* getPaletteRgb() const { return paletteRgb; }
   bool isFadeActive() const { return fadeActive; }
   bool isTextureUploadPending() const { return textureUploadPending; }
@@ -136,6 +141,21 @@ private:
   static constexpr int kDirtyTileDim = 16;
   static constexpr std::size_t kMaximumUploadRects = 8u;
   static constexpr std::size_t kDenseChangedSampleDivisor = 4u;
+  // The canvas shader fades colours itself (canvas_frag.glsl): each cache slot
+  // is two RGBA8 texels, the fade's start colour and its target, whose alpha
+  // bytes hold the fade's start time in 1/512 s ticks, wrapping every 128 s.
+  // The CPU writes a slot only when its target changes or its fade retires.
+  static constexpr int kTexelsPerSlot = 2;
+  static constexpr int kSlotBytes = 8;
+  static constexpr double kFadeTicksPerSecond = 512.0;
+  static constexpr double kFadeWrapSeconds = 65536.0 / kFadeTicksPerSecond;
+  // Finished fades retire (start colour := target) on this period, so no
+  // slot's start time is older than the clock can express.
+  static constexpr double kFadeRetireSeconds = 0.25;
+  static constexpr double kMaximumFadeSeconds = 100.0;
+  // A channel within this of its target shows the target (as the former
+  // per-frame fade snapped it).
+  static constexpr float kFadeSnapDifference = 0.002f;
 
   struct UploadRect
   {
@@ -163,10 +183,16 @@ private:
   CellAddress cacheFirstCell;
   SparseCellGrid* grid;
   unsigned char paletteRgb[kPaletteSize * 3];
+  // kSlotBytes per slot (see kTexelsPerSlot).
   unsigned char* texBuffer;
+  // Each slot's fade: it starts from displayRgb at fadeStart (fade clock
+  // seconds) and approaches targetRgb.
   float* displayRgb;
   float* targetRgb;
+  double* fadeStart;
   float* sampledRgb;
+  double fadeClock = 0.0;
+  double fadeRetireElapsed = 0.0;
   std::vector<int> fadingTexels;
   std::vector<unsigned char> fadingFlags;
   std::vector<int> changedSampleTexels;
@@ -281,4 +307,11 @@ private:
   void includeUpload(int x, int y);
   void writeTexel(int index, int x, int y);
   void setTargetForSlot(int index, float r, float g, float b, bool snap);
+  // A slot's colour on screen now: its fade evaluated at the fade clock.
+  void currentSlotColor(int index, float* rgb) const;
+  // Settles fades that have finished, so their slots no longer depend on
+  // their start time.
+  void retireFinishedFades();
+  // Allocates and whitens every per-slot buffer for the texture size.
+  void allocateSlotBuffers(std::size_t slotCount);
 };

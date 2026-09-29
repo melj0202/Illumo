@@ -41,6 +41,9 @@ struct WasmFrameRenderer::State
     }
     ~Texture()
     {
+      if (!lifetime.expired() && fadeTarget.isValid()) {
+        renderer.destroyFramebuffer(fadeTarget);
+      }
       if (!lifetime.expired() && handle.isValid()) {
         renderer.destroyTexture(handle);
       }
@@ -62,6 +65,12 @@ struct WasmFrameRenderer::State
     TextureHandle handle{};
     // LoadFont atlases: the font whose glyphs host visuals lay out.
     std::shared_ptr<Font> font;
+    // Canvas fade textures (layout 1): the host's cell-sized target that
+    // holds one resolved colour per cell (D-R32), made at first draw. The
+    // texture's size never changes, so neither does the target's.
+    mutable FramebufferHandle fadeTarget{};
+    mutable TextureHandle fadeColor{};
+    mutable bool fadeTargetFailed = false;
   };
   // A retained host mesh. The table shares it as const; its upload state
   // changes while bytes arrive, so that state lives behind an owned pointer.
@@ -1606,6 +1615,41 @@ struct WasmFrameRenderer::State
     renderer.pushDrawIndexed(batch.drawCount(), batch.firstIndex);
   }
 
+  // A layout-1 canvas (frame v9) resolves its fade into a cell-sized target
+  // first, so the canvas shader's neighbourhood reads settled colours instead
+  // of evaluating the fade nine times per pixel (D-R32). Invalid when the
+  // batch draws its texture directly: other styles, layout 0, or no target.
+  TextureHandle resolveCanvasFade(const GuestBatch& batch,
+                                  const PreparedBatch& payload)
+  {
+    if (batch.style != GuestBatchStyle::Canvas || batch.canvasLayout != 1 ||
+        !payload.texture || payload.texture->channels != 4 ||
+        payload.texture->width % 2 != 0 || payload.texture->fadeTargetFailed) {
+      return {};
+    }
+    const Texture& texture = *payload.texture;
+    const int cellsWide = static_cast<int>(texture.width / 2);
+    const int cellsHigh = static_cast<int>(texture.height);
+    if (!texture.fadeTarget.isValid()) {
+      texture.fadeTarget = renderer.enrollColorFramebuffer(
+        cellsWide, cellsHigh, &texture.fadeColor);
+      if (!texture.fadeTarget.isValid() || !texture.fadeColor.isValid()) {
+        texture.fadeTargetFailed = true;
+        return {};
+      }
+    }
+    if (!renderer.pushCanvasFadeResolve(texture.handle,
+                                        texture.fadeTarget,
+                                        cellsWide,
+                                        cellsHigh,
+                                        batch.canvasFade[0],
+                                        batch.canvasFade[1]) ||
+        !bindBatchStyle(batch)) {
+      return {};
+    }
+    return texture.fadeColor;
+  }
+
   // A Shape, Sprite or Canvas batch in a space of width x height logical
   // units; clips scale into the current pass viewport.
   void appendFlat(const GuestBatch& batch,
@@ -1614,6 +1658,7 @@ struct WasmFrameRenderer::State
                   float width,
                   float height)
   {
+    const TextureHandle resolved = resolveCanvasFade(batch, payload);
     if (batch.clipped) {
       const std::array<int, 4> viewport = renderer.getCurrentPassViewport();
       const double left =
@@ -1636,7 +1681,17 @@ struct WasmFrameRenderer::State
     renderer.pushUniformMat4(WorldLook::kMvpUniform, batch.mvp.data());
     if (payload.texture) {
       renderer.pushUniformInt(WorldLook::kTextureUniform, 0);
-      renderer.pushSetTexture(payload.texture->handle, 0);
+      renderer.pushSetTexture(
+        resolved.isValid() ? resolved : payload.texture->handle, 0);
+    }
+    if (batch.style == GuestBatchStyle::Canvas) {
+      // Frames before version 9 carry layout 0: one RGB texel per cell. A
+      // resolved fade texture is layout 0 too.
+      renderer.pushUniformVec3(
+        WorldLook::kCanvasFadeUniform,
+        batch.canvasFade[0],
+        batch.canvasFade[1],
+        resolved.isValid() ? 0.0f : static_cast<float>(batch.canvasLayout));
     }
     renderer.pushDrawIndexed(batch.drawCount(), batch.firstIndex);
     if (batch.clipped) {

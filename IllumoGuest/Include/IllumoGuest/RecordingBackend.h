@@ -242,6 +242,9 @@ private:
   bool m_shadowPass = false;
   std::set<std::uint32_t> m_shadowMeshes;
   GuestLighting m_lighting;
+  // The canvas style's shader fade (uCanvasFade: clock, speed, layout) for
+  // this frame's Canvas batches.
+  std::array<float, 3> m_canvasFade{ 0.0f, 0.0f, 0.0f };
   std::map<std::uint32_t, Mesh> m_meshes;
   // Dynamic meshes drawn by reference in the current frame.
   std::vector<std::uint32_t> m_drawnDynamic;

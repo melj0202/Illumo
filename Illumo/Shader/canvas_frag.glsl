@@ -8,9 +8,19 @@ in vec2 TexCoord;
 // (0 draws flat pixels up close too) and grid lines.
 flat in vec3 vLook;
 
-// Faded display colors (RGB), one texel per cell at the exact LOD. Domain
-// state stays on the CPU as lifeCanvas.
+// The cells' colours. Layout 1 (uCanvasFade.z): two RGBA texels per cell,
+// the colour a fade starts from and its target, whose alpha bytes hold the
+// fade's start time in 1/512 s ticks (wrapping every 128 s); this shader
+// evaluates the fade, so the CPU writes a cell only when its target changes.
+// Layout 0 (frames before version 9): one RGB texel per cell, already faded.
+// Domain state stays on the CPU as lifeCanvas.
 uniform sampler2D uTexture;
+// x: the fade clock in seconds (wrapped every 128 s), y: the fade speed,
+// z: the texture layout.
+uniform vec3 uCanvasFade;
+
+const float kFadeTicksPerSecond = 512.0;
+const float kFadeWrapSeconds = 128.0;
 
 // Up close every cell is an LED in a matrix: a raised rounded-square key set
 // in a dark housing. A lit key has a hot core that runs toward white and falls
@@ -21,9 +31,33 @@ uniform sampler2D uTexture;
 // Far out, once a cell spans only a few pixels (and at the density
 // overviews), it fades back to the flat texel.
 
+// Cells across and down (the texture is twice as wide in layout 1).
+ivec2 cellCount()
+{
+	ivec2 size = textureSize(uTexture, 0);
+	if (uCanvasFade.z > 0.5) {
+		size.x /= 2;
+	}
+	return size;
+}
+
 vec3 cellAt(ivec2 cell, ivec2 size)
 {
-	return texelFetch(uTexture, clamp(cell, ivec2(0), size - 1), 0).rgb;
+	ivec2 slot = clamp(cell, ivec2(0), size - 1);
+	if (uCanvasFade.z < 0.5) {
+		return texelFetch(uTexture, slot, 0).rgb;
+	}
+	vec4 from = texelFetch(uTexture, ivec2(slot.x * 2, slot.y), 0);
+	vec4 to = texelFetch(uTexture, ivec2(slot.x * 2 + 1, slot.y), 0);
+	float ticks = floor(from.a * 255.0 + 0.5) + floor(to.a * 255.0 + 0.5) * 256.0;
+	float age = mod(uCanvasFade.x - ticks / kFadeTicksPerSecond + kFadeWrapSeconds,
+	                kFadeWrapSeconds);
+	// Fades retire long before the wrap, so an age just under it is a start
+	// time a rounding step ahead of the clock: the fade has only just begun.
+	if (age > kFadeWrapSeconds - 1.0) {
+		age = 0.0;
+	}
+	return mix(to.rgb, from.rgb, exp(-uCanvasFade.y * age));
 }
 
 float hash12(vec2 p)
@@ -61,7 +95,7 @@ float litness(vec3 color)
 void main()
 {
 	FragVelocity = vec2(0.0);
-	ivec2 size = textureSize(uTexture, 0);
+	ivec2 size = cellCount();
 	vec2 cellPos = TexCoord * vec2(size);
 	ivec2 cell = ivec2(floor(cellPos));
 	vec3 own = cellAt(cell, size);

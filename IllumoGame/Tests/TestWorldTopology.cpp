@@ -129,9 +129,7 @@ displayRedAt(const CanvasView& view, const CellAddress& address)
       y >= view.getTextureHeight()) {
     return 127;
   }
-  const std::size_t index =
-    static_cast<std::size_t>(y * view.getTextureWidth() + x) * 3u;
-  return view.getDisplayTexBuffer()[index];
+  return view.getDisplayedTexel(x, y)[0];
 }
 
 static void

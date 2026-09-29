@@ -7,6 +7,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/RenderLayerId.h>
 #include <Illumo/Rendering/UiScale.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <algorithm>
 #include <cmath>
@@ -693,6 +694,29 @@ Renderer::enrollDepthFramebuffer(int width,
   return _backend->CreateDepthFramebuffer(width, height, outDepthTexture);
 }
 
+FramebufferHandle
+Renderer::enrollColorFramebuffer(int width,
+                                 int height,
+                                 TextureHandle* outColorTexture)
+{
+  FramebufferDesc desc;
+  desc.width = width;
+  desc.height = height;
+  FramebufferAttachmentDesc color;
+  color.format = TextureFormat::RGBA8;
+  color.filter = TextureFilter::Nearest;
+  desc.colorAttachments.push_back(color);
+  FramebufferAttachments attachments;
+  const FramebufferHandle handle =
+    _backend->CreateFramebuffer(desc, &attachments);
+  if (outColorTexture != nullptr) {
+    *outColorTexture = handle.isValid() && !attachments.colorTextures.empty()
+                         ? attachments.colorTextures[0]
+                         : TextureHandle{};
+  }
+  return handle;
+}
+
 bool
 Renderer::destroyFramebuffer(FramebufferHandle handle)
 {
@@ -1317,6 +1341,52 @@ Renderer::ensureFullscreenQuadMesh()
                                          MeshVertexLayout::Pos3Color3Uv2,
                                          false);
   _fullscreenQuadReady = _fullscreenQuadMeshHandle.isValid();
+}
+
+bool
+Renderer::pushCanvasFadeResolve(TextureHandle source,
+                                FramebufferHandle target,
+                                int cellsWide,
+                                int cellsHigh,
+                                float clock,
+                                float speed)
+{
+  if (isRecording() || !source.isValid() || !target.isValid() ||
+      cellsWide <= 0 || cellsHigh <= 0) {
+    return false;
+  }
+  const RenderStyle* style = getStyle(RenderStyleId::CanvasFade);
+  if (style == nullptr || !style->ready) {
+    return false;
+  }
+  ensureFullscreenQuadMesh();
+  if (!_fullscreenQuadReady) {
+    return false;
+  }
+  ILLUMO_PROFILE_ZONE("Renderer.CanvasFadeResolve");
+  const FramebufferHandle restoredFramebuffer = _currentPassFbo;
+  const std::array<int, 4> restoredViewport = _currentPassViewport;
+  const ScissorState restoredScissor = currentScissorState;
+  pushScissor(false, 0, 0, 0, 0);
+  pushFramebuffer(target);
+  pushViewport(0, 0, cellsWide, cellsHigh);
+  bindStyle(RenderStyleId::CanvasFade);
+  pushUniformInt(WorldLook::kTextureUniform, 0);
+  pushSetTexture(source, 0);
+  pushUniformVec3(WorldLook::kCanvasFadeUniform, clock, speed, 1.0f);
+  pushSetMesh(_fullscreenQuadMeshHandle);
+  pushDrawIndexed(6);
+  pushFramebuffer(restoredFramebuffer);
+  pushViewport(restoredViewport[0],
+               restoredViewport[1],
+               restoredViewport[2],
+               restoredViewport[3]);
+  pushScissor(restoredScissor.enabled,
+              restoredScissor.x,
+              restoredScissor.y,
+              restoredScissor.width,
+              restoredScissor.height);
+  return true;
 }
 
 void

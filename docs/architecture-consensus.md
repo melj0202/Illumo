@@ -692,9 +692,12 @@ changes. Dense exact-cell marking stops once it covers a quarter of the cache,
 then the complete bounded cache is resampled. Revision gaps, non-aligned jumps, palette changes,
 whole-grid replacement, LOD changes, torus wrap, and resize use a complete bounded refill.
 Far LOD coarsens immediately to fit and refines only at 80% budget occupancy.
-A retained active-texel set
-makes fade ticks and zero-speed snaps proportional to colors still changing;
-reapplying an unchanged zero fade speed does no scan. Exact-cell LOD keeps that
+The canvas shader runs the fade (D-R31): the CPU writes a cell's fade slot
+(start colour, target, start time) only when its target changes, and a
+retained active-texel set is swept every 0.25 s to settle finished fades, so
+a fading canvas costs no per-frame CPU work or texture upload. Zero-speed
+snaps stay proportional to colors still changing; reapplying an unchanged
+zero fade speed does no scan. Exact-cell LOD keeps that
 fade; density overviews snap color changes. Dense exact-cell one-revision bins
 that cover at least a quarter of the cache resample the complete bounded cache;
 bin marking stops once that threshold is reached. At far zoom it limits
@@ -1820,6 +1823,13 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
     no world and draws its lit meshes as `MeshVisual`s.
   - **Rollback:** `hostRenderWorld=0` still gives scenes no world. A camera
     per world waits for crossfades.
+- **Frame schema v9** (D-R31): a Canvas batch carries its shader fade — the
+  fade clock in seconds (wrapped every 128 s), the fade speed, and the
+  texture layout (`uCanvasFade`). Layout 1 stores two RGBA8 texels per cell:
+  the colour the fade starts from and its target, whose alpha bytes hold the
+  start time in 1/512 s ticks; `canvas_frag.glsl` evaluates
+  `mix(to, from, exp(-speed * age))`. Layout 0 is the one-RGB-texel canvas
+  of versions 1 to 8, which remain valid input.
 - **Simulation lanes** (D-E17): with a `worker` and the Jobs grant the game
   asks `JobLanes` once at startup; the host compiles one isolated worker
   store per lane (in parallel, while menus run) and answers only when all are
@@ -2054,6 +2064,8 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-E30** | A WASM guest keeps its game state and presentation decisions; the host owns every render and media object and the guest manages them through host calls, not per-frame copies. The guest SDK checks frame quotas before sending. World operations (frame schema v6) come first, then 2D visuals (`docs/host-render-world-design.md`). |
 | **D-R28** | Instance and uniform buffers (`BufferHandle`), `WriteBuffer`/`BindUniformBuffer`/`SetInstanceStream`/`DrawIndexedInstanced`, Renderer's per-frame `FrameUniforms` block, `RecordedCommandList` executed in place by `ExecuteList`, and the engine `RenderWorld`. Supersedes D-R24's instancing deferral and D-R25's recorded-payload clause for host-owned lists; the GL context stays put. |
 | **D-R29** | `VisualStore` keeps 2D visuals on the host (`GameVisual` edited in place, recorded once, replayed until changed). Frame v7 adds visual operations, per-target compositions and a `Skybox` world operation. Guest `GameVisual`s and `SkyboxVisual`s go through `IBackend::AppendVisual`/`AppendSkybox`, and only unconfirmed changes travel. By owner decision the canvas quad, the `MeshVisual` line overlays and visuals that can't travel stay retained batches. |
+| **D-R32** | Canvas fade pre-pass and a leaner frame path (2026-09-29). The host resolves a layout-1 canvas texture into a cell-sized RGBA8 target (`Renderer::pushCanvasFadeResolve`, built-in style `CanvasFade`, one fragment per cell) right before the canvas draw, restoring the pass framebuffer, viewport and scissor, and draws the canvas from it as layout 0; the target lives with its guest texture and the direct layout-1 path remains the fallback. The guest writes its frame straight into the reply envelope (size patched afterwards), the host reads replies in place from guest memory (`WasmInstance::viewMemory`; `WasmGuest::invokeView` lends the frame, decoded before the next guest call), and the wire codec appends and reads words in bulk. At 2560x1440 LED the canvas went from ~1,530 to ~1,650 FPS; the remaining LED-over-flat cost (~0.13 ms) is the LED look itself. |
+| **D-R31** | The canvas fade runs in the canvas shader (2026-09-28, frame schema v9). `CanvasView`'s texture holds two RGBA8 texels per cell — the colour a fade starts from and its target, their alpha bytes the start time in 1/512 s ticks wrapping every 128 s — and the Canvas batch carries `uCanvasFade` (clock, speed, layout); the shader shows `mix(to, from, exp(-speed * age))`. The CPU writes a slot only when a cell's target changes (a new fade starts from the colour on screen) and settles finished fades in a sweep every 0.25 s (at most 100 s, before the wrap). Layout 0 keeps frames before v9 drawing. Tracy showed the CPU fade at 1.4 ms of a 2 ms guest update and ~250 KB uploaded every frame; at the owner's settings (12 tps) the canvas went from ~400 to ~2,100 FPS. |
 | **D-R30** | Frame schema v8 gives each scene its own host render world. `SelectWorld` (10) sends the world operations after it to world `id`, created on first use; `ShowWorld` (11) picks the world that draws (0: none); `DestroyWorld` (12) releases one and everything in it. A v7 frame is exactly "world 1, shown". A guest has at most 8 worlds; material and instance ids are per world; the shown world draws with the frame camera. `GuestSceneWorlds` gives every scene its own `GuestRenderWorld` when `HostRender` is granted and merges their operations, so steady frames send nothing. `hostRenderWorld=0` still gives scenes no world; a camera per world waits for crossfades. Extends D-E30 and D-R29. |
 | **D-R27** | Frame schema v5 adds up to eight UI-only surface batch lists with revisions (`same` when unchanged, one quota across the frame). The host replays a changed surface through `Renderer::renderOffscreen` into a per-window target and reads it back through a two-deep asynchronous stream (`IBackend::requestFramebufferReadback` / `takeFramebufferReadback`) for a `PixelWindow` present, one frame late. No second GL context (D-UI5). |
 | **D-007** | Enroll resources outside the per-frame stream (frame queue = bind/draw/update). |

@@ -1279,6 +1279,18 @@ SparseCellGrid::prepareCandidateScratchFromSource(
     }
   }
 
+  // A counted cell's neighbors lie in this chunk or one of its eight
+  // neighbors: resolve those nine scratch records once, not per neighbor.
+  std::array<CandidateScratchChunk*, 9> targets{};
+  for (int chunkOffsetY = -1; chunkOffsetY <= 1; ++chunkOffsetY) {
+    for (int chunkOffsetX = -1; chunkOffsetX <= 1; ++chunkOffsetX) {
+      CandidateScratchChunk* target = findCandidateScratch(ChunkAddress{
+        sourceAddress.x + chunkOffsetX, sourceAddress.y + chunkOffsetY });
+      targets[static_cast<std::size_t>((chunkOffsetY + 1) * 3 + chunkOffsetX +
+                                       1)] =
+        target == nullptr || target->skipNeighborPrep ? nullptr : target;
+    }
+  }
   for (std::size_t wordIndex = 0u; wordIndex < source.counted.size();
        ++wordIndex) {
     std::uint64_t counted = source.counted[wordIndex];
@@ -1295,24 +1307,26 @@ SparseCellGrid::prepareCandidateScratchFromSource(
           }
           int targetLocalX = sourceLocalX + offsetX;
           int targetLocalY = sourceLocalY + offsetY;
-          ChunkAddress targetAddress = sourceAddress;
+          int chunkX = 1;
+          int chunkY = 1;
           if (targetLocalX < 0) {
-            targetAddress.x -= 1;
+            chunkX = 0;
             targetLocalX += kChunkDim;
           } else if (targetLocalX >= kChunkDim) {
-            targetAddress.x += 1;
+            chunkX = 2;
             targetLocalX -= kChunkDim;
           }
           if (targetLocalY < 0) {
-            targetAddress.y -= 1;
+            chunkY = 0;
             targetLocalY += kChunkDim;
           } else if (targetLocalY >= kChunkDim) {
-            targetAddress.y += 1;
+            chunkY = 2;
             targetLocalY -= kChunkDim;
           }
 
-          CandidateScratchChunk* target = findCandidateScratch(targetAddress);
-          if (target == nullptr || target->skipNeighborPrep) {
+          CandidateScratchChunk* target =
+            targets[static_cast<std::size_t>(chunkY * 3 + chunkX)];
+          if (target == nullptr) {
             continue;
           }
           const std::size_t targetIndex =

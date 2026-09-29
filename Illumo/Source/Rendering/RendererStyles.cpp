@@ -204,6 +204,31 @@ void main() {
 }
 )";
 
+// One fragment per cell of a canvas fade texture (frame schema v9, D-R31):
+// the fade's start colour at 2x, its target at 2x + 1, their alpha bytes the
+// start time in 1/512 s ticks wrapping every 128 s. Mirrors canvas_frag.glsl.
+static const char* kCanvasFadeFragmentShader = R"(
+#version 330 core
+out vec4 FragColor;
+
+uniform sampler2D uTexture;
+// x: the fade clock in seconds, y: the fade speed.
+uniform vec3 uCanvasFade;
+
+void main() {
+    ivec2 cell = ivec2(gl_FragCoord.xy);
+    vec4 from = texelFetch(uTexture, ivec2(cell.x * 2, cell.y), 0);
+    vec4 to = texelFetch(uTexture, ivec2(cell.x * 2 + 1, cell.y), 0);
+    float ticks = floor(from.a * 255.0 + 0.5) + floor(to.a * 255.0 + 0.5) * 256.0;
+    float age = mod(uCanvasFade.x - ticks / 512.0 + 128.0, 128.0);
+    // A start time a rounding step ahead of the clock: just begun.
+    if (age > 127.0) {
+        age = 0.0;
+    }
+    FragColor = vec4(mix(to.rgb, from.rgb, exp(-uCanvasFade.y * age)), 1.0);
+}
+)";
+
 static void
 fillCanvasPipeline(PipelineState& ps)
 {
@@ -342,6 +367,19 @@ Renderer::ensureBuiltinStyles()
     style.shaderHandle = enrollShader(sources);
     style.ready = style.shaderHandle.isValid();
     builtinStyleHandles[renderStyleIndex(RenderStyleId::MotionBlur)] =
+      createStyle(style);
+  }
+
+  // Canvas fade resolve: the full-screen quad into a cell-sized target.
+  {
+    RenderStyle style;
+    fillCanvasPipeline(style.pipeline);
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kCanvasFadeFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::CanvasFade)] =
       createStyle(style);
   }
 

@@ -346,6 +346,18 @@ shown world draws with the frame camera. `GuestSceneWorlds`
 `HostRender` is granted, and steady frames send nothing
 (`docs/scene-programs-design.md` section 6.5).
 
+Note (2026-09-28): frame schema v9 (D-R31) adds the Canvas batch's shader
+fade (`uCanvasFade`: clock, speed, texture layout). The guest still decides
+every cell's target colour; the canvas shader evaluates the fade between the
+start colour and target stored per cell, so a fading canvas uploads nothing
+per frame. Versions 1 to 8 draw with layout 0 (one RGB texel per cell).
+
+Note (2026-09-29, D-R32): the host resolves a layout-1 canvas into a
+cell-sized target just before drawing it, so the canvas shader reads settled
+colours. The guest writes its frame straight into the reply envelope, and the
+host reads replies in place from guest memory: `WasmGuest::invokeView` lends
+the frame to the decoder, valid only until the next call into that guest.
+
 Keep product presentation decisions in WASM. CanvasView continues to sample the
 world, select LOD, fade colors and find dirty uploads there. UI layout, hit tests,
 animation and painter ordering also execute there.

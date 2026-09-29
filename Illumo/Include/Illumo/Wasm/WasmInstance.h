@@ -54,6 +54,11 @@ public:
             std::span<const std::int32_t> arguments,
             std::int32_t& result);
   bool copyFromMemory(std::uint32_t offset, std::span<std::byte> output);
+  // Guest memory in place, valid until the next call into this instance
+  // (only a call can grow or change it). False when out of bounds.
+  bool viewMemory(std::uint32_t offset,
+                  std::size_t size,
+                  std::span<const std::byte>& output);
   bool copyToMemory(std::uint32_t offset, std::span<const std::byte> input);
   bool isAlive() const;
   const std::string& error() const;

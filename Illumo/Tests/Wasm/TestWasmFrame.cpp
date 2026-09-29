@@ -2,6 +2,7 @@
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -386,6 +387,143 @@ run(const std::string& name)
     testTrue(counters,
              inlineRetainedRefused,
              "Writers refuse retained batches with inline geometry");
+
+    // Version 9: the Canvas batch's shader fade (clock, speed, layout).
+    GuestFrame canvas = makeFrame();
+    canvas.batches[0].style = GuestBatchStyle::Canvas;
+    canvas.batches[0].texture = { 7, GuestResourceKind::Texture, 3, 1 };
+    canvas.batches[0].canvasFade = { 12.5f, 4.0f };
+    canvas.batches[0].canvasLayout = 1;
+    GuestWireWriter canvasWire;
+    canvas.write(canvasWire);
+    testTrue(counters,
+             GuestFrame::read(canvasWire.data(), accepted) &&
+               accepted.batches.size() == 1 &&
+               accepted.batches[0].style == GuestBatchStyle::Canvas &&
+               accepted.batches[0].canvasFade[0] == 12.5f &&
+               accepted.batches[0].canvasFade[1] == 4.0f &&
+               accepted.batches[0].canvasLayout == 1,
+             "Version 9 canvas fade round-trips");
+    for (std::size_t size = 0; size < canvasWire.data().size(); ++size) {
+      if (GuestFrame::read(std::span(canvasWire.data()).first(size),
+                           accepted)) {
+        rejected = false;
+      }
+    }
+    testTrue(counters, rejected, "Version 9 truncations rejected");
+    invalid = canvas;
+    invalid.batches[0].canvasLayout = 2;
+    rejectsFrame(counters, invalid, "Unknown canvas layouts rejected");
+    invalid = canvas;
+    invalid.batches[0].canvasFade[0] = GuestFrame::MaximumCanvasFadeClock + 1;
+    rejectsFrame(counters, invalid, "Canvas fade clock is bounded");
+    invalid = canvas;
+    invalid.batches[0].canvasFade[1] = -1.0f;
+    rejectsFrame(counters, invalid, "Negative canvas fade speed rejected");
+    invalid = canvas;
+    invalid.batches[0].canvasFade[1] = std::numeric_limits<float>::quiet_NaN();
+    rejectsFrame(counters, invalid, "Non-finite canvas fade speed rejected");
+    return counters.failures == 0;
+  }
+  if (name == "CanvasFadeResolve") {
+    // Frame v9 layout 1 (D-R31) resolves into a cell-sized target first
+    // (D-R32): the canvas then draws that target's colours as layout 0.
+    class CommandLog final : public MockBackend
+    {
+    public:
+      std::vector<RenderCommand> commands;
+      void PushToCommandQueue(RenderCommand command) override
+      {
+        commands.push_back(command);
+        MockBackend::PushToCommandQueue(command);
+      }
+    };
+    NullRenderWindow window(640, 480);
+    EnvVars env;
+    env.setVar("WinX", 640);
+    env.setVar("WinY", 480);
+    Camera camera(glm::vec2(0, 0), 1, &env);
+    CommandLog mock;
+    mock.Initialize();
+    Renderer renderer(&window, &env, &camera, &mock, false);
+    renderer.ensureBuiltinStyles();
+    WasmFrameRenderer bridge(renderer, 700);
+    // Four cells by two: eight RGBA texels across.
+    const std::vector<std::byte> pixels(8u * 2u * 4u, std::byte{ 0x40 });
+    const GuestResourceId texture =
+      bridge.createTexture(pixels, 8, 2, 4, false);
+    GuestFrame canvas = makeFrame();
+    canvas.batches[0].style = GuestBatchStyle::Canvas;
+    canvas.batches[0].texture = texture;
+    canvas.batches[0].canvasFade = { 3.0f, 4.0f };
+    canvas.batches[0].canvasLayout = 1;
+    const std::function<bool(const GuestFrame&)> render =
+      [&](const GuestFrame& frame) {
+        GuestWireWriter wire;
+        frame.write(wire);
+        const bool accepted = bridge.accept(wire.data());
+        mock.commands.clear();
+        DrawList scene(&window, &camera);
+        bridge.dispatch(scene);
+        renderer.BeginFrame();
+        renderer.RenderScene(&scene, &camera);
+        renderer.EndFrame();
+        return accepted && renderer.frameError().empty();
+      };
+    testTrue(counters, render(canvas), "A layout 1 canvas renders");
+    std::size_t resolveAt = mock.commands.size();
+    TextureHandle resolveSource{};
+    for (std::size_t index = 0; index < mock.commands.size(); ++index) {
+      const RenderCommand& command = mock.commands[index];
+      if (command.commandType == CommandType::SetFramebuffer &&
+          command.bindFramebuffer.handle.isValid()) {
+        resolveAt = index;
+        break;
+      }
+    }
+    bool resolvedCells = false;
+    bool restoredScreen = false;
+    bool drewResolved = false;
+    TextureHandle bound{};
+    for (std::size_t index = resolveAt; index < mock.commands.size(); ++index) {
+      const RenderCommand& command = mock.commands[index];
+      if (command.commandType == CommandType::SetViewport && !restoredScreen) {
+        resolvedCells =
+          command.viewport.width == 4 && command.viewport.height == 2;
+      } else if (command.commandType == CommandType::SetTexture &&
+                 command.bindTexture.slot == 0) {
+        bound = command.bindTexture.handle;
+        if (!restoredScreen) {
+          resolveSource = bound;
+        }
+      } else if (command.commandType == CommandType::SetFramebuffer &&
+                 !command.bindFramebuffer.handle.isValid()) {
+        restoredScreen = true;
+      } else if (command.commandType == CommandType::SetUniformVec3 &&
+                 restoredScreen &&
+                 std::strcmp(command.uniformVec3.name,
+                             WorldLook::kCanvasFadeUniform) == 0) {
+        drewResolved = command.uniformVec3.z == 0.0f &&
+                       command.uniformVec3.x == 3.0f && bound.isValid() &&
+                       !(bound.slot == resolveSource.slot &&
+                         bound.generation == resolveSource.generation);
+      }
+    }
+    testTrue(counters,
+             resolveAt < mock.commands.size() && resolvedCells,
+             "The fade resolves into a target one texel per cell");
+    testTrue(counters,
+             restoredScreen && drewResolved,
+             "The canvas draws the resolved colours as layout 0");
+    canvas.batches[0].canvasLayout = 0;
+    testTrue(counters, render(canvas), "A layout 0 canvas renders");
+    bool offscreen = false;
+    for (const RenderCommand& command : mock.commands) {
+      offscreen =
+        offscreen || (command.commandType == CommandType::SetFramebuffer &&
+                      command.bindFramebuffer.handle.isValid());
+    }
+    testTrue(counters, !offscreen, "Layout 0 canvases draw directly");
     return counters.failures == 0;
   }
   if (name == "RetainedResources") {

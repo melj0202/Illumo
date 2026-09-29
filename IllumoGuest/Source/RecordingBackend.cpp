@@ -196,6 +196,7 @@ GuestRecordingBackend::BeginFrame()
   m_shadowPass = false;
   m_shadowMeshes.clear();
   m_lighting = GuestLighting{};
+  m_canvasFade = { 0.0f, 0.0f, 0.0f };
   m_error.clear();
   m_frameRejections = m_commands.GetTotalRejected();
   m_mesh = {};
@@ -1367,6 +1368,10 @@ GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
     if (sky) {
       batch.lighting.tint = m_lighting.tint;
     }
+    if (batch.style == GuestBatchStyle::Canvas) {
+      batch.canvasFade = { m_canvasFade[0], m_canvasFade[1] };
+      batch.canvasLayout = m_canvasFade[2] != 0.0f ? 1u : 0u;
+    }
   }
   Mesh& mesh = m_meshes.at(m_mesh.slot);
   const MeshVertexLayout expected =
@@ -1527,6 +1532,14 @@ GuestRecordingBackend::consume(const RenderCommand& command)
         m_lighting.lightColor = vector;
       } else if (std::strcmp(value.name, "uAmbientColor") == 0) {
         m_lighting.ambientColor = vector;
+      } else if (std::strcmp(value.name, "uCanvasFade") == 0) {
+        if (!(value.x >= 0.0f &&
+              value.x <= GuestFrame::MaximumCanvasFadeClock &&
+              value.y >= 0.0f &&
+              value.y <= GuestFrame::MaximumCanvasFadeSpeed)) {
+          throw std::runtime_error("Invalid guest canvas fade");
+        }
+        m_canvasFade = vector;
       } else {
         throw std::runtime_error("Unsupported guest vector uniform");
       }

@@ -11,6 +11,7 @@
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 
@@ -1710,14 +1712,13 @@ testBoundedCanvasView()
   testTrue(g,
            view.getVisibleCell(3, 2) == CellAddress{ 0, 0 },
            "view samples the centered origin");
-  const unsigned char* pixels = view.getDisplayTexBuffer();
   const CellAddress cacheFirst = view.getCacheFirstCell();
   const int originX =
     static_cast<int>((0 - cacheFirst.x) / view.getCellsPerTexel());
   const int originY =
     static_cast<int>((cacheFirst.y - 0) / view.getCellsPerTexel());
   testEqUChar(g,
-              pixels[(originY * view.getTextureWidth() + originX) * 3],
+              view.getDisplayedTexel(originX, originY)[0],
               0,
               "visible alive cell is staged black");
 
@@ -1773,10 +1774,9 @@ testAdaptiveOverviewAndRevisionGate()
     static_cast<int>((0 - firstCell.x) / view.getCellsPerTexel());
   const int outputY =
     static_cast<int>((firstCell.y - 0) / view.getCellsPerTexel());
-  const unsigned char* pixels = view.getDisplayTexBuffer();
-  const int pixelIndex = (outputY * view.getTextureWidth() + outputX) * 3;
+  const unsigned char red = view.getDisplayedTexel(outputX, outputY)[0];
   testTrue(g,
-           pixels[pixelIndex] > 0 && pixels[pixelIndex] < 255,
+           red > 0 && red < 255,
            "overview pixel contains density-weighted live color");
 
   view.AppendCommands(&renderer);
@@ -1818,7 +1818,7 @@ testAdaptiveOverviewAndRevisionGate()
     if (command.commandType == CommandType::UpdateTexture) {
       foundOverviewUpload = true;
       usesTextureStride =
-        command.updateTexture.srcRowStride == view.getTextureWidth();
+        command.updateTexture.srcRowStride == view.getTextureWidth() * 2;
     }
   }
   testTrue(g, foundOverviewUpload, "changed overview emits one texture update");
@@ -1932,6 +1932,87 @@ testTextureCapacityAndLifecycle()
              destroyedTextureCount,
              1u,
              "view destruction releases its backend texture");
+}
+
+static void
+testShaderFadeUploadsOnlyTargetChanges()
+{
+  testSection("CanvasView: the shader fades, the CPU uploads target changes");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  SparseCellGrid grid;
+  grid.setCell(CellAddress{ 0, 0 }, 0);
+  CanvasView view(80, 60, &grid, &window, &camera, &renderer);
+  view.rebuildDefaultPalette();
+  view.setFadeSpeed(4.0f);
+  view.rebuildTargetsFromGrid();
+  view.AppendCommands(&renderer);
+  mock.SubmitCommandQueue();
+  mock.ClearCommandQueue();
+
+  const CellAddress first = view.getCacheFirstCell();
+  const int x = static_cast<int>(0 - first.x);
+  const int y = static_cast<int>(first.y - 0);
+  const unsigned char live = view.getDisplayedTexel(x, y)[0];
+  grid.setCell(CellAddress{ 0, 0 }, SparseCellGrid::BackgroundState);
+  view.rebuildTargetsFromGrid();
+  view.AppendCommands(&renderer);
+  mock.SubmitCommandQueue();
+  mock.ClearCommandQueue();
+  testTrue(g,
+           view.getLastUploadByteCount() > 0u,
+           "a changed cell uploads its dirty tile");
+  const unsigned char background = view.getDisplayedTexel(x, y)[0];
+  testEqUChar(g, background, live, "a new fade starts from the shown colour");
+
+  view.tickVisual(0.1f);
+  bool uploadedWhileFading = false;
+  bool fadeUniform = false;
+  view.AppendCommands(&renderer);
+  mock.SubmitCommandQueue();
+  for (std::size_t i = 0; i < mock.getLastSubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastSubmitted(i);
+    uploadedWhileFading =
+      uploadedWhileFading || command.commandType == CommandType::UpdateTexture;
+    if (command.commandType == CommandType::SetUniformVec3 &&
+        std::strcmp(command.uniformVec3.name, WorldLook::kCanvasFadeUniform) ==
+          0) {
+      fadeUniform = std::fabs(command.uniformVec3.x - 0.1f) < 1e-4f &&
+                    command.uniformVec3.y == 4.0f &&
+                    command.uniformVec3.z == 1.0f;
+    }
+  }
+  mock.ClearCommandQueue();
+  testTrue(g, !uploadedWhileFading, "an advancing fade uploads nothing");
+  testTrue(g, fadeUniform, "the cell quad carries clock, speed and layout");
+  const float expected =
+    static_cast<float>(view.getPaletteRgb()[3]) +
+    (static_cast<float>(live) - static_cast<float>(view.getPaletteRgb()[3])) *
+      std::exp(-4.0f * 0.1f);
+  testTrue(g,
+           std::fabs(static_cast<float>(view.getDisplayedTexel(x, y)[0]) -
+                     expected) <= 1.0f,
+           "the shown colour follows the shader's exponential fade");
+
+  for (int step = 0; step < 40; ++step) {
+    view.tickVisual(0.1f);
+  }
+  testEqSize(
+    g, view.getFadingTexelCount(), 0u, "a finished fade retires on the CPU");
+  view.AppendCommands(&renderer);
+  mock.SubmitCommandQueue();
+  mock.ClearCommandQueue();
+  testTrue(g,
+           view.getLastUploadByteCount() > 0u,
+           "retirement uploads the settled slot once");
+  view.tickVisual(1.0f);
+  testTrue(g, !view.isTextureUploadPending(), "a settled canvas stays idle");
 }
 
 static void
@@ -2267,11 +2348,10 @@ readCacheTexelRgb(const CanvasView& view,
   const int cellsPerTexel = view.getCellsPerTexel();
   const int x = static_cast<int>((cell.x - first.x) / cellsPerTexel);
   const int y = static_cast<int>((first.y - cell.y) / cellsPerTexel);
-  const int index = (y * view.getTextureWidth() + x) * 3;
-  const unsigned char* pixels = view.getDisplayTexBuffer();
-  rgb[0] = pixels[index];
-  rgb[1] = pixels[index + 1];
-  rgb[2] = pixels[index + 2];
+  const std::array<unsigned char, 3> texel = view.getDisplayedTexel(x, y);
+  rgb[0] = texel[0];
+  rgb[1] = texel[1];
+  rgb[2] = texel[2];
 }
 
 static void
@@ -3439,6 +3519,9 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CanvasInf.IncrementalPresentationWork", []() {
     return runCanvasInfCase(testIncrementalPresentationWork);
+  });
+  registry.add("IllumoGame.CanvasInf.ShaderFadeUploadsOnlyTargetChanges", []() {
+    return runCanvasInfCase(testShaderFadeUploadsOnlyTargetChanges);
   });
   registry.add(
     "IllumoGame.CanvasInf.DenseVisibleChangesUseCompleteSample", []() {

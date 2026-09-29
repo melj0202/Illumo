@@ -402,6 +402,11 @@ no typeface and keeps the engine default font.
   updates batch all marked bins through the same traversal, avoiding per-bin
   hash probes. Overview snaps convert the sampled RGB in one pass instead of
   per-texel fade enrollment.
+- The canvas shader runs the colour fade (D-R31): each cell is two RGBA8
+  texels (start colour and target, the alpha bytes the start time), written
+  only when the cell's target changes, and `tickVisual` just advances the
+  fade clock and settles finished fades every 0.25 s.
+  `getDisplayedTexel` gives the colour the shader shows now.
   The visual texel budget does not limit stored chunks or world cells.
 - `CanvasScene` dispatches the view on the World layer and the cursor,
   selection outline, inspector, splash, and configuration overlay on UI.

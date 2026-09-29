@@ -3,6 +3,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -25,11 +26,48 @@ public:
   GuestWireWriter& operator=(const GuestWireWriter&) = delete;
   GuestWireWriter(GuestWireWriter&&) noexcept = default;
   GuestWireWriter& operator=(GuestWireWriter&&) noexcept = default;
-  void u32(std::uint32_t value)
+  void u32(std::uint32_t value) { u32s(&value, 1u); }
+  // Little-endian words, appended in one step (a copy on little-endian
+  // hosts, which wasm32 and x86 both are).
+  void u32s(const std::uint32_t* values, std::size_t count)
   {
-    reserve(4u);
-    for (unsigned int index = 0; index < 4u; ++index) {
-      m_bytes.push_back(static_cast<std::byte>(value >> (index * 8u)));
+    if (count > m_maximum / 4u) {
+      throw std::length_error("Guest packet exceeds byte quota");
+    }
+    reserve(count * 4u);
+    const std::size_t start = m_bytes.size();
+    m_bytes.resize(start + count * 4u);
+    std::byte* output = m_bytes.data() + start;
+    if constexpr (std::endian::native == std::endian::little) {
+      if (count != 0) {
+        std::memcpy(output, values, count * 4u);
+      }
+    } else {
+      for (std::size_t word = 0; word < count; ++word) {
+        for (unsigned int index = 0; index < 4u; ++index) {
+          output[word * 4u + index] =
+            static_cast<std::byte>(values[word] >> (index * 8u));
+        }
+      }
+    }
+  }
+  void f32s(const float* values, std::size_t count)
+  {
+    static_assert(sizeof(float) == sizeof(std::uint32_t));
+    if constexpr (std::endian::native == std::endian::little) {
+      if (count > m_maximum / 4u) {
+        throw std::length_error("Guest packet exceeds byte quota");
+      }
+      reserve(count * 4u);
+      const std::size_t start = m_bytes.size();
+      m_bytes.resize(start + count * 4u);
+      if (count != 0) {
+        std::memcpy(m_bytes.data() + start, values, count * 4u);
+      }
+    } else {
+      for (std::size_t index = 0; index < count; ++index) {
+        u32(std::bit_cast<std::uint32_t>(values[index]));
+      }
     }
   }
   void u64(std::uint64_t value)
@@ -51,6 +89,16 @@ public:
     }
     u32(static_cast<std::uint32_t>(value.size()));
     bytes(std::as_bytes(std::span(value.data(), value.size())));
+  }
+  // Overwrites a word written earlier (a length known only afterwards).
+  void patchU32(std::size_t offset, std::uint32_t value)
+  {
+    if (offset > m_bytes.size() || m_bytes.size() - offset < 4u) {
+      throw std::out_of_range("Guest wire patch outside the packet");
+    }
+    for (unsigned int index = 0; index < 4u; ++index) {
+      m_bytes[offset + index] = static_cast<std::byte>(value >> (index * 8u));
+    }
   }
   const std::vector<std::byte>& data() const { return m_bytes; }
   std::vector<std::byte> take() { return std::move(m_bytes); }
@@ -94,6 +142,49 @@ public:
   }
   float f32() { return std::bit_cast<float>(u32()); }
   double f64() { return std::bit_cast<double>(u64()); }
+  // Little-endian words read in one step; false (and invalid) when fewer
+  // than `count` remain, leaving `values` unspecified.
+  bool u32s(std::uint32_t* values, std::size_t count)
+  {
+    if (!m_valid || count > remaining() / 4u) {
+      m_valid = false;
+      return false;
+    }
+    const std::span<const std::byte> input = bytes(count * 4u);
+    if constexpr (std::endian::native == std::endian::little) {
+      if (count != 0) {
+        std::memcpy(values, input.data(), count * 4u);
+      }
+    } else {
+      for (std::size_t word = 0; word < count; ++word) {
+        std::uint32_t result = 0;
+        for (unsigned int index = 0; index < 4u; ++index) {
+          result |= std::to_integer<std::uint32_t>(input[word * 4u + index])
+                    << (index * 8u);
+        }
+        values[word] = result;
+      }
+    }
+    return true;
+  }
+  bool f32s(float* values, std::size_t count)
+  {
+    if (!m_valid || count > remaining() / 4u) {
+      m_valid = false;
+      return false;
+    }
+    if constexpr (std::endian::native == std::endian::little) {
+      const std::span<const std::byte> input = bytes(count * 4u);
+      if (count != 0) {
+        std::memcpy(values, input.data(), count * 4u);
+      }
+    } else {
+      for (std::size_t index = 0; index < count; ++index) {
+        values[index] = f32();
+      }
+    }
+    return true;
+  }
   std::span<const std::byte> bytes(std::size_t count)
   {
     if (!m_valid || count > m_bytes.size() - m_cursor) {

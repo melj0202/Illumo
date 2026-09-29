@@ -47,6 +47,7 @@ CanvasView::CanvasView(int width,
   , texBuffer(nullptr)
   , displayRgb(nullptr)
   , targetRgb(nullptr)
+  , fadeStart(nullptr)
   , sampledRgb(nullptr)
   , lastSampledTexelCount(0u)
   , lastFadeVisitCount(0u)
@@ -80,21 +81,10 @@ CanvasView::CanvasView(int width,
 {
   const std::size_t texelCount = static_cast<std::size_t>(textureWidth) *
                                  static_cast<std::size_t>(textureHeight);
-  texBuffer = new unsigned char[texelCount * 3u];
-  displayRgb = new float[texelCount * 3u];
-  targetRgb = new float[texelCount * 3u];
-  sampledRgb = new float[texelCount * 3u];
-  fadingFlags.assign(texelCount, 0u);
-  changedSampleFlags.assign(texelCount, 0u);
+  allocateSlotBuffers(texelCount);
   dirtyTiles.assign(static_cast<std::size_t>(dirtyTileColumns) *
                       static_cast<std::size_t>(dirtyTileRows),
                     0u);
-  for (std::size_t i = 0; i < texelCount * 3u; ++i) {
-    texBuffer[i] = 255;
-    displayRgb[i] = 1.0f;
-    targetRgb[i] = 1.0f;
-    sampledRgb[i] = 1.0f;
-  }
   rebuildDefaultPalette();
   resetUploadBounds();
   initializeGpuResources();
@@ -114,7 +104,45 @@ CanvasView::~CanvasView()
   delete[] texBuffer;
   delete[] displayRgb;
   delete[] targetRgb;
+  delete[] fadeStart;
   delete[] sampledRgb;
+}
+
+void
+CanvasView::allocateSlotBuffers(std::size_t slotCount)
+{
+  delete[] texBuffer;
+  delete[] displayRgb;
+  delete[] targetRgb;
+  delete[] fadeStart;
+  delete[] sampledRgb;
+  texBuffer = new unsigned char[slotCount * kSlotBytes];
+  displayRgb = new float[slotCount * 3u];
+  targetRgb = new float[slotCount * 3u];
+  fadeStart = new double[slotCount];
+  sampledRgb = new float[slotCount * 3u];
+  fadingTexels.clear();
+  fadingFlags.assign(slotCount, 0u);
+  changedSampleTexels.clear();
+  changedSampleFlags.assign(slotCount, 0u);
+  // White, settled: both endpoints white and start time zero.
+  for (std::size_t slot = 0; slot < slotCount; ++slot) {
+    unsigned char* texels = texBuffer + slot * kSlotBytes;
+    texels[0] = 255;
+    texels[1] = 255;
+    texels[2] = 255;
+    texels[3] = 0;
+    texels[4] = 255;
+    texels[5] = 255;
+    texels[6] = 255;
+    texels[7] = 0;
+    fadeStart[slot] = 0.0;
+  }
+  for (std::size_t i = 0; i < slotCount * 3u; ++i) {
+    displayRgb[i] = 1.0f;
+    targetRgb[i] = 1.0f;
+    sampledRgb[i] = 1.0f;
+  }
 }
 
 std::int64_t
@@ -203,7 +231,7 @@ CanvasView::initializeGpuResources()
   TextureOptions textureOptions;
   textureOptions.filter = TextureFilter::Nearest;
   displayTextureHandle = renderer->enrollTexture(
-    texBuffer, textureWidth, textureHeight, 3, textureOptions);
+    texBuffer, textureWidth * kTexelsPerSlot, textureHeight, 4, textureOptions);
   // One dynamic quad, rewritten in place when the cache moves, so it never
   // waits on a fresh upload the way a re-enrolled static mesh would.
   static const unsigned int kQuadIndices[6] = { 0, 1, 2, 2, 3, 0 };
@@ -235,32 +263,14 @@ CanvasView::resizeBuffers(int width, int height)
   const std::size_t texelCount =
     static_cast<std::size_t>(newWidth) * static_cast<std::size_t>(newHeight);
 
-  delete[] texBuffer;
-  delete[] displayRgb;
-  delete[] targetRgb;
-  delete[] sampledRgb;
-
   textureWidth = newWidth;
   textureHeight = newHeight;
-  texBuffer = new unsigned char[texelCount * 3u];
-  displayRgb = new float[texelCount * 3u];
-  targetRgb = new float[texelCount * 3u];
-  sampledRgb = new float[texelCount * 3u];
-  fadingTexels.clear();
-  fadingFlags.assign(texelCount, 0u);
-  changedSampleTexels.clear();
-  changedSampleFlags.assign(texelCount, 0u);
+  allocateSlotBuffers(texelCount);
   dirtyTileColumns = (textureWidth + kDirtyTileDim - 1) / kDirtyTileDim;
   dirtyTileRows = (textureHeight + kDirtyTileDim - 1) / kDirtyTileDim;
   dirtyTiles.assign(static_cast<std::size_t>(dirtyTileColumns) *
                       static_cast<std::size_t>(dirtyTileRows),
                     0u);
-  for (std::size_t i = 0; i < texelCount * 3u; ++i) {
-    texBuffer[i] = 255;
-    displayRgb[i] = 1.0f;
-    targetRgb[i] = 1.0f;
-    sampledRgb[i] = 1.0f;
-  }
 
   fadeActive = false;
   lastSampledTexelCount = 0u;
@@ -277,9 +287,9 @@ CanvasView::resizeBuffers(int width, int height)
     textureOptions.filter = TextureFilter::Nearest;
     if (!renderer->replaceTexture(displayTextureHandle,
                                   texBuffer,
-                                  textureWidth,
+                                  textureWidth * kTexelsPerSlot,
                                   textureHeight,
-                                  3,
+                                  4,
                                   textureOptions)) {
       Logger::LogError("Canvas texture could not be resized to " +
                        std::to_string(textureWidth) + " x " +
@@ -521,22 +531,61 @@ CanvasView::includeUpload(int x, int y)
   uploadMaxY = std::max(uploadMaxY, y);
 }
 
+static unsigned char
+colorByte(float value)
+{
+  return static_cast<unsigned char>(
+    std::clamp(value * 255.0f + 0.5f, 0.0f, 255.0f));
+}
+
 void
 CanvasView::writeTexel(int index, int x, int y)
 {
   const int base = index * 3;
-  bool changed = false;
+  std::array<unsigned char, kSlotBytes> slot{};
+  bool settled = true;
   for (int channel = 0; channel < 3; ++channel) {
-    const float scaled = displayRgb[base + channel] * 255.0f + 0.5f;
-    const unsigned char value =
-      static_cast<unsigned char>(std::clamp(scaled, 0.0f, 255.0f));
-    if (texBuffer[base + channel] != value) {
-      texBuffer[base + channel] = value;
-      changed = true;
-    }
+    slot[static_cast<std::size_t>(channel)] =
+      colorByte(displayRgb[base + channel]);
+    slot[static_cast<std::size_t>(4 + channel)] =
+      colorByte(targetRgb[base + channel]);
+    settled = settled && slot[static_cast<std::size_t>(channel)] ==
+                           slot[static_cast<std::size_t>(4 + channel)];
   }
-  if (changed) {
+  // A settled slot shows its target at any age, so its start time stays zero
+  // and never causes an upload of its own.
+  const std::uint32_t ticks =
+    settled ? 0u
+            : static_cast<std::uint32_t>(
+                std::floor(std::fmod(fadeStart[index], kFadeWrapSeconds) *
+                           kFadeTicksPerSecond)) &
+                0xffffu;
+  slot[3] = static_cast<unsigned char>(ticks & 0xffu);
+  slot[7] = static_cast<unsigned char>(ticks >> 8u);
+  unsigned char* texels =
+    texBuffer + static_cast<std::size_t>(index) * kSlotBytes;
+  if (std::memcmp(texels, slot.data(), kSlotBytes) != 0) {
+    std::memcpy(texels, slot.data(), kSlotBytes);
     includeUpload(x, y);
+  }
+}
+
+void
+CanvasView::currentSlotColor(int index, float* rgb) const
+{
+  const int base = index * 3;
+  const double age = std::max(0.0, fadeClock - fadeStart[index]);
+  const float remaining =
+    fadeSpeed > 0.0f
+      ? static_cast<float>(std::exp(-static_cast<double>(fadeSpeed) * age))
+      : 0.0f;
+  for (int channel = 0; channel < 3; ++channel) {
+    const float target = targetRgb[base + channel];
+    float value = target + (displayRgb[base + channel] - target) * remaining;
+    if (std::fabs(value - target) <= kFadeSnapDifference) {
+      value = target;
+    }
+    rgb[channel] = value;
   }
 }
 
@@ -546,20 +595,39 @@ CanvasView::setTargetForSlot(int index, float r, float g, float b, bool snap)
   const int base = index * 3;
   const bool changed = targetRgb[base + 0] != r || targetRgb[base + 1] != g ||
                        targetRgb[base + 2] != b;
-  targetRgb[base + 0] = r;
-  targetRgb[base + 1] = g;
-  targetRgb[base + 2] = b;
-  if (snap) {
+  if (snap || (changed && fadeSpeed <= 0.0f)) {
+    targetRgb[base + 0] = r;
+    targetRgb[base + 1] = g;
+    targetRgb[base + 2] = b;
     displayRgb[base + 0] = r;
     displayRgb[base + 1] = g;
     displayRgb[base + 2] = b;
-  } else if (changed) {
-    if (fadingFlags[static_cast<std::size_t>(index)] == 0u) {
-      fadingFlags[static_cast<std::size_t>(index)] = 1u;
-      fadingTexels.push_back(index);
+    fadeStart[index] = fadeClock;
+    if (!snap) {
+      writeTexel(index, index % textureWidth, index / textureWidth);
     }
-    fadeActive = true;
+    return;
   }
+  if (!changed) {
+    return;
+  }
+  // The fade restarts from the colour on screen now, toward the new target;
+  // the shader evaluates it every frame.
+  float current[3];
+  currentSlotColor(index, current);
+  displayRgb[base + 0] = current[0];
+  displayRgb[base + 1] = current[1];
+  displayRgb[base + 2] = current[2];
+  targetRgb[base + 0] = r;
+  targetRgb[base + 1] = g;
+  targetRgb[base + 2] = b;
+  fadeStart[index] = fadeClock;
+  if (fadingFlags[static_cast<std::size_t>(index)] == 0u) {
+    fadingFlags[static_cast<std::size_t>(index)] = 1u;
+    fadingTexels.push_back(index);
+  }
+  fadeActive = true;
+  writeTexel(index, index % textureWidth, index / textureWidth);
 }
 
 void
@@ -614,11 +682,19 @@ CanvasView::applySnappedSampledTargets()
     std::memcpy(displayRgb + row, sampledRgb + row, rowBytes);
     for (int x = 0; x < activeViewWidth; ++x) {
       const int base = row + x * 3;
+      const std::size_t slot =
+        static_cast<std::size_t>(y) * static_cast<std::size_t>(textureWidth) +
+        static_cast<std::size_t>(x);
+      fadeStart[slot] = fadeClock;
+      // Settled: both endpoints the sampled colour, start time zero.
+      unsigned char* texels = texBuffer + slot * kSlotBytes;
       for (int channel = 0; channel < 3; ++channel) {
-        const float scaled = sampledRgb[base + channel] * 255.0f + 0.5f;
-        texBuffer[base + channel] =
-          static_cast<unsigned char>(std::clamp(scaled, 0.0f, 255.0f));
+        const unsigned char value = colorByte(sampledRgb[base + channel]);
+        texels[channel] = value;
+        texels[4 + channel] = value;
       }
+      texels[3] = 0;
+      texels[7] = 0;
     }
   }
   clearFadingTexels();
@@ -1193,14 +1269,17 @@ CanvasView::copyCacheRow(int dstY, int srcY, int dstX, int srcX, int count)
   const std::size_t srcIndex =
     static_cast<std::size_t>(srcY * textureWidth + srcX);
   const std::size_t texelCount = static_cast<std::size_t>(count);
-  std::memmove(
-    texBuffer + dstIndex * 3u, texBuffer + srcIndex * 3u, texelCount * 3u);
+  std::memmove(texBuffer + dstIndex * kSlotBytes,
+               texBuffer + srcIndex * kSlotBytes,
+               texelCount * kSlotBytes);
   std::memmove(displayRgb + dstIndex * 3u,
                displayRgb + srcIndex * 3u,
                texelCount * 3u * sizeof(float));
   std::memmove(targetRgb + dstIndex * 3u,
                targetRgb + srcIndex * 3u,
                texelCount * 3u * sizeof(float));
+  std::memmove(
+    fadeStart + dstIndex, fadeStart + srcIndex, texelCount * sizeof(double));
   std::memmove(sampledRgb + dstIndex * 3u,
                sampledRgb + srcIndex * 3u,
                texelCount * 3u * sizeof(float));
@@ -1677,44 +1756,59 @@ void
 CanvasView::tickVisual(float dt)
 {
   ILLUMO_PROFILE_ZONE("CanvasView.tickVisual");
+  if (dt < 0.0f) {
+    dt = 0.0f;
+  }
+  // The canvas shader evaluates the fade from each slot's endpoints and
+  // start time; the CPU only advances the clock and retires finished fades.
+  fadeClock += static_cast<double>(dt);
   lastFadeVisitCount = fadingTexels.size();
   ILLUMO_PROFILE_PLOT("CanvasView.fadingTexels", lastFadeVisitCount);
   if (!fadeActive) {
+    fadeRetireElapsed = 0.0;
     return;
-  }
-  if (dt < 0.0f) {
-    dt = 0.0f;
   }
   if (fadeSpeed <= 0.0f) {
     snapVisualToTargets();
     return;
   }
-  const float alpha = std::min(1.0f, 1.0f - std::exp(-fadeSpeed * dt));
+  fadeRetireElapsed += static_cast<double>(dt);
+  if (fadeRetireElapsed >= kFadeRetireSeconds) {
+    fadeRetireElapsed = 0.0;
+    retireFinishedFades();
+  }
+}
+
+void
+CanvasView::retireFinishedFades()
+{
+  ILLUMO_PROFILE_ZONE("CanvasView.retireFinishedFades");
   std::size_t retainedCount = 0u;
   for (int index : fadingTexels) {
-    const int base = index * 3;
-    bool cellStillFading = false;
-    for (int channel = 0; channel < 3; ++channel) {
-      const float target = targetRgb[base + channel];
-      const float difference = target - displayRgb[base + channel];
-      if (std::fabs(difference) > 0.002f) {
-        displayRgb[base + channel] += difference * alpha;
-        if (std::fabs(target - displayRgb[base + channel]) > 0.002f) {
-          cellStillFading = true;
-        } else {
-          displayRgb[base + channel] = target;
-        }
-      } else {
-        displayRgb[base + channel] = target;
-      }
+    const std::size_t slot = static_cast<std::size_t>(index);
+    const std::size_t base = slot * 3u;
+    const double age = fadeClock - fadeStart[slot];
+    float difference = 0.0f;
+    for (std::size_t channel = 0; channel < 3u; ++channel) {
+      difference = std::max(
+        difference,
+        std::fabs(targetRgb[base + channel] - displayRgb[base + channel]));
     }
-    writeTexel(index, index % textureWidth, index / textureWidth);
-    if (cellStillFading) {
+    const double remaining =
+      static_cast<double>(difference) *
+      std::exp(-static_cast<double>(fadeSpeed) * std::max(0.0, age));
+    // Past the age limit the packed start time would alias after the wrap.
+    if (remaining > static_cast<double>(kFadeSnapDifference) &&
+        age < kMaximumFadeSeconds) {
       fadingTexels[retainedCount] = index;
       retainedCount += 1u;
-    } else {
-      fadingFlags[static_cast<std::size_t>(index)] = 0u;
+      continue;
     }
+    displayRgb[base + 0u] = targetRgb[base + 0u];
+    displayRgb[base + 1u] = targetRgb[base + 1u];
+    displayRgb[base + 2u] = targetRgb[base + 2u];
+    writeTexel(index, index % textureWidth, index / textureWidth);
+    fadingFlags[slot] = 0u;
   }
   fadingTexels.resize(retainedCount);
   fadeActive = !fadingTexels.empty();
@@ -1755,19 +1849,20 @@ CanvasView::AppendCommands(Renderer* activeRenderer)
     for (const UploadRect& rectangle : uploadRectScratch) {
       const bool rectangleAccepted = activeRenderer->pushUpdateTexture(
         displayTextureHandle,
-        rectangle.x,
+        rectangle.x * kTexelsPerSlot,
         rectangle.y,
-        rectangle.width,
+        rectangle.width * kTexelsPerSlot,
         rectangle.height,
-        3,
+        4,
         texBuffer + (static_cast<std::size_t>(rectangle.y) *
                        static_cast<std::size_t>(textureWidth) +
                      static_cast<std::size_t>(rectangle.x)) *
-                      3u,
-        textureWidth);
+                      kSlotBytes,
+        textureWidth * kTexelsPerSlot);
       accepted = accepted && rectangleAccepted;
       lastUploadByteCount += static_cast<std::size_t>(rectangle.width) *
-                             static_cast<std::size_t>(rectangle.height) * 3u;
+                             static_cast<std::size_t>(rectangle.height) *
+                             kSlotBytes;
     }
     uploadByteMetric.add(static_cast<double>(lastUploadByteCount));
     uploadRectMetric.add(static_cast<double>(lastUploadRectCount));
@@ -1838,7 +1933,21 @@ CanvasView::emitCellQuad(Renderer* activeRenderer)
   activeRenderer->pushUniformMat4(WorldLook::kMvpUniform, mvp);
   activeRenderer->pushUniformInt(WorldLook::kTextureUniform,
                                  WorldLook::kTextureUnit);
+  // Clock (wrapped like the packed start times), fade rate, slot layout.
+  activeRenderer->pushUniformVec3(
+    WorldLook::kCanvasFadeUniform,
+    static_cast<float>(std::fmod(fadeClock, kFadeWrapSeconds)),
+    fadeSpeed,
+    1.0f);
   activeRenderer->pushSetTexture(displayTextureHandle, WorldLook::kTextureUnit);
   activeRenderer->pushDrawIndexed(6u, 0u);
   return true;
+}
+
+std::array<unsigned char, 3>
+CanvasView::getDisplayedTexel(int x, int y) const
+{
+  float color[3] = { 0.0f, 0.0f, 0.0f };
+  currentSlotColor(y * textureWidth + x, color);
+  return { colorByte(color[0]), colorByte(color[1]), colorByte(color[2]) };
 }

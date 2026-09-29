@@ -7,6 +7,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -153,7 +154,7 @@ operator delete[](void* pointer,
 // side is the generic host, a scripted console/keyboard, and a reference
 // oracle that decodes the guest's save; it links no product modules.
 
-// The guest canvas is the only RGB texture (font atlases are 1 or 4 channel).
+// The guest canvas is the texture bound when a batch sets the canvas fade.
 class CanvasObservingBackend final : public MockBackend
 {
 public:
@@ -171,12 +172,7 @@ public:
                               int channels,
                               const TextureOptions& options) override
   {
-    const TextureHandle handle =
-      MockBackend::CreateTexture(data, width, height, channels, options);
-    if (channels == 3) {
-      m_canvas = handle;
-    }
-    return handle;
+    return MockBackend::CreateTexture(data, width, height, channels, options);
   }
   void PushToCommandQueue(RenderCommand command) override
   {
@@ -198,6 +194,11 @@ private:
     if (command.commandType == CommandType::SetTexture &&
         command.bindTexture.slot == 0) {
       m_bound = command.bindTexture.handle;
+    } else if (command.commandType == CommandType::SetUniformVec3 &&
+               std::strcmp(command.uniformVec3.name,
+                           WorldLook::kCanvasFadeUniform) == 0) {
+      // Only a canvas batch sets the fade, after binding its texture.
+      m_canvas = m_bound;
     } else if (command.commandType == CommandType::SetShader) {
       m_shader = command.bindShader.handle;
     } else if (command.commandType == CommandType::SetFramebuffer) {

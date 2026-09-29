@@ -116,11 +116,21 @@ dispatch(const void* pointer, std::uint32_t length, GuestCall expected)
         ILLUMO_PROFILE_ZONE("Guest.recordFrame");
         application->recordFrame(recorded);
       }
-      {
-        ILLUMO_PROFILE_ZONE("GuestFrame.write");
-        recorded.write(payload);
+      // The frame is written in place as the response's payload, so the
+      // largest message is not copied again into its envelope.
+      ILLUMO_PROFILE_ZONE("GuestFrame.write");
+      response.clear();
+      request.writeHeader(response, 0);
+      recorded.write(response);
+      const std::size_t frameBytes =
+        response.data().size() - GuestEnvelope::HeaderBytes;
+      if (frameBytes > UINT32_MAX) {
+        __builtin_trap();
       }
-      ILLUMO_PROFILE_PLOT("Guest frame bytes", payload.data().size());
+      response.patchU32(GuestEnvelope::PayloadSizeOffset,
+                        static_cast<std::uint32_t>(frameBytes));
+      ILLUMO_PROFILE_PLOT("Guest frame bytes", frameBytes);
+      return response.data().data();
     } else if (expected == GuestCall::Close) {
       if (!request.payload.empty()) {
         __builtin_trap();
