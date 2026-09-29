@@ -1,7 +1,7 @@
 #include <Illumo/Foundation/Profile.h>
 #include <IllumoGuest/Console.h>
 
-void
+bool
 GuestConsole::add(std::string name,
                   std::string usage,
                   std::string description,
@@ -16,12 +16,13 @@ GuestConsole::add(std::string name,
   GuestWireWriter bytes;
   request.write(bytes);
   GuestConsoleRequest checked;
-  if (!GuestConsoleRequest::read(bytes.data(), checked)) {
-    throw std::invalid_argument("Invalid console command registration");
+  if (bytes.failed() || !GuestConsoleRequest::read(bytes.data(), checked)) {
+    return false;
   }
   m_outgoing.push_back(std::move(request));
+  return true;
 }
-void
+bool
 GuestConsole::remove(std::string name)
 {
   GuestConsoleRequest request;
@@ -30,12 +31,13 @@ GuestConsole::remove(std::string name)
   GuestWireWriter bytes;
   request.write(bytes);
   GuestConsoleRequest checked;
-  if (!GuestConsoleRequest::read(bytes.data(), checked)) {
-    throw std::invalid_argument("Invalid console command name");
+  if (bytes.failed() || !GuestConsoleRequest::read(bytes.data(), checked)) {
+    return false;
   }
   m_outgoing.push_back(std::move(request));
+  return true;
 }
-void
+bool
 GuestConsole::log(std::uint32_t level, std::string text)
 {
   GuestConsoleRequest request;
@@ -45,10 +47,11 @@ GuestConsole::log(std::uint32_t level, std::string text)
   GuestWireWriter bytes;
   request.write(bytes);
   GuestConsoleRequest checked;
-  if (!GuestConsoleRequest::read(bytes.data(), checked)) {
-    throw std::invalid_argument("Invalid console log text");
+  if (bytes.failed() || !GuestConsoleRequest::read(bytes.data(), checked)) {
+    return false;
   }
   m_outgoing.push_back(std::move(request));
+  return true;
 }
 bool
 GuestConsole::enqueue(GuestConsoleRequest request)
@@ -94,10 +97,11 @@ GuestConsole::pump()
         if (!GuestConsoleRequest::read(result.payload, invocation) ||
             invocation.action != GuestConsoleAction::Listen ||
             invocation.name.empty()) {
-          throw std::runtime_error("Invalid console invocation");
+          m_error = "Invalid console invocation";
+        } else {
+          m_invocations.push_back(std::move(invocation));
+          m_error.clear();
         }
-        m_invocations.push_back(std::move(invocation));
-        m_error.clear();
       } else {
         m_error = "Console listen was rejected";
       }

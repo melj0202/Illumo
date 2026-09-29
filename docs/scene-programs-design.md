@@ -265,7 +265,7 @@ A switch at the frame boundary runs these steps in order:
    target's world and is activated.
 6. `enter()` the target.
 
-If `start` fails (or throws, after which the scene is stopped), the
+If `start` fails, the
 director re-enters the previous scene and logs an error. If there is no previous scene (the program's first switch), it asks
 the program to close.
 
@@ -623,8 +623,8 @@ off, uncapped), CSim storage with the frame cap off.
 - `IllumoContext::scenes` added; `moduleHost` stays until M5.
 - `Illumo/Tests/Content/TestSceneDirector.cpp` covers:
   - **Lifecycle:** add, switch at the boundary, keep and resume, release.
-  - **Failed starts:** fallback to the previous scene, a start that throws,
-    and closing when the first scene fails.
+  - **Failed starts:** fallback to the previous scene and closing when the
+    first scene fails.
   - **Cover switches.**
   - **Input and commands:** input drained on a switch; scene commands
     withdrawn and registered again; close negotiation.

@@ -4,6 +4,7 @@
 #include "EditorUiAtlas.h"
 #include <Illumo/Content/SceneInstance.h>
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -479,10 +480,8 @@ EditorScene::registerCommands()
       }
       float x = 0.0f;
       float y = 0.0f;
-      try {
-        x = args.size() > 1 ? std::stof(args[1]) : 0.0f;
-        y = args.size() > 2 ? std::stof(args[2]) : 0.0f;
-      } catch (...) {
+      if ((args.size() > 1 && !parseFloating(args[1], &x)) ||
+          (args.size() > 2 && !parseFloating(args[2], &y))) {
         Logger::LogWarning("scene_place ignored: the coordinates are not "
                            "numbers");
         return;
@@ -606,17 +605,17 @@ EditorScene::syncFontSize()
     return;
   }
   m_appliedFontSizeVar = fontVar;
-  try {
-    float size = std::stof(fontVar);
-    if (size > 0.0f && size <= 4.0f) {
-      size *= EditorToolbar::kDefaultFontSize;
-    }
-    size = std::clamp(size, 8.0f, 48.0f);
-    applyFontSize(size);
-  } catch (...) {
+  float size = 0.0f;
+  if (!parseFloating(fontVar, &size)) {
     Logger::LogWarning("Ignored the fontSize setting '" + fontVar +
                        "': not a number");
+    return;
   }
+  if (size > 0.0f && size <= 4.0f) {
+    size *= EditorToolbar::kDefaultFontSize;
+  }
+  size = std::clamp(size, 8.0f, 48.0f);
+  applyFontSize(size);
 }
 
 void

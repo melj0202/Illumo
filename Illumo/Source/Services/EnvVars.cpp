@@ -1,3 +1,4 @@
+#include <Illumo/Platform/PathText.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
@@ -38,7 +39,9 @@ EnvVars::ApplicationConfigPath()
     return std::filesystem::path(executablePath).parent_path() / "envvars.json";
   }
 #endif
-  return std::filesystem::current_path() / "envvars.json";
+  std::error_code error;
+  const std::filesystem::path directory = std::filesystem::current_path(error);
+  return (error ? std::filesystem::path(".") : directory) / "envvars.json";
 }
 
 // Settings load before, and save after, the logger's lifetime; without a
@@ -57,32 +60,27 @@ void
 EnvVars::load()
 {
   m_persistenceEligible = false;
-  try {
-    std::error_code error;
-    const bool exists = std::filesystem::exists(m_filePath, error);
-    if (!exists && !error) {
-      m_persistenceEligible = true;
-      return;
-    }
-    std::ifstream file(m_filePath);
-    if (error || !file.is_open()) {
-      reportSettingsProblem("Settings file " + m_filePath.string() +
-                            " is unreadable; using defaults and preserving it");
-      return;
-    }
-    std::ostringstream contents;
-    contents << file.rdbuf();
-    if (file.bad() || contents.bad() || !loadText(contents.str())) {
-      reportSettingsProblem("Settings file " + m_filePath.string() +
-                            " is not a valid settings object; using defaults "
-                            "and preserving it");
-      return;
-    }
+  std::error_code error;
+  const bool exists = std::filesystem::exists(m_filePath, error);
+  if (!exists && !error) {
     m_persistenceEligible = true;
-  } catch (...) {
-    std::fputs("EnvVars: configuration load failed; preserving original file\n",
-               stderr);
+    return;
   }
+  std::ifstream file(m_filePath);
+  if (error || !file.is_open()) {
+    reportSettingsProblem("Settings file " + pathToUtf8(m_filePath) +
+                          " is unreadable; using defaults and preserving it");
+    return;
+  }
+  std::ostringstream contents;
+  contents << file.rdbuf();
+  if (file.bad() || contents.bad() || !loadText(contents.str())) {
+    reportSettingsProblem("Settings file " + pathToUtf8(m_filePath) +
+                          " is not a valid settings object; using defaults "
+                          "and preserving it");
+    return;
+  }
+  m_persistenceEligible = true;
 }
 
 void
@@ -91,17 +89,12 @@ EnvVars::save()
   if (!m_persistenceEligible) {
     return;
   }
-  try {
-    const std::string serialized = saveText();
-    std::ofstream file(m_filePath);
-    file << serialized;
-    file.close();
-    if (!file) {
-      reportSettingsProblem("Settings could not be saved to " +
-                            m_filePath.string());
-    }
-  } catch (...) {
-    // Runs during teardown: nothing may escape.
-    std::fputs("EnvVars: configuration save failed\n", stderr);
+  const std::string serialized = saveText();
+  std::ofstream file(m_filePath);
+  file << serialized;
+  file.close();
+  if (!file) {
+    reportSettingsProblem("Settings could not be saved to " +
+                          pathToUtf8(m_filePath));
   }
 }

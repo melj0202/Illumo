@@ -139,12 +139,7 @@ SceneGraph::Impl::intern(std::string_view name)
     nameFirst.reserve(std::max<size_t>(16, names.size() * 2));
   }
   names.push_back(value);
-  try {
-    nameIds.emplace(names.back(), id);
-  } catch (...) {
-    names.pop_back();
-    throw;
-  }
+  nameIds.emplace(names.back(), id);
   nameFirst.push_back(0);
   return id;
 }

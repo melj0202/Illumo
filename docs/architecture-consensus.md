@@ -204,7 +204,7 @@ Arena and stack allocations align actual addresses and use aligned backing
 storage for stronger requests without relocating live allocations. Typed pool
 storage honors element alignment. The four-chunk cap, bulk reset and LIFO
 contracts remain unchanged; invalid alignments and overflowing sizes are
-rejected before use. Allocation failures may throw.
+rejected before use. Allocation failure ends the process (D-F3).
 
 A general-purpose allocator (mimalloc-class) is a different product; do not reinvent it.
 
@@ -402,7 +402,7 @@ class ProgramScene {       // Illumo::Content, mirrored in IllumoGuestContent
 
 | Hook | Responsibility |
 |------|----------------|
-| start | Once, the first time the scene is entered: bind services, allocate state, load content; `false` (or a throw) fails the switch |
+| start | Once, the first time the scene is entered: bind services, allocate state, load content; `false` fails the switch |
 | enter | Each time the scene becomes active: register scene commands with `command(...)`, resume workers |
 | update | Active scene only: simulation / input |
 | dispatch | Active scene only: contribute what should draw this frame |
@@ -419,8 +419,8 @@ store, its services, frame renderer and render worlds. `DebugOverlay`
 program, so console keys come first, and dispatches after it, so it draws on
 top (D-B1, D-E9). Start runs the program first, then the overlay: a program
 that fails to start fails the launch, and an overlay that fails to start is
-dropped. Stop runs the overlay, then the program. Startup exceptions are
-contained and logged. An interactive launch then plays the engine splash
+dropped. Stop runs the overlay, then the program. Startup failures are
+logged. An interactive launch then plays the engine splash
 (`GuiEngineSplash`, D-UI14): the program is started but neither updated nor
 drawn until the splash ends or a key or click skips it, so no program
 triggers or waits for it; capture and benchmark runs have no splash.
@@ -1440,7 +1440,7 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
   to the next top-level dispatch; retirement cancels unstarted callbacks and
   clearing cancels the batch remainder. The non-copyable registry and input
   manager retain instance-local ownership. See [Services](packages/services.md)
-  for exception and configuration recovery contracts. Failed configuration
+  for failure and configuration recovery contracts. Failed configuration
   loads preserve live values and original bytes, disabling teardown saves until
   a successful reload.
 - Save always writes version 4 sparse records (magic/version, family, ruleset, camera,
@@ -2216,6 +2216,7 @@ disabled.
 | **D-GC10** | Histogram, directional, extended-range and Lenia kernels, and elementary 1D rows, evaluate on the grid worker pool with per-worker scratch and serial in-order publication (native builds; the guest pool stays serial). |
 | **D-F1** | MacroDefs / Windows.h include toxicity deferred until real pain. |
 | **D-F2** | Builds are versioned `vYY.MM_B`. `VERSION.txt` holds the release (`YY.MM`, changed only by `python build.py version --set`); `B` counts first-parent commits since it last changed. `cmake/IllumoVersion.cmake` stamps `BuildInfo` and the staged `illumo.json` manifests on every build; CSim's main menu shows `v26.09_12` from its manifest, and logs and `--version` add the commit and a dirty flag. |
+| **D-F3** | No C++ exceptions (2026-09-29, `.agent/no-exceptions-plan.md`). The host builds with `/EHs-c- _HAS_EXCEPTIONS=0` (MSVC) or `-fno-exceptions` for every C++ target, vendored ones included; first-party MSVC targets make C4530 an error; guests build with `-fno-exceptions` against the WASI SDK's no-exceptions libc++, and Wasmtime runs with the exception proposal off, so a module using exception opcodes is refused. Failures return errors (`bool`/error strings, sticky `GuestWireWriter::failed()`, recorder `fail()`), numbers parse with `Foundation/ParseNumber.h`, JSON reads use `allow_exceptions=false`, paths convert through `Platform/PathText.h`. Programming errors and running out of memory or threads end the process through `illumoFatal` (`Foundation/Fatal.h`); the former allocation-failure recovery in `SparseCellGrid`, `SceneGraphCompile` and `SceneQueryIndex` is removed. `Illumo.Build.NoExceptions` fails on any `try`/`catch`/`throw` in first-party C++. |
 
 ---
 

@@ -80,7 +80,8 @@ struct GuestEnvelope
   void write(GuestWireWriter& output) const
   {
     if (payload.size() > UINT32_MAX) {
-      throw std::length_error("Guest message exceeds ABI range");
+      output.fail("Guest message exceeds ABI range");
+      return;
     }
     writeHeader(output, static_cast<std::uint32_t>(payload.size()));
     output.bytes(payload);

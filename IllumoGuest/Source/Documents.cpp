@@ -119,14 +119,24 @@ GuestDocuments::pump()
   }
   if (!m_dialogActive && !m_choices.empty()) {
     const Choice& next = m_choices.front();
+    bool queued = false;
     if (next.mode == GuestDocumentDialog::Save) {
-      m_dialog.save(next.description, next.defaultName, next.pattern);
+      queued = m_dialog.save(next.description, next.defaultName, next.pattern);
     } else if (next.mode == GuestDocumentDialog::Edit) {
-      m_dialog.edit(next.description, next.defaultName, next.pattern);
+      queued = m_dialog.edit(next.description, next.defaultName, next.pattern);
     } else {
-      m_dialog.load(next.description, next.defaultName, next.pattern);
+      queued = m_dialog.load(next.description, next.defaultName, next.pattern);
     }
-    m_dialogActive = true;
+    if (queued) {
+      m_dialogActive = true;
+    } else {
+      // Dialog text the host would refuse: the caller sees an empty choice.
+      const Choice refused = std::move(m_choices.front());
+      m_choices.pop_front();
+      Logger::LogWarning("File dialog request refused: invalid dialog text");
+      completions.push_back(
+        [refused]() { refused.done(GuestDocumentLocation{}); });
+    }
   }
   m_dialog.pump();
 

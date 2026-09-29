@@ -14,10 +14,11 @@ GuestClipboard::pump()
     } else {
       GuestClipboardRequest actual;
       if (!GuestClipboardRequest::read(result.payload, actual) || actual.set) {
-        throw std::runtime_error("Invalid clipboard completion");
+        m_error = "Invalid clipboard completion";
+      } else {
+        m_text = std::move(actual.text);
+        m_error.clear();
       }
-      m_text = std::move(actual.text);
-      m_error.clear();
     }
   }
   if (m_pending) {

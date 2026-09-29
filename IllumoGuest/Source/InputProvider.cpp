@@ -1,6 +1,6 @@
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Foundation/Profile.h>
 #include <IllumoGuest/InputProvider.h>
-#include <stdexcept>
 
 static InputAction
 nativeAction(GuestKeyAction action)
@@ -36,7 +36,7 @@ InputManager::InputManager(GLFWwindow* requestedWindow)
   , m_modifierFlags(0)
 {
   if (requestedWindow != nullptr) {
-    throw std::invalid_argument("A guest cannot own a native window");
+    illumoFatal("InputManager: a guest cannot own a native window");
   }
   scrollOffset = new double(0);
   contextIds.fill(-1);

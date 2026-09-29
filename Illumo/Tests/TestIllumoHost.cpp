@@ -16,7 +16,6 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <stdexcept>
 #include <string>
 
 static TestCounters g;
@@ -54,21 +53,22 @@ public:
                       bool initializeResult = true,
                       int* windowDestructions = nullptr,
                       int* cleanupsWithLiveWindow = nullptr,
-                      bool throwDuringInitialize = false)
+                      bool failAfterStarting = false)
     : m_initializationCount(initializationCount)
     , m_initializeResult(initializeResult)
     , m_windowDestructions(windowDestructions)
     , m_cleanupsWithLiveWindow(cleanupsWithLiveWindow)
-    , m_throwDuringInitialize(throwDuringInitialize)
+    , m_failAfterStarting(failAfterStarting)
   {
   }
 
   bool Initialize() override
   {
     *m_initializationCount += 1;
-    if (m_throwDuringInitialize) {
+    if (m_failAfterStarting) {
+      // Partly initialized, then failed: cleanup must still run.
       MockBackend::Initialize();
-      throw std::runtime_error("backend initialize failure");
+      return false;
     }
     return m_initializeResult && MockBackend::Initialize();
   }
@@ -87,7 +87,7 @@ private:
   bool m_initializeResult;
   int* m_windowDestructions;
   int* m_cleanupsWithLiveWindow;
-  bool m_throwDuringInitialize;
+  bool m_failAfterStarting;
 };
 
 static std::filesystem::path
@@ -444,39 +444,42 @@ testFallibleFactoryBoundaries()
             1,
             "failed backend is cleaned before its window context");
 
-  int throwingWindowDestructions = 0;
-  int throwingBackendInitializations = 0;
-  int throwingCleanupsWithLiveWindow = 0;
+  int partialWindowDestructions = 0;
+  int partialBackendInitializations = 0;
+  int partialCleanupsWithLiveWindow = 0;
   {
     Illumo host(headlessConfig(path));
-    setHeadlessFactories(host, &throwingWindowDestructions);
+    setHeadlessFactories(host, &partialWindowDestructions);
     IllumoTestAccess::setBackendFactory(host, [&](IRenderWindow*) {
       return std::unique_ptr<IBackend>(
-        std::make_unique<CountingMockBackend>(&throwingBackendInitializations,
+        std::make_unique<CountingMockBackend>(&partialBackendInitializations,
                                               true,
-                                              &throwingWindowDestructions,
-                                              &throwingCleanupsWithLiveWindow,
+                                              &partialWindowDestructions,
+                                              &partialCleanupsWithLiveWindow,
                                               true));
     });
     testTrue(g,
              !host.initialize(),
-             "throwing backend initialization is returned without escaping");
+             "a partly initialized backend failure is returned");
     testTrue(g,
              host.context().window == nullptr,
-             "throwing backend initialization clears the host context");
+             "a partly initialized backend failure clears the host context");
   }
-  testEqInt(g,
-            throwingBackendInitializations,
-            1,
-            "throwing backend receives exactly one Initialize call");
-  testEqInt(g,
-            throwingCleanupsWithLiveWindow,
-            1,
-            "throwing backend is cleaned while its window context is alive");
-  testEqInt(g,
-            throwingWindowDestructions,
-            1,
-            "throwing backend failure releases the accepted window");
+  testEqInt(
+    g,
+    partialBackendInitializations,
+    1,
+    "a partly initialized backend receives exactly one Initialize call");
+  testEqInt(
+    g,
+    partialCleanupsWithLiveWindow,
+    1,
+    "a partly initialized backend is cleaned while its window is alive");
+  testEqInt(
+    g,
+    partialWindowDestructions,
+    1,
+    "a partly initialized backend failure releases the accepted window");
   std::filesystem::remove(path, error);
 }
 

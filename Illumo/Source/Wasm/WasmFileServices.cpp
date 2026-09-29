@@ -72,15 +72,22 @@ public:
     , limits(policy)
     , packages(std::move(mounts))
   {
+    // An invalid policy leaves the services unready (error() says why) and
+    // starts no workers.
     if (owner == 0 || !packages || !storage.is_absolute() ||
         limits.openFiles == 0 || limits.openFiles > 64 ||
         limits.fileBytes > 1024ull * 1024ull * 1024ull) {
-      throw std::invalid_argument("Invalid file service policy");
+      error = "Invalid file service policy";
+      return;
     }
-    storageRoot = std::filesystem::canonical(storage);
-    if (!std::filesystem::is_directory(storageRoot)) {
-      throw std::invalid_argument("File service roots must be directories");
+    std::error_code rootError;
+    storageRoot = std::filesystem::canonical(storage, rootError);
+    if (rootError || !std::filesystem::is_directory(storageRoot, rootError) ||
+        rootError) {
+      error = "File service roots must be directories";
+      return;
     }
+    ready = true;
     files.resize(limits.openFiles);
     worker = std::thread([this]() {
       ILLUMO_PROFILE_THREAD("Wasm file IO");
@@ -127,8 +134,12 @@ public:
     const std::u8string name(
       reinterpret_cast<const char8_t*>(request.path.data()),
       request.path.size());
-    const std::filesystem::path path =
-      std::filesystem::weakly_canonical(root / std::filesystem::path(name));
+    std::error_code status;
+    const std::filesystem::path path = std::filesystem::weakly_canonical(
+      root / std::filesystem::path(name), status);
+    if (status) {
+      return {};
+    }
     std::filesystem::path::const_iterator candidate = path.begin();
     for (const std::filesystem::path& component : root) {
       if (candidate == path.end() || *candidate != component) {
@@ -162,12 +173,21 @@ public:
     ILLUMO_PROFILE_ZONE("WasmFileServices.storageFits");
     std::uint64_t bytes = replacing.size;
     std::size_t count = 0;
-    for (const std::filesystem::directory_entry& entry :
-         std::filesystem::recursive_directory_iterator(storageRoot)) {
-      if (++count > 4096 || entry.is_symlink()) {
+    // Any listing or status error refuses the write, as the quota cannot be
+    // shown to hold.
+    std::error_code status;
+    std::filesystem::recursive_directory_iterator it(storageRoot, status);
+    const std::filesystem::recursive_directory_iterator end;
+    for (; !status && it != end; it.increment(status)) {
+      const std::filesystem::directory_entry& entry = *it;
+      if (++count > 4096 || entry.is_symlink(status) || status) {
         return false;
       }
-      if (!entry.is_regular_file() || entry.path() == replacing.destination) {
+      const bool regular = entry.is_regular_file(status);
+      if (status) {
+        return false;
+      }
+      if (!regular || entry.path() == replacing.destination) {
         continue;
       }
       bool staging = false;
@@ -177,13 +197,14 @@ public:
       if (staging) {
         continue;
       }
-      const std::uint64_t size = entry.file_size();
-      if (bytes > limits.storageBytes || size > limits.storageBytes - bytes) {
+      const std::uint64_t size = entry.file_size(status);
+      if (status || bytes > limits.storageBytes ||
+          size > limits.storageBytes - bytes) {
         return false;
       }
       bytes += size;
     }
-    return bytes <= limits.storageBytes;
+    return !status && bytes <= limits.storageBytes;
   }
   // Grants are made on the main thread (dialogs and launch), so they may log.
   // Logging is best-effort and never changes a grant's outcome.
@@ -202,12 +223,9 @@ public:
   }
   static bool refuseGrant(const std::filesystem::path& path, const char* reason)
   {
-    try {
-      logGrant(true,
-               "File grant for the guest refused (" + std::string(reason) +
-                 "): " + displayPath(path));
-    } catch (...) {
-    }
+    logGrant(true,
+             "File grant for the guest refused (" + std::string(reason) +
+               "): " + displayPath(path));
     return false;
   }
   // Readable grants need an existing bounded file; writable grants need its
@@ -221,6 +239,9 @@ public:
   {
     ILLUMO_PROFILE_ZONE("WasmFileServices.grant");
     std::error_code status;
+    if (!ready) {
+      return refuseGrant(path, "file services unavailable");
+    }
     if (!path.is_absolute()) {
       return refuseGrant(path, "not an absolute path");
     }
@@ -231,7 +252,7 @@ public:
     }
     std::uint64_t bytes = 0;
     if (readable) {
-      if (!std::filesystem::is_regular_file(absolute)) {
+      if (!std::filesystem::is_regular_file(absolute, status) || status) {
         return refuseGrant(absolute, "not a regular file");
       }
       bytes = std::filesystem::file_size(absolute, status);
@@ -239,7 +260,9 @@ public:
         return refuseGrant(absolute, "unreadable size or over the file limit");
       }
     }
-    if (writable && !std::filesystem::is_directory(absolute.parent_path())) {
+    if (writable &&
+        (!std::filesystem::is_directory(absolute.parent_path(), status) ||
+         status)) {
       return refuseGrant(absolute, "its directory does not exist");
     }
     std::lock_guard<std::mutex> lock(mutex);
@@ -252,14 +275,11 @@ public:
       fixedName.empty() ? "sel-" + std::to_string(++nextSelected) : fixedName;
     selected[name] = SelectedGrant{ absolute, writable };
     size = bytes;
-    try {
-      logGrant(
-        false,
-        "Granted the guest " +
-          std::string(writable ? (readable ? "read-write" : "write") : "read") +
-          " access to " + displayPath(absolute) + " as '" + name + "'");
-    } catch (...) {
-    }
+    logGrant(
+      false,
+      "Granted the guest " +
+        std::string(writable ? (readable ? "read-write" : "write") : "read") +
+        " access to " + displayPath(absolute) + " as '" + name + "'");
     return true;
   }
   bool has(GuestCapability capability) const
@@ -601,13 +621,18 @@ public:
         file->size = mounted->size();
         file->mounted = std::move(mounted);
       } else {
-        if (!std::filesystem::exists(path)) {
-          return GuestFileOutcome::NotFound;
+        std::error_code status;
+        if (!std::filesystem::exists(path, status)) {
+          return status ? GuestFileOutcome::IoError
+                        : GuestFileOutcome::NotFound;
         }
-        if (!std::filesystem::is_regular_file(path)) {
+        if (!std::filesystem::is_regular_file(path, status) || status) {
           return GuestFileOutcome::Denied;
         }
-        file->size = std::filesystem::file_size(path);
+        file->size = std::filesystem::file_size(path, status);
+        if (status) {
+          return GuestFileOutcome::IoError;
+        }
         if (file->size > limits.fileBytes) {
           return GuestFileOutcome::Denied;
         }
@@ -752,7 +777,7 @@ public:
     return committed ? GuestFileOutcome::Success : GuestFileOutcome::IoError;
   }
   void work()
-  try {
+  {
     for (;;) {
       Request request;
       {
@@ -775,10 +800,6 @@ public:
       complete(request);
     }
     files.clear();
-  } catch (...) {
-    std::lock_guard<std::mutex> lock(mutex);
-    failed = true;
-    stopping = true;
   }
   void complete(const Request& request)
   {
@@ -787,10 +808,9 @@ public:
       request.id, GuestService::File, GuestServiceStatus::Complete, {}
     };
     GuestWireWriter payload;
-    GuestFileOutcome outcome = GuestFileOutcome::IoError;
-    try {
-      outcome = execute(request.value, payload);
-    } catch (const std::exception&) {
+    GuestFileOutcome outcome = execute(request.value, payload);
+    if (payload.failed()) {
+      outcome = GuestFileOutcome::IoError;
     }
     GuestWireWriter response;
     response.u32(static_cast<std::uint32_t>(outcome));
@@ -804,7 +824,7 @@ public:
     }
   }
   void packWork()
-  try {
+  {
     for (;;) {
       Request request;
       {
@@ -819,10 +839,6 @@ public:
       }
       complete(request);
     }
-  } catch (...) {
-    std::lock_guard<std::mutex> lock(mutex);
-    failed = true;
-    stopping = true;
   }
   static const char* outcomeName(std::uint32_t outcome)
   {
@@ -890,7 +906,8 @@ public:
   GuestServices completions;
   std::size_t outstanding = 0;
   bool stopping = false;
-  bool failed = false;
+  // The policy was valid and the workers started.
+  bool ready = false;
   std::thread worker;
   std::thread packer;
   std::string error;
@@ -901,12 +918,16 @@ WasmFileServices::WasmFileServices(std::uint64_t owner,
                                    std::filesystem::path packageRoot,
                                    std::filesystem::path storageRoot,
                                    WasmFileLimits limits)
-  : WasmFileServices(owner,
-                     grants,
-                     packageDirectory(packageRoot),
-                     std::move(storageRoot),
-                     limits)
 {
+  std::string packageError;
+  std::shared_ptr<const VirtualFileSystem> packages =
+    packageDirectory(packageRoot, packageError);
+  m_state = std::make_unique<State>(
+    owner, grants, std::move(packages), std::move(storageRoot), limits);
+  if (!packageError.empty()) {
+    m_state->error = packageError;
+  }
+  logStarted(limits);
 }
 WasmFileServices::WasmFileServices(
   std::uint64_t owner,
@@ -920,6 +941,14 @@ WasmFileServices::WasmFileServices(
                                     std::move(storageRoot),
                                     limits))
 {
+  logStarted(limits);
+}
+void
+WasmFileServices::logStarted(const WasmFileLimits& limits) const
+{
+  if (!m_state->ready) {
+    return;
+  }
   Logger::LogTrace(
     "Guest file services started: " + std::to_string(limits.openFiles) +
     " file slots, " + std::to_string(limits.storageBytes / (1024u * 1024u)) +
@@ -927,17 +956,24 @@ WasmFileServices::WasmFileServices(
     std::to_string(limits.projectBytes / (1024u * 1024u)) +
     " MiB project quota");
 }
+bool
+WasmFileServices::valid() const
+{
+  return m_state->ready;
+}
 std::shared_ptr<const VirtualFileSystem>
-WasmFileServices::packageDirectory(const std::filesystem::path& root)
+WasmFileServices::packageDirectory(const std::filesystem::path& root,
+                                   std::string& error)
 {
   if (!root.is_absolute()) {
-    throw std::invalid_argument("Invalid file service policy");
+    error = "Invalid file service policy";
+    return nullptr;
   }
-  std::string error;
   std::shared_ptr<DirectoryVfsBackend> backend =
     DirectoryVfsBackend::open(root, false, error);
   if (!backend) {
-    throw std::invalid_argument("File service roots must be directories");
+    error = "File service roots must be directories";
+    return nullptr;
   }
   std::shared_ptr<VirtualFileSystem> vfs =
     std::make_shared<VirtualFileSystem>();
@@ -945,8 +981,9 @@ WasmFileServices::packageDirectory(const std::filesystem::path& root)
   mount.point = "/app";
   mount.layers.push_back({ backend, "app" });
   if (!vfs->mount(std::move(mount), error)) {
-    throw std::invalid_argument(error);
+    return nullptr;
   }
+  error.clear();
   return vfs;
 }
 WasmFileServices::~WasmFileServices() = default;
@@ -978,6 +1015,9 @@ WasmFileServices::submit(const GuestServices& incoming)
 {
   ILLUMO_PROFILE_ZONE("WasmFileServices.submit");
   State& state = *m_state;
+  if (!state.ready) {
+    return false;
+  }
   if (incoming.records.size() > GuestServices::MaximumRecords) {
     state.error = "File batch exceeds record quota";
     return false;
@@ -1023,9 +1063,6 @@ WasmFileServices::poll(std::size_t byteBudget)
   GuestServices result;
   {
     std::lock_guard<std::mutex> lock(state.mutex);
-    if (state.failed) {
-      throw std::runtime_error("Native file worker failed");
-    }
     result.records.reserve(state.completions.records.size());
     std::size_t bytes = 12;
     while (!state.completions.records.empty()) {
@@ -1041,11 +1078,7 @@ WasmFileServices::poll(std::size_t byteBudget)
     state.outstanding -= result.records.size();
   }
   // Outside the lock: the workers keep running while completions are logged.
-  // Logging is best-effort; the completions are delivered regardless.
-  try {
-    state.report(result);
-  } catch (...) {
-  }
+  state.report(result);
   return result;
 }
 std::size_t

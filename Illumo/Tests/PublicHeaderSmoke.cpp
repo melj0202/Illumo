@@ -19,6 +19,7 @@
 #include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Foundation/MacroDefs.h>
 #include <Illumo/Foundation/MathTypes.h>
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Gui/GridAtlas.h>
 #include <Illumo/Gui/GuiDialog.h>

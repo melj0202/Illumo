@@ -2653,10 +2653,9 @@ testSimulationFailureReporting()
     SparseCellGrid* grid =
       CanvasSceneTestAccess::getCellContext(fixture.module)->getGrid();
     grid->clear();
-    grid->setCell(CellAddress{ 0, 0 }, 0);
-    CanvasSceneTestAccess::getCellContext(fixture.module)
-      ->getSpareGrid()
-      ->setElementaryWriteFailureForTesting(1);
+    // The last row has no row below it, so the first generation fails.
+    grid->setCell(CellAddress{ 0, std::numeric_limits<std::int64_t>::max() },
+                  0);
     const std::uint64_t revision = grid->getRevision();
     fixture.execute("run");
     fixture.module.update(0.04);

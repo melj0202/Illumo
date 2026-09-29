@@ -462,13 +462,8 @@ testAllocatorOverAlignment()
     arena.AllocateCString("x", std::numeric_limits<size_t>::max()) == nullptr &&
       stack.AllocateCString("x", std::numeric_limits<size_t>::max()) == nullptr,
     "string size overflow rejected");
-  bool rejected = false;
-  try {
-    ChainedPoolAlloc<Aligned16> huge(std::numeric_limits<size_t>::max());
-  } catch (const std::bad_array_new_length&) {
-    rejected = true;
-  }
-  testTrue(g, rejected, "pool size overflow rejected before allocation");
+  // A pool whose chunk size overflows is a programming error that ends the
+  // process (illumoFatal), so it has no in-process case here.
 }
 
 static int

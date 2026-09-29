@@ -2,7 +2,6 @@
 #include <Illumo/Services/KeyCode.h>
 #include <cstddef>
 #include <functional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -28,13 +27,16 @@ private:
 
 public:
   InputContext() {}
-  InputEvent getActionTag(std::string_view actionTag) const
+  // The event bound to actionTag; false, leaving *event unchanged, for an
+  // unknown action.
+  bool getActionTag(std::string_view actionTag, InputEvent* event) const
   {
     const ActionMap::const_iterator found = actions.find(actionTag);
-    if (found == actions.end()) {
-      throw std::out_of_range("Unknown input action");
+    if (found == actions.end() || event == nullptr) {
+      return false;
     }
-    return found->second;
+    *event = found->second;
+    return true;
   }
   const ActionMap& getActions() const { return actions; }
   // bool containsKeyCode(const std::string& keyCode) const { return

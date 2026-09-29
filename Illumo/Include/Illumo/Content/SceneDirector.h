@@ -1,9 +1,9 @@
 #pragma once
 
 #include <Illumo/Content/ProgramScene.h>
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Rendering/Camera.h>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -59,7 +59,7 @@ public:
   // The scene starts the first time it is entered.
   bool add(std::string name, std::unique_ptr<ProgramScene> scene);
   // Constructs and adds a scene, returning it. A name in use is a programming
-  // error and throws std::logic_error.
+  // error and ends the process (illumoFatal).
   template<typename SceneType, typename... Arguments>
   SceneType& emplace(std::string name, Arguments&&... arguments)
   {
@@ -67,7 +67,7 @@ public:
       std::make_unique<SceneType>(std::forward<Arguments>(arguments)...);
     SceneType& added = *scene;
     if (!add(std::move(name), std::move(scene))) {
-      throw std::logic_error("SceneDirector::emplace: the name is in use");
+      illumoFatal("SceneDirector::emplace: the name is in use");
     }
     return added;
   }

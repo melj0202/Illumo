@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Services/EnvValues.h>
 #include <algorithm>
 #include <cctype>
@@ -9,15 +10,11 @@ EnvValues::parseValue(const std::string& value)
   EnvVar var;
   var.value = value;
 
-  try {
-    var.valueAsLong = std::stol(value);
-  } catch (...) {
+  // Leading numbers count, as with std::stol and std::stod: "12px" is 12.
+  if (!parseInteger(value, &var.valueAsLong)) {
     var.valueAsLong = 0L;
   }
-
-  try {
-    var.valueAsDouble = std::stod(value);
-  } catch (...) {
+  if (!parseFloating(value, &var.valueAsDouble)) {
     var.valueAsDouble = 0.0;
   }
 
@@ -105,26 +102,30 @@ EnvValues::getVar(std::string_view key)
 bool
 EnvValues::loadText(std::string_view text)
 {
-  try {
-    const nlohmann::json document = nlohmann::json::parse(text);
-    if (!document.is_object()) {
-      return false;
-    }
-    EnvVarMap staged = m_vars;
-    for (nlohmann::json::const_iterator item = document.cbegin();
-         item != document.cend();
-         ++item) {
-      if (item.value().is_string()) {
-        staged[item.key()] = parseValue(item.value().get<std::string>());
-      } else if (item.value().is_object()) {
-        staged[item.key()] = parseValue(item.value().value("value", ""));
-      }
-    }
-    m_vars.swap(staged);
-    return true;
-  } catch (...) {
+  const nlohmann::json document = nlohmann::json::parse(text, nullptr, false);
+  if (document.is_discarded() || !document.is_object()) {
     return false;
   }
+  EnvVarMap staged = m_vars;
+  for (nlohmann::json::const_iterator item = document.cbegin();
+       item != document.cend();
+       ++item) {
+    if (item.value().is_string()) {
+      staged[item.key()] = parseValue(item.value().get<std::string>());
+    } else if (item.value().is_object()) {
+      const nlohmann::json& object = item.value();
+      const nlohmann::json::const_iterator field = object.find("value");
+      if (field == object.end()) {
+        staged[item.key()] = parseValue("");
+      } else if (field->is_string()) {
+        staged[item.key()] = parseValue(field->get<std::string>());
+      } else {
+        return false;
+      }
+    }
+  }
+  m_vars.swap(staged);
+  return true;
 }
 
 std::string
@@ -134,5 +135,5 @@ EnvValues::saveText() const
   for (const std::pair<const std::string, EnvVar>& item : m_vars) {
     document[item.first] = item.second.value;
   }
-  return document.dump(1);
+  return document.dump(1, ' ', false, nlohmann::json::error_handler_t::replace);
 }

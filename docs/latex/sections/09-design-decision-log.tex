@@ -3548,6 +3548,34 @@ Windows \texttt{<version>} would resolve to it. \texttt{BuildDateShort} and
 \texttt{BuildTimestamp} are removed.
 \end{decisionbox}
 
+\subsection*{D-F3 --- No C++ exceptions}
+\begin{decisionbox}[title={D-F3 \quad 2026-09-29}]
+\textbf{Decision:} The host and every guest build without C++ exceptions.
+MSVC compiles every C++ target with \texttt{/EHs-c-} and
+\texttt{\_HAS\_EXCEPTIONS=0}, Clang with \texttt{-fno-exceptions}, and
+first-party MSVC targets treat warning C4530 as an error. Guests build with
+\texttt{-fno-exceptions} against the WASI SDK's no-exceptions libc++, and
+Wasmtime runs with the exception proposal off, so a module using exception
+opcodes is refused. Failures return errors: \texttt{bool} results with
+error strings, the sticky \symbolref{GuestWireWriter} failure, the guest
+recorder's first contract failure, \pathref{Foundation/ParseNumber.h} for
+numbers, \texttt{std::error\_code} file-system overloads, non-throwing JSON
+parsing and \pathref{Platform/PathText.h} for path text. A programming error
+or running out of memory or threads ends the process through
+\texttt{illumoFatal} (\pathref{Foundation/Fatal.h}).\\
+\textbf{Why:} Owner directive. It removes unwinding code and tables, keeps
+every failure path explicit, and lets guests use the smaller libc++ without
+\texttt{libunwind}.\\
+\textbf{Consequences:} Standard containers cannot report allocation failure,
+so the allocation-failure recovery in \symbolref{SparseCellGrid},
+\texttt{SceneGraphCompile} and \texttt{SceneQueryIndex} and its fault
+injection are removed; explicit input-size limits stay ordinary errors.
+Worker-thread creation failure is fatal. \texttt{GuestProgram::failStartup}
+replaces throwing from \texttt{bootstrap}. The
+\texttt{Illumo.Build.NoExceptions} test fails on any \texttt{try},
+\texttt{catch} or \texttt{throw} in first-party C++.
+\end{decisionbox}
+
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

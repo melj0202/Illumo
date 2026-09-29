@@ -15,6 +15,6 @@ struct SystemInfo
   std::uint64_t availableMemoryBytes = 0;
 };
 
-// Queries the operating system. Does not log; throws only std::bad_alloc.
+// Queries the operating system. Does not log.
 SystemInfo
 QuerySystemInfo();

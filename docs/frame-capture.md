@@ -174,6 +174,6 @@ build/Release/IllumoCaptureGpuTests.exe
 
 Use a fresh output directory for each image verification run. The explicit
 GPU test executable checks the `FrameCapture` API with actual hidden OpenGL:
-queue-error retention after reset, producer exceptions, precise error
+queue-error retention after reset, producer failures, precise error
 propagation and context recreation after failure. It is excluded from the
 default build and headless CTest suite.

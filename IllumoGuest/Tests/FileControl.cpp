@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Fatal.h>
 #include <IllumoGuest/Application.h>
 #include <IllumoGuest/Display.h>
 #include <IllumoGuest/Environment.h>
@@ -42,7 +43,7 @@ public:
       const std::size_t end = std::min(verified + 16384u, received.size());
       for (; verified < end; ++verified) {
         if (received[verified] != static_cast<std::byte>(verified % 251)) {
-          throw std::runtime_error("Guest streaming bytes mismatch");
+          illumoFatal("Guest streaming bytes mismatch");
         }
       }
       if (verified == received.size()) {
@@ -59,13 +60,13 @@ public:
       return;
     }
     if (result.outcome != GuestFileOutcome::Success) {
-      throw std::runtime_error("Guest file transfer failed");
+      illumoFatal("Guest file transfer failed");
     }
     if (phase == 0) {
       if (result.bytes != std::vector<std::byte>{ std::byte{ 'a' },
                                                   std::byte{ 'b' },
                                                   std::byte{ 'c' } }) {
-        throw std::runtime_error("Guest asset data mismatch");
+        illumoFatal("Guest asset data mismatch");
       }
       std::vector<std::byte> bytes(GuestFileRequest::MaximumBlock * 9 + 7);
       for (std::size_t index = 0; index < bytes.size(); ++index) {
@@ -76,7 +77,7 @@ public:
       task = files.read(GuestFileArea::Storage, "roundtrip.csim");
     } else if (phase == 2) {
       if (result.bytes.size() != GuestFileRequest::MaximumBlock * 9 + 7) {
-        throw std::runtime_error("Guest streaming length mismatch");
+        illumoFatal("Guest streaming length mismatch");
       }
       received = std::move(result.bytes);
     }
@@ -103,7 +104,7 @@ private:
       ++phase;
     } else if (phase == 5 && environment.loaded()) {
       if (!environment.writable() || !environment.error().empty()) {
-        throw std::runtime_error("Missing settings must allow first save");
+        illumoFatal("Missing settings must allow first save");
       }
       environment.setVar("persisted", "first");
       environment.save();
@@ -113,7 +114,7 @@ private:
       ++phase;
     } else if (phase == 6 && environment.idle()) {
       if (!environment.error().empty()) {
-        throw std::runtime_error("Settings save failed");
+        illumoFatal("Settings save failed");
       }
       environment.setVar("persisted", "changed in memory");
       environment.load();
@@ -122,7 +123,7 @@ private:
       if (!environment.writable() ||
           environment.getVar("persisted").value != "latest" ||
           environment.getVar("retained-default").value != "present") {
-        throw std::runtime_error("Coalesced settings were not persisted");
+        illumoFatal("Coalesced settings were not persisted");
       }
       task = files.write("broken.json", { std::byte{ '{' } });
       ++phase;
@@ -130,20 +131,20 @@ private:
       GuestFileResult result;
       if (files.take(task, result)) {
         if (result.outcome != GuestFileOutcome::Success) {
-          throw std::runtime_error("Malformed settings setup failed");
+          illumoFatal("Malformed settings setup failed");
         }
         invalidEnvironment.load();
         ++phase;
       }
     } else if (phase == 9 && invalidEnvironment.loaded()) {
       if (invalidEnvironment.writable() || invalidEnvironment.error().empty()) {
-        throw std::runtime_error("Malformed settings authorized replacement");
+        illumoFatal("Malformed settings authorized replacement");
       }
       invalidEnvironment.setVar("must-not-write", true);
       invalidEnvironment.save();
       invalidEnvironment.pump();
       if (!invalidEnvironment.idle()) {
-        throw std::runtime_error("Malformed settings must remain untouched");
+        illumoFatal("Malformed settings must remain untouched");
       }
       ++phase;
     } else if (phase == 10) {
@@ -155,7 +156,7 @@ private:
       if (display.idle()) {
         if (!display.ready() || !display.error().empty() ||
             display.actual() != GuestDisplayState{ false, false, 120, 2 }) {
-          throw std::runtime_error("Display settings did not round-trip");
+          illumoFatal("Display settings did not round-trip");
         }
         ++phase;
       }

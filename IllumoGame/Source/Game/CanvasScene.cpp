@@ -13,6 +13,7 @@
 #include "TitleScene.h"
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Content/SceneDirector.h>
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiMenuShell.h>
@@ -46,18 +47,7 @@ parseIntegerArgument(const std::string& text, int* value)
   if (value == nullptr || text.empty()) {
     return false;
   }
-  try {
-    std::size_t consumed = 0;
-    long long parsed = std::stoll(text, &consumed);
-    if (consumed != text.size() || parsed < -2147483648LL ||
-        parsed > 2147483647LL) {
-      return false;
-    }
-    *value = static_cast<int>(parsed);
-    return true;
-  } catch (...) {
-    return false;
-  }
+  return parseWholeInteger(text, value);
 }
 
 static std::uint64_t
@@ -111,17 +101,7 @@ parseWorldCoordinate(const std::string& text, std::int64_t* value)
   if (value == nullptr || text.empty()) {
     return false;
   }
-  try {
-    std::size_t consumed = 0;
-    const long long parsed = std::stoll(text, &consumed);
-    if (consumed != text.size()) {
-      return false;
-    }
-    *value = static_cast<std::int64_t>(parsed);
-    return true;
-  } catch (...) {
-    return false;
-  }
+  return parseWholeInteger(text, value);
 }
 
 static std::string
@@ -140,20 +120,13 @@ joinArguments(const std::vector<std::string>& args, std::size_t startIndex)
 static bool
 parseFloatingArgument(const std::string& text, double* value)
 {
-  if (value == nullptr || text.empty()) {
+  double parsed = 0.0;
+  if (value == nullptr || text.empty() || !parseWholeFloating(text, &parsed) ||
+      !std::isfinite(parsed)) {
     return false;
   }
-  try {
-    std::size_t consumed = 0;
-    double parsed = std::stod(text, &consumed);
-    if (consumed != text.size() || !std::isfinite(parsed)) {
-      return false;
-    }
-    *value = parsed;
-    return true;
-  } catch (...) {
-    return false;
-  }
+  *value = parsed;
+  return true;
 }
 
 static bool
@@ -1698,12 +1671,8 @@ CanvasScene::stepSimulation(int generations)
   showModeSplash("EDIT");
   int completed = 0;
   for (; completed < generations; ++completed) {
-    bool succeeded = false;
-    try {
-      succeeded = cellContext->getGrid()->advance(*cellContext->getRuleSet());
-    } catch (...) {
-      succeeded = false;
-    }
+    const bool succeeded =
+      cellContext->getGrid()->advance(*cellContext->getRuleSet());
     if (!succeeded) {
       simulationRetryPending = true;
       break;
@@ -2402,11 +2371,7 @@ CanvasScene::stop()
   ILLUMO_PROFILE_ZONE("CanvasScene.stop");
   // Late platform completions must not touch a module that has exited.
   if (m_lifetime) {
-    try {
-      Logger::LogTrace("Canvas closed");
-    } catch (...) {
-      // Diagnostics never block shutdown.
-    }
+    Logger::LogTrace("Canvas closed");
   }
   m_lifetime.reset();
   if (CSimSounds::musicPlaying(CSimMusic::CanvasEdit)) {

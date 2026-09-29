@@ -124,12 +124,9 @@ RuntimeShell::start()
     ic->frameProfiler->setEnabled(true);
   }
   bool started = false;
-  try {
+  {
     ILLUMO_PROFILE_ZONE("RuntimeShell.startProgram");
     started = m_program->start(*ic);
-  } catch (const std::exception& exception) {
-    Logger::LogError(std::string("The program threw during startup: ") +
-                     exception.what());
   }
   if (!started) {
     Logger::LogError("The " + m_options.application +
@@ -585,7 +582,9 @@ RuntimeShell::reportBench(const std::string& error)
   if (!m_program->error().empty()) {
     result["guestError"] = m_program->error();
   }
-  std::cout << result.dump() << std::endl;
+  std::cout << result.dump(
+                 -1, ' ', false, nlohmann::json::error_handler_t::replace)
+            << std::endl;
   if (ic != nullptr && ic->window != nullptr) {
     ic->window->requestClose();
   }
@@ -639,5 +638,7 @@ RuntimeShell::report(bool success,
   if (!m_program->error().empty()) {
     result["guestError"] = m_program->error();
   }
-  std::cout << result.dump() << std::endl;
+  std::cout << result.dump(
+                 -1, ' ', false, nlohmann::json::error_handler_t::replace)
+            << std::endl;
 }

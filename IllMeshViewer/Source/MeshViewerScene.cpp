@@ -3,6 +3,7 @@
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Content/SceneAssetRefs.h>
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/Camera.h>
@@ -21,6 +22,7 @@
 #include <utility>
 #if !defined(ILLUMO_SERIAL_GUEST)
 #include <filesystem>
+#include <system_error>
 #endif
 
 // The file part of a path or label, without the file system library.
@@ -101,7 +103,8 @@ MeshViewerScene::start(IllumoContext& startContext)
     // repository root instead of the staged runtime directory.
     std::string skyboxPath = "Assets/Skybox/skybox-daylight.png";
 #if !defined(ILLUMO_SERIAL_GUEST)
-    if (!std::filesystem::exists(skyboxPath)) {
+    std::error_code existsError;
+    if (!std::filesystem::exists(skyboxPath, existsError)) {
       skyboxPath = "Illumo/Assets/Skybox/skybox-daylight.png";
     }
 #endif
@@ -127,9 +130,10 @@ MeshViewerScene::start(IllumoContext& startContext)
   if (ic->envVars != nullptr) {
     const std::string fontSizeVar = ic->envVars->getVar("fontSize").value;
     if (!fontSizeVar.empty()) {
-      try {
-        m_ui->setFontSize(std::stof(fontSizeVar));
-      } catch (...) {
+      float fontSize = 0.0f;
+      if (parseFloating(fontSizeVar, &fontSize)) {
+        m_ui->setFontSize(fontSize);
+      } else {
         Logger::LogWarning("Ignored the fontSize setting '" + fontSizeVar +
                            "': not a number");
       }

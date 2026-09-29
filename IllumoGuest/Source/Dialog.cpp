@@ -1,6 +1,6 @@
 #include <IllumoGuest/Dialog.h>
 
-void
+bool
 GuestDialog::apply(bool save,
                    std::string description,
                    std::string defaultName,
@@ -17,11 +17,12 @@ GuestDialog::apply(bool save,
   GuestWireWriter bytes;
   request.write(bytes);
   GuestDialogRequest checked;
-  if (!GuestDialogRequest::read(bytes.data(), checked)) {
-    throw std::invalid_argument("Invalid file dialog request");
+  if (bytes.failed() || !GuestDialogRequest::read(bytes.data(), checked)) {
+    return false;
   }
   m_next = std::move(request);
   m_pending = true;
+  return true;
 }
 void
 GuestDialog::pump()
@@ -36,7 +37,8 @@ GuestDialog::pump()
       m_error = "File dialog request was rejected";
       m_result = {};
     } else if (!GuestDialogResult::read(result.payload, m_result)) {
-      throw std::runtime_error("Invalid file dialog completion");
+      m_error = "Invalid file dialog completion";
+      m_result = {};
     } else {
       m_error.clear();
     }

@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
@@ -20,7 +21,8 @@ static void
 require(bool condition, const char* message)
 {
   if (!condition) {
-    throw std::runtime_error(message);
+    // The trap fails the contract run on the host.
+    illumoFatal(message);
   }
 }
 
@@ -167,13 +169,9 @@ recordingContract()
     renderer.pushSetMesh({});
   }
   renderer.EndFrame();
-  bool rejected = false;
-  try {
-    backend.takeFrame();
-  } catch (const std::exception&) {
-    rejected = true;
-  }
-  require(rejected, "Overflow cannot publish a command prefix");
+  GuestFrame overflowed;
+  require(!backend.takeFrame(overflowed) && !backend.submissionError().empty(),
+          "Overflow cannot publish a command prefix");
   backend.Shutdown();
 }
 

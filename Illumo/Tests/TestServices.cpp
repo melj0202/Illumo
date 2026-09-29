@@ -14,7 +14,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iterator>
-#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -556,20 +555,15 @@ testCommandRegistryReentrancy()
   registry.ExecuteQueue();
   testEqInt(g, calls, 257, "clear cancels pending work and batch remainder");
 
-  registry.RegisterCommand("throw", [&](const std::vector<std::string>&) {
+  registry.RegisterCommand("requeue", [&](const std::vector<std::string>&) {
     registry.QueueCommand("later");
-    throw std::runtime_error("callback failure");
   });
-  registry.QueueCommand("throw");
-  bool threw = false;
-  try {
-    registry.ExecuteQueue();
-  } catch (const std::runtime_error&) {
-    threw = true;
-  }
-  testTrue(g, threw, "callback exceptions propagate");
+  registry.QueueCommand("requeue");
   registry.ExecuteQueue();
-  testEqInt(g, calls, 258, "dispatch recovers after callback exception");
+  testEqInt(
+    g, calls, 257, "work queued by a callback waits for the next batch");
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 258, "the next dispatch runs the queued work");
 }
 
 static void

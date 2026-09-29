@@ -12,21 +12,17 @@
 static bool
 readTextFile(const std::filesystem::path& path, std::string& text)
 {
-  try {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-      return false;
-    }
-    std::ostringstream stream;
-    stream << file.rdbuf();
-    if (file.bad() || stream.fail()) {
-      return false;
-    }
-    text = stream.str();
-    return true;
-  } catch (...) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file.is_open()) {
     return false;
   }
+  std::ostringstream stream;
+  stream << file.rdbuf();
+  if (file.bad() || stream.fail()) {
+    return false;
+  }
+  text = stream.str();
+  return true;
 }
 
 bool
@@ -125,13 +121,9 @@ bool
 RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry& registry)
 {
   std::filesystem::path executableDirectory;
-  try {
-    // The engine owns executable-path discovery; only catalog policy lives
-    // here.
-    executableDirectory = EnvVars::ApplicationConfigPath().parent_path();
-  } catch (...) {
-    // A failed executable lookup must not prevent working-directory fallback.
-  }
+  // The engine owns executable-path discovery; only catalog policy lives
+  // here.
+  executableDirectory = EnvVars::ApplicationConfigPath().parent_path();
   std::error_code error;
   const std::filesystem::path workingDirectory =
     std::filesystem::current_path(error);

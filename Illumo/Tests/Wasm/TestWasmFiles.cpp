@@ -43,17 +43,24 @@ public:
       "file-service-" +
       std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count()));
-    if (!std::filesystem::create_directory(root)) {
-      throw std::runtime_error("Test directory collision");
+    std::error_code error;
+    if (!std::filesystem::create_directory(root, error) || error) {
+      testFailure("Test directory collision");
     }
-    std::filesystem::create_directory(root / "package");
-    std::filesystem::create_directory(root / "storage");
+    std::filesystem::create_directory(root / "package", error);
+    std::filesystem::create_directory(root / "storage", error);
+    if (error) {
+      testFailure("Cannot create the test directories");
+    }
     std::ofstream(root / "package" / "asset.txt", std::ios::binary) << "abc";
     service = packages
                 ? std::make_unique<WasmFileServices>(
                     71, grants, packages, root / "storage", limits)
                 : std::make_unique<WasmFileServices>(
                     71, grants, root / "package", root / "storage", limits);
+    if (!service->valid()) {
+      testFailure("File services rejected the test roots: " + service->error());
+    }
   }
   ~FileFixture()
   {
@@ -78,7 +85,7 @@ public:
     batch.records.push_back(record(request));
     const std::uint64_t id = batch.records[0].request;
     if (!service->submit(batch)) {
-      throw std::runtime_error(service->error());
+      testFailure(service->error());
     }
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -86,7 +93,7 @@ public:
       GuestServices ready = service->poll();
       if (!ready.records.empty()) {
         if (ready.records.size() != 1 || ready.records[0].request != id) {
-          throw std::runtime_error("File completion ownership mismatch");
+          testFailure("File completion ownership mismatch");
         }
         GuestWireReader reader(ready.records[0].payload);
         FileResult result;
@@ -98,7 +105,7 @@ public:
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    throw std::runtime_error("File completion timed out");
+    testFailure("File completion timed out");
   }
 };
 
@@ -145,7 +152,7 @@ packageFromArchive()
                          "game" });
   std::string error;
   if (!vfs->mount(std::move(app), error)) {
-    throw std::runtime_error(error);
+    testFailure(error);
   }
   FileFixture fixture(vfs);
   GuestFileRequest request;
@@ -351,7 +358,7 @@ public:
     forest.layers.push_back(
       { DirectoryVfsBackend::open(root / "forest", false, error), "forest" });
     if (!vfs->mount(app, error) || !vfs->mount(forest, error)) {
-      throw std::runtime_error(error);
+      testFailure(error);
     }
     if (project) {
       VfsMount writable;
@@ -360,7 +367,7 @@ public:
         { DirectoryVfsBackend::open(root / "project", true, error),
           "my-scene" });
       if (!vfs->mount(writable, error)) {
-        throw std::runtime_error(error);
+        testFailure(error);
       }
     }
   }
@@ -667,14 +674,14 @@ exchangeOnce(FileFixture& fixture, GuestServiceQueue& queue)
   completions.write(writer);
   std::vector<std::byte> outgoing;
   if (!queue.exchange(writer.data(), outgoing)) {
-    throw std::runtime_error("Guest queue rejected host completions");
+    testFailure("Guest queue rejected host completions");
   }
   GuestServices requests;
   if (!GuestServices::read(outgoing, requests, true)) {
-    throw std::runtime_error("Guest wrote an invalid request batch");
+    testFailure("Guest wrote an invalid request batch");
   }
   if (!requests.records.empty() && !fixture.service->submit(requests)) {
-    throw std::runtime_error(fixture.service->error());
+    testFailure(fixture.service->error());
   }
 }
 
@@ -1128,7 +1135,7 @@ fileServices()
 
 int
 main(int argc, char** argv)
-try {
+{
   if (argc == 2 && std::string(argv[1]) == "--list") {
     std::puts("Illumo.Wasm.FileServices");
     std::puts("Illumo.Wasm.PackageFromArchive");
@@ -1177,7 +1184,4 @@ try {
     return guestLocalEntries();
   }
   return 2;
-} catch (const std::exception& exception) {
-  std::fprintf(stderr, "%s\n", exception.what());
-  return 1;
 }

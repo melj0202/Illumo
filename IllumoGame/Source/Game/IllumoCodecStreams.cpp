@@ -3,7 +3,6 @@
 #include "Rulesets/RuleSet.h"
 #include "Rulesets/RuleSetRegistry.h"
 #include <Illumo/Foundation/Profile.h>
-#include <system_error>
 
 #include <algorithm>
 #include <cctype>
@@ -59,7 +58,7 @@ bool
 IllumoCodec::writeStream(std::ostream& file,
                          const IllumoDocument& document,
                          std::string* error)
-try {
+{
   ILLUMO_PROFILE_ZONE("IllumoCodec.writeStream");
   if (!CanvasCoordinatePolicy::validPosition(document.cameraX,
                                              document.cameraY) ||
@@ -146,16 +145,13 @@ try {
                static_cast<std::streamsize>(record.cells.size()));
   }
   return file.good();
-} catch (const std::system_error&) {
-  setError(error, "Save stream operation failed");
-  return false;
 }
 
 bool
 IllumoCodec::readStream(std::istream& file,
                         IllumoDocument* document,
                         std::string* error)
-try {
+{
   ILLUMO_PROFILE_ZONE("IllumoCodec.readStream");
   if (document == nullptr) {
     setError(error, "Document pointer is null");
@@ -296,12 +292,7 @@ try {
     }
     const std::size_t cellBytes = static_cast<std::size_t>(fileCellCount);
     std::vector<unsigned char> loadedCells;
-    try {
-      loadedCells.resize(cellBytes);
-    } catch (const std::bad_alloc&) {
-      setError(error, "Legacy save is too large to load");
-      return false;
-    }
+    loadedCells.resize(cellBytes);
     if (!file.read(reinterpret_cast<char*>(loadedCells.data()),
                    static_cast<std::streamsize>(cellBytes))) {
       setError(error, "Legacy save is truncated");
@@ -370,7 +361,4 @@ try {
   document->worldChunkHeight = loadedWorldChunkHeight;
   document->grid = std::move(loadedGrid);
   return true;
-} catch (const std::system_error&) {
-  setError(error, "Save stream operation failed");
-  return false;
 }

@@ -124,11 +124,25 @@ if(MSVC)
   add_compile_options(/FS)
 endif()
 
+# Illumo builds without C++ exceptions: failures return errors, and running
+# out of memory or threads ends the process (docs/contributing.md). Applied to
+# every C++ target, vendored ones included, so one binary never mixes STL
+# exception modes. MSVC's /EHsc comes from CMake's default flags.
+if(MSVC)
+  string(REGEX REPLACE "/EH[a-z-]*" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/EHs-c->)
+  add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:_HAS_EXCEPTIONS=0>)
+else()
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+endif()
+
 function(illumo_configure_cpp_target target_name)
   target_compile_features(${target_name} PUBLIC cxx_std_23)
 
   if(MSVC)
-    target_compile_options(${target_name} PRIVATE /W4 /FS /MP)
+    # C4530: an exception handler in first-party code is an error (MSVC only
+    # warns when exceptions are off; Clang refuses try/throw itself).
+    target_compile_options(${target_name} PRIVATE /W4 /FS /MP /we4530)
   else()
     target_compile_options(${target_name} PRIVATE -Wall -Wextra)
   endif()

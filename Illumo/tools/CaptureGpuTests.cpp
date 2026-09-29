@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
-#include <stdexcept>
 #include <vector>
 
 static FrameCaptureResult
@@ -622,11 +621,12 @@ main(int argc, char** argv)
     std::cerr << "Invalid handle failure lost: " << invalid.error << '\n';
     ++failures;
   }
-  const FrameCaptureResult exception =
-    FrameCapture::render(options, [](Renderer&, Camera&, std::string&) -> bool {
-      throw std::runtime_error("producer exception");
+  const FrameCaptureResult refused = FrameCapture::render(
+    options, [](Renderer&, Camera&, std::string& error) -> bool {
+      error = "producer failure";
+      return false;
     });
-  if (exception.success() || exception.error != "producer exception") {
+  if (refused.success() || refused.error != "producer failure") {
     ++failures;
   }
   const FrameCaptureResult strict = FrameCapture::render(

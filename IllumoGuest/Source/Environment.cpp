@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Environment.h>
@@ -9,7 +10,7 @@ GuestEnvironment::GuestEnvironment(GuestFiles& files, std::string path)
 {
   if (m_path.empty() || m_path.size() > 1024 ||
       m_path.find('\0') != std::string::npos) {
-    throw std::invalid_argument("Invalid settings path");
+    illumoFatal("GuestEnvironment: invalid settings path");
   }
 }
 
@@ -22,7 +23,8 @@ void
 GuestEnvironment::load()
 {
   if (!idle()) {
-    throw std::logic_error("Settings reload while persistence is pending");
+    illumoFatal(
+      "GuestEnvironment: settings reload while persistence is pending");
   }
   m_loaded = false;
   m_writable = false;

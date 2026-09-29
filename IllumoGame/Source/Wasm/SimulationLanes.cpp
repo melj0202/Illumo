@@ -382,7 +382,7 @@ bool
 SimulationLaneWorker::execute(std::span<const std::byte> bytes,
                               std::vector<std::byte>& output,
                               std::string& error)
-try {
+{
   ILLUMO_PROFILE_ZONE("Lane.execute");
   output.clear();
   error.clear();
@@ -472,12 +472,12 @@ try {
   }
   m_writer.clear();
   reply.write(m_writer);
+  if (m_writer.failed()) {
+    error = m_writer.failure();
+    return false;
+  }
   output.assign(m_writer.data().begin(), m_writer.data().end());
   return true;
-} catch (const std::exception& exception) {
-  output.clear();
-  error = exception.what();
-  return false;
 }
 
 static bool

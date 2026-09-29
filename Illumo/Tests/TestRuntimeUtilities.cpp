@@ -2,6 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Engine/PresentationTiming.h>
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Platform/SystemInfo.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/SplashText.h>
@@ -16,7 +17,6 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
-#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -335,8 +335,10 @@ testInputContextBindings()
   event.inputAction = InputAction::Press;
   context.bindAction("primary", event);
   testEqSize(g, context.getActions().size(), 1, "binding is stored");
+  InputEvent found;
   testTrue(g,
-           context.getActionTag("primary").keyCode == KeyCode::A,
+           context.getActionTag("primary", &found) &&
+             found.keyCode == KeyCode::A,
            "bound key is returned");
 
   event.keyCode = KeyCode::B;
@@ -345,16 +347,15 @@ testInputContextBindings()
   testEqSize(
     g, context.getActions().size(), 1, "rebinding replaces existing action");
   testTrue(g,
-           context.getActionTag("primary").inputAction == InputAction::Hold,
+           context.getActionTag("primary", &found) &&
+             found.inputAction == InputAction::Hold,
            "rebound action is returned");
 
-  bool threw = false;
-  try {
-    (void)context.getActionTag("missing");
-  } catch (const std::out_of_range&) {
-    threw = true;
-  }
-  testTrue(g, threw, "unknown action reports out_of_range");
+  found.keyCode = KeyCode::Space;
+  testTrue(g,
+           !context.getActionTag("missing", &found) &&
+             found.keyCode == KeyCode::Space,
+           "unknown action is reported and leaves the event unchanged");
 }
 
 static void
@@ -488,9 +489,10 @@ testInputManagerContextsAndCapacity()
   const long firstId = input.registerInputContext(first);
   testEqInt(g, static_cast<int>(firstId), 0, "first context receives id zero");
   input.setActiveInputContext(firstId);
+  InputEvent toggle;
   testTrue(g,
-           input.getActiveInputContext()->getActionTag("toggle").keyCode ==
-             KeyCode::E,
+           input.getActiveInputContext()->getActionTag("toggle", &toggle) &&
+             toggle.keyCode == KeyCode::E,
            "active context is selected");
   InputManagerTestAccess::setAction(input, KeyCode::E, InputAction::Press);
   testTrue(
@@ -1300,9 +1302,58 @@ testFileTreeOverlayNavigation()
            "Escape closes the browser");
 }
 
+static void
+testParseNumber()
+{
+  long value = 0;
+  testTrue(g, parseWholeInteger("42", &value) && value == 42, "integer");
+  testTrue(g,
+           parseWholeInteger("  +7", &value) && value == 7,
+           "leading white space and '+' are accepted like std::stol");
+  testTrue(g, parseWholeInteger("-9", &value) && value == -9, "negative");
+  testTrue(g, !parseWholeInteger("", &value), "empty text fails");
+  testTrue(g, !parseWholeInteger("+-1", &value), "one sign only");
+  testTrue(g, !parseWholeInteger("12x", &value), "trailing text fails");
+  testTrue(g,
+           !parseWholeInteger("99999999999999999999", &value),
+           "out of range fails");
+  long long minimum = 0;
+  testTrue(g,
+           parseWholeInteger("-9223372036854775808", &minimum) &&
+             minimum == std::numeric_limits<long long>::min(),
+           "the minimum value parses");
+  std::size_t consumed = 0;
+  testTrue(g,
+           parseInteger("12abc", &value, &consumed) && value == 12 &&
+             consumed == 2,
+           "prefix parse reports consumed characters");
+  unsigned long long unsignedValue = 0;
+  testTrue(g,
+           parseWholeInteger("18446744073709551615", &unsignedValue) &&
+             unsignedValue == std::numeric_limits<unsigned long long>::max(),
+           "unsigned maximum");
+  double real = 0.0;
+  testTrue(
+    g, parseWholeFloating(" 1.5e3", &real) && real == 1500.0, "floating point");
+  testTrue(g,
+           parseWholeFloating("-0.25", &real) && real == -0.25,
+           "negative floating point");
+  testTrue(g, !parseWholeFloating("1e400", &real), "out of range fails");
+  testTrue(g, !parseWholeFloating("x", &real), "not a number fails");
+  testTrue(g,
+           parseFloating("2.5px", &real, &consumed) && real == 2.5 &&
+             consumed == 3,
+           "floating prefix parse");
+  float single = 0.0f;
+  testTrue(
+    g, parseWholeFloating("0.5", &single) && single == 0.5f, "float parses");
+}
+
 void
 registerRuntimeUtilityTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Foundation.ParseNumber",
+               []() { return runRuntimeUtilityCase(testParseNumber); });
   registry.add("Illumo.Debug.FileTreeOverlay", []() {
     return runRuntimeUtilityCase(testFileTreeOverlayNavigation);
   });

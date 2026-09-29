@@ -212,7 +212,7 @@ std::unique_ptr<SparseCellGrid>
 SimulationReply::restore(const SparseCellGrid& base,
                          const RuleSet& rule,
                          std::string* error) const
-try {
+{
   ILLUMO_PROFILE_ZONE("CSW1.restore");
   if (!changed || base.getRevision() != baseRevision ||
       baseRevision == UINT64_MAX || revision != baseRevision + 1) {
@@ -321,11 +321,6 @@ try {
     return {};
   }
   return replacement;
-} catch (const std::exception& exception) {
-  if (error) {
-    *error = exception.what();
-  }
-  return {};
 }
 
 SimulationGuestWorker::SimulationGuestWorker() = default;
@@ -335,7 +330,7 @@ bool
 SimulationGuestWorker::execute(std::span<const std::byte> bytes,
                                std::vector<std::byte>& output,
                                std::string& error)
-try {
+{
   ILLUMO_PROFILE_ZONE("CSW1.execute");
   output.clear();
   error.clear();
@@ -448,10 +443,10 @@ try {
   }
   GuestWireWriter writer;
   reply.write(writer);
+  if (writer.failed()) {
+    error = writer.failure();
+    return false;
+  }
   output = writer.take();
   return true;
-} catch (const std::exception& exception) {
-  output.clear();
-  error = exception.what();
-  return false;
 }

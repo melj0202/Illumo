@@ -2,7 +2,6 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <iterator>
-#include <stdexcept>
 
 class AtomicFailureOperations : public AtomicFileOperations
 {
@@ -65,13 +64,17 @@ testAtomicFileFailures()
     std::string error;
     const bool saved = writeAtomicFile(
       path,
-      [failure](std::ostream& output, std::string*) {
+      [failure](std::ostream& output, std::string* writerError) {
         output << "replacement bytes";
         if (failure == 1) {
           return false;
         }
         if (failure == 2) {
-          throw std::runtime_error("encoding failure");
+          // A writer that reports its own reason.
+          if (writerError != nullptr) {
+            *writerError = "encoding failure";
+          }
+          return false;
         }
         if (failure == 3) {
           output.setstate(std::ios::badbit);

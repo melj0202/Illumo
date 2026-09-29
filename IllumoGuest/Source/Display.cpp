@@ -15,11 +15,12 @@ GuestDisplay::pump()
       GuestWireReader reader(result.payload);
       GuestDisplayState actual;
       if (!GuestDisplayState::read(reader, actual) || !reader.finished()) {
-        throw std::runtime_error("Invalid display completion");
+        m_error = "Invalid display completion";
+      } else {
+        m_actual = actual;
+        m_ready = true;
+        m_error.clear();
       }
-      m_actual = actual;
-      m_ready = true;
-      m_error.clear();
     }
   }
   if (m_pending) {

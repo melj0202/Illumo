@@ -1,15 +1,15 @@
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Services/DebugAlloc.h>
 #include <cstdlib>
-#include <exception>
 #include <new>
 #include <tracy/TracyC.h>
 
 void*
 operator new(std::size_t size)
 {
-  void* ptr = std::malloc(size);
+  void* ptr = std::malloc(size == 0 ? 1 : size);
   if (!ptr) {
-    throw std::bad_alloc();
+    illumoFatal("out of memory");
   }
   TracyCAlloc(ptr, size);
   return ptr;
@@ -25,9 +25,9 @@ operator delete(void* ptr) noexcept
 void*
 operator new[](std::size_t size)
 {
-  void* ptr = std::malloc(size);
+  void* ptr = std::malloc(size == 0 ? 1 : size);
   if (!ptr) {
-    throw std::bad_alloc();
+    illumoFatal("out of memory");
   }
   TracyCAlloc(ptr, size);
   return ptr;

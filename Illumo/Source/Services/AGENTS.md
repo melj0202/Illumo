@@ -19,7 +19,7 @@ Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
 
 - `WorkerPool` is an owner-controlled generic range dispatcher. Start/stop,
   submission, and join run on one owner thread; callbacks operate on disjoint
-  caller-owned ranges, do not throw or recursively submit, and their context
+  caller-owned ranges, do not recursively submit, and their context
   outlives join. Stop drains work and joins every worker. Keep CA-specific
   worker policy in IllumoGame; do not import its grid into Services.
 - Long-lived application service objects are Engine-owned. Logger sinks, command callbacks, input
@@ -52,7 +52,7 @@ Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
 - `envvars.json` lives beside the executable. A malformed or unreadable file
   must not be silently replaced during teardown unless recovery is an explicit
   user action.
-- Logging and diagnostics must not throw through shutdown paths. Report I/O,
+- Logging and diagnostics must not fail shutdown paths. Report I/O,
   parse, queue overflow, and registration failures at the boundary that can
   act on them.
 - Console token payload storage must remain valid through renderer submission.

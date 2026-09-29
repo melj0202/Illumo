@@ -5,7 +5,6 @@
 #include <IllumoGuest/InputProvider.h>
 #include <IllumoGuest/Program.h>
 #include <nlohmann/json.hpp>
-#include <stdexcept>
 
 static std::string
 stripPrefix(const std::string& text, const char* prefix)
@@ -72,11 +71,8 @@ GuestCommandLine::forward(const historyBuffer& item)
     level = 4;
     text = stripPrefix(text, "TRACE: ");
   }
-  try {
-    m_console.log(level, boundedText(text, 4096));
-  } catch (const std::invalid_argument&) {
-    // Malformed UTF-8 is dropped rather than retiring the whole store.
-  }
+  // Malformed UTF-8 is refused (and dropped) rather than retiring the store.
+  m_console.log(level, boundedText(text, 4096));
 }
 
 GuestProgram::GuestProgram(std::string applicationName,
@@ -196,6 +192,14 @@ bool
 GuestProgram::bootstrap()
 {
   return true;
+}
+
+void
+GuestProgram::failStartup(const std::string& reason)
+{
+  Logger::LogError("Startup failed: " + reason);
+  m_phase = Phase::Stopped;
+  m_window.requestClose();
 }
 
 void
@@ -356,90 +360,103 @@ GuestProgram::recordFrame(GuestFrame& output)
 {
   ILLUMO_PROFILE_ZONE("GuestProgram.recordFrame");
   const std::array<int, 2> dimensions = m_window.getWindowDimensions();
-  try {
-    {
-      ILLUMO_PROFILE_ZONE("GuestProgram.beginFrame");
-      if (m_worlds) {
-        m_worlds->beginFrame();
-      }
-      m_renderer.BeginFrame();
-      m_backend.setFrame(static_cast<float>(dimensions[0]),
-                         static_cast<float>(dimensions[1]));
-      m_backend.pump();
-      m_scene.ClearDrawables();
-      m_panels.clearScenes();
-    }
-    {
-      ILLUMO_PROFILE_ZONE("GuestProgram.dispatchScenes");
-      if (m_scenes) {
-        m_scenes->dispatch(m_scene);
-      }
-      if (m_phase == Phase::Running) {
-        dispatchProgram(m_scene);
-        dispatchOverlay(m_scene);
-      }
-    }
-    {
-      ILLUMO_PROFILE_ZONE("GuestProgram.pumpAssets");
-      // As the native host: queued asset loads complete before submission.
-      m_assets.pump();
-    }
-    {
-      ILLUMO_PROFILE_ZONE("GuestProgram.renderScene");
-      m_renderer.RenderScene(&m_scene, &m_camera);
-    }
-    // Detached panels record after the main scene, into the frame's
-    // surfaces section.
-    m_panels.record(m_renderer, m_backend, m_window);
-    {
-      ILLUMO_PROFILE_ZONE("GuestProgram.endFrame");
-      m_renderer.EndFrame();
-    }
-    if (!m_renderer.frameError().empty()) {
-      throw std::runtime_error(m_renderer.frameError());
-    }
-    m_backend.takeFrame(output);
-    m_panels.finish(output);
-    {
-      ILLUMO_PROFILE_ZONE("GuestFrame.exceededLimit");
-      const char* exceeded = output.exceededLimit();
-      if (exceeded != nullptr) {
-        throw std::runtime_error(exceeded);
-      }
-    }
-    // Only a frame that will be delivered takes world operations, in what
-    // the visual operations leave of the shared quota; a dropped frame
-    // leaves them queued for the next one. Its visual changes are confirmed.
-    if (m_worlds) {
-      m_worlds->takeOperations(output.worldOperations,
-                               GuestFrameLimits{}.worldOperations -
-                                 output.visualOperations.size());
-    }
-    m_backend.commitVisuals();
-    ILLUMO_PROFILE_PLOT("Guest batches", output.batches.size());
-    ILLUMO_PROFILE_PLOT("Guest surfaces", output.surfaces.size());
-    ILLUMO_PROFILE_PLOT("Guest texture writes", output.textureWrites.size());
-    ILLUMO_PROFILE_PLOT("Guest mesh writes", output.meshWrites.size());
-    ILLUMO_PROFILE_PLOT("Guest visual operations",
-                        output.visualOperations.size());
-    ILLUMO_PROFILE_PLOT("Guest world operations",
-                        output.worldOperations.size());
+  std::string error;
+  if (renderFrame(output, dimensions, error)) {
     if (!m_lastFrameError.empty()) {
       m_lastFrameError.clear();
     }
-  } catch (const std::runtime_error& error) {
-    // A rejected recording drops this frame only; product state is intact.
-    // Its visual changes are sent again with the next frame.
-    m_backend.dropVisuals();
-    // Report each distinct failure once so a persistent fault stays visible.
-    if (m_lastFrameError != error.what()) {
-      m_lastFrameError = error.what();
-      Logger::LogError("Frame dropped: " + m_lastFrameError);
-    }
-    output.clear();
-    output.width = static_cast<float>(dimensions[0]);
-    output.height = static_cast<float>(dimensions[1]);
+    return;
   }
+  // A rejected recording drops this frame only; product state is intact.
+  // Its visual changes are sent again with the next frame.
+  m_backend.dropVisuals();
+  // Report each distinct failure once so a persistent fault stays visible.
+  if (m_lastFrameError != error) {
+    m_lastFrameError = error;
+    Logger::LogError("Frame dropped: " + m_lastFrameError);
+  }
+  output.clear();
+  output.width = static_cast<float>(dimensions[0]);
+  output.height = static_cast<float>(dimensions[1]);
+}
+
+bool
+GuestProgram::renderFrame(GuestFrame& output,
+                          const std::array<int, 2>& dimensions,
+                          std::string& error)
+{
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.beginFrame");
+    if (m_worlds) {
+      m_worlds->beginFrame();
+    }
+    m_renderer.BeginFrame();
+    m_backend.setFrame(static_cast<float>(dimensions[0]),
+                       static_cast<float>(dimensions[1]));
+    m_backend.pump();
+    m_scene.ClearDrawables();
+    m_panels.clearScenes();
+  }
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.dispatchScenes");
+    if (m_scenes) {
+      m_scenes->dispatch(m_scene);
+    }
+    if (m_phase == Phase::Running) {
+      dispatchProgram(m_scene);
+      dispatchOverlay(m_scene);
+    }
+  }
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.pumpAssets");
+    // As the native host: queued asset loads complete before submission.
+    m_assets.pump();
+  }
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.renderScene");
+    m_renderer.RenderScene(&m_scene, &m_camera);
+  }
+  // Detached panels record after the main scene, into the frame's
+  // surfaces section.
+  m_panels.record(m_renderer, m_backend, m_window);
+  {
+    ILLUMO_PROFILE_ZONE("GuestProgram.endFrame");
+    m_renderer.EndFrame();
+  }
+  if (!m_renderer.frameError().empty()) {
+    error = m_renderer.frameError();
+    return false;
+  }
+  if (!m_backend.takeFrame(output)) {
+    error = m_backend.submissionError();
+    return false;
+  }
+  m_panels.finish(output);
+  {
+    ILLUMO_PROFILE_ZONE("GuestFrame.exceededLimit");
+    const char* exceeded = output.exceededLimit();
+    if (exceeded != nullptr) {
+      error = exceeded;
+      return false;
+    }
+  }
+  // Only a frame that will be delivered takes world operations, in what
+  // the visual operations leave of the shared quota; a dropped frame
+  // leaves them queued for the next one. Its visual changes are confirmed.
+  if (m_worlds) {
+    m_worlds->takeOperations(output.worldOperations,
+                             GuestFrameLimits{}.worldOperations -
+                               output.visualOperations.size());
+  }
+  m_backend.commitVisuals();
+  ILLUMO_PROFILE_PLOT("Guest batches", output.batches.size());
+  ILLUMO_PROFILE_PLOT("Guest surfaces", output.surfaces.size());
+  ILLUMO_PROFILE_PLOT("Guest texture writes", output.textureWrites.size());
+  ILLUMO_PROFILE_PLOT("Guest mesh writes", output.meshWrites.size());
+  ILLUMO_PROFILE_PLOT("Guest visual operations",
+                      output.visualOperations.size());
+  ILLUMO_PROFILE_PLOT("Guest world operations", output.worldOperations.size());
+  return true;
 }
 
 bool
@@ -505,14 +522,7 @@ GuestProgram::startScenes()
   m_scenes = std::make_unique<SceneDirector>(
     m_context, sceneWorlds ? m_worlds.get() : nullptr);
   m_context.scenes = m_scenes.get();
-  bool created = false;
-  try {
-    created = createScenes(*m_scenes);
-  } catch (const std::exception& exception) {
-    Logger::LogError(std::string("The program threw while creating its "
-                                 "scenes: ") +
-                     exception.what());
-  }
+  const bool created = createScenes(*m_scenes);
   if (!created || !m_scenes->hasPendingSwitch()) {
     Logger::LogError("The program created no first scene; closing");
     m_window.requestClose();
@@ -556,15 +566,12 @@ GuestProgram::synchronizeCommands()
       }
       completions.push_back(boundedText(completion, 64));
     }
-    try {
-      m_console.add(name,
-                    boundedText(m_commands.GetCommandUsage(name), 256),
-                    boundedText(m_commands.GetCommandDescription(name), 512),
-                    std::move(completions));
-      m_forwarded.insert(name);
-    } catch (const std::invalid_argument&) {
+    if (!m_console.add(name,
+                       boundedText(m_commands.GetCommandUsage(name), 256),
+                       boundedText(m_commands.GetCommandDescription(name), 512),
+                       std::move(completions))) {
       Logger::LogWarning("Console command not forwarded: " + name);
-      m_forwarded.insert(name);
     }
+    m_forwarded.insert(name);
   }
 }

@@ -1,10 +1,10 @@
 #include "MeshViewerPlatform.h"
 #include <Illumo/Content/VirtualFileSystem.h>
+#include <Illumo/Platform/PathText.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <mutex>
-#include <system_error>
 
 static std::mutex nativeTreeMutex;
 static std::shared_ptr<VirtualFileSystem> nativeTree;
@@ -49,34 +49,30 @@ public:
       done(true, std::string(bytes.begin(), bytes.end()), {});
       return;
     }
-    try {
-      std::ifstream file(
-        std::filesystem::path(std::u8string(location.begin(), location.end())),
-        std::ios::binary);
-      if (!file.is_open()) {
-        done(false, {}, "Failed to open mesh file: " + location);
-        return;
-      }
-      const std::string bytes{ std::istreambuf_iterator<char>(file),
-                               std::istreambuf_iterator<char>() };
-      if (file.bad()) {
-        done(false, {}, "Failed while reading mesh file: " + location);
-        return;
-      }
-      done(true, bytes, {});
-    } catch (const std::system_error&) {
+    std::filesystem::path path;
+    if (!pathFromUtf8(location, &path)) {
       done(false, {}, "Invalid or inaccessible UTF-8 file path");
+      return;
     }
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+      done(false, {}, "Failed to open mesh file: " + location);
+      return;
+    }
+    const std::string bytes{ std::istreambuf_iterator<char>(file),
+                             std::istreambuf_iterator<char>() };
+    if (file.bad()) {
+      done(false, {}, "Failed while reading mesh file: " + location);
+      return;
+    }
+    done(true, bytes, {});
   }
 
 private:
   static std::string label(const std::string& path)
   {
-    const std::u8string name =
-      std::filesystem::path(std::u8string(path.begin(), path.end()))
-        .filename()
-        .u8string();
-    return std::string(reinterpret_cast<const char*>(name.data()), name.size());
+    std::filesystem::path parsed;
+    return pathFromUtf8(path, &parsed) ? pathToUtf8(parsed.filename()) : path;
   }
 };
 

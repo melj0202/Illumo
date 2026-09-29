@@ -85,50 +85,45 @@ SceneGraph::Impl::compile()
   }
   ILLUMO_PROFILE_ZONE("SceneGraph.compile");
   compiledRevision = 0;
-  try {
-    preorder.resize(nodeCount);
-    parentIndex.resize(nodeCount);
-    subtreeSize.assign(nodeCount, 1);
-    depth.resize(nodeCount);
-    slotToIndex.assign(flags.size(), kNoIndex);
-    world.resize(nodeCount);
-    worldBounds.resize(nodeCount);
-    subtreeBounds.resize(nodeCount);
-    effective.resize(nodeCount);
-    recomputed.resize(nodeCount);
-    boundsValid.resize(nodeCount);
-    subtreeValid.resize(nodeCount);
-    subtreePresent.resize(nodeCount);
-    uint32_t index = 0;
-    for (uint32_t slot = firstChild[0]; slot != 0; slot = nextSlot(slot)) {
-      preorder[index] = slot;
-      slotToIndex[slot] = index;
-      const uint32_t p =
-        parent[slot] == 0 ? kNoIndex : slotToIndex[parent[slot]];
-      parentIndex[index] = p;
-      depth[index] = p == kNoIndex ? 0 : depth[p] + 1;
-      ++index;
-    }
-    for (size_t i = nodeCount; i-- > 0;) {
-      if (parentIndex[i] != kNoIndex) {
-        subtreeSize[parentIndex[i]] += subtreeSize[i];
-      }
-    }
-    // All compiled indices may have changed. Dirtiness in authoritative slots
-    // survives queries; only this forward resolve consumes it.
-    for (uint32_t slot : preorder) {
-      flags[slot] |= kDirty | kBoundsDirty;
-    }
-    lowestDirtyIndex = 0;
-    stateDirty = true;
-    boundsDirty = true;
-    compiledRevision = structuralRevision;
-    statistics.compiledNodes = nodeCount;
-    ++statistics.compilations;
-    return true;
-  } catch (const std::bad_alloc&) {
-    return false;
+  preorder.resize(nodeCount);
+  parentIndex.resize(nodeCount);
+  subtreeSize.assign(nodeCount, 1);
+  depth.resize(nodeCount);
+  slotToIndex.assign(flags.size(), kNoIndex);
+  world.resize(nodeCount);
+  worldBounds.resize(nodeCount);
+  subtreeBounds.resize(nodeCount);
+  effective.resize(nodeCount);
+  recomputed.resize(nodeCount);
+  boundsValid.resize(nodeCount);
+  subtreeValid.resize(nodeCount);
+  subtreePresent.resize(nodeCount);
+  uint32_t index = 0;
+  for (uint32_t slot = firstChild[0]; slot != 0; slot = nextSlot(slot)) {
+    preorder[index] = slot;
+    slotToIndex[slot] = index;
+    const uint32_t p = parent[slot] == 0 ? kNoIndex : slotToIndex[parent[slot]];
+    parentIndex[index] = p;
+    depth[index] = p == kNoIndex ? 0 : depth[p] + 1;
+    ++index;
   }
+  for (size_t i = nodeCount; i-- > 0;) {
+    if (parentIndex[i] != kNoIndex) {
+      subtreeSize[parentIndex[i]] += subtreeSize[i];
+    }
+  }
+  // All compiled indices may have changed. Dirtiness in authoritative slots
+  // survives queries; only this forward resolve consumes it.
+  for (uint32_t slot : preorder) {
+    flags[slot] |= kDirty | kBoundsDirty;
+  }
+  lowestDirtyIndex = 0;
+  stateDirty = true;
+  boundsDirty = true;
+  compiledRevision = structuralRevision;
+  statistics.compiledNodes = nodeCount;
+  ++statistics.compilations;
+  return true;
 }
 
 bool

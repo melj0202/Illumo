@@ -87,6 +87,8 @@ private:
   void complete(Task& task,
                 const Pending& pending,
                 const GuestServiceRecord& result);
+  // Ends a task whose completion broke the file protocol, as Denied.
+  static void failTask(Task& task, const char* reason);
   GuestServiceQueue& m_services;
   std::map<std::uint64_t, Task> m_tasks;
   std::uint64_t m_next = 1;

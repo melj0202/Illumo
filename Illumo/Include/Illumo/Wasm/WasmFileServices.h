@@ -2,6 +2,7 @@
 #include <IllumoGuest/Services.h>
 #include <filesystem>
 #include <memory>
+#include <string>
 
 class VirtualFileSystem;
 
@@ -69,11 +70,17 @@ public:
                    std::uint64_t& size);
   std::size_t pendingRequests() const;
   void cancel();
+  // False when the policy or roots were invalid: error() says why, and the
+  // services serve nothing (no workers run).
+  bool valid() const;
   const std::string& error() const;
 
 private:
+  // Null, with error set, when root is not an absolute directory.
   static std::shared_ptr<const VirtualFileSystem> packageDirectory(
-    const std::filesystem::path& root);
+    const std::filesystem::path& root,
+    std::string& error);
+  void logStarted(const WasmFileLimits& limits) const;
   class State;
   std::unique_ptr<State> m_state;
 };

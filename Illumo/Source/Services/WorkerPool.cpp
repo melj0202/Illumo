@@ -79,17 +79,9 @@ WorkerPool::start(size_t workerCount)
   stop();
   m_impl->stopping = false;
   m_impl->generation = 0;
-  try {
-    m_impl->workers.reserve(workerCount);
-    for (size_t i = 0; i < workerCount; ++i) {
-      m_impl->workers.emplace_back(&Impl::workerLoop, m_impl.get());
-    }
-  } catch (...) {
-    stop();
-    Logger::LogWarning("Worker pool could not start " +
-                       std::to_string(workerCount) +
-                       " threads; work runs serially");
-    return false;
+  m_impl->workers.reserve(workerCount);
+  for (size_t i = 0; i < workerCount; ++i) {
+    m_impl->workers.emplace_back(&Impl::workerLoop, m_impl.get());
   }
   if (workerCount != 0) {
     Logger::LogTrace("Worker pool started " + std::to_string(workerCount) +

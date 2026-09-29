@@ -31,7 +31,7 @@ gain stronger alignment; live allocations never move. New chunks and typed
 pool storage honor over-aligned requests. The four-chunk cap, bulk clear and
 stack LIFO behavior remain unchanged. Byte alignment zero means one; other
 non-power-of-two alignments and overflowing sizes are rejected before use.
-Underlying allocation failures may throw.
+An underlying allocation failure ends the process (D-F3).
 
 Command dispatch detaches one batch. Newly queued callbacks wait until the next
 top-level dispatch; nested dispatch is ignored. Retiring or replacing a

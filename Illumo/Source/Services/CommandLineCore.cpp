@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Services/CommandLineCore.h>
 #include <Illumo/Services/Logger.h>
 
@@ -181,17 +182,7 @@ parseLongStrict(const std::string& text, long* value)
   if (value == nullptr || text.empty()) {
     return false;
   }
-  try {
-    std::size_t consumed = 0;
-    long parsed = std::stol(text, &consumed);
-    if (consumed != text.size()) {
-      return false;
-    }
-    *value = parsed;
-    return true;
-  } catch (...) {
-    return false;
-  }
+  return parseWholeInteger(text, value);
 }
 
 bool
@@ -2115,16 +2106,9 @@ CommandLineCore::ExecuteSingleCommand(const std::string& singleCmd,
     double amount = 0.0;
     bool valid = args.size() == 2 && !key.empty();
     if (valid) {
-      try {
-        std::size_t consumed = 0;
-        amount = std::stod(args[1], &consumed);
-        valid = consumed == args[1].size();
-        const std::string& value = envVars->getVar(key).value;
-        current = value.empty() ? 0.0 : std::stod(value, &consumed);
-        valid = valid && (value.empty() || consumed == value.size());
-      } catch (...) {
-        valid = false;
-      }
+      const std::string& value = envVars->getVar(key).value;
+      valid = parseWholeFloating(args[1], &amount) &&
+              (value.empty() || parseWholeFloating(value, &current));
     }
     if (args.size() == 2 && key.empty()) {
       logError("Unknown variable: " + args[0]);

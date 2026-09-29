@@ -5,7 +5,6 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
-#include <exception>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -107,64 +106,58 @@ struct WasmWorker::State
     const std::string threadName =
       "Wasm worker " + std::to_string(workerCount.fetch_add(1u) + 1u);
     ILLUMO_PROFILE_THREAD(threadName.c_str());
-    try {
-      WasmInstance instance(limits);
-      std::int32_t abi = 0;
-      if (messageLimit == 0 || messageLimit > INT32_MAX ||
-          !instance.load(module) ||
-          !instance.call("illumo_guest_describe", {}, abi) || abi != 1) {
-        fail(instance.error().empty() ? "Unsupported worker ABI or limits"
-                                      : instance.error());
-        return;
-      }
-      module.clear();
-      module.shrink_to_fit();
+    WasmInstance instance(limits);
+    std::int32_t abi = 0;
+    if (messageLimit == 0 || messageLimit > INT32_MAX ||
+        !instance.load(module) ||
+        !instance.call("illumo_guest_describe", {}, abi) || abi != 1) {
+      fail(instance.error().empty() ? "Unsupported worker ABI or limits"
+                                    : instance.error());
+      return;
+    }
+    module.clear();
+    module.shrink_to_fit();
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      current = WasmWorkerStatus::Idle;
+    }
+    // Swapped with `input` for each job, so the two buffers alternate and
+    // submit() copies into retained capacity.
+    std::vector<std::byte> request;
+    for (;;) {
+      std::uint64_t id = 0;
       {
-        std::lock_guard<std::mutex> lock(mutex);
-        current = WasmWorkerStatus::Idle;
-      }
-      // Swapped with `input` for each job, so the two buffers alternate and
-      // submit() copies into retained capacity.
-      std::vector<std::byte> request;
-      for (;;) {
-        std::uint64_t id = 0;
-        {
-          std::unique_lock<std::mutex> lock(mutex);
-          wake.wait(lock, [this]() {
-            return stopping || current == WasmWorkerStatus::Working;
-          });
-          if (stopping) {
-            return;
-          }
-          request.swap(input);
-          id = activeId;
-        }
-        WasmJobResult completed;
-        completed.requestId = id;
-        bool executed = false;
-        {
-          ILLUMO_PROFILE_ZONE("WasmWorker.job");
-          executed = execute(instance, request, completed.bytes);
-        }
-        if (!executed) {
-          fail(instance.error().empty() ? "Invalid worker response"
-                                        : instance.error(),
-               id);
+        std::unique_lock<std::mutex> lock(mutex);
+        wake.wait(lock, [this]() {
+          return stopping || current == WasmWorkerStatus::Working;
+        });
+        if (stopping) {
           return;
         }
-        {
-          std::lock_guard<std::mutex> lock(mutex);
-          if (stopping) {
-            return;
-          }
-          result = std::move(completed);
-          current = WasmWorkerStatus::Completed;
-        }
+        request.swap(input);
+        id = activeId;
       }
-    } catch (const std::exception& exception) {
-      fail(exception.what(), activeId);
-    } catch (...) {
-      fail("Unknown worker failure", activeId);
+      WasmJobResult completed;
+      completed.requestId = id;
+      bool executed = false;
+      {
+        ILLUMO_PROFILE_ZONE("WasmWorker.job");
+        executed = execute(instance, request, completed.bytes);
+      }
+      if (!executed) {
+        fail(instance.error().empty() ? "Invalid worker response"
+                                      : instance.error(),
+             id);
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (stopping) {
+          return;
+        }
+        result = std::move(completed);
+        current = WasmWorkerStatus::Completed;
+      }
     }
   }
 

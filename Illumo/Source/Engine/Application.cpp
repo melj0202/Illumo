@@ -3,6 +3,7 @@
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Foundation/Profile.h>
+#include <Illumo/Platform/PathText.h>
 #include <Illumo/Platform/PlatformTimer.h>
 #include <Illumo/Platform/ProcessRelaunch.h>
 #include <Illumo/Platform/SystemInfo.h>
@@ -10,7 +11,6 @@
 #include <Illumo/Services/Logger.h>
 #include <chrono>
 #include <cstdio>
-#include <exception>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -91,10 +91,10 @@ logStartupReport(const std::string& applicationName)
   }
   const std::filesystem::path logFile = Logger::getLogFilePath();
   if (!logFile.empty()) {
-    Logger::LogInfo("Log file: " + logFile.string());
+    Logger::LogInfo("Log file: " + pathToUtf8(logFile));
   }
   Logger::LogInfo("Settings file: " +
-                  EnvVars::ApplicationConfigPath().string());
+                  pathToUtf8(EnvVars::ApplicationConfigPath()));
 }
 
 class ApplicationLoggerLifetime
@@ -124,59 +124,49 @@ runApplication(int argc,
     std::chrono::steady_clock::now();
   ApplicationLoggerLifetime loggerLifetime;
   PlatformTimerScope timerScope;
-  try {
-    if (application.applicationName.empty()) {
-      application.applicationName = "Illumo";
-    }
-    if (application.commandLine.applicationName.empty() ||
-        application.commandLine.applicationName == "Illumo") {
-      application.commandLine.applicationName = application.applicationName;
-    }
-
-    IllumoConfig config;
-    config.applicationName = application.applicationName;
-    config.environmentPath = EnvVars::ApplicationConfigPath().string();
-    Illumo illumo(config);
-    if (application.applyDefaults != nullptr) {
-      application.applyDefaults(&illumo.environment());
-    }
-
-    const SysCmdLineResult commandLineResult = SysCmdLine::ParseCommandLine(
-      argc, argv, &illumo.environment(), application.commandLine);
-    if (commandLineResult.shouldExit()) {
-      return commandLineResult.exitCode();
-    }
-    logStartupReport(application.applicationName);
-
-    if (!illumo.initialize()) {
-      Logger::LogError(application.applicationName +
-                       " could not initialize Illumo");
-      return 1;
-    }
-    if (application.run == nullptr) {
-      Logger::LogError(application.applicationName + " has no run loop");
-      illumo.shutdown();
-      return 1;
-    }
-    const int exitCode = application.run(illumo, launched);
-
-    *restart = illumo.context().window != nullptr &&
-               illumo.context().window->restartRequested();
-    Logger::LogInfo(
-      application.applicationName +
-      (*restart ? " shutting down to restart" : " shutting down"));
-    illumo.shutdown();
-    Logger::LogInfo(application.applicationName + " exited with code " +
-                    std::to_string(exitCode));
-    return exitCode;
-  } catch (const std::exception& exception) {
-    Logger::LogError(std::string("Illumo application failed: ") +
-                     exception.what());
-  } catch (...) {
-    Logger::LogError("Illumo application failed with an unknown error");
+  if (application.applicationName.empty()) {
+    application.applicationName = "Illumo";
   }
-  *restart = false;
-  return 1;
+  if (application.commandLine.applicationName.empty() ||
+      application.commandLine.applicationName == "Illumo") {
+    application.commandLine.applicationName = application.applicationName;
+  }
+
+  IllumoConfig config;
+  config.applicationName = application.applicationName;
+  config.environmentPath = pathToUtf8(EnvVars::ApplicationConfigPath());
+  Illumo illumo(config);
+  if (application.applyDefaults != nullptr) {
+    application.applyDefaults(&illumo.environment());
+  }
+
+  const SysCmdLineResult commandLineResult = SysCmdLine::ParseCommandLine(
+    argc, argv, &illumo.environment(), application.commandLine);
+  if (commandLineResult.shouldExit()) {
+    return commandLineResult.exitCode();
+  }
+  logStartupReport(application.applicationName);
+
+  if (!illumo.initialize()) {
+    Logger::LogError(application.applicationName +
+                     " could not initialize Illumo");
+    return 1;
+  }
+  if (application.run == nullptr) {
+    Logger::LogError(application.applicationName + " has no run loop");
+    illumo.shutdown();
+    return 1;
+  }
+  const int exitCode = application.run(illumo, launched);
+
+  *restart = illumo.context().window != nullptr &&
+             illumo.context().window->restartRequested();
+  Logger::LogInfo(application.applicationName +
+                  (*restart ? " shutting down to restart" : " shutting down"));
+  illumo.shutdown();
+  Logger::LogInfo(application.applicationName + " exited with code " +
+                  std::to_string(exitCode));
+  return exitCode;
 }
 
 int

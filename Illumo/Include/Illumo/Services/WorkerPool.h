@@ -4,7 +4,8 @@
 #include <memory>
 
 // Owner-thread range dispatcher. Workers see only disjoint caller-owned ranges;
-// callbacks must not throw, submit recursively, or call owner-thread methods.
+// callbacks must not submit recursively or call owner-thread methods. Failing
+// to create a worker thread is fatal (the build has no exceptions).
 // The caller keeps context alive until join. No allocation occurs on dispatch.
 class WorkerPool
 {

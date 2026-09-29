@@ -246,7 +246,9 @@ sameSparseRecords(const std::vector<SparseChunkRecord>& left,
 static void
 testElementaryTransactions()
 {
-  testSection("Sparse elementary generation: failure rollback and publication");
+  // Allocation failure is fatal (the build has no exceptions), so only the
+  // publication side of the transaction is observable here.
+  testSection("Sparse elementary generation: publication");
   Elementary1DRuleSet rule("RULE_90", 90u);
   SparseCellGrid grid;
   grid.setCell(CellAddress{ 0, 0 }, 0);
@@ -256,23 +258,15 @@ testElementaryTransactions()
   grid.setCell(CellAddress{ 32, 0 }, 0);
   const std::uint64_t revision = grid.getRevision();
   const std::vector<SparseChunkRecord> original = grid.collectChunkRecords();
-  grid.setElementaryWriteFailureForTesting(1);
-  testTrue(g,
-           !grid.advance(rule),
-           "failure injected after a staged destination write");
-  testTrue(g,
-           grid.getRevision() == revision &&
-             sameSparseRecords(original, grid.collectChunkRecords()),
-           "failed staged generation preserves cells and revision");
   SparseGenerationDelta previousDelta;
   testTrue(g,
            grid.captureGenerationDelta(priorRevision, &previousDelta) &&
              prior.applyGenerationDelta(previousDelta) &&
              sameSparseRecords(original, prior.collectChunkRecords()),
-           "failure preserves previous successful presentation delta");
+           "the previous presentation delta reproduces the edits");
   testTrue(g,
            grid.advance(rule) && grid.getRevision() == revision + 1,
-           "retry publishes once for the whole generation");
+           "a generation publishes once");
   SparseGenerationDelta delta;
   testTrue(g,
            grid.captureGenerationDelta(revision, &delta) &&
@@ -283,20 +277,10 @@ testElementaryTransactions()
 
   SparseCellGrid destination;
   destination.setCell(CellAddress{ 100, 4 }, 0);
-  const std::vector<SparseChunkRecord> oldDestination =
-    destination.collectChunkRecords();
-  const std::uint64_t destinationRevision = destination.getRevision();
-  destination.setElementaryWriteFailureForTesting(1);
-  testTrue(
-    g,
-    !destination.advanceFrom(grid, rule) &&
-      destination.getRevision() == destinationRevision &&
-      sameSparseRecords(oldDestination, destination.collectChunkRecords()),
-    "external-source failure preserves destination");
   testTrue(g,
            destination.advance(rule) &&
              destination.getCell(CellAddress{ 99, 5 }) == 0,
-           "failed external-source binding is released before direct advance");
+           "a destination advances directly before an external source");
   SparseCellGrid expected;
   expected.copyStateFrom(grid);
   expected.advance(rule);
@@ -304,7 +288,7 @@ testElementaryTransactions()
            destination.advanceFrom(grid, rule) &&
              sameSparseRecords(destination.collectChunkRecords(),
                                expected.collectChunkRecords()),
-           "external-source retry produces complete source history");
+           "external-source advance produces complete source history");
   SparseCellGrid empty;
   testTrue(g,
            destination.advanceFrom(empty, rule) &&
@@ -315,19 +299,13 @@ testElementaryTransactions()
   SparseCellGrid torus(1, 1);
   torus.setCell(CellAddress{ 8, 0 }, 0);
   torus.setCell(CellAddress{ 8, 15 }, 0);
-  const std::vector<SparseChunkRecord> oldTorus = torus.collectChunkRecords();
-  torus.setElementaryWriteFailureForTesting(1);
-  testTrue(g,
-           !torus.advance(rule) &&
-             sameSparseRecords(oldTorus, torus.collectChunkRecords()),
-           "wrapped destination overwrite is transactional");
   testTrue(
     g,
     torus.advance(rule) && torus.getCell(CellAddress{ 8, 0 }) == 1 &&
       torus.getCell(CellAddress{ 7, 0 }) == 0 &&
       torus.getCell(CellAddress{ 9, 0 }) == 0 &&
       torus.getCell(CellAddress{ 8, 15 }) == 0,
-    "finite retry replaces destination row while preserving source history");
+    "finite advance replaces destination row while preserving source history");
 
   LifeLikeRuleSet life("LIFE", 1u << 3, (1u << 2) | (1u << 3));
   SparseCellGrid evolving;

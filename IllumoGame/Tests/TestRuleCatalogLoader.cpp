@@ -1,5 +1,6 @@
 #include "Game/RuleCatalogLoader.h"
 #include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -8,7 +9,6 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
-#include <stdexcept>
 
 static TestCounters g;
 
@@ -27,11 +27,15 @@ public:
     , executable(root / "executable")
     , working(root / "working")
   {
-    if (!std::filesystem::create_directory(root)) {
-      throw std::runtime_error("Catalog test directory already exists");
+    std::error_code error;
+    if (!std::filesystem::create_directory(root, error) || error) {
+      illumoFatal("Catalog test directory already exists");
     }
-    std::filesystem::create_directories(executable);
-    std::filesystem::create_directories(working / "IllumoGame");
+    std::filesystem::create_directories(executable, error);
+    std::filesystem::create_directories(working / "IllumoGame", error);
+    if (error) {
+      illumoFatal("Cannot create the catalog test directories");
+    }
   }
   ~CatalogFixture()
   {
@@ -56,7 +60,7 @@ public:
     file << text;
     file.close();
     if (!file) {
-      throw std::runtime_error("Cannot write catalog fixture");
+      illumoFatal("Cannot write catalog fixture");
     }
   }
 };

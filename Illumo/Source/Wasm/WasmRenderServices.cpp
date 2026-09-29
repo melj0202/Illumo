@@ -1,9 +1,9 @@
+#include <Illumo/Foundation/ParseNumber.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/WasmRenderServices.h>
 #include <IllumoGuest/Protocol.h>
-#include <exception>
 
 static const char*
 fontPath(const std::string& name)
@@ -56,10 +56,10 @@ resolveEngineFont(const std::string& name, EngineFontRequest& request)
       colon + 1,
       second == std::string::npos ? std::string::npos : second - colon - 1);
     if (digits.empty() || digits.size() > 4 ||
-        digits.find_first_not_of("0123456789") != std::string::npos) {
+        digits.find_first_not_of("0123456789") != std::string::npos ||
+        !parseWholeInteger(digits, &weight)) {
       return false;
     }
-    weight = std::stoi(digits);
     if (weight < 1 || weight > 1000) {
       return false;
     }
@@ -96,7 +96,7 @@ WasmRenderServices::WasmRenderServices(WasmFrameRenderer& frames,
 bool
 WasmRenderServices::process(std::span<const std::byte> requests,
                             std::vector<std::byte>& completions)
-try {
+{
   ILLUMO_PROFILE_ZONE("WasmRenderServices.process");
   completions.clear();
   m_error.clear();
@@ -302,6 +302,10 @@ try {
         }
       }
     }
+    if (payload.failed()) {
+      result.status = GuestServiceStatus::Rejected;
+      payload.clear();
+    }
     result.payload = payload.take();
     results.records.push_back(std::move(result));
   }
@@ -309,10 +313,10 @@ try {
   ILLUMO_PROFILE_PLOT("WasmRenderServices.Pending", m_pending.size());
   m_writer.clear();
   results.write(m_writer);
+  if (m_writer.failed()) {
+    m_error = m_writer.failure();
+    return false;
+  }
   completions.assign(m_writer.data().begin(), m_writer.data().end());
   return true;
-} catch (const std::exception& exception) {
-  m_error = exception.what();
-  completions.clear();
-  return false;
 }

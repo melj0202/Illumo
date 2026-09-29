@@ -1,12 +1,11 @@
 #include "MeshViewerConfig.h"
 #include "MeshViewerScene.h"
-#include "MeshViewerPlatform.h"
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Documents.h>
 #include <IllumoGuest/FileTree.h>
 #include <IllumoGuest/Program.h>
 #include <IllumoGuest/SceneFetches.h>
-#include <stdexcept>
 
 // MeshViewerPlatform over guest services: a chosen mesh is a read-only grant
 // whose bytes are parsed in memory; the host never discloses its path.
@@ -90,7 +89,7 @@ MeshViewerPlatform&
 MeshViewerPlatform::current()
 {
   if (installedPlatform == nullptr) {
-    throw std::logic_error("No guest MeshViewerPlatform is installed");
+    illumoFatal("No guest MeshViewerPlatform is installed");
   }
   return *installedPlatform;
 }

@@ -129,7 +129,7 @@ WasmProgram::setWorkerLimits(const WasmLimits& limits, std::uint32_t lanes)
 
 bool
 WasmProgram::start(IllumoContext& host)
-try {
+{
   ILLUMO_PROFILE_ZONE("Wasm.Start");
   IllumoContext* const context = &host;
   if (context->renderer == nullptr || context->window == nullptr ||
@@ -222,11 +222,19 @@ try {
                                                m_guest.capabilities(),
                                                m_fileRoots.packages,
                                                m_fileRoots.storage);
+    if (!files->valid()) {
+      fail(files->error());
+      return false;
+    }
   } else if (!m_fileRoots.package.empty() || !m_fileRoots.storage.empty()) {
     files = std::make_unique<WasmFileServices>(m_guest.session(),
                                                m_guest.capabilities(),
                                                m_fileRoots.package,
                                                m_fileRoots.storage);
+    if (!files->valid()) {
+      fail(files->error());
+      return false;
+    }
     std::uint64_t size = 0;
     if (!m_fileRoots.launch.empty() &&
         !files->grantLaunch(
@@ -260,33 +268,28 @@ try {
   GuestServices{}.write(emptyServices);
   m_completions = emptyServices.take();
   if (!m_modModule.empty()) {
-    try {
-      // Mods stay fuel-metered whatever the package requests.
-      WasmLimits modLimits;
-      modLimits.meterFuel = true;
-      modLimits.fuelPerCall = 1000000;
-      modLimits.deadlineMilliseconds = 25;
-      m_mod = std::make_unique<WasmGuest>(modLimits, 65536 + 256);
-      if (!m_mod->start(m_modModule,
-                        GuestRole::Mod,
-                        static_cast<std::uint32_t>(GuestCapability::Messages),
-                        {},
-                        response)) {
-        m_modError = m_mod->error();
-        m_mod.reset();
-      } else {
-        GuestWireReader modStarted(response);
-        if (modStarted.u32() != 1 || !modStarted.finished() ||
-            m_mod->descriptor().extensionApi !=
-              m_guest.descriptor().extensionApi) {
-          m_modError = "Mod startup or game API compatibility rejected";
-          m_mod->retire(m_modError);
-          m_mod.reset();
-        }
-      }
-    } catch (const std::exception& exception) {
-      m_modError = exception.what();
+    // Mods stay fuel-metered whatever the package requests.
+    WasmLimits modLimits;
+    modLimits.meterFuel = true;
+    modLimits.fuelPerCall = 1000000;
+    modLimits.deadlineMilliseconds = 25;
+    m_mod = std::make_unique<WasmGuest>(modLimits, 65536 + 256);
+    if (!m_mod->start(m_modModule,
+                      GuestRole::Mod,
+                      static_cast<std::uint32_t>(GuestCapability::Messages),
+                      {},
+                      response)) {
+      m_modError = m_mod->error();
       m_mod.reset();
+    } else {
+      GuestWireReader modStarted(response);
+      if (modStarted.u32() != 1 || !modStarted.finished() ||
+          m_mod->descriptor().extensionApi !=
+            m_guest.descriptor().extensionApi) {
+        m_modError = "Mod startup or game API compatibility rejected";
+        m_mod->retire(m_modError);
+        m_mod.reset();
+      }
     }
     if (!m_modError.empty()) {
       reportError(ic->commandLine, "Mod disabled: " + m_modError);
@@ -306,9 +309,6 @@ try {
     context->fileTree = m_treeSource.get();
   }
   return m_guest.isAlive();
-} catch (const std::exception& exception) {
-  fail(exception.what());
-  return false;
 }
 
 void
@@ -340,7 +340,7 @@ WasmProgram::fail(std::string error)
 
 void
 WasmProgram::update(double elapsed)
-try {
+{
   if (!m_guest.isAlive()) {
     return;
   }
@@ -361,6 +361,10 @@ try {
     }
     m_input.clear();
     snapshotInput.write(m_input);
+    if (m_input.failed()) {
+      fail(m_input.failure());
+      return;
+    }
   }
   std::vector<std::byte>& response = m_response;
   std::chrono::steady_clock::time_point stageStart = updateStart;
@@ -491,8 +495,6 @@ try {
   ILLUMO_PROFILE_PLOT("Wasm.WorldInstances", counters.worldInstances);
   ILLUMO_PROFILE_PLOT("Wasm.VisualOperations", counters.visualOperations);
   ILLUMO_PROFILE_PLOT("Wasm.Visuals", counters.visuals);
-} catch (const std::exception& exception) {
-  fail(exception.what());
 }
 
 void

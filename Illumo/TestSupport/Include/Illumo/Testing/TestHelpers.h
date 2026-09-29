@@ -5,12 +5,23 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 struct TestCounters
 {
   int failures = 0;
 };
+
+// A fixture or protocol step a test cannot continue past: reports it and
+// ends the run with a failing exit code (the build has no exceptions).
+[[noreturn]] inline void
+testFailure(const std::string& message)
+{
+  std::printf("FAIL: %s\n", message.c_str());
+  std::fflush(stdout);
+  std::exit(1);
+}
 
 inline void
 testTrue(TestCounters& c, bool cond, const char* msg)

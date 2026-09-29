@@ -35,8 +35,10 @@ public:
   TextureHandle importTexture(GuestResourceId id);
   GuestFrame takeFrame();
   // Swaps the recorded frame into `output`; the previous contents of
-  // `output` become the next frame's recycled storage.
-  void takeFrame(GuestFrame& output);
+  // `output` become the next frame's recycled storage. False, leaving the
+  // frame in place, when the recording broke the guest contract;
+  // submissionError() says why.
+  bool takeFrame(GuestFrame& output);
   // Frame schema v5: commands submitted between beginSurface and endSurface
   // record into a surface of that logical size instead of the main frame.
   // Surfaces take UI batches only; texture and mesh writes stay frame-level.
@@ -192,14 +194,18 @@ private:
     // describe the texture, and its host copy (if any) is out of date.
     bool replacing() const { return pending != 0 || unsent; }
   };
-  void consume(const RenderCommand& command);
-  void draw(std::uint32_t first, std::uint32_t count);
+  // Each returns false after fail() when the command breaks the contract.
+  bool consume(const RenderCommand& command);
+  bool draw(std::uint32_t first, std::uint32_t count);
+  bool submitCommands();
+  // Records the frame's first contract failure; always false.
+  bool fail(const std::string& message);
   // Copies indices [first, first + count) and the vertices they reference
   // into batch as inline geometry. The batch style must already be set.
-  static void extractInline(const Mesh& mesh,
-                            GuestBatch& batch,
-                            std::uint32_t first,
-                            std::uint32_t count);
+  bool extractInline(const Mesh& mesh,
+                     GuestBatch& batch,
+                     std::uint32_t first,
+                     std::uint32_t count);
   void release(GuestResourceId id);
   // Sends a texture's unsent replacement if the service queue has room.
   void sendReplacement(Texture& texture);
@@ -220,7 +226,7 @@ private:
   GuestResourceId hostTexture(TextureHandle handle) const;
   std::uint32_t currentTarget() const;
   // Closes the target's batch range at this point and places a visual.
-  void placeVisual(std::uint32_t visual);
+  bool placeVisual(std::uint32_t visual);
   // Covers each composition's remaining batches and replaces compositions
   // equal to the last delivered ones with `same`.
   void finishCompositions();

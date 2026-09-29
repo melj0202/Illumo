@@ -2011,7 +2011,7 @@ WasmFrameRenderer::createTexture(std::span<const std::byte> pixels,
                                  std::uint32_t channels,
                                  bool linear,
                                  std::shared_ptr<Font> font)
-try {
+{
   ILLUMO_PROFILE_ZONE("WasmFrame.CreateTexture");
   State& state = *m_state;
   const std::uint64_t bytes =
@@ -2052,15 +2052,12 @@ try {
     texture->font = std::move(font);
   }
   return state.textures.insert(std::move(texture));
-} catch (const std::exception& exception) {
-  m_state->error = exception.what();
-  return {};
 }
 
 GuestResourceId
 WasmFrameRenderer::createCubemap(std::span<const std::byte> faces,
                                  std::uint32_t size)
-try {
+{
   ILLUMO_PROFILE_ZONE("WasmFrame.CreateCubemap");
   State& state = *m_state;
   const std::uint64_t bytes = GuestCubemapRequest::bytesFor(size);
@@ -2094,14 +2091,11 @@ try {
   Logger::LogTrace("Guest cubemap enrolled: " + std::to_string(size) +
                    " px faces");
   return state.textures.insert(std::move(cubemap));
-} catch (const std::exception& exception) {
-  m_state->error = exception.what();
-  return {};
 }
 
 GuestResourceId
 WasmFrameRenderer::createMesh(const GuestMeshRequest& request)
-try {
+{
   ILLUMO_PROFILE_ZONE("WasmFrame.CreateMesh");
   State& state = *m_state;
   const std::uint64_t bytes =
@@ -2146,14 +2140,11 @@ try {
     return id;
   }
   return state.retainedMeshes.insert(std::move(mesh));
-} catch (const std::exception& exception) {
-  m_state->error = exception.what();
-  return {};
 }
 
 bool
 WasmFrameRenderer::writeMesh(const GuestMeshWrite& write)
-try {
+{
   ILLUMO_PROFILE_ZONE("WasmFrame.WriteMesh");
   State& state = *m_state;
   const std::shared_ptr<const State::RetainedMesh> mesh =
@@ -2180,9 +2171,6 @@ try {
     return state.finalizeMesh(*mesh);
   }
   return true;
-} catch (const std::exception& exception) {
-  m_state->error = exception.what();
-  return false;
 }
 
 bool
@@ -2198,19 +2186,8 @@ WasmFrameRenderer::releaseTexture(const GuestResourceId& id)
 }
 bool
 WasmFrameRenderer::accept(std::span<const std::byte> packet)
-try {
+{
   return m_state->accept(packet);
-} catch (const std::exception& exception) {
-  m_state->error = exception.what();
-  if (m_state->changingResources) {
-    m_state->frame.batches.clear();
-    m_state->frame.textureWrites.clear();
-    m_state->uploadTextures.clear();
-    m_state->payloads.clear();
-    m_state->changingResources = false;
-    m_state->renderer.reportFrameError(m_state->error);
-  }
-  return false;
 }
 void
 WasmFrameRenderer::dispatch(DrawList& scene)

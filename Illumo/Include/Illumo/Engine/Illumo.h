@@ -21,6 +21,7 @@ class DrawList;
 struct IllumoConfig
 {
   std::string applicationName{ "Illumo" };
+  // UTF-8; empty selects EnvVars::ApplicationConfigPath().
   std::string environmentPath;
 };
 

@@ -125,6 +125,11 @@ thread spawning works. The SDK documents extra exception flags and experimental
 thread targets. This proposal uses serial entry per instance and message-based
 workers; it does not depend on guest pthreads or shared linear memories.
 
+Later, D-F3 (2026-09-29) turned exceptions off deliberately: guests build with
+`-fno-exceptions` against the SDK's no-exceptions libc++, Wasmtime refuses the
+exception proposal, and the compatibility guest now checks scope destructors
+and `new (std::nothrow)` failure instead of caught exceptions.
+
 Use core WASM and a small explicit ABI for this migration. Component-model
 bindings can be evaluated later; they are not required to establish isolation.
 Use no unrestricted WASI filesystem/process/environment/network bindings. Any
@@ -236,7 +241,8 @@ ID, naming another package or copying a serialized handle.
 Host imports copy requests before returning, or process bounded read-only values
 within the invocation. No native command retains a guest-memory address. Memory
 growth, the next callback, guest unload and traps must not invalidate accepted
-host data. Checked host operations contain exceptions and return status values.
+host data. Checked host operations return status values (the build has no
+exceptions, D-F3).
 
 Capabilities cover resource creation, packaged asset reads, private storage,
 selected-file access, clipboard, console registration, display requests and

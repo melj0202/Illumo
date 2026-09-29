@@ -1,10 +1,10 @@
 #pragma once
+#include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <IllumoGuest/Display.h>
 #include <IllumoGuest/Input.h>
-#include <stdexcept>
 
 // Guest-local window values. A configured display client submits absolute
 // settings and reconciles actual results without exposing native pointers.
@@ -88,7 +88,7 @@ public:
   void toggleFullscreen() override
   {
     if (m_display == nullptr || m_environment == nullptr) {
-      throw std::logic_error("Display request service required");
+      illumoFatal("GuestSnapshotWindow: no display service is bound");
     }
     m_environment->setVar("fullscreen",
                           !m_environment->getVar("fullscreen").valueAsBool);
@@ -97,11 +97,11 @@ public:
   }
   void reinitializeWindow(int, int, const std::string&) override
   {
-    throw std::logic_error("Display request service required");
+    illumoFatal("GuestSnapshotWindow: no display service is bound");
   }
   void reinitializeWindow() override
   {
-    throw std::logic_error("Display request service required");
+    illumoFatal("GuestSnapshotWindow: no display service is bound");
   }
   void handleResize(int width, int height) override
   {
@@ -132,7 +132,7 @@ public:
   int getRefreshRate() const override { return 0; }
   void swapBuffers() override
   {
-    throw std::logic_error("Host owns presentation");
+    illumoFatal("GuestSnapshotWindow: the host owns presentation");
   }
   void requestClose() override { m_close = true; }
   void cancelCloseRequest() override { m_close = false; }

@@ -1,9 +1,11 @@
 #include "../../Wasm/WasmEngineConfig.h"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include <Illumo/Foundation/ParseNumber.h>
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <windows.h>
 
 // This helper compiles but never instantiates untrusted WASM. The parent
@@ -15,18 +17,21 @@
 // example the job's memory limit).
 int
 main(int argc, char** argv)
-try {
+{
   WasmEngineOptions options;
+  std::uint32_t mask = 0;
+  std::uint64_t handleValue = 0;
   if (argc != 3 ||
       std::string(argv[2]).find_first_not_of("0123456789") !=
         std::string::npos ||
-      !decodeWasmEngineOptions(static_cast<std::uint32_t>(std::stoul(argv[2])),
-                               options)) {
+      !parseWholeInteger(std::string_view(argv[2]), &mask) ||
+      !decodeWasmEngineOptions(mask, options) ||
+      !parseWholeInteger(std::string_view(argv[1]), &handleValue)) {
     return 2;
   }
   constexpr std::size_t kCapacity = 256u * 1024u * 1024u;
   constexpr std::size_t kHeaderBytes = 16u;
-  const HANDLE mapping = reinterpret_cast<HANDLE>(std::stoull(argv[1]));
+  const HANDLE mapping = reinterpret_cast<HANDLE>(handleValue);
   std::uint8_t* shared = static_cast<std::uint8_t*>(
     MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity));
   if (shared == nullptr) {
@@ -70,6 +75,4 @@ try {
   wasm_engine_delete(engine);
   UnmapViewOfFile(shared);
   return status;
-} catch (...) {
-  return 2;
 }

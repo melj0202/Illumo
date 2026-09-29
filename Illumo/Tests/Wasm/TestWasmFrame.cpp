@@ -27,7 +27,6 @@
 #include <limits>
 #include <memory>
 #include <span>
-#include <stdexcept>
 #include <thread>
 
 // TestWasmAudio.cpp: the Audio capability cases.
@@ -70,11 +69,11 @@ public:
   }
 };
 
-class ThrowingBackend : public MockBackend
+class FailingBackend : public MockBackend
 {
 public:
-  int replacementsBeforeThrow = -1;
-  bool throwTexture = false;
+  int replacementsBeforeFailure = -1;
+  bool failTexture = false;
   bool sawModColor = false;
   std::size_t observedDraws = 0;
   std::size_t uploadedBufferBytes = 0;
@@ -112,11 +111,11 @@ public:
                    MeshVertexLayout layout,
                    bool dynamic) override
   {
-    if (replacementsBeforeThrow == 0) {
-      throw std::runtime_error("Injected mesh failure");
+    if (replacementsBeforeFailure == 0) {
+      return false; // injected mesh allocation failure
     }
-    if (replacementsBeforeThrow > 0) {
-      --replacementsBeforeThrow;
+    if (replacementsBeforeFailure > 0) {
+      --replacementsBeforeFailure;
     }
     return MockBackend::ReplaceMesh(
       handle, vertices, vertexBytes, indices, indexBytes, layout, dynamic);
@@ -127,8 +126,8 @@ public:
                               int channels,
                               const TextureOptions& options) override
   {
-    if (throwTexture) {
-      throw std::runtime_error("Injected texture failure");
+    if (failTexture) {
+      return {}; // injected texture allocation failure
     }
     return MockBackend::CreateTexture(data, width, height, channels, options);
   }
@@ -375,17 +374,12 @@ run(const std::string& name)
     invalid = retained;
     invalid.batches[0].texture = {};
     rejectsFrame(counters, invalid, "Skyboxes need a cubemap texture");
-    bool inlineRetainedRefused = false;
-    try {
-      invalid = retained;
-      invalid.batches[1].vertices = makeFrame().batches[0].vertices;
-      GuestWireWriter refused;
-      invalid.write(refused);
-    } catch (const std::length_error&) {
-      inlineRetainedRefused = true;
-    }
+    invalid = retained;
+    invalid.batches[1].vertices = makeFrame().batches[0].vertices;
+    GuestWireWriter refused;
+    invalid.write(refused);
     testTrue(counters,
-             inlineRetainedRefused,
+             refused.failed(),
              "Writers refuse retained batches with inline geometry");
 
     // Version 9: the Canvas batch's shader fade (clock, speed, layout).
@@ -532,7 +526,7 @@ run(const std::string& name)
     env.setVar("WinX", 640);
     env.setVar("WinY", 480);
     Camera camera(glm::vec2(0, 0), 1, &env);
-    ThrowingBackend mock;
+    FailingBackend mock;
     mock.Initialize();
     Renderer renderer(&window, &env, &camera, &mock, false);
     renderer.ensureBuiltinStyles();
@@ -796,7 +790,7 @@ run(const std::string& name)
   env.setVar("WinX", 640);
   env.setVar("WinY", 480);
   Camera camera(glm::vec2(0, 0), 1, &env);
-  ThrowingBackend mock;
+  FailingBackend mock;
   mock.Initialize();
   Renderer renderer(&window, &env, &camera, &mock, false);
   renderer.ensureBuiltinStyles();
@@ -1719,7 +1713,7 @@ run(const std::string& name)
            "Texture writes must stay inside the owned resource");
   if (name == "FrameFailures") {
     // Inline slots are pooled per style, so only growth replaces a slot.
-    // Every batch outgrows its slot; the second replacement throws after
+    // Every batch outgrows its slot; the second replacement fails after
     // the first one succeeded.
     for (GuestBatch& batch : frame.batches) {
       const std::vector<GuestVertex> original = batch.vertices;
@@ -1730,11 +1724,11 @@ run(const std::string& name)
     }
     wire.clear();
     frame.write(wire);
-    mock.replacementsBeforeThrow = 1;
+    mock.replacementsBeforeFailure = 1;
     testTrue(
       counters,
       !bridge.accept(wire.data()),
-      "Allocation exception contained after a successful slot replacement");
+      "Allocation failure contained after a successful slot replacement");
     DrawList scene(&window, &camera);
     bridge.dispatch(scene);
     renderer.BeginFrame();
@@ -1744,11 +1738,11 @@ run(const std::string& name)
                mock.countNonEmptyOfType(CommandType::DrawIndexed),
                0,
                "Failed mutation cannot reuse incompatible old-frame payloads");
-    mock.throwTexture = true;
+    mock.failTexture = true;
     testTrue(counters,
              bridge.createTexture(pixel, 1, 1, 4, false).owner == 0 &&
                !bridge.error().empty(),
-             "Texture allocation exception contained");
+             "Texture allocation failure contained");
     return counters.failures == 0;
   }
   std::fill(transferred.begin(), transferred.end(), std::byte{ 0 });

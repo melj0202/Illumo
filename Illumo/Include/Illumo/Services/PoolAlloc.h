@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Foundation/Fatal.h>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -72,7 +73,7 @@ public:
   {
     if (numBlocks > std::numeric_limits<size_t>::max() / blockSize ||
         numBlocks > std::numeric_limits<size_t>::max() / kMaxChunks) {
-      throw std::bad_array_new_length();
+      illumoFatal("ChainedPoolAlloc: the chunk size overflows");
     }
     // Growth only populates an empty list; reserve before owning any chunks.
     freeList.reserve(numBlocks);
