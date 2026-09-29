@@ -58,15 +58,38 @@ chooseFile(const SaveLoadDialogSpec& specification, bool save)
   filter += pattern;
   filter.push_back(L'\0');
   filter.push_back(L'\0');
+  // Owning the dialog by the calling window (main or a detached panel) keeps
+  // it modal to that window and gives Windows somewhere to return activation;
+  // without an owner the app is left unfocused after the dialog closes.
+  HWND owner = GetActiveWindow();
+  if (owner == nullptr) {
+    const HWND foreground = GetForegroundWindow();
+    DWORD process = 0;
+    GetWindowThreadProcessId(foreground, &process);
+    if (foreground != nullptr && process == GetCurrentProcessId()) {
+      owner = foreground;
+    }
+  }
   OPENFILENAMEW dialog{};
   dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = owner;
   dialog.lpstrFile = file.data();
   dialog.nMaxFile = static_cast<DWORD>(file.size());
   dialog.lpstrFilter = filter.c_str();
   dialog.nFilterIndex = 1;
   dialog.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR |
                  (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
-  if (!(save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog))) {
+  const BOOL chosen =
+    save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
+  if (owner != nullptr && IsWindow(owner)) {
+    // A fullscreen GLFW window iconifies when the dialog takes focus.
+    if (IsIconic(owner)) {
+      ShowWindow(owner, SW_RESTORE);
+    }
+    SetForegroundWindow(owner);
+    SetFocus(owner);
+  }
+  if (!chosen) {
     if (CommDlgExtendedError() != 0) {
       Logger::LogError("SaveLoad: native file dialog failed");
     }
