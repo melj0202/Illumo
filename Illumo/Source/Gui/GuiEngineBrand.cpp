@@ -18,6 +18,7 @@ static const ColorRgba kGroundCenter{ 28, 19, 8, 255 };
 static const ColorRgba kNeonGlow{ 255, 150, 40, 255 };
 static const ColorRgba kLetters{ 255, 241, 214, 255 };
 static const char* kBadgeLabel = "POWERED BY";
+static const char* kSplashLabel = "MADE WITH";
 
 // A brand image with linear filtering and its width over height, or an
 // invalid handle (and aspect 0) when it cannot be used.
@@ -271,6 +272,7 @@ GuiEngineSplash::redraw()
   }
   const float centerX = width * 0.5f;
   const float centerY = height * 0.47f;
+  const float bottom = centerY - logoHeight * 0.5f;
   const float opacity = logoOpacity();
   ColorRgba glow = kNeonGlow;
   glow.a = alphaOf(opacity, 36);
@@ -278,10 +280,22 @@ GuiEngineSplash::redraw()
     logo, centerX, centerY, logoWidth * 0.8f, logoHeight * 1.2f, glow, 32);
   logo.addSprite(m_logo,
                  centerX - logoWidth * 0.5f,
-                 centerY - logoHeight * 0.5f,
+                 bottom,
                  logoWidth,
                  logoHeight,
                  ColorRgba{ 255, 255, 255, alphaOf(opacity, 255) });
+  // "MADE WITH" sits above the logo (smaller y is higher in pixel space)
+  // and fades with it.
+  const float labelSize = logoHeight * 0.09f;
+  const float labelGap = logoHeight * 0.14f;
+  const float labelWidth =
+    GuiKit::measureEmphasizedText(kSplashLabel, labelSize, 0.0f);
+  logo.addText(
+    kSplashLabel,
+    centerX - labelWidth * 0.5f,
+    bottom - labelGap - labelSize,
+    labelSize,
+    ColorRgba{ kLetters.r, kLetters.g, kLetters.b, alphaOf(opacity, 140) });
   logo.setVisible(true);
 }
 

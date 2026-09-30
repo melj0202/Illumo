@@ -60,9 +60,9 @@ private:
 
 // The opening splash: over the brand's warm dark ground, the neon logo
 // strikes like a tube lighting (a plain fade with reduced motion), holds,
-// and fades out. Any key press, except the console's Grave key, or a fresh
-// click skips it. It owns its layers; its owner (RuntimeShell) dispatches
-// them and moves on once finished().
+// and fades out as one piece. Any key press, except the console's Grave
+// key, or a fresh click skips it. It owns its layers; its owner
+// (RuntimeShell) dispatches them and moves on once finished().
 class GuiEngineSplash final
 {
 public:
