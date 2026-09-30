@@ -17,6 +17,7 @@ class IEnvVars;
 class InputManager;
 class Renderer;
 class DrawList;
+enum class BackendDef;
 
 struct IllumoConfig
 {
@@ -74,16 +75,24 @@ public:
 private:
   friend class IllumoTestAccess;
 
-  using WindowFactory = std::function<
-    std::unique_ptr<IRenderWindow>(int, int, const std::string&, IEnvVars*)>;
+  // Both receive the graphics API being started: the GraphicsAPI setting,
+  // then OpenGL when that one fails.
+  using WindowFactory = std::function<std::unique_ptr<
+    IRenderWindow>(int, int, const std::string&, IEnvVars*, BackendDef)>;
   using BackendFactory =
-    std::function<std::unique_ptr<IBackend>(IRenderWindow*)>;
+    std::function<std::unique_ptr<IBackend>(IRenderWindow*, BackendDef)>;
 
   void applyHostDefaults();
   void clearContext();
   void processGlobalHotkeys();
   void configureScenePipeline();
   void releaseServices();
+  // Creates the window and an initialized backend for one API. False, with
+  // both released, when either fails.
+  bool startGraphics(BackendDef api,
+                     int width,
+                     int height,
+                     std::unique_ptr<IBackend>* backend);
 
   FrameProfiler m_frameProfiler;
   std::string m_applicationName;

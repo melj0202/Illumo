@@ -443,6 +443,21 @@ testConfigurationNavigationAndActions()
   testTrue(g, fixture.read().msaa == 8, "right steps MSAA from 4x to 8x");
 
   fixture.menu.open(defaultConfiguration());
+  testTrue(g,
+           fixture.read().graphicsApi == "OPENGL",
+           "the renderer defaults to OpenGL");
+  fixture.pressRepeated(KeyCode::Down, row(ConfigurationSetting::Renderer));
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.read().graphicsApi == "VULKAN",
+           "right picks the Vulkan renderer");
+  fixture.press(KeyCode::Left);
+  fixture.menu.update(&fixture.input);
+  testTrue(
+    g, fixture.read().graphicsApi == "OPENGL", "left goes back to OpenGL");
+
+  fixture.menu.open(defaultConfiguration());
   fixture.press(KeyCode::F1);
   testTrue(g,
            fixture.menu.update(&fixture.input) ==

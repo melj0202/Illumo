@@ -1,15 +1,18 @@
 #pragma once
 #include <IllumoGuest/Services.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <string>
 
 // Display wire version. Version 2 appends hideSystemCursor to the state.
 // Version 3 carries the UI scale in hundredths with 0 for automatic, where
 // earlier versions carry a whole factor 1-4. Version 4 appends the MSAA
 // preference (read when the host window is created) and the samples of the
-// window now running. Hosts still accept versions 1-3 and answer each request
-// in its own version.
-inline constexpr std::uint32_t kGuestDisplayVersion = 4u;
+// window now running. Version 5 appends the rendering backend the host saves
+// for its next launch and the one now running. Hosts still accept versions 1-4
+// and answer each request in its own version.
+inline constexpr std::uint32_t kGuestDisplayVersion = 5u;
 
 struct GuestDisplayState
 {
@@ -31,9 +34,39 @@ struct GuestDisplayState
   // is 0xFFFFFFFF when unknown. Both are 0 or a power of two up to 16.
   std::uint32_t msaa = 4;
   std::uint32_t activeMsaa = kUnknownMsaa;
+  // Version 5: the rendering backend (kGraphicsApi*). In a request 0 leaves
+  // the host's saved choice alone; a report carries the saved choice and the
+  // running backend, 0 when unknown. A change applies at the next launch.
+  std::uint32_t graphicsApi = kGraphicsApiUnset;
+  std::uint32_t activeGraphicsApi = kGraphicsApiUnset;
   bool operator==(const GuestDisplayState&) const = default;
 
   static constexpr std::uint32_t kUnknownMsaa = 0xFFFFFFFFu;
+  static constexpr std::uint32_t kGraphicsApiUnset = 0u;
+  static constexpr std::uint32_t kGraphicsApiOpenGl = 1u;
+  static constexpr std::uint32_t kGraphicsApiVulkan = 2u;
+  // The code for a GraphicsAPI setting value in any letter case; unset for
+  // anything else.
+  static std::uint32_t graphicsApiCode(const std::string& name)
+  {
+    std::string upper = name;
+    for (char& character : upper) {
+      character =
+        static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    }
+    if (upper == "OPENGL") {
+      return kGraphicsApiOpenGl;
+    }
+    return upper == "VULKAN" ? kGraphicsApiVulkan : kGraphicsApiUnset;
+  }
+  // The GraphicsAPI setting value for a code; empty for unset.
+  static std::string graphicsApiName(std::uint32_t code)
+  {
+    if (code == kGraphicsApiOpenGl) {
+      return "OPENGL";
+    }
+    return code == kGraphicsApiVulkan ? "VULKAN" : "";
+  }
   static bool validMsaa(std::uint32_t samples)
   {
     return samples <= 16u && (samples & (samples - 1u)) == 0u;
@@ -72,6 +105,10 @@ struct GuestDisplayState
       writer.u32(msaa);
       writer.u32(activeMsaa);
     }
+    if (version >= 5u) {
+      writer.u32(graphicsApi);
+      writer.u32(activeGraphicsApi);
+    }
   }
   static bool read(GuestWireReader& reader,
                    GuestDisplayState& state,
@@ -91,6 +128,12 @@ struct GuestDisplayState
       msaa = reader.u32();
       activeMsaa = reader.u32();
     }
+    std::uint32_t graphicsApi = kGraphicsApiUnset;
+    std::uint32_t activeGraphicsApi = kGraphicsApiUnset;
+    if (version >= 5u) {
+      graphicsApi = reader.u32();
+      activeGraphicsApi = reader.u32();
+    }
     const bool scaleValid =
       version >= 3u ? scale == 0u || (scale >= kMinimumUiScaleHundredths &&
                                       scale <= kMaximumUiScaleHundredths)
@@ -104,10 +147,14 @@ struct GuestDisplayState
     state.hideSystemCursor = hideSystemCursor != 0u;
     state.msaa = msaa;
     state.activeMsaa = activeMsaa;
+    state.graphicsApi = graphicsApi;
+    state.activeGraphicsApi = activeGraphicsApi;
     return reader.valid() && fullscreen <= 1 && vsync <= 1 &&
            hideSystemCursor <= 1 && fps <= 1000 && scaleValid &&
            validMsaa(msaa) &&
-           (activeMsaa == kUnknownMsaa || validMsaa(activeMsaa));
+           (activeMsaa == kUnknownMsaa || validMsaa(activeMsaa)) &&
+           graphicsApi <= kGraphicsApiVulkan &&
+           activeGraphicsApi <= kGraphicsApiVulkan;
   }
 };
 

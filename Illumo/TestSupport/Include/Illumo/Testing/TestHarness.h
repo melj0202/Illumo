@@ -68,6 +68,10 @@ public:
   // The framebuffer's multisample count; -1 (unknown) by default.
   int getMsaaSamples() const override { return msaaSamples; }
   int msaaSamples = -1;
+  // The rendering backend, as GraphicsAPI spells it; empty (unknown) by
+  // default.
+  std::string graphicsApi() const override { return graphicsApiName; }
+  std::string graphicsApiName;
 };
 
 struct HeadlessRenderFixture

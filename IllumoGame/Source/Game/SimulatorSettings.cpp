@@ -72,6 +72,7 @@ SimulatorSettings::read(IEnvVars* environment, SimulatorConfiguration* output)
     output->uiScale = 1.0;
   }
   output->msaa = msaa(environment);
+  output->graphicsApi = graphicsApi(environment);
   output->showInspector = environment->getVar("showInspector").valueAsBool;
   output->reducedUiMotion = environment->getVar("reducedUiMotion").valueAsBool;
   output->soundVolume = CSimSounds::volumeSetting(environment);
@@ -163,6 +164,7 @@ SimulatorSettings::write(IEnvVars* environment,
   environment->setVar("uiScale",
                       UiScale::text(static_cast<float>(configuration.uiScale)));
   environment->setVar("msaa", configuration.msaa);
+  environment->setVar("GraphicsAPI", configuration.graphicsApi);
   environment->setVar("soundVolume", configuration.soundVolume);
   environment->setVar("musicVolume", configuration.musicVolume);
   environment->setVar("startPaused", configuration.startPaused);

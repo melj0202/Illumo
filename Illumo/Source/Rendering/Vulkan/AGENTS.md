@@ -5,40 +5,61 @@ This file specializes `Illumo/Source/Rendering/AGENTS.md` for
 
 ## Status
 
-This directory holds file stubs only. There is no Vulkan instance, device,
-swapchain, or command submission yet; `VulkanBackend::Initialize()`
-deliberately returns `false`. It is not composed into
-`Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.cpp`'s call site or any
-CMake target, and `Illumo/AGENTS.md` still names OpenGL as the only supported
-rendering backend. Do not describe Vulkan as available until real
-initialization, resource creation, and submission exist and are verified.
+A complete `IBackend` on Vulkan 1.3 (D-R33), selected by the `GraphicsAPI`
+setting, `--graphics-api`, or `set GraphicsAPI vulkan` (restart). OpenGL stays
+the default; a Vulkan start that fails falls back to OpenGL. Verified on
+Windows with an NVIDIA driver; Linux sources compile but are unverified. The
+plan, parity contract and validation log are in `docs/vulkan-backend-plan.md`.
 
-Adding the Vulkan SDK is a new third-party dependency and requires explicit
-user approval plus a licensing, maintenance, build, and deployment assessment
-(`AGENTS.md`) before any CMake wiring or `<vulkan/vulkan.h>` include lands.
+## Scope and boundaries
 
-## Scope and boundaries (once implemented)
+This directory is the only place Vulkan types, headers and calls exist. The
+composition files (`Engine/Illumo.cpp`, `Rendering/FrameCapture.cpp`,
+`Rendering/RenderWindow.cpp` for `GLFW_NO_API`) name it through
+`CreateVulkanBackend.h`, which exposes no Vulkan types. `Renderer`, drawables,
+public headers, guests and products never see it.
 
-This directory will be the sole implementation boundary for command execution
-with Vulkan: backend creation, command decoding, resource registries, meshes,
-textures, shaders, device/queue state, and draw submission, mirroring the
-`OpenGL/` boundary. Do not leak Vulkan headers, handles, or state assumptions
-into neutral Rendering, Game, or Services.
+- `VulkanContext`: instance, surface, device selection, queue, VMA, optional
+  features (line rasterization, sample locations), format mapping.
+- `VulkanShaderCompiler`: glslang, GLSL 330 to SPIR-V with reflection.
+- `VulkanTexels`: CPU texel and readback conversions (headless-tested).
+- `VulkanDevice*`: the token executor, resources, submissions, presentation.
+- `VulkanBackend`: the `IBackend` facade (queue, statistics, validation text).
+- Dependencies: `thirdparty/{vulkan-headers,volk,vma,glslang}` built by
+  `cmake/IllumoVulkanDeps.cmake`; the driver supplies `vulkan-1.dll`.
 
-## Required invariants (once implemented)
+## Required invariants
 
-Follow the same contract `OpenGL/AGENTS.md` states for its backend:
-deterministic in-order token execution, registries owning concrete GPU
-resources with safe partial-initialization and failure handling,
-backend-neutral handles that never masquerade a failed create as valid,
-preserved mesh/index/texture capacities and formats, and correct pipeline
-layout/descriptor bindings for `FrameUniformsBlockName` at
-`FrameUniformsBindingPoint`. Keep all raw Vulkan calls here; window/surface
-creation remains in the shared window boundary.
+- Observable behaviour is the OpenGL backend's: same pixels (within MSAA edge
+  noise), row order, readback conversions, error strings and state-machine
+  persistence. Section 5.2 of the plan is the contract; change both backends
+  together or neither.
+- Every image, including the stand-in default framebuffer, is stored bottom
+  row first with an unflipped viewport; presentation flips. Front faces are
+  inverted and vertex shaders remap clip z. Never flip per pass.
+- Shaders stay the frontend's GLSL 330 text; rewriting happens here only
+  (`prepareGlslForVulkan`). Loose uniforms live in a per-program default block
+  whose values persist like OpenGL program uniforms.
+- Updates are ordered with draws: an upload goes to the recording's upload
+  command buffer until the resource is used in the main one, then inline.
+- Resource destruction is deferred until the submissions using it completed.
+- Every wait on presentation is bounded; while the session is locked presents
+  are skipped (`PlatformSessionLocked`), because the driver's present can stall
+  there. Frames keep rendering and readbacks keep working.
+- No exceptions, `auto`, namespaces or recursion, as everywhere.
 
-## Verification (once implemented)
+## Verification
 
-Use MockBackend tests to protect the neutral contract; a Vulkan-specific
-live-window smoke test class (mirroring `IllumoGpuTests`) is required before
-this backend replaces or supplements OpenGL in any build configuration.
-Update this file only for durable Vulkan backend rules.
+- Headless: `Illumo.Vulkan.*` in `IllumoTests` (GLSL preparation, program
+  semantics, engine shaders compile, texel conversion), plus the selection
+  tests (`Illumo.Host.GraphicsApiSelection`, `Illumo.BackendConfig.*`,
+  `Illumo.SysCmdLine.GraphicsApiOption`, `Illumo.Capture.Validation`).
+- Real GPU (`IllumoGpu` label): `Illumo.Gpu.BackendParity` renders a scene
+  suite through both backends in one process and compares pixels
+  (`IllumoGpuTests backendparity --dump <dir>` writes the images);
+  `Illumo.Gpu.Vulkan*Parity` run the instancing and RenderWorld cases on
+  Vulkan. Run them for any change here or to a token's OpenGL behaviour.
+- Live: `IllumoRuntime --app <id> --graphics-api vulkan --capture <png>` and
+  `--bench-frames` for every package, compared with OpenGL.
+- No validation layers are installed on the reference machine;
+  `ILLUMO_VULKAN_VALIDATION=1` enables them where they exist.

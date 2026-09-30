@@ -6,8 +6,9 @@
 
 struct GLFWwindow;
 
-// Platform window + GL context host. Draw submission is NOT done here;
-// use Renderer / IBackend. GLFW types are required for input callbacks.
+// Platform window, and the GL context host when the backend is OpenGL. Draw
+// submission is NOT done here; use Renderer / IBackend. GLFW types are
+// required for input callbacks.
 class IRenderWindow
 {
 public:
@@ -53,6 +54,9 @@ public:
   void clearRestartRequest() { m_restartRequested = false; }
   // Multisample count the framebuffer was created with, or -1 when unknown.
   virtual int getMsaaSamples() const { return -1; }
+  // The rendering backend the window was created for, spelled as the
+  // GraphicsAPI setting spells it ("OPENGL", "VULKAN"); empty when unknown.
+  virtual std::string graphicsApi() const { return {}; }
   // Hosts that learn the product name after creation (a package runtime)
   // retitle the window. Windows without a title bar ignore it.
   virtual void setTitle(const std::string& title) { (void)title; }

@@ -5,8 +5,8 @@
 class IBackend;
 class IRenderWindow;
 
-// Constructs the Vulkan backend stub. Not yet composed into production
-// backend selection (Engine/Illumo.cpp); the returned backend's Initialize()
-// reports failure until a real instance/device/swapchain exists.
+// Constructs the Vulkan backend. Illumo owns its one Initialize call, as for
+// CreateOpenGLBackend. present=false renders offscreen only (capture windows
+// and GPU tests); the window then only supplies the backbuffer size.
 std::unique_ptr<IBackend>
-CreateVulkanBackend(IRenderWindow* window);
+CreateVulkanBackend(IRenderWindow* window, bool present = true);

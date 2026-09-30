@@ -34,8 +34,9 @@ if(WIN32)
     Source/Platform/Windows/WinProcessRelaunch.cpp
     Source/Platform/Windows/WinSystemInfo.cpp
     Source/Platform/Windows/WinPathText.cpp
-    Source/Platform/Windows/WinPixelWindowPresent.cpp)
-  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm Gdi32 Advapi32)
+    Source/Platform/Windows/WinPixelWindowPresent.cpp
+    Source/Platform/Windows/WinSessionState.cpp)
+  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm Gdi32 Advapi32 Wtsapi32)
 elseif(UNIX)
   find_package(PkgConfig REQUIRED)
   find_package(Threads REQUIRED)
@@ -51,7 +52,8 @@ elseif(UNIX)
     Source/Platform/Linux/LinuxPixelWindowPresent.cpp
     Source/Platform/Linux/LinuxProcessRelaunch.cpp
     Source/Platform/UnsupportedProcessMemoryStats.cpp
-    Source/Platform/UnsupportedSystemInfo.cpp)
+    Source/Platform/UnsupportedSystemInfo.cpp
+    Source/Platform/UnsupportedSessionState.cpp)
   list(APPEND ILLUMO_PLATFORM_LIBRARIES
     PkgConfig::GTK Threads::Threads ${CMAKE_DL_LIBS})
 else()
@@ -69,6 +71,7 @@ endif()
 add_subdirectory("thirdparty/glfw-3.4" SYSTEM)
 add_subdirectory("thirdparty/glm" SYSTEM)
 add_subdirectory("thirdparty/freetype-2.13.3" SYSTEM)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoVulkanDeps.cmake")
 
 if(NOT TARGET glew_s)
   add_library(glew_s STATIC
@@ -146,6 +149,15 @@ add_library(Illumo STATIC
   Source/Rendering/OpenGL/CreateOpenGLBackend.cpp
   Source/Rendering/OpenGL/GLBackend.cpp
   Source/Rendering/OpenGL/GLDevice.cpp
+  Source/Rendering/Vulkan/CreateVulkanBackend.cpp
+  Source/Rendering/Vulkan/VulkanBackend.cpp
+  Source/Rendering/Vulkan/VulkanContext.cpp
+  Source/Rendering/Vulkan/VulkanDevice.cpp
+  Source/Rendering/Vulkan/VulkanDeviceCommands.cpp
+  Source/Rendering/Vulkan/VulkanDevicePresent.cpp
+  Source/Rendering/Vulkan/VulkanDeviceResources.cpp
+  Source/Rendering/Vulkan/VulkanShaderCompiler.cpp
+  Source/Rendering/Vulkan/VulkanTexels.cpp
   Source/Engine/Illumo.cpp
   Source/Engine/Application.cpp
   Source/Gui/GridAtlas.cpp
@@ -228,6 +240,7 @@ target_include_directories(Illumo SYSTEM PRIVATE
 target_compile_definitions(Illumo PRIVATE ${ILLUMO_MINIAUDIO_DEFINITIONS})
 target_link_libraries(Illumo PRIVATE
   glm::glm glew_s glfw OpenGL::GL freetype-interface freetype
+  illumo_vulkan_headers illumo_volk illumo_vma illumo_glslang
   ${ILLUMO_PLATFORM_LIBRARIES})
 illumo_configure_runtime_target(Illumo)
 
@@ -310,6 +323,7 @@ if(BUILD_TESTING)
     Tests/TestRenderWorld.cpp
     Tests/TestVisualStore.cpp
     Tests/TestShaderPreprocessor.cpp
+    Tests/TestVulkanShaders.cpp
     Tests/TestGuiKit.cpp
     Tests/TestGuiDropdownList.cpp
     Tests/TestGuiFileTree.cpp
@@ -361,9 +375,11 @@ if(BUILD_TESTING)
   target_compile_definitions(IllumoTests PRIVATE
     ILLUMO_TEST_ARCHIVE_FIXTURE="${_illumo_archive_fixture}")
 
-  # Real-GPU checks. They need an OpenGL 3.3 context, so they carry their own
-  # label instead of IllumoWorkspace; exit code 77 reports a missing context.
-  add_executable(IllumoGpuTests Tests/Gpu/GpuInstancing.cpp)
+  # Real-GPU checks. They need an OpenGL 3.3 context or a Vulkan 1.3 device, so
+  # they carry their own label instead of IllumoWorkspace; exit code 77
+  # reports a missing context or device.
+  add_executable(IllumoGpuTests Tests/Gpu/GpuInstancing.cpp
+    Tests/Gpu/GpuBackendParity.cpp)
   target_link_libraries(IllumoGpuTests PRIVATE Illumo::TestSupport glfw)
   target_include_directories(IllumoGpuTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source")
@@ -374,7 +390,17 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
   add_test(NAME Illumo.Gpu.RenderWorldParity COMMAND IllumoGpuTests renderworld
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+  add_test(NAME Illumo.Gpu.VulkanInstancingParity
+    COMMAND IllumoGpuTests instancing --api vulkan
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+  add_test(NAME Illumo.Gpu.VulkanRenderWorldParity
+    COMMAND IllumoGpuTests renderworld --api vulkan
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+  add_test(NAME Illumo.Gpu.BackendParity COMMAND IllumoGpuTests backendparity
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
   set_tests_properties(Illumo.Gpu.InstancingParity Illumo.Gpu.RenderWorldParity
+    Illumo.Gpu.VulkanInstancingParity Illumo.Gpu.VulkanRenderWorldParity
+    Illumo.Gpu.BackendParity
     PROPERTIES LABELS "IllumoGpu" SKIP_RETURN_CODE 77 TIMEOUT 60)
 
   add_executable(IllumoPublicHeaderSmoke Tests/PublicHeaderSmoke.cpp)

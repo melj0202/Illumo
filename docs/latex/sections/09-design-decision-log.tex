@@ -3148,6 +3148,35 @@ again.\\
 \textbf{Extends:} D-R31
 \end{decisionbox}
 
+\subsection*{D-R33 --- A Vulkan backend with OpenGL's behaviour}
+\begin{decisionbox}[title={D-R33 \quad 2026-09-30}]
+\textbf{Decision:} \texttt{Rendering/Vulkan/} implements \symbolref{IBackend}
+on Vulkan 1.3 (dynamic rendering, synchronization2, push descriptors) and is
+chosen per launch by \texttt{GraphicsAPI} (\texttt{--graphics-api}, console
+\texttt{set}, or CSim's Video tab Renderer row, carried by Display wire
+version~5, which appends the saved and the running backend; a guest sends a
+choice only after the host has reported its own); OpenGL stays the default and
+takes over when Vulkan cannot start. It reproduces the OpenGL backend's observable results: images stored
+bottom row first with the present flipping them, inverted front faces and
+remapped clip $z$, the frontend's GLSL 330 compiled at run time by glslang,
+program-owned uniform values, persistent texture units and binding points,
+uploads ordered with draws, OpenGL's readback conversions, and the NVIDIA
+OpenGL driver's multisample line, sample and resolve behaviour. Presentation
+waits are bounded and presents pause while the login session is locked.
+\texttt{FrameCaptureOptions::graphicsApi} picks the capture backend.\\
+\textbf{Why:} The owner asked for a Vulkan backend to switch to and from, with
+no Vulkan logic in the renderer front end and the OpenGL backend's feature
+set.\\
+\textbf{Consequences:} Nothing Vulkan-specific reaches \texttt{Renderer},
+public headers, guests or products; a token or shader-visible change now has
+to keep \texttt{Illumo.Gpu.BackendParity} passing. Four vendored dependencies
+(Vulkan-Headers, volk, glslang 16.6.0 and VMA 3.4.0, all from Vulkan SDK
+1.4.363.0) are updated together. Recording costs more CPU time than OpenGL's
+driver-threaded submission (median about 0.13 against 0.04\,ms per frame for
+the shipped packages), well inside the frame budget.\\
+\textbf{Extends:} D-R8, D-R11, D-UI13
+\end{decisionbox}
+
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}
 \begin{decisionbox}[title={D-UI8 \quad 2026-09-23}]
 \textbf{Decision:} The glass menus move like liquid. A travelling selection

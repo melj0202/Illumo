@@ -1,6 +1,7 @@
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
 #include <Illumo/Engine/DebugOverlay.h>
 #endif
+#include "Rendering/BackendConfig.h"
 #include "Rendering/RenderWindow.h"
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Foundation/BuildInfo.h>
@@ -831,6 +832,87 @@ testScenePipelineOverrides()
   std::filesystem::remove(path, error);
 }
 
+// Initializes a headless host with GraphicsAPI set to `setting` and reports
+// the APIs it started windows and backends for, in order. Backends for
+// `failingApi` fail to initialize.
+static std::string
+startedGraphicsApis(const char* setting,
+                    BackendDef failingApi,
+                    bool* initialized,
+                    std::string* savedSetting)
+{
+  const std::filesystem::path path = temporaryEnvironmentPath("graphics-api");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  std::string started;
+  int windowDestructions = 0;
+  int initializations = 0;
+  {
+    Illumo host(headlessConfig(path));
+    host.environment().setVar("GraphicsAPI", setting);
+    IllumoTestAccess::setGraphicsApiFactories(
+      host,
+      [&started, &windowDestructions](
+        int, int, const std::string&, IEnvVars* environment, BackendDef api) {
+        started += "window:" + TokenToString(api) + " ";
+        return std::make_unique<CountingWindow>(&windowDestructions,
+                                                environment);
+      },
+      [&started, &initializations, failingApi](IRenderWindow*, BackendDef api) {
+        started += "backend:" + TokenToString(api) + " ";
+        return std::unique_ptr<IBackend>(std::make_unique<CountingMockBackend>(
+          &initializations, api != failingApi));
+      });
+    *initialized = host.initialize();
+    *savedSetting = host.environment().getVar("GraphicsAPI").value;
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+  return started;
+}
+
+static void
+testGraphicsApiSelection()
+{
+  testSection("Illumo: GraphicsAPI picks the backend, OpenGL is the fallback");
+  bool initialized = false;
+  std::string saved;
+  std::string started =
+    startedGraphicsApis("", BackendDef::DIRECTX11, &initialized, &saved);
+  testTrue(g,
+           initialized && started == "window:OPENGL backend:OPENGL ",
+           "no setting starts OpenGL");
+  started =
+    startedGraphicsApis("vulkan", BackendDef::DIRECTX11, &initialized, &saved);
+  testTrue(g,
+           initialized && started == "window:VULKAN backend:VULKAN ",
+           "a lowercase vulkan setting starts Vulkan alone");
+  started =
+    startedGraphicsApis("Vulkan", BackendDef::VULKAN, &initialized, &saved);
+  testTrue(g,
+           initialized && started == "window:VULKAN backend:VULKAN "
+                                     "window:OPENGL backend:OPENGL ",
+           "a Vulkan start that fails falls back to OpenGL in a new window");
+  testTrue(g,
+           saved == "Vulkan",
+           "the fallback keeps the saved preference for the next launch");
+  started =
+    startedGraphicsApis("DIRECTX12", BackendDef::VULKAN, &initialized, &saved);
+  testTrue(g,
+           initialized && started == "window:OPENGL backend:OPENGL ",
+           "an unimplemented backend starts OpenGL");
+  started =
+    startedGraphicsApis("metal", BackendDef::VULKAN, &initialized, &saved);
+  testTrue(g,
+           initialized && started == "window:OPENGL backend:OPENGL ",
+           "an unknown name starts OpenGL");
+  started =
+    startedGraphicsApis("OPENGL", BackendDef::OPENGL, &initialized, &saved);
+  testTrue(g,
+           !initialized && started == "window:OPENGL backend:OPENGL ",
+           "a failing OpenGL start fails without a second attempt");
+}
+
 static int
 runHostCase(void (*testFunction)())
 {
@@ -858,6 +940,8 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
                []() { return runHostCase(testFallibleFactoryBoundaries); });
   registry.add("Illumo.Host.GlobalHotkeys",
                []() { return runHostCase(testGlobalHotkeys); });
+  registry.add("Illumo.Host.GraphicsApiSelection",
+               []() { return runHostCase(testGraphicsApiSelection); });
   registry.add("Illumo.Host.ScenePipelineConfigurationFromEnv", []() {
     return runHostCase(testScenePipelineConfigurationFromEnv);
   });

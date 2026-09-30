@@ -51,7 +51,8 @@ static const ConfigurationSetting kCanvasRows[] = {
 static const ConfigurationSetting kVideoRows[] = {
   ConfigurationSetting::Fullscreen, ConfigurationSetting::Vsync,
   ConfigurationSetting::FpsCap,     ConfigurationSetting::Msaa,
-  ConfigurationSetting::ShowFps,    ConfigurationSetting::ShowMemory
+  ConfigurationSetting::Renderer,   ConfigurationSetting::ShowFps,
+  ConfigurationSetting::ShowMemory
 };
 static const ConfigurationSetting kAudioRows[] = {
   ConfigurationSetting::SoundVolume,
@@ -91,6 +92,7 @@ static const char* const kSettingLabels[] = { "Cell family",
                                               "Vertical sync",
                                               "FPS cap",
                                               "Anti-aliasing*",
+                                              "Renderer*",
                                               "FPS counter",
                                               "Memory readout",
                                               "Sound volume",
@@ -122,6 +124,7 @@ static const char* const kSettingHelp[] = {
   "Synchronize frame presentation to the monitor.",
   "Frame-rate limit; far right is uncapped. VSync still caps at refresh.",
   "Multisample anti-aliasing: Off, 2x, 4x, 8x. (*Requires restart)",
+  "Graphics API: OpenGL or Vulkan; both draw the same. (*Requires restart)",
   "Show frames per second and frame time in the top-left corner.",
   "Show the game's memory use in the top-left corner.",
   "Sound effect volume, off to 100%; each step previews the new level.",
@@ -394,6 +397,7 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
               ? std::min(current.uiScale, 8.0)
               : 1.0;
   msaa = current.msaa;
+  graphicsApi = current.graphicsApi == "VULKAN" ? "VULKAN" : "OPENGL";
   fpsCapText = std::to_string(std::max(0L, current.fpsCap));
   showInspector = current.showInspector;
   reducedUiMotion = current.reducedUiMotion;
@@ -490,6 +494,7 @@ ConfigurationMenu::controlKind(ConfigurationSetting setting)
     case ConfigurationSetting::Ruleset:
       return ControlKind::Choice;
     case ConfigurationSetting::Msaa:
+    case ConfigurationSetting::Renderer:
     case ConfigurationSetting::CellStyle:
       return ControlKind::Segments;
     case ConfigurationSetting::UiScale:
@@ -837,10 +842,13 @@ ConfigurationMenu::sliderReadout(ConfigurationSetting setting) const
 int
 ConfigurationMenu::segmentCount(ConfigurationSetting setting) const
 {
-  return setting == ConfigurationSetting::Msaa
-           ? static_cast<int>(std::size(kMsaaOptions))
-         : setting == ConfigurationSetting::CellStyle ? 2
-                                                      : 0;
+  if (setting == ConfigurationSetting::Msaa) {
+    return static_cast<int>(std::size(kMsaaOptions));
+  }
+  return setting == ConfigurationSetting::CellStyle ||
+             setting == ConfigurationSetting::Renderer
+           ? 2
+           : 0;
 }
 
 int
@@ -848,6 +856,9 @@ ConfigurationMenu::segmentIndex(ConfigurationSetting setting) const
 {
   if (setting == ConfigurationSetting::CellStyle) {
     return ledCells ? 0 : 1;
+  }
+  if (setting == ConfigurationSetting::Renderer) {
+    return graphicsApi == "VULKAN" ? 1 : 0;
   }
   for (int index = 0; index < static_cast<int>(std::size(kMsaaOptions));
        ++index) {
@@ -865,6 +876,9 @@ ConfigurationMenu::segmentLabel(ConfigurationSetting setting, int index) const
   if (setting == ConfigurationSetting::CellStyle) {
     return index == 0 ? "LED keys" : "Flat";
   }
+  if (setting == ConfigurationSetting::Renderer) {
+    return index == 0 ? "OpenGL" : "Vulkan";
+  }
   return kMsaaOptions[index] == 0 ? "Off"
                                   : std::to_string(kMsaaOptions[index]) + "x";
 }
@@ -877,6 +891,8 @@ ConfigurationMenu::setSegment(ConfigurationSetting setting, int index)
     msaa = kMsaaOptions[clamped];
   } else if (setting == ConfigurationSetting::CellStyle) {
     ledCells = clamped == 0;
+  } else if (setting == ConfigurationSetting::Renderer) {
+    graphicsApi = clamped == 1 ? "VULKAN" : "OPENGL";
   }
 }
 
@@ -1597,9 +1613,9 @@ ConfigurationMenu::openList(int row)
       if (id == family) {
         current = static_cast<int>(items.size());
       }
-      items.push_back({ definition == nullptr ? id : definition->name,
-                        std::to_string(rules) +
-                          (rules == 1u ? " rule" : " rules") });
+      items.push_back(
+        { definition == nullptr ? id : definition->name,
+          std::to_string(rules) + (rules == 1u ? " rule" : " rules") });
       listIds.push_back(id);
     }
   } else if (setting == ConfigurationSetting::Ruleset) {
@@ -1812,6 +1828,7 @@ ConfigurationMenu::readConfiguration(SimulatorConfiguration* configuration,
   parsed.fullscreen = fullscreen;
   parsed.uiScale = uiScale;
   parsed.msaa = msaa;
+  parsed.graphicsApi = graphicsApi;
   parsed.soundVolume = soundVolume;
   parsed.musicVolume = musicVolume;
   parsed.startPaused = startPaused;
@@ -2070,8 +2087,8 @@ ConfigurationMenu::drawRowControl(ConfigurationSetting setting,
     // points down while closed and up while its list is open.
     const ColorRgba arrow = UiTheme::applyOpacity(
       UiTheme::mix(UiTheme::textMuted(), cyan, focus), rowOpacity);
-    const bool listOpen = dropdown.isOpen() && listRow >= 0 &&
-                          settingAt(listRow) == setting;
+    const bool listOpen =
+      dropdown.isOpen() && listRow >= 0 && settingAt(listRow) == setting;
     GuiKit::drawChevron(visual,
                         boxX + boxWidth - 16.0f,
                         listOpen ? centerY - 2.0f : centerY + 2.5f,

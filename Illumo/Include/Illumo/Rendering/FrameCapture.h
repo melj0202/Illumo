@@ -3,6 +3,7 @@
 #include <array>
 #include <filesystem>
 #include <functional>
+#include <string>
 
 class Renderer;
 class Camera;
@@ -14,6 +15,9 @@ struct FrameCaptureOptions
   std::array<float, 3> eye{ 4.0f, 3.0f, 5.0f };
   std::array<float, 3> target{ 0.0f, 0.0f, 0.0f };
   float verticalFovDegrees = 45.0f;
+  // The rendering backend, as the GraphicsAPI setting names it: "opengl" or
+  // "vulkan", in any letter case.
+  std::string graphicsApi = "OPENGL";
 };
 
 struct FrameCaptureResult
@@ -25,7 +29,8 @@ struct FrameCaptureResult
   bool success() const { return error.empty() && image.success(); }
 };
 
-// Runs on the calling/main thread in a fresh hidden OpenGL context. Do not call
+// Runs on the calling/main thread in a fresh hidden window (an OpenGL context,
+// or an offscreen Vulkan device). Do not call
 // while another Illumo window is live. The callback must create, synchronously
 // submit, and destroy all renderer-bound content before returning. It must not
 // swap, start a loop, retain service pointers, or mutate external simulation.

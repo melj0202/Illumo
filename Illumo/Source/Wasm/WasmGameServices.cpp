@@ -251,6 +251,14 @@ WasmGameServices::completeDisplay(GuestServices& results)
       if (request.version >= 4u) {
         m_environment->setVar("msaa", static_cast<long>(request.state.msaa));
       }
+      // Saved for the next launch; 0 leaves a choice made elsewhere (the
+      // command line, the console) alone.
+      if (request.version >= 5u &&
+          request.state.graphicsApi != GuestDisplayState::kGraphicsApiUnset) {
+        m_environment->setVar(
+          "GraphicsAPI",
+          GuestDisplayState::graphicsApiName(request.state.graphicsApi));
+      }
     }
     const EnvVar& fps = m_environment->getVar("fps");
     const EnvVar& scale = m_environment->getVar("uiScale");
@@ -285,6 +293,15 @@ WasmGameServices::completeDisplay(GuestServices& results)
                                           static_cast<std::uint32_t>(running))
                           ? static_cast<std::uint32_t>(running)
                           : GuestDisplayState::kUnknownMsaa;
+    // The saved choice as the next launch reads it (anything but Vulkan
+    // starts OpenGL), and the backend the running window was created for.
+    actual.graphicsApi = GuestDisplayState::graphicsApiCode(
+                           m_environment->getVar("GraphicsAPI").value) ==
+                             GuestDisplayState::kGraphicsApiVulkan
+                           ? GuestDisplayState::kGraphicsApiVulkan
+                           : GuestDisplayState::kGraphicsApiOpenGl;
+    actual.activeGraphicsApi =
+      GuestDisplayState::graphicsApiCode(m_window->graphicsApi());
     // Each completion is written in its request's version, so a version 1
     // guest never sees the trailing field.
     GuestWireWriter payload;

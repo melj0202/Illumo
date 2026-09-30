@@ -422,6 +422,56 @@ a swap boundary. Debug labels swap-completion cadence as \texttt{Paced FPS} and
 main-loop work as \texttt{Submit FPS}; uncapped mode reports paced FPS as off
 instead of treating thousands of CPU submissions as displayed frames (D-P32).
 
+\subsection{Vulkan backend (D-R33)}
+\texttt{Rendering/Vulkan/} is a second complete \symbolref{IBackend}. The
+\texttt{GraphicsAPI} setting (\texttt{OPENGL} by default, or \texttt{VULKAN};
+also \texttt{--graphics-api} and the console \texttt{set}, applied at the next
+launch) picks the window and backend in \texttt{Illumo::initialize}; if the
+Vulkan window or backend cannot start, the host logs why and starts OpenGL
+instead, keeping the preference. The window for Vulkan is created with
+\texttt{GLFW\_NO\_API}; everything else about it is unchanged.
+
+The backend executes the same tokens and compiles the same GLSL 330 text, with
+the OpenGL backend's observable results:
+\begin{itemize}
+  \item Every image, including a stand-in for the default framebuffer, is
+        stored bottom row first and drawn with an unflipped viewport, so
+        \texttt{gl\_FragCoord}, viewport, scissor and readback numbers match
+        OpenGL; presentation blits the image to the swapchain flipped. Front
+        faces are inverted and vertex shaders remap clip $z$ from $[-w,w]$.
+  \item glslang compiles the shaders at run time under Vulkan's relaxed GLSL
+        rules: loose uniforms form a per-program default block whose values
+        persist as OpenGL program uniforms do, samplers and blocks are bound
+        automatically, and varyings are matched by name.
+  \item OpenGL's state machine is kept per device: texture units, uniform
+        binding points, pipeline state, viewport and scissor persist; a mesh's
+        instance stream stays attached as a VAO keeps it; missing vertex
+        attributes read $(0,0,0,1)$ and empty texture units sample black.
+  \item Uploads are ordered with draws: until a resource is used in a
+        submission its updates go to that submission's upload command buffer,
+        afterwards inline in the main one.
+  \item Multisampled lines are rectangular and aliased ones Bresenham, sample
+        positions mirror the OpenGL driver's, and the resolve is gamma-correct,
+        as the NVIDIA OpenGL driver resolves its default framebuffer.
+  \item Asynchronous framebuffer readbacks submit their copy when first polled,
+        as a flushing OpenGL fence poll does, so detached panels update at the
+        same rate on both backends.
+  \item Presentation never waits unboundedly: an image the compositor still
+        holds stays pending and the frame goes unshown, and while the login
+        session is locked no presents are issued (the driver's present call
+        can stall there), with the loop still paced by the refresh interval.
+\end{itemize}
+
+\texttt{Illumo.Gpu.BackendParity} renders seven scenes through both backends
+in one process --- lit and shadowed meshes with a RenderWorld and sky, 2D
+visuals through \texttt{renderOffscreen}, raw tokens covering culling,
+primitives, blending, depth, scissored clears, instancing and uniform arrays,
+texture formats and in-frame updates, render-target readback conversions, the
+detached-panel readback loop, and the default framebuffer with motion blur ---
+and compares the pixels. The dependencies are Vulkan-Headers, volk, glslang and
+the Vulkan Memory Allocator, pinned to Vulkan SDK 1.4.363.0 and built from
+\texttt{Illumo/thirdparty}; the driver supplies \texttt{vulkan-1.dll}.
+
 \subsection{Primitive-composed UI (D-R20)}
 \begin{itemize}
   \item \symbolref{CommandLine}: one batched \texttt{DrawIndexed} when open.

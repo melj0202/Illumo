@@ -10,6 +10,10 @@
 static const SysCmdLineOption g_windowOptions[] = {
   { "-ww", "pixels", "WinX", "Render window width" },
   { "-wh", "pixels", "WinY", "Render window height" },
+  { "--graphics-api",
+    "name",
+    "GraphicsAPI",
+    "Rendering backend, opengl or vulkan (saved for later launches)" },
 };
 
 static SysCmdLineResult

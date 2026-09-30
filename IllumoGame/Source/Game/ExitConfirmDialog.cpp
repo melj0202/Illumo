@@ -103,9 +103,10 @@ ExitConfirmDialog::configureRestart(bool inCanvas)
 {
   m_dialog.setTitle("RESTART CSIM?");
   m_dialog.setMessage(
-    inCanvas ? "Anti-aliasing changes need a restart. Unsaved world changes "
-               "will be lost."
-             : "Anti-aliasing changes need a restart. Restart now?");
+    inCanvas ? "Anti-aliasing and renderer changes need a restart. Unsaved "
+               "world changes will be lost."
+             : "Anti-aliasing and renderer changes need a restart. Restart "
+               "now?");
   m_dialog.clearButtons();
 
   GuiButtonDef laterBtn;

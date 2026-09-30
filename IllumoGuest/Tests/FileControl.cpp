@@ -154,8 +154,11 @@ private:
     } else if (phase == 11) {
       display.pump();
       if (display.idle()) {
+        // The host reports its saved backend, OpenGL when none is saved.
+        GuestDisplayState expected{ false, false, 120, 2 };
+        expected.graphicsApi = GuestDisplayState::kGraphicsApiOpenGl;
         if (!display.ready() || !display.error().empty() ||
-            display.actual() != GuestDisplayState{ false, false, 120, 2 }) {
+            display.actual() != expected) {
           illumoFatal("Display settings did not round-trip");
         }
         ++phase;

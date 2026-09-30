@@ -40,6 +40,19 @@ testCaptureValidation()
   options.verticalFovDegrees = std::numeric_limits<float>::quiet_NaN();
   testTrue(
     g, !FrameCapture::validate(options).empty(), "nonfinite camera rejected");
+  options.verticalFovDegrees = 45.0f;
+  options.graphicsApi = "vulkan";
+  testTrue(g,
+           FrameCapture::validate(options).empty(),
+           "Vulkan capture accepted in any letter case");
+  options.graphicsApi = "DirectX12";
+  testTrue(g,
+           !FrameCapture::validate(options).empty(),
+           "unimplemented capture backend rejected");
+  options.graphicsApi = "metal";
+  testTrue(g,
+           !FrameCapture::validate(options).empty(),
+           "unknown capture backend rejected");
   MockBackend backend;
   testTrue(g,
            !backend.readBackbuffer(4, 4).success(),

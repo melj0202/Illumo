@@ -1,21 +1,25 @@
 #pragma once
-#include "VulkanDevice.h"
+
+#include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <memory>
+#include <string>
 
 class IRenderWindow;
-class CommandQueue;
+class VulkanDevice;
 
-// Vulkan backend stub: declares the full IBackend contract without a Vulkan
-// instance, device, or swapchain yet. Initialize() reports failure so a
-// program selecting this backend fails its launch instead of running with a
-// silently broken renderer (Illumo/Source/Rendering/AGENTS.md: "A program
-// that fails to start fails the launch").
+// IBackend on Vulkan 1.3, with the OpenGL backend's observable behaviour
+// (docs/vulkan-backend-plan.md). The device does the GPU work; this class is
+// the token queue, statistics and shader preprocessing around it.
 class VulkanBackend : public IBackend
 {
 public:
-  explicit VulkanBackend(IRenderWindow* window);
+  // present: show frames in the window; otherwise render offscreen only
+  // (capture windows and GPU tests).
+  VulkanBackend(IRenderWindow* window, bool present);
   ~VulkanBackend() override;
   VulkanBackend(const VulkanBackend&) = delete;
   VulkanBackend& operator=(const VulkanBackend&) = delete;
@@ -31,7 +35,17 @@ public:
   void ClearCommandQueue() override;
   size_t rejectedCommandCount() const override;
   size_t commandHighWaterMark() const override;
-  int getFPS() const override { return fps; }
+  std::string submissionError() const override;
+  int getFPS() const override { return m_fps; }
+  FrameReadback readBackbuffer(int width, int height) override;
+  bool requestFramebufferReadback(std::uint32_t stream,
+                                  FramebufferHandle framebuffer,
+                                  int width,
+                                  int height) override;
+  bool takeFramebufferReadback(std::uint32_t stream,
+                               bool wait,
+                               FrameReadback& out) override;
+  void releaseReadbackStream(std::uint32_t stream) override;
 
   MeshHandle CreateMesh(const void* vertices,
                         size_t vertexSize,
@@ -79,6 +93,11 @@ public:
                       int height,
                       int channels,
                       const TextureOptions& options) override;
+  bool ReplaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels) override;
   bool DestroyTexture(TextureHandle handle) override;
   bool IsTextureValid(TextureHandle handle) const override;
   TextureInfo GetTextureInfo(TextureHandle handle) const override;
@@ -93,9 +112,22 @@ public:
   bool DestroyFramebuffer(FramebufferHandle handle) override;
   bool IsFramebufferValid(FramebufferHandle handle) const override;
 
+  BufferHandle CreateBuffer(BufferUsage usage, size_t capacityBytes) override;
+  bool DestroyBuffer(BufferHandle handle) override;
+  bool IsBufferValid(BufferHandle handle) const override;
+
 private:
-  VulkanDevice* device;
-  CommandQueue* commandQueue;
-  IRenderWindow* window;
-  int fps = 0;
+  // Preprocesses like GLShaderProgram; false with the reason logged.
+  bool preprocess(const ShaderSources& sources, ShaderSources* output) const;
+  bool preprocess(const ShaderPaths& paths, ShaderSources* output) const;
+
+  std::unique_ptr<VulkanDevice> m_device;
+  std::unique_ptr<CommandQueue> m_commandQueue;
+  IRenderWindow* m_window = nullptr;
+  bool m_present = true;
+  bool m_initialized = false;
+  int m_fps = 0;
+  size_t m_rejectionsAtFrameStart = 0;
+  long m_frameCount = 0;
+  std::chrono::steady_clock::time_point m_fpsStart;
 };

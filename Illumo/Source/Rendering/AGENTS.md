@@ -7,8 +7,10 @@ This file specializes the repository `AGENTS.md` for
 
 Rendering defines backend-neutral command tokens, queueing, handles, assets,
 drawables, camera/style values, and the backend contract. Concrete OpenGL
-execution belongs only in `OpenGL/`; headless semantic execution belongs in
-`Mock/`. Game and Services consume this boundary without importing GL types.
+execution belongs only in `OpenGL/`, Vulkan execution only in `Vulkan/`
+(D-R33, selected by `GraphicsAPI`); headless semantic execution belongs in
+`Mock/`. Game and Services consume this boundary without importing GL or
+Vulkan types.
 
 ## Required invariants
 
@@ -113,4 +115,7 @@ Use MockBackend for deterministic contract tests. Use a live OpenGL smoke for
 context, shader, state, upload, and visual behavior; headless success is not
 pixel validation. `IllumoGpuTests` (CTest label `IllumoGpu`, skipped with 77
 without a context) compares real-GPU images, for example
-`Illumo.Gpu.RenderWorldParity`; run it for shader or instancing changes. Update this file only for durable Rendering contracts.
+`Illumo.Gpu.RenderWorldParity`; run it for shader or instancing changes.
+`Illumo.Gpu.BackendParity` compares OpenGL and Vulkan images; a token or
+shader-visible change must keep it passing (see `Vulkan/AGENTS.md`). Update
+this file only for durable Rendering contracts.

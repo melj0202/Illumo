@@ -851,6 +851,28 @@ testSettingsShared()
              reread.panSpeed == 900 && reread.ruleSet == "GAME_OF_LIFE",
            "written settings read back");
 
+  // The renderer reads as OpenGL unless the setting names Vulkan, and a
+  // choice unlike the running window's asks for a restart.
+  fixture.env.setVar("GraphicsAPI", "vulkan");
+  SimulatorConfiguration vulkan;
+  SimulatorSettings::read(&fixture.env, &vulkan);
+  fixture.env.setVar("GraphicsAPI", "metal");
+  SimulatorConfiguration fallback;
+  SimulatorSettings::read(&fixture.env, &fallback);
+  NullRenderWindow running;
+  const bool unknownAsks = SimulatorSettings::restartNeeded(vulkan, &running);
+  running.graphicsApiName = "OPENGL";
+  testTrue(g,
+           vulkan.graphicsApi == "VULKAN" && fallback.graphicsApi == "OPENGL" &&
+             !unknownAsks &&
+             SimulatorSettings::restartNeeded(vulkan, &running) &&
+             !SimulatorSettings::restartNeeded(fallback, &running),
+           "a renderer unlike the running window's asks for a restart");
+  SimulatorSettings::write(&fixture.env, vulkan);
+  testTrue(g,
+           fixture.env.getVar("GraphicsAPI").value == "VULKAN",
+           "the renderer choice is written as GraphicsAPI");
+
   // The canvas reads the same settings over its live world, and refuses what
   // the title refuses.
   fixture.module.stop();

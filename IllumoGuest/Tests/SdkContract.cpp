@@ -2,6 +2,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
+#include <Illumo/Services/EnvValues.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/Application.h>
 #include <IllumoGuest/Clipboard.h>
@@ -220,6 +221,65 @@ displayContract()
     "A system-cursor request travels in the current display version");
 }
 
+class MemorySettings final : public EnvValues
+{
+public:
+  void load() override {}
+  void save() override {}
+};
+
+// The snapshot window sends a rendering backend choice only once the host has
+// reported its own, and only when the two differ, so a stale local value
+// never overrides a choice made on the host.
+static void
+displayBackendContract()
+{
+  GuestServiceQueue queue;
+  GuestDisplay display(queue);
+  MemorySettings settings;
+  settings.setVar("GraphicsAPI", "VULKAN");
+  GuestSnapshotWindow window;
+  window.bindDisplay(display, settings);
+  window.synchronizeDisplay();
+  GuestServices first = exchange(queue);
+  GuestDisplayRequest request;
+  require(first.records.size() == 1 &&
+            GuestDisplayRequest::read(first.records[0].payload, request) &&
+            request.state.graphicsApi == GuestDisplayState::kGraphicsApiUnset,
+          "No backend choice travels before the host reports one");
+  GuestDisplayState reported = request.state;
+  reported.graphicsApi = GuestDisplayState::kGraphicsApiOpenGl;
+  reported.activeGraphicsApi = GuestDisplayState::kGraphicsApiOpenGl;
+  GuestWireWriter openGl;
+  reported.write(openGl);
+  first.records[0].status = GuestServiceStatus::Complete;
+  first.records[0].payload = openGl.take();
+  exchange(queue, first);
+  window.synchronizeDisplay();
+  window.synchronizeDisplay();
+  require(settings.getVar("GraphicsAPI").value == "OPENGL" &&
+            window.graphicsApi() == "OPENGL" && exchange(queue).records.empty(),
+          "The host's backend replaces a stale local one and nothing is sent");
+
+  settings.setVar("GraphicsAPI", "vulkan");
+  window.synchronizeDisplay();
+  GuestServices change = exchange(queue);
+  require(change.records.size() == 1 &&
+            GuestDisplayRequest::read(change.records[0].payload, request) &&
+            request.state.graphicsApi == GuestDisplayState::kGraphicsApiVulkan,
+          "A new backend choice travels once the host has reported");
+  reported.graphicsApi = GuestDisplayState::kGraphicsApiVulkan;
+  GuestWireWriter vulkan;
+  reported.write(vulkan);
+  change.records[0].status = GuestServiceStatus::Complete;
+  change.records[0].payload = vulkan.take();
+  exchange(queue, change);
+  window.synchronizeDisplay();
+  window.synchronizeDisplay();
+  require(settings.getVar("GraphicsAPI").value == "VULKAN" &&
+            window.graphicsApi() == "OPENGL" && exchange(queue).records.empty(),
+          "A saved backend waits for the next launch and is not resent");
+}
 static void
 clipboardContract()
 {
@@ -1089,6 +1149,7 @@ public:
   {
     inputContract();
     displayContract();
+    displayBackendContract();
     clipboardContract();
     consoleContract();
     dialogContract();

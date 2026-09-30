@@ -1,7 +1,9 @@
 #include <Illumo/Engine/Illumo.h>
 
+#include "Rendering/BackendConfig.h"
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
 #include "Rendering/RenderWindow.h"
+#include "Rendering/Vulkan/CreateVulkanBackend.h"
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Platform/PathText.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -37,11 +39,26 @@ cleanupBackendAfterInitializationFailure(
   backend->reset();
 }
 
+static std::unique_ptr<IBackend>
+createBackend(IRenderWindow* window, BackendDef api)
+{
+  if (api == BackendDef::VULKAN) {
+    return CreateVulkanBackend(window);
+  }
+  return CreateOpenGLBackend(window);
+}
+
+static const char*
+backendDisplayName(BackendDef api)
+{
+  return api == BackendDef::VULKAN ? "Vulkan" : "OpenGL";
+}
+
 Illumo::Illumo(IllumoConfig config)
   : m_applicationName(config.applicationName.empty() ? "Illumo"
                                                      : config.applicationName)
-  , m_windowFactory(CreateRenderWindow)
-  , m_backendFactory(CreateOpenGLBackend)
+  , m_windowFactory(CreateRenderWindowFor)
+  , m_backendFactory(createBackend)
 {
   std::filesystem::path environmentPath = EnvVars::ApplicationConfigPath();
   if (!config.environmentPath.empty() &&
@@ -126,43 +143,33 @@ Illumo::initialize()
     m_environment->setVar("WinX", initialWindowWidth);
     m_environment->setVar("WinY", initialWindowHeight);
   }
-  {
-    ILLUMO_PROFILE_ZONE("Illumo.CreateWindow");
-    m_window = m_windowFactory(initialWindowWidth,
-                               initialWindowHeight,
-                               m_applicationName,
-                               m_environment.get());
+  BackendDef requestedApi = BackendDef::OPENGL;
+  const std::string& requestedName = m_environment->getVar("GraphicsAPI").value;
+  if (!requestedName.empty() &&
+      !parseBackendDef(requestedName, &requestedApi)) {
+    Logger::LogWarning("GraphicsAPI '" + requestedName +
+                       "' names no rendering backend; using OpenGL");
+  } else if (!isBackendImplemented(requestedApi)) {
+    Logger::LogWarning("GraphicsAPI " + TokenToString(requestedApi) +
+                       " is not available in this build; using OpenGL");
+    requestedApi = BackendDef::OPENGL;
   }
-  if (!m_window) {
-    Logger::LogError("Illumo failed to create its render window");
-    releaseServices();
-    return false;
-  }
-  const std::array<int, 2> windowSize = m_window->getWindowDimensions();
-  Logger::LogInfo("Render window ready: " + std::to_string(windowSize[0]) +
-                  "x" + std::to_string(windowSize[1]) + ", monitor " +
-                  std::to_string(m_window->getRefreshRate()) + " Hz");
-
   m_camera =
     std::make_unique<Camera>(glm::vec2(0.0f, 0.0f), 1.0f, m_environment.get());
-  std::unique_ptr<IBackend> backend = m_backendFactory(m_window.get());
-  if (!backend) {
-    Logger::LogError("Illumo failed to create its rendering backend");
+  std::unique_ptr<IBackend> backend;
+  bool started = startGraphics(
+    requestedApi, initialWindowWidth, initialWindowHeight, &backend);
+  if (!started && requestedApi != BackendDef::OPENGL) {
+    // The preference stays saved, so a later launch tries it again.
+    Logger::LogWarning(std::string(backendDisplayName(requestedApi)) +
+                       " could not start; falling back to OpenGL");
+    started = startGraphics(
+      BackendDef::OPENGL, initialWindowWidth, initialWindowHeight, &backend);
+  }
+  if (!started) {
     releaseServices();
     return false;
   }
-  bool backendInitialized = false;
-  {
-    ILLUMO_PROFILE_ZONE("Illumo.InitializeBackend");
-    backendInitialized = backend->Initialize();
-  }
-  if (!backendInitialized) {
-    Logger::LogError("Illumo failed to initialize its rendering backend");
-    cleanupBackendAfterInitializationFailure(&backend);
-    releaseServices();
-    return false;
-  }
-  Logger::LogTrace("Rendering backend initialized");
   {
     ILLUMO_PROFILE_ZONE("Illumo.CreateRenderer");
     m_renderer = std::make_unique<Renderer>(
@@ -201,6 +208,50 @@ Illumo::initialize()
   m_initialized = true;
   Logger::LogInfo("Engine services initialized (renderer, assets, console, "
                   "input, scene)");
+  return true;
+}
+
+bool
+Illumo::startGraphics(BackendDef api,
+                      int width,
+                      int height,
+                      std::unique_ptr<IBackend>* backend)
+{
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.CreateWindow");
+    m_window = m_windowFactory(
+      width, height, m_applicationName, m_environment.get(), api);
+  }
+  if (!m_window) {
+    Logger::LogError(std::string("Illumo failed to create its render window "
+                                 "for ") +
+                     backendDisplayName(api));
+    return false;
+  }
+  const std::array<int, 2> windowSize = m_window->getWindowDimensions();
+  Logger::LogInfo("Render window ready: " + std::to_string(windowSize[0]) +
+                  "x" + std::to_string(windowSize[1]) + ", monitor " +
+                  std::to_string(m_window->getRefreshRate()) + " Hz");
+  *backend = m_backendFactory(m_window.get(), api);
+  if (!*backend) {
+    Logger::LogError(std::string("Illumo failed to create its ") +
+                     backendDisplayName(api) + " rendering backend");
+    m_window.reset();
+    return false;
+  }
+  bool backendInitialized = false;
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.InitializeBackend");
+    backendInitialized = (*backend)->Initialize();
+  }
+  if (!backendInitialized) {
+    Logger::LogError(std::string("Illumo failed to initialize its ") +
+                     backendDisplayName(api) + " rendering backend");
+    cleanupBackendAfterInitializationFailure(backend);
+    m_window.reset();
+    return false;
+  }
+  Logger::LogInfo(std::string("Rendering backend: ") + backendDisplayName(api));
   return true;
 }
 

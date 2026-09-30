@@ -1,5 +1,7 @@
+#include "BackendConfig.h"
 #include "OpenGL/CreateOpenGLBackend.h"
 #include "RenderWindow.h"
+#include "Vulkan/CreateVulkanBackend.h"
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/FrameCapture.h>
@@ -32,6 +34,11 @@ FrameCapture::validate(const FrameCaptureOptions& options)
       options.verticalFovDegrees > 175.0f) {
     return "Camera FOV must be within 1..175 degrees";
   }
+  BackendDef api = BackendDef::OPENGL;
+  if (!parseBackendDef(options.graphicsApi, &api) ||
+      !isBackendImplemented(api)) {
+    return "Capture graphics API must be opengl or vulkan";
+  }
   return {};
 }
 
@@ -49,17 +56,25 @@ renderCapture(const FrameCaptureOptions& options,
     result.error = "Capture requires a synchronous frame producer";
     return result;
   }
+  BackendDef api = BackendDef::OPENGL;
+  parseBackendDef(options.graphicsApi, &api);
+  const bool vulkan = api == BackendDef::VULKAN;
   result.stage = "context";
   std::unique_ptr<IRenderWindow> window =
-    CreateCaptureWindow(options.width, options.height);
+    CreateCaptureWindowFor(options.width, options.height, api);
   if (!window) {
-    result.error = "Unable to create the requested hidden OpenGL context";
+    result.error = vulkan ? "Unable to create the hidden capture window"
+                          : "Unable to create the requested hidden OpenGL "
+                            "context";
     return result;
   }
   result.stage = "backend";
-  std::unique_ptr<IBackend> backend = CreateOpenGLBackend(window.get());
+  std::unique_ptr<IBackend> backend =
+    vulkan ? CreateVulkanBackend(window.get(), false)
+           : CreateOpenGLBackend(window.get());
   if (!backend || !backend->Initialize()) {
-    result.error = "Unable to initialize OpenGL backend";
+    result.error = vulkan ? "Unable to initialize Vulkan backend"
+                          : "Unable to initialize OpenGL backend";
     return result;
   }
   Camera camera;

@@ -94,6 +94,34 @@ testWindowDimensionOptions()
 }
 
 static void
+testGraphicsApiOption()
+{
+  testSection("SysCmdLine: the graphics API option is an engine option");
+  const std::filesystem::path path = environmentPath("graphics-api");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  {
+    EnvVars environment(path);
+    char executable[] = "Host";
+    char option[] = "--graphics-api";
+    char value[] = "vulkan";
+    char* arguments[] = { executable, option, value };
+    const SysCmdLineResult result =
+      SysCmdLine::ParseCommandLine(3, arguments, &environment);
+    testTrue(g, !result.shouldExit(), "a named API continues startup");
+    testTrue(g,
+             environment.getVar("GraphicsAPI").value == "vulkan",
+             "the API name is stored for the host to parse");
+    char* missing[] = { executable, option };
+    testTrue(g,
+             SysCmdLine::ParseCommandLine(2, missing, &environment).action ==
+               SysCmdLineAction::ExitFailure,
+             "a missing API name fails before startup");
+  }
+  std::filesystem::remove(path, error);
+}
+
+static void
 testInvalidWindowDimensions()
 {
   testSection("SysCmdLine: invalid window dimensions fail before startup");
@@ -317,6 +345,8 @@ registerSysCmdLineTests(IllumoTestRegistry& registry)
                []() { return runSysCmdLineCase(testArgumentValidators); });
   registry.add("Illumo.SysCmdLine.WindowDimensionOptions",
                []() { return runSysCmdLineCase(testWindowDimensionOptions); });
+  registry.add("Illumo.SysCmdLine.GraphicsApiOption",
+               []() { return runSysCmdLineCase(testGraphicsApiOption); });
   registry.add("Illumo.SysCmdLine.InvalidWindowDimensions",
                []() { return runSysCmdLineCase(testInvalidWindowDimensions); });
   registry.add("Illumo.SysCmdLine.HelpAndVersion",

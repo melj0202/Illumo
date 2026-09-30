@@ -1,11 +1,11 @@
 #include "../Source/Engine/ProfilerOverlay.h"
 #include <GL/glew.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Services/Logger.h>
@@ -14,12 +14,23 @@
 #include <iostream>
 #include <vector>
 
+// --api vulkan runs the checks that need no OpenGL introspection on Vulkan.
+static bool g_vulkan = false;
+
+static FrameCaptureOptions
+captureOptions(int width, int height)
+{
+  FrameCaptureOptions options;
+  options.width = width;
+  options.height = height;
+  options.graphicsApi = g_vulkan ? "vulkan" : "opengl";
+  return options;
+}
+
 static FrameCaptureResult
 captureSceneShadows(bool graphPath, bool shadows)
 {
-  FrameCaptureOptions options;
-  options.width = 256;
-  options.height = 192;
+  const FrameCaptureOptions options = captureOptions(256, 192);
   return FrameCapture::render(
     options,
     [graphPath,
@@ -171,11 +182,13 @@ testInvalidTextureUpload(Renderer& renderer, Camera&, std::string& error)
   renderer.pushUpdateTexture(
     texture, 0, 1, 256, 256, 4, replacement.data(), 256);
   renderer.SubmitOnly();
-  glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-  if (!std::all_of(pixels.begin(), pixels.end(), [](unsigned char value) {
-        return value == 17u;
-      })) {
-    error = "Rejected rectangle changed texture pixels";
+  if (!g_vulkan) {
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    if (!std::all_of(pixels.begin(), pixels.end(), [](unsigned char value) {
+          return value == 17u;
+        })) {
+      error = "Rejected rectangle changed texture pixels";
+    }
   }
   renderer.destroyTexture(texture);
   return true;
@@ -255,9 +268,7 @@ testCubemapUploads(Renderer& renderer, Camera&, std::string& error)
 static FrameCaptureResult
 captureProfiler(int width, int height, bool renderingGroup)
 {
-  FrameCaptureOptions options;
-  options.width = width;
-  options.height = height;
+  const FrameCaptureOptions options = captureOptions(width, height);
   return FrameCapture::render(
     options,
     [width, height, renderingGroup](
@@ -297,96 +308,11 @@ captureProfiler(int width, int height, bool renderingGroup)
     });
 }
 
-int
-main(int argc, char** argv)
+// Checks that inspect OpenGL state directly.
+static int
+runOpenGlStateChecks(const FrameCaptureOptions& options)
 {
-  Logger::setConsoleToStderr(true);
-  if (argc == 3 && std::string(argv[1]) == "--profiler-preview") {
-    const FrameCaptureResult preview = captureProfiler(800, 600, false);
-    std::string error;
-    if (!preview.success() ||
-        !FrameCapture::savePng(argv[2], preview.image, &error)) {
-      std::cerr << preview.error << error << '\n';
-      return 1;
-    }
-    return 0;
-  }
-  if (argc != 1) {
-    std::cerr
-      << "Usage: IllumoCaptureGpuTests [--profiler-preview output.png]\n";
-    return 2;
-  }
-  FrameCaptureOptions options;
-  options.width = 32;
-  options.height = 32;
   int failures = 0;
-  const FrameCaptureResult directShadows = captureSceneShadows(false, true);
-  const FrameCaptureResult sceneShadows = captureSceneShadows(true, true);
-  const FrameCaptureResult unshadowed = captureSceneShadows(true, false);
-  if (!directShadows.success() || !sceneShadows.success() ||
-      !unshadowed.success() ||
-      directShadows.image.pixels != sceneShadows.image.pixels ||
-      sceneShadows.image.pixels == unshadowed.image.pixels) {
-    std::cerr << "Scene snapshot shadow pixel parity failed: "
-              << directShadows.error << "; " << sceneShadows.error << "; "
-              << unshadowed.error << '\n';
-    ++failures;
-  } else {
-    std::cout << "Scene snapshot/direct shadow pixels identical; shadows "
-                 "change pixels\n";
-  }
-
-  for (int view = 0; view < 2; ++view) {
-    const FrameCaptureResult chart =
-      captureProfiler(view == 0 ? 800 : 320, view == 0 ? 600 : 240, view != 0);
-    size_t greenPixels = 0;
-    size_t purplePixels = 0;
-    for (size_t i = 0; i + 3 < chart.image.pixels.size(); i += 4) {
-      greenPixels += chart.image.pixels[i] == 185 &&
-                         chart.image.pixels[i + 1] == 224 &&
-                         chart.image.pixels[i + 2] == 91
-                       ? 1
-                       : 0;
-      purplePixels += chart.image.pixels[i] == 146 &&
-                          chart.image.pixels[i + 1] == 116 &&
-                          chart.image.pixels[i + 2] == 245
-                        ? 1
-                        : 0;
-    }
-    if (!chart.success() || greenPixels < 100 || purplePixels < 100) {
-      std::cerr << "Profiler geometry capture failed: " << chart.error << '\n';
-      ++failures;
-    }
-  }
-  std::shared_ptr<Font> persistentFont = Font::getDefaultFont();
-  std::vector<unsigned char> previousTextPixels;
-  for (int capture = 0; capture < 3; ++capture) {
-    const FrameCaptureResult text = FrameCapture::render(
-      options,
-      [&persistentFont](Renderer& renderer, Camera&, std::string& error) {
-        renderer.pushClearScreen(0, 0, 0, 1);
-        GameVisual visual;
-        visual.setWindow(renderer.getWindow());
-        visual.prepare(&renderer);
-        visual.addText("A", 2, 2, 24, ColorRgba{ 255, 255, 255, 255 });
-        if (!persistentFont || !visual.AppendCommands(&renderer)) {
-          error = "Text capture failed to emit font draw";
-          return false;
-        }
-        renderer.SubmitOnly();
-        return true;
-      });
-    bool visible = false;
-    for (size_t pixel = 0; pixel + 3 < text.image.pixels.size(); pixel += 4) {
-      visible = visible || text.image.pixels[pixel] > 64;
-    }
-    if (!text.success() || !visible ||
-        (capture != 0 && text.image.pixels != previousTextPixels)) {
-      std::cerr << "Successive font capture failed: " << text.error << '\n';
-      ++failures;
-    }
-    previousTextPixels = text.image.pixels;
-  }
   const FrameCaptureResult clears = FrameCapture::render(
     options, [](Renderer& renderer, Camera& camera, std::string& error) {
       PooledRenderTargetDesc desc;
@@ -482,57 +408,10 @@ main(int argc, char** argv)
     std::cerr << "Framebuffer restoration checks: " << targets.error << '\n';
     ++failures;
   }
-  const FrameCaptureResult readback = FrameCapture::render(
-    options, [](Renderer& renderer, Camera&, std::string& error) {
-      IBackend* backend = renderer.getBackend();
-      FramebufferDesc desc;
-      desc.width = 16;
-      desc.height = 8;
-      desc.colorAttachments.push_back(FramebufferAttachmentDesc{});
-      const FramebufferHandle target = backend->CreateFramebuffer(desc);
-      GameVisual visual;
-      visual.setWindow(renderer.getWindow());
-      visual.setSpace(PrimitiveSpace::Pixels);
-      visual.prepare(&renderer);
-      visual.addFilledRect(0, 0, 16, 4, ColorRgba{ 255, 0, 0, 255 });
-      if (!renderer.renderOffscreen(
-            target, 16, 8, { &visual }, { 0.0f, 0.0f, 1.0f, 1.0f }, 1.0f)) {
-        error = "Offscreen render failed";
-        return false;
-      }
-      FrameReadback pixels;
-      if (!backend->requestFramebufferReadback(1, target, 16, 8) ||
-          !backend->takeFramebufferReadback(1, true, pixels) ||
-          pixels.width != 16 || pixels.height != 8) {
-        error = "Framebuffer readback failed: " + pixels.error;
-        return false;
-      }
-      // Rows are top-down: the rectangle covers the top half.
-      const unsigned char* top = pixels.pixels.data();
-      const unsigned char* bottom = pixels.pixels.data() + 7 * 16 * 4;
-      if (top[0] != 255 || top[2] != 0 || bottom[0] != 0 || bottom[2] != 255) {
-        error = "Readback pixels or row order differ";
-        return false;
-      }
-      backend->releaseReadbackStream(1);
-      backend->DestroyFramebuffer(target);
-      return glGetError() == GL_NO_ERROR;
-    });
-  if (!readback.success()) {
-    std::cerr << "Framebuffer readback checks: " << readback.error << '\n';
-    ++failures;
-  }
   const FrameCaptureResult uploads =
     FrameCapture::render(options, testTextureUploads);
   if (!uploads.success()) {
     std::cerr << "Texture upload checks: " << uploads.error << '\n';
-    ++failures;
-  }
-  const FrameCaptureResult bounds =
-    FrameCapture::render(options, testInvalidTextureUpload);
-  if (bounds.success() ||
-      bounds.error.find("invalid rectangle") == std::string::npos) {
-    std::cerr << "Texture bounds checks: " << bounds.error << '\n';
     ++failures;
   }
   const FrameCaptureResult cubes =
@@ -577,6 +456,182 @@ main(int argc, char** argv)
     });
   if (!allocation.success()) {
     std::cerr << "Allocation validation checks: " << allocation.error << '\n';
+    ++failures;
+  }
+  return failures;
+}
+
+// The same capture through OpenGL and Vulkan must give the same pixels.
+static int
+runVulkanOnlyChecks(const FrameCaptureOptions&)
+{
+  g_vulkan = false;
+  const FrameCaptureResult openGl = captureSceneShadows(true, true);
+  g_vulkan = true;
+  const FrameCaptureResult vulkan = captureSceneShadows(true, true);
+  size_t differing = 0;
+  for (size_t index = 0;
+       openGl.success() && vulkan.success() &&
+       index < openGl.image.pixels.size() &&
+       openGl.image.pixels.size() == vulkan.image.pixels.size();
+       ++index) {
+    const int difference = static_cast<int>(openGl.image.pixels[index]) -
+                           static_cast<int>(vulkan.image.pixels[index]);
+    differing += difference > 2 || difference < -2 ? 1u : 0u;
+  }
+  if (!openGl.success() || !vulkan.success() ||
+      openGl.image.pixels.size() != vulkan.image.pixels.size() ||
+      differing * 500 > openGl.image.pixels.size()) {
+    std::cerr << "Capture differs between OpenGL and Vulkan (" << differing
+              << " bytes): " << openGl.error << "; " << vulkan.error << '\n';
+    return 1;
+  }
+  std::cout << "OpenGL and Vulkan captures match (" << differing
+            << " bytes differ by more than 2)\n";
+  return 0;
+}
+
+int
+main(int argc, char** argv)
+{
+  Logger::setConsoleToStderr(true);
+  if (argc == 3 && std::string(argv[1]) == "--profiler-preview") {
+    const FrameCaptureResult preview = captureProfiler(800, 600, false);
+    std::string error;
+    if (!preview.success() ||
+        !FrameCapture::savePng(argv[2], preview.image, &error)) {
+      std::cerr << preview.error << error << '\n';
+      return 1;
+    }
+    return 0;
+  }
+  if (argc == 3 && std::string(argv[1]) == "--api" &&
+      std::string(argv[2]) == "vulkan") {
+    g_vulkan = true;
+  } else if (argc != 1) {
+    std::cerr << "Usage: IllumoCaptureGpuTests [--profiler-preview "
+                 "output.png | --api vulkan]\n";
+    return 2;
+  }
+  const FrameCaptureOptions options = captureOptions(32, 32);
+  int failures = 0;
+  const FrameCaptureResult directShadows = captureSceneShadows(false, true);
+  const FrameCaptureResult sceneShadows = captureSceneShadows(true, true);
+  const FrameCaptureResult unshadowed = captureSceneShadows(true, false);
+  if (!directShadows.success() || !sceneShadows.success() ||
+      !unshadowed.success() ||
+      directShadows.image.pixels != sceneShadows.image.pixels ||
+      sceneShadows.image.pixels == unshadowed.image.pixels) {
+    std::cerr << "Scene snapshot shadow pixel parity failed: "
+              << directShadows.error << "; " << sceneShadows.error << "; "
+              << unshadowed.error << '\n';
+    ++failures;
+  } else {
+    std::cout << "Scene snapshot/direct shadow pixels identical; shadows "
+                 "change pixels\n";
+  }
+
+  for (int view = 0; view < 2; ++view) {
+    const FrameCaptureResult chart =
+      captureProfiler(view == 0 ? 800 : 320, view == 0 ? 600 : 240, view != 0);
+    size_t greenPixels = 0;
+    size_t purplePixels = 0;
+    for (size_t i = 0; i + 3 < chart.image.pixels.size(); i += 4) {
+      greenPixels += chart.image.pixels[i] == 185 &&
+                         chart.image.pixels[i + 1] == 224 &&
+                         chart.image.pixels[i + 2] == 91
+                       ? 1
+                       : 0;
+      purplePixels += chart.image.pixels[i] == 146 &&
+                          chart.image.pixels[i + 1] == 116 &&
+                          chart.image.pixels[i + 2] == 245
+                        ? 1
+                        : 0;
+    }
+    if (!chart.success() || greenPixels < 100 || purplePixels < 100) {
+      std::cerr << "Profiler geometry capture failed: " << chart.error << '\n';
+      ++failures;
+    }
+  }
+  std::shared_ptr<Font> persistentFont = Font::getDefaultFont();
+  std::vector<unsigned char> previousTextPixels;
+  for (int capture = 0; capture < 3; ++capture) {
+    const FrameCaptureResult text = FrameCapture::render(
+      options,
+      [&persistentFont](Renderer& renderer, Camera&, std::string& error) {
+        renderer.pushClearScreen(0, 0, 0, 1);
+        GameVisual visual;
+        visual.setWindow(renderer.getWindow());
+        visual.prepare(&renderer);
+        visual.addText("A", 2, 2, 24, ColorRgba{ 255, 255, 255, 255 });
+        if (!persistentFont || !visual.AppendCommands(&renderer)) {
+          error = "Text capture failed to emit font draw";
+          return false;
+        }
+        renderer.SubmitOnly();
+        return true;
+      });
+    bool visible = false;
+    for (size_t pixel = 0; pixel + 3 < text.image.pixels.size(); pixel += 4) {
+      visible = visible || text.image.pixels[pixel] > 64;
+    }
+    if (!text.success() || !visible ||
+        (capture != 0 && text.image.pixels != previousTextPixels)) {
+      std::cerr << "Successive font capture failed: " << text.error << '\n';
+      ++failures;
+    }
+    previousTextPixels = text.image.pixels;
+  }
+  if (g_vulkan) {
+    failures += runVulkanOnlyChecks(options);
+  } else {
+    failures += runOpenGlStateChecks(options);
+  }
+  const FrameCaptureResult readback = FrameCapture::render(
+    options, [](Renderer& renderer, Camera&, std::string& error) {
+      IBackend* backend = renderer.getBackend();
+      FramebufferDesc desc;
+      desc.width = 16;
+      desc.height = 8;
+      desc.colorAttachments.push_back(FramebufferAttachmentDesc{});
+      const FramebufferHandle target = backend->CreateFramebuffer(desc);
+      GameVisual visual;
+      visual.setWindow(renderer.getWindow());
+      visual.setSpace(PrimitiveSpace::Pixels);
+      visual.prepare(&renderer);
+      visual.addFilledRect(0, 0, 16, 4, ColorRgba{ 255, 0, 0, 255 });
+      if (!renderer.renderOffscreen(
+            target, 16, 8, { &visual }, { 0.0f, 0.0f, 1.0f, 1.0f }, 1.0f)) {
+        error = "Offscreen render failed";
+        return false;
+      }
+      FrameReadback pixels;
+      if (!backend->requestFramebufferReadback(1, target, 16, 8) ||
+          !backend->takeFramebufferReadback(1, true, pixels) ||
+          pixels.width != 16 || pixels.height != 8) {
+        error = "Framebuffer readback failed: " + pixels.error;
+        return false;
+      }
+      // Rows are top-down: the rectangle covers the top half.
+      const unsigned char* top = pixels.pixels.data();
+      const unsigned char* bottom = pixels.pixels.data() + 7 * 16 * 4;
+      if (top[0] != 255 || top[2] != 0 || bottom[0] != 0 || bottom[2] != 255) {
+        error = "Readback pixels or row order differ";
+        return false;
+      }
+      backend->releaseReadbackStream(1);
+      backend->DestroyFramebuffer(target);
+      return g_vulkan || glGetError() == GL_NO_ERROR;
+    });
+  if (!readback.success()) {
+    std::cerr << "Framebuffer readback checks: " << readback.error << '\n';
+    ++failures;
+  }
+  const FrameCaptureResult bounds =
+    FrameCapture::render(options, testInvalidTextureUpload);
+  if (bounds.success() ||
+      bounds.error.find("invalid rectangle") == std::string::npos) {
+    std::cerr << "Texture bounds checks: " << bounds.error << '\n';
     ++failures;
   }
   const FrameCaptureResult vertexBounds = FrameCapture::render(

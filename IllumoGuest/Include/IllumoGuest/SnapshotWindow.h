@@ -5,6 +5,7 @@
 #include <Illumo/Services/IEnvVars.h>
 #include <IllumoGuest/Display.h>
 #include <IllumoGuest/Input.h>
+#include <string>
 
 // Guest-local window values. A configured display client submits absolute
 // settings and reconciles actual results without exposing native pointers.
@@ -53,6 +54,19 @@ public:
                      ? static_cast<std::uint32_t>(preferredMsaa)
                      : 4u;
     desired.activeMsaa = m_activeMsaa;
+    // The host keeps the rendering backend for its next launch. Only a choice
+    // that differs from the host's report travels, and nothing before the
+    // first report, so a stale local value never overrides one made on the
+    // host (the command line, the console).
+    const std::uint32_t preferredApi = GuestDisplayState::graphicsApiCode(
+      m_environment->getVar("GraphicsAPI").value);
+    desired.graphicsApi =
+      m_savedGraphicsApi != GuestDisplayState::kGraphicsApiUnset &&
+          preferredApi != GuestDisplayState::kGraphicsApiUnset &&
+          preferredApi != m_savedGraphicsApi
+        ? preferredApi
+        : GuestDisplayState::kGraphicsApiUnset;
+    desired.activeGraphicsApi = m_activeGraphicsApi;
     if (!m_requestedDisplay || desired != m_desired) {
       m_display->apply(desired);
       m_desired = desired;
@@ -67,7 +81,15 @@ public:
       m_environment->setVar("uiScale", UiScale::text(actual.uiScale));
       m_environment->setVar("msaa", static_cast<long>(actual.msaa));
       m_activeMsaa = actual.activeMsaa;
+      m_savedGraphicsApi = actual.graphicsApi;
+      m_activeGraphicsApi = actual.activeGraphicsApi;
+      if (actual.graphicsApi != GuestDisplayState::kGraphicsApiUnset) {
+        m_environment->setVar(
+          "GraphicsAPI",
+          GuestDisplayState::graphicsApiName(actual.graphicsApi));
+      }
       m_desired = actual;
+      m_desired.graphicsApi = GuestDisplayState::kGraphicsApiUnset;
     }
   }
   // The running host window's samples, once the host has reported them.
@@ -76,6 +98,13 @@ public:
     return m_activeMsaa == GuestDisplayState::kUnknownMsaa
              ? -1
              : static_cast<int>(m_activeMsaa);
+  }
+  // The backend of the running host window, once the host has reported it.
+  std::string graphicsApi() const override
+  {
+    return m_activeGraphicsApi == GuestDisplayState::kGraphicsApiUnset
+             ? std::string()
+             : GuestDisplayState::graphicsApiName(m_activeGraphicsApi);
   }
   void accept(const GuestInput& input) { m_input = input; }
   // Travels with the next display synchronization; not a persisted setting.
@@ -147,4 +176,6 @@ private:
   bool m_requestedDisplay = false;
   bool m_hideSystemCursor = false;
   std::uint32_t m_activeMsaa = GuestDisplayState::kUnknownMsaa;
+  std::uint32_t m_savedGraphicsApi = GuestDisplayState::kGraphicsApiUnset;
+  std::uint32_t m_activeGraphicsApi = GuestDisplayState::kGraphicsApiUnset;
 };

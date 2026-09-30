@@ -565,6 +565,24 @@ testBackendConfigTokens()
   testTrue(g,
            TokenToString(static_cast<BackendDef>(999)) == "OPENGL",
            "unknown enum falls back to OpenGL");
+  env.setVar("GraphicsAPI", "vulkan");
+  testTrue(g,
+           StringToToken(&env) == BackendDef::VULKAN,
+           "backend names ignore letter case");
+  BackendDef parsed = BackendDef::VULKAN;
+  testTrue(g,
+           !parseBackendDef("metal", &parsed) && parsed == BackendDef::OPENGL,
+           "an unknown name parses as not recognized, OpenGL");
+  testTrue(g,
+           parseBackendDef("OpenGL", &parsed) && parsed == BackendDef::OPENGL,
+           "mixed-case OpenGL parses");
+  testTrue(g,
+           isBackendImplemented(BackendDef::OPENGL) &&
+             isBackendImplemented(BackendDef::VULKAN) &&
+             !isBackendImplemented(BackendDef::OPENGL_ES) &&
+             !isBackendImplemented(BackendDef::DIRECTX12) &&
+             !isBackendImplemented(BackendDef::DIRECTX11),
+           "OpenGL and Vulkan are the implemented backends");
 }
 
 static void

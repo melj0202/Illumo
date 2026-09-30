@@ -45,7 +45,11 @@ function(illumo_stage_runtime target_name)
     "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/miniaudio-0.11.25/LICENSE"
     "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/stb/LICENSE"
     "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tinyobjloader/LICENSE"
-    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/LICENSE")
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/LICENSE"
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/glslang-16.6.0/LICENSE.txt"
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/vulkan-headers-1.4.363/LICENSE.md"
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/volk-1.4.363/LICENSE.md"
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/vma-3.4.0/LICENSE.txt")
   target_sources(${target_name} PRIVATE ${illumo_runtime_inputs})
   set_source_files_properties(${illumo_runtime_inputs}
     PROPERTIES HEADER_FILE_ONLY TRUE)
@@ -94,6 +98,21 @@ function(illumo_stage_runtime target_name)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/LICENSE"
       "${runtime_directory}/licenses/Tracy-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/glslang-16.6.0/LICENSE.txt"
+      "${runtime_directory}/licenses/glslang-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/glslang-16.6.0/LICENSES"
+      "${runtime_directory}/licenses/glslang-LICENSES"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/vulkan-headers-1.4.363/LICENSE.md"
+      "${runtime_directory}/licenses/Vulkan-Headers-LICENSE.md"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/volk-1.4.363/LICENSE.md"
+      "${runtime_directory}/licenses/volk-LICENSE.md"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/vma-3.4.0/LICENSE.txt"
+      "${runtime_directory}/licenses/VulkanMemoryAllocator-LICENSE.txt"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${ILLUMO_LIBRARY_SOURCE_DIR}/Assets/Fonts/Handjet/OFL.txt"
       "${runtime_directory}/licenses/Handjet-OFL.txt"

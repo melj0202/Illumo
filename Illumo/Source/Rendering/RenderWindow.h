@@ -1,4 +1,5 @@
 #pragma once
+#include "Rendering/BackendConfig.h"
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <array>
@@ -7,8 +8,11 @@
 
 struct GLFWwindow;
 
-// GLFW window and OpenGL context host. GLEW/backend initialization is owned by
-// the backend factory after a context has been created successfully.
+// GLFW window for one graphics API. For OpenGL it also hosts the context;
+// GLEW/backend initialization is owned by the backend factory after the
+// context exists. For Vulkan the window has no client API: the backend
+// creates the surface and presents, and swapBuffers only follows the vsync
+// setting.
 class RenderWindow : public IRenderWindow
 {
 public:
@@ -16,7 +20,8 @@ public:
                const int height,
                const std::string& title,
                IEnvVars* envVars,
-               bool captureOnly = false);
+               bool captureOnly = false,
+               BackendDef graphicsApi = BackendDef::OPENGL);
   ~RenderWindow();
   void reinitializeWindow(const int width,
                           const int height,
@@ -44,17 +49,27 @@ public:
   {
     return m_captureOnly ? -1 : m_createdSamples;
   }
+  std::string graphicsApi() const override
+  {
+    return TokenToString(m_graphicsApi);
+  }
+  // The samples the backbuffer was requested with; 0 for capture windows,
+  // which getMsaaSamples reports as unknown.
+  int requestedSamples() const { return m_createdSamples; }
+  bool isCaptureWindow() const { return m_captureOnly; }
 
 private:
   int m_createdSamples = -1;
-  friend std::unique_ptr<IRenderWindow> CreateCaptureWindow(int width,
-                                                            int height);
+  friend std::unique_ptr<IRenderWindow>
+  CreateCaptureWindowFor(int width, int height, BackendDef graphicsApi);
   bool m_captureOnly = false;
-  friend std::unique_ptr<IRenderWindow> CreateRenderWindow(
+  BackendDef m_graphicsApi = BackendDef::OPENGL;
+  friend std::unique_ptr<IRenderWindow> CreateRenderWindowFor(
     int width,
     int height,
     const std::string& title,
-    IEnvVars* envVars);
+    IEnvVars* envVars,
+    BackendDef graphicsApi);
 
   std::array<double, 2> mouseCoords;
   GLFWwindow* window;
@@ -82,6 +97,7 @@ private:
 bool
 recordWindowSize(IEnvVars* envVars, int width, int height, bool iconified);
 
+// An OpenGL window.
 std::unique_ptr<IRenderWindow>
 CreateRenderWindow(int width,
                    int height,
@@ -89,4 +105,15 @@ CreateRenderWindow(int width,
                    IEnvVars* envVars);
 
 std::unique_ptr<IRenderWindow>
+CreateRenderWindowFor(int width,
+                      int height,
+                      const std::string& title,
+                      IEnvVars* envVars,
+                      BackendDef graphicsApi);
+
+// A hidden OpenGL window for capture.
+std::unique_ptr<IRenderWindow>
 CreateCaptureWindow(int width, int height);
+
+std::unique_ptr<IRenderWindow>
+CreateCaptureWindowFor(int width, int height, BackendDef graphicsApi);

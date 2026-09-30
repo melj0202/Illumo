@@ -18,7 +18,9 @@ is a WASM package in `apps/<name>/` beside that one host: `game`, `illed`
 (`IllEd.wasm`) and `meshviewer` (`IllMeshViewer.wasm`); `IllEdCore` and
 `IllMeshViewerCore` remain only as native test-oracle libraries. The supported product path is
 Windows, GLFW, OpenGL, and — for the simulator — the sparse infinite or
-finite-toroidal canvas. Illumo remains a reusable runtime and rendering
+finite-toroidal canvas. A Vulkan 1.3 backend with OpenGL's observable
+behaviour is selectable per launch (`GraphicsAPI`, `--graphics-api vulkan`;
+D-R33) and falls back to OpenGL when it cannot start. Illumo remains a reusable runtime and rendering
 foundation; application policy stays in the consuming product. The optional
 `Illumo::Content` layer owns the one scene format every program reads
 (`.ilsc` format 2, instantiated by `SceneInstance`), `.ilpk` packages, and
@@ -296,8 +298,8 @@ Ruleset truth:
 | GUI subsystem, dialogs, and atlas helpers | `Illumo/Include/Illumo/Gui/*`, `Illumo/Source/Gui/*` (`GuiKit`, `GuiDialog`, `GridAtlas`, `GuiToolStyle`, `GuiPanelDock`, `GuiPanelPointer`, `PanelSurfaces.h`) |
 | Detached panel windows (host) | `Illumo/Source/Wasm/WasmPanelWindows.*`, `Illumo/Include/Illumo/Platform/SurfaceWindow.h`, `IllumoGuest/Include/IllumoGuest/{Windows,PanelSurfaces}.h` |
 | Debug renderer atlas and shader | `Illumo/Assets/RendererDemo/*` |
-| Production backend factory | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*` (composed in `Engine/Illumo.cpp`) |
-| Real graphics execution | `Illumo/Source/Rendering/OpenGL/*` |
+| Production backend factories and selection | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*`, `Illumo/Source/Rendering/Vulkan/CreateVulkanBackend.*`, `Illumo/Source/Rendering/BackendConfig.h` (composed in `Engine/Illumo.cpp`) |
+| Real graphics execution | `Illumo/Source/Rendering/OpenGL/*`, `Illumo/Source/Rendering/Vulkan/*` (dependencies in `Illumo/cmake/IllumoVulkanDeps.cmake`) |
 | Headless backend | `Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h` |
 | Input, console, env, logging, system CLI | `Illumo/Source/Services/*` |
 | OS entry and native save/load | `Illumo/Source/Platform/*` |
@@ -576,6 +578,7 @@ Subsystem rules live in:
   `IllumoGame/Tests/AGENTS.md`;
 - `Illumo/Source/Rendering/AGENTS.md` plus
   `Illumo/Source/Rendering/OpenGL/AGENTS.md`,
+  `Illumo/Source/Rendering/Vulkan/AGENTS.md`,
   `Illumo/Source/Rendering/Primitives/AGENTS.md`; test-only MockBackend guidance
   lives in `Illumo/TestSupport/AGENTS.md`.
 

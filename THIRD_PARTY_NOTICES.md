@@ -19,10 +19,14 @@ IllumoGame executable.
 | [GLFW 3.4](https://www.glfw.org/) | Windowing and input | zlib/libpng license | Copyright (c) 2002-2006 Marcus Geelnard and Copyright (c) 2006-2019 Camilla Löwy. | [`LICENSE.md`](Illumo/thirdparty/glfw-3.4/LICENSE.md) |
 | [GLM 1.0.0](https://github.com/g-truc/glm) | Vector and matrix math | MIT License | Copyright (c) 2005 - G-Truc Creation. | [`copying.txt`](Illumo/thirdparty/glm/copying.txt) |
 | [JSON for Modern C++ 3.12.0](https://github.com/nlohmann/json) | Environment-variable persistence | MIT License | Copyright (c) 2013-2025 Niels Lohmann. | [`LICENSE.MIT`](Illumo/thirdparty/json/LICENSE.MIT) |
+| [glslang 16.6.0](https://github.com/KhronosGroup/glslang) (Vulkan SDK 1.4.363.0) | Run-time GLSL to SPIR-V compilation for the Vulkan backend (GLSL front end and SPIR-V generator only; the HLSL front end and optimizer are not vendored) | BSD 3-Clause License, with files under the BSD 2-Clause, MIT and Apache 2.0 licenses; the Bison-generated parser is GPL 3.0 or later with the Bison exception 2.2, which lets it be distributed under the terms of the rest of glslang | Copyright (C) 2002-2005 3Dlabs Inc. Ltd., Copyright (C) 2012-2016 LunarG, Inc., Copyright 2015-2026 The Khronos Group Inc., Copyright (C) 2017 Google, Inc., and other contributors named in the source files. | [`LICENSE.txt`](Illumo/thirdparty/glslang-16.6.0/LICENSE.txt), [`LICENSES/`](Illumo/thirdparty/glslang-16.6.0/LICENSES) |
 | [miniaudio 0.11.25](https://github.com/mackron/miniaudio) | Sound decoding (WAV, FLAC, MP3) and output mixing; the decoders also compile into WASM guests | Public domain (Unlicense), with MIT No Attribution as the alternative | Copyright 2025 David Reid (MIT-0 alternative; no attribution is required). | [`LICENSE`](Illumo/thirdparty/miniaudio-0.11.25/LICENSE) |
 | [stb](https://github.com/nothings/stb) (`stb_image` 2.30) | Image loading | MIT License | Copyright (c) 2017 Sean Barrett. | [`LICENSE`](Illumo/thirdparty/stb/LICENSE); the same notice is retained at the end of each header |
 | [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) | Wavefront OBJ mesh loading | MIT License | Copyright (c) 2012-Present Syoyo Fujita and many contributors. | [`LICENSE`](Illumo/thirdparty/tinyobjloader/LICENSE) |
 | [Tracy Profiler 0.14.1](https://github.com/wolfpld/tracy) | Profiling instrumentation (Debug, and `ILLUMO_ENABLE_TRACY` builds) | BSD 3-Clause License | Copyright (c) 2017-2026 Bartosz Taudul. | [`LICENSE`](Illumo/thirdparty/tracy-0.14.1/LICENSE) |
+| [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) (Vulkan SDK 1.4.363.0) | Vulkan API declarations for the Vulkan backend | Apache License 2.0 (the files are dual-licensed Apache 2.0 or MIT) | Copyright 2015-2026 The Khronos Group Inc. | [`LICENSE.md`](Illumo/thirdparty/vulkan-headers-1.4.363/LICENSE.md) |
+| [volk](https://github.com/zeux/volk) (Vulkan SDK 1.4.363.0) | Loads the Vulkan driver (`vulkan-1.dll`) at run time for the Vulkan backend | MIT License | Copyright (c) 2018-2026 Arseny Kapoulkine. | [`LICENSE.md`](Illumo/thirdparty/volk-1.4.363/LICENSE.md) |
+| [Vulkan Memory Allocator 3.4.0](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | GPU memory allocation for the Vulkan backend | MIT License | Copyright (c) 2017-2026 Advanced Micro Devices, Inc. All rights reserved. | [`LICENSE.txt`](Illumo/thirdparty/vma-3.4.0/LICENSE.txt) |
 | [Handjet](https://github.com/rosettatype/Handjet/) | Application TrueType font | SIL Open Font License 1.1 | Copyright 2018 The Handjet Project Authors. | [`OFL.txt`](Illumo/Assets/Fonts/Handjet/OFL.txt) |
 | [Kikuta](https://fontesk.com/kikuta-font/) | Variable-weight application TrueType font (CSim) | SIL Open Font License 1.1 | Copyright 2023 Erwan Le Rétif. | [`OFL.txt`](Illumo/Assets/Fonts/Kikuta/OFL.txt) |
 | [Space Mono](https://github.com/googlefonts/spacemono) | Application TrueType font | SIL Open Font License 1.1 | Copyright 2016 The Space Mono Project Authors. | [`OFL.txt`](Illumo/Assets/Fonts/Space_Mono/OFL.txt) |
@@ -54,9 +58,10 @@ while they are unused.
 
 ## Platform and configure-time dependencies
 
-OpenGL and platform libraries such as the Windows SDK frameworks or Linux GTK
-are supplied by the operating system, toolchain, or build environment; they are
-not vendored in this repository. FreeType can also discover optional system
+OpenGL, the Vulkan loader and driver (`vulkan-1.dll`), and platform libraries
+such as the Windows SDK frameworks or Linux GTK are supplied by the operating
+system, graphics driver, toolchain, or build environment; they are not vendored
+in this repository. FreeType can also discover optional system
 libraries during configuration. Anyone packaging a binary with additional
 redistributed runtime libraries must include the notices required by the exact
 libraries resolved in that build.

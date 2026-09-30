@@ -504,8 +504,8 @@ step, pan speed, autosave) are sliders over fixed stops,
 stepped with Left/Right or dragged; typing digits still enters an exact value
 where the setting is text-backed. The UI scale slider starts at Auto, which
 sizes the interface to the window (D-UI11; the default for new settings) and
-shows the factor it picked, then runs 1x to 4x in fractional steps. MSAA and
-cell style are segmented pickers and booleans are switches. Cell family and
+shows the factor it picked, then runs 1x to 4x in fractional steps. MSAA,
+the renderer and cell style are segmented pickers and booleans are switches. Cell family and
 ruleset, here and on the New Canvas screen (`NewSimulationMenu`), are
 drop-down fields (`GuiDropdownList`, D-UI17): Enter or a click opens a
 scrolling list of every family (with its rule count) or of the chosen
@@ -517,7 +517,12 @@ only when the host window is created: Display wire version 4 saves it for
 the next window, and after Apply, when it differs from the running window's
 samples, the canvas and main menu ask "Restart CSim?" (Later / Restart now,
 `ExitConfirmDialog::openRestart`); Restart now relaunches the runtime
-(D-UI13). The world sliders keep
+(D-UI13). The Video tab's Renderer row (OpenGL or Vulkan) works the same way
+through Display wire version 5: the host saves GraphicsAPI for its next
+launch and reports the running backend, and a choice unlike it offers the same
+restart (D-R33). The guest only sends a backend choice once the host has
+reported its own, so a choice made on the host (--graphics-api, the console)
+is never overridden by a stale local value. The world sliders keep
 both axes finite or both infinite. Applying a topology change drains the
 worker and starts a fresh centered world; other valid settings update the
 live runtime and the persisted environment. The overlay uses larger

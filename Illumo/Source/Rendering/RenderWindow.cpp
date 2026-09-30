@@ -43,9 +43,12 @@ RenderWindow::RenderWindow(const int width,
                            const int height,
                            const std::string& title,
                            IEnvVars* envVars,
-                           bool captureOnly)
+                           bool captureOnly,
+                           BackendDef graphicsApi)
   : IRenderWindow(width, height, title, envVars)
   , m_captureOnly(captureOnly)
+  , m_graphicsApi(graphicsApi == BackendDef::VULKAN ? BackendDef::VULKAN
+                                                    : BackendDef::OPENGL)
 {
 
   /*Init member variables*/
@@ -82,11 +85,16 @@ RenderWindow::initialize()
   }
   glfwInitialized = true;
   Logger::LogTrace(std::string("GLFW ") + glfwGetVersionString());
+  const bool openGl = m_graphicsApi == BackendDef::OPENGL;
   glfwDefaultWindowHints();
   glfwWindowHint(GLFW_VISIBLE, m_captureOnly ? GLFW_FALSE : GLFW_TRUE);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  if (openGl) {
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  } else {
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  }
   glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
   int samples = 4;
@@ -99,7 +107,10 @@ RenderWindow::initialize()
   if (m_captureOnly) {
     samples = 0;
   }
-  glfwWindowHint(GLFW_SAMPLES, samples);
+  // A Vulkan backend reads the count back and builds its own backbuffer.
+  if (openGl) {
+    glfwWindowHint(GLFW_SAMPLES, samples);
+  }
   m_createdSamples = samples;
   /* Create a windowed mode window and its OpenGL context */
 
@@ -121,9 +132,11 @@ RenderWindow::initialize()
   if (!window) {
     const char* description = nullptr;
     glfwGetError(&description);
-    Logger::LogError(std::string("Failed to create an OpenGL 3.3 core window") +
-                     (description != nullptr ? std::string(": ") + description
-                                             : std::string()));
+    Logger::LogError(
+      std::string(openGl ? "Failed to create an OpenGL 3.3 core window"
+                         : "Failed to create a window for Vulkan") +
+      (description != nullptr ? std::string(": ") + description
+                              : std::string()));
     glfwTerminate();
     glfwInitialized = false;
     return false;
@@ -143,12 +156,12 @@ RenderWindow::initialize()
         " at " + std::to_string(mode->refreshRate) + " Hz");
     }
   }
-  Logger::LogTrace(std::string("Window created: ") +
-                   std::to_string(windowWidth) + "x" +
-                   std::to_string(windowHeight) +
-                   (isFullScreen ? ", fullscreen" : ", windowed") +
-                   (m_captureOnly ? ", hidden for capture" : "") + ", " +
-                   std::to_string(samples) + "x MSAA");
+  Logger::LogTrace(
+    std::string("Window created: ") + std::to_string(windowWidth) + "x" +
+    std::to_string(windowHeight) +
+    (isFullScreen ? ", fullscreen" : ", windowed") +
+    (m_captureOnly ? ", hidden for capture" : "") + ", " +
+    std::to_string(samples) + "x MSAA, " + (openGl ? "OpenGL" : "Vulkan"));
   recordWindowSize(envVars, windowWidth, windowHeight, false);
   if (!isFullScreen) {
     centerWindow();
@@ -158,7 +171,9 @@ RenderWindow::initialize()
 
   /* Make the window's context current. Do not issue GL calls here: GLEW has
      not loaded function pointers yet, and core-profile GLX can crash. */
-  glfwMakeContextCurrent(window);
+  if (openGl) {
+    glfwMakeContextCurrent(window);
+  }
   glfwSetWindowUserPointer(window, this);
   glfwSetWindowSizeCallback(window, windowSizeCallback);
   if (!m_captureOnly) {
@@ -185,8 +200,19 @@ CreateRenderWindow(int width,
                    const std::string& title,
                    IEnvVars* envVars)
 {
-  std::unique_ptr<RenderWindow> window =
-    std::make_unique<RenderWindow>(width, height, title, envVars);
+  return CreateRenderWindowFor(
+    width, height, title, envVars, BackendDef::OPENGL);
+}
+
+std::unique_ptr<IRenderWindow>
+CreateRenderWindowFor(int width,
+                      int height,
+                      const std::string& title,
+                      IEnvVars* envVars,
+                      BackendDef graphicsApi)
+{
+  std::unique_ptr<RenderWindow> window = std::make_unique<RenderWindow>(
+    width, height, title, envVars, false, graphicsApi);
   if (!window->initialize()) {
     return nullptr;
   }
@@ -201,7 +227,10 @@ RenderWindow::syncPresentationMode()
     return;
   }
 
-  glfwSwapInterval(requestedVsync ? 1 : 0);
+  // A Vulkan backend reads isFramePaced and picks its present mode.
+  if (m_graphicsApi == BackendDef::OPENGL) {
+    glfwSwapInterval(requestedVsync ? 1 : 0);
+  }
   vsyncEnabled = requestedVsync;
   swapIntervalInitialized = true;
   if (!m_captureOnly) {
@@ -248,10 +277,12 @@ RenderWindow::handleResize(int width, int height)
   windowWidth = width;
   windowHeight = height;
 
-  int fbWidth = 0;
-  int fbHeight = 0;
-  glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
-  glViewport(0, 0, fbWidth, fbHeight);
+  if (m_graphicsApi == BackendDef::OPENGL) {
+    int fbWidth = 0;
+    int fbHeight = 0;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    glViewport(0, 0, fbWidth, fbHeight);
+  }
   // Minimizing reports 0x0 here; the live size follows it, but the persisted
   // size stays the last restored one.
   recordWindowSize(envVars,
@@ -374,7 +405,9 @@ RenderWindow::swapBuffers()
 {
   if (window != nullptr) {
     syncPresentationMode();
-    glfwSwapBuffers(window);
+    if (m_graphicsApi == BackendDef::OPENGL) {
+      glfwSwapBuffers(window);
+    }
   }
 }
 
@@ -394,8 +427,14 @@ RenderWindow::~RenderWindow()
 std::unique_ptr<IRenderWindow>
 CreateCaptureWindow(int width, int height)
 {
+  return CreateCaptureWindowFor(width, height, BackendDef::OPENGL);
+}
+
+std::unique_ptr<IRenderWindow>
+CreateCaptureWindowFor(int width, int height, BackendDef graphicsApi)
+{
   std::unique_ptr<RenderWindow> window = std::make_unique<RenderWindow>(
-    width, height, "Illumo capture", nullptr, true);
+    width, height, "Illumo capture", nullptr, true, graphicsApi);
   if (!window->initialize()) {
     return nullptr;
   }

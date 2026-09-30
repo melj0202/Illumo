@@ -1125,6 +1125,60 @@ run(const std::string& name)
                unknownReply.activeMsaa == GuestDisplayState::kUnknownMsaa,
              "A window that cannot tell reports unknown samples");
 
+    // Version 5: a backend choice is saved for the next launch; 0 leaves a
+    // choice made on the host alone. Reports carry the saved choice and the
+    // running window's backend.
+    const std::function<bool(std::uint32_t, std::uint32_t)> apiDecodes =
+      [](std::uint32_t api, std::uint32_t active) {
+        GuestDisplayState state;
+        state.graphicsApi = api;
+        state.activeGraphicsApi = active;
+        GuestWireWriter bytes;
+        GuestDisplayRequest{ true, state }.write(bytes);
+        GuestDisplayRequest request;
+        return GuestDisplayRequest::read(bytes.data(), request);
+      };
+    testTrue(counters,
+             apiDecodes(0u, 0u) && apiDecodes(1u, 2u) && apiDecodes(2u, 1u) &&
+               !apiDecodes(3u, 0u) && !apiDecodes(0u, 3u),
+             "Backend decoding accepts unset, OpenGL and Vulkan only");
+    window.graphicsApiName = "OPENGL";
+    env.setVar("GraphicsAPI", "opengl");
+    GuestDisplayState apiState;
+    apiState.graphicsApi = GuestDisplayState::kGraphicsApiVulkan;
+    GuestDisplayState apiReply;
+    testTrue(counters,
+             displayRoundTrip({ true, apiState }, 10, &apiReply) &&
+               env.getVar("GraphicsAPI").value == "VULKAN" &&
+               apiReply.graphicsApi == GuestDisplayState::kGraphicsApiVulkan &&
+               apiReply.activeGraphicsApi ==
+                 GuestDisplayState::kGraphicsApiOpenGl,
+             "A version 5 request saves the backend and reports the running "
+             "one");
+    GuestDisplayState keepState;
+    GuestDisplayState keepReply;
+    testTrue(counters,
+             displayRoundTrip({ true, keepState }, 11, &keepReply) &&
+               env.getVar("GraphicsAPI").value == "VULKAN" &&
+               keepReply.graphicsApi == GuestDisplayState::kGraphicsApiVulkan,
+             "An unset backend leaves the saved choice alone");
+    GuestDisplayRequest olderApi{ true, {} };
+    olderApi.version = 4u;
+    GuestDisplayState olderApiReply;
+    testTrue(counters,
+             displayRoundTrip(olderApi, 12, &olderApiReply) &&
+               env.getVar("GraphicsAPI").value == "VULKAN",
+             "A version 4 request leaves the saved backend alone");
+    window.graphicsApiName.clear();
+    env.setVar("GraphicsAPI", "");
+    GuestDisplayState unknownApiReply;
+    testTrue(counters,
+             displayRoundTrip({ false, {} }, 13, &unknownApiReply) &&
+               unknownApiReply.graphicsApi ==
+                 GuestDisplayState::kGraphicsApiOpenGl &&
+               unknownApiReply.activeGraphicsApi ==
+                 GuestDisplayState::kGraphicsApiUnset,
+             "No saved choice reports OpenGL; an unknown window reports unset");
     GuestDisplayRequest decoded;
     GuestWireWriter future;
     future.u32(kGuestDisplayVersion + 1u);

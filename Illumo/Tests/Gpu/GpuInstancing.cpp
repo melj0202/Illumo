@@ -3,17 +3,23 @@
 //   and in one instanced call through LitMeshInstanced give the same image.
 // - renderworld: a shadowed scene drawn by one MeshVisual per object and by
 //   one RenderWorld give the same image, shadows included.
-// Needs an OpenGL 3.3 context; returns 77 (skipped) when none can be created.
+// - backendparity: OpenGL and Vulkan draw the same scenes to the same pixels
+//   (GpuBackendParity.cpp).
+// Options: `--api vulkan` runs instancing and renderworld on Vulkan instead;
+// `--dump <dir>` saves the backendparity images. Returns 77 (skipped) when the
+// chosen API has no device or context.
 
+#include "GpuShared.h"
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
+#include "Rendering/Vulkan/CreateVulkanBackend.h"
 #include <GLFW/glfw3.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <algorithm>
@@ -42,7 +48,12 @@ public:
   {
   }
   GLFWwindow* getWindowInstance() override { return window; }
-  void swapBuffers() override { glfwSwapBuffers(window); }
+  void swapBuffers() override
+  {
+    if (window != nullptr) {
+      glfwSwapBuffers(window);
+    }
+  }
 
 private:
   GLFWwindow* window;
@@ -92,8 +103,7 @@ addFace(std::vector<LitVertex>& vertices,
   }
 }
 
-// A unit cube centred on the origin, one colour per face.
-static MeshAssetInfo
+MeshAssetInfo
 enrollCube(Renderer& renderer)
 {
   std::vector<LitVertex> vertices;
@@ -510,44 +520,77 @@ runRenderWorldParity(Renderer& renderer)
 int
 main(int argc, char** argv)
 {
-  const std::string test = argc > 1 ? argv[1] : "instancing";
-  if (test != "instancing" && test != "renderworld") {
-    std::printf("Unknown case %s (instancing or renderworld)\n", test.c_str());
+  std::string test = "instancing";
+  std::string api = "opengl";
+  std::string dumpDirectory;
+  for (int index = 1; index < argc; ++index) {
+    const std::string argument = argv[index];
+    if (argument == "--api" && index + 1 < argc) {
+      api = argv[++index];
+    } else if (argument == "--dump" && index + 1 < argc) {
+      dumpDirectory = argv[++index];
+    } else {
+      test = argument;
+    }
+  }
+  if (test != "instancing" && test != "renderworld" &&
+      test != "backendparity") {
+    std::printf("Unknown case %s (instancing, renderworld or backendparity)\n",
+                test.c_str());
+    return 2;
+  }
+  if (api != "opengl" && api != "vulkan") {
+    std::printf("Unknown API %s (opengl or vulkan)\n", api.c_str());
     return 2;
   }
   if (glfwInit() != GLFW_TRUE) {
     std::printf("SKIPPED: GLFW could not initialize\n");
     return kSkipped;
   }
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-  glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-  GLFWwindow* context =
-    glfwCreateWindow(kSize, kSize, "IllumoGpuTests", nullptr, nullptr);
-  if (context == nullptr) {
-    std::printf("SKIPPED: no OpenGL 3.3 context\n");
-    glfwTerminate();
-    return kSkipped;
+  // Vulkan renders offscreen with no window; OpenGL and the parity case need
+  // a hidden 3.3 context.
+  const bool vulkan = api == "vulkan" && test != "backendparity";
+  GLFWwindow* context = nullptr;
+  if (!vulkan) {
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    context =
+      glfwCreateWindow(kSize, kSize, "IllumoGpuTests", nullptr, nullptr);
+    if (context == nullptr) {
+      std::printf("SKIPPED: no OpenGL 3.3 context\n");
+      glfwTerminate();
+      return kSkipped;
+    }
+    glfwMakeContextCurrent(context);
   }
-  glfwMakeContextCurrent(context);
   int result = 1;
-  {
+  if (test == "backendparity") {
+    result = runBackendParity(context, dumpDirectory);
+  } else {
     HiddenWindow window(context);
     EnvVars env;
     env.setVar("WinX", kSize);
     env.setVar("WinY", kSize);
     Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
-    std::unique_ptr<IBackend> backend = CreateOpenGLBackend(&window);
+    std::unique_ptr<IBackend> backend = vulkan
+                                          ? CreateVulkanBackend(&window, false)
+                                          : CreateOpenGLBackend(&window);
     if (backend && backend->Initialize()) {
       Renderer renderer(&window, &env, &camera, std::move(backend));
       result = test == "instancing" ? runInstancingParity(renderer)
                                     : runRenderWorldParity(renderer);
+    } else if (vulkan) {
+      std::printf("SKIPPED: the Vulkan backend did not initialize\n");
+      result = kSkipped;
     } else {
       std::printf("FAILED: the OpenGL backend did not initialize\n");
     }
   }
-  glfwDestroyWindow(context);
+  if (context != nullptr) {
+    glfwDestroyWindow(context);
+  }
   glfwTerminate();
   return result;
 }

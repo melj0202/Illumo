@@ -979,6 +979,8 @@ CanvasScene::applyConfiguration(const SimulatorConfiguration& configuration)
     configuration.fullscreen != ic->envVars->getVar("fullscreen").valueAsBool;
   const bool msaaChanged =
     configuration.msaa != SimulatorSettings::msaa(ic->envVars);
+  const bool rendererChanged =
+    configuration.graphicsApi != SimulatorSettings::graphicsApi(ic->envVars);
 
   if (topologyChanged || rulesetChanged) {
     prepareGridMutation();
@@ -1013,6 +1015,9 @@ CanvasScene::applyConfiguration(const SimulatorConfiguration& configuration)
   if (msaaChanged && ic->commandLine != nullptr) {
     ic->commandLine->logNormal(
       "Anti-aliasing (MSAA) changes apply after CSim restarts.");
+  }
+  if (rendererChanged && ic->commandLine != nullptr) {
+    ic->commandLine->logNormal("Renderer changes apply after CSim restarts.");
   }
 
   if (topologyChanged) {

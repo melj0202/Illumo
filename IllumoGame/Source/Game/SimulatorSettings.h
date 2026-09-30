@@ -3,7 +3,9 @@
 #include "ConfigurationMenu.h"
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Services/IEnvVars.h>
+#include <cctype>
 #include <cmath>
+#include <string>
 
 // CSim's persisted settings, shared by every scene that opens the Settings
 // menu (D-E31): their environment names, product defaults and ranges, so the
@@ -39,8 +41,9 @@ public:
                     const SimulatorConfiguration& configuration);
 
   // Whether an applied configuration holds a setting that only a restart
-  // applies (today MSAA, read when the window is created): true when it
-  // differs from what the running window uses. Unknown windows never ask.
+  // applies (MSAA and the rendering backend, chosen when the window is
+  // created): true when it differs from what the running window uses.
+  // Unknown windows never ask.
   static bool restartNeeded(const SimulatorConfiguration& configuration,
                             const IRenderWindow* window)
   {
@@ -48,7 +51,21 @@ public:
       return false;
     }
     const int running = window->getMsaaSamples();
-    return running >= 0 && running != configuration.msaa;
+    const std::string runningApi = window->graphicsApi();
+    return (running >= 0 && running != configuration.msaa) ||
+           (!runningApi.empty() && runningApi != configuration.graphicsApi);
+  }
+
+  // The rendering backend the environment asks for, "OPENGL" unless it
+  // names Vulkan (in any letter case).
+  static std::string graphicsApi(IEnvVars* environment)
+  {
+    std::string name = environment->getVar("GraphicsAPI").value;
+    for (char& character : name) {
+      character =
+        static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    }
+    return name == "VULKAN" ? name : std::string("OPENGL");
   }
 
   // The MSAA sample count the environment asks for.

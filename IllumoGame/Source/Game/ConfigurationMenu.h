@@ -29,6 +29,9 @@ struct SimulatorConfiguration
   // scale follows the window size.
   double uiScale = 1.0;
   long msaa = 4;
+  // The rendering backend for the next launch, as GraphicsAPI spells it:
+  // "OPENGL" or "VULKAN".
+  std::string graphicsApi = "OPENGL";
   long fpsCap = 60;
   bool showInspector = false;
   bool reducedUiMotion = false;
@@ -97,6 +100,7 @@ enum class ConfigurationSetting
   Vsync,
   FpsCap,
   Msaa,
+  Renderer,
   ShowFps,
   ShowMemory,
   SoundVolume,
@@ -269,6 +273,7 @@ private:
   bool fullscreen;
   double uiScale;
   long msaa;
+  std::string graphicsApi = "OPENGL";
   std::string fpsCapText;
   bool showInspector = false;
   bool reducedUiMotion = false;
