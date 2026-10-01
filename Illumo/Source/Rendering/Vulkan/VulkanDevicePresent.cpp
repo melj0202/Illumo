@@ -395,6 +395,7 @@ VulkanDevice::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
   const std::chrono::steady_clock::time_point now =
     std::chrono::steady_clock::now();
   if (now >= m_nextSessionCheck) {
+    ILLUMO_PROFILE_ZONE("VulkanDevice.sessionCheck");
     m_sessionLocked = PlatformSessionLocked();
     m_nextSessionCheck = now + std::chrono::milliseconds(250);
   }
@@ -436,6 +437,7 @@ VulkanDevice::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
     }
     Acquisition& acquisition =
       m_swapchain.acquisitions[static_cast<size_t>(available)];
+    ILLUMO_PROFILE_ZONE("VulkanDevice.acquire");
     vkResetFences(device, 1, &acquisition.fence);
     const VkResult result = vkAcquireNextImageKHR(device,
                                                   m_swapchain.swapchain,
@@ -461,6 +463,7 @@ VulkanDevice::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
     }
   }
   if (!blocked) {
+    ILLUMO_PROFILE_ZONE("VulkanDevice.acquireWait");
     Acquisition& acquisition =
       m_swapchain
         .acquisitions[static_cast<size_t>(m_swapchain.pendingAcquisition)];

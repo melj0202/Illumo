@@ -130,6 +130,7 @@ VulkanDevice::ensureRecording()
   Slot& slot = m_slots[m_slotIndex];
   const VkDevice device = m_context.device();
   if (slot.serial != 0) {
+    ILLUMO_PROFILE_ZONE("VulkanDevice.waitSlot");
     vkWaitForFences(device, 1, &slot.fence, VK_TRUE, UINT64_MAX);
     m_completedSerial = std::max(m_completedSerial, slot.serial);
   }
@@ -144,15 +145,13 @@ VulkanDevice::ensureRecording()
   VkCommandBufferBeginInfo begin{};
   begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  vkBeginCommandBuffer(slot.upload, &begin);
+  // The upload command buffer begins with its first copy (transferCommands).
   vkBeginCommandBuffer(slot.main, &begin);
   m_recording = true;
   m_uploadUsed = false;
   m_mainTransfers = false;
   m_renderingActive = false;
-  m_boundPipeline = VK_NULL_HANDLE;
-  m_pushedLayout = VK_NULL_HANDLE;
-  m_pushedSignature.clear();
+  m_recorded = RecordedState{};
 }
 
 static void
@@ -199,7 +198,9 @@ VulkanDevice::flush(bool presentFrame)
                   VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                   VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
   }
-  vkEndCommandBuffer(slot.upload);
+  if (m_uploadUsed) {
+    vkEndCommandBuffer(slot.upload);
+  }
   vkEndCommandBuffer(slot.main);
 
   VkCommandBufferSubmitInfo commandInfos[2]{};
@@ -232,8 +233,11 @@ VulkanDevice::flush(bool presentFrame)
   submit.pWaitSemaphoreInfos = &wait;
   submit.signalSemaphoreInfoCount = presenting ? 1u : 0u;
   submit.pSignalSemaphoreInfos = &signal;
-  const VkResult submitted =
-    vkQueueSubmit2(m_context.queue(), 1, &submit, slot.fence);
+  VkResult submitted = VK_SUCCESS;
+  {
+    ILLUMO_PROFILE_ZONE("VulkanDevice.queueSubmit");
+    submitted = vkQueueSubmit2(m_context.queue(), 1, &submit, slot.fence);
+  }
   m_recording = false;
   m_lastSubmittedSerial = m_recordingSerial;
   if (submitted != VK_SUCCESS) {
@@ -254,7 +258,11 @@ VulkanDevice::flush(bool presentFrame)
     info.swapchainCount = 1;
     info.pSwapchains = &m_swapchain.swapchain;
     info.pImageIndices = &imageIndex;
-    const VkResult shown = vkQueuePresentKHR(m_context.queue(), &info);
+    VkResult shown = VK_SUCCESS;
+    {
+      ILLUMO_PROFILE_ZONE("VulkanDevice.queuePresent");
+      shown = vkQueuePresentKHR(m_context.queue(), &info);
+    }
     if (shown == VK_ERROR_OUT_OF_DATE_KHR || shown == VK_SUBOPTIMAL_KHR) {
       m_swapchainStale = true;
     } else if (shown != VK_SUCCESS) {
@@ -443,6 +451,10 @@ VulkanDevice::transferCommands(uint64_t useSerial)
   }
   VkCommandBuffer upload = m_slots[m_slotIndex].upload;
   if (!m_uploadUsed) {
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(upload, &begin);
     // Earlier submissions may still read or write what these copies
     // overwrite.
     globalBarrier(upload,
@@ -921,17 +933,25 @@ VulkanDevice::shutdown()
   const VkDevice device = m_context.device();
   vkDeviceWaitIdle(device);
   m_recording = false;
-  for (std::pair<const uint32_t, Entry<VulkanMesh>>& entry : m_meshes) {
-    releaseMesh(*entry.second.resource);
+  for (Entry<VulkanMesh>& entry : m_meshes) {
+    if (entry.resource) {
+      releaseMesh(*entry.resource);
+    }
   }
-  for (std::pair<const uint32_t, Entry<VulkanProgram>>& entry : m_programs) {
-    releaseProgram(*entry.second.resource);
+  for (Entry<VulkanProgram>& entry : m_programs) {
+    if (entry.resource) {
+      releaseProgram(*entry.resource);
+    }
   }
-  for (std::pair<const uint32_t, Entry<VulkanTexture>>& entry : m_textures) {
-    releaseTexture(*entry.second.resource);
+  for (Entry<VulkanTexture>& entry : m_textures) {
+    if (entry.resource) {
+      releaseTexture(*entry.resource);
+    }
   }
-  for (std::pair<const uint32_t, Entry<VulkanBuffer>>& entry : m_buffers) {
-    retireBuffer(entry.second.resource->memory);
+  for (Entry<VulkanBuffer>& entry : m_buffers) {
+    if (entry.resource) {
+      retireBuffer(entry.resource->memory);
+    }
   }
   m_meshes.clear();
   m_programs.clear();

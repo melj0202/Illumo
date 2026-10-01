@@ -212,7 +212,20 @@ or a failed Vulkan start returns to it.
   dependencies are not linted); `IllumoWorkspace` and `IllumoGpu` CTest labels
   pass (709 tests); `IllumoCaptureGpuTests` passes on both APIs;
   `CheckNoExceptions` passes; changed C++ is clang-formatted.
-- Measurements (RTX 4080, 60 Hz): all packages hold 60 FPS on both backends;
-  CPU record time per frame is higher on Vulkan (median about 0.13 against
-  0.04 ms, where the OpenGL driver defers work to its own thread).
-- Not verified: Linux, non-NVIDIA drivers, validation layers (not installed).
+- Measurements (RTX 4080, 1600x900, 4x MSAA): all packages hold 60 FPS on both
+  backends. A CPU pass (2026-10-01, Tracy plus per-section timers) removed a
+  heap allocation and unchanged state from every draw (descriptor signature in
+  a fixed array; viewport, scissor, cull, depth and vertex/index bindings and
+  pipeline binds recorded only when they change; the last pipeline lookup
+  reused), made resource lookups slot-indexed vectors, left the uniform block
+  clean when a set repeats its value, began the upload command buffer only when
+  used, and cached the monitor refresh rate (`glfwGetVideoMode` cost 7.6 us a
+  call, twice a frame). Uncapped frame rates went from 1,567 / 2,762 / 3,253
+  to about 1,500-1,900 / 3,290 / 3,580 FPS (game / IllEd / mesh viewer; the
+  game alternates between two title states run to run), recording from 0.126
+  / 0.095 / 0.066 to 0.083-0.111 / 0.069 / 0.051 ms, at or above OpenGL's
+  1,557 / 2,986 / 3,409 FPS. At 60 Hz recording takes 0.168 / 0.110 / 0.092 ms
+  against OpenGL's 0.102 / 0.037 / 0.032 ms (OpenGL's driver records on its own
+  thread). What remains is mostly the driver: about 290 ns per pipeline bind,
+  where the 2D UI changes program on most draws, and the submit and present
+  calls.- Not verified: Linux, non-NVIDIA drivers, validation layers (not installed).

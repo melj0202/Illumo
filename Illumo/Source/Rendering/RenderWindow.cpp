@@ -389,15 +389,22 @@ RenderWindow::cancelCloseRequest()
 int
 RenderWindow::getRefreshRate() const
 {
+  const std::chrono::steady_clock::time_point now =
+    std::chrono::steady_clock::now();
+  if (m_refreshRate > 0 && now - m_refreshRateRead < std::chrono::seconds(1)) {
+    return m_refreshRate;
+  }
   ILLUMO_PROFILE_ZONE("RenderWindow.getRefreshRate");
+  m_refreshRate = 60;
+  m_refreshRateRead = now;
   GLFWmonitor* monitor = glfwGetPrimaryMonitor();
   if (monitor != nullptr) {
     const GLFWvidmode* mode = glfwGetVideoMode(monitor);
     if (mode != nullptr && mode->refreshRate > 0) {
-      return mode->refreshRate;
+      m_refreshRate = mode->refreshRate;
     }
   }
-  return 60;
+  return m_refreshRate;
 }
 
 void

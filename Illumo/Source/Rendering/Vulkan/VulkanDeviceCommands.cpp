@@ -419,12 +419,17 @@ VulkanDevice::setUniform(const char* name,
                     4);
         word = source != 0.0f ? 1u : 0u;
       }
-      std::memcpy(destination + component * 4u, &word, 4);
+      if (std::memcmp(destination + component * 4u, &word, 4) != 0) {
+        std::memcpy(destination + component * 4u, &word, 4);
+        program->blockDirty = true;
+      }
     }
-  } else {
+  } else if (std::memcmp(destination, value, bytes) != 0) {
+    // An unchanged value (the same screen matrix on every 2D draw) keeps
+    // the uploaded block and the pushed descriptors.
     std::memcpy(destination, value, bytes);
+    program->blockDirty = true;
   }
-  program->blockDirty = true;
 }
 
 void
@@ -577,14 +582,18 @@ VulkanDevice::resolveTarget(RenderTarget* target)
 }
 
 void
-VulkanDevice::ensureRendering()
+VulkanDevice::ensureRendering(const RenderTarget* resolved)
 {
   ensureRecording();
   endMainTransfers();
-  RenderTarget target;
-  if (!resolveTarget(&target)) {
-    return;
+  RenderTarget local;
+  if (resolved == nullptr) {
+    if (!resolveTarget(&local)) {
+      return;
+    }
+    resolved = &local;
   }
+  const RenderTarget& target = *resolved;
   if (m_renderingActive) {
     if (m_target.backbuffer == target.backbuffer &&
         m_target.handle == target.handle) {
@@ -867,12 +876,19 @@ VulkanDevice::pipelineFor(VulkanProgram& program,
     key.blendSrc = static_cast<uint8_t>(m_state.blendSrc);
     key.blendDst = static_cast<uint8_t>(m_state.blendDst);
   }
+  if (m_lastPipelineProgram == &program &&
+      std::memcmp(&key, &m_lastPipelineKey, sizeof(key)) == 0) {
+    return m_lastPipeline;
+  }
   std::unordered_map<VulkanPipelineKey,
                      VkPipeline,
                      VulkanPipelineKeyHash,
                      VulkanPipelineKeyEqual>::const_iterator found =
     program.pipelines.find(key);
   if (found != program.pipelines.end()) {
+    m_lastPipelineProgram = &program;
+    m_lastPipelineKey = key;
+    m_lastPipeline = found->second;
     return found->second;
   }
   ILLUMO_PROFILE_ZONE("VulkanDevice.createPipeline");
@@ -1140,9 +1156,11 @@ VulkanDevice::draw(DrawKind kind,
   std::array<VkDescriptorBufferInfo, 32> buffers{};
   std::array<VkDescriptorImageInfo, 32> images{};
   std::array<VkWriteDescriptorSet, 32> writes{};
-  std::vector<uint64_t> signature;
-  signature.reserve(bindings.size() * 3 + 1);
-  signature.push_back(reinterpret_cast<uint64_t>(program->pipelineLayout));
+  // What the pushed descriptors name; an unchanged set is not pushed again.
+  std::array<uint64_t, kSignatureWords> signature;
+  size_t signatureLength = 0;
+  signature[signatureLength++] =
+    reinterpret_cast<uint64_t>(program->pipelineLayout);
   const VkDeviceSize uniformRange = m_context.limits().maxUniformBufferRange;
   for (size_t index = 0; index < bindings.size(); ++index) {
     const GlslBinding& binding = bindings[index];
@@ -1224,14 +1242,17 @@ VulkanDevice::draw(DrawKind kind,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
       write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
       write.pImageInfo = &images[index];
-      signature.push_back(reinterpret_cast<uint64_t>(image.sampledView));
-      signature.push_back(reinterpret_cast<uint64_t>(texture->sampler));
-      signature.push_back(binding.binding);
+      signature[signatureLength++] =
+        reinterpret_cast<uint64_t>(image.sampledView);
+      signature[signatureLength++] =
+        reinterpret_cast<uint64_t>(texture->sampler);
+      signature[signatureLength++] = binding.binding;
       continue;
     }
-    signature.push_back(reinterpret_cast<uint64_t>(buffers[index].buffer));
-    signature.push_back(buffers[index].offset);
-    signature.push_back(binding.binding);
+    signature[signatureLength++] =
+      reinterpret_cast<uint64_t>(buffers[index].buffer);
+    signature[signatureLength++] = buffers[index].offset;
+    signature[signatureLength++] = binding.binding;
   }
   mesh->vertices.useSerial = m_recordingSerial;
   mesh->indices.useSerial = m_recordingSerial;
@@ -1239,26 +1260,33 @@ VulkanDevice::draw(DrawKind kind,
     instanceBuffer->memory.useSerial = m_recordingSerial;
   }
 
-  ensureRendering();
+  ensureRendering(&target);
   if (!m_renderingActive) {
     return;
   }
-  if (pipeline != m_boundPipeline) {
+  if (pipeline != m_recorded.pipeline) {
     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    m_boundPipeline = pipeline;
+    m_recorded.pipeline = pipeline;
   }
-  if (!bindings.empty() && (m_pushedLayout != program->pipelineLayout ||
-                            signature != m_pushedSignature)) {
+  if (!bindings.empty() &&
+      (m_recorded.pushedLayout != program->pipelineLayout ||
+       m_recorded.signatureLength != signatureLength ||
+       std::memcmp(m_recorded.signature.data(),
+                   signature.data(),
+                   signatureLength * sizeof(uint64_t)) != 0)) {
     vkCmdPushDescriptorSetKHR(commands,
                               VK_PIPELINE_BIND_POINT_GRAPHICS,
                               program->pipelineLayout,
                               0,
                               static_cast<uint32_t>(bindings.size()),
                               writes.data());
-    m_pushedLayout = program->pipelineLayout;
-    m_pushedSignature = std::move(signature);
+    m_recorded.pushedLayout = program->pipelineLayout;
+    m_recorded.signature = signature;
+    m_recorded.signatureLength = signatureLength;
   }
 
+  // Dynamic state lives in the command buffer across rendering instances
+  // and pipeline binds; only changes are recorded.
   VkViewport viewport{};
   viewport.x = static_cast<float>(m_viewport.x);
   viewport.y = static_cast<float>(m_viewport.y);
@@ -1266,8 +1294,6 @@ VulkanDevice::draw(DrawKind kind,
   viewport.height = static_cast<float>(m_viewport.height);
   viewport.minDepth = 0.0f;
   viewport.maxDepth = 1.0f;
-  vkCmdSetViewport(commands, 0, 1, &viewport);
-  vkCmdSetScissor(commands, 0, 1, &scissor);
   VkCullModeFlags cull = VK_CULL_MODE_NONE;
   if (m_state.faceCullingEnabled) {
     cull = m_cullFace == CullMode::Front ? VK_CULL_MODE_FRONT_BIT
@@ -1275,30 +1301,64 @@ VulkanDevice::draw(DrawKind kind,
                                               ? VK_CULL_MODE_FRONT_AND_BACK
                                               : VK_CULL_MODE_BACK_BIT);
   }
-  vkCmdSetCullMode(commands, cull);
   // Framebuffer rows are stored as OpenGL stores them, which mirrors
   // Vulkan's winding: OpenGL's counter-clockwise is Vulkan's clockwise.
-  vkCmdSetFrontFace(commands,
-                    m_frontFace == WindingOrder::CounterClockwise
-                      ? VK_FRONT_FACE_CLOCKWISE
-                      : VK_FRONT_FACE_COUNTER_CLOCKWISE);
-  vkCmdSetDepthTestEnable(commands,
-                          m_state.depthTestEnabled ? VK_TRUE : VK_FALSE);
-  vkCmdSetDepthWriteEnable(commands, VK_TRUE);
-  vkCmdSetDepthCompareOp(commands, VK_COMPARE_OP_LESS_OR_EQUAL);
+  const VkFrontFace frontFace = m_frontFace == WindingOrder::CounterClockwise
+                                  ? VK_FRONT_FACE_CLOCKWISE
+                                  : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  const VkBool32 depthTest = m_state.depthTestEnabled ? VK_TRUE : VK_FALSE;
+  const bool known = m_recorded.dynamicKnown;
+  if (!known) {
+    vkCmdSetDepthWriteEnable(commands, VK_TRUE);
+    vkCmdSetDepthCompareOp(commands, VK_COMPARE_OP_LESS_OR_EQUAL);
+  }
+  if (!known ||
+      std::memcmp(&viewport, &m_recorded.viewport, sizeof(viewport)) != 0) {
+    vkCmdSetViewport(commands, 0, 1, &viewport);
+    m_recorded.viewport = viewport;
+  }
+  if (!known ||
+      std::memcmp(&scissor, &m_recorded.scissor, sizeof(scissor)) != 0) {
+    vkCmdSetScissor(commands, 0, 1, &scissor);
+    m_recorded.scissor = scissor;
+  }
+  if (!known || cull != m_recorded.cullMode) {
+    vkCmdSetCullMode(commands, cull);
+    m_recorded.cullMode = cull;
+  }
+  if (!known || frontFace != m_recorded.frontFace) {
+    vkCmdSetFrontFace(commands, frontFace);
+    m_recorded.frontFace = frontFace;
+  }
+  if (!known || depthTest != m_recorded.depthTest) {
+    vkCmdSetDepthTestEnable(commands, depthTest);
+    m_recorded.depthTest = depthTest;
+  }
+  m_recorded.dynamicKnown = true;
 
-  const VkBuffer vertexBuffers[3] = { mesh->vertices.buffer,
-                                      instanceBuffer != nullptr
-                                        ? instanceBuffer->memory.buffer
-                                        : m_defaultAttributes.buffer,
-                                      m_defaultAttributes.buffer };
-  const VkDeviceSize offsets[3] = {
+  const std::array<VkBuffer, 3> vertexBuffers = {
+    mesh->vertices.buffer,
+    instanceBuffer != nullptr ? instanceBuffer->memory.buffer
+                              : m_defaultAttributes.buffer,
+    m_defaultAttributes.buffer
+  };
+  const std::array<VkDeviceSize, 3> offsets = {
     0, instanceBuffer != nullptr ? mesh->instanceOffset : 0u, 0
   };
-  vkCmdBindVertexBuffers(commands, 0, 3, vertexBuffers, offsets);
+  if (!m_recorded.vertexKnown || vertexBuffers != m_recorded.vertexBuffers ||
+      offsets != m_recorded.vertexOffsets) {
+    vkCmdBindVertexBuffers(
+      commands, 0, 3, vertexBuffers.data(), offsets.data());
+    m_recorded.vertexBuffers = vertexBuffers;
+    m_recorded.vertexOffsets = offsets;
+    m_recorded.vertexKnown = true;
+  }
   if (indexed) {
-    vkCmdBindIndexBuffer(
-      commands, mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+    if (mesh->indices.buffer != m_recorded.indexBuffer) {
+      vkCmdBindIndexBuffer(
+        commands, mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+      m_recorded.indexBuffer = mesh->indices.buffer;
+    }
     vkCmdDrawIndexed(commands, count, instances, first, 0, 0);
   } else {
     vkCmdDraw(commands, count, instances, first, 0);

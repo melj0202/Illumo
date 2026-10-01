@@ -3,6 +3,7 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <array>
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -60,6 +61,10 @@ public:
 
 private:
   int m_createdSamples = -1;
+  // glfwGetVideoMode asks the OS each call; the rate is re-read at most once
+  // a second.
+  mutable int m_refreshRate = 0;
+  mutable std::chrono::steady_clock::time_point m_refreshRateRead{};
   friend std::unique_ptr<IRenderWindow>
   CreateCaptureWindowFor(int width, int height, BackendDef graphicsApi);
   bool m_captureOnly = false;

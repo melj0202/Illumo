@@ -126,7 +126,7 @@ VulkanDevice::createMesh(const void* vertices,
     return {};
   }
   const MeshHandle handle = m_meshHandles.allocate();
-  Entry<VulkanMesh>& entry = m_meshes[handle.slot];
+  Entry<VulkanMesh>& entry = slotEntry(m_meshes, handle.slot);
   entry.generation = handle.generation;
   entry.resource = std::move(mesh);
   return handle;
@@ -168,7 +168,7 @@ VulkanDevice::destroyMesh(MeshHandle handle)
     return false;
   }
   releaseMesh(*mesh);
-  m_meshes.erase(handle.slot);
+  m_meshes[handle.slot] = Entry<VulkanMesh>{};
   return m_meshHandles.release(handle);
 }
 
@@ -278,11 +278,14 @@ VulkanDevice::releaseProgram(VulkanProgram& program)
        program.pipelines) {
     retired.pipelines.push_back(pipeline.second);
   }
-  if (m_pushedLayout == program.pipelineLayout) {
-    m_pushedLayout = VK_NULL_HANDLE;
+  if (m_recorded.pushedLayout == program.pipelineLayout) {
+    m_recorded.pushedLayout = VK_NULL_HANDLE;
   }
   if (!retired.pipelines.empty()) {
-    m_boundPipeline = VK_NULL_HANDLE;
+    m_recorded.pipeline = VK_NULL_HANDLE;
+  }
+  if (m_lastPipelineProgram == &program) {
+    m_lastPipelineProgram = nullptr;
   }
   program.vertexModule = VK_NULL_HANDLE;
   program.fragmentModule = VK_NULL_HANDLE;
@@ -301,7 +304,7 @@ VulkanDevice::createShader(const ShaderSources& sources, std::string* error)
     return {};
   }
   const ShaderHandle handle = m_shaderHandles.allocate();
-  Entry<VulkanProgram>& entry = m_programs[handle.slot];
+  Entry<VulkanProgram>& entry = slotEntry(m_programs, handle.slot);
   entry.generation = handle.generation;
   entry.resource = std::move(program);
   return handle;
@@ -335,7 +338,7 @@ VulkanDevice::destroyShader(ShaderHandle handle)
     return false;
   }
   releaseProgram(*program);
-  m_programs.erase(handle.slot);
+  m_programs[handle.slot] = Entry<VulkanProgram>{};
   return m_shaderHandles.release(handle);
 }
 
@@ -576,7 +579,7 @@ TextureHandle
 VulkanDevice::registerTexture(std::unique_ptr<VulkanTexture> texture)
 {
   const TextureHandle handle = m_textureHandles.allocate();
-  Entry<VulkanTexture>& entry = m_textures[handle.slot];
+  Entry<VulkanTexture>& entry = slotEntry(m_textures, handle.slot);
   entry.generation = handle.generation;
   entry.resource = std::move(texture);
   return handle;
@@ -707,7 +710,7 @@ VulkanDevice::destroyTexture(TextureHandle handle)
     return false;
   }
   releaseTexture(*texture);
-  m_textures.erase(handle.slot);
+  m_textures[handle.slot] = Entry<VulkanTexture>{};
   return m_textureHandles.release(handle);
 }
 
@@ -809,7 +812,7 @@ VulkanDevice::createFramebuffer(const FramebufferDesc& desc,
     outAttachments->depthStencilTexture = framebuffer->depthTexture;
   }
   const FramebufferHandle handle = m_framebufferHandles.allocate();
-  Entry<VulkanFramebuffer>& entry = m_framebuffers[handle.slot];
+  Entry<VulkanFramebuffer>& entry = slotEntry(m_framebuffers, handle.slot);
   entry.generation = handle.generation;
   entry.resource = std::move(framebuffer);
   // OpenGL creation leaves the default framebuffer bound and texture unit
@@ -843,7 +846,7 @@ VulkanDevice::destroyFramebuffer(FramebufferHandle handle)
   if (depth.isValid()) {
     destroyTexture(depth);
   }
-  m_framebuffers.erase(handle.slot);
+  m_framebuffers[handle.slot] = Entry<VulkanFramebuffer>{};
   return m_framebufferHandles.release(handle);
 }
 
@@ -870,7 +873,7 @@ VulkanDevice::createBuffer(BufferUsage usage, size_t capacityBytes)
     return {};
   }
   const BufferHandle handle = m_bufferHandles.allocate();
-  Entry<VulkanBuffer>& entry = m_buffers[handle.slot];
+  Entry<VulkanBuffer>& entry = slotEntry(m_buffers, handle.slot);
   entry.generation = handle.generation;
   entry.resource = std::move(buffer);
   return handle;
@@ -885,7 +888,7 @@ VulkanDevice::destroyBuffer(BufferHandle handle)
     return false;
   }
   retireBuffer(buffer->memory);
-  m_buffers.erase(handle.slot);
+  m_buffers[handle.slot] = Entry<VulkanBuffer>{};
   return m_bufferHandles.release(handle);
 }
 
@@ -898,54 +901,29 @@ VulkanDevice::isBufferValid(BufferHandle handle) const
 VulkanMesh*
 VulkanDevice::resolveMesh(MeshHandle handle) const
 {
-  std::unordered_map<uint32_t, Entry<VulkanMesh>>::const_iterator found =
-    m_meshes.find(handle.slot);
-  return found != m_meshes.end() &&
-             found->second.generation == handle.generation
-           ? found->second.resource.get()
-           : nullptr;
+  return slotResource(m_meshes, handle.slot, handle.generation);
 }
 
 VulkanProgram*
 VulkanDevice::resolveProgram(ShaderHandle handle) const
 {
-  std::unordered_map<uint32_t, Entry<VulkanProgram>>::const_iterator found =
-    m_programs.find(handle.slot);
-  return found != m_programs.end() &&
-             found->second.generation == handle.generation
-           ? found->second.resource.get()
-           : nullptr;
+  return slotResource(m_programs, handle.slot, handle.generation);
 }
 
 VulkanTexture*
 VulkanDevice::resolveTexture(TextureHandle handle) const
 {
-  std::unordered_map<uint32_t, Entry<VulkanTexture>>::const_iterator found =
-    m_textures.find(handle.slot);
-  return found != m_textures.end() &&
-             found->second.generation == handle.generation
-           ? found->second.resource.get()
-           : nullptr;
+  return slotResource(m_textures, handle.slot, handle.generation);
 }
 
 VulkanFramebuffer*
 VulkanDevice::resolveFramebuffer(FramebufferHandle handle) const
 {
-  std::unordered_map<uint32_t, Entry<VulkanFramebuffer>>::const_iterator found =
-    m_framebuffers.find(handle.slot);
-  return found != m_framebuffers.end() &&
-             found->second.generation == handle.generation
-           ? found->second.resource.get()
-           : nullptr;
+  return slotResource(m_framebuffers, handle.slot, handle.generation);
 }
 
 VulkanBuffer*
 VulkanDevice::resolveBuffer(BufferHandle handle) const
 {
-  std::unordered_map<uint32_t, Entry<VulkanBuffer>>::const_iterator found =
-    m_buffers.find(handle.slot);
-  return found != m_buffers.end() &&
-             found->second.generation == handle.generation
-           ? found->second.resource.get()
-           : nullptr;
+  return slotResource(m_buffers, handle.slot, handle.generation);
 }

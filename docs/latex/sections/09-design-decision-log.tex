@@ -3172,8 +3172,9 @@ public headers, guests or products; a token or shader-visible change now has
 to keep \texttt{Illumo.Gpu.BackendParity} passing. Four vendored dependencies
 (Vulkan-Headers, volk, glslang 16.6.0 and VMA 3.4.0, all from Vulkan SDK
 1.4.363.0) are updated together. Recording costs more CPU time than OpenGL's
-driver-threaded submission (median about 0.13 against 0.04\,ms per frame for
-the shipped packages), well inside the frame budget.\\
+driver-threaded submission (median 0.09 to 0.17 against 0.03 to 0.10\,ms per
+frame at 60\,Hz for the shipped packages), well inside the frame budget;
+uncapped, Vulkan matches or beats OpenGL's frame rate.\\
 \textbf{Extends:} D-R8, D-R11, D-UI13
 \end{decisionbox}
 

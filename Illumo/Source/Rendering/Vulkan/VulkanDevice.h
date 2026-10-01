@@ -415,6 +415,26 @@ private:
     std::unique_ptr<T> resource;
   };
 
+  // Handle slots are small and dense (ResourceHandlePool), so each registry
+  // is a vector indexed by slot; a released slot holds an empty entry.
+  template<typename T>
+  static Entry<T>& slotEntry(std::vector<Entry<T>>& table, uint32_t slot)
+  {
+    if (slot >= table.size()) {
+      table.resize(static_cast<size_t>(slot) + 1);
+    }
+    return table[slot];
+  }
+  template<typename T>
+  static T* slotResource(const std::vector<Entry<T>>& table,
+                         uint32_t slot,
+                         uint32_t generation)
+  {
+    return slot < table.size() && table[slot].generation == generation
+             ? table[slot].resource.get()
+             : nullptr;
+  }
+
   // Frames, submissions and deferred destruction (VulkanDevice.cpp).
   bool createSlots(std::string* error);
   void ensureRecording();
@@ -537,7 +557,9 @@ private:
             unsigned instances,
             const char* label);
   bool resolveTarget(RenderTarget* target);
-  void ensureRendering();
+  // Begins rendering to the bound target unless it is already active. A
+  // caller that has just resolved the target passes it.
+  void ensureRendering(const RenderTarget* resolved = nullptr);
   void endRendering();
   VkPipeline pipelineFor(VulkanProgram& program,
                          const RenderTarget& target,
@@ -609,18 +631,41 @@ private:
   // Command-buffer state of the current recording.
   bool m_renderingActive = false;
   RenderTarget m_target;
-  VkPipeline m_boundPipeline = VK_NULL_HANDLE;
-  VkPipelineLayout m_pushedLayout = VK_NULL_HANDLE;
-  std::vector<uint64_t> m_pushedSignature;
-
+  // What the main command buffer being recorded already holds, so a draw
+  // records only what changed. Reset with each recording.
+  static constexpr size_t kSignatureWords = 32 * 3 + 1;
+  struct RecordedState
+  {
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout pushedLayout = VK_NULL_HANDLE;
+    // The pushed descriptors: layout, then buffer or view, sampler or
+    // offset, and binding for each.
+    std::array<uint64_t, kSignatureWords> signature{};
+    size_t signatureLength = 0;
+    bool dynamicKnown = false;
+    VkViewport viewport{};
+    VkRect2D scissor{};
+    VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
+    VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;
+    VkBool32 depthTest = VK_FALSE;
+    bool vertexKnown = false;
+    std::array<VkBuffer, 3> vertexBuffers{};
+    std::array<VkDeviceSize, 3> vertexOffsets{};
+    VkBuffer indexBuffer = VK_NULL_HANDLE;
+  };
+  RecordedState m_recorded;
+  // The last pipeline lookup; consecutive draws usually repeat it.
+  const VulkanProgram* m_lastPipelineProgram = nullptr;
+  VulkanPipelineKey m_lastPipelineKey{};
+  VkPipeline m_lastPipeline = VK_NULL_HANDLE;
   std::string m_frameError;
   VulkanFrameStats m_stats;
 
-  std::unordered_map<uint32_t, Entry<VulkanMesh>> m_meshes;
-  std::unordered_map<uint32_t, Entry<VulkanProgram>> m_programs;
-  std::unordered_map<uint32_t, Entry<VulkanTexture>> m_textures;
-  std::unordered_map<uint32_t, Entry<VulkanFramebuffer>> m_framebuffers;
-  std::unordered_map<uint32_t, Entry<VulkanBuffer>> m_buffers;
+  std::vector<Entry<VulkanMesh>> m_meshes;
+  std::vector<Entry<VulkanProgram>> m_programs;
+  std::vector<Entry<VulkanTexture>> m_textures;
+  std::vector<Entry<VulkanFramebuffer>> m_framebuffers;
+  std::vector<Entry<VulkanBuffer>> m_buffers;
   ResourceHandlePool<MeshHandle> m_meshHandles;
   ResourceHandlePool<ShaderHandle> m_shaderHandles;
   ResourceHandlePool<TextureHandle> m_textureHandles;
