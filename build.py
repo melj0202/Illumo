@@ -61,7 +61,8 @@ WASM_RUNTIME_APPLICATION = "IllumoRuntime"
 # Installed applications live in <runtime dir>/apps/<name>/ with illumo.json.
 APPS_DIRECTORY = "apps"
 DEFAULT_APP = "game"
-APP_LABELS = {"game": "IllumoGame", "illed": "IllEd", "meshviewer": "Mesh Viewer"}
+APP_LABELS = {"game": "IllumoGame", "illed": "IllEd", "meshviewer": "Mesh Viewer",
+              "playground": "Playground"}
 # Native programs from before the WASM cutover; nothing builds or launches
 # them any more. The pre-apps game package directory is stale too.
 RETIRED_EXECUTABLES = ("IllumoGame", "IllEd", "IllMeshViewer", "IllumoCapture")

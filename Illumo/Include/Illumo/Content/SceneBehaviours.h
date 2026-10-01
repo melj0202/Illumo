@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+class InputManager;
 class SceneBehaviours;
 
 // What a behaviour sees: its node, its typed values and the scene. Transform
@@ -29,6 +30,8 @@ public:
   const BehaviourValues& values() const { return m_values; }
   // Seconds of updates since start.
   double time() const { return m_time; }
+  // The program's input (keys and mouse), or nullptr when none was given.
+  InputManager* input() const;
   // The node's record, or nullptr once the node is gone (in stop() after a
   // removal).
   const SceneNode* node() const;
@@ -117,6 +120,8 @@ public:
   // following the scene.
   void detach();
   SceneInstance* scene() const { return m_scene; }
+  // Input behaviours may read (SceneBehaviourContext::input); not owned.
+  void setInput(InputManager* input) { m_input = input; }
 
   // One frame: stops behaviours whose node or component went, reports
   // changed values, starts new behaviours, updates the live ones in scene
@@ -145,6 +150,7 @@ private:
   const BehaviourRegistry& m_registry;
   const BehaviourSchema& m_schema;
   SceneInstance* m_scene = nullptr;
+  InputManager* m_input = nullptr;
   std::vector<std::unique_ptr<Entry>> m_entries;
   std::vector<std::string> m_warnings;
   std::vector<SceneNode> m_queuedCreations;

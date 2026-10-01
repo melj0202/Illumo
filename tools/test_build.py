@@ -996,7 +996,8 @@ class WasmRuntimeTests(unittest.TestCase):
 
     def test_installed_apps_follow_cmake_staging(self):
         apps = build.installed_apps()
-        self.assertEqual([app.name for app in apps], ["game", "illed", "meshviewer"])
+        self.assertEqual([app.name for app in apps],
+                         ["game", "illed", "meshviewer", "playground"])
         self.assertEqual(apps[0].module, "IllumoGame.wasm")
         self.assertEqual(build.app_names(self.root), (build.DEFAULT_APP,))
 

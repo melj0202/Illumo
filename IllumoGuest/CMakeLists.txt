@@ -137,6 +137,7 @@ add_library(IllumoGuestContent STATIC
   ../Illumo/Source/Content/SceneInstance.cpp
   ../Illumo/Source/Content/ScenePrimitiveMeshes.cpp
   ../Illumo/Source/Content/VirtualPath.cpp
+  Source/PlayProgram.cpp
   Source/Program.cpp
   Source/SceneFetches.cpp
   Source/SceneWorlds.cpp)

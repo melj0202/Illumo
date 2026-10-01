@@ -235,13 +235,15 @@ WasmProgram::start(IllumoContext& host)
       fail(files->error());
       return false;
     }
-    std::uint64_t size = 0;
-    if (!m_fileRoots.launch.empty() &&
-        !files->grantLaunch(
-          m_fileRoots.launch, m_fileRoots.launchEditable, size)) {
-      fail("The launch document is missing, unreadable or too large");
-      return false;
-    }
+  }
+  // The launch document (--open) is granted with either file root: a runtime
+  // with a virtual file tree used to skip it, so --open did nothing.
+  std::uint64_t launchSize = 0;
+  if (files && !m_fileRoots.launch.empty() &&
+      !files->grantLaunch(
+        m_fileRoots.launch, m_fileRoots.launchEditable, launchSize)) {
+    fail("The launch document is missing, unreadable or too large");
+    return false;
   }
   m_services = std::make_unique<WasmGameServices>(
     *m_frames,

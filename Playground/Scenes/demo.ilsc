@@ -1,0 +1,50 @@
+{
+  "format": "ilsc",
+  "format_version": [2, 0],
+  "metadata": {
+    "title": "Playground",
+    "author": "Illumo",
+    "description": "The playground's default scene: one node of each sample behaviour."
+  },
+  "settings": { "world_mode": "3d" },
+  "nodes": [
+    { "id": "ground", "name": "Ground",
+      "transform": { "position": [0, -0.05, 0] },
+      "components": [ { "type": "primitive", "shape": "cube",
+                        "extent": [6, 0.05, 6], "color": [86, 120, 92, 255] } ] },
+    { "id": "spinner", "name": "Spinner",
+      "transform": { "position": [-2.5, 0.6, 0] },
+      "components": [
+        { "type": "primitive", "shape": "cube", "extent": [0.5, 0.5, 0.5],
+          "color": [222, 120, 70, 255] },
+        { "type": "playground.spinner", "speed": 90, "axis": [0, 1, 0] } ] },
+    { "id": "bobber", "name": "Bobber",
+      "transform": { "position": [2.5, 1, 0] },
+      "components": [
+        { "type": "primitive", "shape": "sphere", "extent": [0.45, 0.45, 0.45],
+          "color": [240, 200, 90, 255] },
+        { "type": "playground.bob", "height": 0.5, "period": 2 } ] },
+    { "id": "beacon", "name": "Beacon",
+      "transform": { "position": [0, 0.5, -2] },
+      "components": [ { "type": "primitive", "shape": "pyramid",
+                        "extent": [0.4, 0.5, 0.4], "color": [120, 170, 230, 255] } ] },
+    { "id": "moon", "name": "Moon",
+      "transform": { "position": [1.5, 0.5, -2] },
+      "components": [
+        { "type": "primitive", "shape": "cube", "extent": [0.2, 0.2, 0.2],
+          "color": [210, 215, 230, 255] },
+        { "type": "playground.orbit", "target": "beacon", "radius": 1.5,
+          "speed": 60 } ] },
+    { "id": "walker", "name": "Walker",
+      "transform": { "position": [0, 0.35, 2] },
+      "components": [
+        { "type": "primitive", "shape": "sphere", "extent": [0.35, 0.35, 0.35],
+          "color": [150, 110, 200, 255] },
+        { "type": "playground.walker", "speed": 3 } ] },
+    { "id": "camera", "name": "Camera",
+      "transform": { "position": [0, 5, 10], "rotation": [-0.2298, 0, 0, 0.9732] },
+      "components": [ { "type": "camera", "projection": "perspective",
+                        "fov_degrees": 50, "near": 0.1, "far": 250, "zoom": 32,
+                        "primary": true } ] }
+  ]
+}

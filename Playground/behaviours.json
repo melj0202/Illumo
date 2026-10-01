@@ -1,0 +1,45 @@
+{
+  "format": "illumo-behaviours",
+  "format_version": 1,
+  "behaviours": [
+    {
+      "type": "playground.spinner",
+      "title": "Spinner",
+      "fields": [
+        { "name": "speed", "title": "Degrees per second", "kind": "number",
+          "default": 90, "min": -720, "max": 720 },
+        { "name": "axis", "title": "Axis", "kind": "vector3",
+          "default": [0, 1, 0] }
+      ]
+    },
+    {
+      "type": "playground.bob",
+      "title": "Bob",
+      "fields": [
+        { "name": "height", "title": "Height", "kind": "number",
+          "default": 0.5, "min": 0, "max": 100 },
+        { "name": "period", "title": "Seconds per bob", "kind": "number",
+          "default": 2, "min": 0.05, "max": 60 }
+      ]
+    },
+    {
+      "type": "playground.orbit",
+      "title": "Orbit",
+      "fields": [
+        { "name": "target", "title": "Around", "kind": "node" },
+        { "name": "radius", "title": "Radius", "kind": "number",
+          "default": 2, "min": 0, "max": 1000 },
+        { "name": "speed", "title": "Degrees per second", "kind": "number",
+          "default": 45, "min": -720, "max": 720 }
+      ]
+    },
+    {
+      "type": "playground.walker",
+      "title": "Walker",
+      "fields": [
+        { "name": "speed", "title": "Units per second", "kind": "number",
+          "default": 3, "min": 0, "max": 100 }
+      ]
+    }
+  ]
+}

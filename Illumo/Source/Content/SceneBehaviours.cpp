@@ -13,6 +13,12 @@ SceneBehaviourContext::node() const
   return m_scene != nullptr ? m_scene->findNode(m_nodeId) : nullptr;
 }
 
+InputManager*
+SceneBehaviourContext::input() const
+{
+  return m_owner != nullptr ? m_owner->m_input : nullptr;
+}
+
 bool
 SceneBehaviourContext::setTransform(const Transform3D& transform)
 {

@@ -31,7 +31,7 @@ endif()
 
 # The WASM programs: each directory has a GuestTargets.cmake and a
 # PackageTargets.cmake (cmake/IllumoWasm.cmake).
-set(ILLUMO_PROGRAMS IllumoGame IllEd IllMeshViewer)
+set(ILLUMO_PROGRAMS IllumoGame IllEd IllMeshViewer Playground)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoWasm.cmake")
 
 if(ILLUMO_ENABLE_COVERAGE)
