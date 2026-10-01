@@ -432,6 +432,22 @@ Renderer::ensureBuiltinStyles()
   _builtinStylesReady = true;
 }
 
+TextureHandle
+Renderer::whiteTexture()
+{
+  if (_whiteTextureHandle.isValid() || _backend == nullptr ||
+      !_backend->TexturesDrawWhenCreated()) {
+    return _whiteTextureHandle;
+  }
+  const std::array<unsigned char, 4> white{ 255, 255, 255, 255 };
+  TextureOptions options;
+  options.filter = TextureFilter::Nearest;
+  options.wrapX = TextureWrap::ClampToEdge;
+  options.wrapY = TextureWrap::ClampToEdge;
+  _whiteTextureHandle = enrollTexture(white.data(), 1, 1, 4, options);
+  return _whiteTextureHandle;
+}
+
 RenderStyleHandle
 Renderer::createStyle(const RenderStyle& style)
 {

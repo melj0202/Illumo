@@ -420,6 +420,9 @@ private:
                            Point2 p3,
                            const std::array<ColorRgba, 4>& colors);
   bool pushGradientQuad(const ShapePrimitive& shape, const Rect2& hostBounds);
+  // Moves the shape quads from `first` to the end into the sprite vertices,
+  // sampling the white texel (D-R35). Returns the first sprite quad.
+  unsigned int moveShapeQuadsToSprites(unsigned int first);
   bool pushLineAsQuad(Point2 p0,
                       Point2 p1,
                       float width,

@@ -58,23 +58,6 @@ findSubmittedCommand(const MockBackend& mock, CommandType type, size_t ordinal)
   return nullptr;
 }
 
-static size_t
-submittedCommandPosition(const MockBackend& mock,
-                         CommandType type,
-                         size_t ordinal)
-{
-  size_t found = 0;
-  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
-    if (mock.getLastNonEmptySubmittedType(i) == type) {
-      if (found == ordinal) {
-        return i;
-      }
-      found += 1;
-    }
-  }
-  return mock.getLastNonEmptySubmittedCount();
-}
-
 class FrameContextProbe : public DrawableBase
 {
 public:
@@ -743,19 +726,9 @@ testGameVisualTransformAndAtlas()
   }
 }
 
-struct CapturedShapeVertex
-{
-  float x;
-  float y;
-  float z;
-  unsigned char r;
-  unsigned char green;
-  unsigned char b;
-  unsigned char a;
-};
-
+// Built-in shapes upload as sprite vertices on the white texel (D-R35).
 static bool
-vertexColorIs(const CapturedShapeVertex& vertex, ColorRgba color)
+vertexColorIs(const CapturedSpriteVertex& vertex, ColorRgba color)
 {
   return vertex.r == color.r && vertex.green == color.g &&
          vertex.b == color.b && vertex.a == color.a;
@@ -819,12 +792,17 @@ testGameVisualGradientShapes()
     findSubmittedCommand(mock, CommandType::UpdateBuffer, 0);
   testTrue(g, update != nullptr, "gradient vertices are uploaded");
   if (update != nullptr) {
-    const CapturedShapeVertex* vertices =
-      static_cast<const CapturedShapeVertex*>(update->updateBuffer.data);
+    const CapturedSpriteVertex* vertices =
+      static_cast<const CapturedSpriteVertex*>(update->updateBuffer.data);
     testTrue(g,
              vertexColorIs(vertices[0], solid) &&
                vertexColorIs(vertices[3], solid),
              "solid rects keep one color per quad");
+    testTrue(g,
+             nearFloat(vertices[0].u, 0.5f) && nearFloat(vertices[0].v, 0.5f) &&
+               nearFloat(vertices[11].u, 0.5f) &&
+               nearFloat(vertices[11].v, 0.5f),
+             "shapes sample the middle of the white texel");
     testTrue(g,
              vertexColorIs(vertices[4], topLeft) &&
                vertexColorIs(vertices[5], topRight) &&
@@ -857,8 +835,8 @@ testGameVisualGradientShapes()
   const RenderCommand* movedUpdate =
     findSubmittedCommand(mock, CommandType::UpdateBuffer, 0);
   if (movedUpdate != nullptr) {
-    const CapturedShapeVertex* vertices =
-      static_cast<const CapturedShapeVertex*>(movedUpdate->updateBuffer.data);
+    const CapturedSpriteVertex* vertices =
+      static_cast<const CapturedSpriteVertex*>(movedUpdate->updateBuffer.data);
     testTrue(g,
              nearFloat(vertices[0].x, 7.0f) && nearFloat(vertices[0].y, 5.0f),
              "local and host transforms move gradient corners");
@@ -1022,26 +1000,147 @@ testGameVisualCrossTypeOrder()
   visual.getShape(shapeIndex)->drawOrder = 0;
   visual.getSprite(spriteIndex)->drawOrder = 0;
 
+  // Shapes draw with the white texture (D-R35), so the bound textures give
+  // the draw order.
+  const TextureHandle white = renderer.whiteTexture();
+  const auto boundTextures = [&mock]() {
+    std::vector<TextureHandle> bound;
+    for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+         ++index) {
+      const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+      if (command.commandType == CommandType::SetTexture) {
+        bound.push_back(command.bindTexture.handle);
+      }
+    }
+    return bound;
+  };
   mock.resetCounters();
   visual.AppendCommands(&renderer);
   renderer.EndFrame();
-  size_t firstDraw =
-    submittedCommandPosition(mock, CommandType::DrawIndexed, 0);
-  size_t firstTexture =
-    submittedCommandPosition(mock, CommandType::SetTexture, 0);
+  std::vector<TextureHandle> bound = boundTextures();
   testTrue(g,
-           firstDraw < firstTexture,
+           white.isValid() && bound.size() == 2u && bound[0] == white &&
+             bound[1] == texture,
            "equal order preserves shape-before-sprite insertion sequence");
 
   visual.getSprite(spriteIndex)->drawOrder = -1;
   mock.resetCounters();
   visual.AppendCommands(&renderer);
   renderer.EndFrame();
-  firstDraw = submittedCommandPosition(mock, CommandType::DrawIndexed, 0);
-  firstTexture = submittedCommandPosition(mock, CommandType::SetTexture, 0);
+  bound = boundTextures();
   testTrue(g,
-           firstTexture < firstDraw,
+           bound.size() == 2u && bound[0] == texture && bound[1] == white,
            "explicit sprite order moves it before the shape");
+}
+
+static void
+testGameVisualSharedSpritePipeline()
+{
+  testSection("GameVisual: built-in shapes share the sprite pipeline");
+  NullRenderWindow window(320, 240);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  unsigned char pixels[4] = { 255, 255, 255, 255 };
+  TextureHandle texture = renderer.enrollTexture(pixels, 1, 1, 4);
+  GameVisual visual;
+  visual.setWindow(&window);
+  visual.prepare(&renderer);
+  const TextureHandle white = renderer.whiteTexture();
+  testTrue(g, white.isValid(), "the renderer offers a white texture");
+  testTrue(
+    g, renderer.whiteTexture() == white, "the white texture is created once");
+  const TextureInfo info = renderer.getTextureInfo(white);
+  testTrue(g,
+           info.width == 1 && info.height == 1 && info.channels == 4,
+           "the white texture is one RGBA texel");
+
+  // Each item overlaps the last, so painter order keeps three draws.
+  visual.addFilledRect(0.0f, 0.0f, 32.0f, 32.0f, ColorRgba{ 255, 0, 0, 255 });
+  visual.addSprite(
+    texture, 8.0f, 8.0f, 32.0f, 32.0f, ColorRgba{ 255, 255, 255, 255 });
+  visual.addLine(0.0f, 0.0f, 40.0f, 40.0f, ColorRgba{ 0, 0, 255, 255 }, 2.0f);
+  mock.resetCounters();
+  visual.AppendCommands(&renderer);
+  renderer.EndFrame();
+  const ShaderHandle spriteShader =
+    renderer.getStyle(RenderStyleId::Sprite)->shaderHandle;
+  size_t shaderBinds = 0;
+  bool allSprite = true;
+  for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+    if (command.commandType == CommandType::SetShader) {
+      shaderBinds += 1;
+      allSprite = allSprite && command.bindShader.handle == spriteShader;
+    }
+  }
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             3u,
+             "overlapping shape, sprite and line keep three draws");
+  testTrue(g,
+           shaderBinds >= 1u && allSprite,
+           "shapes and sprites draw with the sprite shader");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "one vertex upload covers shapes and sprites");
+
+  // A shape with its own style keeps the shape mesh and that style.
+  GameVisual styled;
+  styled.setWindow(&window);
+  styled.prepare(&renderer);
+  const size_t index =
+    styled.addFilledRect(0.0f, 0.0f, 8.0f, 8.0f, ColorRgba{ 1, 2, 3, 255 });
+  styled.getShape(index)->styleHandle =
+    renderer.getBuiltinStyleHandle(RenderStyleId::Shape);
+  mock.resetCounters();
+  styled.AppendCommands(&renderer);
+  renderer.EndFrame();
+  const RenderCommand* shaderBind =
+    findSubmittedCommand(mock, CommandType::SetShader, 0);
+  testTrue(g,
+           shaderBind != nullptr &&
+             shaderBind->bindShader.handle ==
+               renderer.getStyle(RenderStyleId::Shape)->shaderHandle &&
+             mock.countNonEmptyOfType(CommandType::SetTexture) == 0u,
+           "a custom-styled shape keeps its style and no texture");
+
+  // A large visual of shapes alone keeps the narrower shape vertices.
+  GameVisual field;
+  field.setWindow(&window);
+  field.prepare(&renderer);
+  for (int cell = 0; cell < 65; ++cell) {
+    field.addFilledRect(static_cast<float>(cell % 13) * 4.0f,
+                        static_cast<float>(cell / 13) * 4.0f,
+                        2.0f,
+                        2.0f,
+                        ColorRgba{ 7, 8, 9, 255 });
+  }
+  mock.resetCounters();
+  field.AppendCommands(&renderer);
+  renderer.EndFrame();
+  const RenderCommand* fieldShader =
+    findSubmittedCommand(mock, CommandType::SetShader, 0);
+  testTrue(g,
+           fieldShader != nullptr &&
+             fieldShader->bindShader.handle ==
+               renderer.getStyle(RenderStyleId::Shape)->shaderHandle &&
+             mock.countNonEmptyOfType(CommandType::SetTexture) == 0u &&
+             mock.countNonEmptyOfType(CommandType::DrawIndexed) == 1u,
+           "65 shapes alone draw once on the shape style");
+  field.addSprite(
+    texture, 0.0f, 40.0f, 4.0f, 4.0f, ColorRgba{ 255, 255, 255, 255 });
+  mock.resetCounters();
+  field.AppendCommands(&renderer);
+  renderer.EndFrame();
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::DrawIndexed) == 2u &&
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer) == 1u,
+           "with a sprite, the shapes join the sprite vertices");
 }
 
 static SpriteAnimationClip
@@ -1343,6 +1442,9 @@ registerGameVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.GameVisual.TransformAndAtlas", []() {
     return runGameVisualCase(testGameVisualTransformAndAtlas);
+  });
+  registry.add("Illumo.GameVisual.SharedSpritePipeline", []() {
+    return runGameVisualCase(testGameVisualSharedSpritePipeline);
   });
   registry.add("Illumo.GameVisual.GradientShapes", []() {
     return runGameVisualCase(testGameVisualGradientShapes);

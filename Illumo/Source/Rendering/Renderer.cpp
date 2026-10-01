@@ -531,6 +531,9 @@ Renderer::~Renderer()
   if (_backend != nullptr && m_frameUniformBuffer.isValid()) {
     _backend->DestroyBuffer(m_frameUniformBuffer);
   }
+  if (_backend != nullptr && _whiteTextureHandle.isValid()) {
+    _backend->DestroyTexture(_whiteTextureHandle);
+  }
   if (_ownedBackend) {
     _ownedBackend->Shutdown();
     _ownedBackend.reset();

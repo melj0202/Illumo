@@ -85,6 +85,10 @@ Vulkan types.
 - Backend hooks `AppendVisual`, `ForgetVisual` and `AppendSkybox` default to
   off. Only the guest recorder takes drawables whole; GPU and test backends
   must keep receiving their tokens.
+- `IBackend::TexturesDrawWhenCreated` is false only for the guest recorder,
+  whose new textures draw once the host has its copy. `Renderer::whiteTexture`
+  is then invalid, and callers must keep an untextured path for flat colour
+  (D-R35).
 
 ## Compatibility and errors
 

@@ -147,7 +147,8 @@ recordsMatchNativeOutput()
          ok;
   }
   const FrameCapture stored = fixture.frame(1);
-  ok = check(expected.uploads.size() == 2 && stored.uploads == expected.uploads,
+  // Built-in shapes share the sprite vertices (D-R35): one upload.
+  ok = check(expected.uploads.size() == 1 && stored.uploads == expected.uploads,
              "stored items tessellate to the same vertex bytes") &&
        ok;
   ok = check(stored.types == expected.types && stored.draws == expected.draws,

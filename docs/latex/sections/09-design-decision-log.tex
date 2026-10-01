@@ -3196,10 +3196,40 @@ OpenGL.\\
 frame to 29 and 24; Vulkan recording fell from 0.069 to 0.032\,ms (the mesh
 viewer from 0.051 to 0.034\,ms) and OpenGL IllEd rose from about 3,000 to
 4,000--4,400\,FPS uncapped. A rebuild of 300 widgets drops from 351 draws to
-3 and costs less overall. Draws of different visuals still alternate; one
-pipeline for shapes and sprites would remove most remaining switches but
-would change the guest frame wire and world-space motion velocity.\\
+3 and costs less overall. Draws of different visuals still alternated
+between the shape and sprite pipelines; D-R35 removes most of those
+switches.\\
 \textbf{Extends:} D-R15
+\end{decisionbox}
+
+\subsection*{D-R35 --- GameVisual shapes draw through the sprite pipeline}
+\begin{decisionbox}[title={D-R35 \quad 2026-10-01}]
+\textbf{Decision:} \symbolref{GameVisual} shapes without a custom style are
+tessellated as before and then written as sprite vertices sampling
+\texttt{Renderer::whiteTexture()}, a renderer-owned 1$\times$1 opaque white
+texture (nearest, clamped) at UV (0.5, 0.5). They draw with the built-in
+Sprite style, so shapes, sprites and text differ only by texture and D-R34
+batches them alike. Shapes with a custom style keep the shape mesh, as does a
+visual of more than 64 items that are all shapes. Backends whose new textures
+draw only in a later frame report it through
+\texttt{IBackend::TexturesDrawWhenCreated}; the guest recorder does, gets no
+white texture, and records shapes as before.\\
+\textbf{Why:} After D-R34 most remaining pipeline switches came from
+neighbouring visuals, each drawing shapes and then text. The sprite shader
+multiplies the vertex colour by an exact white texel, so the image is
+unchanged.\\
+\textbf{Consequences:} Vulkan pipeline binds per frame fell from 17 to 2 in
+IllEd, 22 to 3 in the mesh viewer and 11 to 10 in CSim; Vulkan recording fell
+from 0.032 to 0.028\,ms in IllEd and 0.035 to 0.028\,ms in the mesh viewer,
+and OpenGL IllEd rose from about 4,100 to 4,400--4,650\,FPS uncapped.
+Converting every shape regressed CSim, which rebuilds a visual of 1,412 shapes
+each frame: its vertices grew from 16 to 24 bytes for no saved switch, hence
+the shapes-only limit; a full rebuild of 300 mixed widgets costs about
+2.5\% more (222 to 227\,$\mu$s). These shapes now write zero motion velocity, as sprites
+do; before, they inherited whatever motion-blur uniforms a \symbolref{MeshVisual}
+had left on the shared shape program. The guest frame wire is unchanged:
+proxied visuals travel as items and are rebuilt on the host.\\
+\textbf{Extends:} D-R34
 \end{decisionbox}
 
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}

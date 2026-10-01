@@ -228,4 +228,10 @@ or a failed Vulkan start returns to it.
   against OpenGL's 0.102 / 0.037 / 0.032 ms (OpenGL's driver records on its own
   thread). What remains is mostly the driver: about 290 ns per pipeline bind,
   where the 2D UI changes program on most draws, and the submit and present
-  calls.- Not verified: Linux, non-NVIDIA drivers, validation layers (not installed).
+  calls.
+- Follow-ups in the frontend cut the binds: D-R34 merges `GameVisual` batches
+  across non-overlapping draws (IllEd recording 0.069 to 0.032 ms) and D-R35
+  draws built-in shapes through the sprite pipeline (Vulkan pipeline binds per
+  frame 17 to 2 in IllEd, 22 to 3 in the mesh viewer; recording 0.032 to 0.028
+  and 0.035 to 0.028 ms).
+- Not verified: Linux, non-NVIDIA drivers, validation layers (not installed).

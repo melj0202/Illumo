@@ -800,6 +800,7 @@ GameVisual::enrollGpuResources()
   }
 
   renderer->ensureBuiltinStyles();
+  renderer->whiteTexture();
   const std::vector<unsigned int> indices = buildIndices(quadCapacity);
   const size_t shapeBytes =
     static_cast<size_t>(quadCapacity) * 4 * sizeof(ShapeVertex);
@@ -1049,6 +1050,25 @@ GameVisual::pushShapeQuadColors(Point2 p0,
   }
   shapeQuadCount += 1;
   return true;
+}
+
+unsigned int
+GameVisual::moveShapeQuadsToSprites(unsigned int first)
+{
+  // Both arrays hold quadCapacity quads and every push checked the combined
+  // count, so the moved quads fit in the sprite vertices.
+  const unsigned int spriteFirst = spriteQuadCount;
+  const unsigned int count = shapeQuadCount - first;
+  const size_t from = static_cast<size_t>(first) * 4;
+  const size_t to = static_cast<size_t>(spriteFirst) * 4;
+  for (size_t vertex = 0; vertex < static_cast<size_t>(count) * 4; ++vertex) {
+    const ShapeVertex& shape = shapeVerts[from + vertex];
+    spriteVerts[to + vertex] = { shape.x, shape.y, shape.z, shape.r, shape.g,
+                                 shape.b, shape.a, 0.5f,    0.5f };
+  }
+  shapeQuadCount = first;
+  spriteQuadCount += count;
+  return spriteFirst;
 }
 
 bool
@@ -1627,6 +1647,24 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
               return leftOrder == rightOrder ? a.sequence < b.sequence
                                              : leftOrder < rightOrder;
             });
+  // Built-in shapes draw as sprites of a white texel, so shapes, sprites and
+  // text share one pipeline and neighbours differ only by texture (D-R35).
+  // A large visual of shapes alone keeps the narrower shape vertices: it
+  // switches pipeline at most at its ends, and widening its vertices costs
+  // more than that.
+  static constexpr size_t kSpriteShapeItems = 64;
+  const TextureHandle whiteTexture =
+    renderer != nullptr ? renderer->whiteTexture() : TextureHandle{};
+  const RenderStyleHandle spriteStyle =
+    renderer != nullptr ? renderer->getBuiltinStyleHandle(RenderStyleId::Sprite)
+                        : RenderStyleHandle{};
+  bool shapesAsSprites = whiteTexture.isValid() && spriteStyle.isValid();
+  if (shapesAsSprites && ordered.size() > kSpriteShapeItems) {
+    shapesAsSprites =
+      std::any_of(ordered.begin(), ordered.end(), [](const VisualItem& item) {
+        return item.kind != VisualItemKind::Shape;
+      });
+  }
 
   for (size_t itemIndex = 0; itemIndex < ordered.size(); ++itemIndex) {
     const VisualItem& item = ordered[itemIndex];
@@ -1773,6 +1811,13 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
       if (!ok) {
         break;
       }
+    }
+    if (shapesAsSprites && !shape.styleHandle.isValid()) {
+      const unsigned int count = shapeQuadCount - first;
+      const unsigned int spriteFirst = moveShapeQuadsToSprites(first);
+      appendPiece(
+        BatchKind::Sprite, spriteStyle, whiteTexture, spriteFirst, count);
+      continue;
     }
     appendPiece(BatchKind::Shape,
                 styleHandle,

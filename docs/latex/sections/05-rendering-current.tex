@@ -180,7 +180,11 @@ while preserving defaults.
         the latest earlier batch with that key when nothing drawn in between
         overlaps it (D-R34), so a list of widgets (background, icon, label
         each) draws as a few batches while every pixel keeps its painter-order
-        sequence of writes; there is no global texture sort.
+        sequence of writes; there is no global texture sort. Shapes without
+        a custom style draw as sprites of the renderer's white texel, so
+        shapes, sprites and text share one pipeline (D-R35); a visual of more
+        than 64 items that are all shapes, and guest recordings, keep the
+        shape mesh.
         Pixel-space rebuilds conservatively reject quads outside the logical
         viewport. An optional top-left logical-pixel clip rejects fully
         excluded quads before upload and uses nested, intersected scissor

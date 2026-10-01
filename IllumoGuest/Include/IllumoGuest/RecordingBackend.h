@@ -99,6 +99,8 @@ public:
                       int,
                       const TextureOptions&) override;
   bool DestroyTexture(TextureHandle) override;
+  // A new texture draws once the host has acquired its copy.
+  bool TexturesDrawWhenCreated() const override { return false; }
   bool IsTextureValid(TextureHandle) const override;
   TextureInfo GetTextureInfo(TextureHandle) const override;
   FramebufferHandle CreateFramebuffer(const FramebufferDesc&,

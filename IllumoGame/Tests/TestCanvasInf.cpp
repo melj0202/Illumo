@@ -1848,11 +1848,17 @@ testTextureCapacityAndLifecycle()
   std::uint32_t textureGeneration = 0u;
   std::size_t replacementCount = 0u;
 
+  // The renderer's shared white texture (D-R35) is not the view's.
+  renderer.whiteTexture();
+  const std::size_t sharedTextureCreates = countTextureCreates(mock);
+
   {
     CanvasView view(80, 60, &grid, &window, &camera, &renderer);
     const std::size_t initialTextureCreates = countTextureCreates(mock);
-    testEqSize(
-      g, initialTextureCreates, 1u, "view enrolls one initial display texture");
+    testEqSize(g,
+               initialTextureCreates,
+               sharedTextureCreates + 1u,
+               "view enrolls one initial display texture");
 
     view.rebuildTargetsFromGrid();
     const std::size_t grownTextureCreates = countTextureCreates(mock);

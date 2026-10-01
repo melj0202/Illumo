@@ -102,6 +102,7 @@ private:
   std::array<RenderStyleHandle, static_cast<size_t>(RenderStyleId::Count)>
     builtinStyleHandles{};
   bool _builtinStylesReady = false;
+  TextureHandle _whiteTextureHandle{};
 
   // Proof-quad resources.
   bool _proofReady = false;
@@ -380,6 +381,12 @@ public:
   RenderStyle* getStyle(RenderStyleId id);
   bool bindStyle(RenderStyleId id);
   bool builtinStylesReady() const { return _builtinStylesReady; }
+
+  // 1x1 opaque white RGBA texture, created on first call and owned by the
+  // renderer. Sprite-style draws sample it to draw flat colour (D-R35).
+  // Invalid when the backend cannot create it or cannot draw a texture in the
+  // frame that creates it (IBackend::TexturesDrawWhenCreated).
+  TextureHandle whiteTexture();
 
   // =========================================================================
   // Frame lifecycle

@@ -188,6 +188,10 @@ public:
     return false;
   }
   virtual bool DestroyTexture(TextureHandle handle) = 0;
+  // False when a new texture draws nothing until some later frame (the guest
+  // recorder waits for the host's copy). Renderer then offers no white
+  // texture, and flat colour keeps its untextured path (D-R35).
+  virtual bool TexturesDrawWhenCreated() const { return true; }
   virtual bool IsTextureValid(TextureHandle handle) const = 0;
   virtual TextureInfo GetTextureInfo(TextureHandle handle) const = 0;
 

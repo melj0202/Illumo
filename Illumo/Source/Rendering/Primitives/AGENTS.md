@@ -37,13 +37,19 @@ retained widget toolkit or a second renderer.
   Overlap tests must stay conservative: touching or NaN bounds overlap, and a
   batch's extent (exact boxes of its recent runs plus one box around older
   ones) must contain every vertex. Visuals with one run skip batching work.
+- Shapes without a custom style draw through the built-in Sprite style,
+  sampling `Renderer::whiteTexture()` at UV (0.5, 0.5), so shapes, sprites and
+  text share one pipeline (D-R35). Keep the white texel exact (1x1, RGBA 255,
+  nearest, clamp) so the output equals the vertex colour. Shapes with a custom
+  `styleHandle`, visuals of more than 64 items that are all shapes, and
+  renderers without the texture (guests) keep the shape mesh.
 - Any vertex, index, uniform, or text bytes referenced by appended commands
   must outlive queue submission. Reallocation after pointer capture is a
   lifetime defect.
 - Keep shared themes and style data value-only. Ownership, input behavior, and
   domain commands stay with their existing App/Game/Services owners.
 - `ShapeKind::GradientQuad` carries one color per vertex through the ordinary
-  shape vertex format and shader. Its quad must be convex and fan-ordered
+  vertex color path. Its quad must be convex and fan-ordered
   ((0,1,2) then (2,3,0)); colors interpolate per triangle, so use two-color
   axis gradients or radial fans rather than four unrelated corner colors.
   Keep `rect` as the bounding box and `color` as the first vertex color so
