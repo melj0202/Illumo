@@ -126,10 +126,12 @@ target_link_libraries(IllumoGuestEngine PUBLIC IllumoGuestRendering)
 # Archives and the virtual file tree stay host-side; guests reach them through
 # file services.
 add_library(IllumoGuestContent STATIC
+  ../Illumo/Source/Content/BehaviourSchema.cpp
   ../Illumo/Source/Content/IlscCodec.cpp
   ../Illumo/Source/Content/PackageManifest.cpp
   ../Illumo/Source/Content/ProgramScene.cpp
   ../Illumo/Source/Content/SceneAssetRefs.cpp
+  ../Illumo/Source/Content/SceneBehaviours.cpp
   ../Illumo/Source/Content/SceneDirector.cpp
   ../Illumo/Source/Content/SceneDocument.cpp
   ../Illumo/Source/Content/SceneInstance.cpp

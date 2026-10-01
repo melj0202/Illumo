@@ -277,12 +277,14 @@ endif()
 # the .ilsc scene format and the virtual file tree. Core Illumo never includes
 # <Illumo/Content/...>; nlohmann stays private to its sources.
 add_library(IllumoContent STATIC
+  Source/Content/BehaviourSchema.cpp
   Source/Content/IlscCodec.cpp
   Source/Content/PackageArchive.cpp
   Source/Content/PackageManifest.cpp
   Source/Content/PackageMounts.cpp
   Source/Content/ProgramScene.cpp
   Source/Content/SceneAssetRefs.cpp
+  Source/Content/SceneBehaviours.cpp
   Source/Content/SceneDirector.cpp
   Source/Content/SceneDocument.cpp
   Source/Content/SceneInstance.cpp
@@ -355,6 +357,7 @@ if(BUILD_TESTING)
     Tests/Content/TestPackageArchive.cpp
     Tests/Content/TestPackageMounts.cpp
     Tests/Content/TestPackageManifest.cpp
+    Tests/Content/TestSceneBehaviours.cpp
     Tests/Content/TestSceneDirector.cpp
     Tests/Content/TestSceneInstance.cpp
     Tests/Content/TestVirtualFileSystem.cpp

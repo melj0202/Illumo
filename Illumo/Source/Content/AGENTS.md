@@ -14,7 +14,8 @@ D-E24 and D-E26.
   canonical text.
 - The guest mirror `IllumoGuestContent` (`IllumoGuest/CMakeLists.txt`) builds
   the serial-safe subset: `VirtualPath`, `PackageManifest`, `SceneDocument`,
-  `IlscCodec`, `SceneAssetRefs`, `SceneInstance`, `ScenePrimitiveMeshes`.
+  `IlscCodec`, `SceneAssetRefs`, `SceneInstance`, `ScenePrimitiveMeshes`,
+  `BehaviourSchema`, `SceneBehaviours`.
   `PackageArchive`, `VirtualFileSystem`, `VfsAssetSource`, `VfsConsole`,
   `VfsTreeSource` and `PackageMounts` are host-only. Keep a new source in the
   right list.
@@ -48,6 +49,13 @@ D-E24 and D-E26.
   a world. `update()` sends only changed transforms and visibility.
 - Loads collect references (`collectSceneFetches`), make them readable, then
   instantiate: `IAssetSource` reads stay synchronous.
+- Scene behaviours (`docs/scene-behaviours-design.md`): `SceneInstance`
+  reports node and component changes to one `ISceneContentObserver`;
+  observers only record what changed and never edit the scene from the
+  callback. `SceneBehaviours` runs behaviour code in its `update()`, queues
+  structural edits until after the pass, and never stores a node handle
+  across frames. `behaviours.json` is decoded strictly like `.ilsc`;
+  invalid component values fall back to defaults with a warning.
 - No recursion: tree walks, dependency order (Kahn) and flattening are
   iterative.
 

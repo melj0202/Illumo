@@ -95,6 +95,11 @@ SceneInstance::SceneInstance(AssetManager* assets, SceneInstanceOptions options)
 
 SceneInstance::~SceneInstance()
 {
+  if (m_observer != nullptr) {
+    ISceneContentObserver* observer = m_observer;
+    m_observer = nullptr;
+    observer->sceneDestroyed();
+  }
   setRenderWorld(nullptr);
   clear();
   if (m_assets != nullptr) {
@@ -161,6 +166,9 @@ SceneInstance::clear()
   m_lighting = SceneLighting{};
   m_lightingDirty = true;
   touch();
+  if (m_observer != nullptr) {
+    m_observer->contentReplaced();
+  }
 }
 
 bool
@@ -172,7 +180,11 @@ SceneInstance::load(const SceneDocument& document,
   if (!validateSceneDocument(document, error)) {
     return false;
   }
+  // The observer hears about the whole replacement once, at the end.
+  ISceneContentObserver* observer = m_observer;
+  m_observer = nullptr;
   clear();
+  m_observer = observer;
   m_packageRoot = std::string(packageRoot);
   m_state = document;
   m_state.nodes.clear();
@@ -225,6 +237,9 @@ SceneInstance::load(const SceneDocument& document,
     Logger::LogTrace("Scene instantiated under " + m_packageRoot + ": " +
                      std::to_string(m_records.size()) + " nodes, " +
                      std::to_string(m_assetSlots.size()) + " assets");
+  }
+  if (m_observer != nullptr) {
+    m_observer->contentReplaced();
   }
   return true;
 }
@@ -1058,6 +1073,9 @@ SceneInstance::insertNode(const SceneNode& node,
     return false;
   }
   touch();
+  if (m_observer != nullptr) {
+    m_observer->nodeAdded(node.id);
+  }
   return true;
 }
 
@@ -1067,6 +1085,11 @@ SceneInstance::removeSubtree(std::string_view id)
   const std::vector<std::string> ids = subtreeIds(id);
   if (ids.empty()) {
     return false;
+  }
+  if (m_observer != nullptr) {
+    for (const std::string& member : ids) {
+      m_observer->nodeRemoving(member);
+    }
   }
   m_graph.invalidateSnapshots();
   for (const std::string& member : ids) {
@@ -1265,6 +1288,9 @@ SceneInstance::setComponents(std::string_view id,
   }
   m_graph.notifyAttachmentChanged(entry->handle);
   touch();
+  if (m_observer != nullptr) {
+    m_observer->componentsChanged(id);
+  }
   return true;
 }
 
@@ -1296,6 +1322,9 @@ SceneInstance::replaceNode(const SceneNode& node, std::string& error)
   m_graph.notifyAttachmentChanged(entry->handle);
   m_lightingDirty = true;
   touch();
+  if (m_observer != nullptr) {
+    m_observer->componentsChanged(node.id);
+  }
   return true;
 }
 

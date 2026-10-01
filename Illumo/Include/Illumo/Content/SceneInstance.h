@@ -40,6 +40,26 @@ struct SceneLighting
   std::string sourceId;
 };
 
+// Told when a SceneInstance's nodes or their components change, so code that
+// follows nodes (scene behaviours) stays in step without polling. Calls come
+// after the change, except nodeRemoving (before the node goes). Transform,
+// flag, name, tag and asset-table edits are not reported. An observer must not
+// edit the scene from these calls.
+class ISceneContentObserver
+{
+public:
+  virtual ~ISceneContentObserver() = default;
+  // Every node was replaced (load or clear).
+  virtual void contentReplaced() = 0;
+  virtual void nodeAdded(std::string_view id) = 0;
+  // Called for each node of a removed subtree, before any is removed.
+  virtual void nodeRemoving(std::string_view id) = 0;
+  // The node's component list was set or replaced.
+  virtual void componentsChanged(std::string_view id) = 0;
+  // The scene is being destroyed; the observer is dropped after this call.
+  virtual void sceneDestroyed() = 0;
+};
+
 // A live scene built from a SceneDocument: it owns the document state, one
 // SceneGraph, the attachments that draw each node and the asset references
 // they hold. Stable ids are graph node names. Every edit goes through this
@@ -156,6 +176,13 @@ public:
                      std::string& error);
   // Editor view state never counts as an edit (revision is unchanged).
   void setEditorState(const SceneEditorState& state);
+  // One observer at a time (nullptr removes it); it must outlive the
+  // binding or unbind itself.
+  void setContentObserver(ISceneContentObserver* observer)
+  {
+    m_observer = observer;
+  }
+  ISceneContentObserver* contentObserver() const { return m_observer; }
 
   // --- Queries. ---
 
@@ -181,6 +208,7 @@ private:
   AssetManager* m_assets = nullptr;
   Renderer* m_renderer = nullptr;
   IRenderWorld* m_world = nullptr;
+  ISceneContentObserver* m_observer = nullptr;
   // Shared white materials, shadow-casting and not; colours are per-instance
   // tints so every primitive of a mesh shares one bucket.
   RenderMaterialId m_worldMaterials[2]{};
