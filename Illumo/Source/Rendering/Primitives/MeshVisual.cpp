@@ -1306,6 +1306,9 @@ MeshVisual::rebuildMeshes()
     const float v0 = sprite.region.v0;
     const float u1 = sprite.region.u1;
     const float v1 = sprite.region.v1;
+    // Textures store their top row first, so v0 is the image's top edge (as
+    // in GameVisual and TextureRegion::gridCell). The quad's local +Y is up,
+    // so its top corners take v0 and the image draws upright.
     const SpriteVertex corners[4] = {
       { -0.5f,
         -0.5f,
@@ -1315,7 +1318,7 @@ MeshVisual::rebuildMeshes()
         sprite.tint.b,
         sprite.tint.a,
         u0,
-        v0 },
+        v1 },
       { 0.5f,
         -0.5f,
         0.0f,
@@ -1324,7 +1327,7 @@ MeshVisual::rebuildMeshes()
         sprite.tint.b,
         sprite.tint.a,
         u1,
-        v0 },
+        v1 },
       { 0.5f,
         0.5f,
         0.0f,
@@ -1333,7 +1336,7 @@ MeshVisual::rebuildMeshes()
         sprite.tint.b,
         sprite.tint.a,
         u1,
-        v1 },
+        v0 },
       { -0.5f,
         0.5f,
         0.0f,
@@ -1342,7 +1345,7 @@ MeshVisual::rebuildMeshes()
         sprite.tint.b,
         sprite.tint.a,
         u0,
-        v1 },
+        v0 },
     };
     static const int kTriangle[6] = { 0, 1, 2, 0, 2, 3 };
     for (int vertex = 0; vertex < 6; ++vertex) {

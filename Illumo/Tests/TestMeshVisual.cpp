@@ -541,6 +541,79 @@ testMeshVisualSpriteAndCube()
     g, !submittedUsePixelsOne(mock), "world draws do not set uUsePixels=1");
 }
 
+// The uploaded sprite vertex: position, RGBA bytes, then UV (MeshVisual's
+// private SpriteVertex layout).
+struct UploadedSpriteVertex
+{
+  float x;
+  float y;
+  float z;
+  unsigned char color[4];
+  float u;
+  float v;
+};
+static_assert(sizeof(UploadedSpriteVertex) == 24,
+              "matches MeshVisual's sprite vertex layout");
+
+static void
+testMeshVisualSpriteUpright()
+{
+  testSection("MeshVisual: sprites draw their image upright");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  unsigned char px[4] = { 255, 255, 255, 255 };
+  TextureHandle texture = renderer.enrollTexture(px, 1, 1, 4);
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  // A sprite-sheet cell: v0 is the cell's top edge in the image.
+  const TextureRegion region{ 0.25f, 0.1f, 0.75f, 0.4f };
+  visual.addSprite(texture,
+                   glm::vec3(0.0f),
+                   glm::vec2(1.0f, 1.0f),
+                   ColorRgba{ 255, 255, 255, 255 },
+                   MeshFacing::World,
+                   region);
+  DrawList scene(&window, &camera);
+  scene.AddDrawable(&visual, RenderLayerId::World);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+
+  const UploadedSpriteVertex* vertices = nullptr;
+  for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+    if (command.commandType == CommandType::UpdateBuffer &&
+        command.updateBuffer.sizeBytes == 6 * sizeof(UploadedSpriteVertex)) {
+      vertices =
+        static_cast<const UploadedSpriteVertex*>(command.updateBuffer.data);
+    }
+  }
+  testTrue(g, vertices != nullptr, "the sprite quad is uploaded");
+  if (vertices == nullptr) {
+    return;
+  }
+  bool upright = true;
+  for (int index = 0; index < 6; ++index) {
+    const UploadedSpriteVertex& vertex = vertices[index];
+    // Local +Y is up: the top edge samples v0, the bottom edge v1.
+    const float expectedV = vertex.y > 0.0f ? region.v0 : region.v1;
+    const float expectedU = vertex.x > 0.0f ? region.u1 : region.u0;
+    upright = upright && vertex.v == expectedV && vertex.u == expectedU;
+  }
+  testTrue(g,
+           upright,
+           "top corners sample the region's top edge (v0), so the image is "
+           "not flipped vertically");
+}
+
 static void
 testMeshVisualBillboard()
 {
@@ -1537,6 +1610,8 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.MeshVisual.SpriteAndCube",
                []() { return runMeshVisualCase(testMeshVisualSpriteAndCube); });
+  registry.add("Illumo.MeshVisual.SpriteUpright",
+               []() { return runMeshVisualCase(testMeshVisualSpriteUpright); });
   registry.add("Illumo.MeshVisual.Billboard",
                []() { return runMeshVisualCase(testMeshVisualBillboard); });
   registry.add("Illumo.MeshVisual.SceneAttachment", []() {

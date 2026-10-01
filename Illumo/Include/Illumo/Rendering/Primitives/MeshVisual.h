@@ -78,6 +78,9 @@ public:
   size_t addQuad(const glm::vec3& center,
                  const glm::vec2& size,
                  ColorRgba color);
+  // A textured quad in the local XY plane (+Y up). The region uses the
+  // texture's own orientation: v0 is the image's top edge, so the image
+  // draws upright, as GameVisual sprites do.
   size_t addSprite(TextureHandle textureHandle,
                    const glm::vec3& center,
                    const glm::vec2& size,
